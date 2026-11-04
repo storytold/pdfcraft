@@ -332,7 +332,8 @@ pub(crate) fn reset_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
     let Some(Request::Reset(names)) = h.requests.get(queued).cloned() else { return Ok(JsValue::undefined()) };
     let super::host::Host { fields, changed, .. } = &mut *h;
     for (i, field) in std::sync::Arc::make_mut(fields).iter_mut().enumerate() {
-        if !matches!(field.kind, FieldType::Button | FieldType::Signature)
+        if field.default_known
+            && !matches!(field.kind, FieldType::Button | FieldType::Signature)
             && (names.is_empty() || names.iter().any(|n| field.name == *n || field.name.strip_prefix(n).is_some_and(|rest| rest.starts_with('.'))))
         {
             field.value.clone_from(&field.default);

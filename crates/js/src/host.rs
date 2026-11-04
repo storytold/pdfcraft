@@ -135,13 +135,13 @@ pub(crate) fn function(ctx: &mut Context, f: NativeFunction) -> JsFunction {
 /// Format exactly the escaped UTF-8 representation used by `text`, refusing a
 /// write before it exceeds the remaining aggregate budget. No full Rust copy of
 /// an oversized JavaScript string is made just to discover its byte length.
-fn text_with_budget(v: &JsValue, ctx: &mut Context, remaining: usize) -> JsResult<String> {
+pub(crate) fn text_with_budget(v: &JsValue, ctx: &mut Context, remaining: usize, limit_error: &str) -> JsResult<String> {
     use std::fmt::Write;
     if v.is_undefined() || v.is_null() {
         return Ok(String::new());
     }
     let js = v.to_string(ctx)?;
-    let exceeded = || error("string array byte limit exceeded");
+    let exceeded = || error(limit_error);
     // Every UTF-16 unit contributes at least one byte in the escaped UTF-8 output.
     if js.len() > remaining {
         return Err(exceeded());
@@ -177,13 +177,17 @@ pub(crate) fn strings(v: &JsValue, ctx: &mut Context) -> JsResult<Vec<String>> {
         let mut remaining = xfa::MAX_PAYLOAD;
         for i in 0..n {
             let x = a.get(i, ctx)?;
-            let value = text_with_budget(&x, ctx, remaining)?;
+            let value = text_with_budget(&x, ctx, remaining, "string array byte limit exceeded")?;
             remaining = remaining.saturating_sub(value.len());
             out.push(value);
         }
         return Ok(out);
     }
-    Ok(if v.is_undefined() || v.is_null() { Vec::new() } else { vec![text_with_budget(v, ctx, xfa::MAX_PAYLOAD)?] })
+    Ok(if v.is_undefined() || v.is_null() {
+        Vec::new()
+    } else {
+        vec![text_with_budget(v, ctx, xfa::MAX_PAYLOAD, "string array byte limit exceeded")?]
+    })
 }
 
 pub(crate) fn colour(c: &Option<Vec<String>>, ctx: &mut Context) -> JsValue {
@@ -250,9 +254,9 @@ mod string_budget_review_tests {
             let value = ctx.eval(boa_engine::Source::from_bytes(script)).unwrap();
             let expected = text(&value, &mut ctx).unwrap();
             assert_eq!(expected.len(), bytes);
-            assert_eq!(text_with_budget(&value, &mut ctx, bytes).unwrap(), expected);
-            assert!(text_with_budget(&value, &mut ctx, bytes - 1).is_err());
+            assert_eq!(text_with_budget(&value, &mut ctx, bytes, "text limit").unwrap(), expected);
+            assert!(text_with_budget(&value, &mut ctx, bytes - 1, "text limit").is_err());
         }
-        assert_eq!(text_with_budget(&JsValue::null(), &mut ctx, 0).unwrap(), "");
+        assert_eq!(text_with_budget(&JsValue::null(), &mut ctx, 0, "text limit").unwrap(), "");
     }
 }

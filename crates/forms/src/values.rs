@@ -643,6 +643,13 @@ fn unread_stream(doc: &Document, field: ObjRef, key: &[u8]) -> bool {
     false
 }
 
+/// Whether this snapshot contains a known default, including a genuinely absent /DV.
+/// An unread nonempty default stream is unknown, not an instruction to clear the field.
+/// Reuse this policy when exposing reset defaults to other execution layers.
+pub fn default_value_known(doc: &Document, field: &Field) -> bool {
+    !field.default.is_empty() || !unread_stream(doc, field.obj, b"DV")
+}
+
 /// Acrobat's Clear form: every field (or the named ones) back to its default value.
 pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, FormError> {
     let all = fields(doc);
@@ -660,7 +667,7 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
         // the field to nothing would lose the value it should go back to. A value it didn't decode
         // isn't known to be the default, so it is reset.
         let unread = |key: &[u8], read: &[String]| read.is_empty() && unread_stream(doc, f.obj, key);
-        if unread(b"DV", &f.default) || (f.value == f.default && !unread(b"V", &f.value)) {
+        if !default_value_known(doc, f) || (f.value == f.default && !unread(b"V", &f.value)) {
             continue;
         }
         let v = match f.kind {

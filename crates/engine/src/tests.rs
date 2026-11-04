@@ -10794,3 +10794,152 @@ fn native_reset_selector_count_is_bounded() {
     assert_eq!(s.get(id).unwrap().generation, generation);
     assert_eq!(s.save_bytes(id).unwrap(), before);
 }
+
+/// An unread default is preserved by both reset paths; explicit script assignments still win.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn javascript_reset_preserves_unknown_default_like_native_reset() {
+    for inherited in [false, true] {
+        for native in [false, true] {
+            for reset in ["resetForm(['price']);", "resetForm();"] {
+                for (before, after, expected) in
+                    [("", "", "99"), ("getField('price').value=42;", "", "42"), ("", "getField('price').value=43;", "43")]
+                {
+                    let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+                    let price = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "price").unwrap();
+                    let mut dict = pdfcraft_cos::Dict::new();
+                    dict.set(b"Filter".to_vec(), pdfcraft_cos::Object::name("UnknownReviewFilter"));
+                    let dv = cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::from_raw(dict, vec![1])));
+                    let parent = if inherited {
+                        let mut parent = pdfcraft_cos::Dict::new();
+                        parent.set(b"DV".to_vec(), pdfcraft_cos::Object::Ref(dv));
+                        parent.set(b"Kids".to_vec(), pdfcraft_cos::Object::Array(vec![pdfcraft_cos::Object::Ref(price.obj)]));
+                        Some(cos.add(pdfcraft_cos::Object::Dict(parent)))
+                    } else {
+                        None
+                    };
+                    cos.update_dict(price.obj, |d| {
+                        d.set(b"V".to_vec(), pdfcraft_cos::PdfString::text("99"));
+                        if let Some(parent) = parent {
+                            d.set(b"Parent".to_vec(), pdfcraft_cos::Object::Ref(parent));
+                        } else {
+                            d.set(b"DV".to_vec(), pdfcraft_cos::Object::Ref(dv));
+                        }
+                    })
+                    .unwrap();
+                    if let Some(parent) = parent {
+                        let root = cos.root().unwrap();
+                        cos.update_dict(root, |catalog| {
+                            let mut form = catalog.get(b"AcroForm").unwrap().as_dict().unwrap().clone();
+                            let mut refs = form.get(b"Fields").unwrap().as_array().unwrap().clone();
+                            for reference in &mut refs {
+                                if reference.as_ref() == Some(price.obj) {
+                                    *reference = pdfcraft_cos::Object::Ref(parent);
+                                }
+                            }
+                            form.set(b"Fields".to_vec(), pdfcraft_cos::Object::Array(refs));
+                            catalog.set(b"AcroForm".to_vec(), pdfcraft_cos::Object::Dict(form));
+                        })
+                        .unwrap();
+                    }
+                    let mut direct = cos.clone();
+                    pdfcraft_forms::reset(&mut direct, Some(&["price".into()])).unwrap();
+                    assert_eq!(pdfcraft_forms::fields(&direct).into_iter().find(|f| f.name == "price").unwrap().value, ["99"]);
+                    let mut s = Session::new().with_clock(|| 1_700_000_000);
+                    s.set_javascript(false);
+                    let id =
+                        s.open("unknown-default.pdf", None, Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap()), None).unwrap();
+                    s.set_javascript(true);
+                    let script = format!("{before}{reset}{after}String(getField('price').value);");
+                    let out = if native {
+                        let pending = s.start_javascript(id, &script, Some("go")).unwrap();
+                        let crate::js::InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap()
+                        else {
+                            panic!("completion")
+                        };
+                        s.finish_javascript(pending, out).unwrap()
+                    } else {
+                        s.run_javascript(id, &script, None).unwrap()
+                    };
+                    assert_eq!(out.error, None);
+                    assert_eq!(out.result.as_deref(), Some(expected));
+                    let value = |s: &Session, id| s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value.clone();
+                    assert_eq!(value(&s, id), [expected]);
+                    assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
+                    s.undo(id).unwrap();
+                    assert_eq!(value(&s, id), ["99"]);
+                    s.redo(id).unwrap();
+                    assert_eq!(value(&s, id), [expected]);
+                    let saved = s.save_bytes(id).unwrap();
+                    s.set_javascript(false);
+                    let reopened = s.open("saved-unknown.pdf", None, saved, None).unwrap();
+                    assert_eq!(value(&s, reopened), [expected]);
+                }
+            }
+        }
+    }
+}
+
+/// Exhausting the shared default decode budget must also reach the JavaScript snapshot as unknown.
+#[test]
+fn javascript_snapshot_preserves_default_decode_budget_exhaustion() {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    let stream = cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::from_raw(pdfcraft_cos::Dict::new(), vec![b'd'; 1 << 20])));
+    let mut refs = Vec::new();
+    for i in 0..70 {
+        let mut field = pdfcraft_cos::Dict::new();
+        field.set(b"FT".to_vec(), pdfcraft_cos::Object::name("Tx"));
+        field.set(b"T".to_vec(), pdfcraft_cos::PdfString::text(&format!("budget{i}")));
+        field.set(b"V".to_vec(), pdfcraft_cos::PdfString::text("typed"));
+        field.set(b"DV".to_vec(), pdfcraft_cos::Object::Ref(stream));
+        refs.push(pdfcraft_cos::Object::Ref(cos.add(pdfcraft_cos::Object::Dict(field))));
+    }
+    let root = cos.root().unwrap();
+    cos.update_dict(root, |catalog| {
+        let mut form = pdfcraft_cos::Dict::new();
+        form.set(b"Fields".to_vec(), pdfcraft_cos::Object::Array(refs));
+        catalog.set(b"AcroForm".to_vec(), pdfcraft_cos::Object::Dict(form));
+    })
+    .unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    assert_eq!(fields.first().unwrap().default.first().unwrap().len(), 1 << 20);
+    let last = fields.iter().find(|f| f.name == "budget69").unwrap();
+    assert!(last.default.is_empty());
+    let snapshot = crate::js::field_state(&cos, last, &pdfcraft_js::DocInfo::default());
+    assert!(!snapshot.default_known);
+    let out = pdfcraft_js::run(
+        "resetForm();String(getField('budget69').value);",
+        &pdfcraft_js::Event::doc("Console"),
+        &Default::default(),
+        &[snapshot],
+        &[],
+        Default::default(),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("typed"));
+    assert!(out.changed.is_empty());
+}
+
+/// Immediate dependent reads can explicitly request calculation without changing reset callback ordering.
+#[test]
+fn calculate_now_after_reset_reads_and_persists_recalculated_dependents() {
+    use form_scripts::{CalcOp, Calculate};
+    let (mut s, id) = reset_order_session("");
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("2".into()) }).unwrap();
+    s.apply(
+        id,
+        Edit::SetFieldProps {
+            name: "total".into(),
+            props: Box::new(FieldProps {
+                calculate: Some(Calculate::Simple { op: CalcOp::Product, fields: vec!["price".into(), "qty".into()] }),
+                ..Default::default()
+            }),
+        },
+    )
+    .unwrap();
+    s.set_javascript(true);
+    let out = s.run_javascript(id, "resetForm(['price']);calculateNow();String(getField('total').value);", None).unwrap();
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("14"));
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value, ["14"]);
+}

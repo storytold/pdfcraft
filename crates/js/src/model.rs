@@ -42,6 +42,8 @@ pub struct FieldState {
     /// the selected export values.
     pub value: Vec<String>,
     pub default: Vec<String>,
+    /// False when a PDF default stream was not decoded; reset must preserve the live value.
+    pub default_known: bool,
     pub readonly: bool,
     pub required: bool,
     pub display: i32,
@@ -76,6 +78,7 @@ impl FieldState {
             kind,
             value,
             default: Vec::new(),
+            default_known: true,
             readonly: false,
             required: false,
             display: DISPLAY_VISIBLE,

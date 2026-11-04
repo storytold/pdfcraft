@@ -169,6 +169,7 @@ fn display(doc: &pdfcraft_cos::Document, f: &Field) -> i32 {
 pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field, geometry: &pdfcraft_js::DocInfo) -> pdfcraft_js::FieldState {
     let mut s = pdfcraft_js::FieldState::new(f.name.clone(), kind(f.kind), f.value.clone());
     s.default = f.default.clone();
+    s.default_known = pdfcraft_forms::default_value_known(doc, f);
     s.readonly = f.read_only();
     s.required = f.has(pdfcraft_forms::flags::REQUIRED);
     s.display = display(doc, f);
