@@ -120,5 +120,5 @@ modules:
         path: stage
       - type: git
         url: https://github.com/storytold/craft-i18n
-        commit: b1f1d39d727ad92f3208e3359ded11a146085b8c
+        commit: 575cfdef63227b14daf173b8cc87928bfdfa325e
         dest: craft-i18n
