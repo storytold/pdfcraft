@@ -66,7 +66,7 @@ pub struct LangInfo {
 }
 
 /// How many languages [`LANGUAGES`] lists.
-const LANGUAGE_COUNT: usize = 35;
+const LANGUAGE_COUNT: usize = 36;
 
 /// The languages PdfCraft offers. English first: it is the fallback and the source language.
 pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
@@ -150,6 +150,9 @@ pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
     // Norwegian Bokmål; every `nb-*` locale resolves here, and so do general Norwegian (`no-*`) and
     // Nynorsk (`nn-*`), which have no catalog of their own (see `candidates`).
     LangInfo { code: "nb", rtl: false },
+    // Hebrew; every `he-*` locale (`he-IL`), and the legacy `iw` code, resolves here (see
+    // `candidates`). Right to left: see `LangInfo::rtl`.
+    LangInfo { code: "he", rtl: true },
 ];
 
 /// Per language of [`LANGUAGES`], the (context, source) keys of PdfCraft's own catalog as written
@@ -277,6 +280,7 @@ impl Lang {
             "lo" => "Lao",
             "hi" => "Hindi",
             "ko" => "Korean",
+            "he" => "Hebrew",
             // Only reached if a language is added to `LANGUAGES` without an English name; the
             // code still tells the reader which entry it is.
             code => code,
@@ -364,6 +368,10 @@ fn candidates(tag: &str) -> Vec<String> {
         // The only Portuguese catalog is Brazilian; other regions use it rather than English.
         out.insert(out.len().saturating_sub(1), "pt-br".to_string());
     }
+    if primary == "iw" {
+        // The code Java and older Android systems still report for Hebrew.
+        out.push("he".to_string());
+    }
     if matches!(primary, "no" | "nn") {
         // The only Norwegian catalog is Bokmål. `no` (Norwegian in general) and Nynorsk readers use
         // it rather than English; last, so a catalog of their own would win.
@@ -380,6 +388,24 @@ pub fn lang_from_tag(tag: &str) -> Option<Lang> {
         return Some(Lang::EN);
     }
     cands.iter().find_map(|c| Lang::from_code(c))
+}
+
+/// The registered language for a system locale tag, as Auto would pick it: [`lang_from_tag`],
+/// except a language this build can't draw.
+fn auto_lang_from_tag(tag: &str) -> Option<Lang> {
+    lang_from_tag(tag).filter(|lang| auto_can_draw(*lang))
+}
+
+/// The Hebrew letters, final forms included, and the geresh of the abbreviated date names
+/// ("ינו׳"), which the interface fonts must have for Auto to pick Hebrew.
+const HEBREW_LETTERS: &str = "אבגדהוזחטיךכלםמןנסעףפץצקרשת׳";
+
+/// Whether Auto may pick `lang`. Hebrew is drawn with the craft-fonts `Hebr` face, or on desktop
+/// with an installed Hebrew face; a build and machine with neither would show a Hebrew system an
+/// interface of replacement boxes, so Auto goes on to the next preferred language, or English.
+fn auto_can_draw(lang: Lang) -> bool {
+    static HEBREW: OnceLock<bool> = OnceLock::new();
+    lang.code() != "he" || *HEBREW.get_or_init(|| crate::theme::interface_draws(HEBREW_LETTERS))
 }
 
 /// The system language (cached). English when it can't be determined.
@@ -430,7 +456,7 @@ fn language_override(tag: &str) -> Option<Lang> {
     if cfg!(target_os = "windows") && matches!(candidates(tag).first().map(String::as_str), Some("c" | "posix")) {
         return None;
     }
-    lang_from_tag(tag)
+    auto_lang_from_tag(tag)
 }
 
 /// The Windows display languages in preference order, one tag per line, queried once when Auto
@@ -445,7 +471,7 @@ fn windows_ui_language() -> Option<String> {
 /// The first supported language in a macOS `defaults read` list or Windows UI-culture output.
 #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 fn first_supported(list: &str) -> Option<Lang> {
-    list.split(['(', ')', ',', '"', '\n']).map(str::trim).filter(|s| !s.is_empty()).find_map(lang_from_tag)
+    list.split(['(', ')', ',', '"', '\n']).map(str::trim).filter(|s| !s.is_empty()).find_map(auto_lang_from_tag)
 }
 
 /// The first supported language among BCP 47 tags in preference order, as the browser lists them
@@ -453,7 +479,7 @@ fn first_supported(list: &str) -> Option<Lang> {
 /// practice, and a page can't make Auto walk an unbounded one.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn first_supported_tag<S: AsRef<str>>(tags: impl IntoIterator<Item = S>) -> Option<Lang> {
-    tags.into_iter().take(32).find_map(|tag| lang_from_tag(tag.as_ref().trim()))
+    tags.into_iter().take(32).find_map(|tag| auto_lang_from_tag(tag.as_ref().trim()))
 }
 
 /// The browser's preferred languages, as the desktop builds use the system's: `navigator.languages`
