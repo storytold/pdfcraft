@@ -92,7 +92,11 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
         for (index, entry) in list.iter().enumerate() {
             let obj = entry.as_ref().map_or_else(|| doc.resolve(entry), |r| doc.get(final_ref(doc, r)));
             let Some(d) = obj.as_dict() else { continue };
-            let Some(subtype) = d.name(b"Subtype").map(|s| String::from_utf8_lossy(s).into_owned()) else { continue };
+            // Through a reference too, as the renderer reads it, so a comment keeps its slot in the list.
+            let Some(subtype) = d.get(b"Subtype").map(|s| doc.resolve(s)).and_then(|s| s.as_name().map(|s| String::from_utf8_lossy(s).into_owned()))
+            else {
+                continue;
+            };
             if !is_comment_subtype(&subtype) {
                 continue;
             }
