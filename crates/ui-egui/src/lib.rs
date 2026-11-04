@@ -37,6 +37,7 @@ macro_rules! tl_ctx {
 pub mod canvas;
 mod chrome;
 mod image_engine;
+pub mod rulers;
 pub use combine_grid::ThumbState as CombineThumb;
 pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
 mod commands;
@@ -304,6 +305,8 @@ pub struct PdfCraftApp {
     pub reading_colors: pdfcraft_render::ReadingColors,
     /// App-wide page decoration only; never part of a PDF edit or render request.
     pub show_page_edge_shadows: bool,
+    /// View ▸ Show/Hide ▸ Rulers: horizontal and vertical canvas rulers.
+    pub show_rulers: bool,
     /// The Linux portal is enabled only by the native host, and starts on the first System choice.
     #[cfg(target_os = "linux")]
     desktop_theme: Option<pdfcraft_platform::desktop_theme::DesktopTheme>,

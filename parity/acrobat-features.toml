@@ -1607,11 +1607,15 @@ title = "Rulers"
 area = "B"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["view.rulers"]
 tools = []
-evidence = []
-notes = ""
+evidence = [
+    "crates/ui-egui/tests/it/viewer.rs::rulers_end_to_end_cursor_tracking_and_rotation",
+    "crates/ui-egui/tests/it/viewer.rs::rulers_toggle_and_track_cursor_position",
+    "crates/ui-egui/src/rulers.rs::ruler_step_calculation_and_tick_formatting",
+]
+notes = "View ▸ Show/Hide ▸ Rulers (Ctrl+R / ⌘R): horizontal and vertical canvas rulers measuring in pt/in/mm/cm anchored to the active page origin, with dynamic zoom-adaptive tick intervals and real-time cursor tracking hairlines"
 
 [[feature]]
 id = "view.grid"

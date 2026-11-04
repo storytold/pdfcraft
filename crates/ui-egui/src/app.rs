@@ -94,6 +94,7 @@ impl PdfCraftApp {
             theme_preference: ThemePreference::System,
             reading_colors: Default::default(),
             show_page_edge_shadows: true,
+            show_rulers: false,
             #[cfg(target_os = "linux")]
             desktop_theme: None,
             #[cfg(target_os = "linux")]
