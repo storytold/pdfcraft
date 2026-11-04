@@ -924,7 +924,8 @@ fn a_document_copy_reads_in_page_order_and_stops_when_cancelled() {
     let middle = r.render(RenderRequest { page: 1, kind: RequestKind::Text, ..Default::default() }).text.unwrap();
     app.views[0].texts.insert(1, middle);
     let job = || crate::DocumentCopyJob::of(&app.views[0], app.session.get(app.views[0].id).unwrap());
-    let text = job().text(&std::sync::atomic::AtomicBool::new(false)).unwrap();
+    let (text, cut) = job().text(&std::sync::atomic::AtomicBool::new(false)).unwrap();
+    assert!(!cut, "a short document is not cut");
     assert!(text.find("Alpha").unwrap() < text.find("Bravo").unwrap() && text.find("Bravo").unwrap() < text.find("Charlie").unwrap(), "{text:?}");
     assert_eq!(job().text(&std::sync::atomic::AtomicBool::new(true)), None, "cancelled");
 }

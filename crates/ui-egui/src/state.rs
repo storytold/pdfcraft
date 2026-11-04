@@ -271,27 +271,22 @@ impl DocumentCopyJob {
 
     /// The document's text in page order, a page per line run. Each page read here is let go
     /// once its text is taken, so a large document never holds every page's text layer at once.
-    /// `None` when `cancel` was set.
-    pub(crate) fn text(self, cancel: &std::sync::atomic::AtomicBool) -> Option<String> {
+    /// `None` when `cancel` was set; otherwise the text and whether it was cut at the size limit.
+    pub(crate) fn text(self, cancel: &std::sync::atomic::AtomicBool) -> Option<(String, bool)> {
         /// Most text one copy of a whole document puts on the clipboard: pages sharing one long
         /// `/ActualText` would otherwise multiply it without bound.
         const MAX_COPY_BYTES: usize = 256 << 20;
         let mut renderer: Option<pdfcraft_render::PageRenderer> = None;
         let mut out = String::new();
-        let push = |out: &mut String, text: String| {
-            if !text.is_empty() {
-                if !out.is_empty() {
-                    out.push('\n');
-                }
-                out.push_str(&text);
-            }
-        };
+        let mut cut = false;
+        let mut push = |out: &mut String, text: String| cut |= push_bounded(out, &text, MAX_COPY_BYTES);
         for (page, p) in self.pages.into_iter().enumerate() {
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 return None;
             }
             if out.len() >= MAX_COPY_BYTES {
                 // What fits is copied; the rest of the document is left unread.
+                cut = true;
                 break;
             }
             match p {
@@ -316,7 +311,49 @@ impl DocumentCopyJob {
                 CopyPage::Skip => {}
             }
         }
-        Some(out)
+        Some((out, cut))
+    }
+}
+
+/// Append `text` to `out` as a new line, cut (at a character boundary) so `out` stays within `max`
+/// bytes. Whether anything was left out.
+fn push_bounded(out: &mut String, text: &str, max: usize) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    let sep = usize::from(!out.is_empty());
+    let room = max.saturating_sub(out.len()).saturating_sub(sep);
+    if room == 0 {
+        return true;
+    }
+    let mut end = text.len().min(room);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end > 0 {
+        if sep == 1 {
+            out.push('\n');
+        }
+        out.push_str(&text[..end]);
+    }
+    end < text.len()
+}
+
+#[cfg(test)]
+mod copy_bound_tests {
+    use super::push_bounded;
+
+    #[test]
+    fn a_page_past_the_limit_is_cut_at_a_character_boundary() {
+        let mut out = String::from("ab");
+        // 2 + newline leaves 3 bytes: "é" is two, so only one fits before the cut
+        assert!(push_bounded(&mut out, "éé", 6));
+        assert_eq!(out, "ab\né");
+        assert!(out.len() <= 6);
+        assert!(push_bounded(&mut out, "x", 6) || out.len() <= 6);
+        let mut fits = String::new();
+        assert!(!push_bounded(&mut fits, "abc", 3));
+        assert_eq!(fits, "abc");
     }
 }
 
