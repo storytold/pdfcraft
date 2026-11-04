@@ -128,6 +128,23 @@ impl Type3 {
 
         stitching_bounds
     }
+
+    /// PdfCraft patch (ps-export): snapshot for re-emission (see `Function::parsed`).
+    /// The two sentinel bounds the evaluator adds around the interval are stripped, so
+    /// `bounds` carries exactly the dictionary's interior breakpoints.
+    pub(crate) fn parsed(&self) -> super::ParsedFunction {
+        super::ParsedFunction::Stitching {
+            domain: self.clamper.domain.iter().copied().collect(),
+            range: self.clamper.range.clone().map(|r| r.iter().copied().collect()),
+            bounds: self
+                .bounds
+                .get(1..self.bounds.len().saturating_sub(1))
+                .map(|interior| interior.to_vec())
+                .unwrap_or_default(),
+            encode: self.encode.iter().copied().collect(),
+            functions: self.functions.iter().map(|f| f.parsed()).collect(),
+        }
+    }
 }
 
 fn find_interval(bounds: &[f32], x: f32) -> Option<usize> {

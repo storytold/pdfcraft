@@ -900,6 +900,27 @@ pub(crate) fn strip_pdf(name: &str) -> &str {
     name.strip_suffix(".pdf").or_else(|| name.strip_suffix(".PDF")).unwrap_or(name)
 }
 
+/// A PostScript export refusal in words the user can act on — the same cases the automation
+/// tool's `ps_failed` names (`crates/automation/src/a11y.rs`), kept in step with it.
+fn ps_error_text(e: pdfcraft_engine::export::PsExportError) -> String {
+    use pdfcraft_engine::export::PsExportError;
+    match e {
+        PsExportError::UnreadableDocument(reason) => format!("the document could not be exported: {reason}"),
+        PsExportError::InvalidPages { requested, page_count } => {
+            let bad: Vec<String> = requested.iter().filter(|p| **p >= page_count).map(|p| (p + 1).to_string()).collect();
+            format!(
+                "page{} {} not in the document, which has {page_count} page{}",
+                if bad.len() == 1 { "" } else { "s" },
+                bad.join(", "),
+                if page_count == 1 { "" } else { "s" }
+            )
+        }
+        PsExportError::EpsNeedsExactlyOnePage { requested } => {
+            format!("an .eps file takes exactly one page, not {requested}: export .ps for several pages")
+        }
+    }
+}
+
 impl PdfCraftApp {
     /// Prepare a form ▸ Import data: XFDF, FDF, XML, CSV or text.
     pub fn import_data_dialog(&mut self) {
@@ -982,6 +1003,104 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         if let Err(e) = crate::editing::download(&format!("{stem}.{ext}"), &bytes) {
             self.notify_error(e);
+        }
+    }
+
+    /// Export a PDF ▸ PostScript / EPS: ask where (`save_override` in tests), then write. The
+    /// extension of the chosen file picks the flavour: `.ps` writes every page, `.eps` the
+    /// current page — the one page an EPS file holds (a document's visible page is the page
+    /// the user means; a longer document no longer has to be told "exactly one page"). The
+    /// engine path is the one the `doc_export_postscript` tool takes, so both write the same
+    /// bytes.
+    pub fn export_postscript_dialog(&mut self) {
+        // What's typed in a form field is part of the document (#166).
+        if !self.commit_form_typing() {
+            return;
+        }
+        let Some((view, id)) = self.active_ids() else { return };
+        // The page an EPS export takes, captured before the picker opens: the user may
+        // page away while it is up.
+        let current = self.views.get(view).map_or(0, |v| v.current);
+        if !self.may_copy(id) {
+            return;
+        }
+        let Some(doc) = self.session.get(id) else { return };
+        let src = doc.export_source();
+        let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            match self.save_override.clone() {
+                Some(p) => self.write_postscript(src, current, p.into()),
+                None => {
+                    let dialog = rfd::AsyncFileDialog::new()
+                        .set_title(tl!("Export").to_string())
+                        .add_filter(tl!("PostScript / EPS").to_string(), &["ps", "eps"])
+                        .set_file_name(format!("{stem}.ps"));
+                    self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, path| app.write_postscript(src, current, path));
+                }
+            }
+        }
+        // The web has no save picker: the whole document downloads as .ps.
+        #[cfg(target_arch = "wasm32")]
+        {
+            use pdfcraft_engine::export::PsFormat;
+            let pages: Vec<usize> = (0..src.pages).collect();
+            let name = format!("{stem}.ps");
+            match pdfcraft_engine::export::postscript(&src, &pages, PsFormat::Ps) {
+                Ok(out) => match crate::editing::download(&name, &out.bytes) {
+                    Ok(()) => {
+                        // The desktop path reports the degradations after a successful
+                        // write ("Exported to … (N warnings: …)"); a download that
+                        // failed shows its own error instead, never these.
+                        let mut msg = crate::i18n::fmt(tl!("Downloaded {name}"), &[("name", &name)]);
+                        if let Some(first) = out.warnings.first() {
+                            msg.push_str(&crate::i18n::fmt(
+                                tl!(" ({s} warnings: {first})"),
+                                &[("s", &out.warnings.len().to_string()), ("first", &first.text)],
+                            ));
+                        }
+                        self.notify(msg);
+                    }
+                    Err(e) => self.notify_error(e),
+                },
+                Err(e) => self.notify_fmt("Export stopped: {e}", &[("e", &ps_error_text(e))]),
+            }
+        }
+    }
+
+    /// Write the PostScript/EPS export of `src` to `path` (the save picker's answer, or
+    /// `save_override`), saying where it went and, like Export all images, every degradation
+    /// once (the count and the first). EPS output takes exactly `current` — the page the
+    /// export was launched from — while PostScript takes every page.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn write_postscript(&mut self, src: pdfcraft_engine::export::ExportSource, current: usize, path: std::path::PathBuf) {
+        use pdfcraft_engine::export::{PsFormat, postscript};
+        let format = match path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()) {
+            Some(ref e) if e == "eps" => PsFormat::Eps,
+            _ => PsFormat::Ps,
+        };
+        let pages: Vec<usize> = match format {
+            // EPS holds one page: the one on screen (clamped into range, as `current`
+            // tracks a view of this document).
+            PsFormat::Eps => vec![current.min(src.pages.saturating_sub(1))],
+            PsFormat::Ps => (0..src.pages).collect(),
+        };
+        let shown = path.display().to_string();
+        match postscript(&src, &pages, format) {
+            Ok(out) => match crate::editing::write_atomically(&shown, &out.bytes) {
+                Ok(()) => {
+                    let mut msg = crate::i18n::fmt(tl!("Exported to {path}"), &[("path", &shown)]);
+                    if let Some(first) = out.warnings.first() {
+                        msg.push_str(&crate::i18n::fmt(
+                            tl!(" ({s} warnings: {first})"),
+                            &[("s", &out.warnings.len().to_string()), ("first", &first.text)],
+                        ));
+                    }
+                    self.notify(msg);
+                }
+                Err(e) => self.notify_fmt("Couldn't write {name}: {e}", &[("name", &shown), ("e", &e.to_string())]),
+            },
+            Err(e) => self.notify_fmt("Export stopped: {e}", &[("e", &ps_error_text(e))]),
         }
     }
 

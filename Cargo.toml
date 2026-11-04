@@ -54,6 +54,7 @@ pdfcraft-js = { path = "crates/js", version = "0.18.1" }
 pdfcraft-compare = { path = "crates/compare", version = "0.18.1" }
 pdfcraft-preflight = { path = "crates/preflight", version = "0.18.1" }
 pdfcraft-export = { path = "crates/export", version = "0.18.1" }
+pdfcraft-ps-export = { path = "crates/ps-export", version = "0.18.1" }
 pdfcraft-edit = { path = "crates/edit", version = "0.18.1" }
 pdfcraft-create = { path = "crates/create", version = "0.18.1" }
 pdfcraft-forms = { path = "crates/forms", version = "0.18.1" }
