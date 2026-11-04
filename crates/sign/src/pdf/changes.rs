@@ -193,7 +193,7 @@ impl ChangedObjectClassifier<'_> {
         let removed: Vec<ObjRef> = was.iter().filter(|reference| !kept.contains(reference)).copied().collect();
         if removed.is_empty() {
             let added: Vec<ObjRef> = now.iter().filter_map(Object::as_ref).filter(|reference| !was.contains(reference)).collect();
-            added_annots(self.doc, &added)
+            added_annots(self.doc, self.old, &added)
         } else if removed.iter().any(|reference| self.old.get(*reference).as_dict().is_some_and(|dict| dict.name(b"Subtype") == Some(b"Widget"))) {
             // A form field or signature widget taken off the page: no permission covers it.
             kind::OTHER
@@ -371,15 +371,30 @@ fn dss_parts(doc: &Document, old: &Document) -> HashSet<u32> {
     parts
 }
 
+/// Whether `d` is a signature field or a widget of one: `/FT /Sig` on itself or, for a kid
+/// widget without its own `/FT` (ISO 32000-2 §12.7.4), on its `/Parent`. A parent that existed
+/// when signed must have been a signature object then, so a relabel cannot pose as signing.
+fn sig_field(doc: &Document, old: &Document, d: &Dict) -> bool {
+    match d.name(b"FT") {
+        Some(ft) => ft == b"Sig",
+        // ponytail: one level of /Parent, which is what signers write; deeper inheritance reads as form fill.
+        None => d.get(b"Parent").and_then(Object::as_ref).is_some_and(|p| {
+            let was = old.try_get(p.num).ok().filter(|o| !matches!(**o, Object::Null));
+            doc.get(p).as_dict().is_some_and(|pd| pd.name(b"FT") == Some(b"Sig"))
+                && was.as_ref().is_none_or(|o| o.as_dict().is_some_and(is_signature_dict))
+        }),
+    }
+}
+
 /// What adding `added` annotations amounts to: signing (signature widgets only), form fill
 /// (other widgets) or comments.
-fn added_annots(doc: &Document, added: &[ObjRef]) -> &'static str {
+fn added_annots(doc: &Document, old: &Document, added: &[ObjRef]) -> &'static str {
     let kinds: Vec<(bool, bool)> = added
         .iter()
         .map(|r| {
             let o = doc.get(*r);
             let d = o.as_dict();
-            (d.is_some_and(|d| d.name(b"Subtype") == Some(b"Widget")), d.is_some_and(|d| d.name(b"FT") == Some(b"Sig")))
+            (d.is_some_and(|d| d.name(b"Subtype") == Some(b"Widget")), d.is_some_and(|d| sig_field(doc, old, d)))
         })
         .collect();
     if !kinds.is_empty() && kinds.iter().all(|(w, s)| *w && *s) {
@@ -417,7 +432,9 @@ fn acroform_kind(doc: &Document, old: &Document, now: &Dict, before: Option<&Dic
     }
     let old_fields = refs(old, before.get(b"Fields"));
     let added: Vec<ObjRef> = refs(doc, now.get(b"Fields")).into_iter().filter(|r| !old_fields.contains(r)).collect();
-    if added.is_empty() || added_annots(doc, &added) == kind::SIGNATURE { kind::SIGNATURE } else { kind::FORM_FILL }
+    // A field with kid widgets is not itself a widget, so judge the fields as fields.
+    let signing = added.iter().all(|r| doc.get(*r).as_dict().is_some_and(|d| sig_field(doc, old, d)));
+    if signing { kind::SIGNATURE } else { kind::FORM_FILL }
 }
 
 /// Dictionary entries in a stable order, without `keys`.
@@ -525,7 +542,7 @@ fn page_change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Di
         Some(b) => {
             let was = refs(old, b.get(b"Annots"));
             let added: Vec<ObjRef> = refs(doc, d.get(b"Annots")).into_iter().filter(|r| !was.contains(r)).collect();
-            added_annots(doc, &added)
+            added_annots(doc, old, &added)
         }
         None => kind::PAGE_CONTENT,
     }
@@ -588,7 +605,7 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
                 Some(b) => {
                     let was = refs(old, b.get(b"Annots"));
                     let added: Vec<ObjRef> = refs(doc, d.get(b"Annots")).into_iter().filter(|r| !was.contains(r)).collect();
-                    added_annots(doc, &added)
+                    added_annots(doc, old, &added)
                 }
                 None => kind::COMMENTS,
             };
@@ -597,7 +614,10 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
         _ => {}
     }
     match d.name(b"Subtype") {
-        Some(b"Widget") => return if d.name(b"FT") == Some(b"Sig") && signature_ok { kind::SIGNATURE } else { kind::FORM_FILL },
+        Some(b"Widget") => {
+            let was_sig = before.is_none_or(|b| sig_field(old, old, b));
+            return if sig_field(doc, old, d) && was_sig { kind::SIGNATURE } else { kind::FORM_FILL };
+        }
         Some(b"Link") => return kind::LINKS,
         Some(_) if ty == Some(b"Annot") || d.contains(b"Rect") => return kind::COMMENTS,
         _ => {}

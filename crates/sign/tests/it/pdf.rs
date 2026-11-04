@@ -31,6 +31,17 @@ fn fixture_with(catalog: &[u8], more: &[&[u8]]) -> Vec<u8> {
     write_pdf(&objs)
 }
 
+/// Three pages (the last one larger), no form.
+fn three_pages() -> Vec<u8> {
+    write_pdf(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 600] >>",
+    ])
+}
+
 /// A classic-xref PDF of `objs`, numbered from 1, with object 1 as the catalog.
 fn write_pdf(objs: &[&[u8]]) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
@@ -2738,6 +2749,80 @@ fn a_cross_reference_entry_that_misses_its_object_is_not_an_unchanged_object() {
     let honest = append_content_revision(&signed, "Contract text", |new| format!("4 1\n{}", xref_entry(new)));
     let s = signatures(&open(&honest), &honest, &trust).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+}
+
+#[test]
+fn a_signature_on_several_pages_is_turned_for_each_page() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    // Page 2 is shown turned a quarter; pages 1 and 3 are not.
+    let three = write_pdf(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Rotate 90 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] >>",
+    ]);
+    let r = [20.0, 100.0, 220.0, 150.0];
+    let signed = pdfcraft_sign::sign(&open(&three), &id, &SignOptions { also: vec![(1, r), (2, r)], ..opts() }).unwrap();
+    let doc = open(&signed);
+    let pages = pdfcraft_annot::page_refs(&doc).unwrap();
+    let widget = |i: usize| {
+        let annots = doc.get(pages[i]).as_dict().and_then(|d| d.get(b"Annots").map(|a| doc.resolve(a))).and_then(|a| a.as_array().cloned()).unwrap();
+        doc.resolve(&annots[0]).as_dict().cloned().unwrap()
+    };
+    let turn = |i: usize| widget(i).get(b"MK").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().and_then(|m| m.int(b"R")));
+    assert_eq!((turn(0), turn(1), turn(2)), (None, Some(90), None));
+    let ap = |i: usize| widget(i).get(b"AP").and_then(|a| a.as_dict()).and_then(|a| a.get(b"N").cloned());
+    assert_eq!(ap(0), ap(2), "pages turned alike share one appearance");
+    assert_ne!(ap(0), ap(1), "the turned page has its own");
+}
+
+#[test]
+fn one_signature_shows_on_several_pages() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let also = vec![(1, [20.0, 100.0, 220.0, 150.0]), (2, [320.0, 400.0, 520.0, 450.0]), (1, [0.0; 4]), (0, [0.0; 4])];
+    let signed = pdfcraft_sign::sign(&open(&three_pages()), &id, &SignOptions { also, ..opts() }).unwrap();
+    let doc = open(&signed);
+    let sigs = signatures(&doc, &signed, &TrustStore::default());
+    assert_eq!(sigs.iter().filter(|s| s.signed).count(), 1, "one signature");
+    let s = sigs.iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.field, "Signature1");
+    assert_eq!(s.status, Status::Unknown, "{:?}", s.details);
+    // Each page has exactly one widget, all children of the one field, all with the appearance.
+    let pages = pdfcraft_annot::page_refs(&doc).unwrap();
+    let mut parent = None;
+    for (i, p) in pages.iter().enumerate() {
+        let annots = doc.get(*p).as_dict().and_then(|d| d.get(b"Annots").map(|a| doc.resolve(a))).and_then(|a| a.as_array().cloned()).unwrap();
+        assert_eq!(annots.len(), 1, "page {i}");
+        let w = doc.resolve(&annots[0]).as_dict().cloned().unwrap();
+        assert!(w.get(b"AP").is_some(), "page {i} shows the signature");
+        let par = w.get(b"Parent").cloned().expect("a kid widget");
+        assert!(parent.get_or_insert(par.clone()) == &par, "one field");
+    }
+}
+
+#[test]
+fn a_multi_page_counter_signature_is_signing() {
+    // The new field's kid widgets carry `/FT /Sig` only through `/Parent`.
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let first = pdfcraft_sign::sign(&open(&three_pages()), &id, &opts()).unwrap();
+    let also = vec![(1, [20.0, 100.0, 220.0, 150.0]), (2, [20.0, 100.0, 220.0, 150.0])];
+    let rect = Some([20.0, 200.0, 220.0, 250.0]);
+    let second = pdfcraft_sign::sign(&open(&first), &id, &SignOptions { rect, also, ..opts() }).unwrap();
+    let sigs = signatures(&open(&second), &second, &TrustStore::default());
+    let a = sigs.iter().find(|s| s.field == "Signature1").unwrap();
+    assert_eq!(a.modification, Modification::Allowed(vec![kind::SIGNATURE]), "{:?}", a.details);
+}
+
+#[test]
+fn other_pages_need_a_visible_new_signature_on_existing_pages() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let doc = open(&three_pages());
+    let r = [20.0, 100.0, 220.0, 150.0];
+    assert!(pdfcraft_sign::sign(&doc, &id, &SignOptions { also: vec![(3, r)], ..opts() }).is_err(), "no page 4");
+    assert!(pdfcraft_sign::sign(&doc, &id, &SignOptions { rect: None, also: vec![(1, r)], ..opts() }).is_err(), "invisible");
+    let form = open(&fixture());
+    assert!(pdfcraft_sign::sign(&form, &id, &SignOptions { field: Some("Approval".into()), also: vec![(0, r), (1, r)], ..opts() }).is_err());
 }
 
 /// `fixture()` with the page's resources indirect: object 7 is the resources dictionary, 8 its

@@ -48,6 +48,8 @@ impl PdfCraftApp {
                 {
                     let view = &mut self.views[i];
                     view.document_changed(&d.info);
+                    // The placement Fill & Sign would repeat may be gone with the edits.
+                    view.last_fill_sig = None;
                     // Revert discards this source's uncommitted typing as well as model edits.
                     // Otherwise a later Save could write a rejected draft back into the file.
                     view.forms.focus = None;

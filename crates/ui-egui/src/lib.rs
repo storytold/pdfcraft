@@ -333,6 +333,8 @@ pub struct PdfCraftApp {
     pub fill_text_size: f64,
     /// Colour for new Fill & Sign text and dates, kept across launches.
     pub fill_text_color: [f64; 3],
+    /// Fill & Sign ▸ Repeat last signature on these pages.
+    pub fill_repeat: marks_ui::PageRange,
     pub dialog: Option<Dialog>,
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
     pub(crate) updates: updates::Updates,
