@@ -886,13 +886,17 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("sign.digital")
             .with(schema(json!({}), &[])),
-        t("sign_document", "Sign a document", "Sign with a digital ID (a .p12/.pfx path, or on macOS a Keychain identity: \"keychain:<common name or fingerprint>\" from sign_keychain_ids, or on Windows a store identity: \"windows:<common name or fingerprint>\" from sign_windows_ids) and save the signed file to `out` (signing always saves, as in Acrobat; the document then shows the signed file). Sign an existing empty signature field (`field`), or a new one on `page` at `rect` (omit rect for an invisible signature). certify: no_changes, form_fill or comments makes a certification signature. graphic shows a picture where the signer's name would be large (Acrobat: Configure Signature Appearance): {\"image\": path} (PNG or JPEG), {\"text\": name} (typed in the Fill & Sign script font) or {\"strokes\": [[[x, y], …], …]} (y up, the drawing pad 1 wide); it needs a visible signature. appearance chooses what a visible signature shows (default: name, date and labels; reason, location and distinguished_name are off unless turned on). labels gives the words of its labels, e.g. in another language (default English: \"Digitally signed by\", \"DN: \", \"Reason: \", \"Location: \", \"Date: \"; include the separator); each must be in Western European characters (Windows-1252), the only ones the signature's font draws, or the call is refused naming the label and character. PAdES B-B, SHA-256 (SHA-384 for P-384 keys).")
+        t("sign_pkcs11_ids", "List PKCS #11 token digital IDs", "Unix: signing identities on the PKCS #11 tokens the configured modules expose (the CV cryptovision card, a PIV or CAC token, SoftHSM). The private key stays on the card; pass the token PIN as `password` to sign_document. Modules come from PDFCRAFT_PKCS11_MODULES, else the p11-kit proxy. Returns an `id` (pkcs11:<token label>:<fingerprint>) and certificate for each, and `unusable` for the token's other certificates with why they can't sign (no private key, an unsupported key type, a key usage without digitalSignature/nonRepudiation).")
+            .ro()
+            .cmd("sign.digital")
+            .with(schema(json!({}), &[])),
+        t("sign_document", "Sign a document", "Sign with a digital ID (a .p12/.pfx path, or on macOS a Keychain identity: \"keychain:<common name or fingerprint>\" from sign_keychain_ids, or on Windows a store identity: \"windows:<common name or fingerprint>\" from sign_windows_ids, or on Unix a token identity: \"pkcs11:<token label>:<fingerprint>\" from sign_pkcs11_ids) and save the signed file to `out` (signing always saves, as in Acrobat; the document then shows the signed file). Sign an existing empty signature field (`field`), or a new one on `page` at `rect` (omit rect for an invisible signature). certify: no_changes, form_fill or comments makes a certification signature. graphic shows a picture where the signer's name would be large (Acrobat: Configure Signature Appearance): {\"image\": path} (PNG or JPEG), {\"text\": name} (typed in the Fill & Sign script font) or {\"strokes\": [[[x, y], …], …]} (y up, the drawing pad 1 wide); it needs a visible signature. PAdES B-B, SHA-256 (SHA-384 for P-384 keys).")
             .cmd("sign.digital")
             .with(schema(
                 json!({
                     "doc": doc(),
-                    "id": { "type": "string", "description": "Digital ID file (.p12 / .pfx), keychain: reference on macOS, or windows: reference on Windows." },
-                    "password": { "type": "string" },
+                    "id": { "type": "string", "description": "Digital ID file (.p12 / .pfx), keychain: reference on macOS, windows: reference on Windows, or pkcs11: reference on Unix." },
+                    "password": { "type": "string", "description": "The .p12 password, or the token PIN for a pkcs11: identity." },
                     "field": { "type": "string" },
                     "page": { "type": "integer", "minimum": 1 },
                     "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },

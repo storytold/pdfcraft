@@ -188,6 +188,20 @@ impl Automation {
             #[cfg(not(target_os = "windows"))]
             return Err(failed(format!("windows:{r}: Windows certificate store identities are only available on Windows")));
         }
+        // A PKCS #11 token: "pkcs11:<token label>:<fingerprint>" (or "<common name>"). The PIN
+        // comes in the same `password` argument a .p12 uses.
+        if let Some(r) = a.str("id")?.strip_prefix("pkcs11:") {
+            #[cfg(all(unix, not(target_arch = "wasm32")))]
+            {
+                let reference = format!("pkcs11:{r}");
+                if let Some(pin) = a.opt_str("password")? {
+                    sign::pkcs11::set_pin(&reference, pin);
+                }
+                return sign::pkcs11::find(&reference).map_err(failed);
+            }
+            #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+            return Err(failed(format!("pkcs11:{r}: PKCS #11 identities are only available on Unix")));
+        }
         let path = self.resolve(a.str("id")?, false)?;
         let bytes = crate::read_input(&path)?;
         sign::pkcs12::open(&bytes, a.opt_str("password")?.unwrap_or("")).map_err(|e| match e {

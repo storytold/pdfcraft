@@ -7,7 +7,9 @@
 //! base64 body (#159).
 //! Writing uses PBES2 AES-256-CBC with PBKDF2-HMAC-SHA-256 and an HMAC-SHA-256 MAC, OpenSSL 3's
 //! algorithms, at [`WRITE_ROUNDS`] rather than OpenSSL's 2048. Opening stops at a fixed amount
-//! of key-derivation work, whatever the file asks for.
+//! of key-derivation work, whatever the file asks for. A key that lives outside PdfCraft (a
+//! Keychain or token key) has no PKCS#8 to embed, so [`write`] refuses one rather than emit a
+//! `.p12` with an empty key bag.
 //!
 //! The envelope is read as BER, not DER: Windows writes `.p12` files with indefinite lengths and
 //! the AuthenticatedSafe split into OCTET STRING segments, and nothing in the envelope is signed
@@ -483,7 +485,14 @@ fn random(n: usize) -> Result<Vec<u8>, SignError> {
 }
 
 /// Write a digital ID as a `.p12` protected by `password`.
+///
+/// A key that lives outside PdfCraft (a Keychain, a token) has no PKCS#8 to embed, so writing one
+/// needs a key that can be exported: an external key would otherwise produce a `.p12` with an
+/// empty key bag, which is refused rather than written.
 pub fn write(id: &DigitalId, password: &str) -> Result<Vec<u8>, SignError> {
+    if id.key.is_external() {
+        return Err(SignError::Unsupported("a .p12 file for this identity: its private key lives outside PdfCraft and can't be exported".into()));
+    }
     let encrypt = |plain: &[u8]| -> Result<Vec<u8>, SignError> {
         let (salt, iv) = (random(16)?, random(16)?);
         let key = pbkdf2(DigestAlg::Sha256, password.as_bytes(), &salt, WRITE_ROUNDS, 32)?;

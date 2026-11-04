@@ -417,7 +417,7 @@ fn app_creator<'a>(
         }
         app.set_startup_update_check(true);
         app.printer_source = Some(pdfcraft_ui_egui::system_printers());
-        app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
+        app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows", all(unix, not(target_arch = "wasm32"))));
         #[cfg(target_os = "macos")]
         {
             app.os_events = Some(apple_events.connect(&cc.egui_ctx));

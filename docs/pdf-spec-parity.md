@@ -3,6 +3,7 @@
 > Integration update 2026-10-30: lossless JBIG2 generic and exact-copy symbol coding are included; no lossy substitution. Combined tests passed at bdf5620; the subsequent review fixes require fresh CI.
 
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** minor (§7.4: JBIG2 decoding in `pdfcraft-filters`, so redaction clears JBIG2 scans; earlier, §7.4: redaction decodes CCITT fax images, Group 3 on bytes aside) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (§12.8: PKCS #11 token signing on Unix) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How much of ISO 32000-2 (PDF 2.0) and the PDF subset standards PdfCraft implements, set against
 what Acrobat Pro implements. This is PdfCraft's equivalent of a "geometry" or "codec" checklist:
@@ -112,7 +113,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | Seed values | yes | none |
 | Validation: chain, key usage, EKU, critical extensions, changes after signing, signed version | yes | yes; name constraints and issuer critical extensions missing |
 | Trust: own store, OS store, AATL, EUTL | yes | own store only; AATL out of scope; OS and EUTL planned |
-| Smart cards and tokens (PKCS #11, CryptoTokenKit) | yes | Windows CNG store (with PIN prompt) only |
+| Smart cards and tokens (PKCS #11, CryptoTokenKit) | yes | Keychain identities (macOS), Windows CNG store with PIN prompt, PKCS #11 tokens (Unix) |
 
 ## Subset standards
 
@@ -137,5 +138,6 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | 2026-10-26 | minor | §7.4: CCITT decoding (`hayro-ccitt`) in `pdfcraft-filters`, for export and the Optimizer |
 | 2026-10-26 | minor | §7.4: CCITT Group 4 encoding (`fax`) in the Optimizer |
 | 2026-10-14 | minor | §12.4.4: `/Trans` and `/Dur` read into `DocInfo::transitions` and reported by `doc_info` |
+| 2026-10-13 | minor | §12.8: PKCS #11 tokens and smart cards sign (Unix); the smart-cards row lists all three platforms |
 | 2026-10-11 | minor | §7.6.4: encrypted files we write open in Acrobat (#774, fixed by #836) |
 | 2026-10-10 | major | Created from the code, `vendor/README.md` and `parity/acrobat-features.toml`, against ISO 32000-2 and Acrobat Pro 26.002.21931's documented capabilities |

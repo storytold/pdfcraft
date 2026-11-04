@@ -45,6 +45,11 @@ ed25519-dalek = "3.0.0"
 aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
 getrandom = "0.4"
 
+[target.'cfg(all(unix, not(target_arch = "wasm32")))'.dependencies]
+# Signing with PKCS #11 tokens and smart cards, through a module loaded at run time
+# (Apache-2.0 OR MIT).
+cryptoki = "0.12"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 # Safe Windows certificate store and CNG signing wrappers (MIT OR Apache-2.0).
 rustls-cng = { version = "0.7.1", default-features = false }

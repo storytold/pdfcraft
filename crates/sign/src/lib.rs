@@ -4,6 +4,8 @@
 //!   primitives (RSA private-key operations use aws-lc-rs on native targets, ADR-0009).
 //! - [`pdf`]: signature fields in a document — listing and validating them, and signing
 //!   (PAdES B-B, `ETSI.CAdES.detached`) with an incremental save.
+//! - [`pkcs11`] (Unix): sign with PKCS #11 tokens and smart cards — the private key never leaves
+//!   the card, which asks for its PIN when used; the module is loaded at run time.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -16,6 +18,9 @@ pub mod graphic;
 pub mod keychain;
 pub mod keys;
 pub mod pdf;
+/// PKCS #11 tokens and smart cards, on Unix (the module is loaded at run time).
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub mod pkcs11;
 pub mod pkcs12;
 pub mod revocation;
 mod rsa_pad;
@@ -43,6 +48,10 @@ pub enum SignError {
     Unsupported(String),
     #[error("the password is incorrect")]
     WrongPassword,
+    #[error("the token needs its PIN to sign")]
+    PinRequired,
+    #[error("the token's PIN is incorrect")]
+    WrongPin,
     #[error("{0}")]
     Crypto(String),
     #[error("{0}")]
