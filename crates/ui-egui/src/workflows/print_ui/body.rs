@@ -245,7 +245,7 @@ pub(crate) fn body(
                         }
                     }
                 });
-                if d.paper != before {
+                if paper_clicked || d.paper != before {
                     d.paper_overridden = true;
                 }
                 // Label stock gets the label layout (cut, turned upright, fitted).

@@ -168,7 +168,7 @@ impl PrintDraft {
 
     /// Refresh `self.papers` with driver-reported media sizes, preserving the current selection.
     pub fn update_printer_papers(&mut self) {
-        let before_label_name = self.paper_before_label.and_then(|idx| self.papers.get(idx).map(|p| p.0.clone()));
+        let before_label = self.paper_before_label.and_then(|idx| self.papers.get(idx).cloned());
         let mut papers = default_papers();
         if let Some(ref printer) = self.printer {
             let detected = spool::printer_papers(printer);
@@ -188,7 +188,9 @@ impl PrintDraft {
         let current_name = self.paper_name().to_string();
         let current_size = self.paper_size();
         self.papers = papers;
-        if let Some(pos) = self.papers.iter().position(|(n, _)| n == &current_name) {
+        if let Some(pos) =
+            self.papers.iter().position(|(n, s)| n == &current_name && (s.0 - current_size.0).abs() <= 0.5 && (s.1 - current_size.1).abs() <= 0.5)
+        {
             self.paper = pos;
         } else if let Some(pos) = self.papers.iter().position(|(_, s)| (s.0 - current_size.0).abs() <= 0.5 && (s.1 - current_size.1).abs() <= 0.5) {
             self.paper = pos;
@@ -196,7 +198,16 @@ impl PrintDraft {
             self.papers.push((current_name, current_size));
             self.paper = self.papers.len() - 1;
         }
-        self.paper_before_label = before_label_name.and_then(|name| self.papers.iter().position(|(n, _)| n == &name));
+        self.paper_before_label = before_label.map(|(name, size)| {
+            if let Some(pos) = self.papers.iter().position(|(n, s)| n == &name && (s.0 - size.0).abs() <= 0.5 && (s.1 - size.1).abs() <= 0.5) {
+                pos
+            } else if let Some(pos) = self.papers.iter().position(|(_, s)| (s.0 - size.0).abs() <= 0.5 && (s.1 - size.1).abs() <= 0.5) {
+                pos
+            } else {
+                self.papers.push((name, size));
+                self.papers.len() - 1
+            }
+        });
     }
 
     /// Auto-select the printer's configured default paper (from DEVMODE / driver settings).

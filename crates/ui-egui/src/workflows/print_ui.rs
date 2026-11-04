@@ -172,7 +172,7 @@ impl PdfCraftApp {
             ..keep
         };
         self.print_draft.update_printer_papers();
-        if !picked && !self.print_draft.paper_overridden {
+        if !self.print_draft.paper_overridden {
             self.print_draft.auto_select_default_paper();
         }
         self.dialog = Some(crate::Dialog::Print);
