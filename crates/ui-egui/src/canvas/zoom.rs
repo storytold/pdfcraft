@@ -1,4 +1,4 @@
-use super::{DocInfo, DocView, Fit, GAP, MARGIN, PT, PageLayout, Pos2, Rect, SIDE, SavedDisplay, Vec2, device_pixels, pos2, vec2};
+use super::{DocInfo, DocView, Fit, GAP, MARGIN, PageLayout, Pos2, Rect, SIDE, SavedDisplay, Vec2, device_pixels, pos2, vec2};
 
 /// The page grid's zoom range and the step of its buttons and keys.
 pub const GRID_ZOOM_RANGE: std::ops::RangeInclusive<f32> = 0.5..=3.0;
@@ -280,13 +280,13 @@ impl DocView {
         let avail_w = (self.viewport_w - 2.0 * SIDE).max(100.0);
         let per_row = if self.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
         match self.fit {
-            Fit::Width => self.zoom = (avail_w - self.page_gap() * (per_row - 1.0)) / (w * PT * per_row),
+            Fit::Width => self.zoom = (avail_w - self.page_gap() * (per_row - 1.0)) / (w * self.pt * per_row),
             Fit::Page => {
-                let zw = (avail_w - self.page_gap() * (per_row - 1.0)) / (w * PT * per_row);
-                let zh = (self.viewport_h - 2.0 * MARGIN) / (h * PT);
+                let zw = (avail_w - self.page_gap() * (per_row - 1.0)) / (w * self.pt * per_row);
+                let zh = (self.viewport_h - 2.0 * MARGIN) / (h * self.pt);
                 self.zoom = zw.min(zh);
             }
-            Fit::Height => self.zoom = (self.viewport_h - 2.0 * MARGIN) / (h * PT),
+            Fit::Height => self.zoom = (self.viewport_h - 2.0 * MARGIN) / (h * self.pt),
             Fit::None => {}
         }
         self.zoom = self.zoom.clamp(0.08, 64.0);
@@ -299,12 +299,12 @@ impl DocView {
         let shown = info.pages.iter().enumerate().filter(|&(i, _)| single.is_none_or(|c| c == i));
         let max_w = shown.map(|(_, p)| self.display_size(p).0).fold(0.0, f32::max);
         let per_row = if self.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
-        (max_w * self.zoom * PT * per_row + 2.0 * SIDE).max(avail_w)
+        (max_w * self.zoom * self.pt * per_row + 2.0 * SIDE).max(avail_w)
     }
 
     /// Page rects in content coordinates (origin at the scroll content's top-left).
     pub(super) fn layout(&self, info: &DocInfo, content_w: f32, ppp: f32) -> Vec<Rect> {
-        let s = self.zoom * PT;
+        let s = self.zoom * self.pt;
         let gap = self.page_gap();
         let page_size = |p: &pdfcraft_render::PageInfo| {
             let (w, h) = self.display_size(p);

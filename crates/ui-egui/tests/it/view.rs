@@ -1315,6 +1315,59 @@ fn actual_size_fit_width_and_fit_page() {
 }
 
 #[test]
+fn a_calibrated_screen_draws_actual_size_at_its_real_size_and_keeps_fits() {
+    // A screen calibrated at 144 device pixels per inch: at 100% a 300 pt (4 1/6 in) page is
+    // 600 device pixels wide, whatever the interface scale (#739).
+    let mut h = harness(&[("screen-ppi", "144")]);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num1); // actual size
+    h.run_steps(4);
+    let ppp = h.ctx.pixels_per_point();
+    let r = rect(&h, 0).expect("page 1");
+    assert!((r.width() * ppp - 600.0).abs() < 1.0, "300 pt at 144 ppi is 600 device px: {} px at {ppp}x", r.width() * ppp);
+
+    // Fit width still fits the window.
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num2);
+    h.run_steps(4);
+    let (r, vp) = (rect(&h, 0).expect("page 1"), h.state().views[0].viewport_rect());
+    assert!(r.width() > vp.width() * 0.85 && r.width() <= vp.width(), "fit width: page {} in viewport {}", r.width(), vp.width());
+
+    // The interface drawn larger: the page keeps its size on the screen.
+    h.state_mut().set_option("ui-scale", "150%").unwrap();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num1);
+    h.run_steps(4);
+    let ppp = h.ctx.pixels_per_point();
+    let r = rect(&h, 0).expect("page 1");
+    assert!((r.width() * ppp - 600.0).abs() < 1.0, "still 600 device px at {ppp}x: {}", r.width() * ppp);
+
+    // Back to Standard: 96 dpi again.
+    h.state_mut().set_option("ui-scale", "100%").unwrap();
+    h.state_mut().set_option("screen-ppi", "standard").unwrap();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Num1);
+    h.run_steps(4);
+    let r = rect(&h, 0).expect("page 1");
+    assert!((r.width() - 400.0).abs() < 1.0, "300 pt at 96 dpi: {}", r.width());
+}
+
+#[test]
+fn the_screen_resolution_is_kept_and_bad_values_are_refused() {
+    let h = harness(&[("screen-ppi", "163.5")]);
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert_eq!(restored.screen_ppi, Some(163.5));
+    // Settings are untrusted: out of range or not a number keeps the standard basis.
+    for bad in [r#"{"screen_ppi": 5}"#, r#"{"screen_ppi": 1e9}"#, r#"{"screen_ppi": "163"}"#] {
+        let mut fresh = PdfCraftApp::new();
+        fresh.restore(bad);
+        assert_eq!(fresh.screen_ppi, None, "{bad}");
+    }
+    let mut app = PdfCraftApp::new();
+    for bad in ["", "big", "10", "99999", "NaN"] {
+        assert!(app.set_option("screen-ppi", bad).is_err(), "{bad}");
+    }
+    assert_eq!(app.screen_ppi, None);
+}
+
+#[test]
 fn fit_page_holds_zoom_across_mixed_page_sizes() {
     // Scrolling views fit their largest page, so scrolling past other sizes must not jump
     // the zoom (#214).

@@ -1,5 +1,5 @@
 use super::zoom::GRID_ZOOM_STEP;
-use super::{DestView, DocInfo, DocView, Fit, PT, PageLayout, SIDE, ViewAction, pos2, vec2};
+use super::{DestView, DocInfo, DocView, Fit, PageLayout, SIDE, ViewAction, pos2, vec2};
 
 impl DocView {
     /// Where a bookmark made now should go: the page and the `/XYZ` position `[left, top]` in user
@@ -179,7 +179,7 @@ impl DocView {
                 let (dw, dh) = self.display_size(p);
                 let (w, h) = ((ax - bx).abs() * dw, (ay - by).abs() * dh);
                 if w >= 1.0 && h >= 1.0 && self.viewport_w >= 1.0 && self.viewport_h >= 1.0 {
-                    self.zoom = (self.viewport_w / (w * PT)).min(self.viewport_h / (h * PT)).clamp(0.08, 64.0);
+                    self.zoom = (self.viewport_w / (w * self.pt)).min(self.viewport_h / (h * self.pt)).clamp(0.08, 64.0);
                     self.fit = Fit::None;
                     self.zoom_anchor = None;
                 }

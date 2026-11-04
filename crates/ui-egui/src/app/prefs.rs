@@ -146,6 +146,8 @@ impl PdfCraftApp {
         v["pinned_tools"] = serde_json::json!(self.pinned_tools);
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
+        // Likewise; null is the standard 96 dpi basis.
+        v["screen_ppi"] = serde_json::json!(self.screen_ppi);
         v["show_page_edge_shadows"] = self.show_page_edge_shadows.into();
         v["hotbar"] = serde_json::to_value(&self.hotbar).unwrap_or_default();
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
@@ -317,6 +319,8 @@ impl PdfCraftApp {
         }
         // Settings are untrusted: a size out of range follows the system instead.
         self.ui_scale = v["ui_scale"].as_f64().and_then(ui_scale::valid);
+        // Settings are untrusted: a resolution out of range keeps the standard basis.
+        self.screen_ppi = v["screen_ppi"].as_f64().and_then(screen_ppi::valid);
         // Settings are untrusted: an unusable pattern keeps the default.
         if let Some(f) = v["date_format"].as_str() {
             let _ = self.session.set_date_format(f);

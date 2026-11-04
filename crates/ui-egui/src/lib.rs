@@ -137,6 +137,7 @@ use platform::open_worker;
 #[cfg(not(target_arch = "wasm32"))]
 use platform::pickers;
 pub use platform::portable;
+pub use platform::screen_ppi;
 #[cfg(not(target_arch = "wasm32"))]
 use platform::system_fonts;
 pub use platform::ui_scale;
@@ -328,6 +329,11 @@ pub struct PdfCraftApp {
     pub system_text_scale: f32,
     /// The interface size last given to egui ([`ui_scale::sync`]).
     ui_scale_applied: Option<f32>,
+    /// Preferences ▸ Screen resolution in device pixels per inch, or `None` for the standard
+    /// 96 dpi basis ([`screen_ppi`]).
+    pub screen_ppi: Option<f32>,
+    /// What the Calibrate screen window's ruler reading boxes hold, one per line.
+    pub calibration_readings: [f64; screen_ppi::LINES.len()],
     /// Preferences: bake Fill & Sign marks into the page when saving. Off, so a normal save stays editable.
     pub flatten_fill_sign_on_save: bool,
     /// Point size for new Fill & Sign text and dates, kept across launches.
