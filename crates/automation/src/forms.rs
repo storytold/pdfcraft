@@ -568,6 +568,7 @@ impl Automation {
                     Ok((wi, caption.to_owned()))
                 })
                 .transpose()?,
+            caption_all: None,
             read_only: a.opt_bool("read_only")?,
             required: a.opt_bool("required")?,
             multiline: a.opt_bool("multiline")?,

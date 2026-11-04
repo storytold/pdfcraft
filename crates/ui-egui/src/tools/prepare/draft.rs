@@ -254,6 +254,7 @@ impl FieldDraft {
             name: (self.name.trim() != o.name).then(|| self.name.trim().to_string()),
             tooltip: (self.tooltip != o.tooltip).then(|| self.tooltip.clone()),
             caption: (self.caption != o.caption).then(|| (self.widget, self.caption.clone())),
+            caption_all: None,
             read_only: ch(self.read_only, o.read_only),
             required: ch(self.required, o.required),
             multiline: ch(self.multiline, o.multiline),
