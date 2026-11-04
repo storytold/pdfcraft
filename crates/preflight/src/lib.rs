@@ -22,6 +22,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod icc;
+mod spot;
 mod xmp;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
@@ -119,6 +120,8 @@ pub const WORDINGS: &[&str] = &[
     "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)",
     "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile",
     "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile",
+    "Separation colour spaces named {} differ in their alternate space or tint transform",
+    "The spot colour {} of a DeviceN colour space isn't in its Colorants dictionary",
     "The document has additional actions (/AA)",
     "The document has document-level JavaScript",
     "The form asks viewers to make appearances (NeedAppearances)",
@@ -515,6 +518,14 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
         }
     }
     check_objects(doc, level, &objs, &page_of, &mut issue);
+    // 6.2.4.4: Separation and DeviceN colour spaces.
+    let spots = spot::check(doc, &objs);
+    for name in spots.differing {
+        issue("6.2.4.4", "Separation colour spaces named {} differ in their alternate space or tint transform", Some(name), None, false);
+    }
+    for name in spots.undefined {
+        issue("6.2.4.4", "The spot colour {} of a DeviceN colour space isn't in its Colorants dictionary", Some(name), None, false);
+    }
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
     let mut seen = std::collections::HashSet::new();
     out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));

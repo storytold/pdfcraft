@@ -488,3 +488,57 @@ fn an_output_intent_profile_header_is_read_within_a_size_cap() {
         assert_eq!(pdfa_intent_profile(&doc), Some(n), "a {size}-byte profile");
     }
 }
+
+/// PDF/A-2 6.2.4.4: Separation spaces of one colorant name agree on their alternate space and tint
+/// transform, also inside a DeviceN space's `/Colorants`; and a DeviceN space names each spot
+/// colorant it uses in its `/Colorants` (ISO 32000-1 8.6.6.5, Table 71). Process colorants (the
+/// CMYK four, and an NChannel space's `/Process` components) and `None` need no entry.
+#[test]
+fn separation_and_devicen_spaces_are_checked() {
+    let spots = |spaces: &str| -> Vec<String> {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << {spaces} >> >> >>");
+        let doc = build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                &page,
+                "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [1 0 0] /N 1 >>",
+                "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [0 1 0] /N 1 >>",
+                "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [1 0 0] /N 1 >>",
+            ],
+            "",
+        );
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.4.4").map(|i| i.message).collect()
+    };
+    let red = |alt: &str, f: u32| format!("[/Separation /Red /{alt} {f} 0 R]");
+    // The same name, the same alternate and an identical tint transform (another object): fine.
+    assert!(spots(&format!("/A {} /B {}", red("DeviceRGB", 4), red("DeviceRGB", 6))).is_empty());
+    assert_eq!(
+        spots(&format!("/A {} /B {}", red("DeviceRGB", 4), red("DeviceRGB", 5))),
+        ["Separation colour spaces named Red differ in their alternate space or tint transform"]
+    );
+    assert_eq!(
+        spots(&format!("/A {} /B {}", red("DeviceRGB", 4), red("DeviceGray", 4))),
+        ["Separation colour spaces named Red differ in their alternate space or tint transform"]
+    );
+    // Inside two DeviceN spaces' Colorants.
+    let nchannel = |f: u32| format!("[/DeviceN [/Red] /DeviceRGB 4 0 R << /Subtype /NChannel /Colorants << /Red {} >> >>]", red("DeviceRGB", f));
+    assert_eq!(
+        spots(&format!("/A {} /B {}", nchannel(4), nchannel(5))),
+        ["Separation colour spaces named Red differ in their alternate space or tint transform"]
+    );
+    // Spot colorants need a Colorants entry; process colorants and None don't.
+    assert_eq!(
+        spots("/A [/DeviceN [/Spot1 /Cyan /None] /DeviceCMYK 4 0 R]"),
+        ["The spot colour Spot1 of a DeviceN colour space isn't in its Colorants dictionary"]
+    );
+    assert_eq!(
+        spots("/A [/DeviceN [/Spot1] /DeviceRGB 4 0 R << /Colorants << >> >>]"),
+        ["The spot colour Spot1 of a DeviceN colour space isn't in its Colorants dictionary"]
+    );
+    assert!(spots(&format!("/A [/DeviceN [/Red /Black] /DeviceRGB 4 0 R << /Colorants << /Red {} >> >>]", red("DeviceRGB", 4))).is_empty());
+    assert!(
+        spots("/A [/DeviceN [/PrCyan /Black] /DeviceCMYK 4 0 R << /Subtype /NChannel /Process << /ColorSpace /DeviceCMYK /Components [/PrCyan /M /Y /Black] >> >>]")
+            .is_empty()
+    );
+}
