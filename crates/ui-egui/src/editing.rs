@@ -167,20 +167,23 @@ impl PdfCraftApp {
                 view.signature_drag.committed(&edit, doc.edit_generation());
                 view.move_background.committed(&edit, doc.edit_generation());
                 view.text_background.committed(&edit);
+                // A form edit that leaves the pages and XFA as they were: the pages its fields are
+                // on, and the values that show over them until those pages' rasters have them.
+                let form_edit = form_before
+                    .filter(|_| doc.info.pages.len() == page_count_before && doc.xfa.is_some() == had_xfa && doc.xfa.is_none() && is_form_edit(&edit))
+                    .map(|before| form_edit_pages(&before, &doc.form));
                 if signatures_before.is_some_and(|before| crate::canvas::signature_states_changed(&before, &doc.signatures)) {
                     // A signature shows its state on its own page, which an edit elsewhere can
-                    // change (a certification forbidding it, say): every page redraws.
+                    // change (a certification forbidding it, say): every page redraws. The values
+                    // just typed still show until theirs do.
                     view.document_changed(info);
+                    if let Some((_, unbaked)) = form_edit {
+                        view.forms.unbaked.extend(unbaked);
+                    }
                 } else if let Some(page) = comment_page(&edit).or_else(|| content_page(&edit)) {
                     // Comment and content edits change one page: keep every other raster.
                     view.page_changed(page);
-                } else if let Some(form_before) = form_before
-                    && doc.info.pages.len() == page_count_before
-                    && doc.xfa.is_some() == had_xfa
-                    && doc.xfa.is_none()
-                    && is_form_edit(&edit)
-                {
-                    let (changed_pages, unbaked) = form_edit_pages(&form_before, &doc.form);
+                } else if let Some((changed_pages, unbaked)) = form_edit {
                     view.forms.unbaked.extend(unbaked);
                     for page in changed_pages {
                         view.page_changed(page);

@@ -334,6 +334,46 @@ fn an_edit_on_another_page_that_changes_the_verdict_redraws_the_signature() {
     assert!(invalid > 100 && valid < 10, "page 1 redraws in the invalid state: {invalid} red, {valid} green pixels");
 }
 
+/// `file` with a text field, "name", below the signature on page 1.
+fn with_text_field(file: Vec<u8>) -> Vec<u8> {
+    use pdfcraft_cos::{Lexer, ObjRef, Object};
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(file)).unwrap();
+    let field = b"<< /FT /Tx /T (name) /Type /Annot /Subtype /Widget /Rect [100 40 300 70] /P 3 0 R /DA (/Helv 12 Tf 0 g) >>";
+    let field = doc.add(Lexer::new(field, 0).object().unwrap());
+    for (owner, key) in [(ObjRef::new(5, 0), &b"Fields"[..]), (ObjRef::new(3, 0), b"Annots")] {
+        doc.update_dict(owner, |d| {
+            if let Some(Object::Array(a)) = d.get_mut(key) {
+                a.push(Object::Ref(field));
+            }
+        })
+        .unwrap();
+    }
+    pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap()
+}
+
+#[test]
+fn a_value_typed_against_a_certification_shows_while_every_page_redraws() {
+    // A certification that allows no changes: filling a field breaks it, so every page redraws,
+    // the field's own included. Until that page's raster arrives, the value typed is drawn over it.
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+    let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
+    let bytes = sign(&id, with_text_field(fixture()), |v| {
+        let reference = b"[<< /Type /SigRef /TransformMethod /DocMDP /TransformParams << /Type /TransformParams /P 1 /V /1.2 >> >>]";
+        v.set(b"Reference".to_vec(), pdfcraft_cos::Lexer::new(reference, 0).object().unwrap());
+    });
+    let mut h = harness(bytes, "en");
+    h.state_mut().apply_trusted_certificates(vec![anchor]);
+    settle(&mut h);
+    let doc_id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(doc_id).unwrap().signatures[0].status, SignatureStatus::Valid);
+
+    let value = pdfcraft_engine::FieldValue::Text("Ada".into());
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldValue { name: "name".into(), value }));
+    assert_eq!(h.state().session.get(doc_id).unwrap().signatures[0].status, SignatureStatus::Invalid);
+    assert!(h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)), "the value typed is drawn until page 1 redraws");
+}
+
 #[test]
 fn a_file_opened_before_the_first_frame_is_drawn_in_the_interface_language() {
     // Files named at startup open before any frame, which is when the interface language used to
