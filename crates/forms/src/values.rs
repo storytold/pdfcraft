@@ -477,7 +477,9 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
 /// document that declares PDF/A, which forbids it: there the widget's mark
 /// (`pdfcraft_fonts::UNDRAWN_MARK`) is all, and the edit's report says the `?` shows everywhere.
 pub(crate) fn ask_viewers_to_redraw(doc: &mut Document) -> Result<(), FormError> {
-    if declares_pdfa(doc) || need_appearances(doc) {
+    // The form's own flag first: once it is set, the metadata needn't be decoded again for each
+    // field drawn after.
+    if need_appearances(doc) || declares_pdfa(doc) {
         return Ok(());
     }
     let Some(root) = doc.root() else { return Ok(()) };
@@ -632,6 +634,22 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
     Ok(targets.len())
 }
 
+/// Whether `field`'s `key` (`/V` or `/DV`, its own or inherited) is a stream with data, which
+/// [`fields`] reads as empty once its value budget is spent.
+fn unread_stream(doc: &Document, field: ObjRef, key: &[u8]) -> bool {
+    let mut node = Some(field);
+    for _ in 0..64 {
+        let Some(r) = node else { break };
+        let obj = doc.get(r);
+        let Some(d) = obj.as_dict() else { break };
+        if let Some(value) = d.get(key) {
+            return matches!(&*doc.resolve(value), Object::Stream(s) if !s.raw.is_empty());
+        }
+        node = d.reference(b"Parent");
+    }
+    false
+}
+
 /// Acrobat's Clear form: every field (or the named ones) back to its default value.
 pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, FormError> {
     let all = fields(doc);
@@ -645,7 +663,11 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
     }
     let mut changed = 0;
     for f in all.iter().filter(|f| names.is_none_or(|n| n.contains(&f.name))) {
-        if f.value == f.default {
+        // A default the reading didn't decode (its budget spent) is unknown, not empty: clearing
+        // the field to nothing would lose the value it should go back to. A value it didn't decode
+        // isn't known to be the default, so it is reset.
+        let unread = |key: &[u8], read: &[String]| read.is_empty() && unread_stream(doc, f.obj, key);
+        if unread(b"DV", &f.default) || (f.value == f.default && !unread(b"V", &f.value)) {
             continue;
         }
         let v = match f.kind {
