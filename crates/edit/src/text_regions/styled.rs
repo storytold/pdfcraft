@@ -1,3 +1,4 @@
+use super::grouping::same_plane;
 use super::grouping::{across, is_centred, row_rect};
 use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
@@ -126,6 +127,7 @@ impl CharacterPreparation<'_> {
         let Self { doc, first, lines, draft, spans, style, overrides, fonts, metrics, max_glyphs } = self;
         let mut chars = Vec::new();
         let mut substituted = None;
+        let contextual_arabic = arabic_fallback_allowed(draft, style);
         let mut fallback = FallbackBuilder::new(max_glyphs);
         let mut resolver = FontResolver { doc, fonts, metrics, full_faces: HashMap::new(), programs: HashMap::new() };
         for (range, index) in spans {
@@ -143,7 +145,9 @@ impl CharacterPreparation<'_> {
                 }
                 let text = ch.to_string();
                 let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
-                let name = if let Some(name) = resolver.encodable_font(source, &text, requested)? {
+                let name = if requested.is_none() && contextual_arabic && crate::added::is_arabic(ch) {
+                    source.font.clone()
+                } else if let Some(name) = resolver.encodable_font(source, &text, requested)? {
                     name
                 } else if needs_type3(&text) {
                     fallback.prepare(source, ch, &text, chars.len())?
@@ -245,6 +249,7 @@ fn prepare_shaped_rows(
     rows: &[Vec<StyledChar>],
     kept: &[bool],
     advance: impl Fn(&StyledChar) -> f64,
+    contextual_arabic: bool,
 ) -> Result<ShapedRows, EditError> {
     let mut runs = HashMap::new();
     let mut advances = HashMap::new();
@@ -258,7 +263,9 @@ fn prepare_shaped_rows(
             let segment = row.get(at..end).unwrap_or_default();
             advances.insert((row_index, at), segment.iter().map(&advance).sum::<f64>());
             let text: String = segment.iter().map(|character| character.0).collect();
-            if let Some((bytes, shaped, family)) = shape_source(doc, fonts, &item.2, &text)? {
+            if let Some((bytes, shaped, family)) =
+                shape_source(doc, fonts, &item.2, &text, contextual_arabic && text.chars().any(crate::added::is_arabic))?
+            {
                 runs.insert((row_index, at), (bytes, shaped, family));
             }
             at = end;
@@ -267,12 +274,23 @@ fn prepare_shaped_rows(
     Ok(ShapedRows { runs, advances })
 }
 
-fn embed_shaped_resources(doc: &mut Document, fonts: &mut Dict, runs: &ShapedRunCache) -> Result<HashMap<(usize, usize), String>, EditError> {
+type GlyphResources = HashMap<(usize, usize), Vec<(String, Vec<u8>)>>;
+fn embed_shaped_resources(doc: &mut Document, fonts: &mut Dict, runs: &ShapedRunCache) -> Result<GlyphResources, EditError> {
     let mut resources = HashMap::new();
     for (key, (bytes, shaped, family)) in runs {
-        let mappings: Vec<_> = shaped.glyphs.iter().map(|glyph| (glyph.text.clone(), glyph.id)).collect();
-        let resource = pdfcraft_fonts::embedding::embed_mapping(doc, fonts, bytes, family, &mappings).map_err(EditError::Invalid)?;
-        resources.insert(*key, resource);
+        let codes = if pdfcraft_fonts::document_arabic_font().is_some_and(|face| face.bytes == bytes.as_slice()) {
+            crate::added::embed_arabic_glyphs(doc, fonts, shaped)?
+        } else {
+            let mappings: Vec<_> = shaped.glyphs.iter().map(|glyph| (glyph.text.clone(), glyph.id)).collect();
+            let resource = pdfcraft_fonts::embedding::embed_mapping(doc, fonts, bytes, family, &mappings).map_err(EditError::Invalid)?;
+            (1..=mappings.len())
+                .map(|i| {
+                    let code = u16::try_from(i).map_err(|_| EditError::Invalid("shaped glyph limit".into()))?;
+                    Ok((resource.clone(), code.to_be_bytes().to_vec()))
+                })
+                .collect::<Result<Vec<_>, EditError>>()?
+        };
+        resources.insert(*key, codes);
     }
     Ok(resources)
 }
@@ -337,10 +355,7 @@ fn validated_ranges<'a>(draft: &str, style: &'a BlockStyle) -> Result<Vec<&'a Ra
 }
 
 fn replacement_text<'a>(block: &'a TextBlock, text: Option<&'a str>) -> Result<&'a str, EditError> {
-    let draft = match text {
-        Some(text) if text != block.text => text,
-        _ => &block.editor_text,
-    };
+    let draft = text.unwrap_or(&block.editor_text);
     if draft.len() > 4_000_000 {
         return Err(EditError::Invalid("the replacement text is too large".into()));
     }
@@ -567,14 +582,20 @@ fn apply_range_styles<'a>(
     StyledLines { lines: styled_lines, spans: styled_spans, underlines, overrides }
 }
 
-/// Shape in the source or an explicitly registered matching full face. Never use interface fonts.
+fn arabic_fallback_allowed(draft: &str, style: &BlockStyle) -> bool {
+    style.resource.is_none() && style.ranges.iter().all(|range| range.resource.is_none()) && draft.chars().any(crate::added::is_arabic)
+}
+
+/// Shape in the source or an explicitly registered matching full face. Arabic may use the
+/// approved document fallback when the source subset lacks contextual tables or new glyphs.
 fn shape_source(
     doc: &Document,
     fonts: &Dict,
     name: &str,
     text: &str,
+    allow_arabic_fallback: bool,
 ) -> Result<Option<(Vec<u8>, pdfcraft_fonts::source_shaping::ShapedRun, String)>, EditError> {
-    if !pdfcraft_fonts::source_shaping::required(text) {
+    if !pdfcraft_fonts::source_shaping::required(text) && !allow_arabic_fallback {
         return Ok(None);
     }
     let source =
@@ -594,6 +615,13 @@ fn shape_source(
         {
             return Ok(Some((bytes, shaped, family)));
         }
+    }
+    if allow_arabic_fallback
+        && let Some(face) = pdfcraft_fonts::document_arabic_font()
+        && pdfcraft_fonts::embedding::covers(face.bytes, text)
+    {
+        let shaped = pdfcraft_fonts::source_shaping::shape(face.bytes, text).map_err(EditError::Invalid)?;
+        return Ok(Some((face.bytes.to_vec(), shaped, face.family.to_owned())));
     }
     Err(EditError::Invalid("complex text needs the complete source TrueType/OpenType face; load that font before editing".into()))
 }
@@ -838,6 +866,103 @@ fn splice_with_marker(
     data
 }
 
+fn shaped_spacing(source: &TextLine, index: usize, arabic: bool, style: &BlockStyle, overrides: &HashMap<usize, &RangeStyle>) -> f64 {
+    overrides.get(&index).and_then(|r| r.char_spacing).or(style.char_spacing).map_or_else(
+        || {
+            // Some Arabic producers use negative Tc to advance already shaped source
+            // glyphs backwards. OpenType shaping supplies the new glyph positions;
+            // carrying that source positioning into them reverses or overlaps letters.
+            if arabic { source.origin.state.char_spacing.max(0.0) } else { source.origin.state.char_spacing }
+        },
+        |s| s / source.origin.k.max(1e-6),
+    )
+}
+
+fn shaped_substitution(
+    rows: &[Vec<StyledChar>],
+    metrics: &std::collections::BTreeMap<String, Metrics>,
+    shaped_runs: &ShapedRunCache,
+) -> Option<String> {
+    let mut substituted = None;
+    for ((row, at), (_, _, family)) in shaped_runs {
+        if rows
+            .get(*row)
+            .and_then(|row| row.get(*at))
+            .and_then(|item| metrics.get(&item.2))
+            .is_some_and(|metrics| pdfcraft_fonts::embedding::face_key(&metrics.base_font) != pdfcraft_fonts::embedding::face_key(family))
+        {
+            substituted = Some(family.clone());
+        }
+    }
+    substituted
+}
+
+fn flush_shaped_glyphs(ops: &mut Vec<Op>, glyphs: &mut Vec<Object>) {
+    if !glyphs.is_empty() {
+        ops.push(Op::new("TJ", vec![Object::Array(std::mem::take(glyphs))]));
+    }
+}
+
+fn default_alignment(centered: bool, draft: &str) -> crate::added::Align {
+    if centered {
+        crate::added::Align::Center
+    } else if crate::bidi::rtl_base(draft) {
+        crate::added::Align::Right
+    } else {
+        crate::added::Align::Left
+    }
+}
+
+/// Merge same-face subset aliases only within a uniformly styled Arabic row.
+fn merge_arabic_subsets(
+    rows: &mut [Vec<StyledChar>],
+    lines: &[TextLine],
+    style: &BlockStyle,
+    overrides: &HashMap<usize, &RangeStyle>,
+    underlines: &HashMap<usize, bool>,
+    size_of: impl Fn(&TextLine, usize) -> f64,
+    shaped_spacing: impl Fn(&TextLine, usize, bool) -> f64,
+) {
+    // Saved rows can use separate subsets of the same face. When row breaks are
+    // removed, shape their identical styles together rather than treating resource
+    // aliases as a mixed-style paragraph. Real formatting boundaries stay strict.
+    for row in rows {
+        let arabic_row = row.iter().any(|item| crate::added::is_arabic(item.0));
+        if !arabic_row {
+            continue;
+        }
+        let Some((_, index, name)) = row.first().cloned() else { continue };
+        let Some(anchor) = lines.get(index) else { continue };
+        let face = pdfcraft_fonts::embedding::face_key(&anchor.base_font);
+        let scale_of = |line: &TextLine, i: usize| {
+            overrides.get(&i).and_then(|r| r.scale).or(style.scale).map_or(line.origin.state.scale, |s| (s / 100.0).clamp(0.1, 10.0))
+        };
+        let color_of = |line: &TextLine, i: usize| overrides.get(&i).and_then(|r| r.color).or(style.color).unwrap_or(line.color);
+        let uniform = row.iter().all(|(_, i, _)| {
+            let Some(line) = lines.get(*i) else { return false };
+            (line.font == anchor.font || (!face.is_empty() && pdfcraft_fonts::embedding::face_key(&line.base_font) == face))
+                && same_plane(anchor, line)
+                && line.bold == anchor.bold
+                && line.italic == anchor.italic
+                && color_of(line, *i) == color_of(anchor, index)
+                && (size_of(line, *i) * line.origin.k - size_of(anchor, index) * anchor.origin.k).abs() < 0.001
+                && (shaped_spacing(line, *i, arabic_row) * line.origin.k - shaped_spacing(anchor, index, arabic_row) * anchor.origin.k).abs() < 0.001
+                && (line.origin.state.word_spacing * line.origin.k - anchor.origin.state.word_spacing * anchor.origin.k).abs() < 0.001
+                && (scale_of(line, *i) - scale_of(anchor, index)).abs() < 0.001
+                && (across(line) / line.origin.k.max(1e-6) - across(anchor) / anchor.origin.k.max(1e-6)).abs() < 0.001
+                && (line.origin.state.rise * line.origin.k - anchor.origin.state.rise * anchor.origin.k).abs() < 0.001
+                && line.origin.state.render_mode == anchor.origin.state.render_mode
+                && underlines.get(i).copied().or(style.underline) == underlines.get(&index).copied().or(style.underline)
+        });
+        if uniform {
+            for item in row {
+                item.1 = index;
+                item.2.clone_from(&name);
+            }
+        }
+    }
+}
+
 /// Rewrite visual rows while keeping the source style on each surviving character. Resource
 /// names may differ between Unicode subsets of the same face; encoding searches those subsets.
 pub(crate) fn rewrite_styled_block(
@@ -879,10 +1004,12 @@ pub(crate) fn rewrite_styled_block(
     }
     .prepare()?;
     let chars = prepared.values;
-    let substituted = prepared.substituted;
+    let mut substituted = prepared.substituted;
+    let contextual_arabic = arabic_fallback_allowed(draft, style);
     let size_of = |source: &TextLine, index: usize| {
         overrides.get(&index).and_then(|r| r.size).or(style.size).unwrap_or(source.size).max(0.1) / source.origin.k.max(1e-6)
     };
+    let shaped_spacing = |source: &TextLine, index: usize, arabic: bool| shaped_spacing(source, index, arabic, style, &overrides);
     // A source run may carry TJ kerning/justification that is absent from its text state.
     // Keep its measured advance when rebuilding the run instead of making it wrap on entry.
     // Each font's space width, worked out once: when a font can't show a space, finding one
@@ -928,15 +1055,12 @@ pub(crate) fn rewrite_styled_block(
             }
             let segment = items.get(at..end).unwrap_or_default();
             let string: String = segment.iter().map(|v| v.0).collect();
-            if let Some((_, shaped, _)) = shape_source(doc, &fonts, &item.2, &string)? {
+            let fallback = contextual_arabic && string.chars().any(crate::added::is_arabic);
+            if let Some((_, shaped, _)) = shape_source(doc, &fonts, &item.2, &string, fallback)? {
                 let source = lines.get(item.1).unwrap_or(first);
                 let scale =
                     overrides.get(&item.1).and_then(|r| r.scale).or(style.scale).map_or(source.origin.state.scale, |s| (s / 100.0).clamp(0.1, 10.0));
-                let spacing = overrides
-                    .get(&item.1)
-                    .and_then(|r| r.char_spacing)
-                    .or(style.char_spacing)
-                    .map_or(source.origin.state.char_spacing, |s| s / source.origin.k.max(1e-6));
+                let spacing = shaped_spacing(source, item.1, string.chars().any(crate::added::is_arabic));
                 width += (shaped.advance * size_of(source, item.1)
                     + spacing * string.chars().count() as f64
                     + source.origin.state.word_spacing * string.matches(' ').count() as f64)
@@ -949,7 +1073,11 @@ pub(crate) fn rewrite_styled_block(
         }
         Ok(width)
     };
-    let (rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
+    let (mut rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
+    if contextual_arabic {
+        merge_arabic_subsets(&mut rows, lines, style, &overrides, &underlines, size_of, shaped_spacing);
+    }
+
     let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
@@ -978,8 +1106,9 @@ pub(crate) fn rewrite_styled_block(
     let after = if split { &o.state } else { &o.bt_state };
     validate_contextual_rows(&rows, &kept)?;
     let measured: Vec<_> = rows.iter().map(|row| measure(row)).collect::<Result<_, _>>()?;
-    let shaped = prepare_shaped_rows(doc, &fonts, &rows, &kept, advance)?;
+    let shaped = prepare_shaped_rows(doc, &fonts, &rows, &kept, advance, contextual_arabic)?;
     let ShapedRows { runs: shaped_runs, advances: segment_advances } = shaped;
+    substituted = shaped_substitution(&rows, &metrics, &shaped_runs).or(substituted);
     let glyph_resources = embed_shaped_resources(doc, &mut fonts, &shaped_runs)?;
     let n = pdfcraft_content::num;
     let mut block_ops = vec![Op::new("q", vec![])];
@@ -1028,7 +1157,7 @@ pub(crate) fn rewrite_styled_block(
         let w = measured.get(row_index).copied().unwrap_or(0.0);
         // The row's own alignment, or the paragraph's.
         let asked = row_lines.get(row_index).and_then(|l| style.aligns.get(*l)).copied().flatten().or(style.align);
-        let align = asked.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
+        let align = asked.unwrap_or(default_alignment(centered, draft));
         let original_rect = block.rows.get(row_index).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect);
         let left = if style.width.is_none() && asked.is_none() { original_rect[0] } else { block.rect[0] };
         let available = if style.width.is_none() && asked.is_none() { original_rect[2] - original_rect[0] } else { width };
@@ -1075,22 +1204,25 @@ pub(crate) fn rewrite_styled_block(
             block_ops.push(Op::new("q", vec![]));
             block_ops.extend(state.paint_ops(after));
             if let Some((_, shaped, _)) = shaped_runs.get(&(row_index, pos)) {
-                let resource = glyph_resources.get(&(row_index, pos)).ok_or_else(|| EditError::Invalid("shaped font is missing".into()))?;
+                state.char_spacing = shaped_spacing(source, item.1, string.chars().any(crate::added::is_arabic));
+                let codes = glyph_resources.get(&(row_index, pos)).ok_or_else(|| EditError::Invalid("shaped font is missing".into()))?;
                 let mut properties = Dict::new();
                 properties.set(b"ActualText".to_vec(), Object::String(PdfString::text(&string)));
                 block_ops.push(Op::new("BDC", vec![Object::name("Span"), Object::Dict(properties)]));
+                let (resource, _) = codes.first().ok_or_else(|| EditError::Invalid("shaped glyph code is missing".into()))?;
+                let mut resource = resource.clone();
                 state.font = Some((resource.clone(), size_of(source, item.1)));
                 // One text object for the run: each glyph is placed where shaping put it by a TJ
                 // adjustment from where the glyph before it ends (its advance in the embedded
                 // font's widths), and raised by the text rise for a mark set above or below
-                // (ISO 32000-1 §9.4.3, §9.3.7). Font-program codes are separate from Unicode;
+                // (ISO 32000-1 sections 9.4.3 and 9.3.7). Font-program codes are separate from Unicode;
                 // ToUnicode and ActualText keep the logical text.
                 let size = size_of(source, item.1);
                 let per_unit = 1000.0 / size;
                 if !per_unit.is_finite() {
                     return Err(EditError::Invalid("the shaped text has no size".into()));
                 }
-                let shown = fonts
+                let mut shown = fonts
                     .get(resource.as_bytes())
                     .and_then(|f| doc.resolve(f).as_dict().cloned())
                     .map(|d| Metrics::from_dict(doc, &d))
@@ -1106,12 +1238,21 @@ pub(crate) fn rewrite_styled_block(
                 let (mut pen, mut extra, mut raised) = (0.0, 0.0, rise);
                 let mut shown_glyphs: Vec<Object> = Vec::new();
                 for (i, glyph) in shaped.glyphs.iter().enumerate() {
+                    let (next_resource, code) = codes.get(i).ok_or_else(|| EditError::Invalid("shaped glyph code is missing".into()))?;
+                    if *next_resource != resource {
+                        flush_shaped_glyphs(&mut block_ops, &mut shown_glyphs);
+                        resource.clone_from(next_resource);
+                        shown = fonts
+                            .get(resource.as_bytes())
+                            .and_then(|f| doc.dict(f))
+                            .map(|d| Metrics::from_dict(doc, &d))
+                            .ok_or_else(|| EditError::Invalid("shaped font is missing".into()))?;
+                        block_ops.push(Op::new("Tf", vec![Object::name(&resource), n(size)]));
+                    }
                     let target = (glyph.position[0] * size + extra) * per_unit;
                     let glyph_rise = rise + glyph.position[1] * size;
                     if (glyph_rise - raised).abs() > 1e-9 || shown_glyphs.len() >= 4096 {
-                        if !shown_glyphs.is_empty() {
-                            block_ops.push(Op::new("TJ", vec![Object::Array(std::mem::take(&mut shown_glyphs))]));
-                        }
+                        flush_shaped_glyphs(&mut block_ops, &mut shown_glyphs);
                         if (glyph_rise - raised).abs() > 1e-9 {
                             block_ops.push(Op::new("Ts", vec![n(glyph_rise)]));
                             raised = glyph_rise;
@@ -1120,9 +1261,9 @@ pub(crate) fn rewrite_styled_block(
                     if (target - pen).abs() > 1e-6 {
                         shown_glyphs.push(n(pen - target));
                     }
-                    let code = u16::try_from(i + 1).map_err(|_| EditError::Invalid("shaped glyph limit".into()))?;
-                    shown_glyphs.push(Object::String(PdfString::literal(code.to_be_bytes().to_vec())));
-                    pen = target + shown.width(u32::from(code)) * 1000.0;
+                    let numeric = code.iter().fold(0u32, |value, byte| value.saturating_mul(256).saturating_add(u32::from(*byte)));
+                    shown_glyphs.push(Object::String(PdfString::literal(code.clone())));
+                    pen = target + shown.width(numeric) * 1000.0;
                     extra += char_spacing * glyph.text.chars().count() as f64 + word_spacing * glyph.text.matches(' ').count() as f64;
                 }
                 if !shown_glyphs.is_empty() {

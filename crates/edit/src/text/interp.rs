@@ -715,6 +715,8 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     if !pieces.iter().any(|p| matches!(p, Object::String(s) if !s.bytes.is_empty())) {
         return Ok(());
     }
+    // A backwards RTL pen already carries logical typing order.
+    let logical_order = x_text < 0.0 && text.chars().any(crate::bidi::is_rtl);
     out.push(Shown {
         op: i,
         extra_ops: Vec::new(),
@@ -754,7 +756,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         decodable,
         scope: marked.regions.last().copied().flatten(),
         paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
-        logical_order: false,
+        logical_order,
         actual_text: false,
         soft_break: state.soft_break,
         hard_break: state.hard_break,

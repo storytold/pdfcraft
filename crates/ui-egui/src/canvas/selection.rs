@@ -154,6 +154,7 @@ enum SelectionAction {
     Markup(comments::CommentTool),
     Replace,
     Copy,
+    Edit,
 }
 
 /// Actions on an existing text selection, next to the selected words.
@@ -161,11 +162,12 @@ pub(super) fn selection_actions(
     ui: &mut egui::Ui,
     viewport: Rect,
     view: &mut DocView,
-    info: &DocInfo,
+    doc: &pdfcraft_engine::Document,
     prefs: &comments::CommentPrefs,
     can_comment: bool,
     can_copy: bool,
 ) -> bool {
+    let info = &doc.info;
     if ui.input(|input| input.pointer.is_decidedly_dragging()) {
         return false;
     }
@@ -187,6 +189,22 @@ pub(super) fn selection_actions(
     if !viewport.intersects(rect) {
         return false;
     }
+    let editable = (doc.allows_modification() && !view.line_editor.as_ref().is_some_and(|editor| editor.has_changes()))
+        .then(|| {
+            let generation = doc.edit_generation();
+            if !matches!(view.edit_lines.get(&selection.page), Some((cached, _)) if *cached == generation) {
+                view.edit_lines.insert(selection.page, (generation, doc.text_blocks(selection.page)));
+            }
+            let (_, blocks) = view.edit_lines.get(&selection.page)?;
+            let mut candidates = blocks.iter().enumerate().filter_map(|(i, block)| {
+                (xf.user_rect(info, selection.page, block.rect.map(|v| v as f32)).expand(2.0).intersects(rect)
+                    && crate::edit_text_ui::unique_selection_range(&block.editor_text, &selected).is_some())
+                .then_some(i)
+            });
+            let first = candidates.next()?;
+            candidates.next().is_none().then_some(first)
+        })
+        .flatten();
     let x = rect.left().clamp(viewport.left() + 8.0, (viewport.right() - 520.0).max(viewport.left() + 8.0));
     let y = if rect.bottom() + 48.0 < viewport.bottom() { rect.bottom() + 6.0 } else { (rect.top() - 44.0).max(viewport.top() + 6.0) };
     let mut chosen = None;
@@ -195,12 +213,15 @@ pub(super) fn selection_actions(
         |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    if ui.add_enabled(editable.is_some(), egui::Button::new(tl!("Edit text"))).clicked() {
+                        chosen = Some(SelectionAction::Edit);
+                    }
                     for (label, action) in [
                         (tl!("Add comment"), SelectionAction::Note),
                         (tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
                         (tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
                         (tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
-                        (tl!("Replace text"), SelectionAction::Replace),
+                        (tl_ctx!("review-suggestion", "Replace text"), SelectionAction::Replace),
                     ] {
                         if ui.add_enabled(can_comment, egui::Button::new(label)).clicked() {
                             chosen = Some(action);
@@ -218,6 +239,14 @@ pub(super) fn selection_actions(
         // Copying closes the bar but keeps the words selected, for ⌘C or a second action.
         view.actions_dismissed = Some(selection);
         return true;
+    }
+    if let SelectionAction::Edit = action {
+        if let Some(block) = editable
+            && crate::edit_text_ui::open_block(ui.ctx(), doc, view, selection.page, block, Some(&selected))
+        {
+            view.clear_selection();
+        }
+        return false;
     }
     let Some((page, quads)) = view.selection_quads(info) else { return false };
     let last = quads.last().copied().unwrap_or_default();
@@ -248,7 +277,7 @@ pub(super) fn selection_actions(
             }));
         }
         // Copy is dispatched through the app after the view borrow ends.
-        SelectionAction::Copy => {}
+        SelectionAction::Copy | SelectionAction::Edit => {}
     }
     false
 }
