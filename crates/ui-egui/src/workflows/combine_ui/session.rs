@@ -3,7 +3,7 @@ use super::MAX_FOLDER_FILES;
 use super::files::{AssessError, Assessed, CombineFile, Incoming, Secret, Snapshot, SortBy, UnlockPrompt, assess};
 #[cfg(not(target_arch = "wasm32"))]
 use super::parts::combinable_in;
-use super::parts::{Part, items_of, moved_order, parts_of, range_of, title_of};
+use super::parts::{Part, items_of, moved_order, parts_of, range_of, real_folder, title_of};
 use super::{Arc, BTreeSet, CombineTab, HISTORY, Modifiers, PdfCraftApp};
 use pdfcraft_engine::order::{FileFacts, file_order};
 
@@ -423,12 +423,7 @@ impl PdfCraftApp {
             let modified = None;
             let note = doc.dirty.then(|| tl!("Includes unsaved changes").to_string());
             let name = if doc.name.to_ascii_lowercase().ends_with(".pdf") { doc.name.clone() } else { format!("{}.pdf", doc.name) };
-            let folder = doc
-                .path
-                .as_deref()
-                .and_then(|p| std::path::Path::new(p).parent())
-                .filter(|d| !d.as_os_str().is_empty())
-                .map(std::path::Path::to_path_buf);
+            let folder = doc.path.as_deref().and_then(|p| real_folder(std::path::Path::new(p)));
             incoming.push(Incoming { name, bytes: doc.bytes.clone(), modified, folder, note, open_doc: Some(doc.id) });
         }
         self.stage_combine_with(incoming);

@@ -409,7 +409,6 @@ impl PdfCraftApp {
         }
         let mut files = Vec::new();
         let mut modified = Vec::new();
-        let mut folders = Vec::new();
         for p in paths {
             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file.pdf".into());
             if purpose == FilePurpose::RedactWords && std::fs::metadata(p).is_ok_and(|m| m.len() > crate::redact_ui::MAX_WORD_LIST_BYTES as u64) {
@@ -434,7 +433,6 @@ impl PdfCraftApp {
                 }
             }
             modified.push(std::fs::metadata(p).and_then(|m| m.modified()).ok());
-            folders.push(p.parent().filter(|d| !d.as_os_str().is_empty()).map(std::path::Path::to_path_buf));
         }
         if files.is_empty() {
             return;
@@ -444,12 +442,12 @@ impl PdfCraftApp {
             let incoming = files
                 .into_iter()
                 .zip(modified)
-                .zip(folders)
-                .map(|(((name, bytes), modified), folder)| crate::combine_ui::Incoming {
+                .zip(paths)
+                .map(|(((name, bytes), modified), path)| crate::combine_ui::Incoming {
                     name,
                     bytes: Arc::new(bytes),
                     modified,
-                    folder,
+                    folder: crate::combine_ui::real_folder(path),
                     note: None,
                     open_doc: None,
                 })

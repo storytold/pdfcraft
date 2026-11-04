@@ -1852,7 +1852,8 @@ fn sort_by_folder_groups_files_by_their_folder_and_files_from_no_folder_go_last(
 }
 
 /// A folder chosen with Add folder and subfolders, holding `files`: each a path inside it and how
-/// many pages it has. The list opens in Grid view with those files and no others.
+/// many pages it has. The list opens in Grid view with those files and no others, and the folder
+/// comes back as the system spells it.
 fn combine_folder(test: &str, files: &[(&str, usize)]) -> (Harness<'static, PdfCraftApp>, std::path::PathBuf) {
     let dir = temp_path(test);
     let _ = std::fs::remove_dir_all(&dir);
@@ -1869,7 +1870,30 @@ fn combine_folder(test: &str, files: &[(&str, usize)]) -> (Harness<'static, PdfC
     h.run_steps(2);
     h.get_by_label("Add folder and subfolders…").click();
     h.run_steps(4);
-    (h, dir)
+    (h, dir.canonicalize().unwrap())
+}
+
+/// An empty folder for `test` holding one-page `files`.
+fn combine_samples(test: &str, files: &[&str]) -> std::path::PathBuf {
+    let dir = temp_path(test);
+    let _ = std::fs::remove_dir_all(&dir);
+    for name in files {
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, fixture(1)).unwrap();
+    }
+    dir
+}
+
+/// Combine files with `paths` inside `dir` chosen with Add files.
+fn combine_picked(dir: &std::path::Path, paths: &[&str]) -> Harness<'static, PdfCraftApp> {
+    let mut h = harness(1, |_| {});
+    h.state_mut().execute("page.combine");
+    h.run_steps(2);
+    h.state_mut().pick_override = Some(paths.iter().map(|path| dir.join(path).to_string_lossy().into_owned()).collect());
+    h.get_all_by_label("Add files…").next().unwrap().click();
+    h.run_steps(4);
+    h
 }
 
 /// The Sort menu's `item`.
@@ -1915,6 +1939,49 @@ fn a_file_in_a_subfolder_comes_after_the_folders_own_files_whatever_its_name() {
     assert_eq!(combine_names(&h), ["b.pdf", "a.pdf"], "still descending, now by name alone");
     sort_combine_by(&mut h, "Ascending");
     assert_eq!(combine_places(&h, &dir), places(&[("a.pdf", "sub"), ("b.pdf", "")]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_picked_path_sorts_by_the_folder_it_really_leads_to() {
+    let dir = combine_samples("combine-sort-picked", &["a.pdf", "z.pdf", "up/in.pdf"]);
+    let mut h = combine_picked(&dir, &["up/../z.pdf", "up/in.pdf", "a.pdf"]);
+    sort_combine_by(&mut h, "Folder");
+    assert_eq!(combine_names(&h), ["a.pdf", "z.pdf", "in.pdf"], "a folder before the folders inside it");
+    assert_eq!(h.state().combine_draft[1].folder, Some(dir.canonicalize().unwrap()), "and shown as where it is");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_open_document_sorts_by_the_folder_its_path_really_leads_to() {
+    let dir = combine_samples("combine-sort-open", &["a.pdf", "z.pdf", "up/in.pdf"]);
+    let opened: Vec<(String, String)> = [("z.pdf", "up/../z.pdf"), ("in.pdf", "up/in.pdf"), ("a.pdf", "a.pdf")]
+        .map(|(name, path)| (name.into(), dir.join(path).to_string_lossy().into_owned()))
+        .into();
+    let mut h = harness(1, move |app| {
+        for (name, path) in opened {
+            app.open_bytes(&name, Some(path), fixture(1)).unwrap();
+        }
+    });
+    h.state_mut().execute("page.combine");
+    h.run_steps(3);
+    h.get_by_label("Add open documents").click();
+    h.run_steps(2);
+    h.get_by_label("All open documents").click();
+    h.run_steps(3);
+    sort_combine_by(&mut h, "Folder");
+    assert_eq!(combine_names(&h), ["a.pdf", "z.pdf", "in.pdf", "doc.pdf"], "and a document with no file goes last");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_folder_sorts_with_the_folder_it_leads_to() {
+    let dir = combine_samples("combine-sort-link", &["mid/x.pdf", "real/b.pdf", "real/c.pdf"]);
+    std::os::unix::fs::symlink("real", dir.join("alias")).unwrap();
+    let mut h = combine_picked(&dir, &["real/c.pdf", "mid/x.pdf", "alias/b.pdf"]);
+    sort_combine_by(&mut h, "Folder");
+    assert_eq!(combine_names(&h), ["x.pdf", "b.pdf", "c.pdf"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

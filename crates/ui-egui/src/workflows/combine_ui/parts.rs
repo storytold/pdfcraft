@@ -32,6 +32,12 @@ pub(super) fn combinable_in(dir: &std::path::Path, recursive: bool) -> (Vec<std:
     (found, more)
 }
 
+/// The folder a file at `path` is really in, which sorts it and is shown for it; `None` for a path
+/// with no folder.
+pub(crate) fn real_folder(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    pdfcraft_engine::in_real_folder(path).parent().filter(|folder| !folder.as_os_str().is_empty()).map(std::path::Path::to_path_buf)
+}
+
 /// Whether a file with extension `ext` can join the list: a PDF, or an image or text file that
 /// becomes one.
 fn combinable(ext: &str) -> bool {
