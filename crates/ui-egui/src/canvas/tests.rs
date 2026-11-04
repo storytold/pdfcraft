@@ -1390,7 +1390,7 @@ fn the_page_allowance_is_eight_on_screen_rasters_within_its_limits() {
     assert_eq!(cache::page_budget(20 * mib), 160 * mib);
     let ceiling = cache::page_budget(usize::MAX);
     assert_eq!(cache::page_budget(64 * mib), ceiling);
-    assert!((256 * mib..=384 * mib).contains(&ceiling), "{ceiling}");
+    assert_eq!(ceiling, if cfg!(target_arch = "wasm32") { 256 * mib } else { 384 * mib });
 }
 
 #[test]
