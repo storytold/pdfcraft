@@ -191,13 +191,20 @@ fn on_same_baseline(line: &TextLine, target: &TextLine) -> bool {
 }
 
 /// Rewrite paragraph `block` with new text (or its own) and formatting, rewrapped to its width.
+/// Its own text without formatting changes nothing, and writes nothing (#6157).
 pub fn rewrite_block(doc: &mut Document, page: usize, block: usize, text: Option<&str>, style: &BlockStyle) -> Result<LineEdit, EditError> {
-    let edit = rewrite_block_with_limit(doc, page, block, text, style, MAX_TYPE3_GLYPHS)?;
+    let session = TextSession::open(doc, page, block)?;
+    if session.changes_nothing(text, style) {
+        return Ok(LineEdit { substituted: None });
+    }
+    let edit = session.commit_with_limit(doc, text, style, MAX_TYPE3_GLYPHS)?;
     drop_unused_fallback_fonts(doc, page);
     Ok(edit)
 }
 
-/// [`rewrite_block`] with the most unique characters one generated font may hold (tests lower it).
+/// [`rewrite_block`] with the most unique characters one generated font may hold, which tests
+/// lower, and without its fallback-font cleanup.
+#[cfg(test)]
 pub(crate) fn rewrite_block_with_limit(
     doc: &mut Document,
     page: usize,
@@ -779,7 +786,8 @@ fn source_font(doc: &Document, fonts_res: &Dict, font_name: &str, first: &TextLi
     SourceFont { metrics, reuse, space }
 }
 
-/// [`rewrite_block_with_limit`] with the page's [`text_lines`], read from `doc` as it is now.
+/// The rewrite [`rewrite_block`] commits, with the page's [`text_lines`] read from `doc` as it is
+/// now.
 pub(crate) fn rewrite_block_from(
     doc: &mut Document,
     page: usize,

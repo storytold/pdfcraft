@@ -10468,3 +10468,46 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
         }
     }
 }
+
+/// #6157: rewriting a paragraph with its own text and no formatting leaves the page as it is.
+/// A rewrite drew the run as one `Tj` and dropped its `TJ` kerning, so every glyph after the
+/// first adjustment moved (76.8 pt here). A draft that changes the text, or its formatting,
+/// still rewrites the paragraph, and the session's layout of an unchanged draft is the source's.
+#[test]
+fn an_edit_that_changes_nothing_leaves_the_paragraph_as_it_is() {
+    let content = "BT /F1 48 Tf 0 0 0 rg 40 60 Td [(A)-400(V)-400(A)-400(V)-400(A)]TJ ET";
+    let source = text_page(content);
+    let block = text::text_blocks(&source, 0).unwrap().remove(0);
+    let own = block.editor_text.clone();
+    for text in [Some(own.as_str()), None] {
+        let mut doc = source.clone();
+        let edit = text::rewrite_block(&mut doc, 0, 0, text, &text::BlockStyle::default()).unwrap();
+        assert_eq!(edit.substituted, None);
+        assert_eq!(page_content(&doc), content, "{text:?}: the kerned run is left as it was");
+        assert_eq!(text::text_blocks(&doc, 0).unwrap().remove(0).rect, block.rect);
+    }
+    let session = text::TextSession::open(&source, 0, 0).unwrap();
+    assert_eq!(session.layout(&own, &text::BlockStyle::default()).unwrap().draft_rect, Some(block.rect));
+    // A change is still written.
+    let mut doc = source.clone();
+    text::rewrite_block(&mut doc, 0, 0, Some(&format!("{own}!")), &text::BlockStyle::default()).unwrap();
+    assert_ne!(page_content(&doc), content, "new text is rewritten");
+    let mut doc = source.clone();
+    text::rewrite_block(&mut doc, 0, 0, Some(&own), &text::BlockStyle { size: Some(24.0), ..Default::default() }).unwrap();
+    assert_ne!(page_content(&doc), content, "new formatting is rewritten");
+    // Nor does an unchanged edit tidy up: a fallback font nothing shows stays until a rewrite.
+    let mut doc = source.clone();
+    let unused = doc.add(Object::Dict(Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("Type3")),
+        (b"Name".to_vec(), Object::name("PCJapanese")),
+    ])));
+    let p = pdfcraft_model::pages(&doc)[0].obj;
+    let fonts = Dict::from_iter([(b"F1".to_vec(), Object::Ref(pdfcraft_cos::ObjRef::new(5, 0))), (b"PCJp".to_vec(), Object::Ref(unused))]);
+    doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(fonts))])))).unwrap();
+    let before = doc.read_state();
+    text::rewrite_block(&mut doc, 0, 0, Some(&own), &text::BlockStyle::default()).unwrap();
+    assert!(before.matches(&doc), "nothing was written, the unused fallback font included");
+    text::rewrite_block(&mut doc, 0, 0, Some(&format!("{own}!")), &text::BlockStyle::default()).unwrap();
+    assert!(!page_fonts(&doc, &pdfcraft_model::pages(&doc)[0]).contains(b"PCJp"), "a rewrite tidies it away");
+}

@@ -72,6 +72,11 @@ impl Session {
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
         guard(|| run_edit(&mut next, &edit, &mut cx))
             .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
+        // A paragraph edit that changed nothing (its own text, no formatting) wrote nothing:
+        // leave undo history and the dirty flag alone (#6157).
+        if matches!(&edit, Edit::EditTextBlock { .. }) && next.read_state().matches(&editor.cos) {
+            return Ok(());
+        }
         // Redaction removed what its own interpreter places under the marks. The marks were drawn
         // over the page as the renderer shows it, so the renderer has the last word.
         if let Edit::ApplyRedactions { pages } = &edit {
