@@ -610,7 +610,7 @@ pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], view: &Doc
         }
     }
     if prep.show_tab_numbers {
-        for (number, (fi, wi)) in crate::forms_ui::tab_order(form).into_iter().enumerate() {
+        for (number, (fi, wi)) in crate::forms_ui::tab_order(form, info).into_iter().enumerate() {
             let Some(widget) = form.get(fi).and_then(|field| field.widgets.get(wi)) else { continue };
             if widget.page != Some(page) {
                 continue;

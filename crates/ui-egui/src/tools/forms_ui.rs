@@ -96,7 +96,7 @@ fn fillable(f: &FormField) -> bool {
 }
 
 /// The fillable widgets in the order Tab and Shift+Tab visit them.
-pub(crate) fn tab_order(form: &[FormField]) -> Vec<(usize, usize)> {
+pub(crate) fn tab_order(form: &[FormField], info: &DocInfo) -> Vec<(usize, usize)> {
     let mut order: Vec<(usize, usize, usize)> = form
         .iter()
         .enumerate()
@@ -106,7 +106,20 @@ pub(crate) fn tab_order(form: &[FormField]) -> Vec<(usize, usize)> {
                 .widgets
                 .iter()
                 .enumerate()
-                .filter(|(_, widget)| widget.page.is_some() && !widget.hidden && !widget.read_only)
+                .filter(|(_, widget)| {
+                    let Some(page) = widget.page.and_then(|page| info.pages.get(page)) else { return false };
+                    let [x0, y0, x1, y1] = widget.rect;
+                    let [cx0, cy0, cx1, cy1] = page.crop.map(f64::from);
+                    !widget.hidden
+                        && !widget.read_only
+                        && [x0, y0, x1, y1].into_iter().all(f64::is_finite)
+                        && x0 < x1
+                        && y0 < y1
+                        && x1 > cx0
+                        && x0 < cx1
+                        && y1 > cy0
+                        && y0 < cy1
+                })
                 .map(move |(wi, widget)| (widget.tab, fi, wi))
         })
         .collect();
@@ -722,12 +735,12 @@ fn settle_text_editor(
 
 /// Tab / Shift+Tab: commits the field and moves to the next fillable widget in the document's tab
 /// order, returning the edit to apply (the commit's, or `edit`).
-fn tab_to_next_field(view: &mut DocView, form: &[FormField], f: &FormField, widget: usize, forward: bool, edit: Option<Edit>) -> Option<Edit> {
+fn tab_to_next_field(view: &mut DocView, info: &DocInfo, form: &[FormField], f: &FormField, widget: usize, forward: bool, edit: Option<Edit>) -> Option<Edit> {
     commit(view, form);
     let pending = view.pending_edit.take();
     // The next field that can be filled in, check boxes and radio buttons included (#2223), in
     // the document's tab order (each page's /Tabs: rows, columns or structure), wrapping.
-    let order = tab_order(form);
+    let order = tab_order(form, info);
     if let Some(pos) = order
         .iter()
         .position(|(fi, wi)| form.get(*fi).is_some_and(|x| x.name == f.name && *wi == widget))
@@ -1007,7 +1020,7 @@ pub(crate) fn overlay(
         view.forms.focus = None;
     }
     if let Some(forward) = next {
-        edit = tab_to_next_field(view, form, f, focus.widget, forward, edit);
+        edit = tab_to_next_field(view, info, form, f, focus.widget, forward, edit);
     }
     edit.or_else(|| view.pending_edit.take())
 }
