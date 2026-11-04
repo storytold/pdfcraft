@@ -349,6 +349,30 @@ fn a_subset_that_gives_the_space_no_width_cannot_encode_one() {
     assert_eq!(metrics("Sample", 0).encode("a b").as_deref(), Some(&b"a b"[..]), "a full font keeps its space whatever the width says");
 }
 
+/// Only a *space* at code 32 is given up for a width of 0: a subset that puts another glyph there (a symbol
+/// font, say) keeps encoding it.
+#[test]
+fn a_subset_keeps_a_zero_width_glyph_that_is_not_a_space_at_code_32() {
+    let mut doc = Document::new_empty();
+    let widths: Vec<Object> = (32..=98).map(|code| Object::Int(if code == 97 { 500 } else { 0 })).collect();
+    let mut enc = Dict::new();
+    enc.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(32), Object::name("Z")]));
+    let f = font(
+        &mut doc,
+        vec![
+            ("Subtype", Object::name("TrueType")),
+            ("BaseFont", Object::name("ABCDEF+Sample")),
+            ("FirstChar", Object::Int(32)),
+            ("Widths", Object::Array(widths)),
+            ("Encoding", Object::Dict(enc)),
+        ],
+    );
+    let m = Metrics::from_dict(&doc, &f);
+    assert!(m.subset);
+    assert_eq!(m.text_of(32).as_deref(), Some("Z"));
+    assert_eq!(m.encode("Z").as_deref(), Some(&[32][..]), "code 32 is a glyph here, not a space");
+}
+
 #[test]
 fn cmap_streams_decode_within_a_size_cap() {
     // A valid CMap padded past the cap (a small Flate stream of whitespace) is not decoded whole.
