@@ -564,6 +564,7 @@ fn number(t: &Tok) -> Option<u32> {
 #[allow(clippy::type_complexity)]
 fn parse_cmap(data: &[u8]) -> (Vec<(usize, Vec<u8>, Vec<u8>)>, Vec<(u32, u32, u32)>) {
     let (mut spaces, mut cids) = (Vec::new(), Vec::new());
+    let mut seen = HashSet::new();
     let mut toks = Lexer::new(data);
     while let Some(t) = toks.next() {
         match t {
@@ -571,7 +572,10 @@ fn parse_cmap(data: &[u8]) -> (Vec<(usize, Vec<u8>, Vec<u8>)>, Vec<(u32, u32, u3
                 while let Some([lo, hi]) = entry(&mut toks, b"endcodespacerange") {
                     if let (Tok::Hex(Some(lo)), Tok::Hex(Some(hi))) = (lo, hi)
                         && lo.len() == hi.len()
+                        // A code is at most four bytes; a repeated range can never match first, so it only costs every glyph a comparison.
+                        && (1..=4).contains(&lo.len())
                         && spaces.len() < MAX_CMAP_RANGES
+                        && seen.insert((lo.clone(), hi.clone()))
                     {
                         spaces.push((lo.len(), lo, hi));
                     }
@@ -654,7 +658,7 @@ impl Metrics {
         m.code_len = match &m.codes {
             Codes::One => 1,
             Codes::Two => 2,
-            Codes::Ranges(r) => r.last().map_or(2, |x| x.0),
+            Codes::Ranges(r) => r.last().map_or(2, |x| x.0.clamp(1, 4)),
         };
         m.unicode = unicode_map(doc, font, m.composite);
         if m.std14.is_some() {
