@@ -71,11 +71,13 @@ fn japanese_ui_text_uses_craft_fonts() {
 /// order part still holds; glyph coverage follows the craft-fonts checkout.
 #[test]
 fn chinese_ui_text_prefers_the_chinese_face() {
-    if pdfcraft_fonts::ui_chinese_fonts().is_empty() {
-        eprintln!("skipping chinese_ui_text_prefers_the_chinese_face: no Hans face bundled (set CRAFT_FONTS_DIR with a Chinese face to run it)");
-        return;
-    }
-    let defs = theme::font_definitions_for(true);
+    // The check fails rather than skips when no Chinese face is bundled: a build without one
+    // shows question marks where the Chinese text is, and that must not pass unnoticed (#651).
+    assert!(
+        !pdfcraft_fonts::ui_chinese_fonts().is_empty(),
+        "no Chinese face bundled: build with CRAFT_FONTS_DIR holding one (the Simplified Chinese face is required)"
+    );
+    let defs = theme::font_definitions_for(theme::CjkPreference::SimplifiedChinese);
     let hans: Vec<String> = pdfcraft_fonts::ui_chinese_fonts().iter().map(|f| f.name()).collect();
     for family in [FontFamily::Proportional, FontFamily::Monospace] {
         let stack = &defs.families[&family];
