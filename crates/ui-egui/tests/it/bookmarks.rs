@@ -531,3 +531,40 @@ fn cut_copy_and_paste_a_bookmark_subtree_within_and_between_documents() {
     assert!(active_outline(&h).is_empty());
     assert_eq!(outline(&h), tree, "the source is untouched");
 }
+
+/// A one-page document whose single bookmark "Top" heads a chain `depth` bookmarks deep.
+fn deep_outline_pdf(depth: usize) -> Vec<u8> {
+    let mut pdf = String::from(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Outlines /First 10 0 R /Last 10 0 R /Count 1 >> endobj
+",
+    );
+    for k in 0..depth {
+        let id = 10 + k;
+        let parent = if k == 0 { 4 } else { id - 1 };
+        let title = if k == 0 { "Top".to_string() } else { format!("L{k}") };
+        let kids = if k + 1 < depth { format!("/First {0} 0 R /Last {0} 0 R /Count 1", id + 1) } else { String::new() };
+        pdf.push_str(&format!("{id} 0 obj << /Title ({title}) /Parent {parent} 0 R {kids} /Dest [3 0 R /Fit] >> endobj\n"));
+    }
+    pdf.push_str("trailer << /Root 1 0 R >>\n%%EOF");
+    pdf.into_bytes()
+}
+
+/// Cutting a subtree nested deeper than a copy can hold would lose what the copy left out, so
+/// the cut copies and says why it deleted nothing.
+#[test]
+fn cutting_a_subtree_too_deep_to_copy_keeps_it() {
+    let mut h = harness();
+    h.state_mut().open_bytes("deep.pdf", None, deep_outline_pdf(40)).unwrap();
+    h.run_steps(3);
+    let before = active_outline(&h);
+    assert_eq!(before.first().map(|b| b.0.as_str()), Some("Top"));
+    menu(&mut h, "Top", "Cut");
+    assert_eq!(active_outline(&h), before, "nothing was cut");
+    let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.contains("so nothing was cut"), "{toast}");
+    assert!(h.state().bookmark_clipboard.is_some(), "the copy is still on the bookmark clipboard");
+}

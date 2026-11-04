@@ -981,12 +981,15 @@ impl PdfCraftApp {
                 self.copy_bookmark(id, &path);
                 return;
             }
-            A::Cut(path) => {
-                if !self.copy_bookmark(id, &path) {
+            A::Cut(path) => match self.copy_bookmark(id, &path) {
+                Some(false) => Edit::DeleteBookmark { path },
+                // Paste could not bring back what the copy left out, so the bookmarks stay.
+                Some(true) => {
+                    self.notify_tr("Bookmarks nested too deep to list could not be copied, so nothing was cut.");
                     return;
                 }
-                Edit::DeleteBookmark { path }
-            }
+                None => return,
+            },
             A::Paste { parent, index } => {
                 self.paste_bookmarks(id, parent, index);
                 return;
@@ -1006,22 +1009,23 @@ impl PdfCraftApp {
 }
 
 impl PdfCraftApp {
-    /// Put the bookmark at `path` and its subtree on the bookmark clipboard; `false` if it could
-    /// not be read (the reason is shown).
-    fn copy_bookmark(&mut self, id: pdfcraft_engine::DocId, path: &[usize]) -> bool {
+    /// Put the bookmark at `path` and its subtree on the bookmark clipboard. `Some(true)` when
+    /// bookmarks nested too deep to list were left out; `None` if it could not be read (the reason
+    /// is shown).
+    fn copy_bookmark(&mut self, id: pdfcraft_engine::DocId, path: &[usize]) -> Option<bool> {
         match self.session.outline_tree(id, path) {
             Some(Ok(tree)) => {
                 if tree.truncated {
                     self.notify_tr("Bookmarks nested too deep to list were left out of the copy.");
                 }
                 self.bookmark_clipboard = Some(tree.nodes);
-                true
+                Some(tree.truncated)
             }
             Some(Err(e)) => {
                 self.notify_error(e);
-                false
+                None
             }
-            None => false,
+            None => None,
         }
     }
 
