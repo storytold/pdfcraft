@@ -39,7 +39,10 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
         }
     }
     matched = 0;
-    let word = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|c| c.0.is_alphanumeric());
+    // A Han ideograph is not a word boundary: Chinese is written without spaces, so a word
+    // inside Chinese text is found as a substring rather than being rejected for touching
+    // the ideograph next to it (#651).
+    let word = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|c| c.0.is_alphanumeric() && !is_cjk(c.0));
     let mut hits = Vec::new();
     for (i, &(c, owner)) in chars.iter().enumerate() {
         matched = advance(&needle, &prefix, matched, c);
@@ -74,4 +77,17 @@ fn advance(needle: &[char], prefix: &[usize], mut matched: usize, c: char) -> us
         matched = prefix.get(matched - 1).copied().unwrap_or_default();
     }
     if needle.get(matched) == Some(&c) { matched.saturating_add(1) } else { 0 }
+}
+
+/// Whether a character is a Han ideograph. Chinese has no spaces between words, so an
+/// ideograph cannot end a word and a search within Chinese text matches as a substring.
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x3400..=0x4DBF      // CJK Unified Ideographs Extension A
+        | 0x4E00..=0x9FFF    // CJK Unified Ideographs
+        | 0xF900..=0xFAFF    // CJK Compatibility Ideographs
+        | 0x20000..=0x2A6DF  // Extension B
+        | 0x2A700..=0x2EBEF  // Extensions C, D, E and F
+        | 0x2F800..=0x2FA1F  // Compatibility Ideographs Supplement
+    )
 }

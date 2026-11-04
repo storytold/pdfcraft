@@ -608,6 +608,34 @@ fn turkish_dotted_and_dotless_i_match_in_any_case() {
     assert_eq!(lower.find("KIŞ"), vec![13..16]);
 }
 
+/// #651: a Han ideograph is not a word boundary. Chinese is written without spaces, so a
+/// search for a word inside Chinese text has to find it as a substring: the ideograph next
+/// to the match used to count as a word, and "whole words" rejected every Chinese hit.
+#[test]
+fn a_search_inside_chinese_text_matches_as_a_substring() {
+    let mut v = Vec::new();
+    word(&mut v, "签发人：林炳豪", 10.0, 10.0, 7.0);
+    let text = layout(v);
+    assert_eq!(text.plain_text(), "签发人：林炳豪");
+    assert_eq!(text.find_opts("签发人", false, true), vec![0..3], "a Chinese phrase matches whole words");
+    assert_eq!(text.find_opts("林炳豪", false, true), vec![4..7], "a name inside Chinese text matches");
+    assert_eq!(text.find_opts("林炳", false, true), vec![4..6], "part of a Chinese word matches too");
+    // A word inside continuous Chinese text has an ideograph on both sides: it used to be
+    // rejected for touching them, which is the case that made Chinese unsearchable.
+    let mut v = Vec::new();
+    word(&mut v, "数字财政建设", 10.0, 10.0, 7.0);
+    let text = layout(v);
+    assert_eq!(text.find_opts("财政", false, true), vec![2..4], "a word inside continuous Chinese text matches");
+    assert_eq!(text.find_opts("数字", false, true), vec![0..2], "a leading Chinese word matches");
+    assert_eq!(text.find_opts("建设", false, true), vec![4..6], "a trailing Chinese word matches");
+    // A Latin word still needs its own boundaries.
+    let mut v = Vec::new();
+    word(&mut v, "concatenate", 10.0, 10.0, 7.0);
+    let latin = layout(v);
+    assert!(latin.find_opts("cat", false, true).is_empty(), "a Latin word inside another word does not match whole words");
+    assert!(!latin.find_opts("cat", false, false).is_empty(), "without whole words it matches as a substring");
+}
+
 #[test]
 fn greek_sigma_forms_match_without_changing_exact_search_or_glyph_ranges() {
     let mut v = Vec::new();
