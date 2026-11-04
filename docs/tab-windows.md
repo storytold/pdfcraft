@@ -6,7 +6,7 @@ its edges still scroll a long tab list. Escape cancels a drag. There is a 24-poi
 dead zone outside the strip so small vertical pointer movements do not detach tabs.
 Dragging horizontally past the window edge also tears off a tab.
 
-The tab context menu and command palette offer **Move Tab to New Window**. The
+The File menu, tab context menu and command palette offer **Move Tab to New Window**. The
 opt-in UI control channel exposes the same action as `ui.command` with
 `{"id":"file.detach_tab"}`. Browser and other desktop hosts leave it disabled.
 
