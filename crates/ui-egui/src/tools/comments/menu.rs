@@ -4,6 +4,7 @@ use super::{
     Annotation, Color32, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Rect, ReviewState, Rgb, SELECT_BLUE, SWATCHES, Sense, Stroke, color32,
     icons, theme, tool_for, vec2,
 };
+use pdfcraft_engine::measure;
 
 /// Save attachment… and, for a PDF, Open in a new tab, first in a file attachment comment's
 /// menus as in the Attachments panel: the comment is where the reader finds its file. Reading
@@ -286,12 +287,63 @@ pub fn fill_picker(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Option<Rgb
     picked
 }
 
+/// Takes Tab presses out of `events`, for cycling snap targets: +1 for each Tab, -1 for each
+/// Shift+Tab (their releases go too). Tabs with other modifiers stay.
+pub(crate) fn take_snap_tabs(events: &mut Vec<egui::Event>) -> isize {
+    let mut step = 0isize;
+    events.retain(|e| match e {
+        egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } if modifiers.is_none() || modifiers.shift_only() => {
+            if *pressed {
+                step += if modifiers.shift { -1 } else { 1 };
+            }
+            false
+        }
+        _ => true,
+    });
+    step
+}
+
+/// The quick bar's Snap to drawing switch (F3), for the tools whose points snap.
+pub(crate) fn snap_button(ui: &mut egui::Ui, prefs: &mut CommentPrefs) {
+    let key = crate::commands::command_shortcut_label(ui.ctx(), "comment.snap");
+    let tip = format!("{} ({key})", tl!(if prefs.snap { "Snap to drawing: on" } else { "Snap to drawing" }));
+    if icons::button(ui, "circle-dot", 32.0, prefs.snap, &tip).clicked() {
+        prefs.snap = !prefs.snap;
+    }
+    // What snaps (CAD's object snap modes), for commenting and measuring alike.
+    let resp = icons::button(ui, "chevron-down", 32.0, false, tl!("Snap targets"));
+    egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        snap_target_boxes(ui, &mut prefs.snap_targets, false);
+    });
+}
+
+/// The snap targets as check boxes: a list with the Tab hint (the quick bar's menu), or side by
+/// side as space allows (`compact`, the measuring panel).
+pub(crate) fn snap_target_boxes(ui: &mut egui::Ui, targets: &mut measure::snap::SnapOptions, compact: bool) {
+    let mut boxes = |ui: &mut egui::Ui| {
+        ui.add(crate::widgets::checkbox(&mut targets.endpoints, tl!("Endpoints")));
+        ui.add(crate::widgets::checkbox(&mut targets.midpoints, tl!("Midpoints")));
+        ui.add(crate::widgets::checkbox(&mut targets.centres, tl!("Centre points")));
+        ui.add(crate::widgets::checkbox(&mut targets.intersections, tl!("Intersections")));
+        ui.add(crate::widgets::checkbox(&mut targets.paths, tl!("Paths")));
+    };
+    if compact {
+        ui.horizontal_wrapped(boxes);
+    } else {
+        boxes(ui);
+        ui.label(egui::RichText::new(tl!("Tab: the next target under the pointer")).small());
+    }
+}
+
 /// The comment tools' extra quick-bar controls: pin, colour, fill, opacity and thickness.
 pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) -> Option<Rgb> {
     let style = prefs.style(tool);
     let mut selected_color = None;
     if icons::button(ui, "pin", 32.0, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
         prefs.pinned = !prefs.pinned;
+    }
+    if tool.snaps() {
+        snap_button(ui, prefs);
     }
     let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
     ui.painter().circle_filled(r.center(), 9.0, color32(style.color));

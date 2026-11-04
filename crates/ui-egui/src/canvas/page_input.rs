@@ -62,7 +62,20 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let PageSlot { i, xf, .. } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let pcx = comments::PageCx {
+        page: i,
+        xf: &xf,
+        ptr,
+        info,
+        tool,
+        prefs,
+        allowed,
+        hidden: comments_hidden,
+        redact_mark,
+        snap: frame.snap.clone(),
+        snap_comments: frame.snap_comments.clone(),
+        snap_cycle: view.comments.snap_cycle,
+    };
     let (lines, images) =
         if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify { edit_inventory(view, doc, i) } else { Default::default() };
     let field_tool = match tool {
@@ -299,6 +312,7 @@ fn tool_input(
             preview: frame.signature_preview,
             author,
             date_text,
+            comments: pcx,
         };
         match crate::fill_sign::page_input(cx, input, free, view) {
             Some(crate::fill_sign::FillAction::Edit(e)) => view.pending_edit = Some(*e),
@@ -736,7 +750,20 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let painter = ui.painter();
     let tool_cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let pcx = comments::PageCx {
+        page: i,
+        xf: &xf,
+        ptr,
+        info,
+        tool,
+        prefs,
+        allowed,
+        hidden: comments_hidden,
+        redact_mark,
+        snap: frame.snap.clone(),
+        snap_comments: frame.snap_comments.clone(),
+        snap_cycle: view.comments.snap_cycle,
+    };
     if tool == QuickTool::Select && !input.consumed {
         crate::image_pick::page_input(resp, &xf, i, info, doc, pointer, view);
     }

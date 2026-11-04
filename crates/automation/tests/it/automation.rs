@@ -10832,3 +10832,124 @@ fn a_bad_bookmark_tree_is_refused_whole_and_names_the_node() {
     assert!(!out.exists());
     assert_eq!(ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"], json!([]));
 }
+
+/// `comment_add` with `snap: true` moves a polyline's points onto the page's paths (an endpoint
+/// and an intersection here) and says how many moved; without it the points stay.
+#[test]
+fn comment_add_snaps_points_to_the_drawing_on_request() {
+    let dir = workdir("comment-snap");
+    let mut a = auto(&dir);
+    let source = String::from_utf8(fixture(1)).unwrap();
+    let old = "BT /F1 24 Tf 20 150 Td (Page 1) Tj ET";
+    let drawing = "10 20 m 110 20 l S 60 0 m 60 80 l S";
+    let source = source.replace(old, &format!("{drawing:<width$}", width = old.len()));
+    std::fs::write(dir.join("drawing.pdf"), source).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "drawing.pdf" }))["doc"].as_u64().unwrap();
+    // Display coordinates (top-left origin): the line's left end is at [10, 280], the crossing at [60, 280].
+    let r =
+        ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "polyline", "points": [[12, 278], [58, 282], [150, 150]], "snap": true }));
+    assert_eq!(r["snapped"], 2, "{r}");
+    // The vertices, in user space: the endpoint (10, 20), the crossing (60, 20), the free point.
+    ok(&mut a, "doc_export_data", json!({ "doc": doc, "path": "out.xfdf", "what": "comments" }));
+    let xfdf = std::fs::read_to_string(dir.join("out.xfdf")).unwrap();
+    assert!(xfdf.contains("<vertices>10,20;60,20;150,150</vertices>"), "{xfdf}");
+    let plain = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [12, 278], "to": [58, 282] }));
+    assert!(plain.get("snapped").is_none());
+    // Without `snap` the points stay where they were given.
+    let points_of = |a: &mut Automation, id: &Value| -> Vec<Vec<f64>> {
+        let list = ok(a, "comment_list", json!({ "doc": doc, "page": 1 }));
+        let c = list["comments"].as_array().unwrap().iter().find(|c| c["id"] == *id).cloned().expect("the comment");
+        c["points"].as_array().unwrap().iter().map(|p| p.as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect()).collect()
+    };
+    assert_eq!(points_of(&mut a, &plain["comment"]["id"]), [[12.0, 278.0], [58.0, 282.0]]);
+    // Points before paths, as in the app: a line drawn up from (90, 25) in user space, then a
+    // point 1 pt off the page's line (y 20) but 4 pt from that end goes onto the end.
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [90, 275], "to": [90, 200] }));
+    let ranked = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [91, 279], "to": [200, 150], "snap": true }));
+    assert_eq!(ranked["snapped"], 1, "{ranked}");
+    assert_eq!(points_of(&mut a, &ranked["comment"]["id"])[0], [90.0, 275.0], "the end, not the nearer path");
+    assert!(matches!(
+        a.call(
+            "comment_add",
+            &json!({ "doc": doc, "page": 1, "type": "line", "from": [12, 278], "to": [58, 282], "snap": true, "snap_tolerance": -1 })
+        ),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// comment_add `snap` takes the comments already drawn as well as the page's paths: a second
+/// line started 3 pt off the first one's end begins exactly there; one started near nothing
+/// stays where it was asked to start.
+#[test]
+fn snap_takes_the_comments_already_drawn() {
+    let dir = workdir("snap-comments");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [20, 40], "to": [120, 40] }));
+    let out = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [123, 43], "to": [123, 140], "snap": true }));
+    assert_eq!(out["snapped"], 1, "{out}");
+    assert_eq!(out["truncated"], false, "the page was read whole: {out}");
+    let out = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [20, 250], "to": [80, 250], "snap": true }));
+    assert_eq!(out["snapped"], 0, "{out}");
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let mut lines = list["comments"].as_array().unwrap().clone();
+    lines.sort_by_key(|c| c["index"].as_u64());
+    let start = |c: &Value| [c["points"][0][0].as_f64().unwrap(), c["points"][0][1].as_f64().unwrap()];
+    let [x, y] = start(&lines[1]);
+    assert!((x - 120.0).abs() < 1e-3 && (y - 40.0).abs() < 1e-3, "{lines:?}");
+    assert_eq!(start(&lines[2]), [20.0, 250.0]);
+    // A text box snaps by its corners too, as a rectangle does (its bottom-left and top-right
+    // ones): the bottom-left one, 3 pt off the line's end, goes onto it.
+    let out =
+        ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "textbox", "rect": [117, 10, 200, 43], "contents": "Box", "snap": true }));
+    assert_eq!(out["snapped"], 1, "{out}");
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let boxed = list["comments"].as_array().unwrap().iter().find(|c| c["contents"] == "Box").cloned().expect("the text box");
+    let r: Vec<f64> = boxed["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    let want = [120.0, 10.0, 200.0, 40.0];
+    assert!(r.iter().zip(want).all(|(v, w)| (v - w).abs() < 1e-3), "{r:?}");
+    // A point already on a target stays and isn't counted as moved.
+    let out = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [20, 40], "to": [70, 140], "snap": true }));
+    assert_eq!(out["snapped"], 0, "{out}");
+    // A small box around the line's end: both corners would go onto it and leave no box, so it
+    // keeps its corners and is added.
+    let out = ok(
+        &mut a,
+        "comment_add",
+        json!({ "doc": doc, "page": 1, "type": "rectangle", "rect": [117, 37, 123, 43], "contents": "Small", "snap": true }),
+    );
+    assert_eq!(out["snapped"], 0, "{out}");
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let small = list["comments"].as_array().unwrap().iter().find(|c| c["contents"] == "Small").cloned().expect("the small box");
+    let r: Vec<f64> = small["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    let want = [117.0, 37.0, 123.0, 43.0];
+    assert!(r.iter().zip(want).all(|(v, w)| (v - w).abs() < 1e-3), "{r:?}");
+    // A short line both of whose ends lie near the free end (80, 250) of the line drawn near
+    // nothing: they'd meet there, so the line keeps its own ends and is added.
+    let out = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [78, 251], "to": [82, 249], "snap": true }));
+    assert_eq!(out["snapped"], 0, "{out}");
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let short = list["comments"].as_array().unwrap().iter().find(|c| c["id"] == out["comment"]["id"]).cloned().expect("the short line");
+    assert_eq!(short["points"], json!([[78.0, 251.0], [82.0, 249.0]]), "{short}");
+    // Connected lines and a polygon whose points would all go onto one line end (of two lines
+    // drawn for them, at y 200 and 270) would be too flat to add: they keep their points.
+    let points = |a: &mut Automation, out: &Value| -> Value {
+        let list = ok(a, "comment_list", json!({ "doc": doc, "page": 1 }));
+        list["comments"].as_array().unwrap().iter().find(|c| c["id"] == out["comment"]["id"]).cloned().expect("added")["points"].clone()
+    };
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [140, 200], "to": [180, 200] }));
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [140, 270], "to": [180, 270] }));
+    let out = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "polyline", "points": [[178, 201], [182, 199]], "snap": true }));
+    assert_eq!(out["snapped"], 0, "{out}");
+    assert_eq!(points(&mut a, &out), json!([[178.0, 201.0], [182.0, 199.0]]));
+    let out =
+        ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "polygon", "points": [[178, 271], [182, 269], [180, 273]], "snap": true }));
+    assert_eq!(out["snapped"], 0, "{out}");
+    assert_eq!(points(&mut a, &out), json!([[178.0, 271.0], [182.0, 269.0], [180.0, 273.0]]));
+    // Replace Text doesn't snap, but a reach out of range is refused for it as for the others.
+    assert!(matches!(
+        a.call("comment_add", &json!({ "doc": doc, "page": 1, "type": "replace", "find": "Page 1", "contents": "One", "snap_tolerance": 5000 })),
+        Err(ToolError::InvalidArgs(_))
+    ));
+}

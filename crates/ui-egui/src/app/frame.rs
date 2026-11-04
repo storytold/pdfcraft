@@ -84,6 +84,25 @@ impl PdfCraftApp {
         }
         // Before egui reads this frame's wheel input.
         self.scroll_speed.apply(ctx, raw);
+        // Tab over a snap marker cycles the targets under the pointer; while a comment is moved
+        // with snapping on, it moves on to the comment's next anchor. Taken before egui sees it:
+        // egui would move the keyboard focus to a toolbar button, and keep it there.
+        let view = self.active.and_then(|i| self.views.get(i));
+        let marker = view.is_some_and(|v| v.comments.snap_first.is_some());
+        let moving = self.comment_prefs.snap && view.is_some_and(|v| matches!(v.comments.gesture, Some(comments::Gesture::Move { .. })));
+        if (marker || moving) && !ctx.memory(|m| m.focused().is_some()) {
+            let step = comments::take_snap_tabs(&mut raw.events);
+            if step != 0
+                && let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
+            {
+                if moving {
+                    view.comments.anchor_steps = view.comments.anchor_steps.saturating_add(step);
+                } else {
+                    view.comments.cycle_snap(step);
+                }
+                ctx.request_repaint();
+            }
+        }
         // The native menu's key equivalents.
         if let Some(native) = self.native_menu.as_mut() {
             native.raw_input(raw);
