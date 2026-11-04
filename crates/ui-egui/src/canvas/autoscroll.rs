@@ -46,15 +46,18 @@ impl AutoScroll {
     }
 
     /// Run before the document's widgets. Starting is restricted to the unobstructed viewport;
-    /// once started, moving outside that viewport still controls the speed.
-    pub(crate) fn update(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool) -> Vec2 {
-        self.update_for_platform(ui, viewport, organize, cfg!(target_os = "linux"))
+    /// once started, moving outside that viewport still controls the speed. `invert` is
+    /// Preferences ▸ Invert middle-button drag: the returned delta scrolls the other way.
+    pub(crate) fn update(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, invert: bool) -> Vec2 {
+        self.update_for_platform(ui, viewport, organize, cfg!(target_os = "linux"), invert)
     }
 
-    fn update_for_platform(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, supported: bool) -> Vec2 {
-        if !supported {
-            return self.update_drag(ui, viewport);
-        }
+    fn update_for_platform(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, supported: bool, invert: bool) -> Vec2 {
+        let delta = if supported { self.update_latched(ui, viewport, organize) } else { self.update_drag(ui, viewport) };
+        oriented(delta, invert)
+    }
+
+    fn update_latched(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool) -> Vec2 {
         let ctx = ui.ctx();
         let (pointer, middle_press, middle_down, middle_released, cancel, cancel_button, dt) = ctx.input(|i| {
             let cancel_button = [PointerButton::Primary, PointerButton::Secondary, PointerButton::Extra1, PointerButton::Extra2]
@@ -237,6 +240,11 @@ pub(crate) fn edge_delta(y: f32, viewport: egui::Rect, dt: f32) -> f32 {
     -distance.clamp(-MAX_DISPLACEMENT, MAX_DISPLACEMENT) * EDGE_SPEED * dt.clamp(0.0, 0.05)
 }
 
+/// The middle button's delta, reversed when the user inverted it.
+fn oriented(delta: Vec2, invert: bool) -> Vec2 {
+    if invert { -delta } else { delta }
+}
+
 fn scroll_delta(displacement: f32, dt: f32) -> f32 {
     if !displacement.is_finite() || !dt.is_finite() {
         return 0.0;
@@ -261,15 +269,54 @@ mod tests {
 
     /// Run one frame of the non-Linux path; `check` sees the pan delta inside the frame.
     fn drag_frame(ctx: &Context, scroll: &mut AutoScroll, events: Vec<Event>, focused: bool, check: impl Fn(&AutoScroll, Vec2)) {
+        frame(ctx, scroll, events, focused, (false, false), check);
+    }
+
+    /// Run one frame; `mode` is (latched auto-scroll supported, inverted).
+    fn frame(ctx: &Context, scroll: &mut AutoScroll, events: Vec<Event>, focused: bool, mode: (bool, bool), check: impl Fn(&AutoScroll, Vec2)) {
         let mut output = ctx.run_ui(
             egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))), events, focused, ..Default::default() },
             |ui| {
-                let delta = scroll.update_for_platform(ui, ui.max_rect(), false, false);
+                let delta = scroll.update_for_platform(ui, ui.max_rect(), false, mode.0, mode.1);
                 check(scroll, delta);
             },
         );
         // This input-only test has no renderer to apply the generated font texture.
         output.textures_delta.clear();
+    }
+
+    /// The pan delta after pressing at `p` and moving the pointer by `by`.
+    fn pan_by(by: Vec2, invert: bool) -> Vec2 {
+        let (ctx, mut scroll, p) = (Context::default(), AutoScroll::default(), egui::pos2(100.0, 100.0));
+        frame(&ctx, &mut scroll, vec![], true, (false, invert), |_, _| {});
+        frame(&ctx, &mut scroll, vec![Event::PointerMoved(p), middle(p, true)], true, (false, invert), |_, _| {});
+        let moved = std::cell::Cell::new(Vec2::ZERO);
+        frame(&ctx, &mut scroll, vec![Event::PointerMoved(p + by)], true, (false, invert), |_, d| moved.set(d));
+        moved.get()
+    }
+
+    /// The auto-scroll delta in the frame after latching at `p`, with the pointer `dy` below it.
+    fn latched_by(dy: f32, invert: bool) -> Vec2 {
+        let (ctx, mut scroll, p) = (Context::default(), AutoScroll::default(), egui::pos2(100.0, 100.0));
+        frame(&ctx, &mut scroll, vec![], true, (true, invert), |_, _| {});
+        frame(&ctx, &mut scroll, vec![Event::PointerMoved(p), middle(p, true), middle(p, false)], true, (true, invert), |_, _| {});
+        let moved = std::cell::Cell::new(Vec2::ZERO);
+        frame(&ctx, &mut scroll, vec![Event::PointerMoved(p + vec2(0.0, dy))], true, (true, invert), |s, d| {
+            assert!(s.active(), "the click latched auto-scroll");
+            moved.set(d);
+        });
+        moved.get()
+    }
+
+    #[test]
+    fn inverting_the_middle_button_reverses_the_pan_and_the_auto_scroll() {
+        let by = vec2(-30.0, 40.0);
+        assert_eq!(pan_by(by, false), by, "by default the page follows the pointer");
+        assert_eq!(pan_by(by, true), -by, "inverted, the view moves the way the pointer goes");
+        let (normal, inverted) = (latched_by(60.0, false), latched_by(60.0, true));
+        assert!(normal.y < 0.0, "by default, below the anchor scrolls down: {normal:?}");
+        assert_eq!(inverted, -normal, "inverted, the same distance scrolls the other way");
+        assert_eq!(latched_by(10.0, true), Vec2::ZERO, "the dead zone still holds still");
     }
 
     #[test]

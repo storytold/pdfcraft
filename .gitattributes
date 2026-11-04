@@ -3,6 +3,9 @@
 # signatures) and assets whose SHA-256 ATTRIBUTION.toml records (cargo xtask assets).
 * -text
 
+# The craft-i18n pin: CI and the build read it as one SHA, so it stays LF everywhere (readers trim it too).
+craft-i18n.rev text eol=lf
+
 # Not text at all: no textual diffs or merges either.
 *.pdf binary
 *.p12 binary
