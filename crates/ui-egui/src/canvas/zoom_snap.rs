@@ -1,5 +1,6 @@
 //! View ▸ Zoom ▸ Marquee Zoom (drag a rectangle to fill the window with it; click to zoom in)
-//! and Edit ▸ Take a Snapshot (drag a rectangle to copy that area as an image).
+//! and Edit ▸ Take a Snapshot / Take a Vector Snapshot (drag a rectangle to copy that area as an
+//! image, or as SVG with a picture alongside).
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
 use pdfcraft_render::{RenderConfig, RenderRequest, RequestKind, Tile};
@@ -13,7 +14,7 @@ use crate::{PdfCraftApp, QuickTool};
 /// [x0, y0, x1, y1]); a plain click has an empty rectangle.
 pub type Marquee = (usize, Rect, [f32; 4]);
 
-/// Drag a rectangle on page `page` (Marquee Zoom, Snapshot).
+/// Drag a rectangle on page `page` (Marquee Zoom, Snapshot, Vector Snapshot).
 pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, view: &mut DocView) {
     let (pointer, origin) = (ptr.pos, ptr.origin);
     if pointer.is_some_and(|p| xf.rect.contains(p)) {
@@ -63,12 +64,16 @@ impl PdfCraftApp {
                     view.zoom_to_rect(rect);
                 }
             }
-            QuickTool::Snapshot => {
+            QuickTool::Snapshot | QuickTool::VectorSnapshot => {
                 if view_rect[2] - view_rect[0] < 2.0 || view_rect[3] - view_rect[1] < 2.0 {
                     return;
                 }
                 // The tool outlives the tab it was chosen on.
                 if self.views.get(index).map(|v| v.id).is_some_and(|id| !self.may_copy(id)) {
+                    return;
+                }
+                if self.quick_tool == QuickTool::VectorSnapshot {
+                    self.finish_vector_snapshot(index, page, view_rect);
                     return;
                 }
                 match self.snapshot(index, page, view_rect) {
@@ -79,6 +84,14 @@ impl PdfCraftApp {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn finish_vector_snapshot(&mut self, index: usize, page: usize, view_rect: [f32; 4]) {
+        match self.vector_snapshot(index, page, view_rect) {
+            Ok([w, h]) => self
+                .notify_fmt("The selected area has been copied as vectors ({w} × {h} pt)", &[("w", &format!("{w:.0}")), ("h", &format!("{h:.0}"))]),
+            Err(e) => self.notify_fmt("Couldn't take the vector snapshot: {e}", &[("e", &e)]),
         }
     }
 
@@ -122,7 +135,20 @@ impl PdfCraftApp {
     /// Render `view_rect` (page view points) of `page` at the current zoom and copy it to the
     /// clipboard (and keep it in `last_snapshot`).
     pub fn snapshot(&mut self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32), String> {
-        let view = &self.views[index];
+        let (w, h, rgba) = self.snapshot_pixels(index, page, view_rect)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.system_clipboard {
+            let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&rgba) };
+            crate::os_clipboard::with(|c| c.set_image(img)).map_err(|e| e.to_string())?;
+        }
+        self.last_snapshot = Some((w, h, rgba));
+        Ok((w, h))
+    }
+
+    /// `view_rect` (page view points) of `page` drawn at the current zoom: width, height and
+    /// premultiplied RGBA.
+    fn snapshot_pixels(&self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<(u32, u32, pdfcraft_render::Pixels), String> {
+        let view = self.views.get(index).ok_or("no document")?;
         let doc = self.session.get(view.id).ok_or("no document")?;
         let ppp = self.ctx.as_ref().map_or(2.0, |c| c.pixels_per_point());
         let scale = (view.zoom * ppp).clamp(0.5, 8.0);
@@ -141,15 +167,57 @@ impl PdfCraftApp {
         if let Some(e) = out.error {
             return Err(e);
         }
-        let (w, h) = (out.width, out.height);
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.system_clipboard {
-            let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&out.rgba) };
-            crate::os_clipboard::with(|c| c.set_image(img)).map_err(|e| e.to_string())?;
-        }
-        self.last_snapshot = Some((w, h, out.rgba));
-        Ok((w, h))
+        Ok((out.width, out.height, out.rgba))
     }
+
+    /// Edit ▸ Take a Vector Snapshot: `view_rect` (page view points) of `page` as an SVG sized in
+    /// points, kept in `last_copied_svg` and, with `system_clipboard`, put on the clipboard: on
+    /// Windows as SVG, PNG and a bitmap at once, elsewhere as an `.svg` file. Text becomes
+    /// outlines, and an object crossing the edge keeps its hidden part (this is not redaction).
+    /// Returns the area's size in points.
+    pub fn vector_snapshot(&mut self, index: usize, page: usize, view_rect: [f32; 4]) -> Result<[f32; 2], String> {
+        let view = self.views.get(index).ok_or("no document")?;
+        let doc = self.session.get(view.id).ok_or("no document")?;
+        if cfg!(target_arch = "wasm32") && self.system_clipboard {
+            return Err("the web version can't copy vectors yet; use Take a Snapshot".into());
+        }
+        let config = RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..RenderConfig::default() };
+        let svg = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config).svg_region(page, view_rect)?;
+        let size = svg_size_pt(&svg).ok_or("the SVG has no size")?;
+        if self.system_clipboard {
+            self.put_vector_on_clipboard(index, page, view_rect, &svg)?;
+        }
+        self.last_copied_svg = Some(svg);
+        Ok(size)
+    }
+
+    /// Windows: the SVG with a PNG and a bitmap of the same area, for applications that don't
+    /// read SVG.
+    #[cfg(windows)]
+    fn put_vector_on_clipboard(&self, index: usize, page: usize, view_rect: [f32; 4], svg: &str) -> Result<(), String> {
+        let (w, h, rgba) = self.snapshot_pixels(index, page, view_rect)?;
+        // The drawing's resolution, so a reader sizes the pictures as the area: pixels per point
+        // times 72 points per inch, per 0.0254 m.
+        let per_metre = (f64::from(w) / f64::from(view_rect[2] - view_rect[0]).max(1.0) * 72.0 / 0.0254).round().clamp(1.0, 1e9) as u32;
+        let png = pdfcraft_engine::export::encode_png_at(w, h, &rgba, Some(per_metre))?;
+        let dib = crate::os_clipboard::dib_v5(w, h, &rgba, per_metre).ok_or("the area is too large to copy as a bitmap")?;
+        crate::os_clipboard::put_vector(svg, &png, &dib)
+    }
+
+    /// macOS and Linux: the SVG as a file, which drawing applications paste or import.
+    #[cfg(not(windows))]
+    fn put_vector_on_clipboard(&self, index: usize, page: usize, _view_rect: [f32; 4], svg: &str) -> Result<(), String> {
+        let doc = self.views.get(index).and_then(|v| self.session.get(v.id)).ok_or("no document")?;
+        let stem = crate::image_pick::safe_name(doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(s, _)| s));
+        self.put_file_on_clipboard(&format!("{stem} p{} snapshot.svg", page.saturating_add(1)), svg.as_bytes())
+    }
+}
+
+/// The `width` and `height` in points that `svg_region` writes on the root element.
+fn svg_size_pt(svg: &str) -> Option<[f32; 2]> {
+    let head = svg.split_once('>')?.0;
+    let attr = |name: &str| head.split_once(&format!(" {name}=\"")).and_then(|(_, v)| v.split_once("pt\"")).and_then(|(n, _)| n.parse().ok());
+    Some([attr("width")?, attr("height")?])
 }
 
 /// The normalised bounds [u0, v0, u1, v1] of the pixels that aren't (near) white, if any.

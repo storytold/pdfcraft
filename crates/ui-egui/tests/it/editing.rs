@@ -2938,6 +2938,19 @@ fn restricted_documents_show_a_notice_and_block_page_changes() {
     assert!(h.query_all_by_label("Not allowed").count() >= 4);
 }
 
+/// The commands that take text or images out of a document.
+const COPYING_COMMANDS: [&str; 9] = [
+    "edit.snapshot",
+    "edit.snapshot_vector",
+    "export.image",
+    "export.text",
+    "export.docx",
+    "export.pptx",
+    "export.html",
+    "export.rtf",
+    "export.all_images",
+];
+
 /// Table 22, bit 5 (#568): a document whose security withholds copying keeps its text and images
 /// in. ⌘C, snapshots and exports are refused with a notice; the owner password lifts that.
 #[test]
@@ -2997,23 +3010,29 @@ fn copying_out_of_a_document_honours_its_security() {
     let mut h = open("pw");
     assert!(!copy(&mut h), "⌘C copies nothing");
     assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), refused);
-    for command in ["edit.snapshot", "export.image", "export.text", "export.docx", "export.pptx", "export.html", "export.rtf", "export.all_images"] {
+    for command in COPYING_COMMANDS {
         h.state_mut().toast = None;
         assert!(!h.state_mut().execute(command), "{command} is refused");
         assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), refused, "{command} says why");
     }
     assert_eq!(h.state().dialog, None, "no export dialog");
-    // The snapshot tool, chosen on another tab, takes nothing here either.
-    h.state_mut().set_option("quick", "snapshot").unwrap();
-    snapshot(&mut h);
-    assert!(h.state().last_snapshot.is_none());
-    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), refused);
+    // The snapshot tools, chosen on another tab, take nothing here either.
+    for tool in ["snapshot", "vector-snapshot"] {
+        h.state_mut().toast = None;
+        h.state_mut().set_option("quick", tool).unwrap();
+        snapshot(&mut h);
+        assert!(h.state().last_snapshot.is_none() && h.state().last_copied_svg.is_none(), "{tool}");
+        assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), refused, "{tool}");
+    }
 
     let mut h = open("owner");
     assert!(copy(&mut h), "the owner may copy");
     assert!(h.state_mut().execute("edit.snapshot"));
     snapshot(&mut h);
     assert!(h.state().last_snapshot.is_some());
+    assert!(h.state_mut().execute("edit.snapshot_vector"));
+    snapshot(&mut h);
+    assert!(h.state().last_copied_svg.as_deref().is_some_and(|s| s.starts_with("<svg viewBox=")));
 }
 
 #[test]

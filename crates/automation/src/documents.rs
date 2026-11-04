@@ -574,6 +574,9 @@ impl Automation {
             write_atomic(&path, text.as_bytes())?;
             return Ok(json!({ "path": path.to_string_lossy(), "pages": pages.len(), "bytes": text.len() }));
         }
+        if let Some(rect) = a.nums::<4>("rect")?.filter(|_| tool == "doc_export_images") {
+            return self.export_region(a, &mut ex, &pages, &stem, rect);
+        }
         let folder = self.resolve(a.str("folder")?, true)?;
         std::fs::create_dir_all(&folder).map_err(|e| failed(format!("{}: {e}", folder.display())))?;
         if tool == "doc_export_all_images" {
@@ -627,6 +630,36 @@ impl Automation {
         } else {
             Ok(json!({ "count": files.len(), "files": files, "lower_dpi": lowered }))
         }
+    }
+
+    /// `doc_export_images` with `rect`: the area `rect` (points from the top-left of the displayed
+    /// page) of each page as an SVG sized in points. Only SVG takes a rect.
+    fn export_region(&mut self, a: &Args, ex: &mut pdfcraft_engine::export::Exporter, pages: &[usize], stem: &str, rect: [f64; 4]) -> Result<Value> {
+        match a.opt_str("format")? {
+            Some("svg") => {}
+            f => {
+                return Err(ToolError::InvalidArgs(format!(
+                    "`rect` exports an area as SVG only; format {:?} exports whole pages (set format to \"svg\" or drop rect)",
+                    f.unwrap_or("png")
+                )));
+            }
+        }
+        let [x0, y0, x1, y1] = rect;
+        if !(x1 > x0 && y1 > y0) {
+            return Err(ToolError::InvalidArgs(format!("`rect` [{x0}, {y0}, {x1}, {y1}] is empty or inverted (x0 < x1 and y0 < y1 are needed)")));
+        }
+        // A corner past f32 range becomes infinite, which `svg_region` refuses.
+        let rect = rect.map(|v| v as f32);
+        let folder = self.resolve(a.str("folder")?, true)?;
+        std::fs::create_dir_all(&folder).map_err(|e| failed(format!("{}: {e}", folder.display())))?;
+        let mut files = Vec::new();
+        for &p in pages {
+            let svg = ex.svg_region(p, rect).map_err(failed)?;
+            let path = child(&folder, &format!("{stem}_page_{}.svg", p.saturating_add(1)));
+            write_atomic(&path, &svg)?;
+            files.push(path.to_string_lossy().into_owned());
+        }
+        Ok(json!({ "count": files.len(), "files": files }))
     }
 
     pub(crate) fn doc_protect(&mut self, a: &Args) -> Result<Value> {

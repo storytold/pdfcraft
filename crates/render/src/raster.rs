@@ -461,6 +461,12 @@ fn drawable_page(pdf: &Pdf, page: usize) -> Result<(&Page<'_>, f32, f32), String
     Ok((p, w, h))
 }
 
+/// `r` cut to the `w` × `h` page, or `None` when less than a hundredth of a point of it is left.
+fn on_page(r: kurbo::Rect, w: f32, h: f32) -> Option<kurbo::Rect> {
+    let cut = r.intersect(kurbo::Rect::new(0.0, 0.0, w.into(), h.into()));
+    (cut.width() >= 0.01 && cut.height() >= 0.01).then_some(cut)
+}
+
 /// The most SVG text one page may become, by [`SvgSize`]'s estimate. hayro-svg shares only
 /// glyphs, clips, masks and patterns, and writes out every other draw, so a page that draws one
 /// form millions of times would otherwise grow the SVG until memory runs out.
@@ -707,17 +713,43 @@ impl PageRenderer {
     /// and rotation. Text is drawn as glyph outlines, so it is not selectable. A page whose SVG
     /// would pass about [`MAX_SVG_BYTES`] is an error. Never panics.
     pub fn svg(&mut self, page: usize) -> Result<String, String> {
+        self.svg_of(page, None)
+    }
+
+    /// The part of page `page` inside `rect` ([x0, y0, x1, y1] in points, origin at the top-left
+    /// of the displayed page after `/Rotate`, as `render`'s tiles are) as a standalone SVG over
+    /// white: its view box is the part of `rect` on the page and its size is in points. What lies
+    /// wholly outside is left out and the rest is clipped to it; an object crossing the edge keeps
+    /// its whole geometry under the clip, so this is not redaction. A rect that is not finite, is
+    /// empty or inverted, or misses the page is an error. Never panics.
+    pub fn svg_region(&mut self, page: usize, rect: [f32; 4]) -> Result<String, String> {
+        let [x0, y0, x1, y1] = rect;
+        if !rect.iter().all(|v| v.is_finite()) {
+            return Err("the area's corners must be finite numbers".into());
+        }
+        if !(x1 > x0 && y1 > y0) {
+            return Err(format!("the area [{x0}, {y0}, {x1}, {y1}] is empty or inverted (x0 < x1 and y0 < y1 are needed)"));
+        }
+        self.svg_of(page, Some(kurbo::Rect::new(x0.into(), y0.into(), x1.into(), y1.into())))
+    }
+
+    fn svg_of(&mut self, page: usize, rect: Option<kurbo::Rect>) -> Result<String, String> {
         let pdf = self.pdf.as_ref().ok_or("the document could not be parsed")?;
         self.stats.page_interpretations = self.stats.page_interpretations.saturating_add(1);
         let r = catch_unwind(AssertUnwindSafe(|| {
             let (p, w, h) = drawable_page(pdf, page)?;
-            // hayro-svg holds the whole document in one String, so size it before writing it.
+            let region = match rect {
+                None => None,
+                Some(r) => Some(on_page(r, w, h).ok_or_else(|| format!("the area misses page {} ({w}×{h} pt)", page.saturating_add(1)))?),
+            };
+            // hayro-svg holds the whole document in one String, so size it before writing it. A
+            // region is sized as its whole page, which only ever over-counts.
             if svg_size(p, w, h, &self.settings) > MAX_SVG_BYTES {
                 return Err(format!("too complex to export as SVG (over {} MiB); export it as PNG or JPEG instead", MAX_SVG_BYTES >> 20));
             }
             self.stats.page_interpretations = self.stats.page_interpretations.saturating_add(1);
             let white = hayro_svg::SvgRenderSettings { bg_color: [255, 255, 255, 255] };
-            Ok(hayro_svg::convert(p, &hayro_svg::RenderCache::new(), &self.settings, &white))
+            Ok(hayro_svg::convert_region(p, &hayro_svg::RenderCache::new(), &self.settings, &white, region))
         }));
         r.unwrap_or_else(|panic| {
             // A fresh parser, as `render` takes after a crash.

@@ -1632,7 +1632,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     if matches!(tool, QuickTool::SignArea { .. }) {
         crate::sign_ui::page_input(ui, resp, &xf, ptr, i, info, view);
     }
-    if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
+    if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot | QuickTool::VectorSnapshot) {
         crate::zoom_snap::page_input(ui, resp, &xf, ptr, i, view);
     }
     if tool == QuickTool::EnhanceCamera {
@@ -3460,7 +3460,8 @@ fn tool_selects_text(tool: QuickTool, preparing: bool) -> bool {
         | QuickTool::Link
         | QuickTool::SignArea { .. }
         | QuickTool::MarqueeZoom
-        | QuickTool::Snapshot => false,
+        | QuickTool::Snapshot
+        | QuickTool::VectorSnapshot => false,
     }
 }
 

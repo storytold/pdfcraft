@@ -1552,7 +1552,17 @@ fn copy_restricted_documents_refuse_extraction_unless_opened_by_the_owner() {
     assert!(d.allows_printing() && d.allows_modification() && d.allows_assembly(), "only copying is withheld");
     assert_eq!(d.check_copying(), Err(EditError::NotPermitted("copying text and images")));
     assert!(d.page_image_file(0, 0).unwrap_err().contains("don't allow copying"));
-    let extracting = ["edit.snapshot", "export.image", "export.text", "export.docx", "export.pptx", "export.html", "export.rtf", "export.all_images"];
+    let extracting = [
+        "edit.snapshot",
+        "edit.snapshot_vector",
+        "export.image",
+        "export.text",
+        "export.docx",
+        "export.pptx",
+        "export.html",
+        "export.rtf",
+        "export.all_images",
+    ];
     let enabled = |s: &Session, id, c| commands::is_enabled(commands::command(c).unwrap(), s, Some(id));
     for c in extracting {
         assert!(!enabled(&s, id, c), "{c} is disabled");
@@ -3594,6 +3604,22 @@ fn svg_export_follows_the_working_file_at_any_resolution() {
     assert_eq!(svg(ex.image(0, 1200.0, Svg).unwrap()), first, "vector: the resolution doesn't apply");
     assert!(ex.image(5, 72.0, Svg).is_err());
     assert!(export::encode_image(1, 1, &[0; 4], Svg, 72.0).is_err(), "SVG isn't encoded from pixels");
+}
+
+#[test]
+fn svg_region_follows_the_working_file_in_points() {
+    let (mut s, id) = session_with(2);
+    s.apply(id, Edit::RotatePages { pages: vec![1], degrees: 90 }).unwrap();
+    let mut ex = export::Exporter::new(s.get(id).unwrap());
+    let svg = |b: Vec<u8>| String::from_utf8(b).unwrap();
+    let area = svg(ex.svg_region(0, [10.0, 20.0, 110.0, 70.0]).unwrap());
+    assert!(area.starts_with("<svg viewBox=\"10 20 100 50\" width=\"100pt\" height=\"50pt\" "), "{area}");
+    // The unsaved rotation shows the page as 300×200, so an area past 200 across is on it.
+    let rotated = svg(ex.svg_region(1, [250.0, 150.0, 300.0, 200.0]).unwrap());
+    assert!(rotated.starts_with("<svg viewBox=\"250 150 50 50\" "), "{rotated}");
+    assert!(ex.svg_region(0, [250.0, 150.0, 300.0, 200.0]).is_err_and(|e| e.contains("misses page 1")));
+    assert!(ex.svg_region(5, [0.0, 0.0, 10.0, 10.0]).is_err_and(|e| e.contains("page 6 does not exist")));
+    assert!(ex.svg_region(0, [0.0, 0.0, f32::NAN, 10.0]).is_err());
 }
 
 #[test]

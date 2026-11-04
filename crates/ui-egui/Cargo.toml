@@ -81,6 +81,9 @@ sys-locale = "0.3"
 # Region ▸ Measurement system for the default Units, read from the registry without starting reg.exe;
 # where the pointer is while files are dragged over the window (winit doesn't say).
 winsafe = { version = "0.0.29", default-features = false, features = ["advapi", "user"] }
+# Edit ▸ Take a Vector Snapshot: SVG, PNG and a bitmap on the clipboard at once (arboard places
+# one format at a time). Already in the tree through arboard; its safe API only.
+clipboard-win = "5.4"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 rfd = { workspace = true, features = ["file-handle-inner"] }

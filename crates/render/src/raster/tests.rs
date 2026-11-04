@@ -2178,6 +2178,78 @@ trailer << /Root 1 0 R >>
     assert!(r.svg(0).is_err_and(|e| e.contains("too complex to export as SVG")));
 }
 
+/// A 200×100 page with a red square at 10,10–30,30 (view space: top-left origin, y down), a
+/// green bar at 40,20–80,40 and a blue square at 150,70–170,90.
+fn three_squares() -> PageRenderer {
+    svg_page("/MediaBox [0 0 200 100]", "1 0 0 rg 10 70 20 20 re f 0 1 0 rg 40 60 40 20 re f 0 0 1 rg 150 10 20 20 re f")
+}
+
+#[test]
+fn svg_region_is_sized_in_points_and_clipped_to_the_area() {
+    let svg = three_squares().svg_region(0, [0.0, 0.0, 60.0, 50.0]).expect("an SVG");
+    assert!(svg.starts_with("<svg viewBox=\"0 0 60 50\" width=\"60pt\" height=\"50pt\" "), "sized in points: {svg}");
+    assert!(svg.contains("<clipPath id=\"pdfcraft-region\">") && svg.contains("clip-path=\"url(#pdfcraft-region)\""), "clipped to the area: {svg}");
+    assert!(svg.contains("fill=\"rgb(255,255,255)\""), "an opaque background a pasted copy keeps: {svg}");
+    let svg = three_squares().svg_region(0, [100.5, 25.0, 190.0, 95.0]).expect("an SVG");
+    assert!(svg.starts_with("<svg viewBox=\"100.5 25 89.5 70\" width=\"89.5pt\" height=\"70pt\" "), "{svg}");
+}
+
+#[test]
+fn svg_region_leaves_out_what_lies_wholly_outside_and_keeps_what_crosses_it() {
+    let svg = three_squares().svg_region(0, [0.0, 0.0, 60.0, 50.0]).expect("an SVG");
+    assert!(svg.contains("fill=\"#ff0000\""), "the square inside: {svg}");
+    assert!(svg.contains("fill=\"#00ff00\""), "the bar across the edge, uncut: {svg}");
+    assert!(!svg.contains("fill=\"#0000ff\""), "the square outside: {svg}");
+    // The whole page still draws all three.
+    let page = three_squares().svg(0).expect("an SVG");
+    assert!(["#ff0000", "#00ff00", "#0000ff"].iter().all(|c| page.contains(&format!("fill=\"{c}\""))), "{page}");
+}
+
+#[test]
+fn svg_region_of_a_rotated_page_is_in_the_shown_page_rotated_once() {
+    // /Rotate 90 shows the 200×300 page as 300×200. The red square at user 10,10–30,20 shows at
+    // 10,10–20,30; the blue one at user 160,260–180,280 shows at 260,160–280,180.
+    let mut r = svg_page("/MediaBox [0 0 200 300] /Rotate 90", "1 0 0 rg 10 10 20 10 re f 0 0 1 rg 160 260 20 20 re f");
+    let near = r.svg_region(0, [0.0, 0.0, 50.0, 50.0]).expect("an SVG");
+    assert!(near.contains("fill=\"#ff0000\"") && !near.contains("fill=\"#0000ff\""), "{near}");
+    let far = r.svg_region(0, [250.0, 150.0, 300.0, 200.0]).expect("the far corner is on the page");
+    assert!(far.contains("fill=\"#0000ff\"") && !far.contains("fill=\"#ff0000\""), "{far}");
+    assert!(r.svg_region(0, [0.0, 250.0, 50.0, 290.0]).is_err_and(|e| e.contains("misses page 1 (300×200 pt)")));
+}
+
+#[test]
+fn svg_region_keeps_every_definition_a_kept_draw_names() {
+    // The pattern cell and its shading are drawn in their own space (here near 0,0), which a
+    // cull in page space would wrongly empty for an area far from the page's origin.
+    let svg = paint_page("/Pattern cs /P1 scn 0 0 200 100 re f").svg_region(0, [120.0, 40.0, 180.0, 90.0]).expect("an SVG");
+    let ids =
+        |open: &str, close: char| -> Vec<String> { svg.split(open).skip(1).map(|s| s.split(close).next().unwrap_or_default().to_string()).collect() };
+    let refs = [ids("url(#", ')'), ids("href=\"#", '"')].concat();
+    assert!(refs.len() >= 4, "the region clip, the page's pattern, the cell's shading pattern and its raster: {svg}");
+    for id in refs {
+        assert!(svg.contains(&format!("id=\"{id}\"")), "#{id} has no definition: {svg}");
+    }
+}
+
+#[test]
+fn svg_region_of_a_bad_area_page_or_file_is_an_error() {
+    let mut r = three_squares();
+    for bad in [[f32::NAN, 0.0, 10.0, 10.0], [0.0, 0.0, f32::INFINITY, 10.0], [0.0, f32::NEG_INFINITY, 10.0, 10.0]] {
+        assert!(r.svg_region(0, bad).is_err_and(|e| e.contains("finite")), "{bad:?}");
+    }
+    for bad in [[10.0, 10.0, 10.0, 20.0], [10.0, 10.0, 20.0, 10.0], [20.0, 10.0, 10.0, 20.0], [10.0, 20.0, 20.0, 10.0]] {
+        assert!(r.svg_region(0, bad).is_err_and(|e| e.contains("empty or inverted")), "{bad:?}");
+    }
+    assert!(r.svg_region(0, [210.0, 0.0, 300.0, 50.0]).is_err_and(|e| e.contains("misses page 1")));
+    assert!(r.svg_region(0, [-50.0, -50.0, -10.0, -10.0]).is_err_and(|e| e.contains("misses page 1")));
+    assert!(r.svg_region(9, [0.0, 0.0, 10.0, 10.0]).is_err_and(|e| e.contains("page 10 does not exist")));
+    let mut garbage = PageRenderer::new(Arc::new(b"not a pdf at all".to_vec()), RenderConfig::default());
+    assert!(garbage.svg_region(0, [0.0, 0.0, 10.0, 10.0]).is_err());
+    // An area partly off the page is cut to the page.
+    let cut = r.svg_region(0, [150.0, 50.0, 400.0, 400.0]).expect("an SVG");
+    assert!(cut.starts_with("<svg viewBox=\"150 50 50 50\" width=\"50pt\" height=\"50pt\" "), "{cut}");
+}
+
 #[test]
 fn scale_is_clamped_for_huge_pages() {
     // A 200-inch-square page at 4x would be 57,600 px per side.

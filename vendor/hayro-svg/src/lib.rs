@@ -44,6 +44,7 @@ pub(crate) mod image;
 mod mask;
 pub(crate) mod paint;
 mod path;
+mod region;
 
 /// A cache used by the SVG converter.
 ///
@@ -90,6 +91,36 @@ pub fn convert<'a>(
     device.finish()
 }
 
+/// PdfCraft patch: convert the part of the page inside `region` (render space: points, origin at
+/// the top-left of the displayed page, after `/Rotate`) into an SVG whose view box is that
+/// rectangle and whose size is given in points. Everything sits under a clip of the region, a
+/// draw whose box lies wholly outside it is left out, and an opaque `bg_color` is drawn as a
+/// `<rect>`. A draw that crosses the edge keeps its whole geometry under the clip, so this is
+/// not redaction. `None` is [`convert`].
+pub fn convert_region<'a>(
+    page: &'a Page<'a>,
+    cache: &RenderCache<'a>,
+    interpreter_settings: &InterpreterSettings,
+    render_settings: &SvgRenderSettings,
+    region: Option<Rect>,
+) -> String {
+    let Some(region) = region else {
+        return convert(page, cache, interpreter_settings, render_settings);
+    };
+    let (w, h) = page.render_dimensions();
+    let mut state = Context::new(
+        page.initial_transform(true).to_kurbo(),
+        Rect::new(0.0, 0.0, f64::from(w), f64::from(h)),
+        &cache.interpreter_cache,
+        page.xref(),
+        interpreter_settings.clone(),
+    );
+    let mut device = SvgRenderer::new(page, render_settings.clone());
+    device.write_region_header(region);
+    interpret_page(page, &mut state, &mut device);
+    device.finish()
+}
+
 /// Settings to apply during SVG rendering.
 #[derive(Debug, Clone)]
 pub struct SvgRenderSettings {
@@ -120,6 +151,10 @@ pub(crate) struct SvgRenderer<'a> {
     pub(crate) dimensions: (f32, f32),
     pub(crate) cur_mask: Option<SoftMask<'a>>,
     pub(crate) cur_blend_mode: BlendMode,
+    /// PdfCraft patch: the region top-level draws are culled against (`convert_region`).
+    pub(crate) cull: Option<Rect>,
+    /// PdfCraft patch: whether the root region clip group is open.
+    pub(crate) region_group: bool,
 }
 
 impl<'a> SvgRenderer<'a> {
@@ -264,6 +299,10 @@ impl<'a> Device<'a> for SvgRenderer<'a> {
         paint: &Paint<'a>,
         draw_mode: &PathDrawMode,
     ) {
+        // PdfCraft patch: a draw wholly outside the region is left out (`convert_region`).
+        if self.path_culled(path, transform, draw_mode) {
+            return;
+        }
         self.with_group(|r| {
             Self::draw_path(r, path, transform, paint, draw_mode);
         });
@@ -299,12 +338,18 @@ impl<'a> Device<'a> for SvgRenderer<'a> {
         paint: &Paint<'a>,
         draw_mode: &GlyphDrawMode,
     ) {
+        if self.glyph_culled(glyph, transform, glyph_transform, draw_mode) {
+            return;
+        }
         self.with_group(|r| {
             Self::draw_glyph(r, glyph, transform, glyph_transform, paint, draw_mode);
         });
     }
 
     fn draw_image(&mut self, image: Image<'a, '_>, mut transform: Affine) {
+        if self.image_culled(&image, transform) {
+            return;
+        }
         // TODO: Use Self::group
         match image {
             Image::Stencil(s) => {
@@ -356,6 +401,8 @@ impl<'a> SvgRenderer<'a> {
             cur_mask: None,
             dimensions: page.render_dimensions(),
             cur_blend_mode: BlendMode::default(),
+            cull: None,
+            region_group: false,
         }
     }
 
@@ -391,11 +438,19 @@ impl<'a> SvgRenderer<'a> {
     // the case if masks or patterns use new resources that haven't been registered before. As a result,
     pub(crate) fn with_dummy(&mut self, f: impl FnOnce(&mut Self)) {
         let mut old_xml = std::mem::replace(&mut self.xml, XmlWriter::new(Options::default()));
+        // PdfCraft patch: nested content is in its own coordinates, so it is never culled.
+        let cull = self.cull.take();
         f(self);
+        self.cull = cull;
         std::mem::swap(&mut self.xml, &mut old_xml);
     }
 
     pub(crate) fn finish(mut self) -> String {
+        // PdfCraft patch: close the region's clip group; definitions are never culled.
+        self.cull = None;
+        if self.region_group {
+            self.xml.end_element();
+        }
         self.write_glyph_defs();
         self.write_mask_defs();
         self.write_clip_path_defs();

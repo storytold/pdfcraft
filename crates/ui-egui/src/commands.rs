@@ -563,6 +563,10 @@ impl PdfCraftApp {
                 self.quick_tool = crate::QuickTool::Snapshot;
                 self.notify_tr("Drag a rectangle around the area to copy");
             }
+            "edit.snapshot_vector" => {
+                self.quick_tool = crate::QuickTool::VectorSnapshot;
+                self.notify_tr("Drag a rectangle around the area to copy as vectors");
+            }
             "edit.copy" => {
                 if let (Some(i), Some(ctx)) = (active, self.ctx.clone()) {
                     return Some(self.copy_selected_text(i, &ctx));

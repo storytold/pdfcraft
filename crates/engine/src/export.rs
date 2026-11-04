@@ -151,6 +151,14 @@ impl Exporter {
         draw_image(&mut self.renderer, page, dpi, format, used)
     }
 
+    /// The area `rect` of page `page` as a standalone SVG: `rect` is in points from the top-left
+    /// of the displayed page (after `/Rotate`), and the SVG is sized in points. See
+    /// [`PageRenderer::svg_region`] for what it keeps and its errors.
+    pub fn svg_region(&mut self, page: usize, rect: [f32; 4]) -> Result<Vec<u8>, String> {
+        self.check(page)?;
+        self.renderer.svg_region(page, rect).map(String::into_bytes).map_err(|e| format!("page {}: {e}", page.saturating_add(1)))
+    }
+
     /// Pages `pages` as image files of `format`, handed to `sink` in order with their page
     /// number: the same files as [`Exporter::image`] for each page in turn. Encoding a page costs
     /// several times what drawing it does, so several pages are drawn and encoded at once on
@@ -340,6 +348,12 @@ pub fn encode_image(width: u32, height: u32, premultiplied: &[u8], format: Image
 /// (4.46 → 4.47 MB), a text page at 220 dpi 70 → 40 ms (0.85 → 0.89 MB), and an annual
 /// report page at 150 dpi 179 → 64 ms (1.41 → 1.38 MB).
 pub fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>, String> {
+    encode_png_at(width, height, premultiplied, None)
+}
+
+/// [`encode_png`] that also says its resolution (a `pHYs` chunk) when `pixels_per_metre` is
+/// given, so an application it is pasted into sizes it as the area it was drawn from.
+pub fn encode_png_at(width: u32, height: u32, premultiplied: &[u8], pixels_per_metre: Option<u32>) -> Result<Vec<u8>, String> {
     check_raster(width, height, premultiplied)?;
     let pixels = premultiplied.as_chunks::<4>().0;
     let opaque = pixels.iter().all(|px| px[3] == 255);
@@ -363,6 +377,7 @@ pub fn encode_png(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u
     enc.set_depth(png::BitDepth::Eight);
     enc.set_deflate_compression(png::DeflateCompression::Level(3));
     enc.set_filter(png::Filter::Adaptive);
+    enc.set_pixel_dims(pixels_per_metre.map(|ppm| png::PixelDimensions { xppu: ppm, yppu: ppm, unit: png::Unit::Meter }));
     let mut w = enc.write_header().map_err(|e| e.to_string())?;
     w.write_image_data(&data).map_err(|e| e.to_string())?;
     w.finish().map_err(|e| e.to_string())?;
@@ -495,7 +510,7 @@ mod image_name_tests {
 
 #[cfg(test)]
 mod raster_tests {
-    use super::{ImageFormat, encode_image, encode_png};
+    use super::{ImageFormat, encode_image, encode_png, encode_png_at};
 
     const FORMATS: [ImageFormat; 3] = [ImageFormat::Png, ImageFormat::Jpeg { quality: 90 }, ImageFormat::Tiff];
 
@@ -525,6 +540,17 @@ mod raster_tests {
         let (color, pixels) = decode(&encode_png(3, 1, rgba.as_flattened()).unwrap());
         assert_eq!(color, png::ColorType::Rgba);
         assert_eq!(pixels, [128, 0, 64, 128, 0, 0, 0, 0, 10, 20, 30, 255]);
+    }
+
+    /// A PNG for the clipboard says its resolution, so an application sizes it as the area it
+    /// was drawn from; an exported page's PNG doesn't (see [`encode_image`]).
+    #[test]
+    fn a_png_says_its_resolution_only_when_asked() {
+        let dims = |png: &[u8]| png::Decoder::new(std::io::Cursor::new(png)).read_info().unwrap().info().pixel_dims;
+        let px = [0, 0, 0, 255];
+        let at = dims(&encode_png_at(1, 1, &px, Some(5906)).unwrap()).expect("a pHYs chunk");
+        assert_eq!((at.xppu, at.yppu, at.unit), (5906, 5906, png::Unit::Meter));
+        assert!(dims(&encode_png(1, 1, &px).unwrap()).is_none());
     }
 
     /// A buffer that is not exactly `width × height` RGBA pixels is an error in every format,

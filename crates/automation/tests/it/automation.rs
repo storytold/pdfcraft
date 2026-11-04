@@ -3012,6 +3012,34 @@ fn exporting_pages_as_svg_through_tools() {
 }
 
 #[test]
+fn exporting_an_area_of_pages_as_svg_through_tools() {
+    let dir = workdir("export-svg-area");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "b.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "area", "format": "svg", "pages": [2], "rect": [10, 20, 110, 70] }));
+    assert_eq!(r["count"], 1);
+    let svg = std::fs::read_to_string(dir.join("area/b_page_2.svg")).unwrap();
+    assert!(svg.starts_with("<svg viewBox=\"10 20 100 50\" width=\"100pt\" height=\"50pt\" "), "{svg}");
+    // Only SVG takes an area, and nothing is written when it is refused.
+    for format in [json!("png"), json!("jpeg"), json!(null)] {
+        let mut args = json!({ "doc": doc, "folder": "refused", "rect": [10, 20, 110, 70] });
+        if !format.is_null() {
+            args["format"] = format;
+        }
+        assert!(matches!(a.call("doc_export_images", &args), Err(ToolError::InvalidArgs(m)) if m.contains("SVG only")), "{args}");
+    }
+    assert!(!dir.join("refused").exists());
+    let missed = a.call("doc_export_images", &json!({ "doc": doc, "folder": "area", "format": "svg", "rect": [300, 0, 400, 50] }));
+    assert!(matches!(missed, Err(ToolError::Failed(m)) if m.contains("misses page 1")), "an area off the page");
+    let inverted = a.call("doc_export_images", &json!({ "doc": doc, "folder": "area", "format": "svg", "rect": [110, 20, 10, 70] }));
+    assert!(matches!(inverted, Err(ToolError::InvalidArgs(m)) if m.contains("empty or inverted")));
+    assert!(matches!(
+        a.call("doc_export_images", &json!({ "doc": doc, "folder": "area", "format": "svg", "rect": [0, 0, 10] })),
+        Err(ToolError::InvalidArgs(_))
+    ));
+}
+
+#[test]
 fn accessibility_character_encoding_accepts_identity_cjk_through_tools() {
     use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, SaveOptions, Stream, write_full};
     use std::sync::Arc;
