@@ -3,7 +3,7 @@ use super::create::{
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
 use super::info::{line_endings_of, text_value};
-use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, set_annots};
+use super::lookup::{annot_dict, annot_ref, annot_ref_checked, annotation_flags, annots, page_ref, set_annots};
 use super::types::{
     FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape, Style,
     StyleChange, TextReplacement,
@@ -561,26 +561,29 @@ fn ink_rect_for_width(d: &Dict, old_w: f64, w: f64) -> Option<[f64; 4]> {
 /// Change a comment's colour, opacity, line width and/or line endings, and redraw it.
 pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
     let StyleChange { color, opacity, width, endings } = change;
-    let (_, r) = annot_ref(doc, page, index)?;
-    unlocked(doc, r)?;
-    let d = annot_dict(doc, r);
-    let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
-    // Check before changing anything: a stale appearance would contradict the new style.
-    if appearance::build(&d).is_none() {
-        return Err(AnnotError::Unsupported(subtype.clone()));
-    }
-    if color.is_some_and(|c| !finite(&c)) || opacity.is_some_and(|o| !o.is_finite()) || width.is_some_and(|w| !w.is_finite()) {
-        return Err(AnnotError::Invalid("invalid style".into()));
-    }
-    if let Some(ends) = &endings {
-        let callout = subtype == "FreeText" && d.contains(b"CL");
-        let pair = matches!(subtype.as_str(), "Line" | "PolyLine");
-        if (callout && ends.len() != 1) || (pair && ends.len() != 2) || (!callout && !pair) {
-            return Err(AnnotError::Invalid("this comment has no line endings to change".into()));
+    let (_, r) = annot_ref_checked(doc, page, index, |doc, d| {
+        if annotation_flags(doc, d) & FLAG_LOCKED != 0 {
+            return Err(AnnotError::Invalid("the comment is locked".into()));
         }
-    }
-    refuse_foreign_text(doc, &d)?;
-    let free_text = subtype == "FreeText";
+        let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+        // Check before changing anything: a stale appearance would contradict the new style.
+        if appearance::build(d).is_none() {
+            return Err(AnnotError::Unsupported(subtype.clone()));
+        }
+        if color.is_some_and(|c| !finite(&c)) || opacity.is_some_and(|o| !o.is_finite()) || width.is_some_and(|w| !w.is_finite()) {
+            return Err(AnnotError::Invalid("invalid style".into()));
+        }
+        if let Some(ends) = &endings {
+            let callout = subtype == "FreeText" && d.contains(b"CL");
+            let pair = matches!(subtype.as_str(), "Line" | "PolyLine");
+            if (callout && ends.len() != 1) || (pair && ends.len() != 2) || (!callout && !pair) {
+                return Err(AnnotError::Invalid("this comment has no line endings to change".into()));
+            }
+        }
+        refuse_foreign_text(doc, d)
+    })?;
+    let d = annot_dict(doc, r);
+    let free_text = d.name(b"Subtype") == Some(b"FreeText");
     let before = d;
     doc.update_dict(r, |d| {
         if let Some(c) = color {
