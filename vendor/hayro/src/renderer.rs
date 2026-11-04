@@ -723,10 +723,12 @@ const SNAP_SKEW: f64 = 0.01;
 /// turned) is drawn as sharply as upright (#5530). `transform` maps source pixels to device
 /// pixels and `planned` is the size [`image_resampling_size`] chose; `None` (draw as before) for
 /// skewed or freely rotated images, non-finite geometry, or a snapped size that strays more than
-/// a pixel from `planned` (so the memory budget that size passed still holds). An image counts
-/// as axis-aligned when the terms the snap drops move its far edges by at most [`SNAP_SKEW`]: a
-/// tolerance on the coefficients alone let a slight skew of a very wide image through, though it
-/// moved the far edge by more than a pixel.
+/// a pixel from `planned` (so the memory budget that size passed still holds). A side the area
+/// shrink capped at its source size is the exception: its snapped device span may be larger, and
+/// [`snapped_axes_transform`] takes only the other side's placement from the snapped transform.
+/// An image counts as axis-aligned when the terms the snap drops move its far edges by at most
+/// [`SNAP_SKEW`]: a tolerance on the coefficients alone let a slight skew of a very wide image
+/// through, though it moved the far edge by more than a pixel.
 fn snap_minified_image(
     transform: &Affine,
     source: (u32, u32),
@@ -762,7 +764,36 @@ fn snap_minified_image(
     } else {
         return None;
     };
-    (w.abs_diff(planned.0) <= 1 && h.abs_diff(planned.1) <= 1).then_some((w, h, draw))
+    // A side planned at its source size is the area shrink's cap: the snapped device span may be
+    // larger because the sampler enlarges that side, and only the other side is drawn 1:1 from
+    // the snapped transform (see `snapped_axes_transform`). Every other side must stay within a
+    // pixel of the size the memory budget passed.
+    let fits = |snapped: u32, planned: u32, source: u32| {
+        snapped.abs_diff(planned) <= 1 || planned == source
+    };
+    (fits(w, planned.0, width) && fits(h, planned.1, height)).then_some((w, h, draw))
+}
+
+/// PdfCraft patch: a snapped draw combined, side by side, with the fallback transform. An area
+/// shrink caps an enlarged side at its source size, so the snapped size no longer describes that
+/// side: the sampler must enlarge it with the full transform. The other (shrunk) side still lands
+/// on whole device pixels, so keeping its part of the snapped transform avoids resampling it at
+/// a fractional offset. `keep_x` and `keep_y` say which raster axes still have the snapped size.
+fn snapped_axes_transform(fallback: Affine, snapped: Affine, keep_x: bool, keep_y: bool) -> Affine {
+    let [fa, fb, fc, fd, fe, ff] = fallback.as_coeffs();
+    let [sa, sb, sc, sd, se, sf] = snapped.as_coeffs();
+    // `snap_minified_image` draws raster x along device x (upright or mirrored) with non-zero
+    // `a` and `d`, or raster x along device y (a quarter turn) with both zero.
+    let upright = sa != 0.0 && sd != 0.0;
+    if upright {
+        let (a, b, e) = if keep_x { (sa, sb, se) } else { (fa, fb, fe) };
+        let (c, d, f) = if keep_y { (sc, sd, sf) } else { (fc, fd, ff) };
+        Affine::new([a, b, c, d, e, f])
+    } else {
+        let (a, b, f) = if keep_x { (sa, sb, sf) } else { (fa, fb, ff) };
+        let (c, d, e) = if keep_y { (sc, sd, se) } else { (fc, fd, fe) };
+        Affine::new([a, b, c, d, e, f])
+    }
 }
 
 /// PdfCraft patch (19): what `Renderer::set_paint` found out: the clip path to apply while
@@ -804,7 +835,14 @@ pub(crate) struct Renderer {
     pub(crate) soft_mask_cache: HashMap<u128, Mask>,
     pub(crate) outline_cache: Rc<std::cell::RefCell<HashMap<u128, Rc<BezPath>>>>,
     pub(crate) cur_mask: Option<Mask>,
+    /// PdfCraft patch: inside a Type 3 glyph's procedure, where images keep the nearest
+    /// shrink and sampler of #624 instead of the Smooth images paths.
     pub(crate) in_type3_glyph: bool,
+    /// PdfCraft patch: only the renderer that runs a Type 3 glyph's own procedure pads its
+    /// images with the transparent frame interpolation samples past the edge. A nested
+    /// renderer (a pattern-painted stencil) inherits `in_type3_glyph` for the sampling
+    /// exemption but not the frame.
+    pub(crate) type3_glyph_frame: bool,
     pub(crate) scaler: Scaler,
     /// PdfCraft patch: low-detail preview render (see `InterpreterSettings::preview`).
     pub(crate) preview: bool,
@@ -919,6 +957,7 @@ impl Renderer {
             outline_cache: cache.outline_cache.clone(),
             cur_mask: None,
             in_type3_glyph: false,
+            type3_glyph_frame: false,
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
             preview,
             image_transparency_stack: Vec::new(),
@@ -1026,6 +1065,7 @@ impl Renderer {
                 outline_cache: self.outline_cache.clone(),
                 cur_mask: None,
                 in_type3_glyph: false,
+                type3_glyph_frame: false,
                 scaler: self.scaler,
                 preview: self.preview,
                 image_transparency_stack: Vec::new(),
@@ -1284,7 +1324,19 @@ impl Renderer {
                 // included) was multiplied by the averaged mask, and the colour of transparent
                 // samples showed at the mask's edges. A larger mask carries detail the image does
                 // not (#1649) and keeps the layer.
-                let on_grid = (area && a.width <= source_width && a.height <= source_height)
+                // An interpolated mask that is enlarged on some side cannot keep that request on
+                // the image's grid: the combined image is sampled nearest-neighbour there because
+                // the image did not ask for interpolation. Draw it as its own mask layer, where
+                // `/Interpolate` reaches the mask's own resampling.
+                let mask_needs_layer = a.interpolate
+                    && !interpolate
+                    && a.width == source_width
+                    && a.height == source_height
+                    && (x_scale > 1.0 || y_scale > 1.0);
+                let on_grid = (area
+                    && !mask_needs_layer
+                    && a.width <= source_width
+                    && a.height <= source_height)
                     .then(|| mask_on_image_grid(&a, source_width, source_height))
                     .flatten();
                 match on_grid {
@@ -1293,7 +1345,7 @@ impl Renderer {
                             data,
                             width: source_width,
                             height: source_height,
-                            interpolate,
+                            interpolate: a.interpolate,
                             ..a
                         });
                     }
@@ -1313,13 +1365,22 @@ impl Renderer {
         };
         let has_alpha = alpha_data.is_some();
         let mut may_have_transparency = has_alpha || self.force_images_may_have_transparency();
+        // PdfCraft patch: the area shrink never enlarges, so plan (and validate) its target with
+        // the enlarged sides held at their source size. With the raw scales, an enlarged side
+        // could push the target over MAX_IMAGE_PIXELS while the capped area target fits, and the
+        // image then kept its source resolution and skipped the area average altogether.
+        let (plan_x_scale, plan_y_scale) = if area {
+            (x_scale.min(1.0), y_scale.min(1.0))
+        } else {
+            (x_scale, y_scale)
+        };
         let (new_width, new_height) = match image_resampling_size(
             source_width,
             source_height,
             channels,
             data_len,
-            x_scale,
-            y_scale,
+            plan_x_scale,
+            plan_y_scale,
             MAX_IMAGE_PIXELS,
             interpolate,
         ) {
@@ -1506,9 +1567,11 @@ impl Renderer {
         if has_alpha && !premultiplied {
             premultiply_rgba(&mut rgba_data);
         }
-        // Type 3 glyphs get a transparent two-pixel frame for interpolation. Check the padded
-        // RGBA allocation and u16 dimensions too, before narrowing or growing either side.
-        if self.in_type3_glyph {
+        // Type 3 glyphs get a transparent two-pixel frame for interpolation. Only the renderer
+        // running the glyph's own procedure draws that frame; a nested renderer inherits the
+        // sampling exemption but must not move (or pad) the raster. Check the padded RGBA
+        // allocation and u16 dimensions too, before narrowing or growing either side.
+        if self.type3_glyph_frame {
             let (Some(width), Some(height)) = (img_width.checked_add(4), img_height.checked_add(4))
             else {
                 return;
@@ -1544,10 +1607,16 @@ impl Renderer {
         );
         // The snapped transform draws the raster 1:1, so it holds only if the shrink produced the
         // snapped size. A failed resize hands back the source raster: drawn 1:1 it would come out
-        // at its source size, so it keeps the full transform instead.
+        // at its source size, so it keeps the full transform instead. An area shrink may cap one
+        // side at its source size while the other is still snapped: keep whole-pixel placement
+        // for the snapped side and let the sampler enlarge only the capped one.
+        let fallback_transform = cur_transform * additional_transform;
         let draw_transform = match snapped {
             Some((w, h, draw)) if (img_width, img_height) == (w, h) => draw,
-            _ => cur_transform * additional_transform,
+            Some((w, h, draw)) if img_width == w || img_height == h => {
+                snapped_axes_transform(fallback_transform, draw, img_width == w, img_height == h)
+            }
+            _ => fallback_transform,
         };
         self.draw_pixmap(Arc::new(pixmap), quality, draw_transform);
     }
@@ -1600,6 +1669,7 @@ impl Renderer {
             outline_cache: self.outline_cache.clone(),
             cur_mask: None,
             in_type3_glyph: false,
+            type3_glyph_frame: false,
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
             preview: self.preview,
             image_transparency_stack: Vec::new(),
@@ -1878,6 +1948,7 @@ impl Renderer {
                                 soft_mask_cache: HashMap::default(),
                                 outline_cache: self.outline_cache.clone(),
                                 in_type3_glyph: false,
+                                type3_glyph_frame: false,
                                 scaler: self.scaler,
                                 preview: self.preview,
                                 image_transparency_stack: Vec::new(),
@@ -1943,6 +2014,7 @@ impl Renderer {
                             soft_mask_cache: HashMap::default(),
                             outline_cache: self.outline_cache.clone(),
                             in_type3_glyph: false,
+                            type3_glyph_frame: false,
                             scaler: self.scaler,
                             preview: self.preview,
                             image_transparency_stack: Vec::new(),
@@ -2075,9 +2147,16 @@ impl Renderer {
                 // PdfCraft patch: a type 3 glyph's content stream keeps painting as line art
                 // (its internal ops reach `fill_path`/`stroke_path` with `is_text: false`), so
                 // reading colours remap it only when line-art replacement is on.
+                // A Type 3 glyph's procedure may draw text in another Type 3 font: save the
+                // outer glyph's state and restore it, or the rest of the outer procedure would
+                // lose the exemption and be area-averaged and snapped.
+                let outer_in_type3_glyph = self.in_type3_glyph;
+                let outer_type3_glyph_frame = self.type3_glyph_frame;
                 self.in_type3_glyph = true;
+                self.type3_glyph_frame = true;
                 s.interpret(self, transform, glyph_transform, paint);
-                self.in_type3_glyph = false;
+                self.in_type3_glyph = outer_in_type3_glyph;
+                self.type3_glyph_frame = outer_type3_glyph_frame;
             }
         }
     }
@@ -2249,7 +2328,12 @@ impl<'a> Device<'a> for Renderer {
                                         soft_mask_cache: HashMap::default(),
                                         outline_cache: self.outline_cache.clone(),
                                         cur_mask: None,
-                                        in_type3_glyph: false,
+                                        // PdfCraft patch: this renders the stencil a pattern
+                                        // paints, and it belongs to the glyph's procedure, so
+                                        // it keeps the glyph's image-sampling exemption. It is
+                                        // not the glyph itself, so it never takes the frame.
+                                        in_type3_glyph: self.in_type3_glyph,
+                                        type3_glyph_frame: false,
                                         scaler: self.scaler,
                                         preview: self.preview,
                                         image_transparency_stack: Vec::new(),
@@ -2768,6 +2852,7 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         soft_mask_cache: HashMap::default(),
         outline_cache: Rc::new(std::cell::RefCell::new(HashMap::new())),
         in_type3_glyph: false,
+        type3_glyph_frame: false,
         scaler: Scaler::new(ResamplingFunction::CatmullRom),
         preview,
         image_transparency_stack: Vec::new(),
@@ -3012,7 +3097,7 @@ pub fn tiling_cell_pixels(scale: f32, step: f32, max_pixels: f32) -> (u16, f64) 
 
 #[cfg(test)]
 mod snap_tests {
-    use super::{snap_minified_image, Affine};
+    use super::{snap_minified_image, snapped_axes_transform, Affine};
 
     /// The skew a snap drops is measured as the distance it moves the image's far edge, not as a
     /// coefficient against the scale: a 40 000 sample wide image skewed by 4e-5 per sample moves
@@ -3032,6 +3117,32 @@ mod snap_tests {
         assert!(snap_minified_image(&noisy, source, planned).is_some());
         let turned_noisy = Affine::new([1e-9, 0.5, -0.5, 0.0, 200.3, 0.3]);
         assert!(snap_minified_image(&turned_noisy, source, (20_000, 200)).is_some());
+    }
+
+    /// An area cap on one side takes that side's mapping from the fallback transform and the
+    /// other side's from the snapped one, in both the upright and the quarter-turned form.
+    #[test]
+    fn a_capped_side_keeps_only_the_other_sides_snapped_mapping() {
+        let upright_fallback = Affine::new([2.0, 0.0, 0.0, 1.0, 0.4, 5.0]);
+        let upright_snapped = Affine::new([1.0, 0.0, 0.0, 1.0, 3.0, 7.0]);
+        assert_eq!(
+            snapped_axes_transform(upright_fallback, upright_snapped, true, false).as_coeffs(),
+            [1.0, 0.0, 0.0, 1.0, 3.0, 5.0],
+            "raster x is whole-pixel; raster y keeps the fallback"
+        );
+
+        let turned_fallback = Affine::new([0.0, 2.0, 3.0, 0.0, 11.0, 13.0]);
+        let turned_snapped = Affine::new([0.0, 1.0, 1.0, 0.0, 17.0, 19.0]);
+        assert_eq!(
+            snapped_axes_transform(turned_fallback, turned_snapped, true, false).as_coeffs(),
+            [0.0, 1.0, 3.0, 0.0, 11.0, 19.0],
+            "raster x maps to device y; raster y keeps the fallback"
+        );
+        assert_eq!(
+            snapped_axes_transform(turned_fallback, turned_snapped, false, true).as_coeffs(),
+            [0.0, 2.0, 1.0, 0.0, 17.0, 13.0],
+            "raster y maps to device x; raster x keeps the fallback"
+        );
     }
 }
 

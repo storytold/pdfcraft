@@ -24,4 +24,16 @@ fn smooth_images_preference_round_trips_and_ignores_invalid_settings() {
     assert_eq!(enabled(&app), true);
     assert!(app.set_option("smooth_images", "maybe").is_err());
     assert_eq!(enabled(&app), true);
+
+    // The same invalid values from a false preference must leave it false, not reset it to the
+    // default on.
+    app.set_option("smooth_images", "false").unwrap();
+    for invalid in ["null", "0", "\"true\"", "[]", "{}"] {
+        app.restore(&format!("{{\"smooth_images\":{invalid}}}"));
+        assert_eq!(enabled(&app), false);
+    }
+    app.restore("not json");
+    assert_eq!(enabled(&app), false);
+    assert!(app.set_option("smooth_images", "maybe").is_err());
+    assert_eq!(enabled(&app), false);
 }

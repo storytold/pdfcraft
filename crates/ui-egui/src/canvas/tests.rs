@@ -759,6 +759,22 @@ fn content_invalidation_keeps_the_following_state() {
     assert_eq!(f.current.and_then(|i| f.matches.get(i)).map(|(p, _)| *p), Some(0), "the result list still selects the late match");
 }
 
+/// Changing Smooth images is app-wide: every open view drops the rasters and text layers drawn
+/// under the old setting, or a document keeps its earlier image sampling.
+#[test]
+fn toggling_smooth_images_invalidates_every_open_view() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("two.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two"])).unwrap();
+    let ctx = egui::Context::default();
+    let tex = ctx.load_texture("cached page", egui::ColorImage::filled([2, 2], egui::Color32::WHITE), egui::TextureOptions::LINEAR);
+    app.views[0].pages.insert(0, PageTex { tag: 1, tex });
+    app.views[0].texts.insert(0, Arc::new(find_test_text("Alpha one")));
+
+    app.set_smooth_images(false);
+    assert_eq!(app.views[0].pages.get(&0).map(|p| p.tag), Some(STALE_TAG), "a cached raster is marked stale");
+    assert!(app.views[0].texts.is_empty(), "a cached text layer is dropped");
+}
+
 /// A document edit can shrink the page count. `document_changed` clamps `current` but leaves
 /// the automatic anchor's page index alone; a re-extracted layer must then end following
 /// rather than reveal a match by scrolling from a page that no longer exists.

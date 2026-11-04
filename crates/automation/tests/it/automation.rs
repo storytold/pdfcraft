@@ -9423,14 +9423,18 @@ fn smooth_images_through_tools() {
     // Off: nearest-neighbour keeps every pixel black or white, and the tool echoes the setting.
     assert_eq!(ok(&mut a, "view_smooth_images", json!({ "enabled": false })), json!({ "enabled": false }));
     let hard = render(&mut a, doc);
-    assert!(hard.as_chunks::<4>().0.iter().all(|px| px[0] == 0 || px[0] == 255), "smoothing off still blended");
+    let hard_px = hard.as_chunks::<4>().0;
+    assert!(hard_px.iter().all(|px| px[0] == 0 || px[0] == 255), "smoothing off still blended");
+    assert!(hard_px.iter().any(|px| px[0] == 0) && hard_px.iter().any(|px| px[0] == 255), "smoothing off did not draw the checker");
     // Reading it without an argument reports the setting.
     assert_eq!(ok(&mut a, "view_smooth_images", json!({})), json!({ "enabled": false }));
 
     // A document opened after the change inherits it.
     let later = ok(&mut a, "doc_open", json!({ "path": "b.pdf" }))["doc"].as_u64().unwrap();
     let later_render = render(&mut a, later);
-    assert!(later_render.as_chunks::<4>().0.iter().all(|px| px[0] == 0 || px[0] == 255), "a later document did not inherit smoothing off");
+    let later_px = later_render.as_chunks::<4>().0;
+    assert!(later_px.iter().all(|px| px[0] == 0 || px[0] == 255), "a later document did not inherit smoothing off");
+    assert!(later_px.iter().any(|px| px[0] == 0) && later_px.iter().any(|px| px[0] == 255), "a later document did not draw the checker");
 
     // Invalid arguments name the problem.
     let bad = a.call("view_smooth_images", &json!({ "enabled": "yes" }));

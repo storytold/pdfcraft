@@ -82,6 +82,13 @@ impl Session {
         let id = DocId(self.next_id);
         let mut document = prepared.document;
         document.id = id;
+        // The document was prepared from an earlier snapshot: apply the preference as it is
+        // now, so toggling Smooth images while the worker runs still reaches this document.
+        let smooth = self.smooth_images();
+        if document.config.smooth_images != smooth {
+            document.config.smooth_images = smooth;
+            document.renderer = RenderPool::new(document.display.clone(), render_threads(), display_config(&document.config));
+        }
         self.docs.push(document);
         id
     }
