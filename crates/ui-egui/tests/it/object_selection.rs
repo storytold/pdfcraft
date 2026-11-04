@@ -440,7 +440,7 @@ fn a_press_just_outside_a_picture_starts_an_area_selection() {
 }
 
 /// A double-click on one of the objects selected together leaves the group and reaches that one:
-/// added text opens for typing. The double-click only left the group.
+/// added text opens for typing.
 #[test]
 fn a_double_click_on_a_grouped_object_reaches_it() {
     let mut h = harness();

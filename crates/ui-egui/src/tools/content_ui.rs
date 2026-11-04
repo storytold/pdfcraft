@@ -385,7 +385,7 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], 
 pub(crate) struct ContentCx<'a> {
     pub added: &'a [Added],
     /// What the press the pages hold is to this page. With the Edit panel open, a press on added
-    /// text is its own with every tool ([`hit`]).
+    /// text is its own with the tools that pick it up ([`hit`]).
     pub press: PagePress,
     /// Edit text's input is open: no dialog, palette, other window or other tab has it.
     pub gate: bool,

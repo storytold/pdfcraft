@@ -168,7 +168,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // page until its move ends; with no button down the Fill & Sign tool's preview hides where a
     // press would be taken (a mark, its handles, a Prepare field).
     let over_mark = matches!(tool, QuickTool::Fill(_))
-        && (matches!(press, PagePress::Mine(_)) || comments::moving_on(view, i) || !ptr.any_down && top(under.iter().cloned(), tool).is_some());
+        && (matches!(press, PagePress::Mine(_)) || comments::moving_on(view, i) || !ptr.any_down && hovered.is_some());
     tool_input(ui, view, frame, slot, &pcx, press, over_mark);
     let on_field = if preparing {
         let o = crate::prepare::page_input(cx, form, field_tool, prepare_allowed, press, view);
@@ -241,8 +241,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     }
     // Comments, every frame: their own presses, a commenting tool's, and a click elsewhere that
     // leaves them unselected. A press nobody holds that another tool took this frame (Prepare's
-    // selection rectangle, added content, which still decide for themselves) is not also a
-    // commenting tool's, as before.
+    // selection rectangle, added content) is not also a commenting tool's, as before.
     let taken = on_objects || on_edit_text || on_link || on_content || boxing || on_field;
     let on_comment = comments::page_input(ui, resp, &pcx, press, taken, view);
     let consumed = taken || on_comment;

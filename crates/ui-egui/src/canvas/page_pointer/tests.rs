@@ -207,7 +207,7 @@ const PAGE_MODULES: [&str; 37] = [
 /// What a file that acts on the pages uses: the pointer, a tool's or the comments' page context,
 /// what a press is to a page, the router's hits and owners, or the router itself. Such a file is a
 /// page module. One that acts on the pages through the page view's response and a bare point alone
-/// uses none of them (`canvas/image_pick.rs`): PAGE_MODULES lists it by hand.
+/// would use none of them, and PAGE_MODULES would list it by hand.
 const PAGE_MODULE_MARKS: [&str; 6] = ["PagePointer", "PageToolContext", "PageCx", "PagePress", "page_router::", ".router."];
 
 /// The router's own files, which define what page modules use.
@@ -276,7 +276,8 @@ fn declares(line: &str) -> Option<&str> {
 }
 
 /// egui's drag start, which counts every button: a right-button drag would start what a left one
-/// does. Page modules read `PagePointer::drag_started`, the primary button's.
+/// does. Page modules read `PagePointer::drag_started`, the primary button's, or ask for that button
+/// (`drag_started_by`).
 const ANY_BUTTON_DRAG: [&str; 1] = [".drag_started()"];
 
 /// Functions in the page modules that start a drag of a widget of their own, not of the pages:
@@ -550,11 +551,11 @@ fn hit_test_calls(line: &str) -> Vec<String> {
 /// The functions that call a hit test: (file, function, why). Hit tests are found by name (a
 /// function named `hit` or `…_hit`, called by path, bare or as a method). The comments' point test
 /// has a list of its own (`COMMENT_POINT_TESTERS`). Point tests by other names are not seen: what is
-/// left of them paints (a picture's hover outline) or keeps a behaviour no hit stands for (added
-/// text's click with the tools that don't pick it up, crop mode's controls). `PageHits::hits` is the
-/// one: the hits
-/// at the press point decide its owner, and those under the pointer give its cursor, its tip, hover
-/// painting and a right-click.
+/// left of them paints (a picture's hover outline), keeps a behaviour no hit stands for (added
+/// text's click with the tools that don't pick it up, crop mode's controls) or tells a tool that a
+/// press nobody holds began on its page (the text layer's `press_here`, redaction's). `PageHits::hits`
+/// is the one: the hits at the press point decide its owner, and those under the pointer give its
+/// cursor, its tip, hover painting and a right-click.
 const HIT_TESTERS: [(&str, &str, &str); 1] = [(
     "canvas/page_input.rs",
     "hits",
@@ -632,24 +633,6 @@ const PRESS_IGNORES: [&str; 1] = ["press_cancelled = true"];
 /// The one function that ignores a press until the button is up: (file, function, why).
 const PRESS_IGNORERS: [(&str, &str, &str); 1] =
     [("canvas/page_input.rs", "cancel_on_escape", "Escape abandons the gesture the press drives, whichever tool's")];
-
-/// The module hit tests, called by path (HIT_TESTERS says who may): an entry no page module calls
-/// any more fails the test.
-const PAGE_HIT_CALLS: [&str; 13] = [
-    "link_ui::hit(",
-    "prepare::hit(",
-    "forms_ui::hit(",
-    "comments::hit(",
-    "comments::context_hit(",
-    "camera_ui::hit(",
-    "edit_text_ui::hit(",
-    "edit_text_ui::picture_hit(",
-    "edit_text_ui::picture_handle_hit(",
-    "edit_text_ui::crop_hit(",
-    "object_ui::hit(",
-    "object_ui::modified_hit(",
-    "content_ui::hit(",
-];
 
 /// Page modules act on a press only when the router says it is theirs. The hits at the press
 /// point decide its owner once, in one place, and a `Hit` comes only from a module's hit test,
@@ -742,14 +725,6 @@ fn page_modules_act_on_a_press_only_through_the_router() {
         "calls no hit test any more: remove it from HIT_TESTERS.",
     ));
     problems.extend(hit_test_aliases());
-    // An entry no page module calls any more no longer guards anything.
-    let called = page_module_uses(&PAGE_HIT_CALLS);
-    problems.extend(
-        PAGE_HIT_CALLS
-            .iter()
-            .filter(|call| !called.iter().any(|(_, _, _, name)| name == *call))
-            .map(|call| format!("no page module calls `{call}` any more: remove it from PAGE_HIT_CALLS.")),
-    );
     let builds = page_module_uses(&HIT_BUILDS);
     assert!(!builds.is_empty(), "no page module makes a `Hit` any more: update HIT_BUILDS");
     problems.extend(builds.into_iter().filter(|(_, function, _, _)| !function.as_deref().is_some_and(is_hit_test)).map(|(file, _, n, name)| {

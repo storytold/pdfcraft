@@ -375,7 +375,7 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, press: PagePress, vie
             return true;
         }
         // The selection moves.
-        PagePress::Mine(Owner::Objects { part: ObjectsPart::Selection }) if !resp.double_clicked() => {
+        PagePress::Mine(Owner::Objects { part: ObjectsPart::Selection }) => {
             s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
             return true;
         }

@@ -7337,7 +7337,7 @@ fn a_right_click_on_text_over_a_picture_selects_the_picture() {
 }
 
 /// With Edit text, a right-click on added text over a picture is the picture's, which is selected
-/// for its menu: added text has no menu of its own. It unselected the picture and opened the page's.
+/// for its menu: added text has no menu of its own.
 #[test]
 fn a_right_click_on_added_text_over_a_picture_selects_the_picture() {
     let mut h = picture_pages(false);
@@ -7355,7 +7355,7 @@ fn a_right_click_on_added_text_over_a_picture_selects_the_picture() {
 }
 
 /// With Edit text, a right-click on the frame of a paragraph open for typing over a picture is the
-/// picture's too. It unselected the picture and opened the page's menu.
+/// picture's too.
 #[test]
 fn a_right_click_on_an_open_paragraphs_frame_over_a_picture_selects_the_picture() {
     let mut h = picture_pages(false);
@@ -7594,8 +7594,7 @@ fn in_crop_mode_a_right_click_on_another_picture_selects_it() {
 }
 
 /// A drag from a hole in the selected picture (drawn through a clip with a hole in it) moves the
-/// picture: its frame is its own. The press fell through the hole, started an area selection and
-/// unselected it.
+/// picture: its frame is its own.
 #[test]
 fn a_drag_from_a_hole_in_the_selected_picture_moves_it() {
     // The picture shows at x 30..160, y 170..250, around a hole at x 70..120, y 190..230.
@@ -7618,8 +7617,7 @@ fn a_drag_from_a_hole_in_the_selected_picture_moves_it() {
 }
 
 /// A right-click on a crop grip past the page's edge, where those of a picture filling its page lie
-/// half, is the crop's, as on the page: crop mode stays and no menu opens (#5835). No page took it,
-/// which left crop mode.
+/// half, is the crop's, as on the page: crop mode stays and no menu opens (#5835).
 #[test]
 fn a_right_click_on_a_crop_grip_past_the_page_edge_keeps_crop_mode() {
     let mut png = Vec::new();
@@ -7648,8 +7646,7 @@ fn a_right_click_on_a_crop_grip_past_the_page_edge_keeps_crop_mode() {
 }
 
 /// Crop mode's grips reach past the page's edge, where those of a picture filling its page lie
-/// half: a drag from just outside the page's corner trims the picture. Only the half on the page took
-/// the press.
+/// half: a drag from just outside the page's corner trims the picture.
 #[test]
 fn a_crop_grip_past_the_page_edge_drags() {
     let mut png = Vec::new();

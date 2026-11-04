@@ -135,7 +135,7 @@ impl Hit {
 
 /// The hit that wins among `hits` with `tool`: the highest layer the tool reaches, the last of
 /// equals (modules are asked bottom up, in paint order).
-pub(crate) fn top(hits: impl IntoIterator<Item = Hit>, tool: QuickTool) -> Option<Hit> {
+pub(in crate::canvas) fn top(hits: impl IntoIterator<Item = Hit>, tool: QuickTool) -> Option<Hit> {
     hits.into_iter().filter(|h| h.layer.reached_by(tool)).fold(None, |best: Option<Hit>, h| match best {
         Some(b) if b.layer > h.layer => Some(b),
         _ => Some(h),
@@ -172,7 +172,7 @@ impl PagePress {
 
 /// A press the pages hold, and who it belongs to.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct Capture {
+struct Capture {
     pub owner: Owner,
     pub declines_drag: bool,
 }
