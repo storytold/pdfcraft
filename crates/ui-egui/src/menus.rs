@@ -8,9 +8,7 @@
 //! one of them, once per click, whichever bar it came from.
 
 use craft_keymap::{Key, Mods, Platform};
-use craft_menu::{
-    Builtin, Chord, CommandRef, Document, Gate, Item, ItemRole, ItemState, LayoutOptions, Menu, MenuBar, MenuRole, Node, Target,
-};
+use craft_menu::{Builtin, Chord, CommandRef, Document, Gate, Item, ItemRole, ItemState, LayoutOptions, Menu, MenuBar, MenuRole, Node, Target};
 use pdfcraft_engine::catalog::{Availability, TOOL_GROUPS};
 use pdfcraft_engine::commands::{self, Shortcut};
 
