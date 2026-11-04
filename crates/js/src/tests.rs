@@ -82,6 +82,8 @@ fn widget_rect_reads_and_writes_a_four_number_array() {
     assert_eq!(o.error, None);
     assert_eq!(o.value, "10,20,110,50");
     assert_eq!(o.changed.iter().find(|f| f.name == "total").and_then(|f| f.rect), Some([10.0, 20.0, 110.0, 50.0]));
+    let o = go("getField('total').rect = [110, 50, 10, 20];", &Event::field("Mouse Up", "agree", ""));
+    assert_eq!(o.changed.iter().find(|f| f.name == "total").and_then(|f| f.rect), Some([10.0, 20.0, 110.0, 50.0]));
     let o = go("getField('total').rect = [0, 0, Infinity, 10];", &Event::field("Mouse Up", "agree", ""));
     assert!(o.error.is_some());
     assert!(o.changed.iter().all(|f| f.name != "total"));

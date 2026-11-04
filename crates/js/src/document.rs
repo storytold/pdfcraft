@@ -118,6 +118,7 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
             if !width.is_finite() || !height.is_finite() || width < 4.0 || height < 4.0 {
                 return Err(error("rect must be at least 4 points wide and high"));
             }
+            let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
             write(c, name, |f| f.rect = Some(rect))?;
             Ok(JsValue::undefined())
         }
