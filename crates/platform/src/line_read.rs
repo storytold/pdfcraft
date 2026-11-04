@@ -14,8 +14,9 @@ pub enum LineRead {
     TooLong,
 }
 
-/// Read one `\n`-terminated line of at most `max` bytes into `buf`. The limit counts what comes
-/// before the `\n`, a `\r` included: a line of exactly `max` bytes ending in `\r\n` is
+/// Read one `\n`-terminated line into `buf`. At most `max` bytes may come before the `\n`, and a
+/// `\r` before it counts toward them: a line ending in `\n` holds at most `max` payload bytes, one
+/// ending in `\r\n` at most `max - 1`, and `max` payload bytes followed by `\r\n` are
 /// [`LineRead::TooLong`].
 pub fn read_line_limited(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -> std::io::Result<LineRead> {
     buf.clear();
@@ -66,6 +67,12 @@ mod tests {
         assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
         assert_eq!(buf, b"cc", "a last line without a newline is still read");
         assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::End, "then end of stream");
+        // The `\r` of a CRLF ending counts toward the limit.
+        let mut input: &[u8] = b"aaaaaaaaaa\r\n";
+        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::TooLong, "max payload bytes + CRLF");
+        let mut input: &[u8] = b"aaaaaaaaa\r\n";
+        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
+        assert_eq!(buf, b"aaaaaaaaa", "max - 1 payload bytes + CRLF fit");
         let long = [b'x'; 100];
         let mut input: &[u8] = &long;
         assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::TooLong);
