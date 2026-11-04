@@ -109,16 +109,24 @@ fn display(doc: &pdfcraft_cos::Document, f: &Field) -> i32 {
 
 /// A form field as scripts see it.
 pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field) -> pdfcraft_js::FieldState {
-    field_state_with_display(f, display(doc, f))
+    field_state_with_display(doc, f, display(doc, f))
 }
 
-fn field_state_with_display(f: &Field, display: i32) -> pdfcraft_js::FieldState {
+fn field_state_with_display(doc: &pdfcraft_cos::Document, f: &Field, display: i32) -> pdfcraft_js::FieldState {
     let mut s = pdfcraft_js::FieldState::new(f.name.clone(), kind(f.kind), f.value.clone());
     s.default = f.default.clone();
     s.readonly = f.read_only();
     s.required = f.has(pdfcraft_forms::flags::REQUIRED);
     s.display = display;
     s.char_limit = f.max_len;
+    s.current_value_indices = doc
+        .get(f.obj)
+        .as_dict()
+        .and_then(|d| d.get(b"I"))
+        .map(|o| doc.resolve(o))
+        .and_then(|o| o.as_array().map(|a| a.iter().filter_map(|o| usize::try_from(o.as_int()?).ok()).filter(|&i| i < f.options.len()).collect()))
+        .filter(|indices: &Vec<usize>| !indices.is_empty())
+        .unwrap_or_else(|| f.options.iter().enumerate().filter_map(|(i, o)| f.value.contains(&o.0).then_some(i)).collect());
     s.is_comb = f.is_comb();
     s.options = match f.kind {
         FieldKind::CheckBox | FieldKind::Radio => f.widgets.iter().filter_map(|w| w.on_state.clone()).map(|o| (o.clone(), o)).collect(),
@@ -150,14 +158,18 @@ fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]
                 display: (a.display != b.display).then_some(a.display),
                 default_value: (a.default != b.default).then(|| a.default.first().cloned()),
                 // `/MaxLen 0` overrides an inherited limit while remaining unlimited.
-                max_len: (a.char_limit != b.char_limit).then_some(Some(a.char_limit.unwrap_or(0))),
+                max_len: ((a.char_limit != b.char_limit)
+                    || (a.char_limit.is_none() && a.max_len_explicit && !b.max_len_explicit))
+                    .then_some(Some(a.char_limit.unwrap_or(0))),
+                current_value_indices: (a.current_value_indices != b.current_value_indices).then_some(a.current_value_indices.clone()),
             };
             (c.value.is_some()
                 || c.read_only.is_some()
                 || c.required.is_some()
                 || c.display.is_some()
                 || c.default_value.is_some()
-                || c.max_len.is_some())
+                || c.max_len.is_some()
+                || c.current_value_indices.is_some())
             .then_some(c)
         })
         .collect()
@@ -216,7 +228,7 @@ impl Scripts for JsRunner {
                     Some(w) => *self.displays.entry(w.obj).or_insert_with(|| display(&self.cos, f)),
                     None => pdfcraft_js::DISPLAY_VISIBLE,
                 };
-                field_state_with_display(f, display)
+                field_state_with_display(&self.cos, f, display)
             })
             .collect();
         let states = std::sync::Arc::new(states);

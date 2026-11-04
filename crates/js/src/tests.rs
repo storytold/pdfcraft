@@ -5,6 +5,7 @@ fn fields() -> Vec<FieldState> {
     agree.options = vec![("Yes".into(), "Yes".into())];
     let mut size = FieldState::new("size", FieldType::ComboBox, vec!["m".into()]);
     size.options = vec![("s".into(), "Small".into()), ("m".into(), "Medium".into()), ("l".into(), "Large".into())];
+    size.current_value_indices = vec![1];
     let mut comb = FieldState::new("comb", FieldType::Text, vec!["123".into()]);
     comb.is_comb = true;
     vec![
@@ -2093,6 +2094,26 @@ fn field_choice_index_setter_maps_options_and_rejects_bad_indices() {
     let rejected = go("getField('size').currentValueIndices=[0,2]", &Event::doc("Open"));
     assert!(rejected.error.is_some(), "accepted multiple combo-box selections");
     assert!(rejected.changed.is_empty(), "mutated on refused multiple combo-box selections");
+}
+
+#[test]
+fn choice_index_setter_preserves_the_selection_when_exports_repeat() {
+    let mut fields = fields();
+    let size = fields.iter_mut().find(|f| f.name == "size").unwrap();
+    size.value = vec!["same".into()];
+    size.options = vec![("same".into(), "First".into()), ("same".into(), "Second".into())];
+    size.current_value_indices = vec![0];
+    let o = run(
+        "var s=getField('size'); s.currentValueIndices=1; event.value=s.value+'|'+s.currentValueIndices;",
+        &Event::field("Mouse Up", "size", ""),
+        &doc(),
+        &fields,
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "same|1");
+    assert_eq!(o.changed.iter().find(|f| f.name == "size").unwrap().current_value_indices, [1]);
 }
 
 #[test]

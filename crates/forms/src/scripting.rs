@@ -44,6 +44,8 @@ pub struct FieldChange {
     pub display: Option<i32>,
     pub default_value: Option<Option<String>>,
     pub max_len: Option<Option<usize>>,
+    /// Selected `/Opt` positions, when a script assigned `currentValueIndices`.
+    pub current_value_indices: Option<Vec<usize>>,
 }
 
 /// What a script did.
@@ -152,6 +154,26 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
                     doc.update_dict(w.obj, |d| d.set(b"F".to_vec(), Object::Int(new)))?;
                 }
             }
+        }
+        if let Some(indices) = &c.current_value_indices {
+            if f.kind != FieldKind::Combo && f.kind != FieldKind::List {
+                return Err(FormError::Invalid(format!("{:?} is not a choice field", c.name)));
+            }
+            if indices.iter().any(|&i| i >= f.options.len()) {
+                return Err(FormError::Invalid(format!("{:?} has an invalid current option index", c.name)));
+            }
+            let encoded = indices
+                .iter()
+                .map(|&i| i64::try_from(i).map(Object::Int))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| FormError::Invalid(format!("{:?} has an out-of-range current option index", c.name)))?;
+            doc.update_dict(f.obj, |d| {
+                if encoded.is_empty() {
+                    d.remove(b"I");
+                } else {
+                    d.set(b"I".to_vec(), Object::Array(encoded));
+                }
+            })?;
         }
         if c.default_value.is_some() || c.max_len.is_some() {
             crate::set_props(doc, &c.name, &crate::FieldProps { default_value: c.default_value.clone(), max_len: c.max_len, ..Default::default() })?;

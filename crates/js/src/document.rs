@@ -90,7 +90,10 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
                 return Err(error("charLimit must be an integer from 0 to 2147483647"));
             }
             let limit = (n > 0.0).then_some(n as usize);
-            write(c, name, |f| f.char_limit = limit)?;
+            write(c, name, |f| {
+                f.char_limit = limit;
+                f.max_len_explicit = true;
+            })?;
             Ok(JsValue::undefined())
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
@@ -100,7 +103,7 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         JsArray::from_iter(vals, c).into()
     });
     let indices = getter!(ctx, n, |f, c| {
-        let idx: Vec<JsValue> = f.options.iter().enumerate().filter(|(_, o)| f.value.contains(&o.0)).map(|(i, _)| JsValue::from(i as f64)).collect();
+        let idx: Vec<JsValue> = f.current_value_indices.iter().map(|&i| JsValue::from(i as f64)).collect();
         if idx.len() == 1 { idx[0].clone() } else { JsArray::from_iter(idx, c).into() }
     });
     let indices_set = {
@@ -142,8 +145,11 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
                 }
                 indices.push(index);
             }
-            let values = indices.into_iter().filter_map(|i| f.options.get(i).map(|o| o.0.clone())).collect();
-            write(c, name, |f| set_value(f, values))?;
+            let values = indices.iter().filter_map(|&i| f.options.get(i).map(|o| o.0.clone())).collect();
+            write(c, name, |f| {
+                set_value(f, values);
+                f.current_value_indices = indices;
+            })?;
             Ok(JsValue::undefined())
         }
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
