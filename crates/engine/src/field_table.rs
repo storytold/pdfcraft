@@ -12,6 +12,9 @@ use crate::{Edit, FormField, NewField};
 /// The edit's name in the history ("Undo Add text field table"), one of [`crate::BATCH_LABELS`].
 pub const LABEL: &str = "Add text field table";
 
+/// The history entry for a grid copied from an existing field.
+pub const COPY_LABEL: &str = "Create multiple field copies";
+
 /// The edit adding `table`'s cells to `page` (0-based, shown as `info`) of a document whose
 /// fields are `form`. Refused, with nothing added, when a cell would be too small on the page or
 /// its name can't be used.
@@ -38,6 +41,24 @@ pub fn edit(table: &FieldTable, page: usize, info: &PageInfo, form: &[FormField]
         edits.push(Edit::AddField { page, rect, kind: NewField::Text { multiline: false }, name: Some(cell.name) });
     }
     Ok(Edit::Batch { label: LABEL.to_owned(), edits })
+}
+
+/// Lay out a grid of independent copies of one existing field widget.
+pub fn copy_edit(table: &FieldTable, page: usize, info: &PageInfo, form: &[FormField], source: &str, widget: usize) -> Result<Edit, TableError> {
+    let batch = edit(table, page, info, form)?;
+    Ok(match batch {
+        Edit::Batch { edits, .. } => Edit::Batch {
+            label: COPY_LABEL.to_owned(),
+            edits: edits
+                .into_iter()
+                .map(|edit| match edit {
+                    Edit::AddField { page, rect, name: Some(name), .. } => Edit::CopyField { source: source.to_owned(), widget, page, rect, name },
+                    other => other,
+                })
+                .collect(),
+        },
+        other => other,
+    })
 }
 
 #[cfg(test)]
@@ -79,6 +100,29 @@ mod tests {
         assert_eq!(add(&s).err(), Some(TableError::Taken("desc_1".into())));
         assert_eq!(s.undo(id).unwrap().to_string(), LABEL);
         assert!(s.get(id).unwrap().form.is_empty(), "one undo takes the whole table back");
+    }
+
+    #[test]
+    fn a_grid_of_field_copies_is_one_undoable_edit() {
+        let mut s = Session::new();
+        let bytes = s.create_blank(300.0, 400.0, 1).unwrap();
+        let id = s.open("copies.pdf", None, bytes, None).unwrap();
+        s.apply(
+            id,
+            Edit::AddField { page: 0, rect: [30.0, 330.0, 130.0, 350.0], kind: NewField::Text { multiline: true }, name: Some("source".into()) },
+        )
+        .unwrap();
+        let table = grid([30.0, 100.0, 230.0, 180.0], 2, &["a_N", "b_N"]);
+        let doc = s.get(id).unwrap();
+        let edit = copy_edit(&table, 0, &doc.info.pages[0], &doc.form, "source", 0).unwrap();
+        s.apply(id, edit).unwrap();
+        let form = &s.get(id).unwrap().form;
+        assert_eq!(form.len(), 5);
+        for name in ["a_1", "b_1", "a_2", "b_2"] {
+            assert!(form.iter().find(|f| f.name == name).unwrap().has(pdfcraft_forms::flags::MULTILINE));
+        }
+        assert_eq!(s.undo(id).unwrap().to_string(), COPY_LABEL);
+        assert_eq!(s.get(id).unwrap().form.len(), 1);
     }
 
     #[test]

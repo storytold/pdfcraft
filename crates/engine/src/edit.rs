@@ -289,6 +289,14 @@ pub enum Edit {
         name: String,
         pages: Vec<usize>,
     },
+    /// Copy one widget into a separately named field on a page.
+    CopyField {
+        source: String,
+        widget: usize,
+        page: usize,
+        rect: [f64; 4],
+        name: String,
+    },
     DeleteField {
         name: String,
     },

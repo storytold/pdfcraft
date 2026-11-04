@@ -5159,8 +5159,11 @@ evidence = [
   "crates/engine/src/field_table.rs::a_table_is_added_and_undone_as_one_step",
   "crates/automation/tests/it/automation.rs::adding_a_field_table_through_tools",
   "crates/ui-egui/tests/it/prepare.rs::a_text_field_table_is_drawn_set_up_and_added_in_one_step",
+  "crates/forms/src/tests.rs::grid_copy_preserves_properties_and_has_an_independent_value",
+  "crates/automation/tests/it/automation.rs::copying_a_field_into_a_grid_through_tools",
+  "crates/ui-egui/tests/it/prepare.rs::copying_a_field_into_a_grid_from_its_context_menu",
 ]
-notes = "Prepare a form ▸ Text field table: drag an area, then set rows, columns, spacing, column widths (draggable dividers) and a name pattern per column in a movable window, with the table previewed on the page. Added as one undoable edit, or refused whole with the reason (a cell under 4 pt, a name with a period, a repeated or existing name); form_add_field_table does the same headlessly. Missing: copying an existing field of any type, with its properties, into a grid from its context menu, which is what this entry describes; the table only creates new text fields."
+notes = "Prepare a form ▸ Text field table: drag an area, then set rows, columns, spacing, column widths (draggable dividers) and a name pattern per column in a movable window, with the table previewed on the page. Added as one undoable edit, or refused whole with the reason (a cell under 4 pt, a name with a period, a repeated or existing name). Create Multiple Copies in a text field or check box's context menu uses the same grid to copy its properties and initial value into independently named fields; form_add_field_table can do the same with source_field. Missing: copying radio groups, choice fields, buttons, signatures and check boxes with per-widget export values."
 
 [[feature]]
 id = "form.rename-lock-fields"

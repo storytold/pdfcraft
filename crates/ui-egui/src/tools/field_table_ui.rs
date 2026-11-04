@@ -32,6 +32,8 @@ pub struct FieldTableDraft {
     /// The page it goes on, 0-based.
     pub page: usize,
     pub table: FieldTable,
+    /// The field widget to copy, or none for a new table of text fields.
+    pub source: Option<(String, usize)>,
     /// What added columns are named after: the first free "TableK" when the window opened.
     base: String,
     /// The document's edit generation when the window opened: any edit since closes it.
@@ -45,7 +47,8 @@ pub struct FieldTableDraft {
 /// Two drafts are the same table in the same place; what is kept for the next frame isn't part of it.
 impl PartialEq for FieldTableDraft {
     fn eq(&self, other: &Self) -> bool {
-        (self.doc, self.page, &self.table, &self.base, self.generation) == (other.doc, other.page, &other.table, &other.base, other.generation)
+        (self.doc, self.page, &self.table, &self.base, self.generation, &self.source)
+            == (other.doc, other.page, &other.table, &other.base, other.generation, &other.source)
     }
 }
 
@@ -70,12 +73,44 @@ enum Choice {
     Cancel,
 }
 
+/// A two-copy starting grid beside the source, wholly within the displayed page.
+pub(crate) fn copy_grid(info: &PageInfo, rect: [f64; 4]) -> Option<([f64; 4], usize, usize)> {
+    let a = info.user_to_view(rect[0] as f32, rect[1] as f32);
+    let b = info.user_to_view(rect[2] as f32, rect[3] as f32);
+    let (left, right) = (f64::from(a[0].min(b[0])), f64::from(a[0].max(b[0])));
+    let (top, bottom) = (f64::from(a[1].min(b[1])), f64::from(a[1].max(b[1])));
+    let (width, height) = (right - left, bottom - top);
+    let (page_width, page_height) = (f64::from(info.width), f64::from(info.height));
+    if ![left, right, top, bottom, width, height, page_width, page_height].iter().all(|v| v.is_finite())
+        || width < 4.0
+        || height < 4.0
+        || left < 0.0
+        || top < 0.0
+        || right > page_width
+        || bottom > page_height
+    {
+        return None;
+    }
+    let gap = 8.0;
+    if bottom + gap + height * 2.0 <= page_height {
+        Some(([left, bottom + gap, right, bottom + gap + height * 2.0], 2, 1))
+    } else if top >= gap + height * 2.0 {
+        Some(([left, top - gap - height * 2.0, right, top - gap], 2, 1))
+    } else if right + gap + width * 2.0 <= page_width {
+        Some(([right + gap, top, right + gap + width * 2.0, bottom], 1, 2))
+    } else if left >= gap + width * 2.0 {
+        Some(([left - gap - width * 2.0, top, left - gap, bottom], 1, 2))
+    } else {
+        None
+    }
+}
+
 impl FieldTableDraft {
     /// A table filling `rect` (view space) on `page` of a document at edit `generation`, named after
     /// the first base `form` leaves free.
     pub(crate) fn new(doc: DocId, page: usize, rect: [f64; 4], form: &[FormField], generation: u64) -> Self {
         let base = field_table::free_base(form.iter().map(|f| f.name.as_str()));
-        FieldTableDraft { doc, page, table: FieldTable::new(rect, &base), base, generation, laid: None, typing: false }
+        FieldTableDraft { doc, page, table: FieldTable::new(rect, &base), source: None, base, generation, laid: None, typing: false }
     }
 
     /// The table laid out on its page (`info`, in a form whose fields are `form`), worked out again
@@ -85,8 +120,11 @@ impl FieldTableDraft {
         if let Some(laid) = self.laid.as_ref().filter(|l| l.table == self.table) {
             return Arc::clone(laid);
         }
-        let laid =
-            Arc::new(Laid { table: self.table.clone(), cells: self.table.cells(), edit: field_table::edit(&self.table, self.page, info, form) });
+        let edit = match &self.source {
+            Some((source, widget)) => field_table::copy_edit(&self.table, self.page, info, form, source, *widget),
+            None => field_table::edit(&self.table, self.page, info, form),
+        };
+        let laid = Arc::new(Laid { table: self.table.clone(), cells: self.table.cells(), edit });
         self.laid = Some(Arc::clone(&laid));
         laid
     }
@@ -158,7 +196,8 @@ pub(crate) fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut open = true;
     let mut choice = None;
     let mut laid = None;
-    egui::Window::new(tl!("Text Field Table"))
+    let title = if draft.source.is_some() { tl!("Create Multiple Copies") } else { tl!("Text Field Table") };
+    egui::Window::new(title)
         .id(egui::Id::unique("field_table_window"))
         .open(&mut open)
         .collapsible(false)
@@ -203,6 +242,10 @@ fn close(app: &mut PdfCraftApp) {
 /// The window's controls, the names the table will have, and why it can't be added if it can't.
 /// Returns what was chosen and the table as it now stands, laid out and checked.
 fn body(ui: &mut egui::Ui, d: &mut FieldTableDraft, info: &PageInfo, form: &[FormField], t: &theme::Tokens) -> (Option<Choice>, Arc<Laid>) {
+    if d.source.is_some() {
+        copy_grid_controls(ui, d, info);
+        ui.add_space(6.0);
+    }
     let columns = d.table.columns.len();
     egui::Grid::new("field_table_grid").num_columns(2).spacing([14.0, 8.0]).min_col_width(120.0).show(ui, |ui| {
         ui.label(tl!("Rows"));
@@ -309,6 +352,36 @@ fn body(ui: &mut egui::Ui, d: &mut FieldTableDraft, info: &PageInfo, form: &[For
         }
     });
     (choice, laid)
+}
+
+/// The grid area in displayed-page points. A changed position keeps the area on the page.
+fn copy_grid_controls(ui: &mut egui::Ui, d: &mut FieldTableDraft, info: &PageInfo) {
+    let [mut left, mut top, right, bottom] = d.table.rect;
+    let (mut width, mut height) = (right - left, bottom - top);
+    let (page_width, page_height) = (f64::from(info.width), f64::from(info.height));
+    if ![left, top, width, height, page_width, page_height].iter().all(|n| n.is_finite()) || page_width < 4.0 || page_height < 4.0 {
+        return;
+    }
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        changed |= copy_grid_number(ui, "Left", &mut left, 0.0..=(page_width - width).max(0.0));
+        changed |= copy_grid_number(ui, "Top", &mut top, 0.0..=(page_height - height).max(0.0));
+    });
+    ui.horizontal(|ui| {
+        changed |= copy_grid_number(ui, "Width", &mut width, 4.0..=(page_width - left).max(4.0));
+        changed |= copy_grid_number(ui, "Height", &mut height, 4.0..=(page_height - top).max(4.0));
+    });
+    if changed {
+        d.table.rect = [left, top, left + width, top + height];
+    }
+}
+
+fn copy_grid_number(ui: &mut egui::Ui, label: &str, value: &mut f64, range: RangeInclusive<f64>) -> bool {
+    let label = ui.label(tl!(label));
+    let response = ui.add(egui::DragValue::new(value).range(range).speed(0.5).suffix(" pt"));
+    let changed = response.changed();
+    response.labelled_by(label.id);
+    changed
 }
 
 /// "Column 2" for the column at 0-based `index`.
@@ -455,6 +528,18 @@ mod tests {
     use pdfcraft_engine::field_table::TableColumn;
 
     use super::*;
+
+    #[test]
+    fn a_copy_grid_starts_on_the_page_without_covering_the_source() {
+        let info = PageInfo { width: 400.0, height: 300.0, label: "1".into(), crop: [0.0, 0.0, 400.0, 300.0], rotation: 0 };
+        let (below, rows, columns) = copy_grid(&info, [10.0, 270.0, 110.0, 290.0]).unwrap();
+        assert_eq!((rows, columns), (2, 1));
+        assert!(below.iter().zip([10.0, 38.0, 110.0, 78.0]).all(|(a, b)| (a - b).abs() < 1e-3), "{below:?}");
+        let (above, rows, columns) = copy_grid(&info, [10.0, 0.0, 110.0, 20.0]).unwrap();
+        assert_eq!((rows, columns), (2, 1));
+        assert!(above.iter().zip([10.0, 232.0, 110.0, 272.0]).all(|(a, b)| (a - b).abs() < 1e-3), "{above:?}");
+        assert!(copy_grid(&info, [0.0, 0.0, 400.0, 300.0]).is_none());
+    }
 
     fn draft(columns: usize) -> FieldTableDraft {
         let mut d = FieldTableDraft::new(DocId(1), 0, [0.0, 0.0, 400.0, 200.0], &[], 0);
