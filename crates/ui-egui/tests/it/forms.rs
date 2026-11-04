@@ -104,13 +104,14 @@ fn read_only_widgets_are_skipped_by_tab_navigation() {
     let bytes = pdf_from_objects(&[
         "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 7 0 R 8 0 R 9 0 R] >> >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 120] >>",
-        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R 10 0 R 7 0 R 8 0 R 9 0 R] >>",
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (first) /Rect [20 80 150 100] /P 3 0 R /F 4 >>",
-        "<< /FT /Tx /T (locked) /Kids [6 0 R] >>",
+        "<< /FT /Tx /T (locked) /Kids [6 0 R 10 0 R] >>",
         "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Ff 1 /Rect [20 50 150 70] /P 3 0 R /F 4 >>",
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (empty) /Rect [20 50 20 50] /P 3 0 R /F 4 >>",
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (off-page) /Rect [220 50 240 70] /P 3 0 R /F 4 >>",
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (last) /Rect [20 20 150 40] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [20 35 150 45] /P 3 0 R /F 4 >>",
     ]);
     let mut h = harness_with_bytes("readonly-widget.pdf", bytes);
     {
@@ -120,6 +121,9 @@ fn read_only_widgets_are_skipped_by_tab_navigation() {
         assert!(locked.widgets[0].read_only, "only its widget is read-only");
     }
     click_field(&mut h, "first", 0);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("locked".into(), 1)), "the writable widget in the same field remains in tab order");
     h.key_press(egui::Key::Tab);
     h.run_steps(3);
     assert_eq!(focused(&h), Some(("last".into(), 0)));
