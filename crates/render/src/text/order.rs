@@ -152,6 +152,8 @@ pub(super) struct Scratch {
     pub(super) logical: Vec<usize>,
     /// `placed` with the marks merged in, built before it is swapped in.
     pub(super) merged: Vec<usize>,
+    /// The merged ink intervals of the current segment, each with the ink length before it, for `drop_covered_blanks`.
+    ink: Vec<[f32; 3]>,
 }
 
 /// One run of a colliding component.
@@ -264,6 +266,8 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
         sc.placed.sort_unstable_by(|a, b| x0(*a).total_cmp(&x0(*b)).then(a.cmp(b)));
     } else {
         collide(glyphs, height, s.h, sc);
+        // Only another run can draw over a run's blanks: a single run is left as it is.
+        drop_covered_blanks(glyphs, sc);
     }
     // Each mark goes before the first placed glyph whose x is greater than its own. Marks are visited in x order, and
     // that position never moves back, so one pass over `placed` puts all of them in.
@@ -281,6 +285,76 @@ pub(super) fn place_glyphs(glyphs: &[&TextGlyph], height: &dyn Fn(usize) -> f32,
         sc.merged.extend_from_slice(&sc.placed[next..]);
         std::mem::swap(&mut sc.placed, &mut sc.merged);
     }
+}
+
+/// Removes blank glyphs from `sc.placed` that are mostly covered by the ink of other glyphs on the line. A run of blanks
+/// drawn over the digits of an earlier run (a cover headline that overprints a number with spaces) would otherwise sort
+/// between the digits and show as spaces inside the number (#3172). A blank that stands in a gap is kept. A forced word
+/// break on a removed blank moves to the next glyph of its run that is kept. Each blank costs two binary searches.
+fn drop_covered_blanks(glyphs: &[&TextGlyph], sc: &mut Scratch) {
+    let blank = |i: usize| glyphs[i].text.trim().is_empty();
+    if !sc.placed.iter().any(|&i| blank(i)) {
+        return;
+    }
+    let ink = &mut sc.ink;
+    ink.clear();
+    ink.extend(sc.placed.iter().filter(|&&i| !blank(i)).map(|&i| [glyphs[i].rect[0], glyphs[i].rect[2], 0.0]));
+    ink.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    // Merge into disjoint intervals.
+    ink.dedup_by(|cur, prev| {
+        let overlaps = cur[0] <= prev[1];
+        if overlaps {
+            prev[1] = prev[1].max(cur[1]);
+        }
+        overlaps
+    });
+    // `iv[2]` is the ink length of all intervals before this one.
+    let mut total = 0.0;
+    for iv in ink.iter_mut() {
+        iv[2] = total;
+        total += iv[1] - iv[0];
+    }
+    let ink = &sc.ink;
+    let covered = |l: f32, r: f32| {
+        let first = ink.partition_point(|iv| iv[1] <= l);
+        let end = ink.partition_point(|iv| iv[0] < r);
+        let (Some(head), Some(last)) = (ink.get(first), end.checked_sub(1).and_then(|k| ink.get(k))) else { return 0.0 };
+        if end <= first {
+            return 0.0;
+        }
+        let after = ink.get(end).map_or(total, |iv| iv[2]);
+        after - head[2] - (l - head[0]).max(0.0) - (last[1] - r).max(0.0)
+    };
+    sc.merged.clear();
+    for &i in &sc.placed {
+        let (l, r) = (glyphs[i].rect[0], glyphs[i].rect[2]);
+        if blank(i) && r - l > 0.0 && covered(l, r) > 0.5 * (r - l) {
+            sc.merged.push(i);
+        }
+    }
+    if sc.merged.is_empty() {
+        return;
+    }
+    // `placed` is not sorted by index, so the dropped glyphs are sorted for the lookups.
+    sc.merged.sort_unstable();
+    let dropped = &sc.merged;
+    sc.placed.retain(|i| dropped.binary_search(i).is_err());
+    for b in sc.breaks.iter_mut() {
+        if dropped.binary_search(b).is_err() {
+            continue;
+        }
+        let x0 = |i: usize| glyphs[i].rect[0];
+        let run = sc.text.iter().find(|run| run.range().contains(b));
+        let kept = run.and_then(|run| {
+            let mut left = run.range().filter(|j| dropped.binary_search(j).is_err());
+            left.min_by(|a, c| x0(*a).total_cmp(&x0(*c)).then(a.cmp(c)))
+        });
+        *b = kept.unwrap_or(NONE);
+    }
+    sc.breaks.retain(|&b| b != NONE);
+    sc.breaks.sort_unstable();
+    sc.breaks.dedup();
+    sc.merged.clear();
 }
 
 /// `place_glyphs` for a segment of two or more text runs. `h` is the segment's line height. Returns whether the segment

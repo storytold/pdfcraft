@@ -428,12 +428,15 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             for (w, pair) in sc.placed.windows(2).enumerate() {
                 let &[p, c] = pair else { continue };
                 let gap = glyphs[c].rect[0] - glyphs[p].rect[2];
+                // The word gap follows the two glyphs it lies between, not the tallest glyph of the line (#3172).
+                let hp = height(p).min(height(c));
+                let pair_threshold = (typical + hp * WORD_GAP).max(hp * WORD_GAP).min(threshold);
                 let (pt, ct) = (&glyphs[p].text, &glyphs[c].text);
                 let cjk = pt.chars().any(is_cjk) && ct.chars().any(is_cjk) && gap < h * 0.5;
                 let tight_cluster = (pt.chars().any(is_complex) || ct.chars().any(is_complex)) && gap < h * 0.6;
                 let run_start = sc.breaks.binary_search(&c).is_ok();
                 if let Some(space) = spaces.get_mut(w + 1) {
-                    *space = (gap > threshold || run_start) && !cjk && !tight_cluster && !pt.trim().is_empty() && !ct.trim().is_empty();
+                    *space = (gap > pair_threshold || run_start) && !cjk && !tight_cluster && !pt.trim().is_empty() && !ct.trim().is_empty();
                 }
             }
             // Right-to-left spans are reversed (visual → logical) with their gaps, and only then is a second copy made.
