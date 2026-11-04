@@ -141,6 +141,10 @@ pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
     PageText { glyphs, line_of, space_before }
 }
 
+/// How many grid cells around a glyph the far redraw check looks at in each direction, however large the glyph is next to
+/// the page's median glyph.
+const MAX_REDRAW_REACH: i32 = 8;
+
 /// A 64-bit FNV-1a hash of one glyph text.
 fn text_hash(text: &str) -> u64 {
     text.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3))
@@ -153,18 +157,28 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     // closer than a fifth of its height to its double, as the second "l" of "Alle" (#1467), and
     // OCR layers squeeze words to 20 Tz and below (#2457). Only a zero-width mark, which has no
     // width to overlap, is matched by its height alone.
-    let mut keep = vec![true; glyphs.len()];
+    //
     // The twin is usually among the last few glyphs. A page drawn once per column clip also redraws the glyph on the clip
     // edge thousands of glyphs later: the last glyph of one run is the first of another (#3173). So a glyph that starts a
-    // run is also checked against the latest kept glyph of its text and grid cell (a fifth of a line) and its neighbours,
-    // if that one ends a run. A glyph inside a run stays for the redraw check on whole runs below, which keeps a run
-    // that only starts like an earlier one.
+    // run is also checked against the kept glyphs of its text in the grid cells around it, if one of them ends a run. A
+    // glyph inside a run stays for the redraw check on whole runs below, which keeps a run that only starts like an
+    // earlier one. The grid has one cell size for the whole page (a fifth of the median glyph height), so equal places
+    // land in equal cells whatever the glyph sizes. `older[k]` links each kept glyph to the previous one with the same
+    // key, so the earlier candidates are checked newest first, up to `REDRAW_CANDIDATES`, as the runs are below.
+    let mut keep = vec![true; glyphs.len()];
     let follows = |p: usize, q: usize| {
         let (a, b) = (&glyphs[p].rect, &glyphs[q].rect);
         let ph = (a[3] - a[1]).max(0.1).min((b[3] - b[1]).max(0.1));
         ((a[1] + a[3]) / 2.0 - (b[1] + b[3]) / 2.0).abs() < ph * 0.5 && b[0] - a[2] < ph * 3.0 && b[0] > a[0] - ph * 2.0
     };
+    let mut heights: Vec<f32> = glyphs.iter().map(|g| (g.rect[3] - g.rect[1]).max(0.1)).collect();
+    let cell = match heights.len() {
+        0 => 0.02,
+        n => 0.2 * *heights.select_nth_unstable_by(n / 2, f32::total_cmp).1,
+    };
     let mut latest: HashMap<(u64, i32, i32), usize> = HashMap::new();
+    let mut older = vec![NONE; glyphs.len()];
+    let mut prev_kept: Option<usize> = None;
     for i in 0..glyphs.len() {
         let g = &glyphs[i];
         let h = (g.rect[3] - g.rect[1]).max(0.1);
@@ -174,16 +188,36 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             let p = &glyphs[j];
             keep[j] && p.text == g.text && (p.rect[0] - g.rect[0]).abs() < dx && (p.rect[1] - g.rect[1]).abs() < h * 0.2
         };
-        let (fp, cx, cy_) = (text_hash(&g.text), (g.rect[0] / (0.2 * h)).floor() as i32, (g.rect[1] / (0.2 * h)).floor() as i32);
-        let key = |ox: i32, oy: i32| (fp, cx.saturating_add(ox), cy_.saturating_add(oy));
-        let ends_run = |j: usize| j + 1 >= glyphs.len() || !follows(j, j + 1);
-        let starts_run = i == 0 || !follows(i - 1, i);
-        let far = |ox: i32, oy: i32| latest.get(&key(ox, oy)).is_some_and(|&j| same(j) && ends_run(j));
-        let twin = (i.saturating_sub(4)..i).rev().any(&same) || (starts_run && (-1..=1i32).any(|ox| (-1..=1i32).any(|oy| far(ox, oy))));
-        if twin {
+        let near = (i.saturating_sub(4)..i).rev().any(&same);
+        let (fp, cx, cy_) = (text_hash(&g.text), (g.rect[0] / cell).floor() as i32, (g.rect[1] / cell).floor() as i32);
+        // The glyph after a kept one is the next kept glyph: a dropped fake-bold copy does not count.
+        let next_kept = |j: usize| (j + 1..i).find(|&k| keep[k]).unwrap_or(i);
+        let mut far = false;
+        if prev_kept.is_none_or(|p| !follows(p, i)) {
+            let reach = ((dx / cell).ceil() as i32).clamp(1, MAX_REDRAW_REACH);
+            let mut checks = REDRAW_CANDIDATES;
+            'cells: for ox in -reach..=reach {
+                for oy in -reach..=reach {
+                    let mut link = latest.get(&(fp, cx.saturating_add(ox), cy_.saturating_add(oy))).copied();
+                    while let Some(j) = link {
+                        if checks == 0 {
+                            break 'cells;
+                        }
+                        checks -= 1;
+                        if same(j) && !follows(j, next_kept(j)) {
+                            far = true;
+                            break 'cells;
+                        }
+                        link = older.get(j).copied().filter(|&o| o != NONE);
+                    }
+                }
+            }
+        }
+        if near || far {
             keep[i] = false;
         } else {
-            latest.insert((fp, cx, cy_), i);
+            older[i] = latest.insert((fp, cx, cy_), i).unwrap_or(NONE);
+            prev_kept = Some(i);
         }
     }
     let kept: Vec<usize> = (0..glyphs.len()).filter(|i| keep[*i]).collect();

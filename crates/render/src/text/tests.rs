@@ -806,6 +806,18 @@ fn fake_bold_duplicates_are_removed() {
     assert_eq!(layout(v).plain_text(), "e\u{301}");
 }
 
+/// Text drawn once per column clip: "WO" and the `edge` glyphs, lots of other text, then the `second_pass`.
+fn column_passes(edge: &[TextGlyph], second_pass: &[TextGlyph]) -> String {
+    let mut v = Vec::new();
+    word(&mut v, "WO", 10.0, 10.0, 6.0);
+    v.extend_from_slice(edge);
+    for k in 0..50 {
+        word(&mut v, "xx", 100.0, 40.0 + 14.0 * k as f32, 6.0);
+    }
+    v.extend_from_slice(second_pass);
+    layout(v).plain_text()
+}
+
 /// #3173: a page drawn once per column clip draws a glyph on the clip edge in both passes, far apart in drawing order.
 #[test]
 fn a_glyph_redrawn_by_the_other_column_pass_is_dropped() {
@@ -825,6 +837,40 @@ fn a_glyph_redrawn_by_the_other_column_pass_is_dropped() {
     let text = layout(v).plain_text();
     assert!(text.lines().any(|l| l == "WORLD"), "{text}");
     assert!(text.lines().any(|l| l == "illustrated"), "{text}");
+}
+
+/// #3173: the second pass draws the glyph a little taller, so its grid cell must still be the one of the first copy.
+#[test]
+fn a_redrawn_glyph_of_slightly_different_height_is_dropped() {
+    let mut second = vec![em_box("R", 22.0, 10.0, 28.0, 20.3)];
+    word(&mut second, "LD", 28.0, 10.0, 6.0);
+    let text = column_passes(&[em_box("R", 22.0, 10.0, 28.0, 20.0)], &second);
+    assert!(text.lines().any(|l| l == "WORLD"), "{text}");
+}
+
+/// #3173: a fake-bold copy after the last glyph of a pass does not hide that the glyph ends its run.
+#[test]
+fn a_fake_bold_copy_at_the_end_of_a_pass_does_not_hide_the_run_end() {
+    let mut second = vec![g("R", 22.0, 10.0, 28.0)];
+    word(&mut second, "LD", 28.0, 10.0, 6.0);
+    let text = column_passes(&[g("R", 22.0, 10.0, 28.0), g("R", 22.1, 10.0, 28.1)], &second);
+    assert!(text.lines().any(|l| l == "WORLD"), "{text}");
+}
+
+/// #3173: a glyph kept in a cell does not hide the earlier glyph there that the redraw matches.
+#[test]
+fn a_redraw_is_matched_against_earlier_glyphs_of_the_same_cell() {
+    // A narrow "l" at 10 ends its line, a second one 0.8 pt to the right (more than a half of its width) is its own letter,
+    // and the last one redraws the first.
+    let v = vec![
+        g("l", 10.0, 10.0, 11.0),
+        g("Z", 200.0, 100.0, 206.0),
+        g("l", 10.8, 10.0, 11.8),
+        g("Y", 300.0, 200.0, 306.0),
+        g("l", 10.0, 10.0, 11.0),
+    ];
+    let text = layout(v).plain_text();
+    assert_eq!(text.matches('l').count(), 2, "{text}");
 }
 
 /// #1467: condensed text (80 Tz and below, OCR layers fitted to the scan) sets narrow letters
