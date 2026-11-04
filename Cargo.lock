@@ -4449,6 +4449,7 @@ name = "pdfcraft-fonts"
 version = "0.18.1"
 dependencies = [
  "harfrust",
+ "hayro-cmap",
  "pdfcraft-cos",
  "skrifa 0.44.0",
  "unicode-bidi",
@@ -4506,6 +4507,7 @@ dependencies = [
  "ocrs",
  "pdfcraft-fonts",
  "rten",
+ "rten-tensor",
  "tempfile",
  "thiserror 2.0.21",
 ]

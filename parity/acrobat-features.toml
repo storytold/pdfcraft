@@ -794,8 +794,8 @@ milestone = "M2"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/render/src/raster/tests.rs::huge_cid_width_ranges_terminate", "crates/render/src/raster/tests.rs::non_embedded_japanese_cid_fonts_draw_with_a_craft_fonts_face", "crates/render/src/raster/tests.rs::mincho_substitute_covers_half_width_katakana", "crates/render/src/raster/tests.rs::non_embedded_chinese_and_korean_cid_fonts_draw_with_an_installed_face", "crates/engine/src/tests.rs::installed_cjk_fonts_draw_in_the_viewer_but_not_in_an_export", "crates/render/src/text/tests.rs::identity_to_unicode_names_give_text", "crates/fonts/src/pdf/tests.rs::identity_to_unicode_names_read_codes_as_unicode", "crates/render/src/raster/tests.rs::a_soft_hyphen_a_substitute_lacks_draws_its_hyphen"]
-notes = "CID-to-Unicode tables are M2.4; a non-embedded Adobe-Japan1 font is drawn in a craft-fonts Japanese face (Mincho or Gothic by name, else by the descendant font descriptor's Serif flag; bold Gothic for a Bold name or a `/FontWeight` of 600 or more; BIZ UDMincho for Mincho, which covers half-width katakana) when built with craft-fonts; the desktop viewer can fall back to an installed CJK face for GB1, CNS1, Korea1 and Japan1, including GBK-EUC-H TrueType CID fonts without ToUnicode. Windows preserves installed SimSun, SimHei, KaiTi and FangSong families, including subset-prefixed Founder aliases. Combine thumbnails and accessibility figure previews use the same on-screen fallback. System faces are display-only, disabled by PDFCRAFT_SYSTEM_FONTS=0, and not used by export, printing, OCR or automation; machines without a candidate and web builds remain unsupported. A `/ToUnicode` given as the name `/Identity-H` or `/Identity-V` (WSCAD) reads codes as Unicode for selection, search and editing, without control characters. A non-embedded Identity font whose `/ToUnicode` gives a soft hyphen (U+00AD, as Windows exporters write Arial's hyphen) draws the standard substitute's hyphen (#5888). Any other character the substitute lacks still falls back to the CID taken as one of the substitute's glyph indexes, an unrelated glyph (#3529, #5726)"
+evidence = ["crates/render/src/raster/tests.rs::huge_cid_width_ranges_terminate", "crates/render/src/raster/tests.rs::non_embedded_japanese_cid_fonts_draw_with_a_craft_fonts_face", "crates/render/src/raster/tests.rs::mincho_substitute_covers_half_width_katakana", "crates/render/src/raster/tests.rs::non_embedded_chinese_and_korean_cid_fonts_draw_with_an_installed_face", "crates/engine/src/tests.rs::installed_cjk_fonts_draw_in_the_viewer_but_not_in_an_export", "crates/render/src/text/tests.rs::identity_to_unicode_names_give_text", "crates/fonts/src/pdf/tests.rs::identity_to_unicode_names_read_codes_as_unicode", "crates/render/src/raster/tests.rs::a_soft_hyphen_a_substitute_lacks_draws_its_hyphen", "crates/render/tests/it/cid_standard_font_hijack.rs::a_cjk_cid_font_named_like_a_latin_standard_font_asks_for_a_fallback", "crates/render/tests/it/cid_standard_font_hijack.rs::a_non_cjk_font_named_like_a_latin_standard_font_still_asks_for_the_standard_font", "crates/render/tests/it/cid_standard_font_hijack.rs::a_custom_collection_font_named_like_a_latin_standard_font_asks_for_the_standard_font", "crates/fonts/src/pdf/tests.rs::a_named_predefined_encoding_maps_codes_to_unicode_without_to_unicode", "crates/fonts/src/pdf/tests.rs::a_named_encoding_without_a_ucs2_collection_gives_no_meaning", "crates/fonts/src/pdf/tests.rs::an_embedded_cmap_still_keeps_its_own_codes_and_to_unicode"]
+notes = "CID-to-Unicode tables are M2.4; a non-embedded Adobe-Japan1 font is drawn in a craft-fonts Japanese face (Mincho or Gothic by name, else by the descendant font descriptor's Serif flag; bold Gothic for a Bold name or a `/FontWeight` of 600 or more; BIZ UDMincho for Mincho, which covers half-width katakana) when built with craft-fonts; the desktop viewer can fall back to an installed CJK face for GB1, CNS1, Korea1 and Japan1, including GBK-EUC-H TrueType CID fonts without ToUnicode. Windows preserves installed SimSun, SimHei, KaiTi and FangSong families, including subset-prefixed Founder aliases. Combine thumbnails and accessibility figure previews use the same on-screen fallback. System faces are display-only, disabled by PDFCRAFT_SYSTEM_FONTS=0, and not used by export, printing, OCR or automation; machines without a candidate and web builds remain unsupported. A `/ToUnicode` given as the name `/Identity-H` or `/Identity-V` (WSCAD) reads codes as Unicode for selection, search and editing, without control characters. A non-embedded Identity font whose `/ToUnicode` gives a soft hyphen (U+00AD, as Windows exporters write Arial's hyphen) draws the standard substitute's hyphen (#5888). Any other character the substitute lacks still falls back to the CID taken as one of the substitute's glyph indexes, an unrelated glyph (#3529, #5726)" "CID-to-Unicode tables are M2.4; a non-embedded Adobe-Japan1 font is drawn in a craft-fonts Japanese face (Mincho or Gothic by name, else by the descendant font descriptor's Serif flag; bold Gothic for a Bold name or a `/FontWeight` of 600 or more; BIZ UDMincho for Mincho, which covers half-width katakana) when built with craft-fonts; the desktop viewer can fall back to an installed CJK face for GB1, CNS1, Korea1 and Japan1, including GBK-EUC-H TrueType CID fonts without ToUnicode. Windows preserves installed SimSun, SimHei, KaiTi and FangSong families, including subset-prefixed Founder aliases. Combine thumbnails and accessibility figure previews use the same on-screen fallback. System faces are display-only, disabled by PDFCRAFT_SYSTEM_FONTS=0, and not used by export, printing, OCR or automation; machines without a candidate and web builds remain unsupported. A `/ToUnicode` given as the name `/Identity-H` or `/Identity-V` (WSCAD) reads codes as Unicode for selection, search and editing, without control characters. A CID font of an Adobe CJK collection is never the Latin standard 14 whatever its `/BaseFont` name reads: a face named like one (`Noto Sans CJK SC`, `Source Han Serif SC`) asked for the Latin standard font and never reached the CJK fallback chain, so it drew nothing (#3684). A composite font that names its encoding (`/GB-EUC-H`, `/GBpc-EUC-H`, `/ETen-B5-H`, ...) instead of embedding the CMap now reads the predefined table: the code names a CID of the font's character collection, and that collection's UCS2 table gives the CID its character, so a Chinese PDF without `/ToUnicode` has text to find, copy and redact (#651)"
 
 [[feature]]
 id = "view.render-image-codecs"
@@ -6648,7 +6648,7 @@ status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
 evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable"]
-notes = "Invisible text (Tr 3) fitted to each word box; the image is not deskewed or downsampled (exact mode only)."
+notes = "Invisible text (Tr 3) fitted to each word box; the image is not downsampled (exact mode only). Deskew turns where the image is drawn, not its pixels (ocr.deskew)."
 
 [[feature]]
 id = "ocr.searchable-image-exact"
@@ -6660,7 +6660,7 @@ status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
 evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable"]
-notes = "The image is left untouched."
+notes = "The image's pixels are left untouched (Deskew pages turns where it is drawn and can be switched off)."
 
 [[feature]]
 id = "ocr.editable-text-output"
@@ -6704,11 +6704,11 @@ title = "Detect and fix page rotation"
 area = "I"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["ocr.recognize"]
+tools = ["ocr_recognize"]
+evidence = ["crates/ocr/src/orient.rs::a_sideways_page_has_lines_running_down", "crates/ocr/src/orient.rs::a_quarter_turn_reads_rgb_and_rgba_at_their_own_stride"]
+notes = "Recognize text (Auto-rotate pages, on by default) sets the /Rotate that shows a page scanned sideways or upside down upright, so the image and its pixels are unchanged and undo restores it. A projection profile of the ink tells whether the lines run across or down the page; the page is then read at all four quarter turns and the upright one kept. Which turn is upright is decided per language: for Latin text by the reading whose characters most form plausible words (letters in one case pattern, numbers), for Chinese by the turn whose text the PP-OCR model decodes with the highest per-character CTC confidence (measured on a Chinese document page: the upright turn scores 0.983 per character, every wrong turn at most 0.912). Only pages without text of their own. Tested on Chinese official-document scans in all four quarter turns."
 
 [[feature]]
 id = "ocr.deskew"
@@ -6716,11 +6716,11 @@ title = "Deskew"
 area = "I"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["ocr.recognize"]
+tools = ["ocr_recognize"]
+evidence = ["crates/ocr/src/orient.rs::finds_the_turn_that_levels_the_lines", "crates/ocr/src/orient.rs::straightening_the_pixels_levels_them"]
+notes = "Recognize text (Deskew pages, on by default) finds the skew of a scan with a projection profile (+-15 degrees, 0.05 degree steps) and turns the scan image (one covering at least half the page) level about its centre; the pixels are not resampled, so it stays lossless and undoable, and the text layer is read from the levelled rendering. Only pages without text of their own."
 
 [[feature]]
 id = "ocr.despeckle"

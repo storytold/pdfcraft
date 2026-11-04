@@ -795,3 +795,76 @@ fn low_codes_resolve_to_the_covering_range() {
     assert_eq!(covered, [5, 6, 7, 100, 101]);
     assert_eq!((u.covering(0xFFFF).is_some(), u.covering(0x1_0001).is_some(), u.covering(0x1_0002).is_none()), (true, true, true));
 }
+
+/// A composite font that names its encoding (`/GB-EUC-H`) instead of embedding the CMap, and
+/// has no `/ToUnicode`: the predefined table maps the code to a CID of the character collection,
+/// and that collection's UCS2 table maps the CID to Unicode. Without them such a PDF has no text
+/// to find, copy or redact (#651).
+#[test]
+fn a_named_predefined_encoding_maps_codes_to_unicode_without_to_unicode() {
+    let mut doc = Document::new_empty();
+    let mut info = Dict::new();
+    info.set(b"Registry".to_vec(), Object::String(pdfcraft_cos::PdfString::literal("Adobe")));
+    info.set(b"Ordering".to_vec(), Object::String(pdfcraft_cos::PdfString::literal("GB1")));
+    let mut desc = Dict::new();
+    desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+    desc.set(b"CIDSystemInfo".to_vec(), Object::Dict(info));
+    let f = font(
+        &mut doc,
+        vec![
+            ("Subtype", Object::name("Type0")),
+            ("Encoding", Object::name("GB-EUC-H")),
+            ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
+        ],
+    );
+    let m = Metrics::from_dict(&doc, &f);
+    // GB-EUC-H: C4E3 is 你 and C6AC is 片.
+    assert_eq!(m.decode(&[0xC4, 0xE3]), "你", "a named predefined encoding gives its code a character");
+    assert_eq!(m.decode(&[0xC6, 0xAC]), "片");
+    assert_eq!(m.decode(&[0xD6, 0xD0]), "中", "GB-EUC-H's own codes");
+}
+
+/// The named encoding is read from the font, not from the collection: a font of another
+/// collection, or one whose collection has no UCS2 table, keeps no meaning for its codes.
+#[test]
+fn a_named_encoding_without_a_ucs2_collection_gives_no_meaning() {
+    let mut doc = Document::new_empty();
+    let mut info = Dict::new();
+    info.set(b"Registry".to_vec(), Object::String(pdfcraft_cos::PdfString::literal("Adobe")));
+    info.set(b"Ordering".to_vec(), Object::String(pdfcraft_cos::PdfString::literal("Identity")));
+    let mut desc = Dict::new();
+    desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+    desc.set(b"CIDSystemInfo".to_vec(), Object::Dict(info));
+    let f = font(
+        &mut doc,
+        vec![
+            ("Subtype", Object::name("Type0")),
+            ("Encoding", Object::name("GB-EUC-H")),
+            ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
+        ],
+    );
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!(m.decode(&[0xC4, 0xE3]), "", "the Identity collection has no UCS2 table to map the CID");
+}
+
+/// An embedded CMap is read as before: the named-encoding path is only for a font that names its
+/// encoding, so an embedded one keeps its own codes and takes its meaning from `/ToUnicode`.
+#[test]
+fn an_embedded_cmap_still_keeps_its_own_codes_and_to_unicode() {
+    let mut doc = Document::new_empty();
+    let cmap = b"/CIDInit /ProcSet findresource begin 1 begincodespacerange <0000> <FFFF> endcodespacerange \
+            1 begincidchar <C4E3> 1 endcidchar end";
+    let enc = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), cmap.to_vec()))));
+    let tu_cmap = b"/CIDInit /ProcSet findresource begin 1 begincodespacerange <0000> <FFFF> endcodespacerange \
+            1 beginbfchar <C4E3> <0041> endbfchar end";
+    let tu = Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), tu_cmap.to_vec()))));
+    let mut desc = Dict::new();
+    desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+    let f = font(
+        &mut doc,
+        vec![("Subtype", Object::name("Type0")), ("Encoding", enc), ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])), ("ToUnicode", tu)],
+    );
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!(m.decode(&[0xC4, 0xE3]), "A", "the embedded CMap's own `/ToUnicode`");
+    assert_eq!(m.cid(0xC4E3), 1, "the embedded CMap's own code to CID");
+}

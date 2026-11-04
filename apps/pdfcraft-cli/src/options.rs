@@ -101,6 +101,7 @@ pub(crate) const RENDER_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--dpi", takes_value: true },
     OptionSpec { name: "--out", takes_value: true },
     OptionSpec { name: "--password", takes_value: true },
+    OptionSpec { name: "--for-screen", takes_value: false },
 ];
 
 pub(crate) const CHECK_ONE_OPTIONS: &[OptionSpec] =

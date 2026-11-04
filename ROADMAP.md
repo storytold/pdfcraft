@@ -10,6 +10,7 @@
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 review follow-up: preserve image crop/tag/stream ownership, resize in page orientation, harden clipboard and text formatting, and reload installed fonts; estimates unchanged)
 
+> **Last reviewed:** 2026-11-04 | **Last updated:** 2026-11-04 | **Change:** minor (M14 Chinese: Simplified Chinese UI ships LXGW WenKai Lite from the pinned craft-fonts input on native builds, so Chinese font delivery is complete there; the web build keeps no Hans face by design. A CID font of an Adobe CJK collection is never the Latin standard 14 whatever its `/BaseFont` name reads, so a face named like one reaches the CJK fallback chain and draws (#3684). A composite font that names its encoding (`/GB-EUC-H`, `/GBpc-EUC-H`, `/ETen-B5-H`, ...) reads the predefined table, so a Chinese PDF without `/ToUnicode` has text to find, copy and redact (#651); estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -753,7 +754,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 ## Revision history
 
-**2026-10-25 · minor:** M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build has no Hans face. Estimates unchanged.
+**2026-10-25 · minor:** M14 localization current state: Arabic catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite, so Chinese font delivery is complete on native builds; the web build has no Hans face by design. Estimates unchanged.
 
 **2026-10-15 · minor:** M14/#2383 candidate: GPU device requests clamp unsupported limits while retaining the adapter texture extent. Synthetic V3D/downlevel regressions and Windows GPU-required tests pass; Raspberry Pi hardware remains unverified. Estimates unchanged.
 

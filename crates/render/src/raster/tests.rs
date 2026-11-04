@@ -8906,12 +8906,23 @@ fn non_embedded_chinese_and_korean_cid_fonts_draw_with_an_installed_face() {
         // without ToUnicode. These bytes encode 中文; they are not Unicode code points.
         ("SimSun", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
         ("SimHei", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        // A name that reads like a Latin standard font: `select_standard_font` matches
+        // `sans` as a substring, and used to take the CID font for a Latin font, so it never
+        // reached the CJK fallback chain and drew nothing (#3684).
+        ("NotoSansCJKsc", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
         ("KaiTi", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
         ("FangSong", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
         ("ABCDEF+FZSSK--GBK1-0", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
         ("ABCDEF+FZHTK--GBK1-0", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
         ("ABCDEF+FZKTK--GBK1-0", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
         ("ABCDEF+FZFSK--GBK1-0", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
+        // The same hijack in the other two CJK collections: a Traditional Chinese face and a
+        // Korean one, both named like a Latin standard font.
+        ("NotoSansCJKtc", CidFamily::AdobeCNS1, "CNS1", "UniCNS-UCS2-H", "7E419AD45B57", "CIDFontType2"),
+        ("NotoSansCJKkr", CidFamily::AdobeKorea1, "Korea1", "UniKS-UCS2-H", "D55CAE00", "CIDFontType2"),
+        // `serif` is matched as a substring too, and a serif CJK face used to be taken for a
+        // Latin standard font the same way.
+        ("SourceHanSerifSC", CidFamily::AdobeGB1, "GB1", "GBK-EUC-H", "D6D0CEC4", "CIDFontType2"),
     ];
     for (base_font, family, ordering, encoding, code, subtype) in cases {
         let query = FontQuery::Fallback(FallbackFontQuery {

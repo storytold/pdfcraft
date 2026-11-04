@@ -79,11 +79,21 @@ impl Type0Font {
             .filter(|cc| cc.family != CidFamily::AdobeIdentity)
             .or_else(|| read_cid_system_info(&descendant_font));
 
+        // PdfCraft patch: a CID font of an Adobe CJK collection (Japan1, GB1, CNS1, Korea1) is
+        // never the Latin standard 14, whatever its /BaseFont name reads. `select_standard_font`
+        // matches `helvetica`, `arial`/`sans`, `courier`, `mono`, `times` and `serif` as
+        // substrings of the name, so a CJK font named e.g. `Noto Sans CJK SC` was taken for a
+        // Latin standard font and never reached the CJK fallback chain at all. Only the four
+        // Adobe CJK collections have a UCS2 CMap, which is what makes them CJK here.
+        let adobe_cjk_collection = character_collection
+            .as_ref()
+            .is_some_and(|cc| cc.family.ucs2_cmap().is_some());
+
         let (font_type, fallback, _is_standard_fallback) = match FontType::new(&font_descriptor) {
             Some(ft) => (ft, false, false),
             None => {
                 let (query, is_standard) =
-                    if let Some((standard, _)) = select_standard_font(dict, &font_descriptor) {
+                    if !adobe_cjk_collection && let Some((standard, _)) = select_standard_font(dict, &font_descriptor) {
                         (FontQuery::Standard(standard), true)
                     } else {
                         // PdfCraft patch: the style comes from the descendant's descriptor.

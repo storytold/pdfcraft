@@ -14,17 +14,27 @@ use std::path::{Path, PathBuf};
 
 pub use pdfcraft_fonts::helvetica_width;
 
+mod chinese;
+pub mod cjk_text;
+pub mod orient;
+
+use chinese::Chinese;
+
 /// The model files, as named in ATTRIBUTION.toml.
 pub const DETECTION_MODEL: &str = "text-detection.onnx";
 pub const RECOGNITION_MODEL: &str = "text-recognition.onnx";
+/// The Chinese recognition model and the dictionary that names its output classes.
+pub const CHINESE_RECOGNITION_MODEL: &str = "PP-OCRv6_rec_small.onnx";
+pub const CHINESE_DICT: &str = "ppocrv6_dict.txt";
 
 /// The recognition model's alphabet, as it was trained (ocrs-models' `DEFAULT_ALPHABET`): its
 /// output classes follow this order. The ocrs crate's own copy has an `E` where the training had
 /// `€`, which made a scanned "€250" read as "E250".
 pub const ALPHABET: &str = " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/// The languages the models read (ISO 639-1); all use the Latin alphabet without accents.
-pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
+/// The languages the models read (ISO 639-1). The Latin models read the Latin alphabet without
+/// accents; the Chinese models read Chinese.
+pub const LANGUAGES: &[(&str, &str)] = &[("en", "English"), ("zh", "Chinese")];
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
@@ -36,15 +46,34 @@ pub enum OcrError {
     Load(String, String),
     #[error("text recognition failed: {0}")]
     Recognize(String),
+    #[error("the Chinese text recognition models are not installed (reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them)")]
+    NoChineseModels,
     #[error("the image is empty")]
     EmptyImage,
 }
 
-/// Where the two model files are.
+/// Where the model files are.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Models {
     pub detection: PathBuf,
     pub recognition: PathBuf,
+    /// The Chinese model files, when the same folder holds them.
+    pub chinese: Option<ChineseModels>,
+}
+
+/// Where the Chinese model files are.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChineseModels {
+    pub recognition: PathBuf,
+    pub dict: PathBuf,
+}
+
+impl ChineseModels {
+    /// A complete Chinese model pair in `dir`.
+    pub fn in_dir(dir: &Path) -> Option<ChineseModels> {
+        let m = ChineseModels { recognition: dir.join(CHINESE_RECOGNITION_MODEL), dict: dir.join(CHINESE_DICT) };
+        (m.recognition.is_file() && m.dict.is_file()).then_some(m)
+    }
 }
 
 impl Models {
@@ -52,7 +81,7 @@ impl Models {
     /// An incomplete update never mixes formats or hides an intact legacy pair.
     pub fn in_dir(dir: &Path) -> Option<Models> {
         [(DETECTION_MODEL, RECOGNITION_MODEL), ("text-detection.rten", "text-recognition.rten")].into_iter().find_map(|(detection, recognition)| {
-            let m = Models { detection: dir.join(detection), recognition: dir.join(recognition) };
+            let m = Models { detection: dir.join(detection), recognition: dir.join(recognition), chinese: ChineseModels::in_dir(dir) };
             (m.detection.is_file() && m.recognition.is_file()).then_some(m)
         })
     }
@@ -109,6 +138,8 @@ impl Line {
 /// A loaded recogniser. Loading takes a moment; keep one and reuse it.
 pub struct Ocr {
     engine: ocrs::OcrEngine,
+    /// The Chinese recogniser, when the Chinese models are installed.
+    chinese: Option<Chinese>,
 }
 
 impl Ocr {
@@ -121,12 +152,49 @@ impl Ocr {
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
-        Ok(Ocr { engine })
+        let chinese = match &models.chinese {
+            Some(m) => Some(Chinese::load(&m.recognition, &m.dict)?),
+            None => None,
+        };
+        Ok(Ocr { engine, chinese })
     }
 
     /// Load the models found by [`Models::find`].
     pub fn find() -> Result<Ocr, OcrError> {
         Self::load(&Models::find().ok_or(OcrError::NoModels)?)
+    }
+
+    /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels, in the
+    /// language the document is written in.
+    ///
+    /// The Chinese models are a model pair of their own: without them a Chinese page is an
+    /// error rather than a page of `?`.
+    pub fn recognize_in(&self, pixels: &[u8], width: u32, height: u32, language: &str) -> Result<Vec<Line>, OcrError> {
+        if language == "zh" { self.recognize_chinese(pixels, width, height) } else { self.recognize(pixels, width, height) }
+    }
+
+    /// Recognise Chinese text: the detector finds where the text is, and the Chinese model
+    /// reads the lines the words form.
+    fn recognize_chinese(&self, pixels: &[u8], width: u32, height: u32) -> Result<Vec<Line>, OcrError> {
+        let Some(chinese) = self.chinese.as_ref() else { return Err(OcrError::NoChineseModels) };
+        if width == 0 || height == 0 || pixels.is_empty() {
+            return Err(OcrError::EmptyImage);
+        }
+        let rgb = rgb_pixels(pixels, width, height);
+        let lines = chinese::detect_lines(&self.engine, &rgb, width, height)?;
+        chinese.read(&rgb, width as usize, height as usize, &lines)
+    }
+
+    /// The quarter turn (clockwise) at which the Chinese model reads `pixels` most confidently.
+    /// [`chinese::Chinese::best_turn`] for how it decides; `None` when there is no readable text
+    /// or no Chinese models.
+    pub fn best_chinese_turn(&self, pixels: &[u8], width: u32, height: u32) -> Result<Option<u8>, OcrError> {
+        let Some(chinese) = self.chinese.as_ref() else { return Err(OcrError::NoChineseModels) };
+        if width == 0 || height == 0 || pixels.is_empty() {
+            return Err(OcrError::EmptyImage);
+        }
+        let rgb = rgb_pixels(pixels, width, height);
+        chinese.best_turn(&self.engine, &rgb, width, height)
     }
 
     /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
@@ -135,11 +203,7 @@ impl Ocr {
             return Err(OcrError::EmptyImage);
         }
         // ocrs wants 1 or 3 channels.
-        let rgb: std::borrow::Cow<[u8]> = if pixels.len() == (width * height * 4) as usize {
-            pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
-        } else {
-            pixels.into()
-        };
+        let rgb = rgb_pixels(pixels, width, height);
         let err = |e: &dyn std::fmt::Display| OcrError::Recognize(e.to_string());
         let source = ocrs::ImageSource::from_bytes(&rgb, (width, height)).map_err(|e| err(&e))?;
         let input = self.engine.prepare_input(source).map_err(|e| err(&e))?;
@@ -162,6 +226,15 @@ impl Ocr {
             })
             .filter(|l| !l.words.is_empty())
             .collect())
+    }
+}
+
+/// The page as three bytes per pixel: the models read colour, and the images come in as RGBA.
+fn rgb_pixels(pixels: &[u8], width: u32, height: u32) -> std::borrow::Cow<'_, [u8]> {
+    if pixels.len() == (width * height * 4) as usize {
+        pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
+    } else {
+        pixels.into()
     }
 }
 
@@ -331,7 +404,8 @@ mod tests {
         for file in ["text-detection.onnx", "text-recognition.onnx"] {
             std::fs::write(dir.path().join(file), b"model").unwrap();
         }
-        let expected = Some(Models { detection: dir.path().join("text-detection.onnx"), recognition: dir.path().join("text-recognition.onnx") });
+        let expected =
+            Some(Models { detection: dir.path().join("text-detection.onnx"), recognition: dir.path().join("text-recognition.onnx"), chinese: None });
         assert_eq!(Models::in_dir(dir.path()), expected, "a complete ONNX pair is sufficient");
         for file in ["text-detection.rten", "text-recognition.rten"] {
             std::fs::write(dir.path().join(file), b"model").unwrap();
@@ -349,7 +423,11 @@ mod tests {
             }
             assert_eq!(
                 Models::in_dir(dir.path()),
-                Some(Models { detection: dir.path().join("text-detection.rten"), recognition: dir.path().join("text-recognition.rten") }),
+                Some(Models {
+                    detection: dir.path().join("text-detection.rten"),
+                    recognition: dir.path().join("text-recognition.rten"),
+                    chinese: None
+                }),
                 "{current} alone must not hide a complete legacy pair"
             );
         }
@@ -377,7 +455,7 @@ mod tests {
         std::fs::write(dir.path().join("text-recognition.rten"), b"model").unwrap();
         assert_eq!(
             Models::in_dir(dir.path()),
-            Some(Models { detection: dir.path().join("text-detection.rten"), recognition: dir.path().join("text-recognition.rten") })
+            Some(Models { detection: dir.path().join("text-detection.rten"), recognition: dir.path().join("text-recognition.rten"), chinese: None })
         );
     }
 

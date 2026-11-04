@@ -207,6 +207,16 @@ impl CjkPreference {
             _ => Self::Default,
         }
     }
+
+    /// The ISO 15924 script tag whose faces lead the CJK fallback: the language's own script,
+    /// Japanese for every other language.
+    pub fn script(self) -> &'static str {
+        match self {
+            Self::SimplifiedChinese => "Hans",
+            Self::TraditionalChinese => "Hant",
+            Self::Default => "Jpan",
+        }
+    }
 }
 
 /// Install the interface fonts with the CJK fallback order for the UI language (Chinese
@@ -270,7 +280,7 @@ fn installed_fallback_need(cjk: CjkPreference, has_embedded_hans: bool) -> crate
 /// `PDFCRAFT_SYSTEM_FONTS=0` leaves them out.
 pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
     #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
-    let mut fonts = font_definitions_for(cjk == CjkPreference::SimplifiedChinese);
+    let mut fonts = font_definitions_for(cjk);
     #[cfg(not(target_arch = "wasm32"))]
     {
         use crate::system_fonts::{Need, fallback};
@@ -310,15 +320,15 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
 /// last fallback in every family. Without craft-fonts there is no Japanese, Chinese, Arabic,
 /// Telugu, Hebrew or Thai face here.
 pub fn font_definitions() -> FontDefinitions {
-    font_definitions_for(false)
+    font_definitions_for(CjkPreference::Default)
 }
 
 /// [`font_definitions`] with the CJK fallback order for the UI language. Simplified Chinese
 /// must come first in Chinese mode: otherwise shared characters render in the Japanese face
 /// while Simplified-only characters (e.g. U+6B22 欢) fall through to the Chinese face, and
 /// the mixed vertical metrics sink them below the line.
-pub fn font_definitions_for(prefer_hans: bool) -> FontDefinitions {
-    font_definitions_for_platform(prefer_hans, current_font_policy_platform())
+pub fn font_definitions_for(cjk: CjkPreference) -> FontDefinitions {
+    font_definitions_for_platform(cjk, current_font_policy_platform())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -350,7 +360,7 @@ pub(crate) fn on_interface_baseline(mut data: FontData) -> FontData {
     data
 }
 
-fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform) -> FontDefinitions {
+fn font_definitions_for_platform(cjk: CjkPreference, platform: FontPolicyPlatform) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         let data = FontData::from_static(bytes);
@@ -372,7 +382,7 @@ fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform
     // absent from JetBrains Mono), before egui's defaults or optional system/CJK fallbacks.
     fonts.families.entry(FontFamily::Monospace).or_default().insert(1, "Inter".to_owned());
     // The same static bytes pdfcraft-fonts uses for Japanese/Chinese text in PDFs: one copy, not two.
-    for face in pdfcraft_fonts::ui_cjk_fonts(prefer_hans) {
+    for face in pdfcraft_fonts::ui_cjk_fonts(cjk.script()) {
         let name = face.name();
         // Japanese and Chinese faces have distinct family names, so no collision here.
         if !fonts.font_data.contains_key(&name) {
@@ -380,6 +390,20 @@ fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform
         }
         for family in [FontFamily::Proportional, FontFamily::Monospace] {
             fonts.families.entry(family).or_default().push(name.clone());
+        }
+    }
+    // The symbol faces (a separator like U+25B8, which a translation writes and no text face
+    // has) after the text faces, so a text face keeps a character it has.
+    for face in pdfcraft_fonts::ui_symbol_fonts() {
+        let name = face.name();
+        if !fonts.font_data.contains_key(&name) {
+            add(&mut fonts, &name, face.bytes);
+        }
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            let stack = fonts.families.entry(family).or_default();
+            if !stack.contains(&name) {
+                stack.push(name.clone());
+            }
         }
     }
     // Arabic-script faces (file names, document titles), Telugu faces (the Telugu interface,

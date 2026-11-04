@@ -25,6 +25,40 @@ enum Codes {
     Ranges(Vec<(usize, Vec<u8>, Vec<u8>)>),
 }
 
+/// The predefined CMaps a composite font names instead of embedding a CMap: the named table
+/// maps the code to a CID of the font's character collection, and that collection's UCS2
+/// table maps the CID to Unicode (#651).
+#[derive(Clone, Debug)]
+struct PredefinedCmaps {
+    /// The encoding's name, for equality: the parsed tables have no `PartialEq`.
+    name: Vec<u8>,
+    /// The named encoding: code → CID.
+    encoding: hayro_cmap::CMap,
+    /// The character collection's UCS2 table: CID → Unicode.
+    unicode: hayro_cmap::CMap,
+}
+
+impl PartialEq for PredefinedCmaps {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl PredefinedCmaps {
+    /// The text the code shows: the code names a CID of the collection, and the collection's
+    /// UCS2 table gives that CID's character.
+    fn text(&self, code: u32) -> Option<Cow<'_, str>> {
+        for byte_len in 1..=4u8 {
+            let Some(cid) = self.encoding.lookup_cid_code(code, byte_len) else { continue };
+            return match self.unicode.lookup_bf_string(cid)? {
+                hayro_cmap::BfString::Char(c) => Some(Cow::Owned(c.to_string())),
+                hayro_cmap::BfString::String(s) => Some(Cow::Owned(s)),
+            };
+        }
+        None
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Metrics {
     codes: Codes,
@@ -50,6 +84,8 @@ pub struct Metrics {
     pub composite: bool,
     /// Code → Unicode text.
     unicode: Unicode,
+    /// A composite font that names its encoding rather than embedding a CMap.
+    predefined: Option<PredefinedCmaps>,
     /// `/BaseFont` (or Type 3 descriptor's `/FontName`), and whether it is a subset (`ABCDEF+Name`: other glyphs are missing).
     pub base_font: String,
     pub subset: bool,
@@ -602,6 +638,20 @@ fn parse_cmap(data: &[u8]) -> (Vec<(usize, Vec<u8>, Vec<u8>)>, Vec<(u32, u32, u3
     (spaces, cids)
 }
 
+/// The predefined tables of a composite font that names its encoding: the named encoding
+/// (code → CID) and the character collection's UCS2 table (CID → Unicode).
+fn predefined_cmaps(doc: &Document, desc: &Dict, name: &[u8]) -> Option<PredefinedCmaps> {
+    let info = desc.get(b"CIDSystemInfo").map(|s| doc.resolve(s)).and_then(|s| s.as_dict().cloned()).unwrap_or_default();
+    let registry = info.get(b"Registry").map(|r| doc.resolve(r)).and_then(|r| r.as_string().map(|s| s.bytes.clone()));
+    let ordering = info.get(b"Ordering").map(|r| doc.resolve(r)).and_then(|r| r.as_string().map(|s| s.bytes.clone()));
+    let (Some(registry), Some(ordering)) = (registry, ordering) else { return None };
+    let family = hayro_cmap::CidFamily::from_registry_ordering(&registry, &ordering);
+    let ucs2 = family.ucs2_cmap()?;
+    let encoding = hayro_cmap::CMap::parse(hayro_cmap::load_embedded(hayro_cmap::CMapName::from_bytes(name))?, hayro_cmap::load_embedded)?;
+    let unicode = hayro_cmap::CMap::parse(hayro_cmap::load_embedded(ucs2)?, hayro_cmap::load_embedded)?;
+    Some(PredefinedCmaps { name: name.to_vec(), encoding, unicode })
+}
+
 impl Metrics {
     /// Metrics for text without a usable font (Helvetica-like).
     pub fn fallback() -> Self {
@@ -620,6 +670,7 @@ impl Metrics {
             descent: -0.25,
             composite: false,
             unicode: Unicode { encoding: (32..127u8).map(|c| (u32::from(c), char::from(c).to_string())).collect(), ..Unicode::default() },
+            predefined: None,
             base_font: "Helvetica".into(),
             subset: false,
             bold: false,
@@ -689,6 +740,12 @@ impl Metrics {
             m.composite = true;
             m.default = 1000.0;
             m.codes = Codes::Two;
+            let desc = font
+                .get(b"DescendantFonts")
+                .map(|d| doc.resolve(d))
+                .and_then(|a| a.as_array().and_then(|a| a.first().cloned()))
+                .and_then(|d| doc.resolve(&d).as_dict().cloned())
+                .unwrap_or_default();
             if let Some(e) = font.get(b"Encoding").map(|e| doc.resolve(e))
                 && let Object::Stream(s) = &*e
                 && let Ok(data) = s.decoded_within(MAX_CMAP_BYTES)
@@ -698,13 +755,14 @@ impl Metrics {
                     m.codes = Codes::Ranges(spaces);
                 }
                 m.cid_map = Spans::new(cids);
+            } else if let Some(name) = font.get(b"Encoding").map(|e| doc.resolve(e)).and_then(|e| e.as_name().map(|n| n.to_vec())) {
+                // A composite font that names its encoding (`/GB-EUC-H`, `/GBpc-EUC-H`,
+                // `/ETen-B5-H`, …) instead of embedding the CMap: the predefined table maps
+                // the code to a CID of the font's character collection, and that collection's
+                // UCS2 table maps the CID to Unicode. Without them a Chinese PDF with no
+                // `/ToUnicode` has no text to find, copy or redact (#651).
+                m.predefined = predefined_cmaps(doc, &desc, &name);
             }
-            let desc = font
-                .get(b"DescendantFonts")
-                .map(|d| doc.resolve(d))
-                .and_then(|a| a.as_array().and_then(|a| a.first().cloned()))
-                .and_then(|d| doc.resolve(&d).as_dict().cloned())
-                .unwrap_or_default();
             if let Some(dw) = desc.get(b"DW").and_then(|d| doc.resolve(d).as_f64()) {
                 m.default = dw;
                 m.explicit_default = true;
@@ -857,7 +915,7 @@ impl Metrics {
     /// The Unicode text of one code, if known.
     #[inline]
     pub fn text_of(&self, code: u32) -> Option<Cow<'_, str>> {
-        self.unicode.text(code)
+        self.unicode.text(code).or_else(|| self.predefined.as_ref().and_then(|p| p.text(code)))
     }
 
     /// Whether the font has a glyph for `code` (subset fonts lack the glyphs they don't use).

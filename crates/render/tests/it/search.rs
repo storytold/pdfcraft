@@ -1,6 +1,19 @@
 use pdfcraft_render::{PageText, TextGlyph, text::fold_case};
 use std::ops::Range;
 
+/// Whether a character is a Han ideograph. Chinese has no spaces between words, so an
+/// ideograph cannot end a word and a search within Chinese text matches as a substring.
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x3400..=0x4DBF      // CJK Unified Ideographs Extension A
+        | 0x4E00..=0x9FFF    // CJK Unified Ideographs
+        | 0xF900..=0xFAFF    // CJK Compatibility Ideographs
+        | 0x20000..=0x2A6DF  // Extension B
+        | 0x2A700..=0x2EBEF  // Extensions C, D, E and F
+        | 0x2F800..=0x2FA1F  // Compatibility Ideographs Supplement
+    )
+}
+
 fn page(parts: &[&str]) -> PageText {
     PageText {
         glyphs: parts.iter().map(|text| TextGlyph { text: (*text).into(), rect: [0.0; 4], quad: [[0.0; 2]; 4], direction: [1.0, 0.0] }).collect(),
@@ -28,7 +41,10 @@ fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: 
             }
         }
     }
-    let word = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|&(c, _)| c.is_alphanumeric());
+    // A Han ideograph is not a word boundary: Chinese is written without spaces, so a word
+    // inside Chinese text is found as a substring rather than being rejected for touching the
+    // ideograph next to it (#651). The oracle mirrors the rule of `text::search`.
+    let word = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|&(c, _)| c.is_alphanumeric() && !is_cjk(c));
     let mut hits = Vec::new();
     let mut start = 0;
     while start + needle.len() <= chars.len() {

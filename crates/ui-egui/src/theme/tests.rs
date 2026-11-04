@@ -135,7 +135,7 @@ fn hinting_test_fonts(platform: FontPolicyPlatform) -> Fonts {
             color_transfer_function: egui::epaint::FontColorTransferFunction::Gamma(0.75),
             ..TextOptions::default()
         },
-        font_definitions_for_platform(false, platform),
+        font_definitions_for_platform(CjkPreference::Default, platform),
     )
 }
 
@@ -181,8 +181,8 @@ fn traditional_chinese_keeps_an_installed_face_when_hans_is_embedded() {
 
 #[test]
 fn windows_hinting_changes_only_the_jetbrains_symmetric_rendering_field() {
-    let baseline = font_definitions_for_platform(false, FontPolicyPlatform::Other);
-    let windows = font_definitions_for_platform(false, FontPolicyPlatform::Windows);
+    let baseline = font_definitions_for_platform(CjkPreference::Default, FontPolicyPlatform::Other);
+    let windows = font_definitions_for_platform(CjkPreference::Default, FontPolicyPlatform::Windows);
 
     assert_eq!(baseline.families, windows.families);
     assert_eq!(baseline.font_data.keys().collect::<Vec<_>>(), windows.font_data.keys().collect::<Vec<_>>());
@@ -210,8 +210,8 @@ fn windows_hinting_changes_only_the_jetbrains_symmetric_rendering_field() {
         }
     }
     assert_eq!(
-        font_definitions_for(false).font_data["JetBrainsMono"].tweak,
-        font_definitions_for_platform(false, current_font_policy_platform()).font_data["JetBrainsMono"].tweak
+        font_definitions_for(CjkPreference::Default).font_data["JetBrainsMono"].tweak,
+        font_definitions_for_platform(CjkPreference::Default, current_font_policy_platform()).font_data["JetBrainsMono"].tweak
     );
 }
 

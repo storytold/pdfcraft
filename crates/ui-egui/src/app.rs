@@ -196,6 +196,10 @@ impl PdfCraftApp {
             ocr_draft: ocr_ui::OcrDraft::default(),
             ocr_run: None,
             ocr_batch: None,
+            #[cfg(target_arch = "wasm32")]
+            pending_display: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(target_arch = "wasm32")]
+            display_checked: Default::default(),
             run_inline: false,
             custom_actions: Vec::new(),
             wizard: Default::default(),
@@ -608,6 +612,8 @@ impl eframe::App for PdfCraftApp {
         self.poll_export();
         self.auto_ocr_scanned_page();
         self.poll_ocr();
+        #[cfg(target_arch = "wasm32")]
+        self.poll_display_copy();
         self.poll_optimize();
         self.poll_action();
         self.process_file_requests();

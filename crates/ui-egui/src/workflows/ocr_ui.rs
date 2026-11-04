@@ -34,7 +34,9 @@ pub struct OcrDraft {
 
 impl Default for OcrDraft {
     fn default() -> Self {
-        OcrDraft { pages: OcrPages::All, from: 1, to: 1, language: "en".into(), dpi: 300, text_pages: false }
+        // Chinese is the default: the models read Chinese and Latin, and a page that is mostly
+        // Chinese is read wrongly by the Latin ones.
+        OcrDraft { pages: OcrPages::All, from: 1, to: 1, language: "zh".into(), dpi: 300, text_pages: false }
     }
 }
 
@@ -52,6 +54,10 @@ pub struct OcrProgress {
     pub total: usize,
     pub result: Option<Result<Vec<OcrPage>, String>>,
     pub cancel: bool,
+    /// The web build holds no OCR models: the server that serves this site recognizes the
+    /// document and answers with the searchable PDF, which replaces the document.
+    #[cfg(target_arch = "wasm32")]
+    pub server_pdf: Option<Result<Vec<u8>, String>>,
 }
 
 /// Recognize text in multiple files: files done, total, and the summary once finished.
@@ -92,7 +98,8 @@ pub struct AutoOcr {
 
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
-    let available = pdfcraft_engine::ocr::available();
+    // The web build has no models of its own: the server that serves this site has them.
+    let available = pdfcraft_engine::ocr::available() || cfg!(target_arch = "wasm32");
     let d = &mut app.ocr_draft;
     d.to = d.to.clamp(1, pages);
     d.from = d.from.clamp(1, d.to);
@@ -201,7 +208,7 @@ impl PdfCraftApp {
     /// is one undoable step, "Recognize text", and is not run again for that page after Undo.
     pub(crate) fn auto_ocr_scanned_page(&mut self) {
         let Some(scan) = self.scan_to_read() else { return };
-        if !pdfcraft_engine::ocr::available() {
+        if !pdfcraft_engine::ocr::available() && !cfg!(target_arch = "wasm32") {
             self.views[scan.view].auto_ocr_skipped.insert(scan.page, scan.generation);
             return;
         }
@@ -267,11 +274,16 @@ impl PdfCraftApp {
         } else {
             None
         };
+        // The language names the models that read the page; the web build sends it to the
+        // server, which has no way to know which ones the user picked.
+        #[cfg(target_arch = "wasm32")]
+        let language = settings.language.clone();
         let Some(job) = self.session.ocr_job(id, pages, settings) else { return };
         let progress = Arc::new(Mutex::new(OcrProgress { total: job.pages.len(), ..Default::default() }));
         let p = progress.clone();
         // A failure is written on the worker thread: in the UI's language.
         let lang = crate::i18n::current();
+        #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
         let work = move || {
             crate::i18n::set_current(lang);
             let result = recognize_guarded(|| {
@@ -295,7 +307,24 @@ impl PdfCraftApp {
             std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
         }
         #[cfg(target_arch = "wasm32")]
-        work();
+        {
+            // The browser cannot read a model file, so the server that serves this site
+            // recognizes the document and answers with the searchable PDF.
+            let bytes = self.session.save_bytes(id).ok().or_else(|| self.session.get(id).map(|d| d.bytes.clone()));
+            let p = progress.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = match bytes {
+                    Some(bytes) => match crate::server::upload(bytes.as_ref().clone()).await {
+                        Ok((token, _)) => crate::server::ocr_pdf(&token, &language).await,
+                        Err(e) => Err(e),
+                    },
+                    None => Err("the document could not be read".into()),
+                };
+                if let Ok(mut s) = p.lock() {
+                    s.server_pdf = Some(result);
+                }
+            });
+        }
         self.ocr_run = Some(OcrRun { doc: id, progress, automatic: auto });
         self.poll_ocr();
     }
@@ -415,6 +444,39 @@ impl PdfCraftApp {
 
     /// Show progress; apply the result once the worker is done.
     pub(crate) fn poll_ocr(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            // The web build recognizes on the server, and the answer is the searchable PDF:
+            // it replaces the document, so the pages carry their text from here on.
+            let taken = self.ocr_run.as_ref().and_then(|run| run.progress.lock().ok().and_then(|mut s| s.server_pdf.take()));
+            if let Some(result) = taken {
+                let doc = self.ocr_run.as_ref().map(|r| r.doc);
+                self.ocr_run = None;
+                match result {
+                    Ok(bytes) => {
+                        // The answer replaces the document, so its pages carry their text from
+                        // here on: the tab stays the one the reader is looking at.
+                        let Some(doc) = doc else {
+                            self.notify(format!("The document could not be opened: {}", "no document to replace"));
+                            return;
+                        };
+                        match self.session.reload(doc, std::sync::Arc::new(bytes)) {
+                            Ok(()) => {
+                                if let Some(info) = self.session.get(doc).map(|d| d.info.clone())
+                                    && let Some(view) = self.views.iter_mut().find(|v| v.id == doc)
+                                {
+                                    view.document_changed(&info);
+                                }
+                                self.notify_tr("Text recognized on the server");
+                            }
+                            Err(e) => self.notify(format!("The document could not be opened: {e}")),
+                        }
+                    }
+                    Err(e) => self.notify(format!("Text recognition failed: {e}")),
+                }
+                return;
+            }
+        }
         if let Some(b) = self.ocr_batch.clone() {
             let msg = b.lock().map(|mut s| s.message.take().ok_or((s.done, s.total))).map_err(|e| e.to_string());
             match msg {
