@@ -4288,24 +4288,76 @@ fn an_allowance_charges_each_copy_and_refuses_what_does_not_fit() {
     assert!(!a.entry(), "text longer than its stored bytes that doesn't fit spends what is left");
 }
 
-/// Every field may inherit the form's `/DA`: a form whose `/DA` doesn't fit in the text allowance
-/// has no field read whole.
+/// A `/DA` past the text allowance, the form's or a parent's, leaves out the fields that would
+/// draw with it; a field under it with a `/DA` of its own is read. A `/DA` that isn't text leaves
+/// the inherited one in place.
 #[test]
-fn a_form_whose_da_does_not_fit_reads_no_fields() {
-    let read = |da: Vec<u8>| {
-        let mut doc = Document::new_empty();
+fn a_da_that_does_not_fit_leaves_out_only_the_fields_that_draw_with_it() {
+    let read = |form_da: bool, da: Vec<u8>| {
+        let mut doc = document(&[
+            "<< /Type /Catalog /AcroForm << /Fields [2 0 R 3 0 R 4 0 R] >> >>".into(),
+            "<< /FT /Tx /T (a) >>".into(),
+            "<< /FT /Tx /T (b) /DA (/Helv 9 Tf 0 g) >>".into(),
+            "<< /FT /Tx /T (p) /Kids [5 0 R 6 0 R 7 0 R] >>".into(),
+            "<< /T (c) /Parent 4 0 R >>".into(),
+            "<< /T (d) /Parent 4 0 R /DA (/Helv 7 Tf 0 g) >>".into(),
+            "<< /T (e) /Parent 4 0 R /DA 5 >>".into(),
+        ]);
         let da = doc.add(Object::String(pdfcraft_cos::PdfString::literal(da)));
-        let field = doc.add(Object::Dict(
-            [(b"FT".to_vec(), Object::name("Tx")), (b"T".to_vec(), Object::String(pdfcraft_cos::PdfString::literal("a")))].into_iter().collect(),
-        ));
-        let form =
-            Object::Dict([(b"Fields".to_vec(), Object::Array(vec![Object::Ref(field)])), (b"DA".to_vec(), Object::Ref(da))].into_iter().collect());
-        let catalog = doc.add(Object::Dict([(b"AcroForm".to_vec(), form)].into_iter().collect()));
-        doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
-        fields(&doc).len()
+        if form_da {
+            let mut form = doc.get(ObjRef::new(1, 0)).as_dict().and_then(|c| c.get(b"AcroForm")).and_then(Object::as_dict).cloned().unwrap();
+            form.set(b"DA".to_vec(), Object::Ref(da));
+            doc.update_dict(ObjRef::new(1, 0), |c| c.set(b"AcroForm".to_vec(), Object::Dict(form))).unwrap();
+        } else {
+            doc.update_dict(ObjRef::new(4, 0), |p| p.set(b"DA".to_vec(), Object::Ref(da))).unwrap();
+        }
+        fields(&doc).into_iter().map(|f| (f.name, f.da)).collect::<Vec<_>>()
     };
-    assert_eq!(read(b"/Helv 0 Tf 0 g".to_vec()), 1);
-    assert_eq!(read(vec![b' '; crate::read::MAX_TEXT_BYTES]), 0);
+    let own = |name: &str, da: &str| (name.to_string(), da.to_string());
+    let (fits, default) = ("/Helv 5 Tf 0 g", "/Helv 0 Tf 0 g");
+    let past = || vec![b' '; crate::read::MAX_TEXT_BYTES];
+    let (b, d) = (own("b", "/Helv 9 Tf 0 g"), own("p.d", "/Helv 7 Tf 0 g"));
+    assert_eq!(read(true, fits.into()), [own("a", fits), b.clone(), own("p.c", fits), d.clone(), own("p.e", fits)]);
+    assert_eq!(read(true, past()), [b.clone(), d.clone()]);
+    assert_eq!(read(false, fits.into()), [own("a", default), b.clone(), own("p.c", fits), d.clone(), own("p.e", fits)]);
+    assert_eq!(read(false, past()), [own("a", default), b, d]);
+}
+
+/// A field left out of the reading doesn't keep the widgets it lists: a later field listing the
+/// same widget has it.
+#[test]
+fn a_field_left_out_leaves_its_widgets_to_a_later_field() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /FT /Tx /T (first) /Kids [6 0 R] >>".into(),
+        "<< /FT /Tx /T (second) /Kids [6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /Parent 4 0 R >>".into(),
+    ]);
+    let widgets =
+        |doc: &Document| fields(doc).into_iter().map(|f| (f.name, f.widgets.iter().map(|w| w.obj.num).collect::<Vec<_>>())).collect::<Vec<_>>();
+    assert_eq!(widgets(&doc), [("first".to_string(), vec![6]), ("second".to_string(), vec![])]);
+    let tooltip = Object::String(pdfcraft_cos::PdfString::literal(vec![b' '; crate::read::MAX_TEXT_BYTES]));
+    doc.update_dict(ObjRef::new(4, 0), |f| f.set(b"TU".to_vec(), tooltip)).unwrap();
+    assert_eq!(widgets(&doc), [("second".to_string(), vec![6])]);
+}
+
+/// A widget's `/AS` is copied within the text allowance like the rest of the field's text: one
+/// that doesn't fit leaves the field out.
+#[test]
+fn a_widgets_state_is_charged_to_the_text_allowance() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [2 0 R 3 0 R] >> >>".into(),
+        "<< /FT /Btn /T (check) /Rect [0 0 10 10] /AS /Yes /AP << /N << /Yes 4 0 R /Off 4 0 R >> >> >>".into(),
+        "<< /FT /Tx /T (text) /Rect [0 0 10 10] >>".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ]);
+    let names = |doc: &Document| fields(doc).into_iter().map(|f| f.name).collect::<Vec<_>>();
+    assert_eq!(names(&doc), ["check", "text"]);
+    assert_eq!(fields(&doc)[0].widgets[0].state.as_deref(), Some("Yes"));
+    doc.update_dict(ObjRef::new(2, 0), |f| f.set(b"AS".to_vec(), Object::Name(vec![b'x'; crate::read::MAX_TEXT_BYTES]))).unwrap();
+    assert_eq!(names(&doc), ["text"]);
 }
 
 /// What a reading of the form takes from push buttons' actions (named, submit, go-to, reset and

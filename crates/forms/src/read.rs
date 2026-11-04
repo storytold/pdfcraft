@@ -522,8 +522,25 @@ struct Inherited {
     v: Option<Arc<Object>>,
     dv: Option<Arc<Object>>,
     da: Option<Rc<str>>,
+    /// The `/DA` that applies didn't fit the text allowance: a field that would draw with it is
+    /// left out, and one that sets its own is read.
+    da_refused: bool,
     q: Option<i64>,
     max_len: Option<usize>,
+}
+
+impl Inherited {
+    /// `o`, a field's or the form's `/DA`, as the one that applies from here down, charged to
+    /// `text`. One that doesn't fit is noted, and leaves out the fields that would draw with it;
+    /// one that isn't text leaves the inherited one in place.
+    fn read_da(&mut self, doc: &Document, o: &Object, text: &mut Allowance) {
+        let refusals = text.refusals();
+        match text.text(doc, o) {
+            Some(da) => (self.da, self.da_refused) = (Some(Rc::from(da)), false),
+            None if text.refusals() != refusals => self.da_refused = true,
+            None => {}
+        }
+    }
 }
 
 /// Every terminal field: the `/Fields` tree in order, then the fields reachable only through the
@@ -590,18 +607,12 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
         text: Allowance::new(MAX_TEXT_BYTES),
         pages: pages.iter().enumerate().map(|(i, p)| (*p, i)).collect(),
     };
-    let base = match &af {
-        Some(af) => Inherited {
-            da: af.get(b"DA").and_then(|o| seen.text.text(doc, o)).map(Rc::from),
-            q: af.get(b"Q").and_then(|o| doc.resolve(o).as_int()),
-            ..Default::default()
-        },
-        None => Inherited::default(),
-    };
-    // Every field may inherit the form's `/DA`: a form whose `/DA` doesn't fit has none read
-    // whole.
-    if seen.text.refusals() > 0 {
-        return (Vec::new(), 0);
+    let mut base = Inherited::default();
+    if let Some(af) = &af {
+        if let Some(o) = af.get(b"DA") {
+            base.read_da(doc, o, &mut seen.text);
+        }
+        base.q = af.get(b"Q").and_then(|o| doc.resolve(o).as_int());
     }
     let mut out = Vec::new();
     if let Some(af) = &af {
@@ -685,7 +696,7 @@ pub(crate) const MAX_TEXT_BYTES: usize = 256 << 20;
 /// the allowances their scripts, values and other text share.
 struct Seen {
     fields: std::collections::HashSet<ObjRef>,
-    /// A widget belongs to the first field that lists it, however often it is listed.
+    /// A widget belongs to the first field read whole that lists it, however often it is listed.
     widgets: std::collections::HashSet<ObjRef>,
     scripts: Allowance,
     values: Allowance,
@@ -732,7 +743,9 @@ fn walk(
         }
     }
     if let Some(ft) = d.name(b"FT") {
-        inh.ft = Some(Rc::from(ft));
+        // Kept only as long as a type this reads (`Btn`, `Ch`, `Sig`, `Tx`): a longer name is
+        // none of them, and isn't copied.
+        inh.ft = Some(Rc::from(if ft.len() <= 3 { ft } else { &[][..] }));
     }
     if let Some(ff) = field_flags(doc, d) {
         inh.ff = Some(ff);
@@ -742,12 +755,13 @@ fn walk(
             *slot = Some(obj.clone());
         }
     }
-    if let Some(da) = d.get(b"DA").and_then(|o| seen.text.text(doc, o)) {
-        inh.da = Some(Rc::from(da));
-    }
-    // A name or `/DA` that doesn't fit leaves the field out, with the fields under it.
+    // A name that doesn't fit leaves the field out, with the fields under it, whose full names
+    // need it; a `/DA` that doesn't fit, only the fields that would draw with it.
     if seen.text.refusals() != refusals {
         return;
+    }
+    if let Some(o) = d.get(b"DA") {
+        inh.read_da(doc, o, &mut seen.text);
     }
     if let Some(q) = d.get(b"Q").and_then(|o| doc.resolve(o).as_int()) {
         inh.q = Some(q);
@@ -768,8 +782,11 @@ fn walk(
         }
         return;
     }
-    // A field of no kind this reads is skipped before it claims widgets or scripts, which a later
-    // field listing them then reads.
+    // A field of no kind this reads, or whose `/DA` didn't fit, is skipped before it claims
+    // widgets or scripts, which a later field listing them then reads.
+    if inh.da_refused {
+        return;
+    }
     let ff = inh.ff.unwrap_or(0);
     let kind = match inh.ft.as_deref() {
         Some(b"Tx") => FieldKind::Text,
@@ -782,7 +799,10 @@ fn walk(
         _ => return,
     };
     let widget_refs: Vec<ObjRef> = if d.contains(b"Rect") { vec![r] } else { kids };
-    let widget_refs: Vec<ObjRef> = widget_refs.into_iter().filter(|w| seen.widgets.insert(*w)).collect();
+    // Each widget once, claimed only once the field is read whole, so a later field listing it
+    // has it when this one is left out.
+    let mut claimed = std::collections::HashSet::new();
+    let widget_refs: Vec<ObjRef> = widget_refs.into_iter().filter(|w| !seen.widgets.contains(w) && claimed.insert(*w)).collect();
     let refusals = seen.text.refusals();
     let actions = actions_of(doc, d, &widget_refs, &mut seen.scripts);
     let button = (inh.ft.as_deref() == Some(b"Btn") && inh.ff.unwrap_or(0) & flags::PUSH_BUTTON != 0)
@@ -803,7 +823,7 @@ fn walk(
                 page: page_of.get(&w).copied(),
                 rect: [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])],
                 on_state: matches!(kind, FieldKind::CheckBox | FieldKind::Radio).then(|| on_state_of(doc, wd, text)).flatten(),
-                state: wd.name(b"AS").map(name_text),
+                state: wd.name(b"AS").and_then(|n| text.copy(n.len(), || name_text(n))),
                 tab: usize::MAX,
                 locked: annot_flags & 128 != 0,
                 hidden: annot_flags & (2 | 32) != 0,
@@ -855,6 +875,7 @@ fn walk(
     if text.refusals() != refusals {
         return;
     }
+    seen.widgets.extend(claimed);
     out.push(Field {
         name: inh.name.to_string(),
         obj: r,
