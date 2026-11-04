@@ -223,7 +223,9 @@ impl Document {
 
     /// The objects `/Encrypt`, given as `enc`, and `/ID` refer to, the ones they refer to, and so
     /// on, up to [`MAX_ENCRYPT_MEMBERS`]. Their strings aren't encrypted (ISO 32000-2 §7.6.2): the
-    /// key is made from them, so they have to read as stored, and stay so.
+    /// key is made from them, so they have to read as stored, and stay so. A number with no object
+    /// behind it, and a stream, which those dictionaries never hold, isn't one: an object added
+    /// under that number later, or a page's content a hostile `/Encrypt` names, is encrypted.
     fn encryption_members(&self, enc: &Object) -> HashSet<u32> {
         let mut pending = Vec::new();
         crate::writer::collect_refs(enc, &mut |r| pending.push(r));
@@ -232,17 +234,24 @@ impl Document {
         }
         let mut members = HashSet::new();
         while let Some(r) = pending.pop() {
-            if members.len() < MAX_ENCRYPT_MEMBERS && members.insert(r.num) {
-                crate::writer::collect_refs(&self.get(r), &mut |x| pending.push(x));
+            if members.len() >= MAX_ENCRYPT_MEMBERS || members.contains(&r.num) {
+                continue;
             }
+            let held = self.get(r);
+            if matches!(&*held, Object::Null | Object::Stream(_)) {
+                continue;
+            }
+            members.insert(r.num);
+            crate::writer::collect_refs(&held, &mut |x| pending.push(x));
         }
         members
     }
 
-    /// Whether object `num` is written as it is held, being one of [`Document::encryption_members`]
-    /// and the save writing the same `/Encrypt`.
+    /// Whether object `num` is written as it is held, being one of [`Document::encryption_members`],
+    /// unedited, and the save writing the same `/Encrypt`. What was edited or added is encrypted
+    /// whatever its number.
     pub(crate) fn stored_as_is(&self, num: u32) -> bool {
-        !self.encryption_changed && self.encrypt_members.contains(&num)
+        !self.encryption_changed && !self.is_edited(num) && self.encrypt_members.contains(&num)
     }
 
     /// Lift the restrictions of a document opened with its user password by entering the

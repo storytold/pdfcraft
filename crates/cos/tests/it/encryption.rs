@@ -560,6 +560,34 @@ fn holds(bytes: &[u8], text: &str) -> bool {
     String::from_utf8_lossy(bytes).contains(text)
 }
 
+/// An object `/Encrypt` names is written as stored only while it is as stored. A file whose
+/// `/Encrypt` names its `/Info` reads that dictionary as stored; once the title is edited, both
+/// saves encrypt it rather than writing the new title in the clear.
+#[test]
+fn an_edited_object_that_encrypt_names_is_encrypted() {
+    let mut doc = Document::open(Arc::new(fixture())).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes128,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [9; 32],
+    })
+    .unwrap();
+    let info = doc.trailer().reference(b"Info").unwrap();
+    let mut dict = doc.get(doc.trailer().reference(b"Encrypt").unwrap()).as_dict().cloned().unwrap();
+    dict.set(b"Junk".to_vec(), Object::Ref(info));
+    doc.trailer_mut().set(b"Encrypt".to_vec(), Object::Dict(dict));
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    let mut doc = Document::open(Arc::new(bytes)).unwrap();
+    let info = doc.trailer().reference(b"Info").unwrap();
+    doc.update_dict(info, |d| d.set(b"Title".to_vec(), PdfString::text("Merger plan"))).unwrap();
+    for (save, saved) in [("incremental", write_incremental(&doc, &SaveOptions::default())), ("full", write_full(&doc, &SaveOptions::default()))] {
+        assert!(!holds(&saved.unwrap(), "Merger plan"), "{save}: the edited title was written in the clear");
+    }
+}
+
 /// A stream can select its crypt filter by reference at every step: the chain, an entry of it, the
 /// parameters, an entry of those, the name (ISO 32000-2 §7.3.10, §7.4.10). Read as absent, the
 /// filter was `/Identity`, so such a stream was saved in the clear and, in a file from elsewhere,
