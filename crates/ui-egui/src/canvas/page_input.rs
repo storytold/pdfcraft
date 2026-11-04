@@ -318,6 +318,11 @@ fn tool_input(
     if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
         crate::zoom_snap::page_input(ui, resp, &xf, ptr, i, free, view);
     }
+    if tool == QuickTool::Loupe
+        && let Some((page, norm_pos)) = crate::loupe_ui::page_input(ui, resp, &xf, i)
+    {
+        frame.out.loupe_target = Some((page, norm_pos));
+    }
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::page_input(resp, &xf, ptr, i, view, can_modify, press);
     }
@@ -764,6 +769,11 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     }
     if tool == QuickTool::Link {
         crate::link_ui::paint(painter, &xf, i, info, doc_links, view, pointer);
+    }
+    if let Some((l_page, l_center, l_zoom, l_vp)) = frame.env.loupe_preview
+        && l_page == i
+    {
+        crate::loupe_ui::paint_canvas_aperture(painter, &xf, l_center, l_zoom, view.zoom, l_vp);
     }
     if preparing {
         crate::prepare::paint_page(tool_cx, form, view);

@@ -1191,6 +1191,7 @@ struct PageEnv<'a> {
     fill_text_color: [f64; 3],
     today: (i64, u32, u32),
     can_paste_image: bool,
+    loupe_preview: Option<(usize, [f32; 2], f32, Vec2)>,
 }
 
 /// What the page-scroll closure produces for the rest of the frame.
@@ -1212,6 +1213,7 @@ struct PageOut {
     primary_down: bool,
     refused: Option<String>,
     stamp_placed: bool,
+    loupe_target: Option<(usize, [f32; 2])>,
 }
 
 /// The page-scroll closure's body: lays out and draws the visible pages, their tools and overlays, and
@@ -1780,6 +1782,7 @@ fn draw_pages(
         primary_down: _,
         refused,
         stamp_placed,
+        loupe_target,
     } = page_out;
     let mut page_action: Option<PageMenuAction> = None;
     let painter = ui.painter();
@@ -2007,6 +2010,7 @@ fn draw_pages(
         primary_down: ptr.primary_down,
         refused,
         stamp_placed,
+        loupe_target,
     };
     (wanted, visible_now)
 }
@@ -2782,7 +2786,8 @@ fn tool_selects_text(tool: QuickTool, preparing: bool) -> bool {
         | QuickTool::Link
         | QuickTool::SignArea { .. }
         | QuickTool::MarqueeZoom
-        | QuickTool::Snapshot => false,
+        | QuickTool::Snapshot
+        | QuickTool::Loupe => false,
     }
 }
 
@@ -3010,6 +3015,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
 
     scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
+    let loupe_preview = app.loupe.as_ref().map(|l| (l.page, l.center, l.zoom, l.viewport_size));
     let env = PageEnv {
         added: &added,
         allowed,
@@ -3068,6 +3074,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         fill_text_color: app.fill_text_color,
         today,
         can_paste_image,
+        loupe_preview,
     };
     let mut page_out = PageOut::default();
     let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.id)), app.show_page_edge_shadows, |ui, viewport| {
@@ -3090,6 +3097,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         primary_down,
         mut refused,
         stamp_placed,
+        loupe_target,
     } = page_out;
     view.single_edges = visible_pages.first().copied().filter(|_| !view.continuous).map(|page| {
         // At the top once the page's top edge shows where going to a page puts it (a gap
@@ -3189,6 +3197,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         form,
         generation,
         avail,
+        loupe_target,
     };
     apply_frame_requests(app, index, ui, requests);
 }
@@ -3211,6 +3220,7 @@ struct FrameRequests {
     form: Arc<Vec<pdfcraft_engine::FormField>>,
     generation: u64,
     avail: Rect,
+    loupe_target: Option<(usize, [f32; 2])>,
 }
 
 /// Opens the dialogs and runs the app commands the frame asked for.
@@ -3233,7 +3243,11 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         form,
         generation,
         avail,
+        loupe_target,
     } = requests;
+    if let Some((page, norm_pos)) = loupe_target {
+        app.set_loupe_target(page, norm_pos);
+    }
     if let Some((page, at)) = app.views[index].comments.attach_at.take() {
         app.attach_file_comment(page, at);
     }
