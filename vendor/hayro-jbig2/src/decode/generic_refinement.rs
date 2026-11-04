@@ -264,25 +264,25 @@ impl<'a> RefinementContextGatherer<'a> {
             self.reg_cur = ContextGatherer::load_word(region, self.reg_y, new_start);
         }
 
+        // PdfCraft patch: left of the reference the buffers keep what `start_row` loaded, its words
+        // from column 0. The context takes in the reference a column to the right of the current
+        // one (Figures 12 and 13), so at column −1 it reads column 0, and from 0 on the buffers are
+        // the reference's own. They were zeroed here and, at column 0, not loaded again: with the
+        // reference offset right of the region (GRREFERENCEDX above 0, which a refined text
+        // instance or symbol has from a wider bitmap or an RDX above 0), its first 32 columns read
+        // as 0, and the region decoded to other pixels than were coded, or as garbage that failed.
         let ref_x_signed = (x as i32).wrapping_sub(self.reference_dx);
-        if ref_x_signed < 0 {
-            self.ref_cur_x = 0;
-            self.ref_m1 = 0;
-            self.ref_cur = 0;
-            self.ref_p1 = 0;
-        } else {
-            let ref_x = ref_x_signed as u32;
-
-            if ref_x + 1 >= self.ref_cur_x + WORD_BITS || ref_x < self.ref_cur_x {
-                let new_start = ref_x.saturating_sub(1);
-                let ref_y = (self.reg_y as i32).wrapping_sub(self.reference_dy);
-                self.ref_cur_x = new_start;
-                self.ref_m1 =
-                    ContextGatherer::load_word(reference, ref_y.wrapping_sub(1) as u32, new_start);
-                self.ref_cur = ContextGatherer::load_word(reference, ref_y as u32, new_start);
-                self.ref_p1 =
-                    ContextGatherer::load_word(reference, ref_y.wrapping_add(1) as u32, new_start);
-            }
+        if let Ok(ref_x) = u32::try_from(ref_x_signed)
+            && (ref_x + 1 >= self.ref_cur_x + WORD_BITS || ref_x < self.ref_cur_x)
+        {
+            let new_start = ref_x.saturating_sub(1);
+            let ref_y = (self.reg_y as i32).wrapping_sub(self.reference_dy);
+            self.ref_cur_x = new_start;
+            self.ref_m1 =
+                ContextGatherer::load_word(reference, ref_y.wrapping_sub(1) as u32, new_start);
+            self.ref_cur = ContextGatherer::load_word(reference, ref_y as u32, new_start);
+            self.ref_p1 =
+                ContextGatherer::load_word(reference, ref_y.wrapping_add(1) as u32, new_start);
         }
     }
 
