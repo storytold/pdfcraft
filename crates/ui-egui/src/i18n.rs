@@ -592,11 +592,13 @@ fn same_shape(translated: &str, english: &str) -> bool {
 /// values are never read as templates again, so a file name containing `{n}` stays intact. Unlike
 /// the crate's `fmt` it adds no bidi isolates: the egui fork orders each run for display.
 ///
-/// The filling is [`pdfcraft_model::say`]'s; `args` name each hole without its braces.
+/// The filling is [`pdfcraft_model::say_with`]'s; `args` name each hole without its braces, and
+/// nothing is copied to look them up.
 pub fn fmt(template: &str, args: &[(&str, &str)]) -> String {
-    let holes: Vec<String> = args.iter().map(|(name, _)| format!("{{{name}}}")).collect();
-    let values: Vec<(&str, String)> = holes.iter().zip(args).map(|(hole, (_, value))| (hole.as_str(), (*value).to_owned())).collect();
-    pdfcraft_model::say(template, &values)
+    pdfcraft_model::say_with(template, |hole| {
+        let name = hole.strip_prefix('{')?.strip_suffix('}')?;
+        args.iter().find(|(key, _)| *key == name).map(|(_, value)| *value)
+    })
 }
 
 /// A generated history label (the action part of "Undo …") in the current language. Captured
