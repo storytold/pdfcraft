@@ -156,12 +156,16 @@ impl Document {
         self.try_get(r.num).unwrap_or_else(|_| Arc::new(Object::Null))
     }
 
-    /// Follow a reference if `o` is one; otherwise return `o` itself.
+    /// Follow a reference if `o` is one; otherwise return `o` itself. An object can be nothing but
+    /// a reference to another, which is followed too, up to [`MAX_REFERENCE_HOPS`] of them.
     pub fn resolve(&self, o: &Object) -> Arc<Object> {
-        match o {
-            Object::Ref(r) => self.get(*r),
-            other => Arc::new(other.clone()),
+        let Object::Ref(r) = o else { return Arc::new(o.clone()) };
+        let mut held = self.get(*r);
+        for _ in 0..MAX_REFERENCE_HOPS {
+            let Object::Ref(r) = &*held else { break };
+            held = self.get(*r);
         }
+        held
     }
 
     /// `s` with the `/DecodeParms` its filters use made direct, so [`Stream::decoded`] reads them:
@@ -218,7 +222,7 @@ impl Document {
     }
 
     /// `o`, or the object it refers to, without copying either.
-    fn held<'o>(&self, o: &'o Object) -> Held<'o> {
+    pub(crate) fn held<'o>(&self, o: &'o Object) -> Held<'o> {
         match o {
             Object::Ref(_) => Held::Resolved(self.resolve(o)),
             o => Held::Direct(o),
@@ -395,6 +399,7 @@ impl Document {
         // cycles such as `6 0 obj << /Length 6 0 R >>`. Bound the nesting on every path.
         let _guard =
             LoadGuard::enter(num).ok_or_else(|| CosError::Syntax { offset: 0, detail: format!("reference cycle while loading object {num}") })?;
+        let _scope = crate::security::FollowScope::enter();
         let obj = self.load(num, 0)?;
         let obj = Arc::new(obj);
         // The editing cache is bounded like the scan reader's: re-parsing a file-backed view
@@ -562,7 +567,11 @@ impl Document {
         let Object::Stream(s) = &*loaded else { return Err(CosError::MissingObject(num)) };
         let n = s.dict.int(b"N").unwrap_or(0).clamp(0, 1_000_000) as usize;
         let first = usize::try_from(s.dict.int(b"First").unwrap_or(0).max(0)).ok();
-        let data = s.decoded_within(self.stream_limit)?;
+        // Its parameters can be given by reference, and can sit in another object stream. A scan of
+        // the file's object streams comes here without a read around it.
+        let _scope = crate::security::FollowScope::enter();
+        let readable = crate::security::following(Cow::Borrowed(s), || self.with_direct_parms(s));
+        let data = readable.decoded_within(self.stream_limit)?;
         let mut lx = Lexer::new(&data, 0);
         let mut index = Vec::with_capacity(n);
         for _ in 0..n {
@@ -577,8 +586,14 @@ impl Document {
         Ok(stm)
     }
 
-    /// Last-resort lookup: scan the file for `num G obj`.
+    /// Last-resort lookup: scan the file for `num G obj`. What isn't there is remembered: each miss
+    /// reads the whole file, and a file can refer to such an object from everywhere.
     fn scan_for(&self, num: u32) -> Option<(ObjRef, Object)> {
+        if self.unfound.lock().is_ok_and(|unfound| unfound.contains(&num)) {
+            return None;
+        }
+        #[cfg(test)]
+        super::tests::FILE_SCANS.with(|scans| scans.set(scans.get() + 1));
         let needle = format!("{num} ");
         let data = &self.data;
         let mut found = None;
@@ -593,6 +608,11 @@ impl Document {
             {
                 found = Some((id, o)); // keep the last (newest) definition
             }
+        }
+        if found.is_none()
+            && let Ok(mut unfound) = self.unfound.lock()
+        {
+            unfound.insert(num);
         }
         found
     }
@@ -659,8 +679,9 @@ impl Document {
     ///
     /// Used when the working snapshot was restored from an earlier revision and the next
     /// incremental save must still append to this file (the last saved revision). Objects
-    /// that already match are left untouched. Reads go through private readers so neither
-    /// document's editing cache is filled.
+    /// that already match are left untouched, except members of an object stream of this file
+    /// whose stream number `current` frees or reuses: those are written again on their own.
+    /// Reads go through private readers so neither document's editing cache is filled.
     pub fn overlay_changes_from(&mut self, current: &Document) -> Result<(), CosError> {
         let saved_nums = self.object_numbers();
         let current_nums = current.object_numbers();
@@ -684,6 +705,22 @@ impl Document {
                 }
             }
         }
+        // An object stream of this file that is freed or replaced takes its members with it, so
+        // a member that is otherwise unchanged is written again on its own.
+        let gone = |n: u32| freed.binary_search(&n).is_ok() || changed.binary_search(&n).is_ok();
+        let orphaned: Vec<u32> = current_nums
+            .iter()
+            .copied()
+            .filter(|&num| changed.binary_search(&num).is_err())
+            .filter(|&num| {
+                let packed_in = match self.xref_entry(num) {
+                    Some(XrefEntry::InStream { stream, .. }) => Some(stream),
+                    _ => None,
+                };
+                packed_in.is_some_and(gone)
+            })
+            .collect();
+        changed.extend(orphaned);
         for num in freed {
             let generation = self.generation(num);
             self.free(ObjRef::new(num, generation));
@@ -786,9 +823,13 @@ const DECODE_PARMS_KEYS: [&[u8]; 13] = [
     b"ColorTransform",
 ];
 
+/// How many references in a row [`Document::resolve`] follows: enough for any file, and it ends a
+/// cycle of them.
+const MAX_REFERENCE_HOPS: usize = 32;
+
 /// An object read in place, or the object a reference names as the document holds it: either way
 /// nothing is copied ([`Document::held`]).
-enum Held<'o> {
+pub(crate) enum Held<'o> {
     Direct(&'o Object),
     Resolved(Arc<Object>),
 }
