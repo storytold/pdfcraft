@@ -70,6 +70,39 @@ impl PdfCraftApp {
         }
     }
 
+    /// The web build has no face for a font the document does not embed, so such a document
+    /// shows nothing but its lines here. The server that serves this site can draw it, and
+    /// sends back a copy of its pages with the text kept over them. A document that needs
+    /// this is the one with a font the document does not embed.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn poll_display_copy(&mut self) {
+        if let Some((name, bytes)) = self.pending_display.lock().ok().and_then(|mut s| s.take()) {
+            let _ = self.open_bytes(&name, None, bytes);
+            return;
+        }
+        let Some((_, id)) = self.active_ids() else { return };
+        let Some(doc) = self.session.get(id) else { return };
+        let name = doc.name.clone();
+        let bytes = doc.bytes.clone();
+        // Keyed by the document itself, not by its tab: the copy the server sends is a new
+        // document, and asking about it again would ask for a copy of the copy.
+        if !self.display_checked.insert(format!("{}:{}", name, bytes.len())) {
+            return;
+        }
+        let needs = doc.info.fonts.iter().any(|f| !f.embedded);
+        if !needs {
+            return;
+        }
+        let slot = self.pending_display.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(pdf) = crate::server::display_copy(bytes.as_ref().clone()).await
+                && let Ok(mut s) = slot.lock()
+            {
+                *s = Some((name, pdf));
+            }
+        });
+    }
+
     /// Open a document and make it the active tab. Encrypted files raise the password prompt.
     pub fn open_bytes(&mut self, name: &str, path: Option<String>, bytes: Vec<u8>) -> Result<(), String> {
         self.startup_superseded = true;

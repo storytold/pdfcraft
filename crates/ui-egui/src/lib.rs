@@ -83,6 +83,11 @@ mod workflows;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod os_clipboard;
 
+/// The server that carries what a browser cannot: a font face to draw Chinese with and the
+/// OCR models. Only the web build has it.
+#[cfg(target_arch = "wasm32")]
+mod server;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use app::same_file;
 pub(crate) use app::{MAX_AUTHOR_CHARS, copy_refused, date_text_for_pdf, print_refused};
@@ -493,6 +498,14 @@ pub struct PdfCraftApp {
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,
+    /// The web build: documents whose fonts the browser cannot draw get their pages from the
+    /// server instead. `pending_display` holds the copy the server sent.
+    #[cfg(target_arch = "wasm32")]
+    pub pending_display: std::sync::Arc<std::sync::Mutex<Option<(String, Vec<u8>)>>>,
+    /// The documents already checked for such a copy, by name and size: a copy the server
+    /// sent is a new document, and asking again for it would ask for a copy of the copy.
+    #[cfg(target_arch = "wasm32")]
+    pub display_checked: std::collections::HashSet<String>,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the
