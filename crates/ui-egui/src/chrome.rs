@@ -69,10 +69,12 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     app.active = None;
                     app.combine_tab.focused = false;
                 }
-                // Reserve the three icon buttons, Discord and their gaps outside the scrolling tabs.
+                // Reserve the three icon buttons, Discord (its text and 38 pt of icon and padding) and the
+                // four gaps between them outside the scrolling tabs: it all follows the button size and spacing.
                 let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x)
                     + 3.0 * button
-                    + 54.0
+                    + 38.0
+                    + 4.0 * ui.spacing().item_spacing.x
                     + window_controls::width(&controls.right);
                 // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
                 let open_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Open").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
@@ -287,7 +289,7 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         });
                         ui.add_space(window_controls::SIDE_GAP - 4.0);
                     }
-                    if icons::button(ui, "settings", button, false, tl!("Preferences")).clicked() {
+                    if icons::button(ui, "settings", button, app.dialog == Some(Dialog::Preferences), tl!("Preferences")).clicked() {
                         app.execute("app.preferences");
                     }
                     let (icon, label) = match app.theme_preference {
