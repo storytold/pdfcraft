@@ -88,6 +88,8 @@ fn push_button_caption_methods_read_write_and_reject_other_faces() {
     assert_eq!(same.changed[0].caption.as_deref(), Some("Old"), "same-text writes still update every widget");
     assert!(run("getField('go').buttonSetCaption('Bad', 1);").error.is_some());
     assert!(run("getField('text').buttonSetCaption('Bad');").error.is_some());
+    assert!(run("getField('go').buttonGetCaption(1);").error.is_some());
+    assert!(run("getField('text').buttonGetCaption();").error.is_some());
 }
 
 #[test]

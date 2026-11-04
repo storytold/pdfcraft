@@ -5405,6 +5405,10 @@ fn form_javascript_validates_calculates_and_formats() {
         s.get(id).unwrap().form.iter().find(|f| f.name == "go").and_then(|f| f.widgets.first()).and_then(|w| w.caption.as_deref()),
         Some("Continue")
     );
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").and_then(|f| f.widgets.get(1)).and_then(|w| w.caption.as_deref()),
+        Some("Continue")
+    );
 
     // JavaScript off: scripts don't run.
     s.set_javascript(false);
