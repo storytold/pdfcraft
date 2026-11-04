@@ -216,6 +216,13 @@ pub(super) fn outline_item(
         let galley = ui.fonts_mut(|f| f.layout_job(job));
         let h = (galley.size().y + 12.0).max(28.0);
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
+        let x0 = rect.left() + indent;
+        let tri = Rect::from_min_size(pos2(x0, rect.top() + 6.0), vec2(16.0, 16.0));
+        // The chevron's click first, so the row is marked by the state its children are drawn in.
+        if !item.children.is_empty() && !cx.searching && ui.interact(tri, id.with("tri"), Sense::click()).clicked() {
+            open = !open;
+            ui.data_mut(|d| d.insert_temp(id, open));
+        }
         let marked = cx.marked.is_some_and(|m| m == path || (!open && m.starts_with(path)));
         // The marked row says so (as egui's selected rows do); the others are plain buttons.
         resp.widget_info(|| egui::WidgetInfo {
@@ -227,14 +234,8 @@ pub(super) fn outline_item(
             resp.scroll_to_me(None);
             cx.revealed = true;
         }
-        let x0 = rect.left() + indent;
         if !item.children.is_empty() {
-            let tri = Rect::from_min_size(pos2(x0, rect.top() + 6.0), vec2(16.0, 16.0));
             icons::paint(ui, tri, if open { "chevron-down" } else { "chevron-right" }, 14.0, t.text_muted);
-            if !cx.searching && ui.interact(tri, id.with("tri"), Sense::click()).clicked() {
-                open = !open;
-                ui.data_mut(|d| d.insert_temp(id, open));
-            }
         }
         ui.painter().galley(pos2(x0 + 20.0, rect.top() + 6.0), galley, t.text);
         if let Some(g) = label_galley {

@@ -165,9 +165,11 @@ fn a_bookmark_hidden_by_a_search_is_scrolled_to_once_it_shows() {
     h.state_mut().open_bytes("sheets.pdf", None, pdf.into_bytes()).unwrap();
     h.run_steps(4);
     let window = h.ctx.content_rect();
+    // Within the list's viewport: below the search row above it, and above the panel's bottom
+    // margin (8 px), where the list clips its rows.
     let in_view = |h: &Harness<'static, PdfCraftApp>, title: &str| {
-        let r = h.get_by_label(title).rect();
-        r.top() >= window.top() && r.bottom() <= window.bottom()
+        let (r, search) = (h.get_by_label(title).rect(), h.get_by_label("Search").rect());
+        r.top() >= search.bottom() && r.bottom() <= window.bottom() - 8.0
     };
     assert!(in_view(&h, "Sheet 01") && !in_view(&h, "Sheet 55"), "the last sheets start below the fold");
     // A search shows only the first sheet; meanwhile the reader goes to sheet 55.
@@ -217,7 +219,10 @@ trailer << /Root 1 0 R >>
     h.run_steps(1);
     h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-    h.run_steps(3);
+    // Already on the click's own frame: the row is marked by the state its children are drawn in.
+    h.run_steps(1);
+    assert!(marked(&h, "Detail") && !marked(&h, "Section"), "on the click's frame");
+    h.run_steps(2);
     assert!(marked(&h, "Detail") && !marked(&h, "Section"), "open: the child itself");
     // On the section's own page, the section.
     h.state_mut().set_option("page", "2").unwrap();
