@@ -87,6 +87,11 @@ pub struct RenderConfig {
     /// `hayro_syntax::MAX_PAGE_JBIG2_WORK`. Those past it aren't drawn, like an image that can't
     /// be decoded.
     pub jbig2_work: Option<u64>,
+
+    /// View ▸ Show line weights, off: every stroke that isn't text is drawn one device pixel
+    /// wide, whatever its line width, so a plan's thick and thin lines read alike at any zoom
+    /// (Acrobat's Line Weights toggle). Display only; prints and exports keep the widths.
+    pub hairline_strokes: bool,
 }
 
 impl RenderConfig {
@@ -224,6 +229,12 @@ pub const PRINT_TAG: u64 = 1 << 60;
 /// document's setting and render with reading colours off.
 fn request_reading(config: &RenderConfig, req: &RenderRequest) -> ReadingColors {
     if req.tag & PRINT_TAG != 0 { ReadingColors::default() } else { config.reading_colors }
+}
+
+/// Whether a request draws hairlines (line weights off): print previews ([`PRINT_TAG`]) keep the
+/// document's widths, as the print itself does.
+fn request_hairlines(config: &RenderConfig, req: &RenderRequest) -> bool {
+    req.tag & PRINT_TAG == 0 && config.hairline_strokes
 }
 
 /// What a render that panicked or overran the watchdog is remembered by: its page and kind. Not
@@ -373,6 +384,7 @@ fn render_page<'a>(
         (settings, cache)
     };
     let reading = request_reading(config, &req);
+    let hairline_strokes = request_hairlines(config, &req);
     if req.kind == RequestKind::Text {
         return match catch_unwind(AssertUnwindSafe(|| crate::text::extract_page(pdf, req.page, settings))) {
             Ok(Some(t)) => Ok((0, 0, Pixels::default(), Some(Arc::new(t)))),
@@ -408,6 +420,7 @@ fn render_page<'a>(
                     y_offset: t.y as f32,
                     bg_color,
                     color_replacement,
+                    hairline_strokes,
                 }
             }
             None => {
@@ -429,6 +442,7 @@ fn render_page<'a>(
                     height: Some(side(h)),
                     bg_color,
                     color_replacement,
+                    hairline_strokes,
                     ..Default::default()
                 }
             }
