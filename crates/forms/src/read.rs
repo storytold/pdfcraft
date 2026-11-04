@@ -364,12 +364,13 @@ fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Allowa
 pub(crate) const MAX_VALUE_BYTES: usize = 64 << 20;
 
 /// A field's value or default value (`/V`, `/DV`), copied against `budget`. A value that doesn't
-/// fit reads as none, as one that won't decode does, and of an array of values those that fit
-/// are read until the allowance is spent.
+/// fit reads as none, as one that won't decode does, and so does a list of values one of which
+/// doesn't fit: a list read in part would be taken for the whole of it.
 fn values_of(doc: &Document, o: Option<&Object>, budget: &mut Allowance) -> Vec<String> {
     let Some(o) = o else { return Vec::new() };
     match &*held(doc, o) {
         Object::Array(a) => {
+            let refusals = budget.refusals();
             let mut out = Vec::new();
             for x in a {
                 if !budget.entry() {
@@ -377,7 +378,7 @@ fn values_of(doc: &Document, o: Option<&Object>, budget: &mut Allowance) -> Vec<
                 }
                 out.extend(budget.text(doc, x));
             }
-            out
+            if budget.refusals() == refusals { out } else { Vec::new() }
         }
         Object::Stream(s) => budget.decode(s).map(|b| PdfString::literal(b).to_text()).into_iter().collect(),
         other => budget.text(doc, other).filter(|s| s != "Off" && !s.is_empty()).into_iter().collect(),

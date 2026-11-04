@@ -3623,6 +3623,65 @@ fn clear_form_keeps_a_field_whose_default_was_not_read() {
     assert!(last.as_dict().and_then(|d| d.get(b"V")).is_none_or(|v| !matches!(v, Object::Ref(_))), "the last field's unread value is cleared");
 }
 
+/// Clear form leaves a field as it is when its default is a string, or a list of values, that the
+/// value allowance didn't reach, and resets one whose value string it didn't reach.
+#[test]
+fn clear_form_keeps_a_field_whose_default_string_was_not_read() {
+    let n = 70;
+    let fields_list: String = (0..=n).map(|i| format!("{} 0 R ", i + 3)).collect();
+    let value = |doc: &Document, i: usize| -> Option<Object> { doc.get(ObjRef::new(i as u32 + 3, 0)).as_dict().and_then(|d| d.get(b"V").cloned()) };
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), long_string()];
+    objs.extend((0..n).map(|i| format!("<< /FT /Tx /T (f{i}) /V (typed) /DV 2 0 R >>")));
+    objs.push(format!("<< /FT /Ch /Ff 2097152 /T (l) /Opt [(a) (x)] /V [(a)] /DV [{}] >>", "2 0 R ".repeat(n)));
+    let mut doc = document(&objs);
+    reset(&mut doc, None).unwrap();
+    let text = |o: Option<Object>| o.and_then(|v| v.as_string().map(PdfString::to_text)).unwrap_or_default();
+    assert_eq!(text(value(&doc, 0)), "x".repeat(1 << 20), "the first field goes back to its default");
+    assert_eq!(text(value(&doc, n - 1)), "typed", "the last field, whose default wasn't read, keeps its value");
+    assert_eq!(value(&doc, n), Some(Object::Array(vec![Object::String(PdfString::literal("a"))])), "the list keeps its selection");
+    // A value string the reading didn't reach, with no default, is cleared: it isn't known to be
+    // empty.
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), long_string()];
+    objs.extend((0..=n).map(|i| format!("<< /FT /Tx /T (f{i}) /V 2 0 R >>")));
+    let mut doc = document(&objs);
+    reset(&mut doc, None).unwrap();
+    assert!(value(&doc, n).is_none_or(|v| !matches!(v, Object::Ref(_))), "the last field's unread value is cleared");
+}
+
+/// Past the value allowance a short value string or name reads as none, and Clear form resets
+/// its field: it isn't known to be empty. A string that reads as nothing is known to be empty
+/// when it is short; past 16 bytes it counts as text, unconverted.
+#[test]
+fn clear_form_resets_short_values_the_reading_did_not_reach() {
+    let string = |bytes: Vec<u8>| Object::String(pdfcraft_cos::PdfString::literal(bytes));
+    let mut doc = Document::new_empty();
+    let field = |doc: &mut Document, name: &str, key: &[u8], v: Object| {
+        doc.add(Object::Dict([(b"FT".to_vec(), Object::name("Tx")), (b"T".to_vec(), string(name.into())), (key.to_vec(), v)].into_iter().collect()))
+    };
+    // A default that leaves 8 bytes of the allowance, too few for any other copy.
+    let copy = std::mem::size_of::<String>();
+    let big = field(&mut doc, "big", b"DV", string(vec![b'x'; crate::read::MAX_VALUE_BYTES - copy - 8]));
+    let typed = field(&mut doc, "typed", b"V", string(b"typed".to_vec()));
+    let named = field(&mut doc, "named", b"V", Object::name("Yes"));
+    // U+FEFF only, which reads as nothing: 16 bytes are converted, 18 aren't.
+    let marks = |n: usize| string([0xFE, 0xFF].repeat(n));
+    let short = field(&mut doc, "short", b"V", marks(8));
+    let long = field(&mut doc, "long", b"V", marks(9));
+    let list = [big, typed, named, short, long].map(Object::Ref).to_vec();
+    let catalog = doc.add(Object::Dict(
+        [(b"AcroForm".to_vec(), Object::Dict([(b"Fields".to_vec(), Object::Array(list))].into_iter().collect()))].into_iter().collect(),
+    ));
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    let names = ["typed", "named", "short", "long"].map(String::from);
+    reset(&mut doc, Some(&names)).unwrap();
+    let v = |r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"V").cloned());
+    let cleared = |o: Option<Object>| o.is_none_or(|v| v.as_string().is_some_and(|s| s.to_text().is_empty() && s.bytes.len() <= 2));
+    assert!(cleared(v(typed)), "an unread value string is reset");
+    assert!(cleared(v(named)), "an unread value name is reset");
+    assert_eq!(v(short), Some(marks(8)), "a short string that reads as nothing is known to be empty");
+    assert!(cleared(v(long)), "a longer one counts as text");
+}
+
 /// Renaming a field that 300 calculations read through one shared Calculate action, whose script
 /// is a 256 KiB stream, decodes and rewrites that action once, in place: every calculation reads
 /// the new name, and nothing is decoded or written 300 times.
@@ -3671,17 +3730,23 @@ fn value_strings_named_by_reference_share_one_allowance() {
     let mut inherited =
         vec!["<< /Type /Catalog /AcroForm << /Fields [3 0 R] >> >>".into(), long_string(), format!("<< /FT /Tx /T (p) /V 2 0 R /Kids [{kids}] >>")];
     inherited.extend((0..300).map(|i| format!("<< /T (k{i}) /Parent 3 0 R >>")));
-    let listed = vec![
-        "<< /Type /Catalog /AcroForm << /Fields [3 0 R] >> >>".into(),
-        long_string(),
-        format!("<< /FT /Ch /T (l) /Ff 2097152 /V [{}] >>", "2 0 R ".repeat(300)),
-    ];
-    for (how, objs) in [("named", named), ("inherited", inherited), ("listed", listed)] {
+    for (how, objs) in [("named", named), ("inherited", inherited)] {
         let all = fields(&document(&objs));
         let bytes = read(&all);
         assert!(bytes <= crate::read::MAX_VALUE_BYTES, "{bytes} bytes of values {how}");
         assert_eq!(all[0].value.first(), Some(&"x".repeat(1 << 20)), "the first value {how} is read");
     }
+    // A list of values read in part would be taken for the whole: one that doesn't fit reads as
+    // none, and a short one after it is read.
+    let listed = vec![
+        "<< /Type /Catalog /AcroForm << /Fields [3 0 R 4 0 R] >> >>".into(),
+        long_string(),
+        format!("<< /FT /Ch /T (l) /Ff 2097152 /V [{}] >>", "2 0 R ".repeat(300)),
+        "<< /FT /Ch /T (m) /Ff 2097152 /V [(a) (b)] >>".into(),
+    ];
+    let all = fields(&document(&listed));
+    assert_eq!(all[0].value, Vec::<String>::new(), "a list of values that doesn't fit reads as none");
+    assert_eq!(all[1].value, ["a", "b"]);
 }
 
 /// Script strings named by reference — one 256 KiB calculation script that 300 fields' own
@@ -3944,8 +4009,7 @@ fn a_rename_reaches_the_calculation_of_a_field_with_several_widgets() {
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
         "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 7 0 R 8 0 R] >>".into(),
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (a) /Rect [50 700 250 720] /P 3 0 R >>".into(),
-        "<< /FT /Tx /T (total) /Kids [7 0 R 8 0 R] /AA << /C << /S /JavaScript /JS (AFSimple_Calculate(\"SUM\", new Array (\"a\"));) >> >> >>"
-            .into(),
+        "<< /FT /Tx /T (total) /Kids [7 0 R 8 0 R] /AA << /C << /S /JavaScript /JS (AFSimple_Calculate(\"SUM\", new Array (\"a\"));) >> >> >>".into(),
         "null".into(),
         "<< /Type /Annot /Subtype /Widget /Rect [50 10 250 30] /Parent 5 0 R /P 3 0 R >>".into(),
         "<< /Type /Annot /Subtype /Widget /Rect [50 40 250 60] /Parent 5 0 R /P 3 0 R >>".into(),
