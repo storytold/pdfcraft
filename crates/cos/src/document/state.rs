@@ -196,8 +196,6 @@ impl ObjectReader {
 thread_local! {
     /// Cross-reference sections read on this thread.
     pub(super) static SECTION_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// Whole-file searches for an object (`Document::scan_for`) on this thread.
-    pub(super) static OBJECT_SEARCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// What loading each object gave (a failure as well), by number, each with what it holds ([`held_bytes`]) measured once, when it goes

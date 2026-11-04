@@ -19,15 +19,16 @@ mod reader;
 mod state;
 mod xref;
 
+pub(crate) use objects::Held;
 #[cfg(test)]
 pub(crate) use reader::find;
 #[cfg(test)]
 use reader::rfind;
 pub(crate) use state::ObjectReader;
-#[cfg(test)]
-use state::{OBJECT_SEARCHES, SECTION_READS, held_bytes, objstm_member};
 use state::{ObjStm, Slot};
 pub use state::{ReadState, SourceIdentity};
+#[cfg(test)]
+use state::{SECTION_READS, held_bytes, objstm_member};
 use xref::XrefIndex;
 pub use xref::{Revision, XrefEntry};
 
@@ -48,7 +49,8 @@ pub struct Document {
     located: Arc<BTreeMap<u32, (u64, u16)>>,
     repair_log: Arc<Vec<String>>,
     /// What loading each file object gave, a failure as well: a damaged object is otherwise
-    /// searched for across the whole file on every read (`Document::load`).
+    /// loaded again on every read, and a member of an object stream that can't be decoded
+    /// decodes the stream again (`Document::load`).
     cache: Arc<Mutex<state::ObjectCache>>,
     objstms: Arc<Mutex<HashMap<u32, Arc<ObjStm>>>>,
     /// What `/JBIG2Globals` streams of the file decode to, by object number: the images of a scan
@@ -64,6 +66,10 @@ pub struct Document {
     security: Option<Arc<pdfcraft_crypt::SecurityHandler>>,
     /// Object number of the `/Encrypt` dictionary (never encrypted itself).
     encrypt_num: Option<u32>,
+    /// What that dictionary and `/ID` refer to, which the key comes from, and so is as stored.
+    encrypt_members: Arc<HashSet<u32>>,
+    /// Object numbers a scan of the file didn't find: the file doesn't change, so it never will.
+    unfound: Arc<Mutex<HashSet<u32>>>,
     /// Encryption was added, changed or removed since opening: only a full save can apply it.
     encryption_changed: bool,
     /// Set by edits that must not leave earlier revisions in the file (redaction).
