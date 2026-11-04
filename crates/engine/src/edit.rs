@@ -119,6 +119,15 @@ pub enum Edit {
         bold: Option<bool>,
         italic: Option<bool>,
     },
+    /// Write `bookmarks` as children of `parent` from child `index` on, or with `replace` in
+    /// place of the whole outline (`parent` must then be `[]`). A bookmark whose page this
+    /// document lacks is kept without a destination (see [`pdfcraft_organize::import_outline`]).
+    ImportBookmarks {
+        parent: Vec<usize>,
+        index: usize,
+        bookmarks: Vec<pdfcraft_organize::OutlineNode>,
+        replace: bool,
+    },
     /// Bookmarks for the tagged headings (H, H1–H6), nested by level under a new first
     /// "Untitled" bookmark (New Bookmarks from Structure).
     BookmarksFromStructure,
