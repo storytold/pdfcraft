@@ -4825,7 +4825,7 @@ version = "0.18.1"
 
 [[package]]
 name = "pdfcraft-hot-folder"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "chrono",
  "craft-ui",
@@ -4849,7 +4849,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-hot-folder-service"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "ctrlc",
  "serde",
