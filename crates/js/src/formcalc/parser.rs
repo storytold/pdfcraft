@@ -1,6 +1,6 @@
 use super::ast::{Expr, Idx, Stmt};
 use super::lexer::{Tok, Token, lex};
-use super::*;
+use super::{Func, MAX_CHAIN, MAX_PARSE_DEPTH, Rc};
 
 struct Parser {
     toks: Vec<Token>,
