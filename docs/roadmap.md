@@ -314,6 +314,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | M11: Optimize's JBIG2 images share a symbol dictionary (`/JBIG2Globals`), up to 16 at a time and when smaller (`pdfcraft_filters::encode_jbig2_shared`): 41–46% smaller on rendered text in proportional fonts, 10% in Courier |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
 | 2026-11-02 | minor | M10 #1012: integrate main 168a3cb9; annotated skewed pages are recognized without deskew instead of failing the run; batch OCR always adds text. Estimates unchanged |
