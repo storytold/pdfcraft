@@ -4007,6 +4007,18 @@ fn pages_exported_at_once_are_the_files_each_page_exports_alone_in_order() {
     }
 }
 
+/// An SVG page can become as much text as the renderer allows whatever its size, so no more are
+/// drawn at once than that many fit in the export's memory budget (1 GiB).
+#[test]
+fn svg_pages_drawn_at_once_fit_the_export_memory_budget() {
+    use crate::export::{Exporter, ImageFormat};
+    let (s, id) = session_with(12);
+    let ex = Exporter::new(s.get(id).unwrap());
+    let pages: Vec<usize> = (0..12).collect();
+    let svg = ex.image_workers(&pages, 96.0, ImageFormat::Svg);
+    assert!((1..=((1u64 << 30) / pdfcraft_render::MAX_SVG_BYTES) as usize).contains(&svg), "{svg}");
+}
+
 /// A page that can't be exported, or a file that can't be written, stops the export there with
 /// its error: every page before it is handed over, none after it.
 #[test]

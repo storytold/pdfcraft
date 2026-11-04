@@ -15,7 +15,8 @@ use crate::Document;
 
 /// At most this many pages are drawn at once by [`Exporter::images`].
 const MAX_IMAGE_WORKERS: usize = 8;
-/// Bytes of rasters [`Exporter::images`] may hold at once: 1 GiB, about 16 Letter pages at 300 dpi.
+/// Bytes of rasters (or SVG text) [`Exporter::images`] may hold at once: 1 GiB, about 16 Letter
+/// pages at 300 dpi.
 /// Each worker holds one page (the raster, its RGB copy and the encoded file), so large pages run
 /// on fewer workers; a page over the cap still exports, on one worker, as it did before.
 const IMAGE_MEMORY: f64 = 1024.0 * 1024.0 * 1024.0;
@@ -164,7 +165,7 @@ impl Exporter {
         format: ImageFormat,
         sink: impl FnMut(usize, Vec<u8>) -> Result<(), String>,
     ) -> Result<(), String> {
-        let workers = self.image_workers(pages, dpi);
+        let workers = self.image_workers(pages, dpi, format);
         self.images_on(workers, pages, dpi, format, sink)
     }
 
@@ -266,23 +267,29 @@ impl Exporter {
     }
 
     /// How many pages [`Exporter::images`] draws at once: one per core but one, up to
-    /// [`MAX_IMAGE_WORKERS`], as many as [`IMAGE_MEMORY`] holds of the largest page, and one
-    /// when there is nothing to share or no threads (wasm).
-    fn image_workers(&self, pages: &[usize], dpi: f64) -> usize {
+    /// [`MAX_IMAGE_WORKERS`], as many as [`IMAGE_MEMORY`] holds of the largest page (an SVG page
+    /// as much as the renderer lets one become), and one when there is nothing to share or no
+    /// threads (wasm).
+    pub(crate) fn image_workers(&self, pages: &[usize], dpi: f64, format: ImageFormat) -> usize {
         if cfg!(target_arch = "wasm32") || pages.len() < 2 {
             return 1;
         }
         // One core is left for the interface, which keeps drawing while an export runs.
         let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get).saturating_sub(1).min(MAX_IMAGE_WORKERS);
-        // The raster (RGBA), the RGB copy the encoders take, and room for the encoded file.
-        let largest = pages
-            .iter()
-            .filter_map(|p| {
-                let (w, h) = *self.sizes.get(*p)?;
-                let k = self.dpi_used(*p, dpi) / 72.0;
-                Some((f64::from(w) * k).ceil() * (f64::from(h) * k).ceil() * 8.0)
-            })
-            .fold(0.0, f64::max);
+        // The raster (RGBA), the RGB copy the encoders take, and room for the encoded file. SVG
+        // text grows with what a page draws, not its size.
+        let largest = if format == ImageFormat::Svg {
+            pdfcraft_render::MAX_SVG_BYTES as f64
+        } else {
+            pages
+                .iter()
+                .filter_map(|p| {
+                    let (w, h) = *self.sizes.get(*p)?;
+                    let k = self.dpi_used(*p, dpi) / 72.0;
+                    Some((f64::from(w) * k).ceil() * (f64::from(h) * k).ceil() * 8.0)
+                })
+                .fold(0.0, f64::max)
+        };
         // A float-to-integer cast saturates (and NaN is 0).
         let by_memory = if largest > 0.0 { (IMAGE_MEMORY / largest) as usize } else { cores };
         cores.min(by_memory).min(pages.len()).max(1)
