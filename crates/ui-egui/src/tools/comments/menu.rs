@@ -24,10 +24,13 @@ pub(crate) fn attachment_items(ui: &mut egui::Ui, view: &mut DocView, info: &Doc
 
 /// Items of the canvas context menu for the selected comment (or the page).
 /// `can_modify`: the document's pages may change (Flatten comments draws into them).
+/// `deletable`: whether Delete would delete the comment at (page, index) (the engine's
+/// `Document::annotation_deletable`: unlocked, and no locked reply to it).
 pub(crate) fn context_menu(
     ui: &mut egui::Ui,
     view: &mut DocView,
     info: &DocInfo,
+    deletable: &dyn Fn(usize, usize) -> bool,
     prefs: &CommentPrefs,
     allowed: bool,
     can_modify: bool,
@@ -89,7 +92,8 @@ pub(crate) fn context_menu(
                 ui.close();
             }
             ui.separator();
-            if ui.add_enabled(allowed && !a.locked, egui::Button::new(tl!("Delete"))).clicked() {
+            // The engine's own check: a locked comment, or one with a locked reply, stays.
+            if ui.add_enabled(allowed && deletable(page, index), egui::Button::new(tl!("Delete"))).clicked() {
                 view.comments.selected = None;
                 action = Some(CanvasAction::Edit(Box::new(Edit::DeleteAnnotation { page, index })));
                 ui.close();
@@ -326,7 +330,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
             ui.set_min_width(180.0);
             let mut w = style.width;
             ui.label(egui::RichText::new(tl!("Line thickness")).font(theme::semibold(12.0)));
-            if ui.add(egui::Slider::new(&mut w, tool.min_width()..=12.0).step_by(0.5).suffix(" pt")).changed() {
+            if ui.add(egui::Slider::new(&mut w, tool.min_width()..=super::MAX_LINE_WIDTH).step_by(0.5).suffix(" pt")).changed() {
                 prefs.set_width(tool, w);
             }
         });
