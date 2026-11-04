@@ -163,25 +163,37 @@ impl InstalledPlugin {
     }
 }
 
-/// Read a module file, refusing one over the size cap before reading it.
+/// Read a module file. Only a regular file is opened (opening a named pipe
+/// would block until a writer appears), and the read itself stops past the
+/// size cap, so a file that grows after the check cannot exceed it.
 fn read_module(path: &Path) -> Result<Vec<u8>> {
-    let len = std::fs::metadata(path)?.len();
-    if !usize::try_from(len).is_ok_and(|len| len <= MAX_MODULE_BYTES) {
+    use std::io::Read as _;
+    if !std::fs::metadata(path)?.is_file() {
+        return Err(invalid("not a regular file"));
+    }
+    let cap = u64::try_from(MAX_MODULE_BYTES).unwrap_or(u64::MAX).saturating_add(1);
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?.take(cap).read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_MODULE_BYTES {
         return Err(invalid("the module is larger than 32 MiB"));
     }
-    Ok(std::fs::read(path)?)
+    Ok(bytes)
 }
 
 /// Replace `path` with `bytes` through a temporary file in the same folder,
-/// so an interrupted write never leaves a truncated file behind.
+/// so an interrupted write never leaves a truncated file behind. The
+/// temporary name is unique per process and call, so two writers never
+/// share it; it does not end in `.wasm`, so [`discover`] never lists it.
 fn write_replacing(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write as _;
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let name = path.file_name().ok_or_else(|| invalid("the target has no file name"))?;
     let mut tmp_name = std::ffi::OsString::from(".");
     tmp_name.push(name);
-    tmp_name.push(".tmp");
+    tmp_name.push(format!(".{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     let tmp = path.with_file_name(tmp_name);
-    std::fs::write(&tmp, bytes)?;
-    if let Err(e) = std::fs::rename(&tmp, path) {
+    let written = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp).and_then(|mut file| file.write_all(bytes));
+    if let Err(e) = written.and_then(|()| std::fs::rename(&tmp, path)) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e.into());
     }
@@ -196,7 +208,10 @@ pub fn read_manifest(wasm: &[u8]) -> Result<Manifest> {
 /// Every `*.wasm` plug-in directly in `dir` (not recursive, like the
 /// siblings' plug-ins folder). Files whose manifest cannot be read are
 /// reported through `problems` and skipped; a missing folder is no problem,
-/// an unreadable one is.
+/// an unreadable one is. Ids are unique in the result, ignoring ASCII case
+/// as the plug-in files' names do on macOS and Windows: the menu, the
+/// disabled set and the module cache all key on the id, so a second file
+/// declaring a taken id is reported and skipped.
 pub fn discover(dir: &Path) -> (Vec<InstalledPlugin>, Vec<String>) {
     let mut plugins = Vec::new();
     let mut problems = Vec::new();
@@ -213,23 +228,37 @@ pub fn discover(dir: &Path) -> (Vec<InstalledPlugin>, Vec<String>) {
     files.sort();
     for path in files {
         match read_module(&path).and_then(|bytes| read_manifest(&bytes)) {
-            Ok(manifest) => plugins.push(InstalledPlugin { manifest, path }),
+            Ok(manifest) => match plugins.iter().find(|p: &&InstalledPlugin| p.manifest.id.eq_ignore_ascii_case(&manifest.id)) {
+                Some(first) => problems.push(format!("{}: the id {} is already used by {}", path.display(), manifest.id, first.path.display())),
+                None => plugins.push(InstalledPlugin { manifest, path }),
+            },
             Err(e) => problems.push(format!("{}: {e}", path.display())),
         }
     }
     (plugins, problems)
 }
 
-/// Install one `.wasm` module into the plug-ins folder as `<id>.wasm`,
-/// replacing any older copy of the same plug-in. The module is fully
-/// validated (ABI, manifest) before anything is written.
+/// Install one `.wasm` module into the plug-ins folder, replacing the file
+/// of an installed plug-in with the same id (whatever that file is named),
+/// or as `<id>.wasm`. An id that differs from an installed one only by
+/// case is refused: on a case-insensitive folder its `<id>.wasm` would
+/// silently overwrite that plug-in. The module is fully validated (ABI,
+/// manifest) before anything is written.
 pub fn install_module(wasm: &[u8], plugins_dir: &Path) -> Result<Manifest> {
     let manifest = read_manifest(wasm)?;
     if let Some(problem) = manifest.compatibility() {
         return Err(invalid(problem));
     }
     std::fs::create_dir_all(plugins_dir)?;
-    write_replacing(&plugins_dir.join(format!("{}.wasm", manifest.id)), wasm)?;
+    let (installed, _) = discover(plugins_dir);
+    let target = match installed.iter().find(|p| p.manifest.id.eq_ignore_ascii_case(&manifest.id)) {
+        Some(same) if same.manifest.id == manifest.id => same.path.clone(),
+        Some(other) => {
+            return Err(invalid(format!("the id {} differs only by case from the installed plug-in {}", manifest.id, other.manifest.id)));
+        }
+        None => plugins_dir.join(format!("{}.wasm", manifest.id)),
+    };
+    write_replacing(&target, wasm)?;
     Ok(manifest)
 }
 

@@ -253,22 +253,33 @@ impl PluginManager {
     /// answer with any malformed action is rejected whole: none of its
     /// actions apply, so the document is left untouched.
     pub(crate) fn invoke(&mut self, id: &str, command: &str, context: &serde_json::Value) -> Vec<Effect> {
-        let response = match self.ensure_loaded(id) {
-            Ok(loaded) => match loaded.invoke(command, context) {
-                Ok(response) => response,
-                Err(e) => return vec![Effect::Message(e.to_string())],
-            },
-            Err(e) => return vec![Effect::Message(e)],
-        };
-        let mut effects = Vec::new();
-        if let Some(message) = response.message {
-            self.last_message = Some(message.clone());
-            effects.push(Effect::Message(message));
+        match self.answer(id, command, context) {
+            Ok((message, effects)) => {
+                if message.is_some() {
+                    self.last_message = message;
+                }
+                effects
+            }
+            Err(error) => self.reject(error),
         }
+    }
+
+    /// Show `error` in place of the plugin's answer, in the panel and as a message.
+    pub(crate) fn reject(&mut self, error: String) -> Vec<Effect> {
+        self.last_message = Some(error.clone());
+        vec![Effect::Message(error)]
+    }
+
+    /// Run one command and turn its whole answer into effects, with the last
+    /// message it shows, or an error when the run or any action fails.
+    fn answer(&mut self, id: &str, command: &str, context: &serde_json::Value) -> Result<(Option<String>, Vec<Effect>), String> {
+        let response = self.ensure_loaded(id)?.invoke(command, context).map_err(|e| e.to_string())?;
+        let mut last = response.message.clone();
+        let mut effects: Vec<Effect> = response.message.into_iter().map(Effect::Message).collect();
         for action in response.actions {
             match action {
                 pdfcraft_plugin::Action::ShowMessage { text } => {
-                    self.last_message = Some(text.clone());
+                    last = Some(text.clone());
                     effects.push(Effect::Message(text));
                 }
                 pdfcraft_plugin::Action::SetDocumentInfo { key, value } => {
@@ -276,14 +287,14 @@ impl PluginManager {
                 }
                 pdfcraft_plugin::Action::OpenDocument { name, data_base64 } => {
                     use base64::Engine as _;
-                    match base64::engine::general_purpose::STANDARD.decode(&data_base64) {
-                        Ok(bytes) => effects.push(Effect::OpenDocument { name, bytes }),
-                        Err(e) => return vec![Effect::Message(format!("the plugin sent an unreadable document: {e}"))],
-                    }
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(&data_base64)
+                        .map_err(|e| format!("the plugin sent an unreadable document: {e}"))?;
+                    effects.push(Effect::OpenDocument { name, bytes });
                 }
             }
         }
-        effects
+        Ok((last, effects))
     }
 }
 
@@ -384,6 +395,21 @@ impl crate::PdfCraftApp {
     /// Apply effects returned by a plugin run (or the panel) through the
     /// app's ordinary paths.
     pub(crate) fn apply_plugin_effects(&mut self, effects: Vec<Effect>) {
+        // A document the plugin sends must open before anything applies: the effects run in
+        // order with no rollback, so an edit queued before a bad document would otherwise stay.
+        // A password-protected one counts as opening, since it raises the password prompt.
+        for effect in &effects {
+            if let Effect::OpenDocument { name, bytes } = effect {
+                use pdfcraft_render::OpenError;
+                match self.session.prepare_open(name.as_str(), None, std::sync::Arc::new(bytes.clone()), None) {
+                    Ok(_) | Err(OpenError::NeedsPassword | OpenError::WrongPassword) => {}
+                    Err(e) => {
+                        let rejected = self.plugins.reject(format!("the plugin sent a document that cannot be opened: {e}"));
+                        return self.apply_plugin_effects(rejected);
+                    }
+                }
+            }
+        }
         for effect in effects {
             match effect {
                 Effect::Message(message) => self.notify(message),
