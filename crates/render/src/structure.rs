@@ -187,8 +187,19 @@ fn convert_dict(dict: &pdfcraft_cos::Dict, depth: usize) -> Result<Dictionary> {
     if depth > 100 {
         return Err(Error::RecursionLimit);
     }
-    dict.iter().map(|(key, value)| Ok((key.clone(), convert(value, depth + 1)?))).collect::<Result<Vec<_>>>().map(|items| items.into_iter().collect())
+    dict.iter()
+        .filter(|(key, _)| key.as_slice() != PRIVATE_DATA)
+        .map(|(key, value)| Ok((key.clone(), convert(value, depth + 1)?)))
+        .collect::<Result<Vec<_>>>()
+        .map(|items| items.into_iter().collect())
 }
+
+/// `/PieceInfo`: an application's private data about a page, form or document (ISO 32000-1
+/// §14.5), left out of what inspection keeps. Nothing here reads it, and every object read is
+/// kept converted for the inspection's lifetime: InDesign writes kilobytes of it into every page,
+/// and a 1,412-page book held over a gigabyte of it (#5873). The file and the editing document are
+/// untouched; this is the read-only view inspection walks.
+const PRIVATE_DATA: &[u8] = b"PieceInfo";
 
 fn convert(object: &CosObject, depth: usize) -> Result<Object> {
     if depth > 100 {
