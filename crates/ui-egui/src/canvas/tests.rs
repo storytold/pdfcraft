@@ -1364,16 +1364,17 @@ fn an_arriving_raster_evicts_pages_nobody_asks_for_and_then_pages_behind_the_scr
     v.current = 10;
     v.scroll_dir = 1;
     v.frame_visible = [10].into();
-    let page = RenderRequest { page: 10, scale: 1.0, tag: 1000, ..Default::default() };
+    // A prefetch off screen: a raster arriving on screen would widen the allowance to hold it.
+    let page = RenderRequest { page: 11, scale: 1.0, tag: 1000, ..Default::default() };
     let bytes = rgba_bytes(4000, 4000);
     // Page 7 is behind the scroll and no longer asked for; page 14 is the prefetch ahead.
-    v.frame_demanded = [10, 14].into();
+    v.frame_demanded = [10, 11, 14].into();
     v.pages.insert(7, PageTex { tag: 1000, tex: texture("behind") });
     v.pages.insert(14, PageTex { tag: 1000, tex: texture("ahead") });
     assert!(v.admit_texture(page, bytes));
     assert!(v.pages.contains_key(&14) && !v.pages.contains_key(&7), "the page nobody asks for goes first");
     // Both asked for: the page behind the scroll goes, though it is nearer.
-    v.frame_demanded = [7, 10, 14].into();
+    v.frame_demanded = [7, 10, 11, 14].into();
     v.pages.insert(7, PageTex { tag: 1000, tex: texture("behind") });
     assert!(v.admit_texture(page, bytes));
     assert!(v.pages.contains_key(&14) && !v.pages.contains_key(&7), "the page behind the scroll goes first");
