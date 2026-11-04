@@ -113,6 +113,37 @@ impl Realm {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+static LIVE_WORKERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_DOCUMENT_WORKERS: usize = if usize::BITS == 32 { 4 } else { 16 };
+/// A reservation is released only when its worker exits, including detached timed-out workers.
+#[cfg(not(target_arch = "wasm32"))]
+struct WorkerPermit;
+#[cfg(not(target_arch = "wasm32"))]
+impl WorkerPermit {
+    /// Reserve bounded address space without evicting another document's retained state.
+    fn acquire() -> Result<Self, String> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mut live = LIVE_WORKERS.load(SeqCst);
+        loop {
+            if live >= MAX_DOCUMENT_WORKERS {
+                return Err("document script worker limit reached; close a scripted document and retry".into());
+            }
+            match LIVE_WORKERS.compare_exchange(live, live.saturating_add(1), SeqCst, SeqCst) {
+                Ok(_) => return Ok(Self),
+                Err(current) => live = current,
+            }
+        }
+    }
+}
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for WorkerPermit {
+    fn drop(&mut self) {
+        LIVE_WORKERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 /// Native document runtime with one bounded-stack worker and at most one active invocation.
 /// Dropping it releases the sender; after any active job finishes the worker exits and drops its realm.
 #[derive(Default)]
@@ -126,11 +157,12 @@ impl ScriptSession {
     pub fn start(&mut self, job: Job) -> Result<mpsc::Receiver<InteractiveEvent>, String> {
         if self.sender.is_none() {
             let (tx, rx) = mpsc::sync_channel::<(Job, mpsc::Sender<InteractiveEvent>)>(1);
-            let busy = self.busy.clone();
+            let permit = WorkerPermit::acquire()?;
             std::thread::Builder::new()
                 .name("pdfcraft-document-js".into())
                 .stack_size(crate::run::DOCUMENT_WORKER_STACK)
                 .spawn(move || {
+                    let _permit = permit;
                     let mut realm = Realm::new();
                     while let Ok((job, reply)) = rx.recv() {
                         crate::interaction::set_host(Some(reply.clone()));
@@ -140,7 +172,6 @@ impl ScriptSession {
                             realm = Realm::new();
                             Outcome { rc: true, error: Some("script engine stopped unexpectedly".into()), ..Default::default() }
                         });
-                        busy.store(false, std::sync::atomic::Ordering::SeqCst);
                         let _ = reply.send(InteractiveEvent::Complete(out));
                     }
                 })
@@ -161,20 +192,57 @@ impl ScriptSession {
         })?;
         Ok(rx)
     }
-    /// Run a job synchronously, consuming ordered prompt answers and returning a bounded worker error on failure.
+    /// An asynchronous completion remains pending until its document outcome is accepted or discarded.
+    pub fn is_pending(&self) -> bool {
+        self.busy.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    /// Acknowledge a received completion before applying its edits on the same document realm.
+    pub fn acknowledge_completion(&mut self) {
+        self.busy.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+    /// Run a job with one total deadline, discarding its entire realm when the host times out.
     pub fn run(&mut self, job: Job, answers: &[Option<String>]) -> Outcome {
+        self.run_with_limit(job, answers, std::time::Duration::from_secs(10))
+    }
+    /// A separate limit permits deterministic timeout regressions without ten-second test delays.
+    fn run_with_limit(&mut self, job: Job, answers: &[Option<String>], limit: std::time::Duration) -> Outcome {
+        let started = std::time::Instant::now();
         let rx = match self.start(job) {
             Ok(rx) => rx,
             Err(e) => return Outcome { error: Some(e), ..Default::default() },
         };
+        match Self::receive(&rx, answers, started, limit) {
+            Some(out) => {
+                self.acknowledge_completion();
+                out
+            }
+            None => {
+                // The old worker has no route into this replacement realm. Its reservation
+                // remains charged until cooperative execution finishes and the thread exits.
+                *self = Self::default();
+                Outcome { error: Some("script worker did not complete within its limit".into()), ..Default::default() }
+            }
+        }
+    }
+    /// Prompt replies consume the original deadline instead of restarting it.
+    fn receive(
+        rx: &mpsc::Receiver<InteractiveEvent>,
+        answers: &[Option<String>],
+        started: std::time::Instant,
+        limit: std::time::Duration,
+    ) -> Option<Outcome> {
         let mut answers = answers.iter();
         loop {
-            match rx.recv_timeout(std::time::Duration::from_secs(10)) {
-                Ok(InteractiveEvent::Complete(out)) => return out,
+            let remaining = limit.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return None;
+            }
+            match rx.recv_timeout(remaining) {
+                Ok(InteractiveEvent::Complete(out)) => return Some(out),
                 Ok(InteractiveEvent::Prompt(_, reply)) => {
                     let _ = reply.send(answers.next().cloned().flatten());
                 }
-                Err(_) => return Outcome { error: Some("script worker did not complete within its limit".into()), ..Default::default() },
+                Err(_) => return None,
             }
         }
     }
@@ -394,6 +462,8 @@ mod tests {
             assert_eq!(result.error, None);
             assert_eq!(result.result.as_deref(), Some(expected));
         }
+        let block = format!("function library(){{var x=0\n{}return x}}\nlibrary()", "x=1\n".repeat(6000));
+        assert_eq!(ScriptSession::default().run(job(&block), &[]).result.as_deref(), Some("1"));
         let mut document = job("f299();");
         document.doc_scripts.push((0..300).map(|i| format!("const f{i}=()=>1\n")).collect::<String>());
         let result = ScriptSession::default().run(document, &[]);
@@ -407,5 +477,81 @@ mod tests {
     fn persistent_context_keeps_dynamic_compilation_blocked() {
         let mut a = ScriptSession::default();
         assert!(a.run(job("eval('1')"), &[]).error.is_some());
+        assert!(a.run(job("new Function('return 1')()"), &[]).error.is_some());
+    }
+    /// The completion itself must not release the realm before its caller accepts the outcome.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn completion_requires_acknowledgement_before_the_next_job() {
+        let mut session = ScriptSession::default();
+        let rx = session.start(job("buffer='pending';")).unwrap();
+        assert!(matches!(rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap(), InteractiveEvent::Complete(_)));
+        assert!(session.run(job("buffer"), &[]).error.is_some());
+        session.acknowledge_completion();
+        assert_eq!(session.run(job("buffer"), &[]).result.as_deref(), Some("pending"));
+    }
+    /// Multiple prompt round trips share one wall-clock budget.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn synchronous_prompt_waits_share_one_deadline() {
+        use std::time::{Duration, Instant};
+        let (tx, rx) = mpsc::channel();
+        let producer = std::thread::spawn(move || {
+            for _ in 0..3 {
+                std::thread::sleep(Duration::from_millis(50));
+                let (answer, reply) = mpsc::channel();
+                if tx.send(InteractiveEvent::Prompt(crate::interaction::Prompt::Menu(Vec::new()), answer)).is_err() {
+                    return;
+                }
+                if reply.recv_timeout(Duration::from_secs(1)).is_err() {
+                    return;
+                }
+            }
+            let _ = tx.send(InteractiveEvent::Complete(Outcome::default()));
+        });
+        assert!(ScriptSession::receive(&rx, &[], Instant::now(), Duration::from_millis(80)).is_none());
+        drop(rx);
+        producer.join().unwrap();
+    }
+    /// A timed-out invocation cannot seed globals/custom Field properties in its replacement realm.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn timed_out_jobs_never_share_the_next_realm() {
+        let mut session = ScriptSession::default();
+        assert!(session.run_with_limit(job("buffer='late';held.custom=99;"), &[], std::time::Duration::ZERO).error.is_some());
+        assert_eq!(session.run(job("buffer+'/'+typeof held.custom"), &[]).result.as_deref(), Some("/undefined"));
+    }
+    /// Exercise the actual process-wide cap in isolation, then recover a slot without resetting other documents.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn document_worker_capacity_is_bounded_and_reusable() {
+        const CHILD: &str = "PDFCRAFT_WORKER_CAPACITY_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "session::tests::document_worker_capacity_is_bounded_and_reusable"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{} {}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            return;
+        }
+        let mut workers = Vec::new();
+        for _ in 0..MAX_DOCUMENT_WORKERS {
+            let mut worker = ScriptSession::default();
+            assert_eq!(worker.run(job("digit('1')"), &[]).result.as_deref(), Some("1"));
+            workers.push(worker);
+        }
+        let mut extra = ScriptSession::default();
+        assert!(extra.start(job("1")).unwrap_err().contains("worker limit"));
+        drop(workers.pop());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while LIVE_WORKERS.load(std::sync::atomic::Ordering::SeqCst) == MAX_DOCUMENT_WORKERS {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(extra.run(job("digit('2')"), &[]).result.as_deref(), Some("2"));
+        for worker in &mut workers {
+            assert_eq!(worker.run(job("digit('3')"), &[]).result.as_deref(), Some("13"));
+        }
     }
 }

@@ -13,6 +13,10 @@ struct Guard<'a> {
     property: bool,
     prefix: usize,
     line_break: bool,
+    blocks: [bool; MAX_BRACKET_DEPTH + 1],
+    controls: [bool; MAX_BRACKET_DEPTH + 1],
+    control: bool,
+    block_expected: bool,
 }
 impl<'a> Guard<'a> {
     /// Allocate fixed-size nesting state; no input controls an allocation size here.
@@ -28,6 +32,10 @@ impl<'a> Guard<'a> {
             property: false,
             prefix: 0,
             line_break: false,
+            blocks: [false; MAX_BRACKET_DEPTH + 1],
+            controls: [false; MAX_BRACKET_DEPTH + 1],
+            control: false,
+            block_expected: true,
         }
     }
     /// Consume one exact ASCII byte when present.
@@ -44,6 +52,8 @@ impl<'a> Guard<'a> {
         self.prefix = 0;
         self.property = false;
         self.operand = operand;
+        self.control = false;
+        self.block_expected = false;
     }
     /// Count active operators across enclosing depths without charging completed sibling statements.
     fn count(&mut self, kind: usize, limit: usize) -> bool {
@@ -52,18 +62,28 @@ impl<'a> Guard<'a> {
         self.levels.iter().fold(0usize, |sum, d| sum.saturating_add(d.get(kind).copied().unwrap_or(0))) <= limit
     }
     /// Enter a bracket or template interpolation while preserving the enclosing expression's counters.
-    fn open(&mut self, template: bool) -> bool {
+    fn open(&mut self, c: u8, template: bool) -> bool {
+        let control = c == b'(' && self.control;
+        let block = c == b'{' && !template && (self.block_expected || !self.operand);
         self.depth = self.depth.saturating_add(1);
         let Some(level) = self.levels.get_mut(self.depth) else { return false };
         *level = [0; 4];
+        if let Some(b) = self.blocks.get_mut(self.depth) {
+            *b = block;
+        }
+        if let Some(p) = self.controls.get_mut(self.depth) {
+            *p = control;
+        }
         if let Some(back) = self.template_returns.get_mut(self.depth) {
             *back = template;
         }
         self.context(true);
+        self.block_expected = block;
         true
     }
     /// Complete a bracketed expression and resume template text at its interpolation boundary.
     fn close(&mut self, c: u8) {
+        let control = c == b')' && self.controls.get(self.depth).copied().unwrap_or(false);
         self.template_text = c == b'}' && self.template_returns.get(self.depth).copied().unwrap_or(false);
         if let Some(level) = self.levels.get_mut(self.depth) {
             *level = [0; 4];
@@ -72,7 +92,8 @@ impl<'a> Guard<'a> {
             *back = false;
         }
         self.depth = self.depth.saturating_sub(1);
-        self.context(false);
+        self.context(!self.template_text && control);
+        self.block_expected = control;
     }
     /// A semicolon/comma ends only this depth's chain, never a surrounding function assignment.
     fn separator(&mut self) {
@@ -80,6 +101,7 @@ impl<'a> Guard<'a> {
             *level = [0; 4];
         }
         self.context(true);
+        self.block_expected = true;
     }
     /// Skip an ordinary quoted token, including escaped quote bytes.
     fn quoted(&mut self, quote: u8) {
@@ -137,7 +159,7 @@ impl<'a> Guard<'a> {
             }
             b'$' if self.eat(b'{') => {
                 self.template_text = false;
-                return self.open(true);
+                return self.open(b'{', true);
             }
             _ => {}
         }
@@ -164,13 +186,21 @@ impl<'a> Guard<'a> {
         // At source level, an identifier after a completed value cannot continue that
         // expression (except the two binary keyword operators). ASI separates it.
         // Stay conservative inside brackets and after operators/member access.
-        if self.depth == 0 && self.line_break && !self.operand && !self.property && !matches!(token, Some(b"in" | b"instanceof")) {
+        if (self.depth == 0 || self.blocks.get(self.depth).copied().unwrap_or(false))
+            && self.line_break
+            && !self.operand
+            && !self.property
+            && !matches!(token, Some(b"in" | b"instanceof"))
+        {
             self.separator();
         }
         self.line_break = false;
         let unary = !self.property && matches!(token, Some(b"void" | b"typeof" | b"delete" | b"new"));
         self.operand =
             !self.property && (unary || matches!(token, Some(b"return" | b"throw" | b"case" | b"yield" | b"await" | b"in" | b"instanceof")));
+        self.control = !self.property && matches!(token, Some(b"if" | b"while" | b"for" | b"with" | b"switch" | b"catch"));
+        self.block_expected = !self.property && matches!(token, Some(b"else" | b"do" | b"try" | b"finally"));
+        self.operand |= self.block_expected;
         self.property = false;
         if unary {
             self.prefix = self.prefix.saturating_add(1);
@@ -183,7 +213,10 @@ impl<'a> Guard<'a> {
     fn operator(&mut self, c: u8) -> bool {
         self.context(true);
         let op = match c {
-            b'=' if self.eat(b'>') => Some((2, MAX_ARROW_FUNCTIONS)),
+            b'=' if self.eat(b'>') => {
+                self.block_expected = true;
+                Some((2, MAX_ARROW_FUNCTIONS))
+            }
             b'=' if self.eat(b'=') => {
                 self.eat(b'=');
                 None
@@ -235,7 +268,7 @@ impl<'a> Guard<'a> {
             b'/' if self.bytes.get(self.i) == Some(&b'/') => self.line_comment(),
             b'/' if self.bytes.get(self.i) == Some(&b'*') => self.block_comment(),
             b'/' if self.operand => self.regexp(),
-            b'(' | b'[' | b'{' => return self.open(false),
+            b'(' | b'[' | b'{' => return self.open(c, false),
             b')' | b']' | b'}' => self.close(c),
             b';' | b',' => self.separator(),
             b'!' if self.bytes.get(self.i) == Some(&b'=') => return self.operator(c),

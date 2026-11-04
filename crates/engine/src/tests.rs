@@ -5388,6 +5388,9 @@ fn form_javascript_validates_calculates_and_formats() {
 fn calculate_now_updates_live_fields_in_one_undo_step() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("calculate-now.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let value = |s: &Session, name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
+    let before_price = value(&s, "price");
+    let before_qty = value(&s, "qty");
     let out = s
         .run_javascript(
             id,
@@ -5400,8 +5403,12 @@ fn calculate_now_updates_live_fields_in_one_undo_step() {
     assert_eq!(total, ["6"]);
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
     s.undo(id).unwrap();
+    assert_eq!(value(&s, "price"), before_price);
+    assert_eq!(value(&s, "qty"), before_qty);
     assert!(s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value.is_empty());
     s.redo(id).unwrap();
+    assert_eq!(value(&s, "price"), ["3"]);
+    assert_eq!(value(&s, "qty"), ["2"]);
     assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value, ["6"]);
     let bytes = s.save_bytes(id).unwrap();
     let reopened = s.open("reopened.pdf", None, bytes, None).unwrap();
@@ -10453,4 +10460,27 @@ fn javascript_field_colours_respect_document_fill_permissions() {
         EditError::NotPermitted("filling in form fields")
     );
     assert!(!s.get(id).unwrap().dirty);
+}
+
+/// An intervening edit gets a fresh realm before calculation, even after the worker has completed.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn pending_button_globals_cannot_leak_into_intervening_edits() {
+    use crate::js::InteractiveEvent;
+    for valid in [true, false] {
+        let mut s = Session::new();
+        let id = s.open("pending.pdf", None, Arc::new(scripted_form()), None).unwrap();
+        let value = |s: &Session, name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
+        s.apply(id, Edit::SetDocumentScript { name: "lib".into(), script: Some("var retained='clean';".into()) }).unwrap();
+        s.apply(id, Edit::SetFieldScript { name: "total".into(), event: "calculate".into(), script: Some("event.value=retained;".into()) }).unwrap();
+        let pending = s.start_javascript(id, "retained='stale';getField('price').value=99;", Some("go")).unwrap();
+        let InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(2)).unwrap() else { panic!("completion") };
+        let edited = s.apply(id, Edit::SetFieldValue { name: if valid { "qty" } else { "missing" }.into(), value: FieldValue::Text("3".into()) });
+        assert_eq!(edited.is_ok(), valid);
+        assert_eq!(value(&s, "total"), ["clean"]);
+        assert_eq!(s.run_javascript(id, "retained='fresh'", None).unwrap().error, None);
+        assert!(s.finish_javascript(pending, out).is_err());
+        assert_eq!(s.run_javascript(id, "retained", None).unwrap().result.as_deref(), Some("fresh"));
+        assert_ne!(value(&s, "price"), ["99"]);
+    }
 }

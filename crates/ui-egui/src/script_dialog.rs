@@ -69,7 +69,7 @@ impl PdfCraftApp {
             || (pending.prompt.is_none() && pending.started.elapsed() > Duration::from_secs(10))
             || (pending.prompt.is_some() && pending.started.elapsed() > Duration::from_secs(300))
         {
-            self.session.invalidate_javascript(pending.run.id);
+            self.session.discard_javascript(&pending.run);
             return;
         }
         if pending.prompt.is_none() {
@@ -109,7 +109,7 @@ impl PdfCraftApp {
                     return;
                 }
                 Err(TryRecvError::Disconnected) => {
-                    self.session.invalidate_javascript(pending.run.id);
+                    self.session.discard_javascript(&pending.run);
                     self.notify("The form script stopped unexpectedly");
                     return;
                 }
@@ -126,7 +126,11 @@ impl PdfCraftApp {
         let Some((prompt, _)) = pending.prompt.as_ref() else { return };
         let mut answer = None;
         let mut cancel = ctx.input(|i| i.key_pressed(egui::Key::Escape));
-        let modal = crate::widgets::modal(ctx, ("document-script-prompt", pending.run.id.0, pending.serial)).show(ctx, |ui| {
+        let prompt_modal = crate::widgets::modal(ctx, ("document-script-prompt", pending.run.id.0, pending.serial));
+        // A different dialog may have been opened after this prompt. Drawing last alone
+        // does not reorder retained egui areas, so explicitly retain modal input priority.
+        ctx.move_to_top(prompt_modal.area.layer());
+        let modal = prompt_modal.show(ctx, |ui| {
             ui.set_width(360.0);
             match prompt {
                 Prompt::Menu(items) => {

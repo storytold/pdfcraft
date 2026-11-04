@@ -752,6 +752,7 @@ mod caption_tests {
 pub struct PendingScript {
     pub id: DocId,
     generation: u64,
+    runtime: Runtime,
     states: std::sync::Arc<Vec<pdfcraft_js::FieldState>>,
     pub receiver: std::sync::mpsc::Receiver<pdfcraft_js::interaction::InteractiveEvent>,
 }
@@ -759,7 +760,7 @@ pub struct PendingScript {
 impl Session {
     /// Check document identity/generation and the JavaScript preference before accepting a worker completion.
     pub fn script_pending_current(&self, p: &PendingScript) -> bool {
-        !self.js_off && self.get(p.id).is_some_and(|d| d.generation == p.generation)
+        !self.js_off && self.get(p.id).is_some_and(|d| d.generation == p.generation && std::sync::Arc::ptr_eq(&d.js_runtime, &p.runtime))
     }
     /// Capture the current fields/view and start a native script without blocking the caller on its prompts.
     pub fn start_javascript(&mut self, id: DocId, script: &str, target: Option<&str>) -> Result<PendingScript, EditError> {
@@ -787,16 +788,23 @@ impl Session {
         };
         let receiver =
             doc.js_runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.start(job).map_err(EditError::Invalid)?;
-        Ok(PendingScript { id, generation: doc.generation, states, receiver })
+        Ok(PendingScript { id, generation: doc.generation, runtime: doc.js_runtime.clone(), states, receiver })
+    }
+    /// Discard only the captured runtime, preserving a newer realm created by an intervening edit.
+    pub fn discard_javascript(&mut self, p: &PendingScript) {
+        if let Some(doc) = self.docs.iter_mut().find(|d| d.id == p.id)
+            && std::sync::Arc::ptr_eq(&doc.js_runtime, &p.runtime)
+        {
+            doc.js_runtime = Default::default();
+        }
     }
     /// Apply a current worker result, or discard it and reset the realm when the document changed.
     pub fn finish_javascript(&mut self, p: PendingScript, out: Outcome) -> Result<Outcome, EditError> {
         if !self.script_pending_current(&p) {
-            if let Some(doc) = self.docs.iter_mut().find(|d| d.id == p.id) {
-                doc.js_runtime = Default::default();
-            }
+            self.discard_javascript(&p);
             return Err(EditError::Invalid("document changed while the script was running".into()));
         }
+        p.runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.acknowledge_completion();
         self.apply_script_outcome(p.id, &p.states, out)
     }
 }

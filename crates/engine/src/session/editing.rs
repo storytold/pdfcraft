@@ -25,6 +25,12 @@ impl Session {
         let js_off = self.js_off;
         let xfa_time_scale = self.xfa_time_scale.unwrap_or(1);
         let doc = self.doc_mut(id)?;
+        // An edit must never read globals from a completed-but-unapplied button invocation.
+        // Fork its realm before any edit-triggered calculation, even if the edit later fails.
+        #[cfg(not(target_arch = "wasm32"))]
+        if doc.js_runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.is_pending() {
+            doc.js_runtime = Default::default();
+        }
         doc.edit_notices.clear();
         let name = doc.name.clone();
         let is_xfa = doc.info.xfa.is_some();

@@ -287,3 +287,21 @@ mod literal_chain_tests {
         assert_eq!(refuse(&format!("var x=`{}${{1+1}}`; true;", "=>;=".repeat(6000))), None);
     }
 }
+
+#[cfg(test)]
+mod review4_lexical_tests {
+    use super::refuse;
+    /// Function/control blocks may separate statements; array/object/expression contexts may not.
+    #[test]
+    fn block_statements_and_control_regex_literals_are_not_expression_chains() {
+        for head in ["function f(){", "const f=()=>{", "if(true){"] {
+            assert_eq!(refuse(&format!("{head}{} }}", "x=1\n".repeat(6000))), None);
+        }
+        for head in ["if(true)", "while(false)", "for(;false;)", "with({})", "if(false);else", "do"] {
+            assert_eq!(refuse(&format!("{head} /{}/.test('x');", "a=".repeat(6000))), None, "{head}");
+        }
+        for fragment in ["a=({x:1}).x=\n", "a=()=>{x=1\n}.x=\n", "a=(x\n/2).x=\n"] {
+            assert!(refuse(&format!("{}1", fragment.repeat(6000))).is_some(), "{fragment}");
+        }
+    }
+}

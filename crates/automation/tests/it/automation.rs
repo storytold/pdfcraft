@@ -7400,6 +7400,10 @@ fn javascript_through_tools() {
     assert_eq!(r["requests"][0]["page"], 2);
     let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "JSON.stringify(this.getPageBox())" }));
     assert_eq!(r["result"], "[0,300,200,0]");
+    ok(&mut a, "page_set_box", json!({ "doc":doc, "pages":[1], "box":"crop", "margins":[10,20,30,40] }));
+    let cropped = ok(&mut a, "js_run", json!({ "doc":doc, "script":"JSON.stringify(getPageBox('Crop',0))" }));
+    assert_eq!(cropped["result"], "[10,260,170,20]");
+    ok(&mut a, "page_set_box", json!({ "doc":doc, "pages":[1], "box":"crop" }));
     let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
     let total = f["fields"].as_array().unwrap().iter().find(|x| x["name"] == "Total").unwrap().clone();
     assert_eq!(total["value"], "3750");
@@ -7430,6 +7434,8 @@ fn javascript_through_tools() {
         json!({ "doc": doc, "field": "CaptionButton", "script": "getField('CaptionButton').buttonSetCaption('Continue'); getField('CaptionButton').buttonGetCaption();" }),
     );
     assert_eq!(r["result"], "Continue");
+    let routed = ok(&mut a, "js_run", json!({ "doc":doc, "field":"CaptionButton", "script":"event.name+'|'+event.targetName" }));
+    assert_eq!(routed["result"], "Mouse Up|CaptionButton");
     assert_eq!(
         ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"].as_array().unwrap().iter().find(|f| f["name"] == "CaptionButton").unwrap()["caption"],
         "Continue"

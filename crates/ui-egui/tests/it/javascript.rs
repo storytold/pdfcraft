@@ -286,9 +286,11 @@ fn native_popup_completion_is_discarded_after_the_document_is_edited() {
         .session
         .apply(id, pdfcraft_engine::Edit::SetFieldValue { name: "greeting".into(), value: pdfcraft_engine::FieldValue::Text("current".into()) })
         .unwrap();
+    assert!(h.state_mut().session.run_javascript(id, "var afterEdit='kept';", None).unwrap().error.is_none());
     h.run_steps(5);
     assert!(h.query_by_label("Wait").is_none(), "the stale prompt must be dismissed");
     assert_eq!(value(&h, "greeting"), ["current"]);
+    assert_eq!(h.state_mut().session.run_javascript(id, "afterEdit", None).unwrap().result.as_deref(), Some("kept"));
 }
 
 /// Native Mouse Up must expose the same willCommit flag as the headless button path.
@@ -319,4 +321,40 @@ fn native_popup_keeps_undo_shortcuts_out_of_the_document() {
     assert!(h.query_by_label("Wait").is_some());
     h.get_by_label("Cancel").click();
     h.run_steps(5);
+}
+
+/// A script response stays clickable while another modal remains open underneath it.
+#[test]
+fn native_script_prompt_is_above_an_existing_dialog() {
+    for open_first in [true, false] {
+        let mut h = harness();
+        let id = h.state().active_ids().unwrap().1;
+        if open_first {
+            h.state_mut().dialog = Some(Dialog::JsConsole);
+            h.run_steps(3);
+        }
+        h.state_mut().run_button_script(
+            id,
+            "hello",
+            "getField('greeting').value=app.response({cTitle:'Top prompt',cQuestion:'Answer here',cDefault:'visible'});",
+        );
+        wait_for(&mut h, "Answer here");
+        if !open_first {
+            h.state_mut().dialog = Some(Dialog::JsConsole);
+        }
+        h.run_steps(4);
+        let expected = egui::Id::unique(("document-script-prompt", id.0, 1u32));
+        assert_eq!(h.ctx.memory(|m| m.top_modal_layer()).map(|l| l.id), Some(expected), "the prompt owns modal input, open_first={open_first}");
+        if let Ok(path) = std::env::var("PDFCRAFT_REVIEW4_MODAL_SCREENSHOT") {
+            h.render().unwrap().save(path).unwrap();
+        }
+        h.get_by_label("OK").click();
+        wait_value(&mut h, "greeting", "visible");
+        assert_eq!(h.state().dialog, Some(Dialog::JsConsole));
+        h.state_mut().run_button_script(id, "hello", "getField('greeting').value=String(app.response({cQuestion:'Cancel here'}));");
+        wait_for(&mut h, "Cancel here");
+        h.key_press(egui::Key::Escape);
+        wait_value(&mut h, "greeting", "null");
+        assert_eq!(h.state().dialog, Some(Dialog::JsConsole));
+    }
 }
