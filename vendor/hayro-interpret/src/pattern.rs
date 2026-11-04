@@ -1,7 +1,7 @@
 //! PDF patterns.
 
 use crate::cache::Cache;
-use crate::color::{Color, ColorSpace};
+use crate::color::{Color, ColorSpace, DefaultColorSpaces};
 use crate::context::{Context, InterpreterCache};
 use crate::device::Device;
 use crate::font::Glyph;
@@ -34,16 +34,19 @@ pub enum Pattern<'a> {
 }
 
 impl<'a> Pattern<'a> {
+    /// PdfCraft patch (38): `defaults` are those of the resources the pattern is selected with,
+    /// for a shading pattern's shading in a device space.
     pub(crate) fn new(
         object: Object<'a>,
         ctx: &Context<'a>,
         resources: &Resources<'a>,
+        defaults: &DefaultColorSpaces<'_, '_>,
     ) -> Option<Self> {
         match object {
             Object::Dict(dict) => Some(Self::Shading(ShadingPattern::new(
                 &dict,
                 &ctx.interpreter_cache.object_cache,
-                ctx.get().graphics_state.non_stroke_alpha,
+                defaults,
             )?)),
             Object::Stream(stream) => Some(Self::Tiling(Box::new(TilingPattern::new(
                 stream, ctx, resources,
@@ -60,6 +63,28 @@ impl<'a> Pattern<'a> {
                 Arc::make_mut(&mut p.shading).clip_path = transformed_clip_path;
             }
             Self::Tiling(p) => p.matrix = transform * p.matrix,
+        }
+    }
+
+    /// PdfCraft patch (46): the pattern without the fill or stroke opacity it captured when it was
+    /// set (`scn`). A stencil mask's transparency group applies the opacity in force when the mask
+    /// is drawn, so a pattern paint carrying it too drew the mask at the opacity squared (#2975).
+    pub(crate) fn without_opacity(mut self) -> Self {
+        match &mut self {
+            Self::Shading(p) => p.opacity = 1.0,
+            Self::Tiling(p) => {
+                p.non_stroking_paint = p.non_stroking_paint.clone().opaque();
+                p.stroke_paint = p.stroke_paint.clone().opaque();
+            }
+        }
+        self
+    }
+
+    /// PdfCraft patch: set the alpha of the graphics state in effect when the pattern is painted. The `gs` operator
+    /// can come after `scn`/`SCN`, so the alpha must not be captured when the pattern is selected.
+    pub(crate) fn set_alpha(&mut self, alpha: f32) {
+        if let Self::Shading(p) = self {
+            p.opacity = alpha;
         }
     }
 
@@ -93,11 +118,15 @@ pub struct ShadingPattern {
 }
 
 impl ShadingPattern {
-    pub(crate) fn new(dict: &Dict<'_>, cache: &Cache, opacity: f32) -> Option<Self> {
+    pub(crate) fn new(
+        dict: &Dict<'_>,
+        cache: &Cache,
+        defaults: &DefaultColorSpaces<'_, '_>,
+    ) -> Option<Self> {
         let shading = dict.get::<Object<'_>>(SHADING).and_then(|o| {
             let (dict, stream) = dict_or_stream(&o)?;
 
-            Shading::new(dict, stream, cache)
+            Shading::new(dict, stream, cache, defaults)
         })?;
         let matrix = dict
             .get::<[f64; 6]>(MATRIX)
@@ -110,7 +139,7 @@ impl ShadingPattern {
 
         Some(Self {
             shading: Arc::new(shading),
-            opacity,
+            opacity: 1.0,
             matrix,
             transfer_function: None,
         })

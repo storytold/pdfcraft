@@ -92,7 +92,7 @@ fn main() {
     ));
 
     // Can set bookmark formatting and color per report bookmark added.
-    // Formating is 1 for italic 2 for bold 3 for bold and italic
+    // Formatting is 1 for italic 2 for bold 3 for bold and italic
     // Color is RGB 0.0..255.0
     for (layer, mut doc) in documents {
         let color = [0.0, 0.0, 0.0];
