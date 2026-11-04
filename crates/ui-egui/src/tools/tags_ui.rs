@@ -51,7 +51,7 @@ impl Draft {
     }
 
     /// Creates edits for the draft fields that apply to this tag's mapped standard type.
-    fn edit(&self, tag: &TagInfo) -> Option<Edit> {
+    fn edit(&self, tag: &TagInfo, standard_kind: &str) -> Option<Edit> {
         let mut edits = Vec::new();
         let mut add = |property, prior: Option<&str>, next: &str| {
             let value = (!next.is_empty()).then(|| next.to_owned());
@@ -64,10 +64,10 @@ impl Draft {
         add(TagProperty::ActualText, tag.actual_text.as_deref(), &self.actual_text);
         add(TagProperty::AlternateText, tag.alt.as_deref(), &self.alt);
         add(TagProperty::Language, tag.language.as_deref(), &self.language);
-        if tag.standard_kind == "Table" {
+        if standard_kind == "Table" {
             add(TagProperty::Summary, tag.summary.as_deref(), &self.summary);
         }
-        if tag.standard_kind == "TH" {
+        if standard_kind == "TH" {
             add(TagProperty::Scope, tag.scope.as_deref(), &self.scope);
         }
         match edits.len() {
@@ -109,20 +109,20 @@ impl State {
     }
 
     /// Select a checker finding's tag without discarding an unfinished edit.
-    pub(crate) fn select(&mut self, doc: DocId, tags: &[TagInfo], object: ObjRef) -> bool {
+    pub(crate) fn select(&mut self, doc: &pdfcraft_engine::Document, tags: &[TagInfo], object: ObjRef) -> bool {
         let Some(tag) = tags.iter().find(|tag| tag.object == object) else { return false };
-        if self.doc == Some(doc)
+        if self.doc == Some(doc.id)
             && self
                 .selected
                 .and_then(|selected| tags.iter().find(|tag| tag.object == selected))
-                .is_some_and(|current| self.draft.edit(current).is_some())
+                .is_some_and(|current| self.draft.edit(current, &doc.standard_tag_kind(&self.draft.kind)).is_some())
         {
             return false;
         }
-        if self.doc != Some(doc) {
+        if self.doc != Some(doc.id) {
             self.collapsed.clear();
         }
-        self.doc = Some(doc);
+        self.doc = Some(doc.id);
         self.selected = Some(object);
         self.draft = Draft::from_tag(tag);
         self.draft_source = Some(tag.clone());
@@ -137,6 +137,7 @@ pub(crate) fn panel(
     ui: &mut Ui,
     t: &Tokens,
     doc: DocId,
+    document: &pdfcraft_engine::Document,
     tags: &[TagInfo],
     content: &[TagContentItem],
     state: &mut State,
@@ -165,7 +166,10 @@ pub(crate) fn panel(
     let query = state.query.to_lowercase();
     let matching = visible_tags(tags, &query, &state.collapsed);
     let parents: HashSet<ObjRef> = tags.iter().filter_map(|tag| tag.parent).collect();
-    let dirty = state.selected.and_then(|r| tags.iter().find(|t| t.object == r)).is_some_and(|tag| state.draft.edit(tag).is_some());
+    let dirty = state
+        .selected
+        .and_then(|r| tags.iter().find(|t| t.object == r))
+        .is_some_and(|tag| state.draft.edit(tag, &document.standard_tag_kind(&state.draft.kind)).is_some());
     ui.label(egui::RichText::new(crate::i18n::fmt(tl!("{n} tags"), &[("n", &matching.len().to_string())])).small().color(t.text_muted));
     let mut page = None;
     egui::ScrollArea::vertical().max_height(100.0).show_rows(ui, 26.0, matching.len(), |ui, range| {
@@ -228,10 +232,11 @@ pub(crate) fn panel(
     }
     ui.add_enabled_ui(can_edit, |ui| {
         field(ui, tl!("Tag type"), &mut state.draft.kind, false);
-        if tag.standard_kind == "Table" && state.draft.kind == tag.kind {
+        let standard_kind = document.standard_tag_kind(&state.draft.kind);
+        if standard_kind == "Table" {
             field(ui, tl!("Summary"), &mut state.draft.summary, false);
         }
-        if tag.standard_kind == "TH" && state.draft.kind == tag.kind {
+        if standard_kind == "TH" {
             ui.horizontal(|ui| {
                 let scope_label = match state.draft.scope.as_str() {
                     "Row" => tl!("Row"),
@@ -239,12 +244,17 @@ pub(crate) fn panel(
                     "Both" => tl!("Both"),
                     _ => tl!("Unspecified"),
                 };
-                craft_ui::ComboBox::new("tag_scope", tl!("Scope")).selected_text(scope_label).show_ui(ui, |ui| {
-                    ui.selectable_value(&mut state.draft.scope, String::new(), tl!("Unspecified"));
-                    for (scope, label) in [("Row", tl!("Row")), ("Column", tl!("Column")), ("Both", tl!("Both"))] {
-                        ui.selectable_value(&mut state.draft.scope, scope.to_owned(), label);
-                    }
-                });
+                let response = craft_ui::ComboBox::from_id_salt("tag_scope")
+                    .selected_text(scope_label)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut state.draft.scope, String::new(), tl!("Unspecified"));
+                        for (scope, label) in [("Row", tl!("Row")), ("Column", tl!("Column")), ("Both", tl!("Both"))] {
+                            ui.selectable_value(&mut state.draft.scope, scope.to_owned(), label);
+                        }
+                    })
+                    .response
+                    .labelled_by(ui.label(tl!("Scope")).id);
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), tl!("Scope")));
             });
         }
         field(ui, tl!("Title"), &mut state.draft.title, false);
@@ -252,7 +262,7 @@ pub(crate) fn panel(
         field(ui, tl!("Alternate text"), &mut state.draft.alt, true);
         field(ui, tl!("Language"), &mut state.draft.language, false);
     });
-    let edit = state.draft.edit(tag);
+    let edit = state.draft.edit(tag, &document.standard_tag_kind(&state.draft.kind));
     let mut save = false;
     let siblings: Vec<&TagInfo> = tag.parent.map(|parent| tags.iter().filter(|other| other.parent == Some(parent)).collect()).unwrap_or_default();
     let position = siblings.iter().position(|sibling| sibling.object == tag.object);

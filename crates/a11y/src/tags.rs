@@ -35,6 +35,13 @@ pub struct TagContentItem {
     pub text: String,
 }
 
+/// The standard structure type for a tag name after following this document's role map.
+pub fn standard_tag_kind(doc: &Document, kind: &str) -> String {
+    let role_map =
+        alt::tree_root(doc).and_then(|root| root.get(b"RoleMap").map(|o| doc.resolve(o))).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+    String::from_utf8_lossy(&alt::standard(doc, &role_map, kind.as_bytes())).into_owned()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TagProperty {
     Type,

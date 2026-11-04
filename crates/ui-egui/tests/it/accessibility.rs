@@ -419,6 +419,34 @@ fn tags_panel_edits_role_mapped_table_summary_and_header_scope() {
     h.run_steps(2);
     assert_eq!(h.state().session.get(id).unwrap().tags()[1].scope.as_deref(), Some("Row"));
     assert_eq!(h.get_by_role_and_label(Role::ComboBox, "Scope").value().as_deref(), Some("Row"));
+
+    h.get_by_role_and_label(Role::ComboBox, "Scope").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::Button, "Column").click();
+    h.run_steps(1);
+    let tag_type = h.get_by_role_and_label(Role::TextInput, "Tag type");
+    tag_type.focus();
+    h.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::A]);
+    h.key_press(egui::Key::Backspace);
+    tag_type.type_text("P");
+    h.run_steps(1);
+    h.get_by_label("Save tag properties").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().tags()[1].kind, "P");
+    assert_eq!(h.state().session.get(id).unwrap().tags()[1].scope.as_deref(), Some("Row"));
+
+    let tag_type = h.get_by_role_and_label(Role::TextInput, "Tag type");
+    tag_type.focus();
+    h.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::A]);
+    h.key_press(egui::Key::Backspace);
+    tag_type.type_text("ChangedHeader");
+    h.run_steps(1);
+    assert_eq!(h.get_by_role_and_label(Role::ComboBox, "Scope").value().as_deref(), Some("Column"));
+    h.get_by_label("Save tag properties").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().tags()[1].standard_kind, "TH");
+    assert_eq!(h.state().session.get(id).unwrap().tags()[1].scope.as_deref(), Some("Column"));
+
     h.get_by_label("ChangedTable · 7").click();
     h.run_steps(2);
     h.state_mut().undo();
