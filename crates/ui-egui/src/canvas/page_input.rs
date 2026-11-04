@@ -90,9 +90,12 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         images: &images,
         clip: ui.clip_rect(),
     };
-    if let Some(o) = ptr.pressed().filter(|o| xf.rect.contains(*o)) {
+    if let Some(o) = ptr.pressed() {
         let at = hits.at(view, o);
-        view.router.press(i, at, tool);
+        let on_handle = at.iter().any(|h| matches!(h.layer, crate::page_cursor::Layer::Handle));
+        if xf.rect.contains(o) || on_handle {
+            view.router.press(i, at, tool);
+        }
     }
     // What this page has to do with the press: its owner's, the active tool's, or another page's.
     let press = view.router.press_for(i);
