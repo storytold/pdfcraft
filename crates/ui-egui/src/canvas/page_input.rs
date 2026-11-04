@@ -734,7 +734,7 @@ fn selection_click_count(clicks: u32, tool: QuickTool) -> u32 {
 
 fn update_dragged_selection(view: &mut DocView, text: &PageText, gesture: &TextGesture<'_>) {
     let clicks = selection_click_count(view.clicks, gesture.tool);
-    if gesture.resp.dragged()
+    if gesture.resp.dragged_by(egui::PointerButton::Primary)
         && let Some(selection) = view.selection.as_mut().filter(|selection| selection.page == gesture.page)
     {
         match &mut selection.span {

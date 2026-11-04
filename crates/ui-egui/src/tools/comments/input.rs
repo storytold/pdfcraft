@@ -309,7 +309,8 @@ fn select_input(
 /// Text asks for the replacement.
 pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut DocView) {
     let QuickTool::Comment(tool) = cx.tool else { return };
-    if tool == CommentTool::ReplaceText && cx.allowed && (resp.drag_stopped() || resp.double_clicked()) {
+    let finished = resp.drag_stopped_by(egui::PointerButton::Primary) || resp.double_clicked();
+    if tool == CommentTool::ReplaceText && cx.allowed && finished {
         if let Some((page, quads)) = view.selection_quads(cx.info).filter(|(p, _)| *p == cx.page) {
             view.clear_selection();
             let last = quads.last().copied().unwrap_or_default();
@@ -319,7 +320,7 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
         }
         return;
     }
-    if tool.markup().is_none() || !cx.allowed || !(resp.drag_stopped() || resp.double_clicked()) {
+    if tool.markup().is_none() || !cx.allowed || !finished {
         return;
     }
     if let Some(kind) = tool.markup()

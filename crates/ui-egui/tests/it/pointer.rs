@@ -1526,6 +1526,41 @@ fn a_right_button_drag_leaves_the_camera_quadrilateral() {
     assert_eq!(h.state().views[0].camera.as_ref().map(|q| q.page), Some(0), "the quadrilateral stays on page 1");
 }
 
+/// A text selection, then `tool` and a right-button drag across more of the line. The harness, and
+/// the text selected before the drag.
+fn right_drag_over_a_selection(tool: QuickTool) -> (Harness<'static, PdfCraftApp>, Option<String>) {
+    let mut h = open(text_pdf(), "150", false);
+    let (a, b) = (at(&h, 45.0, 303.0), at(&h, 120.0, 303.0));
+    assert_eq!(wait_for_cursor(&mut h, a, |c| c == egui::CursorIcon::Text), egui::CursorIcon::Text, "the page's text has arrived");
+    mouse_drag(&mut h, a, b - a);
+    let selected = h.state().views[0].selected_text();
+    assert!(selected.is_some(), "some text is selected");
+    h.state_mut().quick_tool = tool;
+    h.run_steps(2);
+    let (c, d) = (at(&h, 150.0, 303.0), at(&h, 230.0, 303.0));
+    right_drag(&mut h, c, d);
+    (h, selected)
+}
+
+/// With the Select tool, a right-button drag leaves the text selected as it is. It moved the
+/// selection's end to the pointer.
+#[test]
+fn a_right_button_drag_leaves_a_text_selection_alone() {
+    let (h, selected) = right_drag_over_a_selection(QuickTool::Select);
+    assert_eq!(h.state().views[0].selected_text(), selected, "the selection stays as it was");
+}
+
+/// A right-button drag with a markup tool or Redact turns no selection left from another tool into
+/// a comment: its end finished the selection whichever button it was.
+#[test]
+fn a_right_button_drag_makes_no_mark_of_a_text_selection() {
+    for tool in [QuickTool::Comment(CommentTool::Highlight), QuickTool::Redact] {
+        let (h, _) = right_drag_over_a_selection(tool);
+        let s = h.state();
+        assert!(s.session.get(s.views[0].id).unwrap().info.annotations.is_empty(), "no mark with {tool:?}");
+    }
+}
+
 /// With the Select tool, a right-button drag across text selects none.
 #[test]
 fn a_right_button_drag_selects_no_text() {
