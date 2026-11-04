@@ -449,6 +449,10 @@ pub(super) fn organize_grid(
                         view.pending_action = Some(ViewAction::PastePages);
                         ui.close();
                     }
+                    if ui.add_enabled(editable, egui::Button::new(tl!("Insert from clipboard"))).clicked() {
+                        view.pending_action = Some(ViewAction::InsertFromClipboard);
+                        ui.close();
+                    }
                 });
             }
         }
