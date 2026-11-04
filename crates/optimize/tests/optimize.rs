@@ -2538,6 +2538,20 @@ fn shared_indirect_actions_and_next_arrays_are_cleaned_once_and_stay_shared() {
 }
 
 #[test]
+fn a_form_action_in_an_array_inside_an_indirect_next_array_is_counted() {
+    let mut doc = Document::new_empty();
+    let p = page(&mut doc, &[], "");
+    let next = doc.add(Object::Array(vec![Object::Array(vec![Object::Dict(action("ResetForm"))]), Object::Dict(action("URI"))]));
+    let a = with(action("GoTo"), "Next", Object::Ref(next));
+    let link = doc.add(Object::Dict(with(with(Dict::new(), "Subtype", Object::name("Link")), "A", a)));
+    doc.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link)]))).unwrap();
+
+    let r = optimize(&mut doc, &Settings { discard_form_actions: true, ..Settings::default() }).unwrap();
+    assert_eq!(r.form_actions, 1, "{r:?}");
+    assert_eq!(kinds(&doc, dict(&doc, link).get(b"A")), ["GoTo", "URI"]);
+}
+
+#[test]
 fn a_shared_action_run_as_a_next_action_and_as_an_a_entry_stays_a_dictionary() {
     let mut doc = Document::new_empty();
     let p = page(&mut doc, &[], "");

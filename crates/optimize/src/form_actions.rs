@@ -138,11 +138,7 @@ impl Count {
                 // that refers to it, and their own entries by the array's own pass.
                 Object::Array(items) if self.shared.insert(*r) => {
                     for item in items {
-                        match item {
-                            Object::Dict(a) if is_form_action(doc, a) => self.direct += 1,
-                            Object::Ref(_) => self.entry(doc, item, depth + 1),
-                            _ => {}
-                        }
+                        self.entry(doc, item, depth + 1);
                     }
                 }
                 _ => {}
