@@ -161,7 +161,7 @@ pub fn i18n_report(args: &[String]) -> anyhow::Result<()> {
     }
     // Under GitHub Actions, also show the report in the job summary. Best effort: never fails the build.
     if let (Some(path), false) = (std::env::var_os("GITHUB_STEP_SUMMARY"), report.is_empty()) {
-        let _ = append_translation_summary(&path, &report);
+        let _ = append_translation_summary(std::path::Path::new(&path), &report);
     }
     Ok(())
 }
