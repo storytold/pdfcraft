@@ -524,6 +524,31 @@ fn optimize_refuses_cmyk_under_default_rgb() {
 }
 
 #[test]
+fn optimize_refuses_cmyk_under_default_cmyk() {
+    let (w, h) = (256u16, 256u16);
+    let block = |bx: u16, by: u16| [(bx * 8) as u8, (by * 8) as u8, (255 - (bx + by) * 4) as u8, ((bx ^ by) * 8) as u8];
+    let jpeg = four_component_jpeg(w, h, None, block);
+    let (mut doc, img) = showing(u32::from(w), u32::from(h), 288, "DeviceCMYK", jpeg, Parms::None);
+
+    let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
+    let p =
+        doc.get(pages).as_dict().and_then(|d| d.get(b"Kids")).and_then(|k| k.as_array()).and_then(|a| a.first()).and_then(|k| k.as_ref()).unwrap();
+    doc.update_dict(p, |d| {
+        let mut res = d.get(b"Resources").and_then(Object::as_dict).cloned().unwrap_or_default();
+        let mut cs = Dict::new();
+        cs.set(b"DefaultCMYK".to_vec(), Object::name("DeviceCMYK"));
+        res.set(b"ColorSpace".to_vec(), Object::Dict(cs));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+    })
+    .unwrap();
+
+    let original = doc.get(img);
+    let settings = Settings { convert_cmyk_to_rgb: true, ..Default::default() };
+    optimize(&mut doc, &settings).unwrap();
+    assert_eq!(doc.get(img), original, "CMYK image drawn where /DefaultCMYK is in force must refuse conversion");
+}
+
+#[test]
 fn merging_jpeg_strips_keeps_their_colour_transform() {
     // A page picture printed as 16 JPEG strips stored untransformed (/ColorTransform 0, no
     // Adobe marker): the merged image must show the strips' colours, not their samples converted
