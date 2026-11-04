@@ -226,9 +226,10 @@ pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
     walk_sig_fields(doc).0
 }
 
-/// [`sig_fields`], and whether the walk read the whole form. It did not when a cap stopped it or a
-/// field that is or holds a signature field was passed over for its name; a field it did not reach
-/// may then claim one of the widgets listed.
+/// [`sig_fields`], and whether the walk read the whole form. It did not when a cap stopped it, a
+/// field that is or holds a signature field was passed over for its name, a signed field had no
+/// name to be listed under, or the form or its `/Fields` was there but of the wrong type: a field
+/// it did not read may be signed, or claim one of the widgets listed.
 ///
 /// Kids share their parent's name instead of each copying it. A widget is listed under every field
 /// that lists it, so two claims on one widget stay visible, and it is copied once. A field taken
@@ -237,9 +238,9 @@ pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
 pub(crate) fn walk_sig_fields(doc: &Document) -> (Vec<Field>, bool) {
     let mut out = Vec::new();
     let Some(root) = doc.root() else { return (out, true) };
-    let Some(af) = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned()) else {
-        return (out, true);
-    };
+    // A form that isn't there holds no fields; one that is there but isn't a dictionary may hold any.
+    let Some(form) = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm")).map(|a| doc.resolve(a)) else { return (out, true) };
+    let Some(af) = form.as_dict() else { return (out, matches!(*form, Object::Null)) };
     let Some(top) = af.get(b"Fields") else { return (out, true) };
     let (mut fields_left, mut entries_left, mut names_left, mut whole) = (MAX_FIELDS, MAX_ENTRIES, MAX_NAME_BYTES, true);
     // Fields by reference, and by slot those written in place in an indirect array.
@@ -248,6 +249,9 @@ pub(crate) fn walk_sig_fields(doc: &Document) -> (Vec<Field>, bool) {
     let unnamed: Rc<str> = Rc::from("");
     let mut stack: Vec<(Object, Rc<str>, bool)> = Vec::new();
     let fields = doc.resolve(top);
+    if !matches!(*fields, Object::Null | Object::Array(_)) {
+        return (out, false);
+    }
     for (i, f) in fields.as_array().into_iter().flatten().enumerate() {
         if !take(&mut entries_left) {
             whole = false;
@@ -299,6 +303,10 @@ pub(crate) fn walk_sig_fields(doc: &Document) -> (Vec<Field>, bool) {
             continue;
         }
         let listed = sig && part.is_some();
+        // Signed, but with no name to be listed under: the signature is there all the same.
+        if sig && part.is_none() && d.get(b"V").is_some_and(|v| doc.resolve(v).as_dict().is_some()) {
+            whole = false;
+        }
         let mut ws: Vec<(Option<ObjRef>, Rc<Dict>)> = Vec::new();
         if listed && d.name(b"Subtype") == Some(b"Widget") {
             ws.push((o.as_ref(), Rc::new(d.clone())));
@@ -397,8 +405,8 @@ pub(super) fn nums(doc: &Document, d: &Dict, key: &[u8]) -> Option<Vec<f64>> {
 }
 
 /// List and validate every signature field. `bytes` is the file as stored (the ranges index it).
-/// A form too large to read whole gets one more row, signed and of unknown validity, for the
-/// fields not read: any of them may be signed, so the document still counts as signed.
+/// A form not read whole ([`walk_sig_fields`]) gets one more row, signed and of unknown validity,
+/// for the fields not read: any of them may be signed, so the document still counts as signed.
 pub fn list(doc: &Document, bytes: &[u8], trust: &TrustStore) -> Vec<SignatureInfo> {
     list_cached(doc, bytes, trust, &DigestCache::default())
 }

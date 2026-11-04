@@ -347,6 +347,47 @@ fn a_whole_walk_adds_no_row_for_unread_fields() {
     assert_eq!(rows, [(MAX_FIELD_NAME_BYTES, false)]);
 }
 
+/// A signed field with no name to be listed under, at the top or a kid whose `/T` is blank, cuts
+/// the walk short: its signature is there all the same. A nameless field that isn't signed hides
+/// nothing.
+#[test]
+fn a_signed_field_without_a_name_cuts_the_walk_short() {
+    let sig = "<< /Type /Sig >>".to_string();
+    for (field, whole) in [
+        ("<< /FT /Sig /V 4 0 R >>", false),
+        ("<< /T ( ) /FT /Sig /V 4 0 R >>", false),
+        ("<< /T (p) /FT /Sig /Kids [<< /T () /V 4 0 R >>] >>", false),
+        ("<< /FT /Sig >>", true),
+        ("<< /FT /Sig /V null >>", true),
+    ] {
+        assert_eq!(walk_sig_fields(&form("3 0 R", &[field.into(), sig.clone()])).1, whole, "{field}");
+    }
+}
+
+/// A form that is there but of the wrong type, an `/AcroForm` that isn't a dictionary or a
+/// `/Fields` that isn't an array, may hold any field, signed ones too: the walk counts as cut
+/// short. A form that isn't there, or is null, holds none.
+#[test]
+fn a_form_of_the_wrong_type_cuts_the_walk_short() {
+    for (form, whole) in [
+        ("/AcroForm [3 0 R]", false),
+        ("/AcroForm << /Fields 3 0 R >>", false),
+        ("/AcroForm << /Fields (3 0 R) >>", false),
+        ("/AcroForm << /Fields null >>", true),
+        ("/AcroForm << /Fields 9 0 R >>", true),
+        ("/AcroForm << >>", true),
+        ("/AcroForm null", true),
+        ("", true),
+    ] {
+        let pdf = Pdf::new()
+            .obj(format!("<< /Type /Catalog /Pages 2 0 R {form} >>"))
+            .obj("<< /Type /Pages /Kids [] /Count 0 >>")
+            .obj("<< /T (a) /FT /Sig >>")
+            .build();
+        assert_eq!(walk_sig_fields(&Document::open(Arc::new(pdf)).unwrap()).1, whole, "{form}");
+    }
+}
+
 /// One rule decides whether a signature widget is on its page, for the badge and for the redrawn
 /// layers alike: a box wider and taller than half a point, in either corner order, of finite
 /// numbers, on a widget that isn't Hidden or NoView.
