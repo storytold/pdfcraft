@@ -190,7 +190,7 @@ What's strong and missing in each: [target-app-parity.md](docs/target-app-parity
 
 ## Languages
 
-Twelve key languages: the share of the 2,897 strings the interface looks up, from
+Twelve key languages: the share of the 2,897 strings in the i18n report's denominator (the interface's strings plus every catalog key), from
 `cargo xtask i18n-report` on 2026-11-03. Detail and script notes: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Strings | Status |
@@ -240,8 +240,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-11-03 (M7, #5835):** In image crop mode, a right-click on the image, its crop box or its handles keeps the crop and opens no menu, so the menu no longer switches as the pointer moves. A right-click elsewhere clears the selection and opens the page menu. UI tests cover all four page rotations, overlapping images, a 45° image, and a check that the Done/Cancel/Remove Crop pills at a page edge still keep the crop.
 
-- **2026-11-03 (M14 docs, #5805):** `docs/localization-parity.md` and the Languages table here count every catalog with `cargo xtask i18n-report`: the share of the 2,897 strings the interface looks up, on `14ae839a`. The catalog-union measure it replaces had grown to 2,895 keys and left four catalogs at "100%" that were 44 keys short. Hindi, Indonesian and Korean are listed with their catalogs (97.5% each) instead of 0, and Thai, Lao and Central Kurdish join the table. The ≈ 68% localization score is not re-scored.
-- **2026-11-02 (M12, #1297):** `model_add` embeds a U3D or PRC file, recognised by its header, as a 3D annotation with a chosen activation and a poster (an image or PDF page fitted in the box, or a labelled frame); an older file's catalog `/Version` is raised to what the model needs. Views, a rendered poster and a UI command are later steps. Estimates unchanged.
+- **2026-11-03 (M14 docs, #5805):** `docs/localization-parity.md` and the Languages table here count every catalog with `cargo xtask i18n-report`: the share of the 2,897 strings in its denominator, on `14ae839a`. The catalog-union measure it replaces had grown to 2,895 keys and left four catalogs at "100%" that were 44 keys short. Hindi, Indonesian and Korean are listed with their catalogs (97.5% each) instead of 0, and Thai, Lao and Central Kurdish join the table. The ≈ 68% localization score is not re-scored.
 
 - **2026-11-02 (M10, #5743):** macOS print jobs name their title and owner (`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`), as the system print dialog does, because a Kyocera filter crashes on a job without them. Checked by a test and through `doc_print` against a stand-in `lp`; not yet on a physical printer.
 

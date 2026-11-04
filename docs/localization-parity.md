@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-03 · **Change:** minor (every catalog restated from `cargo xtask i18n-report` on `main` at `14ae839a`: 2,897 strings the interface looks up; Hindi, Indonesian, Korean, Thai, Lao and Central Kurdish listed with their catalogs. Scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-03 · **Change:** minor (every catalog restated from `cargo xtask i18n-report` on `main` at `14ae839a`: 2,897 strings in the report's denominator; Hindi, Indonesian, Korean, Thai, Lao and Central Kurdish listed with their catalogs. Scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Per-language status of PdfCraft's interface against Acrobat Pro's. How translations work and how to
 add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../ROADMAP.md).
@@ -8,12 +8,15 @@ add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../R
 ## How this was measured
 
 - **Strings translated** is measured with `cargo xtask i18n-report`, which CI also runs: the
-  English strings the interface can look up, less the ones a catalog has no translation for. On
-  `main` at `14ae839a` (2026-11-03) the interface looks up **2,897** strings, and every count and
-  percentage in the tables below is of that number. The denominator is what the code asks for, so
-  a catalog's own context rows (such as `theme`/`Appearance`) don't count against the others. It
-  still grows whenever the interface gains a string, so a catalog that was complete falls behind
-  without losing a translation, and every figure here carries its date. English is built in.
+  English strings in its denominator, less the ones a catalog has no translation for. The
+  denominator is the UI source's literals, the command, All tools and engine wordings, and every
+  key of every bundled catalog, which brings in the contextual, plural and dynamically looked-up
+  strings the scan can't see. On `main` at `14ae839a` (2026-11-03) that is **2,897** strings, and
+  every count and percentage in the tables below is of that number. A key only some catalogs have
+  counts as missing in the others; a contextual one (such as `theme`/`Appearance`) is met by a
+  plain translation of the same English. The denominator still grows whenever the interface gains
+  a string, so a catalog that was complete falls behind without losing a translation, and every
+  figure here carries its date. English is built in.
 - **Catalogs:** the figures above were taken from the in-repo catalogs
   (`crates/ui-egui/src/i18n/<code>.tsv`), which have since moved to craft-i18n's `locales/<code>/`.
   The report reads the catalogs the build embeds, so measuring again needs `CRAFT_I18N_DIR` set to a
@@ -100,7 +103,7 @@ Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | minor | Every catalog restated from `cargo xtask i18n-report` on `14ae839a` (of 2,897 strings the interface looks up), replacing the catalog-union measure, which had reached 2,895 keys and left rows "100%" that were 44 short (#5805). Hindi, Indonesian and Korean restated from 0 to their catalogs, and Thai, Lao and Central Kurdish added to the table. The ≈ 68% score is not re-scored |
+| 2026-11-03 | minor | Every catalog restated from `cargo xtask i18n-report` on `14ae839a` (of the 2,897 strings in the report's denominator), replacing the catalog-union measure, which had reached 2,895 keys and left rows "100%" that were 44 short (#5805). Hindi, Indonesian and Korean restated from 0 to their catalogs, and Thai, Lao and Central Kurdish added to the table. The ≈ 68% score is not re-scored |
 | 2026-10-25 | minor | Arabic current state corrected: catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build still has no Hans face and the release-pinned craft-fonts still has no Telugu face. Scores and estimates unchanged |
 | 2026-10-25 | minor | Added Persian (`fa`, 2,785 entries, all but 13 of the current 2,798-key union); right-to-left like Arabic and Kurdish, with logical entries reordered by egui 0.37's epaint; AI-assisted, not yet native-reviewed |
 | 2026-10-21 | minor | Brazilian Portuguese (`pt-br`) now covers all 2,674 distinct keys in the current catalog union; no help or engine/OS error-detail localization; twelve-language mean still rounds to ≈ 68% |
