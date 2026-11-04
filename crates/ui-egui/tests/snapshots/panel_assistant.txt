@@ -1,0 +1,3 @@
+Label = "AI assistant"
+Button "Close" [off]
+Label = "The AI assistant needs the PdfCraft desktop app."

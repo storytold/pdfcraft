@@ -143,6 +143,7 @@ impl PdfCraftApp {
         v["recent_limit"] = serde_json::json!(self.recent_limit);
         v["fill_text_color"] = serde_json::json!(self.fill_text_color);
         v["redact_prefs"] = self.redact_defaults.to_json();
+        v["ai"] = serde_json::json!(self.ai_settings);
         v["pinned_tools"] = serde_json::json!(self.pinned_tools);
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
@@ -392,6 +393,9 @@ impl PdfCraftApp {
         }
         self.custom_stamps = stamps_ui::decode(&v["custom_stamps"]);
         self.custom_actions = actions_ui::decode(&v["actions"]);
+        if let Ok(ai) = serde_json::from_value::<pdfcraft_engine::ai::AiSettings>(v["ai"].clone()) {
+            self.ai_settings = ai.sanitized();
+        }
         if let Some(on) = v["javascript"].as_bool() {
             self.session.set_javascript(on);
         }

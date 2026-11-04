@@ -32,6 +32,7 @@ use std::rc::Rc;
 
 use pdfcraft_ui_egui::PdfCraftApp;
 
+mod ai;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod compositor_gpu;
@@ -416,6 +417,7 @@ fn app_creator<'a>(
             app.motion.source = Some(motion::source());
         }
         app.set_startup_update_check(true);
+        app.ai_provider = Some(std::sync::Arc::new(ai::send));
         app.printer_source = Some(pdfcraft_ui_egui::system_printers());
         app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
         #[cfg(target_os = "macos")]

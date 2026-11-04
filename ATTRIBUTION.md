@@ -265,7 +265,7 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `assets/icons/pilcrow.svg` | Lucide icon "pilcrow" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/pilcrow.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/icons/move-horizontal.svg` | Lucide icon "move-horizontal" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/move-horizontal.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 
-## Compiled in through dependencies (6)
+## Compiled in through dependencies (7)
 
 | Crate | File | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|---|
@@ -274,6 +274,7 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `epaint_default_fonts` 0.37.0 | `fonts/NotoEmoji-Regular.ttf` | Noto Emoji (monochrome) | Google Inc. | OFL-1.1 | https://github.com/googlefonts/noto-emoji | egui monochrome fallback font (egui feature monochrome_emoji_fonts) |
 | `epaint_default_fonts` 0.37.0 | `fonts/emoji-icon-font.ttf` | emoji-icon-font | John Slegers | MIT | https://github.com/jslegers/emoji-icon-font | egui monochrome fallback font (egui feature monochrome_emoji_fonts) |
 | `epaint_default_fonts` 0.37.0 | `fonts/egui-icons.ttf` | egui icons (monochrome emoji-icon-font subset) | John Slegers | MIT | https://github.com/jslegers/emoji-icon-font | Small special-icon subset embedded by egui default_fonts; retained in FontDefinitions::default(). Provenance: https://github.com/storytold/egui/blob/6d518fc799681571963842f95b55a6b68431b15a/crates/epaint_default_fonts/fonts/egui-icons.txt; complete MIT copyright and permission text in NOTICE. |
+| `latex-rust` 2.1.1 | `fonts/stix-two-math/STIXTwoMath-Regular.otf` | STIX Two Math | The STI Pub Companies / STIX Fonts project | OFL-1.1 | https://github.com/stipub/stixfonts | outlines for LaTeX formulas in AI assistant answers (crates/ui-egui/src/ai_md.rs) |
 | `hayro-interpret` 0.7.0 | `src/font/generated/metrics.rs` | Standard-14 font metrics and encodings (as Rust tables) (non-visual data, AGENTS.md §1.1) | Adobe (Core 14 AFM metrics, PDF specification encodings); tables by The Hayro Authors | MIT OR Apache-2.0 | ISO 32000-2 Annex D; Adobe Core14 AFM files (via vendored hayro-interpret) | Glyph widths and encodings for non-embedded standard fonts. Non-visual data, allowed by AGENTS.md §1.1 |
 
 ## Downloaded at build time (22)

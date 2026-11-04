@@ -72,6 +72,8 @@ pub use files::{ExtractDraft, FilePurpose, FileRequest, RotateDraft, SplitDraft,
 pub use recovery::{AUTOSAVE_SECS, RecoveryMeta, RecoveryStore};
 use theme::{ThemeKind, ThemePreference};
 
+mod ai_md;
+pub mod ai_ui;
 mod app;
 mod hooks;
 mod persist;
@@ -337,6 +339,11 @@ pub struct PdfCraftApp {
     pub dialog: Option<Dialog>,
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
     pub(crate) updates: updates::Updates,
+    /// How to send an AI request (the desktop app sets it; see `ai_ui`).
+    pub ai_provider: Option<ai_ui::AiProvider>,
+    /// Preferences ▸ AI assistant (off by default).
+    pub ai_settings: pdfcraft_engine::ai::AiSettings,
+    pub(crate) ai: ai_ui::AiState,
     /// Lists the Print dialog's printers in the background (the desktop app sets it; see
     /// [`PrinterSource`]).
     pub printer_source: Option<PrinterSource>,

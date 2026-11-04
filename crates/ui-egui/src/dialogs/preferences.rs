@@ -544,6 +544,13 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     });
     ui.add_space(12.0);
 
+    // Card 7: AI assistant (M13, off by default)
+    let title7 = tl!("AI assistant");
+    preference_card(ui, t, title7, Some("sparkles"), &mut ctx, |ui, ctx| {
+        card_ai(ui, app, t, ctx);
+    });
+    ui.add_space(12.0);
+
     if ctx.first_match_scrolled {
         ui.data_mut(|d| d.insert_temp(last_scrolled_id, query.clone()));
     } else if query.trim().is_empty() {
@@ -807,6 +814,49 @@ fn card_javascript(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &m
         ui,
         tl!(
             "Scripts run in a sandbox without file or network access. A script that asks to open a web page needs your permission first. With JavaScript off, Acrobat's standard format, validate and calculate functions still work."
+        ),
+        t,
+    );
+}
+
+/// Content for Card 7: AI assistant. Any OpenAI-compatible endpoint; nothing is sent until asked.
+fn card_ai(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
+    let s = &mut app.ai_settings;
+    ctx.checkbox(ui, &mut s.enabled, tl!("Use an AI provider for Summarize, Ask and Translate"), t);
+    ui.add_enabled_ui(s.enabled, |ui| {
+        egui::Grid::new("ai-provider").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+            let l = ctx.label_primary(ui, tl!("Endpoint URL"), t);
+            ui.add(egui::TextEdit::singleline(&mut s.base_url).desired_width(260.0).char_limit(2_048).hint_text("http://localhost:8080/v1"))
+                .labelled_by(l.id);
+            ui.end_row();
+            let l = ctx.label_primary(ui, tl!("Model"), t);
+            ui.add(egui::TextEdit::singleline(&mut s.model).desired_width(260.0).char_limit(256).hint_text(tl!("the model id the server lists")))
+                .labelled_by(l.id);
+            ui.end_row();
+            let l = ctx.label_primary(ui, tl!("API key"), t);
+            ui.add(egui::TextEdit::singleline(&mut s.api_key).password(true).desired_width(260.0).char_limit(2_048).hint_text(tl!("optional")))
+                .labelled_by(l.id);
+            ui.end_row();
+        });
+        if s.enabled
+            && !s.base_url.trim().is_empty()
+            && let Err(e) = s.endpoint()
+        {
+            ui.label(RichText::new(e).small().color(ui.visuals().error_fg_color));
+        }
+        if s.enabled && s.is_plain_http_remote() {
+            let warning = if s.api_key.trim().is_empty() {
+                tl!("This address uses plain http://, so the document text is sent unencrypted. Use https:// unless the server is on a network you trust.")
+            } else {
+                tl!("This address uses plain http://, so the document text and the API key are sent unencrypted. Use https:// unless the server is on a network you trust.")
+            };
+            ui.label(RichText::new(warning).small().color(ui.visuals().warn_fg_color));
+        }
+    });
+    ctx.label_secondary(
+        ui,
+        tl!(
+            "Any OpenAI-compatible chat-completions endpoint (vLLM, llama.cpp, Ollama, LM Studio, or a hosted service). The text of the document you ask about is sent to it; nothing is sent until you ask. The settings, including the API key, are stored in PdfCraft's settings file on this computer."
         ),
         t,
     );

@@ -52,6 +52,8 @@ pub enum RightPanel {
     Search,
     /// Compare files: the differences.
     Compare,
+    /// The AI assistant (M13; needs a provider).
+    Assistant,
 }
 
 /// Quick-action bar tools (the vertical floating strip).
