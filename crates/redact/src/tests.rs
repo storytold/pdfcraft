@@ -1776,6 +1776,8 @@ fn a_shared_jbig2_dictionary_that_cant_leave_refuses_the_redaction() {
             scan.page.clone(),
             vec![b"11 0 R".to_vec(), stream("/N 3", b"")],
         ),
+        // Through a reference to a reference, which now reads as what it names (#5548): stored again
+        // without the dictionary, or refused (see below).
         (shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>"), scan.page.clone(), vec![b"9 0 R".to_vec()]),
         (elsewhere.to_string(), vec![0], vec![]),
         (not_jbig2, pdfcraft_filters::encode_flate(&scan.bits), vec![]),
@@ -1789,11 +1791,18 @@ fn a_shared_jbig2_dictionary_that_cant_leave_refuses_the_redaction() {
             ],
         ),
     ] {
+        let through_reference = other.contains("/JBIG2Globals 10 0 R");
         let mut doc = SharedPages { other: other.clone(), other_data: data, extra, ..SharedPages::new(&scan) }.build(&scan);
         mark(&mut doc, 0, &[CLEARS], "");
         let before = doc.clone();
-        assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(_))), "{other}");
-        assert_eq!(drawn_samples(&doc, 0), drawn_samples(&before, 0), "{other}: nothing was redacted");
+        match apply(&mut doc, None) {
+            Err(RedactError::SharedJbig2Globals(_)) => assert_eq!(drawn_samples(&doc, 0), drawn_samples(&before, 0), "{other}: nothing was redacted"),
+            Ok(_) if through_reference => {
+                assert!(!pdfcraft_cos::reachable(&doc).iter().any(|r| r.num == 9), "{other}: the dictionary stays");
+                assert_gone(&doc, b"LEAK_GLOBALS");
+            }
+            result => panic!("{other}: {result:?}"),
+        }
     }
 }
 
@@ -2119,8 +2128,9 @@ fn what_streams_share_is_fetched_once_a_run() {
 
 /// A copy of the dictionary stored with a predictor is found whatever way its parameters are given,
 /// through a chain of references among them, as a reader that follows them decodes it. Through a
-/// chain, PdfCraft can't decode the image with the copy's symbols to store it again, so the run is
-/// refused; it never goes on with the copy left in the file.
+/// chain the run either stores the image again with the copy's symbols, now that a reference to a
+/// reference reads as what it names (#5548), or is refused; it never goes on with the copy left in
+/// the file.
 #[test]
 fn a_copy_is_found_however_its_parameters_are_given() {
     let scan = shared_scan();
@@ -2135,6 +2145,7 @@ fn a_copy_is_found_however_its_parameters_are_given() {
         ("/DecodeParms 11 0 R", vec![b"12 0 R".to_vec(), parms.clone()], false),
         ("/DecodeParms [11 0 R]", vec![b"12 0 R".to_vec(), parms.clone()], false),
         ("/DecodeParms << /Predictor 11 0 R /Columns 1 >>", vec![b"12 0 R".to_vec(), b"12".to_vec()], false),
+        // `false` above: stored again or refused, either is safe (see the doc).
     ] {
         let mut objects = vec![stream(&format!("/Filter /FlateDecode {spelling}"), flate.clone())];
         objects.extend(extra.clone());
@@ -2144,7 +2155,6 @@ fn a_copy_is_found_however_its_parameters_are_given() {
         let at = format!("{spelling} {}", extra.len());
         match apply(&mut doc, None) {
             Ok(report) => {
-                assert!(stored, "{at}: went on");
                 assert_eq!(report.images_restored, 1, "{at}");
                 let kept: std::collections::HashSet<u32> = pdfcraft_cos::reachable(&doc).into_iter().map(|r| r.num).collect();
                 assert!(!kept.contains(&10) && !kept.contains(&9), "{at}: the copy or the dictionary stays");
