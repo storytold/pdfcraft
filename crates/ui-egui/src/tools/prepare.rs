@@ -244,6 +244,13 @@ fn dragged(r: Rect, grab: Grab, delta: egui::Vec2, shift: bool) -> Rect {
     }
 }
 
+fn tab_badge_rect(widget: Rect, page: Rect, size: egui::Vec2) -> Rect {
+    let max_x = (page.right() - size.x).max(page.left());
+    let max_y = (page.bottom() - size.y).max(page.top());
+    let min = egui::pos2((widget.left() + 3.0).clamp(page.left(), max_x), (widget.top() + 3.0).clamp(page.top(), max_y));
+    Rect::from_min_size(min, size)
+}
+
 pub(crate) struct Outcome {
     /// The click or drag belonged to Prepare a form.
     pub consumed: bool,
@@ -611,15 +618,20 @@ pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], view: &Doc
     }
     if prep.show_tab_numbers {
         for (number, (fi, wi)) in crate::forms_ui::tab_order(form, info).into_iter().enumerate() {
-            let Some(widget) = form.get(fi).and_then(|field| field.widgets.get(wi)) else { continue };
+            let Some(field) = form.get(fi) else { continue };
+            let Some(widget) = field.widgets.get(wi) else { continue };
             if widget.page != Some(page) {
                 continue;
             }
-            let r = screen_rect(xf, info, page, widget.rect);
+            let mut r = screen_rect(xf, info, page, widget.rect);
+            let selected = prep.selected.as_ref().is_some_and(|(name, index)| name == &field.name && *index == wi);
+            if selected && let (Some((_, grab, start)), Some(pointer)) = (grab, pointer) {
+                r = dragged(r, grab, pointer - start, ui.input(|i| i.modifiers.shift));
+            }
             let label = number.saturating_add(1).to_string();
             let font = theme::semibold((10.0 * zoom).clamp(8.0, 14.0));
             let galley = painter.layout_no_wrap(label, font, Color32::WHITE);
-            let badge = Rect::from_min_size(r.min + vec2(3.0, 3.0), galley.size() + vec2(8.0, 5.0));
+            let badge = tab_badge_rect(r, xf.rect, galley.size() + vec2(8.0, 5.0));
             let clipped = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
             clipped.rect_filled(badge, CornerRadius::same(3), SELECT_BLUE);
             clipped.galley(badge.min + vec2(4.0, 2.0), galley, Color32::WHITE);
@@ -784,5 +796,19 @@ mod tests {
             assert_eq!(if top { out.max.y } else { out.min.y }, if top { r.max.y } else { r.min.y });
         }
         assert_eq!(dragged(r, Grab::Move, vec2(5.0, 6.0), true), r.translate(vec2(5.0, 6.0)));
+    }
+
+    #[test]
+    fn tab_badges_follow_dragged_widgets_and_stay_inside_page_edges() {
+        let page = Rect::from_min_size(pos2(10.0, 20.0), vec2(100.0, 80.0));
+        let widget = Rect::from_min_size(pos2(30.0, 40.0), vec2(20.0, 15.0));
+        let size = vec2(24.0, 14.0);
+        let original = tab_badge_rect(widget, page, size);
+        let moved = dragged(widget, Grab::Move, vec2(12.0, 8.0), false);
+        assert_eq!(tab_badge_rect(moved, page, size).min, original.min + vec2(12.0, 8.0));
+
+        let near_edge = Rect::from_min_size(pos2(100.0, 95.0), vec2(8.0, 8.0));
+        let badge = tab_badge_rect(near_edge, page, size);
+        assert!(page.contains_rect(badge));
     }
 }
