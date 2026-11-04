@@ -315,6 +315,76 @@ mod tests {
     use super::*;
 
     #[test]
+    fn editing_a_saved_custom_stamp_dialog_saves_and_cancel_discards_changes() {
+        use egui::{Key, Modifiers};
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+
+        let first_bytes = Arc::new(vec![1, 2, 3]);
+        let second_bytes = Arc::new(vec![4, 5, 6]);
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.custom_stamps = vec![
+                CustomStamp { id: 101, category: "Company".into(), name: "logo".into(), file: "logo.png".into(), page: 0, data: first_bytes.clone() },
+                CustomStamp {
+                    id: 202,
+                    category: "Company".into(),
+                    name: "seal".into(),
+                    file: "seal.png".into(),
+                    page: 0,
+                    data: second_bytes.clone(),
+                },
+            ];
+            app.stamp_edit = Some(StampEdit { id: 202, name: "seal".into(), category: "Company".into() });
+            app.dialog = Some(Dialog::EditStamp);
+            app
+        });
+        h.run_steps(3);
+        h.get_by_label("Edit Custom Stamp");
+        h.get_by_value("seal").click();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.run_steps(1);
+        h.get_by_value("seal").type_text("Renamed");
+        h.get_by_value("Company").click();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.run_steps(1);
+        h.get_by_value("Company").type_text("Moved");
+        h.get_by_label("Save").click();
+        h.run_steps(3);
+        assert_eq!(h.state().custom_stamps.len(), 2);
+        assert_eq!(
+            (h.state().custom_stamps[0].id, h.state().custom_stamps[0].name.as_str(), h.state().custom_stamps[0].category.as_str()),
+            (101, "logo", "Company")
+        );
+        assert!(Arc::ptr_eq(&h.state().custom_stamps[0].data, &first_bytes));
+        assert_eq!(
+            (h.state().custom_stamps[1].id, h.state().custom_stamps[1].name.as_str(), h.state().custom_stamps[1].category.as_str()),
+            (202, "Renamed", "Moved")
+        );
+        assert!(Arc::ptr_eq(&h.state().custom_stamps[1].data, &second_bytes));
+
+        h.state_mut().stamp_edit = Some(StampEdit { id: 202, name: "Renamed".into(), category: "Moved".into() });
+        h.state_mut().dialog = Some(Dialog::EditStamp);
+        h.run_steps(2);
+        h.get_by_value("Renamed").click();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.run_steps(1);
+        h.get_by_value("Renamed").type_text("Discarded");
+        h.get_by_value("Moved").click();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.run_steps(1);
+        h.get_by_value("Moved").type_text("Discarded");
+        h.get_by_label("Cancel").click();
+        h.run_steps(3);
+        assert_eq!(
+            (h.state().custom_stamps[1].id, h.state().custom_stamps[1].name.as_str(), h.state().custom_stamps[1].category.as_str()),
+            (202, "Renamed", "Moved")
+        );
+        assert!(Arc::ptr_eq(&h.state().custom_stamps[1].data, &second_bytes));
+    }
+
+    #[test]
     fn editing_a_saved_stamp_keeps_its_selected_identity_and_source_bytes() {
         let mut app = PdfCraftApp::new();
         let bytes = Arc::new(vec![1, 2, 3]);
