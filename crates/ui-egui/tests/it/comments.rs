@@ -1090,6 +1090,9 @@ fn panel_width(h: &Harness<'static, PdfCraftApp>) -> f32 {
 
 #[test]
 fn the_panel_keeps_its_width_with_a_reply_box_open() {
+    if crate::support::skip_without_catalogs("the_panel_keeps_its_width_with_a_reply_box_open") {
+        return;
+    }
     // The reply row reserved 48 px for "Post"; Russian's wider button overflowed it, and a
     // resizable panel keeps the width its content used, so every repaint widened the panel.
     let mut h = harness(|app| app.set_option("panel", "comments").unwrap());
@@ -2928,7 +2931,7 @@ fn moved_fill_and_sign_text_is_drawn_where_it_goes_before_release() {
     click_pt(&mut h, (40.0, 150.0));
     h.event(egui::Event::Text("WWWWWW".into()));
     h.run_steps(1);
-    h.key_press(egui::Key::Enter);
+    click(&mut h, pos2(350.0, 850.0)); // Outside the field: Enter now inserts a line break.
     h.run_steps(3);
     let a = comments(&h).into_iter().find(|a| a.contents.as_deref() == Some("WWWWWW")).expect("the typed text");
     assert!(a.fill_sign && a.subtype == "FreeText", "{a:?}");
@@ -3225,6 +3228,9 @@ fn hotbar_picker_adds_and_runs_freehand_highlight() {
 
 #[test]
 fn hotbar_picker_searches_translated_tool_labels() {
+    if crate::support::skip_without_catalogs("hotbar_picker_searches_translated_tool_labels") {
+        return;
+    }
     let mut h = harness(|app| {
         app.set_option("language", "fr").unwrap();
     });
@@ -3281,6 +3287,29 @@ fn hotbar_vertical_size_and_docking() {
 }
 
 #[test]
+fn hotbar_settings_layout_and_side_controls_are_reachable_by_label() {
+    let mut h = harness(|_| {});
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    fn vertical(h: &Harness<'static, PdfCraftApp>) -> serde_json::Value {
+        serde_json::from_str::<serde_json::Value>(&h.state().persist()).unwrap()["hotbar"]["vertical"].clone()
+    }
+    let before = vertical(&h);
+    h.get_by_role_and_label(Role::Switch, "Vertical layout").click();
+    h.run_steps(3);
+    assert_ne!(vertical(&h), before, "the layout switch toggles by its label");
+    h.get_by_role_and_label(Role::RadioButton, "Right").click();
+    h.run_steps(3);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["dock"], "right");
+    assert_eq!(saved["hotbar"]["vertical"], true, "docking at the side lays the bar out vertically");
+    h.get_by_role_and_label(Role::RadioButton, "Float").click();
+    h.run_steps(3);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert!(saved["hotbar"]["dock"].is_null());
+}
+
+#[test]
 fn hotbar_settings_reopen_even_with_remembered_collapsed_state() {
     let mut h = harness(|_| {});
     let mut collapsed =
@@ -3327,5 +3356,195 @@ fn hotbar_full_side_strip_spans_each_edge_and_returns_to_float() {
     h.state_mut().set_option("hotbar-side", "float").unwrap();
     h.run_steps(5);
     let size = h.ctx.data_mut(|d| d.get_temp::<egui::Vec2>(egui::Id::unique("custom-hotbar"))).unwrap();
-    assert!(size.x < 150.0 && size.y < 150.0, "floating toolbar is compact: {size:?}");
+    let (length, thickness) = if size.y > size.x { (size.y, size.x) } else { (size.x, size.y) };
+    assert!(thickness <= 64.0 && length < 550.0, "floating toolbar is compact: {size:?}");
+}
+
+#[test]
+fn hotbar_docked_left_does_not_override_quick_tools() {
+    let mut h = harness(|app| {
+        app.set_option("hotbar-side", "left").unwrap();
+    });
+    h.run_steps(5);
+    // Controls in the docked bar share one layout, so none may overlap (#5890).
+    let labels = ["Drag hotbar", "Select (V)", "Hand (H)", "Add a sticky note", "Highlight", "Draw", "Fill & Sign", "Hotbar settings"];
+    let rects: Vec<_> = labels.iter().map(|&label| h.get_by_label(label).rect()).collect();
+    for (i, a) in rects.iter().enumerate() {
+        for (j, b) in rects.iter().enumerate().skip(i + 1) {
+            let overlap = a.min.x < b.max.x && b.min.x < a.max.x && a.min.y < b.max.y && b.min.y < a.max.y;
+            assert!(!overlap, "{} overlaps {}: {a:?} / {b:?}", labels[i], labels[j]);
+        }
+    }
+}
+
+#[test]
+fn hotbar_docked_in_compact_window_keeps_settings_button_visible() {
+    for side in ["left", "right"] {
+        let mut h = Harness::builder().with_size(egui::vec2(800.0, 480.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+            app.set_option("left", "closed").unwrap();
+            app.set_option("hotbar-side", side).unwrap();
+            app.set_option("hotbar-size", "48").unwrap();
+            app
+        });
+        h.run_steps(5);
+        let settings_rect = h.get_by_label("Hotbar settings").rect();
+        assert!(settings_rect.max.y <= 480.0, "{side} hotbar settings button must stay within window height: {settings_rect:?}");
+    }
+}
+
+#[test]
+fn hotbar_settings_menu_closes_on_click_outside() {
+    let mut h = harness(|app| {
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+    });
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some());
+
+    // Clicking outside on the canvas dismisses the settings menu
+    h.event(egui::Event::PointerButton {
+        pos: egui::pos2(600.0, 300.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.event(egui::Event::PointerButton {
+        pos: egui::pos2(600.0, 300.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_none(), "clicking outside closes the hotbar settings menu");
+
+    // Reopening and clicking another tool outside dismisses the menu and activates that tool
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some());
+    h.get_by_label("Hand (H)").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_none());
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+}
+
+#[test]
+fn hotbar_picker_in_narrow_viewport_fits_within_screen_width() {
+    let mut h = Harness::builder().with_size(egui::vec2(270.0, 480.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app
+    });
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(5);
+    let close_btn = h.get_by_label("Close menu");
+    assert!(close_btn.rect().max.x <= 270.0, "Close menu button must stay within viewport width: {:?}", close_btn.rect());
+}
+
+#[test]
+fn hotbar_floating_picker_does_not_overlap_rendered_bar() {
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app
+    });
+    let settings_btn = h.get_by_label("Hotbar settings");
+    let settings_rect = settings_btn.rect();
+    settings_btn.click();
+    h.run_steps(5);
+
+    let picker_close = h.get_by_label("Close menu");
+    let picker_rect = picker_close.rect();
+    assert!(
+        picker_rect.min.x >= settings_rect.max.x || picker_rect.max.x <= settings_rect.min.x,
+        "picker ({:?}) must not overlap the settings button ({:?}) on the floating bar",
+        picker_rect,
+        settings_rect
+    );
+}
+
+fn edit_composer_preserves_only_typewriter_whitespace(kind: u8) {
+    let shots = std::env::var_os("PDFCRAFT_COMPOSER_SHOTS").is_some();
+    let _gpu = shots.then(crate::gpu);
+    use pdfcraft_engine::{Edit, NewAnnotation, NoteIcon, Shape, Style};
+    let mut h = harness(move |app| {
+        app.set_option("layout", "single").unwrap();
+        app.set_option("panel", "comments").unwrap();
+        app.quick_tool = QuickTool::Select;
+        // Both pages use index 0, with opposite intents. The lookup must use page AND index.
+        for page in 0..2 {
+            let typewriter = if page == 0 { kind != 0 } else { kind == 0 };
+            let shape = if typewriter {
+                Shape::Typewriter { rect: [40.0, 40.0, 180.0, 90.0], font_size: 10.0 }
+            } else if kind == 2 {
+                Shape::Note { at: [80.0, 80.0], icon: NoteIcon::Comment }
+            } else {
+                Shape::TextBox { rect: [40.0, 40.0, 180.0, 90.0], font_size: 10.0 }
+            };
+            let style = Style::default_for(&shape);
+            assert!(app.apply_edit(Edit::AddAnnotation(NewAnnotation { page, shape, style, contents: "Original".into(), author: "Tester".into() })));
+        }
+    });
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(4);
+    support::settle(&mut h);
+    let point = {
+        let s = h.state();
+        let v = &s.views[0];
+        let doc = s.session.get(v.id).unwrap();
+        let a = doc.info.annotations.iter().find(|a| a.page == 1 && a.index == 0).unwrap();
+        let page = v.page_screen_rect(1).expect("the second page is visible");
+        let info = &doc.info.pages[1];
+        let p = info.user_to_view((a.rect[0] + a.rect[2]) / 2.0, (a.rect[1] + a.rect[3]) / 2.0);
+        page.min + egui::vec2(p[0], p[1]) * (page.width() / info.width)
+    };
+    support::input::double_click(&mut h, point);
+    h.run_steps(3);
+    let c = h.state().views[0].comments.composer.as_ref().expect("double-click opens the edit composer");
+    assert_eq!(c.page, 1);
+    assert_eq!(c.kind, pdfcraft_ui_egui::comments::ComposerKind::Edit(0));
+    h.input_mut().events.push(egui::Event::Text(" edited\n\n".into()));
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.composer.as_ref().unwrap().text, "Original edited\n\n");
+    if shots {
+        h.render().unwrap().save(format!("/tmp/5954-composer-{kind}.png")).unwrap();
+    }
+    h.get_all_by_label("Post").last().unwrap().click();
+    h.run_steps(3);
+    assert!(h.state().views[0].comments.composer.is_none());
+    let id = h.state().views[0].id;
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    // Check the raw saved string: ordinary-comment reader trimming must not hide a bad post.
+    let cos = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+    let pages = pdfcraft_model::pages(&cos);
+    let annots = cos.resolve(pages[1].dict.get(b"Annots").unwrap());
+    let annot = cos.resolve(&annots.as_array().unwrap()[0]);
+    let contents = cos.resolve(annot.as_dict().unwrap().get(b"Contents").unwrap());
+    let expected = if kind == 0 { "Original edited\n\n" } else { "Original edited" };
+    assert_eq!(contents.as_string().unwrap().to_text(), expected, "only a typewriter edit preserves trailing blank lines");
+    let mut reopened = pdfcraft_engine::Session::new();
+    let again = reopened.open("edited.pdf", None, bytes, None).unwrap();
+    let saved = reopened.get(again).unwrap().info.annotations.iter().find(|a| a.page == 1 && a.index == 0).unwrap();
+    assert_eq!(saved.contents.as_deref(), Some(expected));
+}
+
+#[test]
+fn typewriter_edit_composer_keeps_trailing_blank_lines() {
+    edit_composer_preserves_only_typewriter_whitespace(0);
+}
+
+#[test]
+fn other_edit_composers_keep_trimming_trailing_whitespace() {
+    for kind in [1, 2] {
+        edit_composer_preserves_only_typewriter_whitespace(kind);
+    }
 }
