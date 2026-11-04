@@ -543,8 +543,9 @@ impl PageHits<'_> {
                 return crop.into_iter().collect();
             }
         }
-        // A right-click reaches a Prepare field whatever the field tool, and while a table is set up.
-        let (field_tool, prepare_allowed) = if context { (None, true) } else { (field_tool, prepare_allowed) };
+        // A right-click reaches a Prepare field whatever the field tool, and while a table is set up,
+        // on a document that can be changed.
+        let (field_tool, prepare_allowed) = if context { (None, can_modify) } else { (field_tool, prepare_allowed) };
         let fields = if preparing {
             crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p)
         } else if tool == QuickTool::Select {

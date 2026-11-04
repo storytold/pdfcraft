@@ -1858,6 +1858,25 @@ fn with_prepare_a_click_that_began_off_the_page_keeps_the_selected_field() {
     assert!(h.state().views[0].prepare.selected.is_some(), "a click that began off the page leaves it selected");
 }
 
+/// With Prepare open on a document that can't be changed, a right-click on a field selects nothing
+/// and opens the page's menu, whose field entries would only be refused.
+#[test]
+fn with_prepare_on_a_locked_document_a_right_click_on_a_field_selects_nothing() {
+    let locked = crate::editing::encrypted(comment_and_checkbox_pdf(), pdfcraft_cos::Algorithm::Aes256, "", "owner", -1 ^ 8);
+    let mut h = open(locked, "150", false);
+    // Prepare doesn't open on such a document; it stays open on a tab switched to one.
+    h.state_mut().left = pdfcraft_ui_egui::LeftPanel::Tool("form");
+    h.state_mut().left_open = true;
+    h.run_steps(4);
+    assert!(h.state().is_preparing(), "Prepare is open");
+    let id = h.state().views[0].id;
+    assert!(!h.state().session.get(id).unwrap().allows_modification(), "the document can't be changed");
+    let on_box = at(&h, 110.0, 210.0);
+    right_click(&mut h, on_box);
+    assert!(h.state().views[0].prepare.selected.is_none(), "no field is selected");
+    assert!(h.query_by_label("Duplicate…").is_none(), "no field menu");
+}
+
 /// With Prepare open and a field selected, a right-click on the empty page opens the page's menu, and
 /// one on the field the field's: the menu is what the right-click went to. The field's menu opened
 /// wherever the page was right-clicked.

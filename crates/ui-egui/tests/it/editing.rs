@@ -2588,7 +2588,7 @@ fn protected_with(algorithm: pdfcraft_cos::Algorithm, user: &str, owner: &str, p
 }
 
 /// `bytes` rewritten encrypted.
-fn encrypted(bytes: Vec<u8>, algorithm: pdfcraft_cos::Algorithm, user: &str, owner: &str, permissions: i32) -> Vec<u8> {
+pub(crate) fn encrypted(bytes: Vec<u8>, algorithm: pdfcraft_cos::Algorithm, user: &str, owner: &str, permissions: i32) -> Vec<u8> {
     let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(bytes)).unwrap();
     doc.set_encryption(&pdfcraft_cos::NewEncryption {
         algorithm,
@@ -7466,6 +7466,37 @@ fn a_click_on_a_picture_grip_changes_nothing() {
     slipping_click(&mut h, grip, grip);
     assert_eq!(h.state().session.get(id).unwrap().edit_generation(), before, "no edit");
     assert!(h.state().views[0].image_selection.is_some(), "the picture stays selected");
+}
+
+/// With Add text holding text that can't be drawn, a drag from a paragraph moves nothing: the draft
+/// stays where it is being typed (#125), as a click there leaves it.
+#[test]
+fn add_text_moves_no_paragraph_while_it_holds_a_draft_it_cant_draw() {
+    if crate::support::skip_without_glyphs("add_text_moves_no_paragraph_while_it_holds_a_draft_it_cant_draw", "en", "Hello 世界") {
+        return;
+    }
+    let mut h = edit_page(pdfcraft_ui_egui::QuickTool::AddText);
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let block = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+    let blank = point_on(&h, block.rect[0], block.rect[3] + 12.0);
+    slipping_click(&mut h, blank, blank);
+    h.event(egui::Event::Text("Hello 世界".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("Hello 世界"), "the draft holds the text");
+    let on_text = point_on(&h, (block.rect[0] + block.rect[2]) / 2.0, (block.rect[1] + block.rect[3]) / 2.0);
+    h.hover_at(on_text);
+    h.run_steps(1);
+    h.drag_at(on_text);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(on_text + egui::vec2(10.0 * k as f32, 0.0));
+        h.run_steps(1);
+    }
+    h.drop_at(on_text + egui::vec2(40.0, 0.0));
+    h.run_steps(3);
+    assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].rect, block.rect, "the paragraph stays");
 }
 
 /// In the page grid, Delete deletes the page chosen there. The picture selected before the grid

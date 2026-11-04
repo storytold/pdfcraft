@@ -770,8 +770,11 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         PagePress::Mine(Owner::Paragraph { block, part }) => Some((block, part)),
         _ => None,
     };
+    // Add text holds text that can't be drawn where it is being typed (#125).
+    let held_draft = adding.is_some() && view.content.blocked().is_some();
     if ptr.drag_started
         && active.is_none()
+        && !held_draft
         && let Some(o) = ptr.origin
         && let Some((block, part)) = owner
     {
