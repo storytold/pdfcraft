@@ -31,6 +31,10 @@ release_arch() {
 }
 # The release workflow cross-compiles aarch64 in an x86_64 VM with CARGO_BUILD_TARGET set to
 # aarch64-unknown-freebsd (craft-common-actions#39): name the archive after the target.
+# host-tuple means the build host's triple, as rustc names it.
+if [[ "${CARGO_BUILD_TARGET:-}" == host-tuple ]]; then
+  CARGO_BUILD_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
+fi
 case "${CARGO_BUILD_TARGET:-}" in
   "") ARCH="$(release_arch "$(uname -m)")" ;;
   aarch64-unknown-freebsd | x86_64-unknown-freebsd) ARCH="$(release_arch "${CARGO_BUILD_TARGET%%-*}")" ;;
@@ -47,7 +51,7 @@ BASENAME="pdfcraft-$VERSION-freebsd-$ARCH"
 echo "==> PdfCraft $VERSION for FreeBSD $ARCH"
 
 if [[ "$SKIP_BUILD" = 0 ]]; then
-  (cd "$ROOT" && cargo build --release --locked -p pdfcraft -p pdfcraft-cli)
+  (cd "$ROOT" && cargo build --release --locked ${CARGO_BUILD_TARGET:+--target "$CARGO_BUILD_TARGET"} -p pdfcraft -p pdfcraft-cli)
 fi
 # Cargo puts a cross build under target/<triple>/release.
 BIN="$CARGO_TARGET_DIR/${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}release"
@@ -70,7 +74,7 @@ copy_docs "$STAGE/share/doc/pdfcraft"
 # which has to run here: build it for this machine, not for CARGO_BUILD_TARGET.
 (unset CARGO_BUILD_TARGET; stage_models "$STAGE/share/pdfcraft/models")
 
-if [ "$ARCH" = "$HOST_ARCH" ]; then
+if [ -z "${CARGO_BUILD_TARGET:-}" ] && [ "$ARCH" = "$HOST_ARCH" ]; then
   "$STAGE/bin/pdfcraft" --version
 else
   # They cannot run here, so check what they are instead: executables, not libraries or objects.
@@ -82,7 +86,7 @@ else
       *) echo "error: $b is not a FreeBSD $ARCH executable: $(file -b "$b")" >&2; exit 1 ;;
     esac
   done
-  echo "skipping --version: an $ARCH binary does not run on this $HOST_ARCH machine"
+  echo "skipping --version: a CARGO_BUILD_TARGET=$CARGO_BUILD_TARGET build does not run on this $HOST_ARCH machine"
 fi
 mkdir -p "$DIST"
 tar -C "$WORK" -czf "$DIST/$BASENAME.tar.gz" "$BASENAME"
