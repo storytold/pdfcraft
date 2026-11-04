@@ -2532,7 +2532,8 @@ fn pattern_fills_carry_their_lines_into_the_layout() {
 fn a_patterned_fill_cut_by_a_page_break_keeps_its_pattern_on_both_pages() {
     // A 12-inch bordered box in a 10-inch content area: it is cut at the area's bottom.
     let body = r#"<subform name="body" layout="tb" w="7.5in"><subform name="tall" layout="position" w="7.5in" h="12in"><border><edge/><fill><color value="255,211,0"/><pattern type="diagonalLeft"><color value="255,0,0"/></pattern></fill></border><draw name="note" x="0in" y="0in" w="2in" h="0.3in"><value><text>Note</text></value></draw></subform></subform>"#;
-    let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
+    let xdp = one_area_form(r#"layout="tb""#, body);
+    let form = layout_xml(&xdp).unwrap();
     assert_eq!(form.pages.len(), 2);
     let fills = |page: &Page| {
         page.items
@@ -2548,6 +2549,16 @@ fn a_patterned_fill_cut_by_a_page_break_keeps_its_pattern_on_both_pages() {
     let want = Some(Pattern { hatch: Hatch::DiagonalLeft, color: Color([1.0, 0.0, 0.0]) });
     assert_eq!((first[0].2, last[0].2), (want, want), "both pieces keep the pattern");
     assert!((first[0].0.h + last[0].0.h - 12.0 * 72.0).abs() < 0.01, "the two parts make the whole box");
+    // And the written pages hatch their pieces: each page's stream paints its piece with
+    // the pattern, named in that page's own /Pattern resources.
+    for at in 0..2 {
+        let (doc, page) = written_page(&xdp, at);
+        let ops = page_content(&doc, &page);
+        assert!(ops.lines().any(|l| l.starts_with("q /Pattern cs /Ph") && l.contains(" scn ")), "page {at} hatches its piece: {ops}");
+        let resources = doc.resolve(page.get(b"Resources").unwrap());
+        let patterns = resources.as_dict().unwrap().get(b"Pattern").map(|p| doc.resolve(p)).expect("the page names its patterns");
+        assert_eq!(patterns.as_dict().unwrap().len(), 1, "page {at} names the one pattern it paints with");
+    }
 }
 
 /// A pattern fill is written as the fill's colour, then the same path filled with a coloured
@@ -4281,12 +4292,17 @@ fn line_draw(x: &str, y: &str, rotate: &str) -> String {
 
 /// `xdp` laid out into its document, and that document's first page.
 fn written(xdp: &str) -> (Document, Dict) {
+    written_page(xdp, 0)
+}
+
+/// `xdp` laid out into its document, and that document's page `at`.
+fn written_page(xdp: &str, at: usize) -> (Document, Dict) {
     let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
     render_into(&mut doc).unwrap();
     let root = doc.get(doc.root().unwrap());
     let pages = doc.get(root.as_dict().unwrap().reference(b"Pages").unwrap());
     let kids = pages.as_dict().unwrap().get(b"Kids").map(|k| doc.resolve(k)).unwrap();
-    let page = doc.get(kids.as_array().unwrap()[0].as_ref().unwrap());
+    let page = doc.get(kids.as_array().unwrap()[at].as_ref().unwrap());
     let page = page.as_dict().unwrap().clone();
     (doc, page)
 }
