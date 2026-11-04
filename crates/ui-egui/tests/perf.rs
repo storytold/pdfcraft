@@ -63,16 +63,29 @@ fn calibration_average() -> std::time::Duration {
     best
 }
 
-/// Measure calibration just before each frame round. The lowest average-to-budget ratio determines the result.
+/// A round's calibration: the faster of the runs before and after its frames.
+fn round_calibration(before: std::time::Duration, after: std::time::Duration) -> std::time::Duration {
+    before.min(after)
+}
+
+#[test]
+fn contention_during_one_calibration_does_not_raise_the_budget() {
+    let quiet = std::time::Duration::from_millis(17);
+    let contended = std::time::Duration::from_millis(60);
+    assert_eq!(budget_scale(round_calibration(contended, quiet)), 1.0);
+    assert_eq!(budget_scale(round_calibration(quiet, contended)), 1.0);
+    assert_eq!(budget_scale(round_calibration(contended, contended)), 3.0);
+}
+
+/// Measure calibration just before and just after each frame round, and set that round's budget from
+/// the faster of the two. The lowest average-to-budget ratio determines the result.
 /// Later rounds run only when the measured average exceeds that round's calibrated budget.
 fn best_average(label: &str, frames: usize, mut step: impl FnMut(usize)) -> (std::time::Duration, std::time::Duration) {
     let mut best = std::time::Duration::MAX;
     let mut best_budget = BUDGET;
     let mut best_ratio = f64::INFINITY;
     for round in 1..=3 {
-        let calibration = calibration_average();
-        let scale = budget_scale(calibration);
-        let budget = BUDGET.mul_f64(scale);
+        let before = calibration_average();
         let start = std::time::Instant::now();
         let mut worst = std::time::Duration::ZERO;
         for f in 0..frames {
@@ -81,8 +94,12 @@ fn best_average(label: &str, frames: usize, mut step: impl FnMut(usize)) -> (std
             worst = worst.max(t.elapsed());
         }
         let avg = start.elapsed() / frames as u32;
+        let after = calibration_average();
+        let calibration = round_calibration(before, after);
+        let scale = budget_scale(calibration);
+        let budget = BUDGET.mul_f64(scale);
         eprintln!(
-            "PERF {label} round {round}: calibration {calibration:?}, factor {scale:.2}, budget {budget:?}, avg frame {avg:?}, worst {worst:?}"
+            "PERF {label} round {round}: calibration {before:?} before, {after:?} after, factor {scale:.2}, budget {budget:?}, avg frame {avg:?}, worst {worst:?}"
         );
         let ratio = avg.as_secs_f64() / budget.as_secs_f64();
         if ratio < best_ratio {
