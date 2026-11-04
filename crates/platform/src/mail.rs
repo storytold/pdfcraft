@@ -471,8 +471,14 @@ fn run(program: &Path, args: &[String], stdin: Option<&str>, watch: Watch) -> Op
     };
     if let (Some(script), Some(mut input)) = (stdin, child.stdin.take()) {
         use std::io::Write;
-        // A script the helper doesn't read shows as its exit status.
-        let _ = input.write_all(script.as_bytes());
+        // A script the helper doesn't read shows as its exit status. The write runs on its own
+        // thread: a helper that stalls before reading would fill the pipe and block a write made
+        // here, before the answer timeout below could kill it; the kill closes the pipe and
+        // ends the write.
+        let script = script.to_owned();
+        std::thread::spawn(move || {
+            let _ = input.write_all(script.as_bytes());
+        });
     }
     match watch {
         Watch::Exit => match wait(&mut child, Duration::from_secs(ANSWER_SECONDS)) {
@@ -641,7 +647,8 @@ fn unsent_message(compose: &Compose, name: &str, file: &[u8]) -> String {
     if !compose.to.is_empty() {
         lines.push(format!("To: {}", compose.to.iter().map(|a| a.trim()).collect::<Vec<_>>().join(", ")));
     }
-    lines.push(format!("Subject: {}", word(&compose.subject)));
+    // An empty subject has no encoded-word (RFC 2047 wants at least one character in it).
+    lines.push(if compose.subject.is_empty() { "Subject:".to_string() } else { format!("Subject: {}", word(&compose.subject)) });
     lines.extend(["X-Unsent: 1".into(), "MIME-Version: 1.0".into(), format!("Content-Type: multipart/mixed; boundary=\"{boundary}\"")]);
     lines.extend([String::new(), format!("--{boundary}")]);
     lines.extend(["Content-Type: text/plain; charset=utf-8".into(), "Content-Transfer-Encoding: base64".into(), String::new()]);
@@ -828,7 +835,8 @@ public static class PdfCraftMapi {
 		bool told = false;
 		while (!worker.Join(250)) {
 			if (told) continue;
-			foreach (var w in Titled(subject, caller)) { if (!before.Contains(w)) { told = true; break; } }
+			// An empty subject is in every window's title, so no window says the message opened.
+			if (subject.Length > 0) foreach (var w in Titled(subject, caller)) { if (!before.Contains(w)) { told = true; break; } }
 			if (told) { Console.WriteLine("opened"); Console.Out.Flush(); }
 			else if (DateTime.UtcNow > until) { Console.WriteLine("hung"); Console.Out.Flush(); return; }
 		}
@@ -1072,6 +1080,17 @@ mod tests {
         assert_eq!(mapi_answer("failed Access denied"), Some(Some(Why::Failed("Access denied".into()))));
         assert_eq!(mapi_answer("code x"), None);
         assert_eq!(mapi_answer("WARNING: something"), None);
+    }
+
+    #[test]
+    fn an_empty_subject_has_no_encoded_word() {
+        let mut c = compose();
+        c.subject = String::new();
+        c.to = vec!["ap@example.org".into()];
+        let message = unsent_message(&c, "a.pdf", &[0u8; 20]);
+        let lines: Vec<&str> = message.split("\r\n").collect();
+        assert_eq!(lines[1], "Subject:");
+        assert!(!message.contains("=?UTF-8?B??="));
     }
 
     #[test]
