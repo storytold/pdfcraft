@@ -219,7 +219,12 @@ pub(crate) fn layout_for(wm: &Watermark, lines: &[&str], page: (f64, f64)) -> Re
     let (copy, font_size) = mark_box(wm, lines, page);
     let anchor = (page.0 / 2.0 + wm.offset[0], page.1 / 2.0 + wm.offset[1]);
     let centres = match wm.repeat {
-        Some(rep) => tile_centres(page, anchor, copy, rep)?,
+        Some(rep) => {
+            if !wm.offset.iter().all(|o| o.abs() <= MAX_REPEAT_EXTENT) {
+                return Err(EditError::Invalid("invalid repeat settings".into()));
+            }
+            tile_centres(page, anchor, copy, rep)?
+        }
         None => vec![anchor],
     };
     Ok(Layout { font_size, centres })
@@ -253,9 +258,13 @@ fn rotated_box(size: (f64, f64), degrees: f64) -> (f64, f64) {
 pub(crate) fn tile_centres(page: (f64, f64), anchor: (f64, f64), size: (f64, f64), rep: Repeat) -> Result<Vec<(f64, f64)>, EditError> {
     let bad = || EditError::Invalid("invalid repeat settings".into());
     let finite = |v: f64, max: f64| v.is_finite() && v.abs() <= max;
+    // The anchor is the page centre plus the offset, which `layout_for` has already held to
+    // `MAX_REPEAT_EXTENT`; half a page more is room for the centre itself.
     if !(rep.spacing.iter().all(|s| finite(*s, MAX_REPEAT_EXTENT) && *s >= 0.0)
-        && finite(anchor.0, MAX_REPEAT_EXTENT)
-        && finite(anchor.1, MAX_REPEAT_EXTENT)
+        && finite(page.0, MAX_REPEAT_EXTENT)
+        && finite(page.1, MAX_REPEAT_EXTENT)
+        && finite(anchor.0, MAX_REPEAT_EXTENT + page.0)
+        && finite(anchor.1, MAX_REPEAT_EXTENT + page.1)
         && size.0.is_finite()
         && size.1.is_finite())
     {
@@ -271,7 +280,9 @@ pub(crate) fn tile_centres(page: (f64, f64), anchor: (f64, f64), size: (f64, f64
     let first_row = ((-bh / 2.0 - anchor.1) / py).ceil();
     let last_row = ((page.1 + bh / 2.0 - anchor.1) / py).floor();
     let rows = last_row - first_row + 1.0;
-    if rows > MAX_REPEATS as f64 {
+    // Staggered rows can be empty in turn, so rows alone are not the count; this only keeps the
+    // loops below short, and the copies are counted in them.
+    if rows > (2 * MAX_REPEATS) as f64 {
         return Err(too_many());
     }
     // Both ends are within a few million after the checks above, so they fit an i64.

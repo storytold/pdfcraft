@@ -533,7 +533,15 @@ fn a_repeated_text_watermark_draws_each_copy_once() {
 #[test]
 fn a_repeated_picture_watermark_places_the_picture_in_every_cell() {
     let mut doc = fixture();
-    let src = MarkSource { xobject: pdfcraft_cos::ObjRef::new(50, 0), size: (100.0, 50.0), image: true };
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(1));
+    d.set(b"Height".to_vec(), Object::Int(1));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    let img = doc.add(Object::Stream(Stream::from_raw(d, vec![128])));
+    let src = MarkSource { xobject: img, size: (100.0, 50.0), image: true };
     // At a tenth of the page the picture is 60 × 30 points: a 100 × 100 step, so 9 rows of 7.
     let wm = Watermark {
         source: Some(src),
@@ -545,7 +553,38 @@ fn a_repeated_picture_watermark_places_the_picture_in_every_cell() {
     add_watermark(&mut doc, &[0], &wm, false).unwrap();
     let s = streams(&doc, 0);
     let mark = s.iter().find(|c| c.contains("/PCMark /Watermark")).expect("the watermark stream");
-    assert_eq!(mark.matches("/PCPic50 Do").count(), 63, "{mark}");
+    assert_eq!(mark.matches(&format!("/PCPic{} Do", img.num)).count(), 63, "{mark}");
+    // The name the copies draw is the page's own resource, and it is the image.
+    let p = &page_list(&doc)[0];
+    let res = doc.resolve(p.dict.get(b"Resources").expect("the page has resources"));
+    let xo = doc.resolve(res.as_dict().unwrap().get(b"XObject").expect("the page has XObject resources"));
+    assert_eq!(xo.as_dict().unwrap().get(format!("PCPic{}", img.num).as_bytes()), Some(&Object::Ref(img)));
+}
+
+#[test]
+fn a_staggered_grid_with_empty_rows_is_counted_by_its_copies_not_its_rows() {
+    // 10 x 1 point boxes on a 100 x 1600 page, 1010 apart across and 1.5 down: about 1,070 rows,
+    // but every other row falls between columns and holds nothing, so about 535 copies.
+    let rep = Repeat { spacing: [1000.0, 0.5], stagger: true };
+    let centres = tile_centres((100.0, 1600.0), (50.0, 800.0), (10.0, 1.0), rep).unwrap();
+    assert!(centres.len() > 500 && centres.len() <= MAX_REPEATS, "{}", centres.len());
+}
+
+#[test]
+fn a_repeat_offset_is_held_to_its_own_limit_not_the_page_centre_plus_it() {
+    let wm = |offset: [f64; 2]| Watermark {
+        text: "AB".into(),
+        font_size: 6.0,
+        rotation: 0.0,
+        offset,
+        repeat: Some(Repeat { spacing: [1.0e6, 1.0e6], stagger: false }),
+        ..Watermark::default()
+    };
+    // The limit is 1,000,000 points; on a 600 point page the centre plus the offset passes it.
+    assert!(watermark_centres(&wm([999_900.0, 0.0]), (600.0, 800.0)).is_ok());
+    assert!(watermark_centres(&wm([-1.0e6, 0.0]), (600.0, 800.0)).is_ok());
+    assert!(matches!(watermark_centres(&wm([1.0e6 + 1.0, 0.0]), (600.0, 800.0)), Err(EditError::Invalid(_))));
+    assert!(matches!(watermark_centres(&wm([-1.0e6 - 1.0, 0.0]), (600.0, 800.0)), Err(EditError::Invalid(_))));
 }
 
 #[test]
