@@ -264,7 +264,9 @@ pub(crate) fn page_input(
             point = snapped_point;
             snap = Some(kind);
         }
+        // Level or plumb with the last point, which is only on this page if the measurement is.
         if ui.input(|i| i.modifiers.shift)
+            && state.page == Some(page)
             && let Some(last) = state.points.last()
         {
             point = measure::snap::constrain(*last, point);

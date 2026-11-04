@@ -1934,13 +1934,19 @@ fn full_screen_neither_is_remembered_nor_hides_the_last_view() {
 
 /// A 200 × 300 pt page with one line, from (50, 150) to (150, 150).
 fn one_line_pdf() -> Vec<u8> {
+    line_pages_pdf(1)
+}
+
+/// `pages` pages like [`one_line_pdf`]'s, sharing its content.
+fn line_pages_pdf(pages: usize) -> Vec<u8> {
     let content = "1 w 50 150 m 150 150 l S";
-    let objects = [
+    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", i + 4)).collect();
+    let mut objects = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 4 0 R /Resources << >> >>".to_string(),
+        format!("<< /Type /Pages /Kids [{}] /Count {pages} >>", kids.join(" ")),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
     ];
+    objects.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 3 0 R /Resources << >> >>".to_string()));
     let mut pdf = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objects.iter().enumerate() {
@@ -2002,4 +2008,42 @@ fn the_measure_snap_marker_shows_before_the_first_point() {
     h.hover_at(at(149.0, 149.5));
     h.run_steps(2);
     assert!(!marked(&h), "no marker without Snap to drawing");
+}
+
+/// #6116 review: Shift holds a point level or plumb with the measurement's last point, which only
+/// means something on that point's page. Over another page the point is where the pointer snaps,
+/// and the click that starts a measurement there places it exactly.
+#[test]
+fn shift_on_another_page_does_not_constrain_to_the_first_pages_points() {
+    let mut h = harness(|app| {
+        app.open_bytes("plans.pdf", None, line_pages_pdf(2)).unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app.set_option("quick", "measure-distance").unwrap();
+    });
+    h.run_steps(4);
+    let at = |h: &Harness<'static, PdfCraftApp>, page: usize, x: f32, y: f32| {
+        let r = h.state().views[0].page_screen_rect(page).expect("page on screen");
+        egui::pos2(r.left() + x * r.width() / 200.0, r.top() + (300.0 - y) * r.height() / 300.0)
+    };
+    let click = |h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2| {
+        h.hover_at(p);
+        h.run_steps(1);
+        h.drag_at(p); // press
+        h.drop_at(p); // release
+        h.run_steps(2);
+    };
+    // A first point on page 1, away from the line.
+    let p = at(&h, 0, 60.0, 250.0);
+    click(&mut h, p);
+    assert_eq!((h.state().views[0].measure.page, h.state().views[0].measure.points.len()), (Some(0), 1));
+    // Shift held, a click on page 2's endpoint starts there, on the endpoint.
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    let p = at(&h, 1, 51.0, 150.5);
+    click(&mut h, p);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(1);
+    let m = &h.state().views[0].measure;
+    assert_eq!(m.page, Some(1));
+    let first = *m.points.first().expect("a point on page 2");
+    assert!((first[0] - 50.0).abs() < 1e-6 && (first[1] - 150.0).abs() < 1e-6, "on the endpoint, not held to page 1's point: {first:?}");
 }
