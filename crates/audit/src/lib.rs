@@ -99,6 +99,9 @@ const COVER_FRACTION: f64 = 0.4;
 const WORD_FRACTION: f64 = 0.5;
 /// WCAG contrast ratio below which the text is unreadable against the cover.
 const COVER_CONTRAST: f64 = 3.0;
+/// Bytes of a hidden line's text read (copied or trimmed) that cost one comparison: a byte scan
+/// is far cheaper than a box comparison, but a long padded line under many covers adds up.
+const TEXT_BYTES_PER_COMPARISON: usize = 16;
 
 /// Audit every page for faux redactions and unapplied redaction marks. Fails closed: any
 /// content that cannot be decoded, or that needs more work or report than the audit's bounds, is
@@ -157,15 +160,24 @@ impl Budget {
         cover: &[f64; 4],
         hides: impl Fn(&AuditLine) -> bool,
     ) -> Result<Option<String>, AuditError> {
-        self.comparisons = self.comparisons.saturating_add(self.page_cost);
-        if self.comparisons > self.limits.comparisons {
-            return Err(AuditError::TooManyComparisons);
-        }
+        self.spend(self.page_cost)?;
         if !copying {
-            return Ok(lines.iter().any(|line| hides(line) && !line.line.text.trim().is_empty()).then(String::new));
+            let mut hidden = false;
+            for line in lines.iter().filter(|l| hides(l)) {
+                // Trimming walks the line's text (padding and all): it costs its bytes.
+                self.spend(line.line.text.len() / TEXT_BYTES_PER_COMPARISON)?;
+                if !line.line.text.trim().is_empty() {
+                    hidden = true;
+                    break;
+                }
+            }
+            return Ok(hidden.then(String::new));
         }
         let mut covered = String::new();
         for line in lines.iter().filter(|l| hides(l)) {
+            // Copying and trimming the line walks its text once per cover: a long padded
+            // line under many covers would otherwise be read far more than its runs suggest.
+            self.spend(line.line.text.len() / TEXT_BYTES_PER_COMPARISON)?;
             if !covered.is_empty() {
                 covered.push(' ');
             }
@@ -174,11 +186,21 @@ impl Budget {
         Ok((!covered.trim().is_empty()).then_some(covered))
     }
 
+    /// `n` units of work done against the comparison bound.
+    fn spend(&mut self, n: usize) -> Result<(), AuditError> {
+        self.comparisons = self.comparisons.saturating_add(n);
+        if self.comparisons > self.limits.comparisons {
+            return Err(AuditError::TooManyComparisons);
+        }
+        Ok(())
+    }
+
     /// The text a finding reports for `covered`: none when copying is withheld. Charges what it
-    /// reports against the output bound.
+    /// reports, and the finding's own record, against the output bound: a finding with no text
+    /// (copying withheld, or a shared annotation list on many pages) still takes memory.
     fn report_text(&mut self, covered: String, copying: bool) -> Result<String, AuditError> {
         let reported = if copying { covered } else { String::new() };
-        self.covered_text = self.covered_text.saturating_add(reported.len());
+        self.covered_text = self.covered_text.saturating_add(reported.len()).saturating_add(std::mem::size_of::<AuditFinding>());
         if self.covered_text > self.limits.covered_text {
             return Err(AuditError::TooMuchOutput);
         }
@@ -360,17 +382,14 @@ enum AnnotationCover {
 fn annots(doc: &Document, page: &Dict) -> Result<Vec<AnnotationCover>, AuditError> {
     let Some(a) = page.get(b"Annots") else { return Ok(Vec::new()) };
     let resolved = doc.resolve(a);
-    let items: Vec<pdfcraft_cos::Object> = match &*resolved {
-        pdfcraft_cos::Object::Array(items) => items.clone(),
-        // A missing /Annots means no marks; a malformed one fails the audit.
-        _ => return Err(AuditError::BadAnnots),
-    };
+    // A missing /Annots means no marks; a malformed one fails the audit.
+    let Some(items) = resolved.as_array() else { return Err(AuditError::BadAnnots) };
     let mut out = Vec::new();
-    for a in &items {
-        let dict = match &*doc.resolve(a) {
-            pdfcraft_cos::Object::Dict(d) => d.clone(),
-            _ => continue,
-        };
+    for a in items {
+        // Borrowed from the resolved object: one large dictionary listed many times is not
+        // copied once per listing.
+        let resolved = doc.resolve(a);
+        let Some(dict) = resolved.as_dict() else { continue };
         let v: Vec<f64> = match dict.get(b"Rect") {
             None => continue,
             Some(r) => doc.resolve(r).as_array().map(|arr| arr.iter().filter_map(|o| doc.resolve(o).as_f64()).collect()).unwrap_or_default(),
@@ -379,7 +398,7 @@ fn annots(doc: &Document, page: &Dict) -> Result<Vec<AnnotationCover>, AuditErro
             continue;
         }
         let rect = [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])];
-        match subtype(doc, &dict)?.as_deref() {
+        match subtype(doc, dict)?.as_deref() {
             Some(b"Redact") => out.push(AnnotationCover::Redact(rect)),
             Some(b"Square") => {
                 let flags = dict.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
@@ -388,7 +407,7 @@ fn annots(doc: &Document, page: &Dict) -> Result<Vec<AnnotationCover>, AuditErro
                 }
                 let alpha = dict.get(b"CA").map(|o| doc.resolve(o)).and_then(|o| o.as_f64()).unwrap_or(1.0);
                 if alpha >= 1.0
-                    && let Some(rgb) = annotation_color(doc, &dict, b"IC")
+                    && let Some(rgb) = annotation_color(doc, dict, b"IC")
                 {
                     out.push(AnnotationCover::Square { rect, rgb });
                 }
