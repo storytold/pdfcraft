@@ -309,6 +309,16 @@ fn indexed(doc: &Document, r: ObjRef) -> bool {
     matches!(cs.as_deref(), Some(Object::Array(a)) if matches!(family(doc, a).as_deref().and_then(Object::as_name), Some(b"Indexed")))
 }
 
+/// Whether image `r` is an 8-bit image that could be binarized under [`MonoSettings::binarize_scans`].
+fn scan_candidate(doc: &Document, r: ObjRef) -> bool {
+    let Object::Stream(s) = &*doc.get(r) else { return false };
+    if s.dict.int(b"BitsPerComponent") != Some(8) || s.dict.contains(b"SMask") {
+        return false;
+    }
+    let cs = s.dict.get(b"ColorSpace").map(|cs| doc.resolve(cs));
+    cs.as_deref().and_then(Object::as_name).is_some_and(|n| matches!(n, b"DeviceGray" | b"G" | b"DeviceRGB" | b"RGB"))
+}
+
 /// The first entry of colour space array `a`, its family, read through a reference.
 fn family(doc: &Document, a: &[Object]) -> Option<Arc<Object>> {
     a.first().map(|f| doc.resolve(f))
@@ -1032,17 +1042,30 @@ fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: usiz
     let extreme_ratio = (dark + bright) as f64 / total as f64;
     let midtone_ratio = mid as f64 / total as f64;
     let dark_ratio = dark as f64 / total as f64;
+    let bright_ratio = bright as f64 / total as f64;
 
     // Must be predominantly two-tone with minimal midtones (at most 1.5%),
-    // and contain actual dark content (at least 0.5% dark pixels).
-    if extreme_ratio < 0.92 || midtone_ratio > 0.015 || dark_ratio < 0.005 {
+    // contain actual dark text content (at least 0.5%), and white paper background (at least 50%).
+    if extreme_ratio < 0.92 || midtone_ratio > 0.015 || dark_ratio < 0.005 || bright_ratio < 0.50 {
         return None;
     }
 
     // -------------------------------------------------------------
-    // OTSU THRESHOLDING
+    // OTSU THRESHOLDING & CONTENT-LOSS GUARD
     // -------------------------------------------------------------
-    let threshold = compute_otsu(&hist, total).clamp(100, 180);
+    let raw = compute_otsu(&hist, total)?;
+    if matches!(raw, 0 | 255) {
+        return None;
+    }
+    let threshold = raw.clamp(100, 180);
+
+    // Guard against bleaching faint text strokes (lum in [threshold..215)).
+    // Pixels below 215 are not background paper; if more than 0.05% of page area
+    // would be thresholded to white background, abort binarization to preserve original image.
+    let bleached_ink: u32 = hist.get(usize::from(threshold)..215).map_or(0, |slice| slice.iter().sum());
+    if (bleached_ink as f64 / total as f64) > 0.0005 {
+        return None;
+    }
 
     // -------------------------------------------------------------
     // PACK 1-BIT (MSB first, 1 = white, 0 = black)
@@ -1063,12 +1086,12 @@ fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: usiz
     Some(out)
 }
 
-fn compute_otsu(hist: &[u32; 256], total: usize) -> u8 {
+fn compute_otsu(hist: &[u32; 256], total: usize) -> Option<u8> {
     let sum: f64 = hist.iter().enumerate().map(|(i, &c)| (i as f64) * (c as f64)).sum();
     let mut wb = 0.0;
     let mut sb = 0.0;
     let mut max_variance = 0.0;
-    let mut best_t = 128u8;
+    let mut best_t = None;
     let total_f = total as f64;
 
     for (t, &count) in hist.iter().enumerate() {
@@ -1086,7 +1109,7 @@ fn compute_otsu(hist: &[u32; 256], total: usize) -> u8 {
         let variance = wb * wf * (mb - mf) * (mb - mf);
         if variance > max_variance {
             max_variance = variance;
-            best_t = t as u8;
+            best_t = Some(t as u8);
         }
     }
 
@@ -1391,8 +1414,15 @@ pub(crate) fn run(
     // indexed image's palette says which of its samples a resampled one keeps, which they may
     // change: one used where the walk didn't look may be drawn so.
     let packs = settings.mono.compression != MonoCompression::Retain;
-    let checked: HashSet<u32> =
-        ppi.keys().filter(|r| (packs && device_rgb(doc, **r)) || (settings.mono.downsample && indexed(doc, **r))).map(|r| r.num).collect();
+    let checked: HashSet<u32> = ppi
+        .keys()
+        .filter(|r| {
+            (packs && device_rgb(doc, **r))
+                || (settings.mono.downsample && indexed(doc, **r))
+                || (settings.mono.binarize_scans && scan_candidate(doc, **r))
+        })
+        .map(|r| r.num)
+        .collect();
     defaults.extend(used_elsewhere(doc, &checked, &read));
     // Soft masks are processed with their image, not on their own.
     let masks: HashSet<ObjRef> = ppi
@@ -2323,5 +2353,38 @@ mod binarize_tests {
         let mut budget = ImageBudget::with_work(u64::MAX);
         let res = super::one_bit(&Document::new_empty(), &stream_idx, true, false, true, &mut budget);
         assert!(res.is_none(), "Indexed color space must refuse scan binarization");
+    }
+
+    #[test]
+    fn content_loss_guard_protects_faint_strokes_near_190() {
+        let (w, h) = (200usize, 200usize);
+        let total = w * h; // 40,000 pixels
+        // 94.9% white background (245), 5% dark text (25)
+        let mut samples = vec![245u8; total];
+        for s in samples.iter_mut().take(2000) {
+            *s = 25;
+        }
+
+        // Add 0.1% faint pencil strokes at lum 190 (40 pixels).
+        // Total midtones = 40 / 40000 = 0.1% (<= 1.5%), so midtone_ratio alone passes.
+        // But 190 is in [threshold..215) and 40 / 40000 = 0.001 > 0.0005.
+        // Content-Loss Guard must trigger and reject to prevent bleaching out faint strokes!
+        for s in samples.iter_mut().skip(2000).take(40) {
+            *s = 190;
+        }
+
+        assert_eq!(
+            try_binarize_scan(&samples, w, w, h, 1),
+            None,
+            "Content-Loss Guard must reject scans where faint pencil strokes would be bleached to white"
+        );
+    }
+
+    #[test]
+    fn binarize_refuses_degenerate_otsu() {
+        let (w, h) = (100usize, 100usize);
+        // All pixels are identical dark (25) -> no bimodal distribution
+        let samples = vec![25u8; w * h];
+        assert_eq!(try_binarize_scan(&samples, w, w, h, 1), None, "Must reject degenerate histogram");
     }
 }
