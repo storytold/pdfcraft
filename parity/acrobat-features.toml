@@ -9915,6 +9915,18 @@ evidence = []
 notes = ""
 
 [[feature]]
+id = "misc.3d-add"
+title = "Add a 3D model (U3D/PRC) to a page"
+area = "N"
+tier = "P3"
+milestone = "M12"
+status = "partial"
+commands = []
+tools = ["model_add"]
+evidence = ["crates/automation/tests/it/model_3d.rs::model_add_embeds_the_model_with_a_fitted_poster", "crates/automation/tests/it/model_3d.rs::model_add_without_a_poster_draws_a_labelled_frame_and_activates_on_click", "crates/automation/tests/it/model_3d.rs::model_add_refuses_what_is_not_a_model_and_adds_nothing", "crates/engine/src/tests.rs::a_3d_model_gets_a_fitted_vector_poster_and_a_file_that_is_not_one_is_refused", "crates/annot/src/tests.rs::a_3d_model_raises_an_older_document_to_its_version"]
+notes = "Embeds a U3D or PRC file (detected from its header) as a 3D annotation with an activation choice and a poster: a chosen image or PDF page fitted in the box, or a labelled frame. Not yet: a poster rendered from the model, views (/VA, /3DV), replacing the poster later, a UI command. The poster is drawn in user space and not counter-rotated, so on a page with /Rotate it turns with the page, as the model does. An older file's catalog /Version is raised to 1.6 (U3D) or 1.7 (PRC); Adobe's extension level for PRC in 1.7 is not written."
+
+[[feature]]
 id = "misc.legacy-multimedia"
 title = "Legacy multimedia (screen annotations, renditions)"
 area = "N"

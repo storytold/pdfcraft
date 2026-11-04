@@ -772,6 +772,7 @@ impl Automation {
             "comment_list" => self.comment_list(&a)?,
             "comment_add" => self.comment_add(&a)?,
             "stamp_custom" => self.stamp_custom(&a)?,
+            "model_add" => self.model_add(&a)?,
             "comment_reply" => self.comment_reply(&a)?,
             "comment_set_status" => self.comment_set_status(&a)?,
             "sign_list" => self.sign_list(&a)?,

@@ -6,7 +6,7 @@ use crate::{
     AddedContent, AddedText, Background, BoxSpec, EditError, FieldProps, FieldValue, FillMark, HeaderFooter, Hidden, ImageEdit, InitialView, Label,
     LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget, PageBox, Protection, ReviewState,
     Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image, decode_data_file, embed_image, field_table, fit_picture,
-    image_content_type, is_xfa_data_file, js, mark_source, measure, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+    image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
 };
 
 mod labels;
@@ -165,6 +165,17 @@ pub enum Edit {
         name: String,
         file: MarkFile,
         author: String,
+    },
+    /// Rich Media ▸ Add 3D: a U3D or PRC `model` as a 3D annotation in `rect` on `page`, named
+    /// `name` (its alternate description). Its poster is the picture in `poster` (a PDF page or an
+    /// image) fitted inside `rect`, keeping its shape and centred, or a labelled frame without one.
+    AddModel3d {
+        page: usize,
+        rect: [f64; 4],
+        model: Arc<Vec<u8>>,
+        poster: Option<MarkFile>,
+        activation: pdfcraft_annot::Activation3d,
+        name: String,
     },
     /// Delete the comment at `index` in the page's `/Annots`, with its pop-up and replies.
     DeleteAnnotation {
