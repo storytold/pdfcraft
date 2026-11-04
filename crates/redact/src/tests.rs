@@ -2041,6 +2041,106 @@ fn a_mark_with_only_a_usable_rect_still_redacts() {
     assert!(!content(&doc, 0).contains("1234"));
 }
 
+/// A quad with a corner that is not a finite number (the parser reads `-nan`) is unusable whole:
+/// its box from the other corners would be smaller than the mark. The mark redacts through its
+/// /Rect instead.
+#[test]
+fn a_quad_with_a_corner_that_is_not_finite_falls_back_to_the_rect() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    let quads = pdfcraft_cos::Lexer::new(b"[-nan 110 40 110 30 95 40 95]", 0).object().unwrap();
+    assert!(quads.as_array().unwrap()[0].as_f64().unwrap().is_nan(), "{quads:?}");
+    doc.update_dict(m.obj, |d| {
+        d.set(b"QuadPoints".to_vec(), quads);
+        d.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(20), Object::Int(95), Object::Int(40), Object::Int(110)]));
+    })
+    .unwrap();
+    assert_eq!(marks(&doc)[0].rects, [[20.0, 95.0, 40.0, 110.0]]);
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.marks, r.glyphs), (1, 4));
+    assert!(!content(&doc, 0).contains("1234"));
+}
+
+/// Beside a usable quad, an unusable one still brings in the /Rect, so the mark redacts all it
+/// shows; with no usable /Rect either, the mark is refused rather than half applied.
+#[test]
+fn an_unusable_quad_beside_a_usable_one_still_brings_in_the_rect() {
+    let quads = |text: &[u8]| pdfcraft_cos::Lexer::new(text, 0).object().unwrap();
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    doc.update_dict(m.obj, |d| {
+        d.set(b"QuadPoints".to_vec(), quads(b"[20 110 25 110 20 95 25 95 -nan 110 40 110 30 95 40 95]"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(20), Object::Int(95), Object::Int(40), Object::Int(110)]));
+    })
+    .unwrap();
+    assert_eq!(marks(&doc)[0].rects, [[20.0, 95.0, 25.0, 110.0], [20.0, 95.0, 40.0, 110.0]]);
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.marks, r.glyphs), (1, 4));
+    // No /Rect: refused, not applied with the usable quad only.
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    doc.update_dict(m.obj, |d| {
+        d.set(b"QuadPoints".to_vec(), quads(b"[20 110 25 110 20 95 25 95 -nan 110 40 110 30 95 40 95]"));
+        d.remove(b"Rect");
+    })
+    .unwrap();
+    assert!(marks(&doc).is_empty());
+    assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)));
+}
+
+/// Entries left over after the last whole quad are a quad that can't be used: beside a usable
+/// quad they still bring in the /Rect, and with no /Rect the mark is refused.
+#[test]
+fn a_partial_quad_after_a_usable_one_still_brings_in_the_rect() {
+    let quads = |text: &[u8]| pdfcraft_cos::Lexer::new(text, 0).object().unwrap();
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    doc.update_dict(m.obj, |d| {
+        d.set(b"QuadPoints".to_vec(), quads(b"[20 110 25 110 20 95 25 95 30 110 40]"));
+        d.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(20), Object::Int(95), Object::Int(40), Object::Int(110)]));
+    })
+    .unwrap();
+    assert_eq!(marks(&doc)[0].rects, [[20.0, 95.0, 25.0, 110.0], [20.0, 95.0, 40.0, 110.0]]);
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.marks, r.glyphs), (1, 4));
+    // No /Rect: refused, not applied with the whole quad only.
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    doc.update_dict(m.obj, |d| {
+        d.set(b"QuadPoints".to_vec(), quads(b"[20 110 25 110 20 95 25 95 30 110 40]"));
+        d.remove(b"Rect");
+    })
+    .unwrap();
+    assert!(marks(&doc).is_empty());
+    assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)));
+}
+
+/// A /QuadPoints entry that is an indirect number is read through its reference, as /Rect's are,
+/// so the quad keeps its own box instead of counting as unusable.
+#[test]
+fn an_indirect_quad_corner_is_read_through_its_reference() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    let corner = doc.add(Object::Int(20));
+    let mut quads = vec![Object::Ref(corner)];
+    quads.extend([110, 40, 110, 20, 95, 40, 95].map(Object::Int));
+    doc.update_dict(m.obj, |d| {
+        d.set(b"QuadPoints".to_vec(), Object::Array(quads));
+        d.remove(b"Rect");
+    })
+    .unwrap();
+    assert_eq!(marks(&doc)[0].rects, [[20.0, 95.0, 40.0, 110.0]]);
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.marks, r.glyphs), (1, 4));
+    assert!(!content(&doc, 0).contains("1234"));
+}
+
 /// Only the pages being applied decide the refusal: an unreadable mark on another page does not
 /// stop the marks of the selected page from being applied.
 #[test]
@@ -3896,4 +3996,178 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     apply(&mut doc, None).unwrap();
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
+}
+
+/// The reported mismatch (the review's `sol_review_non_number_corner_covers_the_preview`): a null
+/// first corner with a /Rect over 1234. The renderer's and the comment list's readers take the
+/// null as 0, so the old hover fill covered `[0 95 40 110]`, AB included, while apply removed
+/// only 1234. Preview and apply now read one policy: both are the /Rect, and AB stays, as shown.
+#[test]
+fn a_null_corner_previews_and_applies_the_same_area() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    let quads = pdfcraft_cos::Lexer::new(b"[null 110 40 110 30 95 40 95]", 0).object().unwrap();
+    doc.update_dict(m.obj, |d| {
+        d.set(b"QuadPoints".to_vec(), quads);
+        d.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(20), Object::Int(95), Object::Int(40), Object::Int(110)]));
+    })
+    .unwrap();
+    // The fixture still tells the old reading apart: it substituted 0 for the null.
+    assert_eq!(pdfcraft_annot::summaries(&doc)[0].quads[0], [0.0, 110.0, 40.0, 110.0, 30.0, 95.0, 40.0, 95.0]);
+    let previews = mark_previews(&doc, None).unwrap();
+    assert_eq!(previews.len(), 1);
+    assert_eq!((previews[0].page, previews[0].index, previews[0].object), (0, 0, Some(m.obj)));
+    let areas = previews[0].areas.as_ref().unwrap();
+    assert_eq!(areas.rects, vec![[20.0, 95.0, 40.0, 110.0]], "not [0 95 40 110]");
+    assert!(areas.used_rect && areas.quad_issues.invalid_groups == 1);
+    assert_eq!(marks(&doc)[0].rects, areas.rects, "apply reads what the preview shows");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.marks, r.glyphs), (1, 4));
+    let after = content(&doc, 0);
+    assert!(after.contains("(AB)") && after.contains("(CD)") && !after.contains("1234"), "{after}");
+}
+
+/// Every ready preview is exactly the mark applying reads, in the same order, whatever was wrong
+/// with its QuadPoints.
+#[test]
+fn ready_previews_are_exactly_the_marks_applied() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    for _ in 0..4 {
+        mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    }
+    let objs: Vec<ObjRef> = marks(&doc).iter().map(|m| m.obj).collect();
+    let quads = |t: &[u8]| pdfcraft_cos::Lexer::new(t, 0).object().unwrap();
+    doc.update_dict(objs[1], |d| d.set(b"QuadPoints".to_vec(), quads(b"[20.1 110 25 110 20.1 95.3 25 95.3 -nan 1 2 3 4 5 6 7]"))).unwrap();
+    doc.update_dict(objs[2], |d| d.set(b"QuadPoints".to_vec(), quads(b"[20 110 25 110 20 95 25 95 1 2 3]"))).unwrap();
+    doc.update_dict(objs[3], |d| d.set(b"QuadPoints".to_vec(), Object::name("oops"))).unwrap();
+    let ready: Vec<(ObjRef, Vec<[f64; 4]>)> =
+        mark_previews(&doc, None).unwrap().into_iter().map(|p| (p.object.unwrap(), p.areas.unwrap().rects)).collect();
+    let applied: Vec<(ObjRef, Vec<[f64; 4]>)> = marks(&doc).into_iter().map(|m| (m.obj, m.rects)).collect();
+    assert_eq!(ready, applied);
+    assert_eq!(ready.len(), 4);
+    // 20.1 and 95.3 are not f32s: the area is the nearest f32 outside them.
+    let widened = ready[1].1[0];
+    assert!(widened[0] < 20.1 && widened[1] < 95.3 && f64::from(widened[0] as f32) == widened[0], "{widened:?}");
+}
+
+/// A Redact listed in place, valid numbers and all, is shown refused (with its /Rect to point
+/// at, never a removal fill) and refuses the apply, as before.
+#[test]
+fn a_mark_written_in_place_is_previewed_as_refused() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    let inline = pdfcraft_cos::Lexer::new(b"<< /Type /Annot /Subtype /Redact /Rect [20 95 40 110] /QuadPoints [20 110 40 110 20 95 40 95] >>", 0)
+        .object()
+        .unwrap();
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Annots".to_vec(), Object::Array(vec![inline]))).unwrap();
+    let p = mark_previews(&doc, None).unwrap();
+    assert_eq!(p.len(), 1);
+    assert_eq!((p[0].object, &p[0].areas), (None, &Err(MarkRefusal::InlineAnnotation)));
+    assert!(p[0].removal_rects().is_empty());
+    assert_eq!(p[0].locator, Some([20.0, 95.0, 40.0, 110.0]));
+    assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)));
+}
+
+/// A mark listed through a reference to a reference used to be skipped by apply (the listed
+/// object is not a dictionary) while viewers showed it. It is now refused, and says so.
+#[test]
+fn a_mark_listed_through_a_chain_of_references_is_refused() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    let alias = doc.add(Object::Ref(m.obj));
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(alias)]))).unwrap();
+    let p = mark_previews(&doc, None).unwrap();
+    assert_eq!((p.len(), p[0].object, p[0].areas.clone()), (1, Some(alias), Err(MarkRefusal::UnsupportedAnnotationReference)));
+    assert!(marks(&doc).is_empty());
+    assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)));
+}
+
+/// A refused mark leaves everything as it was: the good mark before it is not applied, the
+/// content and every key of both marks stay, and a full save writes the same bytes.
+#[test]
+fn a_refusal_changes_nothing_that_is_saved() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[10.0, 95.0, 20.0, 110.0]], "");
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let bad = marks(&doc)[1].obj;
+    doc.update_dict(bad, |d| {
+        d.set(b"QuadPoints".to_vec(), pdfcraft_cos::Lexer::new(b"[20 110 25 110 20 95 25 95 -nan 1 2 3 4 5 6 7]", 0).object().unwrap());
+        d.remove(b"Rect");
+        d.set(b"PCUnknownKey".to_vec(), Object::Int(7));
+    })
+    .unwrap();
+    let p = mark_previews(&doc, None).unwrap();
+    assert!(p[0].areas.is_ok());
+    assert_eq!(p[1].areas, Err(MarkRefusal::Geometry(MarkAreaError::QuadNeedsRect)));
+    assert!(p[1].removal_rects().is_empty() && p[1].locator.is_none(), "no zero rectangle is made up to point at it");
+    let before = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)));
+    assert_eq!(pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap(), before);
+    assert!(content(&doc, 0).contains("(AB1234CD) Tj"));
+    assert_eq!(doc.get(bad).as_dict().unwrap().int(b"PCUnknownKey"), Some(7));
+}
+
+/// Separate quads stay separate areas: the line between two marked lines is kept. A usable quad
+/// outside /Rect is applied too, beside the /Rect a bad quad brought in.
+#[test]
+fn separate_areas_are_not_merged_and_a_quad_outside_the_rect_is_applied() {
+    let text = b"BT /F1 10 Tf 10 100 Td (AAAA) Tj ET BT /F1 10 Tf 10 130 Td (GAPWORD) Tj ET BT /F1 10 Tf 10 160 Td (BBBB) Tj ET";
+    let mut doc = one_page(text, "", vec![]);
+    mark(&mut doc, 0, &[[10.0, 95.0, 30.0, 110.0], [10.0, 155.0, 30.0, 170.0]], "");
+    assert_eq!(mark_previews(&doc, None).unwrap()[0].removal_rects(), [[10.0, 95.0, 30.0, 110.0], [10.0, 155.0, 30.0, 170.0]]);
+    apply(&mut doc, None).unwrap();
+    let after = content(&doc, 0);
+    assert!(after.contains("GAPWORD") && !after.contains("AAAA") && !after.contains("BBBB"), "{after}");
+    // Mixed: line one by a usable quad (outside /Rect), line three by the /Rect.
+    let mut doc = one_page(text, "", vec![]);
+    mark(&mut doc, 0, &[[10.0, 155.0, 30.0, 170.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    doc.update_dict(m.obj, |d| {
+        d.set(b"QuadPoints".to_vec(), pdfcraft_cos::Lexer::new(b"[10 110 30 110 10 95 30 95 null 1 2 3 4 5 6 7]", 0).object().unwrap());
+        d.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(10), Object::Int(155), Object::Int(30), Object::Int(170)]));
+    })
+    .unwrap();
+    assert_eq!(mark_previews(&doc, None).unwrap()[0].removal_rects(), [[10.0, 95.0, 30.0, 110.0], [10.0, 155.0, 30.0, 170.0]]);
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.glyphs, 8);
+    let after = content(&doc, 0);
+    assert!(after.contains("GAPWORD") && !after.contains("AAAA") && !after.contains("BBBB"), "{after}");
+}
+
+/// Past the per-mark cap a mark is refused even with a usable /Rect: no prefix of it is taken.
+#[test]
+fn a_mark_past_the_quadpoint_cap_is_refused_even_with_a_rect() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    let mut q: Vec<Object> = [20, 110, 40, 110, 20, 95, 40, 95].map(Object::Int).to_vec();
+    q.resize(pdfcraft_annot::redaction::MAX_QUADPOINT_VALUES + 8, Object::Int(30));
+    doc.update_dict(m.obj, |d| d.set(b"QuadPoints".to_vec(), Object::Array(q))).unwrap();
+    assert_eq!(mark_previews(&doc, None).unwrap()[0].areas, Err(MarkRefusal::Geometry(MarkAreaError::TooManyValues)));
+    assert_eq!(mark_previews(&doc, None).unwrap()[0].locator, Some([20.0, 95.0, 40.0, 110.0]));
+    assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)));
+}
+
+/// A page whose marks hold too many QuadPoints together is refused whole; another page's marks
+/// are previewed and applied as usual.
+#[test]
+fn a_page_past_its_quadpoint_budget_is_refused_alone() {
+    let mut doc = two_pages_one_resource_dictionary(false, false);
+    // One indirect array of 8,192 quads, listed by enough marks to pass the page's budget.
+    let quad = [20, 110, 40, 110, 20, 95, 40, 95].map(Object::Int);
+    let shared = doc.add(Object::Array(quad.iter().cycle().take(pdfcraft_annot::redaction::MAX_QUADPOINT_VALUES).cloned().collect()));
+    let over = MAX_PAGE_QUADPOINT_VALUES / pdfcraft_annot::redaction::MAX_QUADPOINT_VALUES + 1;
+    for _ in 0..over {
+        mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    }
+    for m in marks(&doc) {
+        doc.update_dict(m.obj, |d| d.set(b"QuadPoints".to_vec(), Object::Ref(shared))).unwrap();
+    }
+    mark(&mut doc, 1, &[[20.0, 20.0, 70.0, 70.0]], "");
+    let p = mark_previews(&doc, None).unwrap();
+    assert_eq!(p.iter().filter(|p| p.page == 0 && p.areas == Err(MarkRefusal::PageLimit)).count(), over);
+    assert!(p.iter().any(|p| p.page == 1 && p.areas.is_ok()));
+    assert_eq!(apply(&mut doc.clone(), None), Err(RedactError::UnreadableMark(over)));
+    assert_eq!(apply(&mut doc, Some(&[1])).map(|r| r.marks), Ok(1));
 }

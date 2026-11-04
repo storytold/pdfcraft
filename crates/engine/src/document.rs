@@ -6,6 +6,7 @@ use pdfcraft_cos::{SaveOptions, write_incremental};
 use pdfcraft_render::{DocInfo, RenderConfig, RenderPool};
 
 use crate::history::Editor;
+use crate::redaction_preview::{self, PreviewUnavailable, RedactionPreviews};
 use crate::{
     CalculationOrder, CheckStyle, DocId, Edit, EditError, EditableObject, FormFieldKind, Hidden, InitialView, Label, MarkKind, SecuritySummary,
     SignatureInfo, TabOrder, TrustStore, XfaLayout, a11y, form_appearance, guard, js, measure, optimize, renderer_password, unrestricted,
@@ -22,6 +23,8 @@ pub struct Document {
     /// What is displayed (the page view, `page_render`, page images): `bytes`, plus appearances
     /// drawn for display only for comments that have none ([`display_bytes`]). Never saved.
     pub display: Arc<Vec<u8>>,
+    /// The checked redaction marks of the working graph, rebuilt with `display` ([`Self::redaction_previews`]).
+    pub(crate) redaction_previews: RedactionPreviews,
     pub info: DocInfo,
     pub renderer: RenderPool,
     /// The password the document was opened with (needed to read attachments, etc.).
@@ -433,9 +436,21 @@ impl Document {
         self.editable() && self.permissions().is_none_or(|p| p.assemble())
     }
 
-    /// Redaction marks waiting to be applied.
+    /// Redaction marks waiting to be applied: every Redact annotation the checked view lists, those
+    /// that can't be applied included (applying refuses them, and says why). While the view is
+    /// unavailable, the marks the comment list shows, so Apply is offered and explains its refusal.
     pub fn redaction_marks(&self) -> usize {
-        self.info.annotations.iter().filter(|a| a.subtype == "Redact").count()
+        match &self.redaction_previews {
+            RedactionPreviews::Available(list) => list.len(),
+            RedactionPreviews::Unavailable(_) => self.info.annotations.iter().filter(|a| a.subtype == "Redact").count(),
+        }
+    }
+
+    /// The redaction marks as applying would read them: each one's areas, or why it can't be applied.
+    /// A preview reads this, never the comment list's quads; applying is refused while it is
+    /// [`RedactionPreviews::Unavailable`].
+    pub fn redaction_previews(&self) -> &RedactionPreviews {
+        &self.redaction_previews
     }
 
     /// Page marks present (headers and footers, watermarks, backgrounds), for Update/Remove.
@@ -646,18 +661,24 @@ pub(crate) fn is_placeholder_title(title: &str) -> bool {
 /// The working file plus appearances for comments that have none, and for form fields the file
 /// leaves to the viewer (#3470). Signature artwork is preserved; validation badges belong to the
 /// viewer and never enter these bytes, which image/text exports and Print as Image also consume.
-pub(crate) fn display_bytes(editor: Option<&mut Editor>, bytes: &Arc<Vec<u8>>) -> Arc<Vec<u8>> {
-    let Some(e) = editor else { return bytes.clone() };
+pub(crate) fn display_bytes(
+    editor: Option<&mut Editor>,
+    bytes: &Arc<Vec<u8>>,
+    pages: &[pdfcraft_render::PageInfo],
+) -> (Arc<Vec<u8>>, RedactionPreviews) {
+    let Some(e) = editor else { return (bytes.clone(), RedactionPreviews::Unavailable(PreviewUnavailable::NoEditableGraph)) };
+    // The checked marks come from the same graph as the display copy, at the same moment.
+    let previews = redaction_preview::previews_for(&e.cos, pages);
     let comments = pdfcraft_annot::with_missing_appearances_cached(&e.cos, &mut e.appearances);
     let fields = pdfcraft_forms::with_field_appearances_cached(comments.as_ref().unwrap_or(&e.cos), &mut e.field_appearances);
     let Some(display) = fields.or(comments) else {
-        return bytes.clone();
+        return (bytes.clone(), previews);
     };
     match write_incremental(&display, &SaveOptions::default()) {
-        Ok(written) => Arc::new(written),
+        Ok(written) => (Arc::new(written), previews),
         Err(err) => {
             e.cos.note_repair(format!("missing comment or field appearances could not be drawn ({err})"));
-            bytes.clone()
+            (bytes.clone(), RedactionPreviews::Unavailable(PreviewUnavailable::Display))
         }
     }
 }

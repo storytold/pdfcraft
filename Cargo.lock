@@ -4249,6 +4249,7 @@ dependencies = [
  "hayro-syntax",
  "pdfcraft-cos",
  "pdfcraft-fonts",
+ "pdfcraft-geom",
  "pdfcraft-model",
  "thiserror 2.0.21",
 ]
@@ -4607,7 +4608,6 @@ dependencies = [
  "pdfcraft-filters",
  "pdfcraft-fonts",
  "pdfcraft-forms",
- "pdfcraft-geom",
  "pdfcraft-model",
  "pdfcraft-testkit",
  "pdfcraft-xfa",

@@ -65,6 +65,8 @@ impl Session {
     /// so the next save appends only newer edits. Undo history is kept.
     pub fn mark_saved(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>) -> Result<(), EditError> {
         let doc = self.doc_mut(id)?;
+        // The graph is replaced below; until the refresh rebuilds the view, it is not current.
+        doc.redaction_previews = crate::RedactionPreviews::Unavailable(crate::PreviewUnavailable::Refreshing);
         if let Some(editor) = doc.editor.as_mut() {
             // An encrypted file needs the password it is protected with now (the owner
             // password when known, so saving never downgrades this session's rights).
@@ -128,6 +130,7 @@ impl Session {
     /// cleared, as in Acrobat.
     pub fn revert(&mut self, id: DocId) -> Result<(), EditError> {
         let doc = self.doc_mut(id)?;
+        doc.redaction_previews = crate::RedactionPreviews::Unavailable(crate::PreviewUnavailable::Refreshing);
         let editor = doc.editor.as_mut().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         let base = editor.saved.clone();
         // The saved file opens with the passwords it was saved with. The current snapshot may
@@ -247,7 +250,7 @@ impl Session {
             // Keep verdict refresh and renderer refresh together. Viewer caches are
             // invalidated by the UI trust path; trust alone changes no document artwork.
             let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &doc.bytes, &doc.trust, &doc.sig_cache) };
-            doc.display = display_bytes(Some(editor), &doc.bytes);
+            (doc.display, doc.redaction_previews) = display_bytes(Some(editor), &doc.bytes, &doc.info.pages);
             doc.signatures = Arc::new(signatures);
             doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         }

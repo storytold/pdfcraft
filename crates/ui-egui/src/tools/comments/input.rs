@@ -107,8 +107,14 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
     let markup = is_markup(&a.subtype);
     let icon = if cx.allowed && !markup { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
     // Text markup does not move: a click selects it, a drag across it selects the text.
-    Some(Hit { declines_drag: markup, ..Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer(a), icon) })
+    // A redaction mark that can't be applied says so where it is, and why is in the Comments panel.
+    let tip = cx.redaction_refused(a).then(|| crate::i18n::t(REFUSED_REDACTION_TIP).to_owned());
+    Some(Hit { declines_drag: markup, tip, ..Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer(a), icon) })
 }
+
+/// What a redaction mark that can't be applied says on the page (English, translated by the
+/// catalogues when they have it).
+pub(crate) const REFUSED_REDACTION_TIP: &str = "Cannot apply this redaction; remove it and mark the area again";
 
 /// The layer a comment's body lies on: what a drag moves whole (a note, a shape, a signature, a
 /// Fill & Sign mark) is placed on the page, over a form field; text markup lies on the text, under

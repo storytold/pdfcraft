@@ -245,6 +245,15 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
     // Redact a PDF has Acrobat's footer: Clear all / Redact all.
     let footer = g.id == "redact";
     let marks = if footer { app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks()) } else { 0 };
+    // Marks applying would refuse, and a view that can't be trusted, are said before Redact all.
+    let (refused, unavailable) = if footer {
+        app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or((0, false), |d| {
+            let view = d.redaction_previews();
+            (view.refused(), marks > 0 && !view.is_available())
+        })
+    } else {
+        (0, false)
+    };
     let list_h = if footer { (ui.available_height() - 52.0).max(80.0) } else { ui.available_height() };
     egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(list_h).show(ui, |ui| {
         clear_of_scrollbar(ui);
@@ -311,6 +320,15 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                     })
                     .color(t.text_muted),
                 );
+            }
+            let warning = Color32::from_rgb(0xB4, 0x6A, 0x00);
+            if refused > 0 {
+                ui.label(egui::RichText::new(crate::i18n::fmt(tl!("{n} can't be applied"), &[("n", &refused.to_string())])).color(warning))
+                    .on_hover_text(tl!(crate::tools::comments::REFUSED_REDACTION_TIP));
+            }
+            if unavailable {
+                ui.label(egui::RichText::new(tl!("Preview unavailable")).color(warning))
+                    .on_hover_text(tl!("The marks can't be shown as they would be applied, so they can't be applied now"));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.add_enabled_ui(marks > 0, |ui| widgets::pill_button(ui, tl!("Redact all"), true)).inner.clicked() {

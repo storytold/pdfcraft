@@ -23,6 +23,7 @@ mod image;
 mod interp;
 mod overlay;
 pub mod patterns;
+mod preview;
 pub mod sanitize;
 mod tags;
 #[cfg(test)]
@@ -31,6 +32,8 @@ pub(crate) mod type3;
 pub(crate) mod type3_tables;
 
 use interp::{Mode, Scope, process};
+pub use pdfcraft_annot::redaction::{MarkAreaError, MarkAreas, QuadIssues};
+pub use preview::{MAX_PAGE_QUADPOINT_VALUES, MAX_PREVIEW_BYTES, MarkPreview, MarkRefusal, MarkScanError, mark_previews};
 
 pub type Rgb = [f64; 3];
 
@@ -40,12 +43,17 @@ pub enum RedactError {
     NothingToApply,
     #[error("page {0} has content that can't be read, so it can't be redacted safely")]
     Unreadable(usize),
-    /// Redact annotations with no readable area (neither usable `/QuadPoints` nor a usable `/Rect`).
-    /// Skipping them would leave the text under them in the file while the others report success.
+    /// Redact annotations that can't be applied ([`MarkRefusal`]: no readable area, `/QuadPoints`
+    /// that can't all be read with no usable `/Rect` to cover them, too many `/QuadPoints`, or a mark
+    /// applying can't remove). Skipping them would leave the text under them in the file while the
+    /// others report success. [`mark_previews`] says which marks and why.
     #[error(
-        "{0} redaction mark(s) have no readable area (neither usable QuadPoints nor a usable Rect), so the text under them can't be known; nothing was redacted. Remove those marks or mark the text again, then apply again"
+        "{0} redaction mark(s) have no readable area that can be applied (no usable QuadPoints or Rect, QuadPoints that can't all be read and no usable Rect to cover them, too many QuadPoints, or a mark written where it can't be removed), so the text under them can't be known; nothing was redacted. Remove those marks or mark the area again, then apply again"
     )]
     UnreadableMark(usize),
+    /// The marks could not all be checked, so none is applied.
+    #[error("{0}; nothing was redacted. Apply fewer pages at once")]
+    MarkScan(#[from] MarkScanError),
     #[error("redaction could not be verified: {0} item(s) were still found under the marks, so nothing was changed")]
     Residue(usize),
     /// A mark's overlay text has a character Helvetica can't draw; nothing was redacted.
@@ -189,50 +197,28 @@ pub(crate) fn listed_annotations(doc: &Document) -> HashSet<ObjRef> {
     pdfcraft_model::pages(doc).iter().flat_map(|p| annots_of(doc, &p.dict)).filter_map(|a| a.as_ref()).collect()
 }
 
-/// Every redaction mark in the document, page by page.
+/// Every redaction mark in the document, page by page: the ones that can be applied. A preview
+/// must not use this alone, since it leaves out refused marks ([`mark_previews`] lists them all).
 pub fn marks(doc: &Document) -> Vec<Mark> {
-    marks_checked(doc).0
+    marks_checked(doc, None).map(|(marks, _)| marks).unwrap_or_default()
 }
 
-/// [`marks`], and the 0-based page of each Redact annotation that has no readable area, which
-/// [`apply`] refuses rather than skipping.
-pub(crate) fn marks_checked(doc: &Document) -> (Vec<Mark>, Vec<usize>) {
-    let (mut out, mut unreadable) = (Vec::new(), Vec::new());
-    for (pi, p) in pdfcraft_model::pages(doc).iter().enumerate() {
-        for a in annots_of(doc, &p.dict) {
-            let Some(r) = a.as_ref() else {
-                // A mark written in place has no object to find, apply or remove: refuse it
-                // rather than apply the others as if it were not there.
-                if doc.resolve(&a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Redact")) {
-                    unreadable.push(pi);
-                }
-                continue;
-            };
-            let obj = doc.get(r);
-            let Some(d) = obj.as_dict() else { continue };
-            if d.name(b"Subtype") != Some(b"Redact") {
-                continue;
+/// The marks on `pages` (all when `None`) that can be applied, and the refused ones, from the
+/// same collector [`mark_previews`] reads, so applying uses exactly the areas a preview shows.
+pub(crate) fn marks_checked(doc: &Document, pages: Option<&[usize]>) -> Result<(Vec<Mark>, Vec<MarkPreview>), MarkScanError> {
+    let (mut out, mut refused) = (Vec::new(), Vec::new());
+    for preview::Collected { preview, dict } in preview::collect(doc, pages)? {
+        match (&preview.areas, preview.object, dict) {
+            (Ok(areas), Some(obj), Some(d)) => {
+                let overlay = d.get(b"OverlayText").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text())).unwrap_or_default();
+                let rects = areas.rects.clone();
+                out.push(Mark { page: preview.page, obj, rects, fill: color(doc, &d, b"IC"), overlay, look: overlay_look(doc, &d) });
             }
-            let quads: Vec<f64> = d
-                .get(b"QuadPoints")
-                .and_then(|q| doc.resolve(q).as_array().map(|a| a.iter().filter_map(Object::as_f64).collect()))
-                .unwrap_or_default();
-            let mut rects: Vec<[f64; 4]> =
-                quads.as_chunks::<8>().0.iter().map(pdfcraft_geom::quad_bounds).filter(|r| r.iter().all(|v| v.is_finite())).collect();
-            if rects.is_empty()
-                && let Some(r) = rect_of(doc, d.get(b"Rect"))
-            {
-                rects.push(r);
-            }
-            if rects.is_empty() {
-                unreadable.push(pi);
-                continue;
-            }
-            let overlay = d.get(b"OverlayText").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text())).unwrap_or_default();
-            out.push(Mark { page: pi, obj: r, rects, fill: color(doc, d, b"IC"), overlay, look: overlay_look(doc, d) });
+            // A ready mark always has its object and dictionary; anything else is refused.
+            _ => refused.push(preview),
         }
     }
-    (out, unreadable)
+    Ok((out, refused))
 }
 
 /// A page's content streams: (the references or inline objects as listed, their decoded data),
@@ -382,14 +368,15 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
 
 /// [`apply_to`], its images decoded within `images`.
 fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_cos::ImageBudget) -> Result<Report, RedactError> {
-    let (all_marks, unreadable) = marks_checked(doc);
-    // A mark with no readable area is not applied, and applying the others would look complete:
-    // refuse before anything changes. Only the pages being applied count.
-    let unreadable = unreadable.iter().filter(|page| pages.is_none_or(|p| p.contains(page))).count();
-    if unreadable > 0 {
-        return Err(RedactError::UnreadableMark(unreadable));
+    // Only the pages being applied are collected, so only their refused marks count. A scan that
+    // could not be completed is an error, never a partial list.
+    let (all_marks, refused) = marks_checked(doc, pages)?;
+    // A refused mark is not applied, and applying the others would look complete: refuse before
+    // anything changes.
+    if !refused.is_empty() {
+        return Err(RedactError::UnreadableMark(refused.len()));
     }
-    let chosen: Vec<&Mark> = all_marks.iter().filter(|m| pages.is_none_or(|p| p.contains(&m.page))).collect();
+    let chosen: Vec<&Mark> = all_marks.iter().collect();
     if chosen.is_empty() {
         return Err(RedactError::NothingToApply);
     }

@@ -10,8 +10,6 @@ workspace = true
 
 [dependencies]
 pdfcraft-cos = { workspace = true }
-# The box around each /QuadPoints quad of a redaction mark.
-pdfcraft-geom = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-model = { workspace = true }

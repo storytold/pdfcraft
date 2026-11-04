@@ -20,6 +20,11 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`,
   mark's overlay text, which becomes page content when applied; and a restyle or resize of a
   comment another program drew with a font that has those characters, whose appearance is kept
   rather than redrawn with `?` (new text for it is taken).
+- **Redaction areas** (`redaction::mark_areas`): the one reading of a Redact mark's area that
+  previews and `pdfcraft-redact` both use (usable quads, plus a usable `/Rect` whenever any quad
+  can't be used; refused without one; each area the nearest `f32` rectangle around it), and
+  `redaction::mark_locator`, a refused mark's safe `/Rect` to point at. Which annotations are
+  Redact marks, and whether one can be applied, is `pdfcraft-redact`'s.
 - **Edits:** reply (`/IRT`), set review status (a `/State` reply, as Acrobat's "Set status"
   does), change text, move, resize, restyle, delete (with pop-up and replies).
 

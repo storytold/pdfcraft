@@ -6,7 +6,48 @@ use super::{
     note_warnings, render_threads, run_edit, scan_colours, scope_of, shown_under_redactions, signatures_of, sync_xfa_state, undrawn_notices,
     uses_scripts, write_incremental, xfa, xfa_sync_datasets,
 };
+use crate::redaction_preview::{self, PreviewUnavailable, RedactionPreviews};
 use crate::{EditNotice, MarkKind};
+
+/// Whether the edit, or any edit inside a batch, applies redactions.
+fn applies_redactions(edit: &Edit) -> bool {
+    match edit {
+        Edit::ApplyRedactions { .. } => true,
+        Edit::Batch { edits, .. } => edits.iter().any(applies_redactions),
+        _ => false,
+    }
+}
+
+/// Applying redactions removes what the marks were shown to cover, so it runs only on the
+/// checked view the interface (or a tool) showed, of this very graph. Inside a batch an earlier
+/// edit could change a mark after it was shown, so a batch may not apply redactions at all.
+fn check_redaction_view(
+    edit: &Edit,
+    shown: &RedactionPreviews,
+    cos: &pdfcraft_cos::Document,
+    pages: &[pdfcraft_render::PageInfo],
+) -> Result<(), EditError> {
+    if !applies_redactions(edit) {
+        return Ok(());
+    }
+    if matches!(edit, Edit::Batch { .. }) {
+        return Err(EditError::Invalid(
+            "redactions can't be applied inside a batch of edits, where an earlier edit could change the marks after they were shown; apply them on their own (nothing was redacted)".into(),
+        ));
+    }
+    if let RedactionPreviews::Unavailable(why) = shown {
+        return Err(EditError::Invalid(format!(
+            "the redaction marks can't be shown as they would be applied ({why}), so they can't be applied; nothing was redacted"
+        )));
+    }
+    // Nothing else may have changed the graph since the view was built.
+    if redaction_preview::previews_for(cos, pages) != *shown {
+        return Err(EditError::Invalid(
+            "the redaction marks changed since they were shown; look at them again, then apply (nothing was redacted)".into(),
+        ));
+    }
+    Ok(())
+}
 
 /// Whether the edit, or any edit inside a batch, deletes pages.
 fn deletes_pages(edit: &Edit) -> bool {
@@ -59,6 +100,7 @@ impl Session {
             }
             other => other,
         };
+        check_redaction_view(&edit, &doc.redaction_previews, &editor.cos, &doc.info.pages)?;
         // Nothing to bake: leave undo history and the dirty flag alone.
         if matches!(&edit, Edit::FlattenFillSign) && !pdfcraft_annot::has_visible_fill_sign(&editor.cos) {
             return Ok(());
@@ -309,6 +351,9 @@ impl Session {
     /// Comment and form edits skip the full re-inspection (seconds on very large files): the
     /// comment list and field values are re-read from the object graph instead.
     fn refresh_scoped(doc: &mut Document, scope: Scope) -> Result<(), EditError> {
+        // Whatever path follows, the checked marks are of the graph before this change until it
+        // rebuilds them: never shown or applied as current meanwhile.
+        doc.redaction_previews = RedactionPreviews::Unavailable(PreviewUnavailable::Refreshing);
         if scope == Scope::Full || doc.info.encrypted != doc.editor.as_ref().is_some_and(|e| e.cos.output_handler().is_some()) {
             return Self::refresh(doc);
         }
@@ -338,6 +383,9 @@ impl Session {
                 *field = value;
             }
             doc.info.custom = pdfcraft_organize::custom_info(&editor.cos);
+            // A metadata edit keeps the display copy (no annotation changes), but the view of the
+            // marks is still read again from the new graph.
+            doc.redaction_previews = redaction_preview::previews_for(&editor.cos, &doc.info.pages);
             doc.info.file_size = bytes.len();
             #[cfg(test)]
             check_refresh_panic();
@@ -387,7 +435,7 @@ impl Session {
         doc.info.file_size = bytes.len();
         doc.form = form;
         let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
-        doc.display = display_bytes(Some(editor), &bytes);
+        (doc.display, doc.redaction_previews) = display_bytes(Some(editor), &bytes, &doc.info.pages);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
@@ -429,6 +477,7 @@ impl Session {
     /// from undo/redo, re-reads both: always correct, rarely paid). The cached display
     /// appearances are kept: content edits leave every annotation dictionary alone.
     fn refresh_content(doc: &mut Document, edit: Option<&Edit>) -> Result<(), EditError> {
+        doc.redaction_previews = RedactionPreviews::Unavailable(PreviewUnavailable::Refreshing);
         Self::release_working(doc);
         sync_xfa_state(doc);
         let Some(editor) = doc.editor.as_mut() else { return Ok(()) };
@@ -445,7 +494,7 @@ impl Session {
         }
         doc.info.file_size = bytes.len();
         let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
-        doc.display = display_bytes(Some(editor), &bytes);
+        (doc.display, doc.redaction_previews) = display_bytes(Some(editor), &bytes, &doc.info.pages);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
@@ -462,6 +511,7 @@ impl Session {
     /// still fails, [`Self::show_released`] draws the original rather than nothing. Save writes
     /// from the editor, never from these.
     pub(crate) fn release_working(doc: &mut Document) {
+        doc.redaction_previews = RedactionPreviews::Unavailable(PreviewUnavailable::Refreshing);
         let Some(original) = doc.editor.as_ref().map(|e| e.cos.bytes().clone()) else { return };
         // Dropping the pool stops its workers; each lets go of the file when it exits.
         doc.renderer = RenderPool::new_inline(Arc::new(Vec::new()), doc.config.clone());
@@ -488,6 +538,7 @@ impl Session {
     }
 
     fn refresh_with_indexes(doc: &mut Document, invalidate_markers: bool, invalidate_links: bool) -> Result<(), EditError> {
+        doc.redaction_previews = RedactionPreviews::Unavailable(PreviewUnavailable::Refreshing);
         // A full refresh may follow structural or annotation changes: cached appearances
         // may be stale, so they are rebuilt below.
         if let Some(editor) = doc.editor.as_mut() {
@@ -529,7 +580,7 @@ impl Session {
             doc.links = OnceLock::new();
         }
         let signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
-        doc.display = display_bytes(Some(editor), &bytes);
+        (doc.display, doc.redaction_previews) = display_bytes(Some(editor), &bytes, &doc.info.pages);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;

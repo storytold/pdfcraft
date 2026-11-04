@@ -12,6 +12,8 @@ workspace = true
 pdfcraft-cos = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-model = { workspace = true }
+# Finite boxes and the f32 cover of a redaction mark's areas.
+pdfcraft-geom = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

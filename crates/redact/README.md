@@ -56,9 +56,23 @@ Text is placed with the font and size set by `Tf` or by an ExtGState's `/Font` t
 form XObject starts from the text state of the content that draws it. Content that can't be
 decoded makes the operation fail rather than leave it unredacted, and so does an inline image the
 renderer's tokenizer reads no image for (`RedactError::Unreadable`): where the page's operators
-resume after it would be a guess. A Redact annotation with neither a usable `/QuadPoints` array nor a usable
-`/Rect` makes it fail with `RedactError::UnreadableMark` before anything changes, instead of
-skipping that mark. The count covers the marks on the pages being applied.
+resume after it would be a guess.
+
+What a mark covers is `pdfcraft_annot::redaction::mark_areas`, the one reading both a preview and
+`apply` use: every whole `/QuadPoints` quad that is usable (eight finite numbers, with width and
+height) is an area, each kept apart (never merged, so the lines between marked lines stay). When
+any quad can't be used (a corner that is not a finite number, a quad with no area, or entries left
+after the last whole quad), the usable quads and a usable `/Rect` (four finite numbers, with width
+and height) are the areas; with no usable `/Rect`, the whole mark is refused. `/QuadPoints` that is
+absent, empty or not an array means `/Rect` alone. Each area is widened to the nearest `f32`
+rectangle around it, so the screen draws exactly what is removed. `mark_previews` lists every Redact
+annotation by page and `/Annots` slot with its areas or its `MarkRefusal`: no usable area, quads
+that need a `/Rect` it lacks, more than 65,536 `/QuadPoints` entries (refused whole, even with a
+`/Rect`), a mark written in place or listed through a chain of references (applying can't remove
+it), or a page whose marks hold more than 1,048,576 entries together. A refused mark makes `apply`
+fail with `RedactError::UnreadableMark` before anything changes, instead of skipping it, and
+`marks()` lists only the marks that can be applied, so a preview reads `mark_previews`. The count
+covers the marks on the pages being applied.
 
 Before changing any page, `apply` prepares the redaction appearances with a shared 8 MiB
 budget for their uncompressed PDF content across the selected pages. It bounds repeated-text

@@ -2,6 +2,11 @@ use std::collections::HashMap;
 
 use super::geometry::{corner_ratio, is_markup, resized};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect};
+use pdfcraft_engine::{MarkPreview, PreviewUnavailable, RedactionPreviews};
+
+/// No checked redaction view: for page contexts with no document behind them (the comment composer),
+/// where no Redact mark is filled or hit.
+pub(crate) static NO_REDACTION_VIEW: RedactionPreviews = RedactionPreviews::Unavailable(PreviewUnavailable::Refreshing);
 
 /// The user's login name, which Acrobat uses as the default comment author.
 pub(super) fn login_name() -> String {
@@ -316,6 +321,9 @@ pub(crate) struct PageCx<'a> {
     /// A redaction mark's fill while the pointer is over it, and its opacity (Redaction Tool
     /// Properties).
     pub redact_mark: ([f64; 3], f64),
+    /// The document's checked redaction marks ([`pdfcraft_engine::Document::redaction_previews`]):
+    /// what a Redact mark fills, outlines and is hit by. Never `Annotation::quads`.
+    pub redactions: &'a RedactionPreviews,
     /// The document allows commenting.
     pub allowed: bool,
     /// Comments are hidden (Hide all comments): nothing to select.
@@ -349,10 +357,14 @@ impl PageCx<'_> {
         self.info.annotations.iter().filter(move |a| !self.hidden && a.page == self.page && a.is_comment() && a.subtype != "Popup")
     }
 
-    /// Where a comment is on screen: one rectangle, or one per marked line for text markup.
+    /// Where a comment is on screen: one rectangle, or one per marked line for text markup. A
+    /// redaction mark is where its checked areas are ([`Self::redact_outline_rects`]), never its
+    /// `/Rect` or quads as the comment list reads them.
     pub(crate) fn screen_rects<'b>(&'b self, a: &'b Annotation) -> impl Iterator<Item = Rect> + 'b {
+        let redact = a.subtype == "Redact";
         let quads = if is_markup(&a.subtype) { a.quads.as_slice() } else { &[] };
-        let fallback = quads.is_empty().then(|| self.screen_rect(a));
+        let fallback = (quads.is_empty() && !redact).then(|| self.screen_rect(a));
+        let checked = if redact { self.redact_outline_rects(a) } else { Vec::new() };
         quads
             .iter()
             .map(|q| {
@@ -363,23 +375,45 @@ impl PageCx<'_> {
                 self.xf.user_rect(self.info, self.page, [x0, y0, x1, y1])
             })
             .chain(fallback)
+            .chain(checked)
     }
 
-    /// A redaction mark's areas: one per marked quad, or its rectangle.
+    /// The checked view of redaction mark `a` (`None` for another subtype, or when the view is
+    /// unavailable or doesn't list it: then nothing is filled and the mark isn't hit on the page).
+    pub(crate) fn redaction(&self, a: &Annotation) -> Option<&MarkPreview> {
+        (a.subtype == "Redact").then(|| self.redactions.get(self.page, a.index)).flatten()
+    }
+
+    /// A redaction mark's removal areas in user space, exactly those applying removes; none for a
+    /// mark that can't be applied.
+    pub(crate) fn redact_user_rects(&self, a: &Annotation) -> &[[f64; 4]] {
+        self.redaction(a).map_or(&[], MarkPreview::removal_rects)
+    }
+
+    /// A user-space area on screen. Checked areas are exact `f32` rectangles, so the cast loses
+    /// nothing.
+    fn user_area(&self, r: &[f64; 4]) -> Rect {
+        self.xf.user_rect(self.info, self.page, r.map(|v| v as f32))
+    }
+
+    /// A redaction mark's fill areas on screen: one per checked area, none for a refused mark.
     pub(super) fn redact_rects(&self, a: &Annotation) -> Vec<Rect> {
-        if a.quads.is_empty() {
-            return vec![self.screen_rect(a)];
+        self.redact_user_rects(a).iter().map(|r| self.user_area(r)).collect()
+    }
+
+    /// Where a redaction mark is outlined and hit: its checked areas, or for a refused mark its
+    /// warning locator (a usable `/Rect`) if it has one. The locator is never filled.
+    pub(crate) fn redact_outline_rects(&self, a: &Annotation) -> Vec<Rect> {
+        match self.redaction(a) {
+            Some(p) if p.areas.is_ok() => p.removal_rects().iter().map(|r| self.user_area(r)).collect(),
+            Some(p) => p.locator.iter().map(|r| self.user_area(r)).collect(),
+            None => Vec::new(),
         }
-        a.quads
-            .iter()
-            .map(|q| {
-                let xs = [q[0], q[2], q[4], q[6]];
-                let ys = [q[1], q[3], q[5], q[7]];
-                let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
-                let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
-                self.xf.user_rect(self.info, self.page, [x0, y0, x1, y1])
-            })
-            .collect()
+    }
+
+    /// A redaction mark that can't be applied, which a page shows with a warning instead of a fill.
+    pub(crate) fn redaction_refused(&self, a: &Annotation) -> bool {
+        self.redaction(a).is_some_and(|p| p.areas.is_err())
     }
 
     /// The topmost comment under `p`: the one drawn last, in `/Annots` order (inspection lists

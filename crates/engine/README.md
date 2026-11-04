@@ -36,6 +36,13 @@ Each open document holds a `pdfcraft_cos::Document`: the object graph plus a cop
 3. The view is refreshed from those bytes, so **what you see is exactly what Save will write**.
 4. Saving rebases onto the written bytes, so the next save appends only new edits.
 
+Redaction marks are shown from the editable graph, not the renderer's comment list:
+`Document::redaction_previews` holds `pdfcraft_redact::mark_previews` of the working graph, rebuilt
+with the display copy on every refresh (and `Unavailable` from the moment any refresh starts until
+it finishes). `Session::apply` refuses `ApplyRedactions` while it is unavailable, when it is not
+the reading of the current graph, and inside an `Edit::Batch`, so nothing is removed that wasn't
+shown.
+
 Consequences worth preserving: the original bytes of an opened file are never rewritten in place; a
 full rewrite happens only where it must (redaction, PDF/A conversion, print imposition, a changed
 password); and unknown data survives a round trip because nothing is reconstructed that wasn't

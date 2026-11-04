@@ -52,6 +52,7 @@ pub use types::{
 
 pub mod appearance;
 pub mod links;
+pub mod redaction;
 
 #[cfg(test)]
 mod tests;

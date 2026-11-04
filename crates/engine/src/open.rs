@@ -303,7 +303,7 @@ impl Session {
                 }
             }
         }
-        let display = display_bytes(editor.as_mut(), &bytes);
+        let (display, redaction_previews) = display_bytes(editor.as_mut(), &bytes, &info.pages);
         let renderer = RenderPool::new(display.clone(), render_threads(), display_config(&config));
         let (form, adopted) = editor
             .as_ref()
@@ -330,6 +330,7 @@ impl Session {
             path,
             bytes,
             display,
+            redaction_previews,
             info,
             renderer,
             password: render_password,

@@ -6,6 +6,9 @@ use super::{
 };
 use crate::page_router::{CommentPart, Hit, Owner};
 
+/// The outline of a redaction mark that can't be applied (amber, not the fill colour).
+const REFUSED_REDACTION: Color32 = Color32::from_rgb(214, 134, 0);
+
 /// The comment outlined under the pointer: the one a press there would take (`hover`, the top hit),
 /// with the Select tool or, over its own marks, Fill & Sign. Not the selected comment, nor while a
 /// comment is moved, resized or drawn, nor one under a form field or added text that would take
@@ -29,8 +32,15 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
     {
         let ([r, g, b], opacity) = cx.redact_mark;
         let fill = Color32::from_rgba_unmultiplied((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, (opacity.clamp(0.0, 1.0) * 255.0) as u8);
+        // The checked areas applying removes; a mark that can't be applied gets no fill, only a
+        // warning outline where it is.
         for rect in cx.redact_rects(a) {
             painter.rect_filled(rect, CornerRadius::ZERO, fill);
+        }
+        if cx.redaction_refused(a) {
+            for rect in cx.redact_outline_rects(a) {
+                painter.rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.5, REFUSED_REDACTION), egui::StrokeKind::Outside);
+            }
         }
     }
     if let Some(a) = hover_outline(cx, cv, hover) {
@@ -42,6 +52,23 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
         && page == cx.page
         && let Some(a) = cx.get(index)
     {
+        if a.subtype == "Redact" {
+            // A redaction mark is outlined where it is checked to be: each area applying removes (or a
+            // refused mark's locator), moved with the mark while it is dragged or its move is on its way.
+            let shift = ui.input(|i| i.modifiers.shift);
+            let base = cx.screen_rect(a);
+            let moved = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref());
+            let colour = if cx.redaction_refused(a) { REFUSED_REDACTION } else { SELECT_BLUE };
+            for r in cx.redact_outline_rects(a) {
+                painter.rect_stroke(
+                    r.translate(moved.min - base.min).expand(2.0),
+                    CornerRadius::ZERO,
+                    Stroke::new(1.0, colour),
+                    egui::StrokeKind::Middle,
+                );
+            }
+            return paint_gesture(painter, cx, view);
+        }
         if is_markup(&a.subtype) && !a.quads.is_empty() {
             for r in cx.screen_rects(a) {
                 painter.rect_stroke(r.expand(2.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);

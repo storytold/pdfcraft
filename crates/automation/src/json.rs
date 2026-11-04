@@ -323,6 +323,8 @@ pub(crate) fn info(d: &Document) -> Value {
             "modified": a.modified, "name": a.name, "in_reply_to": a.in_reply_to,
             "rect": view_rect(i, a.page, a.shown_rect(i.pages.get(a.page).map_or(0, |p| p.rotation))),
         })).collect::<Vec<_>>(),
+        // Redaction marks as applying reads them (areas exact, in user space), refused ones too.
+        "redactions": redactions(d),
         "fields": i.fields.iter().map(|f| json!({
             "name": f.name, "kind": format!("{:?}", f.kind), "value": f.value, "page": f.page.map(page1),
             "tooltip": f.tooltip, "has_actions": f.has_actions,
@@ -388,4 +390,66 @@ pub fn view_rect(i: &pdfcraft_render::DocInfo, page: usize, rect: [f32; 4]) -> [
 
 fn outline(items: &[pdfcraft_render::OutlineItem]) -> Value {
     Value::Array(items.iter().map(|o| json!({ "title": o.title, "page": o.page.map(|p| p + 1), "children": outline(&o.children) })).collect())
+}
+
+/// A redaction mark as applying reads it ([`pdfcraft_engine::Document::redaction_previews`]):
+/// `ready` with the areas it removes, or `refused` with why. Areas are in PDF user space, in
+/// points, exactly (not rounded, and not in the tools' top-left convention): they are what
+/// applying removes.
+pub(crate) fn redaction_mark(p: &pdfcraft_engine::MarkPreview) -> Value {
+    use pdfcraft_engine::{MarkAreaError, MarkRefusal};
+    let mut v = json!({ "page": p.page + 1, "index": p.index + 1, "units": "PDF user space, points, [x0, y0, x1, y1]" });
+    match &p.areas {
+        Ok(a) => {
+            v["status"] = json!("ready");
+            v["user_areas"] = json!(a.rects);
+            v["uses_rect"] = json!(a.used_rect);
+            v["widened"] = json!(a.widened);
+            let q = a.quad_issues;
+            v["quad_issues"] = json!({
+                "invalid_groups": q.invalid_groups, "trailing_values": q.trailing_values,
+                "absent_or_empty": q.absent_or_empty, "malformed_container": q.malformed_container,
+            });
+        }
+        Err(r) => {
+            v["status"] = json!("refused");
+            v["refusal"] = json!(match r {
+                MarkRefusal::Geometry(MarkAreaError::NoUsableArea) => "no_usable_area",
+                MarkRefusal::Geometry(MarkAreaError::QuadNeedsRect) => "quad_needs_rect",
+                MarkRefusal::Geometry(MarkAreaError::TooManyValues) => "too_many_quadpoints",
+                MarkRefusal::Geometry(MarkAreaError::Allocation) => "allocation",
+                MarkRefusal::Geometry(MarkAreaError::UnrepresentableGeometry) => "unrepresentable_area",
+                MarkRefusal::InlineAnnotation => "inline_annotation",
+                MarkRefusal::UnsupportedAnnotationReference => "unsupported_reference",
+                MarkRefusal::PageLimit => "page_quadpoint_limit",
+            });
+            v["reason"] = json!(format!("Cannot apply this redaction ({r}); remove it and mark the area again"));
+            v["user_areas"] = json!([]);
+            v["locator"] = json!(p.locator);
+        }
+    }
+    v
+}
+
+/// The redaction state of the comment at (`page`, `index`) (0-based), for a Redact comment.
+pub(crate) fn redaction_of(d: &Document, page: usize, index: usize) -> Value {
+    match d.redaction_previews() {
+        pdfcraft_engine::RedactionPreviews::Unavailable(why) => json!({ "status": "unavailable", "reason": why.to_string() }),
+        view => view
+            .get(page, index)
+            .map_or_else(|| json!({ "status": "unavailable", "reason": "this mark is not among the marks applying reads" }), redaction_mark),
+    }
+}
+
+/// Every redaction mark applying reads, listed or not in `annotations` (which stops at its cap),
+/// and whether the view can be trusted.
+pub(crate) fn redactions(d: &Document) -> Value {
+    match d.redaction_previews() {
+        pdfcraft_engine::RedactionPreviews::Available(list) => json!({
+            "status": "available",
+            "refused": d.redaction_previews().refused(),
+            "marks": list.iter().map(redaction_mark).collect::<Vec<_>>(),
+        }),
+        pdfcraft_engine::RedactionPreviews::Unavailable(why) => json!({ "status": "unavailable", "reason": why.to_string(), "marks": [] }),
+    }
 }
