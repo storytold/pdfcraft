@@ -2,6 +2,7 @@
 //! fragment for the clipboard (inline styles, so a word processor keeps font, size, weight,
 //! slant and colour when it pastes).
 
+use crate::as_html::allowed;
 use crate::{esc, hex};
 
 /// Spans kept for one copy; text past it is left out and [`ClipText::truncated`] is set.
@@ -10,6 +11,8 @@ pub const MAX_CLIP_SPANS: usize = 20_000;
 pub const MAX_CLIP_TEXT_BYTES: usize = 2 << 20;
 /// The HTML written for one copy never passes this many bytes.
 pub const MAX_CLIP_HTML_BYTES: usize = 16 << 20;
+/// Font sizes are written within this range (points), so a hostile size stays a font size.
+const CLIP_SIZE_PT: std::ops::RangeInclusive<f64> = 1.0..=1000.0;
 /// A family name longer than this is not a family name.
 const MAX_FAMILY_CHARS: usize = 64;
 
@@ -18,7 +21,8 @@ const MAX_FAMILY_CHARS: usize = 64;
 pub struct ClipStyle {
     /// The family a word processor knows ([`font_family`]); `None` keeps the target's own.
     pub family: Option<String>,
-    /// Size in points; zero or not finite leaves the target's size.
+    /// Size in points; zero or not finite leaves the target's size, and any other is written
+    /// within 1 to 1000.
     pub size: f64,
     pub bold: bool,
     pub italic: bool,
@@ -186,7 +190,7 @@ fn span_html(span: &ClipSpan) -> String {
         css.push(format!("font-family:'{f}'"));
     }
     if st.size.is_finite() && st.size > 0.0 {
-        css.push(format!("font-size:{}pt", num(st.size)));
+        css.push(format!("font-size:{}pt", num(st.size.clamp(*CLIP_SIZE_PT.start(), *CLIP_SIZE_PT.end()))));
     }
     if let Some(h) = hex(st.color) {
         css.push(format!("color:#{h}"));
@@ -201,26 +205,30 @@ fn span_html(span: &ClipSpan) -> String {
     if css.is_empty() { body } else { format!("<span style=\"{}\">{body}</span>", esc(&css.join(";"))) }
 }
 
-/// Escape for HTML text (control characters dropped by [`esc`]); `\n` becomes `<br>` and a
-/// run of spaces keeps its width with `&nbsp;`.
+/// Escape for HTML text in one pass; `\n` becomes `<br>` and a run of spaces keeps its width
+/// with `&nbsp;`. Dropped: what [`esc`] drops (C0 controls), C1 controls, a carriage return
+/// and the bidirectional overrides and isolates, which would reorder the pasted text.
 fn text_html(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut prev_space = false;
-    for (k, line) in text.split('\n').enumerate() {
-        if k > 0 {
-            out.push_str("<br>");
-            prev_space = false;
+    for c in text.chars().filter(|c| clip_char(*c)) {
+        match c {
+            '\n' => out.push_str("<br>"),
+            ' ' if prev_space => out.push_str("&nbsp;"),
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            c => out.push(c),
         }
-        for c in line.chars() {
-            if c == ' ' && prev_space {
-                out.push_str("&nbsp;");
-            } else {
-                out.push_str(&esc(c.encode_utf8(&mut [0; 4])));
-            }
-            prev_space = c == ' ';
-        }
+        prev_space = c == ' ';
     }
     out
+}
+
+/// Whether `c` may go into the clipboard HTML's text.
+fn clip_char(c: char) -> bool {
+    allowed(c) && !matches!(c, '\r' | '\u{80}'..='\u{9F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
 /// A size with at most one decimal and no trailing `.0`.
@@ -272,6 +280,24 @@ mod tests {
             html,
             "<p style=\"margin:0\"><span style=\"font-family:'Evilstylescript'\">&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt; &nbsp;two<br>line</span></p>\n"
         );
+    }
+
+    #[test]
+    fn invisible_controls_and_bidi_overrides_are_dropped() {
+        let mut b = ClipBuilder::new();
+        b.push("a\u{85}b\u{9F}c\rd\u{202E}e\u{2066}f\u{2069}g\u{202A}h\u{2067}i\tj", &ClipStyle::default());
+        assert_eq!(clip_html(&b.finish()), "<p style=\"margin:0\">abcdefghi\tj</p>\n");
+    }
+
+    #[test]
+    fn font_sizes_stay_within_range() {
+        for (size, want) in [(1e300, "1000"), (f64::MAX, "1000"), (2e306, "1000"), (0.2, "1"), (9.96, "10")] {
+            let st = ClipStyle { size, ..ClipStyle::default() };
+            let mut b = ClipBuilder::new();
+            b.push("x", &st);
+            let html = clip_html(&b.finish());
+            assert_eq!(html, format!("<p style=\"margin:0\"><span style=\"font-size:{want}pt\">x</span></p>\n"), "{size}");
+        }
     }
 
     #[test]

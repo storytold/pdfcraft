@@ -20,6 +20,10 @@ pub(crate) const FIND_MAX_WARNINGS: usize = 100;
 
 pub(crate) const FIND_MAX_WARNING_BYTES: usize = 1024;
 
+/// HTML that one `text_extract` with `format: "html"` returns across all its pages; a page past
+/// it gets none and the result says `html_truncated`.
+const MAX_EXTRACT_HTML_BYTES: usize = 32 << 20;
+
 impl Automation {
     // ---- pages and text ----------------------------------------------------------------------
 
@@ -201,6 +205,11 @@ impl Automation {
     }
 
     pub(crate) fn text_extract(&mut self, a: &Args) -> Result<Value> {
+        self.text_extract_within(a, MAX_EXTRACT_HTML_BYTES)
+    }
+
+    /// [`Self::text_extract`] with at most `html_budget` bytes of HTML across all pages.
+    pub(crate) fn text_extract_within(&mut self, a: &Args, html_budget: usize) -> Result<Value> {
         let html = match a.opt_str("format")?.unwrap_or("text") {
             "text" => false,
             "html" => true,
@@ -221,21 +230,37 @@ impl Automation {
         };
         let doc = self.doc(a)?;
         let mut out = Vec::with_capacity(pages.len());
+        let (mut html_left, mut html_truncated) = (html_budget, false);
         for (&p, t) in pages.iter().zip(texts) {
             let mut page = json!({ "page": p + 1, "text": text(&t) });
             if html {
-                // Copy with formatting: the same glyphs as an HTML fragment.
-                let glyphs: Vec<usize> = match rect {
-                    Some(r) => t.glyphs_in(r),
-                    None => (0..t.glyphs.len()).collect(),
-                };
-                let copy = doc.rich_copy(p, &t, &glyphs).map_err(failed)?;
+                // Copy with formatting: the same glyphs as an HTML fragment, within one budget for
+                // the whole call; a page past it gets none and the call says so.
+                let mut copy = pdfcraft_engine::RichCopy::default();
+                if !html_truncated {
+                    let glyphs: Vec<usize> = match rect {
+                        Some(r) => t.glyphs_in(r),
+                        None => (0..t.glyphs.len()).collect(),
+                    };
+                    copy = doc.rich_copy(p, &t, &glyphs).map_err(failed)?;
+                    match html_left.checked_sub(copy.html.len()) {
+                        Some(left) => html_left = left,
+                        None => {
+                            html_truncated = true;
+                            copy = pdfcraft_engine::RichCopy::default();
+                        }
+                    }
+                }
                 page["html"] = json!(copy.html);
-                page["styles_incomplete"] = json!(copy.styles_incomplete);
+                page["styles_incomplete"] = json!(copy.styles_incomplete || html_truncated);
             }
             out.push(page);
         }
-        Ok(json!({ "pages": out }))
+        let mut result = json!({ "pages": out });
+        if html {
+            result["html_truncated"] = json!(html_truncated);
+        }
+        Ok(result)
     }
 
     /// Matches in document order, extracting page text in growing batches and stopping as soon as

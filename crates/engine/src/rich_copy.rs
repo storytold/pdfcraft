@@ -37,16 +37,22 @@ impl crate::Document {
     /// Selected `glyphs` of `page` (indices into `text`, in copy order) with their formatting.
     /// Refused when the document does not allow copying.
     pub fn rich_copy(&self, page: usize, text: &PageText, glyphs: &[usize]) -> Result<RichCopy, EditError> {
+        self.rich_copy_within(page, text, glyphs, MAX_MATCH_STEPS)
+    }
+
+    /// [`Self::rich_copy`] with `steps` block tests to match glyphs to blocks.
+    fn rich_copy_within(&self, page: usize, text: &PageText, glyphs: &[usize], mut steps: usize) -> Result<RichCopy, EditError> {
         self.check_copying()?;
         let (blocks, mut incomplete) = self.styled_blocks(page);
         let mut b = ClipBuilder::new();
-        let mut steps = MAX_MATCH_STEPS;
         // The previous glyph's line and block, and whether it was a hyphen.
         let mut prev: Option<(usize, Option<usize>, bool)> = None;
         for &i in glyphs {
             let (Some(g), Some(&line)) = (text.glyphs.get(i), text.line_of.get(i)) else { continue };
-            let found = block_at(&blocks, g.rect, prev.and_then(|(_, b, _)| b), &mut steps);
-            incomplete |= steps == 0;
+            let found = block_at(&blocks, g.rect, prev.and_then(|(_, b, _)| b), &mut steps).unwrap_or_else(|| {
+                incomplete = true;
+                None
+            });
             let line = usize::try_from(line).unwrap_or(usize::MAX);
             if let Some((prev_line, prev_block, hyphen)) = prev {
                 if line != prev_line {
@@ -108,8 +114,8 @@ fn view_rect(info: &PageInfo, r: [f64; 4]) -> [f32; 4] {
 }
 
 /// The block whose box holds the centre of `glyph` (view space): `hint` first, then the
-/// smallest that holds it. Each block tested costs a step; with none left, no block.
-fn block_at(blocks: &[StyledBlock], glyph: [f32; 4], hint: Option<usize>, steps: &mut usize) -> Option<usize> {
+/// smallest that holds it. Each block tested costs a step; `None` when the steps ran out first.
+fn block_at(blocks: &[StyledBlock], glyph: [f32; 4], hint: Option<usize>, steps: &mut usize) -> Option<Option<usize>> {
     let (x, y) = ((glyph[0] + glyph[2]) / 2.0, (glyph[1] + glyph[3]) / 2.0);
     let holds = |r: &[f32; 4]| x >= r[0] - SLACK && x <= r[2] + SLACK && y >= r[1] - SLACK && y <= r[3] + SLACK;
     let area = |r: &[f32; 4]| (r[2] - r[0]) * (r[3] - r[1]);
@@ -118,7 +124,7 @@ fn block_at(blocks: &[StyledBlock], glyph: [f32; 4], hint: Option<usize>, steps:
     {
         *steps -= 1;
         if blocks.get(k).is_some_and(|b| holds(&b.rect)) {
-            return Some(k);
+            return Some(Some(k));
         }
     }
     let mut best: Option<(usize, f32)> = None;
@@ -131,7 +137,7 @@ fn block_at(blocks: &[StyledBlock], glyph: [f32; 4], hint: Option<usize>, steps:
             best = Some((k, area(&b.rect)));
         }
     }
-    best.map(|(k, _)| k)
+    Some(best.map(|(k, _)| k))
 }
 
 #[cfg(test)]
@@ -196,6 +202,30 @@ mod tests {
         assert!(none.html.is_empty() && none.text.paragraphs.is_empty());
         let past = s.get(id).unwrap().rich_copy(7, &text, &[usize::MAX, text.glyphs.len()]).unwrap();
         assert!(past.html.is_empty());
+    }
+
+    #[test]
+    fn running_out_of_match_steps_copies_the_rest_unstyled() {
+        let mut s = Session::new();
+        let id = s.open("styled.pdf", None, Arc::new(styled_page()), None).unwrap();
+        let text = page_text(&s, id);
+        let all: Vec<usize> = (0..text.glyphs.len()).collect();
+        let doc = s.get(id).unwrap();
+        let full = doc.rich_copy(0, &text, &all).unwrap();
+        // Enough for the first glyphs only: the text is all there, the rest has no style.
+        let short = doc.rich_copy_within(0, &text, &all, 8).unwrap();
+        assert!(short.styles_incomplete);
+        let plain = |c: &super::RichCopy| c.text.paragraphs.iter().flatten().map(|s| s.text.clone()).collect::<String>();
+        assert_eq!(plain(&short).replace([' ', '\n'], ""), plain(&full).replace([' ', '\n'], ""));
+        let last = short.text.paragraphs.last().and_then(|p| p.last()).unwrap();
+        assert_eq!(last.style, pdfcraft_export::ClipStyle::default(), "{last:?}");
+        assert!(short.html.starts_with("<p style=\"margin:0\"><span style=\"font-family:'Helvetica';font-size:24pt\"><strong>T"), "{}", short.html);
+        // No steps at all: nothing styled, still no panic.
+        let none = doc.rich_copy_within(0, &text, &all, 0).unwrap();
+        assert!(none.styles_incomplete && !none.html.contains("font-size"), "{}", none.html);
+        // A page without blocks to match needs no steps.
+        let page_less = doc.rich_copy_within(5, &text, &all, 0).unwrap();
+        assert!(!page_less.styles_incomplete);
     }
 
     #[test]
