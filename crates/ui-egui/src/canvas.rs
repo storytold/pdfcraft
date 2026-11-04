@@ -18,8 +18,8 @@ use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, QuickTool, RightPanel, comments, icons, widgets};
 
 mod area;
-pub(super) mod autoscroll;
-mod bars;
+pub(crate) mod autoscroll;
+pub(crate) mod bars;
 mod cache;
 pub(super) mod crop;
 mod find;
@@ -251,6 +251,22 @@ impl ImageObb {
     pub fn corners(&self) -> [Pos2; 4] {
         [self.s00, self.s10, self.s11, self.s01]
     }
+}
+
+/// Whether pointer `p` is on an image being cropped, its crop box or its handles (#5835).
+pub(crate) fn crop_contains_point(
+    img: &pdfcraft_engine::PageImage,
+    crop: &crate::edit_text_ui::CropMode,
+    xf: &PageXform,
+    info: &DocInfo,
+    page: usize,
+    p: Pos2,
+) -> bool {
+    let obb = ImageObb::from_image(img, xf, info, page);
+    let full_obb = ImageObb::from_matrix(img.matrix, xf, info, page);
+    crate::edit_text_ui::quad_contains(obb.corners(), p)
+        || crate::edit_text_ui::quad_contains(full_obb.corners(), p)
+        || crate::edit_text_ui::crop_controls_contain(img, crop, xf, info, page, p)
 }
 
 /// The page display as it was before full screen, put back on leaving it
@@ -505,6 +521,9 @@ pub struct DocView {
     /// Pages on screen this frame. Their rasters and tiles are always admitted: the viewport
     /// bounds them, and the byte and count limits apply to prefetch only.
     frame_visible: HashSet<usize>,
+    /// Pages whose whole-page raster this frame asks for, on screen or prefetched. An arriving
+    /// raster over the allowance evicts the other cached pages first.
+    frame_demanded: HashSet<usize>,
     /// Thumbnails that are out of date (still shown until their replacement arrives).
     stale_thumbs: HashSet<usize>,
     /// Tiles that are out of date (still shown until their replacement arrives).
@@ -551,6 +570,8 @@ pub struct DocView {
     /// Screen rects of the pages drawn last frame (hit-testing, tests, automation).
     screen_rects: Vec<(usize, Rect)>,
     screen_xforms: Vec<(usize, PageXform)>,
+    /// Pixels per point last frame, for telling a rounding sliver of a page from a visible one.
+    screen_ppp: f32,
     /// The scroll viewport on screen last frame.
     viewport_screen: Rect,
     /// Pending zoom anchor: page, fractional position (also in gutters), and viewport offset.
@@ -694,6 +715,13 @@ pub struct DocView {
     /// in-flight ones cannot be cancelled mid-operator. Older tiles and the backdrop stay
     /// stretched meanwhile; fresh tiles go out once the pan settles.
     pub(crate) last_scroll: Vec2,
+    /// The way the view last moved vertically: 1 down, -1 up, 0 before any move and after the
+    /// content's size changes (a zoom or a layout change). A jump to a page or a search result
+    /// counts as a move. It stays set while the view is still, so the pages prefetched ahead stay
+    /// in the render queue until they arrive.
+    scroll_dir: i8,
+    /// The content's size when `scroll_dir` was last updated.
+    scroll_content: Vec2,
     /// Side-by-side compare: scroll to here this frame, following the other half.
     pub(crate) sync_scroll: Option<Vec2>,
     /// The page widget's id, by which the Hand tool finds its drag before the pages are laid out.
@@ -911,6 +939,7 @@ impl DocView {
             frame_queue: Vec::new(),
             frame_geometry_changed: false,
             frame_visible: HashSet::new(),
+            frame_demanded: HashSet::new(),
             stale_thumbs: HashSet::new(),
             stale_tiles: HashSet::new(),
             current_scale_tag: 0,
@@ -936,6 +965,7 @@ impl DocView {
             page_heights: info.pages.iter().map(|p| p.height).collect(),
             screen_rects: Vec::new(),
             screen_xforms: Vec::new(),
+            screen_ppp: 1.0,
             viewport_screen: Rect::NOTHING,
             zoom_anchor: None,
             shown: false,
@@ -977,6 +1007,8 @@ impl DocView {
             last_scale: 0.0,
             sharp_hold_until: 0.0,
             last_scroll: Vec2::ZERO,
+            scroll_dir: 0,
+            scroll_content: Vec2::ZERO,
             sync_scroll: None,
             page_widget: None,
             pan_hold_until: 0.0,
@@ -2401,6 +2433,7 @@ fn draw_pages(
     let origin = resp_rect.min - vec2(0.0, y_shift);
     let visible = viewport.translate(resp_rect.min.to_vec2());
     view.screen_rects.clear();
+    view.screen_ppp = ui.ctx().pixels_per_point();
     view.screen_xforms.clear();
     // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
     // or a press they hold. The page modules read it rather than egui's raw pointer state.
@@ -2437,10 +2470,23 @@ fn draw_pages(
                     let xf =
                         PageXform { rect: r, rot: view.rotation, pw: info.pages[page_idx].width.max(1.0), ph: info.pages[page_idx].height.max(1.0) };
                     let images = cached_edit_images(view, doc, page_idx).to_vec();
+                    // Crop controls own the click even when another image overlaps them.
+                    if view.image_selection.as_ref().is_some_and(|s| {
+                        s.page == page_idx
+                            && s.crop
+                                .as_ref()
+                                .zip(images.get(s.index))
+                                .is_some_and(|(crop, img)| crop_contains_point(img, crop, &xf, info, page_idx, p))
+                    }) {
+                        over_image = true;
+                        break;
+                    }
                     for (idx, img) in images.iter().enumerate().rev() {
                         let obb = ImageObb::from_image(img, &xf, info, page_idx);
                         let b = image_screen_rect(img, &xf, info, page_idx);
-                        if obb.contains(b, p) {
+                        let selected_crop = view.image_selection.as_ref().is_some_and(|s| s.page == page_idx && s.index == idx && s.crop.is_some());
+                        let hit = if selected_crop { crate::edit_text_ui::quad_contains(obb.corners(), p) } else { obb.contains(b, p) };
+                        if hit {
                             over_image = true;
                             if view.image_selection.as_ref().is_none_or(|s| s.page != page_idx || s.index != idx) {
                                 view.image_selection = Some(crate::edit_text_ui::ImageSelection::at(page_idx, idx));
@@ -2553,6 +2599,22 @@ fn draw_pages(
         view.current = current;
     }
     resp.context_menu(|ui| {
+        let is_crop_over_image = tool == QuickTool::EditText
+            && view.image_selection.clone().is_some_and(|sel| {
+                let Some(ref crop) = sel.crop else { return false };
+                let pointer_pos = ptr.pos;
+                let Some(p) = pointer_pos else { return false };
+                let Some((_, xf)) = view.screen_xforms.iter().find(|(page_idx, _)| *page_idx == sel.page).cloned() else { return false };
+                let images = cached_edit_images(view, doc, sel.page).to_vec();
+                let Some(img) = images.get(sel.index) else { return false };
+                crop_contains_point(img, crop, &xf, info, sel.page, p)
+            });
+        if is_crop_over_image {
+            ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
+            egui::Popup::close_all(ui.ctx());
+            ui.close();
+            return;
+        }
         // Preparing a form: the selected field's menu.
         if preparing && let Some((name, wi)) = view.prepare.selected.clone() {
             // Several fields: Align, Center, Distribute, Set Fields to Same Size.
@@ -2868,6 +2930,56 @@ fn read_wheel(ui: &mut egui::Ui, view: &mut DocView, avail: Rect, single_paging:
     Wheel { precise_scroll, line_base, boost_extra, has_page, paging_owns_vertical }
 }
 
+/// Rows of pages that continuous view prefetches past the window in the direction it last
+/// moved.
+const PREFETCH_ROWS: usize = 2;
+
+/// The pages continuous view prefetches past the window: the next [`PREFETCH_ROWS`] rows the way
+/// it last moved, nearest first, and none before it moves. The web build renders on the UI
+/// thread, so it prefetches none.
+fn scroll_prefetch(view: &DocView, visible_now: &[usize]) -> Vec<usize> {
+    if !view.continuous || cfg!(target_arch = "wasm32") {
+        return Vec::new();
+    }
+    let n = PREFETCH_ROWS * if view.layout == PageLayout::Single { 1 } else { 2 };
+    match (view.scroll_dir, visible_now.iter().min(), visible_now.iter().max()) {
+        (1, _, Some(&last)) => (last.saturating_add(1)..=last.saturating_add(n)).collect(),
+        (-1, Some(&first), _) => (first.saturating_sub(n)..first).rev().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The whole-page raster a prefetch asks for: the page at this scale, or the backdrop of a page
+/// that is tiled at this scale. A cached raster sharper than the backdrop stays demanded as it
+/// is, as `paint_page_surface` demands it under tiles.
+fn prefetch_demand(view: &DocView, p: &pdfcraft_render::PageInfo, i: usize, scale: f32, tag: u64, max_side: f32) -> (usize, f32, u64, Option<Tile>) {
+    let side = p.width.max(p.height).max(1.0);
+    if side * scale <= TILE_THRESHOLD.min(max_side) {
+        return (i, scale, tag, None);
+    }
+    let bs = BASE_SIDE.min(max_side) / side;
+    match view.pages.get(&i).filter(|c| c.tag != STALE_TAG && tag_scale(c.tag) >= bs) {
+        Some(c) => (i, tag_scale(c.tag), c.tag, None),
+        None => (i, bs, scale_tag(bs), None),
+    }
+}
+
+/// Whether `page` lies behind the way continuous view last moved: above the current page while
+/// scrolling down, below it while scrolling up. `false` outside continuous view.
+fn behind_scroll(continuous: bool, scroll_dir: i8, current: usize, page: usize) -> bool {
+    continuous && ((scroll_dir > 0 && page < current) || (scroll_dir < 0 && page > current))
+}
+
+/// Orders a frame's demand: pages on screen first, then off-screen pages ahead of the way the
+/// view last moved, then those behind it, each nearest the current page first.
+fn order_demand(view: &DocView, wanted: &mut [(usize, f32, u64, Option<Tile>)], visible_now: &[usize]) {
+    let cur = view.current;
+    wanted.sort_by_key(|w| {
+        let shown = visible_now.contains(&w.0);
+        (!shown, !shown && behind_scroll(view.continuous, view.scroll_dir, cur, w.0), w.0.abs_diff(cur), w.3.is_some())
+    });
+}
+
 /// What decides which renders a frame asks for.
 #[derive(Clone, Copy)]
 struct RenderPlan<'a> {
@@ -2880,7 +2992,8 @@ struct RenderPlan<'a> {
 }
 
 /// Queues the renders for the pages and tiles `renders` wants (nearest the view first), prefetches the
-/// rows either side, frees tiles of far pages and old zooms, and asks for the text layers.
+/// rows either side (in continuous view, the rows ahead in the scroll direction), frees tiles of far
+/// pages and old zooms, and asks for the text layers.
 fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: PageRenders, plan: &RenderPlan<'_>) {
     let (mut wanted, visible_now) = renders;
     let RenderPlan { visible_pages, tag, scale, sharp_held, pan_held, hand } = *plan;
@@ -2895,17 +3008,20 @@ fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: Page
         for i in (last.saturating_add(1)..=last.saturating_add(n)).chain(first.saturating_sub(n)..first) {
             let Some(p) = info.pages.get(i).filter(|_| !view.errors.contains_key(&i)) else { continue };
             // As drawn: the whole page at this scale, or the backdrop of a tiled page.
-            let side = p.width.max(p.height).max(1.0);
-            wanted.push(if side * scale > TILE_THRESHOLD.min(max_side) {
-                let bs = BASE_SIDE.min(max_side) / side;
-                (i, bs, scale_tag(bs), None)
-            } else {
-                (i, scale, tag, None)
-            });
+            wanted.push(prefetch_demand(view, p, i, scale, tag, max_side));
         }
     }
+    // Continuous view also asks for the rows ahead of the way it last moved.
+    let max_side = ui.ctx().input(|inp| inp.max_texture_side) as f32;
+    for i in scroll_prefetch(view, &visible_now) {
+        if view.errors.contains_key(&i) || wanted.iter().any(|w| w.0 == i) {
+            continue;
+        }
+        let Some(p) = info.pages.get(i) else { continue };
+        wanted.push(prefetch_demand(view, p, i, scale, tag, max_side));
+    }
     let cur = view.current;
-    wanted.sort_by_key(|w| (!visible_now.contains(&w.0), w.0.abs_diff(cur), w.3.is_some()));
+    order_demand(view, &mut wanted, &visible_now);
     // Tiles of far-away pages are useless: free them. Tiles of an earlier zoom stay for a page
     // that is on screen, whether or not the page is tiled at this zoom (#2196): a zoom out below
     // the tiling threshold used to drop the tiles of the zoom just left, so coming back to it
@@ -3138,9 +3254,10 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
     scroll
 }
 
-/// Notes how far the page view scrolled this frame: reader-owned scrolling ends search following,
-/// a pan holds back fresh tile renders until it settles, and a glide keeps going or stops. Whether
-/// a pan is still settling.
+/// Notes how far and which way the page view scrolled this frame: reader-owned scrolling ends
+/// search following, a pan holds back fresh tile renders until it settles, a glide keeps going or
+/// stops, and the vertical direction is kept for continuous view's prefetch. Whether a pan is
+/// still settling.
 fn track_scroll<T>(ui: &egui::Ui, view: &mut DocView, out: &egui::containers::scroll_area::ScrollAreaOutput<T>, glide: Vec2) -> bool {
     let scroll_offset = out.state.clamped_offset();
     // The document ScrollArea's own scroll surfaces move the offset without the wheel deltas
@@ -3164,8 +3281,25 @@ fn track_scroll<T>(ui: &egui::Ui, view: &mut DocView, out: &egui::containers::sc
     if glide != Vec2::ZERO {
         view.fling.moved((scroll_offset - view.last_scroll).length() > 0.01);
     }
+    view.scroll_dir = scroll_direction(view.scroll_dir, scroll_offset.y - view.last_scroll.y, out.content_size != view.scroll_content);
+    view.scroll_content = out.content_size;
     view.last_scroll = scroll_offset;
     now_settle < view.pan_hold_until
+}
+
+/// The way the view moves after a frame whose offset changed by `dy` points: down (1) or up (-1)
+/// for a move of more than half a point, `dir` otherwise, and 0 when the content's size changed
+/// (a zoom or a layout change).
+fn scroll_direction(dir: i8, dy: f32, resized: bool) -> i8 {
+    if resized {
+        0
+    } else if dy > 0.5 {
+        1
+    } else if dy < -0.5 {
+        -1
+    } else {
+        dir
+    }
 }
 
 /// The hover tip, find bar, size hint and the in-place editors drawn over the pages. Whether the
@@ -3334,9 +3468,9 @@ fn pinch_zoom(ui: &egui::Ui, view: &mut DocView, zoom_delta: f32, navigation_rec
 /// The middle-button auto-scroll's delta, and the edge scroll a drawing in progress asks for: the
 /// pointer in a band along any edge (or just past it) scrolls the view that way, so a point
 /// beyond what is shown can be reached without letting go of the tool.
-fn auto_scroll_deltas(ui: &egui::Ui, view: &mut DocView, avail: Rect, unobstructed: bool) -> (Vec2, Vec2) {
+fn auto_scroll_deltas(ui: &egui::Ui, view: &mut DocView, avail: Rect, unobstructed: bool, invert: bool) -> (Vec2, Vec2) {
     let auto_delta = if unobstructed {
-        view.auto_scroll.update(ui, avail, false)
+        view.auto_scroll.update(ui, avail, false, invert)
     } else {
         view.auto_scroll.cancel();
         Vec2::ZERO
@@ -3513,11 +3647,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let modal = app.modal_open();
     let unobstructed = !modal && !app.palette_open;
     let organize_zoom = app.organize_zoom;
+    let invert_middle = app.invert_middle_drag;
     let view = &mut app.views[index];
     if view.organize {
         // One remembered grid size for every document, kept in the settings.
         view.set_grid_zoom(organize_zoom);
-        organize_grid(view, doc, unobstructed, app.show_page_edge_shadows, ui, &t);
+        organize_grid(view, doc, unobstructed, app.show_page_edge_shadows, invert_middle, ui, &t);
         app.organize_zoom = view.grid_zoom();
         return;
     }
@@ -3537,7 +3672,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let present = presentation_click_state(ui, view, navigation_rect, navigation_enabled && app.quick_tool == QuickTool::Select);
     pinch_zoom(ui, view, zoom_delta, navigation_rect, navigation_enabled);
     view.viewport_screen = avail;
-    let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed);
+    let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed, invert_middle);
 
     let content_w = view.content_width(info, avail.width());
     let rects = view.layout(info, content_w, ui.ctx().pixels_per_point());
@@ -4055,8 +4190,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
     // the quick tools come back with the window.
     if app.mode != crate::Mode::Read && !app.full_screen {
-        quick_bar(app, avail, ui);
-        crate::hotbar::show(app, avail, ui.ctx());
+        // The page nearest the left edge, whose margin the bar sits in.
+        let page_left = app.views[index].screen_rects.iter().map(|(_, r)| r.left()).reduce(f32::min);
+        quick_bar(app, avail, page_left, ui);
     }
     if let Some((source, file, destination)) = remote_open {
         app.open_remote_link(source, file, destination);

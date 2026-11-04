@@ -1273,6 +1273,141 @@ fn page_and_tile_admission_accounts_for_bytes_before_count_limits() {
     assert!(!v.admit_texture(RenderRequest::default(), PAGE_BYTES + 1));
 }
 
+/// The frame demand of a continuous view showing `shown`, with its prefetch, in queue order.
+fn scroll_demand(v: &DocView, shown: &[usize]) -> Vec<RenderRequest> {
+    let mut wanted: Vec<(usize, f32, u64, Option<Tile>)> = shown.iter().map(|&p| (p, 1.0, 1000, None)).collect();
+    wanted.extend(scroll_prefetch(v, shown).into_iter().map(|p| (p, 1.0, 1000, None)));
+    order_demand(v, &mut wanted, shown);
+    wanted.into_iter().map(|(page, scale, tag, tile)| RenderRequest { page, scale, tag, tile, ..Default::default() }).collect()
+}
+
+#[test]
+fn continuous_view_prefetches_the_rows_ahead_of_the_way_it_moved() {
+    let mut v = view(20, PageLayout::Single, true);
+    v.current = 10;
+    assert!(scroll_prefetch(&v, &[9, 10]).is_empty(), "nothing before the view moves");
+    v.scroll_dir = 1;
+    assert_eq!(scroll_prefetch(&v, &[9, 10]), [11, 12]);
+    v.scroll_dir = -1;
+    assert_eq!(scroll_prefetch(&v, &[9, 10]), [8, 7]);
+    assert_eq!(scroll_prefetch(&v, &[0, 1]), Vec::<usize>::new(), "nothing above the first page");
+    let mut two = view(20, PageLayout::TwoUp, true);
+    two.scroll_dir = 1;
+    assert_eq!(scroll_prefetch(&two, &[8, 9]), [10, 11, 12, 13], "two rows of two pages");
+    let mut single = view(20, PageLayout::Single, false);
+    single.scroll_dir = 1;
+    assert!(scroll_prefetch(&single, &[9]).is_empty(), "single-page view keeps its own prefetch");
+}
+
+#[test]
+fn scrolling_the_other_way_drops_the_prefetch_from_the_queue() {
+    let info = DocInfo {
+        pages: (0..20)
+            .map(|_| pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 })
+            .collect(),
+        ..Default::default()
+    };
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults { continuous: true, ..Default::default() });
+    v.current = 10;
+    v.scroll_dir = 1;
+    v.frame_visible = [9, 10].into();
+    v.frame_queue = scroll_demand(&v, &[9, 10]);
+    let down: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+    assert_eq!(down, [10, 9, 11, 12], "on-screen pages first, then the pages below");
+    v.scroll_dir = -1;
+    v.frame_queue = scroll_demand(&v, &[9, 10]);
+    let up: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+    assert_eq!(up, [10, 9, 8, 7], "the pages below leave the queue, which cancels their renders");
+}
+
+#[test]
+fn the_way_the_view_moved_does_not_reorder_the_pages_on_screen() {
+    let mut v = view(20, PageLayout::Single, true);
+    v.current = 10;
+    let shown = [8, 9, 10, 11, 12];
+    let still: Vec<usize> = scroll_demand(&v, &shown).iter().map(|r| r.page).collect();
+    v.scroll_dir = 1;
+    let down: Vec<usize> = scroll_demand(&v, &shown).iter().map(|r| r.page).collect();
+    assert_eq!(down[..5], still[..5], "on-screen pages keep their order");
+    assert_eq!(down[5..], [13, 14]);
+    // Off-screen pages ahead of the move come before nearer ones behind it.
+    let mut wanted = vec![(9, 1.0, 1000, None), (13, 1.0, 1000, None), (10, 1.0, 1000, None)];
+    order_demand(&v, &mut wanted, &[10]);
+    assert_eq!(wanted.iter().map(|w| w.0).collect::<Vec<_>>(), [10, 13, 9]);
+}
+
+#[test]
+fn the_prefetch_ahead_stays_within_the_page_allowance() {
+    let mut info = thumbnail_info(20);
+    for p in &mut info.pages {
+        p.width = 2000.0;
+        p.height = 2000.0;
+    }
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults { continuous: true, ..Default::default() });
+    v.current = 3;
+    v.scroll_dir = 1;
+    // Eight 16 MB pages on screen leave no room in the 128 MiB allowance for another.
+    let shown: Vec<usize> = (0..8).collect();
+    v.frame_visible = shown.iter().copied().collect();
+    v.frame_queue = scroll_demand(&v, &shown);
+    assert!(v.frame_queue.iter().any(|r| r.page == 8), "the prefetch asks for the next page");
+    let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+    assert_eq!(pages.iter().copied().max(), Some(7), "no prefetch past the allowance: {pages:?}");
+}
+
+#[test]
+fn an_arriving_raster_evicts_pages_nobody_asks_for_and_then_pages_behind_the_scroll() {
+    let ctx = egui::Context::default();
+    ctx.input_mut(|i| i.max_texture_side = 4096);
+    let mut v = view(20, PageLayout::Single, true);
+    let texture = |name| ctx.load_texture(name, egui::ColorImage::filled([4000, 4000], Color32::WHITE), TextureOptions::LINEAR);
+    v.current = 10;
+    v.scroll_dir = 1;
+    v.frame_visible = [10].into();
+    // A prefetch off screen: a raster arriving on screen would widen the allowance to hold it.
+    let page = RenderRequest { page: 11, scale: 1.0, tag: 1000, ..Default::default() };
+    let bytes = rgba_bytes(4000, 4000);
+    // Page 7 is behind the scroll and no longer asked for; page 14 is the prefetch ahead.
+    v.frame_demanded = [10, 11, 14].into();
+    v.pages.insert(7, PageTex { tag: 1000, tex: texture("behind") });
+    v.pages.insert(14, PageTex { tag: 1000, tex: texture("ahead") });
+    assert!(v.admit_texture(page, bytes));
+    assert!(v.pages.contains_key(&14) && !v.pages.contains_key(&7), "the page nobody asks for goes first");
+    // Both asked for: the page behind the scroll goes, though it is nearer.
+    v.frame_demanded = [7, 10, 11, 14].into();
+    v.pages.insert(7, PageTex { tag: 1000, tex: texture("behind") });
+    assert!(v.admit_texture(page, bytes));
+    assert!(v.pages.contains_key(&14) && !v.pages.contains_key(&7), "the page behind the scroll goes first");
+}
+
+#[test]
+fn a_tiled_page_ahead_keeps_its_sharper_raster() {
+    let ctx = egui::Context::default();
+    let mut v = view(20, PageLayout::Single, true);
+    let p = pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let (scale, max_side) = (12.0, 16384.0);
+    let backdrop = BASE_SIDE / 400.0;
+    // At 12× the page is 4800 pixels tall: tiled, with a 2048-pixel backdrop.
+    assert_eq!(prefetch_demand(&v, &p, 3, scale, scale_tag(scale), max_side), (3, backdrop, scale_tag(backdrop), None));
+    assert_eq!(prefetch_demand(&v, &p, 3, 2.0, scale_tag(2.0), max_side), (3, 2.0, scale_tag(2.0), None), "not tiled: the page as drawn");
+    let texture = |name| ctx.load_texture(name, egui::ColorImage::filled([1, 1], Color32::WHITE), TextureOptions::LINEAR);
+    v.pages.insert(3, PageTex { tag: scale_tag(8.0), tex: texture("sharper") });
+    assert_eq!(prefetch_demand(&v, &p, 3, scale, scale_tag(scale), max_side), (3, 8.0, scale_tag(8.0), None), "the sharper raster is kept");
+    v.pages.insert(3, PageTex { tag: scale_tag(2.0), tex: texture("softer") });
+    assert_eq!(prefetch_demand(&v, &p, 3, scale, scale_tag(scale), max_side), (3, backdrop, scale_tag(backdrop), None));
+    v.pages.insert(3, PageTex { tag: STALE_TAG, tex: texture("stale") });
+    assert_eq!(prefetch_demand(&v, &p, 3, scale, scale_tag(scale), max_side), (3, backdrop, scale_tag(backdrop), None));
+}
+
+#[test]
+fn a_zoom_or_layout_change_clears_the_scroll_direction() {
+    assert_eq!(scroll_direction(0, 40.0, false), 1);
+    assert_eq!(scroll_direction(1, -40.0, false), -1);
+    assert_eq!(scroll_direction(-1, 0.2, false), -1, "a still view keeps its direction");
+    assert_eq!(scroll_direction(1, -300.0, true), 0, "a zoom out moves the offset up without a scroll");
+    assert_eq!(scroll_direction(-1, 300.0, true), 0);
+}
+
 #[test]
 fn on_screen_pages_and_tiles_are_admitted_beyond_the_prefetch_allowance() {
     let ctx = egui::Context::default();
@@ -1298,6 +1433,99 @@ fn on_screen_pages_and_tiles_are_admitted_beyond_the_prefetch_allowance() {
         .map(|x| RenderRequest { page: 0, scale: 1.0, tag: 1000, tile: Some(Tile { x: x * TILE, y: 0, w: 1024, h: 1024 }), ..Default::default() })
         .collect();
     assert_eq!(v.prepare_render_queue(&info, 1.0).len(), 40);
+}
+
+/// `count` pages that each make a 2,980 x 3,850 raster (about 43.8 MiB, a Letter page at fit
+/// width in a 3440 x 1440 window) at scale `1 / size`.
+fn fit_width_pages(count: usize, size: f32) -> DocInfo {
+    let mut info = thumbnail_info(count);
+    for p in &mut info.pages {
+        p.width = 2980.0 * size;
+        p.height = 3850.0 * size;
+    }
+    info
+}
+
+#[test]
+fn large_pages_on_screen_widen_the_allowance_for_the_pages_around_them() {
+    // A wide window at fit width, or smaller pages zoomed in: the raster's size is what counts.
+    for (size, scale) in [(1.0, 1.0), (0.5, 2.0)] {
+        let info = fit_width_pages(5, size);
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        v.frame_visible = HashSet::from([3, 4]);
+        v.frame_queue = (0..5).map(|page| RenderRequest { page, scale, tag: 1000, ..Default::default() }).collect();
+        let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+        assert_eq!(pages, (0..5).collect::<Vec<_>>(), "two pages on screen and three off screen at scale {scale}");
+    }
+}
+
+#[test]
+fn tiled_pages_on_screen_keep_the_128_mib_page_allowance() {
+    let info = fit_width_pages(8, 1.0);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.frame_visible = HashSet::from([3, 4]);
+    // Pages 3 and 4 are on screen as a backdrop and tiles, beside whole pages off screen.
+    let mut queue: Vec<RenderRequest> = [3, 4]
+        .into_iter()
+        .flat_map(|page| {
+            [
+                RenderRequest { page, scale: 0.25, tag: 2000, ..Default::default() },
+                RenderRequest { page, scale: 1.0, tag: 1000, tile: Some(Tile { x: 0, y: 0, w: 1024, h: 1024 }), ..Default::default() },
+            ]
+        })
+        .collect();
+    queue.extend([2, 5, 1, 6, 0, 7].map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }));
+    v.frame_queue = queue;
+    let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().filter(|r| r.tile.is_none()).map(|r| r.page).collect();
+    assert_eq!(pages, vec![3, 4, 2, 5], "two backdrops and two whole pages fit in 128 MiB");
+}
+
+#[test]
+fn rasters_on_screen_size_the_allowance_for_arriving_pages() {
+    let ctx = egui::Context::default();
+    ctx.begin_pass(egui::RawInput { max_texture_side: Some(4096), ..Default::default() });
+    let info = fit_width_pages(8, 1.0);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    let off_screen = RenderRequest { page: 0, scale: 1.0, tag: 1000, ..Default::default() };
+    let mib = 1024 * 1024;
+    assert!(!v.admit_texture(off_screen, 150 * mib), "with nothing on screen the allowance is 128 MiB");
+    v.frame_visible = HashSet::from([3, 4]);
+    v.last_queue = [3, 4].map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }).to_vec();
+    for req in v.last_queue.clone() {
+        assert!(v.receive_result(&ctx, solid_result(req, 2980, 3850)) > 0, "on-screen page {} uploaded", req.page);
+    }
+    assert!(v.admit_texture(off_screen, 150 * mib), "two 43.8 MiB pages on screen allow 350 MiB, or 256 MiB on the web");
+    assert!(!v.admit_texture(off_screen, 400 * mib), "past the largest allowance");
+    ctx.end_pass().textures_delta.clear();
+}
+
+#[test]
+fn a_raster_held_on_screen_without_a_request_sizes_the_allowance() {
+    let ctx = egui::Context::default();
+    ctx.begin_pass(egui::RawInput { max_texture_side: Some(4096), ..Default::default() });
+    let info = fit_width_pages(8, 1.0);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.frame_visible = HashSet::from([3]);
+    let req = RenderRequest { page: 3, scale: 1.0, tag: 1000, ..Default::default() };
+    v.last_queue = vec![req];
+    assert!(v.receive_result(&ctx, solid_result(req, 2980, 3850)) > 0);
+    // A zoom hold leaves page 3's request out while its raster stays on screen.
+    v.frame_queue = [2, 4, 1].map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }).to_vec();
+    let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+    assert_eq!(pages, vec![2, 4, 1]);
+    assert!(v.pages.contains_key(&3), "the held raster is kept beside the prefetch");
+    ctx.end_pass().textures_delta.clear();
+}
+
+#[test]
+fn the_page_allowance_is_eight_on_screen_rasters_within_its_limits() {
+    let mib = 1024 * 1024;
+    assert_eq!(cache::page_budget(0), PAGE_BYTES);
+    assert_eq!(cache::page_budget(10 * mib), PAGE_BYTES);
+    assert_eq!(cache::page_budget(20 * mib), 160 * mib);
+    let ceiling = cache::page_budget(usize::MAX);
+    assert_eq!(cache::page_budget(64 * mib), ceiling);
+    assert_eq!(ceiling, if cfg!(target_arch = "wasm32") { 256 * mib } else { 384 * mib });
 }
 
 #[test]
