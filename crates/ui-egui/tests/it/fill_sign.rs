@@ -1874,6 +1874,10 @@ fn fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels() {
     commit_typed_text(&mut h);
     assert!(h.state().views[0].fill_text.is_none());
     assert_eq!(items(&h), [("FreeText".to_owned(), Some(text.to_owned()))]);
+    // Saving stamps the time as /ModDate, and the two saves compared byte for byte below can
+    // fall in different seconds on a busy runner: a fixed clock keeps them comparable.
+    let live = std::mem::take(&mut h.state_mut().session);
+    h.state_mut().session = live.with_clock(|| 1_700_000_000);
     let id = h.state().views[0].id;
     let saved = h.state().session.save_bytes(id).unwrap();
     let mut session = pdfcraft_engine::Session::new();
