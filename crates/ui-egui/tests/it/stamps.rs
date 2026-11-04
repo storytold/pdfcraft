@@ -178,6 +178,8 @@ fn editing_a_saved_custom_stamp_through_its_palette_updates_it_and_cancel_discar
     h.run_steps(3);
     assert!(h.state_mut().execute("comment.stamp"));
     h.run_steps(2);
+    h.get_by_label("seal").scroll_to_me();
+    h.run_steps(2);
     h.get_by_label("seal").click_secondary();
     h.run_steps(2);
     h.get_by_label("Rename / change category…").click();
@@ -203,6 +205,8 @@ fn editing_a_saved_custom_stamp_through_its_palette_updates_it_and_cancel_discar
         (second_id, "Renamed", "Moved")
     );
 
+    h.get_by_label("Renamed").scroll_to_me();
+    h.run_steps(2);
     h.get_by_label("Renamed").click_secondary();
     h.run_steps(2);
     h.get_by_label("Rename / change category…").click();
