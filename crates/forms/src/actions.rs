@@ -165,23 +165,30 @@ const MAX_CHAIN: usize = 1000;
 /// How many actions follow `action` through `/Next` (a dictionary or an array of them, each with
 /// its own `/Next`), counting each object once.
 fn chained(doc: &Document, action: &Object) -> usize {
+    // By object number, as `resolve` reads a reference: a reference with another generation
+    // names the same object.
     let mut seen = std::collections::HashSet::new();
     if let Object::Ref(r) = action {
-        seen.insert(*r);
+        seen.insert(r.num);
     }
     let mut stack: Vec<Object> = doc.resolve(action).as_dict().and_then(|d| d.get(b"Next").cloned()).into_iter().collect();
     let mut count = 0;
+    // Every object looked at, arrays and their members included, counts against the walk.
+    let mut visits = 0;
     while let Some(o) = stack.pop() {
-        if count >= MAX_CHAIN {
+        visits += 1;
+        // `visits` already counts this object: the walk stops past MAX_CHAIN of them, so the
+        // MAX_CHAIN-th is still read.
+        if count >= MAX_CHAIN || visits > MAX_CHAIN {
             break;
         }
         if let Object::Ref(r) = &o
-            && !seen.insert(*r)
+            && !seen.insert(r.num)
         {
             continue;
         }
         match &*doc.resolve(&o) {
-            Object::Array(items) => stack.extend(items.iter().cloned()),
+            Object::Array(items) => stack.extend(items.iter().take(MAX_CHAIN.saturating_sub(visits)).cloned()),
             Object::Dict(d) => {
                 count += 1;
                 stack.extend(d.get(b"Next").cloned());
@@ -343,4 +350,47 @@ pub fn set_field_actions(doc: &mut Document, name: &str, actions: &[(Trigger, Fi
         })?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pdfcraft_cos::ObjRef;
+
+    /// An action whose `/Next` array lists itself under other generation numbers (which
+    /// `resolve` ignores) is walked once, within [`MAX_CHAIN`] objects in all.
+    #[test]
+    fn a_cyclic_next_array_is_walked_once() {
+        let mut doc = Document::new_empty();
+        let array = doc.add(Object::Array(Vec::new()));
+        let mut action = Dict::new();
+        action.set(b"S".to_vec(), Object::name("JavaScript"));
+        action.set(b"Next".to_vec(), Object::Ref(array));
+        let action = doc.add(Object::Dict(action));
+        let aliases: Vec<Object> = (0..5_000u16).map(|g| Object::Ref(ObjRef::new(array.num, g))).chain([Object::Ref(action)]).collect();
+        doc.set(array, Object::Array(aliases));
+        let started = std::time::Instant::now();
+        assert!(chained(&doc, &Object::Ref(action)) <= MAX_CHAIN);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    }
+
+    /// A `/Next` chain of exactly MAX_CHAIN actions counts all of them.
+    #[test]
+    fn a_chain_of_max_chain_actions_counts_every_one() {
+        let mut doc = Document::new_empty();
+        let mut next: Option<Object> = None;
+        for _ in 0..MAX_CHAIN {
+            let mut a = Dict::new();
+            a.set(b"S".to_vec(), Object::name("JavaScript"));
+            if let Some(n) = next.take() {
+                a.set(b"Next".to_vec(), n);
+            }
+            next = Some(Object::Ref(doc.add(Object::Dict(a))));
+        }
+        let mut first = Dict::new();
+        first.set(b"S".to_vec(), Object::name("JavaScript"));
+        first.set(b"Next".to_vec(), next.unwrap());
+        let first = doc.add(Object::Dict(first));
+        assert_eq!(chained(&doc, &Object::Ref(first)), MAX_CHAIN);
+    }
 }

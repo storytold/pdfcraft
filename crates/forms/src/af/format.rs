@@ -201,6 +201,9 @@ fn order(fmt: &str) -> Vec<Part> {
 
 /// Parse typed text against a date/time format (AFDate_KeystrokeEx's leniency: any
 /// separators, month names, two-digit years). `None` when it isn't a valid date.
+/// Most fields a date format may have (yyyy, mm, dd, HH, MM, ss, tt and a few more).
+const MAX_DATE_PARTS: usize = 16;
+
 pub fn parse_date(text: &str, fmt: &str) -> Option<DateTime> {
     let t = text.trim();
     if t.is_empty() {
@@ -271,6 +274,11 @@ pub fn parse_date(text: &str, fmt: &str) -> Option<DateTime> {
         digits.parse::<u32>().ok()
     };
     let parts = order(fmt);
+    // A date has a handful of fields; a format of many more is no date format, and each joined
+    // field copies the rest of a digit run.
+    if parts.len() > MAX_DATE_PARTS {
+        return None;
+    }
     let takes_number = |p: &Part| matches!(p.kind, 'y' | 'd' | 'H' | 'M' | 's') || (p.kind == 'm' && month_name.is_none());
     let is_time = |p: &Part| matches!(p.kind, 'H' | 'M' | 's');
     // The fields of each kind still to fill: [date, time].

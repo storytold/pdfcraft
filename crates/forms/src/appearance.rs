@@ -814,11 +814,13 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
             size = rows.size;
             let line = rows.row;
             let mut y = height - rows.inset;
+            // Looked up, not searched: a tiny font fits many options, and a list may select many.
+            let selected: std::collections::HashSet<&str> = values.iter().map(String::as_str).collect();
             for (export, display) in f.options.iter().skip(rows.top) {
                 if y - line < 0.0 {
                     break;
                 }
-                if values.contains(export) {
+                if selected.contains(export.as_str()) {
                     c.push_str(&format!("0.6 0.75 0.86 rg\n{} {} {} {} re f\n", n(bw), n(y - line), n(width - 2.0 * bw), n(line)));
                 }
                 show(&mut body, pad, y - line + size * 0.25, display);

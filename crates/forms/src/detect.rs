@@ -7,6 +7,7 @@
 
 use pdfcraft_content::{Matrix, Pieces};
 use pdfcraft_cos::{Document, Object};
+use std::collections::{HashMap, HashSet};
 
 pub mod raster;
 
@@ -426,7 +427,10 @@ pub fn detect(words: &[Word], shapes: &Shapes, existing: &[[f64; 4]], taken: &[S
     keyed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.rect[0].total_cmp(&b.1.rect[0])));
     let mut out: Vec<Candidate> = keyed.into_iter().map(|(_, c)| c).collect();
     // Unique names (Acrobat numbers repeats); unlabelled fields get Text1, Check Box1, …
-    let mut used: Vec<String> = taken.to_vec();
+    // The names are a set, and each base remembers the next number to try, so naming is linear
+    // in the fields however many share a label.
+    let mut used: HashSet<String> = taken.iter().cloned().collect();
+    let mut next: HashMap<String, usize> = HashMap::new();
     for c in &mut out {
         let base = if c.name.is_empty() {
             match c.kind {
@@ -437,12 +441,12 @@ pub fn detect(words: &[Word], shapes: &Shapes, existing: &[[f64; 4]], taken: &[S
             c.name.clone()
         };
         let mut name = if c.name.is_empty() { format!("{base}1") } else { base.clone() };
-        let mut n = 1;
+        let n = next.entry(base.clone()).or_insert(1);
         while used.contains(&name) {
-            n += 1;
+            *n += 1;
             name = format!("{base}{n}");
         }
-        used.push(name.clone());
+        used.insert(name.clone());
         c.name = name;
     }
     out
