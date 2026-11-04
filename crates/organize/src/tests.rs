@@ -3828,5 +3828,4 @@ fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
     let mut ctrl_names = xobject_names(&extracted_ctrl, 0);
     ctrl_names.sort();
     assert_eq!(ctrl_names, [b"ImHidden".to_vec(), b"ImShown".to_vec()]);
-
 }

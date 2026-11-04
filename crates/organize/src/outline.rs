@@ -599,7 +599,7 @@ pub fn add_bookmark_tree(doc: &mut Document, parent_title: &str, entries: &[Outl
     let mut done: Vec<(ObjRef, Vec<ObjRef>)> = Vec::new();
     for (e, page) in entries.iter().zip(targets) {
         let mut d = Dict::new();
-d.set(b"Title".to_vec(), Object::String(doc.text_string(&e.title)));
+        d.set(b"Title".to_vec(), Object::String(doc.text_string(&e.title)));
         d.set(b"Dest".to_vec(), go_to_at(page, None, e.top));
         if let Some(se) = e.element {
             d.set(b"SE".to_vec(), Object::Ref(se));
