@@ -694,15 +694,21 @@ fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<No
 /// page is a sheet of its own, so the sheet count is the page count, and the sheet number a form
 /// shows (`sheet(this) + 1`, the sheet counted from 0) is the page number.
 fn page_role(f: &Field) -> Option<PageRole> {
-    let script = f.scripts.iter().find(|s| s.activity == "ready" || s.activity == "layoutReady")?;
-    let sheet_number = || script.text.chars().filter(|c| !c.is_whitespace()).collect::<String>().contains("layout.sheet(this)+1");
-    if script.text.contains("pageCount") || script.text.contains("sheetCount") {
-        Some(PageRole::Count)
-    } else if script.text.contains("layout.page(") || script.text.contains("layout.absPage(") || sheet_number() {
-        Some(PageRole::Number)
-    } else {
-        None
-    }
+    // Any of its ready scripts: a field may have one that does something else first.
+    f.scripts.iter().filter(|s| s.activity == "ready" || s.activity == "layoutReady").find_map(|script| {
+        // `this` in JavaScript, `$` in FormCalc.
+        let sheet_number = || {
+            let compact: String = script.text.chars().filter(|c| !c.is_whitespace()).collect();
+            compact.contains("layout.sheet(this)+1") || compact.contains("layout.sheet($)+1")
+        };
+        if script.text.contains("pageCount") || script.text.contains("sheetCount") {
+            Some(PageRole::Count)
+        } else if script.text.contains("layout.page(") || script.text.contains("layout.absPage(") || sheet_number() {
+            Some(PageRole::Number)
+        } else {
+            None
+        }
+    })
 }
 
 /// The ids rich text in `nodes` embeds (draws' values, fields' values and captions), down to
@@ -813,7 +819,14 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     collect_page_roles(&root_node, &mut page_roles, 0);
     let mut embedded = std::collections::BTreeSet::new();
     collect_embedded(&root_node, &mut embedded, 0);
-    Ok((Template { root: root_sf, page_roles, embedded }, warnings))
+    let mut tpl = Template { root: root_sf, page_roles, embedded, embedded_paths: Default::default() };
+    let paths = crate::data::fields_with_ids(&tpl)
+        .into_iter()
+        .filter(|(id, _, _)| tpl.embedded.contains(*id))
+        .map(|(_, som, _)| crate::data::data_path(&tpl, &som).into_iter().map(|(name, _)| name).collect())
+        .collect();
+    tpl.embedded_paths = paths;
+    Ok((tpl, warnings))
 }
 
 fn parse_access(a: Option<&str>) -> Option<Access> {

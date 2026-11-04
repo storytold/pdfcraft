@@ -666,9 +666,16 @@ pub fn field_grows_with_text(tpl: &Template, som: &str) -> bool {
 }
 
 /// Is the field at `som` embedded in rich text (a floating field, XFA 3.3 p. 1222)? Its value
-/// is shown in that text, so a new one needs the form laid out again.
+/// is shown in that text, so a new one needs the form laid out again. A page area's fields count
+/// too, and so does any field bound to the same data as an embedded one.
 pub fn field_is_embedded(tpl: &Template, som: &str) -> bool {
-    !tpl.embedded.is_empty() && crate::data::template_field(tpl, som).and_then(|f| f.common.id.as_ref()).is_some_and(|id| tpl.embedded.contains(id))
+    !tpl.embedded_paths.is_empty() && path_is_embedded(tpl, &data_path(tpl, som))
+}
+
+/// Does `path` hold the data of a field embedded in rich text, in any instance of a repeating
+/// subform? See [`field_is_embedded`].
+pub fn path_is_embedded(tpl: &Template, path: &crate::DataPath) -> bool {
+    !tpl.embedded_paths.is_empty() && tpl.embedded_paths.contains(&path.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>())
 }
 
 /// Give the field at `som` in `live`, and every other field bound to the same data node (a

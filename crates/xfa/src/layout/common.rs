@@ -1,45 +1,45 @@
 use super::items::{Action, Item, Rounded};
-use super::{DataNode, DataPath, HashMap, Layout, MAX_DEPTH, Node, Rect, Script, SomIndices, date_letters, iso_to_pattern};
+use super::{DataNode, DataPath, HashMap, Layout, Node, Rect, Script, Template, data_path, date_letters, iso_to_pattern};
+use crate::data::fields_with_ids;
 
-/// The values of the fields with an `id` in `nodes`, for the rich text that embeds them
-/// (floating fields, XFA 3.3 p. 1222): the data's, else the template's default. `path` is the
-/// data path of `nodes`' parent: a named subform or field adds its name and index among its
-/// siblings; areas and unnamed subforms add nothing, as they have no data of their own.
-pub(super) fn collect_values(nodes: &[Node], data: Option<&DataNode>, path: &mut DataPath, out: &mut HashMap<String, String>, depth: usize) {
-    if depth > MAX_DEPTH {
-        return;
+/// The value of each field with an `id`, for the rich text that embeds it (floating fields,
+/// XFA 3.3 pp. 221–222, p. 1222), with its data path and its template default: the data's value
+/// as the field shows it (a multi-select list's picks on separate lines), else the default.
+pub(super) fn collect_values(tpl: &Template, data: Option<&DataNode>) -> HashMap<String, EmbedSource> {
+    let mut out = HashMap::new();
+    for (id, som, f) in fields_with_ids(tpl) {
+        let path = data_path(tpl, &som);
+        let default = f.value.plain().unwrap_or_default();
+        let value = data_value(data, &path).unwrap_or_else(|| default.clone());
+        out.insert(id.to_string(), EmbedSource { path, default, value });
     }
-    let sibs = SomIndices::of(nodes);
-    for (i, n) in nodes.iter().enumerate() {
-        match n {
-            Node::Field(f) => {
-                if let Some(id) = &f.common.id {
-                    let from_data = f.common.name.as_ref().and_then(|name| {
-                        path.push((name.clone(), sibs.at(i)));
-                        // As a field shows it: the data's value wins unless it is blank.
-                        let text = data.and_then(|d| d.text_at(path)).map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
-                        path.pop();
-                        text
-                    });
-                    out.insert(id.clone(), from_data.or_else(|| f.value.plain()).unwrap_or_default());
-                }
-            }
-            Node::Subform(s) => {
-                let named = s.common.name.as_ref().map(|name| path.push((name.clone(), sibs.at(i)))).is_some();
-                collect_values(&s.children, data, path, out, depth + 1);
-                if let Some(ps) = &s.page_set {
-                    for a in &ps.areas {
-                        collect_values(&a.items, data, path, out, depth + 1);
-                    }
-                }
-                if named {
-                    path.pop();
-                }
-            }
-            Node::Area(a) => collect_values(&a.children, data, path, out, depth + 1),
-            Node::ExclGroup(_) | Node::Draw(_) => {}
+    out
+}
+
+/// What an embedded field shows: see [`collect_values`].
+pub(super) struct EmbedSource {
+    pub(super) path: DataPath,
+    pub(super) default: String,
+    /// The value of its first instance.
+    pub(super) value: String,
+}
+
+/// `path` with the instance numbers `scope` gives the same names, segment by segment from the
+/// root, up to where the two part: the instance of a repeating subform the text is laid out in.
+pub(super) fn instance_path(path: &DataPath, scope: &DataPath) -> DataPath {
+    let mut at = path.clone();
+    for (seg, (name, index)) in at.iter_mut().zip(scope) {
+        if seg.0 != *name {
+            break;
         }
+        seg.1 = *index;
     }
+    at
+}
+
+/// The value a field shows from `data` at `path`: unless it is blank, the data's wins.
+pub(super) fn data_value(data: Option<&DataNode>, path: &DataPath) -> Option<String> {
+    data.and_then(|d| d.value_at(path)).map(|t| t.trim().to_string()).filter(|t| !t.is_empty())
 }
 
 pub(super) fn clamp_opt(v: f64, min: Option<f64>, max: Option<f64>) -> f64 {

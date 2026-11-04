@@ -137,7 +137,7 @@ struct Layouter<'t> {
     cur: Option<Cursor>,
     names: HashMap<String, usize>,
     /// Field values by `id`, for embedded fields in rich text.
-    values: HashMap<String, String>,
+    values: HashMap<String, common::EmbedSource>,
     warnings: Vec<String>,
     warned: HashSet<String>,
     fields: usize,
@@ -179,10 +179,9 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
             occur_min: 0,
         }],
     };
-    let mut values = HashMap::new();
+    let values = collect_values(tpl, data);
     // One copy of the root for the whole layout: measurements are cached by node address.
     let root_node = Node::Subform(Box::new(tpl.root.clone()));
-    collect_values(std::slice::from_ref(&root_node), data, &mut DataPath::new(), &mut values, 0);
     let mut l = Layouter {
         tpl,
         data,

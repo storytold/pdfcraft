@@ -35,7 +35,9 @@ that warning and keeps the existing layout and accepted widget values.
   table in an area) alike; fields that compute the page number or count on layout show the numbers,
   and so do those that compute the sheet number (`sheet(this)+1`) or count, a sheet being a page on
   screen; an embedded (floating) field shows its value from the data, which is where a script's
-  value goes, and a script that gives one a new value lays the form out again;
+  value goes (a repeating row's own instance, a page area's field under the area, a multi-select
+  list's picks), and an event, reset or typed value that changes one lays the form out again;
+  a field inside an exclusion group is not shown yet;
   a draw placed by position turns about its anchor (`rotate`: degrees counter-clockwise, a multiple
   of 90), as one item a page break doesn't cut, and its container grows to the box it stands in. A
   field, a subform or a draw in a flow doesn't turn.

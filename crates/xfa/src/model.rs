@@ -763,6 +763,9 @@ pub struct Template {
     /// The `id`s of the fields some rich text embeds (`xfa:embed="#id"`, XFA 3.3 p. 1222): a new
     /// value in one changes text shown elsewhere, so the form is laid out again.
     pub embedded: std::collections::BTreeSet<String>,
+    /// The data paths of those fields, by name alone (any instance of a repeating subform), as
+    /// a script writes them: a write there changes text shown elsewhere.
+    pub embedded_paths: std::collections::BTreeSet<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

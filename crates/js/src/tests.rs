@@ -1031,6 +1031,16 @@ mod formcalc {
         assert_eq!(calc("xfa.layout.sheetCount()"), "3");
     }
 
+    /// A layout method's arguments are evaluated, once each, for what they do: a message box
+    /// in one still shows.
+    #[test]
+    fn layout_method_arguments_are_evaluated_once() {
+        let o = go("xfa.layout.sheet($host.messageBox(\"Hi\")) + 1", "form1[0].page1[0].total[0]", "calculate");
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2"));
+        assert_eq!(o.effects.iter().filter(|e| matches!(e, XfaEffect::MessageBox(_))).count(), 1, "{:?}", o.effects);
+    }
+
     /// The value of a script run as a calculate on `total`.
     fn calc(script: &str) -> String {
         let o = go(script, "form1[0].page1[0].total[0]", "calculate");

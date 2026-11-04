@@ -426,6 +426,9 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn set_value(&mut self, som: &str, value: &str) -> bool {
         use pdfcraft_forms::FieldKind as K;
         let path = pdfcraft_xfa::data_path(self.tpl, som);
+        // A floating field shows the value of its data node in the text that embeds it (XFA 3.3
+        // pp. 221–222): a page area's, or one another field shares, as well.
+        let embedded = pdfcraft_xfa::path_is_embedded(self.tpl, &path);
         let names = self.widgets_at(&path);
         // The data text: the widget at `som` says how its kind writes the value; without one,
         // the first widget bound to the node, else the value itself.
@@ -475,10 +478,7 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
         if changed {
             self.changes.values += 1;
-            // A floating field shows its value in the text that embeds it (XFA 3.3 p. 1222).
-            if !self.embedded_changed && pdfcraft_xfa::field_is_embedded(self.tpl, som) {
-                self.embedded_changed = true;
-            }
+            self.embedded_changed |= embedded;
         }
         changed
     }
@@ -567,6 +567,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             let path = pdfcraft_xfa::data_path(self.tpl, som);
             let text = data_text(info);
             if self.data.as_ref().and_then(|d| d.text_at(&path)).unwrap_or("") != text {
+                self.embedded_changed |= pdfcraft_xfa::path_is_embedded(self.tpl, &path);
                 self.data_op(pdfcraft_xfa::DataOp::Value { path, text });
                 self.changes.values += 1;
             }
@@ -788,7 +789,8 @@ fn collect_fields(n: &FormNode, out: &mut Vec<(String, String, String, String)>,
     }
 }
 
-/// Reflow a laid-out XFA form when an edited multiline field can grow. The datasets must
+/// Reflow a laid-out XFA form when an edited multiline field can grow, or an edited text field
+/// is embedded in rich text (a floating field, whose value that text shows). The datasets must
 /// already hold the final values, including calculation results. Fixed-height fields keep
 /// their existing geometry; forms without scripts parse their template only when needed.
 /// `Some` means pages/widgets were rebuilt and the caller must fully refresh its snapshot.
@@ -803,7 +805,7 @@ pub(crate) fn relayout_changed_text(
     let current = &*doc;
     let mut changed = before
         .iter()
-        .filter(|f| f.kind == pdfcraft_forms::FieldKind::Text && f.has(pdfcraft_forms::flags::MULTILINE))
+        .filter(|f| f.kind == pdfcraft_forms::FieldKind::Text)
         .filter_map(|f| {
             let object = current.get(f.obj);
             let dict = object.as_dict()?;
@@ -821,7 +823,7 @@ pub(crate) fn relayout_changed_text(
         Some(tpl) => std::borrow::Cow::Borrowed(tpl),
         None => std::borrow::Cow::Owned(pdfcraft_xfa::template_of(current).map_err(|e| e.to_string())?),
     };
-    let reflow = changed.any(|som| pdfcraft_xfa::field_grows_with_text(&template, &som));
+    let reflow = changed.any(|som| pdfcraft_xfa::field_grows_with_text(&template, &som) || pdfcraft_xfa::field_is_embedded(&template, &som));
     drop(changed);
     if !reflow {
         return Ok(None);

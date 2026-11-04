@@ -292,16 +292,23 @@ impl Interp<'_> {
                 }
                 _ => Ok(Val::Null),
             },
-            Val::Layout => match m.as_str() {
-                // On screen every page is a sheet of its own (see the JavaScript `sheet`).
-                "page" | "abspage" | "sheet" => Ok(Val::Num(self.h.doc.page as f64 + if m == "page" { 1.0 } else { 0.0 })),
-                "pagecount" | "abspagecount" | "sheetcount" => Ok(Val::Num(self.h.doc.page_count as f64)),
-                "relayout" | "relayoutpagearea" => {
-                    self.h.push(XfaEffect::Relayout);
-                    Ok(Val::Null)
+            Val::Layout => {
+                // No layout method reads its arguments, but each is evaluated once, for what it
+                // does (a message box in an argument still shows), as the other objects' are.
+                for i in 0..args.len() {
+                    self.arg(args, i)?;
                 }
-                _ => Ok(Val::Num(0.0)),
-            },
+                match m.as_str() {
+                    // On screen every page is a sheet of its own (see the JavaScript `sheet`).
+                    "page" | "abspage" | "sheet" => Ok(Val::Num(self.h.doc.page as f64 + if m == "page" { 1.0 } else { 0.0 })),
+                    "pagecount" | "abspagecount" | "sheetcount" => Ok(Val::Num(self.h.doc.page_count as f64)),
+                    "relayout" | "relayoutpagearea" => {
+                        self.h.push(XfaEffect::Relayout);
+                        Ok(Val::Null)
+                    }
+                    _ => Ok(Val::Num(0.0)),
+                }
+            }
             Val::Xfa => match m.as_str() {
                 "resolvenode" | "resolvenodes" => {
                     let s = self.arg_str(args, 0)?;
