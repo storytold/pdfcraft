@@ -207,6 +207,9 @@ impl Session {
             }
             return Err(e);
         }
+        if let Some(ed) = doc.editor.as_mut() {
+            ed.position += 1;
+        }
         doc.dirty = true;
         doc.generation += 1;
         doc.edit_notices = notices;
@@ -254,6 +257,9 @@ impl Session {
             }
             return Err(e);
         }
+        if let Some(ed) = doc.editor.as_mut() {
+            ed.position -= 1;
+        }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
         doc.generation += 1;
@@ -282,6 +288,9 @@ impl Session {
                 Self::show_released(doc);
             }
             return Err(e);
+        }
+        if let Some(ed) = doc.editor.as_mut() {
+            ed.position += 1;
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
