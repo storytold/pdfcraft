@@ -14,7 +14,7 @@ use crate::arrays;
 use crate::bits::{BitReader, Budget};
 use crate::entity::{Ctx, malformed};
 use crate::{FileStructure, PrcError, SectionKind};
-use triangulate::{Corners, Face};
+use triangulate::{Corners, Face, triangle_elements};
 
 const FILE_STRUCTURE_TESSELLATION: u32 = 305;
 const TESS_3D: u32 = 172;
@@ -202,10 +202,13 @@ impl Ctx<'_, '_> {
         let mut mesh = TriangleMesh { positions: points(&coords)?, normals_recalculated: recalc, ..TriangleMesh::default() };
         let styled = faces.iter().any(|f| !f.styles.is_empty());
         let mut corners = Corners::default();
+        // Every triangle carries a corner triple for each texture set any face uses.
+        let sets = faces.iter().map(Face::texture_sets).max().unwrap_or(0);
+        let per_triangle = triangle_elements(!recalc, sets, styled);
         for f in &faces {
-            // Faces may reuse one index range, so each face's triangles are charged before
-            // they are made.
-            self.r.take_elements(f.triangle_count()?)?;
+            // Faces may reuse one index range, so each face's triangles, with what they
+            // carry, are charged before they are made.
+            self.r.take_elements(f.triangle_count()?.saturating_mul(per_triangle))?;
             let start = mesh.triangles.len();
             let entities = f.triangulate(&indices, !recalc, mesh.positions.len(), &mut mesh.triangles, &mut corners)?;
             mesh.faces.push(start..mesh.triangles.len());

@@ -132,6 +132,12 @@ impl Face {
         Ok(n)
     }
 
+    /// Texture sets the face's triangles carry: its count when one of its blocks is textured,
+    /// at most [`MAX_TEXTURE_SETS`] (a face past it is refused when triangulated).
+    pub(super) fn texture_sets(&self) -> usize {
+        if BLOCKS.iter().any(|b| b.textured && self.flags & b.bit != 0) { self.textures.min(MAX_TEXTURE_SETS) } else { 0 }
+    }
+
     /// Emit the face's triangles into `out`; `normals` = the index array stores normal slots,
     /// in which case each triangle's corner normal slots go to `corners`, as do its corner
     /// texture slots. Returns the triangles each triangulation entity emitted, in order: one
@@ -185,6 +191,14 @@ impl Face {
             out.extend(std::iter::repeat_n(TriangleStyle { style, behaviour: self.behaviour }, n));
         }
     }
+}
+
+/// The 8-byte elements of [`crate::MAX_DECODED_ELEMENTS`] one triangle holds: its corners
+/// (12 bytes), its normal-slot corners when the index array stores them (12), a corner triple
+/// per texture set (16 each) and its style when the mesh is styled (8).
+pub(super) fn triangle_elements(normals: bool, sets: usize, styled: bool) -> usize {
+    let normals = if normals { 2 } else { 0 };
+    2usize.saturating_add(normals).saturating_add(sets.saturating_mul(2)).saturating_add(usize::from(styled))
 }
 
 /// One entity's `points` index slots. `normals` is `None` when the array stores no normal
