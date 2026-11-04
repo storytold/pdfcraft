@@ -5380,17 +5380,11 @@ fn form_javascript_validates_calculates_and_formats() {
     s.apply(id, Edit::DuplicateField { name: "go".into(), pages: vec![1] }).unwrap();
     s.apply(
         id,
-        Edit::SetFieldProps {
-            name: "go".into(),
-            props: Box::new(FieldProps { caption: Some((0, "Continue".into())), ..Default::default() }),
-        },
+        Edit::SetFieldProps { name: "go".into(), props: Box::new(FieldProps { caption: Some((0, "Continue".into())), ..Default::default() }) },
     )
     .unwrap();
-    s.apply(
-        id,
-        Edit::SetFieldProps { name: "go".into(), props: Box::new(FieldProps { caption: Some((1, "Old".into())), ..Default::default() }) },
-    )
-    .unwrap();
+    s.apply(id, Edit::SetFieldProps { name: "go".into(), props: Box::new(FieldProps { caption: Some((1, "Old".into())), ..Default::default() }) })
+        .unwrap();
     let caption =
         s.run_javascript(id, "getField('go').buttonSetCaption('Continue'); event.value = getField('go').buttonGetCaption();", Some("go")).unwrap();
     assert_eq!(caption.error, None);
