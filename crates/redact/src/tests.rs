@@ -4264,3 +4264,38 @@ fn the_report_lists_fallback_readings() {
     assert_eq!(r.fallbacks.len(), 1, "only the mark read through its /Rect");
     assert_eq!((r.fallbacks[0].obj, r.fallbacks[0].reading.used_rect), (m.obj, true));
 }
+
+/// An `/Annots` entry, or a `/Subtype`, that can't be followed (a chain past the bound) may be a
+/// mark the page shows: listed and refused, never skipped. A page `/Annots` that can't be followed
+/// leaves nothing to list: the scan fails rather than give a partial answer.
+#[test]
+fn what_cant_be_followed_is_refused_never_skipped() {
+    let chain = |doc: &mut Document, end: Object, n: usize| (0..n).fold(end, |v, _| Object::Ref(doc.add(v)));
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    // The entry: listed through 40 references to the mark.
+    let far = chain(&mut doc, Object::Ref(m.obj), 40);
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Annots".to_vec(), Object::Array(vec![far]))).unwrap();
+    let p = mark_previews(&doc, None).unwrap();
+    assert_eq!((p.len(), p[0].areas.clone()), (1, Err(MarkRefusal::UnresolvedType)));
+    assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)));
+    // The /Subtype: 40 references to /Redact.
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    let subtype = chain(&mut doc, Object::name("Redact"), 40);
+    doc.update_dict(m.obj, |d| d.set(b"Subtype".to_vec(), subtype)).unwrap();
+    let p = mark_previews(&doc, None).unwrap();
+    assert_eq!((p[0].areas.clone(), p[0].locator), (Err(MarkRefusal::UnresolvedType), Some([20.0, 95.0, 40.0, 110.0])));
+    assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)));
+    assert!(content(&doc, 0).contains("(AB1234CD) Tj"));
+    // The page's /Annots itself.
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let list = doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Annots").unwrap().clone();
+    let far = chain(&mut doc, list, 40);
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Annots".to_vec(), far)).unwrap();
+    assert_eq!(mark_previews(&doc, None), Err(MarkScanError::UnresolvedAnnotations));
+    assert_eq!(apply(&mut doc, None), Err(RedactError::MarkScan(MarkScanError::UnresolvedAnnotations)));
+}

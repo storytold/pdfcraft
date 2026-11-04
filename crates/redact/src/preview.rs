@@ -57,6 +57,10 @@ pub enum MarkRefusal {
     /// one is not supported yet (#5849 follows such a `/Subtype`), so it is refused, never skipped.
     #[error("its type is given by reference, which redaction can't apply yet")]
     IndirectSubtype,
+    /// Its type can't be known: its `/Subtype`, or the reference listing it, can't be followed (a
+    /// cycle, or a chain longer than references are followed). It may be a mark the page shows.
+    #[error("its type can't be read (a reference that can't be followed), so it may be a redaction mark")]
+    UnresolvedType,
     /// Its page's marks have more `/QuadPoints` entries together than one page may.
     #[error("the marks on its page have more than {MAX_PAGE_QUADPOINT_VALUES} QuadPoints entries together")]
     PageLimit,
@@ -65,6 +69,9 @@ pub enum MarkRefusal {
 /// Why the marks could not be listed at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum MarkScanError {
+    /// A page's `/Annots` is a reference that can't be followed, so its marks can't be listed.
+    #[error("a page's list of annotations is a reference that can't be followed, so its redaction marks can't be known")]
+    UnresolvedAnnotations,
     #[error("there was not enough memory to check the redaction marks")]
     Allocation,
     #[error("the redaction marks take more than {} MiB to check at once", MAX_PREVIEW_BYTES >> 20)]
@@ -91,6 +98,12 @@ pub(crate) struct Collected {
 /// renderer does so), and whether it was. Read here for every decision redaction makes about
 /// what an annotation is, so the page and redaction never classify one differently. #5849 also
 /// follows it; keeping the reading in one helper keeps that change local.
+/// Whether `d`'s `/Subtype` is a reference that can't be followed to a value (a cycle, or a chain past
+/// [`Document::resolve`]'s bound): its type is unknown, which redaction never reads as "not a mark".
+pub(crate) fn subtype_unresolved(doc: &Document, d: &Dict) -> bool {
+    matches!(d.get(b"Subtype"), Some(r @ Object::Ref(_)) if matches!(&*doc.resolve(r), Object::Ref(_)))
+}
+
 pub(crate) fn subtype_of(doc: &Document, d: &Dict) -> (Option<Vec<u8>>, bool) {
     match d.get(b"Subtype") {
         Some(Object::Name(n)) => (Some(n.clone()), false),
@@ -110,7 +123,12 @@ impl Entry<'_> {
     fn dict(&self) -> Option<&Dict> {
         match self {
             Entry::Inline(d) => Some(d),
-            Entry::Held(o) => o.as_dict(),
+            // A stream object is an annotation dictionary all the same (the renderer reads it so).
+            Entry::Held(o) => match &**o {
+                Object::Dict(d) => Some(d),
+                Object::Stream(s) => Some(&s.dict),
+                _ => None,
+            },
         }
     }
 }
@@ -122,6 +140,8 @@ struct Candidate<'a> {
     /// The listed object is the dictionary itself (not a reference to a reference).
     direct_object: bool,
     indirect_subtype: bool,
+    /// Its type can't be known: refused.
+    unresolved: bool,
     entry: Entry<'a>,
 }
 
@@ -148,6 +168,10 @@ pub(crate) fn collect_within(doc: &Document, pages: Option<&[usize]>, budget: us
             Some(Object::Array(a)) => a,
             Some(r @ Object::Ref(_)) => {
                 held_list = doc.resolve(r);
+                // A list that can't be followed may hold marks the page shows: no partial answer.
+                if matches!(&*held_list, Object::Ref(_)) {
+                    return Err(MarkScanError::UnresolvedAnnotations);
+                }
                 held_list.as_array().map_or(&[], Vec::as_slice)
             }
             _ => &[],
@@ -160,9 +184,20 @@ pub(crate) fn collect_within(doc: &Document, pages: Option<&[usize]>, budget: us
                 Object::Ref(_) => Entry::Held(doc.resolve(listed)),
                 _ => continue,
             };
-            let Some(d) = entry.dict() else { continue };
-            let (subtype, indirect_subtype) = subtype_of(doc, d);
-            if subtype.as_deref() != Some(b"Redact") {
+            // An entry whose type can't be known (a reference or a `/Subtype` that can't be followed) may
+            // be a mark the renderer draws: it is listed, refused, never skipped.
+            let unresolved = match entry.dict() {
+                None => matches!(&entry, Entry::Held(o) if matches!(**o, Object::Ref(_))),
+                Some(d) => subtype_unresolved(doc, d),
+            };
+            let (redact, indirect_subtype) = match entry.dict() {
+                Some(d) if !unresolved => {
+                    let (subtype, indirect) = subtype_of(doc, d);
+                    (subtype.as_deref() == Some(b"Redact"), indirect)
+                }
+                _ => (false, false),
+            };
+            if !redact && !unresolved {
                 continue;
             }
             let (object, direct_object) = match listed.as_ref() {
@@ -171,7 +206,7 @@ pub(crate) fn collect_within(doc: &Document, pages: Option<&[usize]>, budget: us
             };
             // The page's total is counted from the arrays' lengths, before any entry is read: a
             // direct array is measured in place, only a reference is followed (held, not copied).
-            page_values = page_values.saturating_add(match d.get(b"QuadPoints") {
+            page_values = page_values.saturating_add(match entry.dict().and_then(|d| d.get(b"QuadPoints")) {
                 Some(Object::Array(a)) => a.len(),
                 Some(q @ Object::Ref(_)) => doc.resolve(q).as_array().map_or(0, Vec::len),
                 _ => 0,
@@ -180,19 +215,21 @@ pub(crate) fn collect_within(doc: &Document, pages: Option<&[usize]>, budget: us
             candidates.try_reserve(1).map_err(|_| MarkScanError::Allocation)?;
             #[cfg(test)]
             tests::count_candidate();
-            candidates.push(Candidate { index, object, direct_object, indirect_subtype, entry });
+            candidates.push(Candidate { index, object, direct_object, indirect_subtype, unresolved, entry });
         }
         let over_page = page_values > MAX_PAGE_QUADPOINT_VALUES;
         for c in candidates {
-            let Some(dict) = c.entry.dict() else { continue };
-            let areas = if c.indirect_subtype {
+            let dict = c.entry.dict();
+            let areas = if c.unresolved {
+                Err(MarkRefusal::UnresolvedType)
+            } else if c.indirect_subtype {
                 // The renderer draws it as a Redact mark; applying it is not supported yet, so it is
                 // refused, never skipped.
                 Err(MarkRefusal::IndirectSubtype)
             } else if over_page {
                 Err(MarkRefusal::PageLimit)
             } else {
-                match mark_areas(doc, dict) {
+                match dict.map(|d| mark_areas(doc, d)).unwrap_or(Err(MarkAreaError::NoUsableArea)) {
                     Err(e) => Err(MarkRefusal::Geometry(e)),
                     // Valid numbers, but a mark applying can't remove is refused all the same.
                     Ok(_) if c.object.is_none() => Err(MarkRefusal::InlineAnnotation),
@@ -200,7 +237,7 @@ pub(crate) fn collect_within(doc: &Document, pages: Option<&[usize]>, budget: us
                     Ok(a) => Ok(a),
                 }
             };
-            let locator = if areas.is_err() { mark_locator(doc, dict) } else { None };
+            let locator = if areas.is_err() { dict.and_then(|d| mark_locator(doc, d)) } else { None };
             charge(areas.as_ref().map_or(0, |a| a.rects.len()).saturating_mul(std::mem::size_of::<[f64; 4]>()))?;
             let held = match (&areas, c.entry) {
                 (Ok(_), Entry::Held(o)) => Some(o),

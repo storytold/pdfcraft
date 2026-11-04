@@ -396,14 +396,14 @@ fn outline(items: &[pdfcraft_render::OutlineItem]) -> Value {
 /// `ready` with the areas it removes, or `refused` with why. Areas are in the page's default user
 /// space units (points times `user_unit`), exactly (not rounded, and not in the tools' top-left convention): they are what
 /// applying removes.
-pub(crate) fn redaction_mark(d: &Document, p: &pdfcraft_engine::MarkPreview) -> Value {
+pub(crate) fn redaction_mark(units: &[f64], p: &pdfcraft_engine::MarkPreview) -> Value {
     use pdfcraft_engine::{MarkAreaError, MarkRefusal};
     let mut v = json!({
         "page": p.page + 1,
         "index": p.index + 1,
         "units": "PDF default user space units of the page, [x0, y0, x1, y1]",
         // Points per user-space unit (`/UserUnit`): 1 unless the page says otherwise.
-        "user_unit": d.user_unit(p.page),
+        "user_unit": units.get(p.page),
     });
     match &p.areas {
         Ok(a) => {
@@ -429,6 +429,7 @@ pub(crate) fn redaction_mark(d: &Document, p: &pdfcraft_engine::MarkPreview) -> 
                 MarkRefusal::UnsupportedAnnotationReference => "unsupported_reference",
                 MarkRefusal::PageLimit => "page_quadpoint_limit",
                 MarkRefusal::IndirectSubtype => "indirect_subtype",
+                MarkRefusal::UnresolvedType => "unresolved_type",
             });
             v["reason"] = json!(format!("Cannot apply this redaction ({r}); remove it and mark the area again"));
             v["user_areas"] = json!([]);
@@ -439,12 +440,12 @@ pub(crate) fn redaction_mark(d: &Document, p: &pdfcraft_engine::MarkPreview) -> 
 }
 
 /// The redaction state of the comment at (`page`, `index`) (0-based), for a Redact comment.
-pub(crate) fn redaction_of(d: &Document, page: usize, index: usize) -> Value {
+pub(crate) fn redaction_of(d: &Document, units: &[f64], page: usize, index: usize) -> Value {
     match d.redaction_previews() {
         pdfcraft_engine::RedactionPreviews::Unavailable(why) => json!({ "status": "unavailable", "reason": why.to_string() }),
         view => view.get(page, index).map_or_else(
             || json!({ "status": "unavailable", "reason": "this mark is not among the marks applying reads" }),
-            |p| redaction_mark(d, p),
+            |p| redaction_mark(units, p),
         ),
     }
 }
@@ -453,11 +454,27 @@ pub(crate) fn redaction_of(d: &Document, page: usize, index: usize) -> Value {
 /// and whether the view can be trusted.
 pub(crate) fn redactions(d: &Document) -> Value {
     match d.redaction_previews() {
-        pdfcraft_engine::RedactionPreviews::Available(list) => json!({
+        pdfcraft_engine::RedactionPreviews::Available(list) => {
+            let units = page_units(d);
+            json!({
             "status": "available",
             "refused": d.redaction_previews().refused(),
-            "marks": list.iter().map(|p| redaction_mark(d, p)).collect::<Vec<_>>(),
-        }),
+            "marks": list.iter().map(|p| redaction_mark(&units, p)).collect::<Vec<_>>(),
+            })
+        }
         pdfcraft_engine::RedactionPreviews::Unavailable(why) => json!({ "status": "unavailable", "reason": why.to_string(), "marks": [] }),
     }
+}
+
+/// Points per user-space unit of every page of `d`, read once for a whole response.
+pub(crate) fn page_units(d: &Document) -> Vec<f64> {
+    #[cfg(test)]
+    PAGE_UNIT_WALKS.with(|n| n.set(n.get().saturating_add(1)));
+    d.user_units()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times a response read the pages' units (the operation-count seam).
+    pub(crate) static PAGE_UNIT_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

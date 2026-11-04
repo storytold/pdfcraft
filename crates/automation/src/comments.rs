@@ -177,6 +177,8 @@ impl Automation {
         let doc = self.doc(a)?;
         let only = a.opt_int("page")?.map(|p| (p.max(1) - 1) as usize);
         let all = self.comments(a)?;
+        // Read once for the whole list, and only when it has redaction marks.
+        let units = if all.iter().any(|c| c.subtype == "Redact") { crate::json::page_units(doc) } else { Vec::new() };
         let view = |c: &Annotation| -> Value {
             let mut v = json!({
                 "id": c.name,
@@ -191,7 +193,7 @@ impl Automation {
                 "color": c.color.map(hex),
             });
             if c.subtype == "Redact" {
-                v["redaction"] = crate::json::redaction_of(doc, c.page, c.index);
+                v["redaction"] = crate::json::redaction_of(doc, &units, c.page, c.index);
             }
             // A line's ends, or the corners of connected lines, a polygon or a cloud, as
             // comment_edit's `points` takes them.

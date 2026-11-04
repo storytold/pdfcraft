@@ -97,3 +97,34 @@ fn tools_see_a_refusal_and_why() {
     assert!(text(&mut a, &doc).contains("AB1234CD"), "the page is unchanged");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Through the tools: a mark whose /Subtype follows 34 references (past the bound), over AB, beside
+/// an ordinary mark over 1234. Editing the ordinary mark's comment used to make the view ready
+/// (the comment list, read from the graph, lost the first mark) and redact_apply left AB. It now
+/// stays refused before and after the edit, and the page keeps its text.
+#[test]
+fn tools_keep_a_mark_whose_type_cant_be_followed_refused() {
+    let mut objects = vec![
+        "<< /Type /Annot /Subtype 9 0 R /Rect [8 95 22 110] /AP << /N 8 0 R >> >>".to_owned(),
+        "<< /Type /Annot /Subtype /Redact /Rect [22 95 46 110] >>".to_owned(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 16 >>\nstream\n0 g 0 0 1 1 re f\nendstream".to_owned(),
+    ];
+    for i in 0..34 {
+        objects.push(if i == 33 { "/Redact".into() } else { format!("{} 0 R", 10 + i) });
+    }
+    let refs: Vec<&str> = objects.iter().map(String::as_str).collect();
+    let (dir, mut a, doc) = setup("unresolved-type", &refs);
+    let refused = |info: &Value| {
+        info["redactions"]["status"] == "unavailable"
+            || info["redactions"]["marks"].as_array().is_some_and(|m| m.iter().any(|m| m["index"] == 1 && m["status"] == "refused"))
+    };
+    let before = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert!(refused(&before), "{}", before["redactions"]);
+    assert!(a.call("redact_apply", &json!({ "doc": doc })).is_err());
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 1, "index": 2, "contents": "refresh" }));
+    let after = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert!(refused(&after), "{}", after["redactions"]);
+    assert!(a.call("redact_apply", &json!({ "doc": doc })).is_err());
+    assert!(text(&mut a, &doc).contains("AB1234CD"), "the page is unchanged");
+    let _ = std::fs::remove_dir_all(&dir);
+}

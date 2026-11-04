@@ -561,3 +561,179 @@ fn encrypted_documents_keep_the_original_and_apply_the_checked_area() {
         assert!(text.contains("AB") && text.contains("CD") && !text.contains("1234"), "{algorithm:?}: {text}");
     }
 }
+
+// ---- Review 3 regressions: classification that can't be resolved, lossy comment refreshes, and
+// fallbacks kept in the repair log.
+
+/// A mark whose `/Subtype` follows `n` references to `/Redact`, with its own appearance filling
+/// AB, beside an ordinary mark over 1234; objects 8 (the fill) and 9.. (the chain).
+fn chained_subtype(n: usize) -> Vec<u8> {
+    let indirect = "<< /Type /Annot /Subtype 9 0 R /Rect [8 95 22 110] /AP << /N 8 0 R >> >>";
+    let direct = "<< /Type /Annot /Subtype /Redact /Rect [22 95 46 110] >>";
+    let filled = "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 16 >>\nstream\n0 g 0 0 1 1 re f\nendstream";
+    let mut extras = vec![filled.to_owned()];
+    for i in 0..n {
+        extras.push(if i + 1 == n { "/Redact".into() } else { format!("{} 0 R", 10 + i) });
+    }
+    let refs: Vec<&str> = extras.iter().map(String::as_str).collect();
+    ab1234cd(&[indirect, direct], &refs)
+}
+
+/// However long the chain, a comment edit beside the mark never makes applying go ahead while
+/// AB, under it, stays: the mark is refused (its type followed, or unknown), on open, after the
+/// comment edit (whose comment list is read from the graph) and after metadata edits.
+#[test]
+fn a_mark_whose_type_cant_be_followed_stays_refused_after_any_refresh() {
+    for n in [32, 33, 34, 40] {
+        let (mut s, id) = open(chained_subtype(n));
+        let refused = |s: &Session| {
+            let view = s.get(id).unwrap().redaction_previews();
+            view.get(0, 0).is_some_and(|p| p.areas.is_err()) || !view.is_available()
+        };
+        assert!(refused(&s), "chain {n} at open: {:?}", s.get(id).unwrap().redaction_previews());
+        s.apply(id, Edit::SetAnnotationContents { page: 0, index: 1, text: "refresh".into() }).unwrap();
+        assert!(refused(&s), "chain {n} after a comment edit: {:?}", s.get(id).unwrap().redaction_previews());
+        assert!(!dark_at(&s.get(id).unwrap().display, 16.0, 96.5), "chain {n}: its own fill is not shown");
+        for i in 0..2 {
+            s.apply(id, Edit::SetInfo { key: "Title".into(), value: format!("{i}") }).unwrap();
+            assert!(refused(&s), "chain {n} after a metadata edit");
+        }
+        let before = s.save_bytes(id).unwrap();
+        assert!(s.apply(id, Edit::ApplyRedactions { pages: None }).is_err(), "chain {n}");
+        assert_eq!(s.save_bytes(id).unwrap(), before, "chain {n}: nothing changed");
+        assert!(saved_text(&s, id).contains("AB1234CD"), "chain {n}");
+    }
+    // Past the bound the type is unknown, and says so.
+    let (s, id) = open(chained_subtype(40));
+    assert_eq!(s.get(id).unwrap().redaction_previews().get(0, 0).unwrap().areas, Err(MarkRefusal::UnresolvedType));
+}
+
+/// An annotation written as a stream object is read as the annotation it is (the renderer draws
+/// it), never left out: after a comment edit too, applying removes what it shows.
+#[test]
+fn a_mark_written_as_a_stream_object_is_applied_not_left_out() {
+    let stream_mark = "<< /Type /Annot /Subtype /Redact /Rect [8 95 22 110] /AP << /N 8 0 R >> /Length 0 >>\nstream\n\nendstream";
+    let direct = "<< /Type /Annot /Subtype /Redact /Rect [22 95 46 110] >>";
+    let filled = "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 16 >>\nstream\n0 g 0 0 1 1 re f\nendstream";
+    let (mut s, id) = open(ab1234cd(&[stream_mark, direct], &[filled]));
+    assert_eq!(ready(&s, id, 0, 0), vec![[8.0, 95.0, 22.0, 110.0]]);
+    assert!(!dark_at(&s.get(id).unwrap().display, 16.0, 96.5), "drawn as its checked outline");
+    s.apply(id, Edit::SetAnnotationContents { page: 0, index: 1, text: "refresh".into() }).unwrap();
+    assert_eq!(ready(&s, id, 0, 0), vec![[8.0, 95.0, 22.0, 110.0]], "still listed after the comment edit");
+    s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+    let text = saved_text(&s, id);
+    assert!(!text.contains("AB") && !text.contains("1234") && text.contains("CD"), "{text}");
+}
+
+/// A comment edit re-reads the comment list from the graph, which can't show that a mark the
+/// renderer listed is accounted for: a view missing one stays so until a full refresh.
+#[test]
+fn a_comment_refresh_never_lifts_an_unlisted_mark() {
+    let note = "<< /Type /Annot /Subtype /Text /Rect [150 150 170 170] /Contents (n) >>";
+    let (mut s, id) = open(ab1234cd(&[note, NULL_MARK], &[]));
+    s.doc_mut(id).unwrap().redaction_previews = RedactionPreviews::Unavailable(PreviewUnavailable::UnlistedMark);
+    s.apply(id, Edit::SetAnnotationContents { page: 0, index: 0, text: "refresh".into() }).unwrap();
+    assert_eq!(s.get(id).unwrap().redaction_previews(), &RedactionPreviews::Unavailable(PreviewUnavailable::UnlistedMark));
+    assert!(s.apply(id, Edit::ApplyRedactions { pages: None }).is_err());
+    // A full refresh inspects the file again and finds every mark accounted for.
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    assert!(s.get(id).unwrap().redaction_previews().is_available());
+}
+
+/// After a comment edit, a mark whose /Subtype is a reference keeps its place in the comment list
+/// (so it is still hit and shows its warning), and stays refused.
+#[test]
+fn a_comment_refresh_keeps_an_indirect_subtype_mark_listed_and_refused() {
+    let indirect = "<< /Type /Annot /Subtype 8 0 R /Rect [8 95 22 110] /AP << /N 9 0 R >> >>";
+    let direct = "<< /Type /Annot /Subtype /Redact /Rect [22 95 46 110] >>";
+    let filled = "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 16 >>\nstream\n0 g 0 0 1 1 re f\nendstream";
+    let (mut s, id) = open(ab1234cd(&[indirect, direct], &["/Redact", filled]));
+    s.apply(id, Edit::SetAnnotationContents { page: 0, index: 1, text: "changed".into() }).unwrap();
+    let doc = s.get(id).unwrap();
+    let listed: Vec<(usize, &str)> = doc.info.annotations.iter().map(|a| (a.index, a.subtype.as_str())).collect();
+    assert_eq!(listed, vec![(0, "Redact"), (1, "Redact")]);
+    assert_eq!(doc.redaction_previews().get(0, 0).unwrap().areas, Err(MarkRefusal::IndirectSubtype));
+    assert!(!dark_at(&doc.display, 16.0, 96.5));
+    for i in 0..3 {
+        s.apply(id, Edit::SetInfo { key: "Title".into(), value: format!("{i}") }).unwrap();
+        assert!(s.apply(id, Edit::ApplyRedactions { pages: None }).is_err());
+        assert!(saved_text(&s, id).contains("AB1234CD"));
+    }
+}
+
+/// A picture that couldn't draw the marks keeps applying refused through any number of metadata
+/// edits, until a refresh draws the display again.
+#[test]
+fn a_copy_failure_survives_repeated_metadata_edits() {
+    let (mut s, id) = open(ab1234cd(&[NULL_MARK], &[]));
+    crate::redaction_preview::FAIL_DISPLAY.with(|f| f.set(true));
+    assert!(s.get(id).unwrap().comment_layer(0, &[0]).is_err());
+    crate::redaction_preview::FAIL_DISPLAY.with(|f| f.set(false));
+    for i in 0..3 {
+        s.apply(id, Edit::SetInfo { key: "Title".into(), value: format!("{i}") }).unwrap();
+        assert!(!s.get(id).unwrap().redaction_previews().is_available());
+        assert!(s.apply(id, Edit::ApplyRedactions { pages: None }).is_err());
+    }
+    s.apply(id, Edit::SetAnnotationContents { page: 0, index: 0, text: "redraw".into() }).unwrap();
+    assert!(s.get(id).unwrap().redaction_previews().is_available());
+    s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+}
+
+/// Damaged and unusual page trees: wherever the view is ready, applying removes what it shows;
+/// wherever it isn't, applying is refused.
+#[test]
+fn damaged_and_inline_page_trees_apply_only_what_is_shown() {
+    use pdfcraft_cos::{Dict, ObjRef, Object};
+    for case in 0..6 {
+        let mut cos = pdfcraft_cos::Document::open(Arc::new(ab1234cd(&[NULL_MARK], &[]))).unwrap();
+        let r = ObjRef::new(3, 0);
+        match case {
+            0 => {
+                let d = cos.get(r).as_dict().unwrap().clone();
+                cos.update_dict(ObjRef::new(2, 0), |k| k.set(b"Kids".to_vec(), Object::Array(vec![Object::Dict(d)]))).unwrap();
+            }
+            1 => cos.update_dict(ObjRef::new(2, 0), |d| d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(r), Object::Ref(r)]))).unwrap(),
+            2 => cos
+                .update_dict(r, |d| {
+                    d.remove(b"Type");
+                })
+                .unwrap(),
+            3 => cos.update_dict(r, |d| d.set(b"Type".to_vec(), Object::name("Pages"))).unwrap(),
+            4 => {
+                let mut node = Dict::new();
+                node.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(r)]));
+                node.set(b"Type".to_vec(), Object::name("Pages"));
+                let n = cos.add(Object::Dict(node));
+                cos.update_dict(ObjRef::new(2, 0), |d| d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(n), Object::Ref(ObjRef::new(2, 0))])))
+                    .unwrap();
+            }
+            _ => {
+                let a = cos.get(ObjRef::new(6, 0)).as_dict().unwrap().clone();
+                cos.update_dict(r, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Dict(a)]))).unwrap();
+            }
+        }
+        let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
+        let mut s = Session::new();
+        let Ok(id) = s.open("damaged.pdf", None, bytes, None) else { continue };
+        let doc = s.get(id).unwrap();
+        if doc.redaction_previews().is_available() && doc.redaction_previews().refused() == 0 {
+            s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+            assert!(!saved_text(&s, id).contains("1234"), "case {case}");
+        } else {
+            assert!(s.apply(id, Edit::ApplyRedactions { pages: None }).is_err(), "case {case}");
+        }
+    }
+}
+
+/// A fallback reading is kept in the repair log, not only said once: it is still there after a
+/// later edit has replaced the notice.
+#[test]
+fn a_fallback_reading_is_kept_in_the_repair_log() {
+    let (mut s, id) = open(ab1234cd(&[NULL_MARK], &[]));
+    s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "later".into() }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(doc.edit_notices.is_empty(), "the notice was for the apply");
+    let log = doc.repair_log();
+    assert!(log.iter().any(|l| l.contains("fallback reading") && l.contains("page 1 object 6") && l.contains("its Rect")), "{log:?}");
+}

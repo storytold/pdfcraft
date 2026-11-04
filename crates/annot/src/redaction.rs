@@ -201,7 +201,13 @@ pub fn show_page_in_display(display: &mut Document, page: usize, page_obj: ObjRe
             Object::Dict(d) => d,
             Object::Ref(_) => {
                 entry_held = display.resolve(listed);
-                entry_held.as_dict().ok_or(crate::AnnotError::NoSuchAnnotation { page, index })?
+                // A stream object is drawn from its dictionary; anything else that can't be read as an
+                // annotation is an error (the view is then unavailable), never left drawing itself.
+                match &*entry_held {
+                    Object::Dict(d) => d,
+                    Object::Stream(s) => &s.dict,
+                    _ => return Err(crate::AnnotError::NoSuchAnnotation { page, index }),
+                }
             }
             _ => return Err(crate::AnnotError::NoSuchAnnotation { page, index }),
         };

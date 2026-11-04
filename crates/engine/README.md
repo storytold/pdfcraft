@@ -41,11 +41,15 @@ Redaction marks are shown from the editable graph, not the renderer's comment li
 with the display copy on every refresh and `Unavailable` from the moment any refresh starts until it
 finishes. It is ready only when the editable graph's pages are the renderer's, object for object in
 the same order (`DocInfo::page_objects`; equal sizes don't prove that), and every Redact mark the
-renderer lists is among the marks applying reads. A metadata-only edit keeps the display copy, so it
-keeps the view's state too: ready only if it was. `Session::apply` refuses `ApplyRedactions` while
+renderer lists is among the marks applying reads. A refresh that doesn't inspect the file again
+(comment, form, content and metadata edits) keeps a view that was missing a listed mark unavailable
+until a full refresh inspects again, and a metadata-only edit keeps the display copy, so it keeps the
+view's state too: ready only if it was. `Session::apply` refuses `ApplyRedactions` while
 the view is unavailable, when it is not the reading of the current graph, after a picture of the
 page failed to draw the marks, and inside an `Edit::Batch`; the interface also refuses it while a
-change to a comment is still on screen (a drag, or a move not yet applied).
+change to a comment is still on screen (a drag, or a move not yet applied), and while a page with
+marks (now or before its last change) still shows a raster from before that change. A mark applied
+through a fallback reading is said in the edit's notice and kept in the repair log.
 
 Every picture of a page made from a copy of the graph draws the marks as the outline of those same
 areas, whatever appearance the file gives them (`Document::draw_checked_marks`): the display copy

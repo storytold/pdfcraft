@@ -231,7 +231,9 @@ impl Session {
         }
         let mut notices = edit_notices(&edit, &editor.cos, &next);
         // Marks applied through a fallback reading are said: what went is what was shown, and how.
+        // The notice is for now; the repair log keeps it with the document.
         if !cx.redaction_fallbacks.is_empty() {
+            next.note_repair(fallback_note(&cx.redaction_fallbacks));
             notices.push(EditNotice::RedactionFallbacks { marks: std::mem::take(&mut cx.redaction_fallbacks) });
         }
         let previous = std::mem::replace(&mut editor.cos, next);
@@ -452,6 +454,7 @@ impl Session {
         doc.form = form;
         let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
         (doc.display, doc.redaction_previews) = display_bytes(Some(editor), &bytes, &doc.info);
+        keep_unlisted(&before, &mut doc.redaction_previews);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
@@ -493,7 +496,7 @@ impl Session {
     /// from undo/redo, re-reads both: always correct, rarely paid). The cached display
     /// appearances are kept: content edits leave every annotation dictionary alone.
     fn refresh_content(doc: &mut Document, edit: Option<&Edit>) -> Result<(), EditError> {
-        doc.redaction_previews = RedactionPreviews::Unavailable(PreviewUnavailable::Refreshing);
+        let before = std::mem::replace(&mut doc.redaction_previews, RedactionPreviews::Unavailable(PreviewUnavailable::Refreshing));
         doc.preview_copy_failed.store(false, std::sync::atomic::Ordering::Relaxed);
         Self::release_working(doc);
         sync_xfa_state(doc);
@@ -512,6 +515,7 @@ impl Session {
         doc.info.file_size = bytes.len();
         let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
         (doc.display, doc.redaction_previews) = display_bytes(Some(editor), &bytes, &doc.info);
+        keep_unlisted(&before, &mut doc.redaction_previews);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
@@ -604,6 +608,41 @@ impl Session {
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
         Ok(())
+    }
+}
+
+/// The marks most named in one repair note about fallback readings (the rest are counted).
+const FALLBACK_NOTE_MARKS: usize = 8;
+
+/// One bounded repair note for the marks applied through a fallback reading: each named by page
+/// and object with how it was read, up to [`FALLBACK_NOTE_MARKS`], the rest counted.
+fn fallback_note(marks: &[pdfcraft_redact::MarkFallback]) -> String {
+    let named: Vec<String> = marks
+        .iter()
+        .take(FALLBACK_NOTE_MARKS)
+        .map(|m| {
+            let mut how = Vec::new();
+            if m.reading.used_rect && (m.reading.quad_issues.partial() || m.reading.quad_issues.malformed_container) {
+                how.push("its Rect, as QuadPoints could not all be read");
+            }
+            if m.reading.widened {
+                how.push("an area widened to the nearest representable one");
+            }
+            format!("page {} object {} ({})", m.page.saturating_add(1), m.obj.num, how.join(" and "))
+        })
+        .collect();
+    let more = marks.len().saturating_sub(named.len());
+    let more = if more > 0 { format!(", and {more} more") } else { String::new() };
+    format!("redaction marks applied as previewed through a fallback reading: {}{more}", named.join("; "))
+}
+
+/// A refresh that doesn't inspect the file again (comment, form and content edits re-read the
+/// comment list from the graph, or keep it) can't show that a mark the renderer listed and the
+/// collector lacked is now accounted for: a view that was missing one stays so until a full
+/// refresh inspects the file again. Absence from a list read the lossy way is never proof.
+fn keep_unlisted(before: &RedactionPreviews, now: &mut RedactionPreviews) {
+    if *before == RedactionPreviews::Unavailable(PreviewUnavailable::UnlistedMark) {
+        *now = RedactionPreviews::Unavailable(PreviewUnavailable::UnlistedMark);
     }
 }
 

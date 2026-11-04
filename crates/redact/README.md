@@ -70,10 +70,14 @@ annotation by page and `/Annots` slot with its areas or its `MarkRefusal`: no us
 that need a `/Rect` it lacks, more than 65,536 `/QuadPoints` entries (refused whole, even with a
 `/Rect`), a mark written in place or listed through a chain of references (applying can't remove
 it), a mark whose `/Subtype` is given by reference (the renderer draws it; applying one isn't
-supported yet, so it is refused rather than skipped), or a page whose marks hold more than 1,048,576
-entries together. `/Subtype` is read through a reference everywhere redaction classifies an
+supported yet, so it is refused rather than skipped), an annotation whose type can't be read (a
+listing reference or `/Subtype` that can't be followed: `MarkRefusal::UnresolvedType`, refused and
+never skipped, since it may be a mark the page shows), or a page whose marks hold more than 1,048,576
+entries together. A page `/Annots` that can't be followed fails the whole scan
+(`MarkScanError::UnresolvedAnnotations`). `/Subtype` is read through a reference everywhere redaction classifies an
 annotation, and `clear_marks` removes every listed mark, refused ones included. `Report::fallbacks`
-lists the marks applied through their `/Rect` (unreadable quads) or a widened area. A refused mark makes `apply`
+lists the marks whose areas fell back: `/Rect` used because the quads were malformed or partial, or
+an area widened to `f32`. An ordinary mark with no `/QuadPoints` is not a fallback. A refused mark makes `apply`
 fail with `RedactError::UnreadableMark` before anything changes, instead of skipping it, and
 `marks()` lists only the marks that can be applied, so a preview reads `mark_previews`. The count
 covers the marks on the pages being applied.

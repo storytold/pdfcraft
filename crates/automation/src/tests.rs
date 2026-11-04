@@ -550,3 +550,34 @@ fn tool_file_reads_refuse_inputs_exceeding_512_mib() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Listing many redaction marks reads the pages' user-space units once per response, not once per
+/// mark (each read walks the page tree and copies its pages).
+#[test]
+fn redaction_listings_read_page_units_once_per_response() {
+    let marks: Vec<String> = (0..20).map(|i| format!("<< /Type /Annot /Subtype /Redact /Rect [{x} 100 {} 120] >>", i * 5 + 3, x = i * 5)).collect();
+    let mut objs: Vec<String> =
+        vec!["<< /Type /Catalog /Pages 2 0 R >>".into(), "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into()];
+    let list: String = (0..marks.len()).map(|i| format!("{} 0 R ", i + 4)).collect();
+    objs.push(format!("<< /Type /Page /Parent 2 0 R /Annots [{list}] >>"));
+    objs.extend(marks);
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut a = Automation::new();
+    let id = a.session.open("marks.pdf", None, Arc::new(out), None).unwrap();
+    for tool in ["comment_list", "doc_info"] {
+        crate::json::PAGE_UNIT_WALKS.with(|n| n.set(0));
+        let v = json(&mut a, tool, json!({ "doc": id.0 }));
+        assert_eq!(crate::json::PAGE_UNIT_WALKS.with(std::cell::Cell::get), 1, "{tool}: {v}");
+    }
+}

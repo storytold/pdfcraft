@@ -473,6 +473,13 @@ impl Document {
         pdfcraft_model::pages(cos).get(page).map(|p| p.user_unit(cos))
     }
 
+    /// [`Self::user_unit`] of every page, from one walk of the page tree: what a caller listing many
+    /// marks reads once. Empty without an editable graph.
+    pub fn user_units(&self) -> Vec<f64> {
+        let Some(e) = self.editor.as_ref() else { return Vec::new() };
+        pdfcraft_model::pages(&e.cos).iter().map(|p| p.user_unit(&e.cos)).collect()
+    }
+
     /// The redaction marks as applying would read them: each one's areas, or why it can't be applied.
     /// A preview reads this, never the comment list's quads; applying is refused while it is
     /// [`RedactionPreviews::Unavailable`].
