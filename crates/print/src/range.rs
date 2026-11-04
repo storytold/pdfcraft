@@ -10,7 +10,31 @@ use crate::PrintError;
 pub const MAX_SELECTED: usize = 100_000;
 
 /// The first page with each label, looked up once per token instead of scanning every label.
-type Labels<'a> = HashMap<&'a str, usize>;
+struct Labels<'a> {
+    pages: HashMap<&'a str, usize>,
+    /// The longest label, in bytes: a token longer than that is no label, and is not hashed (a
+    /// dash-heavy token would otherwise hash every split of itself).
+    longest: usize,
+}
+
+impl<'a> Labels<'a> {
+    fn new(labels: &'a [String]) -> Self {
+        let mut pages = HashMap::with_capacity(labels.len());
+        for (i, l) in labels.iter().enumerate() {
+            pages.entry(l.as_str()).or_insert(i);
+        }
+        let longest = pages.keys().map(|l| l.len()).max().unwrap_or(0);
+        Labels { pages, longest }
+    }
+
+    fn get(&self, token: &str) -> Option<usize> {
+        if token.len() > self.longest { None } else { self.pages.get(token).copied() }
+    }
+
+    fn contains_key(&self, token: &str) -> bool {
+        self.get(token).is_some()
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Subset {
@@ -24,7 +48,7 @@ pub enum Subset {
 fn page_of(tok: &str, count: usize, labels: &Labels) -> Result<usize, PrintError> {
     let t = tok.trim();
     // Page labels win over numbers (Acrobat's "use logical page numbers").
-    if let Some(&i) = labels.get(t) {
+    if let Some(i) = labels.get(t) {
         return Ok(i);
     }
     match t.parse::<usize>() {
@@ -42,7 +66,7 @@ fn hyphenated_label_range(part: &str, count: usize, labels: &Labels) -> Option<(
         let (Some(first), Some(last)) = (part.get(..split), part.get(split + 1..)) else { continue };
         let (first, last) = (first.trim(), last.trim());
         // Avoid changing the meaning of ordinary numeric and open-ended ranges.
-        if ![first, last].iter().any(|l| l.contains('-') && labels.contains_key(l)) {
+        if ![first, last].iter().any(|l| labels.contains_key(l) && l.contains('-')) {
             continue;
         }
         let from = if first.is_empty() { Some(0) } else { page_of(first, count, labels).ok() };
@@ -62,10 +86,7 @@ pub fn select_pages(count: usize, range: Option<&str>, labels: &[String], subset
     match range.map(str::trim).filter(|r| !r.is_empty()) {
         None => pages.extend(0..count),
         Some(r) => {
-            let mut index = Labels::with_capacity(labels.len());
-            for (i, l) in labels.iter().enumerate() {
-                index.entry(l.as_str()).or_insert(i);
-            }
+            let index = Labels::new(labels);
             let labels = &index;
             let limit = count.max(MAX_SELECTED);
             let mut selected = 0usize;
@@ -180,6 +201,9 @@ mod tests {
         assert_eq!(select_pages(labels.len(), Some("A-3-A-5"), &labels, Subset::All, false).unwrap(), vec![3, 4, 5]);
         let dashes = "-".repeat(10_000);
         assert!(select_pages(labels.len(), Some(&dashes), &labels, Subset::All, false).is_err());
+        // a token with no label as long as any of its halves costs no hashing of them
+        let long_token = format!("{}A-3", "-".repeat(200_000));
+        assert!(select_pages(labels.len(), Some(&long_token), &labels, Subset::All, false).is_err());
         let twice = vec!["x".to_string(), "x".to_string()];
         assert_eq!(select_pages(2, Some("x"), &twice, Subset::All, false).unwrap(), vec![0]);
     }
