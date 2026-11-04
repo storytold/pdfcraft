@@ -1949,3 +1949,29 @@ fn full_screen_neither_is_remembered_nor_hides_the_last_view() {
     view.leave_presentation();
     assert_eq!((view.fit, view.zoom, view.layout, view.continuous), (Fit::None, 0.5, PageLayout::TwoUp, false), "the remembered view");
 }
+
+/// New highlights start half transparent. Settings written before that carry the old 100 %
+/// default for everyone who never touched it, so a legacy file's exact 1.0 becomes 0.5 once; any
+/// other legacy value stays, and a file that states the current version keeps an explicit 1.0.
+#[test]
+fn legacy_settings_move_the_default_highlight_opacity_to_half() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let opacity = |json: &str| {
+        let mut a = PdfCraftApp::new();
+        a.restore(json);
+        a.comment_prefs.style(CommentTool::Highlight).opacity
+    };
+    assert_eq!(opacity(r#"{"comment_styles":[{"tool":"comment.highlight","opacity":1.0}]}"#), 0.5, "a legacy file's old default");
+    assert_eq!(opacity(r#"{"comment_styles":[{"tool":"comment.highlight","opacity":0.8}]}"#), 0.8, "a legacy choice stays");
+    assert_eq!(
+        opacity(r#"{"comment_styles_version":2,"comment_styles":[{"tool":"comment.highlight","opacity":1.0}]}"#),
+        1.0,
+        "an explicit 100 % stays"
+    );
+    // A round trip states the version, so the migration runs once.
+    let mut a = PdfCraftApp::new();
+    a.restore(r#"{"comment_styles_version":2,"comment_styles":[{"tool":"comment.highlight","opacity":1.0}]}"#);
+    let mut b = PdfCraftApp::new();
+    b.restore(&a.persist());
+    assert_eq!(b.comment_prefs.style(CommentTool::Highlight).opacity, 1.0);
+}

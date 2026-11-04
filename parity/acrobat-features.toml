@@ -3686,8 +3686,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.highlight"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/it/comments.rs::dragging_over_text_with_the_highlighter_highlights_it", "crates/ui-egui/tests/it/comments.rs::a_new_highlight_opens_its_note_for_typing", "crates/engine/src/tests.rs::highlight_multiplies_over_text"]
-notes = "drag over text, or pick the tool with text selected; a new highlight opens its note for typing in the Comments panel; agents can highlight by text search"
+evidence = ["crates/ui-egui/tests/it/comments.rs::dragging_over_text_with_the_highlighter_highlights_it", "crates/ui-egui/tests/it/comments.rs::a_new_highlight_opens_its_note_for_typing", "crates/engine/src/tests.rs::highlight_multiplies_over_text", "crates/ui-egui/src/tools/comments/tests.rs::new_highlights_start_half_transparent", "crates/ui-egui/tests/it/ui.rs::legacy_settings_move_the_default_highlight_opacity_to_half"]
+notes = "drag over text, or pick the tool with text selected; a new highlight opens its note for typing in the Comments panel; agents can highlight by text search. New highlights start at 50 % opacity (/CA 0.5, Multiply); a settings file from before moves an untouched highlight opacity of 1.0 to 0.5 once (comment_styles_version); the quick bar, Properties and the floating style bar change it"
 
 [[feature]]
 id = "comment.underline"

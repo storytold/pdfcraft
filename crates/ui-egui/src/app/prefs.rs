@@ -111,7 +111,10 @@ impl PdfCraftApp {
             "date_language": self.session.date_language(),
             "author": self.comment_prefs.author,
             // Per-tool comment defaults (colours, opacity, widths), so Make Current
-            // Properties Default survives a restart (#340).
+            // Properties Default survives a restart (#340). The version says which defaults the
+            // file was written against (2: new highlights at 50 % opacity), for `restore`'s
+            // one-time migrations.
+            "comment_styles_version": 2,
             "comment_styles": self
                 .comment_prefs
                 .styles()
@@ -374,6 +377,10 @@ impl PdfCraftApp {
     fn restore_comment_prefs(&mut self, v: &serde_json::Value) {
         // Per-tool comment styles (#340): each field goes through its clamping setter, so a
         // malformed or hostile entry is clamped or ignored rather than trusted.
+        // A file from before new highlights started half transparent (no version, or one below
+        // 2) carries the old default, exactly 1.0, for everyone who never touched it: that value
+        // becomes 0.5 once. Any other value, and a 1.0 a current file states, is a choice and stays.
+        let legacy = v["comment_styles_version"].as_u64().unwrap_or(1) < 2;
         if let Some(styles) = v["comment_styles"].as_array() {
             for e in styles {
                 let Some(tool) = e["tool"].as_str().and_then(crate::comments::CommentTool::from_command) else { continue };
@@ -381,7 +388,8 @@ impl PdfCraftApp {
                     self.comment_prefs.set_color(tool, c);
                 }
                 if let Some(o) = e["opacity"].as_f64() {
-                    self.comment_prefs.set_opacity(tool, o);
+                    let old_default = legacy && tool == crate::comments::CommentTool::Highlight && (o - 1.0).abs() < 1e-9;
+                    self.comment_prefs.set_opacity(tool, if old_default { 0.5 } else { o });
                 }
                 // The fill's and text's own opacities, where saved (older settings have none).
                 self.comment_prefs.set_part_opacity(tool, e["fill_opacity"].as_f64(), e["text_opacity"].as_f64());

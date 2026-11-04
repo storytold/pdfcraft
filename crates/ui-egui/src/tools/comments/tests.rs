@@ -19,6 +19,14 @@ fn freehand_highlight_and_draw_accept_widths_up_to_100() {
 
 /// A selected line is drawn where it is going: moved by its body (both ends follow the
 /// pointer), with an end dragged (that end alone), and as released until the page is drawn.
+/// New highlights start half transparent; the other text markup stays opaque.
+#[test]
+fn new_highlights_start_half_transparent() {
+    let prefs = CommentPrefs::default();
+    assert_eq!(prefs.style(CommentTool::Highlight).opacity, 0.5);
+    assert_eq!(prefs.style(CommentTool::Underline).opacity, 1.0);
+}
+
 #[test]
 fn a_moved_or_reshaped_line_is_drawn_at_its_new_points() {
     let line = [[10.0, 10.0], [50.0, 10.0]];

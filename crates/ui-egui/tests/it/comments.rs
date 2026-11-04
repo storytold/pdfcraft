@@ -4330,7 +4330,7 @@ fn the_style_bar_recolours_and_fades_the_selected_highlight() {
         let s = h.state();
         s.session.get(s.views[0].id).expect("document").comment_props(0, 0).expect("props")
     };
-    assert_eq!((props(&h).color, props(&h).opacity), (Some([1.0, 0.94, 0.0]), 1.0));
+    assert_eq!((props(&h).color, props(&h).opacity), (Some([1.0, 0.94, 0.0]), 0.5), "a new highlight is half transparent");
 
     h.get_by_label("Comment colour: Blue").click();
     h.run_steps(3);
@@ -4346,7 +4346,7 @@ fn the_style_bar_recolours_and_fades_the_selected_highlight() {
     h.run_steps(1);
     h.key_press(egui::Key::ArrowLeft);
     h.run_steps(3);
-    assert!((props(&h).opacity - 0.95).abs() < 1e-9, "one 5 % step down: {}", props(&h).opacity);
+    assert!((props(&h).opacity - 0.45).abs() < 1e-9, "one 5 % step down: {}", props(&h).opacity);
 
     // Locked comments refuse restyling, so they get no bar.
     assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 0, locked: true }));
