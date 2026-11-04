@@ -161,11 +161,15 @@ pub fn i18n_report(args: &[String]) -> anyhow::Result<()> {
     }
     // Under GitHub Actions, also show the report in the job summary. Best effort: never fails the build.
     if let (Some(path), false) = (std::env::var_os("GITHUB_STEP_SUMMARY"), report.is_empty()) {
-        use std::io::Write;
-        let text = translation_summary(&report);
-        let _ = std::fs::OpenOptions::new().append(true).create(true).open(path).and_then(|mut f| f.write_all(text.as_bytes()));
+        let _ = append_translation_summary(&path, &report);
     }
     Ok(())
+}
+
+fn append_translation_summary(path: &std::path::Path, report: &[&str]) -> std::io::Result<()> {
+    use std::io::Write;
+    let text = translation_summary(report);
+    std::fs::OpenOptions::new().append(true).create(true).open(path).and_then(|mut f| f.write_all(text.as_bytes()))
 }
 
 /// Fence contributor-supplied catalog text so it cannot escape into GitHub-flavored Markdown.
@@ -581,7 +585,7 @@ fn f1(a: &BTreeMap<String, usize>, b: &BTreeMap<String, usize>) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{f1, order_score, root, translation_summary, word_sequence, words};
+    use super::{append_translation_summary, f1, order_score, root, translation_summary, word_sequence, words};
 
     #[test]
     fn translation_summary_fences_untrusted_markdown() {
@@ -590,6 +594,28 @@ mod tests {
         assert!(summary.starts_with("### Translation gaps\n\n````\n"), "the fence is longer than catalog backtick runs");
         assert!(summary.contains("<script>"), "catalog text stays inside the fenced block");
         assert!(summary.ends_with("\n````\n"));
+    }
+
+    #[test]
+    fn translation_summary_grows_fence_past_four_backtick_runs() {
+        let summary = translation_summary(&["````"]);
+        assert!(summary.starts_with("### Translation gaps\n\n`````\n"));
+        assert!(summary.ends_with("\n`````\n"));
+    }
+
+    #[test]
+    fn translation_summary_file_appends_without_discarding_existing_content() {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!("pdfcraft-i18n-summary-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        let result = (|| {
+            append_translation_summary(&path, &["first report"])?;
+            append_translation_summary(&path, &["second report"])?;
+            std::fs::read_to_string(&path)
+        })();
+        let _ = std::fs::remove_file(&path);
+        let summary = result.expect("summary writes and read should succeed");
+        assert!(summary.contains("first report"));
+        assert!(summary.contains("second report"));
     }
 
     /// The two scores answer different questions, and the point of adding the second one is the
