@@ -167,6 +167,27 @@ impl PdfCraftApp {
             open_worker::ResultKind::Failed(reason) => {
                 self.notify_fmt("Couldn't open {name}: {reason}", &[("name", &pending.name), ("reason", &reason)]);
             }
+            open_worker::ResultKind::Office(pdf, report) => {
+                let stem = pending.name.rsplit_once('.').map_or(pending.name.as_str(), |(stem, _)| stem);
+                match self.open_created_bytes(&format!("{stem}.pdf"), Ok(pdf)) {
+                    Ok(()) => {
+                        // A launch layout applies to the converted document as to a PDF.
+                        if let Some((layout, continuous)) = pending.display_override
+                            && let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
+                        {
+                            view.set_display(layout, continuous);
+                            self.launch_display_target = Some(view.id);
+                        }
+                        if let Some(note) = crate::office_note(&pending.name, &report) {
+                            self.notify(note);
+                        }
+                        if let Some(command) = pending.then {
+                            self.execute(command);
+                        }
+                    }
+                    Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
+                }
+            }
             open_worker::ResultKind::Conversion(bytes) => match self.open_converted(&pending.name, &bytes) {
                 Some(Ok(())) => {
                     if let Some(command) = pending.then {
@@ -703,24 +724,19 @@ impl PdfCraftApp {
         self.open_path_request(path, None, Some((layout, continuous)));
     }
 
-    /// The File ▸ Open picker: PDFs, and images and text that become PDFs.
+    /// The File ▸ Open picker: PDFs, and images, text and Office documents that become PDFs.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn open_picker() -> rfd::AsyncFileDialog {
         rfd::AsyncFileDialog::new()
             .add_filter_any_case("PDF", &["pdf"])
-            .add_filter_any_case(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE)
+            .add_filter_any_case(tl!("Images and text (converted to PDF)"), &create_ui::images_and_text())
+            .add_filter_any_case(tl!("Word, PowerPoint and Excel (converted to PDF)"), &pdfcraft_engine::OFFICE_EXTENSIONS)
     }
 
     pub fn open_dialog(&mut self) {
         self.startup_superseded = true;
         #[cfg(not(target_arch = "wasm32"))]
-        self.pick(
-            pickers::PickFor::Open,
-            rfd::AsyncFileDialog::new()
-                .add_filter_any_case("PDF", &["pdf"])
-                .add_filter_any_case(tl!("Images and text (converted to PDF)"), &create_ui::CONVERTIBLE),
-            true,
-        );
+        self.pick(pickers::PickFor::Open, Self::open_picker(), true);
         // Browsers pick files asynchronously; the bytes arrive through `inbox`.
         #[cfg(target_arch = "wasm32")]
         {
@@ -729,7 +745,8 @@ impl PdfCraftApp {
             wasm_bindgen_futures::spawn_local(async move {
                 if let Some(h) = rfd::AsyncFileDialog::new()
                     .add_filter_any_case("PDF", &["pdf"])
-                    .add_filter_any_case(tl!("Images and text"), &create_ui::CONVERTIBLE)
+                    .add_filter_any_case(tl!("Images and text"), &create_ui::images_and_text())
+                    .add_filter_any_case(tl!("Word, PowerPoint and Excel (converted to PDF)"), &pdfcraft_engine::OFFICE_EXTENSIONS)
                     .pick_file()
                     .await
                 {

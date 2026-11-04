@@ -35,6 +35,7 @@ impl PdfCraftApp {
         let mut used = HashSet::new();
         let mut made = 0usize;
         let mut refused = Vec::new();
+        let mut approximated = Vec::new();
         for file in files {
             let (name, bytes) = match file {
                 Ok(file) => file,
@@ -43,13 +44,15 @@ impl PdfCraftApp {
                     continue;
                 }
             };
-            let (kind, pdf) = match self.session.convert_to_pdf(&name, &Arc::new(bytes)) {
+            let (kind, pdf, report) = match self.session.convert_to_pdf_reported(&name, &Arc::new(bytes)) {
                 Ok(converted) => converted,
                 Err(error) => {
                     refused.push(format!("{name} ({error})"));
                     continue;
                 }
             };
+            // Noted only once the PDF is written: a file left out below has no conversion to report.
+            let note = report.and_then(|report| crate::office_note(&name, &report));
             if kind == SourceKind::Pdf {
                 refused.push(format!("{name} ({})", tl!("already a PDF")));
                 continue;
@@ -81,20 +84,34 @@ impl PdfCraftApp {
                 crate::editing::download(&filename, &pdf)
             };
             match result {
-                Ok(()) => made += 1,
+                Ok(()) => {
+                    made += 1;
+                    approximated.extend(note);
+                }
                 Err(error) => refused.push(format!("{filename} ({error})")),
             }
         }
+        // One notice: what was written, what was left out, and what the Office conversions approximated.
+        let mut notice = Vec::new();
         if made > 0 {
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(dir) = &dir {
-                self.notify_fmt("Wrote {n} files to {dir}", &[("n", &made.to_string()), ("dir", &dir.display().to_string())]);
+                let dir = dir.display().to_string();
+                notice.push(if made == 1 {
+                    crate::i18n::fmt(tl!("Wrote 1 file to {dir}"), &[("dir", &dir)])
+                } else {
+                    crate::i18n::fmt(tl!("Wrote {n} files to {dir}"), &[("n", &made.to_string()), ("dir", &dir)])
+                });
             }
             #[cfg(target_arch = "wasm32")]
-            self.notify(crate::i18n::trn(crate::i18n::current(), made as u64, "Downloaded {n} PDF", "Downloaded {n} PDFs"));
+            notice.push(crate::i18n::trn(crate::i18n::current(), made as u64, "Downloaded {n} PDF", "Downloaded {n} PDFs"));
         }
         if !refused.is_empty() {
-            self.notify(crate::i18n::fmt(tl!("Left out: {names}"), &[("names", &refused.join(", "))]));
+            notice.push(crate::i18n::fmt(tl!("Left out: {names}"), &[("names", &refused.join(", "))]));
+        }
+        notice.extend(approximated);
+        if !notice.is_empty() {
+            self.notify(notice.join(" · "));
         }
     }
 
@@ -105,15 +122,16 @@ impl PdfCraftApp {
     where
         I: IntoIterator<Item = Result<(String, Vec<u8>), (String, String)>>,
     {
-        let (mut refused, mut converted) = (Vec::new(), 0usize);
+        let (mut refused, mut converted, mut approximated) = (Vec::new(), 0usize, Vec::new());
         let mut files = files.into_iter();
         let session = &self.session;
         let sources = std::iter::from_fn(|| {
             loop {
                 match files.next()? {
-                    Ok((name, bytes)) => match session.convert_to_pdf(&name, &Arc::new(bytes)) {
-                        Ok((_, pdf)) => {
+                    Ok((name, bytes)) => match session.convert_to_pdf_reported(&name, &Arc::new(bytes)) {
+                        Ok((_, pdf, report)) => {
                             converted += 1;
+                            approximated.extend(report.and_then(|report| crate::office_note(&name, &report)));
                             return Some(Ok((stem(&name).to_string(), pdf, None)));
                         }
                         Err(_) => refused.push(name),
@@ -138,11 +156,14 @@ impl PdfCraftApp {
             }
         };
         let n = converted.to_string();
-        let message = if !refused.is_empty() {
+        let mut message = if !refused.is_empty() {
             crate::i18n::fmt(tl!("Created a PDF from {n} files; left out: {names}"), &[("n", &n), ("names", &refused.join(", "))])
         } else {
             crate::i18n::fmt(tl!("Created a PDF from {n} files"), &[("n", &n)])
         };
+        for note in approximated {
+            message = format!("{message} · {note}");
+        }
         let before = self.views.len();
         self.open_created("Combined.pdf", bytes, &message);
         if self.views.len() > before

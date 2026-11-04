@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use pdfcraft_cos::{SaveOptions, write_incremental};
+use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
 use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
 
 use crate::history::{Editor, Keys, TextBlocksCache};
@@ -10,6 +10,7 @@ use crate::{
     AppearanceCache, DocId, Document, Session, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard, info_fields, js,
     note_warnings, recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout, xfa_values_from_datasets,
 };
+use crate::{EditError, OfficeReport, SourceKind};
 
 /// Immutable session state needed while a document is prepared away from its owning thread.
 #[derive(Clone)]
@@ -18,6 +19,29 @@ pub struct OpenContext {
     js_off: bool,
     trust: Arc<TrustStore>,
     xfa_time_scale: u32,
+}
+
+/// A file made into PDF bytes by [`Session::convert_to_pdf_reported`]: what it was, the PDF, and
+/// the report of a Word, PowerPoint or Excel conversion.
+pub type Converted = (SourceKind, Arc<Vec<u8>>, Option<OfficeReport>);
+
+/// A Word, PowerPoint or Excel file as new PDF bytes, and what could not be carried over.
+pub(crate) fn office_pdf(now: Option<i64>, name: &str, bytes: &[u8]) -> Result<(Arc<Vec<u8>>, OfficeReport), EditError> {
+    // The importer reads untrusted packages, and the document it builds is written, reopened and
+    // rendered here: a panic anywhere in that must not take the app down.
+    guard(|| office_pdf_unguarded(now, name, bytes)).map_err(|_| EditError::Source(format!("{name}: the file could not be read")))?
+}
+
+fn office_pdf_unguarded(now: Option<i64>, name: &str, bytes: &[u8]) -> Result<(Arc<Vec<u8>>, OfficeReport), EditError> {
+    let (doc, report) = pdfcraft_create::from_office(name, bytes)?;
+    let opts = SaveOptions { mod_date: now.map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
+    let pdf = write_full(&doc, &opts).map(Arc::new).map_err(|e| EditError::Write(e.to_string()))?;
+    // Checked like every new file (`Session::write_new`) before anyone writes or opens it: it
+    // reopens, and shows the pages it was built from.
+    let expected = pdfcraft_organize::page_count(&doc)?;
+    pdfcraft_cos::Document::open(pdf.clone()).map_err(|e| EditError::Reopen(e.to_string()))?;
+    pdfcraft_render::check_pages(pdf.clone(), None, expected).map_err(|e| EditError::Reopen(e.to_string()))?;
+    Ok((pdf, report))
 }
 
 /// A fully prepared document that has not yet been registered in a session.
@@ -37,6 +61,12 @@ struct DocumentOpenData<'a> {
 }
 
 impl OpenContext {
+    /// Convert a Word, PowerPoint or Excel file to new PDF bytes off the UI thread, as
+    /// [`Session::create_from_office`] does.
+    pub fn convert_office(&self, name: &str, bytes: &[u8]) -> Result<(Arc<Vec<u8>>, OfficeReport), EditError> {
+        office_pdf(self.now, name, bytes)
+    }
+
     /// Prepare a document without mutating the session that supplied this context.
     pub fn prepare_open(
         &self,

@@ -20,7 +20,12 @@ pub(crate) enum Input {
 
 pub(crate) enum ResultKind {
     Conversion(Arc<Vec<u8>>),
-    Prepared { bytes: Arc<Vec<u8>>, result: Box<Result<PreparedDocument, OpenError>> },
+    /// A Word, PowerPoint or Excel file converted to PDF in the worker, and what was approximated.
+    Office(Arc<Vec<u8>>, pdfcraft_engine::OfficeReport),
+    Prepared {
+        bytes: Arc<Vec<u8>>,
+        result: Box<Result<PreparedDocument, OpenError>>,
+    },
     ReadFailed(String),
     RemoteFailed(String),
     RecoveryFailed(String),
@@ -175,8 +180,16 @@ fn prepare(job: Job) -> ResultKind {
         },
         Input::Bytes(bytes) => bytes.clone(),
     };
-    if matches!(pdfcraft_engine::source_kind(&job.name, &bytes), Some(SourceKind::Image | SourceKind::Text)) {
-        return ResultKind::Conversion(bytes);
+    match pdfcraft_engine::source_kind(&job.name, &bytes) {
+        Some(SourceKind::Image | SourceKind::Text) => return ResultKind::Conversion(bytes),
+        // Office documents can take a while to lay out: convert them here, off the UI thread.
+        Some(SourceKind::Office) => {
+            return match job.context.convert_office(&job.name, &bytes) {
+                Ok((pdf, report)) => ResultKind::Office(pdf, report),
+                Err(error) => ResultKind::Failed(error.to_string()),
+            };
+        }
+        _ => {}
     }
     let result = job.context.prepare_open(job.name, job.path, bytes.clone(), job.password.as_deref());
     ResultKind::Prepared { bytes, result: Box::new(result) }

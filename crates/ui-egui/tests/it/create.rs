@@ -381,6 +381,129 @@ fn multiple_files_past_a_thousand_are_all_used() {
     assert_eq!(doc.info.pages.len(), 1001, "every picked file is used, in order");
 }
 
+/// #2871: all three user-facing entry points share native DOCX conversion.
+#[test]
+fn docx_opens_inserts_and_combines_as_pdf_pages() {
+    use pdfcraft_engine::{Session, compare::OfficeFormat};
+    use pdfcraft_ui_egui::FilePurpose;
+    let mut source = Session::new();
+    let pdf = source.create_from_text("Report", "Native DOCX import").unwrap();
+    let id = source.open_new("report.pdf", pdf.clone()).unwrap();
+    let docx = source.get(id).unwrap().export_office(OfficeFormat::Docx);
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("Report.DOCX", Some("/tmp/Report.DOCX".into()), docx.clone()).unwrap();
+    let id = app.views[0].id;
+    let converted = app.session.get(id).unwrap();
+    assert_eq!(converted.name, "Report.pdf");
+    assert!(converted.path.is_none() && converted.dirty);
+    assert_eq!(converted.info.pages.len(), 1);
+    app.insert_pages_from("report.docx", docx.clone());
+    assert_eq!(app.session.get(id).unwrap().info.pages.len(), 2);
+    app.session.undo(id).unwrap();
+    assert_eq!(app.session.get(id).unwrap().info.pages.len(), 1);
+    app.session.redo(id).unwrap();
+    assert_eq!(app.session.get(id).unwrap().info.pages.len(), 2);
+    let before = app.session.docs().len();
+    assert!(app.open_bytes("broken.docx", None, b"PK\x03\x04".to_vec()).is_err());
+    assert_eq!(app.session.docs().len(), before);
+    app.open_combine_tab();
+    app.use_files(FilePurpose::Combine, vec![("report.docx".into(), docx), ("existing.pdf".into(), pdf.to_vec())]);
+    assert_eq!(app.combine_draft.len(), 2);
+    assert_eq!(app.combine_draft[0].pages, 1);
+    assert!(app.combine_draft[0].problem.is_none());
+    assert!(app.combine_draft[0].notes.is_empty(), "an exact conversion adds no warning: {:?}", app.combine_draft[0].notes);
+    let before_combine = app.session.docs().len();
+    app.combine_staged();
+    assert_eq!(app.session.docs().len(), before_combine + 1, "Combine opens a new document");
+    assert_eq!(app.session.docs().last().unwrap().name, "Combined.pdf");
+    assert_eq!(app.session.docs().last().unwrap().info.pages.len(), 2);
+    if let Ok(path) = std::env::var("PDFCRAFT_DOCX_IMPORT_SHOT") {
+        let _gpu = crate::gpu();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| app);
+        h.run_steps(8);
+        let start = std::time::Instant::now();
+        while h.state().render_pending() && start.elapsed() < std::time::Duration::from_secs(20) {
+            h.run_steps(2);
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        h.run_steps(3);
+        assert!(!h.state().render_pending(), "the screenshot must show the converted pages");
+        h.render().unwrap().save(path).unwrap();
+    }
+}
+
+/// A Word package written uncompressed (the importer doesn't check CRCs), with an equation: the
+/// importer writes equations as plain text and says so in its report.
+fn docx_with_equation() -> Vec<u8> {
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const M: &str = "http://schemas.openxmlformats.org/officeDocument/2006/math";
+    const REL: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
+    let document = format!(
+        r#"<w:document xmlns:w="{W}" xmlns:m="{M}"><w:body><w:p><w:r><w:t>Area</w:t></w:r><m:oMath><m:r><m:t>a=b+c</m:t></m:r></m:oMath></w:p></w:body></w:document>"#
+    );
+    let rels = format!(
+        r#"<Relationships xmlns="{REL}"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#
+    );
+    let parts = [("[Content_Types].xml", "<Types/>".to_string()), ("_rels/.rels", rels), ("word/document.xml", document)];
+    let (mut out, mut central) = (Vec::new(), Vec::new());
+    for (name, data) in &parts {
+        let offset = out.len() as u32;
+        let sizes = [(data.len() as u32).to_le_bytes(), (data.len() as u32).to_le_bytes()].concat();
+        out.extend_from_slice(b"PK\x03\x04\x14\0\0\0\0\0");
+        out.extend_from_slice(&[0; 8]);
+        out.extend_from_slice(&sizes);
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(&[0, 0]);
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(data.as_bytes());
+        central.extend_from_slice(b"PK\x01\x02\x14\0\x14\0\0\0\0\0");
+        central.extend_from_slice(&[0; 8]);
+        central.extend_from_slice(&sizes);
+        central.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        central.extend_from_slice(&[0; 12]);
+        central.extend_from_slice(&offset.to_le_bytes());
+        central.extend_from_slice(name.as_bytes());
+    }
+    let start = out.len() as u32;
+    out.extend_from_slice(&central);
+    out.extend_from_slice(b"PK\x05\x06\0\0\0\0");
+    out.extend_from_slice(&[parts.len() as u8, 0, parts.len() as u8, 0]);
+    out.extend_from_slice(&(central.len() as u32).to_le_bytes());
+    out.extend_from_slice(&start.to_le_bytes());
+    out.extend_from_slice(&[0, 0]);
+    out
+}
+
+/// Create PDF from multiple files says what an Office conversion approximated, in both modes,
+/// as opening, inserting and combining one do.
+#[test]
+fn create_from_multiple_files_reports_office_approximations() {
+    use pdfcraft_ui_egui::FilePurpose;
+    let docx = docx_with_equation();
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.use_files(FilePurpose::CreateMultiple, vec![("formula.docx".into(), docx.clone()), ("scan.png".into(), png())]);
+    let toast = app.toast.as_ref().map(|(t, _)| t.clone()).unwrap_or_default();
+    assert!(toast.starts_with("Created a PDF from 2 files"), "{toast}");
+    assert!(toast.contains("Converted formula.docx. Approximated: equations, written as plain text: 1"), "{toast}");
+    let dir = std::env::temp_dir().join(format!("pdfcraft-create-separate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    app.export_dir_override = Some(dir.to_string_lossy().into_owned());
+    app.use_files(FilePurpose::CreateMultipleSeparate, vec![("formula.docx".into(), docx)]);
+    let toast = app.toast.as_ref().map(|(t, _)| t.clone()).unwrap_or_default();
+    assert!(toast.starts_with("Wrote 1 file to ") && toast.contains("Converted formula.docx. Approximated: equations"), "{toast}");
+    assert!(dir.join("formula.pdf").exists());
+    // A file whose PDF can't be written is left out, with no conversion note of its own.
+    let not_a_dir = dir.join("formula.pdf");
+    app.export_dir_override = Some(not_a_dir.to_string_lossy().into_owned());
+    app.use_files(FilePurpose::CreateMultipleSeparate, vec![("formula.docx".into(), docx_with_equation())]);
+    let toast = app.toast.as_ref().map(|(t, _)| t.clone()).unwrap_or_default();
+    assert!(toast.starts_with("Left out: formula.pdf") && !toast.contains("Converted formula.docx"), "{toast}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Create ▸ Blank page uses the system region's paper, not always US Letter (#5644): the app
 /// starts with the system's, and a blank page is on A4 and on Letter as the paper says
 /// (CodeRabbit on #5651: a Letter host alone would not tell a hard-coded Letter apart).
@@ -400,4 +523,38 @@ fn a_blank_page_is_on_the_system_regions_paper() {
             "{paper:?}: {crop:?} is not {w} × {h}"
         );
     }
+}
+
+/// A Word file opened with a launch layout (`--layout two-up`) opens in that layout, as a PDF
+/// does: the conversion's result takes the pending open's display override.
+#[test]
+fn an_office_file_opened_with_a_launch_layout_uses_it() {
+    use pdfcraft_engine::{Session, compare::OfficeFormat};
+    use pdfcraft_ui_egui::canvas::PageLayout;
+    let mut source = Session::new();
+    let pdf = source.create_from_text("Report", "Native DOCX import").unwrap();
+    let id = source.open_new("report.pdf", pdf).unwrap();
+    let docx = source.get(id).unwrap().export_office(OfficeFormat::Docx);
+    let dir = std::env::temp_dir().join(format!("pdfcraft-office-layout-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("report.docx");
+    std::fs::write(&path, docx).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.set_option("default-layout", "continuous").unwrap();
+        app
+    });
+    h.run_steps(2);
+    assert!(!h.state().run_inline, "the background open, where Office files are converted");
+    h.state_mut().open_path_with_display(path.to_str().unwrap(), PageLayout::TwoUp, false);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while h.state().views.is_empty() {
+        assert!(std::time::Instant::now() < deadline, "the Word file never opened: {:?}", h.state().toast);
+        h.run_steps(2);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().views[0].layout, PageLayout::TwoUp);
+    assert!(!h.state().views[0].continuous());
+    std::fs::remove_dir_all(&dir).unwrap();
 }
