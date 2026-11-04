@@ -2,7 +2,7 @@
 //! events a template declares, the presence overrides scripts make (kept in the PDF so they
 //! survive undo and reopening), and laying the form out again after scripts changed it.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString};
 
@@ -549,12 +549,14 @@ pub fn fields_by_som(doc: &Document) -> HashMap<String, String> {
     // Each field is read once: a field listed twice in `/Kids` (or among its own kids) would
     // otherwise be walked again for every path to it, doubling the work at each level. Fields
     // are told apart by object number, as `Document::get` finds them, so `5 0 R` and `5 1 R`
-    // are one. `steps` counts every entry looked at, references or not, so fields sharing one
+    // are one. A field is read again only when it is reached shallower than before: first reached
+    // at `MAX_DEPTH`, its kids would otherwise never be read. `steps` counts every entry looked at, references or not, so fields sharing one
     // long `/Kids` array stay bounded too; `walk_all` returns false once it is spent, and every
     // loop then stops.
     struct Walk {
         out: HashMap<String, String>,
-        seen: HashSet<u32>,
+        /// The shallowest depth each object number was read at.
+        seen: HashMap<u32, usize>,
         steps: usize,
     }
     fn walk_all(doc: &Document, kids: &[Object], prefix: &str, w: &mut Walk, depth: usize) -> bool {
@@ -567,9 +569,10 @@ pub fn fields_by_som(doc: &Document) -> HashMap<String, String> {
         })
     }
     fn walk(doc: &Document, r: pdfcraft_cos::ObjRef, prefix: &str, w: &mut Walk, depth: usize) -> bool {
-        if depth > MAX_DEPTH || !w.seen.insert(r.num) {
+        if depth > MAX_DEPTH || w.seen.get(&r.num).is_some_and(|&read| read <= depth) {
             return true;
         }
+        w.seen.insert(r.num, depth);
         let o = doc.get(r);
         let Some(d) = o.as_dict() else { return true };
         let t = d.get(b"T").map(|t| doc.resolve(t)).and_then(|t| t.as_string().map(|s| s.to_text()));
@@ -589,7 +592,7 @@ pub fn fields_by_som(doc: &Document) -> HashMap<String, String> {
     }
     let Some((_, acro)) = acroform(doc) else { return HashMap::new() };
     let fields = acro.get(b"Fields").map(|f| doc.resolve(f));
-    let mut w = Walk { out: HashMap::new(), seen: HashSet::new(), steps: 0 };
+    let mut w = Walk { out: HashMap::new(), seen: HashMap::new(), steps: 0 };
     walk_all(doc, fields.as_deref().and_then(Object::as_array).map(Vec::as_slice).unwrap_or_default(), "", &mut w, 0);
     w.out
 }

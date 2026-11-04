@@ -161,20 +161,26 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
 #[derive(Default)]
 struct FieldQueue {
     stack: Vec<(ObjRef, String, bool, usize)>,
-    /// Object numbers queued: [`Document::get`] finds a field by number alone, so `5 0 R` and
-    /// `5 1 R` are the same field.
-    seen: HashSet<u32>,
+    /// The shallowest depth each object number was queued at: [`Document::get`] finds a field
+    /// by number alone, so `5 0 R` and `5 1 R` are the same field.
+    seen: HashMap<u32, usize>,
+    /// Entries pushed onto `stack`, a field queued again at a shallower depth included.
+    pushed: usize,
+    /// `/Fields` and `/Kids` entries read while queuing.
     read: usize,
+    /// `/Kids` entries read while searching for a signed field's appearance.
+    searched: usize,
 }
 
 impl FieldQueue {
-    /// The first of `kids` for which `f` gives a value. The entries looked at count against
-    /// [`MAX_KIDS_READ`] like those queued: signed fields sharing one long `/Kids` would
-    /// otherwise each search all of it. Past the limit nothing more is looked at.
+    /// The first of `kids` for which `f` gives a value. At most [`MAX_KIDS_READ`] entries are
+    /// looked at in all: signed fields sharing one long `/Kids` would otherwise each search all
+    /// of it. The searches have a budget of their own, apart from the one for queuing, so a
+    /// search can never leave a field's kids unqueued. Past the limit nothing more is looked at.
     fn find_map<T>(&mut self, kids: &[Object], mut f: impl FnMut(&Object) -> Option<T>) -> Option<T> {
         for k in kids {
-            self.read += 1;
-            if self.read > MAX_KIDS_READ {
+            self.searched += 1;
+            if self.searched > MAX_KIDS_READ {
                 return None;
             }
             if let Some(v) = f(k) {
@@ -186,18 +192,22 @@ impl FieldQueue {
 
     /// Queue the fields `kids` lists, each the first time it is listed. Fields and kids are
     /// indirect references (ISO 32000-2 §12.7.3.1); anything else is skipped. A field listed
-    /// again, by this list or another, under any generation, takes no room, and at most
-    /// [`MAX_FIELDS_SEARCHED`] are ever queued: a field listing one kid many times, or fields
-    /// sharing one long `/Kids`, would otherwise queue it all on every visit. Reading the repeats
-    /// costs too, so at most [`MAX_KIDS_READ`] entries are read in all.
+    /// again, by this list or another, under any generation, takes no room, unless it is now
+    /// shallower than where it was queued: first reached at [`MAX_FIELD_DEPTH`], its kids would
+    /// otherwise never be read. So a field is queued at most once per depth, and at most
+    /// [`MAX_FIELDS_SEARCHED`] entries are ever queued: a field listing one kid many times, or
+    /// fields sharing one long `/Kids`, would otherwise queue it all on every visit. Reading the
+    /// repeats costs too, so at most [`MAX_KIDS_READ`] entries are read in all.
     fn queue(&mut self, kids: &[Object], prefix: &str, is_sig: bool, depth: usize) {
         for k in kids {
             self.read += 1;
-            if self.seen.len() >= MAX_FIELDS_SEARCHED || self.read > MAX_KIDS_READ {
+            if self.pushed >= MAX_FIELDS_SEARCHED || self.read > MAX_KIDS_READ {
                 return;
             }
             let Some(r) = k.as_ref() else { continue };
-            if self.seen.insert(r.num) {
+            if self.seen.get(&r.num).is_none_or(|&queued| depth < queued) {
+                self.seen.insert(r.num, depth);
+                self.pushed += 1;
                 self.stack.push((r, prefix.to_string(), is_sig, depth));
             }
         }
@@ -1011,7 +1021,7 @@ mod tests {
 
     use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 
-    use super::{MAX_FIELDS_SEARCHED, Signed, existing_fields, parse_hex32};
+    use super::{MAX_FIELD_DEPTH, MAX_FIELDS_SEARCHED, MAX_KIDS_READ, Signed, existing_fields, parse_hex32};
 
     /// The fields `existing_fields` finds under an AcroForm listing `fields`.
     fn names_found(doc: &Document, fields: Vec<Object>) -> Vec<String> {
@@ -1099,6 +1109,49 @@ mod tests {
         assert_eq!(signed.len(), 1_000);
         let with_appearance = signed.values().filter(|s| s.appearance.is_some()).count();
         assert!((1..=10).contains(&with_appearance), "{with_appearance} appearances found");
+    }
+
+    #[test]
+    fn an_appearance_search_leaves_the_kids_of_a_signed_field_queued() {
+        // A signed field with no appearance of its own lists a signed kid and then
+        // `MAX_KIDS_READ` nulls. Searching them all for an appearance must not spend what
+        // queuing its kids has to read, or the signed kid is never found.
+        let mut doc = Document::new_empty();
+        let mut kid = Dict::new();
+        kid.set(b"T".to_vec(), Object::String(PdfString::literal("c")));
+        kid.set(b"V".to_vec(), Object::Dict(Dict::new()));
+        let mut kids = vec![Object::Ref(doc.add(Object::Dict(kid)))];
+        kids.extend(std::iter::repeat_n(Object::Null, MAX_KIDS_READ));
+        let mut parent = Dict::new();
+        parent.set(b"T".to_vec(), Object::String(PdfString::literal("p")));
+        parent.set(b"FT".to_vec(), Object::Name(b"Sig".to_vec()));
+        parent.set(b"V".to_vec(), Object::Dict(Dict::new()));
+        parent.set(b"Kids".to_vec(), Object::Array(kids));
+        let parent = doc.add(Object::Dict(parent));
+        let (signed, _) = existing(&doc, vec![Object::Ref(parent)]);
+        assert!(signed.contains_key("p.c"), "{:?}", signed.keys().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_field_reached_first_at_the_depth_limit_is_read_again_when_reached_shallower() {
+        // Field `s` is listed at the bottom of a chain `MAX_FIELD_DEPTH` deep, which is walked
+        // first, and again under `b`. Reached first where its kids are not read, it is read
+        // again under `b`, and the signed field under it is found.
+        let mut doc = Document::new_empty();
+        let mut sig = Dict::new();
+        sig.set(b"T".to_vec(), Object::String(PdfString::literal("sig")));
+        sig.set(b"FT".to_vec(), Object::Name(b"Sig".to_vec()));
+        sig.set(b"V".to_vec(), Object::Dict(Dict::new()));
+        let sig = doc.add(Object::Dict(sig));
+        let shared = doc.add(field("s", Object::Array(vec![Object::Ref(sig)])));
+        let mut deep = shared;
+        for i in (0..MAX_FIELD_DEPTH).rev() {
+            deep = doc.add(field(&format!("d{i}"), Object::Array(vec![Object::Ref(deep)])));
+        }
+        let b = doc.add(field("b", Object::Array(vec![Object::Ref(shared)])));
+        let (signed, names) = existing(&doc, vec![Object::Ref(b), Object::Ref(deep)]);
+        assert!(signed.contains_key("b.s.sig"), "{:?}", signed.keys().collect::<Vec<_>>());
+        assert!(names.contains("b.s"));
     }
 
     /// Field `c` with two kids: `plain`, and `sig`, a signed signature field.

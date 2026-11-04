@@ -4136,6 +4136,23 @@ fn fields_by_som_counts_kids_that_are_not_references() {
     assert!(!by_som.contains_key("form1[0].last[0]"), "{by_som:?}");
 }
 
+#[test]
+fn fields_by_som_reads_a_field_again_when_it_is_reached_shallower() {
+    // Field `s` is listed at the bottom of a chain 64 deep, which is walked first, and again
+    // under `b`. Reached first where its kids are past the depth limit, it is read again under
+    // `b`, and the field under it is found by its SOM path.
+    let mut doc = Document::new_empty();
+    let leaf = som_field(&mut doc, "leaf", Some("form1[0].leaf[0]"), None);
+    let shared = som_field(&mut doc, "s", None, Some(Object::Array(vec![Object::Ref(leaf)])));
+    let mut deep = shared;
+    for i in (0..64).rev() {
+        deep = som_field(&mut doc, &format!("d{i}"), None, Some(Object::Array(vec![Object::Ref(deep)])));
+    }
+    let b = som_field(&mut doc, "b", None, Some(Object::Array(vec![Object::Ref(shared)])));
+    let by_som = fields_by_som_of(doc, vec![Object::Ref(deep), Object::Ref(b)]);
+    assert_eq!(by_som.get("form1[0].leaf[0]").map(String::as_str), Some("b.s.leaf"), "{by_som:?}");
+}
+
 /// An AcroForm field named `t`, with SOM path `som` and `kids` when given.
 fn field_named(t: &str, som: Option<&str>, kids: Option<Object>) -> Object {
     let s = |t: &str| Object::String(pdfcraft_cos::PdfString::literal(t));
