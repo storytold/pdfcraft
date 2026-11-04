@@ -11,10 +11,6 @@ workspace = true
 
 [dependencies]
 pdfcraft-ui-egui = { workspace = true }
-# Browser transport for Open and Save against CollabCraft. Session rides the cookie; no token file.
-craft-cloud-client = { workspace = true }
-# Share dialog backend for the browser build.
-collabcraft-share = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "glow", "persistence", "accesskit"] }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 log = { workspace = true }

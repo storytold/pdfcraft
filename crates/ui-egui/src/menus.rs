@@ -704,6 +704,9 @@ mod tests {
             if spec.id == "file.open_recent" {
                 continue; // A submenu of the recent files.
             }
+            if matches!(spec.id, "file.open_cloud" | "file.save_as_cloud") && !crate::cloud::available(&app) {
+                continue; // Absent, not dimmed, while no cloud backend is connected (pending craft-libs#160).
+            }
             let it = item(&bar, &CommandRef::new(spec.id));
             let shortcut = spec.shortcut.or((spec.id == "edit.copy").then_some(crate::commands::COPY));
             assert_eq!(it.shortcut, shortcut.and_then(chord), "{} has its registry shortcut", spec.id);

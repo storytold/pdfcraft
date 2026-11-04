@@ -48,7 +48,8 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 
 /// Commands that open a native file picker can't run headless.
 /// (Create ▸ Clipboard reads the system clipboard: tests use `create_from_clip`.)
-/// CollabCraft cloud commands need a connected service; see `cloud_tests`.
+/// The cloud commands need a connected backend; see `cloud_tests` (none ships today, pending
+/// craft-libs#160).
 const CLOUD_SERVICE: &[&str] = &["file.open_cloud", "file.save_as_cloud"];
 
 const PICKERS: &[&str] = &[

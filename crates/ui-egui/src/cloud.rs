@@ -1,256 +1,242 @@
-//! PdfCraft's half of Open and Save against cloud storage.
+//! PdfCraft's cloud Open/Save/Share scaffolding.
 //!
-//! The pages themselves are `craft_ui::cloud`. Every Craft app offers the same
-//! ones. What is here is what only PdfCraft can answer. A document is a PDF.
-//! These extensions and content types are what that means. Bytes become one
-//! through [`PdfCraftApp::open_bytes`] and go back through
-//! `session.save_full_bytes`.
+//! No concrete backend ships in this crate, or anywhere in this repository.
+//! `craft-libs#160` is building a storytold-reviewable `CloudBackend`
+//! reference implementation to replace the personal-fork `craft_ui::cloud`,
+//! `craft_ui::share` and `craft_ui::presence` modules this file used to
+//! depend on. Until that lands, this file defines its own small local
+//! contract, trimmed to exactly what PdfCraft's UI calls below. Once
+//! craft-libs#160 ships a trait with the same shape, wiring it in should be
+//! a matter of calling [`CloudFiles::connect`] with it; nothing above this
+//! seam should need to change.
 //!
-//! PdfCraft holds no provider credential and speaks no provider protocol.
-//! Every call goes to the CollabCraft service. That service is the single
-//! place a provider is configured and permissions are decided. Replacing one
-//! provider with another changes nothing here.
+//! Nobody calls [`CloudFiles::connect`] today, so [`available`] is always
+//! false. The Open/Save cloud menu items, the title bar's share button,
+//! account badge and presence list all gate on it and so stay hidden
+//! entirely, rather than shown and disabled: a greyed "Open from cloud…"
+//! with nothing behind it would read as a broken feature, not a pending one.
 //!
-//! Nothing in this file opens a socket either. The transport half is a
-//! [`CloudBackend`] the host application supplies. Every CollabCraft call
-//! blocks. The pages state a [`Job`]. The host runs it on a worker thread.
-//! The answer arrives on a channel that [`pump`] drains on a later frame.
-//!
-//! ## PDF semantics
-//!
-//! PdfCraft opens, views, annotates and form-fills PDFs. It does not host
-//! real-time collaborative text editing. The share dialog lets a user grant
-//! View or Edit access; "Edit" here means annotation and form filling, which
-//! the provider enforces. No claim is made that two people can edit the
-//! underlying PDF structure simultaneously.
+//! Every job answers on its own thread; [`CloudBackend::submit`] must return
+//! before anything blocking runs, or it freezes the window that called it.
+//! [`pump`] drains the channel the backend posts to on a later frame.
 
-use egui::{Color32, Painter, Rect, Ui};
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender, channel};
 
-// Re-exported so a host application can name these types without depending on
-// the crates they come from. Tests need them for the same reason.
-pub use craft_cloud::{Capability, Entry, EntryKind};
-pub use craft_ui::cloud::{
-    Account, Busy, CloudApp, CloudBackend, CloudFiles, Conflict, CopyFormat, Destination, DocumentKind, Event, Fault, Folder, Job, Link, Origin,
-    Post, Source, UNAVAILABLE, available, browse, can_converse, conflict_modal, destination_name, has_target, link, load_shared, open_entry,
-    open_page, origin, parent_of, prefers_cloud, progress, reload_active, save, save_as, save_page, share_button, shares, sign_in, sign_out, start,
-    work_together,
-};
+use egui::Ui;
 
 use crate::PdfCraftApp;
-use crate::theme::Tokens;
 
-/// Extensions PdfCraft opens. The same set the desktop file picker offers.
+/// Extensions PdfCraft opens from the cloud. The same set the desktop file picker offers.
 const OPENS: [&str; 3] = ["pdf", "fdf", "xfdf"];
 
-/// Content types PdfCraft opens, matched against the start of what the
-/// provider reports. Neither extension nor MIME is reliable alone.
-const MIMES: [&str; 3] = ["application/pdf", "application/vnd.adobe.xfdf", "application/vnd.adobe.xdf"];
-
-/// What a PdfCraft document is, as a cloud file list needs to know.
-pub const DOCUMENT: DocumentKind = DocumentKind { extensions: &OPENS, mimes: &MIMES, noun: "PDF", default_extension: "pdf" };
-
-/// The format every cloud save writes.
-///
-/// PdfCraft saves PDFs. A file opened from the cloud under any extension goes
-/// back as a PDF — with annotations, form data and any other changes. FDF and
-/// XFDF import forms data but are not saved back as such.
+/// The format every cloud save writes: PdfCraft saves PDFs, whatever extension a file was
+/// opened under.
 const SAVES_AS: &str = "pdf";
 
-/// Save a Copy formats offered under the share.
+/// One entry in a cloud folder listing: a file or a folder a [`CloudBackend`] reported.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    /// Opaque to PdfCraft; round-tripped back to the backend on open/save.
+    pub id: String,
+    pub name: String,
+    pub kind: EntryKind,
+    /// A conditional-write token, when the backend supports one.
+    pub etag: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryKind {
+    File,
+    Folder,
+}
+
+/// The signed-in account shown in the title bar's badge.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Account {
+    pub display: String,
+}
+
+/// A cloud job in flight, for the busy spinner. Trimmed to what the title bar and the hidden
+/// menu items read today; a real backend's job set will likely be larger.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Busy {
+    Account,
+    Open,
+    Save,
+}
+
+/// What a [`CloudBackend`] reports failing, read by the account badge.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Fault {
+    Unauthenticated,
+    Other(String),
+}
+
+/// What the host asks a [`CloudBackend`] to do.
+#[derive(Clone, Debug)]
+pub enum Job {
+    Account,
+    SignIn,
+    SignOut,
+}
+
+/// What a [`CloudBackend`] answers with, through [`Post::send`].
+#[derive(Clone, Debug)]
+pub enum Event {
+    Account(Result<Account, Fault>),
+}
+
+/// Where a [`CloudBackend`] posts its answer once a [`Job`] finishes. A thin wrapper so a
+/// backend crate never needs egui as a dependency of its own.
+#[derive(Clone)]
+pub struct Post {
+    ctx: egui::Context,
+    sender: Sender<Event>,
+}
+
+impl Post {
+    pub fn send(&self, event: Event) {
+        let _ = self.sender.send(event);
+        self.ctx.request_repaint();
+    }
+}
+
+/// The contract a cloud provider implements.
 ///
-/// PdfCraft can export images, but those are destructive one-way conversions,
-/// not copies. The only meaningful cloud copy is the PDF itself.
-const COPIES: [(&str, &str); 1] = [("pdf", "Save a Copy as PDF (.pdf)\u{2026}")];
+/// Pending craft-libs#160: once that crate's reference `CloudBackend` lands, this trait should
+/// be able to go away in favour of it with no change to the call sites in this file.
+pub trait CloudBackend: Send + Sync {
+    fn submit(&self, job: Job, post: Post);
+}
+
+/// Open and Save against cloud storage, and the signed-in account. Local-only placeholder
+/// (see the module doc): nothing populates [`CloudFiles::backend`] today.
+#[derive(Default)]
+pub struct CloudFiles {
+    backend: Option<Arc<dyn CloudBackend>>,
+    receiver: Option<Receiver<Event>>,
+    pub account: Option<Account>,
+    pub account_fault: Option<Fault>,
+    pub busy: Option<Busy>,
+    /// Shown in the account menu while a sign-in or save is in flight.
+    pub status: Option<String>,
+}
+
+impl CloudFiles {
+    pub fn new() -> CloudFiles {
+        CloudFiles::default()
+    }
+
+    /// Wire in a backend. Once craft-libs#160 ships one, an app calls this the same way it
+    /// would have called `CloudApp`'s old `connect`.
+    pub fn connect(&mut self, backend: impl CloudBackend + 'static) {
+        self.backend = Some(Arc::new(backend));
+    }
+
+    fn submit(&mut self, job: Job, ctx: &egui::Context) {
+        let Some(backend) = self.backend.clone() else { return };
+        let (sender, receiver) = channel();
+        self.receiver = Some(receiver);
+        backend.submit(job, Post { ctx: ctx.clone(), sender });
+    }
+}
+
+/// Whether a cloud backend is connected. The Open/Save cloud menu items and the title bar's
+/// share button, account badge and presence list all stay hidden while this is false.
+pub fn available(app: &PdfCraftApp) -> bool {
+    app.cloud.backend.is_some()
+}
 
 /// Whether PdfCraft can open this entry.
 pub fn opens(entry: &Entry) -> bool {
-    craft_ui::cloud::opens(entry, DOCUMENT)
+    entry.kind == EntryKind::Folder || OPENS.iter().any(|ext| entry.name.to_ascii_lowercase().ends_with(&format!(".{ext}")))
 }
 
-/// A typed name as a PDF file name. Strips folder separators; adds `.pdf`
-/// when no recognised extension is present.
+/// A typed name as a PDF file name. Strips folder separators; adds `.pdf` when no recognised
+/// extension is present.
 pub fn pdf_name(typed: &str) -> String {
-    craft_ui::cloud::document_name(typed, DOCUMENT)
+    let name = typed.trim().replace(['/', '\\'], " ");
+    let name = if name.is_empty() { "Untitled".to_owned() } else { name };
+    let has_extension =
+        OPENS.iter().any(|ext| name.to_ascii_lowercase().ends_with(&format!(".{ext}"))) || name.to_ascii_lowercase().ends_with(".pdf");
+    if has_extension { name } else { format!("{name}.{SAVES_AS}") }
 }
 
-/// The whole of the cloud state, for the control channel and for tests.
-pub fn status(app: &PdfCraftApp) -> serde_json::Value {
-    craft_ui::cloud::report(app)
+/// The document a cloud save or share request is about: its id and, if the document was opened
+/// from the cloud, the entry it came from.
+pub struct Origin {
+    pub entry: Entry,
+}
+
+/// The entry the active document was opened from, if any. Nothing populates this today: no
+/// cloud open has ever happened without a backend.
+pub fn origin(_app: &PdfCraftApp) -> Option<&Origin> {
+    None
+}
+
+/// Whether the connected backend supports sharing. Always false: nothing is connected.
+pub fn shares(_app: &PdfCraftApp) -> bool {
+    false
+}
+
+/// "Save a Copy as" format offered under the share button.
+pub struct CopyFormat {
+    pub id: &'static str,
+    pub label: &'static str,
 }
 
 /// The Share menu's export half.
 pub fn copies() -> Vec<CopyFormat> {
-    COPIES.iter().map(|(id, label)| CopyFormat::new(*id, *label)).collect()
+    vec![CopyFormat { id: "pdf", label: "Save a Copy as PDF (.pdf)\u{2026}" }]
 }
 
-/// The host part of the service address, for the account menu's first line.
-///
-/// Read from the environment; nothing is compiled in. The service is
-/// deployment-specific. Somebody with accounts on two deployments needs to
-/// know which one a PDF is about to land in.
-fn service_host() -> String {
-    ["PDFCRAFT_CLOUD_URL", "CRAFT_CLOUD_URL", "COLLABCRAFT_URL"]
-        .into_iter()
-        .filter_map(|key| std::env::var(key).ok())
-        .map(|value| value.trim().trim_end_matches('/').to_owned())
-        .find(|value| !value.is_empty())
-        .map(|value| value.trim_start_matches("https://").trim_start_matches("http://").to_owned())
-        .unwrap_or_default()
+/// The share button, drawn only when [`shares`] is true (so never today). Kept so wiring a real
+/// backend back in is a matter of this function drawing something, not call sites changing.
+pub fn share_button(_app: &mut PdfCraftApp, _ui: &mut Ui, _copies: &[CopyFormat]) -> Option<&'static str> {
+    None
 }
 
-/// The format a cloud save should be written in, given its destination.
-///
-/// PdfCraft only writes PDF. A file opened from the cloud under any other
-/// extension still goes back as a PDF. The only readable output from this
-/// application is a PDF, and so that is the only format offered here. A
-/// destination that explicitly asks for something else is refused with a
-/// message the user can act on.
-fn writes_as(into: Destination<'_>) -> Result<&'static str, String> {
-    let ext = into.extension();
-    if ext == "pdf" || ext.is_empty() {
-        return Ok(SAVES_AS);
-    }
-    Err(format!(
-        "PdfCraft saves PDFs. It cannot write a .{ext} file to the cloud. \
-         Use Save As to create a new PDF in the cloud."
-    ))
-}
-
-impl CloudApp for PdfCraftApp {
-    fn cloud(&self) -> &CloudFiles {
-        &self.cloud
-    }
-
-    fn cloud_mut(&mut self) -> &mut CloudFiles {
-        &mut self.cloud
-    }
-
-    fn kind(&self) -> DocumentKind {
-        DOCUMENT
-    }
-
-    fn active(&self) -> Option<u64> {
-        self.active_ids().map(|(_, id)| id.0)
-    }
-
-    fn title(&self, uid: u64) -> String {
-        let id = pdfcraft_engine::DocId(uid);
-        self.session.get(id).map(|d| d.display_name()).unwrap_or_default()
-    }
-
-    /// Open PDF bytes from the cloud.
-    ///
-    /// Returns `Ok(None)` when the document is password-protected and a prompt
-    /// is shown; the cloud page waits for the next event rather than assuming
-    /// success.
-    fn open_bytes(&mut self, name: &str, bytes: Vec<u8>) -> Result<Option<u64>, String> {
-        // Record which document ids are already open before the call.
-        let before: std::collections::HashSet<u64> = self.views.iter().map(|v| v.id.0).collect();
-        // `PdfCraftApp::open_bytes` opens with focus and returns only errors.
-        // Password-protected documents go into a prompt without raising an error.
-        self.open_bytes(name, None, bytes)?;
-        // The newly opened document, if it became active immediately.
-        let after = self.active_ids().map(|(_, id)| id.0).filter(|uid| !before.contains(uid));
-        Ok(after)
-    }
-
-    /// Encode the document's current state as PDF bytes for the given destination.
-    fn encode(&mut self, uid: u64, into: Destination<'_>) -> Result<Vec<u8>, String> {
-        let id = pdfcraft_engine::DocId(uid);
-        writes_as(into)?;
-        let bytes = self.session.save_full_bytes(id).map_err(|e| e.to_string())?;
-        Ok(bytes.as_ref().clone())
-    }
-
-    fn close(&mut self, uid: u64) {
-        let id = pdfcraft_engine::DocId(uid);
-        if let Some(i) = self.views.iter().position(|v| v.id == id) {
-            self.close_tab(i);
-        }
-    }
-
-    fn ready_to_save(&mut self) -> bool {
-        // A form field's open editor holds text that is not in the document yet.
-        self.commit_form_typing()
-    }
-
-    fn sharing(&mut self) -> &mut craft_ui::share::ShareDialog {
-        &mut self.share
-    }
-
-    fn presence(&mut self) -> &mut craft_ui::presence::PresenceBar {
-        &mut self.presence
-    }
-
-    fn paint_icon(&self, painter: &Painter, rect: Rect, kind: EntryKind, colour: Color32) {
-        let name = if kind == EntryKind::Folder { "folder" } else { "file-text" };
-        crate::icons::paint_on(painter, rect, name, colour);
-    }
-
-    fn open_url(&self, url: &str) {
-        if let Some(ctx) = &self.ctx {
-            ctx.open_url(egui::OpenUrl::new_tab(url));
-        }
-    }
-
-    fn say(&mut self, text: String) {
-        self.notify(text);
-    }
-
-    fn toast(&mut self, text: String) {
-        self.notify(text);
-    }
-
-    fn go_to_save_as(&mut self) {
-        // The conflict modal calls this when the user chooses "Save as a copy".
-        // PdfCraft has no backstage, so we set cloud_page to SaveAs which renders
-        // save_page in the CentralPanel on the next frame.
-        self.cloud_page = Some(crate::CloudPage::SaveAs);
-    }
-
-    fn app_name(&self) -> &str {
-        "PdfCraft"
-    }
-
-    fn service(&self) -> String {
-        service_host()
-    }
-
-    fn save_note(&self) -> Option<String> {
-        Some("The PDF is saved in the folder above. Annotations and form data are preserved.".to_owned())
-    }
-
-    fn style(&self, ui: &Ui) -> craft_ui::cloud::CloudStyle {
-        let t = Tokens::get(ui.ctx());
-        craft_ui::cloud::CloudStyle {
-            surface: t.chrome,
-            border: t.border,
-            text: t.text,
-            dim: t.text_muted,
-            hover: t.hover,
-            soft: t.accent.gamma_multiply(0.14),
-            family: egui::FontFamily::Proportional,
-            bold: egui::FontFamily::Name("semibold".into()),
-        }
-    }
-}
-
-/// The title-bar account badge and menu (`craft_ui::cloud::who`), plus the browser
-/// login popup on Sign in while the click's user activation still holds.
+/// The title-bar account badge and menu. Draws nothing while no backend is connected.
 pub fn who(app: &mut PdfCraftApp, ui: &mut Ui) {
-    craft_ui::cloud::who(app, ui);
-    #[cfg(target_arch = "wasm32")]
-    if app.cloud_mut().take_sign_in_from_menu() && app.cloud.account.is_none() {
-        let ctx = ui.ctx();
-        let popup_retry = egui::Id::new("pdfcraft:popup_retry");
-        ctx.memory_mut(|m| m.data.remove::<bool>(popup_retry));
-        crate::web_auth::offer_login_popup(ctx);
+    if !available(app) {
+        return;
+    }
+    if let Some(account) = &app.cloud.account {
+        ui.label(&account.display);
     }
 }
 
-/// Drain cloud worker events from the background thread.
-pub fn pump(app: &mut PdfCraftApp, ctx: &egui::Context) {
-    craft_ui::cloud::pump(app, ctx);
+/// Ask the connected backend to sign in. A no-op while none is connected.
+pub fn sign_in(app: &mut PdfCraftApp) {
+    if !available(app) {
+        return;
+    }
+    app.cloud.status = Some("Finishing signing in\u{2026}".to_owned());
+    let ctx = app.ctx.clone();
+    if let Some(ctx) = ctx {
+        app.cloud.submit(Job::SignIn, &ctx);
+    }
+}
+
+/// Drain cloud worker events from the background thread. A no-op while no backend is connected,
+/// since nothing ever submits a job in that state.
+pub fn pump(app: &mut PdfCraftApp, _ctx: &egui::Context) {
+    let Some(receiver) = &app.cloud.receiver else { return };
+    while let Ok(event) = receiver.try_recv() {
+        match event {
+            Event::Account(Ok(account)) => {
+                app.cloud.account = Some(account);
+                app.cloud.account_fault = None;
+                app.cloud.status = None;
+            }
+            Event::Account(Err(fault)) => {
+                app.cloud.account = None;
+                app.cloud.account_fault = Some(fault);
+                app.cloud.status = None;
+            }
+        }
+    }
 }
 
 #[cfg(test)]

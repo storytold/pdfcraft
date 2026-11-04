@@ -327,9 +327,10 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     if widgets::ghost_button_sized(ui, "messages-square", "Discord", tab_h).on_hover_text(pdfcraft_engine::links::DISCORD).clicked() {
                         app.execute("help.discord");
                     }
-                    // Cloud: account badge, presence, share button. Drawn only when a CollabCraft
-                    // service is connected. The layout runs right-to-left, so these appear to the
-                    // left of the theme/help controls and do not overlap the scrolling tabs.
+                    // Cloud: account badge, presence, share button. Drawn only when a cloud
+                    // backend is connected (pending craft-libs#160; see cloud.rs's module doc).
+                    // The layout runs right-to-left, so these appear to the left of the
+                    // theme/help controls and do not overlap the scrolling tabs.
                     if crate::cloud::available(app) {
                         ui.add_space(4.0);
                         // Share button: shown only when the provider supports sharing.
@@ -349,13 +350,11 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     None,
                                 ),
                             };
-                            let sender = craft_cloud::Identity {
+                            let sender = crate::esign::Identity {
                                 id: String::new(),
                                 display: app.cloud.account.as_ref().map(|a| a.display.clone()).unwrap_or_default(),
                                 email: None,
-                                avatar: None,
                             };
-                            app.esign_doc = app.active_ids().map(|(_, id)| id);
                             crate::esign::open(&mut app.esign, id, title, etag, sender);
                         }
                         // Who else has this document open (viewer presence only).

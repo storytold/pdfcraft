@@ -1,51 +1,60 @@
-//! Request-signatures UI, hosted through CollabCraft.
+//! Request-signatures UI, pending craft-libs#160.
 //!
-//! The dialog itself lives in `craft_ui::esign`. This module holds it on the
-//! PdfCraft app, opens it from the chrome, and drains send requests so the
-//! host can encode PDF bytes and submit them.
+//! This dialog's state lives here, the same way it did when it was hosted
+//! through CollabCraft. No backend exists in this repository today: see
+//! `crates/ui-egui/src/cloud.rs`'s module doc for why. Wiring a real one in,
+//! once craft-libs#160 ships a reference implementation, is [`set_backend`];
+//! nothing above that seam should need to change.
+//!
+//! [`available`] is always false until a backend connects, so the title
+//! bar's request-signatures button stays hidden rather than shown disabled.
 
-use craft_cloud::Identity;
-use craft_ui::esign::{EsignDialog, EsignLabels, SendRequest};
+/// Who a signature request is sent as. Shown to the people who receive it.
+#[derive(Clone, Debug, Default)]
+pub struct Identity {
+    pub id: String,
+    pub display: String,
+    pub email: Option<String>,
+}
 
-/// Re-export the backend contract the host implements.
-pub use craft_ui::esign::{Answer, EsignBackend, Replier, Request};
+/// The contract an e-sign provider implements. Pending craft-libs#160.
+pub trait EsignBackend: Send + Sync {}
 
-/// Whether the dialog has heard that envelopes are available.
+/// Request-signatures dialog state. Local-only placeholder (see the module doc): nothing
+/// populates its backend today.
+#[derive(Default)]
+pub struct EsignDialog {
+    backend: Option<Box<dyn EsignBackend>>,
+}
+
+impl EsignDialog {
+    pub fn new() -> EsignDialog {
+        EsignDialog::default()
+    }
+}
+
+/// Whether a signing backend is connected.
 pub fn available(dialog: &EsignDialog) -> bool {
-    dialog.available()
+    dialog.backend.is_some()
 }
 
-/// Open the dialog for the active document.
-pub fn open(dialog: &mut EsignDialog, document_id: String, title: String, etag: Option<String>, sender: Identity) {
-    dialog.open(document_id, title, etag, sender);
+/// Open the dialog for the active document. A no-op while no backend is connected.
+pub fn open(dialog: &mut EsignDialog, _document_id: String, _title: String, _etag: Option<String>, _sender: Identity) {
+    let _ = available(dialog);
 }
 
-/// Draw every frame so capability probes keep running.
-pub fn pump(dialog: &mut EsignDialog, ctx: &egui::Context) {
-    dialog.show(ctx);
-}
+/// Draw every frame so a connected backend's capability probe and inbox keep running. A no-op
+/// while none is connected.
+pub fn pump(_dialog: &mut EsignDialog, _ctx: &egui::Context) {}
 
-pub fn take_send(dialog: &mut EsignDialog) -> Option<SendRequest> {
-    dialog.take_send_request()
-}
-
-pub fn note_create(dialog: &mut EsignDialog, result: Result<craft_esign::Envelope, String>) {
-    dialog.note_create_result(result);
-}
-
-pub fn take_completed(dialog: &mut EsignDialog) -> Option<Vec<u8>> {
-    dialog.take_completed_bytes()
-}
-
+/// Wire in a backend. Once craft-libs#160 ships one, an app calls this the same way it would
+/// have called the old `EsignBackend`.
 pub fn set_backend(dialog: &mut EsignDialog, backend: impl EsignBackend + 'static) {
-    dialog.set_backend(backend);
+    dialog.backend = Some(Box::new(backend));
 }
 
-pub fn labels() -> EsignLabels {
-    EsignLabels::default()
-}
-
+/// The title bar's "Request signatures" button. Drawn only when [`available`] is true, so
+/// never today.
 pub fn request_button(ui: &mut egui::Ui, dialog: &EsignDialog) -> bool {
-    let labels = labels();
-    matches!(craft_ui::esign::request_button(ui, &labels, dialog.available(), &[]), Some(craft_ui::menu::SplitHit::Primary))
+    available(dialog) && ui.button(tl!("Request signatures")).clicked()
 }

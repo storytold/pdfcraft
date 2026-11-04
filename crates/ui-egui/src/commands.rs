@@ -192,15 +192,10 @@ impl PdfCraftApp {
             "file.clear_recent" => self.recent.clear(),
             "file.pin_folder" => self.pin_folder_dialog(),
             "file.save" => {
-                // When the active document came from the cloud, save back with the etag guard.
-                // Otherwise fall back to the existing local-file save.
-                if crate::cloud::has_target(self) {
-                    if let Err(e) = crate::cloud::save(self) {
-                        self.notify(e);
-                    }
-                } else {
-                    self.save_active(SaveTarget::InPlace);
-                }
+                // A document opened from the cloud would save back through its origin's etag
+                // guard; nothing populates a cloud origin today (pending craft-libs#160; see
+                // cloud.rs's module doc), so this always falls back to the local-file save.
+                self.save_active(SaveTarget::InPlace);
             }
             "file.save_as" => {
                 self.save_active(SaveTarget::As);

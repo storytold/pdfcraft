@@ -12,12 +12,6 @@ workspace = true
 # Help ▸ Check for updates (issue #28): one HTTPS request to GitHub, over rustls with the OS's
 # trusted roots. No bundled root list (webpki-roots and webpki-root-certs are CDLA-licensed).
 pdfcraft-ui-egui = { workspace = true }
-# How this application reaches CollabCraft. No provider credential, provider URL or provider
-# protocol live here. The service is read from the environment; nothing is compiled in.
-craft-cloud-client = { workspace = true }
-# The share dialog's backend: the half that opens a socket. Kept here so only one session exists
-# per process and a sign-in through Open/Save also reaches the share dialog.
-collabcraft-share = { workspace = true }
 # `build_info`: the version and compile-time build label for `--version` and the log.
 pdfcraft-engine = { workspace = true }
 # wgpu draws; OpenGL (glow) is the fallback when wgpu can't start on an old or unusual GPU or

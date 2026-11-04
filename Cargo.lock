@@ -4,15 +4,6 @@ version = 4
 
 [[package]]
 name = "accesskit"
-version = "0.24.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3b7f7f85a7e5f68090000ed7622545829afd484d210358702ae4cb97dd0c320"
-dependencies = [
- "uuid",
-]
-
-[[package]]
-name = "accesskit"
 version = "0.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e883d1d28c5fd5568c79ed2d2bd48d9f2fd3945c8974ed0f53690ceddb051be"
@@ -28,7 +19,7 @@ version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "24f5baf62e34a4a6c30e3d697e4782f821a7337049c44c3b40576a27dfbb580d"
 dependencies = [
- "accesskit 0.25.2",
+ "accesskit",
  "accesskit_consumer",
  "atspi-common",
  "phf 0.14.0",
@@ -42,7 +33,7 @@ version = "0.39.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3da8f27636015191b2264ee1df681503170a632cafd832fdc1edfdd4e3a2fd3"
 dependencies = [
- "accesskit 0.25.2",
+ "accesskit",
  "hashbrown 0.17.1",
 ]
 
@@ -52,7 +43,7 @@ version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5280724673bbfa8b30a838c013500b719392989be3b97c5a9964062c252c232"
 dependencies = [
- "accesskit 0.25.2",
+ "accesskit",
  "accesskit_consumer",
  "hashbrown 0.17.1",
  "objc2 0.5.3",
@@ -66,7 +57,7 @@ version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "123828ceeec755b05255e3976cb0852993202de98a0626c97dd8d34246991f84"
 dependencies = [
- "accesskit 0.25.2",
+ "accesskit",
  "accesskit_consumer",
  "hashbrown 0.17.1",
  "objc2 0.5.3",
@@ -80,7 +71,7 @@ version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "30d5192871228c54f1b0fb4a85cef000e11a3804f25d2165f14afa0daa67f3f6"
 dependencies = [
- "accesskit 0.25.2",
+ "accesskit",
  "accesskit_atspi_common",
  "async-channel",
  "async-executor",
@@ -98,7 +89,7 @@ version = "0.35.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "498668b90da9995302a0055aaecad4756932333da2ddef6baee1c00844c430fc"
 dependencies = [
- "accesskit 0.25.2",
+ "accesskit",
  "accesskit_consumer",
  "hashbrown 0.17.1",
  "static_assertions",
@@ -112,7 +103,7 @@ version = "0.34.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd4ab4437b520ff03088fbe48676a11e7d44a929535e64b31432c1073e48dbcc"
 dependencies = [
- "accesskit 0.25.2",
+ "accesskit",
  "accesskit_ios",
  "accesskit_macos",
  "accesskit_unix",
@@ -1052,17 +1043,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "collabcraft-share"
-version = "0.1.0"
-source = "git+https://github.com/wdunn001/collab-craft?rev=f895a6f#f895a6fb265d91efcc1d8e4519ac37f30783d695"
-dependencies = [
- "craft-cloud",
- "craft-cloud-client",
- "craft-ui",
- "wasm-bindgen-futures",
-]
-
-[[package]]
 name = "color"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1195,72 +1175,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-cloud"
-version = "0.1.0"
-source = "git+https://github.com/wdunn001/craft-libs?rev=1a3cbfd724bf28ccbe51a1f45f19022f131f15bb#1a3cbfd724bf28ccbe51a1f45f19022f131f15bb"
-dependencies = [
- "serde",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "craft-cloud-client"
-version = "0.1.0"
-source = "git+https://github.com/wdunn001/collab-craft?rev=f895a6f#f895a6fb265d91efcc1d8e4519ac37f30783d695"
-dependencies = [
- "craft-cloud",
- "craft-collab",
- "craft-esign",
- "js-sys",
- "log",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "ureq",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "craft-collab"
-version = "0.1.0"
-source = "git+https://github.com/wdunn001/collab-craft?rev=f895a6f#f895a6fb265d91efcc1d8e4519ac37f30783d695"
-dependencies = [
- "craft-crdt",
- "js-sys",
- "log",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "wasm-bindgen",
-]
-
-[[package]]
-name = "craft-crdt"
-version = "0.1.0"
-source = "git+https://github.com/wdunn001/craft-libs?rev=51cf8664922608321fbd61ada80ddfb78562d71c#51cf8664922608321fbd61ada80ddfb78562d71c"
-dependencies = [
- "postcard",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "craft-docpath"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
 
 [[package]]
-name = "craft-esign"
+name = "craft-fonts-build"
 version = "0.1.0"
-source = "git+https://github.com/wdunn001/craft-libs?rev=1a3cbfd724bf28ccbe51a1f45f19022f131f15bb#1a3cbfd724bf28ccbe51a1f45f19022f131f15bb"
-dependencies = [
- "craft-cloud",
- "serde",
- "thiserror 2.0.21",
-]
+source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
 
 [[package]]
 name = "craft-i18n"
@@ -1290,7 +1212,7 @@ name = "craft-keymap"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
 dependencies = [
- "egui 0.37.0",
+ "egui",
  "serde",
  "serde_json",
 ]
@@ -1302,7 +1224,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618f
 dependencies = [
  "craft-keymap",
  "craft-quit",
- "egui 0.37.0",
+ "egui",
  "muda",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
@@ -1328,7 +1250,7 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
 dependencies = [
  "dispatch2",
- "egui 0.37.0",
+ "egui",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
 ]
@@ -1336,13 +1258,22 @@ dependencies = [
 [[package]]
 name = "craft-ui"
 version = "0.1.0"
-source = "git+https://github.com/wdunn001/craft-libs?rev=1a3cbfd724bf28ccbe51a1f45f19022f131f15bb#1a3cbfd724bf28ccbe51a1f45f19022f131f15bb"
+source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
 dependencies = [
- "craft-cloud",
- "craft-esign",
- "egui 0.36.2",
+ "craft-fonts-build",
+ "craft-i18n",
+ "egui",
+ "epaint",
+ "js-sys",
+ "log",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "serde",
- "serde_json",
+ "skrifa 0.44.0",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -1352,7 +1283,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618f
 dependencies = [
  "chrono",
  "dunce",
- "egui 0.37.0",
+ "egui",
  "flate2",
  "getrandom 0.3.4",
  "image",
@@ -1734,20 +1665,11 @@ dependencies = [
 
 [[package]]
 name = "ecolor"
-version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0656a7530b9e2841ee7a5f983965bdd9840c32f4012f759cfd44b912cced6b34"
-dependencies = [
- "emath 0.36.2",
-]
-
-[[package]]
-name = "ecolor"
 version = "0.37.0"
 source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
 dependencies = [
  "bytemuck",
- "emath 0.37.0",
+ "emath",
  "serde",
 ]
 
@@ -1781,7 +1703,7 @@ dependencies = [
  "ahash",
  "bytemuck",
  "document-features",
- "egui 0.37.0",
+ "egui",
  "egui-wgpu",
  "egui-winit",
  "egui_glow",
@@ -1813,34 +1735,14 @@ dependencies = [
 
 [[package]]
 name = "egui"
-version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc938cc27cd911415e1e4d151bc56ff9df063d8db081374e87aeb805ea74b2ba"
-dependencies = [
- "accesskit 0.24.1",
- "ahash",
- "bitflags 2.13.2",
- "emath 0.36.2",
- "epaint 0.36.2",
- "itertools",
- "log",
- "nohash-hasher",
- "profiling",
- "smallvec",
- "unicode-segmentation",
- "web-sys",
-]
-
-[[package]]
-name = "egui"
 version = "0.37.0"
 source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
 dependencies = [
- "accesskit 0.25.2",
+ "accesskit",
  "ahash",
  "bitflags 2.13.2",
- "emath 0.37.0",
- "epaint 0.37.0",
+ "emath",
+ "epaint",
  "itertools",
  "log",
  "nohash-hasher",
@@ -1860,8 +1762,8 @@ dependencies = [
  "ahash",
  "bytemuck",
  "document-features",
- "egui 0.37.0",
- "epaint 0.37.0",
+ "egui",
+ "epaint",
  "log",
  "profiling",
  "thiserror 2.0.21",
@@ -1880,7 +1782,7 @@ dependencies = [
  "arboard",
  "block2 0.6.2",
  "bytemuck",
- "egui 0.37.0",
+ "egui",
  "image",
  "log",
  "objc2 0.6.5",
@@ -1904,7 +1806,7 @@ version = "0.37.0"
 source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
 dependencies = [
  "ahash",
- "egui 0.37.0",
+ "egui",
  "enum-map",
  "itertools",
  "log",
@@ -1918,7 +1820,7 @@ version = "0.37.0"
 source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
 dependencies = [
  "bytemuck",
- "egui 0.37.0",
+ "egui",
  "glow",
  "log",
  "profiling",
@@ -1931,7 +1833,7 @@ version = "0.37.0"
 source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
 dependencies = [
  "eframe",
- "egui 0.37.0",
+ "egui",
  "egui-wgpu",
  "image",
  "kittest",
@@ -1970,30 +1872,12 @@ dependencies = [
 
 [[package]]
 name = "emath"
-version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52c8d4141cf0f60fb2f7aefaf352d3ffa5171ef0ab09731c64391801e95e48f1"
-
-[[package]]
-name = "emath"
 version = "0.37.0"
 source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
 dependencies = [
  "bytemuck",
  "serde",
 ]
-
-[[package]]
-name = "embedded-io"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef1a6892d9eef45c8fa6b9e0086428a2cca8491aca8f787c534a3d6d0bcb3ced"
-
-[[package]]
-name = "embedded-io"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
 name = "encoding_rs"
@@ -2069,36 +1953,13 @@ dependencies = [
 
 [[package]]
 name = "epaint"
-version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0ec0308dc23130fc1a7d4623a8534c2ed069c6dc84e258ee4f3de99615aa1a3"
-dependencies = [
- "ahash",
- "ecolor 0.36.2",
- "emath 0.36.2",
- "font-types 0.12.7",
- "harfrust",
- "log",
- "nohash-hasher",
- "parking_lot",
- "profiling",
- "self_cell",
- "skrifa 0.44.0",
- "smallvec",
- "unicode-general-category",
- "unicode-segmentation",
- "vello_cpu 0.1.0",
-]
-
-[[package]]
-name = "epaint"
 version = "0.37.0"
 source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
 dependencies = [
  "ahash",
  "bytemuck",
- "ecolor 0.37.0",
- "emath 0.37.0",
+ "ecolor",
+ "emath",
  "epaint_default_fonts",
  "font-types 0.12.7",
  "harfrust",
@@ -2611,22 +2472,6 @@ dependencies = [
  "skrifa 0.42.1",
  "smallvec",
  "vello_common 0.0.9",
-]
-
-[[package]]
-name = "glifo"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed4a1bb24121291d27230c1b1b44e07d6a9b28cefdb32fe1581dfb84e14f940a"
-dependencies = [
- "bytemuck",
- "foldhash 0.2.0",
- "hashbrown 0.17.1",
- "log",
- "peniko",
- "skrifa 0.44.0",
- "smallvec",
- "vello_common 0.1.0",
 ]
 
 [[package]]
@@ -3472,7 +3317,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bb81a721ba76aa095b7f45deb180504f786904e56ca4b8e141f66eb89a78b75"
 dependencies = [
- "accesskit 0.25.2",
+ "accesskit",
  "accesskit_consumer",
 ]
 
@@ -4365,11 +4210,9 @@ name = "pdfcraft"
 version = "0.18.1"
 dependencies = [
  "chrono",
- "collabcraft-share",
- "craft-cloud-client",
  "craft-update",
  "eframe",
- "egui 0.37.0",
+ "egui",
  "fmv-macos-events",
  "log",
  "pdfcraft-engine",
@@ -4815,8 +4658,6 @@ dependencies = [
  "block2 0.6.2",
  "bytemuck",
  "chrono",
- "craft-cloud",
- "craft-esign",
  "craft-i18n",
  "craft-keymap",
  "craft-menu",
@@ -4824,7 +4665,7 @@ dependencies = [
  "craft-ui",
  "craft-update",
  "eframe",
- "egui 0.37.0",
+ "egui",
  "egui_extras",
  "egui_kittest",
  "fontconfig-parser",
@@ -4867,10 +4708,8 @@ dependencies = [
 name = "pdfcraft-web"
 version = "0.18.1"
 dependencies = [
- "collabcraft-share",
- "craft-cloud-client",
  "eframe",
- "egui 0.37.0",
+ "egui",
  "js-sys",
  "log",
  "pdfcraft-ui-egui",
@@ -5230,8 +5069,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6764c3b5dd454e283a30e6dfe78e9b31096d9e32036b5d1eaac7a6119ccb9a24"
 dependencies = [
  "cobs",
- "embedded-io 0.4.0",
- "embedded-io 0.6.1",
  "serde",
 ]
 
@@ -7407,7 +7244,6 @@ dependencies = [
  "rustls-platform-verifier",
  "ureq-proto",
  "utf8-zero",
- "webpki-roots",
 ]
 
 [[package]]
@@ -7531,21 +7367,6 @@ dependencies = [
 
 [[package]]
 name = "vello_common"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2e9aed918117e8152c9eddfd8362d73c465c23f26c44786aa331707b8a64fa2"
-dependencies = [
- "bytemuck",
- "fearless_simd",
- "guillotiere",
- "log",
- "peniko",
- "smallvec",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "vello_common"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbb2141a2bca6e6d598e471fd4d1d7eed8e020aad6a28187edda07f091a325dd"
@@ -7568,18 +7389,6 @@ dependencies = [
  "hashbrown 0.17.1",
  "png 0.18.1",
  "vello_common 0.0.8",
-]
-
-[[package]]
-name = "vello_cpu"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac7349e1f55f6b801c7c277958df4ea53e7f20f21e8014910ad888b2ecda93ea"
-dependencies = [
- "bytemuck",
- "glifo 0.2.0",
- "hashbrown 0.17.1",
- "vello_common 0.1.0",
 ]
 
 [[package]]
@@ -7884,15 +7693,6 @@ name = "webpki-root-certs"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e49d0e65abc00c142e8f9428da991da9f1a250c39be97459901eb12b9b49f62a"
-dependencies = [
- "rustls-pki-types",
-]
-
-[[package]]
-name = "webpki-roots"
-version = "1.0.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5f280bbb2b287bc8e7de7e3852945a0ff50d1bbcb5ed42b6c7a568c546df171"
 dependencies = [
  "rustls-pki-types",
 ]

@@ -297,13 +297,10 @@ impl PdfCraftApp {
             replace_draft: None,
             number_draft: NumberDraft { from: 1, to: 1, style: pdfcraft_engine::LabelStyle::Decimal, prefix: String::new(), start: 1 },
             word_count_draft: word_count_ui::Draft::default(),
-            cloud: craft_ui::cloud::CloudFiles::new(),
+            cloud: cloud::CloudFiles::new(),
             cloud_page: None,
             cloud_page_doc_count: 0,
-            share: craft_ui::share::ShareDialog::new(),
-            presence: craft_ui::presence::PresenceBar::new().badges_only(),
-            esign: craft_ui::esign::EsignDialog::new(),
-            esign_doc: None,
+            esign: esign::EsignDialog::new(),
         }
     }
 
@@ -620,55 +617,11 @@ impl eframe::App for PdfCraftApp {
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
-        // In the browser build a login popup that has just closed signals a fresh
-        // account check.  The transport stores "pdfcraft:auth_done" in egui's
-        // ephemeral memory and requests a repaint; we consume it here, set the
-        // "pdfcraft:popup_retry" flag so the login popup does not open another
-        // window if the post-close check still returns Unauthenticated (user
-        // cancelled), then call sign_in() to force a new Job::Account.
-        #[cfg(target_arch = "wasm32")]
-        {
-            let auth_done = egui::Id::new("pdfcraft:auth_done");
-            let popup_retry = egui::Id::new("pdfcraft:popup_retry");
-            if ctx.memory(|m| m.data.get_temp::<bool>(auth_done).unwrap_or(false)) {
-                ctx.memory_mut(|m| {
-                    m.data.remove::<bool>(auth_done);
-                    m.data.insert_temp(popup_retry, true);
-                });
-                cloud::sign_in(self);
-                // Clear the "Finish signing in…" status that sign_in() sets;
-                // from the user's perspective they already finished.
-                self.cloud.status = None;
-            }
-        }
-        // Drain answers from the cloud worker (Open, Save, account, listing).
-        // Probe only on a user cloud action, not at boot.
+        // Drain answers from a connected cloud backend. A no-op today: nothing connects one
+        // (crates/ui-egui/src/cloud.rs's module doc explains why, pending craft-libs#160).
         cloud::pump(self, ctx);
-        // E-sign dialog: capability probe and inbox, even when closed.
+        // E-sign dialog: capability probe, even when closed. A no-op today for the same reason.
         esign::pump(&mut self.esign, ctx);
-        if let Some(send) = esign::take_send(&mut self.esign) {
-            if let Some(id) = self.esign_doc.filter(|id| self.views.iter().any(|v| v.id == *id)) {
-                if self.commit_typing_in(id) {
-                    match self.session.save_full_bytes(id).ok().map(|b| (*b).clone()) {
-                        Some(bytes) => {
-                            self.esign.submit_request(craft_ui::esign::Request::Create {
-                                draft: Box::new(send.draft),
-                                document: bytes,
-                                idempotency_key: send.idempotency_key,
-                                send: true,
-                            });
-                        }
-                        None => {
-                            esign::note_create(&mut self.esign, Err("the document for this request is no longer open".into()));
-                        }
-                    }
-                } else {
-                    esign::note_create(&mut self.esign, Err(String::new()));
-                }
-            } else {
-                esign::note_create(&mut self.esign, Err("the document for this request is no longer open".into()));
-            }
-        }
         // After pump: if we were on the cloud Open page and a new document tab appeared
         // (the open completed), dismiss the page and show the document.
         if self.cloud_page == Some(CloudPage::Open) && self.views.len() > self.cloud_page_doc_count && self.cloud.busy.is_none() {
