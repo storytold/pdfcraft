@@ -29,17 +29,21 @@ pub const MIN_FRAGMENTS: usize = 4;
 /// Most pixels a merged image may have (memory).
 const MAX_PIXELS: u64 = 80_000_000;
 
-/// Fragment groups a page's search for runs may read per content operator, and at least. A run
-/// that is not one picture is searched again from each of its groups, so without a limit images
-/// drawn over one another take time quadratic in their number; past it, the rest of the page is
-/// left as it is.
-const SCAN_PER_OP: usize = 16;
+/// Content operators a page's search for runs may read per content operator of the page, and at
+/// least. A run that is not one picture is searched again from each of its groups, so without a
+/// limit images drawn over one another take time quadratic in their number; past it, the rest of
+/// the page is left as it is. Every operator of a group counts (its `cm` operators are composed
+/// each time), not just the group; a group of four operators costs four, so the allowance is 16
+/// groups per operator, as before, and groups with many `cm` operators pay for them.
+const SCAN_PER_OP: usize = 64;
 const MIN_SCAN: usize = 1 << 16;
 
 #[cfg(test)]
 thread_local! {
     /// Fragment groups read, for the test that keeps a page's search linear in its content.
     static GROUP_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Operators group reads walked, for the test that keeps the search linear in operators.
+    static OP_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// One fragment: its image, its box in the coordinates the run is drawn in, and its size.
@@ -64,6 +68,8 @@ fn group_at(ops: &[Op], i: usize) -> Option<(usize, Matrix, Vec<u8>)> {
         m = Matrix::from_operands(&op.operands)?.then(&m);
         j += 1;
     }
+    #[cfg(test)]
+    OP_READS.with(|c| c.set(c.get().saturating_add(j - i)));
     let draw = ops.get(j).filter(|o| o.is("Do"))?;
     let name = draw.name(0)?.to_vec();
     ops.get(j + 1).filter(|o| o.is("Q"))?;
@@ -279,7 +285,7 @@ fn merge_page(
             run.push(Fragment { image, rect: [e, f, e + a, f + d], width, height });
             j = next;
         }
-        scanned = scanned.saturating_add(run.len()).saturating_add(1);
+        scanned = scanned.saturating_add(j - i).saturating_add(1);
         // Not one picture as a whole: the rows drawn one under the other from the start may be.
         if run.len() >= MIN_FRAGMENTS && !stacked(&mut run) {
             run = drawn_in_sequence(&ops, i, &xobjects, doc);
@@ -433,5 +439,38 @@ mod tests {
         assert_eq!(merged.ok(), Some(0));
         let reads = GROUP_READS.with(|c| c.get());
         assert!(reads <= 40 * 4 * groups, "{reads} group reads");
+    }
+
+    /// The same with many `cm` operators in each group: the search reads a bounded number of operators
+    /// for each one of the page, however the matrices are spread over the groups.
+    #[test]
+    fn groups_with_many_matrices_are_charged_for_each_operator() {
+        let mut doc = Document::new_empty();
+        let mut image = Dict::new();
+        for (k, v) in
+            [("Subtype", Object::name("Image")), ("Width", Object::Int(1)), ("Height", Object::Int(1)), ("BitsPerComponent", Object::Int(8))]
+        {
+            image.set(k.as_bytes().to_vec(), v);
+        }
+        image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let image = doc.add(Object::Stream(Stream::from_raw(image, vec![0])));
+        let groups = 400;
+        let content = doc.add(Object::Stream(Stream::flate(
+            Dict::new(),
+            format!("q 10 0 0 10 0 0 cm {}/Im Do Q\n", "1 0 0 1 0 0 cm ".repeat(49)).repeat(groups).as_bytes(),
+        )));
+        let mut xobjects = Dict::new();
+        xobjects.set(b"Im".to_vec(), Object::Ref(image));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let mut page = Dict::new();
+        page.set(b"Contents".to_vec(), Object::Ref(content));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+        let page = doc.add(Object::Dict(page));
+        OP_READS.with(|c| c.set(0));
+        let merged = merge_page(&mut doc, page, &mut Report::default(), &mut |_| true, &mut ImageBudget::with_work(u64::MAX));
+        assert_eq!(merged.ok(), Some(0));
+        let reads = OP_READS.with(|c| c.get());
+        assert!(reads <= 80 * 53 * groups, "{reads} operator reads");
     }
 }
