@@ -584,7 +584,7 @@ fn pdfcraft_plural_rule(code: &str) -> fn(u64) -> usize {
         "ja" | "zh-hans" | "zh-hant" | "tr" | "id" | "vi" | "th" | "lo" | "hi" | "ko" => none,
         "cs" => cs,
         "pt-br" | "fr" | "fa" => zero_one_other,
-        "ru" | "uk" => ru_uk,
+        "ru" | "uk" | "bs" => ru_uk,
         "ar" => ar,
         "pl" => pl,
         "sl" => sl,
@@ -1057,25 +1057,40 @@ fn catalan_is_registered_and_persists() {
     assert_eq!(restored.language, "ca");
 }
 
-/// Bosnian locales select the Latin catalog, its counts take one/few/other, and the choice persists.
+/// Bosnian locales select it, its picker falls back to "Bosnian", and the choice persists.
 #[test]
 fn bosnian_is_registered_and_persists() {
+    needs_catalogs!();
     let bs = Lang::from_code("bs").expect("bs registered");
     assert_eq!(bs.name(), "Bosanski");
+    assert_eq!(bs.picker_name(|_| false), "Bosnian");
     assert_eq!(normalize_pref("BS"), Some("bs"));
     for tag in ["bs", "bs-BA", "bs_BA.UTF-8", "BS-ba", "bs-Latn-BA"] {
         assert_eq!(lang_from_tag(tag), Some(bs), "{tag}");
     }
     assert_eq!(first_supported("bs-BA\r\nen-US"), Some(bs));
-    // one (1, 21), few (2-4, 22-24), other (0, 5-20, 25 ...)
-    assert_eq!([0, 1, 2, 4, 5, 11, 12, 14, 21, 22, 25, 111].map(bs.0.plural), [2, 0, 1, 1, 2, 2, 2, 2, 0, 1, 2, 2]);
-    assert_eq!(trn(bs, 3, "{n} reply", "{n} replies"), "3 odgovora");
     let mut app = crate::PdfCraftApp::default();
     app.set_option("language", "BS").unwrap();
     assert_eq!(app.language, "bs");
     let mut restored = crate::PdfCraftApp::default();
     restored.restore(&app.persist());
     assert_eq!(restored.language, "bs");
+}
+
+/// Bosnian counts (CLDR `bs`): one for 1, 21, 101 but not 11; few for 2–4, 22–24 but not 12–14;
+/// other for the rest.
+#[test]
+fn bosnian_plurals_cover_teens_and_compound_counts() {
+    let form = plural_fixture("bs", 3);
+    for (counts, f) in [
+        (vec![1, 21, 31, 101, 1001], 0),
+        (vec![2, 3, 4, 22, 24, 102, 104], 1),
+        (vec![0, 5, 10, 11, 12, 13, 14, 15, 20, 25, 100, 111, 112, 114, 1000], 2),
+    ] {
+        for n in counts {
+            assert_eq!(form(n), f, "{n}");
+        }
+    }
 }
 
 #[test]

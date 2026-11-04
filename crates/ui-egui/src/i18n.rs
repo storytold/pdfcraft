@@ -66,7 +66,7 @@ pub struct LangInfo {
 }
 
 /// How many languages [`LANGUAGES`] lists.
-const LANGUAGE_COUNT: usize = 35;
+const LANGUAGE_COUNT: usize = 36;
 
 /// The languages PdfCraft offers. English first: it is the fallback and the source language.
 pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
@@ -114,6 +114,9 @@ pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
     LangInfo { code: "pl", rtl: false },
     // Slovene; every `sl-*` locale (`sl-SI`) resolves here. Four plural forms (one, two, few, other).
     LangInfo { code: "sl", rtl: false },
+    // Bosnian (Latin script, Ijekavian); every `bs-*` locale (`bs-BA`, `bs_BA.UTF-8`, `bs-Latn-BA`)
+    // resolves here. Three plural forms (one, few, other).
+    LangInfo { code: "bs", rtl: false },
     LangInfo { code: "el", rtl: false },
     // Turkish; every `tr-*` locale (`tr-TR`, `tr_TR.UTF-8`) resolves here. CLDR `tr` has two forms
     // (one, other); the catalog's counted nouns read the same in both, so its `@plural` rows repeat

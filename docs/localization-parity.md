@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-03 · **Change:** minor (Bosnian (`bs`, 2,896 entries) added; previously minor: Turkish: 2,867 entries, 0 missing in `cargo xtask i18n-report` on 2026-11-03; AI-assisted)
+> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-04 · **Change:** minor (Bosnian (`bs`) offered, its catalog from craft-i18n; previously minor: Turkish: 2,867 entries, 0 missing in `cargo xtask i18n-report` on 2026-11-03; AI-assisted)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (Persian (`fa`, 2,785 entries) added right-to-left like Arabic and Kurdish; Arabic current state corrected: catalogs stay logical, RTL labels take an explicit direction and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native release Hans face via LXGW WenKai Lite; release-pinned craft-fonts still has no Telugu face. Current union 2,798 keys. Scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Per-language status of PdfCraft's interface against Acrobat Pro's. How translations work and how to
@@ -34,6 +34,7 @@ add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../R
 
 | Language | Code | UI strings translated | Dialogs / tooltips / help | Script support | Native review | Status | Acrobat ships it | To `full` (h) |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-04 | minor | Bosnian (`bs`, Latin, Ijekavian) offered: `LANGUAGES` row, `bs-*` locales, Bosnian date names, one/few/other plurals; the catalog is craft-i18n's (#141) |
 | English | `en` | built in (100%) | all; README and docs | Latin | yes | **full** | yes | 0 |
 | Simplified Chinese | `zh-hans` | 2,088 (97.4%) | dialogs and tooltips through `tl!`; no help | CJK text and IME work; native craft-fonts builds embed the **LXGW WenKai Lite** Hans face, while the web build has no Hans face beyond BIZ UDPGothic, and missing-glyph reports (#826, #688, #728, #758; Flatpak #689) predate the native face | no | partial | yes | 6–12 |
 | Spanish | `es` | 2,798 (100% of current key union) | dialogs and tooltips; no help | Latin | no | partial | yes | 2–4 |
@@ -72,7 +73,7 @@ help/docs polish (catalog and script work are already done), not missing UI stri
 | Kazakh | `kk` | 2,539 entries | partial | no |
 | Polish | `pl` | 2,611 entries | partial | yes |
 | Slovenian | `sl` | 2,536 entries | partial | no |
-| Bosnian | `bs` | 2,896 entries (every key of the current union; AI-assisted, not native-reviewed) | partial | no |
+| Bosnian | `bs` | 2,492 entries (craft-i18n `locales/bs/pdfcraft.tsv`, storytold/craft-i18n#141; AI-assisted, reviewed in storytold/craft-i18n#72) | partial | no |
 | Greek | `el` | 2,545 entries | partial | no |
 | Turkish | `tr` | 2,867 entries (0 missing in `cargo xtask i18n-report`, 2026-11-03) | partial; AI-assisted, judgement calls reviewed by a native speaker, full proofreading pending | yes |
 | Lithuanian | `lt` | 2,798 (100% of current key union) | partial; community native-speaker review ([#1401](https://github.com/storytold/pdfcraft/pull/1401)) | no |
@@ -91,7 +92,6 @@ Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-30 | minor | Bosnian (`bs`, Latin, Ijekavian) added: 2,798 entries, `bs-*` locales, one/few/other plurals |
 | 2026-10-25 | minor | Arabic current state corrected: catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build still has no Hans face and the release-pinned craft-fonts still has no Telugu face. Scores and estimates unchanged |
 | 2026-10-25 | minor | Added Persian (`fa`, 2,785 entries, all but 13 of the current 2,798-key union); right-to-left like Arabic and Kurdish, with logical entries reordered by egui 0.37's epaint; AI-assisted, not yet native-reviewed |
 | 2026-10-21 | minor | Brazilian Portuguese (`pt-br`) now covers all 2,674 distinct keys in the current catalog union; no help or engine/OS error-detail localization; twelve-language mean still rounds to ≈ 68% |
