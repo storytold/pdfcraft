@@ -9,6 +9,12 @@ use pdfcraft_optimize::{
     effective_resolutions, optimize,
 };
 
+/// What image `s` decodes to, its fax or JBIG2 data included, with no limit on the work: the
+/// samples an operation would read through its `ImageBudget`.
+fn decoded_image(doc: &Document, s: &Stream) -> Result<Vec<u8>, pdfcraft_cos::CosError> {
+    pdfcraft_cos::ImageBudget::with_work(u64::MAX).decode(doc, s, pdfcraft_cos::MAX_DECODED)
+}
+
 fn image(doc: &mut Document, w: u32, h: u32, n: usize, jpeg: bool, smask: Option<ObjRef>) -> ObjRef {
     // A smooth gradient with a little texture (photo-like).
     let mut px = Vec::with_capacity((w * h) as usize * n);
@@ -910,7 +916,7 @@ fn rgb_and_two_colour_indexed_black_and_white_images_become_one_bit() {
             (Some(1), Some(&b"CCITTFaxDecode"[..]), Some(&cs)),
             "{i:?}"
         );
-        assert_eq!(doc.decoded_image(&s).unwrap(), text, "{i:?}");
+        assert_eq!(decoded_image(&doc, &s).unwrap(), text, "{i:?}");
         let decode = if i == rgb_inverted { Some(Object::Array(vec![1.into(), 0.into()])) } else { None };
         assert_eq!(s.dict.get(b"Decode").cloned(), decode, "{i:?}");
     }
@@ -1066,7 +1072,7 @@ fn retain_keeps_a_group_3_halftone_as_it_is() {
     let fax = doc.add(Object::Stream(Stream::from_raw(d, g3.clone())));
     // 7.68 pt for 64 samples is 600 ppi.
     page(&mut doc, &[("A", fax)], "q 7.68 0 0 7.68 100 600 cm /A Do Q");
-    assert_eq!(doc.decoded_image(&stream(&doc, fax)).unwrap().len(), 64 * 8, "the fixture decodes");
+    assert_eq!(decoded_image(&doc, &stream(&doc, fax)).unwrap().len(), 64 * 8, "the fixture decodes");
     let r = optimize(&mut doc, &Settings { mono: RETAIN, ..Settings::default() }).unwrap();
     assert_eq!((r.images_resampled, r.images_recompressed), (0, 0), "{r:?}");
     assert_eq!(stream(&doc, fax).raw[..], g3[..]);
@@ -1564,7 +1570,7 @@ fn ambiguous_monochrome_text_is_recompressed_without_lossy_reduction() {
     }
     assert_eq!(raw(&kept, hex_at_400), raw(&doc, hex_at_400), "and nothing else changes");
     for i in [flate, fax, hex_fax] {
-        assert_eq!((size(&kept, i), kept.decoded_image(&stream(&kept, i)).unwrap()), ((1200, 480), text.clone()), "{i:?}");
+        assert_eq!((size(&kept, i), decoded_image(&kept, &stream(&kept, i)).unwrap()), ((1200, 480), text.clone()), "{i:?}");
     }
     let bits = [eight, rgb, rgb_inverted].map(|i| stream(&kept, i).dict.int(b"BitsPerComponent"));
     assert_eq!(bits, [Some(8); 3], "Retain leaves eight bits to the grey and colour settings");
@@ -1578,7 +1584,7 @@ fn ambiguous_monochrome_text_is_recompressed_without_lossy_reduction() {
         let s = stream(&doc, i);
         assert_eq!((size(&doc, i), s.dict.int(b"BitsPerComponent")), ((1200, 480), if i == mask { None } else { Some(1) }));
         assert!(matches!(s.filters().as_slice(), [(Filter::CcittFax | Filter::Flate, _)]), "{i:?}");
-        assert_eq!(doc.decoded_image(&s).unwrap(), text.clone(), "{i:?}");
+        assert_eq!(decoded_image(&doc, &s).unwrap(), text.clone(), "{i:?}");
     }
     assert_eq!(stream(&doc, mask).dict.get(b"Decode"), Some(&decode), "the decode array stays");
     // Grey now, with grey's decode pair, which makes 1 black: its ties are black too.
@@ -1588,12 +1594,12 @@ fn ambiguous_monochrome_text_is_recompressed_without_lossy_reduction() {
         (size(&doc, rgb_inverted), s.dict.get(b"ColorSpace"), s.dict.get(b"Decode")),
         ((1200, 480), Some(&Object::name("DeviceGray")), Some(&inverting))
     );
-    assert_eq!(doc.decoded_image(&s).unwrap(), text.iter().map(|b| !b).collect::<Vec<u8>>(), "the same picture, ties black");
+    assert_eq!(decoded_image(&doc, &s).unwrap(), text.iter().map(|b| !b).collect::<Vec<u8>>(), "the same picture, ties black");
     for i in [at_400, soft, hex_at_400] {
         assert_eq!((size(&doc, i), stream(&doc, i).dict.name(b"Filter")), ((1200, 480), Some(&b"CCITTFaxDecode"[..])), "{i:?}");
     }
     assert!(raw(&doc, hex_at_400).len() < hex_len, "the ASCIIHexDecode is dropped");
-    assert_eq!(doc.decoded_image(&stream(&doc, hex_at_400)).unwrap(), text, "and the picture kept");
+    assert_eq!(decoded_image(&doc, &stream(&doc, hex_at_400)).unwrap(), text, "and the picture kept");
     assert_eq!([fax_at_400].map(|r| raw(&doc, r)), untouched);
     let after = render(&doc);
     assert_eq!(after, before, "conservative retention preserves the rendered page exactly");
@@ -1681,7 +1687,7 @@ fn a_fax_image_behind_a_decompression_bomb_is_left_alone() {
         let r = optimize(&mut doc, &Settings::default()).unwrap();
         if padding == 0 {
             assert_eq!(r.images_resampled, 0, "ambiguous local tones are retained: {r:?}");
-            assert_eq!(doc.decoded_image(&stream(&doc, img)).unwrap(), bilevel(w, h, false));
+            assert_eq!(decoded_image(&doc, &stream(&doc, img)).unwrap(), bilevel(w, h, false));
         } else {
             assert_eq!((r.images_resampled, r.images_recompressed), (0, 0), "{r:?}");
             assert_eq!(stream(&doc, img).raw, before);
@@ -1776,7 +1782,7 @@ fn monochrome_images_keep_what_they_should() {
     assert_eq!([alone, deep].map(|r| raw(&doc, r)), before, "a Group 4 halftone alone, and sixteen-bit grey");
     assert_eq!(filters(&doc, wrapped), 1, "a wrapped Group 4 halftone is stored again alone by default");
     assert!(matches!(stream(&doc, scan).filters().as_slice(), [(Filter::CcittFax | Filter::Flate, _)]), "the scan: Group 4 or Flate");
-    assert_eq!(doc.decoded_image(&stream(&doc, scan)).unwrap(), ragged, "the scan preserves every sample");
+    assert_eq!(decoded_image(&doc, &stream(&doc, scan)).unwrap(), ragged, "the scan preserves every sample");
     assert_eq!((stream(&doc, fax).dict.name(b"Filter"), filters(&doc, fax)), (Some(&b"CCITTFaxDecode"[..]), 1), "the busy fax image");
 
     let (mut doc, [_, wrapped, scan, _, _]) = build();
@@ -1785,7 +1791,7 @@ fn monochrome_images_keep_what_they_should() {
     assert_eq!(raw(&doc, wrapped), before, "Retain: a wrapped Group 4 halftone stays as it is");
     let s = stream(&doc, scan);
     assert_eq!((s.dict.int(b"Width"), s.dict.name(b"Filter")), (Some(1200), Some(&b"FlateDecode"[..])), "Retain: {r:?}");
-    assert_eq!(doc.decoded_image(&s).unwrap(), ragged, "Retain preserves every sample");
+    assert_eq!(decoded_image(&doc, &s).unwrap(), ragged, "Retain preserves every sample");
 }
 
 /// `rows` coded as CCITT Group 3, one-dimensional (`/K 0`): each row its runs in turn, white first,
@@ -1853,7 +1859,12 @@ fn group_3_fax_images_become_group_4() {
         let g3 = group_3(&runs, k > 0, on_bytes);
         let (end_of_line, encoded_byte_align) = (k > 0 && on_bytes.is_none(), on_bytes.is_some());
         let p = pdfcraft_filters::CcittParams { k, columns: w.into(), end_of_line, encoded_byte_align, ..Default::default() };
-        assert_eq!(pdfcraft_filters::decode_ccitt(&g3, &p, h).unwrap(), bits, "/K {k}, on bytes {on_bytes:?}: the Group 3 data is the picture");
+        let mut work = u64::MAX;
+        assert_eq!(
+            pdfcraft_filters::decode_ccitt_within(&g3, &p, h, &mut work).unwrap(),
+            bits,
+            "/K {k}, on bytes {on_bytes:?}: the Group 3 data is the picture"
+        );
 
         let mut doc = Document::new_empty();
         let mut d = Dict::new();
@@ -1886,7 +1897,7 @@ fn group_3_fax_images_become_group_4() {
         let s = stream(&doc, fax);
         assert_eq!(doc.fax_params(&s).map(|p| p.k), Some(-1), "/K {k}, on bytes {on_bytes:?}: Group 4");
         assert!(s.raw.len() < g3.len(), "{} bytes, from {}", s.raw.len(), g3.len());
-        assert_eq!(doc.decoded_image(&s).unwrap(), bits, "/K {k}, on bytes {on_bytes:?}: the same picture");
+        assert_eq!(decoded_image(&doc, &s).unwrap(), bits, "/K {k}, on bytes {on_bytes:?}: the same picture");
         assert!(render(&doc) == render(&control), "/K {k}, on bytes {on_bytes:?}: the page looks as the picture does");
     }
 }
@@ -2102,14 +2113,14 @@ fn jbig2_scans_are_averaged_and_stored_again() {
         let im = mono_image(&mut doc, w, h, &squares, None, &grey);
         page(&mut doc, &[("Im", im)], "q 144 0 0 57.6 20 600 cm /Im Do Q");
         assert_eq!(optimize(&mut doc, &settings).unwrap().images_resampled, 1, "Flate, {compression:?}");
-        let averaged = doc.decoded_image(&stream(&doc, im)).unwrap();
+        let averaged = decoded_image(&doc, &stream(&doc, im)).unwrap();
         for (filters, globals) in [(&["JBIG2Decode"][..], false), (&["ASCIIHexDecode", "JBIG2Decode"][..], false), (&["JBIG2Decode"][..], true)] {
             let (mut doc, im) = jbig2_page(&coded, filters, globals, (w, h), at_600);
             let r = optimize(&mut doc, &settings).unwrap();
             let s = stream(&doc, im);
             let what = format!("{filters:?}, globals {globals}, {compression:?}: {r:?}");
             assert_eq!((r.images_resampled, s.dict.int(b"Width"), s.dict.int(b"Height")), (1, Some(600), Some(240)), "{what}");
-            assert_eq!(doc.decoded_image(&s).unwrap(), averaged, "{what}");
+            assert_eq!(decoded_image(&doc, &s).unwrap(), averaged, "{what}");
             assert!(!s.dict.contains(b"DecodeParms") || s.dict.name(b"Filter") == Some(&b"CCITTFaxDecode"[..]), "{what}");
             let filter = s.dict.name(b"Filter").map(<[u8]>::to_vec);
             // The smallest of what each compression may store; under Retain, JBIG2 again.
@@ -2140,13 +2151,13 @@ fn jbig2_scans_are_averaged_and_stored_again() {
     let s = stream(&doc, im);
     assert_eq!((r.images_resampled, r.images_recompressed, s.dict.name(b"Filter")), (0, 1, Some(&b"JBIG2Decode"[..])), "{r:?}");
     assert!(s.raw.len() * 2 < generic.len(), "symbols {} bytes, the generic region {}", s.raw.len(), generic.len());
-    assert_eq!(doc.decoded_image(&s).unwrap(), text);
+    assert_eq!(decoded_image(&doc, &s).unwrap(), text);
     // Behind ASCIIHex it is stored again alone, being smaller so.
     let (mut doc, im) = jbig2_page(&generic, &["ASCIIHexDecode", "JBIG2Decode"], false, (tw, th), at_300);
     optimize(&mut doc, &jbig2_asked).unwrap();
     let s = stream(&doc, im);
     assert_eq!((s.filters().len(), s.dict.name(b"Filter")), (1, Some(&b"JBIG2Decode"[..])));
-    assert_eq!(doc.decoded_image(&s).unwrap(), text);
+    assert_eq!(decoded_image(&doc, &s).unwrap(), text);
     // So it is as Group 4 when that is smaller: here the hex digits are spaced out, as ASCIIHex
     // allows, so that the stream is many times the code.
     let (mut doc, im) = jbig2_page(&generic, &["ASCIIHexDecode", "JBIG2Decode"], false, (tw, th), at_300);
@@ -2156,7 +2167,7 @@ fn jbig2_scans_are_averaged_and_stored_again() {
     optimize(&mut doc, &Settings::default()).unwrap();
     let s = stream(&doc, im);
     assert_eq!((s.filters().len(), s.dict.name(b"Filter")), (1, Some(&b"CCITTFaxDecode"[..])), "Group 4 alone");
-    assert_eq!(doc.decoded_image(&s).unwrap(), text);
+    assert_eq!(decoded_image(&doc, &s).unwrap(), text);
 
     // A JBIG2 page taller than the image: the renderer draws the whole page into it, so it isn't
     // read, and stays as it is.
@@ -3399,6 +3410,42 @@ fn lzw_streams_become_flate_and_decode_to_the_same_bytes() {
     assert!(!stream(&doc, c_late).dict.contains(b"DecodeParms"), "nothing left to say for the content stream");
 }
 
+/// A stream can take a second or more to store again, so a cancel lands between any two of them,
+/// and nothing runs after it.
+#[test]
+fn a_cancel_lands_during_the_lzw_pass() {
+    use pdfcraft_optimize::{OptimizeError, Stage, optimize_with_progress};
+    let build = |streams: usize| {
+        let mut doc = Document::new_empty();
+        let mut d = Dict::new();
+        d.set(b"Filter".to_vec(), Object::name("LZWDecode"));
+        for _ in 0..streams {
+            doc.add(Object::Stream(Stream::from_raw(d.clone(), lzw(&lzw_ops(), &Params::default()))));
+        }
+        page(&mut doc, &[], "0 0 1 1 re f");
+        doc
+    };
+    let asked = |streams: usize| {
+        let mut asked = 0;
+        optimize_with_progress(&mut build(streams), &Settings::default(), &mut |s| {
+            asked += usize::from(s == Stage::CleanUp);
+            true
+        })
+        .unwrap();
+        asked
+    };
+    let none = asked(0);
+    assert_eq!(asked(3), none + 3, "once a stream");
+    let mut left = none + 1;
+    let mut doc = build(3);
+    let r = optimize_with_progress(&mut doc, &Settings::default(), &mut |s| {
+        left -= usize::from(s == Stage::CleanUp);
+        left > 0
+    });
+    assert!(matches!(r, Err(OptimizeError::Cancelled)), "{r:?}");
+    assert_eq!(left, 0, "nothing runs after it");
+}
+
 #[test]
 fn a_page_drawn_from_lzw_streams_renders_the_same_after_conversion() {
     let png = Params { predictor: 12, colors: 3, columns: 64, early_change: 0, ..Params::default() };
@@ -3534,7 +3581,7 @@ fn indexed_thin_rules_survive_averaging_for_both_palette_orders_and_decodes() {
     optimize(&mut gray, &Settings::default()).unwrap();
     let gray_after = render(&Document::open(Arc::new(write_full(&gray, &SaveOptions::default()).unwrap())).unwrap());
     let gray_stream = stream(&gray, gray_image);
-    let gray_samples = gray.decoded_image(&gray_stream).unwrap();
+    let gray_samples = decoded_image(&gray, &gray_stream).unwrap();
     assert_eq!((gray_stream.dict.int(b"Width"), gray_stream.dict.int(b"Height")), (Some(600), Some(240)));
     assert!(gray_samples.iter().any(|b| *b != 0xFF), "the DeviceGray thin rule survives");
     for white_first in [false, true] {
@@ -3567,7 +3614,7 @@ fn indexed_thin_rules_survive_averaging_for_both_palette_orders_and_decodes() {
             assert_eq!((s.dict.int(b"Width"), s.dict.int(b"Height")), (Some(600), Some(240)), "white-first={white_first}, inverted={inverted}");
             // The rows are 600 samples, whole bytes: flipping each byte flips each sample.
             let expected: Vec<u8> = gray_samples.iter().map(|b| if white_first != inverted { !b } else { *b }).collect();
-            assert_eq!(doc.decoded_image(&s).unwrap(), expected, "white-first={white_first}, inverted={inverted}: the rule is dark");
+            assert_eq!(decoded_image(&doc, &s).unwrap(), expected, "white-first={white_first}, inverted={inverted}: the rule is dark");
             let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
             assert!(render(&saved) == gray_after, "palette white-first={white_first}, inverted={inverted}");
         }
@@ -3628,7 +3675,7 @@ fn an_indexed_palette_is_read_by_the_luma_of_its_colours() {
         page(&mut doc, &[("Im", image)], "q 144 0 0 57.6 20 600 cm /Im Do Q");
         optimize(&mut doc, &Settings::default()).unwrap();
         let s = stream(&doc, image);
-        (s.dict.int(b"Width"), doc.decoded_image(&s).unwrap())
+        (s.dict.int(b"Width"), decoded_image(&doc, &s).unwrap())
     };
     let (width, samples) = optimized("Indexed");
     assert_eq!(width, Some(600));
@@ -3736,8 +3783,107 @@ fn mixed_text_and_small_halftone_regions_keep_their_tones_with_wide_white_margin
         optimize(&mut doc, &Settings::default()).unwrap();
         let s = stream(&doc, image);
         assert_eq!((s.dict.int(b"Width"), s.dict.int(b"Height")), (Some(w.into()), Some(h.into())));
-        assert_eq!(doc.decoded_image(&s).unwrap(), data, "screened samples survive, not a solid patch");
+        assert_eq!(decoded_image(&doc, &s).unwrap(), data, "screened samples survive, not a solid patch");
         let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
         assert_eq!(render(&saved), before, "local halftone {side}x{side}");
+    }
+}
+
+/// A one-bit stencil of `w` × `h`, solid but for a hole in its middle.
+fn stencil(doc: &mut Document, w: u32, h: u32) -> ObjRef {
+    let row = (w as usize).div_ceil(8);
+    let mut bits = vec![0u8; row * h as usize];
+    for y in (h as usize / 3)..(2 * h as usize / 3) {
+        for x in (w as usize / 3)..(2 * w as usize / 3) {
+            bits[y * row + x / 8] |= 0x80 >> (x % 8);
+        }
+    }
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"ImageMask".to_vec(), Object::Bool(true));
+    d.set(b"Width".to_vec(), Object::Int(i64::from(w)));
+    d.set(b"Height".to_vec(), Object::Int(i64::from(h)));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    doc.add(Object::Stream(Stream::flate(d, &bits)))
+}
+
+/// A picture with a stencil mask is made smaller like any other: the mask has a resolution of its
+/// own, so it stays exactly as it was and the hole it cuts stays where it was.
+#[test]
+fn a_picture_with_a_stencil_mask_is_downsampled_under_its_mask() {
+    let mut doc = Document::new_empty();
+    let mask = stencil(&mut doc, 1200, 1200);
+    let img = image(&mut doc, 1200, 1200, 3, true, None);
+    let mut s = stream(&doc, img);
+    s.dict.set(b"Mask".to_vec(), Object::Ref(mask));
+    doc.set(img, Object::Stream(s));
+    let mask_before = stream(&doc, mask);
+    // 1200 pixels over two inches: 600 ppi.
+    page(&mut doc, &[("Im0", img)], "0 0 1 rg 0 0 612 792 re f q 144 0 0 144 100 100 cm /Im0 Do Q");
+    let before = render(&doc);
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(report.images_resampled, 1, "{report:?}");
+    let after = stream(&doc, img);
+    assert_eq!(after.dict.int(b"Width"), Some(300), "150 ppi");
+    assert_eq!(after.dict.reference(b"Mask"), Some(mask), "the mask stays on it");
+    assert_eq!(stream(&doc, mask), mask_before, "and doesn't change");
+    let rendered = render(&doc);
+    assert_eq!(rendered.len(), before.len());
+    let changed = before.iter().zip(&rendered).filter(|(a, b)| a.abs_diff(**b) > 96).count();
+    assert!(changed * 200 < before.len(), "the masked picture looks the same: {changed} of {} samples far off", before.len());
+    // The hole, the middle third of the picture on the 612 by 792 page, still shows what's behind it.
+    // Its first pixel all round is left out: the coarser picture blends into that a little.
+    for y in 597..643 {
+        for x in 149..195 {
+            let i = (y * 612 + x) * 4;
+            assert_eq!(rendered[i..i + 4], before[i..i + 4], "hole pixel ({x}, {y})");
+        }
+    }
+}
+
+/// A colour-key mask names sample values: resampling or JPEG would make holes where there were none
+/// and fill those there were, so the picture stays as it is, however the array is written. A mask
+/// that can't be read as a stencil is no reason to change the picture either.
+#[test]
+fn a_picture_whose_mask_is_not_a_stencil_is_left_alone() {
+    type Mask = fn(&mut Document) -> Object;
+    fn key() -> Object {
+        Object::Array([250, 255, 250, 255, 250, 255].map(Object::Int).to_vec())
+    }
+    fn not_a_stencil(doc: &mut Document, change: fn(&mut Dict)) -> Object {
+        let mask = stencil(doc, 1200, 1200);
+        let mut s = stream(doc, mask);
+        change(&mut s.dict);
+        doc.set(mask, Object::Stream(s));
+        Object::Ref(mask)
+    }
+    let masks: [(&str, Mask); 5] = [
+        ("direct array", |_| key()),
+        ("array by reference", |doc| Object::Ref(doc.add(key()))),
+        ("nothing there", |doc| Object::Ref(doc.add(Object::Null))),
+        ("an image that says it isn't a stencil", |doc| {
+            not_a_stencil(doc, |d| {
+                d.set(b"ImageMask".to_vec(), Object::Bool(false));
+            })
+        }),
+        ("an image that doesn't say it is one", |doc| {
+            not_a_stencil(doc, |d| {
+                d.remove(b"ImageMask");
+            })
+        }),
+    ];
+    for (what, mask) in masks {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 1200, 1200, 3, true, None);
+        let mut s = stream(&doc, img);
+        let mask = mask(&mut doc);
+        s.dict.set(b"Mask".to_vec(), mask);
+        doc.set(img, Object::Stream(s));
+        let before = stream(&doc, img);
+        page(&mut doc, &[("Im0", img)], "q 144 0 0 144 100 100 cm /Im0 Do Q");
+        let report = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!(report.images_resampled + report.images_recompressed, 0, "{what}: {report:?}");
+        assert_eq!(stream(&doc, img), before, "{what}");
     }
 }

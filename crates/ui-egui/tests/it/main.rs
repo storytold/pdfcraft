@@ -73,6 +73,7 @@ mod recovery;
 mod redact;
 mod reload;
 mod script_noop;
+mod scroll_prefetch;
 mod side_panels;
 mod signing;
 mod snapshot_area_tabs;

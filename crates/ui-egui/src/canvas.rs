@@ -18,8 +18,8 @@ use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, QuickTool, RightPanel, comments, icons, widgets};
 
 mod area;
-pub(super) mod autoscroll;
-mod bars;
+pub(crate) mod autoscroll;
+pub(crate) mod bars;
 mod cache;
 pub(super) mod crop;
 mod find;
@@ -35,14 +35,13 @@ mod selection;
 pub(super) mod signature_drag;
 pub(super) mod wheel_boost;
 pub(super) mod wheel_pager;
+pub(super) mod wheel_reset;
 mod xform;
 mod zoom;
 pub(super) mod zoom_snap;
 
 pub(crate) use area::signature_badges;
-use area::{
-    SUPPRESS_SECS, SUPPRESS_TAIL_SECS, drawing_edge_pointer, glide_interrupted, page_scroll, presentation_click, run_button, set_layers, zoom_anchor,
-};
+use area::{drawing_edge_pointer, glide_interrupted, page_scroll, presentation_click, run_button, set_layers, zoom_anchor};
 #[cfg(test)]
 use bars::in_size_hint_zone;
 use bars::{Notice, notices, page_size_hint, quick_bar};
@@ -251,6 +250,22 @@ impl ImageObb {
     pub fn corners(&self) -> [Pos2; 4] {
         [self.s00, self.s10, self.s11, self.s01]
     }
+}
+
+/// Whether pointer `p` is on an image being cropped, its crop box or its handles (#5835).
+pub(crate) fn crop_contains_point(
+    img: &pdfcraft_engine::PageImage,
+    crop: &crate::edit_text_ui::CropMode,
+    xf: &PageXform,
+    info: &DocInfo,
+    page: usize,
+    p: Pos2,
+) -> bool {
+    let obb = ImageObb::from_image(img, xf, info, page);
+    let full_obb = ImageObb::from_matrix(img.matrix, xf, info, page);
+    crate::edit_text_ui::quad_contains(obb.corners(), p)
+        || crate::edit_text_ui::quad_contains(full_obb.corners(), p)
+        || crate::edit_text_ui::crop_controls_contain(img, crop, xf, info, page, p)
 }
 
 /// The page display as it was before full screen, put back on leaving it
@@ -505,6 +520,9 @@ pub struct DocView {
     /// Pages on screen this frame. Their rasters and tiles are always admitted: the viewport
     /// bounds them, and the byte and count limits apply to prefetch only.
     frame_visible: HashSet<usize>,
+    /// Pages whose whole-page raster this frame asks for, on screen or prefetched. An arriving
+    /// raster over the allowance evicts the other cached pages first.
+    frame_demanded: HashSet<usize>,
     /// Thumbnails that are out of date (still shown until their replacement arrives).
     stale_thumbs: HashSet<usize>,
     /// Tiles that are out of date (still shown until their replacement arrives).
@@ -551,6 +569,8 @@ pub struct DocView {
     /// Screen rects of the pages drawn last frame (hit-testing, tests, automation).
     screen_rects: Vec<(usize, Rect)>,
     screen_xforms: Vec<(usize, PageXform)>,
+    /// Pixels per point last frame, for telling a rounding sliver of a page from a visible one.
+    screen_ppp: f32,
     /// The scroll viewport on screen last frame.
     viewport_screen: Rect,
     /// Pending zoom anchor: page, fractional position (also in gutters), and viewport offset.
@@ -564,12 +584,10 @@ pub struct DocView {
     pub(crate) auto_ocr_skipped: std::collections::HashMap<usize, u64>,
     /// Turns wheel input into page turns in single-page view.
     wheel: crate::wheel_pager::WheelPager,
-    /// Until this time, apply precise (touchpad) wheel input 1:1 and suppress egui's eased copy.
-    /// A precision touchpad sends pixel-precise `MouseWheel` events; on Windows they arrive with
-    /// no `TouchPhase::Start`, so egui eases deltas of 8 px or more and the page lags the finger
-    /// (#759). The window outlasts a single frame so egui's internal easing tail is suppressed as
-    /// it decays, instead of adding on top of the 1:1 motion.
-    precise_scroll_until: f64,
+    /// The document owns the full coarse-wheel distance, including its acceleration.
+    wheel_motion: crate::wheel_boost::Motion,
+    /// Raw input and retained motion advance once per frame, including discarded UI passes.
+    wheel_frame: Option<u64>,
     /// Per-axis line-wheel state; horizontal input cannot extend a vertical burst.
     wheel_boost_x: crate::wheel_boost::WheelBoost,
     wheel_boost_y: crate::wheel_boost::WheelBoost,
@@ -698,6 +716,13 @@ pub struct DocView {
     /// in-flight ones cannot be cancelled mid-operator. Older tiles and the backdrop stay
     /// stretched meanwhile; fresh tiles go out once the pan settles.
     pub(crate) last_scroll: Vec2,
+    /// The way the view last moved vertically: 1 down, -1 up, 0 before any move and after the
+    /// content's size changes (a zoom or a layout change). A jump to a page or a search result
+    /// counts as a move. It stays set while the view is still, so the pages prefetched ahead stay
+    /// in the render queue until they arrive.
+    scroll_dir: i8,
+    /// The content's size when `scroll_dir` was last updated.
+    scroll_content: Vec2,
     /// Side-by-side compare: scroll to here this frame, following the other half.
     pub(crate) sync_scroll: Option<Vec2>,
     /// The page widget's id, by which the Hand tool finds its drag before the pages are laid out.
@@ -915,6 +940,7 @@ impl DocView {
             frame_queue: Vec::new(),
             frame_geometry_changed: false,
             frame_visible: HashSet::new(),
+            frame_demanded: HashSet::new(),
             stale_thumbs: HashSet::new(),
             stale_tiles: HashSet::new(),
             current_scale_tag: 0,
@@ -940,13 +966,15 @@ impl DocView {
             page_heights: info.pages.iter().map(|p| p.height).collect(),
             screen_rects: Vec::new(),
             screen_xforms: Vec::new(),
+            screen_ppp: 1.0,
             viewport_screen: Rect::NOTHING,
             zoom_anchor: None,
             shown: false,
             auto_ocr_tried: Default::default(),
             auto_ocr_skipped: Default::default(),
             wheel: Default::default(),
-            precise_scroll_until: 0.0,
+            wheel_motion: Default::default(),
+            wheel_frame: None,
             wheel_boost_x: Default::default(),
             wheel_boost_y: Default::default(),
             fling: Default::default(),
@@ -981,6 +1009,8 @@ impl DocView {
             last_scale: 0.0,
             sharp_hold_until: 0.0,
             last_scroll: Vec2::ZERO,
+            scroll_dir: 0,
+            scroll_content: Vec2::ZERO,
             sync_scroll: None,
             page_widget: None,
             pan_hold_until: 0.0,
@@ -1094,6 +1124,7 @@ impl DocView {
         self.wheel.clear_motion();
         self.wheel_boost_x.reset();
         self.wheel_boost_y.reset();
+        self.wheel_motion.reset();
     }
 }
 
@@ -1108,7 +1139,7 @@ struct PageEnv<'a> {
     author: &'a String,
     auto_delta: Vec2,
     avail: Rect,
-    boost_extra: Vec2,
+    coarse_scroll: Vec2,
     by_line: &'a String,
     calc_order: bool,
     can_copy: bool,
@@ -2342,7 +2373,7 @@ fn draw_pages(
         allowed,
         auto_delta,
         avail,
-        boost_extra,
+        coarse_scroll,
         calc_order,
         can_copy,
         can_modify,
@@ -2380,12 +2411,11 @@ fn draw_pages(
         // Only interactions pause; the document must keep its original colours.
         ui.set_opacity(opacity);
     }
-    // Middle-button auto-scroll, the keyboard, precise touchpad input (#759) and its glide
-    // (#531), accelerated wheel surplus (#1072), and a drawing's edge scroll; positive y
-    // moves the content down. All scroll without easing, unlike egui's wheel default.
+    // These deltas already contain their motion policy. Positive y moves the content down;
+    // applying another ScrollArea animation would ease the wheel twice.
     // ScrollArea ignores wheel input during a widget drag. Defer the wheel contribution
     // until after the text widgets when a selection owns that drag.
-    let wheel_delta = if selection_wheel { Vec2::ZERO } else { precise_scroll + boost_extra };
+    let wheel_delta = if selection_wheel { Vec2::ZERO } else { precise_scroll + coarse_scroll };
     let delta = auto_delta + edge_delta - vec2(0.0, key_scroll) + wheel_delta + glide;
     if delta != Vec2::ZERO && delta.is_finite() {
         ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
@@ -2407,6 +2437,7 @@ fn draw_pages(
     let origin = resp_rect.min - vec2(0.0, y_shift);
     let visible = viewport.translate(resp_rect.min.to_vec2());
     view.screen_rects.clear();
+    view.screen_ppp = ui.ctx().pixels_per_point();
     view.screen_xforms.clear();
     // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
     // or a press they hold. The page modules read it rather than egui's raw pointer state.
@@ -2443,10 +2474,23 @@ fn draw_pages(
                     let xf =
                         PageXform { rect: r, rot: view.rotation, pw: info.pages[page_idx].width.max(1.0), ph: info.pages[page_idx].height.max(1.0) };
                     let images = cached_edit_images(view, doc, page_idx).to_vec();
+                    // Crop controls own the click even when another image overlaps them.
+                    if view.image_selection.as_ref().is_some_and(|s| {
+                        s.page == page_idx
+                            && s.crop
+                                .as_ref()
+                                .zip(images.get(s.index))
+                                .is_some_and(|(crop, img)| crop_contains_point(img, crop, &xf, info, page_idx, p))
+                    }) {
+                        over_image = true;
+                        break;
+                    }
                     for (idx, img) in images.iter().enumerate().rev() {
                         let obb = ImageObb::from_image(img, &xf, info, page_idx);
                         let b = image_screen_rect(img, &xf, info, page_idx);
-                        if obb.contains(b, p) {
+                        let selected_crop = view.image_selection.as_ref().is_some_and(|s| s.page == page_idx && s.index == idx && s.crop.is_some());
+                        let hit = if selected_crop { crate::edit_text_ui::quad_contains(obb.corners(), p) } else { obb.contains(b, p) };
+                        if hit {
                             over_image = true;
                             if view.image_selection.as_ref().is_none_or(|s| s.page != page_idx || s.index != idx) {
                                 view.image_selection = Some(crate::edit_text_ui::ImageSelection::at(page_idx, idx));
@@ -2519,11 +2563,10 @@ fn draw_pages(
     // ScrollArea ignores the wheel while any widget is dragged, so a text-selection drag
     // scrolls the page itself (#721). After the page loop, so it keeps scrolling once the
     // pointer leaves the selection's page for the gap or the next page; over the whole
-    // document area, like #759. Combine direct and smoothed motion in one request so mixed
-    // Point and Line events retain their full contribution.
+    // document area. The viewer owns both precise and coarse wheel motion, so selection uses
+    // the same distance as ordinary document scrolling.
     if selection_wheel {
-        let smooth = if view.precise_scroll_until == 0.0 { ui.input_mut(|input| std::mem::take(&mut input.smooth_scroll_delta)) } else { Vec2::ZERO };
-        let delta = precise_scroll + boost_extra + smooth;
+        let delta = precise_scroll + coarse_scroll;
         if delta != Vec2::ZERO && delta.is_finite() {
             ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
         }
@@ -2559,6 +2602,22 @@ fn draw_pages(
         view.current = current;
     }
     resp.context_menu(|ui| {
+        let is_crop_over_image = tool == QuickTool::EditText
+            && view.image_selection.clone().is_some_and(|sel| {
+                let Some(ref crop) = sel.crop else { return false };
+                let pointer_pos = ptr.pos;
+                let Some(p) = pointer_pos else { return false };
+                let Some((_, xf)) = view.screen_xforms.iter().find(|(page_idx, _)| *page_idx == sel.page).cloned() else { return false };
+                let images = cached_edit_images(view, doc, sel.page).to_vec();
+                let Some(img) = images.get(sel.index) else { return false };
+                crop_contains_point(img, crop, &xf, info, sel.page, p)
+            });
+        if is_crop_over_image {
+            ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
+            egui::Popup::close_all(ui.ctx());
+            ui.close();
+            return;
+        }
         // Preparing a form: the selected field's menu.
         if preparing && let Some((name, wi)) = view.prepare.selected.clone() {
             // Several fields: Align, Center, Distribute, Set Fields to Same Size.
@@ -2789,89 +2848,141 @@ fn single_page_paging(ui: &egui::Ui, view: &mut DocView, cx: &PagingCx<'_>) -> (
     (single_paging, edge_turned)
 }
 
-/// This frame's wheel motion over the page view, after paging and point/line suppression.
+/// This frame's wheel motion over the page view, after paging and motion integration.
 struct Wheel {
     precise_scroll: Vec2,
     line_base: Vec2,
-    boost_extra: Vec2,
+    coarse_scroll: Vec2,
     has_page: bool,
     /// The pager owns the vertical axis (single-page view, or the rest of a gesture that turned the page).
     paging_owns_vertical: bool,
 }
 
-/// Point input bypasses egui smoothing for 1:1 motion. Line input keeps egui's configured, smoothed
-/// base and adds only the accelerated surplus. While point suppression is active, line and page
-/// input are reconstructed so current coarse events survive without exposing an older eased tail.
-fn read_wheel(ui: &mut egui::Ui, view: &mut DocView, avail: Rect, single_paging: bool, edge_turned: bool) -> Wheel {
+/// Cancels older motion before the pager reads new input, without discarding that input.
+fn reset_interrupted_wheel(ui: &egui::Ui, view: &mut DocView, other_motion: bool) {
+    let frame = ui.ctx().cumulative_frame_nr();
+    let resumed = view.wheel_frame.is_some_and(|last| last != frame && last.checked_add(1) != Some(frame));
+    if resumed || glide_interrupted(ui) || other_motion {
+        view.reset_coarse_state();
+    }
+}
+
+/// Integrates the whole coarse-wheel distance once, independently of egui's wheel easing.
+/// Precise input remains direct, and interrupts clear retained motion before accepting new input.
+fn read_wheel(ui: &mut egui::Ui, view: &mut DocView, avail: Rect, single_paging: bool, edge_turned: bool, enabled: bool, animate: bool) -> Wheel {
     let now = ui.input(|i| i.time);
-    let input = if ui.rect_contains_pointer(avail) {
+    let hovered = ui.rect_contains_pointer(avail);
+    let frame = ui.ctx().cumulative_frame_nr();
+    let repeated = view.wheel_frame == Some(frame);
+    view.wheel_frame = Some(frame);
+    // ScrollArea must not add egui's independently eased copy to the viewer's own motion.
+    // Keep draining that copy on later frames and discarded passes too.
+    if hovered {
+        ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+    }
+    let paging_owns_vertical = single_paging || (!view.continuous && view.wheel.gesture_turned());
+    if repeated || !hovered || !enabled {
+        if !hovered || !enabled {
+            view.reset_coarse_state();
+        }
+        return Wheel { precise_scroll: Vec2::ZERO, line_base: Vec2::ZERO, coarse_scroll: Vec2::ZERO, has_page: false, paging_owns_vertical };
+    }
+    let consumed = ui.input(|i| {
+        i.events.iter().any(|event| {
+            matches!(event, egui::Event::MouseWheel { delta, modifiers, .. } if *delta != Vec2::ZERO && delta.is_finite() && !modifiers.command && !modifiers.ctrl)
+        })
+    });
+    if consumed {
+        wheel_reset::consumed(ui.ctx());
+    }
+    let input = {
         // Match the line distance used by egui's other scroll areas.
         let live = ui.ctx().options(|o| o.input_options.line_scroll_speed);
         let line_points = if live.is_finite() && live > 0.0 { live } else { crate::scroll_speed::EGUI_LINE_POINTS };
         ui.input(|i| crate::wheel_boost::accumulate(&i.events, line_points, single_paging))
-    } else {
-        crate::wheel_boost::FrameInput::default()
     };
     let mut precise_scroll = input.precise;
     let mut line_base = input.line;
-    let mut boost_extra = crate::wheel_boost::boost_extra(input, &mut view.wheel_boost_x, &mut view.wheel_boost_y, now);
-    let has_page = input.page != Vec2::ZERO;
-    if now.is_finite() && precise_scroll != Vec2::ZERO && !has_page {
-        view.precise_scroll_until = now + SUPPRESS_SECS;
+    if precise_scroll.x != 0.0 {
+        view.wheel_boost_x.reset();
     }
+    if precise_scroll.y != 0.0 {
+        view.wheel_boost_y.reset();
+    }
+    let mut coarse_input = line_base + crate::wheel_boost::boost_extra(input, &mut view.wheel_boost_x, &mut view.wheel_boost_y, now);
+    let has_page = input.page != Vec2::ZERO;
     if edge_turned {
-        // The turn leaves egui's eased copy of the notch to decay for a few frames; it must not
-        // scroll the page just shown away from its top (or bottom).
-        view.precise_scroll_until = now + 0.25;
         view.fling.stop();
+    }
+    let page_scale = ui.input(|i| i.viewport_rect().height());
+    if page_scale.is_finite() && page_scale > 0.0 {
+        coarse_input += input.page * page_scale;
     }
     // Paging owns the vertical axis in single-page view; leave it to the pager.
     // The rest of a gesture that turned the page is swallowed too, or it would pan the new page
     // away from the edge it was shown at.
-    let paging_owns_vertical = single_paging || (!view.continuous && view.wheel.gesture_turned());
     if paging_owns_vertical {
         precise_scroll.y = 0.0;
         line_base.y = 0.0;
-        boost_extra.y = 0.0;
+        coarse_input.y = 0.0;
+        view.wheel_motion.cancel_axes(vec2(0.0, 1.0));
     }
-    // egui smooths a Point event that moved at least 8 points, keeping part of it for later
-    // passes. Suppression must outlive that whole action: once it expired after a fixed 0.25 s,
-    // the last few eased points leaked through the ScrollArea after a precise 1:1 scroll (held
-    // point input measured 33 points for a 30-point event). Keep hiding the eased copy until
-    // egui says the action is over, then forget the suppression.
-    let scrolling = ui.input(|i| i.is_scrolling());
-    if now < view.precise_scroll_until || (view.precise_scroll_until != 0.0 && scrolling) {
-        if scrolling {
-            // Keep hiding egui's unprocessed copy until it has drained. The short rolling grace
-            // avoids a delayed duplicate without prolonging suppression after the tail is gone.
-            view.precise_scroll_until = view.precise_scroll_until.max(now + SUPPRESS_TAIL_SECS);
-        }
-        ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
-        // The point path suppresses every eased wheel delta. Restore the line base through the
-        // same un-eased path as its surplus; paging-owned axes were cleared above.
-        boost_extra = crate::wheel_boost::cap_frame(boost_extra + line_base);
-        if has_page {
-            // Page units normally stay on egui's viewport-sized path. During suppression only,
-            // reproduce the current event directly so an older hidden tail stays hidden.
-            let page_scale = ui.input(|i| i.viewport_rect().height());
-            let mut page_delta =
-                if page_scale.is_finite() && page_scale > 0.0 { crate::wheel_boost::cap_frame(input.page * page_scale) } else { Vec2::ZERO };
-            if paging_owns_vertical {
-                page_delta.y = 0.0;
-            }
-            boost_extra = crate::wheel_boost::cap_frame(boost_extra + page_delta);
-        }
-    } else {
-        precise_scroll = Vec2::ZERO;
-        // Selection handling below uses zero to distinguish an inactive window. Clearing a past
-        // deadline also keeps a later line/page action from being mistaken for the old tail.
-        view.precise_scroll_until = 0.0;
+    view.wheel_motion.cancel_axes(precise_scroll);
+    let coarse_scroll = view.wheel_motion.step(coarse_input, now, ui.input(|i| i.stable_dt), animate);
+    if view.wheel_motion.has_pending() {
+        ui.ctx().request_repaint();
     }
-    if has_page && paging_owns_vertical {
-        // Page input belongs to egui on the free axis; the pager still owns vertical motion.
-        ui.input_mut(|i| i.smooth_scroll_delta.y = 0.0);
+    Wheel { precise_scroll, line_base, coarse_scroll, has_page, paging_owns_vertical }
+}
+
+/// Rows of pages that continuous view prefetches past the window in the direction it last
+/// moved.
+const PREFETCH_ROWS: usize = 2;
+
+/// The pages continuous view prefetches past the window: the next [`PREFETCH_ROWS`] rows the way
+/// it last moved, nearest first, and none before it moves. The web build renders on the UI
+/// thread, so it prefetches none.
+fn scroll_prefetch(view: &DocView, visible_now: &[usize]) -> Vec<usize> {
+    if !view.continuous || cfg!(target_arch = "wasm32") {
+        return Vec::new();
     }
-    Wheel { precise_scroll, line_base, boost_extra, has_page, paging_owns_vertical }
+    let n = PREFETCH_ROWS * if view.layout == PageLayout::Single { 1 } else { 2 };
+    match (view.scroll_dir, visible_now.iter().min(), visible_now.iter().max()) {
+        (1, _, Some(&last)) => (last.saturating_add(1)..=last.saturating_add(n)).collect(),
+        (-1, Some(&first), _) => (first.saturating_sub(n)..first).rev().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The whole-page raster a prefetch asks for: the page at this scale, or the backdrop of a page
+/// that is tiled at this scale. A cached raster sharper than the backdrop stays demanded as it
+/// is, as `paint_page_surface` demands it under tiles.
+fn prefetch_demand(view: &DocView, p: &pdfcraft_render::PageInfo, i: usize, scale: f32, tag: u64, max_side: f32) -> (usize, f32, u64, Option<Tile>) {
+    let side = p.width.max(p.height).max(1.0);
+    if side * scale <= TILE_THRESHOLD.min(max_side) {
+        return (i, scale, tag, None);
+    }
+    let bs = BASE_SIDE.min(max_side) / side;
+    match view.pages.get(&i).filter(|c| c.tag != STALE_TAG && tag_scale(c.tag) >= bs) {
+        Some(c) => (i, tag_scale(c.tag), c.tag, None),
+        None => (i, bs, scale_tag(bs), None),
+    }
+}
+
+/// Whether `page` lies behind the way continuous view last moved: above the current page while
+/// scrolling down, below it while scrolling up. `false` outside continuous view.
+fn behind_scroll(continuous: bool, scroll_dir: i8, current: usize, page: usize) -> bool {
+    continuous && ((scroll_dir > 0 && page < current) || (scroll_dir < 0 && page > current))
+}
+
+/// Orders a frame's demand: pages on screen first, then off-screen pages ahead of the way the
+/// view last moved, then those behind it, each nearest the current page first.
+fn order_demand(view: &DocView, wanted: &mut [(usize, f32, u64, Option<Tile>)], visible_now: &[usize]) {
+    let cur = view.current;
+    wanted.sort_by_key(|w| {
+        let shown = visible_now.contains(&w.0);
+        (!shown, !shown && behind_scroll(view.continuous, view.scroll_dir, cur, w.0), w.0.abs_diff(cur), w.3.is_some())
+    });
 }
 
 /// What decides which renders a frame asks for.
@@ -2886,7 +2997,8 @@ struct RenderPlan<'a> {
 }
 
 /// Queues the renders for the pages and tiles `renders` wants (nearest the view first), prefetches the
-/// rows either side, frees tiles of far pages and old zooms, and asks for the text layers.
+/// rows either side (in continuous view, the rows ahead in the scroll direction), frees tiles of far
+/// pages and old zooms, and asks for the text layers.
 fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: PageRenders, plan: &RenderPlan<'_>) {
     let (mut wanted, visible_now) = renders;
     let RenderPlan { visible_pages, tag, scale, sharp_held, pan_held, hand } = *plan;
@@ -2901,17 +3013,20 @@ fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: Page
         for i in (last.saturating_add(1)..=last.saturating_add(n)).chain(first.saturating_sub(n)..first) {
             let Some(p) = info.pages.get(i).filter(|_| !view.errors.contains_key(&i)) else { continue };
             // As drawn: the whole page at this scale, or the backdrop of a tiled page.
-            let side = p.width.max(p.height).max(1.0);
-            wanted.push(if side * scale > TILE_THRESHOLD.min(max_side) {
-                let bs = BASE_SIDE.min(max_side) / side;
-                (i, bs, scale_tag(bs), None)
-            } else {
-                (i, scale, tag, None)
-            });
+            wanted.push(prefetch_demand(view, p, i, scale, tag, max_side));
         }
     }
+    // Continuous view also asks for the rows ahead of the way it last moved.
+    let max_side = ui.ctx().input(|inp| inp.max_texture_side) as f32;
+    for i in scroll_prefetch(view, &visible_now) {
+        if view.errors.contains_key(&i) || wanted.iter().any(|w| w.0 == i) {
+            continue;
+        }
+        let Some(p) = info.pages.get(i) else { continue };
+        wanted.push(prefetch_demand(view, p, i, scale, tag, max_side));
+    }
     let cur = view.current;
-    wanted.sort_by_key(|w| (!visible_now.contains(&w.0), w.0.abs_diff(cur), w.3.is_some()));
+    order_demand(view, &mut wanted, &visible_now);
     // Tiles of far-away pages are useless: free them. Tiles of an earlier zoom stay for a page
     // that is on screen, whether or not the page is tiled at this zoom (#2196): a zoom out below
     // the tiling threshold used to drop the tiles of the zoom just left, so coming back to it
@@ -3144,9 +3259,10 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
     scroll
 }
 
-/// Notes how far the page view scrolled this frame: reader-owned scrolling ends search following,
-/// a pan holds back fresh tile renders until it settles, and a glide keeps going or stops. Whether
-/// a pan is still settling.
+/// Notes how far and which way the page view scrolled this frame: reader-owned scrolling ends
+/// search following, a pan holds back fresh tile renders until it settles, a glide keeps going or
+/// stops, and the vertical direction is kept for continuous view's prefetch. Whether a pan is
+/// still settling.
 fn track_scroll<T>(ui: &egui::Ui, view: &mut DocView, out: &egui::containers::scroll_area::ScrollAreaOutput<T>, glide: Vec2) -> bool {
     let scroll_offset = out.state.clamped_offset();
     // The document ScrollArea's own scroll surfaces move the offset without the wheel deltas
@@ -3170,8 +3286,25 @@ fn track_scroll<T>(ui: &egui::Ui, view: &mut DocView, out: &egui::containers::sc
     if glide != Vec2::ZERO {
         view.fling.moved((scroll_offset - view.last_scroll).length() > 0.01);
     }
+    view.scroll_dir = scroll_direction(view.scroll_dir, scroll_offset.y - view.last_scroll.y, out.content_size != view.scroll_content);
+    view.scroll_content = out.content_size;
     view.last_scroll = scroll_offset;
     now_settle < view.pan_hold_until
+}
+
+/// The way the view moves after a frame whose offset changed by `dy` points: down (1) or up (-1)
+/// for a move of more than half a point, `dir` otherwise, and 0 when the content's size changed
+/// (a zoom or a layout change).
+fn scroll_direction(dir: i8, dy: f32, resized: bool) -> i8 {
+    if resized {
+        0
+    } else if dy > 0.5 {
+        1
+    } else if dy < -0.5 {
+        -1
+    } else {
+        dir
+    }
 }
 
 /// The hover tip, find bar, size hint and the in-place editors drawn over the pages. Whether the
@@ -3355,9 +3488,9 @@ fn pinch_zoom(ui: &egui::Ui, view: &mut DocView, zoom_delta: f32, navigation_rec
 /// The middle-button auto-scroll's delta, and the edge scroll a drawing in progress asks for: the
 /// pointer in a band along any edge (or just past it) scrolls the view that way, so a point
 /// beyond what is shown can be reached without letting go of the tool.
-fn auto_scroll_deltas(ui: &egui::Ui, view: &mut DocView, avail: Rect, unobstructed: bool) -> (Vec2, Vec2) {
+fn auto_scroll_deltas(ui: &egui::Ui, view: &mut DocView, avail: Rect, unobstructed: bool, invert: bool) -> (Vec2, Vec2) {
     let auto_delta = if unobstructed {
-        view.auto_scroll.update(ui, avail, false)
+        view.auto_scroll.update(ui, avail, false, invert)
     } else {
         view.auto_scroll.cancel();
         Vec2::ZERO
@@ -3534,11 +3667,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let modal = app.modal_open();
     let unobstructed = !modal && !app.palette_open;
     let organize_zoom = app.organize_zoom;
+    let invert_middle = app.invert_middle_drag;
     let view = &mut app.views[index];
     if view.organize {
         // One remembered grid size for every document, kept in the settings.
         view.set_grid_zoom(organize_zoom);
-        organize_grid(view, doc, unobstructed, app.show_page_edge_shadows, ui, &t);
+        organize_grid(view, doc, unobstructed, app.show_page_edge_shadows, invert_middle, ui, &t);
         app.organize_zoom = view.grid_zoom();
         return;
     }
@@ -3558,7 +3692,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let present = presentation_click_state(ui, view, navigation_rect, navigation_enabled && app.quick_tool == QuickTool::Select);
     pinch_zoom(ui, view, zoom_delta, navigation_rect, navigation_enabled);
     view.viewport_screen = avail;
-    let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed);
+    let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed, invert_middle);
 
     let content_w = view.content_width(info, avail.width());
     let rects = view.layout(info, content_w, ui.ctx().pixels_per_point());
@@ -3567,21 +3701,20 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // drawn, and the content height (#752). Empty for a document with no pages.
     let row = shown_row(view, &rects);
     let middle_gesture = view.auto_scroll.blocks_input();
+    reset_interrupted_wheel(ui, view, zoom_delta != 1.0 || key_scroll != 0.0 || auto_delta != Vec2::ZERO || edge_delta != Vec2::ZERO);
     // Not scrolling: when the whole page or spread fits, the wheel would do nothing, so it turns
     // pages instead; zoomed in far enough to pan, it pans, and at the edge it turns the page on
     // (#1924, `single_page_wheel_edge`). Touch drags are untouched: with
     // nothing to pan, touch users turn pages with the rail buttons, the page box and the arrow
     // keys. Runs before `visible_pages` so the frame that turns the page draws it.
     let (single_paging, edge_turned) = single_page_paging(ui, view, &PagingCx { row: &row, rects: &rects, avail, middle_gesture, unobstructed });
-    // Point input bypasses egui smoothing for 1:1 motion. Line input keeps egui's configured,
-    // smoothed base and adds only the accelerated surplus. While point suppression is active,
-    // reconstruct line and page input here so current coarse events survive without exposing an
-    // older eased tail.
     let now = ui.input(|i| i.time);
-    let Wheel { precise_scroll, line_base, boost_extra, has_page, paging_owns_vertical } = read_wheel(ui, view, avail, single_paging, edge_turned);
     let animates = app.animation_effects.animates(app.motion.reduced);
+    let wheel_enabled = navigation_enabled && unobstructed && !middle_gesture;
+    let Wheel { precise_scroll, line_base, coarse_scroll, has_page, paging_owns_vertical } =
+        read_wheel(ui, view, avail, single_paging, edge_turned, wheel_enabled, animates);
     let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates;
-    let wheel_scrolled = precise_scroll != Vec2::ZERO || line_base != Vec2::ZERO || boost_extra != Vec2::ZERO || has_page;
+    let wheel_scrolled = precise_scroll != Vec2::ZERO || line_base != Vec2::ZERO || coarse_scroll != Vec2::ZERO || has_page;
     let motion = GlideCx { now, may_glide, key_scroll, auto_delta, zoom_delta, edge_delta, wheel_scrolled };
     let glide = step_glide(ui, view, avail, &motion);
     // The wheel may have turned the page above: draw the row it turned to. Measured from the old
@@ -3666,7 +3799,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         author: &author,
         auto_delta,
         avail,
-        boost_extra,
+        coarse_scroll,
         by_line: &by_line,
         calc_order,
         can_copy,
@@ -4076,8 +4209,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
     // the quick tools come back with the window.
     if app.mode != crate::Mode::Read && !app.full_screen {
-        quick_bar(app, avail, ui);
-        crate::hotbar::show(app, avail, ui.ctx());
+        // The page nearest the left edge, whose margin the bar sits in.
+        let page_left = app.views[index].screen_rects.iter().map(|(_, r)| r.left()).reduce(f32::min);
+        quick_bar(app, avail, page_left, ui);
     }
     if let Some((source, file, destination)) = remote_open {
         app.open_remote_link(source, file, destination);
