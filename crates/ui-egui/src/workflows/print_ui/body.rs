@@ -165,7 +165,9 @@ pub(crate) fn body(
                     d.show_driver_options = false;
                     d.driver_error = None;
                     d.update_printer_papers();
-                    d.auto_select_default_paper();
+                    if !d.paper_overridden {
+                        d.auto_select_default_paper();
+                    }
                 }
                 ui.end_row();
                 // The spooler answered with no printer at all (#160): say so, rather than
@@ -223,9 +225,11 @@ pub(crate) fn body(
                     let page_setup_tip = if spool::HAS_PRINTER_PREFERENCES {
                         tl!("Opens the printer driver's page setup: paper size, orientation and source.")
                     } else {
-                        tl!("The printer driver's page setup: paper size, orientation and source.")
+                        tl!("Page setup dialog is not available on this system.")
                     };
-                    let page_setup = ui.add_enabled(d.printer.is_some() && !browser, egui::Button::new(tl!("Page Setup…"))).on_hover_text(page_setup_tip);
+                    let page_setup = ui
+                        .add_enabled(d.printer.is_some() && !browser && spool::HAS_PRINTER_PREFERENCES, egui::Button::new(tl!("Page Setup…")))
+                        .on_hover_text(page_setup_tip);
                     if page_setup.clicked()
                         && let Some(p) = d.printer.clone()
                     {
@@ -238,6 +242,9 @@ pub(crate) fn body(
                         }
                     }
                 });
+                if d.paper != before {
+                    d.paper_overridden = true;
+                }
                 // Label stock gets the label layout (cut, turned upright, fitted).
                 if d.paper != before && d.paper == print::LABEL_PAPER {
                     d.paper_before_label = Some(before);

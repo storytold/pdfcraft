@@ -61,6 +61,8 @@ pub struct PrintDraft {
     pub paper: usize,
     /// The paper chosen before Label put label stock in, so leaving Label gives it back (#3564).
     pub paper_before_label: Option<usize>,
+    /// Whether the user has explicitly chosen or overridden the paper size.
+    pub paper_overridden: bool,
     /// The list of papers available for selection (standard PAPERS plus any detected from the driver).
     pub papers: Vec<(String, (f64, f64))>,
     /// The sheet shown in the preview (0-based).
@@ -122,6 +124,7 @@ impl Default for PrintDraft {
             dpi: 300.0,
             paper: 0,
             paper_before_label: None,
+            paper_overridden: false,
             papers: default_papers(),
             sheet: 0,
             current_page: 0,
@@ -144,14 +147,17 @@ pub fn default_papers() -> Vec<(String, (f64, f64))> {
 }
 
 impl PrintDraft {
+    /// The display name of the currently selected paper.
     pub fn paper_name(&self) -> &str {
         self.papers.get(self.paper).map(|p| p.0.as_str()).or_else(|| PAPERS.get(self.paper).map(|p| p.0)).unwrap_or(PAPERS[0].0)
     }
 
+    /// The dimensions in points `(width, height)` of the currently selected paper.
     pub fn paper_size(&self) -> (f64, f64) {
         self.papers.get(self.paper).map(|p| p.1).or_else(|| PAPERS.get(self.paper).map(|p| p.1)).unwrap_or(PAPERS[0].1)
     }
 
+    /// Find the index of a paper in `self.papers` matching `size`, allowing for orientation.
     pub fn matching_paper(&self, size: (f64, f64)) -> Option<usize> {
         print::matching_paper(size).or_else(|| {
             self.papers.iter().position(|(_, p)| {
@@ -160,17 +166,16 @@ impl PrintDraft {
         })
     }
 
+    /// Refresh `self.papers` with driver-reported media sizes, preserving the current selection.
     pub fn update_printer_papers(&mut self) {
         let mut papers = default_papers();
         if let Some(ref printer) = self.printer {
             let detected = spool::printer_papers(printer);
             for (name, size) in detected {
                 let norm = (size.0.min(size.1), size.0.max(size.1));
-                if !papers.iter().any(|(n, s)| {
-                    n.eq_ignore_ascii_case(&name) || {
-                        let s_norm = (s.0.min(s.1), s.0.max(s.1));
-                        (s_norm.0 - norm.0).abs() <= 0.5 && (s_norm.1 - norm.1).abs() <= 0.5
-                    }
+                if !papers.iter().any(|(_, s)| {
+                    let s_norm = (s.0.min(s.1), s.0.max(s.1));
+                    (s_norm.0 - norm.0).abs() <= 0.5 && (s_norm.1 - norm.1).abs() <= 0.5
                 }) {
                     papers.push((name, size));
                 }
@@ -184,7 +189,8 @@ impl PrintDraft {
         } else if let Some(pos) = self.papers.iter().position(|(_, s)| (s.0 - current_size.0).abs() <= 0.5 && (s.1 - current_size.1).abs() <= 0.5) {
             self.paper = pos;
         } else {
-            self.paper = self.paper.min(self.papers.len().saturating_sub(1));
+            self.papers.push((current_name, current_size));
+            self.paper = self.papers.len() - 1;
         }
     }
 
@@ -199,16 +205,26 @@ impl PrintDraft {
 
     /// Apply paper size and orientation chosen in printer properties or page setup.
     pub fn apply_driver_paper(&mut self, name: String, size: (f64, f64)) {
+        if !(size.0 >= 72.0 && size.1 >= 72.0 && size.0.is_finite() && size.1.is_finite()) {
+            return;
+        }
+        self.paper_overridden = true;
         if let Some(pos) = self.matching_paper(size) {
             self.paper = pos;
         } else if !name.is_empty() {
-            if let Some(pos) = self.papers.iter().position(|(n, _)| n.eq_ignore_ascii_case(&name)) {
+            let norm = (size.0.min(size.1), size.0.max(size.1));
+            if let Some(pos) = self.papers.iter().position(|(n, s)| {
+                n.eq_ignore_ascii_case(&name) && {
+                    let s_norm = (s.0.min(s.1), s.0.max(s.1));
+                    (s_norm.0 - norm.0).abs() <= 1.0 && (s_norm.1 - norm.1).abs() <= 1.0
+                }
+            }) {
                 self.paper = pos;
             } else {
                 self.papers.push((name, size));
                 self.paper = self.papers.len() - 1;
             }
-        } else if size.0 > 0.0 && size.1 > 0.0 {
+        } else {
             let custom_name = format!("{:.1} x {:.1} pt", size.0, size.1);
             self.papers.push((custom_name, size));
             self.paper = self.papers.len() - 1;

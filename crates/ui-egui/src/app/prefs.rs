@@ -159,6 +159,8 @@ impl PdfCraftApp {
                 .map(|(name, _)| name.as_str())
                 .or_else(|| pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name))
         );
+        let size = self.print_draft.paper_size();
+        v["print_paper_size"] = serde_json::json!([size.0, size.1]);
         v.to_string()
     }
 
@@ -277,6 +279,13 @@ impl PdfCraftApp {
                 self.print_draft.paper = paper;
             } else if let Some(paper) = pdfcraft_engine::print::PAPERS.iter().position(|(canonical, _)| *canonical == name) {
                 self.print_draft.paper = paper;
+            } else if let Some(size) = v.get("print_paper_size").and_then(|s| {
+                let w = s.get(0)?.as_f64()?;
+                let h = s.get(1)?.as_f64()?;
+                if w >= 72.0 && h >= 72.0 && w.is_finite() && h.is_finite() { Some((w, h)) } else { None }
+            }) {
+                self.print_draft.papers.push((name.to_string(), size));
+                self.print_draft.paper = self.print_draft.papers.len() - 1;
             }
         }
         if let Some(on) = v["highlight_fields"].as_bool() {
