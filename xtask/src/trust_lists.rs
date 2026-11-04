@@ -36,6 +36,9 @@
 //! with `http://` (Slovakia's does) is fetched from the same address with `https://`, and curl
 //! refuses any other protocol, redirects included.
 //!
+//! So that a reviewer can compare a run with what the authorities published, each list's line
+//! shows the sequence number and issue date it states, and the last line the SHA-256 of the file.
+//!
 //! Uses `curl` (macOS, Windows 10+ and Linux have it), like `cargo xtask models`.
 
 use std::collections::BTreeMap;
@@ -229,6 +232,16 @@ fn qualified_cas(list: &str) -> Result<Vec<Vec<u8>>> {
     Ok(out)
 }
 
+/// Which edition of a list was read: its sequence number and issue date, as the list states them
+/// (ETSI TS 119 612 §5.3.2, §5.3.9). The XML signatures are not checked, so these let a reviewer
+/// compare a run with the published list. Informational: a list that omits them is still read.
+fn list_edition(list: &str) -> String {
+    let Ok(doc) = roxmltree::Document::parse(list) else { return "edition unreadable".into() };
+    let root = doc.root_element();
+    let say = |name: &str| text(root, name).filter(|t| !t.is_empty()).unwrap_or("not stated").to_string();
+    format!("sequence {}, issued {}", say("TSLSequenceNumber"), say("ListIssueDateTime"))
+}
+
 pub fn run(args: &[String]) -> Result<()> {
     let out = match args {
         [] => Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(OUT),
@@ -240,9 +253,9 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut certs: BTreeMap<[u8; 32], Vec<u8>> = BTreeMap::new();
     let mut failed = Vec::new();
     for url in &lists {
-        match fetch(url).and_then(|l| qualified_cas(&l)) {
-            Ok(found) => {
-                println!("  {url}: {} certificates", found.len());
+        match fetch(url).and_then(|l| qualified_cas(&l).map(|found| (list_edition(&l), found))) {
+            Ok((edition, found)) => {
+                println!("  {url}: {} certificates ({edition})", found.len());
                 for der in found {
                     certs.insert(Sha256::digest(&der).into(), der);
                 }
@@ -261,8 +274,9 @@ pub fn run(args: &[String]) -> Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     std::fs::write(&out, &bundle)?;
+    let digest: String = Sha256::digest(&bundle).iter().map(|b| format!("{b:02x}")).collect();
     println!(
-        "{} certificates, {} bytes -> {}\nOnce #622 (trust lists) is in, load it with the sign_trust tool: {{\"tool\": \"sign_trust\", \"args\": {{\"eu_trusted_list\": \"<path>\"}}}} (the path must be inside the --root of the session). Source: the EU Trusted Lists (CC BY 4.0, European Commission and Member States' supervisory bodies).",
+        "{} certificates, {} bytes, SHA-256 {digest} -> {}\nOnce #622 (trust lists) is in, load it with the sign_trust tool: {{\"tool\": \"sign_trust\", \"args\": {{\"eu_trusted_list\": \"<path>\"}}}} (the path must be inside the --root of the session). Source: the EU Trusted Lists (CC BY 4.0, European Commission and Member States' supervisory bodies).",
         certs.len(),
         bundle.len(),
         out.display()
@@ -344,6 +358,16 @@ mod tests {
         );
         assert!(matches!(judge(Ok(Some(b"partial".to_vec())), None, ""), Err(Failure::Other(_))));
         assert!(matches!(judge(Err(std::io::Error::other("boom")), Some(0), ""), Err(Failure::Other(m)) if m.contains("boom")));
+    }
+
+    #[test]
+    fn a_list_is_identified_by_its_sequence_number_and_issue_date() {
+        let list = "<TrustServiceStatusList><SchemeInformation><TSLSequenceNumber>42</TSLSequenceNumber>\
+                    <ListIssueDateTime>2026-10-01T00:00:00Z</ListIssueDateTime></SchemeInformation></TrustServiceStatusList>";
+        assert_eq!(list_edition(list), "sequence 42, issued 2026-10-01T00:00:00Z");
+        // A list that says neither is still read; one that is not XML says so instead of failing.
+        assert_eq!(list_edition("<TrustServiceStatusList/>"), "sequence not stated, issued not stated");
+        assert_eq!(list_edition("not xml"), "edition unreadable");
     }
 
     #[test]
