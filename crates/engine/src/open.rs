@@ -305,14 +305,26 @@ impl Session {
         }
         let display = display_bytes(editor.as_mut(), &bytes);
         let renderer = RenderPool::new(display.clone(), render_threads(), display_config(&config));
-        let (form, adopted) = editor
+        let (form, adopted, left_out) = editor
             .as_ref()
             .map(|e| {
                 let mut fields = pdfcraft_forms::fields_with_adopted(&e.cos);
                 xfa::mark_script_buttons(&e.cos, &mut fields.items);
-                (fields.items, fields.adopted_page_fields)
+                (fields.items, fields.adopted_page_fields, fields.left_out)
             })
             .unwrap_or_default();
+        // Fields whose text is past what a reading of the form takes are left out of the form
+        // shown, and redaction refuses the file; it says so.
+        if left_out > 0
+            && let Some(e) = &mut editor
+        {
+            let line = if left_out == 1 {
+                "1 form field holds more text than PdfCraft reads at once; it was left out of the form".to_string()
+            } else {
+                format!("{left_out} form fields hold more text than PdfCraft reads at once; they were left out of the form")
+            };
+            e.cos.note_repair(line);
+        }
         // Fields the file lists only as page widgets are adopted leniently; the file says so.
         if adopted > 0
             && let Some(e) = &mut editor

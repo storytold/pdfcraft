@@ -4315,19 +4315,22 @@ fn a_da_that_does_not_fit_leaves_out_only_the_fields_that_draw_with_it() {
             let da = doc.add(Object::String(pdfcraft_cos::PdfString::literal(da)));
             doc.update_dict(ObjRef::new(4, 0), |p| p.set(b"DA".to_vec(), Object::Ref(da))).unwrap();
         }
-        fields(&doc).into_iter().map(|f| (f.name, f.da)).collect::<Vec<_>>()
+        let read = fields_with_adopted(&doc);
+        (read.items.into_iter().map(|f| (f.name, f.da)).collect::<Vec<_>>(), read.left_out)
     };
     let own = |name: &str, da: &str| (name.to_string(), da.to_string());
     let (fits, default) = ("/Helv 5 Tf 0 g", "/Helv 0 Tf 0 g");
     let past = || Some(vec![b' '; crate::read::MAX_TEXT_BYTES]);
     let (b, d) = (own("b", "/Helv 9 Tf 0 g"), own("p.d", "/Helv 7 Tf 0 g"));
     let all = |top: &str, under: &str| [own("a", top), b.clone(), own("p.c", under), d.clone(), own("p.e", under), own("p.t", under), own("s", top)];
-    assert_eq!(read(Some(fits.into()), None), all(fits, fits));
-    assert_eq!(read(None, Some(fits.into())), all(default, fits));
-    assert_eq!(read(past(), None), [b.clone(), d.clone(), own("p.t", default), own("s", default)]);
-    assert_eq!(read(None, past()), [own("a", default), b.clone(), d.clone(), own("p.t", default), own("s", default)]);
+    assert_eq!(read(Some(fits.into()), None).0, all(fits, fits));
+    assert_eq!(read(None, Some(fits.into())).0, all(default, fits));
+    assert_eq!(read(past(), None).0, [b.clone(), d.clone(), own("p.t", default), own("s", default)]);
+    assert_eq!(read(None, past()).0, [own("a", default), b.clone(), d.clone(), own("p.t", default), own("s", default)]);
+    // Each field that would draw with a `/DA` that didn't fit counts as left out.
+    assert_eq!(read(past(), None).1, 3);
     // A signature under a `/DA` that didn't fit reports none, not the one above it.
-    assert_eq!(read(Some(fits.into()), past()), [own("a", fits), b, d, own("p.t", default), own("s", fits)]);
+    assert_eq!(read(Some(fits.into()), past()).0, [own("a", fits), b, d, own("p.t", default), own("s", fits)]);
 }
 
 /// A field left out of the reading doesn't keep the widgets it lists: a later field listing the
@@ -4359,6 +4362,28 @@ fn a_field_left_out_leaves_its_widgets_to_a_later_field() {
     assert_eq!(widgets(&doc), [("only".to_string(), vec![5])]);
     doc.update_dict(ObjRef::new(4, 0), |f| f.set(b"TU".to_vec(), tooltip())).unwrap();
     assert_eq!(widgets(&doc), []);
+    assert_eq!(fields_with_adopted(&doc).left_out, 1);
+    // Nor when the field, or a field above it, is left out for its name.
+    let long_name = || Object::String(pdfcraft_cos::PdfString::literal(vec![b'n'; crate::read::MAX_TEXT_BYTES]));
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /T (p) /Kids [6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Rect [0 0 10 10] >>".into(),
+        "<< /FT /Tx /T (k) /Kids [5 0 R 7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Rect [0 20 10 30] >>".into(),
+        // A widget whose /Parent is the kid field, which doesn't list it.
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Parent 6 0 R /Rect [0 40 10 50] >>".into(),
+    ]);
+    assert_eq!(widgets(&doc), [("p.k".to_string(), vec![5, 7])]);
+    for owner in [6, 4] {
+        let mut doc = doc.clone();
+        doc.update_dict(ObjRef::new(owner, 0), |f| f.set(b"T".to_vec(), long_name())).unwrap();
+        let read = fields_with_adopted(&doc);
+        assert!(read.items.is_empty(), "{owner}: {:?}", read.items.iter().map(|f| &f.name).collect::<Vec<_>>());
+        assert_eq!((read.adopted_page_fields, read.left_out), (0, 1), "{owner}");
+    }
 }
 
 /// A widget's `/AS` is copied within the text allowance like the rest of the field's text: one

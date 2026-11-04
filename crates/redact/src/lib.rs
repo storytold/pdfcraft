@@ -80,6 +80,12 @@ pub enum RedactError {
         "{0} JBIG2 image(s) share their symbol data with a redacted image and can't be decoded to be stored without it, so that data, which can show what is under the marks, would stay in the file; nothing was redacted"
     )]
     SharedJbig2Globals(usize),
+    /// Fields whose text is past what one reading of the form takes are left out of it, so a
+    /// widget under a mark can't be matched to its field, whose value would stay in the file.
+    #[error(
+        "{0} form field(s) hold more text than PdfCraft reads at once, so the fields under the marks can't all be found and their values could stay in the file; nothing was redacted"
+    )]
+    FormPastAllowance(usize),
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),
     #[error(transparent)]
@@ -426,10 +432,16 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         .iter()
         .map(|&(pi, page_marks)| overlay::content(page_marks, &mut remaining).map(|content| (pi, content)))
         .collect::<Result<Vec<_>, _>>()?;
+    // A field the form's reading left out owns widgets no read field does, and its value would
+    // stay under a mark: refuse before anything changes.
+    let form = pdfcraft_forms::fields_with_adopted(doc);
+    if form.left_out > 0 {
+        return Err(RedactError::FormPastAllowance(form.left_out));
+    }
     report.pages = by_page.len();
     localize_resources(doc, &by_page)?;
     let widget_owner: Vec<(ObjRef, ObjRef)> =
-        pdfcraft_forms::fields(doc).into_iter().flat_map(|f| f.widgets.iter().map(|w| (w.obj, f.obj)).collect::<Vec<_>>()).collect();
+        form.items.into_iter().flat_map(|f| f.widgets.iter().map(|w| (w.obj, f.obj)).collect::<Vec<_>>()).collect();
     let listed_before = listed_annotations(doc);
     let mut applying = Applying {
         report,

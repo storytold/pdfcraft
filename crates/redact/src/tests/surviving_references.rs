@@ -27,6 +27,23 @@ fn a_redacted_field_listed_in_the_calculation_order_leaves_the_saved_file() {
     assert!(!full_save_holds(&doc, b"SSN-078-05-1120"), "the field's value is still reachable");
 }
 
+/// A field the form's reading leaves out, its text past the reading's allowance, can't be matched
+/// to its widget under a mark: redaction refuses rather than remove the widget and keep the value.
+#[test]
+fn a_field_the_form_reading_leaves_out_refuses_the_redaction() {
+    let mut doc = one_page(b"", "", vec![]);
+    pdfcraft_forms::add_field(&mut doc, 0, [10.0, 50.0, 100.0, 70.0], &pdfcraft_forms::NewField::Text { multiline: false }, Some("ssn")).unwrap();
+    pdfcraft_forms::set_value(&mut doc, "ssn", &pdfcraft_forms::FieldValue::Text("SSN-078-05-1120".into())).unwrap();
+    let field = pdfcraft_forms::fields(&doc).swap_remove(0).obj;
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    let mut past = doc.clone();
+    let tooltip = Object::String(pdfcraft_cos::PdfString::literal(vec![b' '; 256 << 20]));
+    past.update_dict(field, |d| d.set(b"TU".to_vec(), tooltip)).unwrap();
+    assert!(matches!(apply(&mut past, None), Err(RedactError::FormPastAllowance(1))));
+    assert!(past.get(field).as_dict().is_some_and(|d| d.contains(b"V")) && marks(&past).len() == 1, "nothing changed");
+    assert_eq!(apply(&mut doc, None).unwrap().fields, 1, "read whole, the field goes");
+}
+
 /// A surviving form shares the page's resource dictionary, which lists the image the mark
 /// removes; the form never draws it.
 #[test]

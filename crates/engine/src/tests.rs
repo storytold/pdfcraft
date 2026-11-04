@@ -856,6 +856,24 @@ fn a_repaired_file_is_rewritten_by_save_even_without_edits() {
     }
 }
 
+/// Form fields whose text is past what a reading of the form takes are left out of the form the
+/// document shows; opening the file says so.
+#[test]
+fn fields_left_out_of_the_form_are_recorded_on_open() {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(1))).unwrap();
+    let text = pdfcraft_forms::NewField::Text { multiline: false };
+    pdfcraft_forms::add_field(&mut doc, 0, [10.0, 50.0, 100.0, 70.0], &text, Some("ssn")).unwrap();
+    let field = pdfcraft_forms::fields(&doc).swap_remove(0).obj;
+    let tooltip = pdfcraft_cos::Object::String(pdfcraft_cos::PdfString::literal(vec![b' '; 256 << 20]));
+    doc.update_dict(field, |d| d.set(b"TU".to_vec(), tooltip)).unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions { object_streams: true, ..Default::default() }).unwrap();
+    drop(doc);
+    let mut s = Session::new();
+    let id = s.open("left-out.pdf", None, Arc::new(bytes), None).unwrap();
+    let log = s.get(id).unwrap().repair_log();
+    assert!(log.iter().any(|l| l.contains("1 form field holds more text than PdfCraft reads at once")), "{log:?}");
+}
+
 /// A damaged file that is signed keeps its bytes on a Save without edits: rewriting it in full
 /// to put the repair on disk would invalidate its signatures without a word.
 #[test]

@@ -562,12 +562,16 @@ pub struct Fields {
     pub items: Vec<Field>,
     /// How many fields were reachable only through page annotations.
     pub adopted_page_fields: usize,
+    /// How many fields were left out because their text didn't fit the reading's allowances, a
+    /// field left out for its name counting once with the fields under it. More than none means
+    /// `items` isn't the whole form: an operation that must reach every field (redaction) refuses.
+    pub left_out: usize,
 }
 
 /// Read all terminal fields and the page-only adoption count in one enumeration.
 pub fn fields_with_adopted(doc: &Document) -> Fields {
-    let (items, adopted_page_fields) = enumerate(doc);
-    Fields { items, adopted_page_fields }
+    let (items, adopted_page_fields, left_out) = enumerate(doc);
+    Fields { items, adopted_page_fields, left_out }
 }
 
 #[cfg(test)]
@@ -582,7 +586,7 @@ pub(crate) fn form_reads() -> usize {
     FORM_READS.with(std::cell::Cell::get)
 }
 
-pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
+pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize, usize) {
     #[cfg(test)]
     FORM_READS.with(|n| n.set(n.get() + 1));
     let af = acroform(doc);
@@ -603,6 +607,7 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
         fields: std::collections::HashSet::new(),
         widgets: std::collections::HashSet::new(),
         withheld: std::collections::HashSet::new(),
+        left_out: 0,
         scripts: script_budget(),
         values: Allowance::new(MAX_VALUE_BYTES),
         text: Allowance::new(MAX_TEXT_BYTES),
@@ -627,7 +632,7 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
     adopt_page_fields(doc, &pages, &base, &page_of, &mut seen, &mut out);
     let adopted = out.len() - listed;
     rank_tabs(doc, &pages, &annot_index, &mut out);
-    (out, adopted)
+    (out, adopted, seen.left_out)
 }
 
 /// Widget annotations no `/Fields` entry reaches are adopted as fields, as Acrobat and the
@@ -659,7 +664,7 @@ fn adopt_page_fields(
             if !d.contains(b"FT") && !d.contains(b"T") && !d.contains(b"Parent") {
                 continue;
             }
-            if let Some(root) = unlisted_root(doc, r, &seen.fields) {
+            if let Some(root) = unlisted_root(doc, r, &seen.fields, &seen.withheld) {
                 walk(doc, root, base, page_of, seen, out, 0);
             }
         }
@@ -667,19 +672,26 @@ fn adopt_page_fields(
 }
 
 /// The topmost field above `r` (itself without a `/Parent`), or `None` when `r` or an ancestor is
-/// already reachable from the `/Fields` tree, or a `/Parent` loop hides the top.
-fn unlisted_root(doc: &Document, r: ObjRef, seen: &std::collections::HashSet<ObjRef>) -> Option<ObjRef> {
+/// already reachable from the `/Fields` tree, is under a field left out of the reading
+/// (`withheld`), or a `/Parent` loop hides the top.
+fn unlisted_root(
+    doc: &Document,
+    r: ObjRef,
+    seen: &std::collections::HashSet<ObjRef>,
+    withheld: &std::collections::HashSet<ObjRef>,
+) -> Option<ObjRef> {
+    let known = |n: &ObjRef| seen.contains(n) || withheld.contains(n);
     let mut top = r;
     let mut visited = std::collections::HashSet::from([r]);
     loop {
         let parent = doc.get(top).as_dict().and_then(|d| d.reference(b"Parent"));
         let Some(p) = parent else {
-            return if seen.contains(&top) { None } else { Some(top) };
+            return if known(&top) { None } else { Some(top) };
         };
         if !visited.insert(p) || visited.len() > 64 {
             return None;
         }
-        if seen.contains(&p) {
+        if known(&p) {
             return None;
         }
         top = p;
@@ -702,6 +714,8 @@ struct Seen {
     /// The widgets of fields left out of the reading: a later field that lists one takes it, but
     /// none is adopted as a field of its own.
     withheld: std::collections::HashSet<ObjRef>,
+    /// Fields left out of the reading for text that didn't fit ([`Fields::left_out`]).
+    left_out: usize,
     scripts: Allowance,
     values: Allowance,
     /// A field whose text doesn't fit is left out of the reading whole: a field read without
@@ -718,6 +732,26 @@ fn on_state_of(doc: &Document, wd: &Dict, text: &mut Allowance) -> Option<String
     let n = held(doc, ap.as_dict()?.get(b"N")?);
     let (k, _) = n.as_dict()?.iter().find(|(k, _)| k.as_slice() != b"Off")?;
     text.copy(k.len(), || name_text(k))
+}
+
+/// Withholds the fields and widgets under `r`, a field left out of the reading for its name: none
+/// is adopted from the page as a field of its own, and a later field in the tree that lists one
+/// still takes it. Each is visited once, its text unread, so the walk ends however the kids loop.
+fn withhold_below(doc: &Document, r: ObjRef, seen: &mut Seen) {
+    let mut stack = vec![r];
+    while let Some(n) = stack.pop() {
+        let kids: Vec<ObjRef> = doc
+            .get(n)
+            .as_dict()
+            .and_then(|d| d.get(b"Kids").map(|k| doc.resolve(k)))
+            .map(|k| k.as_array().into_iter().flatten().filter_map(Object::as_ref).collect())
+            .unwrap_or_default();
+        for k in kids {
+            if seen.withheld.insert(k) {
+                stack.push(k);
+            }
+        }
+    }
 }
 
 /// Read the field at `r` and the fields under it into `out`, with what they inherit from
@@ -762,6 +796,8 @@ fn walk(
     // A name that doesn't fit leaves the field out, with the fields under it, whose full names
     // need it; a `/DA` that doesn't fit, only the fields that would draw with it.
     if seen.text.refusals() != refusals {
+        seen.left_out = seen.left_out.saturating_add(1);
+        withhold_below(doc, r, seen);
         return;
     }
     if let Some(o) = d.get(b"DA") {
@@ -808,6 +844,7 @@ fn walk(
     // scripts; a signature, drawn without one, is read.
     if inh.da_refused && kind != FieldKind::Signature {
         seen.withheld.extend(claimed);
+        seen.left_out = seen.left_out.saturating_add(1);
         return;
     }
     let refusals = seen.text.refusals();
@@ -884,6 +921,7 @@ fn walk(
     text.take(field_da.len());
     if text.refusals() != refusals {
         seen.withheld.extend(claimed);
+        seen.left_out = seen.left_out.saturating_add(1);
         return;
     }
     seen.widgets.extend(claimed);
