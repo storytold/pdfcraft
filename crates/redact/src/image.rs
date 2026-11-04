@@ -123,11 +123,11 @@ pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     decode_and_clear(doc, s, ctm, rects, budget).ok_or(())
 }
 
-fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], budget: &mut ImageBudget) -> Option<Option<Stream>> {
-    // Separate masks can retain the original image data.
-    if s.dict.contains(b"SMask") || s.dict.contains(b"Mask") {
-        return None;
-    }
+/// What the stream's filter chain says about the codecs this path can clear. `None` when the
+/// image cannot be decoded at all, which the caller answers by removing it whole. A fax or JBIG2
+/// codec must be the last filter; a DCT codec must be the only one, since its decoder reads the
+/// encoded bytes itself.
+fn filters(s: &Stream) -> Option<(bool, bool, bool)> {
     let supported = |n: &[u8]| {
         matches!(
             n,
@@ -144,23 +144,27 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     // out wherever it stands.
     let crypt = |f: &Object| f.as_name() == Some(b"Crypt".as_slice());
     let dct = |f: &Object| f.as_name().is_some_and(|n| matches!(n, b"DCTDecode" | b"DCT"));
-    let (ok, is_fax, is_jbig2, is_dct) = match s.dict.get(b"Filter") {
-        None => (true, false, false, false),
-        Some(f @ Object::Name(_)) => (readable(f) || crypt(f) || fax(f) || jbig2(f) || dct(f), fax(f), jbig2(f), dct(f)),
+    match s.dict.get(b"Filter") {
+        None => Some((false, false, false)),
+        Some(f @ Object::Name(_)) => (readable(f) || crypt(f) || fax(f) || jbig2(f) || dct(f)).then_some((fax(f), jbig2(f), dct(f))),
         Some(Object::Array(a)) => {
             let chain: Vec<&Object> = a.iter().filter(|f| !crypt(f)).collect();
             match chain.split_last() {
-                Some((last, before)) if fax(last) || jbig2(last) => (before.iter().all(|f| readable(f)), fax(last), jbig2(last), false),
-                // The JPEG decoder consumes the raw bytes, so DCT works only as a single filter.
-                Some((last, _)) if dct(last) => (chain.len() == 1, false, false, true),
-                _ => (chain.iter().all(|f| readable(f)), false, false, false),
+                Some((last, before)) if fax(last) || jbig2(last) => before.iter().all(|f| readable(f)).then_some((fax(last), jbig2(last), false)),
+                Some((last, _)) if dct(last) => (chain.len() == 1).then_some((false, false, true)),
+                _ => chain.iter().all(|f| readable(f)).then_some((false, false, false)),
             }
         }
-        _ => (false, false, false, false),
-    };
-    if !ok {
+        _ => None,
+    }
+}
+
+fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], budget: &mut ImageBudget) -> Option<Option<Stream>> {
+    // Separate masks can retain the original image data.
+    if s.dict.contains(b"SMask") || s.dict.contains(b"Mask") {
         return None;
     }
+    let (is_fax, is_jbig2, is_dct) = filters(s)?;
     // Group 3 on bytes is removed whole for now. The decoder reads it by its end-of-line codes
     // when the data starts with one, but PdfCraft's renderer draws such rows (the fill ending
     // each code on a byte) as other rows, so the pixels a mark covers on screen needn't be the
