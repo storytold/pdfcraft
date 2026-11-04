@@ -392,6 +392,14 @@ fn tags_panel_edits_role_mapped_table_summary_and_header_scope() {
     assert_eq!(h.state().session.get(id).unwrap().tags()[0].standard_kind, "Table");
     assert_eq!(h.state().session.get(id).unwrap().tags()[0].summary.as_deref(), Some("Updated summary"));
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Change tag properties"));
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().tags()[0].summary.as_deref(), Some("Old summary"));
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Summary").value().as_deref(), Some("Old summary"));
+    h.state_mut().redo();
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().tags()[0].summary.as_deref(), Some("Updated summary"));
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Summary").value().as_deref(), Some("Updated summary"));
     h.get_by_label("MyHeader · 8").click();
     h.run_steps(2);
     assert!(h.query_by_role_and_label(Role::TextInput, "Summary").is_none());
@@ -446,13 +454,6 @@ fn tags_panel_edits_role_mapped_table_summary_and_header_scope() {
     h.run_steps(2);
     assert_eq!(h.state().session.get(id).unwrap().tags()[1].standard_kind, "TH");
     assert_eq!(h.state().session.get(id).unwrap().tags()[1].scope.as_deref(), Some("Column"));
-
-    h.get_by_label("ChangedTable · 7").click();
-    h.run_steps(2);
-    h.state_mut().undo();
-    h.run_steps(2);
-    assert_eq!(h.state().session.get(id).unwrap().tags()[0].summary.as_deref(), Some("Old summary"));
-    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Summary").value().as_deref(), Some("Old summary"));
 }
 
 #[test]
