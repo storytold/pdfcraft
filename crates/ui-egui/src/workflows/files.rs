@@ -1027,8 +1027,6 @@ impl PdfCraftApp {
         let Some(doc) = self.session.get(id) else { return };
         let src = doc.export_source();
         let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
-        // The page an EPS export takes: the one on screen.
-        let current = self.active.map_or(0, |i| self.views[i].current);
         #[cfg(not(target_arch = "wasm32"))]
         {
             match self.save_override.clone() {
