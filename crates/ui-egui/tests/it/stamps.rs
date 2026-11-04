@@ -1,5 +1,7 @@
 //! Add a stamp: the palette and placing stamps on the page.
 
+use crate::support;
+
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
