@@ -60,7 +60,8 @@ struct Ctx {
     font: Font,
     para: Para,
     som: String,
-    /// The locale values are shown in: the nearest one an enclosing object names.
+    /// The locale values are shown in: the nearest one an enclosing object names (`ambient`
+    /// included, which stops a locale further out from applying).
     locale: Option<String>,
 }
 

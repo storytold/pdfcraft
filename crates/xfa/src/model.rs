@@ -350,8 +350,8 @@ pub struct Common {
     pub para: ParaSpec,
     /// Table cells: how many columns this cell spans.
     pub col_span: usize,
-    /// The locale its values are shown in (`locale="en_US"`), which the objects inside take when
-    /// they name none. `None`: unnamed, or `ambient` (the viewer's own).
+    /// The locale its values are shown in (`locale="en_US"`, or `ambient`: the viewer's own),
+    /// which the objects inside take when they name none. `None`: unnamed.
     pub locale: Option<String>,
 }
 

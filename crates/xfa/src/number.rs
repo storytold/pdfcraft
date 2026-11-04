@@ -44,19 +44,19 @@ struct Symbols<'a> {
     currency: Option<&'a str>,
 }
 
-/// en_US, for a field whose locale is unnamed or `ambient`, or named `en_US` without a
-/// `localeSet` entry: the locale Designer gives new forms.
+/// en_US's symbols, for an en_US the form's `localeSet` doesn't describe: the locale Designer
+/// gives new forms.
 const EN_US: Symbols<'static> = Symbols { decimal: Some("."), grouping: Some(","), currency: Some("$") };
 
-/// The locale `name` in `locales`. `None` when the form names one it doesn't describe, other than
-/// en_US.
+/// The locale `name` in `locales`. Unnamed or `ambient` (the viewer's own locale) is en_US, as
+/// the packet describes it when it does. `None` when the form names a locale it doesn't
+/// describe, other than en_US.
 fn locale_of<'a>(locales: &'a [Locale], name: Option<&str>) -> Option<(Symbols<'a>, Option<&'a Locale>)> {
-    let found = name.and_then(|n| locales.iter().find(|l| l.name == n));
-    match (found, name) {
-        (Some(l), _) => Some((Symbols { decimal: l.decimal.as_deref(), grouping: l.grouping.as_deref(), currency: l.currency.as_deref() }, Some(l))),
-        (None, None) => Some((EN_US, None)),
-        (None, Some("en_US")) => Some((EN_US, None)),
-        (None, Some(_)) => None,
+    let name = name.filter(|n| !n.eq_ignore_ascii_case("ambient")).unwrap_or("en_US");
+    match locales.iter().find(|l| l.name == name) {
+        Some(l) => Some((Symbols { decimal: l.decimal.as_deref(), grouping: l.grouping.as_deref(), currency: l.currency.as_deref() }, Some(l))),
+        None if name == "en_US" => Some((EN_US, None)),
+        None => None,
     }
 }
 
@@ -72,8 +72,7 @@ fn clause(text: &str) -> Option<(Option<String>, Option<&str>, &str)> {
     let (category, locale) = match (head.find('('), head.find(')')) {
         (Some(a), Some(b)) if a < b => {
             let category = format!("{}{}", head.get(..a)?, head.get(b + 1..)?);
-            // `ambient` is the viewer's own locale, as if the clause named none.
-            (category, Some(head.get(a + 1..b)?.trim()).filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("ambient")))
+            (category, Some(head.get(a + 1..b)?.trim()).filter(|l| !l.is_empty()))
         }
         (None, None) => (head.to_string(), None),
         _ => return None,

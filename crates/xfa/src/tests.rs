@@ -4568,7 +4568,11 @@ fn number_pictures_acrobat_can_show_become_its_number_format() {
     assert_eq!(number_args("num.currency{}", Some("en_US"), &locales), Some((2, 0, 2, dollar.clone(), true)), "$z,zz9.99|($z,zz9.99)");
     assert_eq!(number_args("num(en_US).currency{}", None, &locales), Some((2, 0, 2, dollar.clone(), true)));
     assert_eq!(number_args("num.currency(en_US){}", None, &locales), Some((2, 0, 2, dollar.clone(), true)));
-    assert_eq!(number_args("num(ambient){$z,zz9.99}", Some("de_DE"), &locales), Some((2, 2, 0, "€".into(), true)), "ambient: the field's own");
+    assert_eq!(
+        number_args("num(ambient){$z,zz9.99}", Some("de_DE"), &locales),
+        Some((2, 0, 0, dollar.clone(), true)),
+        "ambient: the viewer's, en_US"
+    );
     // Alternatives: the negative form in parentheses, or after a minus sign.
     assert_eq!(number_args("num{$z,zz9.99}|num{($z,zz9.99)}", None, &locales), Some((2, 0, 2, dollar.clone(), true)));
     assert_eq!(number_args("num{z,zz9.99}|num{-z,zz9.99}", None, &locales), Some((2, 0, 0, none.clone(), true)));
@@ -4580,7 +4584,10 @@ fn number_pictures_acrobat_can_show_become_its_number_format() {
     assert_eq!(number_args("num{z,zzz,zz9.99 $}", Some("de_DE"), &locales), Some((2, 2, 0, " €".into(), false)));
     assert_eq!(number_args("num(de_DE){$ zzz9.99}", Some("en_US"), &locales), Some((2, 3, 0, "€ ".into(), true)), "the clause's locale wins");
     assert_eq!(number_args("num.currency{}", Some("de_DE"), &locales), Some((2, 2, 0, " €".into(), false)));
-    // Unnamed, `ambient` or en_US without a localeSet entry: en_US.
+    // Unnamed or `ambient`: the localeSet's en_US, which gives num.currency{} its pattern.
+    assert_eq!(number_args("num.currency{}", None, &locales), Some((2, 0, 2, dollar.clone(), true)));
+    assert_eq!(number_args("num.currency{}", Some("ambient"), &locales), Some((2, 0, 2, dollar.clone(), true)));
+    // Unnamed, or en_US, without a localeSet entry: en_US's symbols.
     assert_eq!(number_args("num{$z,zz9.99}", None, &[]), Some((2, 0, 0, dollar.clone(), true)));
     assert_eq!(number_args("num{$z,zz9.99}", Some("en_US"), &[]), Some((2, 0, 0, dollar, true)));
 }
@@ -4663,8 +4670,13 @@ fn locale_sets_and_locale_attributes_are_parsed() {
     assert_eq!(de.number_pattern("currency"), Some("z,zz9.99 $"));
     assert_eq!(de.number_pattern("missing"), None);
     assert_eq!(tpl.root.common.locale.as_deref(), Some("en_US"));
+    // `ambient` is kept: it names the viewer's locale, which a locale further out doesn't override.
     let xml = crate::fixtures::number_pictures_template("").replace(r#"locale="en_US""#, r#"locale="ambient""#);
-    assert_eq!(parse(&xml).unwrap().0.root.common.locale, None);
+    assert_eq!(parse(&xml).unwrap().0.root.common.locale.as_deref(), Some("ambient"));
+    // Only a localeSet in XFA's locale-set namespace is the form's.
+    let xml =
+        crate::fixtures::number_pictures_template("").replace(r#"<localeSet xmlns="http://www.xfa.org/schema/xfa-locale-set/2.7/">"#, "<localeSet>");
+    assert!(parse(&xml).unwrap().0.locales.is_empty());
 }
 
 /// #5820: number fields with a picture Acrobat can show become number widgets, which keep the
@@ -4691,8 +4703,8 @@ fn number_fields_are_laid_out_as_number_widgets_with_their_raw_values() {
     }
 }
 
-/// #5820: a field takes the nearest locale an enclosing subform names, and a field on a master
-/// page the root subform's, as the page set is inside it.
+/// #5820: a field takes the nearest locale an enclosing subform names, `ambient` (the viewer's,
+/// en_US) included, and a field on a master page the root subform's, as the page set is inside it.
 #[test]
 fn number_fields_take_the_locale_of_their_subform_and_master_pages_the_roots() {
     let xml = crate::fixtures::number_pictures_template("").replace(
@@ -4701,13 +4713,16 @@ fn number_fields_take_the_locale_of_their_subform_and_master_pages_the_roots() {
         r#"<subform name="form" layout="tb" locale="de_DE">
  <pageSet><pageArea name="front"><field name="sum" x="0.5in" y="10.5in" w="2in" h="0.3in"><ui><numericEdit/></ui><value><decimal/></value><format><picture>num{z,zz9.99}</picture></format></field>"#,
     );
-    assert!(xml.contains(r#"name="sum""#));
+    let xml = xml.replace(r#"<field name="price" w="2in" h="0.3in">"#, r#"<field name="price" w="2in" h="0.3in" locale="ambient">"#);
+    assert!(xml.contains(r#"name="sum""#) && xml.contains(r#"locale="ambient""#));
     let form = layout_xml(&xml).unwrap();
     let w = widgets(&form.pages[0]);
     let sum = w.iter().find(|w| w.name == "sum").expect("the master page field");
     assert_eq!(sum.kind, WidgetKind::Number(crate::number::NumberFormat { decimals: 2, sep: 2, neg: 0, currency: String::new(), prepend: true }));
     let qty = w.iter().find(|w| w.name == "qty").expect("a flowed field");
     assert_eq!(qty.kind, WidgetKind::Number(crate::number::NumberFormat { decimals: 0, sep: 2, neg: 0, currency: String::new(), prepend: true }));
+    let price = w.iter().find(|w| w.name == "price").expect("an ambient field");
+    assert_eq!(price.kind, WidgetKind::Number(crate::number::NumberFormat { decimals: 2, sep: 0, neg: 0, currency: "$".into(), prepend: true }));
 }
 
 /// #5820: a number widget's field carries `AFNumber_Format` and `AFNumber_Keystroke` with its

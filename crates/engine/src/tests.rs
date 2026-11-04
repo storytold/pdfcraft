@@ -6687,7 +6687,9 @@ fn xfa_number_fields_are_shown_through_their_display_pictures() {
         assert!(text.contains(picture), "{picture} in {text}");
     }
     assert!(!text.contains("279893.88"), "no raw price: {text}");
-    assert!(text.contains("1.00000000"), "optional decimals can't be shown: the raw value stands: {text}");
+    // The quantity's `1.00000000` shows as `1`; only the ratio's optional decimals, which can't be
+    // shown, leave the raw value standing.
+    assert_eq!(text.matches("1.00000000").count(), 1, "{text}");
     let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_default();
     assert_eq!(value(&s, "price"), ["279893.88000000"], "stored as the data holds it");
     s.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("1234.5".into()) }).unwrap();

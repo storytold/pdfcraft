@@ -236,7 +236,7 @@ fn parse_common(n: XmlNode) -> Common {
         font: parse_font(child(n, "font")),
         para: parse_para(child(n, "para")),
         col_span: n.attribute("colSpan").and_then(|c| c.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 64),
-        locale: n.attribute("locale").map(str::trim).filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("ambient")).map(str::to_string),
+        locale: n.attribute("locale").map(str::trim).filter(|l| !l.is_empty()).map(str::to_string),
     }
 }
 
@@ -783,7 +783,9 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     collect_page_roles(&[Node::Subform(Box::new(root_sf.clone()))], &mut page_roles, 0);
     // The localeSet packet beside the template says what each locale's number symbols are; like
     // the template, only a packet of the XDP itself, not one nested in data.
-    let locale_set = root.children().find(|n| n.is_element() && n.tag_name().name() == "localeSet");
+    let locale_set = root
+        .children()
+        .find(|n| n.is_element() && n.tag_name().name() == "localeSet" && n.tag_name().namespace().is_some_and(|ns| ns.contains("xfa-locale-set")));
     let locales = locale_set.map(parse_locales).unwrap_or_default();
     Ok((Template { root: root_sf, page_roles, locales }, warnings))
 }

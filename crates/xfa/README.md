@@ -165,14 +165,17 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   (`num{$z,zzz,zz9.99}`, `num{($z,zzz,zz9.99)}`, `$z,zz9.99|($z,zz9.99)`). `.`, `,` and `$`
   show the symbols of the field's locale (its own `locale`, else the nearest enclosing
   object's; a master page takes the root subform's) from the `localeSet` packet, which also
-  gives `num.decimal{}` and `num.currency{}` their patterns; an unnamed or `ambient` locale is
-  en_US. Any other picture (optional decimals, zero- or space-filled digits, signs, `CR`/`DB`,
+  gives `num.decimal{}` and `num.currency{}` their patterns. An unnamed locale, or `ambient`
+  (the viewer's own, which a locale further out doesn't override), is en_US, as the packet
+  describes it when it does. Only a `localeSet` packet of the XDP itself, in XFA's locale-set
+  namespace, is read. Any other picture (optional decimals, zero- or space-filled digits, signs, `CR`/`DB`,
   `E`, `%`, literal text, `num.integer{}`, `num.percent{}`), a locale the form doesn't describe
   (other than en_US) and separators Acrobat has no style for (a space) keep the raw value.
   Where `AFNumber_Format` and XFA still differ: a negative value in a picture with no sign or
   parentheses shows a minus sign, and a value with more digits than the picture has shows them
   all, where XFA's formatting would fail and show the raw value. `formattedValue` in scripts
-  is still the raw value for number pictures.
+  is still the raw value for number pictures, and a `nonInteractive` number field, which is
+  drawn as text rather than as a widget, shows its raw value.
 - **Data files.** `export_data` writes the data as Acrobat's Export Data does: an XML document
   holding the data alone (the form's root data node at the root, its namespaces declared) or
   an XDP holding the whole datasets and a reference to the PDF. `import_data` takes an XDP, a
