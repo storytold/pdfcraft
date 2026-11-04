@@ -263,7 +263,9 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             // A button of the group can be read-only on its own: it can't be picked, and a
             // selected one can't be switched off by picking another.
             let selects = |w: &Widget| w.on_state.is_some() && w.on_state.as_deref() == choice.as_deref();
-            let selected = |w: &Widget| w.state.is_some() && w.state == w.on_state;
+            // (the group's /V names its selection too, when a button's /AS says nothing)
+            let selected =
+                |w: &Widget| (w.state.is_some() && w.state == w.on_state) || w.on_state.as_deref().is_some_and(|on| f.value.iter().any(|v| v == on));
             if f.widgets.iter().any(|w| w.read_only && (selects(w) || selected(w))) {
                 return Err(FormError::ReadOnly(f.name.clone()));
             }
@@ -658,8 +660,13 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
         // A reset is not blocked by NoToggleToOff: go through the writer directly.
         let mut tmp = f.clone();
         tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
-        write_value(doc, &tmp, &v, &mut NoScripts)?;
-        changed += 1;
+        match write_value(doc, &tmp, &v, &mut NoScripts) {
+            Ok(()) => changed += 1,
+            // a read-only button of the group holds the value: this field is left as it is, and the
+            // rest of the form is still cleared
+            Err(FormError::ReadOnly(_)) => {}
+            Err(e) => return Err(e),
+        }
     }
     recalculate(doc)?;
     Ok(changed)
