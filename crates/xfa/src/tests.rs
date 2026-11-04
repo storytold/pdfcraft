@@ -694,6 +694,25 @@ fn large_text_drawn_in_many_instances_spends_the_draw_budget() {
     assert!(layout_xml(&one).is_ok(), "a single large draw must lay out");
 }
 
+/// The draw budget counts the values of embedded fields as well as the text around them: a short
+/// text embedding a long value, drawn in many instances, is as much work as the value written out
+/// each time (CodeRabbit review on #5852).
+#[test]
+fn embedded_values_drawn_in_many_instances_spend_the_draw_budget() {
+    let value = "word ".repeat(4000); // 20,000 characters
+    let span = r##"<span xfa:embed="#long" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"##;
+    let draw = format!(
+        r#"<draw w="1in" h="0.5in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>x {span}</p></body></exData></value></draw>"#
+    );
+    let field = format!(r#"<field id="long" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><value><text>{value}</text></value></field>"#);
+    let many =
+        format!(r#"<template><subform layout="tb">{field}<subform layout="tb"><occur initial="50" max="-1"/>{draw}</subform></subform></template>"#);
+    assert!(matches!(layout_xml(&many), Err(XfaError::TooLarge(_))), "a long embedded value in many instances must be refused");
+    // One copy lays out: the budget does not reject an ordinary form.
+    let one = format!(r#"<template><subform layout="tb">{field}{draw}</subform></template>"#);
+    assert!(layout_xml(&one).is_ok(), "a single draw embedding a long value must lay out");
+}
+
 #[test]
 fn a_packet_stream_listed_many_times_is_read_once() {
     let mut doc = Document::open(Arc::new(shell("<template><subform/></template>"))).unwrap();
