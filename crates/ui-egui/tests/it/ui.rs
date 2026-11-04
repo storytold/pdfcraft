@@ -1931,3 +1931,75 @@ fn full_screen_neither_is_remembered_nor_hides_the_last_view() {
     view.leave_presentation();
     assert_eq!((view.fit, view.zoom, view.layout, view.continuous), (Fit::None, 0.5, PageLayout::TwoUp, false), "the remembered view");
 }
+
+/// A 200 × 300 pt page with one line, from (50, 150) to (150, 150).
+fn one_line_pdf() -> Vec<u8> {
+    let content = "1 w 50 150 m 150 150 l S";
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 4 0 R /Resources << >> >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    pdf
+}
+
+/// #6116: the snap marker shows where the first point will land, before any point is placed,
+/// as it does for the second.
+#[test]
+fn the_measure_snap_marker_shows_before_the_first_point() {
+    let mut h = harness(|app| {
+        app.open_bytes("plan.pdf", None, one_line_pdf()).unwrap();
+        app.set_option("zoom", "200").unwrap();
+        app.set_option("quick", "measure-distance").unwrap();
+    });
+    h.run_steps(4);
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    // About a point off each end of the line (PDF y up), within the 6 px snap distance.
+    let at = |x: f32, y: f32| egui::pos2(r.left() + x * r.width() / 200.0, r.top() + (300.0 - y) * r.height() / 300.0);
+    let marked = |h: &Harness<'static, PdfCraftApp>| painted_text(h).iter().any(|(text, _, _)| text == "Endpoint");
+    h.hover_at(at(51.0, 150.5));
+    h.run_steps(2);
+    assert!(h.state().views[0].measure.points.is_empty(), "nothing placed yet");
+    assert!(marked(&h), "the first point's snap is shown");
+    // Off the line, nothing to snap to: no marker.
+    h.hover_at(at(100.0, 250.0));
+    h.run_steps(2);
+    assert!(!marked(&h));
+    // The first point lands where the marker said, and the second still shows its own.
+    h.hover_at(at(51.0, 150.5));
+    h.run_steps(2);
+    h.drag_at(at(51.0, 150.5)); // press
+    h.drop_at(at(51.0, 150.5)); // release
+    h.run_steps(2);
+    let first = *h.state().views[0].measure.points.first().expect("the first point is placed");
+    assert!((first[0] - 50.0).abs() < 1e-6 && (first[1] - 150.0).abs() < 1e-6, "snapped to the endpoint: {first:?}");
+    h.hover_at(at(149.0, 149.5));
+    h.run_steps(2);
+    assert!(marked(&h), "the second point's snap is shown too");
+
+    // Every measuring tool shows it for its first point, and none does with snapping off.
+    for tool in ["measure-perimeter", "measure-area", "measure-calibrate", "measure-distance"] {
+        h.state_mut().set_option("quick", tool).unwrap();
+        h.hover_at(at(51.0, 150.5));
+        h.run_steps(2);
+        assert!(h.state().views[0].measure.points.is_empty(), "{tool}: a new tool starts with no points");
+        assert!(marked(&h), "{tool}: the first point's snap is shown");
+    }
+    h.state_mut().views[0].measure.snap_enabled = false;
+    h.hover_at(at(149.0, 149.5));
+    h.run_steps(2);
+    assert!(!marked(&h), "no marker without Snap to drawing");
+}
