@@ -99,6 +99,7 @@ impl PdfCraftApp {
             #[cfg(target_os = "linux")]
             desktop_theme_enabled: false,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
+            invert_middle_drag: false,
             animation_effects: motion::AnimationEffects::default(),
             motion: motion::Motion::default(),
             language: i18n::AUTO.to_string(),
@@ -144,6 +145,7 @@ impl PdfCraftApp {
             #[cfg(all(test, not(target_arch = "wasm32")))]
             open_prepare_gate: None,
             pinned: Default::default(),
+            recent_check: Default::default(),
             pinned_tools: Vec::new(),
             pin_tool_search: String::new(),
             toast: None,
@@ -258,6 +260,7 @@ impl PdfCraftApp {
             fonts_cjk: theme::CjkPreference::Default,
             control: None,
             bookmark_rename: None,
+            bookmark_clipboard: None,
             last_opened_url: None,
             community_card_closed: false,
             pending_link: None,
@@ -452,6 +455,7 @@ impl eframe::App for PdfCraftApp {
             }
             self.poll_pending_opens();
         }
+        self.check_restored_recent();
         // Chinese wants its own faces before the Japanese ones (one baseline per line).
         let cjk = theme::CjkPreference::for_language(lang.code());
         if !self.styled {
