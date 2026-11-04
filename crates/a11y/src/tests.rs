@@ -398,6 +398,25 @@ fn class_map_rename_keeps_attributes_and_updates_shared_array_assignments() {
 }
 
 #[test]
+fn class_rename_accepts_existing_names_outside_the_new_name_policy() {
+    let mut doc = structure_doc(&["<< /S /Document /K 4 0 R >>".into(), "<< /S /P /C /Old#20Name >>".into()]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(
+            b"ClassMap".to_vec(),
+            Object::Dict({
+                let mut map = pdfcraft_cos::Dict::new();
+                map.set(b"Old Name".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                map
+            }),
+        );
+    })
+    .unwrap();
+    rename_class(&mut doc, "Old Name", "NewName").unwrap();
+    assert_eq!(tags(&doc)[1].classes, ["NewName"]);
+    assert_eq!(class_map(&doc, 0, 10).1[0].name, "NewName");
+}
+
+#[test]
 fn class_assignment_requires_an_existing_class_and_can_be_cleared() {
     let mut doc = structure_doc(&["<< /S /Document /K 4 0 R >>".into(), "<< /S /P >>".into()]);
     doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
