@@ -829,6 +829,29 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
             view.flash = None;
         }
     }
+    if let Some((fp, [x0, y0, x1, y1], t0)) = view.dest_flash
+        && fp == i
+    {
+        let now = ui.input(|inp| inp.time);
+        let t0 = if t0 == 0.0 { now } else { t0 };
+        view.dest_flash = Some((fp, [x0, y0, x1, y1], t0));
+        let age = (now - t0).max(0.0);
+        if age < 1.5 {
+            let step = (age / 0.25) as usize;
+            if step.is_multiple_of(2) {
+                let r = xf.rect;
+                let sr = Rect::from_min_max(
+                    egui::pos2(r.left() + x0 * r.width(), r.top() + y0 * r.height()),
+                    egui::pos2(r.left() + x1 * r.width(), r.top() + y1 * r.height()),
+                );
+                painter.rect_stroke(sr, CornerRadius::ZERO, Stroke::new(2.0, Color32::BLACK), egui::StrokeKind::Inside);
+            }
+            let next = ((step + 1) as f64 * 0.25).min(1.5);
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((next - age).max(0.01)));
+        } else {
+            view.dest_flash = None;
+        }
+    }
     // Validation is viewer chrome over the signer's original artwork, which
     // may still say "Signature Not Verified". These badges never enter document
     // streams, image/text exports, vector printing or Print as Image.

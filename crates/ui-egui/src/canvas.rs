@@ -514,6 +514,9 @@ pub struct DocView {
     single_edges: Option<(usize, bool, bool)>,
     /// Briefly outline an annotation after navigating to it from a panel.
     pub flash: Option<(usize, [f32; 4], f64)>,
+    /// Active destination flash indicator after following an internal link:
+    /// `(page, normalized_rect [x0, y0, x1, y1], start_time)`.
+    pub dest_flash: Option<(usize, [f32; 4], f64)>,
     /// Compare files: differences shaded on this document's pages (page, user-space box, colour).
     pub compare_marks: Vec<(usize, [f32; 4], Color32)>,
     /// Full screen (Acrobat's Full Screen Mode): the display saved on entering it, while the view
@@ -945,6 +948,7 @@ impl DocView {
             side_edges: None,
             single_edges: None,
             flash: None,
+            dest_flash: None,
             compare_marks: Vec::new(),
             presentation: None,
             pages: HashMap::new(),
@@ -1078,6 +1082,7 @@ impl DocView {
         self.goto_point = None;
         self.zoom_anchor = None;
         self.flash = None;
+        self.dest_flash = None;
         // Thumbnail drags hold page indexes from before the change.
         self.panel_drag = None;
         self.org_drag = None;
@@ -1138,6 +1143,60 @@ impl DocView {
         self.wheel_boost_x.reset();
         self.wheel_boost_y.reset();
         self.wheel_motion.reset();
+    }
+
+    /// Computes the normalized destination indicator rectangle `[x0, y0, x1, y1]` (as fractions
+    /// `0.0..=1.0` of the displayed page) for `dest` on `page`, to flash after following a link.
+    pub(crate) fn dest_indicator_rect(&self, page: usize, dest: DestView, info: &DocInfo) -> Option<[f32; 4]> {
+        let p = info.pages.get(page)?;
+        let (dw, dh) = self.display_size(p);
+        let (dw, dh) = (dw.max(1.0), dh.max(1.0));
+        let band_x = (24.0 / dw).clamp(0.02, 0.3);
+        let band_y = (24.0 / dh).clamp(0.02, 0.3);
+        let point = |x: Option<f32>, y: Option<f32>| p.dest_fraction(x, y, self.rotation);
+        // The destination coordinate lands on one displayed axis only; a quarter turn swaps it.
+        let band = |[fx, fy]: [Option<f32>; 2], default_vertical: bool| match (fx, fy) {
+            (Some(x), _) => {
+                let x1 = (x + band_x).min(1.0);
+                [(x1 - band_x).max(0.0), 0.0, x1, 1.0]
+            }
+            (None, Some(y)) => {
+                let y1 = (y + band_y).min(1.0);
+                [0.0, (y1 - band_y).max(0.0), 1.0, y1]
+            }
+            (None, None) if default_vertical => [0.0, 0.0, band_x, 1.0],
+            (None, None) => [0.0, 0.0, 1.0, band_y],
+        };
+        let rect = match dest {
+            DestView::Top | DestView::Fit => [0.0, 0.0, 1.0, band_y],
+            DestView::FitH { top } => band(point(None, top), (u32::from(p.rotation) + u32::from(self.rotation)) % 180 == 90),
+            DestView::FitV { left } => band(point(left, None), (u32::from(p.rotation) + u32::from(self.rotation)).is_multiple_of(180)),
+            DestView::Xyz { left, top, .. } => {
+                let [fx, fy] = point(left, top);
+                let (x0, x1) = match fx {
+                    Some(x) => {
+                        let x1 = (x + (120.0 / dw).clamp(0.1, 0.5)).min(1.0);
+                        ((x1 - band_x).min(x).max(0.0), x1)
+                    }
+                    None => (0.0, 1.0),
+                };
+                let (y0, y1) = match fy {
+                    Some(y) => {
+                        let y1 = (y + band_y).min(1.0);
+                        ((y1 - band_y).max(0.0), y1)
+                    }
+                    None => (0.0, band_y),
+                };
+                [x0, y0, x1, y1]
+            }
+            DestView::FitR { rect } => {
+                let ([Some(ax), Some(ay)], [Some(bx), Some(by)]) = (point(Some(rect[0]), Some(rect[3])), point(Some(rect[2]), Some(rect[1]))) else {
+                    return None;
+                };
+                [ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)]
+            }
+        };
+        Some(rect)
     }
 }
 
@@ -2655,6 +2714,7 @@ fn follow_link(
     app: &mut PdfCraftApp,
     index: usize,
     target: Option<LinkTarget>,
+    now: f64,
 ) -> Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> {
     let view_id = app.views[index].id;
     match target? {
@@ -2662,6 +2722,8 @@ fn follow_link(
             let view = &mut app.views[index];
             if let Some(doc) = app.session.get(view.id) {
                 view.go_to_dest(p, dest, &doc.info);
+                let target = view.current;
+                view.dest_flash = view.dest_indicator_rect(target, dest, &doc.info).map(|r| (target, r, now));
             }
         }
         LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),
@@ -3223,7 +3285,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         None => {}
     }
     schedule_presentation_turn(ui, view, present, clicked_link.is_some());
-    let remote_open = follow_link(app, index, clicked_link);
+    let now = ui.input(|i| i.time);
+    let remote_open = follow_link(app, index, clicked_link, now);
     if tool == QuickTool::Crop && cropped {
         tool = QuickTool::Select;
     }
