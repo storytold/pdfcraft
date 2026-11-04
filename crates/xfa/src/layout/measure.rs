@@ -1,6 +1,9 @@
 use super::common::clamp_opt;
 use super::field::auto_check_reserve;
-use super::*;
+use super::{
+    Access, Area, Ctx, ExclGroup, Face, Field, Font, Layout, Layouter, MAX_DEPTH, MAX_MEASURES, Measured, Node, Para, Placement, Rect, Subform, Ui,
+    Value, data_path, text,
+};
 
 impl Layouter<'_> {
     /// The width and height `node` takes in `avail_w`: its own size, else what its content needs
@@ -138,7 +141,7 @@ impl Layouter<'_> {
             Layout::Positioned => visible
                 .map(|k| {
                     let (w, h) = self.size_of(k, avail_w, ctx, depth + 1);
-                    k.common().top_left(w, h).0 + w
+                    k.standing_box(w, h).right()
                 })
                 .fold(0.0, f64::max)
                 .min(avail_w),
@@ -294,7 +297,7 @@ impl Layouter<'_> {
             .map(|k| {
                 let c = k.common();
                 let (w, h) = self.size_of(k, (inner_w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1);
-                c.top_left(w, h).1 + h
+                k.standing_box(w, h).bottom()
             })
             .fold(0.0, f64::max)
     }
