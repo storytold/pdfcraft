@@ -909,6 +909,8 @@ fn process_cmyk(
         || d.name(b"ImageMask").is_some()
         || matches!(d.get(b"ImageMask"), Some(Object::Bool(true)))
         || d.int(b"BitsPerComponent") != Some(8)
+        || d.contains(b"SMaskInData")
+        || d.contains(b"OPI")
     {
         return None;
     }
@@ -920,10 +922,28 @@ fn process_cmyk(
     }
 
     let was_dct = is_dct(s)?;
-    // ColorTransform 1 without an Adobe marker indicates YCbCrK (ISO 32000-2 Table 13), which
-    // standard CMYK decoders decode as raw CMYK. Skip conversion fail-safe instead of producing wrong colors.
-    if was_dct && adobe_transform(&s.raw)?.is_none() && color_transform(doc, s)?.is_some_and(|c| c != 0) {
-        return None;
+    // Validate JPEG color transform (ISO 32000-2 Table 13). Refuse contradictory transforms,
+    // unknown Adobe markers, and YCbCrK streams lacking an Adobe marker (ColorTransform 1).
+    if was_dct {
+        let ct = color_transform(doc, s)?;
+        match adobe_transform(&s.raw)? {
+            Some(0) => {
+                if ct.is_some_and(|c| c != 0) {
+                    return None;
+                }
+            }
+            Some(2) => {
+                if ct.is_some_and(|c| c == 0) {
+                    return None;
+                }
+            }
+            None => {
+                if ct.is_some_and(|c| c != 0) {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
     }
     let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
     if w == 0 || h == 0 || (w as u64) * (h as u64) > MAX_PIXELS {
