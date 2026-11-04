@@ -2646,21 +2646,22 @@ fn a_relayout_reuses_the_shadings_the_first_pass_wrote() {
 }
 
 /// A first-pass shading the file has since given a BBox, a function Range, or an Extend
-/// short of [true true] is not this writer's shading any more (#6079): each of those clips
-/// or stops the progression, so a re-layout writes its own object instead of reusing it.
+/// short of [true true] on either side is not this writer's shading any more (#6079): each
+/// of those clips or stops the progression, so a re-layout writes its own object instead of
+/// reusing it. Both shading types are spoiled: the reuse rules apply to each.
 #[test]
 fn a_relayout_does_not_reuse_a_shading_that_clips_or_stops_early() {
     let blue = r#"<color value="0,0,255"/>"#;
-    let xdp = fill_form(&[fill_row(0.0, &format!("<linear>{blue}</linear>"), "", "")]);
+    let xdp = fill_form(&[fill_row(0.0, &format!("<linear>{blue}</linear>"), "", ""), fill_row(1.0, &format!("<radial>{blue}</radial>"), "", "")]);
     let form = layout_xml(&xdp).unwrap();
-    let shading_ref = |doc: &Document| {
+    let shading_ref = |doc: &Document, name: &[u8]| {
         let root = doc.get(doc.root().unwrap());
         let pages = doc.get(root.as_dict().unwrap().reference(b"Pages").unwrap());
         let kids = pages.as_dict().unwrap().get(b"Kids").map(|k| doc.resolve(k)).unwrap();
         let page = doc.get(kids.as_array().unwrap()[0].as_ref().unwrap()).as_dict().unwrap().clone();
         let resources = doc.resolve(page.get(b"Resources").unwrap());
         let shadings = resources.as_dict().unwrap().get(b"Shading").map(|s| doc.resolve(s)).expect("the page names its shadings");
-        shadings.as_dict().unwrap().reference(b"Sh0").expect("the gradient's shading")
+        shadings.as_dict().unwrap().reference(name).expect("the gradient's shading")
     };
     // (name, the mutation a foreign editor could have made to the first pass's shading)
     type Spoil = Box<dyn Fn(&mut Dict)>;
@@ -2678,16 +2679,19 @@ fn a_relayout_does_not_reuse_a_shading_that_clips_or_stops_early() {
             }),
         ),
         ("an Extend of [true false]", Box::new(|d| d.set(b"Extend".to_vec(), Object::Array(vec![Object::Bool(true), Object::Bool(false)])))),
+        ("an Extend of [false true]", Box::new(|d| d.set(b"Extend".to_vec(), Object::Array(vec![Object::Bool(false), Object::Bool(true)])))),
     ];
-    for (name, spoil_it) in spoil {
-        let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
-        crate::pdf::write_form(&mut doc, &form).unwrap();
-        let first = shading_ref(&doc);
-        let mut d = doc.get(first).as_dict().expect("a shading dict").clone();
-        spoil_it(&mut d);
-        doc.set(first, Object::Dict(d));
-        crate::pdf::write_form(&mut doc, &form).unwrap();
-        assert_ne!(shading_ref(&doc), first, "a shading with {name} is not reused");
+    for name in [b"Sh0".as_slice(), b"Sh1".as_slice()] {
+        for (spoil_name, spoil_it) in &spoil {
+            let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+            crate::pdf::write_form(&mut doc, &form).unwrap();
+            let first = shading_ref(&doc, name);
+            let mut d = doc.get(first).as_dict().expect("a shading dict").clone();
+            spoil_it(&mut d);
+            doc.set(first, Object::Dict(d));
+            crate::pdf::write_form(&mut doc, &form).unwrap();
+            assert_ne!(shading_ref(&doc, name), first, "a shading with {spoil_name} is not reused");
+        }
     }
 }
 
