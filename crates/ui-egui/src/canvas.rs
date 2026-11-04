@@ -2607,13 +2607,15 @@ fn schedule_presentation_turn(ui: &egui::Ui, view: &mut DocView, click: Option<b
 
 /// Follows the link that was clicked. A link to another file comes back, to be opened once the
 /// document is no longer borrowed.
-fn follow_link(
-    app: &mut PdfCraftApp,
-    index: usize,
-    target: Option<LinkTarget>,
-) -> Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> {
+enum FollowedLink {
+    Remote(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination),
+    Embedded(pdfcraft_engine::DocId, pdfcraft_render::EmbeddedTarget, pdfcraft_render::RemoteDestination),
+}
+
+fn follow_link(app: &mut PdfCraftApp, index: usize, target: Option<LinkTarget>) -> Option<FollowedLink> {
+    let target = target?;
     let view_id = app.views[index].id;
-    match target? {
+    match target {
         LinkTarget::Page(p, dest) => {
             let view = &mut app.views[index];
             if let Some(doc) = app.session.get(view.id) {
@@ -2622,7 +2624,8 @@ fn follow_link(
         }
         LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),
         LinkTarget::SetLayers { changes, preserve_rb } => set_layers(app, index, &changes, preserve_rb),
-        LinkTarget::RemoteGoTo { file, destination, .. } => return Some((view_id, file, destination)),
+        LinkTarget::RemoteGoTo { file, destination, .. } => return Some(FollowedLink::Remote(view_id, file, destination)),
+        LinkTarget::EmbeddedGoTo { target, destination, .. } => return Some(FollowedLink::Embedded(view_id, target, destination)),
         LinkTarget::Other(s) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
     }
     None
@@ -3166,7 +3169,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         None => {}
     }
     schedule_presentation_turn(ui, view, present, clicked_link.is_some());
-    let remote_open = follow_link(app, index, clicked_link);
+    let followed_link = follow_link(app, index, clicked_link);
     if tool == QuickTool::Crop && cropped {
         tool = QuickTool::Select;
     }
@@ -3185,7 +3188,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         open_table,
         form_notice,
         copy_selected,
-        remote_open,
+        followed_link,
         form,
         generation,
         avail,
@@ -3207,7 +3210,7 @@ struct FrameRequests {
     open_table: Option<(usize, [f64; 4])>,
     form_notice: Option<crate::forms_ui::FormNotice>,
     copy_selected: bool,
-    remote_open: Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)>,
+    followed_link: Option<FollowedLink>,
     form: Arc<Vec<pdfcraft_engine::FormField>>,
     generation: u64,
     avail: Rect,
@@ -3229,7 +3232,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         open_table,
         form_notice,
         copy_selected,
-        remote_open,
+        followed_link,
         form,
         generation,
         avail,
@@ -3430,8 +3433,10 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         let page_left = app.views[index].screen_rects.iter().map(|(_, r)| r.left()).reduce(f32::min);
         quick_bar(app, avail, page_left, ui);
     }
-    if let Some((source, file, destination)) = remote_open {
-        app.open_remote_link(source, file, destination);
+    match followed_link {
+        Some(FollowedLink::Remote(source, file, destination)) => app.open_remote_link(source, file, destination),
+        Some(FollowedLink::Embedded(source, target, destination)) => app.open_embedded_link(source, target, destination),
+        None => {}
     }
 }
 

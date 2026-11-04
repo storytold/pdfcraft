@@ -1,5 +1,7 @@
 use super::core::{limited_pdf_string, pretty_date, spend};
-use super::model::{Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, link_replies};
+use super::model::{
+    Annotation, AttachmentSource, DestView, EmbeddedTarget, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, link_replies,
+};
 use super::navigation::text_string;
 use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
 
@@ -214,6 +216,7 @@ impl<'a> Inspector<'a> {
                 Some("SetOCGState") => self.layer_state(a),
                 Some("GoToR") => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
                 Some("Launch") => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
+                Some("GoToE") => self.embedded_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToE".into())),
                 Some(other) => LinkTarget::Other(other.to_string()),
                 None => return None,
             }
@@ -221,35 +224,111 @@ impl<'a> Inspector<'a> {
         Some(Link { page, index, rect, target })
     }
 
-    fn remote_go_to(&self, action: &Dictionary) -> Option<LinkTarget> {
-        let file = self.action_file(action)?;
-        let destination = match action.get(b"D") {
-            Err(_) => RemoteDestination::Default,
+    /// Parse a destination `/D` from an action dictionary (remote or embedded Go-To).
+    fn action_destination(&self, action: &Dictionary) -> Option<RemoteDestination> {
+        match action.get(b"D") {
+            Err(_) => Some(RemoteDestination::Default),
             Ok(o) => match self.resolve(o) {
                 Object::Array(items) => {
                     let page = items.first().and_then(|o| self.resolve(o).as_i64().ok()).and_then(|n| usize::try_from(n).ok())?;
                     let kind = items.get(1).map(|o| self.resolve(o)).and_then(|o| o.as_name().ok());
                     let operands: [Option<f32>; 4] = std::array::from_fn(|i| items.get(i + 2).and_then(|o| self.resolve(o).as_float().ok()));
-                    RemoteDestination::Page { page, view: DestView::from_operands(kind, &operands) }
+                    Some(RemoteDestination::Page { page, view: DestView::from_operands(kind, &operands) })
                 }
                 Object::Name(name) if name.len() <= MAX_REMOTE_DESTINATION_NAME_BYTES => {
                     let name = String::from_utf8_lossy(name).into_owned();
                     if name.is_empty() || name.len() > MAX_REMOTE_DESTINATION_NAME_BYTES {
                         return None;
                     }
-                    RemoteDestination::Named(name)
+                    Some(RemoteDestination::Named(name))
                 }
                 Object::String(bytes, _) if bytes.len() <= MAX_REMOTE_DESTINATION_NAME_BYTES => {
                     let name = text_string(bytes);
                     if name.is_empty() || name.len() > MAX_REMOTE_DESTINATION_NAME_BYTES {
                         return None;
                     }
-                    RemoteDestination::Named(name)
+                    Some(RemoteDestination::Named(name))
                 }
-                _ => return None,
+                _ => None,
             },
-        };
+        }
+    }
+
+    /// Parse a remote Go-To action (`GoToR`, ISO 32000-2 §12.6.4.3).
+    fn remote_go_to(&self, action: &Dictionary) -> Option<LinkTarget> {
+        let file = self.action_file(action)?;
+        let destination = self.action_destination(action)?;
         Some(LinkTarget::RemoteGoTo { launch: false, file, destination, new_window: self.new_window(action) })
+    }
+
+    /// Parse an embedded Go-To action (`GoToE`, ISO 32000-2 §12.6.4.4).
+    fn embedded_go_to(&self, action: &Dictionary) -> Option<LinkTarget> {
+        // If /F is present and non-empty, the target is in an external file, which is not supported here.
+        if action.get(b"F").is_ok() {
+            return None;
+        }
+        let target = self.embedded_target(action.get(b"T").ok()?)?;
+        let destination = self.action_destination(action)?;
+        Some(LinkTarget::EmbeddedGoTo { target, destination, new_window: self.new_window(action) })
+    }
+
+    /// Parse a target dictionary (ISO 32000-2 §12.6.4.4, Table 205).
+    fn embedded_target(&self, target_obj: &Object) -> Option<EmbeddedTarget> {
+        let dict = self.dict(target_obj)?;
+        let relationship = self.name(dict, b"R")?;
+        match relationship.as_str() {
+            "C" => {
+                if let Ok(name_obj) = dict.get(b"N") {
+                    let name = match self.resolve(name_obj) {
+                        Object::String(bytes, _) => limited_pdf_string(bytes, MAX_REMOTE_FILE_SPEC_BYTES)?,
+                        Object::Name(name) if name.len() <= MAX_REMOTE_FILE_SPEC_BYTES => String::from_utf8_lossy(name).into_owned(),
+                        _ => return None,
+                    };
+                    if !name.is_empty() {
+                        return Some(EmbeddedTarget::Name(name));
+                    }
+                }
+                if let Ok(page_obj) = dict.get(b"P")
+                    && let Ok(page_num) = self.resolve(page_obj).as_i64()
+                    && let Ok(page) = usize::try_from(page_num)
+                    && let Ok(annot_obj) = dict.get(b"A")
+                {
+                    match self.resolve(annot_obj) {
+                        Object::Integer(index_num) => {
+                            if let Ok(index) = usize::try_from(*index_num) {
+                                return Some(EmbeddedTarget::Annotation { page, index });
+                            }
+                        }
+                        Object::String(nm_bytes, _) => {
+                            let nm = text_string(nm_bytes);
+                            if let Some(index) = self.find_annot_by_nm(page, &nm) {
+                                return Some(EmbeddedTarget::Annotation { page, index });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                None
+            }
+            "P" => Some(EmbeddedTarget::Parent),
+            _ => None,
+        }
+    }
+
+    fn find_annot_by_nm(&self, page: usize, nm: &str) -> Option<usize> {
+        let pid = *self.page_ids.get(page)?;
+        let page_dict = self.doc.get_dictionary(pid).ok()?;
+        let annots = page_dict.get(b"Annots").ok()?;
+        let list = self.resolve(annots).as_array().ok()?;
+        for (index, item) in list.iter().enumerate() {
+            if let Some(dict) = self.dict(item)
+                && let Ok(name_obj) = dict.get(b"NM")
+                && self.pdf_text(name_obj, MAX_REMOTE_FILE_SPEC_BYTES).as_deref() == Some(nm)
+            {
+                return Some(index);
+            }
+        }
+        None
     }
 
     /// The non-empty local file an action's `/F` names (a string or a file specification), shared
