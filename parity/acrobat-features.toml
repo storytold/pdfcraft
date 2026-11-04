@@ -4454,8 +4454,8 @@ milestone = "M12"
 status = "shipped"
 commands = ["measure.snap"]
 tools = ["measure_snap"]
-evidence = ["crates/automation/tests/it/automation.rs::measurement_snap_tool_covers_all_targets", "crates/measure/src/tests.rs::nested_forms_transforms_curves_and_cycles_are_bounded", "crates/measure/src/tests.rs::snap_paths_endpoints_midpoints_and_intersections"]
-notes = "Paths, endpoints, midpoints and intersections of painted vector geometry, including transformed Form XObjects. Cubics flattened to 0.2 user units. Bounded extraction and dense-intersection limits are reported. Raster/text outlines, clipping and optional-content visibility are not interpreted."
+evidence = ["crates/automation/tests/it/automation.rs::measurement_snap_tool_covers_all_targets", "crates/measure/src/tests.rs::nested_forms_transforms_curves_and_cycles_are_bounded", "crates/measure/src/tests.rs::snap_paths_endpoints_midpoints_and_intersections", "crates/ui-egui/tests/it/ui.rs::the_measure_snap_marker_shows_before_the_first_point"]
+notes = "Paths, endpoints, midpoints and intersections of painted vector geometry, including transformed Form XObjects. On the page, a marker names the snap target for every point, the first included (#6116). Cubics flattened to 0.2 user units. Bounded extraction and dense-intersection limits are reported. Raster/text outlines, clipping and optional-content visibility are not interpreted."
 
 [[feature]]
 id = "comment.measure-info-panel"
