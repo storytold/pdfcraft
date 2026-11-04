@@ -153,7 +153,7 @@ pub(super) struct Scratch {
     /// `placed` with the marks merged in, built before it is swapped in.
     pub(super) merged: Vec<usize>,
     /// The merged ink intervals of the current segment, each with the ink length before it, for `drop_covered_blanks`.
-    ink: Vec<[f32; 3]>,
+    pub(super) ink: Vec<[f32; 3]>,
 }
 
 /// One run of a colliding component.
@@ -346,7 +346,7 @@ fn drop_covered_blanks(glyphs: &[&TextGlyph], sc: &mut Scratch) {
         let x0 = |i: usize| glyphs[i].rect[0];
         let run = sc.text.iter().find(|run| run.range().contains(b));
         let kept = run.and_then(|run| {
-            let mut left = run.range().filter(|j| dropped.binary_search(j).is_err());
+            let left = run.range().filter(|j| dropped.binary_search(j).is_err());
             left.min_by(|a, c| x0(*a).total_cmp(&x0(*c)).then(a.cmp(c)))
         });
         *b = kept.unwrap_or(NONE);
