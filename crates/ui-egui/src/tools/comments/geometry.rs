@@ -69,10 +69,10 @@ pub(super) fn reshape_for(a: &Annotation, points: &[[f64; 2]], i: usize, to: [f6
     }
 }
 
-/// Whether `tool` picks up a line's end and corner handles: the Select and Fill & Sign tools.
+/// Whether `tool` reaches a line's end and corner handles: the Select and Fill & Sign tools.
 /// The drawing tools draw from where they are pressed, so a new line starts at the end of the
 /// one just drawn rather than dragging it.
-pub(super) fn grabs_points(tool: QuickTool) -> bool {
+pub(super) fn reaches_points(tool: QuickTool) -> bool {
     !matches!(tool, QuickTool::Comment(t) if t.draws() || t.clicks_points())
 }
 
