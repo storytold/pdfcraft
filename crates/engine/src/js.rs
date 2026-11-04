@@ -463,7 +463,6 @@ impl Session {
 
     /// Convert the worker snapshot delta and reset requests into permission-checked atomic document edits.
     fn apply_script_outcome(&mut self, id: DocId, states: &[pdfcraft_js::FieldState], mut o: Outcome) -> Result<Outcome, EditError> {
-        let changes = changes(states, &o.changed);
         let resets: Vec<Vec<String>> = o
             .requests
             .iter()
@@ -473,15 +472,26 @@ impl Session {
             })
             .collect();
         o.requests.retain(|r| !matches!(r, Request::Reset(_)));
+        // Reset the PDF first, then apply the final live shadow. Compare against the
+        // reset baseline so writes restoring an original value are not mistaken for no-ops.
+        let mut baseline = std::borrow::Cow::Borrowed(states);
         let mut edits = Vec::new();
-        if !changes.is_empty() {
-            edits.push(Edit::ApplyScriptChanges { changes });
-        }
         for names in resets {
             let all: Vec<String> = states.iter().map(|f| f.name.clone()).collect();
-            let names = (!names.is_empty())
+            let names: Option<Vec<String>> = (!names.is_empty())
                 .then(|| all.iter().filter(|n| names.iter().any(|x| *n == x || n.starts_with(&format!("{x}.")))).cloned().collect());
+            for field in baseline.to_mut().iter_mut() {
+                if !matches!(field.kind, pdfcraft_js::FieldType::Button | pdfcraft_js::FieldType::Signature)
+                    && names.as_ref().is_none_or(|names| names.contains(&field.name))
+                {
+                    field.value.clone_from(&field.default);
+                }
+            }
             edits.push(Edit::ResetForm { names });
+        }
+        let changes = changes(&baseline, &o.changed);
+        if !changes.is_empty() {
+            edits.push(Edit::ApplyScriptChanges { changes });
         }
         if !edits.is_empty() {
             self.apply(id, Edit::Batch { label: "Run JavaScript".into(), edits })?;

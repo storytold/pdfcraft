@@ -325,7 +325,21 @@ pub(crate) fn get_nth_field_name(_: &JsValue, args: &[JsValue], ctx: &mut Contex
 
 pub(crate) fn reset_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let names = strings(&arg(args, 0), ctx)?;
-    host(ctx)?.borrow_mut().request(Request::Reset(names));
+    let mut h = host(ctx)?.borrow_mut();
+    let queued = h.requests.len();
+    h.request(Request::Reset(names));
+    // Keep the live shadow and the bounded host request in agreement, including clipped names.
+    let Some(Request::Reset(names)) = h.requests.get(queued).cloned() else { return Ok(JsValue::undefined()) };
+    let super::host::Host { fields, changed, .. } = &mut *h;
+    for (i, field) in std::sync::Arc::make_mut(fields).iter_mut().enumerate() {
+        if !matches!(field.kind, FieldType::Button | FieldType::Signature)
+            && (names.is_empty() || names.iter().any(|n| field.name == *n || field.name.strip_prefix(n).is_some_and(|rest| rest.starts_with('.'))))
+        {
+            field.value.clone_from(&field.default);
+            // Retain the final snapshot even when a later assignment restores the pre-reset value.
+            changed.insert(i);
+        }
+    }
     Ok(JsValue::undefined())
 }
 

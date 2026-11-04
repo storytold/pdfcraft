@@ -249,7 +249,7 @@ fn wait_value(h: &mut Harness<'static, PdfCraftApp>, name: &str, expected: &str)
 fn native_button_popup_and_response_resume_without_replaying_the_script() {
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;
-    h.state_mut().run_button_script(id,"hello","var calls=0;calls++;var choice=app.popUpMenuEx({cName:'Morning',cReturn:'08:00'});var extra=app.response({cTitle:'Manual time',cQuestion:'Suffix',cDefault:'x'});getField('greeting').value=choice+'/'+extra+'/'+calls;");
+    h.state_mut().run_button_script(id,"hello","var calls=typeof calls==='number'?calls:0;calls++;var choice=app.popUpMenuEx({cName:'Morning',cReturn:'08:00'});var extra=app.response({cTitle:'Manual time',cQuestion:'Suffix',cDefault:'x'});getField('greeting').value=choice+'/'+extra+'/'+calls;");
     wait_for(&mut h, "Morning");
     h.get_by_label("Morning").click();
     wait_for(&mut h, "Suffix");
@@ -266,14 +266,15 @@ fn native_button_popup_and_response_resume_without_replaying_the_script() {
 fn native_popup_cancellation_returns_null_and_preserves_the_single_invocation() {
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;
-    h.state_mut().run_button_script(
-        id,
-        "hello",
-        "var calls=0;calls++;var choice=app.popUpMenuEx({cName:'Choose',cReturn:'yes'});getField('greeting').value=String(choice)+'/'+calls;",
-    );
+    let script = "var calls=typeof calls==='number'?calls:0;calls++;var choice=app.popUpMenuEx({cName:'Choose',cReturn:'yes'});getField('greeting').value=String(choice)+'/'+calls;";
+    h.state_mut().run_button_script(id, "hello", script);
     wait_for(&mut h, "Choose");
     h.get_by_label("Cancel").click();
     wait_value(&mut h, "greeting", "null/1");
+    h.state_mut().run_button_script(id, "hello", script);
+    wait_for(&mut h, "Choose");
+    h.get_by_label("Cancel").click();
+    wait_value(&mut h, "greeting", "null/2");
 }
 #[test]
 /// An intervening document edit prevents an older pending script result from replacing current values.

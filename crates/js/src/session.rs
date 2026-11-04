@@ -554,4 +554,21 @@ mod tests {
             assert_eq!(worker.run(job("digit('3')"), &[]).result.as_deref(), Some("13"));
         }
     }
+    /// Reset effects are visible during Doc Open and to the first event, including retained Field objects.
+    #[test]
+    fn doc_open_reset_precedes_the_first_event_and_later_writes_win() {
+        for reset in ["resetForm();", "resetForm(['group']);"] {
+            let mut source = FieldState::new("group.source", crate::FieldType::Text, vec!["old".into()]);
+            source.default = vec!["new".into()];
+            let dest = FieldState::new("dest", crate::FieldType::Text, vec!["before".into()]);
+            let mut task = job("getField('dest').value=held.value;held.value='old';openedValue+'/'+getField('dest').value");
+            task.fields = Arc::new(vec![source, dest]);
+            task.doc_scripts = vec![format!("var held=getField('group.source');{reset}var openedValue=held.value;")];
+            let out = ScriptSession::default().run(task, &[]);
+            assert_eq!(out.error, None);
+            assert_eq!(out.result.as_deref(), Some("new/new"));
+            assert_eq!(out.changed.iter().find(|f| f.name == "group.source").unwrap().value, ["old"]);
+            assert_eq!(out.changed.iter().find(|f| f.name == "dest").unwrap().value, ["new"]);
+        }
+    }
 }

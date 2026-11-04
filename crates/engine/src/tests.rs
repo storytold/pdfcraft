@@ -10484,3 +10484,49 @@ fn pending_button_globals_cannot_leak_into_intervening_edits() {
         assert_ne!(value(&s, "price"), ["99"]);
     }
 }
+
+/// Reinitialization resets before the first event reads, while later writes survive save and Undo/Redo.
+#[test]
+fn doc_open_reset_and_first_event_persist_in_script_order() {
+    for reset in ["resetForm();", "resetForm(['price']);"] {
+        for target in [None, Some("go")] {
+            let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+            let source = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "price").unwrap();
+            cos.update_dict(source.obj, |d| {
+                d.set(b"DV".to_vec(), pdfcraft_cos::PdfString::text("7"));
+                d.set(b"V".to_vec(), pdfcraft_cos::PdfString::text("99"));
+            })
+            .unwrap();
+            let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
+            let mut s = Session::new();
+            s.set_javascript(false);
+            let id = s.open("reset-order.pdf", None, bytes, None).unwrap();
+            s.apply(
+                id,
+                Edit::SetDocumentScript {
+                    name: "reset".into(),
+                    script: Some(format!("var held=getField('price');{reset}var openedValue=held.value;")),
+                },
+            )
+            .unwrap();
+            let value = |s: &Session, id, name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
+            let before = [value(&s, id, "price"), value(&s, id, "qty")];
+            s.set_javascript(true);
+            let out = s.run_javascript(id, "getField('qty').value=held.value;held.value='99';openedValue+'/'+getField('qty').value", target).unwrap();
+            assert_eq!(out.error, None);
+            assert_eq!(out.result.as_deref(), Some("7/7"));
+            assert_eq!(value(&s, id, "price"), ["99"]);
+            assert_eq!(value(&s, id, "qty"), ["7"]);
+            s.undo(id).unwrap();
+            assert_eq!([value(&s, id, "price"), value(&s, id, "qty")], before);
+            s.redo(id).unwrap();
+            assert_eq!(value(&s, id, "price"), ["99"]);
+            assert_eq!(value(&s, id, "qty"), ["7"]);
+            let saved = s.save_bytes(id).unwrap();
+            s.set_javascript(false);
+            let reopened = s.open("saved-reset.pdf", None, saved, None).unwrap();
+            assert_eq!(value(&s, reopened, "price"), ["99"]);
+            assert_eq!(value(&s, reopened, "qty"), ["7"]);
+        }
+    }
+}
