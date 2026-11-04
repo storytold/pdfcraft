@@ -50,6 +50,9 @@ impl crate::PdfCraftApp {
 #[cfg(not(target_arch = "wasm32"))]
 fn reveal(path: &std::path::Path) -> Result<(), String> {
     // Absolute paths also prevent a filename starting with '-' becoming an option.
+    // Use absolute to normalize the path (handles relative paths, . and ..) without
+    // the extended-length prefix (\\?\) that canonicalize adds on Windows, which
+    // explorer /select, does not accept.
     let path = std::path::absolute(path).map_err(|e| e.to_string())?;
     if !path.try_exists().map_err(|e| e.to_string())? {
         return Err("The file no longer exists".into());
@@ -156,7 +159,7 @@ fn reveal_command(platform: &str, path: &std::path::Path) -> Result<(&'static st
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
-    const PDF: &[u8] = include_bytes!("../../tests/data/form.pdf");
+    const PDF: &[u8] = include_bytes!("../tests/data/form.pdf");
 
     #[test]
     fn confirmed_close_uses_id_and_cancel_keeps_history_empty() {
@@ -297,7 +300,7 @@ mod ui_tests {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
             for name in ["first.pdf", "second.pdf"] {
-                app.open_bytes(name, None, include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
+                app.open_bytes(name, None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
             }
             app
         });
