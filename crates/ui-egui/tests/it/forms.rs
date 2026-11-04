@@ -18,6 +18,18 @@ fn harness() -> Harness<'static, PdfCraftApp> {
     h
 }
 
+fn harness_with_bytes(name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes(name, None, bytes).unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    h
+}
+
 fn value(h: &Harness<'static, PdfCraftApp>, name: &str) -> Vec<String> {
     let s = h.state();
     s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone()
@@ -98,7 +110,7 @@ fn read_only_widgets_are_skipped_by_tab_navigation() {
         "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Ff 1 /Rect [20 50 150 70] /P 3 0 R /F 4 >>",
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (last) /Rect [20 20 150 40] /P 3 0 R /F 4 >>",
     ]);
-    let mut h = harness_with("readonly-widget.pdf", bytes);
+    let mut h = harness_with_bytes("readonly-widget.pdf", bytes);
     {
         let doc = h.state().session.get(h.state().views[0].id).unwrap();
         let locked = doc.form.iter().find(|field| field.name == "locked").unwrap();
