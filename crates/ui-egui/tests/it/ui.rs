@@ -1959,7 +1959,7 @@ fn measure_common_scales_fits_in_every_ui_language() {
     assert!(h.state_mut().execute("measure.scale"));
     // Optional craft-fonts checkouts may lack a script; this checks layout, not glyph coverage.
     h.ctx.set_missing_glyph_policy(egui::epaint::text::MissingGlyphPolicy::Tofu);
-    for lang in Lang::from_code("de").into_iter().chain(Lang::all().filter(|lang| lang.code() != "de")) {
+    let mut check = |lang: Lang| {
         h.state_mut().set_option("language", lang.code()).unwrap();
         // A saved narrow pane must also respect the translated row's minimum.
         h.state_mut().side_panels.tools_width = 272.0;
@@ -1982,5 +1982,12 @@ fn measure_common_scales_fits_in_every_ui_language() {
         assert!(text.0.expand(1.0).contains_rect(combo), "{}: combo {combo:?} extends past clip {:?}", lang.code(), text.0);
         assert!(text.0.expand(1.0).contains_rect(text.1), "{}: label {:?} extends past clip {:?}", lang.code(), text.1, text.0);
         assert!(combo.expand(1.0).contains_rect(text.1), "{}: label does not fit its button", lang.code());
+    };
+    check(Lang::EN);
+    if support::skip_without_catalogs("measure_common_scales_fits_in_every_ui_language (translated cases)") {
+        return;
+    }
+    for lang in Lang::all().filter(|lang| lang.code() != "en") {
+        check(lang);
     }
 }
