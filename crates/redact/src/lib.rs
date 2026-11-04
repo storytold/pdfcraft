@@ -450,7 +450,8 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     if applying.images.refused() > 0 {
         return Err(RedactError::ImagesPastAllowance);
     }
-    let Applying { mut report, doomed_fields, mut doomed_xobjects, replacements, retired_properties, mut removed_everywhere, mut images, .. } = applying;
+    let Applying { mut report, doomed_fields, mut doomed_xobjects, replacements, retired_properties, mut removed_everywhere, mut images, .. } =
+        applying;
 
     // 2b. Replies and pop-ups of a removed annotation can be listed on another page than their
     // parent: their `/IRT` or `/Parent` would keep the removed comment reachable.

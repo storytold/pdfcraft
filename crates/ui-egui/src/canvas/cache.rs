@@ -158,6 +158,13 @@ impl DocView {
         k
     }
 
+    /// The pages with a cached whole-page raster, in page order (diagnostics and tests).
+    pub fn cached_pages_debug(&self) -> Vec<usize> {
+        let mut pages: Vec<usize> = self.pages.keys().copied().collect();
+        pages.sort_unstable();
+        pages
+    }
+
     /// Re-render every page and text layer (the document's appearance changed, e.g. a layer
     /// was toggled). Out-of-date rasters stay on screen until their replacements arrive, so the
     /// view never flashes blank.
@@ -418,6 +425,7 @@ impl DocView {
         // current page first, so turning back a page shows it at once instead of rendering.
         let mut undemanded: Vec<usize> = self.pages.keys().copied().filter(|p| !pages.contains(p)).collect();
         undemanded.sort_by_key(|p| p.abs_diff(self.current));
+        self.frame_demanded = pages.clone();
         let mut kept = pages.len();
         for page in undemanded {
             let bytes = self.pages.get(&page).map_or(0, |p| texture_bytes(&p.tex));
@@ -671,7 +679,13 @@ impl DocView {
             // demand estimates. Evict those first, then let the current demand refill them.
             let on_screen = |p: &usize| !thumb && self.frame_visible.contains(p);
             while retained.saturating_add(bytes) > limit {
-                let Some(page) = cache.keys().copied().filter(|p| !on_screen(p)).max_by_key(|p| p.abs_diff(self.current)) else { break };
+                // Pages this frame does not ask for go first, then those behind the scroll, the
+                // farthest from the current page first.
+                let evict_order = |p: &usize| {
+                    let demanded = !thumb && self.frame_demanded.contains(p);
+                    (!demanded, !thumb && super::behind_scroll(self.continuous, self.scroll_dir, self.current, *p), p.abs_diff(self.current))
+                };
+                let Some(page) = cache.keys().copied().filter(|p| !on_screen(p)).max_by_key(evict_order) else { break };
                 if let Some(old) = cache.remove(&page) {
                     retained = retained.saturating_sub(texture_bytes(&old.tex));
                 }
