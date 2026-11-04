@@ -133,8 +133,6 @@ pub struct CommentView {
     /// Drawings just released: shown from their points until the page raster that includes the
     /// committed annotation arrives, so the stroke never vanishes in between (#1858).
     pub(crate) settling: Vec<Settling>,
-    /// Escape ends egui's drag too; ignore its synthetic release until the mouse is up.
-    pub(super) cancelled_drag: bool,
     pub composer: Option<Composer>,
     /// Reply being typed under the selected card.
     pub reply: String,
@@ -442,7 +440,7 @@ impl PageCx<'_> {
 
     /// The topmost comment under `p`: the one drawn last, in `/Annots` order (inspection lists
     /// comments by position, not in paint order).
-    pub(super) fn hit(&self, p: Pos2) -> Option<&Annotation> {
+    pub(super) fn comment_at(&self, p: Pos2) -> Option<&Annotation> {
         self.comments().filter(|a| self.screen_rects(a).any(|r| r.expand(3.0).contains(p))).max_by_key(|a| a.index)
     }
 
