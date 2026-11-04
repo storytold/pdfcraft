@@ -88,14 +88,27 @@ fn a_read_only_fields_tooltip_shows_on_hover() {
 }
 
 #[test]
-fn read_only_widgets_are_skipped_by_tab_order() {
-    let mut h = harness();
-    set_city(&mut h, pdfcraft_engine::FieldProps { read_only: Some(true), ..Default::default() });
-    let s = h.state();
-    let doc = s.session.get(s.views[0].id).unwrap();
-    let city = doc.form.iter().position(|field| field.name == "city").unwrap();
-    assert!(doc.form[city].widgets.iter().all(|widget| widget.read_only));
-    assert!(pdfcraft_ui_egui::forms_ui::tab_order(&doc.form).iter().all(|(fi, _)| *fi != city));
+fn read_only_widgets_are_skipped_by_tab_navigation() {
+    let bytes = pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 7 0 R] >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 120] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (first) /Rect [20 80 150 100] /P 3 0 R /F 4 >>",
+        "<< /FT /Tx /T (locked) /Kids [6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Ff 1 /Rect [20 50 150 70] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (last) /Rect [20 20 150 40] /P 3 0 R /F 4 >>",
+    ]);
+    let mut h = harness_with("readonly-widget.pdf", bytes);
+    {
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        let locked = doc.form.iter().find(|field| field.name == "locked").unwrap();
+        assert!(!locked.read_only(), "the field itself is editable");
+        assert!(locked.widgets[0].read_only, "only its widget is read-only");
+    }
+    click_field(&mut h, "first", 0);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("last".into(), 0)));
 }
 
 /// A `/TU` of only spaces shows no tooltip (no empty box under the pointer).
