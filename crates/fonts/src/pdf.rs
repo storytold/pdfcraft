@@ -316,9 +316,16 @@ impl<'a> Reads<'a> {
 
     /// `stream` decoded within `max` and the allowance; `None` when it can't be, noting when the
     /// allowance is why. A stream past `max` is unread as before allowances, not refused.
+    ///
+    /// `max` bounds what the stream decodes to. Its filter stages are paid for together, up to
+    /// `max` for each, the most a decode without an allowance lets them make: a map of 65,536 CIDs
+    /// behind ASCIIHex and Flate makes all of `MAX_CID_TO_GID` in its last stage, with the hex
+    /// stage's output on top.
     fn decode(&mut self, stream: &Stream, max: usize) -> Option<Vec<u8>> {
-        match self.budget.decode_within(stream, max) {
-            Ok(data) => Some(data),
+        let stages = stream.filters().len().max(1);
+        match self.budget.decode_within(stream, max.saturating_mul(stages)) {
+            Ok(data) if data.len() <= max => Some(data),
+            Ok(_) => None,
             Err(_) => {
                 self.refused |= self.budget.remaining() == 0;
                 None

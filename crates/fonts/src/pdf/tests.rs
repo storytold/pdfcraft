@@ -297,6 +297,43 @@ fn a_cmap_past_its_own_limit_is_not_past_the_allowance() {
     assert_eq!(usize::MAX / 2 - budget.remaining(), sizes[..3].iter().sum::<usize>() + MAX_CMAP_BYTES);
 }
 
+/// A `/CIDToGIDMap` as long as a map can be reads the same behind no filter, one or two: each
+/// stage may make as much as the map's limit, so the hex stage's output on top of it doesn't
+/// leave it unread. A map past the limit is unread behind any of them.
+#[test]
+fn a_full_cid_map_reads_behind_any_number_of_filters() {
+    let read = |entries: usize, filters: usize| {
+        let mut doc = Document::new_empty();
+        let (mut f, _) = subset_type0(&mut doc, b"");
+        let map: Vec<u8> = (0..entries).flat_map(|cid| u16::try_from(cid % 2000).unwrap().to_be_bytes()).collect();
+        let flate = Stream::flate(Dict::new(), &map);
+        let stream = match filters {
+            0 => Stream::from_raw(Dict::new(), map),
+            1 => flate,
+            _ => {
+                let hex: String = flate.raw.iter().map(|b| format!("{b:02X}")).chain([">".to_string()]).collect();
+                let mut dict = Dict::new();
+                dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("ASCIIHexDecode"), Object::name("FlateDecode")]));
+                Stream::from_raw(dict, hex.into_bytes())
+            }
+        };
+        let map = Object::Ref(doc.add(Object::Stream(stream)));
+        let Some(Object::Array(mut descendants)) = f.get(b"DescendantFonts").cloned() else { panic!("descendant") };
+        if let Some(Object::Dict(d)) = descendants.get_mut(0) {
+            d.set(b"CIDToGIDMap".to_vec(), map);
+        }
+        f.set(b"DescendantFonts".to_vec(), Object::Array(descendants));
+        Metrics::from_dict(&doc, &f).outlined_cids
+    };
+    let full = read(1 << 16, 1);
+    assert!(!full.is_empty());
+    assert_eq!(read(1 << 16, 0), full);
+    assert_eq!(read(1 << 16, 2), full);
+    for filters in 0..=2 {
+        assert!(read((1 << 16) + 1, filters).is_empty(), "{filters} filters");
+    }
+}
+
 /// Fonts that each name one large ToUnicode share the allowance they are read within: it pays for
 /// as many readings as it holds, and the rest are left unread, where each reading used to decode
 /// it afresh.
