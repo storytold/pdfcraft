@@ -103,8 +103,9 @@ impl Document {
     fn note_unreadable(&self, num: u32, reason: impl FnOnce() -> String) {
         // A poisoned lock only means the object goes unlisted; the read itself still fails.
         let Ok(mut unreadable) = self.unreadable.lock() else { return };
-        if unreadable.wants(num) {
-            unreadable.note(num, self.generation(num), &reason());
+        let hidden = |n: u32| self.overlay.contains_key(&n);
+        if unreadable.wants(num, hidden) {
+            unreadable.note(num, self.generation(num), &reason(), hidden);
         }
     }
 

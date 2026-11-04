@@ -1919,6 +1919,32 @@ fn the_unreadable_object_list_is_bounded() {
     );
 }
 
+/// The unreadable list is shared by clones, and each hides what it has edited. A clone that edited
+/// every listed object still lists its own failures: hidden entries don't use up its allowance.
+#[test]
+fn objects_a_clone_edited_do_not_use_up_its_unreadable_allowance() {
+    let mut bodies = vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"];
+    bodies.extend(std::iter::repeat_n("<< /A ) >>", 110));
+    let doc = Document::open(Arc::new(build(&bodies, "/Root 1 0 R"))).unwrap();
+    for num in 3..103 {
+        assert!(doc.try_get(num).is_err());
+    }
+    assert_eq!(doc.unreadable_objects().len(), 100);
+    let mut edited = doc.clone();
+    for num in 3..103 {
+        edited.set(ObjRef::new(num, 0), Object::Null);
+    }
+    for num in 103..113 {
+        assert!(edited.try_get(num).is_err());
+    }
+    let lines = edited.unreadable_objects();
+    assert_eq!(lines.len(), 10, "{lines:?}");
+    assert!(lines[0].starts_with("object 103 0 could not be read"), "{}", lines[0]);
+    let original = doc.unreadable_objects();
+    assert_eq!(original.len(), 101, "the original still shows at most 100, then says there were more");
+    assert_eq!(original[100], "more objects could not be read; only the first 100 are listed");
+}
+
 /// The cache keeps the sum of what its objects hold as they come and go, so neither reader has
 /// to measure the cache again on every read (#5873).
 #[test]
