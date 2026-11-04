@@ -109,6 +109,7 @@ const SEP: &str = "---";
 const FILE: &[&str] = &[
     "create.blank",
     "file.open",
+    "file.open_cloud",
     "file.open_recent",
     "file.pin_folder",
     SEP,
@@ -116,6 +117,7 @@ const FILE: &[&str] = &[
     SEP,
     "file.save",
     "file.save_as",
+    "file.save_as_cloud",
     "file.revert",
     SEP,
     "file.close",
@@ -297,6 +299,12 @@ impl PdfCraftApp {
                 let recent = matches!(&node, Node::Item(it) if it.command.id == "file.open_recent");
                 if recent {
                     nodes.push(self.recent_menu());
+                    continue;
+                }
+                // Cloud-specific items are absent (not just dimmed) when no service is connected.
+                // A greyed "Open from cloud…" with no service reads as a broken feature.
+                let cloud_only = matches!(&node, Node::Item(it) if matches!(it.command.id.as_str(), "file.open_cloud" | "file.save_as_cloud"));
+                if cloud_only && !crate::cloud::available(self) {
                     continue;
                 }
                 let after = match &node {

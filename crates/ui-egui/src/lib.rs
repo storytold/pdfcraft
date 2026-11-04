@@ -36,7 +36,11 @@ macro_rules! tl_ctx {
 }
 pub mod canvas;
 mod chrome;
+pub mod cloud;
+pub mod esign;
 mod image_engine;
+#[cfg(target_arch = "wasm32")]
+pub mod web_auth;
 pub use combine_grid::ThumbState as CombineThumb;
 pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
 mod commands;
@@ -671,4 +675,35 @@ pub struct PdfCraftApp {
     pub pending_full_screen: Option<DocId>,
     /// An absolute GoToR target waiting for approval, before any target-file I/O (#1364).
     pub pending_remote_link: Option<PendingRemoteLink>,
+    /// Open and Save against cloud storage. Connected by the host application when a
+    /// CollabCraft service is configured; disconnected leaves the app local-only.
+    pub cloud: craft_ui::cloud::CloudFiles,
+    /// Which cloud page is shown in the central panel, when any. `None` is the normal state.
+    pub cloud_page: Option<CloudPage>,
+    /// The number of open document tabs when `cloud_page` became `Some(Open)`. Used to detect
+    /// that a successful cloud open completed so the page can dismiss itself.
+    cloud_page_doc_count: usize,
+    /// Share dialog state. Connected by the host; drawn from the title bar when sharing
+    /// is available. The dialog is the same across all Craft apps.
+    pub share: craft_ui::share::ShareDialog,
+    /// Who else has the document open. Drawn beside the account badge in the title bar.
+    /// Presence is viewer presence only: PdfCraft does not host real-time collaborative
+    /// text editing.
+    pub presence: craft_ui::presence::PresenceBar,
+    /// Request-signatures dialog. Hosted through CollabCraft; local PAdES stays in Sign.
+    pub esign: craft_ui::esign::EsignDialog,
+    /// Document the e-sign dialog was opened for (Send uses this, not the active tab).
+    esign_doc: Option<pdfcraft_engine::DocId>,
+}
+
+/// Which cloud page is shown in the central panel instead of the document or home screen.
+///
+/// `None` (the common case) means the normal document / home / docking view. `Open` shows
+/// `craft_ui::cloud::open_page`; `SaveAs` shows `craft_ui::cloud::save_page`. These are the
+/// only two navigation states PdfCraft needs beyond its existing tabs — the smallest explicit
+/// addition that makes Open from cloud and Save As to cloud reachable from the UI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloudPage {
+    Open,
+    SaveAs,
 }

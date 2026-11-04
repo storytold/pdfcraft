@@ -79,6 +79,10 @@ impl PdfCraftApp {
     /// Whether a registered command can run now. The engine judges the document (security,
     /// contents, undo history); view state it can't see is checked here.
     pub(crate) fn command_enabled(&self, spec: &CommandSpec) -> bool {
+        // Cloud commands need a connected service; without one they are unavailable.
+        if matches!(spec.id, "file.open_cloud" | "file.save_as_cloud") && !crate::cloud::available(self) {
+            return false;
+        }
         // Undo and Redo act on the Combine files list while its tab shows.
         if self.combine_showing() && matches!(spec.needs, commands::Needs::Undo | commands::Needs::Redo) {
             return self.combine_can_undo(spec.needs == commands::Needs::Undo);
@@ -175,6 +179,10 @@ impl PdfCraftApp {
     fn run_file_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
             "file.open" => self.open_dialog(),
+            "file.open_cloud" => {
+                self.cloud_page_doc_count = self.views.len();
+                self.cloud_page = Some(crate::CloudPage::Open);
+            }
             "file.open_recent" => match self.recent.first().map(|r| r.path.clone()) {
                 // The palette runs commands without a submenu: open the most recent file.
                 Some(p) => self.open_recent(&p),
@@ -184,10 +192,21 @@ impl PdfCraftApp {
             "file.clear_recent" => self.recent.clear(),
             "file.pin_folder" => self.pin_folder_dialog(),
             "file.save" => {
-                self.save_active(SaveTarget::InPlace);
+                // When the active document came from the cloud, save back with the etag guard.
+                // Otherwise fall back to the existing local-file save.
+                if crate::cloud::has_target(self) {
+                    if let Err(e) = crate::cloud::save(self) {
+                        self.notify(e);
+                    }
+                } else {
+                    self.save_active(SaveTarget::InPlace);
+                }
             }
             "file.save_as" => {
                 self.save_active(SaveTarget::As);
+            }
+            "file.save_as_cloud" => {
+                self.cloud_page = Some(crate::CloudPage::SaveAs);
             }
             "file.close" => {
                 if let Some(i) = active {

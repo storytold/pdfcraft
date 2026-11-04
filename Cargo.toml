@@ -12,9 +12,20 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/pdfcraft"
 
 [workspace.dependencies]
-# Shared frontend components; engines remain independent of egui.
-craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff", features = ["serde"] }
-# Quit the macOS way (#1136): ⌘Q asks about unsaved changes, and closing quits through `terminate:`.
+# Shared frontend components; engines remain independent of egui. Pinned to wdunn001/craft-libs
+# (not storytold/craft-libs) because the cloud and esign features this PR needs are not yet
+# upstream; see storytold/craft-libs#123 for the fold-in that will let this track storytold again.
+craft-ui = { git = "https://github.com/wdunn001/craft-libs", version = "0.1.0", rev = "1a3cbfd724bf28ccbe51a1f45f19022f131f15bb", features = ["serde", "cloud", "esign"] }
+# Provider-neutral cloud types (Entry, Capability, Permission). Types and contracts only: the
+# crate opens no socket and names no provider, so this builds for the web too.
+craft-cloud = { git = "https://github.com/wdunn001/craft-libs", version = "0.1.0", rev = "1a3cbfd724bf28ccbe51a1f45f19022f131f15bb" }
+craft-esign = { git = "https://github.com/wdunn001/craft-libs", version = "0.1.0", rev = "1a3cbfd724bf28ccbe51a1f45f19022f131f15bb" }
+# How the desktop and browser apps reach CollabCraft. No provider credential or URL compiled in.
+craft-cloud-client = { git = "https://github.com/wdunn001/collab-craft", rev = "f895a6f" }
+# The share dialog's backend: the half that opens a socket, kept here so only one session lives
+# in the process and a sign-in through Open/Save reaches the share dialog too.
+collabcraft-share = { git = "https://github.com/wdunn001/collab-craft", rev = "f895a6f" }
+# Quit the macOS way (#1136): Cmd+Q asks about unsaved changes, and closing quits through `terminate:`.
 craft-quit = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
 # One menu definition for the native macOS menu bar and the in-window bar elsewhere.
 craft-menu = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
@@ -23,12 +34,12 @@ craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1
 # catalogs that `crates/ui-egui/build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, at
 # the commit in `craft-i18n.rev`). Already in the tree through craft-ui.
 craft-i18n = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
+# craft-update: app-specific pretend versions apply to startup and manual checks.
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff", features = ["egui"] }
 # Shared system spooler; document composition remains in pdfcraft-print.
 craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
 # Whether a path stored in a document may be opened (GoToR link targets).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
-# craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff", features = ["egui"] }
 # internal
 pdfcraft-geom = { path = "crates/geom", version = "0.18.1" }
 pdfcraft-filters = { path = "crates/filters", version = "0.18.1" }
