@@ -10,7 +10,7 @@ use crate::ScratchBuffers;
 use crate::arithmetic_decoder::{ArithmeticDecoder, ArithmeticDecoderContext};
 use crate::bitmap::{Bitmap, WORD_BITS, WORD_SHIFT, Word};
 use crate::decode::generic::ContextGatherer;
-use crate::error::{OverflowError, ParseError, RegionError, Result, bail};
+use crate::error::{ParseError, RegionError, Result, bail};
 use crate::reader::Reader;
 
 /// Generic refinement region decoding procedure (6.3).
@@ -46,27 +46,18 @@ pub(crate) fn decode_into(
 
     // Validate that the region fits within the reference bitmap.
     // When referring to another segment, dimensions must match exactly (7.4.7.5).
-    // When using the page bitmap as reference, the region must fit within the page.
+    // PdfCraft patch: a refinement of the page refines the page's area of its own size (7.4.7.4,
+    // `Bitmap::area`), which it always fits.
     if header.region_info.width > reference.width || header.region_info.height > reference.height {
         bail!(RegionError::InvalidDimension);
     }
 
-    let reference_dx = i32::try_from(reference.x_location)
-        .ok()
-        .and_then(|r: i32| {
-            i32::try_from(header.region_info.x_location)
-                .ok()
-                .and_then(|h| r.checked_sub(h))
-        })
-        .ok_or(OverflowError::ReferenceOffset)?;
-    let reference_dy = i32::try_from(reference.y_location)
-        .ok()
-        .and_then(|r: i32| {
-            i32::try_from(header.region_info.y_location)
-                .ok()
-                .and_then(|h| r.checked_sub(h))
-        })
-        .ok_or(OverflowError::ReferenceOffset)?;
+    // PdfCraft patch: "GRREFERENCEDX 0, GRREFERENCEDY 0" (Table 35). The reference is another
+    // region, which a refinement refines where it is (their locations should be equal, 7.4.7.5),
+    // or the page restricted to the refinement's area (7.4.7.4, `Bitmap::area`). Offsetting it by
+    // the difference of the locations refused one past `i32::MAX` as an overflow, and read the
+    // page around a refinement of it.
+    let (reference_dx, reference_dy) = (0, 0);
 
     let mut decoder = ArithmeticDecoder::new(data);
     let num_context_bits = header.template.context_bits();
@@ -194,10 +185,24 @@ impl<'a> RefinementContextGatherer<'a> {
         };
         self.reg_cur = 0;
 
-        self.ref_cur_x = 0;
-        self.ref_m1 = ContextGatherer::load_word(reference, ref_y.wrapping_sub(1) as u32, 0);
-        self.ref_cur = ContextGatherer::load_word(reference, ref_y as u32, 0);
-        self.ref_p1 = ContextGatherer::load_word(reference, ref_y.wrapping_add(1) as u32, 0);
+        // PdfCraft patch: the buffers start a column left of the reference column the row starts
+        // at, as `maybe_reload_buffers` would load them, or at column 0 where that is left of the
+        // reference. The row's first context takes in that column and the one left of it, which
+        // from column 32 on lay outside a word loaded from column 0 and read as 0: with the
+        // reference offset 32 left of the region its first column, and from 33 both (GRREFERENCEDX
+        // below −31, which a refined text instance has from a narrower bitmap or an RDX below −31,
+        // and a refined symbol from such an RDX). The region decoded to other pixels than were
+        // coded, or failed.
+        self.ref_cur_x = self
+            .reference_dx
+            .checked_neg()
+            .and_then(|column| u32::try_from(column).ok())
+            .map_or(0, |column| column.saturating_sub(1));
+        self.ref_m1 =
+            ContextGatherer::load_word(reference, ref_y.wrapping_sub(1) as u32, self.ref_cur_x);
+        self.ref_cur = ContextGatherer::load_word(reference, ref_y as u32, self.ref_cur_x);
+        self.ref_p1 =
+            ContextGatherer::load_word(reference, ref_y.wrapping_add(1) as u32, self.ref_cur_x);
 
         self.ctx = match self.template {
             RefinementTemplate::Template1 => {

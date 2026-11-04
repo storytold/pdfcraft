@@ -221,6 +221,17 @@ impl Bitmap {
         self.data[word_idx] |= (value as Word) << bit_pos;
     }
 
+    /// PdfCraft patch: combine a decoded region into this page at the region's own location.
+    ///
+    /// "Unless otherwise specified, all multi-bit values shall be treated as unsigned values"
+    /// (5.4.4), and a region's location (7.4.1.3, 7.4.1.4) is not specified otherwise. One past
+    /// `i32::MAX` is past any page. Cast to a signed coordinate it read as left of the page or above
+    /// it, and one within a region's size of 2^32 came back onto it.
+    pub(crate) fn combine_region(&mut self, region: &Self, operator: CombinationOperator) {
+        let signed = |location: u32| i32::try_from(location).unwrap_or(i32::MAX);
+        self.combine(region, signed(region.x_location), signed(region.y_location), operator);
+    }
+
     /// Combine another bitmap into this one at a specific location.
     ///
     /// "These operators describe how the segment's bitmap is to be combined with
@@ -306,5 +317,43 @@ impl Bitmap {
         }
 
         self.data[(row * self.stride + word_idx) as usize]
+    }
+
+    /// PdfCraft patch: the `width` × `height` area of this bitmap at `x`, `y`, as a bitmap there.
+    /// It is what a refinement of the page refines: "a bitmap containing the current contents of
+    /// the page buffer, restricted to the area of the page buffer specified by this segment's
+    /// region segment information field" (7.4.7.4). Off this bitmap the area is 0, past its width
+    /// too whatever the padding of its rows holds, and outside the area the refinement reads 0
+    /// (6.3.5.2), where reading the page itself took in the pixels around the area.
+    pub(crate) fn area(&self, x: u32, y: u32, width: u32, height: u32) -> Result<Self> {
+        let mut area = Self::new_with(width, height, x, y, false)?;
+        for row in 0..height {
+            let Some(from_row) = y.checked_add(row).filter(|r| *r < self.height) else {
+                continue;
+            };
+            for word in 0..area.stride {
+                // The first column of this word of the area, in this bitmap; past its width,
+                // or past where a column can be, the rest of the row is 0.
+                let Some(from) = x.checked_add(word * WORD_BITS).filter(|c| *c < self.width) else {
+                    break;
+                };
+                let (index, shift) = (from / WORD_BITS, from % WORD_BITS);
+                let mut bits = self.get_word(from_row, index) << shift;
+                if shift > 0 {
+                    bits |= self.get_word(from_row, index + 1) >> (WORD_BITS - shift);
+                }
+                // Both are above 0: `from` is inside this bitmap, and `word` inside the area.
+                let ours = self.width - from;
+                let theirs = width - word * WORD_BITS;
+                let kept = ours.min(theirs);
+                if kept < WORD_BITS {
+                    bits &= !0 << (WORD_BITS - kept);
+                }
+                if let Some(slot) = area.data.get_mut((row * area.stride + word) as usize) {
+                    *slot = bits;
+                }
+            }
+        }
+        Ok(area)
     }
 }
