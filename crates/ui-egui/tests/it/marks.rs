@@ -682,4 +682,12 @@ fn bates_numbering_dialog_configures_digits_and_padding() {
         })
         .collect();
     assert_eq!(texts, ["DOC-00000042-CONF", "DOC-00000043-CONF", "DOC-00000044-CONF"]);
+
+    // When box 0 contains a Bates token and box 5 is empty, edit.bates inserts the token into box 5.
+    h.state_mut().marks_draft.hf.text[0] = "<<Bates Number#7#10#CASE-#-A>>".into();
+    h.state_mut().marks_draft.hf.text[5].clear();
+    assert!(h.state_mut().execute("edit.bates"));
+    h.run_steps(2);
+    assert_eq!(h.state().marks_draft.focused_box, 5);
+    assert_eq!(h.state().marks_draft.hf.text[5], "<<Bates Number#7#10#CASE-#-A>>");
 }

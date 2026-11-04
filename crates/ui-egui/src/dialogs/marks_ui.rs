@@ -1198,5 +1198,16 @@ mod tests {
         assert_eq!(draft.bates_start, 25);
         assert_eq!(draft.bates_prefix, "CASE-");
         assert_eq!(draft.bates_suffix, "-A");
+
+        // When focused_box contains a token, sync_bates_from_hf prioritizes it over other boxes.
+        let mut draft = MarksDraft::default();
+        draft.hf.text[0] = "<<Bates Number#4#10#OTHER-#>>".into();
+        draft.hf.text[5] = "<<Bates Number#7#50#PRIORITY-#-Z>>".into();
+        draft.focused_box = 5;
+        assert!(draft.sync_bates_from_hf());
+        assert_eq!(draft.bates_digits, 7);
+        assert_eq!(draft.bates_start, 50);
+        assert_eq!(draft.bates_prefix, "PRIORITY-");
+        assert_eq!(draft.bates_suffix, "-Z");
     }
 }
