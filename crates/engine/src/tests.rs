@@ -10213,8 +10213,8 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 
 #[test]
 fn script_choice_index_preserves_repeated_export_values_through_save() {
-    use pdfcraft_forms::{FieldEvent, Scripts};
     use pdfcraft_cos::{Object, PdfString};
+    use pdfcraft_forms::{FieldEvent, Scripts};
     let mut cos = pdfcraft_cos::Document::open(Arc::new(synthetic_acroform(2, 0))).unwrap();
     let ranks = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "ranks").unwrap();
     cos.update_dict(ranks.obj, |d| {
@@ -10222,7 +10222,8 @@ fn script_choice_index_preserves_repeated_export_values_through_save() {
         d.set(b"V".to_vec(), Object::String(PdfString::text("same")));
         d.set(b"Opt".to_vec(), Object::Array(vec![Object::String(PdfString::text("same")), Object::String(PdfString::text("same"))]));
         d.set(b"I".to_vec(), Object::Array(vec![Object::Int(0)]));
-    }).unwrap();
+    })
+    .unwrap();
     let fields = pdfcraft_forms::fields(&cos);
     let target = fields.iter().find(|f| f.name == "ranks").unwrap();
     let mut runner = crate::js::JsRunner::new(&cos, "synthetic.pdf");

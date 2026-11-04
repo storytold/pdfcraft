@@ -158,8 +158,7 @@ fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]
                 display: (a.display != b.display).then_some(a.display),
                 default_value: (a.default != b.default).then(|| a.default.first().cloned()),
                 // `/MaxLen 0` overrides an inherited limit while remaining unlimited.
-                max_len: ((a.char_limit != b.char_limit)
-                    || (a.char_limit.is_none() && a.max_len_explicit && !b.max_len_explicit))
+                max_len: ((a.char_limit != b.char_limit) || (a.char_limit.is_none() && a.max_len_explicit && !b.max_len_explicit))
                     .then_some(Some(a.char_limit.unwrap_or(0))),
                 current_value_indices: (a.current_value_indices != b.current_value_indices).then_some(a.current_value_indices.clone()),
             };
