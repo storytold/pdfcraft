@@ -168,10 +168,14 @@ impl PrintDraft {
 
     /// Refresh `self.papers` with driver-reported media sizes, preserving the current selection.
     pub fn update_printer_papers(&mut self) {
+        let before_label_name = self.paper_before_label.and_then(|idx| self.papers.get(idx).map(|p| p.0.clone()));
         let mut papers = default_papers();
         if let Some(ref printer) = self.printer {
             let detected = spool::printer_papers(printer);
             for (name, size) in detected {
+                if !(size.0 >= 72.0 && size.1 >= 72.0 && size.0.is_finite() && size.1.is_finite()) {
+                    continue;
+                }
                 let norm = (size.0.min(size.1), size.0.max(size.1));
                 if !papers.iter().any(|(_, s)| {
                     let s_norm = (s.0.min(s.1), s.0.max(s.1));
@@ -192,6 +196,7 @@ impl PrintDraft {
             self.papers.push((current_name, current_size));
             self.paper = self.papers.len() - 1;
         }
+        self.paper_before_label = before_label_name.and_then(|name| self.papers.iter().position(|(n, _)| n == &name));
     }
 
     /// Auto-select the printer's configured default paper (from DEVMODE / driver settings).
@@ -199,7 +204,9 @@ impl PrintDraft {
         if let Some(ref printer) = self.printer
             && let Some((name, size)) = spool::printer_default_paper(printer)
         {
+            let overridden = self.paper_overridden;
             self.apply_driver_paper(name, size);
+            self.paper_overridden = overridden;
         }
     }
 

@@ -161,6 +161,7 @@ impl PdfCraftApp {
         );
         let size = self.print_draft.paper_size();
         v["print_paper_size"] = serde_json::json!([size.0, size.1]);
+        v["print_paper_overridden"] = serde_json::json!(self.print_draft.paper_overridden);
         v.to_string()
     }
 
@@ -287,6 +288,7 @@ impl PdfCraftApp {
                 self.print_draft.papers.push((name.to_string(), size));
                 self.print_draft.paper = self.print_draft.papers.len() - 1;
             }
+            self.print_draft.paper_overridden = v.get("print_paper_overridden").and_then(serde_json::Value::as_bool).unwrap_or(true);
         }
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;

@@ -791,9 +791,10 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     let saved = h.state().persist();
     let json: serde_json::Value = serde_json::from_str(&saved).unwrap();
     assert_eq!(json["print_paper"], "A4", "store the canonical name, not its position");
+    assert_eq!(json["print_paper_overridden"], true, "explicitly chosen paper records override flag");
     let mut app = PdfCraftApp::new();
     app.restore(&saved);
-    let expected = pdfcraft_ui_egui::PrintDraft { paper: a4, ..Default::default() };
+    let expected = pdfcraft_ui_egui::PrintDraft { paper: a4, paper_overridden: true, ..Default::default() };
     assert_eq!(app.print_draft, expected, "no other print preference becomes persistent");
     let mut restarted = harness_with_settings(Some(saved));
     assert!(restarted.state_mut().execute("print.dialog"));

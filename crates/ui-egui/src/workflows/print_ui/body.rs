@@ -214,10 +214,13 @@ pub(crate) fn body(
                 let paper_label = ui.label(tl!("Paper:"));
                 let paper_name = d.paper_name().to_string();
                 let before = d.paper;
+                let mut paper_clicked = false;
                 ui.horizontal(|ui| {
                     craft_ui::ComboBox::from_id_salt("paper").selected_text(tl!(&paper_name)).width(180.0).show_ui(ui, |ui| {
                         for (i, (name, _)) in d.papers.iter().enumerate() {
-                            ui.selectable_value(&mut d.paper, i, tl!(name));
+                            if ui.selectable_value(&mut d.paper, i, tl!(name)).clicked() {
+                                paper_clicked = true;
+                            }
                         }
                     })
                     .response
@@ -246,7 +249,7 @@ pub(crate) fn body(
                     d.paper_overridden = true;
                 }
                 // Label stock gets the label layout (cut, turned upright, fitted).
-                if d.paper != before && d.paper == print::LABEL_PAPER {
+                if paper_clicked && d.paper != before && d.paper == print::LABEL_PAPER {
                     d.paper_before_label = Some(before);
                     d.handling = Handling::Label;
                     d.sheet = 0;
@@ -281,6 +284,7 @@ pub(crate) fn body(
                         && let Some(paper) = matched
                     {
                         d.paper = paper;
+                        d.paper_overridden = true;
                         // A paper picked outright: nothing for leaving Label to give back.
                         d.paper_before_label = None;
                         d.handling = Handling::Size;
