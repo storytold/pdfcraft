@@ -566,37 +566,7 @@ fn tab_numbers_follow_fill_order_without_dirtying_the_document() {
     let (order, rects, undo) = {
         let s = h.state();
         let doc = s.session.get(s.views[0].id).unwrap();
-        let mut order: Vec<(usize, usize, usize)> = doc
-            .form
-            .iter()
-            .enumerate()
-            .filter(|(_, field)| {
-                !field.read_only() && !matches!(field.kind, pdfcraft_engine::FormFieldKind::PushButton | pdfcraft_engine::FormFieldKind::Signature)
-            })
-            .flat_map(|(fi, field)| {
-                field
-                    .widgets
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, widget)| {
-                        let Some(page) = widget.page.and_then(|page| doc.info.pages.get(page)) else { return false };
-                        let [x0, y0, x1, y1] = widget.rect;
-                        let [cx0, cy0, cx1, cy1] = page.crop.map(f64::from);
-                        !widget.hidden
-                            && !widget.read_only
-                            && [x0, y0, x1, y1].into_iter().all(f64::is_finite)
-                            && x0 < x1
-                            && y0 < y1
-                            && x1 > cx0
-                            && x0 < cx1
-                            && y1 > cy0
-                            && y0 < cy1
-                    })
-                    .map(move |(wi, widget)| (widget.tab, fi, wi))
-            })
-            .collect();
-        order.sort_by_key(|(tab, _, _)| *tab);
-        let order: Vec<(usize, usize)> = order.into_iter().map(|(_, fi, wi)| (fi, wi)).collect();
+        let order = pdfcraft_ui_egui::forms_ui::tab_order(&doc.form, &doc.info);
         let rects = order
             .iter()
             .map(|(fi, wi)| {
@@ -647,37 +617,8 @@ fn tab_badge_tracks_its_widget_during_a_drag() {
     let (name, widget, rect) = {
         let s = h.state();
         let doc = s.session.get(s.views[0].id).unwrap();
-        let mut order: Vec<(usize, usize, usize)> = doc
-            .form
-            .iter()
-            .enumerate()
-            .filter(|(_, field)| {
-                !field.read_only() && !matches!(field.kind, pdfcraft_engine::FormFieldKind::PushButton | pdfcraft_engine::FormFieldKind::Signature)
-            })
-            .flat_map(|(fi, field)| {
-                field
-                    .widgets
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, widget)| {
-                        let Some(page) = widget.page.and_then(|page| doc.info.pages.get(page)) else { return false };
-                        let [x0, y0, x1, y1] = widget.rect;
-                        let [cx0, cy0, cx1, cy1] = page.crop.map(f64::from);
-                        !widget.hidden
-                            && !widget.read_only
-                            && [x0, y0, x1, y1].into_iter().all(f64::is_finite)
-                            && x0 < x1
-                            && y0 < y1
-                            && x1 > cx0
-                            && x0 < cx1
-                            && y1 > cy0
-                            && y0 < cy1
-                    })
-                    .map(move |(wi, widget)| (widget.tab, fi, wi))
-            })
-            .collect();
-        order.sort_by_key(|(tab, _, _)| *tab);
-        let (_, fi, wi) = *order.first().expect("the form has a fillable widget");
+        let order = pdfcraft_ui_egui::forms_ui::tab_order(&doc.form, &doc.info);
+        let (fi, wi) = *order.first().expect("the form has a fillable widget");
         let field = doc.form.get(fi).expect("the first fillable field exists");
         (field.name.clone(), wi, pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, field, wi).unwrap())
     };

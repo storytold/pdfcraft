@@ -96,7 +96,7 @@ fn fillable(f: &FormField) -> bool {
 }
 
 /// The fillable widgets in the order Tab and Shift+Tab visit them.
-pub(crate) fn tab_order(form: &[FormField], info: &DocInfo) -> Vec<(usize, usize)> {
+pub fn tab_order(form: &[FormField], info: &DocInfo) -> Vec<(usize, usize)> {
     let mut order: Vec<(usize, usize, usize)> = form
         .iter()
         .enumerate()
@@ -766,23 +766,23 @@ fn tab_to_next_field(
     let order = tab_order(form, info);
     let exact = order.iter().position(|(fi, wi)| form.get(*fi).is_some_and(|x| x.name == f.name && *wi == widget));
     let same_field = order.iter().position(|(fi, _)| form.get(*fi).is_some_and(|x| x.name == f.name));
-    let next_after_removed = if forward && exact.is_none() && same_field.is_none() {
+    let next_after_removed = if exact.is_none() && same_field.is_none() {
         form.iter().position(|field| field.name == f.name).and_then(|fi| {
             let tab = form.get(fi)?.widgets.get(widget)?.tab;
             let key = (tab, fi, widget);
-            order
-                .iter()
-                .position(|(other_fi, other_wi)| {
-                    form.get(*other_fi).and_then(|field| field.widgets.get(*other_wi)).is_some_and(|other| (other.tab, *other_fi, *other_wi) > key)
-                })
-                .or_else(|| (!order.is_empty()).then_some(0))
+            let tab_key = |(fi, wi): &(usize, usize)| form.get(*fi).and_then(|field| field.widgets.get(*wi)).map(|other| (other.tab, *fi, *wi));
+            if forward {
+                order.iter().position(|entry| tab_key(entry).is_some_and(|other| other > key)).or_else(|| (!order.is_empty()).then_some(0))
+            } else {
+                order.iter().rposition(|entry| tab_key(entry).is_some_and(|other| other < key)).or_else(|| order.len().checked_sub(1))
+            }
         })
     } else {
         None
     };
     if let Some(pos) = exact.or(same_field).or(next_after_removed) {
         // A focused widget that left the order is replaced by the field's first remaining stop.
-        let k = if forward && (exact.is_none() || next_after_removed.is_some()) {
+        let k = if next_after_removed.is_some() || (forward && exact.is_none()) {
             pos
         } else if forward {
             (pos + 1) % order.len()

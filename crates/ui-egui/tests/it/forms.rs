@@ -119,6 +119,11 @@ fn read_only_widgets_are_skipped_by_tab_navigation() {
         let locked = doc.form.iter().find(|field| field.name == "locked").unwrap();
         assert!(!locked.read_only(), "the field itself is editable");
         assert!(locked.widgets[0].read_only, "only its widget is read-only");
+        let order = pdfcraft_ui_egui::forms_ui::tab_order(&doc.form, &doc.info)
+            .into_iter()
+            .filter_map(|(fi, wi)| doc.form.get(fi).map(|field| (field.name.as_str(), wi)))
+            .collect::<Vec<_>>();
+        assert_eq!(order, vec![("first", 0), ("locked", 1), ("last", 0)], "read-only, empty and off-page widgets are excluded");
     }
     click_field(&mut h, "first", 0);
     h.key_press(egui::Key::Tab);
@@ -335,6 +340,36 @@ fn tab_uses_the_first_remaining_widget_when_focus_leaves_the_order() {
 }
 
 #[test]
+fn shift_tab_uses_the_previous_remaining_widget_when_focus_leaves_the_order() {
+    let mut h = check_box_harness();
+    click_field(&mut h, "last", 0);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+        name: "last".into(),
+        props: Box::new(pdfcraft_engine::FieldProps { rect: Some((0, [320.0, 270.0, 340.0, 292.0])), ..Default::default() }),
+    });
+    h.run_steps(3);
+
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("agree".into(), 0)), "Shift+Tab restores focus to the last stop before the removed widget");
+}
+
+#[test]
+fn shift_tab_wraps_to_the_last_widget_when_focus_leaves_the_order() {
+    let mut h = check_box_harness();
+    click_field(&mut h, "first", 0);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+        name: "first".into(),
+        props: Box::new(pdfcraft_engine::FieldProps { rect: Some((0, [320.0, 350.0, 340.0, 372.0])), ..Default::default() }),
+    });
+    h.run_steps(3);
+
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("pick".into(), 1)), "Shift+Tab wraps to the last remaining stop");
+}
+
+#[test]
 fn tab_and_shift_tab_follow_widget_order_across_pages() {
     let mut h = check_box_harness();
     h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
@@ -347,37 +382,10 @@ fn tab_and_shift_tab_follow_widget_order_across_pages() {
     let order = {
         let s = h.state();
         let doc = s.session.get(s.views[0].id).unwrap();
-        let form = &doc.form;
-        let info = &doc.info;
-        let mut widgets: Vec<(usize, String, usize)> = form
-            .iter()
-            .filter(|field| {
-                !field.read_only() && !matches!(field.kind, pdfcraft_engine::FormFieldKind::PushButton | pdfcraft_engine::FormFieldKind::Signature)
-            })
-            .flat_map(|field| {
-                field
-                    .widgets
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, widget)| {
-                        let Some(page) = widget.page.and_then(|page| info.pages.get(page)) else { return false };
-                        let [x0, y0, x1, y1] = widget.rect;
-                        let [cx0, cy0, cx1, cy1] = page.crop.map(f64::from);
-                        !widget.hidden
-                            && !widget.read_only
-                            && [x0, y0, x1, y1].into_iter().all(f64::is_finite)
-                            && x0 < x1
-                            && y0 < y1
-                            && x1 > cx0
-                            && x0 < cx1
-                            && y1 > cy0
-                            && y0 < cy1
-                    })
-                    .map(move |(wi, widget)| (widget.tab, field.name.clone(), wi))
-            })
-            .collect();
-        widgets.sort_by_key(|(tab, _, _)| *tab);
-        widgets.into_iter().map(|(_, name, wi)| (name, wi)).collect::<Vec<_>>()
+        pdfcraft_ui_egui::forms_ui::tab_order(&doc.form, &doc.info)
+            .into_iter()
+            .filter_map(|(fi, wi)| doc.form.get(fi).map(|field| (field.name.clone(), wi)))
+            .collect::<Vec<_>>()
     };
     assert_eq!(order.first().map(|entry| entry.0.as_str()), Some("first"));
     assert_eq!(order.last().map(|entry| entry.0.as_str()), Some("second_page"));
