@@ -3052,6 +3052,17 @@ usage = "DCT redaction test (crates/redact/src/tests.rs): a CMYK JPEG declared /
 sha256 = "ee688af975e1a9c1c445468887351bea1df2429049c43cdaac7a28aae00b6757"
 
 [[asset]]
+path = "crates/redact/tests/data/rgb.jp2"
+title = "16×16 RGB JPEG 2000 image with a dark border"
+author = "PdfCraft contributors"
+source = "Contributor-original: synthetic 16×16 lossless JPEG 2000 (JP2) image, flat colour with a one-pixel dark border, generated for the redaction regression; no third-party content"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "image"
+usage = "JPX redaction test (crates/redact/src/tests.rs): a partly covered JPEG 2000 image is cleared in place, not removed"
+sha256 = "3494146a66cc0e30fca447b929b45c36279cc9db6cda3adb54f0b74799303788"
+
+[[asset]]
 path = "assets/icons/clipboard-paste.svg"
 title = "Lucide icon \"clipboard-paste\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"

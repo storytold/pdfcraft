@@ -17,11 +17,9 @@ pdfcraft-forms = { workspace = true }
 pdfcraft-edit = { workspace = true }
 pdfcraft-annot = { workspace = true }
 pdfcraft-xfa = { workspace = true }
-# CCITT Group 4 and JBIG2 encoding for cleared one-bit images.
+# CCITT Group 4 and JBIG2 encoding for cleared one-bit images; JPEG and JPEG 2000 decoding.
 pdfcraft-filters = { workspace = true }
 thiserror = { workspace = true }
-# The JPEG decoder for clearing a DCT (scanned) image in place (#2246).
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [dev-dependencies]
 pdfcraft-testkit = { workspace = true }

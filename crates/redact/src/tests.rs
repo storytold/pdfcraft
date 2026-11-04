@@ -848,8 +848,8 @@ fn a_jbig2_image_past_the_runs_allowance_stops_the_run() {
 }
 
 /// A Flate image past the run's allowance stops the run as a JBIG2 image does: removed whole, it
-/// would take what no mark covers with it, unreported. A JPEG, which clearing doesn't read, is
-/// removed whole as it always was, and spends nothing.
+/// would take what no mark covers with it, unreported. A JPEG, which clearing decodes, pays too and
+/// stops the run the same way; one whose data doesn't decode is removed whole.
 #[test]
 fn a_flate_image_past_the_runs_allowance_stops_the_run() {
     let dict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /FlateDecode";
@@ -863,9 +863,14 @@ fn a_flate_image_past_the_runs_allowance_stops_the_run() {
     assert!(crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(u64::MAX)).is_ok());
 
     let dict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /DCTDecode";
-    let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, b"not read")]);
-    mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
-    let report = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0)).unwrap();
+    let jpeg = || {
+        let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, b"not a JPEG")]);
+        mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+        doc
+    };
+    let refused = crate::apply_within(&mut jpeg(), None, pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(matches!(refused, Err(crate::RedactError::ImagesPastAllowance)), "{refused:?}");
+    let report = crate::apply_within(&mut jpeg(), None, pdfcraft_cos::ImageBudget::with_work(u64::MAX)).unwrap();
     assert_eq!(report.images_removed, 1);
 }
 
@@ -3282,6 +3287,83 @@ fn a_cmyk_jpeg_that_decodes_as_rgb_is_removed_when_declared_rgb() {
     let report = apply(&mut doc, None).unwrap();
     assert_eq!((report.images_removed, report.images_cleared), (1, 0), "{report:?}");
     assert!(!content(&doc, 0).contains("/Im0 Do"));
+}
+
+/// The cleared copy of the one image on page 0 of `doc`, decoded.
+fn cleared_copy(doc: &Document) -> (pdfcraft_cos::Dict, Vec<u8>) {
+    let p = pdfcraft_model::pages(doc).swap_remove(0);
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    let new = xo.iter().find(|(k, _)| k.starts_with(b"PCRedacted")).map(|(_, v)| v.clone()).expect("a cleared copy");
+    let Object::Stream(s) = &*doc.resolve(&new) else { panic!() };
+    (s.dict.clone(), s.decoded().unwrap())
+}
+
+/// Issue #283: a CMYK JPEG (a print scan) was removed whole. It is cleared in place, and the
+/// pixels no mark covers keep the samples the page draws: CMYK as stored, `/Decode` kept.
+#[test]
+fn a_cmyk_jpeg_scan_is_cleared_not_removed() {
+    let jpeg = include_bytes!("../tests/data/cmyk.jpg");
+    let img = stream(
+        "/Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceCMYK /BitsPerComponent 8 /Decode [1 0 1 0 1 0 1 0] /Filter /DCTDecode",
+        jpeg,
+    );
+    let mut doc = one_page(b"q 300 0 0 300 0 0 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![img]);
+    mark(&mut doc, 0, &[[125.0, 125.0, 175.0, 175.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!((report.images_removed, report.images_cleared), (0, 1), "{report:?}");
+
+    let (dict, samples) = cleared_copy(&doc);
+    assert_eq!(dict.name(b"ColorSpace"), Some(&b"DeviceCMYK"[..]));
+    assert!(dict.contains(b"Decode"), "the page undoes the stored inversion as before");
+    let original = pdfcraft_filters::decode_dct(jpeg, 16, 16, 4).unwrap();
+    assert_eq!(samples.len(), original.len());
+    let pixel = |s: &[u8], x: usize, y: usize| s[(y * 16 + x) * 4..(y * 16 + x + 1) * 4].to_vec();
+    assert_eq!(pixel(&samples, 7, 7), [0, 0, 0, 0], "marked pixels are cleared");
+    assert_eq!(pixel(&samples, 1, 1), pixel(&original, 1, 1), "unmarked pixels keep their samples");
+}
+
+/// Issue #283: a JPEG 2000 image was removed whole. It is cleared in place as a Flate copy that
+/// says what JPEG 2000 left to its file: 8 bits, the file's device space when the dictionary
+/// names none, and no `/Decode` (ignored for JPEG 2000, but not for Flate).
+#[test]
+fn a_jpeg_2000_scan_is_cleared_not_removed() {
+    let jp2 = include_bytes!("../tests/data/rgb.jp2");
+    for dict in [
+        "/Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /JPXDecode",
+        "/Type /XObject /Subtype /Image /Width 16 /Height 16 /Decode [1 0 1 0 1 0] /Filter /JPXDecode",
+    ] {
+        let mut doc = one_page(b"q 300 0 0 300 0 0 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![stream(dict, jp2)]);
+        mark(&mut doc, 0, &[[125.0, 125.0, 175.0, 175.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_removed, report.images_cleared), (0, 1), "{dict}: {report:?}");
+
+        let (copy, samples) = cleared_copy(&doc);
+        assert_eq!(
+            (copy.name(b"Filter"), copy.name(b"ColorSpace"), copy.int(b"BitsPerComponent")),
+            (Some(&b"FlateDecode"[..]), Some(&b"DeviceRGB"[..]), Some(8)),
+            "{dict}"
+        );
+        assert!(!copy.contains(b"Decode"), "{dict}");
+        let pixel = |x: usize, y: usize| &samples[(y * 16 + x) * 3..(y * 16 + x + 1) * 3];
+        assert_eq!(pixel(7, 7), [0, 0, 0], "{dict}: marked pixels are cleared");
+        assert_eq!((pixel(4, 4), pixel(0, 0)), (&[200, 180, 160][..], &[20, 30, 40][..]), "{dict}: the rest of the scan stays");
+    }
+}
+
+/// A JPEG 2000 image whose dictionary's colour space has another component count than its file,
+/// an image mask, or one whose file is another size than its dictionary says, is removed whole as
+/// before: its copy couldn't draw as it did.
+#[test]
+fn a_jpeg_2000_image_that_cannot_be_cleared_is_removed_whole() {
+    let jp2 = include_bytes!("../tests/data/rgb.jp2");
+    for dict in ["/Width 16 /ColorSpace /DeviceGray", "/Width 16 /ColorSpace /DeviceRGB /ImageMask true", "/Width 8 /ColorSpace /DeviceRGB"] {
+        let full = format!("/Type /XObject /Subtype /Image /Height 16 {dict} /Filter /JPXDecode");
+        let mut doc = one_page(b"q 300 0 0 300 0 0 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![stream(&full, jp2)]);
+        mark(&mut doc, 0, &[[125.0, 125.0, 175.0, 175.0]], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!((report.images_removed, report.images_cleared), (1, 0), "{dict}: {report:?}");
+    }
 }
 
 #[test]
