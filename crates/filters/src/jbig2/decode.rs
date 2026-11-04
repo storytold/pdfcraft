@@ -4,7 +4,8 @@ use crate::FilterError;
 use crate::ccitt::Rows;
 
 /// The largest JBIG2 page [`decode_jbig2_within`] decodes, in pixels. The decoder decodes a page whole,
-/// and takes pages of up to about this many (20,000 × 10,000 decodes).
+/// and takes pages of up to this many (20,000 × 10,000 decodes). It is also the most
+/// [`encode_jbig2_generic`](crate::encode_jbig2_generic) encodes, so what it stores reads back.
 pub const MAX_JBIG2_PIXELS: u64 = 1 << 28;
 
 /// A `JBIG2Decode` stream's `data`, with what its `/JBIG2Globals` stream decodes to, decoded as the
