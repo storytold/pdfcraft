@@ -2691,16 +2691,19 @@ fn presentation_click_state(ui: &egui::Ui, view: &DocView, navigation_rect: Rect
     })
 }
 
-/// The modifier keys of a click on a button, for its script (`event.shift`, #6159): as held now,
-/// or as the click's own release carried them (a synthetic click).
+/// The modifier keys of a click on a button, for its script (`event.shift`, #6159): as the
+/// click's release carried them, or as held now for a frame without one.
 fn click_keys(ui: &egui::Ui) -> pdfcraft_engine::js::Keys {
     ui.input(|i| {
+        // The release's own keys: Shift pressed after it, before the frame runs, isn't part of the
+        // click. egui doesn't say which release a click came from, so with two in one frame the
+        // first one's keys are used.
         let released = i.events.iter().find_map(|e| match e {
             egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, modifiers, .. } => Some(*modifiers),
             _ => None,
         });
         let m = released.unwrap_or(i.modifiers);
-        pdfcraft_engine::js::Keys { shift: m.shift || i.modifiers.shift, modifier: m.command || i.modifiers.command }
+        pdfcraft_engine::js::Keys { shift: m.shift, modifier: m.command }
     })
 }
 
