@@ -90,10 +90,14 @@ fn has_children(doc: &Document, r: ObjRef) -> bool {
 }
 
 /// A destination's view as [`import_outline`] takes it: a known type with exactly its number of
-/// values (extra ones dropped, missing ones `None`). An unknown type gives `None`.
+/// values (extra ones dropped, missing ones `None`). An unknown type, or a FitR missing one of
+/// its four values (the rectangle can't be kept), gives `None`.
 fn portable_view(kind: Vec<u8>, mut values: Vec<Option<f64>>) -> Option<(Vec<u8>, Vec<Option<f64>>)> {
     let (_, arity) = VIEWS.iter().find(|(k, _)| *k == kind.as_slice())?;
     values.resize(*arity, None);
+    if kind.as_slice() == b"FitR" && values.iter().any(Option::is_none) {
+        return None;
+    }
     Some((kind, values))
 }
 
@@ -119,14 +123,18 @@ pub fn view_arity(kind: &[u8]) -> Option<usize> {
 fn visit<'a>(nodes: &'a [OutlineNode], mut f: impl FnMut(&[usize], &'a OutlineNode)) {
     // One entry per open level: its nodes and how many of them have been visited.
     let mut stack: Vec<(&'a [OutlineNode], usize)> = vec![(nodes, 0)];
+    // The visited node's path, kept in step with the stack rather than rebuilt per node.
+    let mut path: Vec<usize> = Vec::new();
     while let Some(level) = stack.last_mut() {
         let list = level.0;
-        let Some(node) = list.get(level.1) else {
+        let index = level.1;
+        let Some(node) = list.get(index) else {
             stack.pop();
             continue;
         };
-        level.1 = level.1.saturating_add(1);
-        let path: Vec<usize> = stack.iter().map(|(_, visited)| visited.saturating_sub(1)).collect();
+        level.1 = index.saturating_add(1);
+        path.truncate(stack.len().saturating_sub(1));
+        path.push(index);
         f(&path, node);
         if !node.children.is_empty() {
             stack.push((&node.children, 0));

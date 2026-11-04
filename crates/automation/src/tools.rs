@@ -326,8 +326,9 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "bookmark_export",
             "Export bookmarks",
-            "The bookmark tree, or the subtree at path, as a list of nodes bookmark_import takes back unchanged. A node has title, page (1-based, null when it goes nowhere), open, and when set view ({type, values}: a destination type from ISO 32000-2 §12.3.2.2 Table 149 and its values in PDF user space, as the file stores them), color ([r, g, b], 0-1), bold, italic and children. truncated is true when bookmarks nested deeper than 33 levels were left out. With out, the tree is also written there as a JSON file {\"bookmarks\": [...]}.",
+            "The bookmark tree, or the subtree at path, as a list of nodes bookmark_import takes back unchanged. A node has title, page (1-based, null when it goes nowhere), open, and when set view ({type, values}: a destination type from ISO 32000-2 §12.3.2.2 Table 149 and its values in PDF user space, as the file stores them), color ([r, g, b], 0-1), bold, italic and children. truncated is true when bookmarks nested deeper than 33 levels were left out. With out, the tree is also written there as a JSON file {\"bookmarks\": [...]}, with \"truncated\": true when that is so; out is overwritten.",
         )
+        .destructive()
         .with(schema(
             json!({ "doc": doc(), "path": path("The bookmark whose subtree to export (omit for the whole outline)"), "out": path_arg() }),
             &["doc"],
@@ -335,7 +336,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "bookmark_import",
             "Import bookmarks",
-            "Add a tree of bookmarks, as bookmark_export gives it (bookmarks) or as a JSON file it wrote (file), under a parent bookmark (or at the top level) at a position, or with replace in place of the whole outline. A bookmark whose page this document lacks is kept without a destination and listed in unmapped (1-based paths into the given tree). A view takes exactly its type's values (XYZ 3, FitR 4, FitH/FitV/FitBH/FitBV 1, Fit/FitB none). Give exactly one of bookmarks and file. Every node is checked before anything is written: at most 100000 bookmarks, nested at most 33 levels counting the parent's. Undoable.",
+            "Add a tree of bookmarks, as bookmark_export gives it (bookmarks) or as a JSON file it wrote (file), under a parent bookmark (or at the top level) at a position, or with replace in place of the whole outline. A bookmark whose page this document lacks is kept without a destination and listed in unmapped (1-based paths into the given tree). A view takes exactly its type's values (XYZ 3, FitR 4, FitH/FitV/FitBH/FitBV 1, Fit/FitB none). Give exactly one of bookmarks and file. A title may be empty but not missing. Every node is checked before anything is written: at most 100000 bookmarks, nested at most 33 levels counting the parent's. truncated is true when the file says its export left bookmarks out. Undoable.",
         )
         .destructive()
         .with(schema(
@@ -352,7 +353,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "bookmark_copy",
             "Copy bookmarks from another document",
-            "Copy the bookmarks of document from (or the subtree at path) into doc, by page number: under a parent bookmark (or at the top level) at a position, or with replace in place of doc's outline. A bookmark whose page doc lacks is kept without a destination and listed in unmapped (1-based paths into the copied tree). Undoable.",
+            "Copy the bookmarks of document from (or the subtree at path) into doc, by page number: under a parent bookmark (or at the top level) at a position, or with replace in place of doc's outline. A bookmark whose page doc lacks is kept without a destination and listed in unmapped (1-based paths into the copied tree). truncated is true when bookmarks nested deeper than 33 levels were left out of the copy. Undoable.",
         )
         .destructive()
         .with(schema(

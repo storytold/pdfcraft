@@ -3,7 +3,8 @@
 //! The portable form is JSON: `{"bookmarks": [node, …]}`, where a node is `title`, `page`
 //! (1-based, or `null` for one that goes nowhere), `view` (`{"type", "values"}`: a destination
 //! type and its values in PDF user space, as the file stores them), `color`, `bold`, `italic`,
-//! `open` and `children`. What export writes, import takes back unchanged.
+//! `open` and `children`. What export writes, import takes back unchanged. A file also carries
+//! `"truncated": true` when the export left out bookmarks nested past the listing limit.
 use crate::{Args, Automation, Result, ToolError, failed};
 use pdfcraft_engine::{DocId, Edit, OutlineNode};
 use serde_json::{Value, json};
@@ -19,7 +20,11 @@ impl Automation {
         let mut out = json!({ "bookmarks": tree.nodes.iter().map(node_json).collect::<Vec<_>>(), "truncated": tree.truncated });
         if let Some(file) = a.opt_str("out")? {
             let target = self.resolve(file, true)?;
-            let text = serde_json::to_vec_pretty(&json!({ "bookmarks": out["bookmarks"] })).map_err(failed)?;
+            let mut saved = json!({ "bookmarks": out["bookmarks"] });
+            if tree.truncated {
+                saved["truncated"] = json!(true);
+            }
+            let text = serde_json::to_vec_pretty(&saved).map_err(failed)?;
             crate::write_atomic(&target, &text)?;
             out["path"] = json!(target);
         }
@@ -27,16 +32,19 @@ impl Automation {
     }
 
     pub(crate) fn bookmark_import(&mut self, a: &Args) -> Result<Value> {
-        let nodes = match (a.get("bookmarks"), a.opt_str("file")?) {
-            (Some(list), None) => nodes_of(list)?,
+        let (nodes, truncated) = match (a.get("bookmarks"), a.opt_str("file")?) {
+            (Some(list), None) => (nodes_of(list)?, false),
             (None, Some(file)) => {
                 let path = self.resolve(file, false)?;
                 let value: Value = serde_json::from_slice(&crate::read_input(&path)?).map_err(|e| failed(format!("not a bookmark file: {e}")))?;
-                nodes_of(value.get("bookmarks").ok_or_else(|| failed("not a bookmark file: it has no \"bookmarks\" list"))?)?
+                let list = value.get("bookmarks").ok_or_else(|| failed("not a bookmark file: it has no \"bookmarks\" list"))?;
+                (nodes_of(list)?, value.get("truncated") == Some(&Value::Bool(true)))
             }
             _ => return Err(ToolError::InvalidArgs("give either bookmarks or file".into())),
         };
-        self.write_tree(a, nodes)
+        let mut out = self.write_tree(a, nodes)?;
+        out["truncated"] = json!(truncated);
+        Ok(out)
     }
 
     pub(crate) fn bookmark_copy(&mut self, a: &Args) -> Result<Value> {
@@ -44,12 +52,18 @@ impl Automation {
         let from = DocId(u64::try_from(from).map_err(|_| ToolError::InvalidArgs("from must be positive".into()))?);
         let path = a.opt_path("path")?.unwrap_or_default();
         let tree = self.outline_of(from, &path)?;
-        self.write_tree(a, tree.nodes)
+        let mut out = self.write_tree(a, tree.nodes)?;
+        out["truncated"] = json!(tree.truncated);
+        Ok(out)
     }
 
     fn outline_of(&self, id: DocId, path: &[usize]) -> Result<pdfcraft_engine::OutlineTree> {
         match self.session.outline_tree(id, path) {
-            Some(tree) => tree.map_err(failed),
+            // The engine names the path 0-based; the caller gave it 1-based.
+            Some(tree) => tree.map_err(|e| match e {
+                pdfcraft_organize::OutlineError::NoSuchBookmark(_) => failed(format!("there is no bookmark at {:?}", one_based(path))),
+                e => failed(e),
+            }),
             None => Err(failed(format!("document {} is not open, or its bookmarks can't be read for editing", id.0))),
         }
     }
@@ -121,7 +135,8 @@ fn list_of(list: &Value, at: &[usize], count: &mut usize) -> Result<Vec<OutlineN
 fn node_of(v: &Value, at: &[usize], count: &mut usize) -> Result<OutlineNode> {
     let o = v.as_object().ok_or_else(|| bad(at, "must be an object"))?;
     let field = |k: &str| o.get(k).filter(|x| !x.is_null());
-    let title = field("title").and_then(Value::as_str).filter(|t| !t.trim().is_empty()).ok_or_else(|| bad(at, "needs a title"))?.to_string();
+    // An empty title is kept: files have them, and export writes them as "".
+    let title = field("title").and_then(Value::as_str).ok_or_else(|| bad(at, "needs a title"))?.to_string();
     let page = match field("page") {
         None => None,
         Some(p) => Some(p.as_u64().filter(|p| *p >= 1).and_then(|p| usize::try_from(p - 1).ok()).ok_or_else(|| bad(at, "page must be 1 or more"))?),

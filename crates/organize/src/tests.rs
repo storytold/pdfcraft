@@ -3905,6 +3905,21 @@ fn a_page_the_target_lacks_keeps_its_bookmark_without_a_destination() {
 }
 
 #[test]
+fn a_fit_r_missing_a_value_copies_with_its_page_and_no_view() {
+    let mut src = outline_source();
+    let pages = crate::walk(&src).unwrap();
+    let figure = crate::bookmarks(&src)[2].obj;
+    let short = vec![Object::Ref(pages[2].0), Object::name("FitR"), Object::Int(10), Object::Int(20), Object::Int(110)];
+    src.update_dict(figure, |x| x.set(b"Dest".to_vec(), Object::Array(short))).unwrap();
+    let tree = crate::outline_tree(&src, &[]).unwrap();
+    let copied = &tree.nodes[0].children[1];
+    assert_eq!((copied.page, copied.view.clone()), (Some(2), None));
+    let mut target = doc_a();
+    crate::import_outline(&mut target, &[], 0, &tree.nodes, false).unwrap();
+    assert_eq!(titles(&crate::bookmarks(&target)), ["Intro[Part,Figure]", "Results"]);
+}
+
+#[test]
 fn an_import_appends_inserts_or_replaces() {
     let mut d = doc_a();
     crate::add_bookmark(&mut d, &[], 0, "Old A", 0).unwrap();

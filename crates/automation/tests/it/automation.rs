@@ -10683,6 +10683,65 @@ fn bookmarks_export_import_and_copy_between_documents() {
     assert_eq!(ok(&mut a, "bookmark_list", json!({ "doc": same }))["bookmarks"][1]["children"][0]["title"], "Detail");
 }
 
+/// A one-page document whose outline has an untitled item, a /FitR destination with three of
+/// its four numbers, and a chain nested `deep` levels below them.
+fn odd_outline(deep: usize) -> Vec<u8> {
+    let first_deep = 7;
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Outlines /First 5 0 R /Last 6 0 R >>".into(),
+        "<< /Title () /Parent 4 0 R /Next 6 0 R /Dest [3 0 R /Fit] >>".into(),
+        format!(
+            "<< /Title (Short) /Parent 4 0 R /Prev 5 0 R /Dest [3 0 R /FitR 0 0 10]{} >>",
+            if deep > 0 { format!(" /First {first_deep} 0 R /Last {first_deep} 0 R") } else { String::new() }
+        ),
+    ];
+    for i in 0..deep {
+        let (me, parent) = (first_deep + i, if i == 0 { 6 } else { first_deep + i - 1 });
+        let child = if i + 1 < deep { format!(" /First {0} 0 R /Last {0} 0 R", me + 1) } else { String::new() };
+        objs.push(format!("<< /Title (Level) /Parent {parent} 0 R /Dest [3 0 R /Fit]{child} >>"));
+    }
+    pdf_of(&objs.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+/// What a real file holds and the JSON form can't say exactly still copies and round-trips: an
+/// empty title stays empty, a short /FitR keeps its page and drops the view, and bookmarks past
+/// the listing depth are reported as left out at every step.
+#[test]
+fn odd_bookmarks_round_trip_and_a_cut_tree_says_so() {
+    let dir = workdir("bookmark-io-odd");
+    std::fs::write(dir.join("odd.pdf"), odd_outline(0)).unwrap();
+    std::fs::write(dir.join("deep.pdf"), odd_outline(40)).unwrap();
+    let mut a = auto(&dir);
+    let src = ok(&mut a, "doc_open", json!({ "path": "odd.pdf" }))["doc"].as_u64().unwrap();
+    let tree = ok(&mut a, "bookmark_export", json!({ "doc": src, "out": "odd.json" }))["bookmarks"].clone();
+    assert_eq!((tree[0]["title"].clone(), tree[1]["page"].clone(), tree[1].get("view")), (json!(""), json!(1), None));
+    let dst = ok(&mut a, "doc_open", json!({ "path": "b.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "bookmark_import", json!({ "doc": dst, "file": "odd.json", "replace": true }))["truncated"], false);
+    // A destination with no view is written as XYZ with nulls: the same page, the reader's view.
+    let back = ok(&mut a, "bookmark_export", json!({ "doc": dst }))["bookmarks"].clone();
+    assert_eq!((back[0].clone(), back[1]["title"].clone(), back[1]["page"].clone()), (tree[0].clone(), json!("Short"), json!(1)));
+    assert_eq!(back[1]["view"], json!({ "type": "XYZ", "values": [null, null, null] }));
+    let copied = ok(&mut a, "bookmark_copy", json!({ "doc": dst, "from": src, "replace": true }));
+    assert_eq!((copied["unmapped"].clone(), copied["truncated"].clone()), (json!([]), json!(false)));
+    match a.call("bookmark_export", &json!({ "doc": src, "path": [3] })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("no bookmark at [3]"), "{m}"),
+        other => panic!("expected no bookmark, got {other:?}"),
+    }
+
+    let deep = ok(&mut a, "doc_open", json!({ "path": "deep.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "bookmark_export", json!({ "doc": deep, "out": "deep.json" }))["truncated"], true);
+    let saved: Value = serde_json::from_slice(&std::fs::read(dir.join("deep.json")).unwrap()).unwrap();
+    assert_eq!(saved["truncated"], true);
+    assert_eq!(ok(&mut a, "bookmark_import", json!({ "doc": dst, "file": "deep.json", "replace": true }))["truncated"], true);
+    assert_eq!(ok(&mut a, "bookmark_copy", json!({ "doc": dst, "from": deep, "replace": true }))["truncated"], true);
+    let export = tools().into_iter().find(|t| t.name == "bookmark_export").unwrap();
+    assert!(export.destructive && !export.read_only, "bookmark_export overwrites out");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn a_bad_bookmark_tree_is_refused_whole_and_names_the_node() {
     let dir = workdir("bookmark-io-bad");
@@ -10695,7 +10754,7 @@ fn a_bad_bookmark_tree_is_refused_whole_and_names_the_node() {
     let fine = json!({ "title": "Fine", "page": 1 });
     let m = refused(&mut a, json!([fine, { "title": "Parent", "children": [{ "page": 1 }] }]));
     assert!(m.contains("[2, 1]") && m.contains("title"), "{m}");
-    let m = refused(&mut a, json!([{ "title": "  " }]));
+    let m = refused(&mut a, json!([{ "title": 5 }]));
     assert!(m.contains("[1]") && m.contains("title"), "{m}");
     let m = refused(&mut a, json!([fine, { "title": "Bad", "page": 0 }]));
     assert!(m.contains("[2]") && m.contains("page"), "{m}");
