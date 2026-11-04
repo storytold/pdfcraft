@@ -97,17 +97,7 @@ pub(crate) fn needs_arabic(doc: &Document, f: &Field, w: &Widget, values: &[Stri
 pub fn field_appearance_drawn_in(doc: &mut Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>) {
     if !needs_syriac_display(doc, f, w, values, format) {
         let (mut stream, missing) = field_appearance_drawn(doc, f, w, values, format);
-        // PR #3465's writer returns inline Type3 streams. Materialize only that
-        // successful path; Syriac already owns document-backed font resources.
-        if let Some(Object::Dict(resources)) = stream.dict.get_mut(b"Resources")
-            && let Some(Object::Dict(fonts)) = resources.get(b"Font")
-            && fonts.iter().any(|(_, font)| matches!(font, Object::Dict(d) if d.name(b"Subtype") == Some(b"Type3")))
-        {
-            let mut staged = doc.clone();
-            let fonts = pdfcraft_fonts::appearance_text::materialize_fonts(&mut staged, fonts);
-            resources.set(b"Font".to_vec(), Object::Dict(fonts));
-            *doc = staged;
-        }
+        materialize_inline_fonts(doc, &mut stream);
         return (stream, missing);
     }
     if f.kind == FieldKind::PushButton {
@@ -120,6 +110,21 @@ pub fn field_appearance_drawn_in(doc: &mut Document, f: &Field, w: &Widget, valu
             (stream, None)
         }
         Err(_) => field_appearance_drawn(doc, f, w, values, format),
+    }
+}
+
+/// PR #3465's writer returns inline Type3 fonts, which hold no document objects, so one drawing
+/// can serve several documents: give `stream` its own copies of them in `doc`. Syriac already
+/// owns document-backed font resources and has none, which leaves it unchanged.
+pub(crate) fn materialize_inline_fonts(doc: &mut Document, stream: &mut Stream) {
+    if let Some(Object::Dict(resources)) = stream.dict.get_mut(b"Resources")
+        && let Some(Object::Dict(fonts)) = resources.get(b"Font")
+        && fonts.iter().any(|(_, font)| matches!(font, Object::Dict(d) if d.name(b"Subtype") == Some(b"Type3")))
+    {
+        let mut staged = doc.clone();
+        let fonts = pdfcraft_fonts::appearance_text::materialize_fonts(&mut staged, fonts);
+        resources.set(b"Font".to_vec(), Object::Dict(fonts));
+        *doc = staged;
     }
 }
 

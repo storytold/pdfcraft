@@ -156,14 +156,16 @@ pub(super) fn overflow(box_: &TextBox, f: &Field, shown: &str) -> Result<Option<
     if box_.comb && f.kind == FieldKind::Text {
         return comb_overflow(box_, f, shown);
     }
-    let size = size_for(shown, box_.size, box_.inner_w, box_.inner_h, box_.multiline, box_.syriac_family)?;
-    let rows = layout(shown, size, box_.inner_w, box_.multiline, box_.syriac_family)?;
+    // As `field` draws it: only a text field wraps; a combo shows one line whatever its flags.
+    let multiline = box_.multiline && f.kind == FieldKind::Text;
+    let size = size_for(shown, box_.size, box_.inner_w, box_.inner_h, multiline, box_.syriac_family)?;
+    let rows = layout(shown, size, box_.inner_w, multiline, box_.syriac_family)?;
     let (top, bottom) = extents(&rows)?;
     let height = (top - bottom) * size;
     if height > box_.inner_h + 0.01 {
         return Ok(Some(Overflow::High { height, room: box_.inner_h, size }));
     }
-    if box_.multiline {
+    if multiline {
         let room = (((box_.inner_h - height).max(0.0) / ((top - bottom + 0.1).max(1.15) * size)).floor() as usize).saturating_add(1);
         if room < rows.len() {
             return Ok(Some(Overflow::Tall { lines: rows.len(), room, size }));

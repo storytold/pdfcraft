@@ -551,7 +551,7 @@ fn walk(
             other => text_of(other).map(|t| (t.clone(), t)),
         })
         .collect();
-    out.push(Field {
+    let mut field = Field {
         name: inh.name.clone(),
         obj: r,
         kind,
@@ -567,7 +567,16 @@ fn walk(
         widgets,
         actions,
         button,
-    });
+    };
+    // Shaped Syriac labels can make the drawn rows taller than the `/DA` size gives; clicks and
+    // scrolling must use the rows the appearance draws.
+    if field.kind == FieldKind::List && field.options.iter().any(|(_, label)| pdfcraft_fonts::content_text::contains_syriac(label)) {
+        let rows: Vec<_> = field.widgets.iter().map(|w| appearance::list_rows(doc, &field, w)).collect();
+        for (w, rows) in field.widgets.iter_mut().zip(rows) {
+            w.list = Some(rows);
+        }
+    }
+    out.push(field);
 }
 
 pub(crate) fn field_flags(doc: &Document, dict: &Dict) -> Option<u32> {

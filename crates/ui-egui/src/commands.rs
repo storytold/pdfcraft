@@ -149,6 +149,9 @@ impl PdfCraftApp {
             }
             commands::Needs::Copying if self.active.is_some() => crate::copy_refused().to_string(),
             commands::Needs::Printing if self.active.is_some() => crate::print_refused().to_string(),
+            commands::Needs::TwoPageView if self.active.is_some() && spec.id == "view.layout.rtl" => {
+                tl!("Switch to two-page view first to put pages in right-to-left order").to_string()
+            }
             commands::Needs::TwoPageView if self.active.is_some() => tl!("Switch to two-page view first to show the cover page").to_string(),
             _ => tl!("Open a document first").to_string(),
         }

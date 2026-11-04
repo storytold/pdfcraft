@@ -47,6 +47,57 @@ fn review5914_followup_syriac_list_overflow_measures_visible_labels() {
     }
 }
 
+/// The rows a read Syriac list keeps for clicks and scrolling are the rows it is drawn with.
+#[test]
+fn review5914_round3_read_syriac_list_keeps_drawn_row_geometry() {
+    use pdfcraft_fonts::SyriacFamily;
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Eastern Syriac");
+        return;
+    }
+    let mut doc = fixture();
+    let f = field(&fields(&doc), "toppings").clone();
+    let w = f.widgets[0].clone();
+    doc.update_dict(w.obj, |d| {
+        d.set(b"DA".to_vec(), PdfString::text("/Helv 14 Tf 0 g"));
+        d.set(SyriacFamily::PDF_KEY.to_vec(), Object::name("Eastern"));
+    })
+    .unwrap();
+    // Lamadh's ascender under stacked marks and marks below a descending letter.
+    let labels = ["\u{0720}\u{0730}\u{0747}\u{0720}\u{0733}", "\u{0729}\u{0731}\u{0748}\u{0732}\u{0723}\u{0734}"];
+    doc.update_dict(f.obj, |d| d.set(b"Opt".to_vec(), Object::Array(labels.iter().map(|l| PdfString::text(l).into()).collect()))).unwrap();
+    let f = field(&fields(&doc), "toppings").clone();
+    let w = &f.widgets[0];
+    let drawn = appearance::list_rows(&doc, &f, w);
+    assert!(drawn.row > drawn.size * 1.15, "shaped Syriac extents must change the row height for this check to mean anything: {drawn:?}");
+    assert_eq!(w.list, Some(drawn));
+}
+
+/// A combo draws its label on one line, so an imported Multiline flag must not wrap its measure.
+#[test]
+fn review5914_round3_syriac_combo_ignores_multiline_overflow() {
+    use pdfcraft_fonts::SyriacFamily;
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Eastern Syriac");
+        return;
+    }
+    let mut doc = fixture();
+    set_props(&mut doc, "country", &FieldProps { font_size: Some(12.0), syriac_family: Some(SyriacFamily::Eastern), ..Default::default() }).unwrap();
+    let all = fields(&doc);
+    let mut f = field(&all, "country").clone();
+    let mut w = f.widgets[0].clone();
+    // Tall enough for every wrapped row, far too narrow for the one drawn line.
+    w.rect = [0.0, 0.0, 60.0, 600.0];
+    f.options = vec![("code".into(), "ܫܠܡܐ ".repeat(8))];
+    f.value = vec!["code".into()];
+    assert!(matches!(appearance::value_overflow(&doc, &f, &w), Some(appearance::Overflow::Wide { .. })));
+    f.flags |= flags::MULTILINE;
+    assert!(
+        matches!(appearance::value_overflow(&doc, &f, &w), Some(appearance::Overflow::Wide { .. })),
+        "a combo with an imported Multiline flag still draws one clipped line"
+    );
+}
+
 /// Imported Comb flags on choices must not substitute cell widths for ordinary text widths.
 #[test]
 fn review5914_followup_syriac_choice_ignores_comb_overflow() {
@@ -1099,6 +1150,9 @@ fn arabic_multiline_wrap_reopen_and_regenerate() {
     assert!(drawn.matches("/ActualText").count() > 3, "hard paragraphs and soft wraps use shaped rows: {drawn}");
     assert_eq!(f.value.as_slice(), std::slice::from_ref(&value));
     let widget = f.widgets[0].obj;
+    let mut cache = FieldAppearanceCache::default();
+    with_field_appearances_cached(&doc, &mut cache);
+    let others = cache.builds();
     doc.update_dict(widget, |d| {
         d.remove(b"AP");
     })
@@ -1109,6 +1163,14 @@ fn arabic_multiline_wrap_reopen_and_regenerate() {
     let f = field(&all, "notes");
     assert_eq!(f.value, [value]);
     assert_eq!(ap(&reopened, &f.widgets[0]), drawn);
+    // A display refresh reuses the Arabic drawing and gives each copy its own fonts.
+    let mut cache = FieldAppearanceCache::default();
+    with_field_appearances_cached(&doc, &mut cache).unwrap();
+    let built = cache.builds();
+    assert_eq!(built, others + 1, "the Arabic field is drawn through the cache");
+    let again = reopen(&with_field_appearances_cached(&doc, &mut cache).unwrap());
+    assert_eq!((cache.builds(), cache.hits()), (built, built), "nothing changed, nothing reshaped");
+    assert_eq!(ap(&again, &field(&fields(&again), "notes").widgets[0]), drawn);
 }
 
 /// Multiline fit and overflow account for every row and overwide graphemes before clipping.

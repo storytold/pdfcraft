@@ -179,6 +179,9 @@ fn disabled_commands_explain_themselves() {
     // View state counts too: the cover page exists only in two-page view.
     assert!(!app.execute("view.layout.cover"));
     assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Switch to two-page view first to show the cover page"));
+    // Right-to-left order shares that requirement but says what it is for.
+    assert!(!app.execute("view.layout.rtl"));
+    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Switch to two-page view first to put pages in right-to-left order"));
     assert!(!app.execute("no.such.command"));
 }
 

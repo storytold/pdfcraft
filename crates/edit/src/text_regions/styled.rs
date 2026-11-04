@@ -43,17 +43,14 @@ impl FontResolver<'_> {
             return Ok(None);
         }
         let usable = |bytes: &[u8]| embedding::covers(bytes, span) && span.split(['\n', '\r']).all(|row| source_shaping::shape(bytes, row).is_ok());
-        let program = self
-            .fonts
-            .get(source.font.as_bytes())
-            .and_then(|font| self.doc.dict(font))
-            .and_then(|font| pdfcraft_fonts::pdf::embedded_sfnt(self.doc, &font));
-        if program.as_deref().is_some_and(&usable)
-            && self.metrics.get(&source.font).is_some_and(|metrics| span.split(['\n', '\r']).all(|row| source_encodes(metrics, row)))
+        // Only a complete program qualifies (`source_program`): a subset can keep a character's
+        // mapping after dropping its outline, which would leave the shaped text invisible.
+        let program = source_program(self.doc, self.fonts, &source.font).filter(|bytes| usable(bytes));
+        if program.is_some() && self.metrics.get(&source.font).is_some_and(|metrics| span.split(['\n', '\r']).all(|row| source_encodes(metrics, row)))
         {
             return Ok(Some(source.font.clone()));
         }
-        if let Some(bytes) = source_program(self.doc, self.fonts, &source.font).filter(|bytes| usable(bytes)) {
+        if let Some(bytes) = program {
             let family = embedding::names(&bytes).map_err(EditError::Invalid)?.0;
             return self.embed_face(format!("source {}", source.font), &bytes, &family, "the source Syriac font could not be loaded").map(Some);
         }
@@ -61,12 +58,7 @@ impl FontResolver<'_> {
             if !span.split(['\n', '\r']).all(|row| source_encodes(metrics, row)) {
                 continue;
             }
-            let bytes = self
-                .fonts
-                .get(name.as_bytes())
-                .and_then(|font| self.doc.dict(font))
-                .and_then(|font| pdfcraft_fonts::pdf::embedded_sfnt(self.doc, &font));
-            if bytes.as_deref().is_some_and(&usable) {
+            if source_program(self.doc, self.fonts, name).is_some_and(|bytes| usable(&bytes)) {
                 return Ok(Some(name.clone()));
             }
         }
