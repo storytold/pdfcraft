@@ -38,7 +38,7 @@ The current converter does not import Word, Excel or PowerPoint files; those ext
 Windows `.lnk` shortcuts are not registered. There is no modern Windows 11 `IExplorerCommand`
 COM extension in this change. Menu text is a localized executable resource, selected by Windows'
 UI language with neutral English fallback, rather than fixed by the installer language.
-The resources cover all 35 current UI languages, including Catalan, Central Kurdish, Korean, Lao, Thai and Vietnamese.
+The labels are built from the craft-i18n checkout the interface embeds (`CRAFT_I18N_DIR`, `locales/<code>/pdfcraft.tsv`): every UI language whose catalog has all three labels gets a table (at the pinned revision, all 34 translated UI languages, including Catalan, Central Kurdish, Korean, Lao, Thai and Vietnamese). A build without the checkout, like its interface, has English labels only.
 
 Explorer requests are limited to 100 paths; IPC is bounded to 1 MiB and file reads to 64 MiB per
 source. Explorer conversion/combination checks a 128 MiB aggregate PDF-source budget across the

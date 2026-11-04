@@ -16,6 +16,7 @@
 
 mod a11y;
 mod batch;
+mod bates;
 mod comments;
 mod content;
 mod conventions;
