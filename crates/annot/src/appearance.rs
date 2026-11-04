@@ -278,7 +278,7 @@ fn ext_gstate(opacity: f64, multiply: bool) -> Option<Dict> {
     Some(res)
 }
 
-fn form(bbox: [f64; 4], content: &[u8], resources: Dict) -> Stream {
+pub(crate) fn form(bbox: [f64; 4], content: &[u8], resources: Dict) -> Stream {
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("XObject"));
     d.set(b"Subtype".to_vec(), Object::name("Form"));
@@ -286,6 +286,18 @@ fn form(bbox: [f64; 4], content: &[u8], resources: Dict) -> Stream {
     d.set(b"BBox".to_vec(), Object::Array(bbox.iter().map(|x| Object::Real(*x)).collect()));
     d.set(b"Resources".to_vec(), Object::Dict(resources));
     Stream::flate(d, content)
+}
+
+/// The `cm` that draws a picture into `at`: an image (its unit square) or a form XObject whose
+/// `/Matrix` maps it to `size` points (`None`, or a side that is not positive, draws nothing).
+pub(crate) fn picture_place(at: [f64; 4], image: bool, size: Option<(f64, f64)>) -> Option<String> {
+    let [x0, y0, x1, y1] = at;
+    let (w, h) = (x1 - x0, y1 - y0);
+    if image {
+        return Some(format!("{} 0 0 {} {} {} cm", n(w), n(h), n(x0), n(y0)));
+    }
+    let (sw, sh) = size.filter(|(sw, sh)| *sw > 0.0 && *sh > 0.0)?;
+    Some(format!("{} 0 0 {} {} {} cm", n(w / sw), n(h / sh), n(x0), n(y0)))
 }
 
 /// The page `/Rotate` an image signature's picture is turned back by (`/PCPictureRotate`, written
@@ -327,7 +339,7 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
 }
 
 /// `/Font` resources naming `/Helv`: standard Helvetica with WinAnsiEncoding.
-fn helvetica_resource() -> Object {
+pub(crate) fn helvetica_resource() -> Object {
     let mut font = Dict::new();
     font.set(b"Type".to_vec(), Object::name("Font"));
     font.set(b"Subtype".to_vec(), Object::name("Type1"));
@@ -790,7 +802,10 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
     // bounding box to `/Rect` (ISO 32000-2 §12.5.5), so it reads upright as displayed.
     if let Some(pic) = d.get(b"PCPicture").and_then(Object::as_ref) {
         let image = matches!(d.get(b"PCPictureImage"), Some(Object::Bool(true)));
-        let size = nums(d, b"PCPictureSize").filter(|s| s.len() == 2 && s[0] > 0.0 && s[1] > 0.0);
+        let size = nums(d, b"PCPictureSize").and_then(|s| match s.as_slice() {
+            [w, h] if *w > 0.0 && *h > 0.0 => Some((*w, *h)),
+            _ => None,
+        });
         // A text line (#1741) takes the bottom of the rectangle, and the picture keeps its
         // shape, centred above it. Without one the picture fills the rectangle.
         let line = d.get(b"PCByLine").and_then(Object::as_string).map(PdfString::to_text).filter(|l| !l.trim().is_empty());
@@ -803,10 +818,10 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
         let [x0, y0, x1, y1] = bbox;
         let band = if line.is_some() { (y1 - y0) * crate::CUSTOM_LINE_BAND } else { 0.0 };
         let (w, h) = (x1 - x0, y1 - y0 - band);
-        let place = match (&line, &size) {
-            (Some(_), Some(sz)) => {
-                let k = (w / sz[0]).min(h / sz[1]).max(0.0);
-                let (pw, ph) = (sz[0] * k, sz[1] * k);
+        let place = match (&line, size) {
+            (Some(_), Some((sw, sh))) => {
+                let k = (w / sw).min(h / sh).max(0.0);
+                let (pw, ph) = (sw * k, sh * k);
                 let (px, py) = (x0 + (w - pw) / 2.0, y0 + band + (h - ph) / 2.0);
                 if image {
                     format!("{} 0 0 {} {} {} cm", n(pw), n(ph), n(px), n(py))
@@ -814,11 +829,8 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
                     format!("{} 0 0 {} {} {} cm", n(k), n(k), n(px), n(py))
                 }
             }
-            _ if image => format!("{} 0 0 {} {} {} cm", n(w), n(h), n(x0), n(y0 + band)),
-            _ => {
-                let sz = size?;
-                format!("{} 0 0 {} {} {} cm", n(w / sz[0]), n(h / sz[1]), n(x0), n(y0 + band))
-            }
+            // Without a line the band is empty and this is the rectangle itself.
+            _ => picture_place([x0, y0 + band, x1, y1], image, size)?,
         };
         c.push_str(&format!("q {place} /Pic Do Q\n"));
         // Bytes from here: the line is WinAnsi, not UTF-8.

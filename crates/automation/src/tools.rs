@@ -181,6 +181,13 @@ pub fn tools() -> Vec<ToolDef> {
                 "hide_text_block": { "type": "integer", "minimum": 1, "description": "Render an inline editor background without this paragraph (number from text_paragraphs, resolved as text_edit does: refused once an edit merged that paragraph into a neighbour). Does not modify the document." },
                 "hide_added_text": { "type": "integer", "minimum": 1, "description": "Render a retyping background without this added text item (added index from object_list). Mutually exclusive with hide_text_block. Does not modify the document." }
             }), &["doc", "page"])),
+        t("model_render", "Render a 3D model", "Draw a page's 3D model (a 3D annotation's PRC stream) to a PNG, framed to fill the image, with headlight shading on a white background. model is its 1-based position among the page's 3D models (default 1). direction is the view direction [x, y, z] from the eye towards the model (default [-1, 1, -1]); Z is up unless the view looks along Z. perspective defaults to true. U3D models can't be drawn yet and give an error. Does not modify the document.")
+            .ro()
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "model": { "type": "integer", "minimum": 1 },
+                "width": { "type": "integer", "minimum": 1, "maximum": 4096 }, "height": { "type": "integer", "minimum": 1, "maximum": 4096 },
+                "direction": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                "perspective": { "type": "boolean" }
+            }), &["doc", "page"])),
         t("object_list", "List editable objects", "List existing paragraphs, Image/Form artwork and added content once, with source kind/index references, displayed rectangles and document generation. Indexes change when content changes; use generation in object_move to reject stale references.")
             .ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1}}), &["doc","page"])),
         t("object_move", "Move objects together", "Atomically translate 1–1000 mixed references from object_list by [dx, dy] in displayed points (right/down). Preserves glyph codes, fonts, image data and relative spacing; success is one undo step. Text used as a clipping path and vertical text are refused. A bad/stale reference refuses the entire move.")
@@ -322,6 +329,50 @@ pub fn tools() -> Vec<ToolDef> {
                 "left": { "type": "number", "minimum": -1000000, "maximum": 1000000, "description": "Points from the left of the displayed page." }
             }),
             &["doc", "title", "page"],
+        )),
+        t(
+            "bookmark_export",
+            "Export bookmarks",
+            "The bookmark tree, or the subtree at path, as a list of nodes bookmark_import takes back unchanged. A node has title, page (1-based, null when it goes nowhere), open, and when set view ({type, values}: a destination type from ISO 32000-2 §12.3.2.2 Table 149 and its values in PDF user space, as the file stores them), color ([r, g, b], 0-1), bold, italic and children. truncated is true when bookmarks nested deeper than 33 levels were left out. With out, the tree is also written there as a JSON file {\"bookmarks\": [...]}, with \"truncated\": true when that is so; out is overwritten.",
+        )
+        .destructive()
+        .with(schema(
+            json!({ "doc": doc(), "path": path("The bookmark whose subtree to export (omit for the whole outline)"), "out": path_arg() }),
+            &["doc"],
+        )),
+        t(
+            "bookmark_import",
+            "Import bookmarks",
+            "Add a tree of bookmarks, as bookmark_export gives it (bookmarks) or as a JSON file it wrote (file), under a parent bookmark (or at the top level) at a position, or with replace in place of the whole outline. A bookmark whose page this document lacks is kept without a destination and listed in unmapped (1-based paths into the given tree). A view takes exactly its type's values (XYZ 3, FitR 4, FitH/FitV/FitBH/FitBV 1, Fit/FitB none). Give exactly one of bookmarks and file. A title may be empty but not missing; a key a node does not have is refused. Every node is checked before anything is written: at most 100000 bookmarks, nested at most 33 levels counting the parent's. truncated is true when the file says its export left bookmarks out. Undoable.",
+        )
+        .destructive()
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "bookmarks": { "type": "array", "items": { "type": "object" }, "minItems": 1, "description": "Nodes as bookmark_export returns them." },
+                "file": path_arg(),
+                "parent": path("Parent bookmark (omit for the top level)"),
+                "position": { "type": "integer", "minimum": 1, "description": "1-based position among the parent's children (default: last)." },
+                "replace": { "type": "boolean", "description": "Replace the document's bookmarks instead of adding to them (default false; leave parent out)." }
+            }),
+            &["doc"],
+        )),
+        t(
+            "bookmark_copy",
+            "Copy bookmarks from another document",
+            "Copy the bookmarks of document from (or the subtree at path) into doc, by page number: under a parent bookmark (or at the top level) at a position, or with replace in place of doc's outline. A bookmark whose page doc lacks is kept without a destination and listed in unmapped (1-based paths into the copied tree). truncated is true when bookmarks nested deeper than 33 levels were left out of the copy. Undoable.",
+        )
+        .destructive()
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "from": { "type": "integer", "minimum": 1, "description": "Id of the document to copy from." },
+                "path": path("The bookmark whose subtree to copy (omit for the whole outline)"),
+                "parent": path("Parent bookmark in doc (omit for the top level)"),
+                "position": { "type": "integer", "minimum": 1, "description": "1-based position among the parent's children (default: last)." },
+                "replace": { "type": "boolean", "description": "Replace doc's bookmarks instead of adding to them (default false; leave parent out)." }
+            }),
+            &["doc", "from"],
         )),
         t("bookmark_rename", "Rename a bookmark", "Change a bookmark's title. Undoable.")
             .with(schema(json!({ "doc": doc(), "path": path("The bookmark"), "title": { "type": "string", "minLength": 1 } }), &["doc", "path", "title"])),
@@ -469,6 +520,20 @@ pub fn tools() -> Vec<ToolDef> {
                     "line": { "type": "string", "maxLength": 200 },
                 }),
                 &["doc", "page", "path"],
+            )),
+        t("model_add", "Add a 3D model", "Add a 3D model (Acrobat: Rich Media ▸ Add 3D): the U3D or PRC file at path, recognised by its first bytes, as a 3D annotation in rect [x0, y0, x1, y1] (points from the top-left of the displayed page; each side 1–14400 pt; at most 256 MiB). Its poster, what prints and what readers show until the model is activated, is the picture at poster (a PDF page, poster_page default 1, or an image) fitted inside rect keeping its shape and centred; without poster, a frame labelled \"3D model\". activation: click (default), page_open or page_visible. name is its description (default: the file name). No views are added: readers open the model on its own default view. Undoable.")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "page": { "type": "integer", "minimum": 1 },
+                    "path": { "type": "string" },
+                    "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
+                    "poster": { "type": "string" },
+                    "poster_page": { "type": "integer", "minimum": 1 },
+                    "activation": { "type": "string", "enum": ["click", "page_open", "page_visible"] },
+                    "name": { "type": "string" },
+                }),
+                &["doc", "page", "path", "rect"],
             )),
         t("form_set_image", "Set an image field's picture", "Show an image file (PNG, JPEG, TIFF, GIF or BMP) in an image field or button, scaled to fit and centred (what clicking an image field does). On an XFA form the picture is kept in its data too (base64, as Designer saves it) and the form shows it from there. Undoable.")
             .with(schema(json!({ "doc": doc(), "field": { "type": "string" }, "path": { "type": "string" } }), &["doc", "field", "path"])),
