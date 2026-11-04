@@ -1231,6 +1231,10 @@ mod formcalc {
         // A `%` that starts no escape is kept; bytes that aren't UTF-8 become U+FFFD.
         assert_eq!(calc(r#"Decode("%c3%a9%G1%4%", "url")"#), "é%G1%4%");
         assert_eq!(calc(r#"Decode("%E9x", "url")"#), "\u{FFFD}x");
+        // A literal `+` is escaped, and decoding leaves one as `+`, not a space: this is URL
+        // percent-encoding, not form encoding.
+        assert_eq!(calc(r#"Encode("a+b", "url")"#), "a%2Bb");
+        assert_eq!(calc(r#"Decode("a+b", "url")"#), "a+b");
     }
 
     fn assert_format_and_date_builtins() {
