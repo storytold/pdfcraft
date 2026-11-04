@@ -33,8 +33,11 @@ impl ScratchDir {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("pdfcraft-{name}-{}-{n}", std::process::id()));
         // Process ids come round again, so a run that was killed before its drops ran can have
-        // left a folder of this name: start empty.
-        let _ = std::fs::remove_dir_all(&path);
+        // left a folder of this name: start empty, or fail rather than hand out its contents.
+        match std::fs::remove_dir_all(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
         std::fs::create_dir_all(&path)?;
         Ok(ScratchDir { path })
     }
