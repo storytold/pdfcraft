@@ -117,6 +117,15 @@ const MAX_EI_LOOKAHEAD_STEPS: u32 = 256;
 pub trait ContentTokenizer<'a> {
     /// Return the next instruction, or `None` after the content stream ends or becomes invalid.
     fn next_instruction<'b>(&'b mut self) -> Option<Instruction<'b, 'a>>;
+
+    /// PdfCraft patch: whether this tokenizer is only judging whether bytes read as content, as
+    /// the look-ahead past a candidate `EI` does. Such a pass must not recover from a malformed
+    /// token: its whole purpose is to find out whether the bytes are content, and answering
+    /// "yes, once the bad parts are skipped" of an inline image's data would cut the image at a
+    /// false `EI` (#3636 review).
+    fn judging_only(&self) -> bool {
+        false
+    }
 }
 
 /// An iterator over operators in the PDF content streams, providing raw access to the
@@ -198,14 +207,28 @@ impl<'a> UntypedIter<'a> {
                     if self.undecided() {
                         return None;
                     }
-                    self.stack.push(object)?;
+                    self.stack.push(object);
                 } else if self.reader.read_without_context::<Operator<'_>>().is_some() {
                     if self.undecided() {
                         return None;
                     }
                     self.stack.clear();
+                } else if self.undecided() {
+                    return None;
+                } else if !self.lookahead && self.reader.peek_byte() == Some(b'/') && self.skip_bad_token() {
+                    // PdfCraft patch: a name the lexer cannot read -- a malformed `#` escape, as
+                    // in `/C#2 gs` -- used to end the stream, losing the rest of the page. Step
+                    // over it and carry on, as the edit reader and other readers do (#3568).
+                    //
+                    // Only a name. An operand that is well formed but refused by a resource cap
+                    // (a dictionary nested past the limit) still ends the stream, which is what
+                    // `dictionaries_nested_without_keys_are_read_up_to_the_nesting_cap` in
+                    // pdfcraft's renderer asserts: reading on there would draw a page whose
+                    // content was deliberately not parsed.
+                    warn!("skipped an unreadable name in content stream");
+                    self.stack.clear();
+                    continue;
                 } else {
-                    self.undecided();
                     return None;
                 }
             } else {
@@ -217,6 +240,13 @@ impl<'a> UntypedIter<'a> {
                         }
 
                         warn!("failed to read operator in content stream");
+
+                        // PdfCraft patch: a stray delimiter (`)`, say) ended the stream here, so
+                        // the rest of the page was lost. Step over it and carry on (#3568).
+                        if !self.lookahead && self.skip_bad_token() {
+                            self.stack.clear();
+                            continue;
+                        }
 
                         self.reader.jump_to_end();
                         return None;
@@ -263,7 +293,7 @@ impl<'a> UntypedIter<'a> {
                         UnfilteredEnd::Found(end_data, end_after_ei) => {
                             let image_data = stream_data.get(..end_data)?;
                             let stream = Stream::new(image_data, dict.clone());
-                            self.stack.push(Object::Stream(stream))?;
+                            self.stack.push(Object::Stream(stream));
                             self.reader.read_bytes(end_after_ei)?;
                             self.reader.skip_white_spaces();
                             accepted = true;
@@ -425,7 +455,7 @@ impl<'a> UntypedIter<'a> {
                                 return None;
                             }
 
-                            self.stack.push(Object::Stream(stream))?;
+                            self.stack.push(Object::Stream(stream));
 
                             self.reader.read_bytes(2)?;
                             self.reader.skip_white_spaces();
@@ -484,6 +514,36 @@ impl<'a> UntypedIter<'a> {
         open_comment.unwrap_or(self.reader.offset())
     }
 
+    /// PdfCraft patch: step over one token the lexer could not read, so the rest of the stream is
+    /// still read instead of the page ending there. A delimiter stands alone; anything else runs
+    /// to the next delimiter or space. At least one byte is always consumed when this returns
+    /// true, so the loop in `next` cannot spin (#3568).
+    fn skip_bad_token(&mut self) -> bool {
+        let before = self.reader.offset();
+        match self.reader.peek_byte() {
+            None => return false,
+            // Never step over a good token: called where the blanks after the last one have not
+            // been skipped yet, there is nothing bad here to skip. Skipping ` BT` cost the page
+            // its second text object while this was being written.
+            Some(b) if is_white_space_character(b) || b == b'%' => {}
+            // A name reads to the next delimiter, malformed escapes included.
+            Some(b'/') => {
+                let _ = skip_name_like(&mut self.reader, true);
+            }
+            // A token of regular characters runs to the next delimiter or space.
+            Some(b) if is_regular_character(b) => {
+                self.reader.forward_while(is_regular_character);
+            }
+            // A delimiter stands alone. Consuming what follows it would eat the next operator:
+            // `)BT` cost the page its second text object while this was being written
+            // (#3636 review).
+            Some(_) => self.reader.forward(),
+        }
+        // Land on the next token, as the end of the loop in `next` does.
+        self.reader.skip_white_spaces_and_comments();
+        self.reader.offset() > before
+    }
+
     /// PdfCraft patch: whether the instruction being read ran into the end of a window, so it
     /// cannot be decided yet. Records that more data is needed.
     fn undecided(&mut self) -> bool {
@@ -498,6 +558,10 @@ impl<'a> UntypedIter<'a> {
 impl<'a> ContentTokenizer<'a> for UntypedIter<'a> {
     fn next_instruction<'b>(&'b mut self) -> Option<Instruction<'b, 'a>> {
         self.next()
+    }
+
+    fn judging_only(&self) -> bool {
+        self.lookahead
     }
 }
 
@@ -557,6 +621,8 @@ where
     /// Return the next typed instruction.
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<TypedInstruction<'_, 'a>> {
+        // Read before the instruction borrows the tokenizer.
+        let judging = self.untyped.judging_only();
         let op = self.untyped.next_instruction()?;
         // TODO: Explore whether dispatching can be made more efficient.
         match TypedInstruction::dispatch(&op) {
@@ -565,22 +631,22 @@ where
             // operator was used, let's abort completely, otherwise we might end up drawing random stuff.
             // However, for other operators it could be worth it to just skip it but keep attempting
             // to read other content operators.
+            // PdfCraft patch: a path operator whose operands do not fit it contributes nothing to
+            // the path, so skipping it leaves the path as it was -- the same state the abort
+            // below used to leave it in, except that the rest of the page is still read. Ending
+            // the stream here lost every later operator, and with it the rest of the page, its
+            // text and anything a redaction search would have matched (#3568).
             None => {
-                if [
-                    &b"m"[..],
-                    &b"l"[..],
-                    &b"c"[..],
-                    &b"v"[..],
-                    &b"y"[..],
-                    &b"h"[..],
-                    &b"re"[..],
-                ]
-                .contains(&op.operator.0.deref())
+                // A pass that is only judging whether bytes read as content must still stop at a
+                // path operator it cannot dispatch: counting it as a step would let an inline
+                // image's data pass for a content stream and cut the image at a false `EI`
+                // (#3636 review).
+                if judging
+                    && [&b"m"[..], &b"l"[..], &b"c"[..], &b"v"[..], &b"y"[..], &b"h"[..], &b"re"[..]].contains(&op.operator.0.deref())
                 {
-                    None
-                } else {
-                    Some(TypedInstruction::Fallback(op.operator))
+                    return None;
                 }
+                Some(TypedInstruction::Fallback(op.operator))
             }
         }
     }
@@ -631,11 +697,16 @@ impl<'a> Stack<'a> {
     }
 
     /// PdfCraft patch (28): push an operand, dropping the oldest once `MAX_OPERANDS` are held
-    /// (see `MAX_OPERANDS`). Never fails: it used to, and the failure ended the content stream.
-    fn push(&mut self, operand: Object<'a>) -> Option<()> {
+    /// (see `MAX_OPERANDS`). It cannot fail: it used to, and the failure ended the content stream.
+    ///
+    /// The operands kept are the newest, so the ones nearest the operator -- which are its own.
+    /// No operator takes anywhere near `MAX_OPERANDS` of them (`scn` takes one per colourant, and
+    /// ISO 32000 allows a DeviceN space 32), so an instruction preceded by stray operands is
+    /// applied to its own and the strays fall off the back.
+    fn push(&mut self, operand: Object<'a>) {
         if self.data.len() < MAX_OPERANDS {
             self.data.push(operand);
-            return Some(());
+            return;
         }
 
         self.dropped = true;
@@ -643,7 +714,6 @@ impl<'a> Stack<'a> {
             *slot = operand;
         }
         self.oldest = (self.oldest + 1) % MAX_OPERANDS;
-        Some(())
     }
 
     /// PdfCraft patch (28): put the operands back in the order they were read, oldest first,

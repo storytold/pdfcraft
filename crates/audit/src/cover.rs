@@ -15,7 +15,7 @@
 //! the joined stream)`; rectangles inside a form XObject carry the `Do` operator's position.
 //! Positions compare lexicographically in paint order.
 
-use pdfcraft_content::{Matrix, Op, Pieces, parse};
+use pdfcraft_content::{Matrix, Op, Pieces, ops};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, Object};
 
 use crate::AuditError;
@@ -138,12 +138,13 @@ impl<'a> Walker<'a> {
         Ok(())
     }
 
-    /// Walk one operator slice with the given graphics state. `at_do` is the `Do` position to
+    /// Walk one stream's operators, read one at a time (a stream of millions of short operators
+    /// is never held whole), with the given graphics state. `at_do` is the `Do` position to
     /// stamp on rectangles found inside a form XObject, or `None` at page level (where each
     /// fill operator's own position is used).
     fn walk_ops(
         &mut self,
-        ops: &[Op],
+        ops: impl Iterator<Item = Op>,
         gs: &mut Gs,
         stack: &mut Vec<Gs>,
         resources: &Dict,
@@ -151,8 +152,9 @@ impl<'a> Walker<'a> {
         at_do: Option<(usize, usize)>,
     ) -> Result<(), AuditError> {
         let mut path = Path::Empty;
-        for (i, op) in ops.iter().enumerate() {
+        for (i, op) in ops.enumerate() {
             self.bump()?;
+            let op = &op;
             // Paint position of this operator: its own `(piece, joined index)` at page level,
             // the enclosing `Do`'s position inside a form XObject.
             let pos = match at_do {
@@ -283,8 +285,9 @@ impl<'a> Walker<'a> {
     /// changes inside never leak out; every rectangle found is stamped with the `Do`
     /// position `pos`.
     fn walk_xobject(&mut self, name: &[u8], gs: &Gs, resources: &Dict, depth: usize, pos: (usize, usize)) -> Result<(), AuditError> {
-        let xobjects = resources.get(b"XObject").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
-        let Some(entry) = xobjects.get(name) else { return Ok(()) };
+        // Borrowed, not copied: a `Do` must not cost the size of the whole XObject table.
+        let xobjects = resources.get(b"XObject").map(|o| self.doc.resolve(o));
+        let Some(entry) = xobjects.as_deref().and_then(Object::as_dict).and_then(|d| d.get(name)) else { return Ok(()) };
         let resolved = self.doc.resolve(entry);
         let Object::Stream(stream) = &*resolved else { return Ok(()) };
         let dict = &stream.dict;
@@ -300,19 +303,18 @@ impl<'a> Walker<'a> {
                 (v.len() == 6 && v.iter().all(|x| x.is_finite())).then(|| Matrix([v[0], v[1], v[2], v[3], v[4], v[5]]))
             })
             .unwrap_or(Matrix::IDENTITY);
-        let own_resources = dict.get(b"Resources").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned());
-        let sub_resources = own_resources.as_ref().unwrap_or(resources);
+        let sub_resources = dict.get(b"Resources").map(|o| self.doc.resolve(o));
+        let sub_resources = sub_resources.as_deref().and_then(Object::as_dict).unwrap_or(resources);
         if !self.budget.enter_form() {
             return Err(AuditError::TooManyForms);
         }
         // A form stream that cannot be decoded fails the audit: it might hide a cover.
         let data = self.budget.decode_strict(stream)?;
-        let ops = parse(&data).ops;
         // The XObject matrix maps form space into the user space active at `Do`.
         let mut sub_gs = gs.clone();
         sub_gs.ctm = matrix.then(&gs.ctm);
         let mut sub_stack = Vec::new();
-        self.walk_ops(&ops, &mut sub_gs, &mut sub_stack, sub_resources, depth + 1, Some(pos))
+        self.walk_ops(ops(&data), &mut sub_gs, &mut sub_stack, sub_resources, depth + 1, Some(pos))
     }
 
     /// Resolves a colour-space operand list (`cs`) against the page/form `/ColorSpace` resource dictionary.
@@ -442,13 +444,10 @@ fn user_point(gs: &Gs, op: &Op) -> Option<[f64; 2]> {
 
 /// The non-stroking alpha (`/ca`) of a named ExtGState, defaulting to opaque.
 fn ext_alpha(doc: &Document, resources: &Dict, name: &[u8]) -> f64 {
-    let alpha = resources
-        .get(b"ExtGState")
-        .map(|o| doc.resolve(o))
-        .and_then(|o| o.as_dict().cloned())
-        .and_then(|d| d.get(name).map(|o| doc.resolve(o)))
-        .and_then(|o| o.as_dict().cloned())
-        .and_then(|d| d.get(b"ca").map(|o| doc.resolve(o)).and_then(|o| o.as_f64()));
+    // Borrowed, not copied: a `gs` must not cost the size of the whole ExtGState table.
+    let states = resources.get(b"ExtGState").map(|o| doc.resolve(o));
+    let state = states.as_deref().and_then(Object::as_dict).and_then(|d| d.get(name)).map(|o| doc.resolve(o));
+    let alpha = state.as_deref().and_then(Object::as_dict).and_then(|d| d.get(b"ca").map(|o| doc.resolve(o)).and_then(|o| o.as_f64()));
     alpha.filter(|a| a.is_finite()).map(|a| a.clamp(0.0, 1.0)).unwrap_or(1.0)
 }
 
@@ -474,10 +473,11 @@ pub fn filled_rects(doc: &Document, page: &Dict) -> Result<Vec<FilledRect>, Audi
         }
     }
     let pieces = Pieces::join(&streams);
-    let parsed = pieces.parse();
     let mut w = Walker { doc, pieces: &pieces, out: Vec::new(), ops_seen: 0, budget };
     let mut gs = Gs::default();
     let mut stack = Vec::new();
-    w.walk_ops(&parsed.ops, &mut gs, &mut stack, &resources, 0, None)?;
+    // Read one operator at a time: the joined stream can hold millions of them within the
+    // decode budget, and the walk only ever needs the current one.
+    w.walk_ops(ops(pieces.data()), &mut gs, &mut stack, &resources, 0, None)?;
     Ok(w.out)
 }
