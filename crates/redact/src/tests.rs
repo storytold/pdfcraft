@@ -83,7 +83,8 @@ fn redacted_paint_loses_the_actual_text_that_names_it() {
     mark(&mut doc, 0, &[[90.0, 95.0, 130.0, 125.0]], "");
     apply(&mut doc, None).unwrap();
     let c = content(&doc, 0);
-    assert!(!c.contains("SHADED") && c.contains(" sh"), "{c}");
+    // Drawn after a clip that cuts the region out.
+    assert!(!c.contains("SHADED") && c.find("W*").zip(c.find(" sh")).is_some_and(|(w, s)| w < s), "{c}");
 
     // A path that clips as it paints.
     let mut doc = one_page(b"q /Span <</ActualText (CLIPS)>> BDC 100 100 m 160 100 l 160 120 l 100 120 l h W f EMC Q", "", vec![]);

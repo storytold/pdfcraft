@@ -393,10 +393,19 @@ fn save_as_appends_to_a_document_whose_field_walk_passes_a_signature_over() {
         app
     });
     h.run_steps(4);
+    // An edit to save: an unedited copy is the original's bytes, appended to or not.
+    let shape = pdfcraft_engine::Shape::Rectangle { rect: [200.0, 120.0, 260.0, 180.0] };
+    let style = pdfcraft_engine::Style::default_for(&shape);
+    let note = pdfcraft_engine::NewAnnotation { page: 0, style, shape, contents: "Checked".into(), author: "Tester".into() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(note)));
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
     assert!(h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::As), "the document can be saved as a copy");
     let saved = std::fs::read(&out).expect("file written");
     assert!(saved.starts_with(&original), "Save As rewrote the file instead of appending to it");
+    let mut s = pdfcraft_engine::Session::new();
+    let id = s.open("copy.pdf", None, std::sync::Arc::new(saved), None).expect("the copy opens");
+    let notes: Vec<_> = s.get(id).unwrap().info.annotations.iter().filter_map(|a| a.contents.as_deref()).collect();
+    assert!(notes.contains(&"Checked"), "the copy has the comment added before Save As: {notes:?}");
 }
 
 /// The fixture with an empty signature field across the bottom of the page.

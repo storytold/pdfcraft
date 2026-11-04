@@ -9012,6 +9012,9 @@ fn an_action_appends_to_a_file_whose_field_walk_passes_a_signature_over() {
     let title = actions::Action { name: "Title".into(), description: String::new(), steps, builtin: false };
     let r = actions::run_on(&title, "form.pdf", bytes.clone(), |_, _| {}).unwrap();
     assert!(r.bytes.starts_with(&bytes[..]), "the action rewrote the file instead of appending to it");
+    let mut s = Session::new();
+    let id = s.open("out.pdf", None, r.bytes, None).unwrap();
+    assert_eq!(s.get(id).unwrap().info.title.as_deref(), Some("Checked"), "the title is in what was appended");
 }
 
 /// #1324: marking a figure decorative rewrites that figure only. The header, added text and an
