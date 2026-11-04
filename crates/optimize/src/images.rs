@@ -1231,6 +1231,11 @@ const SHARED_IMAGES: usize = 16;
 /// bytes, at most that many bytes, which is this: one always fits a group with nothing in it.
 const SHARED_BYTES: usize = 64 << 20;
 
+/// What the globals cost as an object of their own besides their dictionary and data: `N 0 obj`,
+/// `stream`, `endstream` and `endobj`, a cross-reference entry, and an encrypted file's IV and
+/// padding. A group is shared only when it saves more than that as well.
+const NEW_OBJECT: usize = 96;
+
 /// Adds `image` to `group`, coding the group (`share`, which empties it) first when the image's
 /// samples would take it past `cap` bytes, and after when it has [`SHARED_IMAGES`].
 fn hold_in(group: &mut Vec<Held>, image: Held, cap: usize, mut share: impl FnMut(&mut Vec<Held>)) {
@@ -1300,7 +1305,7 @@ fn share(doc: &mut Document, group: &mut Vec<Held>, report: &mut Report) {
         }
     }
     let globals = Stream::from_raw(Dict::new(), shared.globals);
-    if chosen.is_empty() || crate::stored_len(&globals).is_none_or(|takes| saved <= takes) {
+    if chosen.is_empty() || crate::stored_len(&globals).is_none_or(|takes| saved <= takes.saturating_add(NEW_OBJECT)) {
         return;
     }
     report.image_bytes_after = report.image_bytes_after.saturating_add(globals.raw.len());
