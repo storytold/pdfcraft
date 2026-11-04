@@ -346,10 +346,12 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
 }
 
 /// [`write_full`] into any [`Write`] sink, such as a file, without holding the output in memory:
-/// each object is passed on as soon as it is serialized (in chunks of about 64 KB), so memory
-/// stays at the document plus the largest object or object stream. The bytes are identical to
-/// `write_full`'s. Returns the number of bytes written. The sink is flushed at the end; on an
-/// error, what was already written is incomplete.
+/// each object is passed on as soon as it is serialized (in chunks of about 64 KB). Object data
+/// in flight stays within about 64 KB plus the largest object or object stream. Besides the
+/// document, memory also holds what grows with the object count, not the output size: the
+/// numbering and offset bookkeeping, and the cross-reference section, which is built in full
+/// before it is written. The bytes are identical to `write_full`'s. Returns the number of bytes
+/// written. The sink is flushed at the end; on an error, what was already written is incomplete.
 ///
 /// One exception: a document that asked for a new file identifier (redaction, sanitizing) is
 /// held in memory until its trailer is written, because that identifier is a hash of every byte
@@ -462,6 +464,14 @@ struct Sink<W: Write> {
 /// How much a full save stages before writing to its sink.
 const SINK_CHUNK: usize = 64 * 1024;
 
+#[cfg(test)]
+thread_local! {
+    /// Test builds only: how many objects and object streams full saves on this thread have
+    /// staged, so a test sink can tell whether output reached it while serialization was still
+    /// going on, not only after it.
+    static STAGED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl<W: Write> Sink<W> {
     /// A sink at file offset 0 that stages up to [`SINK_CHUNK`] bytes, or everything if `hold`.
     fn new(inner: W, hold: bool) -> Self {
@@ -473,8 +483,11 @@ impl<W: Write> Sink<W> {
         self.written + self.buf.len() as u64
     }
 
-    /// Hands the staged bytes on once there are enough of them, unless the sink holds them.
+    /// Called after each object or object stream is staged: hands the staged bytes on once there
+    /// are enough of them, unless the sink holds them.
     fn spill(&mut self) -> Result<(), CosError> {
+        #[cfg(test)]
+        STAGED.with(|staged| staged.set(staged.get() + 1));
         if !self.hold && self.buf.len() >= SINK_CHUNK { self.drain() } else { Ok(()) }
     }
 
@@ -1028,17 +1041,20 @@ mod tests {
         doc
     }
 
-    /// A sink that keeps what it is given and counts the calls.
+    /// A sink that keeps what it is given, counts the calls, and notes how many objects had been
+    /// staged when the first bytes arrived.
     #[derive(Default)]
     struct Recording {
         bytes: Vec<u8>,
         writes: usize,
+        staged_at_first_write: Option<usize>,
         flushed: bool,
     }
 
     impl Write for Recording {
         fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
             assert!(!self.flushed, "nothing is written after the final flush");
+            self.staged_at_first_write.get_or_insert_with(|| STAGED.with(std::cell::Cell::get));
             self.writes += 1;
             self.bytes.extend_from_slice(data);
             Ok(data.len())
@@ -1078,10 +1094,16 @@ mod tests {
             let opts = SaveOptions { object_streams, ..Default::default() };
             let whole = write_full(&doc, &opts).unwrap();
             let mut sink = Recording::default();
+            STAGED.with(|staged| staged.set(0));
             let written = write_full_to(&doc, &opts, &mut sink).unwrap();
+            let staged = STAGED.with(std::cell::Cell::get);
             assert_eq!(written, whole.len() as u64);
             assert!(sink.bytes == whole, "same bytes as write_full (object_streams: {object_streams})");
-            assert!(sink.writes > 10, "handed on in chunks, not at the end ({} writes)", sink.writes);
+            assert!(sink.writes > 10, "handed on in chunks ({} writes)", sink.writes);
+            // Chunked writes alone would also come from building the whole file first. Streaming
+            // means output reached the sink while objects were still being serialized.
+            let first = sink.staged_at_first_write.unwrap();
+            assert!(first * 2 < staged, "first write after {first} of {staged} objects staged: not streamed");
             assert!(sink.flushed);
             let reopened = Document::open(Arc::new(whole)).unwrap();
             assert!(reopened.repair_log().is_empty(), "offsets are right: no reconstruction");
