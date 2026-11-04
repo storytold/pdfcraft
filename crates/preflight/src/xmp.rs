@@ -34,9 +34,27 @@ pub(crate) fn identification(xmp: &str) -> Identification {
     }
     let [pdfa_part, pdfa_conformance, pdfua_part] = match parsed_identification(xmp) {
         Ok(found) => found,
-        Err(()) => PROPERTIES.map(|(_, prefix, local)| value(xmp, &format!("{prefix}:{local}"))),
+        Err(()) => {
+            let text = without_comments(xmp);
+            PROPERTIES.map(|(_, prefix, local)| value(&text, &format!("{prefix}:{local}")))
+        }
     };
     Identification { pdfa_part, pdfa_conformance, pdfua_part }
+}
+
+/// `xmp` with each XML comment replaced by a space (so the text either side can't join into a
+/// match), for the conventional-prefix read: a property written in a comment is not declared. An
+/// unterminated comment runs to the end.
+fn without_comments(xmp: &str) -> String {
+    let mut out = String::with_capacity(xmp.len());
+    let mut rest = xmp;
+    while let Some((before, comment)) = rest.split_once("<!--") {
+        out.push_str(before);
+        out.push(' ');
+        rest = comment.split_once("-->").map_or("", |(_, after)| after);
+    }
+    out.push_str(rest);
+    out
 }
 
 /// [`identification`] through the XML parser; `Err` when the packet can't be parsed within
@@ -239,6 +257,10 @@ mod limit_tests {
         let undeclared = r#"<rdf:Description pdfaid:part="3" pdfaid:conformance="u" pdfuaid:part="1"/>"#;
         let expected = Identification { pdfa_part: Some("3".into()), pdfa_conformance: Some("u".into()), pdfua_part: Some("1".into()) };
         assert_eq!(identification(undeclared), expected);
+        // A comment can't supply a property to the prefix read; the declared one after it still counts.
+        let commented = r#"<!-- pdfaid:part="1" --><rdf:Description pdfaid:conformance="b"/><!-- pdfuaid:part="1""#;
+        let expected = Identification { pdfa_part: None, pdfa_conformance: Some("b".into()), pdfua_part: None };
+        assert_eq!(identification(commented), expected);
         let over_bytes = format!("<root>{}</root>", " ".repeat(8 * 1024 * 1024));
         assert_eq!(identification(&over_bytes), Identification::default());
     }
