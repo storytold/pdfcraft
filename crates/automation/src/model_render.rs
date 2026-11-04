@@ -2,7 +2,8 @@
 
 use pdfcraft_engine::model3d::Model3dKind;
 use pdfcraft_prc::PrcFile;
-use pdfcraft_prc_render::{Camera, RenderOptions, assemble, render};
+use pdfcraft_prc_render::{Bounds, Camera, RenderOptions, ViewLens, ViewSide, assemble, render};
+use pdfcraft_render::{Dimension3d, Projection3d};
 
 use super::Automation;
 use super::dispatch::Content;
@@ -41,9 +42,28 @@ impl Automation {
         }
         let prc = PrcFile::parse(&model.data).map_err(|e| failed(format!("the 3D model could not be read: {e}")))?;
         let meshes = assemble(&prc).map_err(failed)?;
-        let aspect = f64::from(width) / f64::from(height);
-        let camera = Camera::fit_meshes(&meshes, direction, up_for(direction), perspective, aspect).map_err(failed)?;
-        let image = render(&meshes, &camera, &RenderOptions { width, height, ..RenderOptions::default() }).map_err(failed)?;
+        let annot = doc.info.annots_3d.iter().find(|m| m.page == page && m.index == index);
+        let chosen = match a.opt_str("view")? {
+            Some("saved") => Some(annot.and_then(|m| m.view).ok_or_else(|| failed("this 3D model has no saved view; use view \"fit\""))?),
+            Some("fit") => None,
+            Some(_) => return Err(Args::wrong("view", "\"saved\" or \"fit\"")),
+            None if a.get("direction").is_none() && a.get("perspective").is_none() => annot.and_then(|m| m.view),
+            None => None,
+        };
+        let mut options = RenderOptions { width, height, ..RenderOptions::default() };
+        let camera = match (chosen, annot) {
+            (Some(view), Some(annot)) => {
+                let centre = Bounds::of(&meshes).map_or([0.0; 3], |b| b.centre());
+                let size = [f64::from(annot.rect[2] - annot.rect[0]), f64::from(annot.rect[3] - annot.rect[1])];
+                if let Some([r, g, b]) = view.background {
+                    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                    options.background = [byte(r), byte(g), byte(b), 255];
+                }
+                Camera::from_view(view.camera_to_world, view.center_of_orbit, lens(view.projection), size, centre).map_err(failed)?
+            }
+            _ => Camera::fit_meshes(&meshes, direction, up_for(direction), perspective, f64::from(width) / f64::from(height)).map_err(failed)?,
+        };
+        let image = render(&meshes, &camera, &options).map_err(failed)?;
         let data = encode_png(image.width, image.height, &premultiplied(image.rgba))?;
         Ok(vec![Content::Png { data, width: image.width, height: image.height }])
     }
@@ -69,6 +89,20 @@ fn direction(a: &Args) -> Result<[f64; 3]> {
         return Err(wrong());
     }
     Ok(out)
+}
+
+/// A PDF 3D view's projection as the renderer's lens.
+fn lens(p: Projection3d) -> ViewLens {
+    let side = |d: Dimension3d| match d {
+        Dimension3d::Width => ViewSide::Width,
+        Dimension3d::Height => ViewSide::Height,
+        Dimension3d::Min => ViewSide::Min,
+        Dimension3d::Max => ViewSide::Max,
+    };
+    match p {
+        Projection3d::Perspective { fov, scaled } => ViewLens::Perspective { fov, side: side(scaled) },
+        Projection3d::Orthographic { scale, scaled } => ViewLens::Orthographic { scale, side: side(scaled) },
+    }
 }
 
 /// Z is up, as CAD models are drawn, unless the view looks along it.

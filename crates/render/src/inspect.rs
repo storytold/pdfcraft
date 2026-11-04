@@ -36,8 +36,8 @@ pub use core::{check_pages, inspect, pretty_date};
 #[cfg(test)]
 use core::{inspect_structure, spend};
 pub use model::{
-    Annotation, Attachment, AttachmentSource, DestView, Field, FieldKind, FontInfo, Format3d, Layer, LayerOp, Link, LinkTarget, Model3d, OutlineItem,
-    PageInfo, PageTransition, RemoteDestination, TransitionStyle, Xfa, link_replies, thread_tops,
+    Annot3d, Annotation, Attachment, AttachmentSource, DestView, Dimension3d, Field, FieldKind, FontInfo, Format3d, Layer, LayerOp, Link, LinkTarget,
+    OutlineItem, PageInfo, PageTransition, Projection3d, RemoteDestination, TransitionStyle, View3d, Xfa, link_replies, thread_tops,
 };
 #[cfg(test)]
 use navigation::{OUTLINE_DEPTH, OUTLINE_WINDOW};
@@ -71,7 +71,7 @@ pub struct DocInfo {
     pub fields: Vec<Field>,
     pub links: Vec<Link>,
     /// 3D models (3D annotations) in page and `/Annots` order, at most 1024.
-    pub models_3d: Vec<Model3d>,
+    pub annots_3d: Vec<Annot3d>,
     pub layers: Vec<Layer>,
     /// Radio-button layer groups (`/OCProperties /D /RBGroups`): turning one layer of a group on
     /// turns the others off.

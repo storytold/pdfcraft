@@ -1,6 +1,7 @@
 use super::core::{limited_pdf_string, pretty_date, spend};
 use super::model::{
-    Annotation, AttachmentSource, DestView, Field, FieldKind, Format3d, LayerOp, Link, LinkTarget, Model3d, RemoteDestination, link_replies,
+    Annot3d, Annotation, AttachmentSource, DestView, Dimension3d, Field, FieldKind, Format3d, LayerOp, Link, LinkTarget, Projection3d,
+    RemoteDestination, View3d, link_replies,
 };
 use super::navigation::text_string;
 use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
@@ -24,8 +25,8 @@ pub(super) const MAX_ANNOTATION_BYTES: usize = 64 << 20;
 /// key does not fit is not listed.
 pub(super) const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
 
-/// 3D models `DocInfo::models_3d` lists. Real files have one per page or fewer.
-pub(super) const MAX_MODELS_3D: usize = 1024;
+/// 3D models `DocInfo::annots_3d` lists. Real files have one per page or fewer.
+pub(super) const MAX_ANNOTS_3D: usize = 1024;
 
 /// The bytes a listed annotation keeps.
 pub(super) fn retained(a: &Annotation) -> usize {
@@ -44,18 +45,108 @@ pub(super) fn retained(a: &Annotation) -> usize {
 impl<'a> Inspector<'a> {
     /// The format of a 3D annotation's model: its `/3DD` stream's `/Subtype`, following one 3D
     /// reference dictionary (`/Type /3DRef`, a stream another annotation shares; §13.6.3).
-    fn format_3d(&self, annot: &Dictionary) -> Format3d {
+    fn model_3d(&self, page: usize, index: usize, annot: &Dictionary) -> Annot3d {
+        let rect = rect4(self.resolve(annot.get(b"Rect").unwrap_or(&Object::Null)));
         let mut data = annot.get(b"3DD").ok().and_then(|o| self.dict(o));
         if let Some(d) = data
             && self.name(d, b"Type").as_deref() == Some("3DRef")
         {
             data = d.get(b"3DD").ok().and_then(|o| self.dict(o));
         }
-        match data.and_then(|d| self.name(d, b"Subtype")).as_deref() {
+        let format = match data.and_then(|d| self.name(d, b"Subtype")).as_deref() {
             Some("PRC") => Format3d::Prc,
             Some("U3D") => Format3d::U3d,
             _ => Format3d::Unknown,
+        };
+        let chosen = match annot.get(b"3DV") {
+            Ok(selector) => self.select_view(selector, data, true),
+            Err(_) => self.default_view(data),
+        };
+        Annot3d { page, index, rect, format, view: chosen.and_then(|v| self.view_3d(v)) }
+    }
+
+    /// The 3D stream's default view (§13.6.3): its `/DV`, else its first view.
+    fn default_view(&self, data: Option<&'a Dictionary>) -> Option<&'a Dictionary> {
+        let d = data?;
+        d.get(b"DV").ok().and_then(|dv| self.select_view(dv, data, false)).or_else(|| self.views(data).first().and_then(|v| self.dict(v)))
+    }
+
+    fn views(&self, data: Option<&'a Dictionary>) -> &'a [Object] {
+        data.and_then(|d| d.get(b"VA").ok()).and_then(|o| self.resolve(o).as_array().ok()).map_or(&[], Vec::as_slice)
+    }
+
+    /// A view given by `/3DV` or `/DV` (§13.6.2): a view dictionary, an index or name into the
+    /// stream's `/VA`, or `/F`, `/L` (first, last) and, for `/3DV`, `/D` (the default).
+    fn select_view(&self, selector: &'a Object, data: Option<&'a Dictionary>, may_default: bool) -> Option<&'a Dictionary> {
+        let views = self.views(data);
+        match self.resolve(selector) {
+            Object::Dictionary(_) | Object::Stream(_) => self.dict(selector),
+            Object::Integer(i) => usize::try_from(*i).ok().and_then(|i| views.get(i)).and_then(|v| self.dict(v)),
+            Object::Name(n) => match n.as_slice() {
+                b"F" => views.first().and_then(|v| self.dict(v)),
+                b"L" => views.last().and_then(|v| self.dict(v)),
+                b"D" if may_default => self.default_view(data),
+                _ => None,
+            },
+            Object::String(s, _) => {
+                let wanted = text_string(s);
+                views.iter().filter_map(|v| self.dict(v)).find(|d| self.text(d, b"XN").as_deref() == Some(wanted.as_str()))
+            }
+            _ => None,
         }
+    }
+
+    /// A 3D view dictionary (§13.6.4) with a camera given by `/C2W`; `None` for views positioned
+    /// another way (a U3D path) or without a usable matrix.
+    fn view_3d(&self, view: &Dictionary) -> Option<View3d> {
+        let num = |o: &Object| match self.resolve(o) {
+            Object::Integer(i) => Some(*i as f64),
+            Object::Real(r) => Some(f64::from(*r)),
+            _ => None,
+        };
+        if self.name(view, b"MS").is_some_and(|ms| ms != "M") {
+            return None;
+        }
+        let c2w = self.resolve(view.get(b"C2W").ok()?).as_array().ok()?;
+        let mut camera_to_world = [0.0; 12];
+        for (out, o) in camera_to_world.iter_mut().zip(c2w) {
+            *out = num(o)?;
+        }
+        if c2w.len() != 12 || camera_to_world.iter().any(|v| !v.is_finite()) {
+            return None;
+        }
+        let center_of_orbit = view.get(b"CO").ok().and_then(num).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
+        let dimension = |d: Option<&Object>, default: Dimension3d| match d.map(|o| self.resolve(o)) {
+            Some(Object::Name(n)) => match n.as_slice() {
+                b"W" => Dimension3d::Width,
+                b"H" => Dimension3d::Height,
+                b"Max" => Dimension3d::Max,
+                b"Min" => Dimension3d::Min,
+                _ => default,
+            },
+            _ => default,
+        };
+        let p = view.get(b"P").ok().and_then(|o| self.dict(o));
+        let projection = match p {
+            Some(p) if self.name(p, b"Subtype").as_deref() == Some("O") => Projection3d::Orthographic {
+                scale: p.get(b"OS").ok().and_then(num).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.0),
+                scaled: dimension(p.get(b"OB").ok(), Dimension3d::Width),
+            },
+            Some(p) => Projection3d::Perspective {
+                fov: p.get(b"FOV").ok().and_then(num).filter(|v| *v > 0.0 && *v < 180.0).unwrap_or(90.0),
+                scaled: dimension(p.get(b"PS").ok(), Dimension3d::Width),
+            },
+            None => Projection3d::Perspective { fov: 90.0, scaled: Dimension3d::Width },
+        };
+        let background = view
+            .get(b"BG")
+            .ok()
+            .and_then(|o| self.dict(o))
+            .and_then(|bg| bg.get(b"C").ok())
+            .and_then(|c| self.resolve(c).as_array().ok())
+            .filter(|c| c.len() == 3)
+            .and_then(|c| Some([num(&c[0])? as f32, num(&c[1])? as f32, num(&c[2])? as f32]));
+        Some(View3d { camera_to_world, center_of_orbit, projection, background })
     }
 
     /// Whether an annotation is a Fill & Sign mark. Keep in step with
@@ -131,9 +222,8 @@ impl<'a> Inspector<'a> {
                 continue;
             }
             if subtype == "3D" {
-                if info.models_3d.len() < MAX_MODELS_3D {
-                    let rect = rect4(self.resolve(d.get(b"Rect").unwrap_or(&Object::Null)));
-                    info.models_3d.push(Model3d { page, index, rect, format: self.format_3d(d) });
+                if info.annots_3d.len() < MAX_ANNOTS_3D {
+                    info.annots_3d.push(self.model_3d(page, index, d));
                 }
                 continue;
             }

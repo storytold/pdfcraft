@@ -860,7 +860,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
 /// are fixed rather than themed, as the field highlights' are.
 fn paint_models_3d(painter: &egui::Painter, xf: &PageXform, info: &DocInfo, page: usize) {
     let accent = Color32::from_rgb(0x1B, 0x63, 0xE0);
-    for model in info.models_3d.iter().filter(|m| m.page == page) {
+    for model in info.annots_3d.iter().filter(|m| m.page == page) {
         let r = xf.user_rect(info, page, model.rect);
         painter.rect_stroke(r, CornerRadius::same(2), Stroke::new(1.0, accent.gamma_multiply(0.6)), egui::StrokeKind::Inside);
         // Too small for text: the outline alone says where the model is.

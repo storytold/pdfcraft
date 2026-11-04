@@ -345,3 +345,44 @@ fn an_on_screen_triangle_is_drawn_when_projecting_it_would_overflow() {
     let big = mesh(vec![[-5e307, -5e307, 0.0], [5e307, -5e307, 0.0], [0.0, 5e307, 0.0]], vec![[0, 1, 2]]);
     assert_eq!(pixel(&render(&[WorldMesh::new(big)], &ortho(1.5e308), &wide).unwrap(), 15, 5), [190, 192, 200, 255]);
 }
+
+/// Looking down -z from 10 units above the origin, y up.
+const LOOK_DOWN: [f64; 12] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 10.0];
+
+#[test]
+fn a_saved_orthographic_view_spans_one_over_its_scale_across_its_side() {
+    // A 200 x 100 annotation: 4 units span its shorter side (the height) at scale 0.25.
+    let lens = ViewLens::Orthographic { scale: 0.25, side: ViewSide::Min };
+    let cam = Camera::from_view(LOOK_DOWN, 10.0, lens, [200.0, 100.0], [0.0; 3]).unwrap();
+    assert_eq!((cam.eye, cam.target, cam.up), ([0.0, 0.0, 10.0], [0.0; 3], [0.0, 1.0, 0.0]));
+    assert_eq!(cam.projection, Projection::Orthographic { height: 4.0 });
+    // Relative to the width, 4 units span 200, so 2 span the height.
+    let wide = Camera::from_view(LOOK_DOWN, 10.0, ViewLens::Orthographic { scale: 0.25, side: ViewSide::Width }, [200.0, 100.0], [0.0; 3]).unwrap();
+    assert_eq!(wide.projection, Projection::Orthographic { height: 2.0 });
+    // A unit square at the origin then fills a quarter of a 100-pixel-high image.
+    let square = WorldMesh::new(quad_mesh(0.0, 0.5, 0.0));
+    let img = render(&[square], &cam, &RenderOptions { width: 200, height: 100, ..RenderOptions::default() }).unwrap();
+    assert_ne!(pixel(&img, 110, 50), [255, 255, 255, 255]);
+    assert_eq!(pixel(&img, 115, 50), [255, 255, 255, 255]);
+}
+
+#[test]
+fn a_saved_perspective_view_converts_its_field_of_view_to_the_height() {
+    // 90 degrees across the width of a 2:1 annotation is 2·atan(0.5) across its height.
+    let lens = ViewLens::Perspective { fov: 90.0, side: ViewSide::Width };
+    let cam = Camera::from_view(LOOK_DOWN, 0.0, lens, [2.0, 1.0], [0.0, 0.0, -5.0]).unwrap();
+    let Projection::Perspective { fov_y } = cam.projection else { panic!("perspective") };
+    assert!((fov_y - 2.0 * 0.5f64.atan().to_degrees()).abs() < 1e-9);
+    // With no centre of orbit it looks as far as the fallback lies along its axis.
+    assert_eq!(cam.target, [0.0, 0.0, -5.0]);
+}
+
+#[test]
+fn unusable_saved_views_are_refused() {
+    let lens = ViewLens::Perspective { fov: 30.0, side: ViewSide::Min };
+    assert!(Camera::from_view([0.0; 12], 1.0, lens, [1.0, 1.0], [0.0; 3]).is_err());
+    let along = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]; // y along z
+    assert!(Camera::from_view(along, 1.0, lens, [1.0, 1.0], [0.0; 3]).is_err());
+    let nan = [f64::NAN, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+    assert!(Camera::from_view(nan, 1.0, lens, [1.0, 1.0], [0.0; 3]).is_err());
+}

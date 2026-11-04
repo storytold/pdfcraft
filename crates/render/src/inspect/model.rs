@@ -200,15 +200,49 @@ pub struct Link {
 }
 
 /// A 3D annotation (ISO 32000-2 §13.6): a 3D model shown in `rect`. It is not a comment, so it is
-/// listed in [`DocInfo::models_3d`](super::DocInfo::models_3d), not with the annotations.
+/// listed in [`DocInfo::annots_3d`](super::DocInfo::annots_3d), not with the annotations.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Model3d {
+pub struct Annot3d {
     pub page: usize,
     /// Zero-based position in the page's raw `/Annots` array.
     pub index: usize,
     /// User space, normalized so `rect[0] <= rect[2]` and `rect[1] <= rect[3]`.
     pub rect: [f32; 4],
     pub format: Format3d,
+    /// The view the model opens on (`/3DV`, else the stream's `/DV`, else its first view).
+    pub view: Option<View3d>,
+}
+
+/// A 3D view (ISO 32000-2 §13.6.4): where the camera is and how it projects.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct View3d {
+    /// Camera to world (`/C2W`): the camera's x, y and z axes, then its position, as 12 numbers.
+    /// The camera looks along its z axis, with its y axis up.
+    pub camera_to_world: [f64; 12],
+    /// Distance from the camera to the centre of orbit (`/CO`).
+    pub center_of_orbit: f64,
+    pub projection: Projection3d,
+    /// Background colour (`/BG /C`, DeviceRGB), if the view gives one.
+    pub background: Option<[f32; 3]>,
+}
+
+/// A 3D view's projection (`/P`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Projection3d {
+    /// Field of view in degrees (`/FOV`), across the annotation's `scaled` dimension (`/PS`).
+    Perspective { fov: f64, scaled: Dimension3d },
+    /// Orthographic: `scale` (`/OS`) is points per world unit across the annotation's `scaled`
+    /// dimension (`/OB`), relative to that dimension's length.
+    Orthographic { scale: f64, scaled: Dimension3d },
+}
+
+/// Which of the annotation's dimensions a projection is relative to (`/PS`, `/OB`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dimension3d {
+    Width,
+    Height,
+    Min,
+    Max,
 }
 
 /// The format of a 3D stream's data (`/3DD /Subtype`, ISO 32000-2 §13.6.3).

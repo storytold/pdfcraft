@@ -18,9 +18,9 @@ pub mod text;
 pub mod transition;
 
 pub use inspect::{
-    Annotation, Attachment, AttachmentSource, DestView, DocInfo, Field, FieldKind, FontInfo, Format3d, Layer, LayerOp, Link, LinkTarget, Model3d,
-    OutlineItem, PageInfo, PageTransition, RemoteDestination, TransitionStyle, Xfa, attachment_data, check_pages, inspect, link_replies, pretty_date,
-    thread_tops,
+    Annot3d, Annotation, Attachment, AttachmentSource, DestView, Dimension3d, DocInfo, Field, FieldKind, FontInfo, Format3d, Layer, LayerOp, Link,
+    LinkTarget, OutlineItem, PageInfo, PageTransition, Projection3d, RemoteDestination, TransitionStyle, View3d, Xfa, attachment_data, check_pages,
+    inspect, link_replies, pretty_date, thread_tops,
 };
 pub use pixels::Pixels;
 pub use raster::{
