@@ -2337,7 +2337,7 @@ fn page_boxes_default_inherit_and_set() {
 #[test]
 fn empty_intersections_fall_back_to_the_media_or_crop_box() {
     let mut doc = open(fixture());
-    let page = pdfcraft_model::pages(&doc)[0].obj;
+    let page = pages(&doc).unwrap()[0].obj;
     doc.update_dict(page, |d| {
         d.set(b"CropBox".to_vec(), Object::Array([400, 500, 600, 700].into_iter().map(Object::Int).collect()));
         d.set(b"BleedBox".to_vec(), Object::Array([700, 800, 900, 1000].into_iter().map(Object::Int).collect()));
