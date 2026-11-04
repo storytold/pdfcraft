@@ -155,7 +155,10 @@ pub(crate) fn shapes_within(doc: &Document, page: usize, budget: &mut DecodeBudg
     }
     let mut ctm = Matrix::IDENTITY;
     let mut stack = Vec::new();
-    let mut lost_saves = 0usize;
+    // Saves past MAX_SAVES aren't kept: the matrix when the first of them was made, which closing
+    // the last restores; the shallowest of them a `cm` changed the matrix in; and whether a `Q` has
+    // closed that one, so the matrix isn't known until the last closes.
+    let (mut lost_saves, mut lost_base, mut moved_at, mut unknown) = (0usize, Matrix::IDENTITY, usize::MAX, false);
     let mut path_boxes: Vec<[f64; 4]> = Vec::new();
     let mut subpaths: Vec<DetectionPath> = Vec::new();
     let mut path = DetectionPath::default();
@@ -166,15 +169,37 @@ pub(crate) fn shapes_within(doc: &Document, page: usize, budget: &mut DecodeBudg
     // byte it decoded.
     for op in pdfcraft_content::ops(joined.data()) {
         match op.op.as_slice() {
-            b"q" if stack.len() < MAX_SAVES => stack.push(ctm),
+            b"q" if stack.len() < MAX_SAVES && lost_saves == 0 => stack.push(ctm),
             // Saves past the cap are counted, not kept, so each `Q` still closes its own `q`.
-            b"q" => lost_saves = lost_saves.saturating_add(1),
-            b"Q" if lost_saves > 0 => lost_saves -= 1,
+            b"q" => {
+                if lost_saves == 0 {
+                    lost_base = ctm;
+                }
+                lost_saves = lost_saves.saturating_add(1);
+            }
+            b"Q" if lost_saves > 0 => {
+                lost_saves -= 1;
+                if lost_saves == 0 {
+                    (ctm, moved_at, unknown) = (lost_base, usize::MAX, false);
+                } else if lost_saves < moved_at {
+                    unknown = true;
+                }
+            }
             b"Q" => ctm = stack.pop().unwrap_or(ctm),
             b"cm" => {
                 if let Some(m) = op.nums::<6>() {
                     ctm = Matrix(m).then(&ctm);
+                    if lost_saves > 0 {
+                        moved_at = moved_at.min(lost_saves);
+                    }
                 }
+            }
+            // Painted where the matrix isn't known: dropped, as `n` drops a path.
+            b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" if unknown => {
+                path_boxes.clear();
+                subpaths.clear();
+                path = DetectionPath::default();
+                cur = None;
             }
             b"re" => {
                 path.finish(&mut subpaths);

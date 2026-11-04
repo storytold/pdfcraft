@@ -3614,6 +3614,13 @@ fn clear_form_keeps_a_field_whose_default_was_not_read() {
     assert!(values.iter().all(|v| !v.is_empty()), "no field is emptied");
     assert_eq!(values[0], "d".repeat(1 << 20), "the first field goes back to its default");
     assert_eq!(values[n - 1], "typed", "the last field, whose default wasn't read, keeps its value");
+    // A value the reading didn't decode, with no default, is cleared: it isn't known to be empty.
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), raw_stream(&"v".repeat(1 << 20))];
+    objs.extend((0..n).map(|i| format!("<< /FT /Tx /T (f{i}) /V 2 0 R >>")));
+    let mut doc = document(&objs);
+    reset(&mut doc, None).unwrap();
+    let last = doc.get(ObjRef::new(n as u32 + 2, 0));
+    assert!(last.as_dict().and_then(|d| d.get(b"V")).is_none_or(|v| !matches!(v, Object::Ref(_))), "the last field's unread value is cleared");
 }
 
 /// Renaming a field that 300 calculations read through one shared Calculate action, whose script
@@ -3677,6 +3684,16 @@ fn page_shapes_restore_saves_past_the_cap() {
         raw_stream(&content),
     ]);
     assert_eq!(crate::detect::page_shapes(&doc, 0).boxes, [[10.0, 10.0, 30.0, 30.0]]);
+    // A scale set past the cap and closed by its own `Q` leaves a matrix that can't be known until
+    // the last lost save closes: what is drawn in between isn't reported at the scaled place.
+    let content = format!("{} q 2 0 0 2 0 0 cm Q 10 10 20 20 re S {} 40 40 10 10 re S", "q ".repeat(257), "Q ".repeat(257));
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".into(),
+        raw_stream(&content),
+    ]);
+    assert_eq!(crate::detect::page_shapes(&doc, 0).boxes, [[40.0, 40.0, 50.0, 50.0]]);
 }
 
 /// The PDF/A declaration is read from metadata each filter stage of which decodes within
