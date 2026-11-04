@@ -1966,9 +1966,10 @@ fn text_outside_the_crop_box_is_clipped() {
     }
 }
 
-/// An embedded TrueType font as a Type 0 font (`Identity-H`, CID = glyph index), `to_unicode`
-/// being the font's `/ToUnicode` value if any, drawing "Zażółć gęślą jaźń, Grüße".
-fn identity_h_text(to_unicode: Option<lopdf::Object>) -> String {
+/// An embedded TrueType font as a Type 0 font (`Identity-H`, CID = glyph index), drawing
+/// "Zażółć gęślą jaźń, Grüße". With `mapped_z`, the font has a `/ToUnicode` CMap that maps only the
+/// code of the glyph of 'Z', to that character.
+fn identity_h_text(mapped_z: Option<char>) -> String {
     use lopdf::{Document, Object, Stream, dictionary};
     use skrifa::MetadataProvider;
     let ttf = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
@@ -1989,8 +1990,15 @@ fn identity_h_text(to_unicode: Option<lopdf::Object>) -> String {
         "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "Inter-Regular", "Encoding" => "Identity-H",
         "DescendantFonts" => vec![Object::Reference(cid_font)],
     };
-    if let Some(value) = to_unicode {
-        font.set("ToUnicode", value);
+    if let Some(mapped) = mapped_z {
+        let code = face.charmap().map('Z').unwrap().to_u32();
+        let mapped = mapped as u32;
+        let cmap = format!(
+            "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Partial def /CMapType 2 def \
+             1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfchar <{code:04X}> <{mapped:04X}> endbfchar \
+             endcmap CMapName currentdict /CMap defineresource pop end end"
+        );
+        font.set("ToUnicode", doc.add_object(Stream::new(dictionary! {}, cmap.into_bytes())));
     }
     let font = doc.add_object(font);
     let mut hex = String::new();
@@ -2016,4 +2024,6 @@ fn identity_h_text(to_unicode: Option<lopdf::Object>) -> String {
 #[test]
 fn embedded_identity_h_font_without_a_usable_to_unicode_reads_text_from_its_cmap() {
     assert_eq!(identity_h_text(None), "Zażółć gęślą jaźń, Grüße", "no /ToUnicode");
+    // A code the CMap maps keeps its mapping; the codes it leaves out fall back to the font's cmap.
+    assert_eq!(identity_h_text(Some('X')), "Xażółć gęślą jaźń, Grüße", "partial /ToUnicode");
 }
