@@ -10924,4 +10924,11 @@ fn snap_takes_the_comments_already_drawn() {
     let r: Vec<f64> = small["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
     let want = [117.0, 37.0, 123.0, 43.0];
     assert!(r.iter().zip(want).all(|(v, w)| (v - w).abs() < 1e-3), "{r:?}");
+    // A short line both of whose ends lie near the free end (80, 250) of the line drawn near
+    // nothing: they'd meet there, so the line keeps its own ends and is added.
+    let out = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [78, 251], "to": [82, 249], "snap": true }));
+    assert_eq!(out["snapped"], 0, "{out}");
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let short = list["comments"].as_array().unwrap().iter().find(|c| c["id"] == out["comment"]["id"]).cloned().expect("the short line");
+    assert_eq!(short["points"], json!([[78.0, 251.0], [82.0, 249.0]]), "{short}");
 }

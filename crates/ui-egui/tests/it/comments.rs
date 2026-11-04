@@ -3692,6 +3692,41 @@ fn marks_and_text_boxes_snap_with_f3() {
     assert!((at_[1] - 50.0).abs() < 0.01 && (at_[0] - 60.0).abs() < 0.5, "on the line: {at_:?}");
 }
 
+/// A comment moved a few points from where it was doesn't snap back onto its own old outline:
+/// it is no snap target for itself while it moves.
+#[test]
+fn a_moved_comment_does_not_snap_back_to_where_it_was() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("protocol.pdf", None, CHECK_BOX_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("author", "Tester").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    h.run_steps(4);
+    crate::support::settle(&mut h);
+    // A rectangle well away from the page's lines (the nearest, at y 50, is 20 pt above it).
+    let rect = Shape::Rectangle { rect: [200.0, 10.0, 240.0, 30.0] };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        style: Style::default_for(&rect),
+        shape: rect,
+        contents: String::new(),
+        author: "Tester".into()
+    })));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    assert!(h.state().comment_prefs.snap);
+    // Moved 3 pt right: its own old corners are in reach, but it is no target for itself.
+    drag_pt(&mut h, (220.0, 20.0), (223.0, 20.0));
+    let r = comments(&h).into_iter().find(|a| a.subtype == "Square").expect("the rectangle").rect;
+    assert!((r[0] - 203.0).abs() < 0.01 && (r[2] - 243.0).abs() < 0.01 && (r[1] - 10.0).abs() < 0.01, "moved as dragged: {r:?}");
+}
+
 /// With Snap to drawing on, the Select tool snaps comments that are moved: a Fill & Sign cross by
 /// its centre (into the middle of a table cell), a rectangle by its corner nearest a target (onto
 /// a line's end). Tab moves on to the next target under the pointer; the snap targets are the

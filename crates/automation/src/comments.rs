@@ -75,7 +75,7 @@ fn hex(c: [f32; 3]) -> String {
 /// where one lies within `tolerance` (user units), the better target of them: line ends, polygon
 /// and polyline vertices, a box's corners (a rectangle's, an oval's, a text box's). How many
 /// points moved (a point already on its target doesn't count). A box that both its corners would
-/// flatten onto one target keeps its corners.
+/// flatten onto one target keeps its corners, and a line whose ends would meet keeps its ends.
 fn snap_shape(shape: Shape, geometries: &[&measure::snap::Geometry], tolerance: f64) -> (Shape, Option<usize>) {
     let options = measure::snap::SnapOptions::default();
     let path = |s: &measure::snap::Snap| s.kind == measure::snap::SnapKind::Path;
@@ -107,7 +107,17 @@ fn snap_shape(shape: Shape, geometries: &[&measure::snap::Geometry], tolerance: 
         snapped
     };
     let shape = match shape {
-        Shape::Line { from, to, start, end } => Shape::Line { from: snap(from), to: snap(to), start, end },
+        Shape::Line { from, to, start, end } => {
+            let (a, b) = (target(from), target(to));
+            let (pa, pb) = (a.map_or(from, |s| s.point), b.map_or(to, |s| s.point));
+            // Both ends on one target would leave no line, which can't be added: it keeps its ends.
+            if measure::distance(pa, pb) < 1.0 {
+                Shape::Line { from, to, start, end }
+            } else {
+                count.set(count.get() + moved(&a) + moved(&b));
+                Shape::Line { from: pa, to: pb, start, end }
+            }
+        }
         Shape::Polygon { vertices, cloud } => Shape::Polygon { vertices: vertices.into_iter().map(snap).collect(), cloud },
         Shape::PolyLine { vertices, start, end } => Shape::PolyLine { vertices: vertices.into_iter().map(snap).collect(), start, end },
         Shape::Rectangle { rect } => Shape::Rectangle { rect: snap_box(rect) },
@@ -506,12 +516,14 @@ impl Automation {
             }
             let doc = self.doc(a)?;
             let geometry = doc.measurement_paths(page).map_err(failed)?;
-            let comments = doc.comment_paths(page, &[]).map_err(failed)?;
+            // Comments hidden on screen are no targets, as in the app.
+            let comments = (!doc.comments_hidden()).then(|| doc.comment_paths(page, &[])).transpose().map_err(failed)?;
             // The tolerance in user units: the distance two display points apart map to.
             let origin = doc.measurement_to_user(page, [0.0, 0.0]).map_err(failed)?;
             let adjacent = doc.measurement_to_user(page, [tolerance, 0.0]).map_err(failed)?;
             let tolerance = measure::distance(origin, adjacent);
-            snap_shape(shape, &[&geometry, &comments], tolerance)
+            let targets: Vec<&measure::snap::Geometry> = std::iter::once(&geometry).chain(comments.as_ref()).collect();
+            snap_shape(shape, &targets, tolerance)
         } else {
             (shape, None)
         };

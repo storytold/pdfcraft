@@ -51,6 +51,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
         }
         if view.signature_drag.contains(page, index) && matches!(cv.gesture, Some(Gesture::Move { page: p, index: i, .. }) if (p, i) == (page, index))
         {
+            paint_snap_marker(painter, cx, view);
             return paint_gesture(painter, cx, view);
         }
         let shift = ui.input(|i| i.modifiers.shift);

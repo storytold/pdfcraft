@@ -33,7 +33,14 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     }
     // The nearest target under the pointer, which Tab cycles from.
     match pointer.filter(|_| over_page && cx.snapping()) {
-        Some(p) => cv.snap_first = cx.snap_candidates(cx.to_user(p)).first().map(|s| (cx.page, s.point)),
+        Some(p) => {
+            let first = cx.snap_candidates(cx.to_user(p)).first().map(|s| (cx.page, s.point));
+            // Tab's place is among one page's candidates: on another page it starts over.
+            if first.map(|(page, _)| page) != cv.snap_first.map(|(page, _)| page) {
+                cv.snap_cycle = None;
+            }
+            cv.snap_first = first;
+        }
         None if cv.snap_first.is_some_and(|(page, _)| page == cx.page) => cv.snap_first = None,
         None => {}
     }
@@ -316,9 +323,13 @@ fn snap_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, cv: &mut CommentView, poi
             let (p, hit, _) = cx.snap_move(a, *from, p, cv.move_anchor);
             (p, hit)
         }),
-        (Some(Gesture::Resize { page, index, handle, from, .. }), Some(p)) if *page == cx.page => {
-            cx.get(*index).map(|a| cx.snap_drag(&[handle_pos(cx.screen_rect(a), *handle)], None, *from, p))
-        }
+        (Some(Gesture::Resize { page, index, handle, from, aspect_ratio }), Some(p)) if *page == cx.page => cx.get(*index).and_then(|a| {
+            let r = cx.screen_rect(a);
+            // A corner held to its ratio (a fixed one, or Shift's) can't land on a target on both
+            // axes, so it doesn't snap: the marker would show a point the corner misses.
+            let held = handle.0 != 0 && handle.1 != 0 && corner_ratio(r, *aspect_ratio, ui.input(|i| i.modifiers.shift)).is_some();
+            (!held).then(|| cx.snap_drag(&[handle_pos(r, *handle)], None, *from, p))
+        }),
         // A line's end or a corner dragged: onto a target (Shift holds the angle instead).
         (Some(Gesture::Reshape { page, .. }), Some(p)) if *page == cx.page && !ui.input(|i| i.modifiers.shift) => {
             let (u, kind) = cx.snapped(p);
@@ -475,6 +486,12 @@ impl Gestures<'_> {
                 }
             } else {
                 let u = cx.snapped(p).0;
+                // Snapped onto the first point's target, or onto one line through it, a box or line
+                // would have no size and draw nothing: then the pointer's own point.
+                let u = match points.first() {
+                    Some(first) if drawn_shape(*tool, &[*first, u]).is_none() => cx.to_user(p),
+                    _ => u,
+                };
                 points.truncate(1);
                 points.push(u);
             }
@@ -542,7 +559,7 @@ impl Gestures<'_> {
                 Some(Gesture::Draw { page, tool: t, points }) if *page == cx.page && *t == tool => {
                     // Clicking the first point again closes a polygon.
                     let closes = points.len() >= 3 && tool != CommentTool::PolyLine && cx.to_screen(points[0]).distance(p) <= 6.0;
-                    let repeat = points.last().is_some_and(|l| cx.to_screen(*l).distance(p) < 2.0);
+                    let repeat = points.last().is_some_and(|l| cx.to_screen(*l).distance(cx.to_screen(u)) < 2.0);
                     if closes {
                         let pts = std::mem::take(points);
                         cv.gesture = None;
@@ -683,8 +700,16 @@ impl Gestures<'_> {
                 && *page == cx.page
                 && let Some(p) = pointer
             {
+                let q = clamp_to(page_rect, p);
+                let u = cx.snapped(q).0;
+                // Both corners snapped onto one line would leave no box, and the drag would read as
+                // a click: then the pointer's own point.
+                let flat = points.first().is_some_and(|f| {
+                    let r = Rect::from_two_pos(cx.to_screen(*f), cx.to_screen(u));
+                    r.width() < 6.0 || r.height() < 6.0
+                });
                 points.truncate(1);
-                points.push(cx.snapped(clamp_to(page_rect, p)).0);
+                points.push(if flat { cx.to_user(q) } else { u });
             }
             if resp.drag_stopped()
                 && let Some(Gesture::Draw { page, points, .. }) = cv.gesture.clone()
