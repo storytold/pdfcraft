@@ -1,0 +1,14 @@
+Label = "Comments"
+Label = "1"
+Button "Close" [off]
+Button "More options" [off]
+Button "Filter comments" [off]
+Button "Search comments" [off]
+TextInput "Add a comment"
+Button "Collapse" [off]
+Label = "Page 1"
+Label = "1"
+Label = "Reviewer"
+Label = "2026-01-01 12:00"
+Label = "Check this heading"
+Unknown "Note — click to show it on the page"

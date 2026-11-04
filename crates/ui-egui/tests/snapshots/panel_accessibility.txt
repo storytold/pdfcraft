@@ -1,0 +1,85 @@
+Label = "Accessibility Checker"
+Button "Close" [off]
+Label = "7 issues"
+Button "Check again"
+Button "Report"
+Label = "Needs manual check: 5"
+Button "Collapse" [off]
+Label = "Document (2 issues)"
+Image
+Label = "Accessibility permission flag - Passed"
+Image
+Label = "Image-only PDF - Passed"
+Image
+Label = "Tagged PDF - Passed"
+Image
+Label = "Logical Reading Order - Needs manual check"
+Image
+Label = "Primary language - Failed"
+Image
+Label = "Title - Failed"
+Image
+Label = "Bookmarks - Passed"
+Image
+Label = "Color contrast - Skipped"
+Button "Collapse" [off]
+Label = "Page Content (3 issues)"
+Image
+Label = "Tagged content - Failed"
+Image
+Label = "Tagged annotations - Failed"
+Image
+Label = "Tab order - Failed"
+Image
+Label = "Character encoding - Passed"
+Image
+Label = "Tagged multimedia - Passed"
+Image
+Label = "Screen flicker - Needs manual check"
+Image
+Label = "Scripts - Needs manual check"
+Image
+Label = "Timed responses - Needs manual check"
+Image
+Label = "Navigation links - Needs manual check"
+Button "Collapse" [off]
+Label = "Forms (2 issues)"
+Image
+Label = "Tagged form fields - Failed"
+Image
+Label = "Field descriptions - Failed"
+Button "Collapse" [off]
+Label = "Alternate Text"
+Image
+Label = "Figures alternate text - Passed"
+Image
+Label = "Nested alternate text - Passed"
+Image
+Label = "Associated with content - Passed"
+Image
+Label = "Hides annotation - Passed"
+Image
+Label = "Other elements alternate text - Passed"
+Button "Collapse" [off]
+Label = "Tables"
+Image
+Label = "Rows - Passed"
+Image
+Label = "TH and TD - Passed"
+Image
+Label = "Headers - Passed"
+Image
+Label = "Regularity - Passed"
+Image
+Label = "Summary - Passed"
+Button "Collapse" [off]
+Label = "Lists"
+Image
+Label = "List items - Passed"
+Image
+Label = "Lbl and LBody - Passed"
+Button "Collapse" [off]
+Label = "Headings"
+Image
+Label = "Appropriate nesting - Passed"
+ScrollBar

@@ -45,8 +45,8 @@ fn hyphenated_label_range(part: &str, count: usize, labels: &[String]) -> Option
 }
 
 /// The pages to print (0-based, in print order). `range` is `None` for all pages; it may list
-/// numbers and labels with `-` ranges (open-ended allowed: `5-`, `-3`). The subset counts the
-/// selected pages (the first selected is "odd"), as Acrobat does.
+/// numbers and labels with `-` ranges (open-ended allowed: `5-`, `-3`). The subset keeps the odd or
+/// even pages of those chosen, by page number (see [`narrow`]).
 pub fn select_pages(count: usize, range: Option<&str>, labels: &[String], subset: Subset, reverse: bool) -> Result<Vec<usize>, PrintError> {
     let mut pages = Vec::new();
     match range.map(str::trim).filter(|r| !r.is_empty()) {
@@ -70,7 +70,7 @@ pub fn select_pages(count: usize, range: Option<&str>, labels: &[String], subset
                     Some(_) if labels.iter().any(|l| l == part) => pages.push(page_of(part, count, labels)?),
                     Some((a, b)) => {
                         let from = if a.trim().is_empty() { 0 } else { page_of(a, count, labels)? };
-                        let to = if b.trim().is_empty() { count.saturating_sub(1) } else { page_of(b, count, labels)? };
+                        let to = if b.trim().is_empty() { count.checked_sub(1).ok_or(PrintError::NoPages)? } else { page_of(b, count, labels)? };
                         if from <= to {
                             pages.extend(from..=to);
                         } else {
@@ -95,12 +95,17 @@ pub fn select_listed(count: usize, pages: &[usize], subset: Subset, reverse: boo
     narrow(pages.to_vec(), subset, reverse)
 }
 
-/// Odd or even positions of the chosen pages, then the print order.
+/// The odd or even pages of those chosen, by page number (the first page of the document is 1,
+/// odd; `pages` are 0-based), then the print order. Acrobat counts the same way (#3984): "if you
+/// set the range to 2, 7–10 and choose Even Pages Only, only pages 2, 8, and 10 print" (Adobe
+/// Acrobat DC Help, last updated 11/28/2019, Options in the Print dialog box, p. 515; the same
+/// example in Using Adobe Acrobat 9 Pro, p. 413). Counting places in the range instead printed
+/// 7 and 9 there, and a range starting on an even page started its "even" pages on an odd one.
 fn narrow(pages: Vec<usize>, subset: Subset, reverse: bool) -> Result<Vec<usize>, PrintError> {
     let mut out: Vec<usize> = match subset {
         Subset::All => pages,
-        Subset::Odd => pages.into_iter().step_by(2).collect(),
-        Subset::Even => pages.into_iter().skip(1).step_by(2).collect(),
+        Subset::Odd => pages.into_iter().filter(|p| p % 2 == 0).collect(),
+        Subset::Even => pages.into_iter().filter(|p| p % 2 == 1).collect(),
     };
     if reverse {
         out.reverse();
@@ -109,4 +114,19 @@ fn narrow(pages: Vec<usize>, subset: Subset, reverse: bool) -> Result<Vec<usize>
         return Err(PrintError::NoPages);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_ended_range_of_empty_document_is_an_error() {
+        assert!(select_pages(0, Some("-"), &[], Subset::All, false).is_err());
+    }
+
+    #[test]
+    fn open_ended_range_covers_all_pages() {
+        assert_eq!(select_pages(5, Some("-"), &[], Subset::All, false).unwrap(), vec![0, 1, 2, 3, 4]);
+    }
 }

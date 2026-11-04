@@ -1,4 +1,4 @@
-use crate::color::{Color, ColorSpace};
+use crate::color::{Color, ColorSpace, device_cmyk_to_gray};
 use crate::context::{Context, path_as_rect};
 use crate::device::Device;
 use crate::util::{BezPathExt, Float32Ext};
@@ -159,6 +159,8 @@ pub(crate) fn get_paint<'a>(context: &Context<'a>, is_stroke: bool) -> Paint<'a>
                 pattern.set_transfer_function(tf.clone());
             }
 
+            // PdfCraft patch: `CA`/`ca` can be set by a `gs` after the pattern colour operator, so use the alpha current at paint time.
+            pattern.set_alpha(data.alpha);
             pattern.pre_concat_transform(context.root_transform());
 
             Paint::Pattern(Box::new(pattern))
@@ -167,7 +169,13 @@ pub(crate) fn get_paint<'a>(context: &Context<'a>, is_stroke: bool) -> Paint<'a>
             Paint::Color(Color::new(ColorSpace::device_gray(), smallvec![0.0], 0.0))
         }
     } else {
-        let color = Color::new(data.color_space, data.color, data.alpha);
+        // PdfCraft patch (63): see `Context::luminosity_in_device_cmyk`.
+        let color = if context.luminosity_in_device_cmyk && data.color_space.is_device_cmyk() {
+            let gray = device_cmyk_to_gray(&data.color);
+            Color::new(ColorSpace::device_gray(), smallvec![gray], data.alpha)
+        } else {
+            Color::new(data.color_space, data.color, data.alpha)
+        };
 
         if let Some(tf) = &data.transfer_function {
             Paint::Color(Color::from_rgba(tf.apply(&color.to_rgba())))
