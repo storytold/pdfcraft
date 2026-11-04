@@ -173,7 +173,10 @@ pub(crate) fn inline_edit(it: &InlineText, info: &DocInfo, prefs: &CommentPrefs)
     if !it.has_changes() {
         return None;
     }
-    let text = it.text.trim_end().to_string();
+    // Typed text keeps what was typed, trailing blank lines too, as its edit composer does
+    // (#5850); a text box drops trailing whitespace.
+    let typewriter = it.target(info).is_some_and(|a| a.intent.as_deref() == Some("FreeTextTypeWriter"));
+    let text = if typewriter { it.text.clone() } else { it.text.trim_end().to_string() };
     match it.index {
         Some(_) => Some(Edit::SetAnnotationContents { page: it.page, index: it.target(info)?.index, text }),
         None => {

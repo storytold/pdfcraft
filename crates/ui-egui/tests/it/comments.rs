@@ -3618,9 +3618,21 @@ fn edit_composer_preserves_only_typewriter_whitespace(kind: u8) {
     };
     support::input::double_click(&mut h, point);
     h.run_steps(3);
-    let c = h.state().views[0].comments.composer.as_ref().expect("double-click opens the edit composer");
-    assert_eq!(c.page, 1);
-    assert_eq!(c.kind, pdfcraft_ui_egui::comments::ComposerKind::Edit(0));
+    // Text boxes and typed text are typed into on the page; a note opens the edit composer.
+    let in_place = kind != 2;
+    let typed = |h: &Harness<'static, PdfCraftApp>| {
+        let cv = &h.state().views[0].comments;
+        if in_place { cv.inline.as_ref().map(|t| t.text.clone()) } else { cv.composer.as_ref().map(|c| c.text.clone()) }
+    };
+    if in_place {
+        let t = h.state().views[0].comments.inline.as_ref().expect("double-click opens the text on the page");
+        assert_eq!((t.page, t.index), (1, Some(0)));
+        assert!(h.state().views[0].comments.composer.is_none(), "no composer card");
+    } else {
+        let c = h.state().views[0].comments.composer.as_ref().expect("double-click opens the edit composer");
+        assert_eq!(c.page, 1);
+        assert_eq!(c.kind, pdfcraft_ui_egui::comments::ComposerKind::Edit(0));
+    }
     h.input_mut().events.push(egui::Event::Text(" edited\n\n".into()));
     let ctx = h.ctx.clone();
     let mut raw = std::mem::take(h.input_mut());
@@ -3628,13 +3640,17 @@ fn edit_composer_preserves_only_typewriter_whitespace(kind: u8) {
     *h.input_mut() = raw;
     h.step();
     h.run_steps(2);
-    assert_eq!(h.state().views[0].comments.composer.as_ref().unwrap().text, "Original edited\n\n");
+    assert_eq!(typed(&h).as_deref(), Some("Original edited\n\n"));
     if shots {
         h.render().unwrap().save(format!("/tmp/5954-composer-{kind}.png")).unwrap();
     }
-    h.get_all_by_label("Post").last().unwrap().click();
+    if in_place {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+    } else {
+        h.get_all_by_label("Post").last().unwrap().click();
+    }
     h.run_steps(3);
-    assert!(h.state().views[0].comments.composer.is_none());
+    assert!(typed(&h).is_none(), "the edit is kept and its editor closed");
     let id = h.state().views[0].id;
     let bytes = h.state().session.save_bytes(id).unwrap();
     // Check the raw saved string: ordinary-comment reader trimming must not hide a bad post.
