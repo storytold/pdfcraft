@@ -10807,3 +10807,28 @@ fn a_bad_bookmark_tree_is_refused_whole_and_names_the_node() {
     assert!(!out.exists());
     assert_eq!(ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"], json!([]));
 }
+
+/// Test removing white margins headlessly through the automation tool `page_remove_white_margins`.
+#[test]
+fn remove_white_margins_through_tools() {
+    let dir = workdir("white_margins");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let initial_sizes = ok(&mut a, "doc_info", json!({ "doc": doc }))["pages"].as_array().unwrap().len();
+    assert_eq!(initial_sizes, 3);
+
+    // Call page_remove_white_margins on page 1.
+    let r = ok(&mut a, "page_remove_white_margins", json!({ "doc": doc, "pages": [1] }));
+    let page1_size = r["page_sizes"][0].as_array().unwrap();
+    let w = page1_size[0].as_f64().unwrap();
+    let h = page1_size[1].as_f64().unwrap();
+    // In a.pdf, page 1 (200x300) has text "Page 1". White margins are removed, so dimensions shrink.
+    assert!(w < 200.0 && w > 10.0, "width after white margin removal: {w}");
+    assert!(h < 300.0 && h > 10.0, "height after white margin removal: {h}");
+
+    // Undo restores the original size.
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    let undone = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(undone["pages"][0]["width"].as_f64().unwrap(), 200.0);
+    assert_eq!(undone["pages"][0]["height"].as_f64().unwrap(), 300.0);
+}
