@@ -302,6 +302,22 @@ fn a_triangle_that_is_not_drawn_does_not_widen_the_box() {
 }
 
 #[test]
+fn a_fully_transparent_triangle_does_not_widen_the_box_or_the_fit() {
+    // The far triangle is clear, so the camera frames the near one as if it were alone.
+    let m = mesh(vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1e6, 0.0, 0.0], [1e6, 1.0, 0.0]], vec![[0, 1, 2], [3, 4, 1]]);
+    let clear = WorldMesh { triangle_colours: Some(vec![None, Some([0, 0, 0, 0])]), ..WorldMesh::new(m.clone()) };
+    assert_eq!(Bounds::of(std::slice::from_ref(&clear)).unwrap().max, [1.0, 1.0, 0.0]);
+    let alone = WorldMesh::new(mesh(m.positions, vec![[0, 1, 2]]));
+    let fit = |w: &WorldMesh| Camera::fit_meshes(std::slice::from_ref(w), [0.0, 0.0, -1.0], [0.0, 1.0, 0.0], true, 1.0).unwrap();
+    assert_eq!(fit(&clear), fit(&alone));
+    // A whole mesh painted clear is not framed either.
+    assert_eq!(
+        Bounds::of(&[painted(WorldMesh::new(mesh(vec![[0.0; 3], [9.0, 0.0, 0.0], [0.0, 9.0, 0.0]], vec![[0, 1, 2]])), Some([1, 2, 3, 0]))]),
+        None
+    );
+}
+
+#[test]
 fn a_small_model_far_from_the_origin_can_be_fitted() {
     let (o, d) = (1e16, 4.0);
     let m = mesh(vec![[o, o, o], [o + d, o, o], [o, o + d, o]], vec![[0, 1, 2]]);

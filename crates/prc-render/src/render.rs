@@ -56,7 +56,8 @@ pub struct Bounds {
 }
 
 impl Bounds {
-    /// The box around every finite vertex the meshes' triangles use, or `None` when there is none.
+    /// The box around every finite vertex the meshes' drawn triangles use, or `None` when there
+    /// is none.
     #[must_use]
     pub fn of(meshes: &[WorldMesh]) -> Option<Bounds> {
         let mut out: Option<Bounds> = None;
@@ -83,9 +84,17 @@ impl Bounds {
     }
 }
 
-/// Every corner of the triangles [`render`] draws: those whose three corners exist and are finite.
+/// Every corner of the triangles [`render`] draws: those not fully transparent whose three
+/// corners exist and are finite.
 fn vertices(meshes: &[WorldMesh]) -> impl Iterator<Item = [f64; 3]> + Clone + '_ {
-    meshes.iter().flat_map(|m| m.mesh.triangles.iter().filter_map(|tri| corners(&m.mesh, tri)).flatten())
+    meshes
+        .iter()
+        .flat_map(|m| m.mesh.triangles.iter().enumerate().filter(|&(t, _)| !invisible(m, t)).filter_map(|(_, tri)| corners(&m.mesh, tri)).flatten())
+}
+
+/// Whether triangle `t` of `m` is fully transparent, so [`render`] does not draw it.
+fn invisible(m: &WorldMesh, t: usize) -> bool {
+    m.colour_of(t).is_some_and(|c| c[3] == 0)
 }
 
 impl Camera {
@@ -100,7 +109,7 @@ impl Camera {
         Camera::frame(bounds, corners, direction, up, (perspective, aspect))
     }
 
-    /// As [`Camera::fit`], framing every vertex the meshes' triangles use rather than their box,
+    /// As [`Camera::fit`], framing every vertex the meshes' drawn triangles use rather than their box,
     /// so an oblique view is not padded by empty box corners.
     ///
     /// # Errors
