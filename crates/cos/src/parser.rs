@@ -403,9 +403,16 @@ impl<'a> Lexer<'a> {
 
 /// Nested dictionaries of this many bytes or more are offered to [`SharedDicts`].
 const SHARE_FROM: usize = 8 * 1024;
-/// Dictionaries a document keeps for sharing, and the bytes they span together.
+/// Dictionaries a document keeps for sharing, and what they hold together ([`weight`]).
 const SHARED_MAX: usize = 16;
 const SHARED_BYTES: usize = 16 << 20;
+
+/// What a kept dictionary holds: its source bytes, and a parsed value for each node its parse
+/// built. The table keeps the parsed entries alive after the objects that held them are evicted,
+/// and the object cache charges a reused dictionary its node alone, so this is its only bound.
+fn weight(bytes: usize, nodes: usize) -> usize {
+    bytes.saturating_add(nodes.saturating_mul(std::mem::size_of::<Object>()))
+}
 
 /// Large nested dictionaries a document has parsed, kept so that a copy of one is not parsed
 /// again. Producers repeat one inline resource dictionary in every page: a CAD plot rewritten by
@@ -453,15 +460,16 @@ impl SharedDicts {
     /// Keep `dict`, parsed from `bytes` at `depth`, if it is large enough and there is room. When
     /// full, it replaces the oldest kept dictionary that no copy has reused yet.
     fn offer(&self, bytes: &[u8], depth: usize, nodes: usize, dict: &Dict) {
-        if bytes.len() < SHARE_FROM || bytes.len() > SHARED_BYTES {
+        let w = weight(bytes.len(), nodes);
+        if bytes.len() < SHARE_FROM || w > SHARED_BYTES {
             return;
         }
         let Ok(mut entries) = self.entries.lock() else { return };
         if entries.iter().any(|e| e.depth == depth && *e.bytes == *bytes) {
             return;
         }
-        let used = |entries: &[Arc<SharedDict>]| entries.iter().map(|e| e.bytes.len()).sum::<usize>();
-        while entries.len() >= SHARED_MAX || used(&entries).saturating_add(bytes.len()) > SHARED_BYTES {
+        let used = |entries: &[Arc<SharedDict>]| entries.iter().map(|e| weight(e.bytes.len(), e.nodes)).sum::<usize>();
+        while entries.len() >= SHARED_MAX || used(&entries).saturating_add(w) > SHARED_BYTES {
             let Some(unused) = entries.iter().position(|e| e.hits.load(Ordering::Relaxed) == 0) else { return };
             entries.remove(unused);
         }
@@ -901,7 +909,9 @@ mod tests {
         }
         let entries = dicts.entries.lock().unwrap();
         assert!(entries.iter().any(|e| *e.bytes == *reused.as_bytes()), "the dictionary read twice is still kept");
-        assert!(entries.iter().map(|e| e.bytes.len()).sum::<usize>() <= SHARED_BYTES);
+        assert!(entries.iter().map(|e| weight(e.bytes.len(), e.nodes)).sum::<usize>() <= SHARED_BYTES);
+        // A list of shadings holds more than its source: a parsed value for every entry.
+        assert!(entries.iter().all(|e| weight(e.bytes.len(), e.nodes) >= e.bytes.len() + 1000 * std::mem::size_of::<Object>()));
     }
 
     /// `<< /K tag >>` padded with spaces to exactly `len` bytes: large in bytes, few nodes.
@@ -945,11 +955,18 @@ mod tests {
         read(&c, &dicts);
         assert_eq!(kept(&dicts), [b.as_bytes()]);
         assert_eq!(again, obj(&format!("<< /S {b} >>")));
-        // A dictionary of exactly the budget is kept; one byte more never is.
+        // A dictionary that holds exactly the budget, its bytes and its parsed nodes, is kept; one
+        // byte more never is.
+        let nodes = {
+            let probe = SharedDicts::default();
+            read(&padded(SHARE_FROM, 6), &probe);
+            probe.entries.lock().unwrap()[0].nodes
+        };
+        let size = SHARED_BYTES - weight(0, nodes);
         let fresh = SharedDicts::default();
-        read(&padded(SHARED_BYTES + 1, 4), &fresh);
+        read(&padded(size + 1, 4), &fresh);
         assert!(kept(&fresh).is_empty());
-        let whole = padded(SHARED_BYTES, 5);
+        let whole = padded(size, 5);
         read(&whole, &fresh);
         assert_eq!(kept(&fresh), [whole.as_bytes()]);
     }

@@ -1769,8 +1769,18 @@ fn pages_repeating_one_large_resource_list_share_it() {
     for bytes in [plain, packed] {
         let doc = Document::open(Arc::new(bytes)).unwrap();
         let tree = doc.get(doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap());
-        let pages: Vec<Arc<Object>> =
-            tree.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap().iter().map(|k| doc.get(k.as_ref().unwrap())).collect();
+        // What the cache stored, not a recount: the first page is charged the list, which it alone
+        // held when it went in; the two after it share that parse and are charged their own entries.
+        let kids = tree.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap().clone();
+        let stored = || doc.cache.lock().unwrap().owned();
+        let (mut pages, mut charged): (Vec<Arc<Object>>, Vec<usize>) = (Vec::new(), Vec::new());
+        for k in &kids {
+            let before = stored();
+            pages.push(doc.get(k.as_ref().unwrap()));
+            charged.push(stored().saturating_sub(before));
+        }
+        assert!(charged[0] > 2000 * std::mem::size_of::<Object>(), "the first page holds the list: {charged:?}");
+        assert!(charged[1] < 4000 && charged[2] < 4000, "the others share it: {charged:?}");
         let shading =
             |p: &Object| p.as_dict().unwrap().get(b"Resources").unwrap().as_dict().unwrap().get(b"Shading").unwrap().as_dict().unwrap().clone();
         assert_eq!(pages.len(), 3);

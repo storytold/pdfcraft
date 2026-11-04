@@ -589,7 +589,9 @@ impl Document {
             if p > 0 && !is_whitespace(data[p - 1]) {
                 continue;
             }
-            if let Ok((id, o)) = parse_indirect_shared(data, p, &|_| None, &self.endstreams)
+            // Through the shared dictionaries as `load` reads: a recovered file whose objects repeat
+            // one large resource list parses it once here too.
+            if let Ok((id, o)) = parse_indirect_sharing(data, p, &|_| None, &self.endstreams, &self.shared_dicts)
                 && id.num == num
             {
                 found = Some((id, o)); // keep the last (newest) definition
