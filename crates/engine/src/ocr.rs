@@ -18,7 +18,7 @@ use crate::{DocId, Edit, EditError, Session};
 pub struct OcrSettings {
     /// Resolution pages are rendered at for recognition (Acrobat's "Downsample to" choices).
     pub dpi: f32,
-    /// Language code from [`LANGUAGES`] (the models read the Latin alphabet, whatever this says).
+    /// Language code from [`LANGUAGES`]; selects the recognition backend and model.
     pub language: String,
     /// Leave pages that already have text alone (Acrobat reports "page contains renderable
     /// text" and skips them). When `false`, such pages are read too (a picture on a page that
@@ -34,6 +34,7 @@ pub struct OcrSettings {
 /// A recognised word whose box is at least this much covered by the page's own text is that
 /// text read again, not a word in a picture.
 const ALREADY_ON_PAGE: f32 = 0.5;
+const PAGE_HAS_TEXT: &str = "the page already contains text";
 
 /// The long side of an A4 sheet in points (a letter page's, 792, is shorter): "Downsample to"
 /// is a resolution on paper this size or smaller.
@@ -89,6 +90,23 @@ pub fn engine() -> Result<Arc<Ocr>, String> {
     Ok(o)
 }
 
+/// English keeps its shared model; Hungarian uses the installed Tesseract executable.
+pub fn engine_for_language(language: &str) -> Result<Arc<Ocr>, String> {
+    if language == "en" { engine() } else { Ocr::for_language(language).map(Arc::new).map_err(|e| e.to_string()) }
+}
+
+/// A cheap, per-language readiness check for GUI redraws. Restart after installing Tesseract.
+pub fn availability(language: &str) -> Result<(), String> {
+    if language == "en" {
+        return available().then_some(()).ok_or_else(|| OcrError::NoModels.to_string());
+    }
+    if language == "hu" {
+        static HUNGARIAN: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+        return HUNGARIAN.get_or_init(|| Ocr::for_language("hu").map(|_| ()).map_err(|e| e.to_string())).clone();
+    }
+    Err(format!("unsupported OCR language {language:?}"))
+}
+
 /// Whether the recognition models are installed.
 pub fn available() -> bool {
     Models::find().is_some()
@@ -110,6 +128,18 @@ impl OcrJob {
     /// Read the pages. `progress(done, total)` is called before each page; returning `false`
     /// stops (the pages read so far are returned).
     pub fn run(self, ocr: &Ocr, mut progress: impl FnMut(usize, usize) -> bool) -> Vec<OcrPage> {
+        if ocr.language() != self.settings.language {
+            return self
+                .pages
+                .iter()
+                .map(|&page| OcrPage {
+                    page,
+                    words: Vec::new(),
+                    already_on_page: 0,
+                    skipped: Some("OCR engine does not match the selected language".into()),
+                })
+                .collect();
+        }
         let config =
             RenderConfig { password: self.password.as_deref().map(Arc::from), hide_comments: self.settings.native_text_only, ..Default::default() };
         let mut r = PageRenderer::new(self.bytes.clone(), config);
@@ -128,7 +158,7 @@ impl OcrJob {
                 .map(|t| t.glyphs.iter().filter(|g| !g.text.trim().is_empty()).map(|g| g.rect).collect())
                 .unwrap_or_default();
             if self.settings.skip_text_pages && !existing.is_empty() {
-                out.push(skip("the page already contains text"));
+                out.push(skip(PAGE_HAS_TEXT));
                 continue;
             }
             let shot = r.render(RenderRequest { page, scale: self.scale(page, info), ..Default::default() });
@@ -198,6 +228,13 @@ impl Session {
 
     /// Add the words found by [`OcrJob::run`] as one undoable step. Returns the number of words.
     pub fn apply_ocr(&mut self, id: DocId, found: &[OcrPage]) -> Result<usize, EditError> {
+        if let Some(page) = found.iter().find(|p| p.skipped.as_deref().is_some_and(|s| s != PAGE_HAS_TEXT)) {
+            return Err(EditError::Invalid(format!(
+                "OCR failed on page {}: {}",
+                page.page.saturating_add(1),
+                page.skipped.as_deref().unwrap_or_default()
+            )));
+        }
         let edits: Vec<Edit> =
             found.iter().filter(|p| !p.words.is_empty()).map(|p| Edit::AddOcrText { page: p.page, words: p.words.clone() }).collect();
         let words = found.iter().map(|p| p.words.len()).sum();
@@ -213,7 +250,7 @@ impl Session {
         if let Some(why) = self.get(id).and_then(|d| d.read_only_reason.clone()) {
             return Err(why);
         }
-        let ocr = engine()?;
+        let ocr = engine_for_language(&job.settings.language)?;
         let found = job.run(&ocr, |_, _| true);
         self.apply_ocr(id, &found).map_err(|e| e.to_string())?;
         Ok(found)
@@ -258,6 +295,49 @@ pub fn recognize_file(
     let bytes = s.save_bytes(id).map_err(|e| e.to_string())?;
     s.check_save(id, &bytes).map_err(|e| e.to_string())?;
     Ok(FileResult { bytes, pages })
+}
+
+/// Keep the historical Helvetica layer for WinAnsi words. For wider alphabets embed the
+/// already-bundled OFL Inter face and its ToUnicode map; no system font enters the PDF.
+pub(crate) fn add_text_layer(doc: &mut pdfcraft_cos::Document, page: usize, words: &[PlacedWord]) -> Result<(), EditError> {
+    use pdfcraft_cos::Object;
+    if words.iter().all(|w| pdfcraft_fonts::first_non_win_ansi(&w.text).is_none()) {
+        pdfcraft_edit::stamp(doc, page, "OCR", pdfcraft_ocr::text_layer(words))?;
+        return Ok(());
+    }
+    let pages = pdfcraft_model::pages(doc);
+    let page_info = pages.get(page).ok_or_else(|| EditError::Invalid("no such OCR page".into()))?;
+    let bytes = pdfcraft_fonts::INTER_REGULAR;
+    for word in words {
+        if !pdfcraft_fonts::embedding::covers(bytes, &word.text) {
+            return Err(EditError::Invalid("the OCR text contains a character the embedded font cannot preserve".into()));
+        }
+    }
+    let mut resources = page_info.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let mut fonts = resources.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
+    let name = pdfcraft_fonts::embedding::embed(doc, &mut fonts, bytes, "Inter").map_err(EditError::Invalid)?;
+    let font = fonts
+        .get(name.as_bytes())
+        .map(|f| doc.resolve(f))
+        .and_then(|f| f.as_dict().cloned())
+        .ok_or_else(|| EditError::Invalid("OCR font embedding failed".into()))?;
+    let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(doc, &font);
+    let mut content = format!("/OCR BMC\nq\nBT\n3 Tr\n/{name} 1 Tf\n").into_bytes();
+    for word in words {
+        let encoded = metrics.encode(&word.text).ok_or_else(|| EditError::Invalid("OCR word cannot be encoded without losing characters".into()))?;
+        let width: f64 = encoded.chunks_exact(2).map(|c| metrics.width(u32::from(u16::from_be_bytes([c[0], c[1]])))).sum();
+        let matrix = pdfcraft_ocr::word_matrix(word, width).ok_or_else(|| EditError::Invalid("invalid OCR word bounds".into()))?;
+        let numbers: Vec<String> = matrix.iter().map(|v| format!("{v:.6}")).collect();
+        content.extend_from_slice(format!("{} Tm ", numbers.join(" ")).as_bytes());
+        // A binary literal preserves the two-byte character codes, including parentheses/backslashes.
+        content.extend(pdfcraft_fonts::literal(&encoded));
+        content.extend_from_slice(b" Tj\n");
+    }
+    content.extend_from_slice(b"ET\nQ\nEMC\n");
+    resources.set(b"Font".to_vec(), Object::Dict(fonts));
+    doc.update_dict(page_info.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(resources))).map_err(|e| EditError::Invalid(e.to_string()))?;
+    pdfcraft_edit::stamp(doc, page, "OCR", content)?;
+    Ok(())
 }
 
 #[cfg(test)]

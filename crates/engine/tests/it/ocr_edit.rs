@@ -207,3 +207,42 @@ fn visible_stretched_text_rewrites_unchanged() {
     let i = ((y * out.width + x) * 4) as usize;
     assert_eq!(&out.rgba[i..i + 3], &[255, 255, 255]);
 }
+
+#[test]
+fn hungarian_ocr_text_survives_save_reopen_and_undo() {
+    let text = "Árvíztűrő tükörfúrógép ŐŰőű ÁÉÍÓÖŐÚÜŰ";
+    let (mut s, id) = scanned_with(vec![PlacedWord { text: text.into(), origin: [10.0, 20.0], across: [180.0, 0.0], up: [0.0, 15.0] }]);
+    let extract = |s: &Session, id| {
+        let mut renderer = PageRenderer::new(s.get(id).unwrap().bytes.clone(), Default::default());
+        renderer.render(RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Text, ..Default::default() }).text.unwrap().plain_text()
+    };
+    assert_eq!(extract(&s, id).trim(), text);
+    assert!(s.get(id).unwrap().text_blocks(0).iter().all(|b| b.invisible));
+    assert!(word_pixels(&s, id).iter().all(|p| near(*p, INK)), "OCR must not change the scan pixels");
+    let bytes = s.save_bytes(id).unwrap();
+    let reopened = s.open("saved.pdf", None, bytes, None).unwrap();
+    assert_eq!(extract(&s, reopened).trim(), text);
+    s.undo(id).unwrap();
+    assert!(extract(&s, id).trim().is_empty());
+    s.redo(id).unwrap();
+    assert_eq!(extract(&s, id).trim(), text);
+}
+
+#[test]
+fn a_failed_ocr_page_does_not_apply_a_partial_edit() {
+    use pdfcraft_engine::ocr::OcrPage;
+    let (mut s, id) = scanned();
+    let before = s.save_bytes(id).unwrap();
+    let pages = [
+        OcrPage {
+            page: 0,
+            words: vec![PlacedWord { text: "extra".into(), origin: [0.0, 0.0], across: [20.0, 0.0], up: [0.0, 10.0] }],
+            already_on_page: 0,
+            skipped: None,
+        },
+        OcrPage { page: 1, words: vec![], already_on_page: 0, skipped: Some("Tesseract failed: missing hun model".into()) },
+    ];
+    let error = s.apply_ocr(id, &pages).unwrap_err().to_string();
+    assert!(error.contains("page 2") && error.contains("missing hun"), "{error}");
+    assert_eq!(s.save_bytes(id).unwrap(), before);
+}
