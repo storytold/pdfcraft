@@ -4171,3 +4171,15 @@ fn a_page_past_its_quadpoint_budget_is_refused_alone() {
     assert_eq!(apply(&mut doc.clone(), None), Err(RedactError::UnreadableMark(over)));
     assert_eq!(apply(&mut doc, Some(&[1])).map(|r| r.marks), Ok(1));
 }
+
+/// The collector holds a listed mark as the document holds it, never a copy of its dictionary
+/// (and so of a large direct `/QuadPoints` array), and measures a page's QuadPoints in place.
+#[test]
+fn the_collector_holds_marks_without_copying_them() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    let collected = preview::collect(&doc, None).unwrap();
+    let held = collected[0].held.as_ref().unwrap();
+    assert!(Arc::ptr_eq(held, &doc.get(m.obj)), "the document's own object, not a copy");
+}

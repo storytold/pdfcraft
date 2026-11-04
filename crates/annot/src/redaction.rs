@@ -174,7 +174,14 @@ pub fn show_in_display(display: &mut Document, page: usize, index: usize, shown:
     let page_obj = pdfcraft_model::pages(display).get(page).map(|p| p.obj).ok_or(crate::AnnotError::NoSuchPage(page))?;
     let mut list = crate::annots(display, page_obj);
     let entry = list.get(index).cloned().ok_or(crate::AnnotError::NoSuchAnnotation { page, index })?;
-    let Some(mut d) = display.resolve(&entry).as_dict().cloned() else { return Err(crate::AnnotError::NoSuchAnnotation { page, index }) };
+    let held = display.resolve(&entry);
+    let Some(src) = held.as_dict() else { return Err(crate::AnnotError::NoSuchAnnotation { page, index }) };
+    // Every key but `/QuadPoints`, which the drawn appearance replaces and which can be large: the
+    // copy never carries it.
+    let mut d = Dict::default();
+    for (key, value) in src.iter().filter(|(key, _)| key.as_slice() != b"QuadPoints") {
+        d.set(key.clone(), value.clone());
+    }
     let flags = d.int(b"F").unwrap_or(0) & !DISPLAY_CLEARED_FLAGS;
     for key in [&b"AS"[..], b"OC"] {
         d.remove(key);

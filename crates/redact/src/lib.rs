@@ -207,12 +207,12 @@ pub fn marks(doc: &Document) -> Vec<Mark> {
 /// same collector [`mark_previews`] reads, so applying uses exactly the areas a preview shows.
 pub(crate) fn marks_checked(doc: &Document, pages: Option<&[usize]>) -> Result<(Vec<Mark>, Vec<MarkPreview>), MarkScanError> {
     let (mut out, mut refused) = (Vec::new(), Vec::new());
-    for preview::Collected { preview, dict } in preview::collect(doc, pages)? {
-        match (&preview.areas, preview.object, dict) {
+    for preview::Collected { preview, held } in preview::collect(doc, pages)? {
+        match (&preview.areas, preview.object, held.as_deref().and_then(Object::as_dict)) {
             (Ok(areas), Some(obj), Some(d)) => {
                 let overlay = d.get(b"OverlayText").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text())).unwrap_or_default();
                 let rects = areas.rects.clone();
-                out.push(Mark { page: preview.page, obj, rects, fill: color(doc, &d, b"IC"), overlay, look: overlay_look(doc, &d) });
+                out.push(Mark { page: preview.page, obj, rects, fill: color(doc, d, b"IC"), overlay, look: overlay_look(doc, d) });
             }
             // A ready mark always has its object and dictionary; anything else is refused.
             _ => refused.push(preview),

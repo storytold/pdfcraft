@@ -7,7 +7,9 @@
 //! applied is never left out, so absence from this list never means "no mark".
 
 use pdfcraft_annot::redaction::{MarkAreaError, MarkAreas, mark_areas, mark_locator};
-use pdfcraft_cos::{Dict, Document, ObjRef};
+use std::sync::Arc;
+
+use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 /// The most `/QuadPoints` entries all the marks of one page may have together; past it the
 /// page's marks are refused ([`MarkRefusal::PageLimit`]), other pages unaffected.
@@ -75,10 +77,10 @@ pub fn mark_previews(doc: &Document, pages: Option<&[usize]>) -> Result<Vec<Mark
     Ok(collect(doc, pages)?.into_iter().map(|c| c.preview).collect())
 }
 
-/// A collected mark: its preview, and its dictionary for building the applicable `Mark`.
+/// A collected mark: its preview, and (when ready) its dictionary, held, for building the `Mark`.
 pub(crate) struct Collected {
     pub(crate) preview: MarkPreview,
-    pub(crate) dict: Option<Dict>,
+    pub(crate) held: Option<Arc<Object>>,
 }
 
 /// Whether `d` is a Redact annotation. Read directly as the collector always has; #5849 changes
@@ -88,12 +90,12 @@ fn is_redact(d: &Dict) -> bool {
 }
 
 /// One listed entry that is a Redact annotation: its object (if it has one), whether that object
-/// is the dictionary itself, and the dictionary.
+/// is the dictionary itself, and the dictionary (held as the document holds it).
 struct Candidate {
     index: usize,
     object: Option<ObjRef>,
     direct_object: bool,
-    dict: Dict,
+    held: Arc<Object>,
 }
 
 /// The one collector behind [`mark_previews`] and [`crate::marks_checked`].
@@ -107,24 +109,32 @@ pub(crate) fn collect(doc: &Document, pages: Option<&[usize]>) -> Result<Vec<Col
         let mut candidates: Vec<Candidate> = Vec::new();
         let mut page_values = 0usize;
         for (index, entry) in crate::annots_of(doc, &p.dict).into_iter().enumerate() {
-            let resolved = doc.resolve(&entry);
-            let Some(d) = resolved.as_dict().filter(|d| is_redact(d)) else { continue };
+            // Held, not copied: a listed object is the document's own; only an entry written in place
+            // is a copy (of what `annots_of` already copied).
+            let held = doc.resolve(&entry);
+            let Some(d) = held.as_dict().filter(|d| is_redact(d)) else { continue };
             let (object, direct_object) = match entry.as_ref() {
                 Some(r) => (Some(r), doc.get(r).as_dict().is_some()),
                 None => (None, false),
             };
             // The page's total is counted from the arrays' lengths, before any entry is read.
-            let values = d.get(b"QuadPoints").and_then(|q| doc.resolve(q).as_array().map(Vec::len)).unwrap_or(0);
+            // A direct array is measured in place; only a reference is followed (and held, not copied).
+            let values = match d.get(b"QuadPoints") {
+                Some(Object::Array(a)) => a.len(),
+                Some(q @ Object::Ref(_)) => doc.resolve(q).as_array().map_or(0, Vec::len),
+                _ => 0,
+            };
             page_values = page_values.saturating_add(values);
             candidates.try_reserve(1).map_err(|_| MarkScanError::Allocation)?;
-            candidates.push(Candidate { index, object, direct_object, dict: d.clone() });
+            candidates.push(Candidate { index, object, direct_object, held: held.clone() });
         }
         let over_page = page_values > MAX_PAGE_QUADPOINT_VALUES;
         for c in candidates {
+            let Some(dict) = c.held.as_dict() else { continue };
             let areas = if over_page {
                 Err(MarkRefusal::PageLimit)
             } else {
-                match mark_areas(doc, &c.dict) {
+                match mark_areas(doc, dict) {
                     Err(e) => Err(MarkRefusal::Geometry(e)),
                     // Valid numbers, but a mark applying can't remove is refused all the same.
                     Ok(_) if c.object.is_none() => Err(MarkRefusal::InlineAnnotation),
@@ -132,16 +142,16 @@ pub(crate) fn collect(doc: &Document, pages: Option<&[usize]>) -> Result<Vec<Col
                     Ok(a) => Ok(a),
                 }
             };
-            let locator = if areas.is_err() { mark_locator(doc, &c.dict) } else { None };
+            let locator = if areas.is_err() { mark_locator(doc, dict) } else { None };
             let rects = areas.as_ref().map_or(0, |a| a.rects.len());
             held_bytes =
                 held_bytes.saturating_add(std::mem::size_of::<Collected>()).saturating_add(rects.saturating_mul(std::mem::size_of::<[f64; 4]>()));
             if held_bytes > MAX_PREVIEW_BYTES {
                 return Err(MarkScanError::PreviewLimit);
             }
-            let dict = areas.is_ok().then_some(c.dict);
+            let held = areas.is_ok().then(|| c.held.clone());
             out.try_reserve(1).map_err(|_| MarkScanError::Allocation)?;
-            out.push(Collected { preview: MarkPreview { page: pi, index: c.index, object: c.object, areas, locator }, dict });
+            out.push(Collected { preview: MarkPreview { page: pi, index: c.index, object: c.object, areas, locator }, held });
         }
     }
     Ok(out)
