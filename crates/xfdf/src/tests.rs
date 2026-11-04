@@ -761,6 +761,7 @@ fn unicode_annotation_colours_are_ignored_without_panicking() {
 fn xfdf_comment_import_preserves_text_around_comments_and_instructions() {
     for (body, expected) in [
         ("left<!-- ignored -->right", "leftright"),
+        ("left<nested>excluded</nested>right", "leftright"),
         ("<!-- first -->left<?note ignored?>middle<!-- last -->right", "leftmiddleright"),
         ("<![CDATA[Å<left>]]><!-- ignored -->&amp;Ω", "Å<left>&Ω"),
         (" left <!-- ignored --> right ", " left  right "),
