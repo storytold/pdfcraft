@@ -175,11 +175,11 @@ pub struct CommentView {
     pub(crate) editor_focus: Option<EditorFocus>,
     /// Snapshot of `(page, index)` comment slot identity from the last `DocInfo`, used to detect
     /// when an edit removes or shifts `/Annots` entries under an active selection or editor.
-    slots: std::collections::HashMap<(usize, usize), CommentSlot>,
+    pub(crate) slots: std::collections::HashMap<(usize, usize), CommentSlot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct CommentSlot {
+pub(crate) struct CommentSlot {
     subtype: String,
     name: Option<String>,
     page_ord: usize,
