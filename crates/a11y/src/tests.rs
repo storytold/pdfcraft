@@ -1504,3 +1504,37 @@ fn marking_a_tag_artifact_refuses_content_past_the_decode_budget() {
     assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::TooLarge));
     assert_eq!(doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents"), Some(&contents), "the page keeps its content");
 }
+
+#[test]
+fn autotag_form_fields_tags_widgets_of_a_shared_annots_array_once() {
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 7 0 R >>".into(),
+            "<< /Length 0 >>\nstream\n\nendstream".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 60 120 80] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots 7 0 R >>".into(),
+            "[5 0 R 5 0 R]".into(),
+        ],
+        "",
+    );
+    assert_eq!(tag_form_fields(&mut doc).unwrap(), 1);
+}
+
+#[test]
+fn checker_reports_each_untagged_annotation_without_copying_shared_dictionaries() {
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 4 0 R 5 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Text /Rect [20 60 120 80] >>".into(),
+            "<< /Type /Annot /Subtype /Popup /Rect [20 60 120 80] >>".into(),
+        ],
+        "",
+    );
+    let pages = pdfcraft_model::pages(&doc);
+    let found = content::page_rule(&doc, Rule::TaggedAnnotations, &pages, &[0], &Default::default(), false);
+    assert_eq!(found.len(), 2, "the popup is skipped, each listed text annotation reported");
+}
