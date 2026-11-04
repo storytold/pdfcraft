@@ -13,7 +13,7 @@
 //! mode 3, as OCR text layers are) in a Type 0 font addressed by UTF-16 over a non-embedded
 //! Adobe-Korea1 CID font ([`outline_text_font`]). Its glyphs are never painted.
 
-use pdfcraft_cos::{Dict, Document, Object, PdfString};
+use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 
 use crate::{GlyphError, ShapedScript, korean_has, shape_korean, shaped_glyph, win_ansi_encodable};
 
@@ -71,12 +71,13 @@ pub fn outlined_text_layer(s: &str, size: f64, x: f64, y: f64, width: f64) -> St
     format!("q BT 3 Tr /{OUTLINE_TEXT_FONT} {} Tf {} Tz 1 0 0 1 {} {} Tm <{hex}> Tj ET Q\n", num(size), num(scale), num(x), num(y))
 }
 
-/// Make every direct font descriptor under `resources`' `/Font` entries (a Type 0 font's
-/// descendant, or a simple font) an indirect object of `doc`, as ISO 32000-2 §9.8.1 requires. For
-/// an appearance built with direct resources ([`outline_text_font`]) when it is stored.
-pub fn hoist_font_descriptors(doc: &mut Document, resources: &mut Dict) {
-    let Some(Object::Dict(fonts)) = resources.get(b"Font").cloned() else { return };
-    let mut fonts = fonts;
+/// Make every direct font descriptor under the `/Font` entries of `stream`'s direct `/Resources`
+/// (a Type 0 font's descendant, or a simple font) an indirect object of `doc`, as ISO 32000-2
+/// §9.8.1 requires. For an appearance built with direct resources ([`outline_text_font`]) when it
+/// is stored.
+pub fn hoist_font_descriptors(doc: &mut Document, stream: &mut Stream) {
+    let Some(Object::Dict(mut resources)) = stream.dict.get(b"Resources").cloned() else { return };
+    let Some(Object::Dict(mut fonts)) = resources.get(b"Font").cloned() else { return };
     let names: Vec<Vec<u8>> = fonts.iter().map(|(k, _)| k.clone()).collect();
     for name in names {
         let Some(Object::Dict(mut font)) = fonts.get(&name).cloned() else { continue };
@@ -101,6 +102,7 @@ pub fn hoist_font_descriptors(doc: &mut Document, resources: &mut Dict) {
         fonts.set(name, Object::Dict(font));
     }
     resources.set(b"Font".to_vec(), Object::Dict(fonts));
+    stream.dict.set(b"Resources".to_vec(), Object::Dict(resources));
 }
 
 /// The face outlines are drawn from: the Korean Gothic, regular.
@@ -190,7 +192,11 @@ mod tests {
         fonts.set(OUTLINE_TEXT_FONT.as_bytes().to_vec(), Object::Dict(font));
         let mut res = Dict::new();
         res.set(b"Font".to_vec(), Object::Dict(fonts));
-        hoist_font_descriptors(&mut doc, &mut res);
+        let mut dict = Dict::new();
+        dict.set(b"Resources".to_vec(), Object::Dict(res));
+        let mut stream = Stream::from_raw(dict, Vec::new());
+        hoist_font_descriptors(&mut doc, &mut stream);
+        let Some(Object::Dict(res)) = stream.dict.get(b"Resources") else { panic!() };
         let Some(Object::Dict(fonts)) = res.get(b"Font") else { panic!() };
         let Some(Object::Dict(font)) = fonts.get(OUTLINE_TEXT_FONT.as_bytes()) else { panic!() };
         let Some(Object::Array(d)) = font.get(b"DescendantFonts") else { panic!() };

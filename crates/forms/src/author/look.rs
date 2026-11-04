@@ -325,10 +325,7 @@ pub(super) fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>
             FieldKind::Text | FieldKind::Combo | FieldKind::List => {
                 let (mut s, m) = appearance::field_appearance_drawn(doc, &f, w, &f.value, true);
                 missing = m;
-                if let Some(Object::Dict(mut res)) = s.dict.get(b"Resources").cloned() {
-                    pdfcraft_fonts::hoist_font_descriptors(doc, &mut res);
-                    s.dict.set(b"Resources".to_vec(), Object::Dict(res));
-                }
+                pdfcraft_fonts::hoist_font_descriptors(doc, &mut s);
                 let r = doc.add(Object::Stream(s));
                 let mut d = Dict::new();
                 d.set(b"N".to_vec(), Object::Ref(r));

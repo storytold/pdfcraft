@@ -872,10 +872,15 @@ fn date_format(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut P
     });
     let bad = app.date_text(None).map(|today| pdfcraft_engine::dates::unwritable(&today)).unwrap_or_default();
     if !bad.is_empty() {
-        let bad_msg = crate::i18n::fmt(
-            tl!("{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy."),
-            &[("chars", &bad)],
-        );
+        // Korean is written (as outlines) only when this build has the craft-fonts Korean face.
+        let reason = if pdfcraft_fonts::document_korean_fonts_for_style(false, false).is_empty() {
+            tl!("{chars} can't be written into the PDF yet: Fill & Sign text is Western European only. Pick a numeric format such as dd.mm.yyyy.")
+        } else {
+            tl!(
+                "{chars} can't be written into the PDF yet: Fill & Sign text is Western European or Korean only. Pick a numeric format such as dd.mm.yyyy."
+            )
+        };
+        let bad_msg = crate::i18n::fmt(reason, &[("chars", &bad)]);
         ctx.label(ui, &bad_msg, theme::regular(13.0), Color32::from_rgb(0xD1, 0x3B, 0x3B));
     }
     ui.horizontal(|ui| {

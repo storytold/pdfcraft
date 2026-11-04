@@ -62,10 +62,7 @@ fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> 
     let missing = appearance::undrawable_text(d).map(|(_, c)| c);
     // The invisible text layer's font descriptor must be indirect (ISO 32000-2 §9.8.1).
     let mut stream = stream;
-    if let Some(Object::Dict(mut res)) = stream.dict.get(b"Resources").cloned() {
-        pdfcraft_fonts::hoist_font_descriptors(doc, &mut res);
-        stream.dict.set(b"Resources".to_vec(), Object::Dict(res));
-    }
+    pdfcraft_fonts::hoist_font_descriptors(doc, &mut stream);
     let ap = doc.add(Object::Stream(stream));
     // A copy (a shared /AP is left alone) that keeps unknown entries; the old down and rollover
     // appearances would show the previous look on press or hover, so they go with the old /N.
