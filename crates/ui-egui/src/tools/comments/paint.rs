@@ -1,18 +1,30 @@
-use super::geometry::{HANDLES, grabs_points, handle_pos, is_markup, reshapable, reshaped, resizable};
-use super::state::{Gesture, PageCx, SETTLE_SECS};
+use super::geometry::{HANDLES, handle_pos, is_markup, reaches_points, reshapable, reshaped, resizable};
+use super::state::{CommentView, Gesture, PageCx, SETTLE_SECS};
 use super::{
     Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Shape,
     Stroke, color32, vec2,
 };
+use crate::page_router::{CommentPart, Hit, Owner};
 
-/// Paint comment selection, hover and gesture previews on a page.
-pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
+/// The comment outlined under the pointer: the one a press there would take (`hover`, the top hit),
+/// with the Select tool or, over its own marks, Fill & Sign. Not the selected comment, nor while a
+/// comment is moved, resized or drawn, nor one under a form field or added text that would take
+/// the press.
+pub(super) fn hover_outline<'c>(cx: &'c PageCx<'_>, cv: &CommentView, hover: Option<&Hit>) -> Option<&'c Annotation> {
+    let Some(Owner::Comment { index, part: CommentPart::Body }) = hover.map(|h| h.owner) else { return None };
+    let tool_outlines = matches!(cx.tool, QuickTool::Select | QuickTool::Fill(_));
+    (cv.gesture.is_none() && tool_outlines && cv.selected != Some((cx.page, index))).then(|| cx.get(index)).flatten()
+}
+
+/// Paint comment selection, hover and gesture previews on a page. `hover` is the top hit under the
+/// pointer.
+pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, hover: Option<&Hit>) {
     let cv = &view.comments;
     let pointer = cx.ptr.pos;
     // A redaction mark shows its fill while the pointer is over it, as Acrobat's does, so the
     // marked area reads before anything is applied.
     if cv.gesture.is_none()
-        && let Some(a) = pointer.and_then(|p| cx.hit(p))
+        && let Some(a) = pointer.and_then(|p| cx.comment_at(p))
         && a.subtype == "Redact"
     {
         let ([r, g, b], opacity) = cx.redact_mark;
@@ -21,11 +33,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             painter.rect_filled(rect, CornerRadius::ZERO, fill);
         }
     }
-    if cv.gesture.is_none()
-        && let Some(a) = pointer.and_then(|p| cx.hit(p))
-        && (cx.tool == QuickTool::Select || matches!(cx.tool, QuickTool::Fill(_)) && a.fill_sign)
-        && cv.selected != Some((cx.page, a.index))
-    {
+    if let Some(a) = hover_outline(cx, cv, hover) {
         for r in cx.screen_rects(a) {
             painter.rect_stroke(r.expand(2.0), CornerRadius::same(2), Stroke::new(1.0, SELECT_BLUE.gamma_multiply(0.7)), egui::StrokeKind::Outside);
         }
@@ -52,7 +60,7 @@ fn paint_selected(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &
     {
         return;
     }
-    if cx.allowed && grabs_points(cx.tool) && reshapable(a) {
+    if cx.allowed && reaches_points(cx.tool) && reshapable(a) {
         return paint_points(painter, cx, view, a, pointer, shift);
     }
     let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
