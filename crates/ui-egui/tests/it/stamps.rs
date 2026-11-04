@@ -160,6 +160,29 @@ fn creating_placing_and_keeping_custom_stamps() {
     );
     assert_eq!(h.state().quick_tool, QuickTool::CustomStamp(stamp_id));
     assert_eq!(h.state().custom_stamps[0].data, stamp_data);
+    let brand = h.get_by_label("brand").rect().center();
+    h.hover_at(brand);
+    h.run_steps(2);
+    h.event(egui::Event::PointerButton { pos: brand, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.event(egui::Event::PointerButton { pos: brand, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    h.get_by_label("Rename / change category…").click();
+    h.run_steps(2);
+    h.get_by_label("Name:").click();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(1);
+    h.get_by_label("Name:").type_text("Discarded");
+    h.get_by_label("Category:").click();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(1);
+    h.get_by_label("Category:").type_text("Discarded");
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!(
+        (h.state().custom_stamps[0].id, h.state().custom_stamps[0].category.as_str(), h.state().custom_stamps[0].name.as_str()),
+        (stamp_id, "Marketing", "brand")
+    );
+    assert_eq!(h.state().custom_stamps[0].data, stamp_data);
     // The edited library is kept with the app's settings.
     let saved = h.state().persist();
     let mut again = PdfCraftApp::new();
