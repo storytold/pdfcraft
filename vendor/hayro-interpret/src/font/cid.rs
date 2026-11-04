@@ -287,13 +287,14 @@ impl Type0Font {
             }
             FontType::Cff(c) => {
                 // Map codepoint to glyph name via AFL, and then look it up.
-                if let Some(name) = glyph_names::get_reverse(character)
-                    && let Some(gid) = c.glyph_index_by_name(name)
-                {
-                    Some(gid)
-                } else {
-                    None
-                }
+                let by_name = |character: char| {
+                    glyph_names::get_reverse(character).and_then(|name| c.glyph_index_by_name(name))
+                };
+                // PdfCraft patch: a soft hyphen the substitute has no glyph for is its hyphen
+                // (#5888). Windows exporters map the hyphen glyph of a font they don't embed to
+                // U+00AD, which ISO 32000-2 Annex D.2 calls typographically the same as the
+                // hyphen; without this the CID, taken as a glyph index, drew an unrelated glyph.
+                by_name(character).or_else(|| (character == '\u{00ad}').then(|| by_name('-')).flatten())
             }
             FontType::Type1(_) => {
                 // We could in theory map to a glyph via AFL and then look up

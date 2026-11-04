@@ -1,5 +1,5 @@
 use super::reader::find;
-use super::state::{LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, objstm_member, owned_bytes};
+use super::state::{LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, held_bytes, objstm_member};
 use super::xref::{Revision, XrefEntry};
 use super::{
     Arc, CosError, Cow, Dict, Document, Lexer, MAX_DECODED, MAX_JBIG2_GLOBALS, ObjRef, Object, Stream, is_whitespace, parse_indirect_shared,
@@ -156,12 +156,16 @@ impl Document {
         self.try_get(r.num).unwrap_or_else(|_| Arc::new(Object::Null))
     }
 
-    /// Follow a reference if `o` is one; otherwise return `o` itself.
+    /// Follow a reference if `o` is one; otherwise return `o` itself. An object can be nothing but
+    /// a reference to another, which is followed too, up to [`MAX_REFERENCE_HOPS`] of them.
     pub fn resolve(&self, o: &Object) -> Arc<Object> {
-        match o {
-            Object::Ref(r) => self.get(*r),
-            other => Arc::new(other.clone()),
+        let Object::Ref(r) = o else { return Arc::new(o.clone()) };
+        let mut held = self.get(*r);
+        for _ in 0..MAX_REFERENCE_HOPS {
+            let Object::Ref(r) = &*held else { break };
+            held = self.get(*r);
         }
+        held
     }
 
     /// `s` with the `/DecodeParms` its filters use made direct, so [`Stream::decoded`] reads them:
@@ -218,7 +222,7 @@ impl Document {
     }
 
     /// `o`, or the object it refers to, without copying either.
-    fn held<'o>(&self, o: &'o Object) -> Held<'o> {
+    pub(crate) fn held<'o>(&self, o: &'o Object) -> Held<'o> {
         match o {
             Object::Ref(_) => Held::Resolved(self.resolve(o)),
             o => Held::Direct(o),
@@ -395,12 +399,14 @@ impl Document {
         // cycles such as `6 0 obj << /Length 6 0 R >>`. Bound the nesting on every path.
         let _guard =
             LoadGuard::enter(num).ok_or_else(|| CosError::Syntax { offset: 0, detail: format!("reference cycle while loading object {num}") })?;
+        let _scope = crate::security::FollowScope::enter();
         let obj = self.load(num, 0)?;
         let obj = Arc::new(obj);
         // The editing cache is bounded like the scan reader's: re-parsing a file-backed view
         // is cheap, and returned objects outlive eviction.
-        self.cache.lock().map_err(|_| CosError::Poisoned)?.insert(num, obj.clone());
-        self.evict_editor_cache_if_over_budget(num, &obj)?;
+        let owned = held_bytes(&obj, &self.data, 0);
+        self.cache.lock().map_err(|_| CosError::Poisoned)?.insert(num, obj.clone(), owned);
+        self.evict_editor_cache_if_over_budget(num)?;
         Ok(obj)
     }
 
@@ -409,10 +415,10 @@ impl Document {
     /// document cannot pin its whole object graph. Only owned (decrypted/copied) bytes
     /// count; file-backed views re-parse for free.
     ///
-    /// Worst case per document: input bytes + up to `EDITOR_CACHE_OBJECTS` ×
-    /// `EDITOR_LARGE_OBJECT` (1024 × 256 KB = 256 MB) of small objects between full
-    /// accounting passes + `EDITOR_OBJSTM_BYTES` (32 MB) + unsaved `overlay` edits.
-    /// The count cap always holds; byte accounting between passes is approximate.
+    /// Worst case per document: input bytes + `EDITOR_CACHE_BYTES` (32 MB) of owned object
+    /// data + `EDITOR_OBJSTM_BYTES` (32 MB) + unsaved `overlay` edits. Each object is measured
+    /// once, as it is cached ([`ObjectCache`](super::state::ObjectCache)), so both caps hold
+    /// after every insertion.
     /// Clones share these caches, so one clone's eviction drops another's hot set;
     /// that only costs re-parsing, never correctness. Eviction keeps just the newcomer:
     /// file-backed views re-parse cheaply and editor working sets stay far below 1024.
@@ -425,37 +431,13 @@ impl Document {
 
     const EDITOR_OBJSTM_BYTES: usize = 32 * 1024 * 1024;
 
-    /// Newcomers above this force a full accounting pass even below the count cap:
-    /// `EDITOR_CACHE_BYTES / 128`, so 128 large newcomers always trigger a pass before the
-    /// byte budget can double.
-    const EDITOR_LARGE_OBJECT: usize = 256 * 1024;
-
-    fn evict_editor_cache_if_over_budget(&self, fresh_num: u32, fresh: &Object) -> Result<(), CosError> {
-        // Fast path: the full fold is O(cache) per insert, so skip it for a small newcomer
-        // below the count cap. `len` is copied out first; nothing here holds the lock.
-        let len = self.cache.lock().map_err(|_| CosError::Poisoned)?.len();
-        if len <= Self::EDITOR_CACHE_OBJECTS && owned_bytes(fresh, &self.data, 0) <= Self::EDITOR_LARGE_OBJECT {
-            return Ok(());
-        }
-        // Walk a snapshot off-lock; re-lock only to evict.
-        let live: Vec<(u32, Arc<Object>)> = self.cache.lock().map_err(|_| CosError::Poisoned)?.iter().map(|(n, o)| (*n, o.clone())).collect();
-        let data = &self.data;
-        let owned: usize = live.iter().fold(0usize, |n, (_, o)| n.saturating_add(owned_bytes(o, data, 0)));
-        if live.len() <= Self::EDITOR_CACHE_OBJECTS && owned <= Self::EDITOR_CACHE_BYTES {
-            return Ok(());
-        }
-        // Re-check under the final lock: another thread may have inserted or evicted since
-        // the snapshot. Keep its newcomers, and skip the eviction if back within budget.
-        let snapshot: std::collections::HashSet<u32> = live.into_iter().map(|(n, _)| n).collect();
+    fn evict_editor_cache_if_over_budget(&self, fresh_num: u32) -> Result<(), CosError> {
         let mut cache = self.cache.lock().map_err(|_| CosError::Poisoned)?;
-        if cache.len() <= Self::EDITOR_CACHE_OBJECTS {
-            let data = &self.data;
-            let owned: usize = cache.values().fold(0usize, |n, o| n.saturating_add(owned_bytes(o, data, 0)));
-            if owned <= Self::EDITOR_CACHE_BYTES {
-                return Ok(());
-            }
+        if cache.len() <= Self::EDITOR_CACHE_OBJECTS && cache.owned() <= Self::EDITOR_CACHE_BYTES {
+            return Ok(());
         }
-        cache.retain(|n, _| *n == fresh_num || !snapshot.contains(n));
+        // Eviction keeps just the newcomer: file-backed views re-parse cheaply.
+        cache.retain(|n| *n == fresh_num);
         Ok(())
     }
 
@@ -585,7 +567,11 @@ impl Document {
         let Object::Stream(s) = &*loaded else { return Err(CosError::MissingObject(num)) };
         let n = s.dict.int(b"N").unwrap_or(0).clamp(0, 1_000_000) as usize;
         let first = usize::try_from(s.dict.int(b"First").unwrap_or(0).max(0)).ok();
-        let data = s.decoded_within(self.stream_limit)?;
+        // Its parameters can be given by reference, and can sit in another object stream. A scan of
+        // the file's object streams comes here without a read around it.
+        let _scope = crate::security::FollowScope::enter();
+        let readable = crate::security::following(Cow::Borrowed(s), || self.with_direct_parms(s));
+        let data = readable.decoded_within(self.stream_limit)?;
         let mut lx = Lexer::new(&data, 0);
         let mut index = Vec::with_capacity(n);
         for _ in 0..n {
@@ -600,8 +586,14 @@ impl Document {
         Ok(stm)
     }
 
-    /// Last-resort lookup: scan the file for `num G obj`.
+    /// Last-resort lookup: scan the file for `num G obj`. What isn't there is remembered: each miss
+    /// reads the whole file, and a file can refer to such an object from everywhere.
     fn scan_for(&self, num: u32) -> Option<(ObjRef, Object)> {
+        if self.unfound.lock().is_ok_and(|unfound| unfound.contains(&num)) {
+            return None;
+        }
+        #[cfg(test)]
+        super::tests::FILE_SCANS.with(|scans| scans.set(scans.get() + 1));
         let needle = format!("{num} ");
         let data = &self.data;
         let mut found = None;
@@ -616,6 +608,11 @@ impl Document {
             {
                 found = Some((id, o)); // keep the last (newest) definition
             }
+        }
+        if found.is_none()
+            && let Ok(mut unfound) = self.unfound.lock()
+        {
+            unfound.insert(num);
         }
         found
     }
@@ -809,9 +806,13 @@ const DECODE_PARMS_KEYS: [&[u8]; 13] = [
     b"ColorTransform",
 ];
 
+/// How many references in a row [`Document::resolve`] follows: enough for any file, and it ends a
+/// cycle of them.
+const MAX_REFERENCE_HOPS: usize = 32;
+
 /// An object read in place, or the object a reference names as the document holds it: either way
 /// nothing is copied ([`Document::held`]).
-enum Held<'o> {
+pub(crate) enum Held<'o> {
     Direct(&'o Object),
     Resolved(Arc<Object>),
 }
