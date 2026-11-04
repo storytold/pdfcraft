@@ -14,7 +14,8 @@ Install Rust 1.95.0, `trunk 0.21.14` and `tauri-cli 2.12.2` with Cargo (`--locke
 cargo install trunk --version 0.21.14 --locked
 cargo install tauri-cli --version 2.12.2 --locked
 rustup target add wasm32-unknown-unknown
-# Set CRAFT_FONTS_DIR to the pinned craft-fonts checkout from mobile.yml.
+# Set CRAFT_FONTS_DIR to the pinned craft-fonts checkout from mobile.yml, and CRAFT_I18N_DIR
+# to a storytold/craft-i18n checkout at the commit in craft-i18n.rev (the interface catalogs).
 cargo xtask mobile frontend
 cargo xtask mobile prepare android
 cargo xtask mobile android
@@ -43,6 +44,6 @@ The existing browser-download export paths (non-PDF conversion, split/export act
 
 ## Validation
 
-Native adapter tests cover path/name/size bounds. Shared UI tests simulate native success, cancellation, failure and edits made while saving; an older exported snapshot cannot close or replace a newer document. Packaging tests ensure every UI catalog is advertised to iOS and that PDF associations/safe areas survive changes. CI additionally builds the actual Android and iOS targets. Device-level PDF picker/provider, suspend/resume, handwriting and highlighting checks on physical tablets remain required before a stable release; compilation alone is not that verification.
+Native adapter tests cover path/name/size bounds. Shared UI tests simulate native success, cancellation, failure and edits made while saving; an older exported snapshot cannot close or replace a newer document. Packaging tests ensure every interface language in `i18n.rs` is advertised to iOS and that PDF associations/safe areas survive changes. CI additionally builds the actual Android and iOS targets. Device-level PDF picker/provider, suspend/resume, handwriting and highlighting checks on physical tablets remain required before a stable release; compilation alone is not that verification.
 
 Primary implementation references: [Tauri mobile file associations](https://v2.tauri.app/learn/mobile-file-associations/), [dialog plugin](https://v2.tauri.app/plugin/dialog/), [filesystem plugin](https://v2.tauri.app/plugin/file-system/), [Android distribution](https://v2.tauri.app/distribute/google-play/) and [iOS distribution](https://v2.tauri.app/distribute/app-store/).

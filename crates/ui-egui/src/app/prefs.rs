@@ -160,6 +160,9 @@ impl PdfCraftApp {
     pub fn restore(&mut self, json: &str) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
         if let Ok(mut bar) = serde_json::from_value::<crate::hotbar::Hotbar>(v["hotbar"].clone()) {
+            if v["hotbar"].get("placed").is_none() {
+                bar.adopt_legacy();
+            }
             bar.normalize();
             self.hotbar = bar;
         }

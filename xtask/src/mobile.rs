@@ -144,6 +144,16 @@ fn frontend_notices(root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The interface languages `crates/ui-egui/src/i18n.rs` offers, English included. The catalogs
+/// themselves come from craft-i18n at build time, so the source list is what the app advertises.
+fn ui_languages(root: &Path) -> Result<Vec<String>> {
+    let source = std::fs::read_to_string(root.join("crates/ui-egui/src/i18n.rs"))?;
+    let languages =
+        source.split("LangInfo { code: \"").skip(1).filter_map(|rest| rest.split_once('"').map(|(code, _)| code.to_owned())).collect::<Vec<_>>();
+    ensure!(languages.iter().any(|code| code == "en") && languages.len() > 1, "No interface languages in ui-egui's i18n.rs");
+    Ok(languages)
+}
+
 /// Distribution from a fork cannot carry the upstream trademarks. Keep this
 /// packaging transformation out of the shared UI contribution, fail closed if
 /// its source changes, and restore the checkout even when Trunk fails.
@@ -227,6 +237,10 @@ pub fn run(args: &[String]) -> Result<()> {
         ["android-notices", manifest, output] => android_notices::run(Path::new(manifest), Path::new(output)),
         ["notices"] => frontend_notices(&root),
         [mode @ ("frontend" | "frontend-preview")] => {
+            ensure!(
+                std::env::var_os("CRAFT_I18N_DIR").is_some_and(|dir| !dir.is_empty()),
+                "Set CRAFT_I18N_DIR to the craft-i18n checkout at craft-i18n.rev: the mobile apps advertise every interface language"
+            );
             let mut preview = if *mode == "frontend-preview" { PreviewSources::apply(&root)? } else { PreviewSources::default() };
             let result = run_in(
                 &root.join("apps/pdfcraft-web"),
@@ -248,15 +262,7 @@ pub fn run(args: &[String]) -> Result<()> {
                 copy_tree(&app.join("icons/android"), &app.join("gen/android/app/src/main/res"))?;
                 let resources = app.join("gen/android/app/src/main/res/xml");
                 std::fs::create_dir_all(&resources)?;
-                let mut languages = vec!["en".to_owned()];
-                for entry in std::fs::read_dir(root.join("crates/ui-egui/src/i18n"))? {
-                    let path = entry?.path();
-                    if path.extension().is_some_and(|ext| ext == "tsv")
-                        && let Some(code) = path.file_stem().and_then(|code| code.to_str())
-                    {
-                        languages.push(code.to_owned());
-                    }
-                }
+                let mut languages = ui_languages(&root)?;
                 languages.sort();
                 let mut locales = String::from(
                     "<?xml version=\"1.0\" encoding=\"utf-8\"?><locale-config xmlns:android=\"http://schemas.android.com/apk/res/android\">",
@@ -341,10 +347,8 @@ mod tests {
     fn mobile_packaging_retains_all_ui_languages_and_native_file_associations() {
         let root = super::super::gates::root();
         let plist = std::fs::read_to_string(root.join("packaging/mobile/app/Info.ios.plist")).unwrap();
-        let catalogs = std::fs::read_dir(root.join("crates/ui-egui/src/i18n")).unwrap();
-        assert!(plist.contains("<string>en</string>"));
-        for file in catalogs.flatten().filter(|entry| entry.path().extension().is_some_and(|ext| ext == "tsv")) {
-            let language = file.path().file_stem().unwrap().to_string_lossy().into_owned();
+        let languages = super::ui_languages(&root).unwrap();
+        for language in languages {
             assert!(plist.to_lowercase().contains(&format!("<string>{language}</string>")), "missing iOS language {language}");
         }
         let config: serde_json::Value =
