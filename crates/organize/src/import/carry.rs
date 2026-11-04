@@ -1,5 +1,5 @@
 use super::copy::Copier;
-use super::{Dict, Document, HashMap, HashSet, ObjRef, Object, OrganizeError, name_tree_entries};
+use super::{Dict, Document, HashMap, ObjRef, Object, OrganizeError, name_tree_entries};
 
 /// Copy a source's document-level attachments (`/Names /EmbeddedFiles`) into `dst`.
 pub(super) fn collect_attachments(dst: &mut Document, src: &Document, out: &mut Vec<(Vec<u8>, Object)>) -> Result<(), OrganizeError> {
@@ -12,7 +12,7 @@ pub(super) fn collect_attachments(dst: &mut Document, src: &Document, out: &mut 
         return Ok(());
     };
     let mut entries = Vec::new();
-    name_tree_entries(src, &tree, 0, &mut HashSet::new(), &mut entries);
+    name_tree_entries(src, &tree, 0, &mut crate::import::Seen::new(), &mut entries);
     let mut copier = Copier::new(src, HashMap::new(), HashMap::new());
     for (k, v) in entries {
         let v = copier.copy_value(dst, &v, None)?;
@@ -29,13 +29,21 @@ pub(crate) fn set_attachments(dst: &mut Document, mut entries: Vec<(Vec<u8>, Obj
     // Names are compared and numbered as text: a key written as UTF-16 (a name with an accent
     // or Chinese letters) must not get ASCII bytes appended to it.
     let mut seen = std::collections::HashSet::new();
+    // `seen` only grows, so every number below the last one handed out for a name is still
+    // taken: the next duplicate resumes there instead of trying them all again.
+    let mut next: HashMap<String, u32> = HashMap::new();
     for (k, _) in entries.iter_mut() {
         let base = pdfcraft_cos::PdfString::literal(k.clone()).to_text();
         let mut text = base.clone();
-        let mut n = 2;
-        while !seen.insert(text.clone()) {
-            text = format!("{base} ({n})");
-            n += 1;
+        if !seen.insert(text.clone()) {
+            let n = next.entry(base.clone()).or_insert(2);
+            loop {
+                text = format!("{base} ({n})");
+                *n = n.saturating_add(1);
+                if seen.insert(text.clone()) {
+                    break;
+                }
+            }
         }
         if text != base {
             *k = pdfcraft_cos::PdfString::text(&text).bytes;

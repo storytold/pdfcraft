@@ -2821,8 +2821,9 @@ fn extract_still_prunes_separate_resources_when_many_pages_share_a_type3_font() 
 #[test]
 fn extract_type3_shared_xobjects_matches_poppler_pixels() {
     let pdftoppm = pdfcraft_oracle::or_skip!(pdfcraft_oracle::pdftoppm());
-    let dir = std::env::temp_dir().join(format!("pdfcraft-type3-extract-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    // A fresh private directory: a predictable shared path could be prepared by another user.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
     let fixtures = [
         doc_type3_shared_xobjects("<< /XObject 6 0 R >>"),
         doc_type3_shared_xobjects("5 0 R"),
@@ -2846,7 +2847,7 @@ fn extract_type3_shared_xobjects_matches_poppler_pixels() {
         assert!(before.iter().filter(|&&v| v < 200).count() > 2500, "the source contains a drawn glyph");
         assert_eq!(after, before, "extraction must keep every rendered pixel in fixture {i}");
     }
-    std::fs::remove_dir_all(dir).unwrap();
+    tmp.close().unwrap();
 }
 
 /// A page listed twice whose widget's field keeps `/Kids` as an array object of its own: the
@@ -3812,4 +3813,61 @@ fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
     let mut ctrl_names = xobject_names(&extracted_ctrl, 0);
     ctrl_names.sort();
     assert_eq!(ctrl_names, [b"ImHidden".to_vec(), b"ImShown".to_vec()]);
+}
+
+/// Many attachments of one name are numbered in one pass: each duplicate resumes after the last
+/// number handed out instead of trying every number below it again (CodeRabbit).
+#[test]
+fn duplicate_attachment_names_are_numbered_in_linear_work() {
+    let mut dst = Document::new_empty();
+    let entries: Vec<(Vec<u8>, Object)> = (0..2_000).map(|_| (b"a.txt".to_vec(), Object::Null)).collect();
+    crate::import::set_attachments(&mut dst, entries).unwrap();
+    let names = crate::attachment_keys(&dst);
+    assert_eq!(names.len(), 2_000);
+    let mut seen = std::collections::HashSet::new();
+    assert!(names.iter().all(|n| seen.insert(n.clone())), "names are unique");
+}
+
+/// A name tree whose nodes share one indirect `/Kids` array of direct children reads it once,
+/// not once per node: a cyclic or shared array would otherwise be read exponentially often.
+#[test]
+fn a_shared_name_tree_kids_array_is_read_once() {
+    let mut doc = Document::new_empty();
+    let mut leaf = Dict::new();
+    leaf.set(b"Names".to_vec(), Object::Array(vec![Object::String(pdfcraft_cos::PdfString::literal(b"k".to_vec())), Object::Int(1)]));
+    let kids = doc.add(Object::Array(vec![Object::Dict(leaf); 1]));
+    // 30 levels of nodes, each pointing at the same array of 2 direct nodes that point back at it.
+    let mut node = Dict::new();
+    node.set(b"Kids".to_vec(), Object::Ref(kids));
+    let inner = Object::Dict(node.clone());
+    doc.set(kids, Object::Array(vec![inner.clone(), inner]));
+    let mut out = Vec::new();
+    crate::take_work();
+    crate::import::name_tree_entries(&doc, &Object::Dict(node), 0, &mut crate::import::Seen::new(), &mut out);
+    assert!(crate::take_work() <= 4, "the shared array was read again");
+}
+
+/// The same for the import's name-tree walk: a shared `/Kids` array first met past the depth
+/// limit is read again from a shallower node.
+#[test]
+fn a_shared_name_tree_kids_array_first_met_deep_is_read_again_shallower() {
+    let mut doc = Document::new_empty();
+    let mut leaf = Dict::new();
+    leaf.set(b"Names".to_vec(), Object::Array(vec![Object::String(pdfcraft_cos::PdfString::literal(b"deep".to_vec())), Object::Int(7)]));
+    let shared = doc.add(Object::Array(vec![Object::Dict(leaf)]));
+    let mut node = Dict::new();
+    node.set(b"Kids".to_vec(), Object::Ref(shared));
+    // The innermost node sits at depth 32: it reads the array, whose entries are past the limit.
+    for _ in 0..31 {
+        let mut up = Dict::new();
+        up.set(b"Kids".to_vec(), Object::Array(vec![Object::Dict(node)]));
+        node = up;
+    }
+    let mut near = Dict::new();
+    near.set(b"Kids".to_vec(), Object::Ref(shared));
+    let mut root = Dict::new();
+    root.set(b"Kids".to_vec(), Object::Array(vec![Object::Dict(node), Object::Dict(near)]));
+    let mut out = Vec::new();
+    crate::import::name_tree_entries(&doc, &Object::Dict(root), 0, &mut crate::import::Seen::new(), &mut out);
+    assert_eq!(out, vec![(b"deep".to_vec(), Object::Int(7))]);
 }

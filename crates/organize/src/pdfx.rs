@@ -16,6 +16,9 @@ use crate::OrganizeError;
 
 /// Decoding limit for an output profile or an XMP packet (ICC profiles are a few MB at most).
 const MAX_DECODED: usize = 64 << 20;
+/// Most output intents read: each may carry a profile of [`MAX_DECODED`] bytes, decoded and
+/// kept to compare; a real file declares one or two.
+const MAX_INTENTS: usize = 8;
 
 /// What a document declares about the print standard it meets.
 #[derive(Debug, Default)]
@@ -24,6 +27,9 @@ pub(crate) struct PrintStandard {
     intents: Option<Object>,
     /// Each output intent's type (`/S`), printing condition and decoded profile, to compare.
     conditions: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>,
+    /// More than [`MAX_INTENTS`] distinct intents: `conditions` holds only the first ones, so
+    /// they can't show that two documents declare the same.
+    truncated: bool,
     /// `GTS_PDFXVersion` ("PDF/X-4"), from the document information or else the XMP metadata.
     version: Option<String>,
     /// `GTS_PDFXConformance` ("PDF/X-1a:2001"), which PDF/X-1a and PDF/X-3 add.
@@ -40,8 +46,12 @@ impl PrintStandard {
         let catalog = doc.root().and_then(|r| doc.get(r).as_dict().cloned()).unwrap_or_default();
         let intents = catalog.get(b"OutputIntents").cloned();
         let list = intents.as_ref().and_then(|o| doc.resolve(o).as_array().cloned()).unwrap_or_default();
-        let conditions = list
-            .iter()
+        let mut seen = std::collections::HashSet::new();
+        // One intent object listed again is the same declaration: read it once.
+        let mut distinct = list.iter().filter(|oi| oi.as_ref().is_none_or(|r| seen.insert(r)));
+        let conditions: Vec<_> = distinct
+            .by_ref()
+            .take(MAX_INTENTS)
             .map(|oi| {
                 let oi = doc.resolve(oi);
                 let d = oi.as_dict();
@@ -55,6 +65,7 @@ impl PrintStandard {
                 (kind, id.unwrap_or_default(), profile.unwrap_or_default())
             })
             .collect();
+        let truncated = distinct.next().is_some();
         let xmp = metadata(doc, &catalog);
         let declared = |info_key: &str, xmp_key: &str| {
             crate::info(doc, info_key)
@@ -66,6 +77,7 @@ impl PrintStandard {
         Self {
             intents,
             conditions,
+            truncated,
             version: declared("GTS_PDFXVersion", "pdfxid:GTS_PDFXVersion"),
             conformance: declared("GTS_PDFXConformance", "pdfxid:GTS_PDFXConformance"),
             trapped,
@@ -80,8 +92,14 @@ impl PrintStandard {
 
     /// Whether `other` declares the same standard: the same version and trapping, and the same
     /// output intents (type, printing condition and profile).
+    /// Past [`MAX_INTENTS`] the lists aren't fully read: they are never taken for the same.
     pub(crate) fn same_as(&self, other: &Self) -> bool {
-        self.conditions == other.conditions && self.version == other.version && self.conformance == other.conformance && self.trapped == other.trapped
+        !self.truncated
+            && !other.truncated
+            && self.conditions == other.conditions
+            && self.version == other.version
+            && self.conformance == other.conformance
+            && self.trapped == other.trapped
     }
 }
 
@@ -199,4 +217,44 @@ pub(crate) fn esc(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_INTENTS, PrintStandard};
+    use pdfcraft_cos::{Dict, Document, Object, PdfString};
+
+    fn with_intents(ids: &[&str]) -> Document {
+        let mut doc = Document::new_empty();
+        let intents = ids
+            .iter()
+            .map(|id| {
+                let mut oi = Dict::new();
+                oi.set(b"S".to_vec(), Object::name("GTS_PDFX"));
+                oi.set(b"OutputConditionIdentifier".to_vec(), Object::String(PdfString::literal(id.as_bytes().to_vec())));
+                Object::Ref(doc.add(Object::Dict(oi)))
+            })
+            .collect();
+        let mut catalog = Dict::new();
+        catalog.set(b"Type".to_vec(), Object::name("Catalog"));
+        catalog.set(b"OutputIntents".to_vec(), Object::Array(intents));
+        let catalog = doc.add(Object::Dict(catalog));
+        doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+        doc
+    }
+
+    /// Two documents agreeing on the first MAX_INTENTS output intents but not on the next one
+    /// don't declare the same standard; ones within the bound still compare.
+    #[test]
+    fn intents_past_the_bound_are_never_taken_for_the_same() {
+        let first: Vec<String> = (0..MAX_INTENTS).map(|i| format!("cond{i}")).collect();
+        let mut a_ids: Vec<&str> = first.iter().map(String::as_str).collect();
+        let mut b_ids = a_ids.clone();
+        a_ids.push("A");
+        b_ids.push("B");
+        let (a, b) = (PrintStandard::of(&with_intents(&a_ids)), PrintStandard::of(&with_intents(&b_ids)));
+        assert!(!a.same_as(&b));
+        let within: Vec<&str> = first.iter().map(String::as_str).collect();
+        assert!(PrintStandard::of(&with_intents(&within)).same_as(&PrintStandard::of(&with_intents(&within))));
+    }
 }
