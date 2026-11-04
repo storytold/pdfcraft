@@ -19,10 +19,24 @@ fn harness() -> Harness<'static, PdfCraftApp> {
     harness_bytes(FIXTURE)
 }
 
+/// A harness whose session stamps every save with the same fixed time, for tests that compare
+/// two saves byte for byte: each save writes /ModDate, so with the system clock the bytes differ
+/// whenever the saves fall in different seconds (#6066).
+fn harness_fixed_clock() -> Harness<'static, PdfCraftApp> {
+    harness_with_clock(FIXTURE, Some(|| 1_700_000_000))
+}
+
 fn harness_bytes(fixture: &[u8]) -> Harness<'static, PdfCraftApp> {
+    harness_with_clock(fixture, None)
+}
+
+fn harness_with_clock(fixture: &[u8], clock: Option<fn() -> i64>) -> Harness<'static, PdfCraftApp> {
     let fixture = fixture.to_vec();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        if let Some(clock) = clock {
+            app.session = std::mem::take(&mut app.session).with_clock(clock);
+        }
         app.set_option("language", "en").unwrap();
         app.open_bytes("form.pdf", None, fixture.clone()).unwrap();
         app.set_option("left", "closed").unwrap();
@@ -1843,7 +1857,8 @@ fn fill_key(h: &mut Harness<'static, PdfCraftApp>, key: egui::Key) {
 fn fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels() {
     let shots = std::env::var_os("PDFCRAFT_FILL_SIGN_SHOTS").is_some();
     let _gpu = shots.then(gpu);
-    let mut h = harness();
+    // The test ends by comparing two saves byte for byte, so both must stamp the same /ModDate.
+    let mut h = harness_fixed_clock();
     assert!(h.state_mut().execute("sign.fill.text"));
     click(&mut h, 50.0, 300.0);
     let initial_height = type_box_rect(&h).height();
