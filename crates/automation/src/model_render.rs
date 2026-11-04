@@ -1,4 +1,4 @@
-//! `model3d_render`: a page's 3D model (ISO 32000-2 §13.6) drawn to a PNG, without a viewer.
+//! `model_render`: a page's 3D model (ISO 32000-2 §13.6) drawn to a PNG, without a viewer.
 
 use pdfcraft_engine::model3d::Model3dKind;
 use pdfcraft_prc::PrcFile;
@@ -18,7 +18,7 @@ pub(crate) const MAX_SIDE: u32 = 4096;
 const DEFAULT_DIRECTION: [f64; 3] = [-1.0, 1.0, -1.0];
 
 impl Automation {
-    pub(crate) fn model3d_render(&mut self, a: &Args) -> Result<Vec<Content>> {
+    pub(crate) fn model_render(&mut self, a: &Args) -> Result<Vec<Content>> {
         let page = self.page(a)?;
         let width = side(a, "width")?;
         let height = side(a, "height")?;
@@ -30,9 +30,9 @@ impl Automation {
             None => *found.first().ok_or_else(|| failed(format!("page {} has no 3D model", page.saturating_add(1))))?,
             Some(n) => {
                 let pos = usize::try_from(n).ok().and_then(|n| n.checked_sub(1)).ok_or_else(|| Args::wrong("model", "a positive integer"))?;
-                *found.get(pos).ok_or_else(|| {
-                    ToolError::InvalidArgs(format!("page {} has {} 3D models, not {n}", page.saturating_add(1), found.len()))
-                })?
+                *found
+                    .get(pos)
+                    .ok_or_else(|| ToolError::InvalidArgs(format!("page {} has {} 3D models, not {n}", page.saturating_add(1), found.len())))?
             }
         };
         let model = doc.model_3d(page, index).map_err(failed)?;

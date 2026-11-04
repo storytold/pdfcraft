@@ -46,7 +46,7 @@ fn a_plain_3d_stream_is_read_through_its_filters() {
 
 #[test]
 fn a_3dref_leads_to_the_stream_it_names() {
-    let d = doc("[4 0 R]", &[annot("<< /Type /3DRef /3DD 5 0 R >>"), stream("/Type /3D /Subtype /PRC", b"PRC")]);
+    let d = doc("[4 0 R]", &[annot("<< /Type /3DRef /3D 5 0 R >>"), stream("/Type /3D /Subtype /PRC", b"PRC")]);
     assert_eq!(model_3d(&d, 0, 0).map(|m| m.data), Ok(b"PRC".to_vec()));
 }
 
@@ -69,8 +69,12 @@ fn an_unknown_format_is_invalid() {
 }
 
 #[test]
-fn a_cycle_of_3drefs_ends() {
-    let d = doc("[4 0 R]", &[annot("5 0 R"), b"<< /Type /3DRef /3DD 6 0 R >>".to_vec(), b"<< /Type /3DRef /3DD 5 0 R >>".to_vec()]);
+fn a_3dref_is_followed_once_and_only_to_a_stream() {
+    // A reference naming another reference, or one that names itself, is damage: no stream.
+    let d = doc("[4 0 R]", &[annot("5 0 R"), b"<< /Type /3DRef /3D 6 0 R >>".to_vec(), b"<< /Type /3DRef /3D 5 0 R >>".to_vec()]);
+    assert!(matches!(model_3d(&d, 0, 0), Err(AnnotError::Invalid(m)) if m.contains("no 3D stream")));
+    // The stream is under `/3D`; a `/3DD` inside the reference is not the standard's key.
+    let d = doc("[4 0 R]", &[annot("<< /Type /3DRef /3DD 5 0 R >>"), stream("/Type /3D /Subtype /PRC", b"PRC")]);
     assert!(matches!(model_3d(&d, 0, 0), Err(AnnotError::Invalid(m)) if m.contains("no 3D stream")));
 }
 

@@ -1,4 +1,4 @@
-//! `model3d_render` draws a page's 3D model headlessly: a synthetic PDF holding a synthetic PRC.
+//! `model_render` draws a page's 3D model headlessly: a synthetic PDF holding a synthetic PRC.
 
 use std::path::PathBuf;
 
@@ -69,32 +69,32 @@ fn a_prc_model_is_drawn_over_the_background() {
     let (_dir, mut a) = setup("prc");
     let doc = open(&mut a, "prc.pdf");
     let args = json!({ "doc": doc, "page": 1, "width": 64, "height": 48, "direction": [0, 0, -1], "perspective": false });
-    let out = a.call("model3d_render", &args).unwrap();
+    let out = a.call("model_render", &args).unwrap();
     let Content::Png { data, width, height } = &out[0] else { panic!("expected a PNG") };
     assert_eq!((*width, *height), (64, 48));
     assert_eq!(rgb(data, 0, 0), [255, 255, 255], "the corner is background");
     assert_eq!(rgb(data, 32, 24), [190, 192, 200], "the centre is the triangle, lit head on");
     // In perspective the headlight meets the face at a slight angle, so only not-background holds.
-    let out = a.call("model3d_render", &json!({ "doc": doc, "page": 1, "width": 64, "height": 48, "direction": [0, 0, -1] })).unwrap();
+    let out = a.call("model_render", &json!({ "doc": doc, "page": 1, "width": 64, "height": 48, "direction": [0, 0, -1] })).unwrap();
     let Content::Png { data, .. } = &out[0] else { panic!("expected a PNG") };
     assert_ne!(rgb(data, 32, 24), [255, 255, 255], "the centre is drawn in perspective too");
     // The same model named explicitly, and the default isometric view, both draw.
-    assert!(a.call("model3d_render", &json!({ "doc": doc, "page": 1, "model": 1 })).is_ok());
+    assert!(a.call("model_render", &json!({ "doc": doc, "page": 1, "model": 1 })).is_ok());
 }
 
 #[test]
 fn a_u3d_model_or_a_missing_one_is_a_clear_error() {
     let (_dir, mut a) = setup("u3d");
     let doc = open(&mut a, "u3d.pdf");
-    let err = a.call("model3d_render", &json!({ "doc": doc, "page": 1 })).unwrap_err().to_string();
+    let err = a.call("model_render", &json!({ "doc": doc, "page": 1 })).unwrap_err().to_string();
     assert!(err.contains("U3D"), "{err}");
     let doc = open(&mut a, "prc.pdf");
-    let err = a.call("model3d_render", &json!({ "doc": doc, "page": 1, "model": 2 })).unwrap_err().to_string();
+    let err = a.call("model_render", &json!({ "doc": doc, "page": 1, "model": 2 })).unwrap_err().to_string();
     assert!(err.contains("has 1 3D models, not 2"), "{err}");
     for bad in [json!({ "direction": [0, 0, 0] }), json!({ "direction": [1, 2] }), json!({ "width": 0 }), json!({ "height": 5000 })] {
         let mut args = json!({ "doc": doc, "page": 1 });
         args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
-        assert!(a.call("model3d_render", &args).is_err(), "{bad}");
+        assert!(a.call("model_render", &args).is_err(), "{bad}");
     }
 }
 
@@ -106,7 +106,7 @@ fn a_model_outside_the_root_is_never_opened_to_be_drawn() {
         assert!(a.call("doc_open", &json!({ "path": path })).is_err(), "{path} lies outside the root");
     }
     // The tool takes no path of its own: only a document opened inside the root reaches it.
-    assert!(a.call("model3d_render", &json!({ "doc": 1, "page": 1 })).is_err());
+    assert!(a.call("model_render", &json!({ "doc": 1, "page": 1 })).is_err());
     let doc = open(&mut a, "prc.pdf");
-    assert!(a.call("model3d_render", &json!({ "doc": doc, "page": 1 })).is_ok());
+    assert!(a.call("model_render", &json!({ "doc": doc, "page": 1 })).is_ok());
 }

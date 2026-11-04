@@ -69,7 +69,7 @@ impl Automation {
                 self.apply(&a, edit)?
             }
             "page_render" => return self.page_render(&a),
-            "model3d_render" => return self.model3d_render(&a),
+            "model_render" => return self.model_render(&a),
             "comment_image_preview" => return self.comment_image_preview(&a),
             "text_extract" => self.text_extract(&a)?,
             "text_word_count" => self.text_word_count(&a)?,

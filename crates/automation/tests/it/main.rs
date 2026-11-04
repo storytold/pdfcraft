@@ -8,7 +8,7 @@ mod batch;
 mod button_caption;
 mod form_bulk;
 mod hostile_args;
-mod model3d_render;
+mod model_render;
 mod optimize_content_boundaries;
 mod redact_after_stray_q_form;
 mod redact_text_after_q;

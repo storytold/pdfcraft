@@ -7,10 +7,6 @@ use super::{AnnotError, Dict, Document, Object};
 /// The largest decoded 3D stream [`model_3d`] reads, in bytes.
 pub const MAX_MODEL_BYTES: usize = 256 << 20;
 
-/// How many `/3DRef` dictionaries [`model_3d`] follows before giving up: the standard allows one,
-/// so a longer chain is damage, and a cycle ends here too.
-const MAX_REF_DEPTH: usize = 4;
-
 /// The format of a 3D stream, from its `/Subtype`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Model3dKind {
@@ -69,17 +65,14 @@ pub fn model_3d(doc: &Document, page: usize, index: usize) -> Result<Model3d, An
     Ok(Model3d { kind, data })
 }
 
-/// The 3D stream an annotation's `/3DD` names, through at most [`MAX_REF_DEPTH`] `/3DRef`s.
+/// What an annotation's `/3DD` names: the 3D stream itself, or the `/3D` entry of a 3D reference
+/// dictionary. A reference is followed once; the caller refuses anything that is not a stream.
 fn stream_of(doc: &Document, annot: &Dict) -> Option<std::sync::Arc<Object>> {
-    let mut obj = doc.resolve(annot.get(b"3DD")?);
-    for _ in 0..=MAX_REF_DEPTH {
-        match obj.as_ref() {
-            Object::Stream(_) => return Some(obj),
-            Object::Dict(d) if d.name(b"Type") == Some(b"3DRef") => obj = doc.resolve(d.get(b"3DD")?),
-            _ => return None,
-        }
+    let obj = doc.resolve(annot.get(b"3DD")?);
+    match obj.as_ref() {
+        Object::Dict(d) if d.name(b"Type") == Some(b"3DRef") => Some(doc.resolve(d.get(b"3D")?)),
+        _ => Some(obj),
     }
-    None
 }
 
 #[cfg(test)]
