@@ -12,6 +12,9 @@ disallowed-methods = [
     { path = "egui::Ui::radio", reason = "use radio from crates/ui-egui/src/widgets.rs, which is outlined and filled" },
     { path = "egui::Ui::radio_value", reason = "use radio_value from crates/ui-egui/src/widgets.rs, which is outlined and filled" },
     { path = "egui::RadioButton::new", reason = "use radio from crates/ui-egui/src/widgets.rs, which is outlined and filled" },
+    # roxmltree 0.21's duplicate-attribute and namespace loops are quadratic: unbounded, a 436 KB file took 156 s.
+    { path = "roxmltree::Document::parse", reason = "parse through pdfcraft_xml::parse, which bounds the parser's work before it starts" },
+    { path = "roxmltree::Document::parse_with_options", reason = "parse through pdfcraft_xml::parse, which bounds the parser's work before it starts" },
 ]
 cognitive-complexity-threshold = 30
 
