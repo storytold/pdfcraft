@@ -9363,6 +9363,42 @@ fn floating_fields_follow_their_data_whoever_writes_it() {
     assert!(after.contains("Stamp:") && !after.contains("Paid"), "a reset page-area field with no widget: {after}");
 }
 
+/// A reset gives a hidden floating field its default in every row of a repeating subform, not
+/// only the first, and each row's text shows it.
+#[test]
+fn a_reset_clears_a_floating_field_in_every_row() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="row" layout="tb"><occur min="1" max="-1"/>
+  <field name="amount" id="floatAmount" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui><value><text>none</text></value></field>
+  <draw w="5in" h="0.4in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Amount: <span xfa:embed="#floatAmount"/></p></body></exData></value></draw>
+ </subform>
+ <field name="clear" w="2in" h="0.3in"><ui><button/></ui>
+  <event activity="click"><script contentType="application/x-javascript">xfa.host.resetData();</script></event></field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><row><amount>10</amount></row><row><amount>20</amount></row></form></xfa:data></xfa:datasets>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let text = page_texts(&s, id).join(
+        "
+",
+    );
+    assert!(text.contains("Amount: 10") && text.contains("Amount: 20"), "{text}");
+    let o = s.run_javascript(id, "", Some("clear")).expect("clicks");
+    assert_eq!(o.error, None, "{o:?}");
+    let text = page_texts(&s, id).join(
+        "
+",
+    );
+    assert_eq!(text.matches("Amount: none").count(), 2, "both rows reset: {text}");
+}
+
 /// An XFA button's click script may show the attachments panel; a text field's exit script
 /// asking the same is noted on the console and ignored.
 #[test]

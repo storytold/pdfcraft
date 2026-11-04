@@ -219,6 +219,8 @@ fn sheet_roles_are_read_from_formcalc_and_from_any_ready_script() {
 <field id="fc" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script>$.rawValue = xfa.layout.sheet($) + 1</script></event></field>
 <field id="fcCase" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script>$.rawValue = xfa.layout.Sheet($) + 1</script></event></field>
 <field id="jsCase" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.Sheet(this)+1</script></event></field>
+<field id="fcCount" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script>$.rawValue = xfa.layout.SheetCount()</script></event></field>
+<field id="jsCount" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.SheetCount()</script></event></field>
 <field id="second" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui>
  <event activity="ready" ref="$form"><script contentType="application/x-javascript">this.rawValue = 0;</script></event>
  <event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.sheet(this)+1</script></event></field>
@@ -227,7 +229,12 @@ fn sheet_roles_are_read_from_formcalc_and_from_any_ready_script() {
     // FormCalc names methods case-insensitively, JavaScript does not.
     assert_eq!(
         tpl.page_roles,
-        vec![("fc".to_string(), PageRole::Number), ("fcCase".to_string(), PageRole::Number), ("second".to_string(), PageRole::Number)]
+        vec![
+            ("fc".to_string(), PageRole::Number),
+            ("fcCase".to_string(), PageRole::Number),
+            ("fcCount".to_string(), PageRole::Count),
+            ("second".to_string(), PageRole::Number)
+        ]
     );
 }
 

@@ -579,11 +579,15 @@ impl<'a, 'b> Runner<'a, 'b> {
             if by_som.contains_key(&som) || (!names.is_empty() && !names.iter().any(|n| som_matches(&som, n))) {
                 continue;
             }
-            let path = pdfcraft_xfa::data_path(self.tpl, &som);
-            if self.data.as_ref().and_then(|d| d.text_at(&path)).unwrap_or("") != default {
-                self.embedded_changed = true;
-                self.data_op(pdfcraft_xfa::DataOp::Value { path, text: default });
-                self.changes.values += 1;
+            // Every row that holds it, not only the first.
+            let names: Vec<String> = pdfcraft_xfa::data_path(self.tpl, &som).into_iter().map(|(name, _)| name).collect();
+            let paths = self.data.as_ref().map(|d| d.paths_named(&names, pdfcraft_xfa::MAX_FORM_NODES)).unwrap_or_default();
+            for path in paths {
+                if self.data.as_ref().and_then(|d| d.text_at(&path)).unwrap_or("") != default {
+                    self.embedded_changed = true;
+                    self.data_op(pdfcraft_xfa::DataOp::Value { path, text: default.clone() });
+                    self.changes.values += 1;
+                }
             }
         }
         self.invalidate();

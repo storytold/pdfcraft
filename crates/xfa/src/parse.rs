@@ -696,16 +696,18 @@ fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<No
 fn page_role(f: &Field) -> Option<PageRole> {
     // Any of its ready scripts: a field may have one that does something else first.
     f.scripts.iter().filter(|s| s.activity == "ready" || s.activity == "layoutReady").find_map(|script| {
+        // FormCalc names methods case-insensitively; JavaScript does not.
+        let text: std::borrow::Cow<str> =
+            if script.formcalc { std::borrow::Cow::Owned(script.text.to_ascii_lowercase()) } else { std::borrow::Cow::Borrowed(&script.text) };
+        let has = |name: &str| if script.formcalc { text.contains(&name.to_ascii_lowercase()) } else { text.contains(name) };
         // `this` in JavaScript, `$` in FormCalc.
         let sheet_number = || {
-            let compact: String = script.text.chars().filter(|c| !c.is_whitespace()).collect();
-            // FormCalc names methods case-insensitively; JavaScript does not.
-            let compact = if script.formcalc { compact.to_ascii_lowercase() } else { compact };
+            let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
             compact.contains("layout.sheet(this)+1") || compact.contains("layout.sheet($)+1")
         };
-        if script.text.contains("pageCount") || script.text.contains("sheetCount") {
+        if has("pageCount") || has("sheetCount") {
             Some(PageRole::Count)
-        } else if script.text.contains("layout.page(") || script.text.contains("layout.absPage(") || sheet_number() {
+        } else if has("layout.page(") || has("layout.absPage(") || sheet_number() {
             Some(PageRole::Number)
         } else {
             None

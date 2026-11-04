@@ -70,6 +70,31 @@ impl DataNode {
         Some(node)
     }
 
+    /// Every path to a node whose names, from here, are `names`: each instance of each step (a
+    /// repeating subform's rows), at most `cap` of them, in document order.
+    pub fn paths_named(&self, names: &[String], cap: usize) -> Vec<DataPath> {
+        fn walk(n: &DataNode, names: &[String], path: &mut DataPath, out: &mut Vec<DataPath>, cap: usize) {
+            let Some((first, rest)) = names.split_first() else {
+                if out.len() < cap {
+                    out.push(path.clone());
+                }
+                return;
+            };
+            for (i, c) in n.children.iter().filter(|c| &c.name == first).enumerate() {
+                if out.len() >= cap {
+                    return;
+                }
+                path.push((first.clone(), i));
+                walk(c, rest, path, out, cap);
+                path.pop();
+            }
+        }
+        let mut out = Vec::new();
+        // The depth is the length of `names`, a template's own path.
+        walk(self, names, &mut DataPath::new(), &mut out, cap);
+        out
+    }
+
     /// How many children of the node at `parent` are named `name`.
     pub fn count(&self, parent: &[(String, usize)], name: &str) -> usize {
         self.get(parent).map_or(0, |n| n.children.iter().filter(|c| c.name == name).count())
