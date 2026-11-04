@@ -1515,6 +1515,8 @@ impl Color {
             _ => return None,
         };
         Some((tints, self.opacity.clamp(0.0, 1.0)))
+    }
+
     /// PdfCraft patch (ps-export): the colour's source — the device space with its raw
     /// components, the /Separation details, or the /DeviceN marker — or `None` for every
     /// source an exporter cannot name (ICC, Cal, Lab, Indexed, pattern-embedded).
@@ -1525,11 +1527,13 @@ impl Color {
             ColorSpaceType::DeviceGray => Some(ColorSource::Gray(&self.components)),
             ColorSpaceType::DeviceRgb => Some(ColorSource::Rgb(&self.components)),
             ColorSpaceType::DeviceCmyk => Some(ColorSource::Cmyk(&self.components)),
-            ColorSpaceType::Separation(separation) => Some(ColorSource::Separation {
+            // A tint transform that cannot be read (patch 55) is not one an exporter can
+            // replay: such a separation reports no source, and the RGBA approximation draws it.
+            ColorSpaceType::Separation(separation) => separation.tint_transform.as_ref().map(|tint_transform| ColorSource::Separation {
                 colorant: &separation.name,
                 tint: &self.components,
                 alternate: separation.alternate_space.device_space(),
-                tint_transform: &separation.tint_transform,
+                tint_transform,
             }),
             ColorSpaceType::DeviceN(_) => Some(ColorSource::DeviceN),
             _ => None,

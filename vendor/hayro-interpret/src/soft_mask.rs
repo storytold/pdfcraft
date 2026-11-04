@@ -229,6 +229,7 @@ impl<'a> SoftMask<'a> {
             transfer_function: r.transfer_function.clone(),
             settings: r.settings.clone(),
             background: r.background.clone(),
+            luminosity_in_device_cmyk: r.luminosity_in_device_cmyk,
             xref: r.xref,
             nesting_depth: r.nesting_depth,
         }))

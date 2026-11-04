@@ -328,9 +328,10 @@ union). Detail and script notes: [localization-parity.md](docs/localization-pari
 | Korean | `ko` | 0% | none |
 | Vietnamese | `vi` | 100% of current union | partial (dialogs / tooltips; no help) |
 
-Also shipped: Traditional Chinese, Russian, Bulgarian, Telugu, Hungarian, Ukrainian, Italian,
-Kazakh, Polish, Slovenian, Greek, Turkish, Lithuanian and Czech (menus only): **14 more catalogs**
-(23 interface languages including English).
+Also shipped: Traditional Chinese, Czech, Russian, Kazakh, Bulgarian, Telugu, Hungarian,
+Ukrainian, Italian, Central Kurdish, Persian, Polish, Slovene, Greek, Turkish, Lithuanian,
+Finnish, Albanian, Thai, Catalan, Romanian, Lao and Norwegian: **23 more catalogs** (35
+interface languages including English, the full registry).
 
 ## Upcoming
 
