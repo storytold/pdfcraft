@@ -550,13 +550,14 @@ impl<'a, 'b> Runner<'a, 'b> {
         } else {
             Some(by_som.iter().filter(|(som, _)| names.iter().any(|n| som_matches(som, n))).map(|(_, f)| f.clone()).collect())
         };
-        if listed.as_ref().is_some_and(Vec::is_empty) {
-            return Ok(());
+        // Names no widget answers to may still name a floating field (below).
+        let widgets = !listed.as_ref().is_some_and(Vec::is_empty);
+        if widgets {
+            pdfcraft_forms::reset(self.doc, listed.as_deref()).map_err(|e| e.to_string())?;
         }
-        pdfcraft_forms::reset(self.doc, listed.as_deref()).map_err(|e| e.to_string())?;
         self.fields = None;
         let infos = self.fields().clone();
-        for (som, name) in &by_som {
+        for (som, name) in by_som.iter().filter(|_| widgets) {
             if listed.as_ref().is_some_and(|l| !l.contains(name)) {
                 continue;
             }
@@ -569,6 +570,19 @@ impl<'a, 'b> Runner<'a, 'b> {
             if self.data.as_ref().and_then(|d| d.text_at(&path)).unwrap_or("") != text {
                 self.embedded_changed |= pdfcraft_xfa::path_is_embedded(self.tpl, &path);
                 self.data_op(pdfcraft_xfa::DataOp::Value { path, text });
+                self.changes.values += 1;
+            }
+        }
+        // A floating field without a widget (a hidden one, as forms place them) goes back to
+        // its default too, and the text that embeds it shows that.
+        for (som, default) in pdfcraft_xfa::embedded_fields(self.tpl) {
+            if by_som.contains_key(&som) || (!names.is_empty() && !names.iter().any(|n| som_matches(&som, n))) {
+                continue;
+            }
+            let path = pdfcraft_xfa::data_path(self.tpl, &som);
+            if self.data.as_ref().and_then(|d| d.text_at(&path)).unwrap_or("") != default {
+                self.embedded_changed = true;
+                self.data_op(pdfcraft_xfa::DataOp::Value { path, text: default });
                 self.changes.values += 1;
             }
         }
@@ -789,8 +803,9 @@ fn collect_fields(n: &FormNode, out: &mut Vec<(String, String, String, String)>,
     }
 }
 
-/// Reflow a laid-out XFA form when an edited multiline field can grow, or an edited text field
-/// is embedded in rich text (a floating field, whose value that text shows). The datasets must
+/// Reflow a laid-out XFA form when an edited multiline field can grow, or an edited text field,
+/// choice list or check box is embedded in rich text (a floating field, whose value that text
+/// shows). The datasets must
 /// already hold the final values, including calculation results. Fixed-height fields keep
 /// their existing geometry; forms without scripts parse their template only when needed.
 /// `Some` means pages/widgets were rebuilt and the caller must fully refresh its snapshot.
@@ -805,12 +820,30 @@ pub(crate) fn relayout_changed_text(
     let current = &*doc;
     let mut changed = before
         .iter()
-        .filter(|f| f.kind == pdfcraft_forms::FieldKind::Text)
+        .filter(|f| {
+            use pdfcraft_forms::FieldKind as K;
+            matches!(f.kind, K::Text | K::Combo | K::List | K::CheckBox)
+        })
         .filter_map(|f| {
             let object = current.get(f.obj);
             let dict = object.as_dict()?;
-            let value = dict.get(b"V").and_then(|v| current.resolve(v).as_string().map(|s| s.to_text())).unwrap_or_default();
-            if f.value.first().map_or("", String::as_str) == value {
+            // Every value: a list box's picks are an array, a check box's state a name (Off for
+            // none, as the field's value has none).
+            let values: Vec<String> = match dict.get(b"V").map(|v| current.resolve(v)).as_deref() {
+                Some(pdfcraft_cos::Object::Array(items)) => {
+                    items.iter().filter_map(|i| current.resolve(i).as_string().map(|s| s.to_text())).collect()
+                }
+                Some(pdfcraft_cos::Object::Name(n)) if n.as_slice() == b"Off" => Vec::new(),
+                Some(pdfcraft_cos::Object::Name(n)) => vec![String::from_utf8_lossy(n).into_owned()],
+                Some(v) => v.as_string().map(|s| s.to_text()).into_iter().collect(),
+                None => Vec::new(),
+            };
+            let unchanged = if f.kind == pdfcraft_forms::FieldKind::Text {
+                f.value.first().map_or("", String::as_str) == values.first().map_or("", String::as_str)
+            } else {
+                f.value == values
+            };
+            if unchanged {
                 return None;
             }
             dict.get(pdfcraft_xfa::SOM_KEY).and_then(|s| current.resolve(s).as_string().map(|s| s.to_text()))

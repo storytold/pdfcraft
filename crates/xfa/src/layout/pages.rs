@@ -38,7 +38,7 @@ impl Layouter<'_> {
                     let shown = if at == src.path {
                         std::borrow::Cow::Borrowed(src.value.as_str())
                     } else {
-                        super::common::data_value(self.data, &at).map_or(std::borrow::Cow::Borrowed(src.default.as_str()), std::borrow::Cow::Owned)
+                        std::borrow::Cow::Owned(src.shown(super::common::data_value(self.data, &at)))
                     };
                     text::prefix(&shown, max).to_string()
                 }

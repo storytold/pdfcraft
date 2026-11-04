@@ -672,6 +672,17 @@ pub fn field_is_embedded(tpl: &Template, som: &str) -> bool {
     !tpl.embedded_paths.is_empty() && path_is_embedded(tpl, &data_path(tpl, som))
 }
 
+/// The fields rich text embeds, by the SOM path the layout gives them (a repeating subform's
+/// first instance), with their template defaults: what a reset gives a floating field that has
+/// no widget of its own.
+pub fn embedded_fields(tpl: &Template) -> Vec<(String, String)> {
+    crate::data::fields_with_ids(tpl)
+        .into_iter()
+        .filter(|(id, _, _)| tpl.embedded.contains(*id))
+        .map(|(_, som, f)| (som, f.value.plain().unwrap_or_default()))
+        .collect()
+}
+
 /// Does `path` hold the data of a field embedded in rich text, in any instance of a repeating
 /// subform? See [`field_is_embedded`].
 pub fn path_is_embedded(tpl: &Template, path: &crate::DataPath) -> bool {

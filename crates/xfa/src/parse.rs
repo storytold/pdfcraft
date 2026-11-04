@@ -699,6 +699,8 @@ fn page_role(f: &Field) -> Option<PageRole> {
         // `this` in JavaScript, `$` in FormCalc.
         let sheet_number = || {
             let compact: String = script.text.chars().filter(|c| !c.is_whitespace()).collect();
+            // FormCalc names methods case-insensitively; JavaScript does not.
+            let compact = if script.formcalc { compact.to_ascii_lowercase() } else { compact };
             compact.contains("layout.sheet(this)+1") || compact.contains("layout.sheet($)+1")
         };
         if script.text.contains("pageCount") || script.text.contains("sheetCount") {

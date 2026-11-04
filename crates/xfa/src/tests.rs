@@ -217,12 +217,18 @@ fn an_embedded_sheet_number_counts_the_pages() {
 fn sheet_roles_are_read_from_formcalc_and_from_any_ready_script() {
     let tpl = r#"<template><subform name="form" layout="tb">
 <field id="fc" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script>$.rawValue = xfa.layout.sheet($) + 1</script></event></field>
+<field id="fcCase" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script>$.rawValue = xfa.layout.Sheet($) + 1</script></event></field>
+<field id="jsCase" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.Sheet(this)+1</script></event></field>
 <field id="second" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui>
  <event activity="ready" ref="$form"><script contentType="application/x-javascript">this.rawValue = 0;</script></event>
  <event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.sheet(this)+1</script></event></field>
 </subform></template>"#;
     let (tpl, _) = parse(tpl).unwrap();
-    assert_eq!(tpl.page_roles, vec![("fc".to_string(), PageRole::Number), ("second".to_string(), PageRole::Number)]);
+    // FormCalc names methods case-insensitively, JavaScript does not.
+    assert_eq!(
+        tpl.page_roles,
+        vec![("fc".to_string(), PageRole::Number), ("fcCase".to_string(), PageRole::Number), ("second".to_string(), PageRole::Number)]
+    );
 }
 
 /// The data paths of embedded fields are the ones scripts write: a page area's field under the
@@ -255,7 +261,8 @@ fn embedded_fields_are_known_by_the_data_paths_scripts_write() {
 
 /// Text embedding a field shows the value the data gives it: each row of a repeating subform
 /// its own row's, a page area's field the value scripts write under the area, a multi-select
-/// list its picks; a row without data shows the template's default, not the first row's value.
+/// list its picks, a date in its display picture (XFA 3.3 p. 221) in every row; a row without
+/// data shows the template's default, not the first row's value.
 #[test]
 fn embedded_text_shows_each_instances_data() {
     let span = |id: &str| format!(r##"<span xfa:embed="#{id}" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"##);
@@ -271,17 +278,20 @@ fn embedded_text_shows_each_instances_data() {
 </pageArea></pageSet>
 <subform name="row" layout="tb"><occur min="1" max="-1" initial="3"/>
  <field name="amount" id="amount" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><value><text>none</text></value></field>
+ <field name="due" id="due" presence="hidden" w="1in" h="0.2in"><ui><dateTimeEdit/></ui><format><picture>date{{MM/DD/YYYY}}</picture></format></field>
+ <draw w="4in" h="0.3in"><value>{}</value></draw>
  <draw w="4in" h="0.3in"><value>{}</value></draw>
 </subform>
 <field name="picks" id="picks" presence="hidden" w="1in" h="0.6in"><ui><choiceList open="multiSelect"/></ui><items><text>A</text><text>B</text></items></field>
 <draw w="4in" h="0.6in"><value>{}</value></draw>
 </subform></template>
 <xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data>
-<form><row><amount>10</amount></row><row><amount>20</amount></row><row/><picks><value>A</value><value>B</value></picks></form>
+<form><row><amount>10</amount><due>2026-11-04</due></row><row><amount>20</amount><due>2026-12-25</due></row><row/><picks><value>A</value><value>B</value></picks></form>
 <front><stamp>Paid</stamp></front>
 </xfa:data></xfa:datasets></xdp:xdp>"#,
         rich("Stamp", "stamp"),
         rich("Amount", "amount"),
+        rich("Due", "due"),
         rich("Picks", "picks")
     );
     let (tpl, _) = parse(&xml).unwrap();
@@ -289,7 +299,7 @@ fn embedded_text_shows_each_instances_data() {
     let form = crate::layout::layout(&tpl, Some(&data)).unwrap();
     let all: Vec<String> = form.pages.iter().flat_map(texts).collect();
     let joined = all.join(" | ");
-    for want in ["Stamp Paid", "Amount 10", "Amount 20", "Amount none", "Picks A"] {
+    for want in ["Stamp Paid", "Amount 10", "Amount 20", "Amount none", "Due 11/04/2026", "Due 12/25/2026", "Picks A"] {
         assert!(joined.contains(want), "{want} in {joined}");
     }
     assert!(joined.contains('B'), "both picks: {joined}");

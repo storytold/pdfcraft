@@ -9295,8 +9295,8 @@ fn text_shows_the_values_scripts_give_its_floating_fields() {
 
 /// Text that embeds a field follows its data whoever writes it (XFA 3.3 pp. 221–222): a
 /// script writing another field bound to the same data, a script writing a page area's field,
-/// a typed value in a plain one-line field, and a reset (of a drop-down list, which no text
-/// edit lays out again).
+/// a typed value in a plain one-line field, a pick in a drop-down list, and a reset (of a
+/// drop-down list, and of a page area's field that has no widget).
 #[test]
 fn floating_fields_follow_their_data_whoever_writes_it() {
     let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
@@ -9352,11 +9352,15 @@ fn floating_fields_follow_their_data_whoever_writes_it() {
     assert!(text(&s).contains("Pick: B"), "{}", text(&s));
     click(&mut s, "clearPick");
     assert!(text(&s).contains("Pick: A"), "a reset drop-down list: {}", text(&s));
+    let pick = s.get(id).unwrap().form.iter().find(|f| f.name.ends_with("Pick")).map(|f| f.name.clone()).expect("the Pick field");
+    s.apply(id, Edit::SetFieldValue { name: pick, value: FieldValue::Choice(vec!["B".into()]) }).unwrap();
+    assert!(text(&s).contains("Pick: B"), "a picked value: {}", text(&s));
     click(&mut s, "pickB");
     click(&mut s, "clear");
     let after = text(&s);
     assert!(after.contains("Edit: start") && !after.contains("Shared"), "reset: {after}");
     assert!(after.contains("Pick: A"), "a reset drop-down list: {after}");
+    assert!(after.contains("Stamp:") && !after.contains("Paid"), "a reset page-area field with no widget: {after}");
 }
 
 /// An XFA button's click script may show the attachments panel; a text field's exit script
