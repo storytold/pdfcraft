@@ -268,15 +268,20 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, over_text: impl Fn(Pos2) -> bo
 }
 
 /// A finished text selection with the Redact tool becomes a mark.
+/// Across pages: a mark on each page it covers, once all are read; refused when one of them could
+/// not be read, rather than leave it unmarked.
 pub(crate) fn after_text(resp: &egui::Response, page: usize, info: &DocInfo, view: &mut DocView) {
-    if !(resp.drag_stopped() || resp.double_clicked()) || view.redact_drag.is_some() {
+    if view.redact_drag.is_some() {
         return;
     }
-    // Once, from whichever of the selection's pages is drawn; a mark on each page it covers.
-    let marks = view.selection_quads(info);
-    if marks.iter().any(|(p, _)| *p == page) {
-        view.clear_selection();
-        view.pending_redaction = marks;
+    let finished = resp.drag_stopped() || resp.double_clicked();
+    match view.tool_marks(crate::QuickTool::Redact, finished, Some(page), true, info) {
+        crate::canvas::ToolMarks::Marks(marks) => {
+            view.clear_selection();
+            view.pending_redaction = marks;
+        }
+        crate::canvas::ToolMarks::Unreadable => view.redaction_refused = true,
+        crate::canvas::ToolMarks::None => {}
     }
 }
 

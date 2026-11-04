@@ -90,10 +90,9 @@ impl PdfCraftApp {
             || spec.needs == commands::Needs::Undo && self.page_typing_unapplied()
             || spec.needs == commands::Needs::Redo && self.open_box_can_redo())
             && (spec.id != "edit.copy"
-                || self
-                    .active
-                    .and_then(|i| self.views.get(i))
-                    .is_some_and(|v| !v.organize && (v.all_text || v.selected_text().is_some_and(|t| !t.is_empty()))))
+                || self.active.and_then(|i| self.views.get(i)).is_some_and(|v| {
+                    !v.organize && (v.all_text || v.selection_waits_for_text().is_some() || v.selected_text().is_some_and(|t| !t.is_empty()))
+                }))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
             && match spec.id {
                 "comment.copy" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.comments.selected.is_some()),
@@ -471,19 +470,22 @@ impl PdfCraftApp {
                 if let (Some(kind), Some(i)) = (tool.markup(), active)
                     && let Some(doc) = self.session.get(self.views[i].id)
                 {
-                    let marks = self.views[i].selection_quads(&doc.info);
-                    let edits: Vec<Edit> = marks
-                        .into_iter()
-                        .map(|(page, quads)| {
-                            let style = self.comment_prefs.style(tool);
-                            let author = self.comment_prefs.author.clone();
-                            let shape = pdfcraft_engine::Shape::TextMarkup { kind, quads };
-                            Edit::AddAnnotation(pdfcraft_engine::NewAnnotation { page, shape, style, contents: String::new(), author })
-                        })
-                        .collect();
-                    if let Some(edit) = crate::canvas::one_undo_step(edits) {
-                        self.views[i].clear_selection();
-                        self.apply_edit(edit);
+                    // Pages still to be read are marked when they are, by the tool now picked.
+                    let tool_now = self.quick_tool;
+                    if let crate::canvas::ToolMarks::Marks(marks) = self.views[i].tool_marks(tool_now, true, None, false, &doc.info) {
+                        let edits: Vec<Edit> = marks
+                            .into_iter()
+                            .map(|(page, quads)| {
+                                let style = self.comment_prefs.style(tool);
+                                let author = self.comment_prefs.author.clone();
+                                let shape = pdfcraft_engine::Shape::TextMarkup { kind, quads };
+                                Edit::AddAnnotation(pdfcraft_engine::NewAnnotation { page, shape, style, contents: String::new(), author })
+                            })
+                            .collect();
+                        if let Some(edit) = crate::canvas::one_undo_step(edits) {
+                            self.views[i].clear_selection();
+                            self.apply_edit(edit);
+                        }
                     }
                 }
             }
@@ -758,11 +760,20 @@ impl PdfCraftApp {
                     && let Some(doc) = self.session.get(self.views[i].id)
                 {
                     let author = self.comment_prefs.author.clone();
-                    let marks = self.views[i].selection_quads(&doc.info);
-                    let edits: Vec<Edit> = marks.into_iter().map(|(page, quads)| self.redact_prefs.mark(page, quads, &author)).collect();
-                    if let Some(edit) = crate::canvas::one_undo_step(edits) {
-                        self.views[i].clear_selection();
-                        self.apply_edit(edit);
+                    // Pages still to be read are marked when they are, by the Redact tool now
+                    // picked; a page that could not be read refuses the whole selection.
+                    match self.views[i].tool_marks(crate::QuickTool::Redact, true, None, true, &doc.info) {
+                        crate::canvas::ToolMarks::Marks(marks) => {
+                            let edits: Vec<Edit> = marks.into_iter().map(|(page, quads)| self.redact_prefs.mark(page, quads, &author)).collect();
+                            if let Some(edit) = crate::canvas::one_undo_step(edits) {
+                                self.views[i].clear_selection();
+                                self.apply_edit(edit);
+                            }
+                        }
+                        crate::canvas::ToolMarks::Unreadable => {
+                            self.notify_tr("Part of the selected text is on a page whose text could not be read, so nothing was marked for redaction. Mark that page with a box instead.");
+                        }
+                        crate::canvas::ToolMarks::None => {}
                     }
                 }
             }

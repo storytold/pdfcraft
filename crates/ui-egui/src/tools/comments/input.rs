@@ -388,14 +388,12 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
         }
         return;
     }
-    if tool.markup().is_none() || !cx.allowed || !(resp.drag_stopped() || resp.double_clicked()) {
-        return;
-    }
-    let Some(kind) = tool.markup() else { return };
+    let Some(kind) = tool.markup().filter(|_| cx.allowed) else { return };
     // Once, from whichever of the selection's pages is drawn: after an edge scroll its first page
-    // may be out of view. Every page it covers gets its own markup, in one undo step.
-    let marks = view.selection_quads(cx.info);
-    if marks.iter().any(|(p, _)| *p == cx.page) {
+    // may be out of view. Every page it covers gets its own markup, in one undo step, once all
+    // of them are read.
+    let finished = resp.drag_stopped() || resp.double_clicked();
+    if let crate::canvas::ToolMarks::Marks(marks) = view.tool_marks(cx.tool, finished, Some(cx.page), false, cx.info) {
         view.clear_selection();
         let edits = marks.into_iter().map(|(page, quads)| {
             Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {

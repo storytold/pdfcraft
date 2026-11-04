@@ -65,8 +65,8 @@ use organize::organize_grid;
 use organize::sharp_enough;
 pub(crate) use page_input::PageToolContext;
 use page_input::{PageInput, cancel_on_escape, page_overlays, page_tool_input, text_layer};
-pub(crate) use selection::one_undo_step;
 use selection::{Selection, Span, click_unit, selection_actions, start_selection_drag};
+pub(crate) use selection::{TextSpan, ToolMarks, one_undo_step};
 pub use xform::PageXform;
 use xform::snap_to_pixels;
 use zoom::anchored_scroll;
@@ -653,6 +653,12 @@ pub struct DocView {
     /// one per page (a text selection can cover several), added in one undo step.
     pub redact_drag: crate::redact_ui::AreaDrag,
     pub pending_redaction: Vec<(usize, Vec<[f64; 8]>)>,
+    /// A text selection Redact did not mark: it covers a page whose text could not be read
+    /// ([`ToolMarks::Unreadable`]). The app says so.
+    pub(crate) redaction_refused: bool,
+    /// A marking tool finished this text selection while a page it covers was still to be read
+    /// (or none was drawn): it is marked once they are ([`DocView::tool_marks`]).
+    marks_waiting: Option<(QuickTool, Selection)>,
     /// A crop rectangle being dragged (Crop tool).
     pub crop_drag: crate::crop::CropDrag,
     /// Enhance ▸ Camera image: the quadrilateral being placed.
@@ -1048,6 +1054,8 @@ impl DocView {
             links: Default::default(),
             redact_drag: None,
             pending_redaction: Vec::new(),
+            redaction_refused: false,
+            marks_waiting: None,
             crop_drag: None,
             camera: None,
             camera_done: None,
@@ -2024,7 +2032,9 @@ fn draw_pages(
             canvas_action = copy_image;
         }
         let (page, at) = view.comments.context_at.unwrap_or((view.current, [0.0, 0.0]));
-        let can_copy_items = can_copy && (view.image_selection.is_some() || view.selected_text().is_some() || has_copy_image);
+        // A text selection whose pages are still being read copies once they are.
+        let has_text = view.selected_text().is_some() || view.selection_waits_for_text().is_some();
+        let can_copy_items = can_copy && (view.image_selection.is_some() || has_text || has_copy_image);
         let can_paste = can_paste_image && can_modify;
         let perms = PageMenuPerms {
             can_modify,
@@ -3395,6 +3405,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     if let Some((page, i)) = app.views[index].links.open_existing.take() {
         app.open_link_props(page, None, Some(i));
     }
+    if std::mem::take(&mut app.views[index].redaction_refused) {
+        app.notify_tr("Part of the selected text is on a page whose text could not be read, so nothing was marked for redaction. Mark that page with a box instead.");
+    }
     let marks = std::mem::take(&mut app.views[index].pending_redaction);
     if !marks.is_empty() {
         let author = app.comment_prefs.author.clone();
@@ -3464,7 +3477,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         Some(PageMenuAction::Copy) => {
             if let Some(sel) = app.views[index].image_selection.clone() {
                 app.copy_page_image(sel.page, sel.index);
-            } else if app.views[index].selected_text().is_some() {
+            } else if app.views[index].selected_text().is_some() || app.views[index].selection_waits_for_text().is_some() {
                 app.execute("edit.copy");
             } else if let Some((page, at)) = app.views[index].comments.context_at
                 && let Some(doc) = app.session.get(app.views[index].id)

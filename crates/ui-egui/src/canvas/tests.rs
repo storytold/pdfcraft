@@ -956,12 +956,19 @@ fn a_later_copy_cancels_a_document_copy_still_reading() {
     assert!(app.document_copy.is_none(), "cancelled");
     let copies: Vec<_> = out.platform_output.commands.iter().filter(|c| matches!(c, egui::OutputCommand::CopyText(_))).collect();
     assert_eq!(copies, vec![&egui::OutputCommand::CopyText("a word".to_owned())], "the later copy stays");
-    // So does copying a page selection.
+    // So does copying a page selection whose page is read.
     app.views[0].select_all();
     assert!(app.copy_selected_text(0, &ctx) && app.document_copy.is_some());
+    app.views[0].texts.insert(0, Arc::new(line_text("abcdef")));
     app.views[0].select_text(0, 0, 5);
     app.copy_selected_text(0, &ctx);
     assert!(app.document_copy.is_none(), "a page selection's copy cancels it");
+    // One whose pages are still to be read replaces it with its own (#5017 review).
+    app.views[0].select_all();
+    assert!(app.copy_selected_text(0, &ctx) && app.document_copy.is_some());
+    app.views[0].select_text(0, 0, 5);
+    app.views[0].selection = Some(Selection { page: 0, span: Span::Run { anchor: 0, head: 0, head_page: 1 } });
+    assert!(app.copy_selected_text(0, &ctx) && app.document_copy.is_some(), "the selection's own copy");
 }
 
 /// A press anywhere on a page ends Select All of the document, whatever the tool (here the
@@ -2517,4 +2524,113 @@ fn enhancing_a_scan_re_renders_the_page_shown() {
     app.poll_scan_clean();
     assert!(app.scan_clean_run.is_none());
     assert_eq!(app.views[i].pages.get(&0).unwrap().tag, STALE_TAG, "the old raster is re-rendered");
+}
+
+/// Review of #5017: a selection across pages copied before every page it covers is read is not
+/// dropped. Copy stays on and reads those pages off the UI thread, taking only the part each
+/// page has selected.
+#[test]
+fn a_selection_across_pages_still_to_be_read_is_copied_once_read() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
+    // From the second glyph of page 1 to the first of page 3, no page read yet.
+    app.views[0].selection = Some(Selection { page: 0, span: Span::Run { anchor: 1, head: 0, head_page: 2 } });
+    let span = app.views[0].selection_waits_for_text().expect("waits for its pages");
+    assert_eq!(span, TextSpan { start: (0, 1), end: (2, 0) });
+    assert!(app.views[0].selected_text().is_none(), "nothing to copy on this thread yet");
+    assert!(pdfcraft_engine::commands::command("edit.copy").is_some_and(|c| app.command_enabled(c)), "Copy stays on");
+    // The job reads only the selection's part of each page, and no page outside it.
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let text = crate::DocumentCopyJob::of_selection(&app.views[0], doc, span).text(&std::sync::atomic::AtomicBool::new(false));
+    assert_eq!(text.as_deref(), Some("lpha one\nBravo two\nC"));
+    let later = crate::DocumentCopyJob::of_selection(&app.views[0], doc, TextSpan { start: (1, 0), end: (1, 4) });
+    assert!(matches!(later.pages[0], crate::CopyPage::Skip) && matches!(later.pages[2], crate::CopyPage::Skip));
+    assert_eq!(later.text(&std::sync::atomic::AtomicBool::new(false)).as_deref(), Some("Bravo"));
+    // Copy starts that job, and the clipboard gets the text when it is done.
+    let ctx = egui::Context::default();
+    assert!(app.copy_selected_text(0, &ctx), "the copy starts");
+    let mut copied = None;
+    for _ in 0..500 {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| app.finish_document_copy(ui.ctx()));
+        out.textures_delta.clear();
+        copied = out.platform_output.commands.iter().find_map(|c| match c {
+            egui::OutputCommand::CopyText(t) => Some(t.clone()),
+            _ => None,
+        });
+        if copied.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(copied.as_deref(), Some("lpha one\nBravo two\nC"));
+}
+
+/// Review of #5017: Redact refuses a selection across a page whose text could not be read,
+/// rather than leave that page unmarked, and says why; markup tools mark the readable pages.
+#[test]
+fn redaction_refuses_a_selection_over_an_unreadable_page() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
+    let info = app.session.get(app.views[0].id).unwrap().info.clone();
+    let v = &mut app.views[0];
+    v.texts.insert(0, Arc::new(line_text("abc")));
+    v.texts.insert(2, Arc::new(line_text("ghi")));
+    v.text_failed.insert(1);
+    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2 } };
+    v.selection = Some(sel);
+    assert!(v.selection_has_unreadable_page());
+    assert_eq!(v.tool_marks(QuickTool::Redact, true, None, true, &info), ToolMarks::Unreadable);
+    let pages = |m: ToolMarks| match m {
+        ToolMarks::Marks(m) => m.into_iter().map(|(p, _)| p).collect::<Vec<_>>(),
+        other => panic!("marks expected, got {other:?}"),
+    };
+    let highlight = QuickTool::Comment(comments::CommentTool::Highlight);
+    assert_eq!(pages(v.tool_marks(highlight, true, None, false, &info)), [0, 2], "a highlight has nothing to hide");
+    // Redact ▸ Mark on it: nothing marked, the selection kept, and the reason given.
+    app.views[0].selection = Some(sel);
+    assert!(app.execute("redact.mark"));
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert_eq!(doc.redaction_marks(), 0, "no partial redaction");
+    assert_eq!(app.views[0].selection, Some(sel), "still selected");
+    assert!(app.toast.as_ref().is_some_and(|(t, _)| t.contains("could not be read")), "{:?}", app.toast);
+}
+
+/// Review of #5017: a marking tool that finishes a selection while a page it covers is still
+/// to be read marks it once that page is read, from one of its pages, unless the selection or
+/// the tool changed meanwhile.
+#[test]
+fn a_marking_tool_waits_for_the_selections_pages() {
+    let info = thumbnail_info(3);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.texts.insert(0, Arc::new(line_text("abc")));
+    v.texts.insert(2, Arc::new(line_text("ghi")));
+    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2 } };
+    v.selection = Some(sel);
+    let tool = QuickTool::Comment(comments::CommentTool::Underline);
+    assert_eq!(v.tool_marks(tool, true, Some(0), false, &info), ToolMarks::None, "page 2 is not read yet");
+    assert_eq!(v.tool_marks(tool, false, Some(0), false, &info), ToolMarks::None, "still waiting");
+    v.texts.insert(1, Arc::new(line_text("def")));
+    // Asked from a page it doesn't cover, it keeps waiting; from one it covers, all of it, once.
+    let mut w = DocView::new(DocId(2), &thumbnail_info(4), ViewDefaults::default());
+    w.texts = v.texts.clone();
+    w.selection = Some(sel);
+    assert_eq!(w.tool_marks(tool, true, Some(3), false, &info), ToolMarks::None);
+    assert!(matches!(w.tool_marks(tool, false, Some(2), false, &info), ToolMarks::Marks(ref m) if m.len() == 3));
+    assert_eq!(w.tool_marks(tool, false, Some(2), false, &info), ToolMarks::None, "marked once");
+    assert!(matches!(v.tool_marks(tool, false, Some(1), false, &info), ToolMarks::Marks(ref m) if m.len() == 3));
+    // Another tool, or another selection, does not inherit the wait.
+    v.texts.remove(&1);
+    assert_eq!(v.tool_marks(tool, true, Some(0), false, &info), ToolMarks::None);
+    v.texts.insert(1, Arc::new(line_text("def")));
+    assert_eq!(v.tool_marks(QuickTool::Redact, false, Some(0), true, &info), ToolMarks::None, "another tool");
+    v.selection = Some(Selection::run(0, 0, 2));
+    assert_eq!(v.tool_marks(tool, false, Some(0), false, &info), ToolMarks::None, "another selection");
+    // Clearing the selection ends the wait.
+    v.selection = Some(sel);
+    v.texts.remove(&1);
+    assert_eq!(v.tool_marks(tool, true, Some(0), false, &info), ToolMarks::None);
+    v.clear_selection();
+    v.selection = Some(sel);
+    v.texts.insert(1, Arc::new(line_text("def")));
+    assert_eq!(v.tool_marks(tool, false, Some(0), false, &info), ToolMarks::None, "cleared");
 }
