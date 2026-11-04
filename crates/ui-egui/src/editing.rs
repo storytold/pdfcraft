@@ -1110,6 +1110,9 @@ mod revert_draft_tests {
     /// interface language; a drawable value says nothing.
     #[test]
     fn a_value_its_font_cannot_draw_is_kept_and_explained() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let mut app = app();
         let fill =
             |app: &mut PdfCraftApp, text: &str| app.apply_edit(Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text(text.into()) });
