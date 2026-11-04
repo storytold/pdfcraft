@@ -8,6 +8,12 @@ pub(crate) fn sub([ax, ay, az]: Vec3, [bx, by, bz]: Vec3) -> Vec3 {
     [ax - bx, ay - by, az - bz]
 }
 
+/// The direction from `from` to `to`: `to - from`, halved when the full difference overflows.
+pub(crate) fn span(from: Vec3, to: Vec3) -> Vec3 {
+    let d = sub(to, from);
+    if d.iter().all(|c| c.is_finite()) { d } else { sub(scale(to, 0.5), scale(from, 0.5)) }
+}
+
 /// `a` times `s`.
 pub(crate) fn scale(a: Vec3, s: f64) -> Vec3 {
     a.map(|c| c * s)
@@ -93,6 +99,12 @@ mod tests {
     #[test]
     fn unit_cross_survives_edges_of_very_different_sizes() {
         assert_eq!(unit_cross([1e-170, 0.0, 0.0], [0.0, 1e160, 0.0]), Some([0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn span_keeps_the_direction_of_a_difference_that_overflows() {
+        assert_eq!(span([1.0, 2.0, 3.0], [4.0, 0.0, 3.0]), [3.0, -2.0, 0.0]);
+        assert_eq!(span([-1e308, 0.0, 0.0], [1e308, 1e308, 0.0]), [1e308, 5e307, 0.0]);
     }
 
     #[test]
