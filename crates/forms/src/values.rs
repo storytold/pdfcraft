@@ -215,7 +215,7 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
                 if t.is_empty() && !shadow {
                     d.remove(b"V");
                 } else {
-                    d.set(b"V".to_vec(), PdfString::text(t));
+                    d.set(b"V".to_vec(), PdfString::text(&t));
                 }
                 d.remove(b"RV");
             })?;
