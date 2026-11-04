@@ -20,6 +20,7 @@ mod bates;
 mod comments;
 mod content;
 mod conventions;
+mod cursor_coords;
 pub mod file_access;
 mod forms;
 mod layers;

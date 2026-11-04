@@ -130,6 +130,8 @@ impl PdfCraftApp {
             reload_changed_files: true,
             show_secured_notice: true,
             always_default_view: false,
+            show_cursor_coordinates: false,
+            cursor_coordinates_origin_bottom_left: true,
             #[cfg(not(target_arch = "wasm32"))]
             watch: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -306,6 +308,11 @@ impl PdfCraftApp {
         ((self.left_open && matches!(self.left, LeftPanel::Tool("form") | LeftPanel::CalculationOrder))
             || matches!(self.quick_tool, QuickTool::Field(_)))
             && !self.form_preview
+    }
+
+    /// Toggle visibility of the cursor coordinates window.
+    pub fn toggle_cursor_coordinates(&mut self) {
+        self.show_cursor_coordinates = !self.show_cursor_coordinates;
     }
 
     /// A number that changes whenever the open dialog changes (opened, closed or replaced by
@@ -652,6 +659,7 @@ impl eframe::App for PdfCraftApp {
                 }
             });
             dialogs::show(self, &ctx);
+            cursor_coordinates_ui::show(self, &ctx);
             // Notices too: a refused field value or a failed save must be seen in full screen.
             self.show_progress(&ctx);
             widgets::toast(self, &ctx);
@@ -691,6 +699,7 @@ impl eframe::App for PdfCraftApp {
         self.process_pending_edits();
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
+        cursor_coordinates_ui::show(self, &ctx);
         self.show_progress(&ctx);
         widgets::toast(self, &ctx);
         self.finish_render_frame(&ctx);

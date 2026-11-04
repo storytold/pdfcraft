@@ -865,6 +865,11 @@ pub(crate) fn default_page_context_menu(ui: &mut egui::Ui, page: usize, at: [f64
 }
 
 impl DocView {
+    /// Screen transforms of all pages drawn on screen last frame.
+    pub(crate) fn screen_xforms(&self) -> &[(usize, PageXform)] {
+        &self.screen_xforms
+    }
+
     /// Whether a middle-button scrolling gesture is active (tests and automation).
     pub fn auto_scrolling(&self) -> bool {
         self.auto_scroll.active()

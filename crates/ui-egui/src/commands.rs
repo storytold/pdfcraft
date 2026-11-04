@@ -281,6 +281,7 @@ impl PdfCraftApp {
                 }
             }
             "view.palette" => self.palette_open = !self.palette_open,
+            "view.cursor_coordinates" => self.toggle_cursor_coordinates(),
             layout if crate::canvas::PageLayout::from_command(layout).is_some() => {
                 if let (Some(i), Some(layout)) = (active, crate::canvas::PageLayout::from_command(layout)) {
                     self.views[i].set_layout(layout);

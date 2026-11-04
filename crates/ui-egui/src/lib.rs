@@ -52,6 +52,7 @@ pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignGraphic, SignStep};
 mod bidi;
+pub mod cursor_coordinates_ui;
 mod dialogs;
 pub use edit_text_ui::{CropMode, DragTarget, ImageDrag, ImageHandle, ImageSelection};
 mod editing;
@@ -671,4 +672,8 @@ pub struct PdfCraftApp {
     pub pending_full_screen: Option<DocId>,
     /// An absolute GoToR target waiting for approval, before any target-file I/O (#1364).
     pub pending_remote_link: Option<PendingRemoteLink>,
+    /// Whether the cursor coordinates floating window is open (View ▸ Show/Hide ▸ Cursor Coordinates, `Ctrl+Y`).
+    pub show_cursor_coordinates: bool,
+    /// Whether cursor coordinates are anchored to bottom-left (PDF origin) or top-left.
+    pub cursor_coordinates_origin_bottom_left: bool,
 }
