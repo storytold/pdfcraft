@@ -2634,3 +2634,61 @@ fn a_marking_tool_waits_for_the_selections_pages() {
     v.texts.insert(1, Arc::new(line_text("def")));
     assert_eq!(v.tool_marks(tool, false, Some(0), false, &info), ToolMarks::None, "cleared");
 }
+
+/// Review of #5017 (FredApps): marks a tool is still waiting to make, for a page whose text has
+/// not arrived, never land on a page that changed or went away meanwhile. Deleting a page, or a
+/// change to a page the selection covers, ends the selection, and the wait goes with it.
+#[test]
+fn waiting_marks_are_dropped_when_their_pages_change() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
+    let id = app.views[0].id;
+    let info = |app: &PdfCraftApp| app.session.get(id).unwrap().info.clone();
+    let sel = Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 2 } };
+    let wait = |app: &mut PdfCraftApp| {
+        let info = info(app);
+        let v = &mut app.views[0];
+        v.texts.clear();
+        v.texts.insert(0, Arc::new(line_text("abc")));
+        v.texts.insert(2, Arc::new(line_text("ghi")));
+        v.selection = Some(sel);
+        assert_eq!(v.tool_marks(QuickTool::Redact, true, Some(0), true, &info), ToolMarks::None, "waiting for page 2's text");
+    };
+    // Page 2 deleted while the marks wait.
+    wait(&mut app);
+    assert!(app.apply_edit(Edit::DeletePages { pages: vec![1] }));
+    let after = info(&app);
+    assert_eq!(after.pages.len(), 2);
+    let v = &mut app.views[0];
+    assert!(v.selection.is_none(), "a change to the document's pages ends the selection");
+    for p in 0..2 {
+        v.texts.insert(p, Arc::new(line_text("abc")));
+    }
+    // The old selection's glyph positions now name other pages: even made again, nothing is
+    // marked unless the tool finishes it again.
+    v.selection = Some(Selection { page: 0, span: Span::Run { anchor: 1, head: 1, head_page: 1 } });
+    assert_eq!(v.tool_marks(QuickTool::Redact, false, Some(0), true, &after), ToolMarks::None, "the wait went with the selection");
+    let redactions = app.session.get(id).unwrap().redaction_marks();
+    assert_eq!(redactions, 0);
+    // A change to one page the selection covers (a comment added on it) ends it too.
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
+    let id = app.views[0].id;
+    wait(&mut app);
+    let note = Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 2,
+        shape: pdfcraft_engine::Shape::Note { at: [10.0, 10.0], icon: pdfcraft_engine::NoteIcon::Comment },
+        style: Default::default(),
+        contents: "x".into(),
+        author: String::new(),
+    });
+    assert!(app.apply_edit(note));
+    let now = info(&app);
+    let v = &mut app.views[0];
+    assert!(v.selection.is_none(), "a change to a page it covers ends the selection");
+    v.texts.insert(1, Arc::new(line_text("def")));
+    v.texts.insert(2, Arc::new(line_text("ghi")));
+    v.selection = Some(sel);
+    assert_eq!(v.tool_marks(QuickTool::Redact, false, Some(0), true, &now), ToolMarks::None, "nothing marked");
+    assert_eq!(app.session.get(id).unwrap().redaction_marks(), 0);
+}
