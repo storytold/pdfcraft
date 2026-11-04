@@ -103,7 +103,14 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         JsArray::from_iter(vals, c).into()
     });
     let indices = getter!(ctx, n, |f, c| {
-        let idx: Vec<JsValue> = f.current_value_indices.iter().map(|&i| JsValue::from(i as f64)).collect();
+        let derived;
+        let indices = if f.current_value_indices.is_empty() {
+            derived = f.options.iter().enumerate().filter_map(|(i, option)| f.value.contains(&option.0).then_some(i)).collect::<Vec<_>>();
+            &derived
+        } else {
+            &f.current_value_indices
+        };
+        let idx: Vec<JsValue> = indices.iter().map(|&i| JsValue::from(i as f64)).collect();
         if idx.len() == 1 { idx[0].clone() } else { JsArray::from_iter(idx, c).into() }
     });
     let indices_set = {

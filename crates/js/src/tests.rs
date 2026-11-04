@@ -88,6 +88,22 @@ fn choice_and_check_box_object_model() {
 }
 
 #[test]
+fn current_value_indices_are_derived_for_unindexed_choice_fields() {
+    let mut size = FieldState::new("size", FieldType::ComboBox, vec!["m".into()]);
+    size.options = vec![("s".into(), "Small".into()), ("m".into(), "Medium".into()), ("l".into(), "Large".into())];
+    let o = run(
+        "event.value = getField('size').currentValueIndices;",
+        &Event::field("Calculate", "total", ""),
+        &doc(),
+        &[size],
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "1");
+}
+
+#[test]
 fn util_printf_printd_and_printx() {
     let o = go(
         "event.value = [util.printf('%,0.2f', 1234567.891), util.printf('%05d|%s|%x', 42, 'hi', 255), util.printf('%,2.2f', 1234.5), \
