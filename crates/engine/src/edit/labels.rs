@@ -38,6 +38,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Set bookmark destination",
     "Colour",
     "Style",
+    "Import bookmarks",
     "New bookmarks from structure",
     "New bookmarks from text styles",
     "Number pages",
@@ -193,6 +194,7 @@ impl Edit {
             // The bookmark Style and Colour menus' own names, already said in every language.
             Edit::SetBookmarkColor { .. } => Label::of("Colour"),
             Edit::SetBookmarkStyle { .. } => Label::of("Style"),
+            Edit::ImportBookmarks { .. } => Label::of("Import bookmarks"),
             Edit::BookmarksFromStructure => Label::of("New bookmarks from structure"),
             Edit::BookmarksFromTextStyles { .. } => Label::of("New bookmarks from text styles"),
             Edit::NumberPages { .. } => Label::of("Number pages"),
