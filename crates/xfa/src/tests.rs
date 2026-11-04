@@ -2148,9 +2148,9 @@ fn data_paths_leave_areas_out() {
     assert_eq!(data_path(&tpl, ""), Vec::new());
 }
 
-/// A template nested thousands of elements deep must be refused. roxmltree recurses with the
-/// nesting depth, so it used to overflow the stack - and a stack overflow aborts the process,
-/// which no `catch_unwind` can intercept.
+/// A template nested thousands of elements deep must be refused. roxmltree before 0.21.2 recursed
+/// with the nesting depth and overflowed the stack (an abort no `catch_unwind` intercepts); the
+/// depth bound now also protects the walks of the tree, which still recurse.
 #[test]
 fn deeply_nested_template_is_refused_instead_of_overflowing_the_stack() {
     let mut xml = String::from(r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">"#);
@@ -2160,20 +2160,6 @@ fn deeply_nested_template_is_refused_instead_of_overflowing_the_stack() {
     xml.push_str(&"</subform>".repeat(10_000));
     xml.push_str("</template>");
     assert!(matches!(crate::parse::parse(&xml), Err(crate::XfaError::Malformed(_))), "ten thousand nested subforms must be refused, not parsed");
-}
-
-/// The depth scanner skips what is not an element and cannot under-count one.
-#[test]
-fn nesting_depth_scanner_counts_what_matters() {
-    use crate::xml_nesting_depth as d;
-    assert_eq!(d(""), 0);
-    assert_eq!(d("<a><b><c/></b></a>"), 3);
-    assert_eq!(d(r#"<?xml version="1.0"?><!-- <x> --><a/>"#), 1);
-    assert_eq!(d("<a><![CDATA[<not-an-element>]]></a>"), 1);
-    assert_eq!(d(r#"<a b="<"><c/></a>"#), 2);
-    assert_eq!(d("<a/>"), 1);
-    assert_eq!(d("<a><b/></a>"), 2);
-    assert_eq!(d(&"<empty/>".repeat(2_000)), 1, "elements that close themselves must not accumulate");
 }
 
 /// A template holding thousands of self-closing elements is two levels deep, not thousands. Before
@@ -2188,11 +2174,27 @@ fn many_self_closing_elements_do_not_accumulate_into_the_bound() {
     assert!(crate::parse::parse(&xml).is_ok(), "two thousand self-closing draws are two levels deep, not two thousand");
 }
 
+/// An element with 20,000 attributes costs roxmltree's duplicate check 4·10⁸ comparisons (about a
+/// second; 60,000 took ten). The template, data file and datasets readers refuse it before parsing.
+#[test]
+fn attribute_heavy_xml_is_refused_before_parsing() {
+    let attributes: String = (0..20_000).map(|i| format!(" a{i}='v'")).collect();
+    let template = format!(r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"{attributes}><subform/></template>"#);
+    assert!(matches!(crate::parse::parse(&template), Err(crate::XfaError::Malformed(m)) if m.contains("attributes")));
+    let data = format!(r#"<xfa:data xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><form{attributes}/></xfa:data>"#);
+    assert!(matches!(crate::parse_data_file(&data, None), Err(crate::XfaError::TooLarge(m)) if m.contains("attributes")));
+    let datasets =
+        format!(r#"<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form{attributes}/></xfa:data></xfa:datasets>"#);
+    assert_eq!(crate::data::parse_datasets(&datasets), None);
+    // The same packets without the attributes are read.
+    assert!(crate::data::parse_datasets(&datasets.replace(&attributes, "")).is_some());
+}
+
 /// The bound must hold on a worker thread too, whose default stack (2 MiB) is a quarter of the
 /// main thread's: a template exactly at the limit parses there without overflowing.
 #[test]
 fn template_at_the_depth_limit_parses_on_a_worker_thread() {
-    let depth = crate::MAX_XML_DEPTH - 1;
+    let depth = pdfcraft_xml::MAX_DEPTH - 1;
     let mut xml = String::from(r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">"#);
     for i in 0..depth {
         xml.push_str(&format!(r#"<subform name="s{i}">"#));

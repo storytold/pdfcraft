@@ -14,7 +14,8 @@ workspace = true
 pdfcraft-content = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-model = { workspace = true }
-roxmltree = "0.21"
+pdfcraft-xml = { workspace = true }
+roxmltree = { workspace = true }
 
 [dev-dependencies]
 flate2 = { workspace = true }

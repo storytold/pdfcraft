@@ -1,6 +1,5 @@
 use super::common::{
-    FLAGS, MAX_DEPTH, SUBTYPES, arr, check_form_xml_depth, csv, esc, hex, n, nums_of, parse_form_xml, parse_hex, quad_has_area, rect_strict, text_of,
-    walk_xfdf,
+    FLAGS, MAX_DEPTH, SUBTYPES, arr, csv, esc, hex, n, nums_of, parse_form_xml, parse_hex, quad_has_area, rect_strict, text_of, walk_xfdf,
 };
 use super::*;
 
@@ -473,8 +472,7 @@ pub(crate) fn add_popup(doc: &mut Document, page: ObjRef, parent: ObjRef, rect: 
 }
 
 pub(crate) fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, DataError> {
-    check_form_xml_depth(text)?;
-    let xml = parse_form_xml(text).map_err(|e| DataError::Malformed(e.to_string()))?;
+    let xml = parse_form_xml(text, |e| DataError::Malformed(e.to_string()))?;
     let root = xml.root_element();
     if root.tag_name().name() != "xfdf" {
         return Err(DataError::UnknownFormat);

@@ -1,4 +1,4 @@
-use super::{DataNode, DataPath, Field, MAX_DEPTH, MAX_NODES, Node, SomIndices, Template};
+use super::{DataNode, DataPath, Field, MAX_DEPTH, Node, SomIndices, Template, XML_LIMITS};
 
 fn to_node(n: roxmltree::Node, depth: usize) -> DataNode {
     let name = n.tag_name().name().to_string();
@@ -12,11 +12,7 @@ fn to_node(n: roxmltree::Node, depth: usize) -> DataNode {
 /// The `xfa:data` element of the datasets packet in `xdp` (or a bare datasets document), as a
 /// tree whose root is that element.
 pub fn parse_datasets(xdp: &str) -> Option<DataNode> {
-    if crate::xml_nesting_depth(xdp) > crate::MAX_XML_DEPTH {
-        return None;
-    }
-    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
-    let doc = roxmltree::Document::parse_with_options(xdp, opts).ok()?;
+    let doc = pdfcraft_xml::parse(xdp, XML_LIMITS).ok()?;
     let datasets = doc.descendants().find(|n| n.is_element() && n.tag_name().name() == "datasets")?;
     let data = datasets.children().find(|n| n.is_element() && n.tag_name().name() == "data")?;
     Some(to_node(data, 0))
