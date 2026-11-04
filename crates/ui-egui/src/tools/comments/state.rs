@@ -137,8 +137,6 @@ pub struct CommentView {
     /// Drawings just released: shown from their points until the page raster that includes the
     /// committed annotation arrives, so the stroke never vanishes in between (#1858).
     pub(crate) settling: Vec<Settling>,
-    /// Escape ends egui's drag too; ignore its synthetic release until the mouse is up.
-    pub(super) cancelled_drag: bool,
     pub composer: Option<Composer>,
     /// Reply being typed under the selected card.
     pub reply: String,
@@ -415,7 +413,7 @@ impl PageCx<'_> {
 
     /// The topmost comment under `p`: the one drawn last, in `/Annots` order (inspection lists
     /// comments by position, not in paint order).
-    pub(super) fn hit(&self, p: Pos2) -> Option<&Annotation> {
+    pub(super) fn comment_at(&self, p: Pos2) -> Option<&Annotation> {
         self.comments().filter(|a| self.screen_rects(a).any(|r| r.expand(3.0).contains(p))).max_by_key(|a| a.index)
     }
 
@@ -442,7 +440,7 @@ impl PageCx<'_> {
     /// The comment a click at `p` selects: the topmost one under it or, on a group subordinate,
     /// the group's primary, which stands for the group.
     pub(super) fn click_hit(&self, p: Pos2) -> Option<&Annotation> {
-        self.hit(p).or_else(|| self.member_at(p).map(|(_, p)| p))
+        self.comment_at(p).or_else(|| self.member_at(p).map(|(_, p)| p))
     }
 
     /// The group subordinate under `p`, where no comment is, with its group's primary.
@@ -453,7 +451,7 @@ impl PageCx<'_> {
     /// The group member a click at `p` picked when it selects `selected`, its group's primary
     /// ([`CommentView::member`]): the subordinate under the pointer.
     pub(super) fn picked(&self, p: Pos2, selected: Option<(usize, usize)>) -> Option<((usize, usize), (usize, usize))> {
-        let (m, primary) = self.hit(p).is_none().then(|| self.member_at(p)).flatten()?;
+        let (m, primary) = self.comment_at(p).is_none().then(|| self.member_at(p)).flatten()?;
         let group = (primary.page, primary.index);
         (Some(group) == selected).then_some(((self.page, m.index), group))
     }
