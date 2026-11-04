@@ -4,7 +4,7 @@ use hayro_syntax::bit_reader::BitReader;
 use hayro_syntax::object::Array;
 use hayro_syntax::object::Stream;
 use hayro_syntax::object::dict::keys::{BITS_PER_SAMPLE, DECODE, ENCODE, SIZE};
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 
 /// A type 0 function (sampled function).
 #[derive(Debug)]
@@ -175,8 +175,29 @@ impl Type0 {
             .iter()
             .try_fold(1usize, |acc, &s| acc.checked_mul(s as usize))
             .unwrap_or(0);
-        let mut samples = self.samples.clone();
-        samples.resize(total.saturating_mul(self.range.len()), 0);
+        let comps = self.range.len();
+        let mut samples = Vec::with_capacity(total.saturating_mul(comps).min(1 << 23));
+        let mut parts: IntVec = smallvec![0; self.sizes.len()];
+
+        for _ in 0..total {
+            let entry = self.entry(&parts);
+            for c in 0..comps {
+                samples.push(entry.and_then(|e| e.get(c).copied()).unwrap_or(0));
+            }
+
+            // Advance the odometer: dimension 0 varies fastest.
+            for i in 0..parts.len() {
+                let size = self.sizes.get(i).copied().unwrap_or(1).max(1) as usize;
+                if let Some(part) = parts.get_mut(i) {
+                    *part += 1;
+                    if (*part as usize) < size {
+                        break;
+                    }
+                    *part = 0;
+                }
+            }
+        }
+
         samples
     }
 }
