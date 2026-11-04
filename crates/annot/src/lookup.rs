@@ -144,11 +144,11 @@ pub fn is_fill_sign(doc: &Document, d: &Dict) -> bool {
     if matches!(d.get(b"PCFillSign").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true))) {
         return true;
     }
-    let subtype = d.name(b"Subtype").unwrap_or_default();
-    if subtype == b"FreeText" && d.name(b"IT") == Some(b"FreeTextTypeWriter") {
+    let name_is = |key: &[u8], expected: &[u8]| d.get(key).is_some_and(|o| doc.resolve(o).as_name() == Some(expected));
+    if name_is(b"Subtype", b"FreeText") && name_is(b"IT", b"FreeTextTypeWriter") {
         return true;
     }
-    if subtype == b"Stamp" {
+    if name_is(b"Subtype", b"Stamp") {
         if matches!(d.name(b"Name"), Some(b"PCCheck" | b"PCCross" | b"PCDot" | b"PCLine" | b"PCTypedSignature")) {
             return true;
         }
@@ -158,7 +158,7 @@ pub fn is_fill_sign(doc: &Document, d: &Dict) -> bool {
             return true;
         }
     }
-    subtype == b"Ink" && text_value(doc, d, b"Subj").as_deref() == Some("Signature")
+    name_is(b"Subtype", b"Ink") && text_value(doc, d, b"Subj").as_deref() == Some("Signature")
 }
 
 pub(crate) fn annotation_flags(doc: &Document, d: &Dict) -> i64 {
