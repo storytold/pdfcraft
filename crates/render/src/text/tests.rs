@@ -842,9 +842,16 @@ fn a_glyph_redrawn_by_the_other_column_pass_is_dropped() {
 /// #3173: the second pass draws the glyph a little taller, so its grid cell must still be the one of the first copy.
 #[test]
 fn a_redrawn_glyph_of_slightly_different_height_is_dropped() {
-    let mut second = vec![em_box("R", 22.0, 10.0, 28.0, 20.3)];
-    word(&mut second, "LD", 28.0, 10.0, 6.0);
-    let text = column_passes(&[em_box("R", 22.0, 10.0, 28.0, 20.0)], &second);
+    // Far from the page origin, a grid cell sized by each glyph's own height would put the two copies three cells apart.
+    let mut v = Vec::new();
+    word(&mut v, "WO", 150.0, 150.0, 6.0);
+    v.push(em_box("R", 162.0, 150.0, 168.0, 160.0));
+    for k in 0..50 {
+        word(&mut v, "xx", 300.0, 200.0 + 14.0 * k as f32, 6.0);
+    }
+    v.push(em_box("R", 162.0, 150.0, 168.0, 160.3));
+    word(&mut v, "LD", 168.0, 150.0, 6.0);
+    let text = layout(v).plain_text();
     assert!(text.lines().any(|l| l == "WORLD"), "{text}");
 }
 
@@ -861,12 +868,15 @@ fn a_fake_bold_copy_at_the_end_of_a_pass_does_not_hide_the_run_end() {
 #[test]
 fn a_redraw_is_matched_against_earlier_glyphs_of_the_same_cell() {
     // A narrow "l" at 10 ends its line, a second one 0.8 pt to the right (more than a half of its width) is its own letter,
-    // and the last one redraws the first.
+    // and the last one, more than 4 glyphs later, redraws the first.
     let v = vec![
         g("l", 10.0, 10.0, 11.0),
         g("Z", 200.0, 100.0, 206.0),
         g("l", 10.8, 10.0, 11.8),
         g("Y", 300.0, 200.0, 306.0),
+        g("Z", 300.0, 300.0, 306.0),
+        g("Y", 300.0, 400.0, 306.0),
+        g("Z", 300.0, 500.0, 306.0),
         g("l", 10.0, 10.0, 11.0),
     ];
     let text = layout(v).plain_text();
