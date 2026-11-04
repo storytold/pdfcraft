@@ -168,17 +168,41 @@ impl Ocr {
 
     /// Recognise the text in an image using `lang` (`"en"` or `"he"`).
     pub fn recognize_lang(&self, pixels: &[u8], width: u32, height: u32, lang: &str) -> Result<Vec<Line>, OcrError> {
-        if width == 0 || height == 0 || pixels.is_empty() {
-            return Err(OcrError::EmptyImage);
-        }
-        let code = lang.trim().to_ascii_lowercase();
-        if code == "he" || code.starts_with("he-") || code.starts_with("he_") || code == "iw" || code == "heb" {
-            // The bundled model reads only the Latin alphabet: on a Hebrew page it would invent
-            // Latin text, so report what is missing instead.
-            return recognize_tesseract(pixels, width, height, "heb+eng");
-        }
-        self.recognize(pixels, width, height)
+        recognize_lang(Some(self), pixels, width, height, lang)
     }
+}
+
+/// Whether `lang` selects Hebrew OCR (`"he"`, `"he-*"`, `"iw"`, `"heb"`).
+pub fn is_hebrew_lang(lang: &str) -> bool {
+    let code = lang.trim().to_ascii_lowercase();
+    code == "he" || code.starts_with("he-") || code.starts_with("he_") || code == "iw" || code == "heb"
+}
+
+fn command_in_path(bin: &Path) -> bool {
+    if bin.is_file() {
+        return true;
+    }
+    let Some(name) = bin.file_name() else { return false };
+    std::env::var_os("PATH").is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(name).is_file()))
+}
+
+/// Whether Tesseract OCR and `heb.traineddata` are available for Hebrew recognition.
+pub fn hebrew_available() -> bool {
+    find_tesseract().is_some_and(|(bin, tessdata)| tessdata.is_some() && command_in_path(&bin))
+}
+
+/// Recognise the text in an image using `lang` (`"en"` or `"he"`), requiring `ocr` only for
+/// Latin-model languages.
+pub fn recognize_lang(ocr: Option<&Ocr>, pixels: &[u8], width: u32, height: u32, lang: &str) -> Result<Vec<Line>, OcrError> {
+    if width == 0 || height == 0 || pixels.is_empty() {
+        return Err(OcrError::EmptyImage);
+    }
+    if is_hebrew_lang(lang) {
+        // The bundled model reads only the Latin alphabet: on a Hebrew page it would invent
+        // Latin text, so report what is missing instead.
+        return recognize_tesseract(pixels, width, height, "heb+eng");
+    }
+    ocr.ok_or(OcrError::NoModels)?.recognize(pixels, width, height)
 }
 
 /// Locate the `tesseract` executable and optional `tessdata` directory.
@@ -270,15 +294,46 @@ fn run_tesseract_ppm(ppm: &[u8], tess_lang: &str, psm: &str) -> Result<Vec<Line>
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     let mut child = cmd.spawn().map_err(|e| OcrError::Recognize(format!("could not start {}: {e}", bin.display())))?;
+    const TESSERACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + TESSERACT_TIMEOUT;
     if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(ppm);
+        let data = ppm.to_vec();
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&data);
+        });
     }
-    let out = child.wait_with_output().map_err(|e| OcrError::Recognize(e.to_string()))?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout_handle = child.stdout.take().map(|mut out| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut out, &mut buf);
+            buf
+        })
+    });
+    let stderr_handle = child.stderr.take().map(|mut err| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut err, &mut buf);
+            buf
+        })
+    });
+    let status = loop {
+        match child.try_wait().map_err(|e| OcrError::Recognize(e.to_string()))? {
+            Some(status) => break status,
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(OcrError::Recognize("Tesseract OCR timed out".into()));
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(10)),
+        }
+    };
+    let stdout = stdout_handle.and_then(|h| h.join().ok()).unwrap_or_default();
+    let stderr = stderr_handle.and_then(|h| h.join().ok()).unwrap_or_default();
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr);
         return Err(OcrError::Recognize(stderr.trim().to_string()));
     }
-    let tsv = String::from_utf8_lossy(&out.stdout);
+    let tsv = String::from_utf8_lossy(&stdout);
     let mut lines: Vec<((i32, i32, i32, i32), Line)> = Vec::new();
     for row in tsv.lines().skip(1) {
         let cols: Vec<&str> = row.split('\t').collect();
@@ -398,24 +453,36 @@ fn visual_word_text(text: &str) -> String {
     if !text.chars().any(is_rtl_char) {
         return text.to_string();
     }
-    let mut clusters: Vec<(bool, String)> = Vec::new();
+    let mut raw_clusters: Vec<(Option<bool>, char, String)> = Vec::new();
     for c in text.chars() {
         if is_combining_mark(c)
-            && let Some((_, last)) = clusters.last_mut()
+            && let Some((_, _, marks)) = raw_clusters.last_mut()
         {
-            last.push(c);
+            marks.push(c);
             continue;
         }
-        let prev_rtl = clusters.last().map_or(true, |(r, _)| *r);
-        let rtl = if is_rtl_char(c) {
-            true
+        let dir = if is_rtl_char(c) {
+            Some(true)
         } else if c.is_alphanumeric() {
-            false
+            Some(false)
         } else {
-            prev_rtl
+            None
         };
-        let mut s = String::new();
-        s.push(if rtl { mirror_bracket(c) } else { c });
+        raw_clusters.push((dir, c, String::new()));
+    }
+    let mut clusters: Vec<(bool, String)> = Vec::with_capacity(raw_clusters.len());
+    for i in 0..raw_clusters.len() {
+        let (dir, base, ref marks) = raw_clusters[i];
+        // UAX #9 N1/N2 in an RTL paragraph: neutrals between two strong LTR characters stay LTR;
+        // neutrals adjacent to strong RTL or between opposite strong directions resolve to RTL.
+        let rtl = dir.unwrap_or_else(|| {
+            let prev_rtl = raw_clusters[..i].iter().rev().find_map(|&(d, _, _)| d).unwrap_or(true);
+            let next_rtl = raw_clusters[i + 1..].iter().find_map(|&(d, _, _)| d).unwrap_or(true);
+            prev_rtl || next_rtl
+        });
+        let mut s = String::with_capacity(base.len_utf8() + marks.len());
+        s.push(if rtl { mirror_bracket(base) } else { base });
+        s.push_str(marks);
         clusters.push((rtl, s));
     }
     let mut runs: Vec<(bool, Vec<String>)> = Vec::new();
@@ -443,10 +510,17 @@ fn visual_word_text(text: &str) -> String {
 /// scripts), each word stretched to its box so selection and search highlight the right place.
 /// Marked content `/OCR` so it can be told apart from the page's own text.
 pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
+    text_layer_with_font(words, "PCOCR")
+}
+
+/// Like [`text_layer`], naming `unicode_font` (e.g. `"PCOCR"` or `"PCOCR_1"`) for the Identity-H
+/// Type0 font resource.
+pub fn text_layer_with_font(words: &[PlacedWord], unicode_font: &str) -> Vec<u8> {
     // `3 Tr` and the font are graphics state, which `ET` doesn't reset: without `q … Q` they
     // would stay set for every later content stream on the page, so text added after OCR (a
     // header or footer) drew invisibly (#3029).
     let mut out = b"/OCR BMC\nq\nBT\n3 Tr\n/PCHelv 1 Tf\n".to_vec();
+    let unicode_tf = format!("/{unicode_font} 1 Tf\n").into_bytes();
     let mut ordered: std::borrow::Cow<[PlacedWord]> = std::borrow::Cow::Borrowed(words);
     if words.iter().any(|w| w.text.chars().any(is_rtl_char)) {
         // PDF content streams draw visual lines from left to right so both the viewer's text
@@ -476,7 +550,9 @@ pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
         let needs_unicode = w.text.chars().any(|c| pdfcraft_fonts::win_ansi_byte(c).is_none() || is_rtl_char(c));
         let (width, encoded) = if needs_unicode {
             let visual = visual_word_text(&w.text);
-            let units: Vec<u16> = visual.encode_utf16().filter(|&u| u != 0 && u != 0xFFFF).collect();
+            // `/PCOCR` uses a 2-byte BMP Identity-H ToUnicode CMap (excluding surrogate high bytes
+            // 0xD8..=0xDF), so only BMP characters in U+0001..=U+FFFE are emitted.
+            let units: Vec<u16> = visual.chars().filter(|&c| ('\u{0001}'..='\u{FFFE}').contains(&c)).map(|c| c as u16).collect();
             if units.is_empty() {
                 continue;
             }
@@ -490,7 +566,7 @@ pub fn text_layer(words: &[PlacedWord]) -> Vec<u8> {
             (width, pdfcraft_fonts::literal(&pdfcraft_fonts::win_ansi(&w.text)))
         };
         if needs_unicode != using_pcocr {
-            out.extend_from_slice(if needs_unicode { b"/PCOCR 1 Tf\n" } else { b"/PCHelv 1 Tf\n" });
+            out.extend_from_slice(if needs_unicode { &unicode_tf } else { b"/PCHelv 1 Tf\n" });
             using_pcocr = needs_unicode;
         }
         // The em square: the word's own ink (cap height or x-height, descenders or not) spans the
@@ -570,6 +646,11 @@ mod tests {
         // "שלום" in visual left-to-right order is "םולש": U+05DD, U+05D5, U+05DC, U+05E9.
         assert!(s.contains("/PCOCR 1 Tf"), "{s}");
         assert!(s.contains("<05DD05D505DC05E9> Tj"), "{s}");
+
+        let mixed = PlacedWord { text: "שלום (123)".into(), origin: [100.0, 30.0], across: [80.0, 0.0], up: [0.0, 12.0] };
+        let s_mixed = String::from_utf8(text_layer(&[mixed])).unwrap();
+        // "שלום (123)" in visual left-to-right order is "(123) םולש": mirrored brackets around LTR digits.
+        assert!(s_mixed.contains("<00280031003200330029002005DD05D505DC05E9> Tj"), "{s_mixed}");
     }
 
     /// A word box is tight around the ink, so the text's size and baseline come from the letters:

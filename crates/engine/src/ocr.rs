@@ -89,9 +89,28 @@ pub fn engine() -> Result<Arc<Ocr>, String> {
     Ok(o)
 }
 
-/// Whether the recognition models are installed.
+/// Whether any recognition backend (the bundled Latin models or Hebrew Tesseract) is installed.
 pub fn available() -> bool {
-    Models::find().is_some()
+    Models::find().is_some() || pdfcraft_ocr::hebrew_available()
+}
+
+/// Whether the recognition backend for `lang` is installed.
+pub fn available_for(lang: &str) -> bool {
+    if pdfcraft_ocr::is_hebrew_lang(lang) {
+        pdfcraft_ocr::hebrew_available()
+    } else {
+        Models::find().is_some()
+    }
+}
+
+/// Load the shared Latin recogniser when `lang` needs it; `Ok(None)` for Hebrew, which uses
+/// Tesseract directly.
+pub fn engine_for(lang: &str) -> Result<Option<Arc<Ocr>>, String> {
+    if pdfcraft_ocr::is_hebrew_lang(lang) {
+        Ok(engine().ok())
+    } else {
+        engine().map(Some)
+    }
 }
 
 /// Everything recognition needs from a document, detached from the session.
@@ -109,7 +128,13 @@ pub struct OcrJob {
 impl OcrJob {
     /// Read the pages. `progress(done, total)` is called before each page; returning `false`
     /// stops (the pages read so far are returned).
-    pub fn run(self, ocr: &Ocr, mut progress: impl FnMut(usize, usize) -> bool) -> Vec<OcrPage> {
+    pub fn run(self, ocr: &Ocr, progress: impl FnMut(usize, usize) -> bool) -> Vec<OcrPage> {
+        self.run_with(Some(ocr), progress)
+    }
+
+    /// Like [`OcrJob::run`], taking `ocr: Option<&Ocr>` so Hebrew jobs can run without loading the
+    /// Latin models.
+    pub fn run_with(self, ocr: Option<&Ocr>, mut progress: impl FnMut(usize, usize) -> bool) -> Vec<OcrPage> {
         let config =
             RenderConfig { password: self.password.as_deref().map(Arc::from), hide_comments: self.settings.native_text_only, ..Default::default() };
         let mut r = PageRenderer::new(self.bytes.clone(), config);
@@ -136,7 +161,7 @@ impl OcrJob {
                 out.push(skip(&e));
                 continue;
             }
-            let lines = match ocr.recognize_lang(&shot.rgba, shot.width, shot.height, &self.settings.language) {
+            let lines = match pdfcraft_ocr::recognize_lang(ocr, &shot.rgba, shot.width, shot.height, &self.settings.language) {
                 Ok(l) => l,
                 Err(e) => {
                     out.push(skip(&e.to_string()));
@@ -213,11 +238,21 @@ impl Session {
         if let Some(why) = self.get(id).and_then(|d| d.read_only_reason.clone()) {
             return Err(why);
         }
-        let ocr = engine()?;
-        let found = job.run(&ocr, |_, _| true);
+        let ocr = engine_for(&job.settings.language)?;
+        let found = job.run_with(ocr.as_deref(), |_, _| true);
+        if let Some(why) = first_error_when_none_read(&found) {
+            return Err(why);
+        }
         self.apply_ocr(id, &found).map_err(|e| e.to_string())?;
         Ok(found)
     }
+}
+
+fn first_error_when_none_read(pages: &[OcrPage]) -> Option<String> {
+    if pages.iter().any(|p| p.skipped.is_none()) {
+        return None;
+    }
+    pages.iter().find_map(|p| p.skipped.as_deref()).filter(|&why| why != "the page already contains text").map(String::from)
 }
 
 /// What [`recognize_file`] did to one file.
@@ -244,13 +279,29 @@ pub fn recognize_file(
     ocr: &Ocr,
     progress: impl FnMut(usize, usize) -> bool,
 ) -> Result<FileResult, String> {
+    recognize_file_with(name, bytes, password, settings, Some(ocr), progress)
+}
+
+/// Like [`recognize_file`], taking `ocr: Option<&Ocr>` so Hebrew batch jobs can run without
+/// loading the Latin models.
+pub fn recognize_file_with(
+    name: &str,
+    bytes: Arc<Vec<u8>>,
+    password: Option<&str>,
+    settings: OcrSettings,
+    ocr: Option<&Ocr>,
+    progress: impl FnMut(usize, usize) -> bool,
+) -> Result<FileResult, String> {
     let mut s = Session::new();
     let id = s.open(name, None, bytes.clone(), password).map_err(|e| e.to_string())?;
     if let Some(why) = s.get(id).and_then(|d| d.read_only_reason.clone()) {
         return Err(why);
     }
     let job = s.ocr_job(id, &[], settings).ok_or("the document could not be read")?;
-    let pages = job.run(ocr, progress);
+    let pages = job.run_with(ocr, progress);
+    if let Some(why) = first_error_when_none_read(&pages) {
+        return Err(why);
+    }
     if s.apply_ocr(id, &pages).map_err(|e| e.to_string())? == 0 {
         return Ok(FileResult { bytes, pages });
     }
