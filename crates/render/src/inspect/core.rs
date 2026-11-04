@@ -147,6 +147,9 @@ pub(super) struct Inspector<'a> {
     /// What is left of [`MAX_FIELD_TEXT_BYTES`]: names, values and tooltips of form fields and
     /// layer names, which many entries can share one string of.
     pub(super) field_text: std::cell::Cell<usize>,
+    /// Set when a field with an action went unlisted because the text allowance was spent, so the
+    /// document still reports JavaScript.
+    pub(super) field_actions: std::cell::Cell<bool>,
 }
 
 /// Bytes of field and layer text one inspection reads and keeps together.
@@ -156,8 +159,15 @@ impl<'a> Inspector<'a> {
     pub(super) fn new(doc: &'a dyn Structure) -> Self {
         let page_ids = doc.page_ids();
         let page_index = page_ids.iter().copied().enumerate().map(|(index, id)| (id, index)).collect();
-        let mut me =
-            Self { doc, page_ids, page_index, named: HashMap::new(), annotation_pages: OnceCell::new(), field_text: MAX_FIELD_TEXT_BYTES.into() };
+        let mut me = Self {
+            doc,
+            page_ids,
+            page_index,
+            named: HashMap::new(),
+            annotation_pages: OnceCell::new(),
+            field_text: MAX_FIELD_TEXT_BYTES.into(),
+            field_actions: false.into(),
+        };
         let mut named = HashMap::new();
         if let Some(tree) =
             doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| me.dict(o)).and_then(|n| n.get(b"Dests").ok()).and_then(|o| me.dict(o))
@@ -244,7 +254,7 @@ impl<'a> Inspector<'a> {
                 }
             }
         }
-        info.has_javascript |= info.fields.iter().any(|f| f.has_actions);
+        info.has_javascript |= info.fields.iter().any(|f| f.has_actions) || self.field_actions.get();
         let needs_rendering = catalog.get(b"NeedsRendering").ok().and_then(|o| self.resolve(o).as_bool().ok()).unwrap_or(false);
         if let Some(xfa) = catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o)).and_then(|form| form.get(b"XFA").ok()) {
             // A form with no fields is taken to be laid out from its template, unless its
@@ -337,10 +347,25 @@ impl<'a> Inspector<'a> {
     }
 
     pub(super) fn budgeted_text(&self, d: &Dictionary, key: &[u8], budget: &mut usize) -> Option<String> {
-        let o = self.resolve(d.get(key).ok()?);
-        let (Object::String(bytes, _) | Object::Name(bytes)) = o else { return None };
-        let text = spend(bytes, budget, |_| trimmed_text(o).unwrap_or_default())?;
-        (!text.is_empty()).then_some(text)
+        self.budgeted_text_within(d, key, budget).ok().flatten()
+    }
+
+    /// [`Self::budgeted_text`], but `Err` when the text is there and does not fit `budget`
+    /// (against `Ok(None)`: no text, or none that trims to anything).
+    pub(super) fn budgeted_text_within(&self, d: &Dictionary, key: &[u8], budget: &mut usize) -> Result<Option<String>, ()> {
+        let Ok(o) = d.get(key) else { return Ok(None) };
+        let o = self.resolve(o);
+        let (Object::String(bytes, _) | Object::Name(bytes)) = o else { return Ok(None) };
+        let text = spend(bytes, budget, |_| trimmed_text(o).unwrap_or_default()).ok_or(())?;
+        Ok((!text.is_empty()).then_some(text))
+    }
+
+    /// [`Self::field_text`], but `Err` when the text does not fit the allowance.
+    pub(super) fn field_text_within(&self, d: &Dictionary, key: &[u8]) -> Result<Option<String>, ()> {
+        let mut left = self.field_text.get();
+        let text = self.budgeted_text_within(d, key, &mut left);
+        self.field_text.set(left);
+        text
     }
 
     pub(super) fn name(&self, d: &Dictionary, key: &[u8]) -> Option<String> {
