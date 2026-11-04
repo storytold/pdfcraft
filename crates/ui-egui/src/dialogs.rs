@@ -342,15 +342,18 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             return false;
         }
         Dialog::AttachmentDescription => {
-            let Some((doc, _, _)) = app.attachment_description_draft.as_ref() else {
+            let Some((doc, generation, _, _)) = app.attachment_description_draft.as_ref() else {
                 req.close = true;
                 return false;
             };
-            if app.active_ids().is_none_or(|(_, active)| active != *doc) {
+            if app.active_ids().is_none_or(|(_, active)| active != *doc)
+                || app.session.get(*doc).is_none_or(|current| current.edit_generation() != *generation)
+            {
+                app.attachment_description_draft = None;
                 req.close = true;
                 return false;
             }
-            let Some((_, key, description)) = app.attachment_description_draft.as_mut() else {
+            let Some((_, _, key, description)) = app.attachment_description_draft.as_mut() else {
                 req.close = true;
                 return false;
             };
@@ -1735,9 +1738,22 @@ fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: 
                 }
             } else if dialog == Dialog::AttachmentDescription {
                 if widgets::pill_button(ui, tl!("OK"), true).clicked() {
-                    if let Some((doc, key, description)) = app.attachment_description_draft.as_ref() {
-                        req.attachment_description_now =
-                            Some((*doc, Edit::EditAttachmentDescription { key: key.clone(), description: Some(description.clone()) }));
+                    if let Some((doc, generation, key, description)) = app.attachment_description_draft.as_ref() {
+                        let current = app.session.get(*doc).and_then(|doc| {
+                            doc.info
+                                .attachments
+                                .iter()
+                                .find(|attachment| matches!(&attachment.source, pdfcraft_render::AttachmentSource::Document { key: attachment_key } if attachment_key == key))
+                                .map(|attachment| attachment.description.as_deref().unwrap_or_default().trim().to_owned())
+                        });
+                        let normalized = description.trim();
+                        let still_current = app.session.get(*doc).is_some_and(|doc| doc.edit_generation() == *generation);
+                        if still_current && current.as_deref().is_some_and(|current| current != normalized) {
+                            req.attachment_description_now = Some((
+                                *doc,
+                                Edit::EditAttachmentDescription { key: key.clone(), description: Some(normalized.to_owned()) },
+                            ));
+                        }
                     }
                     req.close = true;
                 }

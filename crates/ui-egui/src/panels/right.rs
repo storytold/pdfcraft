@@ -364,7 +364,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                 if let Some(key) = deletable
                                     && ui.button(tl!("Edit description")).clicked()
                                 {
-                                    app.attachment_description_draft = Some((id, key.clone(), a.description.clone().unwrap_or_default()));
+                                    app.attachment_description_draft = Some((id, doc.edit_generation(), key.clone(), a.description.clone().unwrap_or_default()));
                                     app.dialog = Some(crate::Dialog::AttachmentDescription);
                                     ui.close();
                                 }

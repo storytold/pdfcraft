@@ -9619,6 +9619,49 @@ fn attachment_descriptions_can_be_edited_cleared_undone_and_saved() {
 }
 
 #[test]
+fn attachment_edit_resolves_the_listed_name_to_its_name_tree_key() {
+    let dir = workdir("attachment-name-tree-key");
+    std::fs::write(dir.join("payload.txt"), b"payload").unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "attachment_add", json!({"doc":doc,"path":"payload.txt","name":"storage-key.txt"}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"seed.pdf","full":true}));
+    let mut source = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("seed.pdf")).unwrap())).unwrap();
+    let key = "storage-key.txt";
+    let root = source.root().unwrap();
+    let catalog = source.get(root).as_dict().unwrap().clone();
+    let names = source.resolve(catalog.get(b"Names").unwrap()).as_dict().unwrap().clone();
+    let tree = source.resolve(names.get(b"EmbeddedFiles").unwrap()).as_dict().unwrap().clone();
+    let pairs = source.resolve(tree.get(b"Names").unwrap()).as_array().unwrap().clone();
+    let spec_ref = pairs.get(1).and_then(pdfcraft_cos::Object::as_ref).unwrap();
+    source
+        .update_dict(spec_ref, |spec| {
+            let name = pdfcraft_cos::Object::String(pdfcraft_cos::PdfString::text("visible-name.txt"));
+            spec.set(b"F".to_vec(), name.clone());
+            spec.set(b"UF".to_vec(), name);
+        })
+        .unwrap();
+    let bytes = pdfcraft_cos::write_full(&source, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    std::fs::write(dir.join("named.pdf"), bytes).unwrap();
+
+    let doc = ok(&mut a, "doc_open", json!({"path":"named.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc}))["attachments"][0]["name"], "visible-name.txt");
+    ok(&mut a, "attachment_edit", json!({"doc":doc,"name":"visible-name.txt","description":"Updated"}));
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc}))["attachments"][0]["description"], "Updated");
+    assert!(matches!(
+        a.call("attachment_edit", &json!({"doc":doc,"name":"missing.txt","description":"x"})),
+        Err(ToolError::InvalidArgs(message)) if message.contains("no document attachment named")
+    ));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"edited.pdf","full":true}));
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("edited.pdf")).unwrap())).unwrap();
+    let catalog = saved.get(saved.root().unwrap()).as_dict().unwrap().clone();
+    let names = saved.resolve(catalog.get(b"Names").unwrap()).as_dict().unwrap().clone();
+    let tree = saved.resolve(names.get(b"EmbeddedFiles").unwrap()).as_dict().unwrap().clone();
+    let pairs = saved.resolve(tree.get(b"Names").unwrap()).as_array().unwrap().clone();
+    assert_eq!(pairs.first().and_then(pdfcraft_cos::Object::as_string).map(pdfcraft_cos::PdfString::to_text).as_deref(), Some(key));
+}
+
+#[test]
 fn fdf_nested_comment_values_survive_export_import_and_save_through_tools() {
     use pdfcraft_cos::{Dict, Document, Object, PdfString, SaveOptions, write_full};
     use std::sync::Arc;

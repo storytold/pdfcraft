@@ -755,7 +755,24 @@ impl Automation {
                 self.apply(&a, edit)?
             }
             "attachment_edit" => {
-                let edit = Edit::EditAttachmentDescription { key: a.str("name")?.into(), description: Some(a.str("description")?.into()) };
+                let name = a.str("name")?;
+                let keys: Vec<String> = self
+                    .doc(&a)?
+                    .info
+                    .attachments
+                    .iter()
+                    .filter(|attachment| attachment.name == name)
+                    .filter_map(|attachment| match &attachment.source {
+                        pdfcraft_render::AttachmentSource::Document { key } => Some(key.clone()),
+                        pdfcraft_render::AttachmentSource::Annotation { .. } => None,
+                    })
+                    .collect();
+                let key = match keys.as_slice() {
+                    [key] => key.clone(),
+                    [] => return Err(ToolError::InvalidArgs(format!("there is no document attachment named {name:?}; use a name from doc_info"))),
+                    _ => return Err(ToolError::InvalidArgs(format!("more than one document attachment is named {name:?}; choose an unambiguous name"))),
+                };
+                let edit = Edit::EditAttachmentDescription { key, description: Some(a.str("description")?.into()) };
                 self.apply(&a, edit)?
             }
             "doc_remove_hidden" => self.doc_remove_hidden(&a)?,

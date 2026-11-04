@@ -171,6 +171,39 @@ fn the_description_can_be_edited_from_the_row_menu() {
 }
 
 #[test]
+fn keeping_the_attachment_description_does_not_create_an_edit() {
+    let mut h = harness();
+    right_click(&mut h, "notes.txt");
+    h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Edit description").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let state = h.state();
+    let doc = state.session.get(state.views[0].id).unwrap();
+    assert_eq!(doc.info.attachments.iter().find(|a| a.name == "notes.txt").unwrap().description.as_deref(), Some("Original"));
+    assert!(!doc.dirty, "confirming the unchanged description does not dirty the document");
+    assert_eq!(doc.can_undo(), None, "confirming the unchanged description does not add undo history");
+}
+
+#[test]
+fn editing_the_document_while_description_dialog_is_open_discards_its_stale_draft() {
+    let mut h = harness();
+    right_click(&mut h, "notes.txt");
+    h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Edit description").click();
+    h.run_steps(2);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::EditAttachmentDescription {
+        key: "notes.txt".into(),
+        description: Some("Changed elsewhere".into()),
+    }));
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let state = h.state();
+    let doc = state.session.get(state.views[0].id).unwrap();
+    assert_eq!(doc.info.attachments.iter().find(|a| a.name == "notes.txt").unwrap().description.as_deref(), Some("Changed elsewhere"));
+    assert_eq!(doc.can_undo(), Some("Edit attachment description"));
+}
+
+#[test]
 fn the_row_buttons_still_take_their_own_clicks() {
     let dir = Dir::new("buttons");
     let target = dir.0.join("from button.txt");
