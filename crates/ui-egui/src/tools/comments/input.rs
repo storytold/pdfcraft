@@ -106,7 +106,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
     // A click on a group subordinate (`/RT /Group`) selects its group (ISO 32000-2 §12.5.6.2); a
     // drag moves just it, as Acrobat's does. The tool's own filter picks the candidates, so a
     // Fill & Sign tool reaches its mark under a comment or group member it ignores.
-    let a = cx.click_hit_where(p, |a| bodies && pick(a))?;
+    let a = cx.click_target_where(p, |a| bodies && pick(a))?;
     // A click on a highlight over a link follows the link, so the link's hand and tip show there.
     if cx.tool == QuickTool::Select && a.subtype == "Highlight" && on_link {
         return None;
@@ -132,7 +132,7 @@ pub(crate) fn context_hit(cx: &PageCx<'_>, p: Pos2) -> Option<Hit> {
     if cx.hidden || !cx.xf.rect.contains(p) {
         return None;
     }
-    let a = cx.click_hit(p)?;
+    let a = cx.click_target(p)?;
     Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer(a), egui::CursorIcon::Default))
 }
 
@@ -142,12 +142,13 @@ pub(crate) fn anchor(cx: &PageCx<'_>, p: Pos2, view: &mut DocView) {
     view.comments.context_at = Some((cx.page, cx.to_user(p)));
 }
 
-/// A right-click at `p` on comment `index` of this page ([`context_hit`], when it wins there)
+/// A right-click on comment `index` of this page ([`context_hit`], when it wins there)
 /// selects what a click there selects: the comment, or the group a subordinate belongs to, so the
 /// menu offers the comment's actions. One on anything else selects none.
-pub(crate) fn context(cx: &PageCx<'_>, p: Pos2, index: Option<usize>, view: &mut DocView) {
+pub(crate) fn context(cx: &PageCx<'_>, index: Option<usize>, view: &mut DocView) {
     match index {
-        Some(i) => match cx.click_hit(p).filter(|a| a.index == i) {
+        // `index` is what the right-click is on ([`context_hit`]): no second look at the point.
+        Some(i) => match cx.annotation(i) {
             Some(a) => view.comments.pick(cx, a),
             None => view.comments.select(Some((cx.page, i))),
         },
