@@ -94,10 +94,10 @@ into compressed object streams with a cross-reference stream (PDF 1.5+); turning
 classic table any reader accepts. Both forms map accepted xref/header aliases to one output
 object, retaining shared identity such as page-tree parent links; unrelated generations stay null.
 `write_full_to` is the same writer handing each object to a `Write` sink as it is serialized, so
-the output is never held whole. What it still holds besides the document grows with the object
-*count*, not the output size: the numbering and offset bookkeeping, and the cross-reference
-section, which is built in full before it is written. Object data in flight stays within about
-64 KB plus the largest object or object stream.
+the output is never held whole. Only the output buffer goes away: the writer's own working memory
+(object-stream batches of up to 8 MiB, the largest single object, bookkeeping that grows with the
+number of objects and references, and the cross-reference section, built in full before it is
+written) is the same as `write_full`'s.
 
 A full save keeps the file's `/ID` as it is, unless the document asked for a new identifier with
 `Document::require_full_save_with_new_id` (redaction and sanitizing do). Then both strings are

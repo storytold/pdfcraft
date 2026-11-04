@@ -145,6 +145,8 @@ fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &
 }
 
 fn write_indirect(num: u32, generation: u16, o: &Object, out: &mut Vec<u8>) {
+    #[cfg(test)]
+    STAGED.with(|staged| staged.set(staged.get() + 1));
     let _ = writeln!(out, "{num} {generation} obj");
     serialize(o, out);
     out.extend_from_slice(b"\nendobj\n");
@@ -346,12 +348,13 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
 }
 
 /// [`write_full`] into any [`Write`] sink, such as a file, without holding the output in memory:
-/// each object is passed on as soon as it is serialized (in chunks of about 64 KB). Object data
-/// in flight stays within about 64 KB plus the largest object or object stream. Besides the
-/// document, memory also holds what grows with the object count, not the output size: the
-/// numbering and offset bookkeeping, and the cross-reference section, which is built in full
-/// before it is written. The bytes are identical to `write_full`'s. Returns the number of bytes
-/// written. The sink is flushed at the end; on an error, what was already written is incomplete.
+/// each object is passed on as soon as it is serialized (in chunks of about 64 KB). Only the
+/// output buffer goes away; the writer's working memory is the same as `write_full`'s, such as
+/// object-stream batches (up to 8 MiB, briefly more while one is assembled and
+/// compressed), the largest single object, bookkeeping that grows with the number of objects and
+/// references, and the cross-reference section, which is built in full before it is written.
+/// The bytes are identical to `write_full`'s. Returns the number of bytes written. The sink is
+/// flushed at the end; on an error, what was already written is incomplete.
 ///
 /// One exception: a document that asked for a new file identifier (redaction, sanitizing) is
 /// held in memory until its trailer is written, because that identifier is a hash of every byte
@@ -466,9 +469,10 @@ const SINK_CHUNK: usize = 64 * 1024;
 
 #[cfg(test)]
 thread_local! {
-    /// Test builds only: how many objects and object streams full saves on this thread have
-    /// staged, so a test sink can tell whether output reached it while serialization was still
-    /// going on, not only after it.
+    /// Test builds only: how many indirect objects (object streams included) this thread has
+    /// serialized, counted in `write_indirect` so it does not depend on the sink code under
+    /// test. A test sink reads it to tell whether output reached it while serialization was
+    /// still going on, not only after it.
     static STAGED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -486,8 +490,6 @@ impl<W: Write> Sink<W> {
     /// Called after each object or object stream is staged: hands the staged bytes on once there
     /// are enough of them, unless the sink holds them.
     fn spill(&mut self) -> Result<(), CosError> {
-        #[cfg(test)]
-        STAGED.with(|staged| staged.set(staged.get() + 1));
         if !self.hold && self.buf.len() >= SINK_CHUNK { self.drain() } else { Ok(()) }
     }
 
@@ -1041,6 +1043,32 @@ mod tests {
         doc
     }
 
+    /// A document whose catalog reaches `dicts` dictionaries and no streams, each dictionary
+    /// holding `bytes` pseudo-random bytes, so they all go into object streams and compression
+    /// does not shrink a batch below a sink chunk.
+    fn packed_document(dicts: usize, bytes: usize) -> Document {
+        let mut doc = Document::new_empty();
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut items = Vec::new();
+        for _ in 0..dicts {
+            let data: Vec<u8> = (0..bytes)
+                .map(|_| {
+                    state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                    (state >> 56) as u8
+                })
+                .collect();
+            let mut d = Dict::new();
+            d.set(b"Data".to_vec(), Object::String(PdfString { bytes: data, hex: true }));
+            items.push(Object::Ref(doc.add(Object::Dict(d))));
+        }
+        let mut catalog = Dict::new();
+        catalog.set(b"Type".to_vec(), Object::name("Catalog"));
+        catalog.set(b"Items".to_vec(), Object::Array(items));
+        let root = doc.add(Object::Dict(catalog));
+        doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(root));
+        doc
+    }
+
     /// A sink that keeps what it is given, counts the calls, and notes how many objects had been
     /// staged when the first bytes arrived.
     #[derive(Default)]
@@ -1108,6 +1136,24 @@ mod tests {
             let reopened = Document::open(Arc::new(whole)).unwrap();
             assert!(reopened.repair_log().is_empty(), "offsets are right: no reconstruction");
         }
+    }
+
+    #[test]
+    fn a_full_save_streams_packed_objects_too() {
+        // No standalone streams that could reach the sink first: only packed objects, enough for
+        // several object streams, each larger than a sink chunk.
+        let doc = packed_document(OBJSTM_SIZE * 5, 1024);
+        let opts = SaveOptions::default();
+        assert!(opts.object_streams, "the default packs non-stream objects");
+        let whole = write_full(&doc, &opts).unwrap();
+        let mut sink = Recording::default();
+        STAGED.with(|staged| staged.set(0));
+        write_full_to(&doc, &opts, &mut sink).unwrap();
+        let staged = STAGED.with(std::cell::Cell::get);
+        assert!(sink.bytes == whole, "same bytes as write_full");
+        assert!(staged >= 5, "several object streams ({staged} objects serialized)");
+        let first = sink.staged_at_first_write.unwrap();
+        assert!(first * 2 < staged, "first write after {first} of {staged} objects serialized: packed output not streamed");
     }
 
     #[test]
