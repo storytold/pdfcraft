@@ -95,15 +95,17 @@ help/docs polish: their script work is done, and each catalog lacks 46 strings o
 | Central Kurdish (Sorani) | `ckb` | 2,754 (95.1%) | partial; right-to-left like Arabic | no |
 | Thai | `th` | 2,751 (95.0%) | partial | no |
 | Lao | `lo` | 2,504 (86.4%) | partial | no |
+| Hebrew | `he` | 2,934 of 5,037 (58.2%; measured 2026-11-09 with `cargo xtask i18n-report`, on a larger string set than the rows above) | partial; gathered from several contributors, one a native speaker | yes (Middle East edition) |
 
-**23 other languages** ship (34 catalogs plus English = **35** interface languages in Preferences).
+**24 other languages** ship (35 catalogs plus English = **36** interface languages in Preferences).
 Their presence does not imply a detailed linguistic or runtime review.
-Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is shipped here but not by Acrobat.
+Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish. Vietnamese is shipped here but not by Acrobat.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | minor | Hebrew (`he`) offered: craft-i18n catalog, right to left through epaint like Arabic; three CLDR plural forms; Auto picks it only where the interface fonts draw Hebrew |
 | 2026-11-03 | minor | Every catalog restated from `cargo xtask i18n-report` on `14ae839a` (of the 2,897 strings in the report's denominator), replacing the catalog-union measure, which had reached 2,895 keys and left rows "100%" that were 44 short (#5805). Hindi, Indonesian and Korean restated from 0 to their catalogs, and Thai, Lao and Central Kurdish added to the table. The ≈ 68% score is not re-scored |
 | 2026-10-25 | minor | Arabic current state corrected: catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build still has no Hans face and the release-pinned craft-fonts still has no Telugu face. Scores and estimates unchanged |
 | 2026-10-25 | minor | Added Persian (`fa`, 2,785 entries, all but 13 of the current 2,798-key union); right-to-left like Arabic and Kurdish, with logical entries reordered by egui 0.37's epaint; AI-assisted, not yet native-reviewed |
