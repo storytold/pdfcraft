@@ -12,6 +12,9 @@ use serde_json::{Value, json};
 /// Deepest nesting a bookmark tree may have (the listing reaches 33 levels).
 const MAX_DEPTH: usize = 33;
 
+/// The keys a node may have: the ones [`node_json`] writes.
+const NODE_KEYS: [&str; 8] = ["title", "page", "view", "color", "bold", "italic", "open", "children"];
+
 impl Automation {
     pub(crate) fn bookmark_export(&self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
@@ -134,6 +137,9 @@ fn list_of(list: &Value, at: &[usize], count: &mut usize) -> Result<Vec<OutlineN
 /// One node and, through [`list_of`], its children (recursion bounded by `MAX_DEPTH`).
 fn node_of(v: &Value, at: &[usize], count: &mut usize) -> Result<OutlineNode> {
     let o = v.as_object().ok_or_else(|| bad(at, "must be an object"))?;
+    if let Some(k) = o.keys().find(|k| !NODE_KEYS.contains(&k.as_str())) {
+        return Err(bad(at, &format!("unknown key {k:?} (a bookmark has {})", NODE_KEYS.join(", "))));
+    }
     let field = |k: &str| o.get(k).filter(|x| !x.is_null());
     // An empty title is kept: files have them, and export writes them as "".
     let title = field("title").and_then(Value::as_str).ok_or_else(|| bad(at, "needs a title"))?.to_string();

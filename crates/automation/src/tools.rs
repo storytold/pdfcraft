@@ -336,7 +336,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "bookmark_import",
             "Import bookmarks",
-            "Add a tree of bookmarks, as bookmark_export gives it (bookmarks) or as a JSON file it wrote (file), under a parent bookmark (or at the top level) at a position, or with replace in place of the whole outline. A bookmark whose page this document lacks is kept without a destination and listed in unmapped (1-based paths into the given tree). A view takes exactly its type's values (XYZ 3, FitR 4, FitH/FitV/FitBH/FitBV 1, Fit/FitB none). Give exactly one of bookmarks and file. A title may be empty but not missing. Every node is checked before anything is written: at most 100000 bookmarks, nested at most 33 levels counting the parent's. truncated is true when the file says its export left bookmarks out. Undoable.",
+            "Add a tree of bookmarks, as bookmark_export gives it (bookmarks) or as a JSON file it wrote (file), under a parent bookmark (or at the top level) at a position, or with replace in place of the whole outline. A bookmark whose page this document lacks is kept without a destination and listed in unmapped (1-based paths into the given tree). A view takes exactly its type's values (XYZ 3, FitR 4, FitH/FitV/FitBH/FitBV 1, Fit/FitB none). Give exactly one of bookmarks and file. A title may be empty but not missing; a key a node does not have is refused. Every node is checked before anything is written: at most 100000 bookmarks, nested at most 33 levels counting the parent's. truncated is true when the file says its export left bookmarks out. Undoable.",
         )
         .destructive()
         .with(schema(

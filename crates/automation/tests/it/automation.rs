@@ -10743,6 +10743,20 @@ fn odd_bookmarks_round_trip_and_a_cut_tree_says_so() {
 }
 
 #[test]
+fn a_misspelt_bookmark_key_is_refused_not_dropped() {
+    let dir = workdir("bookmark-io-key");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let tree = json!([{ "title": "Parent", "children": [{ "title": "Red", "page": 1, "colour": [1, 0, 0] }] }]);
+    match a.call("bookmark_import", &json!({ "doc": doc, "bookmarks": tree })) {
+        Err(ToolError::InvalidArgs(m)) => assert!(m.contains("[1, 1]") && m.contains("\"colour\""), "{m}"),
+        other => panic!("expected InvalidArgs, got {other:?}"),
+    }
+    assert_eq!(ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"], json!([]));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn a_bad_bookmark_tree_is_refused_whole_and_names_the_node() {
     let dir = workdir("bookmark-io-bad");
     let mut a = auto(&dir);
