@@ -5485,3 +5485,20 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
 }
+
+#[test]
+fn detection_finds_ballot_box_glyphs_as_checkboxes() {
+    use crate::detect::*;
+    // Printed check boxes set as text (U+2610), with the label above (as in Evet/Hayır grids).
+    let words = vec![
+        Word { text: "Evet".into(), rect: [300.0, 440.0, 330.0, 452.0] },
+        Word { text: "☐".into(), rect: [322.0, 418.0, 340.0, 436.0] },
+        Word { text: "☑".into(), rect: [420.0, 418.0, 438.0, 436.0] },
+        Word { text: "Name:".into(), rect: [50.0, 700.0, 80.0, 710.0] },
+    ];
+    let found = detect(&words, &Shapes::default(), &[], &[]);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].kind, Kind::CheckBox);
+    assert_eq!(found[0].rect, [322.0, 418.0, 340.0, 436.0]);
+    assert_eq!(found[0].name, "Evet", "{found:?}");
+}

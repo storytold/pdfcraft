@@ -24,7 +24,7 @@ pub(super) const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
 
 /// The bytes a listed annotation keeps.
 pub(super) fn retained(a: &Annotation) -> usize {
-    let text = [&a.author, &a.contents, &a.modified, &a.name, &a.in_reply_to, &a.state, &a.intent];
+    let text = [&a.author, &a.contents, &a.modified, &a.name, &a.in_reply_to, &a.state, &a.intent, &a.stamp];
     text.into_iter()
         .map(|t| t.as_ref().map_or(0, String::len))
         .chain([
@@ -158,6 +158,7 @@ impl<'a> Inspector<'a> {
                 }
                 _ => Vec::new(),
             };
+            let stamp = (subtype == "Stamp").then(|| self.name(d, b"Name")).flatten();
             let annotation = Annotation {
                 page,
                 subtype,
@@ -177,6 +178,7 @@ impl<'a> Inspector<'a> {
                 quads,
                 locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
                 intent: self.name(d, b"IT"),
+                stamp,
                 fill_sign,
                 no_rotate: d.get(b"F").is_ok_and(|f| draw_flags(self.resolve(f)) & 16 != 0),
                 points,

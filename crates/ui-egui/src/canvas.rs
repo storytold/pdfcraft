@@ -1116,6 +1116,7 @@ type PageRenders = (Vec<(usize, f32, u64, Option<Tile>)>, Vec<usize>);
 /// What the page-scroll closure reads: this frame's zoom, scrolling, tool and document state.
 #[derive(Clone, Copy)]
 struct PageEnv<'a> {
+    session: &'a pdfcraft_engine::Session,
     added: &'a Vec<pdfcraft_engine::Added>,
     allowed: bool,
     author: &'a String,
@@ -1525,6 +1526,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     };
     // While a table is being set up, nothing else is drawn or moved.
     let prepare_allowed = can_modify && table_preview.is_none() && frame.out.open_table.is_none();
+    cache_printed_page(view, &frame.env, i, &xf, ptr);
     let hits = PageHits {
         page: i,
         xf: &xf,
@@ -1653,6 +1655,8 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     } else {
         tool == QuickTool::Select && crate::forms_ui::page_input(cx, form, can_fill, view)
     };
+    let on_printed =
+        tool == QuickTool::Select && !preparing && !editing_content && crate::forms_ui::printed_page_input(cx, form, allowed, author, view);
     // Redact draws boxes off text; so does Highlight (an area highlight, as in Acrobat).
     let area_tool = tool == QuickTool::Redact && can_modify || tool == QuickTool::Comment(comments::CommentTool::Highlight) && allowed;
     let boxing = area_tool && {
@@ -1730,7 +1734,8 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     {
         view.links.context = Some((i, l.index));
     }
-    let consumed = on_objects || on_edit_text || on_link || on_content || boxing || on_field || comments::page_input(ui, resp, &pcx, view);
+    let consumed =
+        on_objects || on_edit_text || on_link || on_content || boxing || on_field || on_printed || comments::page_input(ui, resp, &pcx, view);
     // The cursor and the tip from what lies under the pointer, after the tools claimed theirs (the
     // last claim on a layer stands).
     if frame.env.unobstructed
@@ -1741,6 +1746,22 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         }
     }
     PageInput { consumed, area_tool }
+}
+
+/// Printed check boxes are detected lazily through the existing engine tool, once per generation.
+fn cache_printed_page(view: &mut DocView, env: &PageEnv<'_>, page: usize, xf: &PageXform, ptr: &PagePointer) {
+    if env.tool != QuickTool::Select || env.preparing || env.editing_content || ptr.within(xf.rect).is_none() {
+        return;
+    }
+    let id = view.id;
+    crate::forms_ui::cache_printed_boxes(view, env.doc.edit_generation(), page, &|| {
+        env.session
+            .detect_fields(id, &[page])
+            .into_iter()
+            .filter(|(_, c)| matches!(c.kind, pdfcraft_engine::detect::Kind::CheckBox))
+            .map(|(_, c)| c.rect)
+            .collect()
+    });
 }
 
 /// Edit text's paragraphs and pictures on page `i`, kept while the document is unchanged.
@@ -1867,10 +1888,22 @@ impl PageHits<'_> {
         // together.
         let picks_up = matches!(tool, QuickTool::Select | QuickTool::AddText | QuickTool::EditText);
         let added = (editing_content && can_modify && picks_up).then(|| crate::content_ui::hit(xf, info, page, added, view, p)).flatten();
-        [link_hit(info, xf, page, p), comments::hit(pcx, view, p), pictures, paragraphs, added, objects, grips, fields]
-            .into_iter()
-            .flatten()
-            .collect()
+        [
+            link_hit(info, xf, page, p),
+            comments::hit(pcx, view, p),
+            (tool == QuickTool::Select && !preparing && !editing_content)
+                .then(|| crate::forms_ui::printed_hit(xf, info, page, form, view, p, pcx.allowed))
+                .flatten(),
+            pictures,
+            paragraphs,
+            added,
+            objects,
+            grips,
+            fields,
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 }
 
@@ -3242,6 +3275,7 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
     if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {
         view.pending_edit = Some(e);
     }
+    view.forms.offer_allowed = tool == QuickTool::Select && !env.preparing && !env.editing_content && env.can_fill && unobstructed;
     let text_box = crate::forms_ui::text_box(doc, view, form);
     if let Some(e) = crate::forms_ui::overlay(ui.ctx(), view, info, form, primary_down, text_box.as_ref(), today) {
         view.pending_edit = Some(e);
@@ -3253,6 +3287,7 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
     if typed.is_some() {
         view.pending_edit = typed;
     }
+    crate::forms_ui::finish_printed_edit(view);
     text_done
 }
 
@@ -3690,6 +3725,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
     let env = PageEnv {
+        session: &app.session,
         added: &added,
         allowed,
         author: &author,

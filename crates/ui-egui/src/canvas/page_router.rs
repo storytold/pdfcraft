@@ -16,6 +16,8 @@ use crate::page_cursor::Layer;
 /// What a hit is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Owner {
+    /// A detected printed check box, by its position in the page cache.
+    PrintedSquare { index: usize },
     /// A comment (or a Fill & Sign mark), by its `/Annots` index, and the part of it.
     Comment { index: usize, part: CommentPart },
     /// A link, by its index in the document's links.

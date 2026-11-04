@@ -150,7 +150,7 @@ fn edges_are_primary_finite_in_order_and_capped() {
 }
 
 /// The page modules: the per-page chain in `canvas::document_area` and what it calls.
-const PAGE_MODULES: [&str; 35] = [
+const PAGE_MODULES: [&str; 36] = [
     "canvas.rs",
     "canvas/area.rs",
     "canvas/bars.rs",
@@ -169,6 +169,7 @@ const PAGE_MODULES: [&str; 35] = [
     "tools/comments/paint.rs",
     "tools/comments/state.rs",
     "tools/forms_ui.rs",
+    "tools/forms_ui/printed.rs",
     "tools/prepare.rs",
     "tools/fill_sign.rs",
     "tools/fill_sign/scan.rs",
@@ -363,9 +364,10 @@ fn page_modules_claim_the_cursor_and_never_set_it() {
 }
 
 /// Hit producers are called only by the central routing table, not again by an input handler.
-const PAGE_HIT_CALLS: [&str; 8] = [
+const PAGE_HIT_CALLS: [&str; 9] = [
     "prepare::hit(",
     "forms_ui::hit(",
+    "forms_ui::printed_hit(",
     "comments::hit(",
     "edit_text_ui::hit(",
     "edit_text_ui::picture_hit(",
@@ -402,6 +404,7 @@ fn page_modules_take_presses_from_the_router_without_repeating_hit_tests() {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     for (file, function) in [
         ("tools/forms_ui.rs", "page_input"),
+        ("tools/forms_ui/printed.rs", "printed_page_input"),
         ("tools/prepare.rs", "page_input"),
         ("tools/content_ui.rs", "page_input"),
         ("tools/edit_text_ui.rs", "page_input"),

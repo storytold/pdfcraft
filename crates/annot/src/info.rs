@@ -31,6 +31,8 @@ pub struct Summary {
     pub quads: Vec<[f32; 8]>,
     pub locked: bool,
     pub intent: Option<String>,
+    /// Stamp `/Name` (`PCCheck`, `Approved`, …).
+    pub stamp: Option<String>,
     /// A Fill & Sign mark ([`is_fill_sign`]).
     pub fill_sign: bool,
     /// The NoRotate flag (`/F` bit 5), as `pdfcraft_render::Annotation::no_rotate`.
@@ -127,6 +129,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
             let irt = d.get(b"IRT").map(|o| o.as_ref().map_or_else(|| doc.resolve(o), |r| doc.get(final_ref(doc, r))));
             let in_reply_to = irt.and_then(|o| o.as_dict().cloned()).and_then(|p| text_value(doc, &p, b"NM"));
             let parent = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| slots.get(&final_ref(doc, r)).copied());
+            let stamp = (subtype == "Stamp").then(|| text_value(doc, d, b"Name")).flatten();
             out.push(Summary {
                 page,
                 index,
@@ -146,6 +149,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 quads,
                 locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
                 intent: d.get(b"IT").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
+                stamp,
                 fill_sign: is_fill_sign(doc, d),
                 no_rotate: drawn_upright(doc, d),
                 points,

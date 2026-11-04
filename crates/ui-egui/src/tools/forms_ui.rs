@@ -7,7 +7,11 @@
 //! list of their options; an editable one (Edit flag) also takes typed text in a box over the
 //! field. Every change is one undoable engine edit.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+mod printed;
+pub use printed::square_screen_rect;
+pub(crate) use printed::{cache_printed_boxes, finish_printed_edit, printed_hit, printed_page_input};
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, FormWidget, field_flags, form_appearance};
@@ -52,6 +56,14 @@ pub struct Focus {
 #[derive(Clone, Debug, Default)]
 pub struct FormView {
     pub focus: Option<Focus>,
+    /// Toggle-field hover offer and the corridor from the field to its button.
+    pub offer: Option<(String, usize)>,
+    pub offer_rect: Option<Rect>,
+    pub(crate) offer_allowed: bool,
+    pub(crate) flat: HashMap<usize, Vec<[f64; 4]>>,
+    pub(crate) flat_gen: u64,
+    /// A check or popup toggle waiting for a field draft to commit.
+    pub(crate) queued: Option<Edit>,
     /// The draft whose edit is queued (`DocView::pending_edit`): if the field refuses the value,
     /// the editor reopens with it rather than losing the typing.
     pub(crate) committed: Option<Focus>,
@@ -760,6 +772,10 @@ pub(crate) fn overlay(
     text_box: Option<&form_appearance::TextBox>,
     today: (i64, u32, u32),
 ) -> Option<Edit> {
+    let pointer = ctx.input(|i| i.pointer.hover_pos());
+    if let Some(edit) = printed::widget_offer(ctx, view, info, form, pointer).flatten() {
+        view.pending_edit = Some(edit);
+    }
     let pressed = view.forms.pressed;
     if !primary_down {
         view.forms.pressed = false;
