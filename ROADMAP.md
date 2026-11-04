@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M7 #4487 review: retain leading spaces in incompatible styled runs through save/reopen and re-edit; rebase #5104 onto ecdd1e65; estimates unchanged)
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
@@ -9,6 +11,7 @@
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 review follow-up: preserve image crop/tag/stream ownership, resize in page orientation, harden clipboard and text formatting, and reload installed fonts; estimates unchanged)
+
 
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
@@ -92,6 +95,9 @@
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M12 #2570: Dynamic XFA rich-text fields carry exData/maxLength into AcroForm MaxLen for reported and enforced Unicode character limits, retained after save/reopen. Estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M4 #3309: bounded iterative named-destination pruning on page deletion; estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M1 #2658: macOS atomic saves retain destination extended attributes, including Finder tags, and reject partial resource-fork reads after size changes. Metadata failures retain the original PDF and unsaved edit. Estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4487: rebase PR #5104 onto main 0cba87ae; 866 scoped tests pass (4 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (Reused-font row measurements match the base word spacing of zero actually emitted; inherited Tw regression fails before and with an indent-only fix, then passes at the requested margin; 770 edit/engine tests and scoped gates pass (4 existing ignored))
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #4487: rebase PR #5104 onto main 47f42ba0; 3025 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 
 PdfCraft's one-page summary: how close it is to Adobe Acrobat Pro's offline feature set, and what
 comes next. Adobe's cloud services (Document Cloud, Acrobat Sign requests, shared review, the AI
@@ -223,6 +229,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-03 (M7, #4487 review):** Keep separate leading-space runs when they directly precede text on the same visual row and no nonblank text lies before the blank geometrically on that row and plane, retaining each run’s font, size and rewrite operators. Inter-word space runs retain main’s line list, editor text and reading text. Isolated blank runs remain outside editable text. Save/reopen/re-edit regressions cover font and size changes on one/two rows and previously justified text. Rebased #5104 onto `ecdd1e65`, preserving both roadmap histories and reviewing auto-merged source and test hunks. Estimates unchanged.
+
 - **2026-11-03 (M5, #5850 review):** Resolve indirect IT when recognizing typewriter contents and Fill & Sign marks. Comment listing and property lookup retain their existing direct-Subtype behavior. A real double-click Edit composer preserves the typewriter’s text as written; ordinary comment edits keep trimming. Regressions cover direct Subtype with indirect intent, save/reopen, raw posted contents and same-index comments on different pages. The existing live-movement test now commits its setup with an outside click rather than Enter. Estimates unchanged.
 
 - **2026-11-03 (M5, #5850):** Fill & Sign Enter inserts a line break in a growing editor; clicking outside commits and Escape cancels. Nonempty text keeps leading, internal and trailing line breaks. The headless fill_sign_add path sizes its typewriter box for the same wrapped lines so saved appearances show every row. Production-order keyboard and engine save/reopen/render regressions exercise the UI and headless callers. Estimates unchanged.
@@ -243,6 +251,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - 2026-11-01: PR #2155 review follow-up preserves editor crops through group moves and keeps arranged artwork outside added-item streams; unsafe nested-tag extraction is refused. Image handles and flips follow page orientation, added images accept general transforms, and clipboard/text/Home/font-discovery edge cases have focused regressions. Candidate only; estimates unchanged.
 - 2026-11-01: PR #2155 maintainer edits remove redundant image/text helpers and add regressions for crop ownership, arrange scope/state fidelity, clipboard precedence, crop-drag bounds, and font scanning. Transform and Unicode-script tools complete the headless paths.
 
+
+
 - **2026-10-18 (M3, #1354, local candidate):** Integrated --two-paged with current main, retaining upstream modal/picker ownership and single-tab reuse. Native launch/opening/password regressions, negative checks against the old wrapper, visual inspection, formatting, strict scoped Clippy, layers, assets, parity and scoped WASM compilation pass. Three existing socket tests are unavailable in this workspace; one existing network test remains ignored. No push or GitHub merge; estimates unchanged.
 - **2026-10-31 (M2, PR #4172 review):** Added same-machine pixel oracles for GBK Song, Hei, Kai and FangSong, including all four subset-prefixed Founder aliases. Reference PDFs use explicit Unicode mappings and independently selected installed faces; font data and rasters remain in memory. All eight cases ran; wrong-glyph and wrong-family production mutations each failed the new assertion and were restored. Validation: 422 renderer unit tests, renderer all-target Clippy with -D warnings, formatting, layers/assets/parity and renderer WASM checks passed; existing optional-patch/WASM warnings and parity notes remain. Estimates unchanged.
 
@@ -251,6 +261,15 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-28 (M2, PR #4172):** Integrated main 5af10276, preserving both roadmap histories and reviewing auto-merged export tests and accessibility UI changes. Validation: 488 scoped tests passed (18 engine, 412 renderer unit, 43 renderer integration, 15 Combine; one existing renderer integration test ignored); scoped all-target Clippy with -D warnings, formatting, layers, assets, parity and renderer/engine WASM checks passed. Viewer-only CJK fallback and print/output font policy remain unchanged; estimates unchanged.
 
 - **2026-10-27 (M2, PR #4172 module-split conflicts):** Integrated main 1dd2737b, retaining viewer-only CJK fallback in split session modules and Combine thumbnail workers, and moving renderer regressions to the new test module. Validation: 798 scoped tests passed (371 engine, 412 renderer, 15 Combine; two existing engine tests ignored); scoped all-target Clippy with -D warnings, formatting, layers, assets, parity and renderer/engine WASM checks passed. Estimates unchanged.
+- **2026-10-29 (M7, #4487 integration):** Rebased justified-indent editing onto upstream/main `3109bb23`, retaining both the upstream q/Q matrix regression and the source-word-spacing indent regression. Estimates unchanged.
+
+- **2026-10-28 (M7, #4487):** Editing a justified paragraph keeps the spaces typed at the start of a stretched row as an indent: they are drawn at their own width in the row's text object, its word spacing taken back after them, so the row still ends at the margin and reads back with its indent. A second edit through the styled path measures and draws a row's indent without word spacing and calibrates rows with edge spaces over their words, so the paragraph stays one block at 100 Tz. Spaces after a stretched row's last word are still left out. Estimates unchanged.
+
+- **2026-11-01 (M7, #4487 review):** Reused-font row measurements match the base word spacing of zero actually emitted; inherited Tw regression fails before and with an indent-only fix, then passes at the requested margin; 770 edit/engine tests and scoped gates pass (4 existing ignored).
+
+- **2026-11-01 (M7, #4487 rebase):** PR #5104 rebased onto main `47f42ba0`; resolved and auto-merged hunks reviewed. 3025 scoped tests passed, 9 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Upstream selected-row and mixed-style justification restrictions retained; supported indent paths pass three independent negative controls. Estimates unchanged.
+
+- **2026-11-01 (M7, #4487 rebase):** PR #5104 rebased onto main `0cba87ae`; resolved and auto-merged hunks reviewed. 866 scoped tests passed, 4 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
 
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 
@@ -757,9 +776,13 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | patch | M7 #4487 review: retain leading spaces in incompatible styled runs through save/reopen and re-edit; rebase #5104 onto ecdd1e65; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
+| 2026-11-01 | patch | M7 #4487: rebase PR #5104 onto main 0cba87ae; 866 scoped tests pass (4 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
+| 2026-11-01 | patch | Reused-font row measurements match the base word spacing of zero actually emitted; inherited Tw regression fails before and with an indent-only fix, then passes at the requested margin; 770 edit/engine tests and scoped gates pass (4 existing ignored). |
+| 2026-11-01 | patch | M7 #4487: rebase PR #5104 onto main 47f42ba0; 3025 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |
