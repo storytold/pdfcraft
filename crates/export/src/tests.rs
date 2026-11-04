@@ -89,6 +89,24 @@ fn html_has_headings_paragraphs_and_images_in_order() {
 }
 
 #[test]
+fn simple_html_has_no_css_or_layout_elements() {
+    let mut p = page();
+    let mut unicode = block("naïve 日本語.", 72.0, 300.0, 300.0, 311.0);
+    unicode.bold = true;
+    unicode.italic = true;
+    p.blocks.push(unicode);
+    let source = html_simple(&[p, table_page()], "Simple export");
+    for banned in ["<style", "style=", "<div", "<span"] {
+        assert!(!source.contains(banned), "{banned} in {source}");
+    }
+    for wanted in ["<h1", "<p>", "<strong>", "<em>", "<table", "naïve 日本語."] {
+        assert!(source.contains(wanted), "no {wanted} in {source}");
+    }
+    // The rich export of the same pages keeps its stylesheet: only simple mode drops it.
+    assert!(html(&[page()], "Rich").contains("<style"));
+}
+
+#[test]
 fn docx_is_a_word_package() {
     let d = docx(&[page()], "Report");
     assert!(d.starts_with(b"PK"));
