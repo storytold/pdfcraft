@@ -173,8 +173,14 @@ impl Camera {
         let ahead = normalize([c[6], c[7], c[8]]).ok_or(RenderError::Camera("the view's z axis is zero"))?;
         let up = normalize([c[3], c[4], c[5]]).ok_or(RenderError::Camera("the view's y axis is zero"))?;
         let eye = [c[9], c[10], c[11]];
-        let distance = if center_of_orbit.is_finite() && center_of_orbit > 0.0 { center_of_orbit } else { dot(sub(fallback, eye), ahead) };
-        let distance = if distance.is_finite() && distance > 0.0 { distance } else { 1.0 };
+        // The target sets the perspective near plane (1/10,000 of its distance), so it is the
+        // nearer of the centre of orbit and the model's centre ahead: a far /CO must not clip
+        // a model close to the eye.
+        let usable = |d: f64| Some(d).filter(|d| d.is_finite() && *d > 0.0);
+        let distance = match (usable(center_of_orbit), usable(dot(sub(fallback, eye), ahead))) {
+            (Some(orbit), Some(model)) => orbit.min(model),
+            (orbit, model) => orbit.or(model).unwrap_or(1.0),
+        };
         let target = [0, 1, 2].map(|i| at(eye, i) + at(ahead, i) * distance);
         let [w, h] = size.map(|v| if v.is_finite() && v > 0.0 { v } else { 1.0 });
         let side = |s: ViewSide| match s {

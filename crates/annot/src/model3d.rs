@@ -1,7 +1,7 @@
 //! Reading the model a 3D annotation shows (ISO 32000-2 §13.6.3 and §13.6.4): its `/3DD` is a
 //! 3D stream, or a 3D reference dictionary naming the stream another annotation shares.
 
-use super::lookup::{annots, page_ref};
+use super::lookup::{annotation_flags, annots, page_ref};
 use super::threed::MAX_MODEL_BYTES;
 use super::{AnnotError, Dict, Document, Object};
 
@@ -28,6 +28,17 @@ pub struct Model3d {
 pub fn model_3d_annotations(doc: &Document, page: usize) -> Result<Vec<usize>, AnnotError> {
     let list = annots(doc, page_ref(doc, page)?);
     Ok(list.iter().enumerate().filter(|(_, a)| doc.dict(a).is_some_and(|d| d.name(b"Subtype") == Some(b"3D"))).map(|(i, _)| i).collect())
+}
+
+/// As [`model_3d_annotations`], leaving out those flagged Hidden or NoView (§12.5.3): the ones a
+/// page shows, which `pdfcraft_render`'s `DocInfo::annots_3d` lists.
+///
+/// # Errors
+/// [`AnnotError::NoPageTree`] or [`AnnotError::NoSuchPage`].
+pub fn shown_model_3d_annotations(doc: &Document, page: usize) -> Result<Vec<usize>, AnnotError> {
+    let list = annots(doc, page_ref(doc, page)?);
+    let shown = |a: &Object| doc.dict(a).is_some_and(|d| d.name(b"Subtype") == Some(b"3D") && annotation_flags(doc, &d) & (2 | 32) == 0);
+    Ok(list.iter().enumerate().filter(|(_, a)| shown(a)).map(|(i, _)| i).collect())
 }
 
 /// The model of the 3D annotation at `/Annots` position `index` on 0-based `page`, decoded.

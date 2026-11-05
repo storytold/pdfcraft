@@ -28,6 +28,20 @@ pub(super) const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
 /// 3D models `DocInfo::annots_3d` lists. Real files have one per page or fewer.
 pub(super) const MAX_ANNOTS_3D: usize = 1024;
 
+/// A 3D view chosen by name is looked for among this many of the stream's views...
+const MAX_VIEWS_SEARCHED: usize = 1024;
+/// ...and only for a name this long or shorter. Real view names are a few words.
+const MAX_VIEW_NAME_BYTES: usize = 1024;
+
+/// Whether a `/C2W` matrix has a camera: its y and z axes not zero and not parallel.
+fn has_camera_axes(c: &[f64; 12]) -> bool {
+    let (y, z) = ([c[3], c[4], c[5]], [c[6], c[7], c[8]]);
+    let length = |v: [f64; 3]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let cross = [y[1] * z[2] - y[2] * z[1], y[2] * z[0] - y[0] * z[2], y[0] * z[1] - y[1] * z[0]];
+    let (ly, lz) = (length(y), length(z));
+    ly > 0.0 && lz > 0.0 && length(cross) > ly * lz * 1e-9
+}
+
 /// The bytes a listed annotation keeps.
 pub(super) fn retained(a: &Annotation) -> usize {
     let text = [&a.author, &a.contents, &a.modified, &a.name, &a.in_reply_to, &a.state, &a.intent];
@@ -58,9 +72,10 @@ impl<'a> Inspector<'a> {
             Some("U3D") => Format3d::U3d,
             _ => Format3d::Unknown,
         };
-        let chosen = match annot.get(b"3DV") {
-            Ok(selector) => self.select_view(selector, data, true),
-            Err(_) => self.default_view(data),
+        // A null entry is an absent one (§7.3.7).
+        let chosen = match annot.get(b"3DV").ok().filter(|s| !matches!(self.resolve(s), Object::Null)) {
+            Some(selector) => self.select_view(selector, data, true),
+            None => self.default_view(data),
         };
         Annot3d { page, index, rect, format, view: chosen.and_then(|v| self.view_3d(v)) }
     }
@@ -88,9 +103,15 @@ impl<'a> Inspector<'a> {
                 b"D" if may_default => self.default_view(data),
                 _ => None,
             },
-            Object::String(s, _) => {
-                let wanted = text_string(s);
-                views.iter().filter_map(|v| self.dict(v)).find(|d| self.text(d, b"XN").as_deref() == Some(wanted.as_str()))
+            // A name matches a view's internal name `/IN`; a view without one is matched by its
+            // external name `/XN`. Compared as written, without decoding, over a bounded number
+            // of views and only for a short name, so no file makes this scan costly.
+            Object::String(s, _) if s.len() <= MAX_VIEW_NAME_BYTES => {
+                let named = |d: &Dictionary| {
+                    let key: &[u8] = if d.has(b"IN") { b"IN" } else { b"XN" };
+                    matches!(d.get(key).map(|o| self.resolve(o)), Ok(Object::String(n, _)) if n == s)
+                };
+                views.iter().take(MAX_VIEWS_SEARCHED).filter_map(|v| self.dict(v)).find(|d| named(d))
             }
             _ => None,
         }
@@ -112,7 +133,7 @@ impl<'a> Inspector<'a> {
         for (out, o) in camera_to_world.iter_mut().zip(c2w) {
             *out = num(o)?;
         }
-        if c2w.len() != 12 || camera_to_world.iter().any(|v| !v.is_finite()) {
+        if c2w.len() != 12 || camera_to_world.iter().any(|v| !v.is_finite()) || !has_camera_axes(&camera_to_world) {
             return None;
         }
         let center_of_orbit = view.get(b"CO").ok().and_then(num).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
@@ -222,7 +243,9 @@ impl<'a> Inspector<'a> {
                 continue;
             }
             if subtype == "3D" {
-                if info.annots_3d.len() < MAX_ANNOTS_3D {
+                // Hidden (2) and NoView (32) annotations are not shown (§12.5.3).
+                let flags = d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0);
+                if flags & (2 | 32) == 0 && info.annots_3d.len() < MAX_ANNOTS_3D {
                     info.annots_3d.push(self.model_3d(page, index, d));
                 }
                 continue;

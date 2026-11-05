@@ -21,8 +21,7 @@ const DEFAULT_DIRECTION: [f64; 3] = [-1.0, 1.0, -1.0];
 impl Automation {
     pub(crate) fn model_render(&mut self, a: &Args) -> Result<Vec<Content>> {
         let page = self.page(a)?;
-        let width = side(a, "width")?;
-        let height = side(a, "height")?;
+        let (width_arg, height_arg) = (side(a, "width")?, side(a, "height")?);
         let direction = direction(a)?;
         let perspective = a.opt_bool("perspective")?.unwrap_or(true);
         let doc = self.doc(a)?;
@@ -50,18 +49,24 @@ impl Automation {
             None if a.get("direction").is_none() && a.get("perspective").is_none() => annot.and_then(|m| m.view),
             None => None,
         };
+        let saved = chosen.zip(annot);
+        // A saved view is drawn in its annotation's shape unless a size is asked for.
+        let shape = saved.map(|(_, m)| [f64::from(m.rect[2] - m.rect[0]), f64::from(m.rect[3] - m.rect[1])]);
+        let (width, height) = image_size(width_arg, height_arg, shape);
         let mut options = RenderOptions { width, height, ..RenderOptions::default() };
-        let camera = match (chosen, annot) {
-            (Some(view), Some(annot)) => {
+        let camera = match saved {
+            Some((view, _)) => {
                 let centre = Bounds::of(&meshes).map_or([0.0; 3], |b| b.centre());
-                let size = [f64::from(annot.rect[2] - annot.rect[0]), f64::from(annot.rect[3] - annot.rect[1])];
+                // The lens is converted for the image's own sides, so the view's scaled side
+                // shows what it says even when the image is not the annotation's shape.
+                let size = [f64::from(width), f64::from(height)];
                 if let Some([r, g, b]) = view.background {
                     let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
                     options.background = [byte(r), byte(g), byte(b), 255];
                 }
                 Camera::from_view(view.camera_to_world, view.center_of_orbit, lens(view.projection), size, centre).map_err(failed)?
             }
-            _ => Camera::fit_meshes(&meshes, direction, up_for(direction), perspective, f64::from(width) / f64::from(height)).map_err(failed)?,
+            None => Camera::fit_meshes(&meshes, direction, up_for(direction), perspective, f64::from(width) / f64::from(height)).map_err(failed)?,
         };
         let image = render(&meshes, &camera, &options).map_err(failed)?;
         let data = encode_png(image.width, image.height, &premultiplied(image.rgba))?;
@@ -69,10 +74,29 @@ impl Automation {
     }
 }
 
-fn side(a: &Args, key: &str) -> Result<u32> {
+fn side(a: &Args, key: &str) -> Result<Option<u32>> {
     match a.opt_int(key)? {
-        None => Ok(DEFAULT_SIDE),
-        Some(n) => u32::try_from(n).ok().filter(|n| (1..=MAX_SIDE).contains(n)).ok_or_else(|| Args::wrong(key, &format!("between 1 and {MAX_SIDE}"))),
+        None => Ok(None),
+        Some(n) => u32::try_from(n)
+            .ok()
+            .filter(|n| (1..=MAX_SIDE).contains(n))
+            .map(Some)
+            .ok_or_else(|| Args::wrong(key, &format!("between 1 and {MAX_SIDE}"))),
+    }
+}
+
+/// The image's size: the sides asked for; a side not asked for follows `shape` (width, height)
+/// from the other, or is [`DEFAULT_SIDE`] on the longer side when neither is given.
+fn image_size(width: Option<u32>, height: Option<u32>, shape: Option<[f64; 2]>) -> (u32, u32) {
+    let aspect = shape.map(|[w, h]| w.abs() / h.abs()).filter(|r| r.is_finite() && *r > 0.0);
+    let fit = |v: f64| (v.round() as u32).clamp(1, MAX_SIDE);
+    match (width, height, aspect) {
+        (Some(w), Some(h), _) => (w, h),
+        (Some(w), None, Some(r)) => (w, fit(f64::from(w) / r)),
+        (None, Some(h), Some(r)) => (fit(f64::from(h) * r), h),
+        (None, None, Some(r)) if r >= 1.0 => (DEFAULT_SIDE, fit(f64::from(DEFAULT_SIDE) / r)),
+        (None, None, Some(r)) => (fit(f64::from(DEFAULT_SIDE) * r), DEFAULT_SIDE),
+        (w, h, None) => (w.unwrap_or(DEFAULT_SIDE), h.unwrap_or(DEFAULT_SIDE)),
     }
 }
 
@@ -128,6 +152,18 @@ mod tests {
     #[test]
     fn premultiplying_scales_colour_by_alpha() {
         assert_eq!(premultiplied(vec![200, 100, 0, 255, 200, 100, 0, 128, 9, 9, 9, 0]), vec![200, 100, 0, 255, 100, 50, 0, 128, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_saved_view_image_takes_its_annotation_shape_unless_sized() {
+        let wide = Some([700.0, 350.0]);
+        assert_eq!(image_size(None, None, wide), (512, 256));
+        assert_eq!(image_size(None, None, Some([100.0, 400.0])), (128, 512));
+        assert_eq!(image_size(Some(300), None, wide), (300, 150));
+        assert_eq!(image_size(None, Some(100), wide), (200, 100));
+        assert_eq!(image_size(Some(64), Some(64), wide), (64, 64));
+        assert_eq!(image_size(None, Some(100), None), (512, 100));
+        assert_eq!(image_size(None, None, Some([0.0, 0.0])), (512, 512));
     }
 
     #[test]

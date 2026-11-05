@@ -873,6 +873,8 @@ fn paint_models_3d(painter: &egui::Painter, xf: &PageXform, info: &DocInfo, page
             pdfcraft_render::Format3d::Unknown => tl!("3D model"),
         };
         let size = (r.height() / 12.0).clamp(12.0, 22.0);
+        // Text wider than the model is cut at its outline rather than spilling onto the page.
+        let painter = painter.with_clip_rect(painter.clip_rect().intersect(r));
         painter.text(r.center() - vec2(0.0, size * 0.7), egui::Align2::CENTER_CENTER, title, crate::theme::semibold(size), accent);
         painter.text(
             r.center() + vec2(0.0, size * 0.7),

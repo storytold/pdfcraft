@@ -378,6 +378,20 @@ fn a_saved_perspective_view_converts_its_field_of_view_to_the_height() {
 }
 
 #[test]
+fn a_far_centre_of_orbit_does_not_clip_a_model_near_the_eye() {
+    // The model lies 1 unit ahead; a centre of orbit 100,000 ahead would put the near plane at 10.
+    let lens = ViewLens::Perspective { fov: 90.0, side: ViewSide::Width };
+    let cam = Camera::from_view(LOOK_DOWN, 1e5, lens, [100.0, 100.0], [0.0, 0.0, 9.0]).unwrap();
+    assert_eq!(cam.target, [0.0, 0.0, 9.0]);
+    let img =
+        render(&[WorldMesh::new(quad_mesh(9.0, 0.5, 0.0))], &cam, &RenderOptions { width: 100, height: 100, ..RenderOptions::default() }).unwrap();
+    assert_ne!(pixel(&img, 50, 50), [255, 255, 255, 255]);
+    // A centre of orbit nearer than the model is kept.
+    let near = Camera::from_view(LOOK_DOWN, 0.5, lens, [100.0, 100.0], [0.0, 0.0, 9.0]).unwrap();
+    assert_eq!(near.target, [0.0, 0.0, 9.5]);
+}
+
+#[test]
 fn unusable_saved_views_are_refused() {
     let lens = ViewLens::Perspective { fov: 30.0, side: ViewSide::Min };
     assert!(Camera::from_view([0.0; 12], 1.0, lens, [1.0, 1.0], [0.0; 3]).is_err());

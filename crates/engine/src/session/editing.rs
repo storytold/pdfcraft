@@ -357,6 +357,9 @@ impl Session {
                 doc.info.annotations = comment_list(&editor.cos);
                 // Link indexes are positions in /Annots, so comment insertion/deletion can move them.
                 doc.links = OnceLock::new();
+                // So are 3D annotations' indexes. Comment edits neither add nor remove 3D
+                // annotations, so each page's keep their order.
+                reindex_annots_3d(&mut doc.info.annots_3d, &editor.cos);
             }
             Scope::Form => {
                 // PERF: keystroke path, index once. A linear find per field is O(F^2);
@@ -534,6 +537,19 @@ impl Session {
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
         Ok(())
+    }
+}
+
+/// Moves each listed 3D annotation to its page's current `/Annots` position, after comments were
+/// added or removed around it.
+fn reindex_annots_3d(list: &mut [pdfcraft_render::Annot3d], cos: &pdfcraft_cos::Document) {
+    let mut pages: Vec<usize> = list.iter().map(|a| a.page).collect();
+    pages.dedup();
+    for page in pages {
+        let Ok(now) = pdfcraft_annot::shown_model_3d_annotations(cos, page) else { continue };
+        for (a, index) in list.iter_mut().filter(|a| a.page == page).zip(now) {
+            a.index = index;
+        }
     }
 }
 

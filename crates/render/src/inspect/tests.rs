@@ -673,6 +673,40 @@ fn models_3d_are_listed_with_their_format_and_view_and_not_as_comments() {
     assert_eq!(info.annotations.iter().map(|a| a.subtype.as_str()).collect::<Vec<_>>(), ["Text"]);
 }
 
+/// A null `/3DV`, a name matching `/IN` (not `/XN`), a hidden and a no-view annotation, and a
+/// view whose y and z axes are parallel.
+const MODEL_VIEW_EDGES: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 792 612] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /3D /Rect [0 0 10 10] /3DD 9 0 R /3DV null >> endobj
+5 0 obj << /Type /Annot /Subtype /3D /Rect [0 0 10 10] /3DD 9 0 R /3DV (view-1) >> endobj
+6 0 obj << /Type /Annot /Subtype /3D /Rect [0 0 10 10] /3DD 9 0 R /F 2 >> endobj
+7 0 obj << /Type /Annot /Subtype /3D /Rect [0 0 10 10] /3DD 9 0 R /F 32 >> endobj
+8 0 obj << /Type /Annot /Subtype /3D /Rect [0 0 10 10] /3DD 9 0 R /3DV (Flat) >> endobj
+9 0 obj << /Type /3D /Subtype /PRC /VA [10 0 R 11 0 R] /DV 0 /Length 3 >> stream
+PRC
+endstream endobj
+10 0 obj << /Type /3DView /IN (view-1) /XN (Front) /C2W [1 0 0 0 0 -1 0 1 0 0 -10 0] /CO 10 >> endobj
+11 0 obj << /Type /3DView /XN (Flat) /C2W [1 0 0 0 1 0 0 2 0 0 0 0] /CO 10 >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+#[test]
+fn model_views_follow_null_selectors_and_internal_names_and_skip_hidden_models_and_flat_cameras() {
+    let info = inspect(Arc::new(MODEL_VIEW_EDGES.to_vec()), None).expect("opens");
+    let front = View3d {
+        camera_to_world: [1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0, 0.0, -10.0, 0.0],
+        center_of_orbit: 10.0,
+        projection: Projection3d::Perspective { fov: 90.0, scaled: Dimension3d::Width },
+        background: None,
+    };
+    let listed: Vec<_> = info.annots_3d.iter().map(|a| (a.index, a.view)).collect();
+    // Index 0: null `/3DV` uses `/DV`. Index 1: `(view-1)` is the first view's `/IN`. 2 and 3 are
+    // hidden. Index 4: the named view has no usable camera.
+    assert_eq!(listed, [(0, Some(front)), (1, Some(front)), (4, None)]);
+}
+
 const ATTACHMENTS: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(notes.txt) 6 0 R] >> >> >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
