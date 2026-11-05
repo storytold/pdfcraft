@@ -599,7 +599,7 @@ pub(crate) fn build(bodies: &[&str], trailer: &str) -> Vec<u8> {
 
 fn assert_compact_matches_materialized(doc: &Document) {
     assert!(matches!(doc.entries.as_ref(), XrefIndex::Compact { .. }), "valid xrefs should not retain a per-entry map");
-    let (entries, _, revisions, _) = doc.read_xref_chain_materialized(&mut Vec::new()).unwrap();
+    let (entries, _, revisions, _, _) = doc.read_xref_chain_materialized(&mut Vec::new()).unwrap();
     assert_eq!(revisions.as_slice(), doc.revisions());
     let max = entries.keys().next_back().copied().unwrap_or(0);
     assert_eq!(doc.entries.max_num(), max);
@@ -687,7 +687,7 @@ fn malformed_size_uses_the_materialized_compatibility_path() {
     let at = bytes.windows(marker.len()).position(|window| window == marker).unwrap();
     bytes[at..at + marker.len()].copy_from_slice(b"/Size 2");
     let doc = Document::open(Arc::new(bytes)).unwrap();
-    assert!(matches!(doc.entries.as_ref(), XrefIndex::Materialized(_)));
+    assert!(matches!(doc.entries.as_ref(), XrefIndex::Materialized(..)));
     assert_eq!(doc.next_num, 4);
     assert_eq!(doc.object_numbers(), vec![1, 2, 3]);
 }
@@ -1181,15 +1181,18 @@ fn reads_classic_revision_and_edits_are_copy_on_write() {
 fn object_numbers_merge_source_and_overlay_in_order() {
     let mut doc = Document::new_empty();
     doc.overlay.clear();
-    doc.entries = Arc::new(XrefIndex::Materialized(Arc::new(BTreeMap::from([
-        (0, XrefEntry::Free { next_generation: 65535 }),
-        (2, XrefEntry::InFile { offset: 10, generation: 7 }),
-        (4, XrefEntry::Free { next_generation: 9 }),
-        (6, XrefEntry::InStream { stream: 80, index: 1 }),
-        (8, XrefEntry::InFile { offset: 20, generation: 5 }),
-        (10, XrefEntry::InFile { offset: 30, generation: 3 }),
-        (u32::MAX, XrefEntry::InFile { offset: 40, generation: 1 }),
-    ]))));
+    doc.entries = Arc::new(XrefIndex::Materialized(
+        Arc::new(BTreeMap::from([
+            (0, XrefEntry::Free { next_generation: 65535 }),
+            (2, XrefEntry::InFile { offset: 10, generation: 7 }),
+            (4, XrefEntry::Free { next_generation: 9 }),
+            (6, XrefEntry::InStream { stream: 80, index: 1 }),
+            (8, XrefEntry::InFile { offset: 20, generation: 5 }),
+            (10, XrefEntry::InFile { offset: 30, generation: 3 }),
+            (u32::MAX, XrefEntry::InFile { offset: 40, generation: 1 }),
+        ])),
+        Arc::default(),
+    ));
     doc.set(ObjRef::new(1, 2), Object::Int(1)); // before the first live source slot
     doc.set(ObjRef::new(2, 8), Object::Int(2)); // override, without duplication
     doc.set(ObjRef::new(4, 9), Object::Int(4)); // reuse a source free slot

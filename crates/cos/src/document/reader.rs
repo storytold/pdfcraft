@@ -18,8 +18,8 @@ impl Document {
                 return Ok((index, trailer, revisions, Vec::new()));
             }
         }
-        let (entries, trailer, revisions, oddities) = self.read_xref_chain_materialized(log)?;
-        Ok((XrefIndex::Materialized(Arc::new(entries)), trailer, revisions, oddities))
+        let (entries, trailer, revisions, oddities, generation_repairs) = self.read_xref_chain_materialized(log)?;
+        Ok((XrefIndex::Materialized(Arc::new(entries), Arc::new(generation_repairs)), trailer, revisions, oddities))
     }
 
     fn read_compact_xref_chain(&self, log: &mut Vec<String>) -> Result<Option<(XrefIndex, Dict, Vec<Revision>)>, CosError> {
@@ -324,7 +324,7 @@ impl Document {
     pub(super) fn read_xref_chain_materialized(
         &self,
         log: &mut Vec<String>,
-    ) -> Result<(BTreeMap<u32, XrefEntry>, Dict, Vec<Revision>, Vec<(u64, u32)>), CosError> {
+    ) -> Result<(BTreeMap<u32, XrefEntry>, Dict, Vec<Revision>, Vec<(u64, u32)>, Vec<String>), CosError> {
         let data = &self.data;
         let tail_start = data.len().saturating_sub(4096);
         let sx = rfind(data, b"startxref", tail_start).ok_or(CosError::Syntax { offset: data.len(), detail: "no startxref".into() })?;
@@ -344,6 +344,9 @@ impl Document {
         // At most MAX_XREF_OBJECTS entries are kept in all; a stream past that is read again.
         let mut hybrids: HashMap<i64, Option<BTreeMap<u32, XrefEntry>>> = HashMap::new();
         let (mut hybrid_rows, mut noted) = (0usize, HashSet::new());
+        let mut generation_repairs = Vec::new();
+        let mut recorded = HashSet::new();
+        let mut diagnose = true;
         let mut next = Some(first);
         while let Some(off) = next.take() {
             if !visited.insert(off) || visited.len() > 10_000 {
@@ -372,6 +375,12 @@ impl Document {
                 }
             };
             revisions.push(Revision { xref_offset: off, is_stream, header_relative });
+            for (&num, &entry) in &sect {
+                if !diagnose {
+                    break;
+                }
+                diagnose = self.inspect_xref_generation_repair(num, entry, &mut recorded, &mut generation_repairs);
+            }
             // Hybrid files (§7.5.8.4): the /XRefStm entries supplement the table and replace the
             // free entries it gives objects only a cross-reference stream can locate.
             let hybrid = sect_trailer.int(b"XRefStm").filter(|x| *x >= 0);
@@ -391,6 +400,12 @@ impl Document {
                 let mut stm = BTreeMap::new();
                 let read = match self.read_section(x as usize, &mut stm, &mut odd, log) {
                     Ok(_) => {
+                        for (&num, &entry) in &stm {
+                            if !diagnose {
+                                break;
+                            }
+                            diagnose = self.inspect_xref_generation_repair(num, entry, &mut recorded, &mut generation_repairs);
+                        }
                         for (&num, &e) in &stm {
                             match sect.get(&num) {
                                 None | Some(XrefEntry::Free { .. }) => {
@@ -428,7 +443,7 @@ impl Document {
         for k in [&b"Prev"[..], b"XRefStm", b"Type", b"W", b"Index", b"Filter", b"DecodeParms", b"Length"] {
             trailer.remove(k);
         }
-        Ok((entries, trailer, revisions, oddities))
+        Ok((entries, trailer, revisions, oddities, generation_repairs))
     }
 
     /// Read one section at `off`, adding entries not already known (newer sections win). `odd`
@@ -607,7 +622,7 @@ impl Document {
         }
         if found > 0 {
             log.push(format!("the cross-reference data leaves out {found} objects the file contains; located them by their object headers"));
-            self.entries = Arc::new(XrefIndex::Materialized(Arc::new(filled)));
+            self.entries = Arc::new(XrefIndex::Materialized(Arc::new(filled), Arc::default()));
         }
         self.located = Arc::new(located);
     }
@@ -632,7 +647,7 @@ impl Document {
         if entries.is_empty() {
             return Err(CosError::Syntax { offset: 0, detail: "no objects found".into() });
         }
-        self.entries = Arc::new(XrefIndex::Materialized(Arc::new(entries.clone())));
+        self.entries = Arc::new(XrefIndex::Materialized(Arc::new(entries.clone()), Arc::default()));
         self.cache.lock().map_err(|_| CosError::Poisoned)?.clear();
         *self.unreadable.lock().map_err(|_| CosError::Poisoned)? = Unreadable::default();
         // Objects inside object streams.
@@ -650,7 +665,7 @@ impl Document {
             }
         }
         let object_count = entries.len();
-        self.entries = Arc::new(XrefIndex::Materialized(Arc::new(entries)));
+        self.entries = Arc::new(XrefIndex::Materialized(Arc::new(entries), Arc::default()));
         // Failures from the scan stand: the members added change no scanned entry, and a
         // `/Length` found only now cannot make a stream unreadable.
         self.cache.lock().map_err(|_| CosError::Poisoned)?.clear();
@@ -662,7 +677,7 @@ impl Document {
         // A file whose only trailers are cross-reference streams (and whose `startxref` is gone
         // or points nowhere) keeps its /Info, /ID and /Encrypt this way.
         let rank = |at: usize, d: &Dict| {
-            let root = self.try_get(d.reference(b"Root")?.num).ok()?;
+            let root = self.try_get_reference(d.reference(b"Root")?).ok()?;
             let Object::Dict(c) = &*root else { return None };
             Some((c.name(b"Type") == Some(b"Catalog") || c.contains(b"Pages"), at))
         };
