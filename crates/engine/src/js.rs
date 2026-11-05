@@ -217,14 +217,26 @@ impl Scripts for JsRunner {
 impl JsRunner {
     /// [`Scripts::run`], keeping what the script showed and asked for only when `log`; `None`
     /// when the script failed.
-    fn run_logged(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], doc: &pdfcraft_cos::Document, log: bool) -> Option<ScriptResult> {
-        let states: Vec<_> = fields.iter().map(|f| {
-            let mut state = field_state(doc, f);
-            if let Some(w) = f.widgets.first() {
-                state.display = *self.displays.entry(w.obj).or_insert_with(|| display(&self.cos, f));
-            }
-            state
-        }).collect();
+    fn run_logged(
+        &mut self,
+        event: FieldEvent,
+        script: &str,
+        target: &Field,
+        value: &str,
+        fields: &[Field],
+        doc: &pdfcraft_cos::Document,
+        log: bool,
+    ) -> Option<ScriptResult> {
+        let states: Vec<_> = fields
+            .iter()
+            .map(|f| {
+                let mut state = field_state(doc, f);
+                if let Some(w) = f.widgets.first() {
+                    state.display = *self.displays.entry(w.obj).or_insert_with(|| display(&self.cos, f));
+                }
+                state
+            })
+            .collect();
         let states = std::sync::Arc::new(states);
         let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
         let o = pdfcraft_js::run_shared(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default());
