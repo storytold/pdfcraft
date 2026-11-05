@@ -235,11 +235,11 @@ title = "Attachment-only encryption (/EFF) opens without a password"
 area = "A"
 tier = "P1"
 milestone = "M1"
-status = "partial"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = "two corpus files still ask for a password (M1.6)"
+evidence = ["crates/cos/tests/it/efopen.rs::a_document_encrypting_only_its_embedded_files_opens_without_a_password", "crates/cos/tests/it/efopen.rs::saves_keep_the_encrypted_embedded_files_as_stored", "crates/render/src/inspect/tests.rs::a_document_encrypting_only_its_embedded_files_opens_without_a_password", "crates/engine/src/tests.rs::a_document_encrypting_only_its_embedded_files_opens_and_saves_without_a_password", "crates/organize/tests/efopen_attachments.rs::combining_does_not_copy_attachments_held_encrypted"]
+notes = "a document whose encrypting crypt filters are all /AuthEvent /EFOpen, with /StmF and /StrF /Identity, opens without a password (ISO 32000-2 7.6.6, Table 25); its attachments are listed but not read or copied without the password, and saves keep them encrypted (a full save is refused where the key depends on the object number). Not yet: entering the password after opening to read the attachments (the document is reopened with it). pdf.js encrypted-attachment.pdf has no /AuthEvent (DocOpen) and a non-empty user password, so it rightly asks for one; its broken startxref currently reports it as unreadable instead"
 
 [[feature]]
 id = "core.unencrypted-metadata"
