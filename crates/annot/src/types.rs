@@ -588,6 +588,9 @@ pub struct Style {
     pub width: f64,
     /// Interior fill for rectangles and ovals (`/IC`), background for text boxes.
     pub fill: Option<Rgb>,
+    /// A text box's, typewriter text's or callout's border colour where it differs from the
+    /// text's (`None`: the text colour), the stroking colour in its `/DA`.
+    pub border_color: Option<Rgb>,
     /// The fill's own opacity, 0–1 (`/ca`), where it differs from `opacity` (which is then the
     /// line's or border's); `None`: as `opacity`.
     pub fill_opacity: Option<f64>,
@@ -624,7 +627,7 @@ pub struct TextReplacement<'a> {
 
 impl Default for Style {
     fn default() -> Self {
-        Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None, fill_opacity: None, text_opacity: None }
+        Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None, fill_opacity: None, text_opacity: None, border_color: None }
     }
 }
 
