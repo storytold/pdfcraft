@@ -22,6 +22,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod icc;
+mod transparency;
 mod xmp;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
@@ -116,6 +117,7 @@ pub const WORDINGS: &[&str] = &[
     // The document as a whole.
     "The document is encrypted",
     "Device colour is used, but there is no PDF/A output intent",
+    "Page {} uses transparency, but there is no PDF/A output intent and its group names no blending colour space",
     "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)",
     "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile",
     "DeviceRGB is used, but the PDF/A output intent isn't an RGB profile",
@@ -512,6 +514,21 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     for (i, p) in pages.iter().enumerate() {
         if p.dict.get(b"AA").is_some() {
             issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true);
+        }
+    }
+    // 6.2.10: without a PDF/A output intent, a page with transparency names its blending colour
+    // space.
+    if !has_pdfa_intent(doc) {
+        for (i, p) in pages.iter().enumerate() {
+            if transparency::page_has_transparency(doc, &p.dict) && !transparency::page_names_blending_space(doc, &p.dict) {
+                issue(
+                    "6.2.10",
+                    "Page {} uses transparency, but there is no PDF/A output intent and its group names no blending colour space",
+                    Some((i + 1).to_string()),
+                    Some(i),
+                    false,
+                );
+            }
         }
     }
     check_objects(doc, level, &objs, &page_of, &mut issue);
