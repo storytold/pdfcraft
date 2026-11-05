@@ -75,6 +75,8 @@ pub struct PrintDraft {
     pub driver_error: Option<String>,
     /// Label: turn a further 180°.
     pub label_flip: bool,
+    /// Area: turn a further 180°, kept apart from Label's so one doesn't turn the other.
+    pub area_flip: bool,
     /// Label: each page's printed area and text direction, read when Label is chosen
     /// ([`PdfCraftApp::read_label_crops`]); empty until then.
     pub crops: Vec<Option<print::Crop>>,
@@ -131,6 +133,7 @@ impl Default for PrintDraft {
             show_driver_options: false,
             driver_error: None,
             label_flip: false,
+            area_flip: false,
             crops: Vec::new(),
             crop_pages: None,
             driver_options_loading: None,
@@ -200,7 +203,8 @@ impl PrintDraft {
             },
             Handling::Booklet => Layout::Booklet { subset: self.booklet_subset, binding: self.binding },
             Handling::Poster => Layout::Poster { scale: self.poster_scale, overlap: self.overlap, cut_marks: self.cut_marks },
-            Handling::Label | Handling::Area => Layout::Label { flip: self.label_flip },
+            Handling::Label => Layout::Label { flip: self.label_flip },
+            Handling::Area => Layout::Label { flip: self.area_flip },
         };
         Ok(print::Settings {
             pages,

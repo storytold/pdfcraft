@@ -350,7 +350,7 @@ pub(crate) fn body(
                     );
                 }
                 Handling::Area => {
-                    ui.add(widgets::checkbox(&mut d.label_flip, tl!("Turn upside down (180°)")));
+                    ui.add(widgets::checkbox(&mut d.area_flip, tl!("Turn upside down (180°)")));
                     ui.label(
                         egui::RichText::new(tl!("Prints only the area you dragged on the page, fitted to the sheet without stretching."))
                             .small()

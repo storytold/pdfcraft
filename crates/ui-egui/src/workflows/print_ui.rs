@@ -736,6 +736,13 @@ mod tests {
         draft.crop_pages = Some(vec![0]);
         draft.set_handling(Handling::Label);
         assert!(draft.crops.is_empty() && draft.crop_pages.is_none());
+
+        // Area and Label each keep their own Turn upside down.
+        draft.subset = Subset::All;
+        draft.area_flip = true;
+        assert!(matches!(draft.settings(5, &[]).unwrap().layout, Layout::Label { flip: false }));
+        draft.set_handling(Handling::Area);
+        assert!(matches!(draft.settings(5, &[]).unwrap().layout, Layout::Label { flip: true }));
     }
 
     /// A job being spooled holds the progress card, counting its sheets as the spooler reports

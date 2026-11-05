@@ -603,7 +603,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "subset": { "type": "string", "enum": ["all", "odd", "even"] },
                 "reverse": { "type": "boolean" },
                 "layout": { "type": "string", "enum": ["fit", "actual", "shrink", "custom", "multiple", "booklet", "poster", "area"] },
-                "area": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "For layout area: [x0, y0, x1, y1] in points on the displayed page, origin at its bottom left." },
+                "area": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "For layout area: [x0, y0, x1, y1] in points on the displayed page, origin at its bottom left, with x1 > x0 and y1 > y0 (more than 1 point apart); a reversed rectangle is refused." },
                 "flip": { "type": "boolean", "description": "For layout area: turn the area a further 180°." },
                 "scale": { "type": "number", "exclusiveMinimum": 0 },
                 "per_sheet": { "type": "integer", "minimum": 1, "maximum": 256 },
