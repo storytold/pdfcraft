@@ -1940,28 +1940,71 @@ fn text_outside_the_crop_box_is_clipped() {
         }
     }
 
-    // A CropBox that is zero-area or disjoint from the MediaBox leaves an empty visible region,
-    // even when a glyph straddles the clamped intersection point.
-    for crop in [[200, 200, 200, 200], [100, 200, 300, 200], [500, 500, 600, 600]] {
+    // A CropBox that is zero-area or disjoint from the MediaBox is read as a missing one
+    // (vendored hayro-syntax patch 38): the visible region is the MediaBox, as on a page without
+    // a CropBox, not a region of no area.
+    let text_with = |crop: Option<[i64; 4]>| {
         let mut doc = Document::with_version("1.7");
         let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
         let content = doc.add_object(Stream::new(dictionary! {}, ops.as_bytes().to_vec()));
         let pages = doc.new_object_id();
-        let page = doc.add_object(dictionary! {
+        let mut page = dictionary! {
             "Type" => "Page",
             "Parent" => pages,
             "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(400), Object::Integer(400)],
-            "CropBox" => crop.map(Object::Integer).to_vec(),
             "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
             "Contents" => content,
-        });
+        };
+        if let Some(crop) = crop {
+            page.set("CropBox", crop.map(Object::Integer).to_vec());
+        }
+        let page = doc.add_object(page);
         doc.objects.insert(pages, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1 }.into());
         let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
         doc.trailer.set("Root", catalog);
         let mut bytes = Vec::new();
         doc.save_to(&mut bytes).unwrap();
         let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
-        let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
-        assert!(text.is_empty(), "expected no glyphs on {crop:?}, got {:?}", text.plain_text());
+        extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text()
+    };
+    let media = text_with(None);
+    assert!(media.contains("LeftOut") && media.contains("AboveOut") && !media.contains("OutSpan"), "{media:?}");
+    for crop in [[200, 200, 200, 200], [100, 200, 300, 200], [500, 500, 600, 600]] {
+        assert_eq!(text_with(Some(crop)), media, "{crop:?}");
+    }
+}
+
+/// A page box that encloses no area is read as a missing one (vendored hayro-syntax patch 38,
+/// ISO 32000-2 §14.11.2): a `/MediaBox [0 0 0 0]` as the default page, a `/CropBox [0 0 0 0]`,
+/// or one with nothing in common with the media box, as the media box. The page's visible region
+/// had no area, so its text was all outside it and none was extracted (pdf.js
+/// `boundingBox_invalid`).
+#[test]
+fn text_on_a_page_whose_box_has_no_area_is_extracted() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let rect = |r: [i64; 4]| r.iter().map(|v| Object::Integer(*v)).collect::<Vec<_>>();
+    let mut doc = Document::with_version("1.7");
+    let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+    let pages = doc.new_object_id();
+    let boxes = [([0, 0, 0, 0], None), ([0, 0, 800, 600], Some([0, 0, 0, 0])), ([0, 0, 600, 800], Some([600, 800, 1000, 1000]))];
+    let mut kids = Vec::new();
+    for (media, crop) in boxes {
+        let content = doc.add_object(Stream::new(dictionary! {}, b"BT /F1 30 Tf 25 500 Td (Boxed) Tj ET".to_vec()));
+        let mut page = dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => rect(media), "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content };
+        if let Some(crop) = crop {
+            page.set("CropBox", rect(crop));
+        }
+        kids.push(Object::Reference(doc.add_object(page)));
+    }
+    let count = kids.len() as i64;
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => kids, "Count" => count}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    for page in 0..3 {
+        let text = extract_page(&pdf, page, &InterpreterSettings::default()).unwrap().plain_text();
+        assert_eq!(text.trim(), "Boxed", "page {}", page + 1);
     }
 }

@@ -199,7 +199,7 @@ impl Automation {
 }
 
 /// Publish a PDF atomically while refusing a target created by another process after preflight.
-pub(super) fn publish_new(path: &Path, bytes: &[u8]) -> Result<()> {
+fn publish_new(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().ok_or_else(|| failed("output has no parent directory"))?;
     let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(failed)?;
     temp.write_all(bytes).map_err(failed)?;
