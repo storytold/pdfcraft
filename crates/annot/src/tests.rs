@@ -2286,6 +2286,141 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
     }
 }
 
+/// A 3D annotation is PDF 1.6 and a PRC model 1.7 (ISO 32000-2 §13.6): an older document's
+/// catalog says so, and a newer one is left as it is.
+#[test]
+fn a_3d_model_raises_an_older_document_to_its_version() {
+    let catalog_version = |doc: &Document| {
+        let root = doc.root().unwrap();
+        doc.get(root).as_dict().unwrap().name(b"Version").map(<[u8]>::to_vec)
+    };
+    let add = |doc: &mut Document, model: &[u8]| {
+        let new = NewModel3d { page: 0, rect: [100.0, 100.0, 300.0, 300.0], model, activation: Activation3d::default(), poster: None, contents: "" };
+        add_3d_model(doc, &new, &meta("m")).unwrap();
+    };
+    let mut doc = fixture();
+    add(&mut doc, b"U3D\0rest");
+    assert_eq!(catalog_version(&reopen(&doc)), None, "a 1.7 file needs nothing for U3D");
+    for (model, version) in [(&b"U3D\0rest"[..], &b"1.6"[..]), (b"PRC rest", b"1.7")] {
+        let mut doc = fixture();
+        doc.set_version("1.4");
+        add(&mut doc, model);
+        assert_eq!(catalog_version(&reopen(&doc)).as_deref(), Some(version));
+    }
+    let mut doc = fixture();
+    doc.set_version("2.0");
+    add(&mut doc, b"PRC rest");
+    assert_eq!(catalog_version(&reopen(&doc)), None, "a 2.0 file takes PRC as it is");
+}
+
+/// Before 2.0, PRC is an Adobe extension to PDF 1.7 (§7.12): a PRC model declares it, keeping
+/// other extensions and a later ADBE level; U3D and a 2.0 file need nothing.
+#[test]
+fn a_prc_model_declares_the_adobe_extension_before_pdf_2() {
+    let adbe = |doc: &Document| {
+        let root = doc.root().unwrap();
+        let ext = doc.get(root).as_dict().unwrap().get(b"Extensions").map(|e| doc.resolve(e).as_dict().unwrap().clone());
+        ext.map(|e| {
+            let adbe = e.get(b"ADBE").map(|a| a.as_dict().unwrap().clone());
+            (e.get(b"XYZ").is_some(), adbe.map(|a| (a.name(b"BaseVersion").map(<[u8]>::to_vec), a.get(b"ExtensionLevel").and_then(Object::as_int))))
+        })
+    };
+    let add = |doc: &mut Document, model: &[u8]| {
+        let new = NewModel3d { page: 0, rect: [100.0, 100.0, 300.0, 300.0], model, activation: Activation3d::default(), poster: None, contents: "" };
+        add_3d_model(doc, &new, &meta("m")).unwrap();
+    };
+    let mut doc = fixture();
+    add(&mut doc, b"PRC rest");
+    assert_eq!(adbe(&reopen(&doc)), Some((false, Some((Some(b"1.7".to_vec()), Some(1))))));
+    let mut doc = fixture();
+    add(&mut doc, b"U3D rest");
+    assert_eq!(adbe(&reopen(&doc)), None, "U3D is in ISO 32000-1");
+    let mut doc = fixture();
+    doc.set_version("2.0");
+    add(&mut doc, b"PRC rest");
+    assert_eq!(adbe(&reopen(&doc)), None, "PRC is in ISO 32000-2");
+
+    let mut doc = fixture();
+    let root = doc.root().unwrap();
+    let mut level3 = Dict::new();
+    level3.set(b"BaseVersion".to_vec(), Object::name("1.7"));
+    level3.set(b"ExtensionLevel".to_vec(), Object::Int(3));
+    let mut ext = Dict::new();
+    ext.set(b"ADBE".to_vec(), Object::Dict(level3));
+    ext.set(b"XYZ".to_vec(), Object::Dict(Dict::new()));
+    doc.update_dict(root, |c| c.set(b"Extensions".to_vec(), Object::Dict(ext.clone()))).unwrap();
+    add(&mut doc, b"PRC rest");
+    assert_eq!(adbe(&reopen(&doc)), Some((true, Some((Some(b"1.7".to_vec()), Some(3))))), "a later level is kept");
+    ext.remove(b"ADBE");
+    let mut doc = fixture();
+    doc.update_dict(root, |c| c.set(b"Extensions".to_vec(), Object::Dict(ext))).unwrap();
+    add(&mut doc, b"PRC rest");
+    assert_eq!(adbe(&reopen(&doc)), Some((true, Some((Some(b"1.7".to_vec()), Some(1))))), "other extensions are kept");
+
+    let mut doc = fixture();
+    let mut ext = Dict::new();
+    ext.set(b"ADBE".to_vec(), Object::Array(vec![Object::Dict(Dict::new())]));
+    let ext = doc.add(Object::Dict(ext));
+    doc.update_dict(root, |c| c.set(b"Extensions".to_vec(), Object::Ref(ext))).unwrap();
+    add(&mut doc, b"PRC rest");
+    let doc = reopen(&doc);
+    let ext = doc.resolve(doc.get(doc.root().unwrap()).as_dict().unwrap().get(b"Extensions").unwrap());
+    assert!(ext.as_dict().unwrap().get(b"ADBE").unwrap().as_array().is_some(), "an array of ADBE extensions is left alone");
+}
+
+#[test]
+fn a_picture_is_placed_by_its_box_and_a_form_needs_a_positive_size() {
+    let at = [10.0, 20.0, 110.0, 70.0];
+    assert_eq!(appearance::picture_place(at, true, None).as_deref(), Some("100 0 0 50 10 20 cm"), "an image fills its unit square");
+    assert_eq!(appearance::picture_place(at, false, Some((200.0, 25.0))).as_deref(), Some("0.5 0 0 2 10 20 cm"));
+    for size in [None, Some((0.0, 25.0)), Some((200.0, -1.0))] {
+        assert_eq!(appearance::picture_place(at, false, size), None, "{size:?}");
+    }
+}
+
+/// The poster's box must lie in the rectangle, and a form poster needs a size to scale by.
+#[test]
+fn a_3d_poster_outside_its_rectangle_or_without_a_size_is_refused() {
+    let picture = |at: [f64; 4], size: (f64, f64)| PosterPicture { xobject: ObjRef { num: 6, generation: 0 }, image: false, size, at };
+    for (poster, why) in [
+        (picture([50.0, 100.0, 250.0, 300.0], (10.0, 10.0)), "starts left of the rectangle"),
+        (picture([100.0, 100.0, 300.0, 301.0], (10.0, 10.0)), "ends above it"),
+        (picture([100.0, 100.0, 300.0, 300.0], (0.0, 10.0)), "has no width"),
+        (picture([100.0 - 2e-7, 150.0, 100.0 - 1e-7, 200.0], (10.0, 10.0)), "lies outside within the rounding slack"),
+    ] {
+        let mut doc = fixture();
+        let new = NewModel3d {
+            page: 0,
+            rect: [100.0, 100.0, 300.0, 300.0],
+            model: b"PRC rest",
+            activation: Activation3d::default(),
+            poster: Some(poster),
+            contents: "",
+        };
+        assert!(matches!(add_3d_model(&mut doc, &new, &meta("m")), Err(AnnotError::Invalid(_))), "{why}");
+        assert_eq!(list(&doc, 0).len(), 1, "{why}: nothing added");
+    }
+}
+
+/// A poster box fitted to the rectangle in floating point ends an ulp outside it: a 7×3 picture
+/// centred in [0 100 3.6 110.8] spans -2.2e-16 to 3.6000000000000005. It is taken, inside the
+/// rectangle.
+#[test]
+fn a_3d_poster_fitted_to_its_rectangle_with_rounding_is_taken() {
+    let mut doc = fixture();
+    let at = [-2.220446049250313e-16, 104.62857142857143, 3.6000000000000005, 106.17142857142858];
+    let poster = PosterPicture { xobject: ObjRef { num: 6, generation: 0 }, image: false, size: (7.0, 3.0), at };
+    let new = NewModel3d {
+        page: 0,
+        rect: [0.0, 100.0, 3.6, 110.8],
+        model: b"PRC rest",
+        activation: Activation3d::default(),
+        poster: Some(poster),
+        contents: "",
+    };
+    assert_eq!(add_3d_model(&mut doc, &new, &meta("m")), Ok(1));
+}
+
 #[test]
 fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     let mut doc = fixture();
