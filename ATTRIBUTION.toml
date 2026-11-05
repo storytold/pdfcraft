@@ -3074,6 +3074,17 @@ usage = "JPX decoder test (crates/filters/src/jpx.rs): an image of more than fou
 sha256 = "7795ab788717b2447ce5e42184e1bb58103bf05f62985b2af54b965f7c04dab0"
 
 [[asset]]
+path = "crates/filters/tests/data/palette-five-components.jp2"
+title = "16×16 JPEG 2000 image with a three-column palette over five components"
+author = "PdfCraft contributors"
+source = "Contributor-original: synthetic 16×16 five-component lossless JPEG 2000 (JP2) gradient with a hand-written 256-entry pclr box and cmap box added; no third-party content"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "image"
+usage = "JPX decoder test (crates/filters/src/jpx.rs): a palette image whose codestream has more than four components is refused before it is decoded"
+sha256 = "90fcdcee4e3fc795a83b92b6f9b8073de43354a03ad28b82892e29eba2b8f805"
+
+[[asset]]
 path = "assets/icons/clipboard-paste.svg"
 title = "Lucide icon \"clipboard-paste\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"
