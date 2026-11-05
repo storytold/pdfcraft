@@ -663,6 +663,9 @@ impl<'a> ImageXObject<'a> {
         let to = (tw.min(self.width).max(1), th.min(self.height).max(1));
         let shrink = || {
             let full = decode_mask(self, target_dimension)?;
+            // A truncated stream decodes fewer rows than the dictionary says: never more target
+            // samples than decoded ones on a side.
+            let to = (to.0.min(full.luma.width).max(1), to.1.min(full.luma.height).max(1));
             Some(DecodedMask { luma: shrink_luma(full.luma, to)? })
         };
         let Some(cache) = &self.decoded_cache else {
@@ -679,9 +682,16 @@ impl<'a> ImageXObject<'a> {
     /// step and kept once per zoom level; without it, one decode serves them all.
     fn decode_reads_target(&self) -> bool {
         let dict = self.stream.dict();
+        // PdfCraft patch (77): a soft mask (or `/Mask` image) larger than the image may be
+        // averaged down to the size the image is drawn at (`decoded_soft_mask`), so the decoded
+        // raster, which holds it as its alpha, depends on that size too.
+        let larger = |s: &Stream<'_>| {
+            let d = s.dict();
+            d.get::<u32>(WIDTH).is_some_and(|w| w > self.width) || d.get::<u32>(HEIGHT).is_some_and(|h| h > self.height)
+        };
         uses_jpx(&self.stream)
-            || dict.get::<Stream<'_>>(SMASK).is_some_and(|s| uses_jpx(&s))
-            || dict.get::<Stream<'_>>(MASK).is_some_and(|s| uses_jpx(&s))
+            || dict.get::<Stream<'_>>(SMASK).is_some_and(|s| uses_jpx(&s) || larger(&s))
+            || dict.get::<Stream<'_>>(MASK).is_some_and(|s| uses_jpx(&s) || larger(&s))
     }
 
     pub(crate) fn width(&self) -> u32 {
@@ -713,22 +723,31 @@ const MAX_DECODED_IMAGE_BYTES: usize = 64 << 20;
 const SOFT_MASK_SHRINK_FACTOR: u64 = 2;
 
 /// PdfCraft patch (77): `luma` averaged down to `to` (no larger than it on either side): each
-/// target sample is the mean of the source samples whose centres fall in it.
+/// target sample is the mean of the source samples whose centres fall in it. Source sample `x`
+/// of `sw`, centred at `x + ½`, falls in target sample `⌊(2x + 1)·tw / 2sw⌋`. The only buffers are
+/// the target's sums and counts, reserved fallibly; nothing is sized by the source's width.
 fn shrink_luma(luma: LumaData, to: (u32, u32)) -> Option<LumaData> {
     let (sw, sh) = (luma.width as usize, luma.height as usize);
     let (tw, th) = (to.0 as usize, to.1 as usize);
-    if sw == 0 || sh == 0 || tw == 0 || th == 0 || luma.data.len() != sw.checked_mul(sh)? {
+    if sw == 0 || sh == 0 || tw == 0 || th == 0 || tw > sw || th > sh || luma.data.len() != sw.checked_mul(sh)? {
         return None;
     }
-    let mut sums = vec![0u64; tw.checked_mul(th)?];
-    let mut counts = vec![0u32; tw.checked_mul(th)?];
-    // Which target column each source column falls in, worked out once.
-    let column: Vec<usize> = (0..sw).map(|x| (x * tw / sw).min(tw - 1)).collect();
+    let cells = tw.checked_mul(th)?;
+    let (mut sums, mut counts): (Vec<u64>, Vec<u32>) = (Vec::new(), Vec::new());
+    sums.try_reserve_exact(cells).ok()?;
+    counts.try_reserve_exact(cells).ok()?;
+    sums.resize(cells, 0);
+    counts.resize(cells, 0);
+    // The target sample a source sample's centre falls in, along an axis of `src` samples
+    // shrunk to `dst`. `2·i + 1 < 2·src` and `dst ≤ src ≤ 2^32`, so the product fits a u64.
+    let centre = |i: usize, src: usize, dst: usize| -> usize {
+        let at = (2 * i as u64 + 1) * dst as u64 / (2 * src as u64);
+        (at as usize).min(dst - 1)
+    };
     for (y, row) in luma.data.chunks_exact(sw).enumerate() {
-        let ty = (y * th / sh).min(th - 1);
-        let base = ty * tw;
-        for (&v, &tx) in row.iter().zip(&column) {
-            let i = base + tx;
+        let base = centre(y, sh, th) * tw;
+        for (x, &v) in row.iter().enumerate() {
+            let i = base + centre(x, sw, tw);
             if let (Some(sum), Some(count)) = (sums.get_mut(i), counts.get_mut(i)) {
                 *sum += u64::from(v);
                 *count += 1;
