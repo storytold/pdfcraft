@@ -124,6 +124,7 @@ pub const WORDINGS: &[&str] = &[
     "The document has document-level JavaScript",
     "A graphics state has a transfer function (TR)",
     "A graphics state has a transfer function (TR2) other than Default",
+    "A graphics state has a halftone phase (HTP)",
     "A halftone has type {}: only types 1 and 5 are allowed",
     "A halftone has a HalftoneName",
     "A graphics state has the rendering intent {}, which isn't a standard one",
@@ -528,6 +529,9 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     if gs.transfer2 {
         issue("6.2.5", "A graphics state has a transfer function (TR2) other than Default", None, None, false);
+    }
+    if gs.phase {
+        issue("6.2.5", "A graphics state has a halftone phase (HTP)", None, None, false);
     }
     for kind in gs.halftone_types {
         issue("6.2.5", "A halftone has type {}: only types 1 and 5 are allowed", Some(kind.to_string()), None, false);

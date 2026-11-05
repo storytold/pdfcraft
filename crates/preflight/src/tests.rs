@@ -521,6 +521,7 @@ fn extended_graphics_states_are_checked() {
     assert_eq!(gs("/A 6 0 R"), [tr]);
     assert_eq!(gs("/A << /TR2 4 0 R >>"), [tr2]);
     assert_eq!(gs("/A << /TR2 /Identity >>"), [tr2]);
+    assert_eq!(gs("/A << /HTP [0 1] >>"), ["A graphics state has a halftone phase (HTP)"]);
     // Halftones: the type, also of a type 5 halftone's colorants and of a stream, and the name.
     assert_eq!(gs("/A << /HT << /HalftoneType 6 >> >>"), ["A halftone has type 6: only types 1 and 5 are allowed"]);
     assert_eq!(gs("/A << /HT 7 0 R >>"), ["A halftone has type 6: only types 1 and 5 are allowed"]);
