@@ -7808,11 +7808,11 @@ title = "Optimize multiple files"
 area = "K"
 tier = "P2"
 milestone = "M13"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["doc_batch"]
+evidence = ["apps/pdfcraft-cli/tests/it/batch.rs::cli_batch_reports_partial_failure_and_continues_into_subfolders"]
+notes = "Headless and CLI only: doc_batch with the optimize step (`pdfcraft-cli batch --steps optimize`, or `convert,optimize` as the cited test runs) over files and folders. No GUI batch dialog, no report file, no parallel workers, no resume. See docs/cli-batch.md."
 
 [[feature]]
 id = "optimize.preflight"
@@ -9416,11 +9416,11 @@ title = "Run guided actions on files"
 area = "N"
 tier = "P1"
 milestone = "M13"
-status = "shipped"
+status = "partial"
 commands = ["actions.wizard"]
 tools = ["action_list", "action_run"]
 evidence = ["crates/ui-egui/tests/it/actions.rs::desktop_actions_preserve_duplicate_names_and_results_from_earlier_runs", "crates/engine/src/tests.rs::actions_run_their_steps_on_files", "crates/automation/tests/it/automation.rs::actions_through_tools", "crates/ui-egui/tests/it/actions.rs::run_and_create_actions"]
-notes = "Desktop output filenames receive numbered suffixes when occupied, preserving every batch result and previous outputs. Pick an action and files; results go to a chosen folder, in the background with progress."
+notes = "Desktop output filenames receive numbered suffixes when occupied, preserving every batch result and previous outputs. Pick an action and files; results go to a chosen folder, in the background with progress. Known gap: a failing non-removal step still publishes its output as success (crates/engine/src/actions.rs:200-208)."
 
 [[feature]]
 id = "misc.action-wizard-create"
