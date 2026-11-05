@@ -427,6 +427,35 @@ fn without(x: &Dict, keys: &[&[u8]]) -> Vec<(Vec<u8>, Object)> {
     v
 }
 
+/// Whether two page dictionaries are the same apart from `/Annots`. Dictionaries are compared
+/// without regard to key order at every depth: a writer may re-serialise a page's inline
+/// resources in another order without changing what the page shows.
+fn same_but_annots(d: &Dict, b: &Dict) -> bool {
+    same_entries(d, b, &[b"Annots"])
+}
+
+/// Whether two dictionaries hold the same entries apart from `skip`: both sorted by key, then
+/// compared pairwise, so neither side can hide a key the other lacks.
+fn same_entries(a: &Dict, b: &Dict, skip: &[&[u8]]) -> bool {
+    fn sorted<'a>(x: &'a Dict, skip: &[&[u8]]) -> Vec<(&'a [u8], &'a Object)> {
+        let mut v: Vec<(&[u8], &Object)> = x.iter().map(|(k, o)| (k.as_slice(), o)).filter(|(k, _)| !skip.contains(k)).collect();
+        v.sort_by(|p, q| p.0.cmp(q.0));
+        v
+    }
+    let (x, y) = (sorted(a, skip), sorted(b, skip));
+    x.len() == y.len() && x.iter().zip(&y).all(|((k, v), (l, w))| k == l && same_object(v, w))
+}
+
+/// Object equality where dictionaries (and stream dictionaries) ignore key order; arrays keep it.
+fn same_object(a: &Object, b: &Object) -> bool {
+    match (a, b) {
+        (Object::Dict(a), Object::Dict(b)) => same_entries(a, b, &[]),
+        (Object::Stream(a), Object::Stream(b)) => a.raw == b.raw && same_entries(&a.dict, &b.dict, &[]),
+        (Object::Array(a), Object::Array(b)) => a.len() == b.len() && a.iter().zip(b).all(|(v, w)| same_object(v, w)),
+        _ => a == b,
+    }
+}
+
 /// Whether a dictionary was a signature object: a signature or timestamp value, a signature
 /// reference or its transform parameters, or a signature form field. Used to decide from the
 /// signed revision, so a later relabel of some other object cannot pose as a signature change.
@@ -521,7 +550,7 @@ fn signed_page_resources(old: &Document, pages: &HashSet<ObjRef>) -> HashMap<Obj
 /// difference (content, resources, a relabelled or dropped `/Type`) is a page content change.
 fn page_change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) -> &'static str {
     match before {
-        Some(b) if without(d, &[b"Annots"]) != without(b, &[b"Annots"]) => kind::PAGE_CONTENT,
+        Some(b) if !same_but_annots(d, b) => kind::PAGE_CONTENT,
         Some(b) => {
             let was = refs(old, b.get(b"Annots"));
             let added: Vec<ObjRef> = refs(doc, d.get(b"Annots")).into_iter().filter(|r| !was.contains(r)).collect();
@@ -584,7 +613,7 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
         }
         Some(b"Page") => {
             return match before {
-                Some(b) if without(d, &[b"Annots"]) != without(b, &[b"Annots"]) => kind::PAGE_CONTENT,
+                Some(b) if !same_but_annots(d, b) => kind::PAGE_CONTENT,
                 Some(b) => {
                     let was = refs(old, b.get(b"Annots"));
                     let added: Vec<ObjRef> = refs(doc, d.get(b"Annots")).into_iter().filter(|r| !was.contains(r)).collect();
@@ -616,4 +645,84 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
         return kind::FORM_FILL;
     }
     kind::OTHER
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn font(order: &[&str], base: &str) -> Object {
+        let mut d = Dict::new();
+        for k in order {
+            match *k {
+                "Type" => d.set(b"Type".to_vec(), Object::name("Font")),
+                "Subtype" => d.set(b"Subtype".to_vec(), Object::name("Type1")),
+                "BaseFont" => d.set(b"BaseFont".to_vec(), Object::name(base)),
+                _ => {
+                    let mut w = Dict::new();
+                    w.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(32), Object::name("space")]));
+                    w.set(b"Type".to_vec(), Object::name("Encoding"));
+                    d.set(b"Encoding".to_vec(), Object::Dict(w));
+                }
+            }
+        }
+        Object::Dict(d)
+    }
+
+    fn page(fonts: Vec<(&str, Object)>, annots: Vec<Object>) -> Dict {
+        let mut f = Dict::new();
+        fonts.into_iter().for_each(|(k, v)| f.set(k.as_bytes().to_vec(), v));
+        let mut r = Dict::new();
+        r.set(b"Font".to_vec(), Object::Dict(f));
+        let mut p = Dict::new();
+        p.set(b"Type".to_vec(), Object::name("Page"));
+        p.set(b"Resources".to_vec(), Object::Dict(r));
+        p.set(b"Annots".to_vec(), Object::Array(annots));
+        p
+    }
+
+    #[test]
+    fn reordered_inline_resources_are_not_page_content() {
+        let doc = Document::new_empty();
+        let order = ["Type", "Subtype", "BaseFont", "Encoding"];
+        let before = page(vec![("F1", font(&order, "Times-Roman")), ("F2", font(&order, "Helvetica"))], vec![]);
+        let unchanged = page_change_kind(&doc, &doc, &before, Some(&before));
+        let reordered = page(
+            vec![
+                ("F2", font(&["Encoding", "BaseFont", "Type", "Subtype"], "Helvetica")),
+                ("F1", font(&["BaseFont", "Subtype", "Encoding", "Type"], "Times-Roman")),
+            ],
+            vec![],
+        );
+        assert_eq!(page_change_kind(&doc, &doc, &reordered, Some(&before)), unchanged);
+        assert_eq!(change_kind(&doc, &doc, &reordered, Some(&before)), change_kind(&doc, &doc, &before, Some(&before)));
+
+        // A changed value inside the nested dictionary still is a page content change.
+        let changed = page(vec![("F2", font(&order, "Helvetica")), ("F1", font(&order, "Courier"))], vec![]);
+        assert_eq!(page_change_kind(&doc, &doc, &changed, Some(&before)), kind::PAGE_CONTENT);
+        assert_eq!(change_kind(&doc, &doc, &changed, Some(&before)), kind::PAGE_CONTENT);
+    }
+
+    #[test]
+    fn a_swapped_nested_key_is_page_content_both_ways() {
+        let doc = Document::new_empty();
+        let order = ["Type", "Subtype", "BaseFont"];
+        let signed = page(vec![("F1", font(&order, "Times-Roman"))], vec![]);
+        // Same entry count, but /Subtype was dropped and /Encoding added in its place.
+        let swapped = page(vec![("F1", font(&["Type", "Encoding", "BaseFont"], "Times-Roman"))], vec![]);
+        for (now, then) in [(&swapped, &signed), (&signed, &swapped)] {
+            assert_eq!(page_change_kind(&doc, &doc, now, Some(then)), kind::PAGE_CONTENT);
+            assert_eq!(change_kind(&doc, &doc, now, Some(then)), kind::PAGE_CONTENT);
+        }
+    }
+
+    #[test]
+    fn reordered_arrays_are_still_page_content() {
+        let doc = Document::new_empty();
+        let mut before = page(vec![], vec![]);
+        before.set(b"MediaBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(612), Object::Int(792)]));
+        let mut after = before.clone();
+        after.set(b"MediaBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(792), Object::Int(612)]));
+        assert_eq!(page_change_kind(&doc, &doc, &after, Some(&before)), kind::PAGE_CONTENT);
+    }
 }
