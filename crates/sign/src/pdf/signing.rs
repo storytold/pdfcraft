@@ -550,6 +550,8 @@ fn bidi_control(c: char) -> bool {
 
 /// Shape directional runs, not the whole mixed-script row. Latin keeps its own font.
 fn signature_atoms(text: &str, base: Option<unicode_bidi::Level>) -> Result<Vec<SignatureAtom>, SignError> {
+    #[cfg(test)]
+    arabic_tests::ATOM_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
     if text.is_empty() {
         // visual_runs requires a nonempty range.
         return Ok(Vec::new());
@@ -605,6 +607,12 @@ fn signature_lines(text: &str, size: f64, width: f64) -> Result<Vec<SignatureLin
     for para in text.replace("\r\n", "\n").split(['\r', '\n']) {
         let bidi = unicode_bidi::ParagraphBidiInfo::new(para, None);
         let base = bidi.paragraph_level;
+        if width == f64::MAX {
+            // The name-width pass has no wrapping limit. Preserve the empty-line rule that
+            // drops leading spaces, but shape the final paragraph only once.
+            lines.push(SignatureLine { atoms: signature_atoms(para.trim_start_matches(' '), Some(base))?, rtl: base.is_rtl() });
+            continue;
+        }
         let measure =
             |s: &str| -> Result<f64, SignError> { Ok(signature_atoms(s, Some(base))?.iter().map(SignatureAtom::advance).sum::<f64>() * size) };
         let mut line = String::new();
@@ -1037,6 +1045,10 @@ pub(crate) fn fmt(v: f64) -> String {
 mod arabic_tests {
     use super::*;
 
+    thread_local! {
+        pub(super) static ATOM_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
     fn visual_text(line: &SignatureLine) -> String {
         line.atoms
             .iter()
@@ -1073,6 +1085,34 @@ mod arabic_tests {
         assert!(lines.iter().all(|l| l.rtl && visual_text(l) == visual_text(&first[0])));
         let lines = signature_lines("موافق دمشق", 12.0, width).unwrap();
         assert_eq!(visual_text(&lines[0]), visual_text(&first[0]));
+    }
+
+    #[test]
+    fn unbounded_name_shapes_each_paragraph_once_without_changing_spacing() {
+        if pdfcraft_fonts::document_arabic_font().is_none() {
+            return;
+        }
+        for text in ["  موافق Smith  Smith  \r\n   \n  Damascus ", "", "   "] {
+            let expected = signature_lines(text, 1.0, 1000.0).unwrap();
+            ATOM_CALLS.with(|calls| calls.set(0));
+            let actual = signature_lines(text, 1.0, f64::MAX).unwrap();
+            assert_eq!(ATOM_CALLS.with(std::cell::Cell::get), expected.len(), "{text:?}");
+            assert_eq!(actual.len(), expected.len());
+            for (actual, expected) in actual.iter().zip(&expected) {
+                assert_eq!(actual.rtl, expected.rtl);
+                assert_eq!(visual_text(actual), visual_text(expected));
+                assert_eq!(
+                    actual.atoms.iter().map(SignatureAtom::advance).collect::<Vec<_>>(),
+                    expected.atoms.iter().map(SignatureAtom::advance).collect::<Vec<_>>()
+                );
+            }
+        }
+        let word = "موافق ";
+        let long_name = word.repeat(16_384 / word.len());
+        ATOM_CALLS.with(|calls| calls.set(0));
+        let lines = signature_lines(&long_name, 1.0, f64::MAX).unwrap();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(ATOM_CALLS.with(std::cell::Cell::get), 1);
     }
 
     #[test]

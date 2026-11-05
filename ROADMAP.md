@@ -230,6 +230,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-05 (M9, PR #6264 performance review):** The unbounded signature-name measurement shapes each paragraph once, preserving leading-space removal, internal/trailing spaces and explicit breaks. A call-count regression covers empty paragraphs and a near-limit name; finite-width candidate measurements are unchanged. Estimates unchanged.
+
 - **2026-11-05 (M9, PR #6264 review):** Signature wrapping measures each complete word/grapheme candidate with the same bidi shaping as drawing. Tight mixed-script lines no longer overflow from independently measured spaces, and joined Arabic letters no longer wrap unnecessarily. Both regressions failed before the fix; estimates unchanged.
 
 - **2026-11-05 (M9, Arabic signature review):** Visible signatures use directional runs with Inter/Helvetica fallback beside Arabic outlines, wrap logical paragraphs before bidi shaping, preserve CR/LF and vowel-mark groups, and skip hidden signer-name shaping. Type 3 ToUnicode CMaps now declare their name and system information. Added regression coverage; 152 signing tests pass with craft-fonts, and the no-font refusal test passes separately. Scoped Clippy, formatting, assets, layering and parity checks pass. Cross-viewer visual fidelity is not qualified; estimates unchanged.
