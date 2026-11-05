@@ -127,6 +127,7 @@ pub use persist::units;
 #[cfg(not(target_arch = "wasm32"))]
 pub use persist::window_state;
 use platform::drag_pointer;
+use platform::file_filter;
 #[cfg(not(target_arch = "wasm32"))]
 pub use platform::file_watch;
 #[cfg(target_os = "macos")]
@@ -182,6 +183,7 @@ use workflows::js_ui;
 use workflows::ocr_ui;
 use workflows::optimize_ui;
 use workflows::print_ui;
+use workflows::scan_clean_ui;
 use workflows::web_print;
 
 /// Files dropped on a document's page grid or its Pages panel.
@@ -316,6 +318,9 @@ pub struct PdfCraftApp {
     pub tab_cycle: tab_cycle::TabCycle,
     /// The tabs most recently shown first, for [`tab_cycle::TabCycle::Recent`].
     pub(crate) recent_tabs: tab_cycle::RecentTabs,
+    /// Preferences ▸ Invert middle-button drag: the middle button's pan or auto-scroll moves the
+    /// view the other way. Off by default.
+    pub invert_middle_drag: bool,
     /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.
     pub animation_effects: motion::AnimationEffects,
     /// Whether the system asked for no animations, and how the desktop app asks it.
@@ -333,6 +338,7 @@ pub struct PdfCraftApp {
     pub flatten_fill_sign_on_save: bool,
     /// Point size for new Fill & Sign text and dates, kept across launches.
     pub fill_text_size: f64,
+    pub fill_tool: fill_sign::FillTool,
     /// Colour for new Fill & Sign text and dates, kept across launches.
     pub fill_text_color: [f64; 3],
     pub dialog: Option<Dialog>,
@@ -372,6 +378,9 @@ pub struct PdfCraftApp {
     quit_session: Option<last_session::LastSession>,
     /// Preferences: reload a document when its file changes on disk (#431).
     pub reload_changed_files: bool,
+    /// Preferences: ask for a newer release when the desktop app starts (#5737). Off, the app
+    /// asks only from Help ▸ Check for updates.
+    pub update_check_at_start: bool,
     /// Preferences: tell the user, above the pages, that a document is secured (its security
     /// settings restrict changes). Off only hides that notice (#4035); kept in the settings.
     pub show_secured_notice: bool,
@@ -550,6 +559,9 @@ pub struct PdfCraftApp {
     pub optimize_draft: OptimizeDraft,
     /// The running optimization (Optimize PDF ▸ Advanced optimization).
     pub optimize_run: Option<optimize_ui::OptimizeRun>,
+    /// Scan & OCR ▸ Enhance scanned file: the dialog's choices and the running clean-up.
+    pub scan_clean_draft: scan_clean_ui::ScanCleanDraft,
+    pub scan_clean_run: Option<scan_clean_ui::ScanCleanRun>,
     /// A background job's progress card (see [`widgets::progress_notice`]).
     pub progress_notice: Option<widgets::ProgressNotice>,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
@@ -613,6 +625,9 @@ pub struct PdfCraftApp {
     control: Option<control::Control>,
     /// A bookmark being renamed in the Bookmarks panel: (path, text so far).
     pub bookmark_rename: Option<(Vec<usize>, String)>,
+    /// Bookmarks copied or cut in the Bookmarks panel, with their subtrees, ready to paste into
+    /// any document. Destinations are page indices.
+    pub bookmark_clipboard: Option<Vec<pdfcraft_engine::OutlineNode>>,
     /// Number pages dialog settings (1-based pages).
     pub number_draft: NumberDraft,
     pub(crate) word_count_draft: word_count_ui::Draft,
