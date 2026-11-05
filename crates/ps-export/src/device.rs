@@ -163,6 +163,11 @@ enum OpenGroup {
 struct GroupBuffer {
     parent_out: Vec<u8>,
     clips_at_push: usize,
+    /// A non-Normal blend mode was set inside this real group (recorded, not emitted:
+    /// the flattened raster is what composites it — in RGB).
+    blend_inside: bool,
+    /// A DeviceCMYK-source paint was drawn inside this real group.
+    cmyk_inside: bool,
 }
 
 /// The page the unit-test device draws over: the 200×300 `MediaBox` the crate's
@@ -270,6 +275,12 @@ impl<'a> PsDevice<'a> {
                 let withheld = std::mem::take(&mut self.emit.out);
                 self.emit.out = buffer.parent_out;
                 self.emit.out.extend_from_slice(&withheld);
+                // A group left open by a crashed interpretation is the decline case: its
+                // vector bytes return, and the same disclosure the decline path records
+                // stands — otherwise a page whose inner group flattened would note only
+                // the flattening and the crash, never the transparency it silently drew
+                // opaque.
+                self.emit.note_once("transparency ignored (transparency group)");
             }
         }
     }
@@ -439,6 +450,11 @@ impl<'a> PsDevice<'a> {
     /// `draw_path`, `draw_rect` and the glyph vectorize arms: `gsave`, the total
     /// CTM baked in, the stroke properties, the paint machinery, `grestore`.
     fn emit_shape(&mut self, transform: Affine, paint: &Paint<'a>, draw_mode: &PathDrawMode, build: impl FnOnce(&mut Emitter)) {
+        if let (Paint::Color(color), Some(OpenGroup::Real(buffer))) = (paint, self.group_stack.last_mut())
+            && matches!(color.source(), Some(hayro::hayro_interpret::color::ColorSource::Cmyk(_)))
+        {
+            buffer.cmyk_inside = true;
+        }
         self.emit.op("gsave");
         concat(&mut self.emit, transform);
         if let PathDrawMode::Stroke(props) = draw_mode {
@@ -849,6 +865,9 @@ impl<'a> Device<'a> for PsDevice<'a> {
         if !normal && !self.inside_real_group() {
             self.emit.note_once(&format!("transparency ignored (blend {blend_mode:?})"));
         }
+        if !normal && let Some(OpenGroup::Real(buffer)) = self.group_stack.last_mut() {
+            buffer.blend_inside = true;
+        }
     }
 
     fn draw_path(&mut self, path: &BezPath, transform: Affine, paint: &Paint<'a>, draw_mode: &PathDrawMode) {
@@ -890,7 +909,12 @@ impl<'a> Device<'a> for PsDevice<'a> {
         if real {
             self.saw_transparency = true;
             self.scene.push_frame();
-            self.group_stack.push(OpenGroup::Real(GroupBuffer { parent_out: std::mem::take(&mut self.emit.out), clips_at_push: self.clip_depth }));
+            self.group_stack.push(OpenGroup::Real(GroupBuffer {
+                parent_out: std::mem::take(&mut self.emit.out),
+                clips_at_push: self.clip_depth,
+                blend_inside: false,
+                cmyk_inside: false,
+            }));
         } else {
             self.group_stack.push(OpenGroup::Wrapper);
         }
@@ -1057,6 +1081,11 @@ impl<'a> Device<'a> for PsDevice<'a> {
                 images::opaque_raster(&mut self.emit, raster.width, raster.height, &raster.rgb);
                 self.emit.op("grestore");
                 self.emit.note_once("transparency flattened to raster");
+                // The offscreen replay composites in RGB: for CMYK content blended inside
+                // the group, overlapping process inks can differ from a CMYK blend — say so.
+                if buffer.blend_inside && buffer.cmyk_inside {
+                    self.emit.note_once("transparency flattened to raster (group composited in RGB, not CMYK)");
+                }
             }
             Some(_) => {
                 // The group painted nothing on the page (an empty region): nothing
@@ -1765,7 +1794,14 @@ mod tests {
         let out = output(&dev);
         assert!(out.contains("1 setgray\n") && out.contains("1 0 0 setrgbcolor\n"), "the group's bytes were never lost: {out}");
         assert!(!out.contains(">> image"), "no raster on the unwind path: {out}");
-        assert_eq!(dev.emit.notes, vec![], "the unwind path notes nothing: {:?}", dev.emit.notes);
+        // The unwind is the decline case, so its disclosure stands too: the group's vector
+        // content returned to the program drawn opaque (its opacity cannot apply).
+        assert_eq!(
+            dev.emit.notes,
+            vec![FidelityNote { page: None, text: "transparency ignored (transparency group)".into() }],
+            "the unwind discloses like the decline path: {:?}",
+            dev.emit.notes
+        );
         assert_eq!(out.matches("gsave\n").count(), out.matches("grestore\n").count(), "balanced: {out}");
     }
 
