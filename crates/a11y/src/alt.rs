@@ -417,7 +417,7 @@ enum Marked {
     /// None of the content is on the page, or with `require_all` not all of it: nothing changed.
     NotFound,
     /// Some of it is in a stream damaged partway, which can't be rewritten without losing what
-    /// follows the damage: nothing changed.
+    /// follows the damage, or may be past the damage: nothing changed.
     Damaged,
 }
 
@@ -441,6 +441,11 @@ fn artifact_marked_content(
             found.insert(id);
             edits.push((op.span, b"/Artifact BMC".to_vec()));
         }
+    }
+    // Content not found may be past the damage in a damaged stream: whether it is on the page
+    // isn't known.
+    if found != *ids && streams.iter().any(|(_, s)| s.as_ref().is_some_and(|(_, _, damaged)| *damaged)) {
+        return Ok(Marked::Damaged);
     }
     if if require_all { found != *ids } else { found.is_empty() } {
         return Ok(Marked::NotFound);
@@ -494,7 +499,7 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
         match artifact_marked_content(doc, page, streams, &ids, false)? {
             // The parent tree no longer points those ids at the figure.
             Marked::Done => {
-                if let Some(key) = page.dict.get(b"StructParents").and_then(Object::as_int) {
+                if let Some(key) = page.dict.get(b"StructParents").and_then(|o| doc.resolve(o).as_int()) {
                     clear_parent_tree(doc, key, obj)?;
                 }
             }
@@ -545,7 +550,7 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
         Marked::NotFound => return Err(ArtifactError::ContentNotFound),
         Marked::Damaged => return Err(ArtifactError::Damaged),
     }
-    if let Some(key) = page.dict.get(b"StructParents").and_then(Object::as_int) {
+    if let Some(key) = page.dict.get(b"StructParents").and_then(|o| doc.resolve(o).as_int()) {
         clear_parent_tree(doc, key, obj).map_err(|e| ArtifactError::ParentTree(e.to_string()))?;
     }
     doc.update_dict(parent, |p| p.set(b"K".to_vec(), replacement))?;

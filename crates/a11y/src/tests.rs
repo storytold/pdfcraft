@@ -1129,6 +1129,42 @@ fn a_tags_content_in_a_stream_damaged_partway_is_not_rewritten() {
     assert_ne!(list.get(1), Some(&Object::Ref(ObjRef::new(4, 0))), "the tag's stream is rewritten");
 }
 
+/// A tag's content not found before the damage in a damaged stream may be past it: it isn't known
+/// to be off the page, so neither marking changes anything.
+#[test]
+fn a_tags_content_past_the_damage_is_not_taken_for_absent() {
+    use pdfcraft_cos::ObjRef;
+    let damaged =
+        damaged_flate(b"/Photo << /MCID 1 >> BDC 100 100 50 30 re f EMC\n", b"/Figure << /MCID 0 >> BDC q 40 0 0 20 10 150 cm /Im Do Q EMC");
+    let mut doc = figures_doc();
+    doc.set(ObjRef::new(4, 0), damaged);
+    let contents = |doc: &Document| doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned();
+    let before = (contents(&doc), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0)));
+    assert_eq!(mark_decorative(&mut doc, ObjRef::new(7, 0)), Err(AltError::Damaged));
+    assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::Damaged));
+    assert_eq!((contents(&doc), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0))), before);
+}
+
+/// A page's `/StructParents` given by reference is read through it: the parent tree no longer
+/// points the marked content at the tag.
+#[test]
+fn struct_parents_given_by_reference_are_read() {
+    use pdfcraft_cos::{ObjRef, Object};
+    let by_reference = || {
+        let mut doc = figures_doc();
+        let key = doc.add(Object::Int(0));
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"StructParents".to_vec(), Object::Ref(key))).unwrap();
+        doc
+    };
+    let nums = |doc: &Document| doc.get(ObjRef::new(9, 0)).as_dict().and_then(|d| d.get(b"Nums").cloned());
+    let mut doc = by_reference();
+    mark_decorative(&mut doc, ObjRef::new(7, 0)).unwrap();
+    assert_eq!(nums(&doc), Some(Object::Array(vec![Object::Int(0), Object::Array(vec![Object::Null, Object::Ref(ObjRef::new(8, 0))])])));
+    let mut doc = by_reference();
+    mark_tag_artifact(&mut doc, ObjRef::new(8, 0)).unwrap();
+    assert_eq!(nums(&doc), Some(Object::Array(vec![Object::Int(0), Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Null])])));
+}
+
 /// A content stream that doesn't decode at all is kept as stored, and a tag in the page's other
 /// streams is still marked: only running past the decode budget refuses.
 #[test]
