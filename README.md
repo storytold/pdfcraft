@@ -94,7 +94,7 @@ Real-world typography: world scripts, vertical Japanese, colour emoji, gradients
 <td width="33%" valign="top">
 
 ### Fearless
-Every save appends your changes and leaves the original bytes untouched. Writes are atomic, undo runs deep, and nothing is lost if you close by mistake.
+Ordinary saves append your changes and leave the original bytes untouched. Edits to damaged objects whose xref and header generations disagree use a full rewrite, keeping both accepted references connected to the same repaired object. Writes are atomic, undo runs deep, and nothing is lost if you close by mistake.
 
 </td>
 <td width="33%" valign="top">
