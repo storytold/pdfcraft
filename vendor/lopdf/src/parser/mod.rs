@@ -35,6 +35,12 @@ pub(crate) type NomResult<'a, O, E = NomError<'a>> = IResult<ParserInput<'a>, O,
 /// trees, parent trees, widths) stay far below.
 pub(crate) const MAX_OBJECT_NODES: usize = 1 << 22;
 
+/// PdfCraft patch: the budget of a container parsed outside `_direct_object` (an indirect
+/// object's body, a content-stream operand, a CMap or inline-image dictionary). Its contents are
+/// charged but the container itself isn't, so it starts one short and the whole object stays
+/// within `MAX_OBJECT_NODES`. (`MAX_OBJECT_NODES` is a nonzero constant, so this can't underflow.)
+const MAX_NESTED_NODES: usize = MAX_OBJECT_NODES - 1;
+
 #[inline]
 fn strip_nom<O>(r: NomResult<O>) -> Option<O> {
     r.ok().map(|(_, o)| o)
@@ -297,9 +303,9 @@ fn array(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) -> NomResult
     }
 }
 
-/// A dictionary, from a node budget of its own (`MAX_OBJECT_NODES`).
+/// A dictionary, from a node budget of its own (`MAX_NESTED_NODES`).
 pub(crate) fn dictionary(input: ParserInput) -> NomResult<Dictionary> {
-    let nodes = Cell::new(MAX_OBJECT_NODES);
+    let nodes = Cell::new(MAX_NESTED_NODES);
     _dictionary(crate::reader::MAX_NESTING_DEPTH, &nodes)(input)
 }
 
@@ -332,7 +338,7 @@ fn inner_dictionary(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) -
 
 /// A CMap's `N dict dup begin /Key value def ...` dictionary, from a node budget of its own.
 pub(crate) fn dict_dup(input: ParserInput) -> NomResult<Dictionary> {
-    let nodes = Cell::new(MAX_OBJECT_NODES);
+    let nodes = Cell::new(MAX_NESTED_NODES);
     delimited(
         (
             digit1,
@@ -515,7 +521,7 @@ fn object<'a>(
     input: ParserInput<'a>, reader: &Reader, already_seen: &mut HashSet<ObjectId>, recover_stream_length: bool,
     recovery_bound: Option<usize>,
 ) -> NomResult<'a, Object> {
-    let nodes = Cell::new(MAX_OBJECT_NODES);
+    let nodes = Cell::new(MAX_NESTED_NODES);
     terminated(
         alt((
             |input| stream(input, reader, already_seen, recover_stream_length, recovery_bound),
@@ -738,7 +744,7 @@ fn operator(input: ParserInput) -> NomResult<String> {
 
 /// One content-stream operand, from a node budget of its own.
 fn operand(input: ParserInput) -> NomResult<Object> {
-    let nodes = Cell::new(MAX_OBJECT_NODES);
+    let nodes = Cell::new(MAX_NESTED_NODES);
     terminated(
         alt((
             null,
@@ -775,7 +781,7 @@ fn inline_image(input: ParserInput) -> NomResult<(Vec<Object>, String)> {
 
 /// An inline image after `BI`: its dictionary (from a node budget of its own) and data.
 fn inline_image_impl(input: ParserInput) -> NomResult<(Vec<Object>, String)> {
-    let nodes = Cell::new(MAX_OBJECT_NODES);
+    let nodes = Cell::new(MAX_NESTED_NODES);
     let (input, stream_dict) = inner_dictionary(crate::reader::MAX_NESTING_DEPTH, &nodes).parse(input)?;
     let (input, _) = pair(tag(&b"ID"[..]), content_space).parse(input)?;
     match image_data_stream(input, stream_dict) {

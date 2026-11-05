@@ -351,6 +351,83 @@ fn a_malformed_object_stream_member_refunds_its_reservation() {
     assert!(!budget.spent(), "unused reservation from the malformed member is refunded");
 }
 
+/// A budget too small for every member builds them in index order, so the members a spent
+/// budget skips are the same on every load. Here the first member takes four of the five
+/// nodes, the second the last one, and the third is skipped. Parsed in parallel from the shared
+/// budget, the second and third could find it held by the first and be skipped as well.
+#[test]
+fn a_tight_budget_builds_object_stream_members_in_index_order() {
+    let stream = indexed_object_stream(&[(10, 0), (11, 8), (12, 10)], b"[1 2 3] 7 8");
+    let budget = lopdf::NodeBudget::new(5);
+    let parsed = lopdf::ObjectStream::new_within(&stream, None, &budget).unwrap();
+    assert!(parsed.objects.contains_key(&(10, 0)));
+    assert!(parsed.objects.contains_key(&(11, 0)), "the second member is built from what the first left");
+    assert!(!parsed.objects.contains_key(&(12, 0)), "the third member finds the budget spent");
+    assert!(budget.spent());
+}
+
+/// A PDF with a cross-reference stream whose Info dictionary (object 4) sits in object stream 3
+/// after `first`, a member listed before it.
+fn info_in_object_stream_pdf(first: &[u8]) -> Vec<u8> {
+    let info = b"<< /Title (Kept) >>";
+    let index = format!("5 0 4 {} ", first.len() + 1);
+    let mut data = index.clone().into_bytes();
+    data.extend_from_slice(first);
+    data.push(b' ');
+    data.extend_from_slice(info);
+    let mut pdf = b"%PDF-1.5\n".to_vec();
+    let mut offsets = [0_u32; 7];
+    let mut append = |pdf: &mut Vec<u8>, id: usize, head: &[u8], body: &[u8], tail: &[u8]| {
+        offsets[id] = pdf.len() as u32;
+        pdf.extend_from_slice(format!("{id} 0 obj\n").as_bytes());
+        pdf.extend_from_slice(head);
+        pdf.extend_from_slice(body);
+        pdf.extend_from_slice(tail);
+        pdf.extend_from_slice(b"\nendobj\n");
+    };
+    append(&mut pdf, 1, b"<< /Type /Catalog /Pages 2 0 R >>", b"", b"");
+    append(&mut pdf, 2, b"<< /Type /Pages /Kids [] /Count 0 >>", b"", b"");
+    let head = format!("<< /Type /ObjStm /N 2 /First {} /Length {} >>\nstream\n", index.len(), data.len());
+    append(&mut pdf, 3, head.as_bytes(), &data, b"\nendstream");
+    let xref_offset = pdf.len() as u32;
+    offsets[6] = xref_offset;
+    let mut records = Vec::new();
+    for id in 0..7_usize {
+        let (kind, field, index) = match id {
+            0 => (0_u8, 0_u32, 0xffff_u16),
+            4 => (2, 3, 1),
+            5 => (2, 3, 0),
+            _ => (1, offsets[id], 0),
+        };
+        records.push(kind);
+        records.extend_from_slice(&field.to_be_bytes());
+        records.extend_from_slice(&index.to_be_bytes());
+    }
+    let head = format!("<< /Type /XRef /Size 7 /Root 1 0 R /Info 4 0 R /W [1 4 2] /Length {} >>\nstream\n", records.len());
+    pdf.extend_from_slice(format!("6 0 obj\n{head}").as_bytes());
+    pdf.extend_from_slice(&records);
+    pdf.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes());
+    pdf
+}
+
+/// lopdf patch (7), #5083: a lookup in an object stream (lopdf's metadata reader, or an indirect
+/// `/Length` read while loading) parses only the member it wants. It used to parse every member
+/// from one object's budget, so a member before it of more than `MAX_OBJECT_NODES` objects spent
+/// that budget and the wanted member was skipped: the Info dictionary read as missing.
+#[test]
+fn a_lookup_in_an_object_stream_parses_only_the_member_it_wants() {
+    let mut big = vec![b'['];
+    for _ in 0..4_300_000 {
+        big.extend_from_slice(b"0 ");
+    }
+    big.push(b']');
+    let metadata = Document::load_metadata_mem(&info_in_object_stream_pdf(&big)).unwrap();
+    assert_eq!(metadata.title.as_deref(), Some("Kept"));
+    // The fixture itself reads: with a small member before it, the Info dictionary was read before too.
+    let metadata = Document::load_metadata_mem(&info_in_object_stream_pdf(b"[1 2 3]")).unwrap();
+    assert_eq!(metadata.title.as_deref(), Some("Kept"));
+}
+
 #[test]
 fn view_and_user_space_round_trip_for_every_rotation() {
     for rotation in [0u16, 90, 180, 270] {
