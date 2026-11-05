@@ -195,8 +195,41 @@ impl Debug for OpenTypeFontBlob {
     }
 }
 
+/// PdfCraft patch (79): a copy of the font with its `head.indexToLocFormat` set to the format its
+/// `loca` table is in, when the field holds neither 0 (short offsets) nor 1 (long), or `None` when
+/// it needs no change. The glyph outline reader takes only 1 as long, so a font whose field reads
+/// 256 (the value's bytes swapped) had its long `loca` read as short offsets: every glyph came
+/// out wrong, and a line of text set in it drew boxes (pdf.js `issue2537r.pdf`). The `loca`
+/// table's length decides (`numGlyphs + 1` offsets of 4 bytes or of 2); a length that fits
+/// neither keeps the rule that any value other than 0 means long offsets.
+fn with_loca_format_fixed(data: &[u8], index: u32) -> Option<Vec<u8>> {
+    use skrifa::raw::types::Tag;
+    const HEAD: Tag = Tag::new(b"head");
+    const LOCA: Tag = Tag::new(b"loca");
+    // The `indexToLocFormat` field's offset in `head`.
+    const FORMAT_AT: usize = 50;
+    let f = FontRef::from_index(data, index).ok()?;
+    let format = f.head().ok()?.index_to_loc_format();
+    if format == 0 || format == 1 {
+        return None;
+    }
+    let offsets = usize::from(f.maxp().ok()?.num_glyphs()).checked_add(1)?;
+    let loca_len = f.table_data(LOCA)?.len();
+    let long = loca_len != offsets.checked_mul(2)? || loca_len == offsets.checked_mul(4)?;
+    let head_at = f.table_directory.table_records().iter().find(|r| r.tag() == HEAD)?.offset() as usize;
+    let at = head_at.checked_add(FORMAT_AT)?;
+    let mut fixed = data.to_vec();
+    fixed.get_mut(at..at.checked_add(2)?)?.copy_from_slice(&i16::from(long).to_be_bytes());
+    Some(fixed)
+}
+
 impl OpenTypeFontBlob {
     pub(crate) fn new(data: FontData, index: u32) -> Option<Self> {
+        // PdfCraft patch (79): see `with_loca_format_fixed`.
+        let data = match with_loca_format_fixed(data.as_ref().as_ref(), index) {
+            Some(fixed) => Arc::new(fixed) as FontData,
+            None => data,
+        };
         // Check first whether the font is valid so we can unwrap in the closure.
         let f = FontRef::from_index(data.as_ref().as_ref(), index).ok()?;
         // Reject fonts with invalid post table version, fixes pdf.js issue 9462. Not sure if there
