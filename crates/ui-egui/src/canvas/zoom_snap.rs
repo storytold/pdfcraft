@@ -13,15 +13,15 @@ use crate::{PdfCraftApp, QuickTool};
 /// [x0, y0, x1, y1]); a plain click has an empty rectangle.
 pub type Marquee = (usize, Rect, [f32; 4]);
 
-/// Drag a rectangle on page `page` (Marquee Zoom, Snapshot).
-pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, view: &mut DocView) {
+/// Drag a rectangle on page `page` (Marquee Zoom, Snapshot), with a press nobody holds (`free`).
+pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, free: bool, view: &mut DocView) {
     let (pointer, origin) = (ptr.pos, ptr.origin);
     if pointer.is_some_and(|p| xf.rect.contains(p)) {
         view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
     }
-    // The tool's own press, of the primary button: nothing drawn over the page here holds it.
+    // The tool's own press, of the primary button: one nobody holds.
     if resp.drag_started_by(egui::PointerButton::Primary)
-        && view.router.owner(page).is_none()
+        && free
         && let Some(o) = origin.filter(|o| xf.rect.contains(*o))
     {
         view.marquee = Some((page, o));
@@ -40,7 +40,8 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, p
             view.marquee_done = Some((page, r, [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)]));
         }
     }
-    if resp.clicked()
+    if free
+        && resp.clicked()
         && let Some(p) = pointer.filter(|p| xf.rect.contains(*p))
     {
         let v = xf.screen_to_view(p);
@@ -145,7 +146,7 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         if self.system_clipboard {
             let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&out.rgba) };
-            arboard::Clipboard::new().and_then(|mut c| c.set_image(img)).map_err(|e| e.to_string())?;
+            crate::os_clipboard::with(|c| c.set_image(img)).map_err(|e| e.to_string())?;
         }
         self.last_snapshot = Some((w, h, out.rgba));
         Ok((w, h))
