@@ -446,6 +446,20 @@ fn forbidden_actions_chained_behind_allowed_ones_are_found_and_removed() {
         build(&["<< /Type /Catalog /Pages 2 0 R >>", pages, page, &link(&format!("<< /S /GoTo /D [3 0 R /Fit] /Next {js} >>"))], ""),
         // `/Next` refers to an array that holds the action directly.
         build(&["<< /Type /Catalog /Pages 2 0 R >>", pages, page, &link("<< /S /GoTo /D [3 0 R /Fit] /Next 5 0 R >>"), &format!("[{js}]")], ""),
+        // `/Next` refers to the action itself, which carries `/P` and `/K` as a structure
+        // element would: those keys must not exempt it.
+        build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                pages,
+                page,
+                &link("<< /S /GoTo /D [3 0 R /Fit] /Next 5 0 R >>"),
+                "<< /S /JavaScript /JS (app.alert(1)) /P 3 0 R /K 0 >>",
+            ],
+            "",
+        ),
+        // A `/Next` array refers to the action.
+        build(&["<< /Type /Catalog /Pages 2 0 R >>", pages, page, &link("<< /S /GoTo /D [3 0 R /Fit] /Next [5 0 R] >>"), js], ""),
     ];
     for (i, mut doc) in cases.into_iter().enumerate() {
         let found = messages(&verify(&doc, Level::A2b)).contains(&"A JavaScript action isn't allowed");
@@ -487,4 +501,90 @@ fn an_output_intent_profile_header_is_read_within_a_size_cap() {
         doc.set(pdfcraft_cos::ObjRef::new(2, 0), Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), &profile)));
         assert_eq!(pdfa_intent_profile(&doc), Some(n), "a {size}-byte profile");
     }
+}
+
+/// A widget the form reader finds by its field is an annotation whether or not it writes
+/// `/Type /Annot`: conversion takes its additional actions off all the same.
+#[test]
+fn a_widget_without_a_type_loses_its_additional_actions() {
+    let pages = "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>";
+    let page = "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>";
+    let widget = "<< /Subtype /Widget /Rect [0 0 10 10] /F 4 /T (f) /AA << /K << /S /JavaScript /JS (1) >> >> >>";
+    let mut doc = build(&["<< /Type /Catalog /Pages 2 0 R >>", pages, page, widget], "");
+    convert(&mut doc, Level::A2b).unwrap();
+    let w = doc.get(pdfcraft_cos::ObjRef::new(4, 0));
+    assert!(w.as_dict().is_some_and(|d| d.get(b"AA").is_none()), "{w:?}");
+}
+
+/// Forbidden annotations on one page are taken off it in one pass, all of them.
+#[test]
+fn forbidden_annotations_leave_their_page_together() {
+    let n = 300;
+    let annots: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 4)).collect();
+    let page = format!("<< /Type /Page /Parent 2 0 R /Annots [{} 2 0 R] >>", annots.join(" "));
+    let mut objs =
+        vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string(), "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(), page];
+    objs.extend((0..n).map(|_| "<< /Type /Annot /Subtype /Sound /Rect [0 0 0 0] /P 3 0 R >>".to_string()));
+    let refs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let mut doc = build(&refs, "");
+    let r = convert(&mut doc, Level::A2b).unwrap();
+    assert!(r.fixed.iter().any(|f| f.starts_with(&format!("{n}: removed multimedia"))), "{:?}", r.fixed);
+    let left = pdfcraft_model::pages(&doc)[0].dict.get(b"Annots").and_then(|a| doc.resolve(a).as_array().map(Vec::len));
+    assert_eq!(left, Some(1));
+}
+
+/// Content that can't be read may draw in DeviceCMYK: convert then adds no sRGB output intent.
+#[test]
+fn convert_adds_no_srgb_intent_when_colour_could_not_all_be_read() {
+    let mut doc = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << >> >>",
+            // A /Filter that isn't a name can't be decoded: the content isn't read.
+            "<< /Length 9 /Filter 5 >>\nstream\nnot flate\nendstream",
+        ],
+        "",
+    );
+    convert(&mut doc, Level::A2b).unwrap();
+    assert!(declared(&doc).output_intents.is_empty());
+}
+
+/// A `/Next` chain of arrays alone (each array naming the next) still reaches the chain limit,
+/// so the walk's work is bounded however the arrays are linked.
+#[test]
+fn an_array_only_next_chain_is_too_deeply_chained() {
+    let mut doc = Document::new_empty();
+    let mut next = Object::Array(Vec::new());
+    for _ in 0..2 * MAX_ACTION_CHAIN {
+        next = Object::Array(vec![Object::Ref(doc.add(next))]);
+    }
+    let mut action = Dict::new();
+    action.set(b"S".to_vec(), Object::name("URI"));
+    action.set(b"Next".to_vec(), Object::Ref(doc.add(next)));
+    assert_eq!(chain_forbidden(&doc, &action).as_deref(), Some("too deeply chained"));
+    // A short chain of arrays is read through.
+    let mut short = Object::Array(Vec::new());
+    for _ in 0..10 {
+        short = Object::Array(vec![Object::Ref(doc.add(short))]);
+    }
+    action.set(b"Next".to_vec(), Object::Ref(doc.add(short)));
+    assert_eq!(chain_forbidden(&doc, &action), None);
+}
+
+/// Every distinct output intent is declared, past eight; an identifier longer than any real one
+/// keeps its start.
+#[test]
+fn every_output_intent_is_declared_with_its_identifier_cut_to_the_bound() {
+    let long = "x".repeat(4 * MAX_IDENTIFIER_BYTES);
+    let intents: Vec<String> = (0..9)
+        .map(|i| {
+            format!("<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier ({}) >>", if i == 8 { long.clone() } else { format!("c{i}") })
+        })
+        .collect();
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R /OutputIntents [{}] >>", intents.join(" "));
+    let doc = build(&[catalog.as_str(), "<< /Type /Pages /Kids [] /Count 0 >>"], "");
+    let d = declared(&doc);
+    assert_eq!(d.output_intents.len(), 9);
+    assert_eq!(d.output_intents[8].len(), MAX_IDENTIFIER_BYTES);
 }

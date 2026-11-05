@@ -122,6 +122,7 @@ pub const WORDINGS: &[&str] = &[
     "The document has additional actions (/AA)",
     "The document has document-level JavaScript",
     "The form asks viewers to make appearances (NeedAppearances)",
+    "Some content could not be read for device colour",
     // Pages, actions, annotations and fields.
     "Page {} has additional actions",
     "A {} action isn't allowed",
@@ -148,7 +149,8 @@ pub struct Declared {
     /// `pdfaid:part` and `pdfaid:conformance`, e.g. (2, "B").
     pub pdfa: Option<(u8, String)>,
     pub pdfua: Option<u8>,
-    /// Output intents' condition identifiers.
+    /// Output intents' condition identifiers: every intent the document lists (each object
+    /// once), each identifier cut to [`MAX_IDENTIFIER_BYTES`].
     pub output_intents: Vec<String>,
 }
 
@@ -180,16 +182,41 @@ pub fn declared(doc: &Document) -> Declared {
         d.pdfua = xmp::identifier(&x, xmp::PDFUA_ID, "part").and_then(|p| p.parse().ok());
     }
     let cat = catalog(doc);
-    if let Some(list) = cat.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()) {
-        for oi in list {
-            if let Some(od) = doc.resolve(&oi).as_dict() {
-                let id = od.get(b"OutputConditionIdentifier").and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text())).unwrap_or_default();
+    let list = cat.get(b"OutputIntents").map(|o| doc.resolve(o));
+    if let Some(list) = list.as_deref().and_then(Object::as_array) {
+        // One intent object listed again is one declaration: its identifier is not copied once
+        // per listing. Every distinct one is kept (verification reads them all too), and only
+        // the start of an identifier longer than any real one.
+        let mut seen = std::collections::HashSet::new();
+        for oi in list.iter().filter(|oi| oi.as_ref().is_none_or(|r| seen.insert(r))) {
+            if let Some(od) = doc.resolve(oi).as_dict() {
+                let id = od
+                    .get(b"OutputConditionIdentifier")
+                    .and_then(|v| {
+                        doc.resolve(v).as_string().map(|s| {
+                            if s.bytes.len() <= MAX_IDENTIFIER_BYTES {
+                                s.to_text()
+                            } else {
+                                // An even cut keeps UTF-16 text whole code units.
+                                pdfcraft_cos::PdfString { bytes: s.bytes[..MAX_IDENTIFIER_BYTES & !1].to_vec(), hex: s.hex }.to_text()
+                            }
+                        })
+                    })
+                    .unwrap_or_default();
                 d.output_intents.push(id);
             }
         }
     }
     d
 }
+
+/// The most bytes of an output condition identifier [`declared`] keeps (a real one is a few
+/// dozen).
+const MAX_IDENTIFIER_BYTES: usize = 1024;
+
+/// Decoded bytes one verification reads looking for device colour, all content streams
+/// together. Past it, content is not inspected, and the report says so.
+const MAX_COLOUR_DECODED: usize = 1 << 30;
 
 /// Every indirect object, with its reference.
 fn objects(doc: &Document) -> Vec<(ObjRef, std::sync::Arc<Object>)> {
@@ -252,6 +279,9 @@ struct DeviceColour {
     /// space, which PDF/A accepts whatever the output intent (ISO 19005-2 6.2.4.3).
     default_rgb: bool,
     default_cmyk: bool,
+    /// Content that could not be read (undecodable, or past [`MAX_COLOUR_DECODED`]) may use
+    /// device colour that was not seen.
+    incomplete: bool,
 }
 
 impl DeviceColour {
@@ -279,27 +309,35 @@ const MAX_DIRECT_DEPTH: u8 = 8;
 
 /// The glyph procedures of every Type 3 font in `d`: `d` itself, or a font held directly inside
 /// it (a font can sit inline in a resource dictionary).
-fn type3_procs(doc: &Document, d: &Dict, depth: u8, out: &mut std::collections::HashSet<ObjRef>) {
+fn type3_procs(doc: &Document, d: &Dict, depth: u8, read: &mut std::collections::HashSet<ObjRef>, out: &mut std::collections::HashSet<ObjRef>) {
     if d.name(b"Subtype") == Some(b"Type3")
-        && let Some(procs) = d.get(b"CharProcs").map(|c| doc.resolve(c))
-        && let Some(procs) = procs.as_dict()
+        && let Some(c) = d.get(b"CharProcs")
+        // One glyph dictionary shared by many fonts is read once: its entries are the same.
+        && c.as_ref().is_none_or(|r| read.insert(r))
+        && let Some(procs) = doc.resolve(c).as_dict()
     {
         out.extend(procs.iter().filter_map(|(_, p)| p.as_ref()));
     }
     for (_, v) in d.iter() {
-        type3_procs_within(doc, v, depth.saturating_add(1), out);
+        type3_procs_within(doc, v, depth.saturating_add(1), read, out);
     }
 }
 
-fn type3_procs_within(doc: &Document, o: &Object, depth: u8, out: &mut std::collections::HashSet<ObjRef>) {
+fn type3_procs_within(
+    doc: &Document,
+    o: &Object,
+    depth: u8,
+    read: &mut std::collections::HashSet<ObjRef>,
+    out: &mut std::collections::HashSet<ObjRef>,
+) {
     if depth > MAX_DIRECT_DEPTH {
         return;
     }
     match o {
-        Object::Dict(d) => type3_procs(doc, d, depth, out),
+        Object::Dict(d) => type3_procs(doc, d, depth, read, out),
         Object::Array(a) => {
             for v in a {
-                type3_procs_within(doc, v, depth.saturating_add(1), out);
+                type3_procs_within(doc, v, depth.saturating_add(1), read, out);
             }
         }
         _ => {}
@@ -321,9 +359,10 @@ fn referenced_content(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
         };
         out.extend(contents.iter().filter_map(Object::as_ref));
     }
+    let mut read = std::collections::HashSet::new();
     for (_, o) in objs {
         if let Some(d) = dict_of(o) {
-            type3_procs(doc, d, 0, &mut out);
+            type3_procs(doc, d, 0, &mut read, &mut out);
         }
     }
     out
@@ -385,6 +424,7 @@ fn content_colour(data: &[u8], used: &mut DeviceColour) -> usize {
 fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> DeviceColour {
     let mut used = DeviceColour::default();
     let referenced = referenced_content(doc, objs);
+    let mut budget = pdfcraft_cos::DecodeBudget::new(MAX_COLOUR_DECODED, usize::MAX);
     for (r, o) in objs {
         let Some(d) = dict_of(o) else { continue };
         // A resource dictionary's /ColorSpace, whether it is this object or the page's inline
@@ -411,9 +451,14 @@ fn uses_device_colour(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
         if !(used.gray && used.rgb && used.cmyk)
             && let Object::Stream(s) = &**o
             && (referenced.contains(r) || is_content(&s.dict))
-            && let Ok(data) = s.decoded()
         {
-            let _ = content_colour(&data, &mut used);
+            match budget.decode(s) {
+                Ok(data) => {
+                    let _ = content_colour(&data, &mut used);
+                }
+                // Not read: it may draw in a device space nothing above saw.
+                Err(_) => used.incomplete = true,
+            }
         }
     }
     used
@@ -461,6 +506,9 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     // 6.2.2: output intent when device colour is used.
     let objs = objects(doc);
     let used = uses_device_colour(doc, &objs);
+    if used.incomplete {
+        issue("6.2.3", "Some content could not be read for device colour", None, None, false);
+    }
     match pdfa_intent_profile(doc) {
         None if used.any() => {
             issue("6.2.3", "Device colour is used, but there is no PDF/A output intent", None, None, !used.cmyk);
@@ -717,7 +765,9 @@ pub struct Report {
 fn is_action(d: &Dict) -> bool {
     match d.name(b"Type") {
         Some(t) => t == b"Action",
-        None => !(d.get(b"P").is_some() && d.get(b"K").is_some()),
+        // An untyped dictionary with `/P` and `/K` is read as a structure element, unless its
+        // `/S` names a forbidden action: those two keys must not exempt one.
+        None => d.name(b"S").is_some_and(|s| FORBIDDEN_ACTIONS.contains(&s)) || !(d.get(b"P").is_some() && d.get(b"K").is_some()),
     }
 }
 
@@ -731,22 +781,55 @@ const MAX_ACTION_CHAIN: usize = 1024;
 fn chain_forbidden(doc: &Document, a: &Dict) -> Option<String> {
     let mut read = 0;
     let mut seen = std::collections::HashSet::new();
-    // Actions written in an indirect `/Next` array, copied out of it.
-    let mut held: Vec<Dict> = Vec::new();
+    // Objects `/Next` refers to (an action, or an array of them), each read once and borrowed:
+    // one array shared by many chains is not copied per chain.
+    let mut held: Vec<std::sync::Arc<Object>> = Vec::new();
     if let Some(s) = walk_chain(doc, a, &mut read, &mut seen, &mut held) {
         return Some(s);
     }
-    while let Some(d) = held.pop() {
-        if let Some(s) = walk_chain(doc, &d, &mut read, &mut seen, &mut held) {
-            return Some(s);
+    while let Some(o) = held.pop() {
+        let dicts: Vec<&Dict> = match &*o {
+            Object::Dict(d) => vec![d],
+            Object::Array(list) => {
+                // An array read is work too, with its entries: a chain of arrays alone must
+                // still reach the limit.
+                read = read.saturating_add(1 + list.len().min(MAX_ACTION_CHAIN));
+                if read > MAX_ACTION_CHAIN {
+                    return Some("too deeply chained".into());
+                }
+                // More than the chain limit can't be read anyway.
+                hold_referenced(doc, list, &mut seen, &mut held);
+                list.iter().filter_map(Object::as_dict).take(MAX_ACTION_CHAIN).collect()
+            }
+            _ => continue,
+        };
+        for d in dicts {
+            if let Some(s) = walk_chain(doc, d, &mut read, &mut seen, &mut held) {
+                return Some(s);
+            }
         }
     }
     None
 }
 
-/// [`chain_forbidden`] for the actions reachable from `a` through direct `/Next` entries. The
-/// actions of each indirect `/Next` array (each read once) go to `held`.
-fn walk_chain(doc: &Document, a: &Dict, read: &mut usize, seen: &mut std::collections::HashSet<ObjRef>, held: &mut Vec<Dict>) -> Option<String> {
+/// Queue the objects the references in a `/Next` array name, each once.
+fn hold_referenced(doc: &Document, list: &[Object], seen: &mut std::collections::HashSet<ObjRef>, held: &mut Vec<std::sync::Arc<Object>>) {
+    for r in list.iter().filter_map(Object::as_ref).take(MAX_ACTION_CHAIN) {
+        if seen.insert(r) {
+            held.push(doc.get(r));
+        }
+    }
+}
+
+/// [`chain_forbidden`] for the actions reachable from `a` through direct `/Next` entries. What
+/// an indirect `/Next`, or a reference inside a `/Next` array, names goes to `held`.
+fn walk_chain(
+    doc: &Document,
+    a: &Dict,
+    read: &mut usize,
+    seen: &mut std::collections::HashSet<ObjRef>,
+    held: &mut Vec<std::sync::Arc<Object>>,
+) -> Option<String> {
     let mut stack = vec![a];
     while let Some(d) = stack.pop() {
         *read += 1;
@@ -760,13 +843,12 @@ fn walk_chain(doc: &Document, a: &Dict, read: &mut usize, seen: &mut std::collec
         }
         match d.get(b"Next") {
             Some(Object::Dict(next)) => stack.push(next),
-            Some(Object::Array(list)) => stack.extend(list.iter().filter_map(Object::as_dict)),
-            Some(Object::Ref(r)) if seen.insert(*r) => {
-                if let Object::Array(list) = &*doc.get(*r) {
-                    // More than the chain limit can't be read anyway.
-                    held.extend(list.iter().filter_map(Object::as_dict).take(MAX_ACTION_CHAIN).cloned());
-                }
+            Some(Object::Array(list)) => {
+                *read = read.saturating_add(list.len().min(MAX_ACTION_CHAIN));
+                hold_referenced(doc, list, seen, held);
+                stack.extend(list.iter().filter_map(Object::as_dict));
             }
+            Some(Object::Ref(r)) if seen.insert(*r) => held.push(doc.get(*r)),
             _ => {}
         }
     }
@@ -789,6 +871,22 @@ fn strip_actions(doc: &Document, d: &mut Dict) -> bool {
         changed = true;
     }
     changed
+}
+
+/// Take the annotations `gone` off every page that lists them, each page's list rewritten once.
+fn remove_from_pages(doc: &mut Document, gone: &std::collections::HashSet<ObjRef>) -> Result<(), pdfcraft_cos::CosError> {
+    if gone.is_empty() {
+        return Ok(());
+    }
+    for p in pdfcraft_model::pages(doc) {
+        let annots = p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        let listed = |a: &Object| a.as_ref().is_some_and(|r| gone.contains(&r));
+        if annots.iter().any(listed) {
+            let kept: Vec<Object> = annots.into_iter().filter(|a| !listed(a)).collect();
+            doc.update_dict(p.obj, |pd| pd.set(b"Annots".to_vec(), Object::Array(kept)))?;
+        }
+    }
+    Ok(())
 }
 
 /// Make `doc` conform to `level` as far as possible, then re-check it.
@@ -830,8 +928,10 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
         fixed.push("Cleared NeedAppearances".into());
     }
     // An sRGB output intent describes RGB and gray content only: a document with CMYK content
-    // needs a CMYK output condition, which only the user can choose (#667).
-    if !has_pdfa_intent(doc) && !uses_device_colour(doc, &objects(doc)).cmyk {
+    // needs a CMYK output condition, which only the user can choose (#667). Content that could
+    // not all be read may hold CMYK too, so it gets none either.
+    let colour = uses_device_colour(doc, &objects(doc));
+    if !has_pdfa_intent(doc) && !colour.cmyk && !colour.incomplete {
         let mut icc = Dict::new();
         icc.set(b"N".to_vec(), Object::Int(3));
         let profile = doc.add(Object::Stream(Stream::flate(icc, &icc::srgb())));
@@ -863,20 +963,17 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
         doc.update_dict(p.obj, |d| changed = d.remove(b"AA").is_some())?;
         actions += changed as usize;
     }
+    let mut forbidden_annots = std::collections::HashSet::new();
     for (r, o) in objects(doc) {
         let Some(d) = dict_of(&o).cloned() else { continue };
         let ty = d.name(b"Type").map(<[u8]>::to_vec);
         let sub = d.name(b"Subtype").map(<[u8]>::to_vec);
-        let is_annot = ty.as_deref() == Some(b"Annot");
+        // A widget is an annotation whether or not it says `/Type /Annot` (the form reader
+        // finds it by its field), so its actions go the same way.
+        let is_annot = ty.as_deref() == Some(b"Annot") || sub.as_deref() == Some(b"Widget");
         if is_annot && sub.as_deref().is_some_and(|s| FORBIDDEN_ANNOTS.contains(&s)) {
-            // Take it off its page.
-            for p in pdfcraft_model::pages(doc) {
-                let annots = p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
-                if annots.iter().any(|a| a.as_ref() == Some(r)) {
-                    let kept: Vec<Object> = annots.into_iter().filter(|a| a.as_ref() != Some(r)).collect();
-                    doc.update_dict(p.obj, |pd| pd.set(b"Annots".to_vec(), Object::Array(kept)))?;
-                }
-            }
+            // Taken off its page below, all of them in one pass over the pages.
+            forbidden_annots.insert(r);
             removed += 1;
             continue;
         }
@@ -922,6 +1019,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
             files += 1;
         }
     }
+    remove_from_pages(doc, &forbidden_annots)?;
     // Forbidden actions left as objects of their own, or chained to by one, and those written
     // directly in an /A elsewhere (an outline item's, say).
     for (r, o) in objects(doc) {
