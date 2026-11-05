@@ -5198,6 +5198,26 @@ fn an_edit_never_rewrites_a_content_stream_damaged_partway() {
     assert_eq!(kept.raw, damaged.raw, "stored as it was");
 }
 
+/// A content stream that doesn't decode at all is no damage to write over: it is kept as stored,
+/// and the page's other streams are read and edited around it. A stream of a few MB is read for
+/// selecting objects.
+#[test]
+fn a_content_stream_that_does_not_decode_is_kept_and_edited_around() {
+    let mut doc = split_page("", "BT /F1 12 Tf 72 600 Td (Whole) Tj ET");
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    let unknown = pdfcraft_cos::Stream::from_raw(dict, b"BT /F1 12 Tf 72 700 Td (Unread) Tj ET".to_vec());
+    doc.set(pdfcraft_cos::ObjRef::new(4, 0), unknown.clone());
+    text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>(), ["Edited"]);
+    let Object::Stream(kept) = &*doc.get(pdfcraft_cos::ObjRef::new(4, 0)) else { panic!("not a stream") };
+    assert_eq!(kept.raw, unknown.raw, "stored as it was");
+
+    let large = format!("{}0 0 m 10 10 l S", " ".repeat(2 << 20));
+    assert!(editable_objects(&split_page(&large, "BT /F1 12 Tf 72 600 Td (Whole) Tj ET"), 0).is_ok());
+}
+
 /// Objects are selected only from content read whole: what a damaged stream hides past the
 /// damage could change the graphics state of every later item.
 #[test]
