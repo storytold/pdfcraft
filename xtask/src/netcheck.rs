@@ -30,8 +30,9 @@ use crate::gates::root;
 /// The packages the batch path is built from.
 const PACKAGES: &[&str] = &["pdfcraft-cli", "pdfcraft-automation", "pdfcraft-engine"];
 
-/// Crates that can open a socket: HTTP clients, TLS stacks, async runtimes and libcurl bindings.
-const NETWORK_CRATES: &[&str] = &["curl", "hyper", "isahc", "minreq", "native-tls", "reqwest", "tokio", "ureq"];
+/// Crates that can open a socket: HTTP clients, TLS stacks, async runtimes, socket wrappers and
+/// libcurl bindings.
+const NETWORK_CRATES: &[&str] = &["curl", "hyper", "isahc", "minreq", "native-tls", "reqwest", "socket2", "tokio", "ureq"];
 
 /// The resolved dependency graph of the workspace, relative to the repository root.
 const LOCKFILE: &str = "Cargo.lock";
@@ -134,18 +135,19 @@ fn parse_lockfile(text: &str) -> anyhow::Result<BTreeMap<String, BTreeSet<String
     Ok(graph)
 }
 
-/// The shortest chain from `from` to `to` in the graph, both ends included.
-fn shortest_path(graph: &BTreeMap<String, BTreeSet<String>>, from: &str, to: &str) -> Option<Vec<String>> {
+/// The shortest chain from `from` to `to` in the graph, both ends included. A walk past
+/// [`MAX_VISITED`] is an error: it has no answer, and "unreachable" would pass the gate.
+fn shortest_path(graph: &BTreeMap<String, BTreeSet<String>>, from: &str, to: &str) -> anyhow::Result<Option<Vec<String>>> {
     let mut parents: BTreeMap<String, String> = BTreeMap::new();
     let mut queue: VecDeque<String> = VecDeque::from([from.to_owned()]);
     let mut visited = 0usize;
     while let Some(node) = queue.pop_front() {
         visited = visited.saturating_add(1);
         if visited > MAX_VISITED {
-            return None;
+            bail!("walking from {from} to {to} visited more than {MAX_VISITED} packages; is {LOCKFILE} damaged?");
         }
         if node == to {
-            return Some(walk_back(&parents, node));
+            return Ok(Some(walk_back(&parents, node)));
         }
         let Some(next) = graph.get(&node) else { continue };
         for dependency in next {
@@ -155,7 +157,7 @@ fn shortest_path(graph: &BTreeMap<String, BTreeSet<String>>, from: &str, to: &st
             }
         }
     }
-    None
+    Ok(None)
 }
 
 /// The chain from the start of the walk to `node`, following the discovery parents.
@@ -171,18 +173,18 @@ fn walk_back(parents: &BTreeMap<String, String>, node: String) -> Vec<String> {
 }
 
 /// One row per package and network-capable crate.
-fn rows(graph: &BTreeMap<String, BTreeSet<String>>) -> Vec<Row> {
+fn rows(graph: &BTreeMap<String, BTreeSet<String>>) -> anyhow::Result<Vec<Row>> {
     let mut rows = Vec::with_capacity(PACKAGES.len().saturating_mul(NETWORK_CRATES.len()));
     for package in PACKAGES {
         for name in NETWORK_CRATES {
-            let path = shortest_path(graph, package, name);
+            let path = shortest_path(graph, package, name)?;
             let path = path.map(|chain| chain.join(" -> "));
             let reachable = path.is_some();
             let row = Row { package: (*package).to_owned(), name: (*name).to_owned(), reachable, path: path.unwrap_or_default() };
             rows.push(row);
         }
     }
-    rows
+    Ok(rows)
 }
 
 /// Write the reviewed baseline: the reachable pairs only, so a reader sees exactly the accepted
@@ -245,7 +247,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     if let Some(package) = PACKAGES.iter().find(|name| !graph.contains_key(**name)) {
         bail!("{package} is not in {LOCKFILE}; is it still a workspace member?");
     }
-    let rows = rows(&graph);
+    let rows = rows(&graph)?;
     let reachable = rows.iter().filter(|r| r.reachable).count();
     println!("netcheck: {} packages x {} network-capable crates; {reachable} reachable", PACKAGES.len(), NETWORK_CRATES.len());
     for row in rows.iter().filter(|r| r.reachable) {
@@ -318,10 +320,10 @@ dependencies = ["leaf"]
     #[test]
     fn shortest_path_names_the_chain_and_follows_dependencies_only() {
         let graph = parse_lockfile(SAMPLE).expect("the sample parses");
-        assert_eq!(shortest_path(&graph, "root", "leaf"), Some(vec!["root".to_string(), "middle".to_string(), "leaf".to_string()]));
-        assert_eq!(shortest_path(&graph, "leaf", "root"), None);
-        assert_eq!(shortest_path(&graph, "root", "nowhere"), None);
-        assert_eq!(shortest_path(&graph, "root", "root"), Some(vec!["root".to_string()]));
+        assert_eq!(shortest_path(&graph, "root", "leaf").unwrap(), Some(vec!["root".to_string(), "middle".to_string(), "leaf".to_string()]));
+        assert_eq!(shortest_path(&graph, "leaf", "root").unwrap(), None);
+        assert_eq!(shortest_path(&graph, "root", "nowhere").unwrap(), None);
+        assert_eq!(shortest_path(&graph, "root", "root").unwrap(), Some(vec!["root".to_string()]));
     }
 
     #[test]
@@ -331,14 +333,12 @@ dependencies = ["leaf"]
     }
 
     #[test]
-    fn committed_baseline_lists_the_reachable_pairs_of_the_lockfile_graph() {
+    fn committed_baseline_accepts_the_reachable_pairs_of_the_lockfile_graph() {
         let text = std::fs::read_to_string(root().join(LOCKFILE)).expect("Cargo.lock is committed");
         let graph = parse_lockfile(&text).expect("Cargo.lock parses");
-        let found = rows(&graph);
+        let found = rows(&graph).expect("the walk finishes");
         let reviewed = read_baseline(&root().join(BASELINE)).expect("the baseline is committed");
-        let list = |rows: &[Row]| -> Vec<String> {
-            rows.iter().filter(|r| r.reachable).map(|r| format!("{} -> {}: {}", r.package, r.name, r.path)).collect()
-        };
-        assert_eq!(list(&reviewed), list(&found), "{BASELINE} must list exactly the pairs the lock file graph gives");
+        // The gate's own rule: a pair that went away or moved is reported, not a failure.
+        check_rows(&found, &reviewed).expect("every reachable pair is in the baseline");
     }
 }
