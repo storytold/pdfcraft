@@ -26,6 +26,8 @@ pub enum AltError {
     #[error("the page has more content than can be edited")]
     TooLarge,
     #[error("{0}")]
+    PageTree(#[from] pdfcraft_model::PageTreeLimit),
+    #[error("{0}")]
     Cos(#[from] pdfcraft_cos::CosError),
 }
 
@@ -52,6 +54,9 @@ pub enum ArtifactError {
     ParentTree(String),
     #[error("the page has more content than can be edited")]
     TooLarge,
+    /// The page tree is too large to read whole, so the tag's page can't be found.
+    #[error("{0}")]
+    PageTree(#[from] pdfcraft_model::PageTreeLimit),
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
 }
@@ -464,9 +469,14 @@ fn artifact_marked_content(
 pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> {
     let d = check_figure(doc, obj)?;
     let ids: HashSet<i64> = mcids(doc, &d).into_iter().collect();
-    let pages = pdfcraft_model::pages(doc);
     let pg = d.get(b"Pg").and_then(Object::as_ref).or_else(|| elements(doc).into_iter().find(|e| e.object == obj).and_then(|e| e.page));
-    if let Some(page) = pg.and_then(|p| pages.iter().find(|x| x.obj == p)).filter(|_| !ids.is_empty()) {
+    // Its page from the whole tree, or an error before anything changes: a page past a walk limit
+    // would keep the marked content and the parent tree while the tag left its parent.
+    let page = match pg.filter(|_| !ids.is_empty()) {
+        Some(p) => pdfcraft_model::page_by_ref(doc, p)?,
+        None => None,
+    };
+    if let Some(page) = &page {
         let streams = decode_page_streams(doc, &page.dict).ok_or(AltError::TooLarge)?;
         // The parent tree no longer points those ids at the figure.
         if artifact_marked_content(doc, page, streams, &ids, false)?
@@ -507,9 +517,8 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
     if ids.is_empty() {
         return Err(ArtifactError::NoMarkedContent);
     }
-    let pages = pdfcraft_model::pages(doc);
     let page_ref = element.page.ok_or(ArtifactError::NoPage)?;
-    let page = pages.iter().find(|page| page.obj == page_ref).ok_or(ArtifactError::NoPage)?;
+    let page = &pdfcraft_model::page_by_ref(doc, page_ref)?.ok_or(ArtifactError::NoPage)?;
     let parent = element.dict.get(b"P").and_then(Object::as_ref).ok_or(ArtifactError::NoParent)?;
     let replacement = replacement_kids(doc, parent, obj)?;
     let streams = decode_page_streams(doc, &page.dict).ok_or(ArtifactError::TooLarge)?;

@@ -1504,3 +1504,24 @@ fn marking_a_tag_artifact_refuses_content_past_the_decode_budget() {
     assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::TooLarge));
     assert_eq!(doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents"), Some(&contents), "the page keeps its content");
 }
+
+/// A figure on a page past a walk limit is refused before anything changes: marked decorative, its
+/// tag would leave its parent while its marked content and the parent tree still named it.
+#[test]
+fn a_figure_on_a_page_past_a_walk_limit_is_refused_before_any_change() {
+    use pdfcraft_cos::{ObjRef, Object};
+    use pdfcraft_model::{Limits, PageTreeLimit, with_limits};
+    let mut doc = figures_doc();
+    doc.update_dict(ObjRef::new(2, 0), |d| d.set(b"Kids".to_vec(), Object::Array(vec![Object::Null, Object::Null, Object::Ref(ObjRef::new(3, 0))])))
+        .unwrap();
+    let parent_kids = |doc: &Document| doc.get(ObjRef::new(6, 0)).as_dict().unwrap().get(b"K").cloned();
+    let contents = |doc: &Document| doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned();
+    let (kids_before, contents_before) = (parent_kids(&doc), contents(&doc));
+    let capped = Limits { kids_entries: 2, ..Limits::DEFAULT };
+    assert_eq!(with_limits(capped, || mark_decorative(&mut doc, ObjRef::new(7, 0))), Err(AltError::PageTree(PageTreeLimit::KidsEntries)));
+    assert_eq!(with_limits(capped, || mark_tag_artifact(&mut doc, ObjRef::new(7, 0))), Err(ArtifactError::PageTree(PageTreeLimit::KidsEntries)));
+    assert_eq!((parent_kids(&doc), contents(&doc)), (kids_before.clone(), contents_before.clone()), "nothing changed");
+    mark_decorative(&mut doc, ObjRef::new(7, 0)).unwrap();
+    assert_ne!(parent_kids(&doc), kids_before, "within the default limits the figure leaves its parent");
+    assert_ne!(contents(&doc), contents_before, "and its content becomes an artifact");
+}
