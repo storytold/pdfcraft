@@ -14,6 +14,7 @@ pub mod embedding;
 mod encodings;
 pub mod fallback;
 pub mod pdf;
+pub mod plan;
 mod script;
 mod shaping;
 pub mod source_shaping;
@@ -24,8 +25,10 @@ pub use craft::{
     document_japanese_font_for_style, document_japanese_fonts_for_style, document_latin_fonts, document_thai_font, ui_arabic_fonts, ui_chinese_fonts,
     ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
 };
+pub use plan::{MAX_PLAN_GLYPHS, MAX_TYPE3_GLYPHS, PlannedType3, TextPlan};
 pub use script::{
-    GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, japanese_glyph_from, script_missing, script_outline,
+    GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, craft_glyph, face_has, japanese_glyph, japanese_glyph_from,
+    script_missing, script_outline,
 };
 pub use shaping::{
     ShapedCluster, ShapedScript, arabic_glyph, arabic_has, hebrew_has, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, thai_has,
@@ -271,6 +274,16 @@ pub fn set_undrawn_mark(d: &mut pdfcraft_cos::Dict, c: Option<char>) {
             d.remove(UNDRAWN_MARK);
         }
     }
+}
+
+/// The byte used by Unicode text plans, from the shared WinAnsi table (tabs become spaces).
+pub fn win_ansi_char(c: char) -> Option<u8> {
+    if c == '\t' { Some(b' ') } else { win_ansi_byte(c) }
+}
+
+/// Whether every character can be represented without substitution in WinAnsi.
+pub fn fits_win_ansi(s: &str) -> bool {
+    s.chars().all(win_ansi_encodable)
 }
 
 /// Bytes as a PDF literal string, `(` … `)`, with delimiters escaped.
