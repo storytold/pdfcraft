@@ -548,7 +548,9 @@ fn extended_graphics_states_are_checked() {
     );
     assert!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Black 5 0 R /Spot << /HalftoneType 1 /TransferFunction 4 0 R >> >> >>").is_empty());
     // Private application data isn't graphics resources.
-    assert!(gs("/A << /RI /Perceptual >> >> /PieceInfo << /App << /Private << /ExtGState << /X << /TR 4 0 R >> >> >> >> >>").is_empty());
+    assert!(
+        gs("/A << /RI /Perceptual >> >> /PieceInfo << /App << /Private << /Resources << /ExtGState << /X << /TR 4 0 R >> >> >> >> >>").is_empty()
+    );
     // A shading pattern holds one graphics state, not a dictionary of them.
     let pattern = |gs: &str| format!("/A << /RI /Perceptual >> >> /Pattern << /P << /PatternType 2 /Shading << /ShadingType 2 >> /ExtGState {gs} >>");
     assert_eq!(gs(&pattern("<< /TR 4 0 R >>")), [tr]);
