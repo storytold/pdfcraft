@@ -79,30 +79,37 @@ fn read_mode_shows_the_side_panel_without_tools() {
     assert!(side(&h).right() < rail(&h).left());
 }
 
-#[test]
-fn a_dragged_width_is_remembered_across_restarts() {
-    let mut h = harness(|app| app.set_option("panel", "bookmarks").unwrap());
-    let before = h.state().side_panels.side_width;
-    let side_left = side(&h).left();
-    // The side panel's resize edge: the one right of the page, left of the panel's text.
-    let edge = h
-        .get_all_by_label("Resize panels")
+/// The side panel's resize edge: the nearest one left of the panel's text, right of the page.
+fn side_edge(h: &Harness<'static, PdfCraftApp>) -> egui::Pos2 {
+    let side_left = side(h).left();
+    h.get_all_by_label("Resize panels")
         .map(|n| n.rect().left_center())
-        .filter(|c| c.x < side_left && c.x > WIDTH / 2.0)
+        .filter(|c| c.x < side_left)
         .min_by(|a, b| (side_left - a.x).total_cmp(&(side_left - b.x)))
         .expect("the side panel has a resize edge")
-        // 2 pt inside the panel: the edge lies right of the border, clear of the page's scrollbar.
-        + egui::vec2(2.0, 0.0);
+}
+
+/// Drag the side panel's resize edge `by` points to the left (wider).
+fn widen_side(h: &mut Harness<'static, PdfCraftApp>, by: f32) {
+    // 2 pt inside the panel: the edge lies right of the border, clear of the page's scrollbar.
+    let edge = side_edge(h) + egui::vec2(2.0, 0.0);
     h.hover_at(edge);
     h.run_steps(1);
     h.drag_at(edge);
     h.run_steps(1);
     for i in 1..=4 {
-        h.hover_at(edge - egui::vec2(10.0 * i as f32, 0.0));
+        h.hover_at(edge - egui::vec2(by * i as f32 / 4.0, 0.0));
         h.run_steps(1);
     }
-    h.drop_at(edge - egui::vec2(40.0, 0.0));
+    h.drop_at(edge - egui::vec2(by, 0.0));
     h.run_steps(3);
+}
+
+#[test]
+fn a_dragged_width_is_remembered_across_restarts() {
+    let mut h = harness(|app| app.set_option("panel", "bookmarks").unwrap());
+    let before = h.state().side_panels.side_width;
+    widen_side(&mut h, 40.0);
     let after = h.state().side_panels.side_width;
     // The pointer was pressed 2 pt inside the panel, and the edge follows the pointer.
     assert!((after - (before + 40.0 - 2.0)).abs() <= 1.0, "{before} -> {after}");
@@ -110,6 +117,49 @@ fn a_dragged_width_is_remembered_across_restarts() {
     let mut restored = PdfCraftApp::new();
     restored.restore(&saved);
     assert_eq!(restored.side_panels.side_width, after);
+}
+
+/// Long bookmark titles want room: the side panel widens well past the Tools pane's 520 pt, up to
+/// 70 % of the window, so the page stays in view.
+#[test]
+fn the_side_panel_widens_up_to_most_of_the_window() {
+    let mut h = harness(|app| {
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "bookmarks").unwrap();
+    });
+    let before = h.state().side_panels.side_width;
+    widen_side(&mut h, 400.0);
+    let wide = h.state().side_panels.side_width;
+    assert!((wide - (before + 400.0 - 2.0)).abs() <= 1.0, "{before} -> {wide}");
+    // Drawn as wide as set: from its resize edge to the rail.
+    let drawn = rail(&h).left() - side_edge(&h).x;
+    assert!(wide > 520.0 && (drawn - wide).abs() <= 12.0, "{wide} set, {drawn} drawn");
+    // Dragged far past it, it stops at 70 % of the room left of the rail (the window but the
+    // rail's 48 pt or so), and a further drag doesn't take it on.
+    widen_side(&mut h, 600.0);
+    let widest = h.state().side_panels.side_width;
+    assert!((0.7 * (WIDTH - 60.0)..=0.7 * WIDTH + 1.0).contains(&widest), "{wide} -> {widest}");
+    widen_side(&mut h, 200.0);
+    assert!((h.state().side_panels.side_width - widest).abs() <= 1.0, "{widest} -> {}", h.state().side_panels.side_width);
+}
+
+/// With the Tools pane open beside it, the side panel takes what the two together leave of the
+/// 70 %, so the page still keeps the rest of the window.
+#[test]
+fn the_side_panel_and_the_tools_pane_leave_the_page_its_share() {
+    let mut h = harness(|app| app.set_option("panel", "bookmarks").unwrap());
+    assert!(h.query_by_label("Expand all tools").is_some(), "the Tools pane is open");
+    widen_side(&mut h, 1000.0);
+    let side = h.state().side_panels.side_width;
+    assert!(side > 520.0, "still well past the old limit: {side}");
+    // The page between the Tools pane's resize edge (the leftmost) and the side panel's keeps
+    // what the two panes leave of the window: 30 % of the room left of the rail.
+    let tools_edge = h.get_all_by_label("Resize panels").map(|n| n.rect().center().x).fold(f32::INFINITY, f32::min);
+    let page = side_edge(&h).x - tools_edge;
+    assert!(page >= 0.3 * (WIDTH - 60.0) - 12.0, "the page keeps its part: {page} (side {side}, Tools to {tools_edge})");
+    // Dragged further, the side panel stays where the share ends.
+    widen_side(&mut h, 200.0);
+    assert!((h.state().side_panels.side_width - side).abs() <= 1.0, "{side} -> {}", h.state().side_panels.side_width);
 }
 
 #[test]

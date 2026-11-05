@@ -21,7 +21,12 @@ pub const SIDE_WIDTH: f32 = 330.0;
 const TOOLS_GUTTERS: f32 = 30.0;
 /// No narrower than Format text's widest row, so nothing in it is cut off.
 const TOOLS_RANGE: RangeInclusive<f32> = (crate::format_text_ui::MIN_ROW + TOOLS_GUTTERS)..=520.0;
-const SIDE_RANGE: RangeInclusive<f32> = 260.0..=520.0;
+/// The side panel can be dragged as wide as the window lets it ([`MAX_SHARE`]): the long
+/// bookmark titles of a set of plans, or a comment thread, then read on one line.
+const SIDE_RANGE: RangeInclusive<f32> = 260.0..=3840.0;
+/// The share of the window one pane may take, so the page keeps the rest in view; the side
+/// panel and the Tools pane beside it keep to it together ([`side_room`]).
+const MAX_SHARE: f32 = 0.7;
 /// Version of the saved `side_panels` value.
 const VERSION: u64 = 1;
 /// Deepest split tree the old layout migration walks; the old renderer allowed far fewer.
@@ -328,6 +333,20 @@ pub fn command(app: &mut PdfCraftApp, reset: bool, params: &Value) -> Result<Val
 
 struct Content<'a> {
     app: &'a mut PdfCraftApp,
+    /// The widest the side panel may be drawn this frame ([`side_room`]).
+    side_max: f32,
+}
+
+/// The widest the side panel may be in a window `extent` wide (the panes' area) with the Tools
+/// pane `tools` wide beside it, if it is open: the two together keep to [`MAX_SHARE`] of the
+/// window, so the page keeps the rest in view. The host holds each pane to that share alone,
+/// and a later pane only to the room left, so with both open the page could otherwise lose all
+/// of its width. The side panel's minimum still holds in a narrow window, as the host's does.
+fn side_room(extent: f32, tools: Option<f32>) -> f32 {
+    let share = MAX_SHARE * extent.max(0.0);
+    // The Tools pane as the host draws it: within its range, and within the share alone.
+    let tools = tools.map_or(0.0, |w| w.clamp(*TOOLS_RANGE.start(), TOOLS_RANGE.end().min(share).max(*TOOLS_RANGE.start())));
+    (share - tools).clamp(*SIDE_RANGE.start(), *SIDE_RANGE.end())
 }
 
 impl PaneContent<Pane> for Content<'_> {
@@ -354,7 +373,10 @@ impl PaneContent<Pane> for Content<'_> {
     }
 
     fn size_range(&self, pane: &Pane) -> RangeInclusive<f32> {
-        pane.range()
+        match pane {
+            Pane::Tools => pane.range(),
+            Pane::Side => *SIDE_RANGE.start()..=self.side_max,
+        }
     }
 
     fn movable(&self, _pane: &Pane) -> bool {
@@ -435,15 +457,19 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let labels = PaneLabels { resize: crate::i18n::t("Resize panels").to_owned(), ..PaneLabels::default() };
     let panels = app.side_panels;
+    // The host lays the panes out in the room left of the rail (`available_rect_before_wrap`).
+    let extent = ui.available_rect_before_wrap().width();
+    let side_max = side_room(extent, open.contains(&Pane::Tools).then_some(panels.tools_width));
     // Columns: both panes may share the right edge, Tools outermost, as `open` lists them.
     let host = egui::Id::unique("pdfcraft-side-panels");
     let output = PaneHost::new(host)
         .policy(SidePolicy::Columns)
+        .max_fraction(MAX_SHARE)
         .f6(false)
         .labels(labels)
         .frame(egui::Frame::NONE.fill(t.panel))
         .body_margin(egui::Margin::ZERO)
-        .show(ui, &open, |pane| Some(state_of(&panels, *pane)), &mut Content { app });
+        .show(ui, &open, |pane| Some(state_of(&panels, *pane)), &mut Content { app, side_max });
 
     keep_resize_edges_off_scrollbars(ui, host, &open);
     for request in output.requests {
@@ -563,6 +589,11 @@ mod tests {
             restored.panels,
             SidePanels { tools_side: ToolsSide::Left, rail_side: ToolsSide::Right, tools_width: 520.0, side_width: SIDE_WIDTH }
         );
+        // The side panel keeps a width well past the Tools pane's limit.
+        let restored = restore(&json!({"side_panels": {"version": 1, "side_width": 1200.0}}));
+        assert_eq!(restored.panels.side_width, 1200.0);
+        let restored = restore(&json!({"side_panels": {"version": 1, "side_width": 9000.0}}));
+        assert_eq!(restored.panels.side_width, 3840.0);
         // Deep trees are cut off rather than walked.
         let mut deep = tabs(&["tools"]);
         for _ in 0..200 {
@@ -587,5 +618,24 @@ mod tests {
         assert_eq!(panels.rail_edge(), Edge::Start);
         let restored = restore(&json!({"side_panels": {"version": 1, "rail_side": "left"}}));
         assert_eq!(restored.panels.rail_side, ToolsSide::Left);
+    }
+
+    #[test]
+    fn the_side_panel_and_the_tools_pane_keep_to_the_share_together() {
+        // Alone, the side panel may take 70 % of the room, up to its maximum.
+        assert!((side_room(1000.0, None) - 700.0).abs() < 1e-3);
+        assert_eq!(side_room(10_000.0, None), *SIDE_RANGE.end());
+        // Beside the Tools pane, what that leaves of the 70 %.
+        let tools = *TOOLS_RANGE.start() + 20.0;
+        assert!((side_room(1000.0, Some(tools)) - (700.0 - tools)).abs() < 1e-3);
+        // The Tools pane counts as drawn: within its range (520 pt at most, Format text's widest
+        // row at least).
+        assert!((side_room(2000.0, Some(9000.0)) - 880.0).abs() < 1e-3);
+        assert!((side_room(1000.0, Some(0.0)) - (700.0 - TOOLS_RANGE.start())).abs() < 1e-3);
+        // In a narrow window the side panel's minimum holds, as the host's does; no panic when the
+        // Tools pane's own minimum is above the share either.
+        assert_eq!(side_room(300.0, Some(272.0)), *SIDE_RANGE.start());
+        assert_eq!(side_room(100.0, Some(272.0)), *SIDE_RANGE.start());
+        assert_eq!(side_room(f32::NAN, None), *SIDE_RANGE.start());
     }
 }

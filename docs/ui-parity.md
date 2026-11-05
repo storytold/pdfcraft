@@ -1,6 +1,6 @@
 # UI and interaction parity
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (Pages inspector thumbnail size slider and buttons #3808; full screen presents one page at a time #1459; the selected field nudges with the arrow keys in Prepare a form #2608) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-11-03 · **Change:** minor (the side panel widens up to 70 % of the window, past its old 520 pt, so long bookmark titles read on one line) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft's tools, panels, shortcuts and feel compare with Acrobat Pro's current interface (the
 2023+ "new Acrobat": All tools pane on the left, quick-action toolbar, Home view). Behaviour is
@@ -33,7 +33,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Split window, spreadsheet split | yes | no | planned |
 | Read mode, full screen | yes | yes; full screen is one fitted page at a time on black, click/keys turn pages (#1459) | shipped; auto-advance, loop and transitions planned |
 | Light, dark, system theme | yes | yes | shipped |
-| Side panels: thumbnails, bookmarks, attachments, layers, comments, fields, signatures | yes | yes; panels keep their width (#704); the Pages inspector has a 50–150% thumbnail size slider and buttons (#3808) | shipped |
+| Side panels: thumbnails, bookmarks, attachments, layers, comments, fields, signatures | yes | yes; panels keep their width (#704) and widen up to 70 % of the window, together with the Tools pane beside them and to at most 3840 pt; the Pages inspector has a 50–150% thumbnail size slider and buttons (#3808) | shipped |
 | Destinations, articles, model tree, Tags, Order, Content panels | yes | no | planned |
 | Message bars (restricted, signed, PDF/A, forms) | yes | restricted and signed; no PDF/A view mode | partial |
 
@@ -82,6 +82,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | The side panel widens up to 70 % of the window, past its old 520 pt, so long bookmark titles read on one line |
 | 2026-10-21 | minor | Pages inspector thumbnail sizing (#3808), separate from page and Organize zoom; view setting retained on reload and exposed through UI control. Not persisted between sessions. |
 | 2026-10-15 | minor | A selected field nudges with the arrow keys in Prepare a form: a point, Shift ten points, one undo step per press (#2608) |
 | 2026-10-14 | minor | Full screen shows one fitted page (or spread) at a time on black with click and key paging, as Acrobat's Full Screen Mode (#379, #1459, #1353) |
