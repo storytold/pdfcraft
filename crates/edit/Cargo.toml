@@ -24,3 +24,5 @@ unicode-bidi = "0.3"
 
 [dev-dependencies]
 hayro-syntax = { workspace = true }
+pdfcraft-render = { workspace = true }
+proptest = { workspace = true }
