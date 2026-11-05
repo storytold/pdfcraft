@@ -525,11 +525,12 @@ impl PdfCraftApp {
                 self.ocr_addon.status = None;
                 self.ocr_addon.message = None;
                 self.ocr_draft.recognize = true;
-                // Plain recognition never crops; only Enhance scanned file turns it on.
+                // Plain recognition never crops; only Correct scanned pages turns it on.
                 self.ocr_draft.auto_crop = false;
                 self.dialog = Some(Dialog::RecognizeText);
             }
-            "ocr.enhance" => {
+            "ocr.enhance" => self.dialog = Some(Dialog::EnhanceScan),
+            "ocr.correct_scan" => {
                 self.ocr_addon.status = None;
                 self.ocr_addon.message = None;
                 self.ocr_draft.recognize = false;
