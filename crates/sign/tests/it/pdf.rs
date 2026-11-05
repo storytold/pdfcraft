@@ -2954,3 +2954,34 @@ fn signing_a_field_with_a_null_value_after_another_signature_keeps_the_first_val
         all.iter().map(|s| (&s.status, &s.modification)).collect::<Vec<_>>()
     );
 }
+
+/// Signature fields are found through a field hierarchy of bounded depth: a chain of ordinary
+/// depth lists its leaf, one thousands deep does not build a name per level.
+#[test]
+fn signature_discovery_bounds_the_field_hierarchy_depth() {
+    let chain = |levels: usize| {
+        let mut objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R] >> >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] >>".to_vec(),
+            b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+            b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+        ];
+        for i in 0..levels {
+            let num = 7 + i;
+            objs.push(
+                if i + 1 == levels {
+                    format!("<< /T (leaf) /FT /Sig /Parent {} 0 R >>", num - 1)
+                } else {
+                    format!("<< /T (g) /FT /Sig /Kids [{} 0 R] >>", num + 1)
+                }
+                .into_bytes(),
+            );
+        }
+        write_pdf(&objs.iter().map(Vec::as_slice).collect::<Vec<_>>())
+    };
+    let names = |bytes: &[u8]| signatures(&open(bytes), bytes, &TrustStore::default()).into_iter().map(|s| s.field).collect::<Vec<_>>();
+    assert!(names(&chain(4)).iter().any(|n| n == "g.g.g.leaf"), "{:?}", names(&chain(4)));
+    assert!(names(&chain(2_000)).iter().all(|n| !n.ends_with("leaf")));
+}

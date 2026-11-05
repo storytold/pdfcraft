@@ -198,6 +198,13 @@ impl Field {
     }
 }
 
+/// Deepest field hierarchy `sig_fields` follows; fields below it are not listed.
+const MAX_FIELD_DEPTH: usize = 64;
+
+/// Bytes of qualified field names `sig_fields` builds for one document. Each name repeats its
+/// ancestors', so a long chain would otherwise cost the square of its length.
+const MAX_FIELD_NAME_BYTES: usize = 32 << 20;
+
 /// Every signature field, depth first in `/Fields` order.
 pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
     let mut out = Vec::new();
@@ -207,8 +214,12 @@ pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
     };
     let Some(fields) = af.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()) else { return out };
     let mut seen = HashSet::new();
-    let mut stack: Vec<(Object, String, Option<Vec<u8>>)> = fields.into_iter().rev().map(|f| (f, String::new(), None)).collect();
-    while let Some((o, prefix, inherited_ft)) = stack.pop() {
+    let mut stack: Vec<(Object, String, Option<Vec<u8>>, usize)> = fields.into_iter().rev().map(|f| (f, String::new(), None, 0)).collect();
+    let mut name_bytes = 0usize;
+    while let Some((o, prefix, inherited_ft, depth)) = stack.pop() {
+        if depth > MAX_FIELD_DEPTH {
+            continue;
+        }
         if let Some(r) = o.as_ref()
             && !seen.insert(r)
         {
@@ -225,8 +236,13 @@ pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
         let kids: Vec<Object> = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
         // Kids with a /T are fields; others are this field's widgets.
         let (sub, widgets): (Vec<Object>, Vec<Object>) = kids.into_iter().partition(|k| doc.resolve(k).as_dict().is_some_and(|kd| kd.contains(b"T")));
+        // this name, and the clone of it each queued sub-field is about to hold
+        name_bytes = name_bytes.saturating_add(name.len().saturating_mul(sub.len() + 1));
+        if name_bytes > MAX_FIELD_NAME_BYTES {
+            break;
+        }
         for k in sub.into_iter().rev() {
-            stack.push((k, name.clone(), ft.clone()));
+            stack.push((k, name.clone(), ft.clone(), depth + 1));
         }
         if ft.as_deref() == Some(b"Sig") && part.is_some() {
             let mut ws: Vec<(Option<ObjRef>, Dict)> =
