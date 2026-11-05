@@ -461,6 +461,85 @@ fn class_assignment_accepts_exact_comma_and_legacy_names() {
 }
 
 #[test]
+fn class_assignment_matches_comma_names_before_splitting_multiple_classes() {
+    let mut doc = structure_doc(&["<< /S /Document /K 4 0 R >>".into(), "<< /S /P >>".into()]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(
+            b"ClassMap".to_vec(),
+            Object::Dict({
+                let mut map = pdfcraft_cos::Dict::new();
+                for name in ["North,East", "West", "North", "East"] {
+                    map.set(name.as_bytes().to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                }
+                map
+            }),
+        );
+    })
+    .unwrap();
+    let tag = pdfcraft_cos::ObjRef::new(4, 0);
+    set_tag_property(&mut doc, tag, TagProperty::Class, Some("North,East, West")).unwrap();
+    let classes = doc.get(tag).as_dict().unwrap().get(b"C").and_then(Object::as_array).unwrap();
+    assert_eq!(classes.iter().filter_map(Object::as_name).collect::<Vec<_>>(), [b"North,East".as_slice(), b"West".as_slice()]);
+}
+
+#[test]
+fn class_map_counts_inline_classes_and_follows_indirect_k_arrays() {
+    let mut doc = structure_doc(&[
+        "<< /S /Document /K 4 0 R >>".into(),
+        "[<< /S /Span /C /Inline >> 5 0 R]".into(),
+        "<< /S /Span /C /Indirect /K 6 0 R >>".into(),
+        "[<< /S /Span /C /Nested >>]".into(),
+    ]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(
+            b"ClassMap".to_vec(),
+            Object::Dict({
+                let mut map = pdfcraft_cos::Dict::new();
+                for name in ["Inline", "Indirect", "Nested"] {
+                    map.set(name.as_bytes().to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                }
+                map
+            }),
+        );
+    })
+    .unwrap();
+    let entries = class_map(&doc, 0, 10).1;
+    for name in ["Inline", "Indirect", "Nested"] {
+        assert_eq!(entries.iter().find(|entry| entry.name == name).map(|entry| entry.assignments), Some(1), "{name}");
+    }
+}
+
+#[test]
+fn class_rename_follows_indirect_k_arrays_and_renames_inline_classes() {
+    let mut doc = structure_doc(&[
+        "<< /S /Document /K 4 0 R >>".into(),
+        "[5 0 R]".into(),
+        "<< /S /Span /C /Old /K 6 0 R >>".into(),
+        "[<< /S /Span /C /Old >> 7 0 R]".into(),
+        "<< /S /P /C /Old >>".into(),
+    ]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(
+            b"ClassMap".to_vec(),
+            Object::Dict({
+                let mut map = pdfcraft_cos::Dict::new();
+                map.set(b"Old".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                map
+            }),
+        );
+    })
+    .unwrap();
+    assert!(tags(&doc).iter().any(|tag| tag.object == pdfcraft_cos::ObjRef::new(7, 0)));
+    rename_class(&mut doc, "Old", "New").unwrap();
+    assert_eq!(tags(&doc).iter().find(|tag| tag.object == pdfcraft_cos::ObjRef::new(7, 0)).map(|tag| tag.classes.clone()), Some(vec!["New".to_owned()]));
+    let inline = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
+    assert_eq!(
+        inline.as_array().and_then(|items| items.first()).and_then(Object::as_dict).and_then(|dict| dict.get(b"C")).and_then(Object::as_name),
+        Some(b"New".as_slice()),
+    );
+}
+
+#[test]
 fn class_rename_supports_direct_roots_and_updates_inline_tags() {
     let mut doc = pdf(
         &[
@@ -528,6 +607,10 @@ fn class_map_edits_bound_cyclic_tags_and_leave_malformed_assignments_intact() {
     rename_class(&mut doc, "Old", "New").unwrap();
     assert_eq!(tags(&doc).len(), 1);
     assert_eq!(tags(&doc)[0].classes, ["New", "New"]);
+    assert_eq!(
+        doc.get(pdfcraft_cos::ObjRef::new(4, 0)).as_dict().unwrap().get(b"C"),
+        Some(&Object::Array(vec![Object::name("New"), Object::Int(7), Object::name("New")])),
+    );
     assert_eq!(class_map(&doc, 0, 10).1[0].assignments, 1);
 }
 

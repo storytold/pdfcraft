@@ -102,13 +102,17 @@ pub(crate) fn elements(doc: &Document) -> Vec<Element> {
                 if !seen.insert(r) {
                     continue;
                 }
-                let Some(d) = doc.get(r).as_dict().cloned() else { continue };
-                if d.contains(b"S") {
-                    let pg = d.get(b"Pg").and_then(Object::as_ref).or(pg);
-                    if let Some(kids) = d.get(b"K") {
-                        stack.push((kids.clone(), pg, Some(r), depth.saturating_add(1)));
+                match &*doc.get(r) {
+                    Object::Dict(d) if d.contains(b"S") => {
+                        let d = d.clone();
+                        let pg = d.get(b"Pg").and_then(Object::as_ref).or(pg);
+                        if let Some(kids) = d.get(b"K") {
+                            stack.push((kids.clone(), pg, Some(r), depth.saturating_add(1)));
+                        }
+                        out.push(Element { object: r, dict: d, page: pg, parent, depth });
                     }
-                    out.push(Element { object: r, dict: d, page: pg, parent, depth });
+                    Object::Array(items) => stack.extend(items.iter().rev().cloned().map(|item| (item, pg, parent, depth))),
+                    _ => {}
                 }
             }
             Object::Dict(d) if d.contains(b"S") => {

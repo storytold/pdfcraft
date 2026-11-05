@@ -1,7 +1,7 @@
 //! Properties of reachable indirect structure elements.
 
 use pdfcraft_cos::{CosError, Dict, Document, ObjRef, Object, PdfString};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::alt;
 
@@ -210,6 +210,11 @@ pub fn class_map(doc: &Document, offset: usize, limit: usize) -> (usize, Vec<Cla
         }
         counts
     });
+    let mut assignments = assignments;
+    if let Some(kids) = alt::tree_root(doc).and_then(|root| root.get(b"K")) {
+        let mut budget = 1_000_000usize;
+        count_inline_class_assignments(doc, kids, &mut assignments, 0, &mut budget, &mut HashSet::new());
+    }
     let count = map.iter().filter(|(key, _)| std::str::from_utf8(key).is_ok()).count();
     let entries = map
         .iter()
@@ -219,6 +224,53 @@ pub fn class_map(doc: &Document, offset: usize, limit: usize) -> (usize, Vec<Cla
         .map(|(name, _)| ClassMapEntry { assignments: assignments.get(name).copied().unwrap_or_default(), name: name.to_owned() })
         .collect();
     (count, entries)
+}
+
+fn count_inline_class_assignments(
+    doc: &Document,
+    object: &Object,
+    counts: &mut HashMap<String, usize>,
+    depth: usize,
+    budget: &mut usize,
+    seen: &mut HashSet<ObjRef>,
+) {
+    let Some(remaining) = budget.checked_sub(1) else { return };
+    *budget = remaining;
+    if depth > 128 {
+        return;
+    }
+    match object {
+        Object::Array(items) => {
+            for item in items {
+                count_inline_class_assignments(doc, item, counts, depth + 1, budget, seen);
+            }
+        }
+        Object::Ref(reference) => {
+            if !seen.insert(*reference) {
+                return;
+            }
+            let target = doc.get(*reference);
+            if let Object::Dict(dict) = &*target
+                && dict.contains(b"S")
+            {
+                if let Some(kids) = dict.get(b"K") {
+                    count_inline_class_assignments(doc, kids, counts, depth + 1, budget, seen);
+                }
+            } else {
+                count_inline_class_assignments(doc, &target, counts, depth + 1, budget, seen);
+            }
+        }
+        Object::Dict(dict) if dict.contains(b"S") => {
+            for name in class_names(doc, dict).into_iter().collect::<BTreeSet<_>>() {
+                let count = counts.entry(name).or_default();
+                *count = count.saturating_add(1);
+            }
+            if let Some(kids) = dict.get(b"K") {
+                count_inline_class_assignments(doc, kids, counts, depth + 1, budget, seen);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn class_map_dict(doc: &Document) -> Option<Dict> {
@@ -239,6 +291,48 @@ fn class_names(doc: &Document, tag: &Dict) -> Vec<String> {
 
 fn valid_class_name(value: &str) -> bool {
     !value.is_empty() && value.len() <= 127 && value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'.' | b'_' | b'-'))
+}
+
+fn parse_class_assignments(value: &str, map: &Dict) -> Vec<String> {
+    let trimmed = value.trim();
+    if map.contains(trimmed.as_bytes()) {
+        return vec![trimmed.to_owned()];
+    }
+    let parts: Vec<&str> = trimmed.split(',').map(str::trim).collect();
+    let max_name_len = map.iter().map(|(key, _)| key.len()).max().unwrap_or_default();
+    let mut next = vec![None; parts.len() + 1];
+    next[parts.len()] = Some((parts.len(), String::new()));
+    for start in (0..parts.len()).rev() {
+        let mut candidate = String::new();
+        for end in start..parts.len() {
+            if end > start {
+                candidate.push(',');
+            }
+            candidate.push_str(parts[end]);
+            if candidate.len() > max_name_len {
+                break;
+            }
+            if map.contains(candidate.as_bytes()) && next[end + 1].is_some() {
+                next[start] = Some((end + 1, candidate.clone()));
+            }
+        }
+        if next[start].is_none() {
+            next[start] = Some((start + 1, parts[start].to_owned()));
+        }
+    }
+    let mut classes = Vec::new();
+    let mut index = 0usize;
+    while index < parts.len() {
+        let Some((following, name)) = next.get(index).and_then(Clone::clone) else {
+            break;
+        };
+        if following <= index {
+            break;
+        }
+        classes.push(name);
+        index = following;
+    }
+    classes
 }
 
 /// List marked-content references directly owned by an indirect tag.
@@ -395,10 +489,8 @@ pub fn set_tag_property(doc: &mut Document, object: ObjRef, property: TagPropert
         return Err(TagError::InvalidType);
     }
     if property == TagProperty::Class {
-        let classes: Vec<&str> = value.filter(|s| !s.trim().is_empty()).map(|s| s.split(',').map(str::trim).collect()).unwrap_or_default();
         let map = class_map_dict(doc);
-        let exact = value.filter(|s| map.as_ref().is_some_and(|map| map.contains(s.as_bytes())));
-        let classes: Vec<&str> = exact.map(|s| vec![s]).unwrap_or(classes);
+        let classes = value.filter(|s| !s.trim().is_empty()).map(|s| map.as_ref().map_or_else(|| s.split(',').map(str::trim).map(str::to_owned).collect(), |map| parse_class_assignments(s, map))).unwrap_or_default();
         for class in &classes {
             let exists = map.as_ref().is_some_and(|map| map.contains(class.as_bytes()));
             if !valid_class_name(class) && !exists {
@@ -483,33 +575,13 @@ pub fn rename_class(doc: &mut Document, old: &str, new: &str) -> Result<(), TagE
 
     let mut budget = 1_000_000usize;
     let mut root_changed = false;
+    let mut seen_refs = HashSet::new();
     if let Some(k) = root.get_mut(b"K") {
-        root_changed = rename_inline_classes(doc, k, old.as_bytes(), new, 0, &mut budget)?;
-    }
-    let mut element_updates = Vec::new();
-    for element in alt::elements(doc) {
-        let mut dict = element.dict;
-        let mut changed = if let Some(value) = dict.get(b"C").cloned()
-            && let Some(renamed) = renamed_class_value(doc, &value, old.as_bytes(), new)
-        {
-            dict.set(b"C".to_vec(), renamed);
-            true
-        } else {
-            false
-        };
-        if let Some(k) = dict.get_mut(b"K") {
-            changed |= rename_inline_classes(doc, k, old.as_bytes(), new, 0, &mut budget)?;
-        }
-        if changed {
-            element_updates.push((element.object, dict));
-        }
+        root_changed = rename_inline_classes(doc, k, old.as_bytes(), new, 0, &mut budget, &mut seen_refs)?;
     }
 
     if let Some((reference, map)) = map_update {
         doc.update_dict(reference, |d| *d = map.clone())?;
-    }
-    for (reference, dict) in element_updates {
-        doc.update_dict(reference, |d| *d = dict.clone())?;
     }
     if root_changed || matches!(root.get(b"ClassMap"), Some(Object::Dict(_))) {
         match root_object {
@@ -546,7 +618,15 @@ fn renamed_class_value(doc: &Document, value: &Object, old: &[u8], new: &str) ->
     }
 }
 
-fn rename_inline_classes(doc: &Document, object: &mut Object, old: &[u8], new: &str, depth: usize, budget: &mut usize) -> Result<bool, TagError> {
+fn rename_inline_classes(
+    doc: &mut Document,
+    object: &mut Object,
+    old: &[u8],
+    new: &str,
+    depth: usize,
+    budget: &mut usize,
+    seen: &mut HashSet<ObjRef>,
+) -> Result<bool, TagError> {
     *budget = budget.checked_sub(1).ok_or(TagError::StructureTooLarge)?;
     if depth > 128 {
         return Err(TagError::StructureTooLarge);
@@ -555,12 +635,13 @@ fn rename_inline_classes(doc: &Document, object: &mut Object, old: &[u8], new: &
         Object::Array(items) => {
             let mut changed = false;
             for item in items {
-                changed |= rename_inline_classes(doc, item, old, new, depth + 1, budget)?;
+                changed |= rename_inline_classes(doc, item, old, new, depth + 1, budget, seen)?;
             }
             Ok(changed)
         }
-        Object::Dict(dict) if dict.contains(b"S") => {
-            let mut changed = if let Some(value) = dict.get(b"C").cloned()
+        Object::Dict(dict) => {
+            let mut changed = if dict.contains(b"S")
+                && let Some(value) = dict.get(b"C").cloned()
                 && let Some(renamed) = renamed_class_value(doc, &value, old, new)
             {
                 dict.set(b"C".to_vec(), renamed);
@@ -569,9 +650,21 @@ fn rename_inline_classes(doc: &Document, object: &mut Object, old: &[u8], new: &
                 false
             };
             if let Some(k) = dict.get_mut(b"K") {
-                changed |= rename_inline_classes(doc, k, old, new, depth + 1, budget)?;
+                changed |= rename_inline_classes(doc, k, old, new, depth + 1, budget, seen)?;
             }
             Ok(changed)
+        }
+        Object::Ref(reference) => {
+            if !seen.insert(*reference) {
+                return Ok(false);
+            }
+            let mut target = (*doc.get(*reference)).clone();
+            if rename_inline_classes(doc, &mut target, old, new, depth + 1, budget, seen)? {
+                doc.set(*reference, target);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
         }
         _ => Ok(false),
     }

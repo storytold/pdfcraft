@@ -10,6 +10,23 @@ use pdfcraft_engine::{DocId, Edit};
 
 use crate::{icons, theme::Tokens, widgets};
 
+fn load_class_pages(mut page: impl FnMut(usize, usize) -> (usize, Vec<ClassMapEntry>)) -> Vec<ClassMapEntry> {
+    let mut classes = Vec::new();
+    let mut offset = 0usize;
+    loop {
+        let (total, next) = page(offset, 100);
+        if next.is_empty() {
+            break;
+        }
+        offset = offset.saturating_add(next.len());
+        classes.extend(next);
+        if offset >= total {
+            break;
+        }
+    }
+    classes
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct State {
     doc: Option<DocId>,
@@ -110,7 +127,8 @@ impl State {
         {
             return classes.clone();
         }
-        let classes = Arc::new(doc.class_map(0, 100).1);
+        let classes = load_class_pages(|offset, limit| doc.class_map(offset, limit));
+        let classes = Arc::new(classes);
         self.class_cache = Some((doc.id, generation, classes.clone()));
         classes
     }
@@ -144,6 +162,88 @@ impl State {
         {
             self.draft = Draft::from_tag(tag);
         }
+    }
+
+    pub(crate) fn class_history_snapshot(&self, doc: &pdfcraft_engine::Document) -> Option<ObjRef> {
+        let selected = self.selected?;
+        let tag = doc.tags().into_iter().find(|tag| tag.object == selected)?;
+        self.class_draft_matches_tag(&tag).then_some(selected)
+    }
+
+    pub(crate) fn sync_class_after_history(&mut self, doc: &pdfcraft_engine::Document, selected: ObjRef) {
+        if self.selected != Some(selected) {
+            return;
+        }
+        if let Some(tag) = doc.tags().into_iter().find(|tag| tag.object == selected) {
+            self.sync_classes_from_tag(&tag);
+        }
+    }
+
+    fn class_draft_matches_tag(&self, tag: &TagInfo) -> bool {
+        self.selected == Some(tag.object) && self.draft.classes == tag.classes.join(", ")
+    }
+
+    fn sync_classes_from_tag(&mut self, tag: &TagInfo) {
+        if self.selected == Some(tag.object) {
+            self.draft.classes = tag.classes.join(", ");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tag(object: ObjRef, classes: &[&str]) -> TagInfo {
+        TagInfo {
+            object,
+            parent: None,
+            depth: 0,
+            kind: "P".to_owned(),
+            title: None,
+            actual_text: None,
+            alt: None,
+            language: None,
+            summary: None,
+            scope: None,
+            classes: classes.iter().map(|name| (*name).to_owned()).collect(),
+            page: None,
+        }
+    }
+
+    #[test]
+    fn classes_load_across_pages_until_total_or_an_empty_page() {
+        let loaded = load_class_pages(|offset, limit| {
+            let total = 201;
+            let end = offset.saturating_add(limit).min(total);
+            let page = (offset..end).map(|index| ClassMapEntry { name: format!("Class{index}"), assignments: 0 }).collect();
+            (total, page)
+        });
+        assert_eq!(loaded.len(), 201);
+        assert_eq!(loaded.last().map(|entry| entry.name.as_str()), Some("Class200"));
+
+        let mut calls = 0;
+        let stopped = load_class_pages(|offset, _| {
+            calls += 1;
+            if offset == 0 { (201, vec![ClassMapEntry { name: "First".to_owned(), assignments: 0 }]) } else { (201, Vec::new()) }
+        });
+        assert_eq!(stopped.len(), 1);
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn rename_history_syncs_only_a_clean_classes_draft() {
+        let object = ObjRef::new(4, 0);
+        let mut state = State { selected: Some(object), ..State::default() };
+        state.draft.classes = "Old".to_owned();
+        assert!(state.class_draft_matches_tag(&tag(object, &["Old"])));
+        state.sync_classes_from_tag(&tag(object, &["New"]));
+        assert_eq!(state.draft.classes, "New");
+
+        state.draft.classes = "An unfinished edit".to_owned();
+        assert!(!state.class_draft_matches_tag(&tag(object, &["New"])));
+        state.sync_classes_from_tag(&tag(object, &["Old"]));
+        assert_eq!(state.draft.classes, "An unfinished edit");
     }
 }
 

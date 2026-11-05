@@ -385,6 +385,13 @@ fn tags_panel_renames_a_structure_class() {
     assert_eq!(doc.tags()[1].classes, ["Renamed"]);
     assert_eq!(doc.class_map(0, 10).1[0].name, "Renamed");
     assert_eq!(h.get_by_role_and_label(Role::TextInput, "Classes, separated by commas").value().as_deref(), Some("Renamed"));
+
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Classes, separated by commas").value().as_deref(), Some("Old"));
+    assert!(h.state_mut().execute("edit.redo"));
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Classes, separated by commas").value().as_deref(), Some("Renamed"));
 }
 
 #[test]

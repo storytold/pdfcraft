@@ -3,6 +3,7 @@
 //! signature. Everything is an annotation (typewriter text, PdfCraft-drawn stamps, ink), so it
 //! can be moved, deleted and undone like any comment.
 
+use crate::file_filter::AddFilterAnyCase as _;
 use egui::{Color32, CornerRadius, Pos2, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::signature_scan::{DEFAULT_SENSITIVITY, PREVIEW_MAX_SIDE, SCAN_MAX_SIDE, ScanError};
 use pdfcraft_engine::{Edit, FillMark, NewAnnotation, PhotoRect, Shape, SignatureImage, SignaturePhoto, Style, Turn};
@@ -373,20 +374,22 @@ pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp,
             }
             continue;
         };
-        ui.horizontal(|ui| {
+        let on = app.quick_tool == crate::QuickTool::Fill(if i == 0 { FillTool::Signature } else { FillTool::Initials });
+        let wash = ui.painter().add(egui::Shape::Noop);
+        let row = ui.horizontal(|ui| {
             let (rect, response) = ui.allocate_exact_size(vec2((ui.available_width() - 68.0).max(140.0), 52.0), Sense::click());
             let use_label = label("Use {what}");
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, use_label.clone()));
+            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, use_label.clone()));
             let painter = ui.painter_at(rect);
             painter.rect_filled(rect, CornerRadius::same(4), Color32::WHITE);
             painter.rect_stroke(
                 rect,
                 CornerRadius::same(4),
-                Stroke::new(1.0, if response.hovered() { t.accent } else { t.border }),
+                Stroke::new(1.0, if on || response.hovered() { t.accent } else { t.border }),
                 egui::StrokeKind::Inside,
             );
             paint_saved(ui, rect.shrink(8.0), saved, &mut app.saved_signature_previews[i], &format!("saved-{what}"));
-            if response.on_hover_text(label("Place saved {what}")).clicked() {
+            if crate::theme::hand(response).on_hover_text(label("Place saved {what}")).clicked() {
                 command = Some(use_id);
             }
             if crate::icons::button(ui, "pencil", 26.0, false, &label("Change {what}")).clicked() {
@@ -396,6 +399,9 @@ pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp,
                 command = Some(remove_id);
             }
         });
+        if on {
+            ui.painter().set(wash, egui::Shape::rect_filled(row.response.rect.expand(3.0), CornerRadius::same(6), t.accent_soft));
+        }
         ui.add_space(4.0);
     }
     command
@@ -485,7 +491,10 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, free: bo
     match tool {
         FillTool::Text => {
             // Clicking away from an open box commits it: the page sees this click before the box
-            // sees its lost focus, so replacing the box first would drop what was typed.
+            // sees its lost focus, so replacing the box first would drop what was typed. A new box
+            // deselects, as a comment tool's note or text box does: Escape then closes the box and
+            // leaves the tool in two presses.
+            view.comments.selected = None;
             let open = view.fill_text.replace(TypeBox { page, at: top, text: String::new(), size: text_size, color: text_color, focus: true });
             open.filter(|tb| !tb.text.trim().is_empty()).map(|tb| {
                 FillAction::Edit(Box::new(typed_with_color(
@@ -581,7 +590,8 @@ pub(crate) fn type_box(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 r.request_focus();
                 t.focus = false;
             }
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            // Taken here: the same press must not also leave the tool (one step back per press).
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
                 cancel = true;
             } else if r.lost_focus() {
                 commit = true;
@@ -787,7 +797,7 @@ impl crate::PdfCraftApp {
         let epoch = self.dialog_epoch();
         let initials = self.signature_draft.initials;
         let scan = self.signature_draft.scan_mode;
-        let dialog = rfd::AsyncFileDialog::new().add_filter(tl!(if scan { "Photo" } else { "Image" }), &["png", "jpg", "jpeg"]);
+        let dialog = rfd::AsyncFileDialog::new().add_filter_any_case(tl!(if scan { "Photo" } else { "Image" }), &["png", "jpg", "jpeg"]);
         #[cfg(not(target_arch = "wasm32"))]
         self.ask_one(crate::pickers::Ask::File(dialog), None, move |app, path| {
             if app.dialog_epoch() != epoch
