@@ -75,6 +75,10 @@ struct Gs {
     /// or its drawing stays in the file (#3647).
     fill_pattern: Option<Vec<u8>>,
     stroke_pattern: Option<Vec<u8>>,
+    /// The current font is a Type 3 font without `/Resources`: its glyph descriptions look their
+    /// names up in this scope's resources (ISO 32000-2 §9.6.4), so a shown glyph may paint with
+    /// any of this scope's patterns.
+    type3_inherits: bool,
 }
 
 /// What processing a scope produced.
@@ -267,6 +271,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         rise: 0.0,
         fill_pattern: None,
         stroke_pattern: None,
+        type3_inherits: false,
     };
     process_from(doc, scope, streams, resources, gs)
 }
@@ -367,6 +372,8 @@ struct Walk {
     fonts_res: Dict,
     ext_gstates: Dict,
     xobjects: Dict,
+    /// This scope's pattern names, which a Type 3 glyph without resources may paint with.
+    patterns: Vec<Vec<u8>>,
     fallback: Rc<Metrics>,
     /// The current path: its operators, its bounding box in user space, and whether it clips.
     path: Vec<Op>,
@@ -385,6 +392,7 @@ impl Walk {
             fonts_res: res_dict(doc, resources, b"Font"),
             ext_gstates: res_dict(doc, resources, b"ExtGState"),
             xobjects: res_dict(doc, resources, b"XObject"),
+            patterns: res_dict(doc, resources, b"Pattern").iter().map(|(n, _)| n.to_vec()).collect(),
             fallback: Rc::new(Metrics::fallback()),
             path: Vec::new(),
             path_box: None,
@@ -536,6 +544,7 @@ impl Walk {
         let Some(name) = op.name(0) else { return };
         let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
         self.gs.vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
+        self.gs.type3_inherits = font_dict.as_ref().is_some_and(|d| d.name(b"Subtype") == Some(b"Type3") && !d.contains(b"Resources"));
         self.gs.font = match scope.fonts.get(name) {
             Some(f) => f.clone(),
             None => {
@@ -588,6 +597,11 @@ impl Walk {
         // modes. Mode 3 paints nothing and mode 7 only clips.
         let mode = self.gs.render_mode;
         uses_patterns(&mut self.out, &self.gs, matches!(mode, 0 | 2 | 4 | 6), matches!(mode, 1 | 2 | 5 | 6));
+        // A Type 3 glyph without resources of its own paints through this scope's: keep every
+        // pattern it could select, as with a form that has no /Resources.
+        if self.gs.type3_inherits {
+            self.out.patterns_painted.extend(self.patterns.iter().cloned());
+        }
         let o = op.op.as_slice();
         if o == b"\"" {
             self.gs.word_spacing = op.num(0).unwrap_or(self.gs.word_spacing);

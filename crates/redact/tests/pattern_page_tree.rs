@@ -166,3 +166,34 @@ fn a_hostile_chain_of_nested_patterns_is_bounded() {
     assert!(matches!(error, RedactError::Pattern { reason: PatternProblem::Limit | PatternProblem::Content, .. }), "{error}");
     assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
 }
+/// A Type 3 font without `/Resources` draws its glyph with the page's `/P0` (ISO 32000-1 9.6.5:
+/// names are then looked up in the page's resources). The glyph is outside the mark; the page's
+/// own fill with `/P0` is under it. Pruning `/P0` loses the glyph's paint.
+#[test]
+fn a_type3_glyph_without_resources_keeps_the_page_pattern_it_paints_with() {
+    let doc = open(vec![
+        catalog(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 300] /Contents 5 0 R /Resources << /Font << /F1 4 0 R /T3 7 0 R >> /Pattern << /P0 6 0 R >> >> >>".to_vec(),
+        FONT.to_vec(),
+        stream_obj("", b"BT /T3 1 Tf 300 230 Td (a) Tj ET\n/Pattern cs /P0 scn 35 110 170 35 re f\n"),
+        stream_obj(PATTERN, b"0 0 1 rg 0 0 500 300 re f\n"),
+        b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 40 40] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 8 0 R >> /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [40] >>".to_vec(),
+        stream_obj("", b"40 0 d0 /Pattern cs /P0 scn 0 0 40 40 re f\n"),
+    ]);
+    let mut doc = doc;
+    let blue_glyph = |doc: &Document| {
+        let bytes = write_full(doc, &SaveOptions::default()).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(Arc::new(bytes), pdfcraft_render::RenderConfig::default());
+        let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        // The glyph covers x 300..340, y 230..270 (rows 30..70 from the top).
+        let i = ((50 * out.width + 320) * 4) as usize;
+        out.rgba[i..i + 3].to_vec()
+    };
+    let before = blue_glyph(&doc);
+    assert_eq!(before, vec![0, 0, 255], "the glyph paints with the page pattern before the redaction");
+    mark(&mut doc, 0);
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!(blue_glyph(&doc), before, "the unmarked glyph lost its pattern paint ({report:?})");
+}
+
