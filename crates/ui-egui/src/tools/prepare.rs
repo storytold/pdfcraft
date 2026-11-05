@@ -229,10 +229,13 @@ fn handles(r: Rect) -> [(Pos2, bool, bool); 4] {
     [(r.left_top(), true, true), (r.right_top(), false, true), (r.left_bottom(), true, false), (r.right_bottom(), false, false)]
 }
 
-/// The rect while a move or resize is in progress. With `shift` held a corner keeps the field's
-/// proportions, as it does for comments and stamps.
+/// The rect while a move or resize is in progress. With `shift` held a move keeps to the axis the
+/// drag has gone furthest along, horizontal or vertical, as Acrobat's Prepare Form does ("To
+/// constrain the vertical or horizontal movement as you drag, press and hold Shift"), and a corner
+/// keeps the field's proportions, as it does for comments and stamps.
 fn dragged(r: Rect, grab: Grab, delta: egui::Vec2, shift: bool) -> Rect {
     match grab {
+        Grab::Move if shift => r.translate(if delta.x.abs() >= delta.y.abs() { vec2(delta.x, 0.0) } else { vec2(0.0, delta.y) }),
         Grab::Move => r.translate(delta),
         Grab::Corner(left, top) => {
             let handle = (if left { -1 } else { 1 }, if top { -1 } else { 1 });
@@ -777,6 +780,19 @@ mod tests {
             assert_eq!(if left { out.max.x } else { out.min.x }, if left { r.max.x } else { r.min.x });
             assert_eq!(if top { out.max.y } else { out.min.y }, if top { r.max.y } else { r.min.y });
         }
-        assert_eq!(dragged(r, Grab::Move, vec2(5.0, 6.0), true), r.translate(vec2(5.0, 6.0)));
+        assert_eq!(dragged(r, Grab::Move, vec2(5.0, 6.0), false), r.translate(vec2(5.0, 6.0)));
+    }
+
+    /// Shift keeps a move to one axis: whichever the drag has gone further along, so the field
+    /// follows the pointer's main direction and never drifts on the other.
+    #[test]
+    fn shift_keeps_a_move_horizontal_or_vertical() {
+        let r = Rect::from_min_max(pos2(100.0, 100.0), pos2(196.0, 132.0));
+        assert_eq!(dragged(r, Grab::Move, vec2(40.0, 6.0), true), r.translate(vec2(40.0, 0.0)), "mostly right");
+        assert_eq!(dragged(r, Grab::Move, vec2(-40.0, 6.0), true), r.translate(vec2(-40.0, 0.0)), "mostly left");
+        assert_eq!(dragged(r, Grab::Move, vec2(5.0, -30.0), true), r.translate(vec2(0.0, -30.0)), "mostly up");
+        assert_eq!(dragged(r, Grab::Move, vec2(-5.0, 30.0), true), r.translate(vec2(0.0, 30.0)), "mostly down");
+        // Releasing Shift moves freely again.
+        assert_eq!(dragged(r, Grab::Move, vec2(40.0, 6.0), false), r.translate(vec2(40.0, 6.0)));
     }
 }
