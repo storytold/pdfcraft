@@ -492,11 +492,17 @@ impl PageHits<'_> {
             // paragraph, where a click starts a new box.
             let edit_text = tool == QuickTool::EditText;
             let on_paragraphs = edit_text || crate::edit_text_ui::over_paragraph(xf, info, page, lines, p);
+            let pictures = edit_text.then(|| crate::edit_text_ui::picture_hit(xf, page, info, images, view, p)).flatten();
+            // The selection's modifier click toggles the picture a plain press would find.
+            let picture = pictures.as_ref().and_then(|h| match h.owner {
+                Owner::Picture { index, .. } => Some(index),
+                _ => None,
+            });
             (
-                edit_text.then(|| crate::edit_text_ui::picture_hit(xf, page, info, images, view, p)).flatten(),
+                pictures,
                 edit_text.then(|| crate::object_ui::path_hit(view, xf, info, page, p)).flatten(),
                 on_paragraphs.then(|| crate::edit_text_ui::hit(xf, info, page, lines, open.map(|e| e.block), p)).flatten(),
-                edit_text.then(|| crate::object_ui::hit(view, xf, info, page, frame, p)).flatten(),
+                edit_text.then(|| crate::object_ui::hit(view, xf, info, page, frame, picture, p)).flatten(),
                 edit_text.then(|| crate::edit_text_ui::picture_handle_hit(clip, xf, page, info, images, view, p)).flatten(),
             )
         } else {

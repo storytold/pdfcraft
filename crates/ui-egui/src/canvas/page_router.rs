@@ -55,8 +55,10 @@ pub(crate) enum PicturePart {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ObjectsPart {
     /// The objects selected together: a drag moves them all. `path`: the vector path painted
-    /// there, by its index among the page's, which a modifier click toggles.
-    Selection { path: Option<usize> },
+    /// there, by its index among the page's; `picture`: the picture shown there (by its visible
+    /// shape, as a press on it is found), by its index among the page's. A modifier click toggles
+    /// one of them.
+    Selection { path: Option<usize>, picture: Option<usize> },
     /// The frame drawn around the paragraph open for typing: a click selects the box, a drag moves it.
     Frame,
     /// A resize handle of the one vector path selected, by its index in `edit_text_ui::corners`:

@@ -5,10 +5,11 @@ In **Edit a PDF → Edit text & images**, select several items on the same page:
 - **Shift-click**, **Ctrl-click**, or **Command-click** toggles an item. An ordinary selected
   paragraph, image, or added item becomes the first member when you extend its selection.
 - A plain click on a vector path's painted shape (not its empty box) selects it, and a drag moves
-  it. Where a paragraph's, image's or added item's box covers the press, that object takes the
-  click whatever the painting order, even when the path is drawn over it (a page-sized background
-  image doesn't): start a selection rectangle on empty page space, then Shift-click the other
-  object to leave just the path. A path covering most of the page (a background) stays out of
+  it. Where a paragraph's or added item's box, or the visible part of an image, covers the press,
+  that object takes the click, plain or with a modifier, whatever the painting order, even when
+  the path is drawn over it (a page-sized background image doesn't, nor does a part of an image's
+  box that its clip hides): start a selection rectangle on empty page space, then Shift-click the
+  other object to leave just the path. A path covering most of the page (a background) stays out of
   clicks and plain marquees; Shift-drag over the whole page to select it.
 - Drag through empty page space to draw a selection rectangle. Items intersecting the rectangle
   are selected; hold one of those modifiers to add to the selection.

@@ -359,10 +359,11 @@ fn leave_single(view: &mut DocView) {
 
 /// What of the objects lies under `p` on `page`: a resize handle of the one vector path selected
 /// (a drag resizes it), the objects selected together (a drag moves them; with the vector path
-/// painted there, which a modifier click toggles), or the frame around the paragraph open for
-/// typing (`open`: its box on screen), which takes hold of the box as in Acrobat: a click selects
-/// it, a drag moves it, its text keeps the caret.
-pub(crate) fn hit(view: &DocView, xf: &PageXform, info: &DocInfo, page: usize, open: Option<Rect>, p: Pos2) -> Option<Hit> {
+/// painted there and `picture`, the picture a press there finds, which a modifier click
+/// toggles), or the frame around the paragraph open for typing (`open`: its box on screen), which
+/// takes hold of the box as in Acrobat: a click selects it, a drag moves it, its text keeps the
+/// caret.
+pub(crate) fn hit(view: &DocView, xf: &PageXform, info: &DocInfo, page: usize, open: Option<Rect>, picture: Option<usize>, p: Pos2) -> Option<Hit> {
     let s = &view.objects;
     // A handle sits on the box's edge, half outside it: it is looked for before the box.
     if let Some(corner) = s.single_path().filter(|_| s.page == Some(page)).and_then(|o| handle_at(screen(xf, info, page, o), p)) {
@@ -370,7 +371,7 @@ pub(crate) fn hit(view: &DocView, xf: &PageXform, info: &DocInfo, page: usize, o
     }
     if s.page == Some(page) && !s.selected.is_empty() && s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o))).contains(p)
     {
-        let part = ObjectsPart::Selection { path: path_under(s, xf, info, page, p) };
+        let part = ObjectsPart::Selection { path: path_under(s, xf, info, page, p), picture };
         return Some(Hit::new(Owner::Objects { part }, Layer::Placed, egui::CursorIcon::Move));
     }
     open.filter(|r| on_frame(r.shrink(2.0), p)).map(|_| Hit::new(Owner::Objects { part: ObjectsPart::Frame }, Layer::Handle, egui::CursorIcon::Move))
@@ -512,19 +513,23 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
     // it, the selection moves; the frame of the paragraph open for typing selects its box (for the
     // arrow keys) and moves it; a vector path's painted shape takes the press (a plain one selects
     // it alone), unless a paragraph or a picture other than the page's background lies over it.
+    // A picture is the one the press found by its visible shape, as for a plain click: where a
+    // clip hides part of its box, a path there takes the press.
     let owner = view.router.owner(page);
-    let path = match owner {
-        Some(Owner::Objects { part: ObjectsPart::Path(index) | ObjectsPart::Selection { path: Some(index) } }) => {
-            objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Path, index })
+    let found = |kind: ObjectKind, index: usize| objects.iter().find(|o| o.target == ObjectTarget { kind, index });
+    let (path, image) = match owner {
+        Some(Owner::Objects { part: ObjectsPart::Path(index) }) => (found(ObjectKind::Path, index), None),
+        Some(Owner::Objects { part: ObjectsPart::Selection { path, picture } }) => {
+            (path.and_then(|i| found(ObjectKind::Path, i)), picture.and_then(|i| found(ObjectKind::Image, i)))
         }
-        _ => None,
+        Some(Owner::Picture { index, .. }) => (None, found(ObjectKind::Image, index)),
+        _ => (None, None),
     };
     // A page-sized background image must not hide editable labels, added notes or the vector
     // paths drawn over it. Within each kind, prefer the last object as the ordinary single-item
     // tools do. Any other image still wins over a path without comparing paint order; the
     // inventory doesn't carry image op indices yet.
     let boxed = |kind: ObjectKind| objects.iter().rev().find(|o| o.target.kind == kind && screen(xf, info, page, o).expand(2.0).contains(p));
-    let image = boxed(ObjectKind::Image);
     let hit = boxed(ObjectKind::Added)
         .or_else(|| boxed(ObjectKind::Text))
         .or_else(|| image.filter(|o| !covers_page(info, page, o.rect)))

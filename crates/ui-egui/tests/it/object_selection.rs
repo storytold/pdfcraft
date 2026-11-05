@@ -476,6 +476,38 @@ fn an_image_over_a_vector_panel_keeps_modifier_clicks() {
     h.get_by_label("2 objects selected");
 }
 
+/// A plain click and a modifier click agree on a picture clipped to a circle: where the clip
+/// hides its box's corner, the vector path painted there takes the press.
+#[test]
+fn where_a_clip_hides_an_image_both_clicks_take_the_path_there() {
+    // A square (202..212 across, 288..298 down) under the figure scaled to 200..320 across and
+    // 180..300 down, clipped to the circle in that box.
+    let mut h = harness_document(
+        false,
+        false,
+        " 0 0 1 rg 202 202 10 10 re f q 320 260 m 320 293.14 293.14 320 260 320 c 226.86 320 200 293.14 200 260 c \
+         200 226.86 226.86 200 260 200 c 293.14 200 320 226.86 320 260 c h W n 2 0 0 4 200 200 cm /Figure Do Q",
+    );
+    assert_eq!(objects(&h).len(), 6);
+    let (corner, centre) = (at(&h, 206.0, 294.0), at(&h, 260.0, 240.0));
+    click(&mut h, corner, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    assert!(h.state().views[0].image_selection.is_none());
+    // A shift-click at the same point takes the square out again, rather than adding the figure.
+    click(&mut h, corner, Modifiers::SHIFT);
+    assert!(nothing_selected(&h));
+    click(&mut h, corner, Modifiers::SHIFT);
+    h.get_by_label("1 object selected");
+    click(&mut h, centre, Modifiers::SHIFT);
+    h.get_by_label("2 objects selected");
+    // Inside the selection's box, the figure's visible part toggles the figure, its hidden corner
+    // the square.
+    click(&mut h, centre, Modifiers::SHIFT);
+    h.get_by_label("1 object selected");
+    click(&mut h, corner, Modifiers::SHIFT);
+    assert!(nothing_selected(&h));
+}
+
 #[test]
 fn a_page_covering_vector_background_stays_out_of_clicks_and_small_marquees() {
     // Painted last here; it is a background by its size, not its paint order.
