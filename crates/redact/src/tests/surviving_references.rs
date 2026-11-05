@@ -86,18 +86,47 @@ fn a_widget_of_a_field_the_form_reading_lacks_refuses_the_redaction() {
             d.set(b"Annots".to_vec(), Object::Array(annots));
         })
         .unwrap();
+        w
     };
     let (mut unlisted, field) = filled();
-    widget(&mut unlisted, Some(field), None);
+    let _ = widget(&mut unlisted, Some(field), None);
     mark(&mut unlisted, 0, &[[190.0, 40.0, 290.0, 80.0]], "");
     assert!(matches!(apply(&mut unlisted, None), Err(RedactError::FieldNotRead)));
     // A field of no type, which the reading skips, named and with a value.
     let (mut untyped, _) = filled();
-    widget(&mut untyped, None, Some("untyped"));
+    let _ = widget(&mut untyped, None, Some("untyped"));
     mark(&mut untyped, 0, &[[190.0, 40.0, 290.0, 80.0]], "");
     assert!(matches!(apply(&mut untyped, None), Err(RedactError::FieldNotRead)));
+    // A field whose /FT is given by reference, or nested past what the reading follows, and whose
+    // only widget names nothing: the form's tree reaches the widget.
+    for depth in [0, 70] {
+        let (mut lone, _) = filled();
+        let w = widget(&mut lone, None, None);
+        let tx = lone.add(Object::Name(b"Tx".to_vec()));
+        let ft = if depth == 0 { Object::Ref(tx) } else { Object::Name(b"Tx".to_vec()) };
+        let mut kid = w;
+        for level in 0..=depth {
+            let mut f: Dict = [(b"Kids".to_vec(), Object::Array(vec![Object::Ref(kid)]))].into_iter().collect();
+            f.set(b"T".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(format!("l{level}").into_bytes())));
+            if level == 0 {
+                f.set(b"FT".to_vec(), ft.clone());
+                f.set(b"V".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"LONE-SECRET".to_vec())));
+            }
+            kid = lone.add(Object::Dict(f));
+        }
+        let root = lone.root().unwrap();
+        let af = lone.get(root).as_dict().unwrap().reference(b"AcroForm").unwrap();
+        lone.update_dict(af, |d| {
+            let mut fields = d.get(b"Fields").and_then(Object::as_array).cloned().unwrap_or_default();
+            fields.push(Object::Ref(kid));
+            d.set(b"Fields".to_vec(), Object::Array(fields));
+        })
+        .unwrap();
+        mark(&mut lone, 0, &[[190.0, 40.0, 290.0, 80.0]], "");
+        assert!(matches!(apply(&mut lone, None), Err(RedactError::FieldNotRead)), "depth {depth}");
+    }
     let (mut orphan, _) = filled();
-    widget(&mut orphan, None, None);
+    let _ = widget(&mut orphan, None, None);
     mark(&mut orphan, 0, &[[190.0, 40.0, 290.0, 80.0]], "");
     assert_eq!(apply(&mut orphan, None).unwrap().fields, 0);
     assert!(full_save_holds(&orphan, b"SSN-078-05-1120"), "the field outside the mark keeps its value");

@@ -439,6 +439,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         .map(|&(pi, page_marks)| overlay::content(page_marks, &mut remaining).map(|content| (pi, content)))
         .collect::<Result<Vec<_>, _>>()?;
     let form = pdfcraft_forms::fields_with_adopted(doc);
+    let form_tree = form_tree(doc);
     report.pages = by_page.len();
     localize_resources(doc, &by_page)?;
     let widget_owner: Vec<(ObjRef, ObjRef)> =
@@ -451,6 +452,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         retired_properties: Vec::new(),
         widget_owner,
         left_out: form.left_out,
+        form_tree,
         removed_everywhere: HashSet::new(),
         images,
     };
@@ -654,6 +656,8 @@ struct Applying {
     /// Fields the form's reading left out, their text past its allowances
     /// ([`pdfcraft_forms::Fields::left_out`]).
     left_out: usize,
+    /// What the form's `/Fields` tree reaches ([`form_tree`]).
+    form_tree: HashSet<ObjRef>,
     removed_everywhere: HashSet<ObjRef>,
     /// What clearing images may spend, across the run's pages.
     images: pdfcraft_cos::ImageBudget,
@@ -760,6 +764,30 @@ fn redact_page_content(
     Ok(())
 }
 
+/// Every object the form's `/Fields` tree reaches through `/Kids`, fields and widgets alike, each
+/// once and however deep, its text unread: a widget it reaches belongs to a field, whether or not
+/// the form's reading has that field (one whose `/FT` is given by reference, or nested past what
+/// the reading follows, whose only widget needn't name it).
+fn form_tree(doc: &Document) -> HashSet<ObjRef> {
+    let kids = |o: Option<&Object>| -> Vec<ObjRef> {
+        o.map(|o| doc.resolve(o)).map(|a| a.as_array().into_iter().flatten().filter_map(Object::as_ref).collect()).unwrap_or_default()
+    };
+    let fields = doc.root().map(|root| doc.get(root)).and_then(|catalog| {
+        let form = doc.resolve(catalog.as_dict()?.get(b"AcroForm")?);
+        Some(kids(form.as_dict()?.get(b"Fields")))
+    });
+    let mut stack = fields.unwrap_or_default();
+    let mut tree: HashSet<ObjRef> = stack.iter().copied().collect();
+    while let Some(n) = stack.pop() {
+        for k in kids(doc.get(n).as_dict().and_then(|d| d.get(b"Kids"))) {
+            if tree.insert(k) {
+                stack.push(k);
+            }
+        }
+    }
+    tree
+}
+
 /// Step 2 for one page: the marks, and whatever lies under them (with their pop-ups).
 fn remove_page_annotations(
     doc: &mut Document,
@@ -768,7 +796,7 @@ fn remove_page_annotations(
     rects: &[[f64; 4]],
     page_marks: &[&Mark],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_fields, widget_owner, left_out, removed_everywhere, .. } = applying;
+    let Applying { report, doomed_fields, widget_owner, left_out, form_tree, removed_everywhere, .. } = applying;
     // 2. Annotations: the marks, and whatever lies under them (with their pop-ups).
     let annots = annots_of(doc, &doc.get(page.obj).as_dict().cloned().unwrap_or_default());
     let mut removed: Vec<ObjRef> = Vec::new();
@@ -796,10 +824,12 @@ fn remove_page_annotations(
                         }
                     }
                     // A widget of a field the form's reading doesn't have would go and leave the
-                    // field and its value: one that names a field, or any while the reading left
-                    // fields out.
+                    // field and its value: one the form's tree reaches or that names a field, or
+                    // any while the reading left fields out.
                     None if *left_out > 0 => return Err(RedactError::FormPastAllowance(*left_out)),
-                    None if d.contains(b"Parent") || d.contains(b"T") || d.contains(b"FT") => return Err(RedactError::FieldNotRead),
+                    None if form_tree.contains(&r) || d.contains(b"Parent") || d.contains(b"T") || d.contains(b"FT") => {
+                        return Err(RedactError::FieldNotRead);
+                    }
                     None => {}
                 }
             } else {
