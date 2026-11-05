@@ -59,12 +59,13 @@ fn small(v: u64) -> Result<u32, CosError> {
 }
 
 /// Whether `bytes` is a linearized file: its first object is a linearization dictionary, within
-/// the first 1,024 bytes, whose `/L` is the file's length. An update appended later leaves the
-/// dictionary behind but changes the length, and the file is then no longer linearized.
+/// the first 1,024 bytes, of version 1 (the only one Annex F defines), whose `/L` is the file's
+/// length. An update appended later leaves the dictionary behind but changes the length, and the
+/// file is then no longer linearized.
 pub fn is_linearized(bytes: &[u8]) -> bool {
     let head = bytes.get(..bytes.len().min(1024)).unwrap_or(bytes);
     let Ok((_, Object::Dict(d))) = crate::parser::parse_indirect(head, 0, &|_| None) else { return false };
-    d.contains(b"Linearized") && d.int(b"L").and_then(|l| usize::try_from(l).ok()) == Some(bytes.len())
+    d.get(b"Linearized").and_then(Object::as_f64) == Some(1.0) && d.int(b"L").and_then(|l| usize::try_from(l).ok()) == Some(bytes.len())
 }
 
 /// Where an object goes.
@@ -855,6 +856,19 @@ mod tests {
             if o.as_dict().and_then(|d| d.name(b"Type")) == Some(&b"Page"[..]) {
                 assert!(o.as_dict().unwrap().contains(b"MediaBox"));
             }
+        }
+    }
+
+    /// `/Linearized` is the format's version, 1 (Annex F.2.2, Table F.1): a first object with any
+    /// other value isn't a linearization dictionary, however well its `/L` matches.
+    #[test]
+    fn only_version_1_is_linearized() {
+        let file = |value: &str| {
+            let body = |l: usize| format!("%PDF-1.7\n1 0 obj\n<</Linearized {value}/L {l:010}>>\nendobj\n").into_bytes();
+            body(body(0).len())
+        };
+        for (value, linearized) in [("1", true), ("1.0", true), ("0", false), ("2", false), ("/Yes", false), ("(1)", false), ("2 0 R", false)] {
+            assert_eq!(is_linearized(&file(value)), linearized, "/Linearized {value}");
         }
     }
 
