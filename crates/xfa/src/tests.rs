@@ -4605,6 +4605,20 @@ fn a_multi_select_lists_data_group_takes_its_new_picks() {
     assert!(!write_data_value(&mut doc, &path, "wheat\nmillet & oats").unwrap().written, "the same picks change nothing");
     assert!(write_data_value(&mut doc, &path, "").unwrap().written);
     assert_eq!(crate::script::data_of(&doc).unwrap().value_at(&path).as_deref(), Some(""), "nothing picked");
+    // Emptied, the group is marked as one (XFA 3.3 p. 150), so it is still written as picks.
+    let xdp = crate::read_packets(&doc).unwrap().unwrap().xdp;
+    assert!(xdp.contains("<grains xfa:dataNode=\"dataGroup\"></grains>"), "{xdp}");
+    assert!(
+        write_data_value(
+            &mut doc,
+            &path,
+            "rye
+millet"
+        )
+        .unwrap()
+        .written
+    );
+    assert_eq!(crate::script::data_of(&doc).unwrap().count(&path, "value"), 2, "picks again, not text");
     // A pick split or led by a comment is read whole: the same pick is no change, and clearing
     // a pick that reads as empty through its first segment alone still clears it.
     let commented =

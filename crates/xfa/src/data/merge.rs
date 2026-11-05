@@ -271,15 +271,39 @@ fn merge(text: &str, within: Within, op: Op, warnings: &mut Vec<String>) -> Merg
     Merged::Changed(out)
 }
 
-/// The edits that put `wants` into the `data` element.
 /// Whether `node` is a multi-select choice list's data group: element children only, every one
-/// a `value` holding text alone.
+/// a `value` holding text alone; or, with no children, an element marked `xfa:dataNode=
+/// "dataGroup"`, as a group with no picks is written (XFA 3.3 p. 150).
 fn is_value_group(node: roxmltree::Node) -> bool {
+    let blank = node.children().filter(|c| c.is_text()).all(|c| c.text().is_some_and(|t| t.trim().is_empty()));
     let mut elements = node.children().filter(|c| c.is_element()).peekable();
-    elements.peek().is_some()
-        && node.children().filter(|c| c.is_text()).all(|c| c.text().is_some_and(|t| t.trim().is_empty()))
-        && elements.all(|c| c.tag_name().name() == "value" && !c.children().any(|g| g.is_element()))
+    if elements.peek().is_none() {
+        return blank && marked_data_group(node);
+    }
+    blank && elements.all(|c| c.tag_name().name() == "value" && !c.children().any(|g| g.is_element()))
 }
+
+/// Whether `node` carries `xfa:dataNode="dataGroup"`.
+fn marked_data_group(node: roxmltree::Node) -> bool {
+    node.attribute((XFA_DATA_NS, "dataNode")) == Some("dataGroup")
+}
+
+/// The edit that marks the data group `node` as one, so that emptied of its picks it still loads
+/// as a group and not as a data value (XFA 3.3 p. 150): `xfa:dataNode="dataGroup"` added to its
+/// start tag, with the namespace declared there when the packet has no prefix for it.
+fn mark_data_group_edit(src: &str, node: roxmltree::Node) -> Option<Edit> {
+    let range = node.range();
+    let tag_end = start_tag_end(src, &range)?;
+    // Before `/>` of an empty tag, else before `>`.
+    let at = if src.get(..tag_end)?.ends_with('/') { tag_end.checked_sub(1)? } else { tag_end };
+    let text = match node.lookup_prefix(XFA_DATA_NS) {
+        Some(prefix) if !prefix.is_empty() => format!(" {prefix}:dataNode=\"dataGroup\""),
+        _ => format!(" xmlns:pcxfa=\"{XFA_DATA_NS}\" pcxfa:dataNode=\"dataGroup\""),
+    };
+    Some(Edit { start: at, end: at, text })
+}
+
+/// The edits that put `wants` into the `data` element.
 
 fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Vec<Edit>, warnings: &mut Vec<String>) {
     // Element children by local name, per element visited (built once each).
@@ -337,8 +361,13 @@ fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Ve
                     continue;
                 }
                 let inner: String = wanted.iter().map(|v| format!("<value>{}</value>", escape(v).0)).collect();
+                // Emptied, the group keeps saying it is one (XFA 3.3 p. 150).
+                let mark = if wanted.is_empty() && !marked_data_group(node) { mark_data_group_edit(src, node) } else { None };
                 match replace_edit(src, node, &inner) {
-                    Some(e) => edits.push(e),
+                    Some(e) => {
+                        edits.extend(mark);
+                        edits.push(e);
+                    }
                     None => skipped(warnings, STRUCTURED, &w.som),
                 }
                 if dropped {
