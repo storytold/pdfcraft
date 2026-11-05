@@ -110,6 +110,30 @@ mod tests {
         data
     }
 
+    /// A stream that starts with a JBIG2 file header (ISO 14492 D.4), which some producers write
+    /// into `JBIG2Decode` data although ISO 32000-1 7.4.7 has the embedded organization there,
+    /// decodes past it as Acrobat and PDFBox draw it (hayro-jbig2 patch 17): with the page count
+    /// and without it. A header with its reserved flag bits set is an error, not a panic.
+    #[test]
+    fn a_stream_with_a_jbig2_file_header_decodes_past_it() {
+        let (w, h) = (203u32, 41u32);
+        let bits = noise(w, h);
+        let embedded = encode_jbig2_generic(&bits, w, h).unwrap();
+        const ID: [u8; 8] = [0x97, 0x4A, 0x42, 0x32, 0x0D, 0x0A, 0x1A, 0x0A];
+        let with_header = |flags: u8, pages: Option<u32>| {
+            let mut data = ID.to_vec();
+            data.push(flags);
+            data.extend(pages.map(u32::to_be_bytes).into_iter().flatten());
+            data.extend_from_slice(&embedded);
+            data
+        };
+        // Sequential organization (bit 0), one page.
+        assert_eq!(decode_jbig2(&with_header(0x01, Some(1)), None, w, h, usize::MAX).unwrap(), bits, "page count given");
+        // Sequential, number of pages unknown (bit 1): no count follows.
+        assert_eq!(decode_jbig2(&with_header(0x03, None), None, w, h, usize::MAX).unwrap(), bits, "page count unknown");
+        assert!(decode_jbig2(&with_header(0x11, Some(1)), None, w, h, usize::MAX).is_err(), "reserved bits");
+    }
+
     /// Either coding decodes to its samples, black as 0, the bits that pad each row 0: a generic
     /// region of noise, and symbols for letters repeated across the page. With no rows asked for,
     /// nothing is decoded.
