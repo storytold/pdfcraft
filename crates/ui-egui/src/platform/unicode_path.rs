@@ -101,6 +101,9 @@ mod tests {
         apart
     }
 
+    /// A path that exists as delivered comes back byte for byte: the resolver never hands the
+    /// caller a re-encoded copy of a path it could have used exactly, so command lines,
+    /// drag-drop and picker paths keep the bytes they arrived with.
     #[test]
     fn an_existing_path_is_returned_unchanged() {
         let dir = TempDir::new("exact");
@@ -109,6 +112,10 @@ mod tests {
         assert_eq!(resolve(&delivered).as_deref(), Some(delivered.as_str()), "no re-encoded copy of an existing path");
     }
 
+    /// The one name the operating system got wrong is still opened: a delivered form that
+    /// matches no entry resolves to the stored form, in both directions (NFD delivered with
+    /// NFC stored — the 'odoc' case — and the reverse). On a volume that folds the forms the
+    /// delivered path already opens the file, and the resolver says so by returning it.
     #[test]
     fn a_delivered_name_opens_a_file_stored_in_the_other_form() {
         for (stored, delivered, tag) in [(NFC, NFD, "nfc-stored"), (NFD, NFC, "nfd-stored")] {
@@ -126,6 +133,9 @@ mod tests {
         }
     }
 
+    /// Forms can differ per component — a Windows-imported folder with a macOS-renamed file
+    /// inside — so resolving the whole path in one form would miss: each component is tried
+    /// in its own NFC and NFD forms, and the chain resolves however the forms are mixed.
     #[test]
     fn mixed_forms_along_the_chain_resolve_component_by_component() {
         let dir = TempDir::new("mixed");
@@ -146,6 +156,10 @@ mod tests {
         }
     }
 
+    /// A name that matches in no form resolves to `None`, never to an invented path, so the
+    /// caller keeps what the operating system sent and the error names it. An ASCII miss has
+    /// no other form to try, a component that matches nothing ends the walk there, and the
+    /// empty path names nothing to open.
     #[test]
     fn a_name_that_exists_in_no_form_resolves_to_nothing() {
         let dir = TempDir::new("missing");

@@ -1180,6 +1180,10 @@ fn files_and_quit_from_the_operating_system() {
     assert!(closing);
 }
 
+/// A file the operating system names in one Unicode normalization form but is stored in the
+/// other still opens: an `OsEvent::Open` delivered in NFD reaches the app's open path
+/// resolved to the NFC-stored name. A delivered name no form of matches is opened as sent,
+/// so its read failure reaches the user instead of vanishing.
 #[test]
 fn an_os_delivered_path_opens_across_normalization_forms() {
     // macOS decodes the 'odoc' event's file URL in NFD, while APFS keeps the name as it was
