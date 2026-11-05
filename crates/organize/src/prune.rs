@@ -219,10 +219,10 @@ impl Pruner<'_> {
             }
             #[cfg(test)]
             crate::work(1);
-            match s.decoded() {
-                Ok(data) => self.content(&data, &inner, inner_owner, depth + 1),
-                // What the form draws is unknown: keep everything it could reach.
-                Err(_) => {
+            match DecodeBudget::new(usize::MAX, 0).decode_with_damage(s, usize::MAX) {
+                Ok((data, false)) => self.content(&data, &inner, inner_owner, depth + 1),
+                // What the form draws is unknown, past damage too: keep everything it could reach.
+                Ok((_, true)) | Err(_) => {
                     self.protect_type3_resources(&inner, inner_owner);
                     self.distrust(&inner, inner_owner);
                 }
@@ -232,16 +232,20 @@ impl Pruner<'_> {
 }
 
 /// The page's content, concatenated (`/Contents` may be one stream or an array) with a space
-/// between pieces as the renderer joins them, decoded against one page's [`DecodeBudget`]. An
+/// between pieces as the renderer joins them, decoded against one page's [`DecodeBudget`], and
+/// whether a stream is damaged partway (its part is then what decoded before the damage). An
 /// error when a stream can't be decoded or the budget runs out: the page may draw names that
 /// can't be seen.
-pub(crate) fn content_bytes(doc: &Document, contents: &Object) -> Result<Vec<u8>, CosError> {
+pub(crate) fn content_bytes(doc: &Document, contents: &Object) -> Result<(Vec<u8>, bool), CosError> {
     let mut out = Vec::new();
-    for data in DecodeBudget::page().decode_contents(doc, contents) {
-        out.extend(data?);
+    let mut damaged = false;
+    for read in DecodeBudget::page().decode_contents_with_damage(doc, contents) {
+        let (data, partial) = read?;
+        damaged |= partial;
+        out.extend(data);
         out.push(b' ');
     }
-    Ok(out)
+    Ok((out, damaged))
 }
 
 /// The resources of a page (as `walk` reports them) with their owner.
@@ -324,9 +328,10 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
         let Some(pd) = pruner.doc.get(*page).as_dict().cloned() else { continue };
         let Some(contents) = pd.get(b"Contents").cloned() else { continue };
         match content_bytes(pruner.doc, &contents) {
-            Ok(data) if data.is_empty() => {}
-            Ok(data) => pruner.content(&data, &res_dict, owner, 0),
-            Err(_) => {
+            Ok((data, false)) if data.is_empty() => {}
+            Ok((data, false)) => pruner.content(&data, &res_dict, owner, 0),
+            // What the page draws past damage is unknown too.
+            Ok((_, true)) | Err(_) => {
                 pruner.protect_type3_resources(&res_dict, owner);
                 pruner.distrust(&res_dict, owner);
             }

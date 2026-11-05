@@ -499,9 +499,10 @@ pub fn page_as_form(dst: &mut Document, src: &Document, page: usize) -> Result<(
     let bbox = rect(b"CropBox").or_else(|| rect(b"MediaBox")).unwrap_or([0.0, 0.0, 612.0, 792.0]);
     let (w, h) = (bbox[2] - bbox[0], bbox[3] - bbox[1]);
     let rotate = d.get(b"Rotate").and_then(|r| src.resolve(r).as_int()).unwrap_or(0).rem_euclid(360);
-    // Content: the page's streams, decoded and joined.
+    // Content: the page's streams, decoded and joined. Of a stream damaged partway, the copy draws
+    // what decoded before the damage.
     let content = match own.get(b"Contents") {
-        Some(c) => crate::prune::content_bytes(src, c).map_err(|e| OrganizeError::Invalid(format!("page {} content: {e}", page + 1)))?,
+        Some(c) => crate::prune::content_bytes(src, c).map_err(|e| OrganizeError::Invalid(format!("page {} content: {e}", page + 1)))?.0,
         None => Vec::new(),
     };
     let mut copier = Copier::new(src, HashMap::new(), HashMap::new());

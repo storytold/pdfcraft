@@ -2628,6 +2628,47 @@ fn extract_keeps_images_an_undecodable_page_might_draw() {
     assert!(names.iter().any(|n| n.as_slice() == b"ImB"), "an image the unreadable page may draw must stay");
 }
 
+/// zlib data that reads as `readable` and is then damaged, with more of the stream after the
+/// damage: a stored block, then a block of the reserved type (RFC 1951 §3.2.3), then `rest`.
+fn damaged_flate(readable: &[u8], rest: &[u8]) -> pdfcraft_cos::Stream {
+    let len = u16::try_from(readable.len()).unwrap();
+    let mut raw = vec![0x78, 0x01, 0x00];
+    raw.extend_from_slice(&len.to_le_bytes());
+    raw.extend_from_slice(&(!len).to_le_bytes());
+    raw.extend_from_slice(readable);
+    raw.push(0x07);
+    raw.extend_from_slice(rest);
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    pdfcraft_cos::Stream::from_raw(dict, raw)
+}
+
+/// A page or form damaged partway may draw images past the damage, which other readers may still
+/// read: pruning keeps them, as it does for content that doesn't decode.
+#[test]
+fn extract_keeps_images_content_damaged_partway_might_draw() {
+    use pdfcraft_cos::ObjRef;
+    let mut page = doc_images_with(&raw("/ImA Do"), "");
+    page.set(ObjRef::new(6, 0), damaged_flate(b"/ImA Do\n", b"/ImB Do"));
+
+    let mut form = doc_images_with(&raw("/Fm Do"), "");
+    let mut fm = damaged_flate(b"/ImA Do\n", b"/ImB Do");
+    fm.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    fm.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+    let fm = form.add(fm);
+    let xobjects: Dict =
+        [(b"ImA".to_vec(), Object::Ref(ObjRef::new(8, 0))), (b"ImB".to_vec(), Object::Ref(ObjRef::new(9, 0))), (b"Fm".to_vec(), Object::Ref(fm))]
+            .into_iter()
+            .collect();
+    form.update_dict(ObjRef::new(7, 0), |d| d.set(b"XObject".to_vec(), Object::Dict(xobjects))).unwrap();
+
+    for (src, what) in [(page, "page"), (form, "form")] {
+        let part = full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap());
+        let names = xobject_names(&part, 0);
+        assert!(names.iter().any(|n| n.as_slice() == b"ImB"), "{what}: an image drawn past the damage must stay: {names:?}");
+    }
+}
+
 #[test]
 fn extract_keeps_images_type3_glyphs_may_draw() {
     // A Type 3 font without its own /Resources draws through the page's: its glyphs could `Do`.
