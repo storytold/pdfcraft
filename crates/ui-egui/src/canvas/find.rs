@@ -4,6 +4,8 @@ use super::{Align2, Color32, CornerRadius, DocView, Range, Rect, Stroke, Tokens,
 #[derive(Default)]
 pub struct Find {
     pub query: String,
+    /// The keyboard shortcut requested selecting the existing query.
+    pub select_all_requested: bool,
     /// (page, glyph range) in document order.
     pub matches: Vec<(usize, Range<usize>)>,
     pub current: Option<usize>,
@@ -81,10 +83,11 @@ impl DocView {
     }
 
     /// Open or focus Find from ⌘/Ctrl+F and select its existing query.
-    pub(super) fn open_find_from_shortcut(&mut self, ctx: &egui::Context) {
-        let id = egui::Id::unique("find-input");
-        ctx.memory_mut(|memory| memory.surrender_focus(id));
+    pub(super) fn open_find_from_shortcut(&mut self) {
         self.open_find();
+        if let Some(f) = self.find.as_mut() {
+            f.select_all_requested = true;
+        }
     }
 
     /// Re-run the search on all pages whose text is known (after the query changed).
@@ -245,11 +248,14 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
                             r.request_focus();
                             find.focus = false;
                         }
-                        if r.gained_focus() && !ui.input(|i| i.pointer.any_pressed()) {
+                        if r.clicked() {
+                            find.select_all_requested = false;
+                        } else if (find.select_all_requested || r.gained_focus()) && !ui.input(|i| i.pointer.any_pressed()) {
                             let mut state = egui::TextEdit::load_state(ui.ctx(), r.id).unwrap_or_default();
                             let end = egui::text::CCursor::new(find.query.chars().count());
                             state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
                             state.store(ui.ctx(), r.id);
+                            find.select_all_requested = false;
                         }
                         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                             step = Some(!ui.input(|i| i.modifiers.shift));
