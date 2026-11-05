@@ -389,7 +389,7 @@ fn decode_page_streams(doc: &Document, page: &Dict) -> Option<Vec<DecodedStream>
     for entry in entries {
         let decoded = match &*doc.resolve(&entry) {
             Object::Stream(s) => {
-                let (data, damaged) = match budget.decode_with_damage(s, usize::MAX) {
+                let (data, damaged) = match budget.decode_with_damage(doc, s, usize::MAX) {
                     Ok(read) => read,
                     // Content past the budget may hold more of the tag: editing the rest
                     // would leave that part marked as a tag the tree no longer has.

@@ -276,12 +276,13 @@ impl DecodeBudget {
         self.charge(stream, max, Stream::decoded_within_counted).map(|(data, _)| data)
     }
 
-    /// [`DecodeBudget::decode_within`] (`usize::MAX` for no bound of its own), also saying
-    /// whether the stream is damaged: `true` when a filter stopped at corrupt data, so the bytes
-    /// are only what decoded before it. A stream written back from them loses everything after
-    /// the damage, which other readers may still read.
-    pub fn decode_with_damage(&mut self, stream: &Stream, max: usize) -> Result<(Vec<u8>, bool), CosError> {
-        self.charge(stream, max, Stream::decoded_within_counted)
+    /// [`DecodeBudget::decode_within`] (`usize::MAX` for no bound of its own), with the stream's
+    /// `/DecodeParms` given by reference read in `doc`, also saying whether the stream is damaged:
+    /// `true` when a filter stopped at corrupt data, so the bytes are only what decoded before it.
+    /// A stream written back from them loses everything after the damage, which other readers may
+    /// still read.
+    pub fn decode_with_damage(&mut self, doc: &Document, stream: &Stream, max: usize) -> Result<(Vec<u8>, bool), CosError> {
+        self.charge(&doc.decoding_view(stream), max, Stream::decoded_within_counted)
     }
 
     /// `stream` decoded like [`Stream::decoded_strict`] (any corruption is an error), charged to
@@ -343,23 +344,24 @@ impl DecodeBudget {
         self.seen.insert(r)
     }
 
-    /// Each stream `contents` names, decoded against the allowance, in order. `contents` is a
-    /// page's `/Contents`: one stream, or an array whose non-stream entries are left out.
-    /// A stream that fails to decode, or arrives after the allowance is spent, is an `Err` in its
-    /// place, so the caller chooses between skipping it and giving up.
+    /// Each stream `contents` names, decoded against the allowance, in order, its `/DecodeParms`
+    /// given by reference read in `doc`. `contents` is a page's `/Contents`: one stream, or an
+    /// array whose non-stream entries are left out. A stream that fails to decode, or arrives
+    /// after the allowance is spent, is an `Err` in its place, so the caller chooses between
+    /// skipping it and giving up.
     pub fn decode_contents(&mut self, doc: &Document, contents: &Object) -> Vec<Result<Vec<u8>, CosError>> {
         self.decode_contents_with_damage(doc, contents).into_iter().map(|read| read.map(|(data, _)| data)).collect()
     }
 
     /// [`DecodeBudget::decode_contents`], each stream also saying whether it is damaged partway
-    /// ([`DecodeBudget::decode_with_damage`]).
+    /// ([`DecodeBudget::decode_with_damage`], which reads `/DecodeParms` given by reference).
     pub fn decode_contents_with_damage(&mut self, doc: &Document, contents: &Object) -> Vec<Result<(Vec<u8>, bool), CosError>> {
         match &*doc.resolve(contents) {
-            Object::Stream(s) => vec![self.decode_with_damage(s, usize::MAX)],
+            Object::Stream(s) => vec![self.decode_with_damage(doc, s, usize::MAX)],
             Object::Array(list) => list
                 .iter()
                 .filter_map(|entry| match &*doc.resolve(entry) {
-                    Object::Stream(s) => Some(self.decode_with_damage(s, usize::MAX)),
+                    Object::Stream(s) => Some(self.decode_with_damage(doc, s, usize::MAX)),
                     _ => None,
                 })
                 .collect(),
@@ -823,7 +825,8 @@ mod tests {
     /// checksum, no filter at all.
     #[test]
     fn a_stream_damaged_partway_says_so() {
-        let read = |budget: &mut DecodeBudget, s: &Stream, max| budget.decode_with_damage(s, max).map(|(d, damaged)| (d.len(), damaged)).ok();
+        let doc = Document::new_empty();
+        let read = |budget: &mut DecodeBudget, s: &Stream, max| budget.decode_with_damage(&doc, s, max).map(|(d, damaged)| (d.len(), damaged)).ok();
         let whole = Stream::flate(Dict::new(), &vec![b' '; 1 << 20]);
         let cut = Stream::from_raw(whole.dict.clone(), whole.raw.get(..whole.raw.len() / 2).unwrap_or_default().to_vec());
         let partial = cut.decoded().map(|d| d.len()).unwrap_or(0);
@@ -845,7 +848,42 @@ mod tests {
         let mut dict = Dict::new();
         dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("ASCIIHexDecode")]));
         let hex = Stream::from_raw(dict, Stream::flate(Dict::new(), b"4142zz4344>").raw.to_vec());
-        assert_eq!(budget.decode_with_damage(&hex, usize::MAX).ok(), Some((b"AB".to_vec(), true)));
+        assert_eq!(budget.decode_with_damage(&doc, &hex, usize::MAX).ok(), Some((b"AB".to_vec(), true)));
+    }
+
+    /// `/DecodeParms` given by reference, or a parameter given by reference in them, is read: a
+    /// predicted stream decodes as with them direct. Of the stream, decoding copies no more than
+    /// its filters and their parameters.
+    #[test]
+    fn parameters_given_by_reference_are_read() {
+        let content = b"q 10 0 0 10 0 0 cm /Im Do Q";
+        // PNG Up, one column: each byte a row of its own, tagged 2.
+        let mut rows = Vec::new();
+        let mut above = 0u8;
+        for &b in content {
+            rows.extend([2, b.wrapping_sub(above)]);
+            above = b;
+        }
+        let raw = Stream::flate(Dict::new(), &rows).raw;
+        let mut doc = Document::new_empty();
+        let direct: Dict = [(b"Predictor".to_vec(), Object::Int(12))].into_iter().collect();
+        let by_reference = Object::Ref(doc.add(Object::Dict(direct.clone())));
+        let predictor = doc.add(Object::Int(12));
+        let inner = Object::Dict([(b"Predictor".to_vec(), Object::Ref(predictor))].into_iter().collect());
+        for parms in [Object::Dict(direct), by_reference, inner] {
+            let mut dict = Dict::new();
+            dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+            dict.set(b"DecodeParms".to_vec(), parms.clone());
+            dict.set(b"Other".to_vec(), Object::Array(vec![Object::Int(0); 1000]));
+            let s = Stream::from_raw(dict, raw.to_vec());
+            assert_eq!(DecodeBudget::page().decode_with_damage(&doc, &s, usize::MAX).ok(), Some((content.to_vec(), false)), "{parms:?}");
+            let r = doc.add(Object::Stream(s.clone()));
+            let read = DecodeBudget::page().decode_contents_with_damage(&doc, &Object::Array(vec![Object::Ref(r)]));
+            assert_eq!(read, [Ok((content.to_vec(), false))], "{parms:?}");
+            assert_eq!(DecodeBudget::page().decode_contents(&doc, &Object::Ref(r)), [Ok(content.to_vec())], "{parms:?}");
+            let view = doc.decoding_view(&s);
+            assert!(matches!(view, std::borrow::Cow::Borrowed(_)) || view.dict.len() == 2, "{:?}", view.dict);
+        }
     }
 
     /// A page's content streams each say whether they are damaged, in their places.

@@ -219,7 +219,7 @@ impl Pruner<'_> {
             }
             #[cfg(test)]
             crate::work(1);
-            match DecodeBudget::new(usize::MAX, 0).decode_with_damage(s, usize::MAX) {
+            match DecodeBudget::new(usize::MAX, 0).decode_with_damage(self.doc, s, usize::MAX) {
                 Ok((data, false)) => self.content(&data, &inner, inner_owner, depth + 1),
                 // What the form draws is unknown, past damage too: keep everything it could reach.
                 Ok((_, true)) | Err(_) => {

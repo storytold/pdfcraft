@@ -316,7 +316,7 @@ fn checked_streams(doc: &Document, page: usize) -> Result<Vec<ContentStream>, Ed
             return Err(EditError::Invalid("a page content stream is missing".into()));
         };
         let (bytes, damaged) = decode
-            .decode_with_damage(stream, remaining.min(64 * 1024 * 1024))
+            .decode_with_damage(doc, stream, remaining.min(64 * 1024 * 1024))
             .map_err(|_| EditError::Invalid("the page content cannot be decoded within its size limit".into()))?;
         if damaged {
             return Err(EditError::Invalid("a page content stream is damaged partway".into()));

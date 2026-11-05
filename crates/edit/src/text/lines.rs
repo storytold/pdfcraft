@@ -92,7 +92,7 @@ pub(crate) fn content_streams_within(doc: &Document, page: &Dict, budget: &mut D
     let mut out = Vec::with_capacity(list.len());
     for entry in list {
         let (data, damaged) = match &*doc.resolve(&entry) {
-            Object::Stream(s) => match budget.decode_with_damage(s, usize::MAX) {
+            Object::Stream(s) => match budget.decode_with_damage(doc, s, usize::MAX) {
                 Ok(read) => read,
                 Err(e) if budget.remaining() == 0 => return Err(EditError::Invalid(format!("the page content is too large to read: {e}"))),
                 Err(_) => (Vec::new(), false),
