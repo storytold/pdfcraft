@@ -726,6 +726,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::EnhanceScan { images } => crate::scan_clean::write_back(doc, images)?,
         Edit::DownsampleImages { pages, ppi } => {
+            // The optimizer quietly does nothing at such a resolution; as an edit it would leave
+            // an undo step and a dirty document that changed nothing.
+            if !ppi.is_finite() || *ppi <= 0.0 {
+                return Err(EditError::Invalid(format!("the resolution must be a positive number of pixels per inch, not {ppi}")));
+            }
             let all = pdfcraft_annot::page_refs(doc).map_err(|e| EditError::Invalid(e.to_string()))?;
             let mut refs = Vec::with_capacity(pages.len());
             for p in pages {
