@@ -131,12 +131,14 @@ fn finish(b: ClipBuilder, styles_incomplete: bool) -> RichCopy {
 /// Two blocks of the same style, a change of size, or a gap of over half a line are paragraphs.
 fn wraps(prev: Option<&ClipStyle>, next: Option<&ClipStyle>, prev_rect: [f32; 4], rect: [f32; 4]) -> bool {
     let (Some(prev), Some(next)) = (prev, next) else { return false };
-    if prev == next || (prev.size - next.size).abs() > 0.01 {
+    let diff = (prev.size - next.size).abs();
+    if prev == next || diff.is_nan() || diff > 0.01 {
         return false;
     }
     let height = (prev_rect[3] - prev_rect[1]).max(rect[3] - rect[1]);
+    // The next line starts just below the last one; a line far above it is another column.
     let gap = rect[1] - prev_rect[3];
-    height > 0.0 && gap.is_finite() && gap <= height / 2.0
+    height > 0.0 && gap.is_finite() && gap >= -height / 2.0 && gap <= height / 2.0
 }
 
 /// Whether a block smaller than block `k` overlaps it, so a glyph inside `k` may belong to that
@@ -148,7 +150,7 @@ fn holds_smaller(blocks: &[StyledBlock], nested: &mut [Option<bool>], k: usize, 
     }
     let Some(outer) = blocks.get(k) else { return true };
     let area = |r: &[f32; 4]| (r[2] - r[0]) * (r[3] - r[1]);
-    let overlaps = |r: &[f32; 4]| r[0] <= outer.rect[2] && r[2] >= outer.rect[0] && r[1] <= outer.rect[3] && r[3] >= outer.rect[1];
+    let overlaps = |r: &[f32; 4]| r[0] < outer.rect[2] && r[2] > outer.rect[0] && r[1] < outer.rect[3] && r[3] > outer.rect[1];
     let mut found = false;
     for (j, b) in blocks.iter().enumerate() {
         if *steps == 0 {
@@ -167,7 +169,8 @@ fn holds_smaller(blocks: &[StyledBlock], nested: &mut [Option<bool>], k: usize, 
 }
 
 /// The block whose box holds the centre of `glyph` (view space): `hint` first (a block no
-/// smaller one overlaps), then the smallest that holds it. Each block tested costs a step; `None` when the steps ran out first.
+/// smaller one overlaps), then the smallest that holds it. Each block tested costs a step;
+/// `None` when the steps ran out first.
 fn block_at(blocks: &[StyledBlock], glyph: [f32; 4], hint: Option<usize>, steps: &mut usize) -> Option<Option<usize>> {
     let (x, y) = ((glyph[0] + glyph[2]) / 2.0, (glyph[1] + glyph[3]) / 2.0);
     let holds = |r: &[f32; 4]| x >= r[0] - SLACK && x <= r[2] + SLACK && y >= r[1] - SLACK && y <= r[3] + SLACK;
@@ -307,6 +310,21 @@ mod tests {
         let paragraphs: Vec<String> = copy.text.paragraphs.iter().map(text).collect();
         assert!(paragraphs.iter().any(|p| p.contains("bold") && p.contains("continues")), "{paragraphs:?}");
         assert!(paragraphs.iter().any(|p| p.contains("Another") && !p.contains("continues")), "a wide gap is still a paragraph: {paragraphs:?}");
+    }
+
+    #[test]
+    fn a_style_change_into_the_next_column_starts_a_paragraph() {
+        let content = b"BT /F2 12 Tf 20 200 Td (left top) Tj ET \
+            BT /F2 12 Tf 20 186 Td (left end) Tj ET \
+            BT /F1 12 Tf 170 200 Td (Right head) Tj ET \
+            BT /F2 12 Tf 170 186 Td (right body) Tj ET";
+        let mut s = Session::new();
+        let id = s.open("columns.pdf", None, Arc::new(page_with(content)), None).unwrap();
+        let copy = copy_all(&s, id);
+        let text = |p: &Vec<pdfcraft_export::ClipSpan>| p.iter().map(|s| s.text.as_str()).collect::<String>();
+        let paragraphs: Vec<String> = copy.text.paragraphs.iter().map(text).collect();
+        assert!(paragraphs.iter().any(|p| p.contains("Right")), "{paragraphs:?}");
+        assert!(!paragraphs.iter().any(|p| p.contains("left end") && p.contains("Right")), "{paragraphs:?}");
     }
 
     #[test]

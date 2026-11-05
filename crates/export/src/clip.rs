@@ -143,7 +143,7 @@ pub fn font_family(base_font: &str) -> Vec<String> {
         _ => base_font,
     };
     let name = name.split_once(',').map_or(name, |(family, _)| family);
-    let family = match name.split_once('-') {
+    let family = match name.rsplit_once('-') {
         Some((family, style)) if STYLE_WORDS.iter().any(|w| style.starts_with(w)) => family,
         _ => name,
     };
@@ -345,6 +345,7 @@ mod tests {
         assert_eq!(f("Arial-BoldMT"), ["Arial"]);
         assert_eq!(f("Helvetica-Oblique"), ["Helvetica"]);
         assert_eq!(f("MS-Gothic"), ["MS Gothic", "MS-Gothic"], "a hyphen before a family word stays in the name");
+        assert_eq!(f("Segoe-UI-Bold"), ["Segoe UI", "Segoe-UI"], "the style is the last part");
         assert_eq!(f("SimSun"), ["Sim Sun", "SimSun"], "the name as spelt is tried too");
         assert_eq!(f("abcdef+Foo"), ["abcdefFoo"], "a lower-case prefix is not a subset tag");
         assert!(f("").is_empty());

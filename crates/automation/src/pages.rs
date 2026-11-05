@@ -21,7 +21,7 @@ pub(crate) const FIND_MAX_WARNINGS: usize = 100;
 pub(crate) const FIND_MAX_WARNING_BYTES: usize = 1024;
 
 /// HTML that one `text_extract` with `format: "html"` returns across all its pages; a page past
-/// it gets none and the result says `html_truncated`.
+/// it gets none. `html_truncated` covers this and any page whose own copy hit its caps.
 const MAX_EXTRACT_HTML_BYTES: usize = 32 << 20;
 
 impl Automation {
