@@ -137,11 +137,13 @@ fn write_stream(s: &Stream, out: &mut Vec<u8>) {
 }
 
 /// The object as written: encrypted with its (output) number when the document is encrypted,
-/// except the `/Encrypt` dictionary itself (`source_num` is its number in the source document).
-/// `o` has the document's numbers in its references ([`crate::security::transform`]).
-fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &'a Object) -> Cow<'a, Object> {
+/// except the `/Encrypt` dictionary itself and what it and `/ID` hold as stored. `source_num` is
+/// the object's number in the source document, `None` for an object the writer makes, which no
+/// number in the source can exempt. `o` has the document's numbers in its references
+/// ([`crate::security::transform`]).
+fn prepared<'a>(doc: &Document, source_num: Option<u32>, num: u32, generation: u16, o: &'a Object) -> Cow<'a, Object> {
     match doc.output_security() {
-        (Some(h), encrypt_num) if Some(source_num) != encrypt_num && !doc.stored_as_is(source_num) => {
+        (Some(h), encrypt_num) if source_num.is_none_or(|n| Some(n) != encrypt_num && !doc.stored_as_is(n)) => {
             let pass = if doc.encryption_changed() { crate::security::Pass::EncryptReplacing } else { crate::security::Pass::Encrypt };
             Cow::Owned(crate::security::transform(doc, h, o, num, generation, pass))
         }
@@ -240,7 +242,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
             }
             Some(o) => {
                 offsets.insert(num, (base + out.len() as u64, generation, true));
-                write_indirect(num, generation, &prepared(&doc, num, num, generation, &o), &mut out);
+                write_indirect(num, generation, &prepared(&doc, Some(num), num, generation, &o), &mut out);
             }
             None => {
                 offsets.insert(num, (0, generation, false));
@@ -355,7 +357,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             packed.push((num, *r));
         } else {
             let o = reread(&mut reader, *r, *is_stream)?;
-            let o = renumber(&prepared(&reader.document, r.num, num, 0, &o), &map);
+            let o = renumber(&prepared(&reader.document, Some(r.num), num, 0, &o), &map);
             rows.insert(num, Row::InFile(out.len() as u64, 0));
             write_indirect(num, 0, &o, &mut out);
         }
@@ -436,7 +438,7 @@ impl ObjectStreamBatch {
         d.set(b"First".to_vec(), Object::Int(first as i64));
         let stm = Object::Stream(Stream::flate(d, &header));
         rows.insert(*next, Row::InFile(out.len() as u64, 0));
-        write_indirect(*next, 0, &prepared(doc, u32::MAX, *next, 0, &stm), out);
+        write_indirect(*next, 0, &prepared(doc, None, *next, 0, &stm), out);
         *next = following;
         Ok(())
     }

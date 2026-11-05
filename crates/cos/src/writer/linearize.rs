@@ -601,7 +601,7 @@ pub(super) fn write(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosEr
     let mut body = |i: usize| -> Result<Vec<u8>, CosError> {
         let (r, is_stream) = graph.order[i];
         let o = reread(&mut reader, r, is_stream)?;
-        let o = renumber(&prepared(&reader.document, r.num, number[i], 0, &o), &map);
+        let o = renumber(&prepared(&reader.document, Some(r.num), number[i], 0, &o), &map);
         let mut out = Vec::new();
         write_indirect(number[i], 0, &o, &mut out);
         Ok(out)
@@ -708,7 +708,7 @@ pub(super) fn write(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosEr
     }
     let stream = Object::Stream(Stream::flate(dict, &data));
     let mut hint_body = Vec::new();
-    write_indirect(hint, 0, &prepared(&reader.document, u32::MAX, hint, 0, &stream), &mut hint_body);
+    write_indirect(hint, 0, &prepared(&reader.document, None, hint, 0, &stream), &mut hint_body);
 
     // Real positions: everything after the hint stream moves by its length.
     let shift = len(&hint_body);
