@@ -75,7 +75,7 @@ fn to_user(p: &PageInfo, x: f64, y: f64) -> [f64; 2] {
     [ux as f64, uy as f64]
 }
 
-fn rect_to_user(p: &PageInfo, r: [f64; 4]) -> [f64; 4] {
+pub(crate) fn rect_to_user(p: &PageInfo, r: [f64; 4]) -> [f64; 4] {
     let (a, b) = (to_user(p, r[0], r[1]), to_user(p, r[2], r[3]));
     [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
 }
@@ -539,8 +539,10 @@ impl Automation {
             return self.apply(a, edit);
         }
         let text_at = |t: &str| {
-            let w = (pdfcraft_engine::annot_text::text_width(t, size) + 8.0).clamp(20.0, 600.0);
-            let h = size * 1.2 + 6.0;
+            let longest = t.lines().map(|line| pdfcraft_engine::annot_text::text_width(line, size)).fold(0.0, f64::max);
+            let w = (longest + 8.0).clamp(20.0, 600.0);
+            let rows = pdfcraft_engine::annot_text::wrap(t, size, w - 4.0).len().max(1);
+            let h = rows as f64 * size * 1.2 + 6.0;
             let rect = pdfcraft_engine::text_box_at(i64::from(info.rotation), at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]]);
             Shape::Typewriter { rect, font_size: size }
         };

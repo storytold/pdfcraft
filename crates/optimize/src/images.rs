@@ -4,12 +4,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use pdfcraft_content::{Matrix, Pieces};
-use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ImageBudget, ObjRef, Object, Stream};
 
 use crate::{Compression, ImageSettings, MonoCompression, MonoSettings, OptimizeError, Report, Settings, Stage};
 
 /// Images with more pixels than this are left alone (memory).
-const MAX_PIXELS: u64 = 80_000_000;
+pub(crate) const MAX_PIXELS: u64 = 80_000_000;
 
 /// The resources of a page, inherited from the page tree if the page has none.
 pub(crate) fn page_resources(doc: &Document, page: ObjRef) -> Option<Dict> {
@@ -419,7 +419,7 @@ pub(crate) fn components(doc: &Document, cs: &Object) -> Option<usize> {
     }
 }
 
-fn is_dct(s: &Stream) -> Option<bool> {
+pub(crate) fn is_dct(s: &Stream) -> Option<bool> {
     match s.dict.get(b"Filter") {
         None => Some(false),
         Some(Object::Name(n)) => match n.as_slice() {
@@ -479,7 +479,7 @@ fn count_decoded(_n: u64) {
 /// every row, and the image would be written back wrong. `None` for a JPEG whose colour transform
 /// readers may disagree about ([`ycc_encoded`]), and for data that decodes past what the samples
 /// can need ([`allowance`]).
-pub(crate) fn pixels(doc: &Document, s: &Stream, n: usize) -> Option<Vec<u8>> {
+pub(crate) fn pixels(doc: &Document, s: &Stream, n: usize, budget: &mut ImageBudget) -> Option<Vec<u8>> {
     let (w, h) = (u32::try_from(s.dict.int(b"Width")?).ok()?, u32::try_from(s.dict.int(b"Height")?).ok()?);
     if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PIXELS {
         return None;
@@ -490,11 +490,14 @@ pub(crate) fn pixels(doc: &Document, s: &Stream, n: usize) -> Option<Vec<u8>> {
         // never get here: the colour space check excludes them. The JPEG's own size must be the
         // dictionary's: `jpeg_samples` refuses another from its header, before any pixels.
         let ycc = n == 3 && ycc_encoded(doc, s)?;
+        if !budget.pay_jpeg(u64::try_from(bytes).ok()?, &s.raw) {
+            return None;
+        }
         let v = jpeg_samples(&s.raw, usize::try_from(w).ok()?, usize::try_from(h).ok()?, n, ycc)?;
         count_decoded(u64::from(w) * u64::from(h));
         (v.len() == bytes).then_some(v)
     } else {
-        let v = doc.with_direct_parms(s).decoded_within(allowance(bytes, h)?).ok()?;
+        let v = budget.decode_filters(doc, s, allowance(bytes, h)?).ok()?;
         Some(v.get(..bytes)?.to_vec())
     }
 }
@@ -503,7 +506,7 @@ pub(crate) fn pixels(doc: &Document, s: &Stream, n: usize) -> Option<Vec<u8>> {
 /// to three bytes for each of them and of a PNG predictor's bytes a row (ASCIIHex text under
 /// Flate, its two digits a byte broken into lines or spaced). More can only be a decompression
 /// bomb, and the image is left alone.
-fn allowance(bytes: usize, rows: u32) -> Option<usize> {
+pub(crate) fn allowance(bytes: usize, rows: u32) -> Option<usize> {
     bytes.checked_add(usize::try_from(rows).ok()?)?.checked_mul(3)?.checked_add(4096)
 }
 
@@ -515,7 +518,7 @@ fn allowance(bytes: usize, rows: u32) -> Option<usize> {
 /// /ColorTransform contradict each other (PdfCraft's renderer lets /ColorTransform 0 win where
 /// the standard lets the marker win), either holds a value other than 0 or 1, or the parameters
 /// or the JPEG's segments can't be read.
-fn ycc_encoded(doc: &Document, s: &Stream) -> Option<bool> {
+pub(crate) fn ycc_encoded(doc: &Document, s: &Stream) -> Option<bool> {
     let entry = color_transform(doc, s)?;
     match adobe_transform(&s.raw)? {
         Some(t @ (0 | 1)) => entry.is_none_or(|c| c == i64::from(t)).then_some(t == 1),
@@ -655,7 +658,7 @@ fn scaled<P: image::Pixel<Subpixel = u8> + 'static>(img: &image::ImageBuffer<P, 
     }
 }
 
-fn jpeg(px: &[u8], n: usize, w: u32, h: u32, quality: u8) -> Option<Vec<u8>> {
+pub(crate) fn jpeg(px: &[u8], n: usize, w: u32, h: u32, quality: u8) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality.clamp(1, 100));
     let ty = if n == 1 { image::ExtendedColorType::L8 } else { image::ExtendedColorType::Rgb8 };
@@ -678,7 +681,7 @@ pub(crate) fn decodable(doc: &Document, s: &Stream) -> Option<bool> {
 
 /// Whether `decode` is the default decode array for `n` components ([0 1] each), which changes
 /// nothing. Scanners write it on page images (#490).
-fn is_identity_decode(doc: &Document, decode: &Object, n: usize) -> bool {
+pub(crate) fn is_identity_decode(doc: &Document, decode: &Object, n: usize) -> bool {
     let decode = doc.resolve(decode);
     let Some(a) = decode.as_array() else { return false };
     a.len() == 2 * n && a.chunks(2).all(|p| matches!(p, [lo, hi] if doc.resolve(lo).as_f64() == Some(0.0) && doc.resolve(hi).as_f64() == Some(1.0)))
@@ -714,12 +717,27 @@ fn image_stream(old: &Dict, px: &[u8], n: usize, w: u32, h: u32, compression: Co
     }
 }
 
+/// Whether a `/Mask` value is a stencil mask: an image that says `/ImageMask true`.
+fn is_stencil(doc: &Document, mask: &Object) -> bool {
+    matches!(&*doc.resolve(mask), Object::Stream(s) if matches!(s.dict.get(b"ImageMask"), Some(Object::Bool(true))))
+}
+
 /// One image: resample and/or recompress per `settings`; `ppi` is its effective resolution.
 /// Returns the new image and its new soft mask, if the result is smaller.
-fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: usize) -> Option<(Stream, Option<(ObjRef, Stream)>)> {
+fn process(
+    doc: &Document,
+    s: &Stream,
+    ppi: f64,
+    settings: &ImageSettings,
+    n: usize,
+    budget: &mut ImageBudget,
+) -> Option<(Stream, Option<(ObjRef, Stream)>)> {
     let d = &s.dict;
+    // A colour-key mask names sample values, which resampling and JPEG would change. A stencil mask
+    // is an image of its own, with its own resolution (ISO 32000-2 §8.9.6.3): the picture can change
+    // under it and its edges stay as they are.
     if d.get(b"Decode").is_some_and(|a| !is_identity_decode(doc, a, n))
-        || d.contains(b"Mask")
+        || d.get(b"Mask").is_some_and(|m| !is_stencil(doc, m))
         || d.name(b"ImageMask").is_some()
         || matches!(d.get(b"ImageMask"), Some(Object::Bool(true)))
     {
@@ -748,7 +766,7 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
     } else {
         (w, h)
     };
-    let px = pixels(doc, s, n)?;
+    let px = pixels(doc, s, n, budget)?;
     let px = if (nw, nh) != (w, h) { resample(&px, n, w, h, nw, nh)? } else { px };
     let new = image_stream(d, &px, n, nw, nh, settings.compression, was_dct)?;
     // A soft mask must keep the image's dimensions: resample it with the image (lossless).
@@ -761,7 +779,7 @@ fn process(doc: &Document, s: &Stream, ppi: f64, settings: &ImageSettings, n: us
                 return None;
             }
             let (mw, mh) = (u32::try_from(m.dict.int(b"Width")?).ok()?, u32::try_from(m.dict.int(b"Height")?).ok()?);
-            let mpx = pixels(doc, m, 1)?;
+            let mpx = pixels(doc, m, 1, budget)?;
             let mpx = resample(&mpx, 1, mw, mh, nw, nh)?;
             smask = Some((mr, image_stream(&m.dict, &mpx, 1, nw, nh, Compression::Flate, false)?));
         }
@@ -801,7 +819,7 @@ type Pixel = fn(&[u8]) -> Option<bool>;
 /// with its width and height, and, when they were packed from more bits, its dictionary as a 1-bit
 /// image. These count:
 /// - one bit per pixel in one colour component, or an image mask, stored with no filter, with
-///   general-purpose ones, or with CCITT fax or JBIG2 last ([`Document::decoded_image_within`], no further
+///   general-purpose ones, or with CCITT fax or JBIG2 last ([`ImageBudget::decode`], no further
 ///   than its rows can need);
 /// - with `pack`, and with no colour-key `/Mask` (its ranges are in the image's own values):
 ///   - eight-bit grey (one component, not indexed) whose every sample is 0 or 255. A decode array
@@ -815,7 +833,7 @@ type Pixel = fn(&[u8]) -> Option<bool>;
 ///   - an indexed image of 2, 4 or 8 bits that uses only palette entries 0 and 1, which stay 0 and
 ///     1 at one bit, whatever their colours, so the colour space stays. A decode array other than
 ///     the default stops it: in index units it would mean something else at one bit.
-fn one_bit(doc: &Document, s: &Stream, pack: bool, defaults: bool) -> Option<(Vec<u8>, u32, u32, Option<Dict>)> {
+fn one_bit(doc: &Document, s: &Stream, pack: bool, defaults: bool, budget: &mut ImageBudget) -> Option<(Vec<u8>, u32, u32, Option<Dict>)> {
     let d = &s.dict;
     // Through u32 first, as everywhere here, so the product can't overflow.
     let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
@@ -836,7 +854,7 @@ fn one_bit(doc: &Document, s: &Stream, pack: bool, defaults: bool) -> Option<(Ve
             _ => allowance(len, h)?,
         };
         count_decoded(u64::from(w) * u64::from(h));
-        let mut data = doc.decoded_image_within(s, max).ok()?;
+        let mut data = budget.decode(doc, s, max).ok()?;
         if data.len() < len {
             return None;
         }
@@ -904,7 +922,7 @@ fn one_bit(doc: &Document, s: &Stream, pack: bool, defaults: bool) -> Option<(Ve
     let row_len = wu.checked_mul(n)?.checked_mul(bpc)?.div_ceil(8);
     // Through its parameters given by reference too: without a PNG predictor's tag bytes taken
     // off, rows of 0 and 255 (or palette entries 0 and 1) would still pass below, each shifted.
-    let samples = doc.with_direct_parms(s).decoded_within(allowance(row_len.checked_mul(hu)?, h)?).ok()?;
+    let samples = budget.decode_filters(doc, s, allowance(row_len.checked_mul(hu)?, h)?).ok()?;
     Some((packed_rows(&samples, row_len, wu, hu, (n, bpc, white))?, w, h, Some(packed)))
 }
 
@@ -1099,12 +1117,23 @@ fn downsample_bits_checked(data: &[u8], w: u32, h: u32, nw: u32, nh: u32, dark_i
 ///   to be resampled, and so is JBIG2 alone when Group 4 is asked for; Group 3, Group 4 inside
 ///   another filter, and JBIG2 otherwise are stored again like any other. With `Retain`, a resampled image keeps its kind of compression (CCITT, JBIG2, or
 ///   Flate), and nothing else changes: an image of more bits stays as it is, for the grey or
-///   colour settings. A JBIG2 image stored again refers to no `/JBIG2Globals`.
+///   colour settings. A JBIG2 image stored again refers to no `/JBIG2Globals`; with `Jbig2`, [`share`]
+///   may then have a group of them share one.
 ///
 /// The samples keep their meaning, so the colour space, decode array and `/Mask` stay, but for
 /// black-and-white RGB, which becomes grey with one decode pair, and an indexed image's default
 /// decode array, which goes as the default at one bit.
-fn mono(doc: &Document, s: &Stream, ppi: f64, defaults: bool, settings: &MonoSettings) -> Option<(Stream, bool)> {
+///
+/// Stored as JBIG2 with `Jbig2`, it comes with the 1-bit samples it was coded from, for [`share`]
+/// to code again with the run's other JBIG2 images.
+fn mono(
+    doc: &Document,
+    s: &Stream,
+    ppi: f64,
+    defaults: bool,
+    settings: &MonoSettings,
+    budget: &mut ImageBudget,
+) -> Option<(Stream, bool, Option<Vec<u8>>)> {
     let d = &s.dict;
     let downsample = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0 && !d.contains(b"SMask");
     let retain = settings.compression == MonoCompression::Retain;
@@ -1118,10 +1147,13 @@ fn mono(doc: &Document, s: &Stream, ppi: f64, defaults: bool, settings: &MonoSet
     // JBIG2 (whose symbols may be smaller than its own coding) can be smaller stored again alone.
     let alone_to_g4 = s.filters().len() == 1 && settings.compression == MonoCompression::CcittG4;
     let only_to_resample = retain || (alone_to_g4 && (jbig2 || fax.is_some_and(|p| p.k < 0)));
-    if only_to_resample && !downsample {
+    // What can't be averaged, whatever it holds, comes to the same `None` below, after a decode that
+    // would spend the run's allowance on it.
+    let too_wide = d.int(b"Width").is_some_and(|w| w > i64::from(pdfcraft_filters::MAX_CCITT_COLUMNS));
+    if only_to_resample && (!downsample || defaults || too_wide || settings.target_ppi >= ppi || (jbig2 && dark_is_one(doc, d).is_none())) {
         return None;
     }
-    let (data, w, h, packed) = one_bit(doc, s, !retain, defaults)?;
+    let (data, w, h, packed) = one_bit(doc, s, !retain, defaults, budget)?;
     let packed_from_more = packed.is_some();
     let k = settings.target_ppi / ppi;
     // `downsample_bits` keeps a counter for each column: no more columns than a fax row may have,
@@ -1185,15 +1217,117 @@ fn mono(doc: &Document, s: &Stream, ppi: f64, defaults: bool, settings: &MonoSet
     let flate = ((resampled || packed_from_more) && !(retain && (ccitt || jbig2))).then(|| Stream::flate(dict, &data));
     // Smaller as stored, counting the dictionary: a tiny image can lose by Group 4's parameters.
     let best = [g4, jbig, flate].into_iter().flatten().filter_map(|c| Some((crate::stored_len(&c)?, c))).min_by_key(|(len, _)| *len)?;
-    (best.0 < crate::stored_len(s)?).then_some((best.1, resampled))
+    let shareable = settings.compression == MonoCompression::Jbig2 && best.1.dict.name(b"Filter") == Some(b"JBIG2Decode");
+    (best.0 < crate::stored_len(s)?).then(|| (best.1, resampled, shareable.then_some(data)))
 }
 
+/// The most images that share one symbol dictionary ([`share`]). Redaction stores again every
+/// image that shares a redacted one's dictionary, and each image's decode reads all of it, so a
+/// group keeps both to that many; most of what sharing saves comes with the first few images.
+const SHARED_IMAGES: usize = 16;
+
+/// The most bytes of 1-bit samples a group holds: a group is coded before it would pass them
+/// ([`hold_in`]). An image that shares has at most [`SHARED_PIXELS`], and as its rows are whole
+/// bytes, at most that many bytes, which is this: one always fits a group with nothing in it.
+const SHARED_BYTES: usize = 64 << 20;
+
+/// What the globals cost as an object of their own besides their dictionary and data: `N 0 obj`,
+/// `stream`, `endstream` and `endobj`, a cross-reference entry, and an encrypted file's IV and
+/// padding. A group is shared only when it saves more than that as well.
+const NEW_OBJECT: usize = 96;
+
+/// Adds `image` to `group`, coding the group (`share`, which empties it) first when the image's
+/// samples would take it past `cap` bytes, and after when it has [`SHARED_IMAGES`].
+fn hold_in(group: &mut Vec<Held>, image: Held, cap: usize, mut share: impl FnMut(&mut Vec<Held>)) {
+    if group.iter().map(|h| h.bits.len()).fold(image.bits.len(), usize::saturating_add) > cap {
+        share(group);
+    }
+    group.push(image);
+    if group.len() == SHARED_IMAGES {
+        share(group);
+    }
+}
+
+/// The most pixels an image sharing a dictionary has: redaction's own limit on the images it
+/// stores again (see [`shares`]).
+const SHARED_PIXELS: u64 = pdfcraft_cos::MAX_REDACTED_IMAGE_PIXELS;
+
+/// Whether an image stored as JBIG2 (its dictionary `d`) may share a dictionary: only one that
+/// redaction can store again without it, an image mask or a DeviceGray image, named directly, of
+/// at most [`SHARED_PIXELS`]. Redacting one image of a group stores the others so, as the
+/// dictionary can hold the shapes of marks under the area, and refuses the redaction for one it
+/// can't; an image of another colour space, though redaction may take it, is coded alone.
+fn shares(d: &Dict) -> bool {
+    let side = |key: &[u8]| d.int(key).and_then(|v| u64::try_from(v).ok());
+    let within = side(b"Width").zip(side(b"Height")).is_some_and(|(w, h)| w.saturating_mul(h) <= SHARED_PIXELS);
+    within && (matches!(d.get(b"ImageMask"), Some(Object::Bool(true))) || d.name(b"ColorSpace") == Some(b"DeviceGray"))
+}
+
+/// An image the run stored as JBIG2, held to be stored again sharing a dictionary ([`share`]): its
+/// 1-bit samples, `width` × `height`.
+struct Held {
+    image: ObjRef,
+    bits: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+/// Stores the images of `group`, each JBIG2 already, again sharing one symbol dictionary in a
+/// `/JBIG2Globals` stream ([`pdfcraft_filters::encode_jbig2_shared`]): those that come out smaller
+/// that way, if together they save more than the globals take. The others stay as they are, and
+/// so do all of them when that saves nothing. `report` counts the bytes as they end up, the globals
+/// included.
+fn share(doc: &mut Document, group: &mut Vec<Held>, report: &mut Report) {
+    let held = std::mem::take(group);
+    if held.len() < 2 {
+        return;
+    }
+    let images: Vec<(&[u8], u32, u32)> = held.iter().map(|h| (&h.bits[..], h.width, h.height)).collect();
+    let Ok(Some(shared)) = pdfcraft_filters::encode_jbig2_shared(&images) else { return };
+    let with_globals = |s: &Stream, coded: Vec<u8>, globals: ObjRef| {
+        let mut dict = s.dict.clone();
+        let mut parms = Dict::new();
+        parms.set(b"JBIG2Globals".to_vec(), Object::Ref(globals));
+        dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        Stream::from_raw(dict, coded)
+    };
+    // Weighed naming the globals with the longest reference there is: the real one is no longer.
+    let longest = ObjRef { num: u32::MAX, generation: u16::MAX };
+    let (mut chosen, mut saved) = (Vec::new(), 0usize);
+    for (h, coded) in held.iter().zip(shared.images) {
+        let Some(coded) = coded else { continue };
+        let object = doc.get(h.image);
+        let Object::Stream(alone) = &*object else { continue };
+        let shorter = crate::stored_len(alone).zip(crate::stored_len(&with_globals(alone, coded.clone(), longest))).filter(|(a, b)| b < a);
+        if let Some((before, after)) = shorter {
+            saved = saved.saturating_add(before - after);
+            chosen.push((h.image, coded));
+        }
+    }
+    let globals = Stream::from_raw(Dict::new(), shared.globals);
+    if chosen.is_empty() || crate::stored_len(&globals).is_none_or(|takes| saved <= takes.saturating_add(NEW_OBJECT)) {
+        return;
+    }
+    report.image_bytes_after = report.image_bytes_after.saturating_add(globals.raw.len());
+    let globals = doc.add(Object::Stream(globals));
+    for (image, coded) in chosen {
+        let object = doc.get(image);
+        let Object::Stream(alone) = &*object else { continue };
+        report.image_bytes_after = report.image_bytes_after.saturating_sub(alone.raw.len()).saturating_add(coded.len());
+        let new = with_globals(alone, coded, globals);
+        doc.set(image, Object::Stream(new));
+    }
+}
+
+/// One pass over the document's images, within `budget`. An image past it stays as it is, and is
+/// counted in the report.
 pub(crate) fn run(
     doc: &mut Document,
     pages: &[ObjRef],
     settings: &Settings,
     report: &mut Report,
     progress: &mut dyn FnMut(Stage) -> bool,
+    budget: &mut ImageBudget,
 ) -> Result<(), OptimizeError> {
     let (ppi, mut defaults, read) = walk_pages(doc, pages);
     // Black-and-white RGB becomes grey, which default colour spaces would draw otherwise, and an
@@ -1215,6 +1349,13 @@ pub(crate) fn run(
     refs.sort_by_key(|(r, _)| r.num);
     let total = refs.len();
     let mut jbig2 = false;
+    let mut group: Vec<Held> = Vec::new();
+    // Holds a JBIG2 image for `share`, which codes the group once it is full.
+    let mut hold = |doc: &mut Document, image: ObjRef, size: (Option<i64>, Option<i64>), bits: Option<Vec<u8>>, report: &mut Report| {
+        let side = |v: Option<i64>| v.and_then(|v| u32::try_from(v).ok());
+        let (Some(bits), Some(width), Some(height)) = (bits, side(size.0), side(size.1)) else { return };
+        hold_in(&mut group, Held { image, bits, width, height }, SHARED_BYTES, |group| share(doc, group, report));
+    };
     for (done, (r, ppi)) in refs.into_iter().enumerate() {
         if !progress(Stage::Images { done, total }) {
             return Err(OptimizeError::Cancelled);
@@ -1222,14 +1363,15 @@ pub(crate) fn run(
         let obj = doc.get(r);
         let Object::Stream(s) = &*obj else { continue };
         report.images += 1;
+        let refused = budget.refused();
         // Packed from more bits a sample, it is lossless at one bit, but the grey or colour
         // settings can make it smaller still (below).
         let packed_from_more = s.dict.int(b"BitsPerComponent").is_some_and(|b| b > 1);
-        let (packed, mono) = match mono(doc, s, ppi, defaults.contains(&r.num), &settings.mono) {
+        let (packed, mono) = match mono(doc, s, ppi, defaults.contains(&r.num), &settings.mono, budget) {
             Some(m) if packed_from_more => (Some(m), None),
             m => (None, m),
         };
-        if let Some((new, resampled)) = mono {
+        if let Some((new, resampled, bits)) = mono {
             report.image_bytes_before += s.raw.len();
             report.image_bytes_after += new.raw.len();
             if resampled {
@@ -1238,11 +1380,14 @@ pub(crate) fn run(
                 report.images_recompressed += 1;
             }
             jbig2 |= new.dict.name(b"Filter") == Some(b"JBIG2Decode");
+            let size = (new.dict.int(b"Width"), new.dict.int(b"Height"));
+            let bits = bits.filter(|_| shares(&new.dict));
             doc.set(r, Object::Stream(new));
+            hold(doc, r, size, bits, report);
             continue;
         }
         let n = s.dict.get(b"ColorSpace").and_then(|cs| components(doc, cs));
-        let processed = n.and_then(|n| process(doc, s, ppi, if n == 1 { &settings.gray } else { &settings.color }, n));
+        let processed = n.and_then(|n| process(doc, s, ppi, if n == 1 { &settings.gray } else { &settings.color }, n, budget));
         // A dithered scan, say, downsampled and JPEG-compressed: the smaller wins, counting a soft
         // mask resampled with it.
         let smask_len = |smask: Option<&(ObjRef, Stream)>| match smask {
@@ -1253,10 +1398,10 @@ pub(crate) fn run(
             }),
         };
         let total = |new: &Stream, smask: Option<&(ObjRef, Stream)>| Some(crate::stored_len(new)?.saturating_add(smask_len(smask).unwrap_or(0)));
-        let packed_wins = packed.as_ref().is_some_and(|(p, _)| {
+        let packed_wins = packed.as_ref().is_some_and(|(p, _, _)| {
             processed.as_ref().is_none_or(|(new, smask)| total(p, None).zip(total(new, smask.as_ref())).is_some_and(|(a, b)| a <= b))
         });
-        if let Some((new, resampled)) = packed.filter(|_| packed_wins) {
+        if let Some((new, resampled, bits)) = packed.filter(|_| packed_wins) {
             jbig2 |= new.dict.name(b"Filter") == Some(b"JBIG2Decode");
             report.image_bytes_before += s.raw.len();
             report.image_bytes_after += new.raw.len();
@@ -1265,10 +1410,17 @@ pub(crate) fn run(
             } else {
                 report.images_recompressed += 1;
             }
+            let size = (new.dict.int(b"Width"), new.dict.int(b"Height"));
+            let bits = bits.filter(|_| shares(&new.dict));
             doc.set(r, Object::Stream(new));
+            hold(doc, r, size, bits, report);
             continue;
         }
-        let Some((new, smask)) = processed else { continue };
+        let Some((new, smask)) = processed else {
+            // Read to be packed and again to be resampled, it is still one image, and it stayed.
+            report.images_refused += usize::from(budget.refused() > refused);
+            continue;
+        };
         let resized = new.dict.int(b"Width") != s.dict.int(b"Width") || new.dict.int(b"Height") != s.dict.int(b"Height");
         report.image_bytes_before += s.raw.len();
         report.image_bytes_after += new.raw.len();
@@ -1282,6 +1434,7 @@ pub(crate) fn run(
             doc.set(mr, Object::Stream(m));
         }
     }
+    share(doc, &mut group, report);
     if !progress(Stage::Images { done: total, total }) {
         return Err(OptimizeError::Cancelled);
     }
@@ -1309,6 +1462,58 @@ fn at_least_pdf_1_4(doc: &mut Document) -> Result<(), OptimizeError> {
 mod dimension_tests {
     use super::*;
 
+    /// A group is coded before an image's samples would take it past its limit, and once it has
+    /// [`SHARED_IMAGES`]: with room for 10 bytes, images of 4 go two to a group, never three, and
+    /// with room for 8, two of 4 fill one exactly; one of exactly the limit joins a group with
+    /// nothing in it.
+    #[test]
+    fn a_group_is_coded_before_its_samples_would_pass_the_limit() {
+        let held = |bytes: usize| Held { image: ObjRef { num: 1, generation: 0 }, bits: vec![0; bytes], width: 8, height: 8 };
+        let mut coded: Vec<Vec<usize>> = Vec::new();
+        let mut group = Vec::new();
+        let mut code = |g: &mut Vec<Held>| coded.push(std::mem::take(g).iter().map(|h| h.bits.len()).collect());
+        for _ in 0..5 {
+            hold_in(&mut group, held(4), 10, &mut code);
+        }
+        hold_in(&mut group, held(10), 10, &mut code);
+        assert_eq!(coded, [vec![4, 4], vec![4, 4], vec![4]]);
+        assert_eq!(group.iter().map(|h| h.bits.len()).collect::<Vec<_>>(), [10]);
+        // Exactly the limit is within it: with room for 8, two images of 4 stay together.
+        let (mut count, mut group) = (0, Vec::new());
+        let mut code = |g: &mut Vec<Held>| count += std::mem::take(g).len();
+        hold_in(&mut group, held(4), 8, &mut code);
+        hold_in(&mut group, held(4), 8, &mut code);
+        assert_eq!((count, group.len()), (0, 2));
+        let (mut count, mut group) = (0, Vec::new());
+        for _ in 0..SHARED_IMAGES {
+            hold_in(&mut group, held(1), usize::MAX, |g| count += std::mem::take(g).len());
+        }
+        assert_eq!((count, group.len()), (SHARED_IMAGES, 0), "coded on the 16th");
+    }
+
+    /// Only what redaction can store again without the dictionary shares one: an image mask, or
+    /// DeviceGray named directly, of at most 2^26 pixels.
+    #[test]
+    fn only_what_redaction_can_store_again_shares_a_dictionary() {
+        let dict = |entries: Vec<(&str, Object)>| {
+            let mut d = Dict::new();
+            for (k, v) in entries {
+                d.set(k.as_bytes().to_vec(), v);
+            }
+            d
+        };
+        let sized = |w: i64, h: i64, cs: Object| dict(vec![("Width", Object::Int(w)), ("Height", Object::Int(h)), ("ColorSpace", cs)]);
+        assert!(shares(&sized(8192, 8192, Object::name("DeviceGray"))));
+        assert!(!shares(&sized(8192, 8193, Object::name("DeviceGray"))), "a row past 2^26 pixels");
+        assert!(shares(&dict(vec![("Width", Object::Int(8)), ("Height", Object::Int(8)), ("ImageMask", Object::Bool(true))])));
+        let device_n =
+            Object::Array(vec![Object::name("DeviceN"), Object::Array(vec![Object::name("Black")]), Object::name("DeviceGray"), Object::Null]);
+        assert!(!shares(&sized(8, 8, device_n)));
+        assert!(!shares(&sized(8, 8, Object::name("CalGray"))));
+        assert!(!shares(&sized(8, 8, Object::Ref(ObjRef { num: 3, generation: 0 }))), "a colour space by reference");
+        assert!(!shares(&dict(vec![("ColorSpace", Object::name("DeviceGray"))])), "no size");
+    }
+
     #[test]
     fn pixel_reader_rejects_hostile_dimensions_before_decoding() {
         for (width, height, channels) in [(-1, 1, 1), (0, 1, 1), (i64::from(u32::MAX) + 101, 1, 1), (80_000_001, 1, 1), (2, 2, usize::MAX)] {
@@ -1316,13 +1521,16 @@ mod dimension_tests {
             dict.set(b"Width".to_vec(), Object::Int(width));
             dict.set(b"Height".to_vec(), Object::Int(height));
             let stream = Stream::from_raw(dict, vec![0; 4]);
-            assert!(pixels(&Document::new_empty(), &stream, channels).is_none(), "{width} x {height} x {channels}");
+            assert!(
+                pixels(&Document::new_empty(), &stream, channels, &mut ImageBudget::with_work(u64::MAX)).is_none(),
+                "{width} x {height} x {channels}"
+            );
         }
         let mut dict = Dict::new();
         dict.set(b"Width".to_vec(), Object::Int(2));
         dict.set(b"Height".to_vec(), Object::Int(2));
         let stream = Stream::from_raw(dict, vec![1, 2, 3, 4, 5]);
-        assert_eq!(pixels(&Document::new_empty(), &stream, 1), Some(vec![1, 2, 3, 4]));
+        assert_eq!(pixels(&Document::new_empty(), &stream, 1, &mut ImageBudget::with_work(u64::MAX)), Some(vec![1, 2, 3, 4]));
     }
 
     /// JBIG2 alone, with Group 4 asked for, is decoded only to be resampled. A cost guard: dropped,
@@ -1344,7 +1552,7 @@ mod dimension_tests {
         let settings = MonoSettings { compression: MonoCompression::CcittG4, ..MonoSettings::REDUCE };
         let decoded = |s: &Stream, settings: &MonoSettings| {
             DECODED_PIXELS.with(|c| c.set(0));
-            mono(&Document::new_empty(), s, 300.0, false, settings);
+            mono(&Document::new_empty(), s, 300.0, false, settings, &mut ImageBudget::with_work(u64::MAX));
             DECODED_PIXELS.with(|c| c.get())
         };
         let alone = image(Object::name("JBIG2Decode"), coded.clone());
@@ -1353,6 +1561,281 @@ mod dimension_tests {
         assert!(decoded(&behind, &settings) > 0, "behind another filter it can be stored again");
         let jbig2 = MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE };
         assert!(decoded(&alone, &jbig2) > 0, "stored as JBIG2 its symbols may come out smaller");
+    }
+
+    /// A run has one allowance for all its JBIG2 images. Those past it stay as they are, and the
+    /// report says how many: a file of thousands of them can't hold a run for hours.
+    #[test]
+    fn jbig2_images_past_the_runs_allowance_stay_as_they_are() {
+        let coded = pdfcraft_filters::encode_jbig2_generic(&[0xF0; 4], 16, 2).unwrap();
+        let mut dict = Dict::new();
+        dict.set(b"Type".to_vec(), Object::name("XObject"));
+        dict.set(b"Subtype".to_vec(), Object::name("Image"));
+        dict.set(b"Width".to_vec(), Object::Int(16));
+        dict.set(b"Height".to_vec(), Object::Int(2));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+        dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        dict.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+        let image = Stream::from_raw(dict, coded);
+        let mut cost = ImageBudget::with_work(u64::MAX);
+        cost.decode(&Document::new_empty(), &image, 1 << 20).unwrap();
+        let cost = u64::MAX - cost.work_left();
+
+        let mut doc = Document::new_empty();
+        let refs = [doc.add(Object::Stream(image.clone())), doc.add(Object::Stream(image.clone())), doc.add(Object::Stream(image.clone()))];
+        let mut xobjects = Dict::new();
+        for (i, r) in refs.iter().enumerate() {
+            xobjects.set(format!("I{i}").into_bytes(), Object::Ref(*r));
+        }
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        // Drawn small enough, at 720 ppi, for the settings to resample all three.
+        let content = doc.add(Object::Stream(Stream::flate(Dict::new(), b"q 1.6 0 0 .2 0 0 cm /I0 Do /I1 Do /I2 Do Q")));
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+        page.set(b"Contents".to_vec(), Object::Ref(content));
+        let page = doc.add(Object::Dict(page));
+
+        let settings = Settings { mono: MonoSettings { compression: MonoCompression::CcittG4, ..MonoSettings::REDUCE }, ..Settings::default() };
+        let mut report = Report::default();
+        let mut budget = ImageBudget::with_work(2 * cost);
+        run(&mut doc, &[page], &settings, &mut report, &mut |_| true, &mut budget).unwrap();
+        assert_eq!(report.images_refused, 1);
+        assert_eq!(budget.work_left(), 0, "two decoded and the third refused");
+        assert_eq!(report.images_resampled, 2);
+        let changed = refs.iter().filter(|r| matches!(&*doc.get(**r), Object::Stream(s) if *s != image)).count();
+        assert_eq!(changed, 2, "the third is as it was");
+    }
+
+    /// Images that aren't JBIG2 share the run's allowance too, both on the way to being resampled
+    /// and on the way to being packed to a bit a sample: a file of filter bombs would hold a run
+    /// as long as one of JBIG2, and those past it stay as they are.
+    #[test]
+    fn flate_images_past_the_runs_allowance_stay_as_they_are() {
+        // Noise, resampled, or black and white, packed.
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let noise: Vec<u8> = (0..256 * 256)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                seed as u8
+            })
+            .collect();
+        let black_and_white: Vec<u8> = noise.iter().map(|v| if v & 1 == 0 { 0 } else { 255 }).collect();
+        for (name, samples, settings) in [
+            ("resampled", &noise, Settings::default()),
+            (
+                "packed",
+                &black_and_white,
+                Settings { mono: MonoSettings { compression: MonoCompression::CcittG4, ..MonoSettings::REDUCE }, ..Settings::default() },
+            ),
+        ] {
+            let page_of = |images: usize| {
+                let mut doc = Document::new_empty();
+                let mut dict = Dict::new();
+                dict.set(b"Subtype".to_vec(), Object::name("Image"));
+                dict.set(b"Width".to_vec(), Object::Int(256));
+                dict.set(b"Height".to_vec(), Object::Int(256));
+                dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+                dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+                let image = Stream::flate(dict, samples);
+                let refs: Vec<ObjRef> = (0..images).map(|_| doc.add(Object::Stream(image.clone()))).collect();
+                let mut xobjects = Dict::new();
+                let mut drawn = String::from("q 10 0 0 10 0 0 cm ");
+                for (i, r) in refs.iter().enumerate() {
+                    xobjects.set(format!("I{i}").into_bytes(), Object::Ref(*r));
+                    drawn.push_str(&format!("/I{i} Do "));
+                }
+                drawn.push('Q');
+                let mut resources = Dict::new();
+                resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+                let content = doc.add(Object::Stream(Stream::flate(Dict::new(), drawn.as_bytes())));
+                let mut page = Dict::new();
+                page.set(b"Type".to_vec(), Object::name("Page"));
+                page.set(b"Resources".to_vec(), Object::Dict(resources));
+                page.set(b"Contents".to_vec(), Object::Ref(content));
+                let page = doc.add(Object::Dict(page));
+                (doc, page, refs, image)
+            };
+            let (mut doc, page, ..) = page_of(1);
+            let mut budget = ImageBudget::with_work(u64::MAX);
+            let mut report = Report::default();
+            run(&mut doc, &[page], &settings, &mut report, &mut |_| true, &mut budget).unwrap();
+            let cost = u64::MAX - budget.work_left();
+            assert!(cost > 0, "{name}");
+            assert_eq!(report.images_refused, 0, "{name}");
+
+            let (mut doc, page, refs, image) = page_of(3);
+            let mut budget = ImageBudget::with_work(2 * cost);
+            let mut report = Report::default();
+            run(&mut doc, &[page], &settings, &mut report, &mut |_| true, &mut budget).unwrap();
+            assert_eq!(report.images_refused, 1, "{name}: {report:?}");
+            assert_eq!(budget.work_left(), 0, "{name}");
+            let changed = refs.iter().filter(|r| matches!(&*doc.get(**r), Object::Stream(s) if *s != image)).count();
+            assert_eq!(changed, 2, "{name}: the third is as it was");
+        }
+    }
+
+    /// An image the allowance ran out on between being packed and being resampled is rewritten,
+    /// as the packed one, so it isn't one that stayed as it was.
+    #[test]
+    fn a_packed_image_isnt_counted_as_refused() {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let samples: Vec<u8> = (0..256 * 256)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                if seed & 1 == 0 { 0 } else { 255 }
+            })
+            .collect();
+        let mut doc = Document::new_empty();
+        let mut dict = Dict::new();
+        dict.set(b"Subtype".to_vec(), Object::name("Image"));
+        dict.set(b"Width".to_vec(), Object::Int(256));
+        dict.set(b"Height".to_vec(), Object::Int(256));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let image = Stream::flate(dict, &samples);
+        let read = (image.raw.len() + samples.len()) as u64 + 256 * 256;
+        let original = doc.add(Object::Stream(image.clone()));
+        let mut xobjects = Dict::new();
+        xobjects.set(b"I0".to_vec(), Object::Ref(original));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let content = doc.add(Object::Stream(Stream::flate(Dict::new(), b"q 10 0 0 10 0 0 cm /I0 Do Q")));
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+        page.set(b"Contents".to_vec(), Object::Ref(content));
+        let page = doc.add(Object::Dict(page));
+        let settings = Settings { mono: MonoSettings { compression: MonoCompression::CcittG4, ..MonoSettings::REDUCE }, ..Settings::default() };
+        let mut report = Report::default();
+        let mut budget = ImageBudget::with_work(read);
+        run(&mut doc, &[page], &settings, &mut report, &mut |_| true, &mut budget).unwrap();
+        assert_eq!(budget.refused(), 1, "its second read was refused");
+        assert_eq!(report.images_refused, 0, "{report:?}");
+        assert_eq!(report.images_recompressed + report.images_resampled, 1, "{report:?}");
+        assert!(matches!(&*doc.get(original), Object::Stream(s) if *s != image));
+    }
+
+    /// An image the run has no use for stayed as it was too, but nothing refused it: this one is
+    /// too small to compress and drawn at no more than its size.
+    #[test]
+    fn an_image_left_alone_isnt_counted_as_refused() {
+        let mut doc = Document::new_empty();
+        let mut dict = Dict::new();
+        dict.set(b"Subtype".to_vec(), Object::name("Image"));
+        dict.set(b"Width".to_vec(), Object::Int(8));
+        dict.set(b"Height".to_vec(), Object::Int(8));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let image = doc.add(Object::Stream(Stream::flate(dict, &[0x80; 64])));
+        let mut xobjects = Dict::new();
+        xobjects.set(b"I0".to_vec(), Object::Ref(image));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let content = doc.add(Object::Stream(Stream::flate(Dict::new(), b"q 72 0 0 72 0 0 cm /I0 Do Q")));
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+        page.set(b"Contents".to_vec(), Object::Ref(content));
+        let page = doc.add(Object::Dict(page));
+        let mut report = Report::default();
+        run(&mut doc, &[page], &Settings::default(), &mut report, &mut |_| true, &mut ImageBudget::with_work(u64::MAX)).unwrap();
+        assert_eq!((report.images, report.images_refused), (1, 0), "{report:?}");
+    }
+
+    /// A JPEG pays for its samples before it is decoded, however few bytes it takes: past what is
+    /// left it isn't, and counts as refused.
+    #[test]
+    fn a_jpeg_pays_for_its_samples() {
+        let mut dict = Dict::new();
+        dict.set(b"Width".to_vec(), Object::Int(16));
+        dict.set(b"Height".to_vec(), Object::Int(8));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        dict.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+        let jpeg = image_stream(&dict, &[120; 16 * 8 * 3], 3, 16, 8, Compression::Jpeg(60), false).expect("a JPEG");
+        let doc = Document::new_empty();
+        let cost = 2 * 16 * 8 * 3 + 4 * jpeg.raw.len() as u64;
+        let mut budget = ImageBudget::with_work(cost);
+        assert_eq!(pixels(&doc, &jpeg, 3, &mut budget).map(|p| p.len()), Some(16 * 8 * 3));
+        assert_eq!((budget.work_left(), budget.refused()), (0, 0), "exactly that");
+        let mut budget = ImageBudget::with_work(cost - 1);
+        assert!(pixels(&doc, &jpeg, 3, &mut budget).is_none());
+        assert_eq!((budget.work_left(), budget.refused()), (0, 1));
+    }
+
+    /// A soft mask resampled with its image is read from the same allowance as the image.
+    #[test]
+    fn a_soft_mask_resampled_with_its_image_spends_the_allowance() {
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let noise: Vec<u8> = (0..256 * 256)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                seed as u8
+            })
+            .collect();
+        let image = |space: &str| {
+            let mut dict = Dict::new();
+            dict.set(b"Subtype".to_vec(), Object::name("Image"));
+            dict.set(b"Width".to_vec(), Object::Int(256));
+            dict.set(b"Height".to_vec(), Object::Int(256));
+            dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+            dict.set(b"ColorSpace".to_vec(), Object::name(space));
+            Stream::flate(dict, &noise)
+        };
+        let mut doc = Document::new_empty();
+        let mask = image("DeviceGray");
+        let cost = (mask.raw.len() + noise.len()) as u64 + 256 * 256;
+        let masked = doc.add(Object::Stream(mask));
+        let mut with_mask = image("DeviceGray");
+        with_mask.dict.set(b"SMask".to_vec(), Object::Ref(masked));
+        let spent = |s: &Stream| {
+            let mut budget = ImageBudget::with_work(u64::MAX);
+            process(&doc, s, 720.0, &Settings::default().gray, 1, &mut budget).expect("resampled, and smaller");
+            u64::MAX - budget.work_left()
+        };
+        assert_eq!(spent(&with_mask), spent(&image("DeviceGray")) + cost);
+    }
+
+    /// Decoded only to be resampled, what can't be averaged whatever it holds isn't decoded, so it
+    /// takes nothing from the images that can be, and isn't counted as refused past the allowance.
+    #[test]
+    fn a_jbig2_image_that_cant_be_averaged_spends_nothing() {
+        let image = |edit: &dyn Fn(&mut Dict)| {
+            let mut dict = Dict::new();
+            dict.set(b"Subtype".to_vec(), Object::name("Image"));
+            dict.set(b"Width".to_vec(), Object::Int(16));
+            dict.set(b"Height".to_vec(), Object::Int(2));
+            dict.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+            dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+            dict.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+            edit(&mut dict);
+            Stream::from_raw(dict, pdfcraft_filters::encode_jbig2_generic(&[0xF0; 4], 16, 2).unwrap())
+        };
+        let spent_at = |target_ppi: f64, s: &Stream, defaults: bool| {
+            let settings = MonoSettings { compression: MonoCompression::Retain, above_ppi: 100.0, target_ppi, ..MonoSettings::REDUCE };
+            let mut budget = ImageBudget::with_work(u64::MAX);
+            let _ = mono(&Document::new_empty(), s, 720.0, defaults, &settings, &mut budget);
+            u64::MAX - budget.work_left()
+        };
+        let spent = |s: &Stream, defaults: bool| spent_at(300.0, s, defaults);
+        let plain = image(&|_| {});
+        assert_eq!(spent_at(720.0, &plain, false), 0, "already at the target");
+        assert!(spent_at(719.0, &plain, false) > 0, "just above it");
+        assert!(spent(&plain, false) > 0, "one that can be averaged is decoded");
+        assert_eq!(spent(&plain, true), 0, "drawn where a device colour space is remapped");
+        let width = |w: i64| image(&move |d| d.set(b"Width".to_vec(), Object::Int(w)));
+        let widest = i64::from(pdfcraft_filters::MAX_CCITT_COLUMNS);
+        assert!(spent(&width(widest), false) > 0, "the widest that can be averaged is decoded");
+        assert_eq!(spent(&width(widest + 1), false), 0, "too wide to average");
+        let tinted = image(&|d| d.set(b"ColorSpace".to_vec(), Object::Array(vec![Object::name("CalGray"), Object::Dict(Dict::new())])));
+        assert_eq!(spent(&tinted, false), 0, "no way to tell which sample is dark");
     }
 
     /// A JPEG larger than its dictionary says is refused from its header, before its pixels are decoded.
@@ -1367,9 +1850,9 @@ mod dimension_tests {
             Stream::from_raw(dict, data.clone())
         };
         DECODED_PIXELS.with(|c| c.set(0));
-        assert!(pixels(&Document::new_empty(), &stream(10, 10), 1).is_none());
+        assert!(pixels(&Document::new_empty(), &stream(10, 10), 1, &mut ImageBudget::with_work(u64::MAX)).is_none());
         assert_eq!(DECODED_PIXELS.with(|c| c.get()), 0, "pixels decoded");
-        assert_eq!(pixels(&Document::new_empty(), &stream(1000, 1000), 1).map(|p| p.len()), Some(1000 * 1000));
+        assert_eq!(pixels(&Document::new_empty(), &stream(1000, 1000), 1, &mut ImageBudget::with_work(u64::MAX)).map(|p| p.len()), Some(1000 * 1000));
     }
 
     /// Resampling goes through no more than one of the two sizes holds, whatever their proportions:
