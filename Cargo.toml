@@ -139,6 +139,9 @@ hayro-cmap = { path = "vendor/hayro-cmap" }
 hayro-postscript = { path = "vendor/hayro-postscript" }
 hayro-jbig2 = { path = "vendor/hayro-jbig2" }
 lopdf = { path = "vendor/lopdf" }
+# macOS odoc items whose on-disk name is NFC-precomposed are decoded from the items'
+# raw descriptor bytes instead of dropped when bookmark resolution fails (#6324).
+fmv-macos-events = { path = "vendor/fmv-macos-events" }
 vello_common = { path = "vendor/vello_common" }
 vello_cpu = { path = "vendor/vello_cpu" }
 # The egui and winit crates below are pinned to immutable storytold git revisions (egui
