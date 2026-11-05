@@ -406,12 +406,18 @@ mod tests {
         let mut state = State { selected: Some(object), ..State::default() };
         state.draft.classes = "Old".to_owned();
         assert!(state.class_draft_matches_tag(&tag(object, &["Old"])));
-        state.sync_classes_from_tag(&tag(object, &["New"]));
+        let class_snapshot = state.class_draft_matches_tag(&tag(object, &["Old"])).then_some(object);
+        if let Some(selected) = class_snapshot {
+            state.sync_classes_from_tag(&tag(selected, &["New"]));
+        }
         assert_eq!(state.draft.classes, "New");
 
         state.draft.classes = "An unfinished edit".to_owned();
         assert!(!state.class_draft_matches_tag(&tag(object, &["New"])));
-        state.sync_classes_from_tag(&tag(object, &["New"]));
+        let class_snapshot = state.class_draft_matches_tag(&tag(object, &["New"])).then_some(object);
+        if let Some(selected) = class_snapshot {
+            state.sync_classes_from_tag(&tag(selected, &["New"]));
+        }
         assert_eq!(state.draft.classes, "An unfinished edit");
     }
 }
