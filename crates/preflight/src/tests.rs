@@ -504,6 +504,7 @@ fn extended_graphics_states_are_checked() {
                 "<< /HalftoneType 1 /Frequency 60 /Angle 45 /SpotFunction /Round >>",
                 "<< /TR 4 0 R >>",
                 "<< /Type /Halftone /HalftoneType 6 /Width 2 /Height 2 /Length 4 >>\nstream\nabcd\nendstream",
+                "<< /Resources << /ExtGState << /X << /TR 4 0 R >> >> >> >>",
             ],
             "",
         );
@@ -536,7 +537,9 @@ fn extended_graphics_states_are_checked() {
     assert_eq!(gs("/A << /RI /Custom >>"), ["A graphics state has the rendering intent Custom, which isn't a standard one"]);
     assert_eq!(gs("/A << /RI (Perceptual) >>"), ["A graphics state has a rendering intent that isn't a name"]);
     // A halftone's type is required; a null name is no name.
-    assert_eq!(gs("/A << /HT << /Frequency 60 >> >>"), ["A halftone has no HalftoneType"]);
+    let untyped = ["A halftone's HalftoneType is missing or isn't an integer"];
+    assert_eq!(gs("/A << /HT << /Frequency 60 >> >>"), untyped);
+    assert_eq!(gs("/A << /HT << /HalftoneType 1.0 >> >>"), untyped);
     assert!(gs("/A << /HT << /HalftoneType 1 /HalftoneName null >> >>").is_empty());
     // Transfer functions in halftones: only, and always, for a non-primary colorant.
     let in_halftone = "A halftone has a transfer function, which only a non-primary colorant's halftone may have";
@@ -551,6 +554,9 @@ fn extended_graphics_states_are_checked() {
     assert!(
         gs("/A << /RI /Perceptual >> >> /PieceInfo << /App << /Private << /Resources << /ExtGState << /X << /TR 4 0 R >> >> >> >> >>").is_empty()
     );
+    // Nor is an object (8) only private data refers to; one the page refers to is read.
+    assert!(gs("/A << /RI /Perceptual >> >> /PieceInfo << /App << /Private 8 0 R >> >> /Z <<").is_empty());
+    assert_eq!(gs("/A << /RI /Perceptual >> >> /Other 8 0 R /Z <<"), [tr]);
     // A shading pattern holds one graphics state, not a dictionary of them.
     let pattern = |gs: &str| format!("/A << /RI /Perceptual >> >> /Pattern << /P << /PatternType 2 /Shading << /ShadingType 2 >> /ExtGState {gs} >>");
     assert_eq!(gs(&pattern("<< /TR 4 0 R >>")), [tr]);

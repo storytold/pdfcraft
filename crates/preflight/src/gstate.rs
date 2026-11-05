@@ -13,10 +13,11 @@
 //! Graphics state dictionaries are found as the `/ExtGState` entries of resource dictionaries
 //! (`/Resources` of pages, forms, Type 3 fonts, patterns and annotation appearances, and an
 //! interactive form's `/DR`), and as the `/ExtGState` of a shading pattern (ISO 32000-1 8.7.4.3,
-//! Table 76). Private application data (`/PieceInfo`) isn't read. A map shared by reference is
-//! read once.
+//! Table 76). They are looked for in what the document reaches from its trailer, following
+//! references, but not into private application data (`/PieceInfo`), so an object only that data
+//! refers to isn't read. A map shared by reference is read once.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashSet, VecDeque};
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
@@ -42,7 +43,7 @@ pub(crate) struct Findings {
     pub(crate) phase: bool,
     /// Halftone types other than 1 and 5, in order.
     pub(crate) halftone_types: BTreeSet<i64>,
-    /// A halftone has no `/HalftoneType` integer.
+    /// A halftone's `/HalftoneType` is missing or isn't an integer.
     pub(crate) untyped: bool,
     /// A halftone has a `/HalftoneName`.
     pub(crate) halftone_name: bool,
@@ -56,11 +57,15 @@ pub(crate) struct Findings {
     pub(crate) intent_not_name: bool,
 }
 
-/// The 6.2.5 findings over the indirect objects `objs`.
-pub(crate) fn check(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> Findings {
-    let mut scan = Scan { doc, read: HashSet::new(), findings: Findings::default() };
-    for (_, o) in objs {
-        scan.walk(o, 0);
+/// The 6.2.5 findings over what `doc` reaches from its trailer.
+pub(crate) fn check(doc: &Document) -> Findings {
+    let mut scan = Scan { doc, read: HashSet::new(), reached: HashSet::new(), queue: VecDeque::new(), findings: Findings::default() };
+    scan.walk(&Object::Dict(doc.trailer().clone()), 0);
+    // References are followed from a queue, not by recursion: a chain of them can be as long as
+    // the file.
+    while let Some(r) = scan.queue.pop_front() {
+        let o = doc.get(r);
+        scan.walk(&o, 0);
     }
     scan.findings
 }
@@ -69,6 +74,9 @@ struct Scan<'a> {
     doc: &'a Document,
     /// Resource dictionaries, `/ExtGState` maps and graphics states read so far, by reference.
     read: HashSet<ObjRef>,
+    /// Objects reached so far, queued or walked.
+    reached: HashSet<ObjRef>,
+    queue: VecDeque<ObjRef>,
     findings: Findings,
 }
 
@@ -78,6 +86,12 @@ impl Scan<'_> {
             return;
         }
         let d = match o {
+            Object::Ref(r) => {
+                if self.reached.insert(*r) {
+                    self.queue.push_back(*r);
+                }
+                return;
+            }
             Object::Array(a) => {
                 for v in a {
                     self.walk(v, depth.saturating_add(1));
@@ -171,7 +185,8 @@ impl Scan<'_> {
     /// A halftone dictionary or stream: the graphics state's own (`colorant` is `None`), or the
     /// one a type 5 halftone holds for `colorant`.
     fn halftone(&mut self, ht: &Dict, colorant: Option<&[u8]>) {
-        let kind = self.present(ht, b"HalftoneType").and_then(|t| t.as_int());
+        // An integer (ISO 32000-1 Table 128), not a real of the same value.
+        let kind = self.present(ht, b"HalftoneType").and_then(|t| if let Object::Int(t) = *t { Some(t) } else { None });
         match kind {
             None => self.findings.untyped = true,
             Some(1 | 5) => {}

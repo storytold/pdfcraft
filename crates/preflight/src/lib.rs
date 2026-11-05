@@ -126,7 +126,7 @@ pub const WORDINGS: &[&str] = &[
     "A graphics state has a transfer function (TR2) other than Default",
     "A graphics state has a halftone phase (HTP)",
     "A halftone has type {}: only types 1 and 5 are allowed",
-    "A halftone has no HalftoneType",
+    "A halftone's HalftoneType is missing or isn't an integer",
     "A halftone has a HalftoneName",
     "A halftone has a transfer function, which only a non-primary colorant's halftone may have",
     "The halftone for the colorant {} has no transfer function",
@@ -527,7 +527,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     check_objects(doc, level, &objs, &page_of, &mut issue);
     // 6.2.5: the extended graphics state.
-    let gs = gstate::check(doc, &objs);
+    let gs = gstate::check(doc);
     if gs.transfer {
         issue("6.2.5", "A graphics state has a transfer function (TR)", None, None, false);
     }
@@ -541,7 +541,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
         issue("6.2.5", "A halftone has type {}: only types 1 and 5 are allowed", Some(kind.to_string()), None, false);
     }
     if gs.untyped {
-        issue("6.2.5", "A halftone has no HalftoneType", None, None, false);
+        issue("6.2.5", "A halftone's HalftoneType is missing or isn't an integer", None, None, false);
     }
     if gs.halftone_name {
         issue("6.2.5", "A halftone has a HalftoneName", None, None, false);
