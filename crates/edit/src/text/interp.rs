@@ -819,7 +819,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                                 .text_left
                                 .checked_sub(t.len())
                                 .ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
-                            text.push_str(t);
+                            text.push_str(&crate::bidi::glyph_in_drawing_order(t));
                         }
                         None => decodable = false,
                     }

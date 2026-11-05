@@ -8128,20 +8128,23 @@ fn actual_text_and_visual_rtl_glyphs_keep_their_own_reading_order() {
     }
 }
 
-/// Synthetic codes A س, B م and X a lam-alef glyph, drawn from left to right.
+/// Synthetic codes A س, B م and X a lam-alef glyph (its presentation form), drawn from left to
+/// right; Y and Z are lam-alef and lam-alef-hamza-below glyphs whose ToUnicode gives the two
+/// letters they join, as Word maps them.
 fn arabic_ligature_page(content: &str, composite: bool) -> Document {
     let prefix = if composite { "00" } else { "" };
     let cmap = format!(
         "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapType 2 def \
-         1 begincodespacerange <{prefix}00> <{prefix}FF> endcodespacerange 4 beginbfchar \
+         1 begincodespacerange <{prefix}00> <{prefix}FF> endcodespacerange 6 beginbfchar \
          <{prefix}20> <0020> <{prefix}41> <0633> <{prefix}42> <0645> <{prefix}58> <FEFB> \
+         <{prefix}59> <06440627> <{prefix}5A> <06440625> \
          endbfchar endcmap CMapName currentdict /CMap defineresource pop end end"
     );
-    let widths: Vec<_> = (32..=88).map(|c| if c == 32 { "250" } else { "500" }).collect();
+    let widths: Vec<_> = (32..=90).map(|c| if c == 32 { "250" } else { "500" }).collect();
     let font = if composite {
         "<< /Type /Font /Subtype /Type0 /BaseFont /FakeArabic /Encoding /Identity-H /DescendantFonts [7 0 R] /ToUnicode 6 0 R >>".into()
     } else {
-        format!("<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 88 /Widths [{}] /ToUnicode 6 0 R >>", widths.join(" "))
+        format!("<< /Type /Font /Subtype /Type1 /BaseFont /FakeArabic /FirstChar 32 /LastChar 90 /Widths [{}] /ToUnicode 6 0 R >>", widths.join(" "))
     };
     build(&[
         "<< /Type /Catalog /Pages 2 0 R >>",
@@ -8168,6 +8171,27 @@ fn arabic_ligature_actual_text_stays_on_its_line() {
             let lines = text::text_lines(doc, 0).unwrap();
             assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), [expected.as_str()]);
             assert_eq!(text::text_blocks(doc, 0).unwrap()[0].editor_text, expected);
+        }
+    }
+}
+
+/// Word draws لا and لإ as one glyph whose ToUnicode gives both letters in typing order. The
+/// line is read in drawing order and then turned into typing order as a whole, which must not
+/// turn the glyph's own letters around: سلام read as سالم, and an edit then saved that way.
+#[test]
+fn a_lam_alef_glyph_mapped_to_two_letters_keeps_them_in_typing_order() {
+    for composite in [false, true] {
+        let code = |c: char| if composite { format!("<00{:02X}>", u32::from(c)) } else { format!("({c})") };
+        for (glyph, ligature) in [('Y', "لا"), ('Z', "لإ")] {
+            // Drawn left to right: م, the ligature, س.
+            let content = format!("BT /F1 12 Tf 72 700 Td {} Tj {} Tj {} Tj ET", code('B'), code(glyph), code('A'));
+            let doc = arabic_ligature_page(&content, composite);
+            let expected = format!("س{ligature}م");
+            for doc in [&doc, &reopen(&doc)] {
+                let lines = text::text_lines(doc, 0).unwrap();
+                assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), [expected.as_str()], "composite {composite}");
+                assert_eq!(text::text_blocks(doc, 0).unwrap()[0].editor_text, expected, "composite {composite}");
+            }
         }
     }
 }
