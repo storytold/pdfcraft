@@ -830,6 +830,8 @@ struct TilingCells(Vec<(TilingCellKey, Arc<Pixmap>)>);
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct TilingCellKey {
     instance: u64,
+    /// Whether this is the bordered cell of a pattern whose step shows one cell (patch (20)).
+    one_cell: bool,
     is_stroke: bool,
     pixels: (u16, u16),
     scale: (u64, u64),
@@ -1577,6 +1579,52 @@ impl Renderer {
         self.draw_pixmap(Arc::new(pixmap), quality, draw_transform);
     }
 
+    /// PdfCraft patch (30): the cell pixmap of tiling pattern `t`, `size` pixels drawn at
+    /// `initial_transform`; a cell with a `key` is drawn once and then taken from `tiling_cells`.
+    fn tiling_cell(
+        &mut self,
+        t: &hayro_interpret::pattern::TilingPattern<'_>,
+        key: Option<TilingCellKey>,
+        size: (u16, u16),
+        initial_transform: Affine,
+        is_stroke: bool,
+    ) -> Arc<Pixmap> {
+        if let Some(cell) = key.and_then(|key| self.tiling_cells.get(&key)) {
+            return cell;
+        }
+        let mut renderer = Self {
+            ctx: RenderContext::new_with(size.0, size.1, derive_settings(self.ctx.render_settings())),
+            // PdfCraft patch: a pattern cell is painted as one artwork, so its content is never
+            // remapped by the reading-colours setting.
+            color_replacement: None,
+            in_annotations: false,
+            knockout: Vec::new(),
+            erasing: false,
+            knockout_passes: Vec::new(),
+            erase_groups: 0,
+            cur_mask: None,
+            inside_pattern: true,
+            soft_mask_cache: HashMap::default(),
+            tiling_cells: TilingCells::default(),
+            outline_cache: self.outline_cache.clone(),
+            in_type3_glyph: false,
+            scaler: self.scaler,
+            preview: self.preview,
+            image_transparency_stack: Vec::new(),
+            ink: InkState::default(),
+        };
+        t.interpret(&mut renderer, initial_transform, is_stroke);
+        let mut pix = Pixmap::new(size.0, size.1);
+        renderer.ctx.flush();
+        let mut resources = vello_cpu::Resources::default();
+        renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+        let pix = Arc::new(pix);
+        if let Some(key) = key {
+            self.tiling_cells.insert(key, pix.clone());
+        }
+        pix
+    }
+
     fn push_clip_path_inner(&mut self, clip_path: &BezPath, fill: FillRule) {
         let old_transform = *self.ctx.transform();
 
@@ -1779,7 +1827,9 @@ impl Renderer {
                 AlphaColor::from_rgba8(c[0], c[1], c[2], c[3]).into()
             }
             Paint::Pattern(p) => {
-                let path_transform = self.ctx.transform();
+                // PdfCraft patch (30): a copy, so a tiling cell can be drawn and kept on `self`.
+                let current_transform = *self.ctx.transform();
+                let path_transform = &current_transform;
 
                 match *p {
                     Pattern::Shading(s) => {
@@ -1886,40 +1936,20 @@ impl Renderer {
                             const BORDER: f64 = 1.0;
                             let pix_width = ((bbox.width() as f32 * xs).ceil() as u16).saturating_add(2);
                             let pix_height = ((bbox.height() as f32 * ys).ceil() as u16).saturating_add(2);
-                            let mut renderer = Self {
-                                ctx: RenderContext::new_with(
-                                    pix_width,
-                                    pix_height,
-                                    derive_settings(self.ctx.render_settings()),
-                                ),
-                                color_replacement: None,
-                                in_annotations: false,
-                                knockout: Vec::new(),
-                                erasing: false,
-                                knockout_passes: Vec::new(),
-                                erase_groups: 0,
-                                cur_mask: None,
-                                inside_pattern: true,
-                                soft_mask_cache: HashMap::default(),
-                                tiling_cells: TilingCells::default(),
-                                outline_cache: self.outline_cache.clone(),
-                                in_type3_glyph: false,
-                                scaler: self.scaler,
-                                preview: self.preview,
-                                image_transparency_stack: Vec::new(),
-                                ink: InkState::default(),
-                            };
                             let initial_transform = Affine::translate((BORDER, BORDER))
                                 * Affine::scale_non_uniform(xs as f64, ys as f64)
                                 * Affine::translate((-bbox.x0, -bbox.y0));
-                            t.interpret(&mut renderer, initial_transform, is_stroke);
-                            let mut pix = Pixmap::new(pix_width, pix_height);
-                            renderer.ctx.flush();
-                            let mut resources = vello_cpu::Resources::default();
-                            renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
+                            let key = t.is_coloured().then(|| TilingCellKey {
+                                instance: t.instance(),
+                                one_cell: true,
+                                is_stroke,
+                                pixels: (pix_width, pix_height),
+                                scale: (u64::from(xs.to_bits()), u64::from(ys.to_bits())),
+                            });
+                            let pix = self.tiling_cell(&t, key, (pix_width, pix_height), initial_transform, is_stroke);
                             paint_transform = path_transform.inverse() * t.matrix * initial_transform.inverse();
                             let image = Image {
-                                image: ImageSource::Pixmap(Arc::new(pix)),
+                                image: ImageSource::Pixmap(pix),
                                 sampler: ImageSampler {
                                     x_extend: peniko::Extend::Pad,
                                     y_extend: peniko::Extend::Pad,
@@ -1952,53 +1982,14 @@ impl Renderer {
                         let mut initial_transform = Affine::scale_non_uniform(xs, ys)
                             * Affine::translate((-bbox.x0, -bbox.y0));
                         // PdfCraft patch (30): a coloured cell is drawn once per setting and scale.
-                        let cell_key = t.is_coloured().then(|| TilingCellKey {
+                        let key = t.is_coloured().then(|| TilingCellKey {
                             instance: t.instance(),
+                            one_cell: false,
                             is_stroke,
                             pixels: (pix_width, pix_height),
                             scale: (xs.to_bits(), ys.to_bits()),
                         });
-                        let cached = cell_key.and_then(|key| self.tiling_cells.get(&key));
-                        let pix = match cached {
-                            Some(cell) => cell,
-                            None => {
-                                let mut renderer = Self {
-                                    ctx: RenderContext::new_with(
-                                        pix_width,
-                                        pix_height,
-                                        derive_settings(self.ctx.render_settings()),
-                                    ),
-                                    // PdfCraft patch: a pattern cell is painted as one artwork, so its
-                                    // content is never remapped by the reading-colours setting.
-                                    color_replacement: None,
-                                    in_annotations: false,
-                                    knockout: Vec::new(),
-                                    erasing: false,
-                                    knockout_passes: Vec::new(),
-                                    erase_groups: 0,
-                                    cur_mask: None,
-                                    inside_pattern: true,
-                                    soft_mask_cache: HashMap::default(),
-                                    tiling_cells: TilingCells::default(),
-                                    outline_cache: self.outline_cache.clone(),
-                                    in_type3_glyph: false,
-                                    scaler: self.scaler,
-                                    preview: self.preview,
-                                    image_transparency_stack: Vec::new(),
-                                    ink: InkState::default(),
-                                };
-                                t.interpret(&mut renderer, initial_transform, is_stroke);
-                                let mut pix = Pixmap::new(pix_width, pix_height);
-                                renderer.ctx.flush();
-                                let mut resources = vello_cpu::Resources::default();
-                                renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
-                                let pix = Arc::new(pix);
-                                if let Some(key) = cell_key {
-                                    self.tiling_cells.insert(key, pix.clone());
-                                }
-                                pix
-                            }
-                        };
+                        let pix = self.tiling_cell(&t, key, (pix_width, pix_height), initial_transform, is_stroke);
 
                         // TODO: Fix these
                         if t.x_step < 0.0 {
@@ -2333,6 +2324,10 @@ impl<'a> Device<'a> for Renderer {
                                     Compose::DestIn,
                                 ));
                                 self.ctx.set_transform(transform);
+                                // The coverage is drawn as a stencil outside a Type 3 glyph is:
+                                // a glyph's image rules (nearest shrink, padded frame) are for
+                                // the glyph's own images.
+                                let in_type3_glyph = std::mem::replace(&mut self.in_type3_glyph, false);
                                 self.draw_image(
                                     ImageData::Rgb(RgbData {
                                         data: white,
@@ -2343,6 +2338,7 @@ impl<'a> Device<'a> for Renderer {
                                     }),
                                     Some(stencil),
                                 );
+                                self.in_type3_glyph = in_type3_glyph;
                                 self.ctx.pop_layer();
                                 self.ctx.set_blend_mode(paint_blend);
 
