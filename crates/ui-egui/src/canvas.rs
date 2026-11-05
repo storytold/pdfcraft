@@ -1605,7 +1605,6 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     page_overlays(ui, view, frame, &slot, &input);
 }
 
-#[allow(clippy::cognitive_complexity)]
 /// Close only the page context menu retained by the document response.
 ///
 /// Keeping the operation in one narrow helper makes its popup-isolation contract directly
@@ -1614,6 +1613,7 @@ fn close_page_context_menu(ctx: &egui::Context, page_context_menu_id: egui::Id) 
     egui::Popup::close_id(ctx, page_context_menu_id);
 }
 
+#[allow(clippy::cognitive_complexity)]
 fn draw_pages(
     ui: &mut egui::Ui,
     viewport: Rect,
