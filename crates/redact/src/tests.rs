@@ -3265,7 +3265,13 @@ fn mismatched_jpeg_dimensions_and_dct_filter_chains_fail_closed() {
     let sof = mismatched.windows(2).position(|marker| marker == [0xff, 0xc0]).unwrap();
     mismatched.get_mut(sof + 5..sof + 9).unwrap().copy_from_slice(&[0x10, 0x00, 0x10, 0x00]);
 
-    for (filter, data) in [("/Filter /DCTDecode", mismatched.as_slice()), ("/Filter [/ASCII85Decode /DCTDecode]", jpeg.as_slice())] {
+    for (filter, data) in [
+        ("/Filter /DCTDecode", mismatched.as_slice()),
+        ("/Filter [/ASCII85Decode /DCTDecode]", jpeg.as_slice()),
+        // A `/ColorTransform` of the image's own, in either form, is removed whole.
+        ("/Filter /DCTDecode /DecodeParms << /ColorTransform 0 >>", jpeg.as_slice()),
+        ("/Filter [/DCTDecode] /DecodeParms [<< /ColorTransform 0 >>]", jpeg.as_slice()),
+    ] {
         let img = stream(&format!("/Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceGray /BitsPerComponent 8 {filter}"), data);
         let mut doc = one_page(b"q 300 0 0 300 0 0 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![img]);
         mark(&mut doc, 0, &[[125.0, 125.0, 175.0, 175.0]], "");
@@ -3364,6 +3370,13 @@ fn a_jpeg_2000_image_that_cannot_be_cleared_is_removed_whole() {
         let report = apply(&mut doc, None).unwrap();
         assert_eq!((report.images_removed, report.images_cleared), (1, 0), "{dict}: {report:?}");
     }
+    // One in a colour space that isn't a device one is removed before it pays: with nothing left
+    // to spend, the run goes on.
+    let dict = "/Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace [/Indexed /DeviceRGB 0 <ff0000>] /Filter /JPXDecode";
+    let mut doc = one_page(b"q 300 0 0 300 0 0 cm /Im0 Do Q", "/XObject << /Im0 7 0 R >>", vec![stream(dict, jp2)]);
+    mark(&mut doc, 0, &[[125.0, 125.0, 175.0, 175.0]], "");
+    let report = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0)).unwrap();
+    assert_eq!((report.images_removed, report.images_cleared), (1, 0), "{report:?}");
 }
 
 #[test]

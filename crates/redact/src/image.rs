@@ -134,8 +134,14 @@ fn coded_samples(
     if codec == Codec::Dct {
         // shortcut: a `/ColorTransform` of the image's own is removed whole, since the decoder
         // follows the JPEG's markers; read it into `decode_dct` if such scans turn up.
-        let parms = s.dict.get(b"DecodeParms").map(|p| doc.resolve(p));
-        if parms.as_deref().and_then(Object::as_dict).is_some_and(|p| p.contains(b"ColorTransform")) || s.dict.int(b"BitsPerComponent") != Some(8) {
+        let transform = |p: &Object| doc.resolve(p).as_dict().is_some_and(|p| p.contains(b"ColorTransform"));
+        // The lone filter's parameters are a dictionary or the entry of a one-filter array.
+        let own_transform = match s.dict.get(b"DecodeParms").map(|p| doc.resolve(p)).as_deref() {
+            Some(Object::Array(a)) => a.iter().any(transform),
+            Some(p) => transform(p),
+            None => false,
+        };
+        if own_transform || s.dict.int(b"BitsPerComponent") != Some(8) {
             return None;
         }
         let n = device_components(doc, s)?;
@@ -144,19 +150,19 @@ fn coded_samples(
         }
         return Some((pdfcraft_filters::decode_dct(&s.raw, w, h, n)?, n, None));
     }
+    // The dictionary's colour space, when it gives one, is the one the page draws the samples in
+    // (ISO 32000-2 §8.9.5.1, `/ColorSpace`); otherwise the file's own. A space that isn't a device
+    // one is refused before paying, so it is removed whole rather than stopping the run.
+    let declared = if s.dict.contains(b"ColorSpace") { Some(device_components(doc, s)?) } else { None };
     // shortcut: JPEG 2000 pays as a JPEG of four components whatever it holds (its count is known
     // only once decoded); give it a rate of its own if a run of JPEG 2000 scans proves slower.
     if !budget.pay_jpeg(pixels.saturating_mul(4), &s.raw) {
         return None;
     }
     let jpx = pdfcraft_filters::decode_jpx(&s.raw, w, h)?;
-    // The dictionary's colour space, when it gives one, is the one the page draws the samples in
-    // (ISO 32000-2 §8.9.5.1, `/ColorSpace`); otherwise the file's own.
-    if s.dict.contains(b"ColorSpace") {
-        (device_components(doc, s)? == jpx.components).then_some((jpx.data, jpx.components, None))
-    } else {
-        let space = jpx.device?;
-        Some((jpx.data, jpx.components, Some(space)))
+    match declared {
+        Some(n) => (n == jpx.components).then_some((jpx.data, jpx.components, None)),
+        None => Some((jpx.data, jpx.components, Some(jpx.device?))),
     }
 }
 
