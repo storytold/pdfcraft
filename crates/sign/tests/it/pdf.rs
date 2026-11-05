@@ -655,6 +655,25 @@ fn a_malformed_timestamp_response_fails_signing_without_a_file() {
     assert!(pdfcraft_sign::sign_with_timestamp(&open(&fixture()), &id, &opts(), &Bad).is_err());
 }
 
+/// A form dictionary held in an object of its own, rewritten after a document timestamp without
+/// its /Fields but with keys a form fill may touch, is still the stamped form losing its fields.
+#[test]
+fn an_indirect_form_dropping_its_fields_is_no_form_fill() {
+    let unsigned = fixture_with(b"<< /Type /Catalog /Pages 2 0 R /AcroForm 7 0 R >>", &[b"<< /Fields [6 0 R] /DR << >> >>"]);
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let stamped = pdfcraft_sign::timestamp_document(&open(&unsigned), &tsa, "D:20261006120000Z").unwrap();
+    let dropped = edit_after(&stamped, |doc| {
+        doc.update_dict(ObjRef { num: 7, generation: 0 }, |f| {
+            f.remove(b"Fields");
+            f.set(b"DA".to_vec(), PdfString::text("/Helv 0 Tf 0 g"));
+        })
+        .unwrap();
+    });
+    let trust = TrustStore { certs: vec![tsa.id.certificate.clone()] };
+    let s = signatures(&open(&dropped), &dropped, &trust).into_iter().find(|s| s.doc_timestamp).unwrap();
+    assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::OTHER)), "{:?}", s.modification);
+}
+
 #[test]
 fn a_document_timestamp_covers_the_file_and_validates() {
     let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
