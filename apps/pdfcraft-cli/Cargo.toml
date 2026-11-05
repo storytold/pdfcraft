@@ -15,7 +15,7 @@ workspace = true
 [dependencies]
 pdfcraft-render = { workspace = true }
 serde_json = { workspace = true }
-pdfcraft-engine = { workspace = true }
+pdfcraft-engine = { workspace = true, features = ["ocr-gpu"] }
 pdfcraft-audit = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-preflight = { workspace = true }
