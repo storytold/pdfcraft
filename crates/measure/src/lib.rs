@@ -364,7 +364,7 @@ fn nums(v: impl IntoIterator<Item = f64>) -> Object {
     Object::Array(v.into_iter().map(Object::Real).collect())
 }
 fn page(doc: &Document, index: usize) -> Result<pdfcraft_model::Page> {
-    pdfcraft_model::pages(doc).get(index).cloned().ok_or_else(|| invalid("measurement page does not exist"))
+    pdfcraft_model::page(doc, index).map_err(|e| invalid(&e.to_string()))?.ok_or_else(|| invalid("measurement page does not exist"))
 }
 fn annot(doc: &Document, page_index: usize, index: usize) -> Result<(ObjRef, Dict)> {
     let p = page(doc, page_index)?;
@@ -483,8 +483,10 @@ pub fn list(doc: &Document) -> Listing {
     let mut count = 0usize;
     let mut kept = 0usize;
     let mut seen = std::collections::HashSet::new();
-    for (page, p) in pdfcraft_model::pages(doc).iter().enumerate() {
-        let Some(o) = p.dict.get(b"Annots") else { continue };
+    // The leaves without their inherited values (`/Annots` isn't inherited), so a page past the
+    // copy budget of a whole `pages` walk, which `add` writes through `page`, is listed too.
+    for (page, leaf) in pdfcraft_model::PageLeaves::new(doc).map_while(std::result::Result::ok).enumerate() {
+        let Some(o) = leaf.dict().and_then(|d| d.get(b"Annots")) else { continue };
         let o = doc.resolve(o);
         let Some(arr) = o.as_array() else { continue };
         for (index, a) in arr.iter().enumerate() {

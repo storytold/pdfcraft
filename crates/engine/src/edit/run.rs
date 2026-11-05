@@ -303,9 +303,8 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
         ImageEdit::Arrange(order) => pdfcraft_edit::ImageChange::Arrange(*order),
         ImageEdit::RemoveCrop => pdfcraft_edit::ImageChange::RemoveCrop,
     };
-    let page_model = pdfcraft_model::pages(doc)
-        .into_iter()
-        .nth(page)
+    let page_model = pdfcraft_model::page(doc, page)
+        .map_err(pdfcraft_edit::EditError::from)?
         .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page {} not found", page + 1))))?;
     let target_stream_obj = match page_model.dict.get(b"Contents") {
         None => None,
@@ -753,7 +752,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             let rect = match rect {
                 Some(r) => *r,
                 None => {
-                    let p = pdfcraft_model::pages(doc).swap_remove(*page);
+                    let p = pdfcraft_model::page(doc, *page)
+                        .map_err(pdfcraft_edit::EditError::from)?
+                        .ok_or(pdfcraft_edit::EditError::NoSuchPage(*page))?;
                     let (pw, ph) = p.display_size(doc);
                     let k = ((pw * 0.8) / natural.0).min((ph * 0.8) / natural.1).min(1.0);
                     let (w, h) = (natural.0 * k, natural.1 * k);

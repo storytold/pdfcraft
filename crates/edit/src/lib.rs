@@ -32,6 +32,9 @@ pub enum EditError {
     NoSuchPage(usize),
     #[error("{0}")]
     Invalid(String),
+    /// The page tree is too large to read whole, so the page asked for can't be found.
+    #[error("{0}")]
+    PageTree(#[from] pdfcraft_model::PageTreeLimit),
     #[error("{0}")]
     Cos(#[from] pdfcraft_cos::CosError),
 }

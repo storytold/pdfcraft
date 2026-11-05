@@ -353,9 +353,10 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
     // The original image and form XObjects the rewrite drops or replaces, on any page.
     let mut doomed = Vec::new();
     let mut retired_properties = Vec::new();
-    let n = pdfcraft_model::pages(doc).len();
+    // Every page or none: hidden content left on pages past a walk limit would be reported removed.
+    let n = pdfcraft_model::page_refs(doc)?.len();
     for pi in 0..n {
-        let page = pdfcraft_model::pages(doc).swap_remove(pi);
+        let page = pdfcraft_model::page(doc, pi)?.ok_or(RedactError::Unreadable(pi + 1))?;
         let mut budget = pdfcraft_cos::DecodeBudget::page();
         let Ok((list, data)) = page_streams_within(doc, &page.dict, pi, &mut budget) else {
             if write {

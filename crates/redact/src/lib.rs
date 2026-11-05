@@ -446,7 +446,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         images,
     };
     for &(pi, page_marks) in &groups {
-        let page = pdfcraft_model::pages(doc).swap_remove(pi);
+        let page = pdfcraft_model::page(doc, pi)?.ok_or(RedactError::Unreadable(pi + 1))?;
         let rects: Vec<[f64; 4]> = page_marks.iter().flat_map(|m| m.rects.iter().copied()).collect();
         redact_page_content(doc, &mut applying, pi, &page, &rects)?;
         remove_page_annotations(doc, &mut applying, &page, &rects, page_marks)?;
@@ -542,7 +542,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     // 5. Verify: nothing readable may remain under a region.
     let mut residue = 0;
     for &(pi, page_marks) in &groups {
-        let page = pdfcraft_model::pages(doc).swap_remove(pi);
+        let page = pdfcraft_model::page(doc, pi)?.ok_or(RedactError::Unreadable(pi + 1))?;
         let rects: Vec<[f64; 4]> = page_marks.iter().flat_map(|m| m.rects.iter().copied()).collect();
         let mut budget = pdfcraft_cos::DecodeBudget::page();
         let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;

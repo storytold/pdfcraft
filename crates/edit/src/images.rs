@@ -109,7 +109,7 @@ fn joined(streams: &[(Object, Vec<u8>)]) -> Pieces {
 }
 
 fn page_of(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
-    pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
+    pdfcraft_model::page(doc, page)?.ok_or(EditError::NoSuchPage(page))
 }
 
 fn xobjects(doc: &Document, page: &Dict) -> Dict {

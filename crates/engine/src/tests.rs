@@ -4169,6 +4169,23 @@ fn added_text_and_images_render_and_stay_editable() {
     assert_eq!(s.get(id).unwrap().added().len(), 2);
 }
 
+/// An image added without a rectangle to a page that doesn't exist is refused, not a panic: the
+/// centring read the page list and took the page out of it by index.
+#[test]
+fn an_image_added_to_a_missing_page_is_refused() {
+    let (mut s, id) = session_with(1);
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 20, 10);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[0u8; 600]).unwrap();
+    }
+    let err = s.apply(id, Edit::AddImage { page: 5, rect: None, name: "dot.png".into(), bytes: Arc::new(png) }).unwrap_err();
+    assert_eq!(err, EditError::Edit(pdfcraft_edit::EditError::NoSuchPage(5)));
+    assert!(s.get(id).unwrap().added().is_empty());
+}
+
 /// Edit ▸ Copy and Paste of added content (#2636): a text box comes back with all its style, an
 /// image with its picture and transforms, in the same document and in another.
 #[test]
