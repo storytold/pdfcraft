@@ -331,8 +331,10 @@ impl PdfCraftApp {
             self.reading_colors = colors;
         }
         // Settings are untrusted: only a boolean is accepted; anything else keeps the default (on).
+        // Go through the app-level setter so a restore after a document opened invalidates its
+        // views, as the Preferences checkbox and the control channel do.
         if let Some(on) = v["smooth_images"].as_bool() {
-            self.session.set_smooth_images(on);
+            self.set_smooth_images(on);
         }
         // Settings are untrusted: a size out of range follows the system instead.
         self.ui_scale = v["ui_scale"].as_f64().and_then(ui_scale::valid);
