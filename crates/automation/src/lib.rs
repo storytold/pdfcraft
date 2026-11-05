@@ -28,6 +28,7 @@ mod links;
 pub mod mcp;
 mod measure;
 mod model3d;
+mod model_render;
 mod printing;
 mod reading;
 mod redact;

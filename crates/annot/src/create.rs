@@ -1,6 +1,6 @@
 use super::draw::draw_appearance;
 use super::lookup::{annot_dict, annot_ref, annots, fill_sign_shape, page_ref, set_annots};
-use super::modify::{n, rich_text};
+use super::modify::{free_text_da, n, rich_text, set_part_keys, shape_text_box};
 use super::types::{
     FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, Style,
 };
@@ -310,8 +310,13 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     let rect = rect_for(&new.shape, style)?;
     let mut d = base_dict(new.shape.subtype(), rect, page, &new.contents, &new.author, meta);
     d.set(b"Subj".to_vec(), PdfString::text(subject(&new.shape)));
-    let opacity = style.opacity.clamp(0.0, 1.0);
-    set_non_opaque_style(&mut d, opacity);
+    if style.fill_opacity.into_iter().chain(style.text_opacity).any(|o| !o.is_finite()) {
+        return Err(AnnotError::Invalid("invalid opacity".into()));
+    }
+    let line = style.opacity.clamp(0.0, 1.0);
+    let fill = style.fill_opacity.map_or(line, |o| o.clamp(0.0, 1.0));
+    let text = style.text_opacity.map_or(fill, |o| o.clamp(0.0, 1.0));
+    set_part_keys(&mut d, appearance::PartOpacity { line, fill, text });
     let border = |d: &mut Dict| {
         let mut bs = Dict::new();
         bs.set(b"W".to_vec(), Object::Real(style.width.max(0.0)));
@@ -476,20 +481,22 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                 d.set(b"IT".to_vec(), Object::name("FreeTextTypeWriter"));
             }
             let size = if font_size.is_finite() && *font_size > 0.0 { font_size.clamp(1.0, 400.0) } else { 12.0 };
-            let [r, g, b] = style.color.map(|x| x.clamp(0.0, 1.0));
-            d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg /Helv {} Tf", n(r), n(g), n(b), n(size)).into_bytes()));
+            d.set(b"DA".to_vec(), free_text_da(style.color, style.border_color, size));
             d.set(b"Q".to_vec(), Object::Int(0));
             if let Some(f) = style.fill {
                 d.set(b"C".to_vec(), rgb(f));
             }
             border(&mut d);
             rich_text(&mut d);
-            // The text is laid out for the page as displayed, like a stamp's label.
             if !matches!(new.shape, Shape::Callout { .. }) {
+                // The text is laid out for the page as displayed, like a stamp's label.
                 let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
                 if matches!(turn, 90 | 180 | 270) {
                     d.set(b"PCTextRotate".to_vec(), Object::Int(turn));
                 }
+                // An oval or a circle goes around the text box, its text wrapped as displayed:
+                // after `/PCTextRotate`, which swaps the box's sides on a quarter-turned page.
+                shape_text_box(&mut d, rect, style.border_shape, style.width);
             }
         }
         _ => {}
@@ -517,7 +524,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
 }
 
 fn validate_style(style: &Style) -> Result<(), AnnotError> {
-    if !finite(&style.color) || !style.opacity.is_finite() || !style.width.is_finite() {
+    if !finite(&style.color) || style.border_color.is_some_and(|c| !finite(&c)) || !style.opacity.is_finite() || !style.width.is_finite() {
         return Err(AnnotError::Invalid("invalid style".into()));
     }
     Ok(())
@@ -536,12 +543,6 @@ fn set_redaction_properties(dict: &mut Dict, style: &Style, quads: &[[f64; 8]], 
         if look.repeat {
             dict.set(b"Repeat".to_vec(), Object::Bool(true));
         }
-    }
-}
-
-fn set_non_opaque_style(dict: &mut Dict, opacity: f64) {
-    if opacity < 1.0 {
-        dict.set(b"CA".to_vec(), Object::Real(opacity));
     }
 }
 
