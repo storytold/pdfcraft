@@ -126,6 +126,7 @@ pub use persist::units;
 #[cfg(not(target_arch = "wasm32"))]
 pub use persist::window_state;
 use platform::drag_pointer;
+use platform::file_filter;
 #[cfg(not(target_arch = "wasm32"))]
 pub use platform::file_watch;
 #[cfg(target_os = "macos")]
@@ -146,8 +147,9 @@ use state::CopyPage;
 #[cfg(not(target_arch = "wasm32"))]
 use state::OpenRequest;
 pub use state::{
-    CustomDraft, Dialog, DuplicateDraft, LeftPanel, LinkOrigin, Mode, NumberDraft, OpenOutcome, PageClip, PagePropsDraft, PasswordPrompt,
-    PendingLink, PendingRemoteLink, PropsTab, QuickTool, RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile, RightPanel, UnlockPrompt,
+    CommentClip, CustomDraft, Dialog, DuplicateDraft, LeftPanel, LinkOrigin, Mode, NumberDraft, OpenOutcome, PageClip, PagePropsDraft,
+    PasswordPrompt, PendingLink, PendingRemoteLink, PropsTab, QuickTool, RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile, RightPanel,
+    UnlockPrompt,
 };
 use state::{DocumentCopyJob, GridFile};
 pub use tools::bulk_fields;
@@ -181,6 +183,7 @@ use workflows::js_ui;
 use workflows::ocr_ui;
 use workflows::optimize_ui;
 use workflows::print_ui;
+use workflows::scan_clean_ui;
 use workflows::web_print;
 
 /// Files dropped on a document's page grid or its Pages panel.
@@ -331,8 +334,19 @@ pub struct PdfCraftApp {
     pub flatten_fill_sign_on_save: bool,
     /// Point size for new Fill & Sign text and dates, kept across launches.
     pub fill_text_size: f64,
+    pub fill_tool: fill_sign::FillTool,
     /// Colour for new Fill & Sign text and dates, kept across launches.
     pub fill_text_color: [f64; 3],
+    /// Border around new Fill & Sign text and dates, in points (0: none), until PdfCraft quits:
+    /// each launch starts from [`Self::fill_text_default`].
+    pub fill_text_border: f64,
+    /// That border's own colour (`None`: the text's).
+    pub fill_text_border_color: Option<pdfcraft_engine::Rgb>,
+    /// That border's shape (an oval or a circle goes around the text).
+    pub fill_text_border_shape: pdfcraft_engine::BorderShape,
+    /// The border new Fill & Sign text starts each launch with, kept across launches: what Make
+    /// Current Properties Default last took from typed text (none at first).
+    pub fill_text_default: fill_sign::TextBorder,
     pub dialog: Option<Dialog>,
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
     pub(crate) updates: updates::Updates,
@@ -370,6 +384,9 @@ pub struct PdfCraftApp {
     quit_session: Option<last_session::LastSession>,
     /// Preferences: reload a document when its file changes on disk (#431).
     pub reload_changed_files: bool,
+    /// Preferences: ask for a newer release when the desktop app starts (#5737). Off, the app
+    /// asks only from Help ▸ Check for updates.
+    pub update_check_at_start: bool,
     /// Preferences: tell the user, above the pages, that a document is secured (its security
     /// settings restrict changes). Off only hides that notice (#4035); kept in the settings.
     pub show_secured_notice: bool,
@@ -548,10 +565,15 @@ pub struct PdfCraftApp {
     pub optimize_draft: OptimizeDraft,
     /// The running optimization (Optimize PDF ▸ Advanced optimization).
     pub optimize_run: Option<optimize_ui::OptimizeRun>,
+    /// Scan & OCR ▸ Enhance scanned file: the dialog's choices and the running clean-up.
+    pub scan_clean_draft: scan_clean_ui::ScanCleanDraft,
+    pub scan_clean_run: Option<scan_clean_ui::ScanCleanRun>,
     /// A background job's progress card (see [`widgets::progress_notice`]).
     pub progress_notice: Option<widgets::ProgressNotice>,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
     pub page_clipboard: Option<PageClip>,
+    /// Copied comments (XFDF), to paste into this or another document (M14).
+    pub comment_clipboard: Option<CommentClip>,
     /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.
     grid_drop: Option<GridDrop>,
     /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the
@@ -611,6 +633,9 @@ pub struct PdfCraftApp {
     control: Option<control::Control>,
     /// A bookmark being renamed in the Bookmarks panel: (path, text so far).
     pub bookmark_rename: Option<(Vec<usize>, String)>,
+    /// Bookmarks copied or cut in the Bookmarks panel, with their subtrees, ready to paste into
+    /// any document. Destinations are page indices.
+    pub bookmark_clipboard: Option<Vec<pdfcraft_engine::OutlineNode>>,
     /// Number pages dialog settings (1-based pages).
     pub number_draft: NumberDraft,
     pub(crate) word_count_draft: word_count_ui::Draft,
