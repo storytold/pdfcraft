@@ -1739,6 +1739,22 @@ fn narrow_side_panels_hide_thumbnail_controls_and_preserve_the_size() {
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["thumbnail_zoom"], 1.0);
 }
 
+/// At the narrowest width the selection count sits under the title, clear of the Page tools
+/// and Close buttons on its right.
+#[test]
+fn narrow_pages_panel_keeps_the_selection_count_clear_of_its_buttons() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({"key":"panel", "value":"pages"}));
+    ok(&mut h, &c, "ui.panel", json!({"panel":"side", "width":1}));
+    ok(&mut h, &c, "ui.set", json!({"key":"select", "value":"1-3"}));
+    h.run_steps(4);
+    let picked = h.get_by_label("3 pages selected").rect();
+    let title = h.get_by_role_and_label(egui::accesskit::Role::Label, "Pages").rect();
+    let tools = h.get_by_label("Page tools").rect();
+    assert!(picked.top() >= title.bottom() - 1.0, "{picked:?} sits under the title at {title:?}");
+    assert!(picked.right() <= tools.left(), "{picked:?} ends before Page tools (and Close after it) at {tools:?}");
+}
+
 #[test]
 fn invalid_panel_requests_change_nothing() {
     let (mut h, c) = harness();

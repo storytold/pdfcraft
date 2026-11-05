@@ -120,11 +120,18 @@ pub(super) fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut cr
     // A new current page scrolls its thumbnail into view, as little as it takes (Acrobat), but
     // not while thumbnails are dragged: then the change counts as seen. A wheel turned or a
     // scroll bar dragged by the user already wins over a scroll to a place in egui.
-    let follow = view.panel_followed != Some(view.current) && view.panel_drag.is_none();
-    view.panel_followed = Some(view.current);
     let available = (ui.available_width() - 16.0).max(1.0);
     let usual = (ui.available_width() - 40.0).clamp(1.0, 150.0);
     let w = (usual * view.thumbnail_zoom()).min(available);
+    // Resizing the panel reflows every thumbnail under the same scroll offset, which can carry
+    // the current page's out of sight. If it was in sight, it is followed back into view; one
+    // the reader scrolled away from stays away.
+    let reflow_id = focus_id.with("reflow");
+    let (last_w, current_seen) = ui.data(|d| d.get_temp::<(f32, bool)>(reflow_id)).unwrap_or((w, false));
+    let reflowed = last_w != w && current_seen;
+    let follow = (view.panel_followed != Some(view.current) || reflowed) && view.panel_drag.is_none();
+    view.panel_followed = Some(view.current);
+    let mut current_in_sight = false;
     let count = info.pages.len();
     let mut rows: Vec<Rect> = Vec::with_capacity(info.pages.len());
     let mut dropped = false;
@@ -173,8 +180,11 @@ pub(super) fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut cr
             } else {
                 t.text_muted
             }));
-            if follow && selected {
-                ui.scroll_to_rect(rect.union(label.rect), None);
+            if selected {
+                current_in_sight = ui.clip_rect().intersects(rect);
+                if follow {
+                    ui.scroll_to_rect(rect.union(label.rect), None);
+                }
             }
             let resp = theme::hand(resp);
             if resp.clicked() {
@@ -233,6 +243,9 @@ pub(super) fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut cr
         });
         ui.add_space(4.0);
     }
+    // A thumbnail followed this frame is in sight by the next, even while the panel is still
+    // being dragged wider or narrower.
+    ui.data_mut(|d| d.insert_temp(reflow_id, (w, current_in_sight || follow)));
     page_drag(ui, t, view, &rows, dropped);
     file_drop(ui, t, view, &rows, editable && !modal);
 }
