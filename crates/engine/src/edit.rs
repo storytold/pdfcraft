@@ -263,6 +263,15 @@ pub enum Edit {
         index: usize,
         fill: Option<Rgb>,
     },
+    /// Draw a rectangle's, oval's, polygon's or text box's fill, or a text box's text, at an
+    /// opacity of its own (0–1), the line or border keeping the comment's; `None` leaves that
+    /// part as it is. `StyleAnnotation`'s opacity sets the whole comment's.
+    PartOpacity {
+        page: usize,
+        index: usize,
+        fill: Option<f64>,
+        text: Option<f64>,
+    },
     /// Change the font size (pt) of a text box, typewriter text or callout.
     FontSizeAnnotation {
         page: usize,
@@ -405,6 +414,13 @@ pub enum Edit {
     AddOcrText {
         page: usize,
         words: Vec<pdfcraft_ocr::PlacedWord>,
+    },
+    /// Scan & OCR ▸ Enhance ▸ Scanned document: put the scan images
+    /// [`ScanCleanJob::run`](crate::scan_clean::ScanCleanJob::run) cleaned in place of the old
+    /// ones (each object must still be an image). Built by
+    /// [`Session::apply_scan_clean`](crate::Session::apply_scan_clean).
+    EnhanceScan {
+        images: Vec<(pdfcraft_cos::ObjRef, pdfcraft_cos::Stream)>,
     },
     /// Edit a PDF ▸ Edit text: replace the text of line `line` (from `Document::text_lines`) on
     /// `page`, in its own font when it can show it, else in Helvetica.
@@ -553,6 +569,15 @@ pub enum Edit {
     ImportData {
         name: String,
         bytes: Arc<Vec<u8>>,
+    },
+    /// Paste copied comments (XFDF from [`Session::export_comments`]) onto `page` as new
+    /// comments: copies under names of their own, so nothing is replaced and pasting twice
+    /// gives two sets; replies keep their copied parent.
+    PasteComments {
+        xfdf: String,
+        page: usize,
+        /// Where the copies go: moved by (dx, dy) in user space, or at their own positions.
+        offset: Option<[f64; 2]>,
     },
     /// Remove Hidden Information: the chosen categories.
     RemoveHidden {
