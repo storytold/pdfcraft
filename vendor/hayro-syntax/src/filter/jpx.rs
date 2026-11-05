@@ -17,7 +17,7 @@ impl ImageColorSpace {
     }
 }
 
-/// PdfCraft patch (35): the most pixels a codestream may decode to (2^28, the renderer's
+/// PdfCraft patch (36): the most pixels a codestream may decode to (2^28, the renderer's
 /// `MAX_IMAGE_PIXELS` and hayro-interpret's `image_size_ok`). Its size comes from the SIZ marker,
 /// not the image dictionary, and the decoder allocates it infallibly: a tiny file could ask for
 /// tens of gigabytes and abort the process (#5078).
@@ -55,7 +55,7 @@ fn decode_with_pixel_limit(
     // image fail, so the page drew blank (#3306). Then it is decoded as if it had no colour
     // specification, as MuPDF and Poppler draw it: grey, RGB or CMYK by its component count.
     //
-    // PdfCraft patch (35): the header is read at full resolution first, because
+    // PdfCraft patch (36): the header is read at full resolution first, because
     // `target_resolution` shrinks `width()` and `height()` but each tile's coefficients are still
     // allocated at full size (review on #5086); see `MAX_PIXELS`.
     let full_resolution = DecodeSettings {
