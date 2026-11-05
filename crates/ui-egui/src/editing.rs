@@ -905,6 +905,7 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::ResizeAnnotation { page, .. }
         | Edit::StyleAnnotation { page, .. }
         | Edit::FillAnnotation { page, .. }
+        | Edit::PartOpacity { page, .. }
         | Edit::FontSizeAnnotation { page, .. }
         | Edit::BorderColorAnnotation { page, .. }
         | Edit::SetAnnotationInfo { page, .. } => Some(*page),
