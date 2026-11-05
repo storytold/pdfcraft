@@ -965,3 +965,80 @@ fn what_the_editor_adds_is_refused_past_the_limit_too() {
     assert!(t.text.len() < MAX_EDITED_BYTES, "Shift+Tab gives room");
     assert!(!refused(&t));
 }
+
+/// However egui comes to edit next to a `\r\n`, it stays whole. `snap_off_crlf` can't cover these: the
+/// caret gets there in the same frame, the paste brings its own place, or the delete ends there.
+#[test]
+fn nothing_the_box_does_splits_a_windows_line_end() {
+    let none = egui::Modifiers::NONE;
+    // End and typing in one frame.
+    let mut t = Typing::new("a;\r\nb;");
+    t.select(0..0);
+    t.frame(vec![press(egui::Key::End, none), egui::Event::Text("x".into())]);
+    assert_eq!(t.text, "a;x\r\nb;");
+    assert_eq!(t.caret(), Some(3..3), "after what was typed");
+    // Typing with the caret left inside by End, in the frame the caret is moved off.
+    let mut t = Typing::new("a;\r\nb;");
+    t.select(0..0);
+    t.key(egui::Key::End, none);
+    assert_eq!(t.caret(), Some(3..3), "egui's End leaves it inside: the case this is about");
+    t.typed("x");
+    assert_eq!(t.text, "a;x\r\nb;");
+    // A delete to the end of the line.
+    let mut t = Typing::new("ab\r\ncd");
+    t.select(1..1);
+    t.key(egui::Key::K, egui::Modifiers::CTRL);
+    assert_eq!(t.text, "a\r\ncd", "the line end stays as it was");
+    let mut t = Typing::new("ab\rcd\r\nef");
+    t.select(4..4);
+    t.key(egui::Key::K, egui::Modifiers::CTRL);
+    assert_eq!(t.text, "ab\rc\r\nef");
+    // A delete of the whole line end still goes.
+    let mut t = Typing::new("a\r\nb");
+    t.select(1..1);
+    t.key(egui::Key::Delete, none);
+    assert_eq!(t.text, "ab");
+    // Middle-click paste past the end of a line: it brings its own place.
+    let mut t = Typing::new("a;\r\nb;");
+    t.frame(Vec::new());
+    let row = t.shapes.iter().find(|(s, _, _)| s.starts_with("a;")).map(|(_, r, _)| *r).expect("the script is drawn");
+    let pos = egui::pos2(row.left() + 200.0, row.top() + 4.0);
+    t.frame(vec![egui::Event::PointerMoved(pos)]);
+    t.frame(vec![egui::Event::MiddleClickPaste { pos, text: "X".into() }]);
+    t.settle();
+    assert_eq!(t.text, "a;X\r\nb;");
+}
+
+/// Copy with no selection copies nothing, so it must not move a caret Undo put back, or Redo is lost.
+#[test]
+fn copy_with_no_selection_leaves_the_redo() {
+    let none = egui::Modifiers::NONE;
+    let mut t = Typing::new("a;\r\nb;");
+    t.select(0..0);
+    t.key(egui::Key::End, none);
+    t.idle();
+    t.typed("x");
+    t.idle();
+    t.key(egui::Key::Z, egui::Modifiers::COMMAND);
+    t.settle();
+    assert_eq!(t.text, "a;\r\nb;");
+    assert_eq!(t.caret(), Some(3..3), "Undo put the caret back inside the line end");
+    t.frame(vec![egui::Event::Copy]);
+    t.key(egui::Key::Z, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
+    t.settle();
+    assert_eq!(t.text, "a;x\r\nb;", "Redo still works");
+}
+
+/// Each token is a section egui shapes on its own, so past a limit the rest of a script is plain.
+#[test]
+fn a_very_long_script_is_coloured_only_so_far() {
+    let source = "1,".repeat(100_000);
+    let tokens = pdfcraft_engine::js::highlight(&source);
+    assert!(tokens.len() > MAX_COLOURED_TOKENS, "{}", tokens.len());
+    let job = layout_job(&source, &tokens, &palette(), &egui::FontId::monospace(12.0));
+    assert_eq!(job.text, source, "nothing lost");
+    assert!(job.sections.len() <= MAX_COLOURED_TOKENS * 2 + 1, "{} sections", job.sections.len());
+    let last = job.sections.last().expect("a section");
+    assert_eq!(last.format.color, palette().text, "the rest is plain");
+    assert_eq!(last.byte_range.end.0, source.len());
+}

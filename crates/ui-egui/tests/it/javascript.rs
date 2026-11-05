@@ -375,3 +375,129 @@ fn the_actions_tab_of_a_text_field_says_its_actions_do_not_run() {
     let height = script.rect().height();
     assert!(height > 100.0, "eight lines, not three: {height}");
 }
+
+fn sized(size: egui::Vec2) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(size).build_eframe(|_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, form_with("go\\(\\);")).unwrap();
+        app
+    });
+    h.run_steps(8);
+    h
+}
+
+/// Drag the corner of the only script box to `to`.
+fn drag_the_corner(h: &mut Harness<'static, PdfCraftApp>, to: egui::Pos2) {
+    let corner = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().right_bottom() - egui::vec2(3.0, 3.0);
+    h.hover_at(corner);
+    h.run_steps(2);
+    h.drag_at(corner);
+    h.run_steps(1);
+    for i in 1..=6 {
+        h.hover_at(corner + (to - corner) * (i as f32 / 6.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(4);
+}
+
+/// Field Properties' card stays as tall as it has been, so the tabs don't jump (see below). Going by
+/// the card, the box shrank for good: to three lines in a window with room for more, and it could not
+/// be dragged back. And a card too tall for the window once stayed so, its title off the screen.
+#[test]
+fn the_action_box_is_sized_by_the_room_the_dialog_really_has() {
+    let height = |h: &Harness<'static, PdfCraftApp>| h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().height();
+    let open = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.state_mut().open_field_props("greeting", 0);
+        h.state_mut().field_props.as_mut().unwrap().tab = pdfcraft_ui_egui::prepare::FieldTab::Actions;
+        h.run_steps(6);
+    };
+    // A window a little too short for the eight lines.
+    let mut h = sized(egui::vec2(1000.0, 700.0));
+    open(&mut h);
+    assert!(height(&h) > 110.0, "what fits, not three lines: {}", height(&h));
+    let mut h = sized(egui::vec2(1000.0, 640.0));
+    open(&mut h);
+    let title = h.get_by_label("Text Field Properties").rect();
+    assert!(title.top() >= 0.0, "the title stays on the screen: {title:?}");
+    assert!(h.get_by_label("OK").rect().bottom() <= 640.0, "and so do the buttons");
+    // Dragged as tall as it goes, shorter and taller again, it follows the corner: the card, still as
+    // tall as it was, has no room to give, but the dialog does.
+    let mut h = sized(egui::vec2(1000.0, 900.0));
+    open(&mut h);
+    let corner = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().right_bottom();
+    drag_the_corner(&mut h, egui::pos2(corner.x - 3.0, 895.0));
+    let tallest = height(&h);
+    let corner = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().right_bottom();
+    drag_the_corner(&mut h, corner - egui::vec2(3.0, 80.0));
+    let shorter = height(&h);
+    assert!(shorter < tallest - 40.0, "{tallest} then {shorter}");
+    let corner = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().right_bottom();
+    drag_the_corner(&mut h, corner + egui::vec2(-3.0, 80.0));
+    assert!(height(&h) > shorter + 40.0, "{shorter} then {}", height(&h));
+}
+
+/// Field Properties keeps its height as tabs are picked, so a shorter one doesn't move the tabs out
+/// from under the pointer. Sizing the card by what each tab holds moved them by 100 points a click.
+#[test]
+fn the_tabs_of_field_properties_stay_put() {
+    use pdfcraft_ui_egui::prepare::FieldTab as T;
+    let mut h = sized(egui::vec2(1200.0, 1000.0));
+    h.state_mut().open_field_props("greeting", 0);
+    h.run_steps(6);
+    let tabs_at = |h: &mut Harness<'static, PdfCraftApp>, tab: T| {
+        h.state_mut().field_props.as_mut().unwrap().tab = tab;
+        h.run_steps(6);
+        h.get_by_label("General").rect().top()
+    };
+    let tallest = tabs_at(&mut h, T::Actions);
+    for tab in [T::General, T::Position, T::Format, T::Validate, T::Calculate] {
+        let y = tabs_at(&mut h, tab);
+        assert!((y - tallest).abs() < 1.0, "{tab:?}: the tabs moved from {tallest} to {y}");
+    }
+}
+
+/// A box dragged tall and reopened in a short window measures what it is, not the part still on the
+/// screen: that made it collapse, and stay small in a tall window too.
+#[test]
+fn a_tall_box_reopened_in_a_short_window_fits_it() {
+    let mut h = sized(egui::vec2(1400.0, 1000.0));
+    assert!(h.state_mut().execute("tools.document_js"));
+    h.run_steps(3);
+    h.state_mut().doc_js.script = "a\nb\nc\n".into();
+    h.run_steps(3);
+    let corner = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().right_bottom();
+    drag_the_corner(&mut h, egui::pos2(corner.x - 3.0, 990.0));
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    h.set_size(egui::vec2(1400.0, 500.0));
+    h.run_steps(3);
+    assert!(h.state_mut().execute("tools.document_js"));
+    h.run_steps(8);
+    let reopened = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().height();
+    assert!(reopened > 150.0, "the room there is, not three lines: {reopened}");
+}
+
+/// ⌘Enter goes by the key's own modifiers. Behind typing in a slow frame the box holds the key for a
+/// frame, by when ⌘ may be up: the script then didn't run.
+#[test]
+fn cmd_enter_behind_typing_runs_the_script_even_with_cmd_up_by_then() {
+    let cmd = egui::Modifiers { alt: false, ctrl: false, shift: false, mac_cmd: true, command: true };
+    let enter = |pressed| egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat: false, modifiers: cmd };
+    let mut h = harness();
+    assert!(h.state_mut().execute("tools.js_console"));
+    h.run_steps(2);
+    h.get_by_label("JavaScript").focus();
+    h.run_steps(2);
+    h.state_mut().js_console.input = "6 * 7".into();
+    h.run_steps(2);
+    h.input_mut().events.extend([egui::Event::ModifiersChanged(cmd), egui::Event::Text("0".into()), enter(true)]);
+    h.step();
+    h.input_mut().events.extend([enter(false), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
+    h.step();
+    h.run_steps(3);
+    let console = &h.state().js_console;
+    assert_eq!(console.input, "06 * 7");
+    assert!(console.log.iter().any(|l| l.contains("42")), "it ran: {:?}", console.log);
+}

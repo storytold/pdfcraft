@@ -52,13 +52,45 @@ pub fn show_modal<R>(ctx: &egui::Context, id: &str, content: impl FnOnce(&mut eg
 /// Room kept between a dialog's card and the window's top and bottom edges.
 const DIALOG_EDGE: f32 = 16.0;
 
+/// How tall a dialog's row of pill buttons is.
+const DIALOG_BUTTONS: f32 = 30.0;
+
 /// How much taller the dialog `ui` is in can grow and still fit in the window with
-/// [`DIALOG_EDGE`] to spare above and below (negative when it is already too tall), by its card as
-/// [`show_modal`] stored it last frame. `None` outside such a dialog.
+/// [`DIALOG_EDGE`] to spare above and below (negative when it is already too tall), by what it held
+/// last frame: its card as [`show_modal`] stored it, or less where [`dialog_buttons_keeping_height`]
+/// said so. `None` outside such a dialog.
 pub(crate) fn dialog_room(ui: &egui::Ui) -> Option<f32> {
     // A modal's contents paint on its area's layer, whose id is the modal's: the id the card is kept under.
-    let card: Rect = ui.ctx().data(|d| d.get_temp(ui.layer_id().id.with("card")))?;
-    Some(ui.ctx().content_rect().height() - 2.0 * DIALOG_EDGE - card.height())
+    let layer = ui.layer_id().id;
+    let card: Rect = ui.ctx().data(|d| d.get_temp(layer.with("card")))?;
+    let frame = ui.ctx().cumulative_frame_nr();
+    let held = ui.ctx().data(|d| d.get_temp::<(u64, f32)>(layer.with("held"))).filter(|(at, _)| at.saturating_add(1) >= frame);
+    Some(window_room(ui) - held.map_or(card.height(), |(_, h)| h))
+}
+
+/// The tallest a dialog's card can be and fit in the window with [`DIALOG_EDGE`] to spare.
+fn window_room(ui: &egui::Ui) -> f32 {
+    ui.ctx().content_rect().height() - 2.0 * DIALOG_EDGE
+}
+
+/// The row of buttons at the bottom of a dialog with tabs. Laid out right to left it takes all the
+/// height left, so the card never shrinks and the tabs above it stay put when a shorter tab is picked.
+/// So the card says nothing of what the dialog holds, and this tells [`dialog_room`] instead. A card
+/// too tall for the window does shrink, as the row then takes only its own height.
+pub(crate) fn dialog_buttons_keeping_height(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    let layer = ui.layer_id().id;
+    let held = ui.cursor().top() - ui.min_rect().top() + DIALOG_BUTTONS + 2.0 * f32::from(DIALOG_PAD_Y);
+    let frame = ui.ctx().cumulative_frame_nr();
+    ui.ctx().data_mut(|d| d.insert_temp(layer.with("held"), (frame, held)));
+    let card: Option<Rect> = ui.ctx().data(|d| d.get_temp(layer.with("card")));
+    let layout = egui::Layout::right_to_left(egui::Align::Center);
+    if card.is_some_and(|c| c.height() > window_room(ui)) {
+        ui.horizontal(|ui| {
+            ui.with_layout(layout, add);
+        });
+    } else {
+        ui.with_layout(layout, add);
+    }
 }
 
 /// Outlined controls at a shared 30-point height, with a focus stroke and 4-point corners.

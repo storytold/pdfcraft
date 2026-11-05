@@ -250,7 +250,11 @@ pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
     ui.add_space(6.0);
     let hint = tl!("JavaScript, e.g. getField(\"total\").value");
     let input = crate::widgets::script_editor(ui, &mut app.js_console.input, "js-console-input", 4, f32::INFINITY, Some(hint));
-    let run_key = input.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
+    // By the key's own modifiers: the box can hold a key behind typing for a frame, and Cmd may be up by then.
+    let run_key = input.has_focus()
+        && ui.input(|i| {
+            i.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. } if modifiers.command))
+        });
     ui.add_space(8.0);
     match buttons(ui, "Run", &["Close", "Clear"]).as_deref() {
         Some("Run") => app.run_console(),

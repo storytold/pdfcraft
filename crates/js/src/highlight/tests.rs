@@ -53,8 +53,25 @@ fn template_code_is_coloured_as_code() {
 }
 
 #[test]
-fn properties_are_never_keywords_or_api_names() {
+fn names_after_a_dot_are_never_keywords_or_api_names() {
     assert_eq!(kinds("x.default = this.event;"), vec![(TokenKind::Keyword, "this")]);
+}
+
+#[test]
+fn a_number_stops_at_a_property() {
+    use TokenKind::*;
+    assert_eq!(kinds("1.5.toFixed(2);"), vec![(Number, "1.5"), (Number, "2")]);
+    assert_eq!(kinds("1..toString();"), vec![(Number, "1.")]);
+    assert_eq!(kinds(".5.toFixed(2);"), vec![(Number, ".5"), (Number, "2")]);
+    assert_eq!(kinds("1.5e3 + 1e-3 + 0x1F + 1_000;"), vec![(Number, "1.5e3"), (Number, "1e-3"), (Number, "0x1F"), (Number, "1_000")]);
+}
+
+#[test]
+fn a_spread_is_followed_by_a_value() {
+    use TokenKind::*;
+    assert_eq!(kinds("f(...event);"), vec![(Api, "event")]);
+    assert_eq!(kinds("f(...this.a);"), vec![(Keyword, "this")]);
+    assert_eq!(kinds("x.event;"), vec![], "a single dot still makes a property");
 }
 
 #[test]

@@ -22,6 +22,12 @@ const INDENT_KEY: &str = "script-indent";
 /// The tallest the box can be dragged, in points.
 const MAX_HEIGHT: f32 = 900.0;
 
+/// Most tokens coloured, about 150 KiB of ordinary code; the rest of a longer script is plain. Each
+/// is a section the layout shapes on its own: at the limit's 262,144 tokens, the first layout took
+/// 1.6 s and every keystroke most of a second, on a script of `1,1,1,…`. This bounds that to about
+/// a quarter of a second.
+const MAX_COLOURED_TOKENS: usize = 40_000;
+
 /// Longest script the box shows or can make: the engine's own limit, past which it won't run anyway.
 /// A longer one a document holds gets a note instead ([`too_long`]): a PDF's stream can decode to
 /// tens of megabytes, and every frame would lay them all out. The box refuses an edit that would
@@ -50,6 +56,10 @@ struct Colours {
 /// the same limit where it does that. So what the box leaves is never a script the engine won't run
 /// for its length, and the note ([`too_long`]) is only ever for text the box did not type: a script a
 /// document held, or a value typed for another kind of action before switching to a script.
+///
+/// It also keeps a `\r\n` whole, wherever egui puts its caret or ends a delete: a lone `\r` would
+/// be a line end of its own. [`snap_off_crlf`] moves the caret before an edit, but not one the same
+/// frame moved there first, or a paste that brings its own place, or a delete to the end of a line.
 struct Bounded<'a> {
     text: &'a mut String,
     refused: &'a mut bool,
@@ -69,6 +79,10 @@ impl egui::TextBuffer for Bounded<'_> {
     fn insert_text(&mut self, text: &str, char_index: CharIndex) -> usize {
         let selection = self.selection.take();
         if self.text.len().saturating_add(text.len()) <= MAX_EDITED_BYTES {
+            if edit::inside_crlf(self.text, char_index.0) {
+                // Before the `\r`, and the caret, which egui moves on by what was added, after the text.
+                return self.text.insert_text(text, CharIndex(char_index.0.saturating_sub(1))).saturating_sub(1);
+            }
             return self.text.insert_text(text, char_index);
         }
         *self.refused = true;
@@ -77,7 +91,9 @@ impl egui::TextBuffer for Bounded<'_> {
     }
 
     fn delete_char_range(&mut self, char_range: Range<CharIndex>) {
-        self.text.delete_char_range(char_range);
+        let inside = edit::inside_crlf(self.text, char_range.end.0);
+        let end = if inside { CharIndex(char_range.end.0.saturating_sub(1)) } else { char_range.end };
+        self.text.delete_char_range(char_range.start..end.max(char_range.start));
     }
 
     fn delete_selected(&mut self, cursor_range: &CCursorRange) -> CCursor {
@@ -137,7 +153,7 @@ fn editor(ui: &mut egui::Ui, text: &mut String, id: egui::Id, rows: usize, width
     let arrived = hash(text);
     // Text the box did not type itself (another field's script loaded into the same box) starts its
     // own undo history: Cmd+Z must not bring back the script shown before it. It has its own
-    // indentation too.
+    // indentation too. Told apart by content: one identical to what the box left keeps the history.
     let outside = stored.as_ref().is_none_or(|s| s.text != arrived);
     if outside {
         ui.data_mut(|d| d.remove_temp::<String>(id.with(INDENT_KEY)));
@@ -185,6 +201,8 @@ fn editor(ui: &mut egui::Ui, text: &mut String, id: egui::Id, rows: usize, width
     let mut output: Option<egui::text_edit::TextEditOutput> = None;
     // The part of the box that shows: the gutter is clipped to it.
     let mut viewport = egui::Rect::NOTHING;
+    // How tall the box is, whether or not it all shows: partly off the screen, what shows is less.
+    let mut height = f32::NAN;
     egui::Resize::default()
         .id_salt(id.with("size"))
         .resizable([false, true])
@@ -199,11 +217,14 @@ fn editor(ui: &mut egui::Ui, text: &mut String, id: egui::Id, rows: usize, width
         .show(ui, |ui| {
             egui::ScrollArea::vertical().id_salt(id.with("scroll")).auto_shrink([false, false]).show(ui, |ui| {
                 viewport = ui.clip_rect();
+                height = ui.available_height();
                 let margin = egui::Margin { left: (10.0 + gutter).round().clamp(0.0, 120.0) as i8, right: 10, top: 6, bottom: 6 };
                 let mut bounded = Bounded { text: &mut *text, refused: &mut refused, selection: None };
                 let mut edit = crate::widgets::block(&mut bounded)
                     .code_editor()
                     .margin(margin)
+                    // As tall as the box, set below: its own four rows would scroll a short box for nothing.
+                    .desired_rows(1)
                     .desired_width(f32::INFINITY)
                     .min_size(egui::vec2(0.0, ui.available_height()))
                     .id(id)
@@ -222,8 +243,8 @@ fn editor(ui: &mut egui::Ui, text: &mut String, id: egui::Id, rows: usize, width
             });
         });
     let Some(output) = output else { return ui.label("") };
-    if viewport.height().is_finite() {
-        ui.data_mut(|d| d.insert_temp(height_id, (frame, viewport.height())));
+    if height.is_finite() {
+        ui.data_mut(|d| d.insert_temp(height_id, (frame, height)));
     }
     let mut response = output.response.response.clone().accessible_name(tl!("JavaScript"));
     if edited {
@@ -286,9 +307,12 @@ fn editor_keys(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> Keys {
     // end, and Copy take half of it), but not on the keys that only move: moved back every frame,
     // Right could never cross a line end. Nor on Undo and Redo, which go by whether the caret is
     // still where the undo point has it: moved, Undo would go back to that same point every time.
+    let selected = selection(ui.ctx(), id).is_some_and(|s| !s.is_empty());
     let editing = ui.input(|i| {
         i.events.iter().any(|e| match e {
-            egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut | egui::Event::Copy | egui::Event::Ime(_) => true,
+            egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut | egui::Event::Ime(_) => true,
+            // A caret copies nothing, and moving it would lose the Redo that Undo left.
+            egui::Event::Copy => selected,
             egui::Event::Key { key, pressed: true, modifiers, .. } => {
                 !undo_or_redo(*key, *modifiers)
                     && !matches!(
@@ -545,7 +569,7 @@ impl Palette {
     }
 }
 
-/// `source` laid out in `font`, its `tokens` coloured. A lone
+/// `source` laid out in `font`, its first [`MAX_COLOURED_TOKENS`] `tokens` coloured. A lone
 /// `\r` (Acrobat's line end) is laid out as a `\n`: egui starts a row only at `\n`. Both are one
 /// byte and one character, so every place in the layout is still that place in the script, as
 /// egui's own password boxes lay out other characters than they hold.
@@ -561,6 +585,7 @@ fn layout_job(source: &str, tokens: &[Token], palette: &Palette, font: &egui::Fo
         source.into()
     };
     let source = shown.as_ref();
+    let tokens = tokens.get(..MAX_COLOURED_TOKENS).unwrap_or(tokens);
     let mut job = LayoutJob::default();
     // Cut points: where a token starts or ends. Every token sits on character boundaries, so
     // every cut does.

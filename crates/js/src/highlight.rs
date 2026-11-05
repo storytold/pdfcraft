@@ -227,7 +227,9 @@ impl Lexer<'_> {
                 if is_line_end(c) {
                     self.line_start = true;
                 } else if !c.is_whitespace() {
-                    self.after(regex_ok, c == '.');
+                    // What follows a spread is a value, not a property: `f(...event)`.
+                    let spread = c == '.' && self.s.get(..self.i).is_some_and(|b| b.ends_with("..."));
+                    self.after(regex_ok, c == '.' && !spread);
                 }
             }
         }
@@ -319,12 +321,14 @@ impl Lexer<'_> {
 
     fn number(&mut self) {
         let hex = self.peek() == Some('0') && matches!(self.peek2(), Some('x' | 'X'));
-        let mut last = '\0';
+        let (mut last, mut dot) = ('\0', false);
         while let Some(c) = self.peek() {
             let sign = matches!(c, '+' | '-') && matches!(last, 'e' | 'E') && !hex;
-            if !(c.is_ascii_alphanumeric() || c == '_' || c == '.' || sign) {
+            // A second `.` is a property's: `1.5.toFixed(2)`, `1..toString()`.
+            if !(c.is_ascii_alphanumeric() || c == '_' || (c == '.' && !dot) || sign) {
                 break;
             }
+            dot |= c == '.';
             last = c;
             self.bump();
         }
