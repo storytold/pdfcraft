@@ -5218,6 +5218,38 @@ fn a_content_stream_that_does_not_decode_is_kept_and_edited_around() {
     assert!(editable_objects(&split_page(&large, "BT /F1 12 Tf 72 600 Td (Whole) Tj ET"), 0).is_ok());
 }
 
+/// A content stream whose `/DecodeParms`, or a parameter in them, is given by reference is read
+/// through the reference: its text is listed and edited, not read with the predictor's tag bytes
+/// left in it.
+#[test]
+fn content_with_parameters_given_by_reference_is_read_and_edited() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let content = b"BT /F1 12 Tf 72 700 Td (Predicted) Tj ET";
+    // PNG Up, one column: each byte a row of its own, tagged 2.
+    let mut rows = Vec::new();
+    let mut above = 0u8;
+    for &b in content {
+        rows.extend([2, b.wrapping_sub(above)]);
+        above = b;
+    }
+    let texts = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>();
+    for given in ["parameters", "predictor"] {
+        let mut doc = split_page("", "BT /F1 12 Tf 72 600 Td (Whole) Tj ET");
+        let predictor = Object::Int(12);
+        let parms = if given == "parameters" {
+            Object::Ref(doc.add(Object::Dict([(b"Predictor".to_vec(), predictor)].into_iter().collect::<Dict>())))
+        } else {
+            Object::Dict([(b"Predictor".to_vec(), Object::Ref(doc.add(predictor)))].into_iter().collect())
+        };
+        let mut s = Stream::flate(Dict::new(), &rows);
+        s.dict.set(b"DecodeParms".to_vec(), parms);
+        doc.set(ObjRef::new(4, 0), s);
+        assert_eq!(texts(&doc), ["Predicted", "Whole"], "{given} by reference");
+        text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
+        assert_eq!(texts(&reopen(&doc)), ["Edited", "Whole"], "{given} by reference");
+    }
+}
+
 /// Objects are selected only from content read whole: what a damaged stream hides past the
 /// damage could change the graphics state of every later item.
 #[test]

@@ -2669,6 +2669,37 @@ fn extract_keeps_images_content_damaged_partway_might_draw() {
     }
 }
 
+/// A form whose `/DecodeParms` is given by reference is read through it: the image it draws is
+/// kept, not lost to content read with the predictor's tag bytes left in it.
+#[test]
+fn extract_keeps_images_a_form_with_parameters_by_reference_draws() {
+    use pdfcraft_cos::ObjRef;
+    let content = b"q 10 0 0 10 0 0 cm /ImB Do Q";
+    // PNG Up, one column: each byte a row of its own, tagged 2.
+    let mut rows = Vec::new();
+    let mut above = 0u8;
+    for &b in content {
+        rows.extend([2, b.wrapping_sub(above)]);
+        above = b;
+    }
+    let mut src = doc_images_with(&raw("/Fm Do"), "");
+    let parms = src.add(Object::Dict([(b"Predictor".to_vec(), Object::Int(12))].into_iter().collect::<Dict>()));
+    let mut fm = pdfcraft_cos::Stream::flate(Dict::new(), &rows);
+    fm.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+    fm.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    fm.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+    let fm = src.add(fm);
+    let xobjects: Dict =
+        [(b"ImA".to_vec(), Object::Ref(ObjRef::new(8, 0))), (b"ImB".to_vec(), Object::Ref(ObjRef::new(9, 0))), (b"Fm".to_vec(), Object::Ref(fm))]
+            .into_iter()
+            .collect();
+    src.update_dict(ObjRef::new(7, 0), |d| d.set(b"XObject".to_vec(), Object::Dict(xobjects))).unwrap();
+    let part = full_roundtrip(&extract_pages(&src, &[1]).unwrap());
+    let names = xobject_names(&part, 0);
+    assert!(names.iter().any(|n| n.as_slice() == b"ImB"), "{names:?}");
+    assert!(!names.iter().any(|n| n.as_slice() == b"ImA"), "what the part doesn't draw still goes: {names:?}");
+}
+
 #[test]
 fn extract_keeps_images_type3_glyphs_may_draw() {
     // A Type 3 font without its own /Resources draws through the page's: its glyphs could `Do`.

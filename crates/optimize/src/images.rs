@@ -215,7 +215,7 @@ impl Walk<'_> {
             self.complete = false;
             return;
         }
-        let Ok((data, false)) = self.budget.decode_with_damage(s, usize::MAX) else {
+        let Ok((data, false)) = self.budget.decode_with_damage(doc, s, usize::MAX) else {
             self.complete = false;
             return;
         };
