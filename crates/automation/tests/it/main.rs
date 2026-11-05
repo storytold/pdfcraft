@@ -5,6 +5,7 @@ mod automation;
 mod automation_roots;
 mod backdrop;
 mod batch;
+mod batch_secrets;
 mod button_caption;
 mod form_bulk;
 mod hostile_args;
