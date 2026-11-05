@@ -251,6 +251,12 @@ fn roots(doc: &Json, options: GltfOptions, out: &mut GltfImport) {
             (0..parented.len()).filter(|&i| parented.get(i) == Some(&false)).collect()
         }
     };
+    let mut seen = vec![false; out.scene.nodes.len()];
+    let listed = out.scene.roots.len();
+    out.scene.roots.retain(|&r| seen.get_mut(r).is_none_or(|s| !std::mem::replace(s, true)));
+    if out.scene.roots.len() < listed {
+        out.notes.push(format!("{} repeated scene roots drawn once", listed - out.scene.roots.len()));
+    }
     if scenes.len() > 1 {
         out.notes.push(format!("scene {chosen} of {} drawn", scenes.len()));
     }

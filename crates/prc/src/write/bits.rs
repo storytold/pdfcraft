@@ -92,8 +92,8 @@ impl BitWriter {
 
     /// A `Double` [WD 11.17]: ±0 as the two-bit zero code; any other finite
     /// value as its exponent row, the sign, then the mantissa as literal
-    /// bytes, never as a back-reference to a previous double (ISS #769
-    /// reports viewers that mis-read distance-1 references).
+    /// bytes, never as a back-reference to a previous double (the
+    /// simplest form a reader can take; the writer never needs the others).
     pub(crate) fn double(&mut self, v: f64) -> &mut Self {
         if v == 0.0 {
             return self.put(0b01, 2);

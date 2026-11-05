@@ -195,7 +195,9 @@ fn model_add_reads_a_gltf_buffer_beside_it_and_nothing_outside_the_root() {
     let out = tool(&mut a, "model_add", json!({ "doc": doc, "page": 1, "path": "parts/tri.gltf", "rect": [10, 10, 200, 200] }));
     assert_eq!(out["converted"]["triangles"], 1, "{out}");
 
-    for (n, uri) in ["../../outside.bin", outside.as_str(), "file:///outside.bin"].into_iter().enumerate() {
+    for (n, uri) in
+        ["../../outside.bin", "%2e%2e/%2e%2e/outside.bin", "C:outside.bin", outside.as_str(), "file:///outside.bin"].into_iter().enumerate()
+    {
         let name = format!("parts/escape{n}.gltf");
         std::fs::write(root.join(&name), triangle_gltf(Some(uri)).1).unwrap();
         let refused = a.call("model_add", &json!({ "doc": doc, "page": 1, "path": name, "rect": [10, 10, 200, 200] }));

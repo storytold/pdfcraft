@@ -180,8 +180,10 @@ fn check_numbers(scene: &MeshScene) -> Result<(), PrcWriteError> {
 }
 
 /// Every child and root names a node, no node has two parents, no root
-/// has one, and no chain is deeper than [`MAX_DEPTH`]. With at most one
-/// parent each and parentless roots, what the roots reach has no cycle.
+/// has one or is listed twice, and no chain is deeper than [`MAX_DEPTH`].
+/// With one parent at most each and distinct parentless roots, what the
+/// roots reach has no cycle and holds each node once, so the occurrences
+/// number no more than the nodes.
 fn check_forest(scene: &MeshScene) -> Result<(), PrcWriteError> {
     let n = scene.nodes.len();
     let mut parent = vec![None; n];
@@ -193,17 +195,19 @@ fn check_forest(scene: &MeshScene) -> Result<(), PrcWriteError> {
             }
         }
     }
+    let mut rooted = vec![false; n];
     for &r in &scene.roots {
-        match parent.get(r) {
-            None => return Err(bad("root node", r)),
-            Some(Some(_)) => return Err(PrcWriteError::NotATree("a root has a parent")),
-            Some(None) => {}
+        match (parent.get(r), rooted.get_mut(r)) {
+            (Some(None), Some(seen)) if !*seen => *seen = true,
+            (Some(None), Some(_)) => return Err(PrcWriteError::NotATree("a root is listed twice")),
+            (Some(Some(_)), _) => return Err(PrcWriteError::NotATree("a root has a parent")),
+            _ => return Err(bad("root node", r)),
         }
     }
     let mut depth = vec![0usize; n];
     let mut stack: Vec<usize> = scene.roots.clone();
     while let Some(i) = stack.pop() {
-        let d = depth.get(i).copied().unwrap_or(0) + 1;
+        let d = depth.get(i).copied().unwrap_or(0).saturating_add(1);
         if d > MAX_DEPTH {
             return Err(PrcWriteError::NotATree("nested too deeply"));
         }
@@ -218,8 +222,7 @@ fn check_forest(scene: &MeshScene) -> Result<(), PrcWriteError> {
 }
 
 /// Occurrences with every son before its father and the root last
-/// [WD 7.3.6: a son precedes the occurrence that uses it; Acrobat reads in
-/// one forward pass and drops a son written after its father], under a
+/// [WD 7.3.6: a son precedes the occurrence that uses it], under a
 /// synthetic root when there is not exactly one.
 fn occurrences(scene: &MeshScene) -> Result<Vec<Occ>, PrcWriteError> {
     let mut out = Vec::new();
@@ -243,7 +246,7 @@ fn occurrences(scene: &MeshScene) -> Result<Vec<Occ>, PrcWriteError> {
     out.reverse();
     for o in &mut out {
         for s in &mut o.sons {
-            *s = last - *s;
+            *s = last.saturating_sub(*s);
         }
     }
     Ok(out)

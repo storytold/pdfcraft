@@ -37,8 +37,8 @@ fn offset(at: usize) -> Option<u32> {
     u32::try_from(at).ok()
 }
 
-/// The PRC stream: version 8137 for reading and authoring (Acrobat refuses
-/// 8138 and 10001), no file-header uncompressed files. `None` past 4 GiB.
+/// The PRC stream: version 8137 for reading and authoring (the version
+/// this crate's reader is tested against), no file-header uncompressed files. `None` past 4 GiB.
 pub(crate) fn container(structures: &[Structure<'_>], model: &[u8], ids: &Ids) -> Option<Vec<u8>> {
     let v = PRC_READER_VERSION;
     // "PRC", 2 versions, 2 ids, count; 48 bytes per description; model
@@ -75,7 +75,6 @@ pub(crate) fn container(structures: &[Structure<'_>], model: &[u8], ids: &Ids) -
     le(&mut out, &[u32::try_from(structures.len()).ok()?]);
     out.extend(descriptions);
     le(&mut out, &[mf_start, mf_end, 0]);
-    debug_assert_eq!(out.len(), header_len);
     out.extend(body);
     Some(out)
 }

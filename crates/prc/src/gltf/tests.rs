@@ -154,6 +154,17 @@ fn no_scene_draws_every_top_level_node() {
     assert!(import.notes.iter().any(|n| n.contains("names no scene")));
 }
 
+#[test]
+fn a_repeated_scene_root_is_drawn_once_and_turned_once() {
+    let bin = payload(&QUAD, &QUAD_INDICES);
+    let text = doc("").replace(r#""scenes":[{"nodes":[0]}]"#, r#""scenes":[{"nodes":[0,0,0]}]"#);
+    let import = read(&glb(&text, &bin), GltfOptions::default());
+    assert_eq!(import.scene.roots, [0]);
+    assert!(import.notes.iter().any(|n| n == "2 repeated scene roots drawn once"), "{:?}", import.notes);
+    assert_eq!(&import.scene.nodes[0].matrix.unwrap()[12..15], &[0.0, 0.0, 2.0]);
+    assert!(write_prc(&import.scene).is_ok());
+}
+
 /// A PNG header claiming 1 x 2: enough for import, not for decoding.
 const PNG_HEADER: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\0\x01\0\0\0\x02";
 

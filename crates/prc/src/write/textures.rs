@@ -1,6 +1,6 @@
 //! The globals' texture entities: `Picture` (703), `TextureDefinition` (712)
 //! and the materials array of `Material` (702) / `TextureApplication` (711)
-//! pairs [WD 7.5.4-7.5.7; `prc__8137__graphics_materials.md` §14].
+//! pairs [WD 7.5.4-7.5.7].
 
 use super::TextureWrap;
 use super::sections::{base, ref_base};
@@ -11,13 +11,13 @@ const PICTURE: u32 = 703;
 const TEXTURE_APPLICATION: u32 = 711;
 const TEXTURE_DEFINITION: u32 = 712;
 
-/// `EPRCPictureDataFormat`, 0-based [ISS #411].
+/// `EPRCPictureDataFormat`, counted from 0.
 pub(super) const FORMAT_PNG: u32 = 0;
 pub(super) const FORMAT_JPEG: u32 = 1;
 /// Mapping type "stored": the coordinates come from the tessellation.
 const MAPPING_STORED: i32 = 1;
-/// `PRC_TEXTURE_MAPPING_DIFFUSE`. No source gives its value (§14.0 GAP);
-/// the first bit is a guess, to be confirmed by a viewer drawing it.
+/// `PRC_TEXTURE_MAPPING_DIFFUSE`. The specification does not give its
+/// value; the first bit is an assumption no viewer has confirmed here.
 const MAPPING_DIFFUSE: u32 = 0x0001;
 /// Components: red, green, blue, and alpha (WD 7.5.7 Table 100).
 const COMPONENTS_RGB: u8 = 0x07;

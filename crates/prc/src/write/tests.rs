@@ -125,6 +125,13 @@ fn invalid_scenes_are_refused() {
 }
 
 #[test]
+fn a_root_listed_twice_is_refused_not_written_twice() {
+    let mut s = scene();
+    s.roots = vec![0; 100];
+    assert_eq!(write_prc(&s), Err(PrcWriteError::NotATree("a root is listed twice")));
+}
+
+#[test]
 fn a_cycle_is_refused_not_looped() {
     let mut s = scene();
     s.nodes[1].children.push(0);
@@ -146,8 +153,8 @@ fn a_mirrored_rotation_reads_back() {
     assert!(near([0.0, 13.0, 0.0]) && near([-2.0, 13.0, 0.0]), "{pts:?}");
 }
 
-/// Acrobat reads occurrences in one forward pass and drops a son written
-/// after its father, which shows as an empty grey 3D window.
+/// Every son precedes the occurrence that uses it [WD 7.3.6], so a reader
+/// can resolve the tree in one forward pass.
 #[test]
 fn every_son_precedes_its_father_and_the_root_is_last() {
     for roots in [vec![0], vec![0, 2, 3]] {

@@ -20,8 +20,7 @@ const LINE_PATTERN: u32 = 721;
 
 /// `PRC_GRAPHICS_Show` [WD 7.2.4.2].
 const SHOW: u16 = 0x0001;
-/// `EPRCProductLoadStatus` as real Acrobat-displayed files carry it (the
-/// spec RAG's model-tree §ProductInformation: 4 is seen in practice).
+/// `EPRCProductLoadStatus` given to every product written.
 const LOAD_STATUS: i32 = 4;
 
 /// `ContentPRCBase` with no attributes and the current (section-start:
