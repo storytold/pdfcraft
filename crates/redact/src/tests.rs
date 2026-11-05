@@ -3954,6 +3954,78 @@ fn a_reply_on_another_page_to_a_removed_popup_goes_too() {
 }
 
 #[test]
+fn a_mark_whose_subtype_is_an_indirect_name_is_applied() {
+    // `/Subtype` may be an indirect reference (ISO 32000-2 §7.3.10); the audit reads it that way.
+    // Passing over the mark would leave the text under it while the others report success.
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [7 0 R] >>".to_vec(),
+        stream("", b"BT /F1 10 Tf 20 20 Td (SECRET) Tj ET"),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        b"<< /Type /Annot /Subtype 8 0 R /Rect [10 10 90 40] >>".to_vec(),
+        b"/Redact".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    assert_eq!(marks(&doc).len(), 1, "the mark is found");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.marks, 1);
+    assert!(r.glyphs >= 6, "the text under the mark went: {r:?}");
+    assert!(marks(&doc).is_empty(), "the mark itself went");
+}
+
+#[test]
+fn a_mark_written_in_place_with_an_indirect_subtype_is_refused() {
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Annots [<< /Type /Annot /Subtype 5 0 R /Rect [10 10 70 40] >>] >>"
+            .to_vec(),
+        stream("", b"BT ET"),
+        b"/Redact".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[100.0, 100.0, 120.0, 120.0]], "");
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1))));
+}
+
+#[test]
+fn annotations_written_in_place_go_when_covered_or_hanging_off_a_removed_one() {
+    // `/Annots` may hold dictionaries rather than references. One under the mark, a reply to a
+    // removed highlight on the same page and on another, and a reply to that inline comment's
+    // pop-up must all go; an inline comment elsewhere stays.
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Annots [6 0 R \
+          << /Type /Annot /Subtype /Text /Rect [30 15 40 25] /Contents (INLINE-UNDER) /Popup 7 0 R >> \
+          << /Type /Annot /Subtype /Text /Rect [250 250 270 270] /IRT 6 0 R /Contents (INLINE-REPLY) >> \
+          << /Type /Annot /Subtype /Text /Rect [250 100 270 120] /Contents (INLINE-KEPT) >> 7 0 R] >>"
+            .to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Annots [\
+          << /Type /Annot /Subtype /Text /Rect [250 250 270 270] /IRT 6 0 R /Contents (OTHER-PAGE-INLINE-REPLY) >> \
+          << /Type /Annot /Subtype /Text /Rect [200 200 220 220] /IRT 7 0 R /Contents (POPUP-INLINE-REPLY) >>] >>"
+            .to_vec(),
+        stream("", b"BT ET"),
+        b"<< /Type /Annot /Subtype /Highlight /Rect [20 20 60 30] /QuadPoints [20 30 60 30 20 20 60 20] /Contents (HIGHLIGHT-NOTE) >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Popup /Rect [200 150 290 190] /Contents (INLINE-POPUP) >>".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[10.0, 10.0, 70.0, 40.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.annotations, 5, "the highlight, the inline comment and the three replies: {r:?}");
+    let pages = pdfcraft_model::pages(&doc);
+    assert_eq!(annots_of(&doc, &pages[0].dict).len(), 1, "only the inline comment elsewhere stays");
+    assert!(annots_of(&doc, &pages[1].dict).is_empty(), "the replies leave page 2");
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    for gone in [&b"HIGHLIGHT-NOTE"[..], b"INLINE-UNDER", b"INLINE-REPLY", b"OTHER-PAGE-INLINE-REPLY", b"POPUP-INLINE-REPLY", b"INLINE-POPUP"] {
+        assert!(!bytes.windows(gone.len()).any(|w| w == gone), "{} survived the save", String::from_utf8_lossy(gone));
+    }
+    assert!(bytes.windows(11).any(|w| w == b"INLINE-KEPT"));
+}
+
+#[test]
 fn a_rewritten_form_xobject_drops_the_source_text_of_added_content() {
     // A form drawing invisible text whose dictionary repeats it in /PCAdded.
     let form = stream(
@@ -3977,4 +4049,25 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     apply(&mut doc, None).unwrap();
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
+}
+
+#[test]
+fn an_inline_widget_takes_its_field_even_with_no_referenced_widget() {
+    // The field's only widget is written in place in `/Annots`, so no referenced widget names it:
+    // the field (and its value) must still go with the widget under the mark.
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Annots [<< /Type /Annot /Subtype /Widget /Rect [20 20 60 30] /Parent 6 0 R >>] >>"
+            .to_vec(),
+        stream("", b"BT ET"),
+        b"<< >>".to_vec(),
+        b"<< /FT /Tx /T (name) /V (FIELD-SECRET) >>".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[10.0, 10.0, 70.0, 40.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.fields, 1, "{r:?}");
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!bytes.windows(12).any(|w| w == b"FIELD-SECRET"), "the field value survived the save");
 }
