@@ -7960,7 +7960,7 @@ notes = ""
 
 [[feature]]
 id = "optimize.pdfa-validate"
-title = "Verify PDF/A compliance (1-4)"
+title = "Verify PDF/A compliance (2b and 3b so far; 1, 2a, 2u, 3a, 3u, 4 not yet)"
 area = "K"
 tier = "P1"
 milestone = "M11"
@@ -7972,7 +7972,7 @@ notes = "PDF/A-2b/3b structural rules: identification, encryption, output intent
 
 [[feature]]
 id = "optimize.pdfa-convert"
-title = "Save as PDF/A (1b, 2b, 3b, 4)"
+title = "Save as PDF/A (2b and 3b so far)"
 area = "K"
 tier = "P1"
 milestone = "M11"
