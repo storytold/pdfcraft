@@ -238,19 +238,28 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.add(icons::image("search", 16.0, t.text_muted));
+                        let input_id = egui::Id::unique("find-input");
+                        let pointer_pressed = ui.input(|i| i.pointer.any_pressed());
+                        if find.focus {
+                            ui.memory_mut(|memory| memory.request_focus(input_id));
+                            find.focus = false;
+                        }
+                        if find.select_all_requested && !pointer_pressed {
+                            let mut state = egui::TextEdit::load_state(ui.ctx(), input_id).unwrap_or_default();
+                            let end = egui::text::CCursor::new(find.query.chars().count());
+                            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
+                            state.store(ui.ctx(), input_id);
+                            find.select_all_requested = false;
+                        }
                         let edit = egui::TextEdit::singleline(&mut find.query)
-                            .id(egui::Id::unique("find-input"))
+                            .id(input_id)
                             .hint_text(tl!("Find text"))
                             .desired_width(220.0)
                             .frame(egui::Frame::NONE);
                         let r = ui.add(edit).accessible_name(tl!("Find text"));
-                        if find.focus {
-                            r.request_focus();
-                            find.focus = false;
-                        }
                         if r.clicked() {
                             find.select_all_requested = false;
-                        } else if (find.select_all_requested || r.gained_focus()) && !ui.input(|i| i.pointer.any_pressed()) {
+                        } else if r.gained_focus() && !pointer_pressed {
                             let mut state = egui::TextEdit::load_state(ui.ctx(), r.id).unwrap_or_default();
                             let end = egui::text::CCursor::new(find.query.chars().count());
                             state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
