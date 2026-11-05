@@ -217,7 +217,7 @@ pub fn interpret_page<'a>(
             {
                 continue;
             }
-            // PdfCraft patch (76): a reply of type R (a markup annotation with an `/IRT` to the
+            // PdfCraft patch (81): a reply of type R (a markup annotation with an `/IRT` to the
             // annotation it answers and an `/RT` other than `/Group`; R is the default, so a
             // missing, unknown or malformed `/RT` reads as R) is not drawn, whatever its
             // appearance or flags: "Interactive PDF processors shall not display replies to an
