@@ -7944,7 +7944,7 @@ status = "partial"
 commands = ["standards.pdfa"]
 tools = ["pdfa_verify"]
 evidence = ["crates/preflight/src/tests.rs::verify_reports_what_breaks_pdfa", "crates/preflight/src/tests.rs::standards_identification_uses_namespace_not_prefix", "crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::verify_reports_an_output_intent_that_does_not_match_device_colour", "crates/preflight/src/tests.rs::extended_graphics_states_are_checked", "crates/preflight/src/tests.rs::graphics_state_scan_reads_each_object_once_whatever_the_generation", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts"]
-notes = "PDF/A-2b/3b structural rules: identification, encryption, output intent (present, and RGB/CMYK to match DeviceRGB/DeviceCMYK use), fonts embedded, graphics states (6.2.5: TR, TR2, HTP, halftone types, names and transfer functions, rendering intents), annotations, actions, images, embedded files. Not yet: content-stream operator checks, transparency details, PDF/A-1 and -4, a veraPDF comparison."
+notes = "PDF/A-2b/3b structural rules: identification, encryption, output intent (present, and RGB/CMYK to match DeviceRGB/DeviceCMYK use), fonts embedded, graphics states (6.2.5: TR, TR2, HTP, halftone types, names and transfer functions with the primary components of ISO 32000-1 10.5.5.6, rendering intents), annotations, actions, images, embedded files. Not yet: content-stream operator checks, transparency details, PDF/A-1 and -4, a veraPDF comparison."
 
 [[feature]]
 id = "optimize.pdfa-convert"
