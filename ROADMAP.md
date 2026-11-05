@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **2026-11-05, M14 / #4238 review:** Startup flag saves only changed values; the legacy VRR key is read solely for migration. Two-launch and save regressions use self-cleaning temporary directories. Estimates unchanged.
+
 > **Last reviewed:** 2026-11-04 | **Last updated:** 2026-11-04 | **Change:** patch (M14 #4238: rebase Windows VRR preference onto main; translations now supplied by craft-i18n; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
@@ -225,6 +227,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-05 (M14, #4238 review):** Avoid unchanged startup-flag writes, retain only legacy reads from app.ron, and cover the two-launch migration with automatically cleaned temporary directories. Estimates unchanged.
 
 - **2026-11-04 (M14, #4238 review):** Store the VRR startup flag separately from large app settings, add disk read/write regressions, and consolidate the M14 localization status. Estimates unchanged.
 

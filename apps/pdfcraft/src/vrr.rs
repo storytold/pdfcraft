@@ -19,8 +19,8 @@ mod tests {
 
     #[test]
     fn startup_composition_loads_a_small_flag_beside_large_settings() {
-        let dir = std::env::temp_dir().join(format!("pdfcraft-vrr-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
         let path = dir.join("compose-window");
         std::fs::write(dir.join("app.ron"), vec![b' '; 9 * 1024 * 1024]).unwrap();
         assert!(!load(&path));
@@ -28,7 +28,6 @@ mod tests {
             std::fs::write(&path, text).unwrap();
             assert_eq!(load(&path), expected);
         }
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -39,5 +38,27 @@ mod tests {
         assert!(!enabled(true, true, false, false, false), "OpenGL retry stays opaque");
         assert!(!enabled(true, true, true, true, false), "explicit backend wins");
         assert!(!enabled(true, true, true, false, true), "explicit presentation wins");
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod launch_tests {
+    #[test]
+    fn legacy_choice_migrates_only_for_a_later_launch() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = r#"{"compose_window":true}"#;
+        let map = std::collections::HashMap::from([("pdfcraft", legacy)]);
+        std::fs::write(dir.path().join("app.ron"), ron::to_string(&map).unwrap()).unwrap();
+        let mut app = pdfcraft_ui_egui::PdfCraftApp::new();
+        let saved: std::collections::HashMap<String, String> = ron::from_str(&std::fs::read_to_string(dir.path().join("app.ron")).unwrap()).unwrap();
+        app.restore(saved.get("pdfcraft").unwrap());
+        assert!(app.compose_window);
+        let first = super::super::native_options_in(false, false, eframe::Renderer::Wgpu, Some(dir.path().to_path_buf()));
+        assert_eq!(first.viewport.transparent, Some(false));
+        std::fs::write(dir.path().join("compose-window"), "on").unwrap();
+        let later = super::super::native_options_in(false, false, eframe::Renderer::Wgpu, Some(dir.path().to_path_buf()));
+        let overridden = std::env::var_os("WGPU_BACKEND").is_some() || std::env::var_os("WGPU_DX12_PRESENTATION_SYSTEM").is_some();
+        assert_eq!(later.viewport.transparent, Some(!overridden));
+        assert_eq!(first.viewport.transparent, Some(false));
     }
 }

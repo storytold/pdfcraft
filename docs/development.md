@@ -185,3 +185,6 @@ channel on 2026-10-23. The user confirmed on 2026-10-23 that the fix works on a 
 
 The Windows startup flag is saved atomically in `compose-window` beside `app.ron`.
 It is read independently of stamp-library size. Existing preferences migrate on the next save.
+
+The flag file is the authoritative store; the old VRR key in app.ron is accepted solely to migrate an existing choice.
+Unchanged autosaves do not rewrite the flag. Tests cover the first legacy launch and the later composed launch.

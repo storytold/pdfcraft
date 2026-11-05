@@ -2190,7 +2190,7 @@ fn vrr_preference_can_be_saved_through_the_control_channel() {
     assert!(h.state().compose_window);
     let mut restored = PdfCraftApp::new();
     restored.restore(&h.state().persist());
-    assert!(restored.compose_window);
+    assert!(!restored.compose_window); // The desktop startup file owns persistence, not app.ron.
     ok(&mut h, &c, "ui.set", json!({"key": "compose_window", "value": "off"}));
     assert!(!h.state().compose_window);
 }

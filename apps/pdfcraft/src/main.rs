@@ -331,6 +331,11 @@ fn retry_with_gl(choice: RendererChoice, app_started: bool) -> bool {
 
 /// The window and renderer settings for one run.
 fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer) -> eframe::NativeOptions {
+    native_options_in(integrated, app_frame, renderer, settings_dir())
+}
+
+/// Build launch options from an explicit settings directory, including the startup flag.
+fn native_options_in(integrated: bool, app_frame: bool, renderer: eframe::Renderer, directory: Option<std::path::PathBuf>) -> eframe::NativeOptions {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("PdfCraft")
         .with_inner_size([1440.0, 920.0])
@@ -350,8 +355,8 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
         // The tab strip is the title bar (pdfcraft_ui_egui::window_controls).
         viewport = viewport.with_decorations(false);
     }
-    let persistence_path = settings_dir().map(|d| d.join("app.ron"));
-    let compose = cfg!(target_os = "windows") && settings_dir().is_some_and(|d| vrr::load(&d.join("compose-window")));
+    let persistence_path = directory.as_ref().map(|d| d.join("app.ron"));
+    let compose = cfg!(target_os = "windows") && directory.as_ref().is_some_and(|d| vrr::load(&d.join("compose-window")));
     viewport = viewport.with_transparent(vrr::enabled(
         cfg!(target_os = "windows"),
         compose,
@@ -421,6 +426,7 @@ fn app_creator<'a>(
             // the small startup flag is authoritative even for large settings libraries.
             if let Some(path) = app.compose_window_path.as_deref().filter(|p| p.exists()) {
                 app.compose_window = vrr::load(path);
+                app.compose_window_saved = Some(app.compose_window);
             }
         }
         app.window_state = pdfcraft_ui_egui::window_state::WindowState::started_with(cc.storage);
