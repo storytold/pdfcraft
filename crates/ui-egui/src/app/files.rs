@@ -77,6 +77,25 @@ impl PdfCraftApp {
         self.open_bytes_with_focus(name, path, bytes, true)
     }
 
+    /// Open a document from memory, make it the active tab, and navigate to the given remote destination.
+    pub fn open_bytes_with_destination(
+        &mut self,
+        name: &str,
+        path: Option<String>,
+        bytes: Vec<u8>,
+        destination: Option<pdfcraft_render::RemoteDestination>,
+    ) -> Result<(), String> {
+        self.startup_superseded = true;
+        let active = self.active;
+        if let Some(r) = self.open_converted(name, &bytes) {
+            if active.is_none() {
+                self.active = active;
+            }
+            return r;
+        }
+        self.try_open_with_destination(name, path, std::sync::Arc::new(bytes), None, true, destination)
+    }
+
     pub(super) fn open_bytes_with_focus(&mut self, name: &str, path: Option<String>, bytes: Vec<u8>, activate: bool) -> Result<(), String> {
         // Images and text files become new, unsaved PDFs (Create a PDF).
         let active = self.active;
@@ -230,6 +249,18 @@ impl PdfCraftApp {
         password: Option<&str>,
         activate: bool,
     ) -> Result<(), String> {
+        self.try_open_with_destination(name, path, bytes, password, activate, None)
+    }
+
+    fn try_open_with_destination(
+        &mut self,
+        name: &str,
+        path: Option<String>,
+        bytes: std::sync::Arc<Vec<u8>>,
+        password: Option<&str>,
+        activate: bool,
+        destination: Option<pdfcraft_render::RemoteDestination>,
+    ) -> Result<(), String> {
         use pdfcraft_render::OpenError;
         let prepared = match self.session.prepare_open(name, path.clone(), bytes.clone(), password) {
             Ok(prepared) => prepared,
@@ -248,14 +279,18 @@ impl PdfCraftApp {
                     activate,
                     recovered: None,
                     then: None,
-                    after_open: None,
+                    after_open: destination,
                     display_override: None,
                 });
                 return Ok(());
             }
             Err(e) => return Err(e.to_string()),
         };
-        self.finish_open(name, path, bytes.len(), prepared, activate).map(|_| ())
+        self.finish_open(name, path, bytes.len(), prepared, activate)?;
+        if let Some(destination) = destination {
+            self.apply_remote_destination(destination);
+        }
+        Ok(())
     }
 
     fn finish_open(

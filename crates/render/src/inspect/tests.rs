@@ -1245,6 +1245,79 @@ fn launch_actions_that_name_a_pdf_open_it_like_a_remote_link() {
     );
 }
 
+/// ISO 32000-2 §12.6.4.4: embedded Go-To (GoToE) actions jump to a destination in an
+/// embedded child PDF or the parent document (#4529).
+#[test]
+fn links_read_embedded_go_to_actions() {
+    let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /Annots [30 0 R 31 0 R 32 0 R 33 0 R 34 0 R 35 0 R 36 0 R 37 0 R 38 0 R 39 0 R 40 0 R] >> endobj\n\
+         30 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /GoToE /T << /R /C /N (inner.pdf) >> /D [1 /Fit] /NewWindow true >> >> endobj\n\
+         31 0 obj << /Type /Annot /Subtype /Link /Rect [0 20 10 30] /A << /S /GoToE /T << /R /C /N /sub.pdf >> /D [0 /XYZ 10 20 1.5] >> >> endobj\n\
+         32 0 obj << /Type /Annot /Subtype /Link /Rect [0 40 10 50] /A << /S /GoToE /T << /R /P >> /D [0 /Fit] /NewWindow false >> >> endobj\n\
+         33 0 obj << /Type /Annot /Subtype /Link /Rect [0 60 10 70] /A << /S /GoToE /T << /R /C /P 0 /A 0 >> /D (dest) >> >> endobj\n\
+         34 0 obj << /Type /Annot /Subtype /Link /Rect [0 80 10 90] /A << /S /GoToE /T << /R /C /P 0 /A (file_annot) >> >> >> endobj\n\
+         35 0 obj << /Type /Annot /Subtype /FileAttachment /Rect [0 0 5 5] /NM (file_annot) /FS << /Type /Filespec /F (a.pdf) >> >> endobj\n\
+         36 0 obj << /Type /Annot /Subtype /Link /Rect [0 100 10 110] /A << /S /GoToE /T << /R /Unknown >> /D [0 /Fit] >> >> endobj\n\
+         37 0 obj << /Type /Annot /Subtype /Link /Rect [0 120 10 130] /A << /S /GoToE /T << /R /C >> /D [0 /Fit] >> >> endobj\n\
+         38 0 obj << /Type /Annot /Subtype /Link /Rect [0 140 10 150] /A << /S /GoToE /T << /R /C /N () >> /D [0 /Fit] >> >> endobj\n\
+         39 0 obj << /Type /Annot /Subtype /Link /Rect [0 160 10 170] /A << /S /GoToE /F (external.pdf) /T << /R /C /N (inner.pdf) >> /D [0 /Fit] >> >> endobj\n\
+         40 0 obj << /Type /Annot /Subtype /Link /Rect [0 180 10 190] /A << /S /GoToE >> >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF";
+    let info = inspect(Arc::new(pdf.as_bytes().to_vec()), None).expect("opens");
+    let targets: Vec<_> = info.links.iter().map(|l| (l.index, l.target.clone())).collect();
+    assert_eq!(
+        targets,
+        [
+            (
+                0,
+                LinkTarget::EmbeddedGoTo {
+                    target: EmbeddedTarget::Name("inner.pdf".into()),
+                    destination: RemoteDestination::Page { page: 1, view: DestView::Fit },
+                    new_window: Some(true),
+                }
+            ),
+            (
+                1,
+                LinkTarget::EmbeddedGoTo {
+                    target: EmbeddedTarget::Name("sub.pdf".into()),
+                    destination: RemoteDestination::Page { page: 0, view: DestView::Xyz { left: Some(10.0), top: Some(20.0), zoom: Some(1.5) } },
+                    new_window: None,
+                }
+            ),
+            (
+                2,
+                LinkTarget::EmbeddedGoTo {
+                    target: EmbeddedTarget::Parent,
+                    destination: RemoteDestination::Page { page: 0, view: DestView::Fit },
+                    new_window: Some(false),
+                }
+            ),
+            (
+                3,
+                LinkTarget::EmbeddedGoTo {
+                    target: EmbeddedTarget::Annotation { page: 0, index: 0 },
+                    destination: RemoteDestination::Named("dest".into()),
+                    new_window: None,
+                }
+            ),
+            (
+                4,
+                LinkTarget::EmbeddedGoTo {
+                    target: EmbeddedTarget::Annotation { page: 0, index: 5 },
+                    destination: RemoteDestination::Default,
+                    new_window: None,
+                }
+            ),
+            (6, LinkTarget::Other("GoToE".into())),
+            (7, LinkTarget::Other("GoToE".into())),
+            (8, LinkTarget::Other("GoToE".into())),
+            (9, LinkTarget::Other("GoToE".into())),
+            (10, LinkTarget::Other("GoToE".into())),
+        ]
+    );
+}
+
 #[test]
 fn links_read_bounded_local_remote_go_to_actions() {
     use DestView::{Fit, Xyz};

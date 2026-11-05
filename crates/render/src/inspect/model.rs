@@ -220,7 +220,30 @@ pub enum LinkTarget {
         destination: RemoteDestination,
         new_window: Option<bool>,
     },
+    /// An embedded Go-To action (`GoToE`, ISO 32000-2 §12.6.4.4, Tables 204 and 205).
+    /// Targets a document embedded in this PDF (or a parent) at the given destination.
+    EmbeddedGoTo {
+        target: EmbeddedTarget,
+        destination: RemoteDestination,
+        new_window: Option<bool>,
+    },
     Other(String),
+}
+
+/// The target of an embedded go-to action (ISO 32000-2 §12.6.4.4, Tables 204 and 205).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EmbeddedTarget {
+    /// A file in the document's `/Names /EmbeddedFiles` name tree (`/R /C /N`).
+    Name(String),
+    /// A file attachment annotation (`/R /C /P /A`).
+    Annotation {
+        /// The zero-based page index containing the annotation.
+        page: usize,
+        /// The zero-based index of the file attachment annotation in the page's `/Annots` array.
+        index: usize,
+    },
+    /// The parent of the current document (`/R /P`).
+    Parent,
 }
 
 #[derive(Clone, Debug, PartialEq)]

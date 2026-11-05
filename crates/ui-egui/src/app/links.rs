@@ -22,6 +22,61 @@ impl PdfCraftApp {
         self.open_resolved_remote_link(path, destination);
     }
 
+    /// Follow an embedded Go-To link to an attached PDF document (#4529).
+    pub(crate) fn open_embedded_link(
+        &mut self,
+        source: DocId,
+        target: pdfcraft_render::EmbeddedTarget,
+        destination: pdfcraft_render::RemoteDestination,
+    ) {
+        let Some(source_doc) = self.session.get(source) else { return };
+        match target {
+            pdfcraft_render::EmbeddedTarget::Parent => {
+                self.notify_fmt("Couldn't follow linked PDF: {reason}", &[("reason", tl!("navigating to the parent document is not supported"))]);
+            }
+            pdfcraft_render::EmbeddedTarget::Name(name) => {
+                let att = source_doc.info.attachments.iter().find(|a| match &a.source {
+                    pdfcraft_render::AttachmentSource::Document { key } => key == &name,
+                    pdfcraft_render::AttachmentSource::Annotation { .. } => false,
+                });
+                let Some(att) = att else {
+                    self.notify_fmt("Couldn't follow linked PDF: {reason}", &[("reason", tl!("the attached file was not found"))]);
+                    return;
+                };
+                self.open_embedded_attachment(source, att.clone(), destination);
+            }
+            pdfcraft_render::EmbeddedTarget::Annotation { page, index } => {
+                let att = source_doc.info.attachments.iter().find(|a| a.source == pdfcraft_render::AttachmentSource::Annotation { page, index });
+                let Some(att) = att else {
+                    self.notify_fmt("Couldn't follow linked PDF: {reason}", &[("reason", tl!("the attached file was not found"))]);
+                    return;
+                };
+                self.open_embedded_attachment(source, att.clone(), destination);
+            }
+        }
+    }
+
+    /// Open an embedded attachment as a document in a new tab and navigate to `destination`.
+    fn open_embedded_attachment(&mut self, source: DocId, att: pdfcraft_render::Attachment, destination: pdfcraft_render::RemoteDestination) {
+        let Some(source_doc) = self.session.get(source) else { return };
+        let data = pdfcraft_render::attachment_data(&source_doc.bytes, source_doc.password.as_deref(), &att);
+        match data {
+            Err(e) => {
+                self.notify_fmt("Couldn't read {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
+            }
+            Ok(bytes) => {
+                if !matches!(pdfcraft_engine::source_kind(&att.name, &bytes), Some(pdfcraft_engine::SourceKind::Pdf)) {
+                    self.notify_fmt("Couldn't follow linked PDF: {reason}", &[("reason", tl!("the linked file is not a .pdf file"))]);
+                    return;
+                }
+                let tab_name = crate::files::attachment_file_name(&att.name);
+                if let Err(e) = self.open_bytes_with_destination(&tab_name, None, bytes, Some(destination)) {
+                    self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
+                }
+            }
+        }
+    }
+
     /// Take a pending request exactly once. Closing its source invalidates the request.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn resolve_pending_remote_link(&mut self, open: bool) {

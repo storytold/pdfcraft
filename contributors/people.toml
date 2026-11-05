@@ -178,6 +178,10 @@ sync_github_name = true
 real_name = "Robert Lee"
 sync_github_name = true
 
+[people.YusufMntm]
+sync_github_name = true
+
+
 [people.dylanmtaylor]
 sync_github_name = true
 
