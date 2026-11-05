@@ -7943,8 +7943,8 @@ milestone = "M11"
 status = "partial"
 commands = ["standards.pdfa"]
 tools = ["pdfa_verify"]
-evidence = ["crates/preflight/src/tests.rs::verify_reports_what_breaks_pdfa", "crates/preflight/src/tests.rs::standards_identification_uses_namespace_not_prefix", "crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::verify_reports_an_output_intent_that_does_not_match_device_colour", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts"]
-notes = "PDF/A-2b/3b structural rules: identification, encryption, output intent (present, and RGB/CMYK to match DeviceRGB/DeviceCMYK use), fonts embedded, annotations, actions, images, embedded files. Not yet: content-stream operator checks, transparency details, PDF/A-1 and -4, a veraPDF comparison."
+evidence = ["crates/preflight/src/tests.rs::verify_reports_what_breaks_pdfa", "crates/preflight/src/tests.rs::standards_identification_uses_namespace_not_prefix", "crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::verify_reports_an_output_intent_that_does_not_match_device_colour", "crates/preflight/src/tests.rs::trailer_file_identifier_is_checked_and_added", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts"]
+notes = "PDF/A-2b/3b structural rules: identification, the trailer file identifier (6.1.3), encryption, output intent (present, and RGB/CMYK to match DeviceRGB/DeviceCMYK use), fonts embedded, annotations, actions, images, embedded files. Not yet: content-stream operator checks, transparency details, PDF/A-1 and -4, a veraPDF comparison."
 
 [[feature]]
 id = "optimize.pdfa-convert"
@@ -7955,8 +7955,8 @@ milestone = "M11"
 status = "partial"
 commands = ["standards.pdfa"]
 tools = ["pdfa_convert"]
-evidence = ["crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::convert_does_not_give_cmyk_documents_an_srgb_output_intent", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts", "crates/engine/src/tests.rs::convert_to_pdfa_needs_the_owners_rights_on_an_encrypted_document"]
-notes = "Fixes XMP, output intent (generated sRGB ICC profile, only for documents without DeviceCMYK; CMYK documents need a user-chosen CMYK output intent, not yet offered), forbidden actions, annotation flags, interpolation, encryption, AFRelationship. Not yet: embedding fonts, converting device CMYK, flattening transparency for PDF/A-1. On an encrypted document it needs the owner password, as Protect and Remove security do, since it removes the encryption (#3921)."
+evidence = ["crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::trailer_file_identifier_is_checked_and_added", "crates/preflight/src/tests.rs::convert_does_not_give_cmyk_documents_an_srgb_output_intent", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts", "crates/engine/src/tests.rs::convert_to_pdfa_needs_the_owners_rights_on_an_encrypted_document"]
+notes = "Fixes XMP, output intent (generated sRGB ICC profile, only for documents without DeviceCMYK; CMYK documents need a user-chosen CMYK output intent, not yet offered), forbidden actions, annotation flags, interpolation, encryption, AFRelationship, a missing or malformed file identifier. Not yet: embedding fonts, converting device CMYK, flattening transparency for PDF/A-1. On an encrypted document it needs the owner password, as Protect and Remove security do, since it removes the encryption (#3921)."
 
 [[feature]]
 id = "optimize.pdfa-accessible-levels"
