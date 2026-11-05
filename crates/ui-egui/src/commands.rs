@@ -344,6 +344,7 @@ impl PdfCraftApp {
                 }
             }
             "view.marquee_zoom" => self.quick_tool = crate::QuickTool::MarqueeZoom,
+            "view.loupe" => self.toggle_loupe(),
             _ => return None,
         }
         Some(true)

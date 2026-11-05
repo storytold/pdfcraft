@@ -41,6 +41,7 @@ pub use combine_grid::ThumbState as CombineThumb;
 pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
 mod commands;
 pub mod control;
+pub mod loupe_ui;
 mod menus;
 /// Header & footer / watermark / background dialog types (tests and automation).
 pub mod marks {
@@ -579,6 +580,8 @@ pub struct PdfCraftApp {
     pub page_props_draft: Option<PagePropsDraft>,
     /// Text field table: the table being set up, and the page it goes on.
     pub field_table_draft: Option<field_table_ui::FieldTableDraft>,
+    /// View ▸ Zoom ▸ Loupe tool: active state for the loupe magnifier window and canvas aperture.
+    pub loupe: Option<loupe_ui::LoupeState>,
     /// Prepare a form ▸ Preview: fill the form instead of editing its fields.
     pub form_preview: bool,
     /// Where autosaves go (`None`: autosave off, e.g. on the web and in tests).

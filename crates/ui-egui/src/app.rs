@@ -241,6 +241,7 @@ impl PdfCraftApp {
             duplicate_draft: None,
             page_props_draft: None,
             field_table_draft: None,
+            loupe: None,
             form_preview: false,
             window_title: String::new(),
             page_title: String::new(),
@@ -405,6 +406,34 @@ impl PdfCraftApp {
             false
         } else {
             self.pin_tool(id)
+        }
+    }
+
+    /// Toggles the Loupe magnifier tool.
+    pub fn toggle_loupe(&mut self) {
+        if self.loupe.is_some() {
+            self.loupe = None;
+            if self.quick_tool == QuickTool::Loupe {
+                self.quick_tool = QuickTool::Select;
+            }
+        } else {
+            let active_view = self.active.and_then(|i| self.views.get(i));
+            let doc_id = active_view.map(|v| v.id);
+            let page = active_view.map_or(0, |v| v.current);
+            self.loupe = Some(crate::loupe_ui::LoupeState::new(doc_id, page));
+            self.quick_tool = QuickTool::Loupe;
+        }
+    }
+
+    /// Sets the target page and center point for the active loupe magnifier.
+    pub fn set_loupe_target(&mut self, page: usize, center: [f32; 2]) {
+        if let Some(loupe) = &mut self.loupe {
+            loupe.set_center(page, center);
+        } else {
+            let doc_id = self.active.and_then(|i| self.views.get(i)).map(|v| v.id);
+            let mut state = crate::loupe_ui::LoupeState::new(doc_id, page);
+            state.set_center(page, center);
+            self.loupe = Some(state);
         }
     }
 }

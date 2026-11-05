@@ -319,6 +319,13 @@ impl PdfCraftApp {
                     "marquee-zoom" => QuickTool::MarqueeZoom,
                     "snapshot" => QuickTool::Snapshot,
                     "column-select" => QuickTool::ColumnSelect,
+                    "loupe" => {
+                        let active_view = self.active.and_then(|i| self.views.get(i));
+                        let doc_id = active_view.map(|v| v.id);
+                        let page = active_view.map_or(0, |v| v.current);
+                        self.loupe = Some(crate::loupe_ui::LoupeState::new(doc_id, page));
+                        QuickTool::Loupe
+                    }
                     "certify" => QuickTool::SignArea { certify: true },
                     custom if custom.starts_with("custom-stamp-") => {
                         let i: usize = custom[13..].parse().map_err(|_| format!("bad stamp {custom}"))?;
