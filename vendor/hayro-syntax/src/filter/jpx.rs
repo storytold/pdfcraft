@@ -21,6 +21,11 @@ impl ImageColorSpace {
 /// `MAX_IMAGE_PIXELS` and hayro-interpret's `image_size_ok`). Its size comes from the SIZ marker,
 /// not the image dictionary, and the decoder allocates it infallibly: a tiny file could ask for
 /// tens of gigabytes and abort the process (#5078).
+///
+/// It is checked against `Image::width()` x `height()` at full resolution: the SIZ image area,
+/// divided by a component subsampling (`XRsiz`, `YRsiz`) that every component shares, the size the
+/// decoder allocates each channel and component tile at. Components sampled differently leave the
+/// area undivided. So a 2x2-subsampled 32768 x 32768 area decodes to, and counts as, 2^28.
 const MAX_PIXELS: u64 = 1 << 28;
 
 /// Decode a JPEG 2000 image (JP2 file or raw codestream) for an image XObject described by
