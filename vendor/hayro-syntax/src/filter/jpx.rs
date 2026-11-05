@@ -516,8 +516,11 @@ mod tests {
     }
 
     /// `one_bit_jp2`'s file with the SIZ image and tile sizes set to `xsiz` x `ysiz` (one tile
-    /// covering the whole image, so the header still parses cheaply) and a matching `ihdr`.
-    fn jp2_with_size(xsiz: u32, ysiz: u32) -> Vec<u8> {
+    /// covering the whole image, so the header still parses cheaply), a matching `ihdr`, and
+    /// `levels` wavelet decomposition levels in COD. With none, a target resolution can't shrink
+    /// the image (there is no lower resolution to decode); with some, a small target decodes it
+    /// up to 2^`levels` times smaller on each side.
+    fn jp2_with_size(xsiz: u32, ysiz: u32, levels: u8) -> Vec<u8> {
         let jp2_box = |kind: &[u8], body: &[u8]| {
             let mut b = ((8 + body.len()) as u32).to_be_bytes().to_vec();
             b.extend_from_slice(kind);
@@ -530,9 +533,18 @@ mod tests {
             codestream.extend_from_slice(&value.to_be_bytes());
         }
         codestream.extend_from_slice(&[0, 1, 0, 1, 1]);
-        codestream.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, 0, 4, 4, 0, 1]);
-        codestream.extend_from_slice(&[0xff, 0x5c, 0, 4, 0x40, 0x40]);
-        codestream.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 15, 0, 1, 0xff, 0x93, 0]);
+        // COD: Scod, LRCP order, one layer, no MCT, `levels`, 64 x 64 code blocks, 5/3 wavelet.
+        codestream.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, levels, 4, 4, 0, 1]);
+        // QCD: no quantization, one exponent per subband (3 per level and the lowest band).
+        let subbands = 3 * usize::from(levels) + 1;
+        codestream.extend_from_slice(&[0xff, 0x5c, 0, (3 + subbands) as u8, 0x40]);
+        codestream.extend(core::iter::repeat_n(0x40, subbands));
+        // One tile part holding an empty packet (one zero byte) per resolution level.
+        let packets = usize::from(levels) + 1;
+        codestream.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0]);
+        codestream.extend_from_slice(&((14 + packets) as u32).to_be_bytes());
+        codestream.extend_from_slice(&[0, 1, 0xff, 0x93]);
+        codestream.extend(core::iter::repeat_n(0, packets));
         codestream.extend_from_slice(&[0xff, 0xd9]);
         let mut ihdr = ysiz.to_be_bytes().to_vec();
         ihdr.extend_from_slice(&xsiz.to_be_bytes());
@@ -549,29 +561,41 @@ mod tests {
     /// #5078: a `/Width 1 /Height 1` image whose codestream SIZ declares more than 2^28 pixels
     /// is refused before the decoder makes its full-resolution, infallible allocation (tens of
     /// gigabytes from a tiny file, which aborts the process), with or without a small target
-    /// resolution, since a target shrinks the reported size but not the per-tile buffers. The
-    /// same builder at 1 x 1 decodes, so the `None` at 65536 x 65536 (2^32 pixels) is the cap
-    /// and not a parse error.
+    /// resolution, since a target shrinks the reported size but not the per-tile buffers: with
+    /// four decomposition levels a 1 x 1 target reports 4096 x 4096, under the cap. The same
+    /// builder at 1 x 1 decodes, so the `None` at 65536 x 65536 (2^32 pixels) is the cap and not
+    /// a parse error.
     #[test]
     fn a_codestream_over_the_pixel_cap_is_refused() {
         let params = ImageDecodeParams { width: 1, height: 1, ..ImageDecodeParams::default() };
-        assert!(decode(&jp2_with_size(1, 1), &params).is_some());
-        assert!(decode(&jp2_with_size(65536, 65536), &params).is_none());
+        assert!(decode(&jp2_with_size(1, 1, 0), &params).is_some());
+        assert!(decode(&jp2_with_size(65536, 65536, 0), &params).is_none());
         let small_target = ImageDecodeParams { target_dimension: Some((1, 1)), ..params };
-        assert!(decode(&jp2_with_size(65536, 65536), &small_target).is_none());
+        assert!(decode(&jp2_with_size(65536, 65536, 4), &small_target).is_none());
     }
 
-    /// The size check uses the full-resolution size, not the target's: with a 4-pixel limit the
-    /// 4x2 palette image is refused even when a 1x1 target would shrink it under the limit, and
-    /// it decodes normally under the real cap. The small limit lets the unfixed check be seen
-    /// failing without an attacker-sized allocation.
+    /// The size check uses the full-resolution size, not the target's. With four decomposition
+    /// levels a 1x1 target decodes a 64x64 image at a reduced resolution under 1024 pixels; with
+    /// a 1024-pixel limit the same image at the same target is still refused, because its
+    /// full-resolution 4096 pixels are over it. (An image a target can't shrink, with no
+    /// decomposition levels or a JP2 palette like `PALETTE_JP2`, can't tell the two measurements
+    /// apart.) The small limit lets the unfixed check be seen failing without an attacker-sized
+    /// allocation.
     #[test]
     fn jpx_size_guard_uses_full_resolution_before_target_resolution() {
-        let normal_params = ImageDecodeParams { width: 4, height: 2, ..ImageDecodeParams::default() };
-        let normal = decode(PALETTE_JP2, &normal_params).expect("small JPX image should decode");
-        assert_eq!(normal.image_data.as_ref().map(|image| (image.width, image.height)), Some((4, 2)));
-        let small_target =
-            ImageDecodeParams { width: 1, height: 1, target_dimension: Some((1, 1)), ..ImageDecodeParams::default() };
-        assert!(decode_with_pixel_limit(PALETTE_JP2, &small_target, 4).is_none());
+        let image = jp2_with_size(64, 64, 4);
+        let small_target = ImageDecodeParams {
+            width: 1,
+            height: 1,
+            target_dimension: Some((1, 1)),
+            ..ImageDecodeParams::default()
+        };
+        let reduced = decode(&image, &small_target).expect("a 64x64 image decodes at a 1x1 target");
+        let size = reduced.image_data.as_ref().map(|d| (d.width, d.height));
+        assert!(
+            size.is_some_and(|(w, h)| u64::from(w) * u64::from(h) <= 1024),
+            "the target shrinks the image under the limit: {size:?}"
+        );
+        assert!(decode_with_pixel_limit(&image, &small_target, 1024).is_none());
     }
 }
