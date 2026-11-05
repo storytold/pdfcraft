@@ -72,6 +72,7 @@ const PANELS: &[(RightPanel, &str, &str)] = &[
     (RightPanel::Fields, "fields", "Fields"),
     (RightPanel::Layers, "layers", "Layers"),
     (RightPanel::Attachments, "attachments", "Attachments"),
+    (RightPanel::Measurements, "measurements", "Measurements"),
     (RightPanel::Signatures, "signatures", "Signatures"),
     (RightPanel::Accessibility, "accessibility", "Accessibility Checker"),
     (RightPanel::Tags, "tags", "Tags"),

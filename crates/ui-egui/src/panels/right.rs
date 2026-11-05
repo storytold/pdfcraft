@@ -22,6 +22,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let mut sig_action: Option<crate::sign_ui::PanelAction> = None;
     let mut a11y_action: Option<crate::a11y_ui::PanelAction> = None;
     let mut compare_action: Option<crate::compare_ui::PanelAction> = None;
+    let mut measure_action: Option<super::measurements::Action> = None;
     let mut bm_rename = app.bookmark_rename.clone();
     let bm_editable = app.session.get(id).is_some_and(|d| d.allows_assembly() && d.read_only_reason.is_none());
     let bm_can_paste = app.bookmark_clipboard.is_some();
@@ -56,6 +57,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     RightPanel::Tags => ("Tags", None),
                     RightPanel::Search => ("Search", None),
                     RightPanel::Compare => ("Compare", compare.as_ref().filter(|c| c.new == id).map(|c| c.result.changes.len())),
+                    RightPanel::Measurements => ("Measurements", super::measurements::count(view, doc)),
                 };
                 // Comments count like Acrobat (no replies); the replies go in small text below.
                 let replies = if panel == RightPanel::Comments { crate::comments_panel::reply_count(info) } else { 0 };
@@ -129,6 +131,10 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     }
                                 }
                             });
+                        }
+                        if panel == RightPanel::Measurements {
+                            let any = super::measurements::count(view, doc).is_some_and(|n| n > 0);
+                            measure_action = super::measurements::header_controls(ui, any);
                         }
                         if panel == RightPanel::Layers && !info.layers.is_empty() {
                             let more = icons::button(ui, "ellipsis", 26.0, false, tl!("Layer options"));
@@ -279,6 +285,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     }
                     RightPanel::Search => crate::search_ui::panel(ui, &t, view, info.pages.len()),
                     RightPanel::Compare => compare_action = crate::compare_ui::panel(ui, &t, compare, id),
+                    RightPanel::Measurements => super::measurements::show(ui, &t, doc, view, &mut nav),
                     RightPanel::Attachments => {
                         let attachable = doc.allows_modification() && doc.read_only_reason.is_none();
                         if attachable {
@@ -394,6 +401,9 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if let Some(a) = a11y_action {
         app.a11y_action(index, a);
     }
+    if let Some(super::measurements::Action::Export) = measure_action {
+        crate::measure_ui::export_csv(app);
+    }
     if let Some(a) = compare_action {
         app.compare_action(index, a);
     }
@@ -458,7 +468,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     }
 }
 
-fn empty(ui: &mut egui::Ui, t: &Tokens, icon: &str, text: &str) {
+pub(super) fn empty(ui: &mut egui::Ui, t: &Tokens, icon: &str, text: &str) {
     ui.add_space(40.0);
     ui.vertical_centered(|ui| {
         ui.add(icons::image(icon, 36.0, t.text_faint));

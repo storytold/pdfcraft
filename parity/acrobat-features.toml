@@ -4494,6 +4494,18 @@ evidence = ["crates/automation/tests/it/automation.rs::measurements_calibrate_dr
 notes = "Live value, units, X/Y deltas, angle and selected scale while drawing; saved measurements can be selected from the panel. Rectilinear 2D readings only."
 
 [[feature]]
+id = "comment.measure-side-panel"
+title = "Measurements side panel: every saved measurement, by page"
+area = "E"
+tier = "P2"
+milestone = "M12"
+status = "shipped"
+commands = []
+tools = ["measure_list", "measure_export"]
+evidence = ["crates/ui-egui/tests/it/control.rs::the_measurements_panel_lists_filters_and_shows_every_saved_measurement", "crates/ui-egui/src/panels/measurements.rs::totals_add_up_per_kind_and_unit", "crates/ui-egui/src/panels/measurements.rs::totals_skip_values_that_are_not_finite", "crates/ui-egui/tests/it/panel_snapshots.rs::every_panel_matches_its_snapshot"]
+notes = "A Measurements panel on the navigation rail (ruler icon, marked when the document has measurements; also View ▸ Side panels and the control channel's panel=measurements) lists every saved measurement under its page: kind, value, label, scale ratio and author. A click goes to the page, flashes and selects the annotation and makes it the Measure tool's reading. Filters by kind with counts, totals per kind and unit (sums of the unrounded values, so they can differ from the sum of the rounded rows in the last digit), unreadable measurements counted with their reasons, and CSV export from the header. Not yet: sorting, search, editing a label from the panel, and translations of the new strings in craft-i18n."
+
+[[feature]]
 id = "comment.measure-export"
 title = "Export measurements as CSV"
 area = "E"
