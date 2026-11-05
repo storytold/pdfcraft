@@ -1664,7 +1664,10 @@ fn draw_pages(
     if delta != Vec2::ZERO && delta.is_finite() {
         ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
     }
-    let (resp_rect, resp) = ui.allocate_exact_size(vec2(content_w, content_h), Sense::click_and_drag());
+    // Below a document shorter than the view the pages' widget still reaches the view's bottom, so
+    // a click there is beside the pages as one in the gutter is (#6133). The content that scrolls
+    // is no larger for it: it fits the view either way.
+    let (resp_rect, resp) = ui.allocate_exact_size(vec2(content_w, content_h.max(viewport.height())), Sense::click_and_drag());
     view.page_widget = Some(resp.id);
     // A drag lasts only while egui reports it, so the mark can't outlive one.
     if !resp.dragged_by(egui::PointerButton::Primary) {

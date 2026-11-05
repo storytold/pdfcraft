@@ -4360,4 +4360,33 @@ fn a_click_beside_the_pages_lets_go_of_what_is_selected() {
     // A click on the page's empty part let go of it before, and still does.
     click_pt(&mut h, (200.0, 150.0));
     assert_eq!(h.state().views[0].comments.selected, None);
+
+    // A press Escape cancels lets go of nothing when it is released, even a click's distance off
+    // the page with Escape in the press's own frame: the cancel lets go of the press the pages hold.
+    click_pt(&mut h, (20.0, 40.0));
+    let (on, off) = (pos2(page.left() + 2.0, page.center().y), pos2(page.left() - 2.0, page.center().y));
+    h.hover_at(on);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: on, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    for pressed in [true, false] {
+        h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: Default::default() });
+    }
+    h.run_steps(1);
+    h.hover_at(off);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: off, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the cancelled press keeps it");
+
+    // Below the last page of a document shorter than the view is beside the pages too.
+    h.state_mut().set_option("zoom", "25").unwrap();
+    crate::support::settle(&mut h);
+    let last = (0..).map_while(|i| h.state().views[0].page_screen_rect(i)).last().expect("pages on screen");
+    let below = pos2(last.center().x, last.bottom() + 40.0);
+    let window = h.ctx.content_rect();
+    assert!(below.y < window.bottom() - 80.0, "room below the pages: {last:?} in {window:?}");
+    click_pt(&mut h, (20.0, 40.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    click(&mut h, below);
+    assert_eq!(h.state().views[0].comments.selected, None, "a click below the pages lets go of the comment");
 }
