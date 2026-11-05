@@ -1,5 +1,5 @@
-//! `model_add` embeds a U3D or PRC model as a 3D annotation (ISO 32000-2 §13.6.2) with a poster,
-//! end to end: the tool, the saved file, undo, and the refusals.
+//! `model_add` embeds a U3D or PRC model, or a glTF scene converted to PRC, as a 3D annotation
+//! (ISO 32000-2 §13.6.2) with a poster, end to end: the tool, the saved file, undo, and the refusals.
 
 use pdfcraft_automation::{Automation, Content, ToolError};
 use pdfcraft_cos::{Dict, Document, Object, Stream};
@@ -114,6 +114,108 @@ fn model_add_refuses_what_is_not_a_model_and_adds_nothing() {
         let mut call = json!({ "doc": doc, "page": 1, "path": "part.prc" });
         call.as_object_mut().unwrap().extend(args.as_object().unwrap().clone());
         assert!(matches!(a.call("model_add", &call), Err(ToolError::InvalidArgs(_))), "{why}");
+    }
+    tool(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
+    assert!(saved_3d(dir.path()).1.is_empty());
+}
+
+/// One triangle's three corners as little-endian `f32`s, and a glTF document drawing it from
+/// buffer `uri` (`None`: the GLB binary chunk).
+fn triangle_gltf(uri: Option<&str>) -> (Vec<u8>, String) {
+    let bin: Vec<u8> = [0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let buffer = match uri {
+        Some(uri) => json!({ "byteLength": 36, "uri": uri }),
+        None => json!({ "byteLength": 36 }),
+    };
+    let doc = json!({
+        "asset": { "version": "2.0" },
+        "buffers": [buffer],
+        "bufferViews": [{ "buffer": 0, "byteLength": 36 }],
+        "accessors": [{ "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0] }],
+        "meshes": [{ "name": "tri", "primitives": [{ "attributes": { "POSITION": 0 } }] }],
+        "nodes": [{ "mesh": 0 }],
+        "scenes": [{ "nodes": [0] }],
+        "scene": 0
+    });
+    (bin, doc.to_string())
+}
+
+/// A GLB container holding `json` and `bin`.
+fn glb(json: &str, bin: &[u8]) -> Vec<u8> {
+    let mut json = json.as_bytes().to_vec();
+    json.resize(json.len().next_multiple_of(4), b' ');
+    let total = 12 + 8 + json.len() + 8 + bin.len();
+    let mut out = b"glTF".to_vec();
+    for v in [2, total as u32, json.len() as u32, 0x4E4F_534A] {
+        out.extend(u32::to_le_bytes(v));
+    }
+    out.extend(&json);
+    out.extend(u32::to_le_bytes(bin.len() as u32));
+    out.extend(u32::to_le_bytes(0x004E_4942));
+    out.extend(bin);
+    out
+}
+
+/// The PRC stream of the one 3D annotation in the saved file, parsed.
+fn saved_prc(dir: &std::path::Path) -> pdfcraft_prc::PrcFile {
+    let (saved, found) = saved_3d(dir);
+    let [annot] = found.as_slice() else { panic!("one 3D annotation: {found:?}") };
+    let model = stream(&saved, annot.get(b"3DD").unwrap());
+    assert_eq!(model.dict.name(b"Subtype"), Some(&b"PRC"[..]));
+    pdfcraft_prc::PrcFile::parse(&model.decoded().unwrap()).unwrap()
+}
+
+#[test]
+fn model_add_converts_a_glb_to_prc() {
+    let dir = tempfile::tempdir().unwrap();
+    let (bin, json) = triangle_gltf(None);
+    std::fs::write(dir.path().join("tri.glb"), glb(&json, &bin)).unwrap();
+    let mut a = Automation::new().with_root(dir.path()).unwrap();
+    let doc = tool(&mut a, "doc_create", json!({ "from": "blank", "width": 600, "height": 800 }))["doc"].as_u64().unwrap();
+    let out = tool(&mut a, "model_add", json!({ "doc": doc, "page": 1, "path": "tri.glb", "rect": [100, 100, 400, 400] }));
+    assert_eq!(out["converted"]["from"], "glTF", "{out}");
+    assert_eq!(out["converted"]["triangles"], 1, "{out}");
+    tool(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
+    let prc = saved_prc(dir.path());
+    assert_eq!(prc.placements().unwrap().len(), 1, "the triangle's node is placed");
+}
+
+#[test]
+fn model_add_reads_a_gltf_buffer_beside_it_and_nothing_outside_the_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("root");
+    std::fs::create_dir_all(root.join("parts/sub")).unwrap();
+    let (bin, beside) = triangle_gltf(Some("sub/tri%20data.bin"));
+    std::fs::write(root.join("parts/sub/tri data.bin"), &bin).unwrap();
+    std::fs::write(root.join("parts/tri.gltf"), beside).unwrap();
+    std::fs::write(dir.path().join("outside.bin"), &bin).unwrap();
+    let outside = dir.path().join("outside.bin").to_string_lossy().replace('\\', "/");
+    let mut a = Automation::new().with_root(&root).unwrap();
+    let doc = tool(&mut a, "doc_create", json!({ "from": "blank", "width": 600, "height": 800 }))["doc"].as_u64().unwrap();
+    let out = tool(&mut a, "model_add", json!({ "doc": doc, "page": 1, "path": "parts/tri.gltf", "rect": [10, 10, 200, 200] }));
+    assert_eq!(out["converted"]["triangles"], 1, "{out}");
+
+    for (n, uri) in ["../../outside.bin", outside.as_str(), "file:///outside.bin"].into_iter().enumerate() {
+        let name = format!("parts/escape{n}.gltf");
+        std::fs::write(root.join(&name), triangle_gltf(Some(uri)).1).unwrap();
+        let refused = a.call("model_add", &json!({ "doc": doc, "page": 1, "path": name, "rect": [10, 10, 200, 200] }));
+        assert!(matches!(&refused, Err(ToolError::Failed(m)) if m.contains("buffer 0")), "{uri}: {refused:?}");
+    }
+    tool(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
+    assert_eq!(saved_3d(&root).1.len(), 1, "only the model whose buffer is inside the root");
+}
+
+#[test]
+fn model_add_refuses_a_broken_gltf_and_adds_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("broken.gltf"), b"{ \"asset\": ").unwrap();
+    let (_, json) = triangle_gltf(None);
+    std::fs::write(dir.path().join("no-chunk.glb"), glb(&json, &[])).unwrap();
+    let mut a = Automation::new().with_root(dir.path()).unwrap();
+    let doc = tool(&mut a, "doc_create", json!({ "from": "blank", "width": 600, "height": 800 }))["doc"].as_u64().unwrap();
+    for name in ["broken.gltf", "no-chunk.glb"] {
+        let refused = a.call("model_add", &json!({ "doc": doc, "page": 1, "path": name, "rect": [10, 10, 200, 200] }));
+        assert!(matches!(&refused, Err(ToolError::Failed(m)) if m.contains(name)), "{name}: {refused:?}");
     }
     tool(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
     assert!(saved_3d(dir.path()).1.is_empty());
