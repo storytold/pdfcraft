@@ -71,6 +71,7 @@ impl Session {
             opts: SaveOptions {
                 mod_date: self.now().map(pdfcraft_cos::pdf_date),
                 object_streams: settings.effective_object_streams(),
+                linearize: settings.fast_web_view,
                 ..SaveOptions::default()
             },
         })

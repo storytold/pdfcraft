@@ -4,6 +4,7 @@ mod bounded_writer;
 mod corpus;
 mod encryption;
 mod generations;
+mod linearize;
 mod proptests;
 mod shared_streams;
 mod writer;

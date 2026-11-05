@@ -7,9 +7,10 @@
 //!
 //! Done: every cross-reference form (tables, streams, hybrid `/XRefStm`), object streams, repair
 //! by scanning, encryption on load and save (R2–R6, crypt filters, `/EFF`), incremental writing,
-//! and full saves that pack objects into compressed object streams with a cross-reference stream.
+//! full saves that pack objects into compressed object streams with a cross-reference stream,
+//! and linearized full saves for Fast Web View (classic tables, no object streams).
 //! Not yet: streaming very large files within a memory budget (`ByteSource`,
-//! `core.lazy-loading`), and linearized output (`core.linearization`, M11). See the README.
+//! `core.lazy-loading`). See the README.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -30,7 +31,7 @@ pub use parser::{Lexer, is_whitespace, parse_indirect};
 pub use pdfcraft_crypt::{
     Algorithm, Auth, Method as CryptMethod, NewEncryption, Permissions, SecurityHandler, effective_password, pdfdoc_byte, pdfdoc_char,
 };
-pub use writer::{SaveOptions, pdf_date, serialize, write_full, write_incremental};
+pub use writer::{SaveOptions, is_linearized, pdf_date, serialize, write_full, write_incremental};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum CosError {

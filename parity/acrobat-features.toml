@@ -367,11 +367,11 @@ title = "Linearized save (Fast Web View)"
 area = "A"
 tier = "P1"
 milestone = "M11"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["doc_save", "doc_optimize"]
+evidence = ["crates/cos/tests/it/linearize.rs::qpdf_finds_no_linearization_errors", "crates/cos/tests/it/linearize.rs::every_encryption_algorithm_linearizes", "crates/cos/tests/it/linearize.rs::an_update_on_top_opens_but_is_no_longer_linearized", "crates/cos/src/writer/linearize.rs::the_layout_matches_its_parameters", "crates/automation/tests/it/automation.rs::saving_and_optimizing_for_fast_web_view"]
+notes = "linearized full saves (ISO 32000-2 Annex F) in cos: linearization dictionary, first-page cross-reference section and primary hint stream with the page offset, shared object and outline tables; inherited page attributes are written onto each page (a shared inherited dictionary or array stays one object); all four encryption algorithms work; an update appended later keeps the file valid but no longer linearized, as in any reader (is_linearized() tells). qpdf --check-linearization finds no errors on synthetic files, encrypted ones included (runs where qpdf is installed, as on the Linux CI runner). Headless only: doc_save linearize (implies a full rewrite; refused for signed documents, which Acrobat saves incrementally), doc_optimize fast_web_view, doc_info reports linearized. Missing: classic cross-reference tables and no object streams, so the file is larger than the default compressed full save; no desktop control (no Save As option, no Optimizer checkbox, no Fast Web View line in Document Properties); Acrobat's 'Save As optimizes for Fast Web View' preference is not modelled; the thumbnail hint table, the generic tables other than the outlines' and the overflow hint stream are not written"
 
 [[feature]]
 id = "core.revision-list"

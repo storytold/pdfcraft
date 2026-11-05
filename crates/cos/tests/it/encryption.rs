@@ -232,7 +232,7 @@ fn qpdf_agrees() {
 
 /// A new directory for oracle files, private to this user: an unpredictable name (`RandomState`
 /// is seeded by the operating system), created by this call or not at all.
-fn private_temp_dir(prefix: &str) -> std::path::PathBuf {
+pub(crate) fn private_temp_dir(prefix: &str) -> std::path::PathBuf {
     use std::hash::{BuildHasher, Hasher};
     let mut name = std::collections::hash_map::RandomState::new().build_hasher();
     name.write_u32(std::process::id());
@@ -1316,4 +1316,28 @@ fn selectors_that_lead_to_selectors_load_at_once() {
     // With the budget it takes milliseconds, and without it longer than anyone would wait, so a
     // margin this wide can't fail on a busy machine.
     assert_eq!(finished.recv_timeout(std::time::Duration::from_secs(120)), Ok(true), "loading must not fan out");
+}
+
+/// Object number 4294967295 can't be saved (no `/Size` covers it), so the reader drops it, but
+/// `/ID` naming it still made it one of the numbers written as stored. Objects a save makes, a
+/// linearized save's hint stream and a full save's object streams, were given that number as "no
+/// object in the file", so they were written in the clear in an encrypted file.
+#[test]
+fn objects_a_save_makes_are_encrypted_whatever_the_file_numbers() {
+    let file = classic_file();
+    let trailer =
+        format!("/Root {} 0 R /Encrypt {} 0 R /Info {} 0 R /ID [<{}> 4294967295 0 R]", file.root.num, file.encrypt.num, file.info.num, hex(&file.id));
+    let bytes = updated(&file.bytes, &[(u32::MAX, b"(x)".to_vec())], &trailer);
+    let saves = [("linearized", SaveOptions { linearize: true, ..SaveOptions::default() }), ("object streams", SaveOptions::default())];
+    for (save, opts) in saves {
+        let saved = write_full(&Document::open(Arc::new(bytes.clone())).unwrap(), &opts).unwrap();
+        let back = Document::open(Arc::new(saved)).unwrap();
+        assert!(back.repair_log().is_empty(), "{save}: {:?}", back.repair_log());
+        for (r, o) in back.scan_objects() {
+            if let Object::Stream(s) = &*o {
+                assert!(s.decoded_strict().is_ok(), "{save}: stream {} does not decrypt", r.num);
+            }
+        }
+        assert_eq!(title(&back).as_deref(), Some("Quarterly numbers"), "{save}");
+    }
 }

@@ -1139,6 +1139,54 @@ fn an_in_place_save_reports_a_required_rewrite_as_not_incremental() {
     }
 }
 
+/// Fast Web View: doc_save and doc_optimize write linearized files, and doc_info says whether the
+/// file as saved is linearized, which an incremental update appended later ends.
+#[test]
+fn saving_and_optimizing_for_fast_web_view() {
+    let dir = workdir("fast-web-view");
+    let is_linearized = |name: &str| pdfcraft_cos::is_linearized(&std::fs::read(dir.join(name)).unwrap());
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let info = |a: &mut Automation| ok(a, "doc_info", json!({ "doc": doc }))["linearized"].clone();
+    assert_eq!(info(&mut a), false);
+    let saved = ok(&mut a, "doc_save", json!({ "doc": doc, "path": "web.pdf", "linearize": true }));
+    assert_eq!(saved["incremental"], false);
+    assert!(is_linearized("web.pdf"));
+    assert_eq!(info(&mut a), true);
+    // An edit saved in place is appended, and the file is no longer linearized.
+    ok(&mut a, "doc_set_info", json!({ "doc": doc, "key": "Title", "value": "Web" }));
+    assert_eq!(ok(&mut a, "doc_save", json!({ "doc": doc }))["incremental"], true);
+    assert!(!is_linearized("web.pdf"));
+    assert_eq!(info(&mut a), false);
+    assert!(matches!(err(&mut a, "doc_save", json!({ "doc": doc, "linearize": true, "full": false })), ToolError::InvalidArgs(_)));
+    // A linearized copy is written with classic tables, and the report says so.
+    assert_eq!(ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "fast.pdf", "fast_web_view": true }))["object_streams"], false);
+    assert_eq!(ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "plain.pdf" }))["object_streams"], true);
+    assert!(is_linearized("fast.pdf") && !is_linearized("plain.pdf"));
+}
+
+/// A signed document is never rewritten, so a linearized or full save of one is refused before
+/// Fill & Sign marks are flattened: the open document is as it was, with nothing unsaved.
+#[test]
+fn a_refused_rewrite_of_a_signed_document_flattens_nothing() {
+    let dir = workdir("signed-rewrite");
+    let mut a = auto(&dir);
+    ok(&mut a, "sign_id_create", json!({ "name": "Ada Lovelace", "key": "p256", "password": "secret12", "path": "ada.p12" }));
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "sign_document", json!({ "doc": doc, "id": "ada.p12", "password": "secret12", "out": "signed.pdf" }));
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "text", "at": [40.0, 80.0], "text": "Hello" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc }));
+    for rewrite in [json!({ "doc": doc, "linearize": true }), json!({ "doc": doc, "path": "copy.pdf" })] {
+        let mut args = rewrite.clone();
+        args["flatten_fill_sign"] = json!(true);
+        assert!(matches!(err(&mut a, "doc_save", args), ToolError::Failed(_)), "{rewrite}");
+        let comments = ok(&mut a, "comment_list", json!({ "doc": doc }))["comments"].as_array().unwrap().clone();
+        assert!(comments.iter().any(|c| c["contents"] == "Hello"), "{rewrite}: nothing was flattened: {comments:?}");
+        assert_eq!(ok(&mut a, "doc_revisions", json!({ "doc": doc }))["unsaved_changes"], false, "{rewrite}");
+    }
+    assert!(!dir.join("copy.pdf").exists());
+}
+
 /// #1664 repairs the missing page tree on open. The former #1698 failure fixture now
 /// saves successfully, keeping its page and pixels through a full rewrite.
 #[test]

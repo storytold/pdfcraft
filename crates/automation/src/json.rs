@@ -290,6 +290,8 @@ pub(crate) fn info(d: &Document) -> Value {
         "document": summary(d),
         "pdf_version": i.pdf_version,
         "file_size": i.file_size,
+        // Fast Web View: the file as last opened or saved is linearized (a later update ends it).
+        "linearized": pdfcraft_cos::is_linearized(&d.saved_bytes()),
         "title": i.title, "author": i.author, "subject": i.subject, "keywords": i.keywords,
         // Custom document properties (Document Properties ▸ Custom): /Info entries beyond the
         // ones the spec names, set and cleared with doc_set_info.

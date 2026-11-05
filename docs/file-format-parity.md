@@ -1,5 +1,6 @@
 # File format parity
 
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (linearized PDF row: written headlessly, not from the app) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-19 · **Change:** patch (`.p7b`/`.p7c` bundles read for trust import) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Every format Acrobat Pro reads or writes, and PdfCraft's support for it. Acrobat's list comes from
@@ -24,7 +25,7 @@ features total).
 | PDF 2.0 (ISO 32000-2) | R W | R W (2.0-only features ignored but preserved) | good | No UTF-8 strings, `/AF`, DPart, namespaces ([pdf-spec-parity.md](pdf-spec-parity.md)) |
 | Encrypted PDF (standard security R2–R6) | R W | R W | reading high; writing opens in Acrobat DC since #836 (#774; AES-256 and RC4-128 checked by hand, no automated interop suite) | `crates/crypt`, `crates/cos` tests (`the_catalog_of_an_encrypted_document_stays_outside_object_streams`); all 7 corpus encrypted files open |
 | Certificate-encrypted PDF (public-key handler) | R W | none (clear message) | none | `core.unsupported-handlers` |
-| Linearized PDF (Fast Web View) | R W | R (as normal PDF); no W | none for W | `core.linearization` planned |
+| Linearized PDF (Fast Web View) | R W | R (as normal PDF); W through the automation tools only (`doc_save` `linearize`, `doc_optimize` `fast_web_view`), no desktop control | basic for W: `qpdf --check-linearization` clean on synthetic files, encrypted ones included; classic cross-reference tables, so larger than our default save | `core.linearization` partial |
 | Damaged PDF | R (repair) | R (repair, logged) | high | `core.repair-broken-files`, nightly fuzzing |
 | PDF/A-1, 2, 3, 4 | R W, verify | R; verify/convert 2b and 3b (partial) | basic | `optimize.pdfa-*`; veraPDF not yet used as oracle |
 | PDF/X, PDF/UA, PDF/E, PDF/VT | R W, verify | R only | none | [pdf-spec-parity.md](pdf-spec-parity.md) |
@@ -110,6 +111,7 @@ features total).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Linearized PDF row: PdfCraft writes linearized files through the automation tools (`core.linearization` partial); no desktop control, no object streams in the output. |
 | 2026-10-19 | patch | Certificates row: `.p7b`/`.p7c` bundles (DER or PEM `PKCS7`/`CMS`) are read for trust import. |
 | 2026-10-12 | minor | XDP split into data (read and write for XFA forms, already shipped under `form.xfa-data`) and opening `.xdp` as a document (none). Create PDF reads BigTIFF; malformed GIF headers are no longer detected as images. |
 | 2026-10-11 | minor | #773: inferred tables have no invented borders; rotated or overlapping invoice pages use floating shapes and page sections. Full Office layout fidelity remains partial. |
