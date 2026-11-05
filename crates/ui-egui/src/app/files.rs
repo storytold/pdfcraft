@@ -120,7 +120,22 @@ impl PdfCraftApp {
             then: request.then,
             display_override: None,
         });
+        self.refresh_opening_notice();
         Ok(token)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn refresh_opening_notice(&mut self) {
+        let Some(pending) = self.pending_opens.first() else {
+            self.opening_notice = None;
+            return;
+        };
+        let lang = i18n::current();
+        if self.opening_notice.as_ref().is_some_and(|notice| notice.token == pending.token && notice.lang == lang) {
+            return;
+        }
+        self.opening_notice =
+            Some(OpeningNotice { token: pending.token, lang, label: i18n::fmt(tl!("Opening {name}…"), &[("name", &pending.name)]) });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -149,6 +164,7 @@ impl PdfCraftApp {
         // earlier waiting replies, without consuming a blocked receiver's result.
         waiting.append(&mut self.pending_opens);
         self.pending_opens = waiting;
+        self.refresh_opening_notice();
         self.settle_launch_layout();
     }
 
