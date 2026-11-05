@@ -141,6 +141,7 @@ impl Host for crate::PdfCraftApp {
             "right_panel": self.right.map(|r| format!("{r:?}")),
             "dialog": self.dialog.map(|d| format!("{d:?}")),
             "palette_open": self.palette_open,
+            "compose_window": self.compose_window,
             "theme": format!("{:?}", self.theme),
             "theme_preference": self.theme_preference,
             "show_page_edge_shadows": self.show_page_edge_shadows,

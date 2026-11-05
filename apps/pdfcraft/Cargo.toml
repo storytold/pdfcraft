@@ -42,6 +42,8 @@ wayland-protocols = { version = "0.32", features = ["client"] }
 raw-window-handle = "0.6"
 
 [dev-dependencies]
+ron = "0.12.2"
+tempfile = "3"
 # Waits for wgpu's adapter, device and error-scope futures in tests (already in the tree through wgpu).
 pollster = "1.0"
 

@@ -317,6 +317,14 @@ pub struct PdfCraftApp {
     pub invert_middle_drag: bool,
     /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.
     pub animation_effects: motion::AnimationEffects,
+    /// Opt-in Windows VRR workaround; takes effect at next launch.
+    pub compose_window: bool,
+    /// Desktop-owned path to the small startup composition flag.
+    #[cfg(target_os = "windows")]
+    pub compose_window_path: Option<std::path::PathBuf>,
+    /// Last successfully saved startup value; None means a legacy preference needs migration.
+    #[cfg(target_os = "windows")]
+    pub compose_window_saved: Option<bool>,
     /// Whether the system asked for no animations, and how the desktop app asks it.
     pub motion: motion::Motion,
     /// Interface language preference: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].

@@ -544,6 +544,11 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     });
     ui.add_space(12.0);
 
+    #[cfg(target_os = "windows")]
+    preference_card(ui, t, tl!("Display"), None, &mut ctx, |ui, ctx| {
+        ctx.checkbox(ui, &mut app.compose_window, tl!("Prevent G-SYNC/FreeSync flicker (applies at next launch)"), t);
+    });
+
     if ctx.first_match_scrolled {
         ui.data_mut(|d| d.insert_temp(last_scrolled_id, query.clone()));
     } else if query.trim().is_empty() {

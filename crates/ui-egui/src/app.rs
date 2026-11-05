@@ -101,6 +101,11 @@ impl PdfCraftApp {
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             invert_middle_drag: false,
             animation_effects: motion::AnimationEffects::default(),
+            compose_window: false,
+            #[cfg(target_os = "windows")]
+            compose_window_path: None,
+            #[cfg(target_os = "windows")]
+            compose_window_saved: None,
             motion: motion::Motion::default(),
             language: i18n::AUTO.to_string(),
             ui_scale: None,
@@ -410,6 +415,12 @@ impl PdfCraftApp {
 }
 
 impl eframe::App for PdfCraftApp {
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        // Composition needs a transparency-capable window, but modal dimming must not reveal the desktop.
+        let background = visuals.panel_fill;
+        egui::Color32::from_rgb(background.r(), background.g(), background.b()).to_normalized_gamma_f32()
+    }
+
     /// While files are dragged over the window the system sends no pointer moves, so egui
     /// would keep the place the pointer entered at: tell it where the pointer really is, so the
     /// page grid can show (and use) the gap under it.
@@ -436,6 +447,22 @@ impl eframe::App for PdfCraftApp {
         {
             let minimized = self.ctx.as_ref().is_some_and(|c| c.input(|i| i.viewport().minimized == Some(true)));
             self.window_state.keep(storage, minimized);
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(path) = &self.compose_window_path
+            && self.compose_window_saved != Some(self.compose_window)
+        {
+            if let Some(parent) = path.parent()
+                && let Err(error) = std::fs::create_dir_all(parent)
+            {
+                log::warn!("Cannot create composition preference directory: {error}");
+            }
+            let bytes: &[u8] = if self.compose_window { b"on" } else { b"off" };
+            if let Err(error) = pdfcraft_platform::staging::write_atomically(path, bytes, pdfcraft_platform::staging::StagingName::TagThenSuffix) {
+                log::warn!("Cannot save composition preference: {error}");
+            } else {
+                self.compose_window_saved = Some(self.compose_window);
+            }
         }
         storage.set_string("pdfcraft", self.persist());
     }
@@ -701,6 +728,74 @@ impl eframe::App for PdfCraftApp {
         if let Some(mut control) = self.control.take() {
             control.finish_frame(&ctx, self);
             self.control = Some(control);
+        }
+    }
+}
+
+#[cfg(test)]
+mod vrr_tests {
+    use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn vrr_save_writes_the_dedicated_startup_flag() {
+        struct Storage;
+        impl eframe::Storage for Storage {
+            fn get_string(&self, _: &str) -> Option<String> {
+                None
+            }
+            fn set_string(&mut self, _: &str, _: String) {}
+            fn flush(&mut self) {}
+            fn remove_string(&mut self, _: &str) {}
+        }
+        let scratch = tempfile::tempdir().unwrap();
+        let dir = scratch.path();
+        let path = dir.join("compose-window");
+        let mut app = PdfCraftApp::new();
+        app.compose_window_path = Some(path.clone());
+        for (enabled, expected) in [(true, "on"), (false, "off")] {
+            app.compose_window = enabled;
+            eframe::App::save(&mut app, &mut Storage);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+            std::fs::write(&path, "untouched").unwrap();
+            eframe::App::save(&mut app, &mut Storage);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "untouched");
+        }
+    }
+
+    #[test]
+    fn vrr_preference_round_trips_and_rejects_invalid_options() {
+        let mut app = PdfCraftApp::new();
+        assert!(!app.compose_window);
+        app.set_option("compose_window", "on").unwrap();
+        let mut restored = PdfCraftApp::new();
+        assert!(serde_json::from_str::<serde_json::Value>(&app.persist()).unwrap().get("compose_window").is_none());
+        restored.restore(r#"{"compose_window":true}"#);
+        assert!(restored.compose_window);
+        assert!(restored.set_option("compose_window", "invalid").is_err());
+        assert!(restored.compose_window);
+        restored.set_option("compose_window", "off").unwrap();
+        assert!(!restored.compose_window);
+        for json in ["{}", r#"{"compose_window":"on"}"#, r#"{"compose_window":null}"#] {
+            restored.compose_window = true;
+            restored.restore(json);
+            assert!(!restored.compose_window);
+        }
+    }
+
+    #[test]
+    fn vrr_modal_background_remains_opaque_in_both_themes() {
+        let mut app = PdfCraftApp::new();
+        app.dialog = Some(Dialog::Preferences);
+        for mut visuals in [egui::Visuals::dark(), egui::Visuals::light()] {
+            let background = visuals.panel_fill;
+            visuals.panel_fill = egui::Color32::from_rgba_unmultiplied(background.r(), background.g(), background.b(), 128);
+            let clear = eframe::App::clear_color(&app, &visuals);
+            assert_eq!(clear[3], 1.0);
+            assert_eq!(
+                clear,
+                egui::Color32::from_rgb(visuals.panel_fill.r(), visuals.panel_fill.g(), visuals.panel_fill.b()).to_normalized_gamma_f32()
+            );
         }
     }
 }

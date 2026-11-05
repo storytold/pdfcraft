@@ -250,6 +250,7 @@ impl PdfCraftApp {
         if let Some(invert) = v["invert_middle_drag"].as_bool() {
             self.invert_middle_drag = invert;
         }
+        self.compose_window = v.get("compose_window").and_then(serde_json::Value::as_bool).unwrap_or(false);
         if let Ok(effects) = serde_json::from_value::<motion::AnimationEffects>(v["animation_effects"].clone()) {
             self.animation_effects = effects;
         }

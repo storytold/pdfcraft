@@ -56,6 +56,13 @@ impl PdfCraftApp {
             ("invert_middle_drag", _) => {
                 self.invert_middle_drag = value.parse::<bool>().map_err(|_| "invert_middle_drag must be true or false")?;
             }
+            ("compose_window", _) => {
+                self.compose_window = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("compose_window must be on or off".into()),
+                };
+            }
             ("animation_effects", _) => {
                 self.animation_effects = motion::AnimationEffects::parse(value).ok_or("animation_effects must be system, on, or off")?;
             }

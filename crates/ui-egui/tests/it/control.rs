@@ -2178,3 +2178,19 @@ fn accessible_labels_on_format_text_and_pin_dialog() {
     let char_spin = ok(&mut h, &c, "ui.inspect", json!({"query": "Character spacing", "role": "SpinButton"}));
     assert!(char_spin["count"].as_u64().unwrap() >= 1, "character spacing spin button has accessible label: {char_spin}");
 }
+
+#[test]
+fn vrr_preference_can_be_saved_through_the_control_channel() {
+    let (mut h, c) = harness();
+    assert!(!h.state().compose_window);
+    ok(&mut h, &c, "ui.set", json!({"key": "compose_window", "value": "on"}));
+    assert!(h.state().compose_window);
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["compose_window"], true);
+    assert!(call(&mut h, &c, "ui.set", json!({"key": "compose_window", "value": "invalid"})).is_err());
+    assert!(h.state().compose_window);
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert!(!restored.compose_window); // The desktop startup file owns persistence, not app.ron.
+    ok(&mut h, &c, "ui.set", json!({"key": "compose_window", "value": "off"}));
+    assert!(!h.state().compose_window);
+}
