@@ -13,7 +13,7 @@ workspace = true
 # trusted roots. No bundled root list (webpki-roots and webpki-root-certs are CDLA-licensed).
 pdfcraft-ui-egui = { workspace = true }
 # `build_info`: the version and compile-time build label for `--version` and the log.
-pdfcraft-engine = { workspace = true }
+pdfcraft-engine = { workspace = true, features = ["ocr-gpu"] }
 # `owner_only`: the --control file is restricted to its user on Windows (#3922).
 pdfcraft-platform = { workspace = true }
 # wgpu draws; OpenGL (glow) is the fallback when wgpu can't start on an old or unusual GPU or
