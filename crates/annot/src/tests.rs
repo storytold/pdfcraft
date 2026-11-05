@@ -2876,11 +2876,19 @@ fn resized_typed_signatures_are_drawn_into_their_new_rectangle() {
     let (hull, _, content) = turned_appearance(&doc, &d);
     assert!(near(hull, resized), "the appearance's box {hull:?} is not /Rect {resized:?}");
     assert!(content.contains("330 254 l"), "the outline fills the new rectangle: {content}");
-    // A rubber stamp keeps the appearance it has; viewers scale it into the new rectangle.
+    // A rubber stamp keeps the appearance it has, the stream itself and not only the reference to
+    // it; viewers scale it into the new rectangle.
     let stamp =
         add_annotation(&mut doc, &new(0, Shape::Stamp { rect: [300.0, 300.0, 400.0, 330.0], stamp: StampKind::Approved, by: None }), &meta("s"))
             .unwrap();
-    let before = list(&doc, 0).remove(stamp).get(b"AP").cloned();
+    let normal = |doc: &Document| {
+        let d = list(doc, 0).remove(stamp);
+        let ap = doc.resolve(d.get(b"AP").expect("an appearance"));
+        let n = doc.get(ap.as_dict().and_then(|ap| ap.reference(b"N")).expect("a normal appearance"));
+        let Object::Stream(n) = n.as_ref() else { panic!("the normal appearance is a stream") };
+        (d.get(b"AP").cloned(), n.dict.clone(), n.decoded().unwrap().to_vec())
+    };
+    let before = normal(&doc);
     set_rect(&mut doc, 0, stamp, [300.0, 300.0, 500.0, 360.0], &meta("s")).unwrap();
-    assert_eq!(list(&doc, 0).remove(stamp).get(b"AP").cloned(), before);
+    assert_eq!(normal(&doc), before, "the /AP entry, the stream's dictionary (with /BBox and /Resources) and its content");
 }
