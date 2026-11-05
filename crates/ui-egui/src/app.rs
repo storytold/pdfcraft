@@ -100,6 +100,7 @@ impl PdfCraftApp {
             #[cfg(target_os = "linux")]
             desktop_theme_enabled: false,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
+            invert_middle_drag: false,
             animation_effects: motion::AnimationEffects::default(),
             motion: motion::Motion::default(),
             language: i18n::AUTO.to_string(),
@@ -108,6 +109,7 @@ impl PdfCraftApp {
             ui_scale_applied: None,
             flatten_fill_sign_on_save: false,
             fill_text_size: fill_sign::TEXT_SIZE,
+            fill_tool: fill_sign::FillTool::Signature,
             fill_text_color: [0.0; 3],
             dialog: None,
             updates: updates::Updates::default(),
@@ -128,6 +130,7 @@ impl PdfCraftApp {
             last_session: Default::default(),
             quit_session: None,
             reload_changed_files: true,
+            update_check_at_start: true,
             show_secured_notice: true,
             always_default_view: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -227,8 +230,11 @@ impl PdfCraftApp {
             stamp_draft: Default::default(),
             optimize_draft: OptimizeDraft::default(),
             optimize_run: None,
+            scan_clean_draft: scan_clean_ui::ScanCleanDraft::default(),
+            scan_clean_run: None,
             progress_notice: None,
             page_clipboard: None,
+            comment_clipboard: None,
             grid_drop: None,
             last_snapshot: None,
             last_copied_image: None,
@@ -260,6 +266,7 @@ impl PdfCraftApp {
             fonts_cjk: theme::CjkPreference::Default,
             control: None,
             bookmark_rename: None,
+            bookmark_clipboard: None,
             last_opened_url: None,
             community_card_closed: false,
             pending_link: None,
@@ -447,6 +454,9 @@ impl eframe::App for PdfCraftApp {
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);
         i18n::set_current(lang);
+        // Form date fields name months in the date language (Preferences ▸ Date format), which
+        // follows the interface language until one is picked (#5303).
+        pdfcraft_engine::dates::use_form_date_language(self.session.date_language().unwrap_or(lang.code()));
         #[cfg(not(target_arch = "wasm32"))]
         {
             if let Some(worker) = &self.open_worker {
@@ -609,6 +619,7 @@ impl eframe::App for PdfCraftApp {
         self.auto_ocr_scanned_page();
         self.poll_ocr();
         self.poll_optimize();
+        self.poll_scan_clean();
         self.poll_action();
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]

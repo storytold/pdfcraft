@@ -39,6 +39,8 @@ pub(crate) struct PagePointer {
     pub origin: Option<Pos2>,
     /// This frame's primary presses and releases of a press the pages hold, in order.
     pub edges: Vec<Edge>,
+    /// Where this frame's last primary release of a press the pages hold was.
+    pub released: Option<Pos2>,
     /// The primary button is down, wherever it was pressed: a gesture ends once it is up.
     pub primary_down: bool,
     /// Some button is down, wherever it was pressed.
@@ -64,29 +66,33 @@ impl PagePointer {
     /// The page pointer with gestures that begin in `blocked` retained as blocked through every
     /// egui pass of their release frame. A new frame clears the retained block.
     pub(crate) fn read_excluding(ui: &egui::Ui, resp: &egui::Response, modal: bool, blocked: &[Rect]) -> Self {
-        let (at, origin, edges, mut primary_down, mut any_down, raw_press_blocked, raw_primary_press_blocked, blocked_interaction) = ui.input(|i| {
-            (
-                i.pointer.interact_pos(),
-                i.pointer.press_origin(),
-                edges(&i.events),
-                i.pointer.primary_down(),
-                i.pointer.any_down(),
-                i.events.iter().any(|event| match event {
-                    Event::PointerButton { pos, pressed: true, .. } => blocked.iter().any(|rect| rect.contains(*pos)),
-                    _ => false,
-                }),
-                i.events.iter().any(|event| match event {
-                    Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, .. } => blocked.iter().any(|rect| rect.contains(*pos)),
-                    _ => false,
-                }),
-                i.events.iter().find_map(|event| match event {
-                    Event::PointerButton { pos, pressed: true, .. } if pos.is_finite() && blocked.iter().any(|rect| rect.contains(*pos)) => {
-                        Some(*pos)
-                    }
-                    _ => None,
-                }),
-            )
-        });
+        let (at, origin, edges, released, mut primary_down, mut any_down, raw_press_blocked, raw_primary_press_blocked, blocked_interaction) = ui
+            .input(|i| {
+                (
+                    i.pointer.interact_pos(),
+                    i.pointer.press_origin(),
+                    edges(&i.events),
+                    last_release(&i.events),
+                    i.pointer.primary_down(),
+                    i.pointer.any_down(),
+                    i.events.iter().any(|event| match event {
+                        Event::PointerButton { pos, pressed: true, .. } => blocked.iter().any(|rect| rect.contains(*pos)),
+                        _ => false,
+                    }),
+                    i.events.iter().any(|event| match event {
+                        Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, .. } => {
+                            blocked.iter().any(|rect| rect.contains(*pos))
+                        }
+                        _ => false,
+                    }),
+                    i.events.iter().find_map(|event| match event {
+                        Event::PointerButton { pos, pressed: true, .. } if pos.is_finite() && blocked.iter().any(|rect| rect.contains(*pos)) => {
+                            Some(*pos)
+                        }
+                        _ => None,
+                    }),
+                )
+            });
         let layer = ui.layer_id();
         let blocked_interaction = blocked_interaction.filter(|p| !modal && ui.ctx().layer_id_at(*p).is_none_or(|l| l == layer));
         let blocked_press_key = resp.id.with("blocked-press");
@@ -121,13 +127,13 @@ impl PagePointer {
             ui.data_mut(|data| data.insert_temp(blocked_press_key, true));
         }
         let blocked_press = started_blocked || ui.data(|data| data.get_temp::<bool>(blocked_press_key)).unwrap_or(false);
-        let released = edges.iter().any(|edge| matches!(edge, Edge::Release(_)));
+        let primary_released = edges.iter().any(|edge| matches!(edge, Edge::Release(_)));
         // A later button press over viewport chrome must not revoke a primary drag that the pages
         // already own. Keep the chrome press blocked for context-menu handling while delivering
         // the held primary pointer and its release to the active page operation.
         let preserve_primary = blocked_press
             && !primary_press_blocked
-            && ((primary_down && resp.dragged_by(PointerButton::Primary)) || (released && resp.drag_stopped()));
+            && ((primary_down && resp.dragged_by(PointerButton::Primary)) || (primary_released && resp.drag_stopped()));
         let raw_any_down = any_down;
         if blocked_press && !preserve_primary {
             primary_down = false;
@@ -155,9 +161,9 @@ impl PagePointer {
             ui.data_mut(|data| data.insert_temp(clear_blocked_press_key, true));
         }
         if !held {
-            return Self { pos, origin: None, edges: Vec::new(), primary_down, any_down, blocked_press, blocked_interaction };
+            return Self { pos, origin: None, edges: Vec::new(), released: None, primary_down, any_down, blocked_press, blocked_interaction };
         }
-        Self { pos, origin: press_origin, edges, primary_down, any_down, blocked_press, blocked_interaction }
+        Self { pos, origin: press_origin, edges, released, primary_down, any_down, blocked_press, blocked_interaction }
     }
 
     /// Where the pointer is, when it is inside `r`.
@@ -185,6 +191,14 @@ fn first_press(edges: &[Edge]) -> Option<Pos2> {
     edges.iter().find_map(|e| match e {
         Edge::Press(p) => Some(*p),
         Edge::Release(_) => None,
+    })
+}
+
+/// Where the last primary release among `events` was.
+fn last_release(events: &[Event]) -> Option<Pos2> {
+    events.iter().rev().find_map(|e| match e {
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, .. } if pos.is_finite() => Some(*pos),
+        _ => None,
     })
 }
 

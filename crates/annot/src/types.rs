@@ -124,6 +124,28 @@ impl FillMark {
         let (w, h) = if matches!(rotation.rem_euclid(360), 90 | 270) { (h, w) } else { (w, h) };
         [at[0] - w / 2.0, at[1] - h / 2.0, at[0] + w / 2.0, at[1] + h / 2.0]
     }
+
+    /// The mark whose `/Name` this is.
+    pub fn from_name(n: &[u8]) -> Option<Self> {
+        [FillMark::Check, FillMark::Cross, FillMark::Dot, FillMark::Line].into_iter().find(|m| m.name().as_bytes() == n)
+    }
+
+    /// The pen strokes the mark is drawn with in `rect` (user space): what its appearance strokes,
+    /// and what a copy of it shows while it is being placed. The dot is a filled circle (radius
+    /// 0.3 × the shorter side, centred) and has none.
+    pub fn strokes(self, rect: [f64; 4]) -> Vec<Vec<[f64; 2]>> {
+        let [x0, y0, x1, y1] = rect;
+        let (w, h) = (x1 - x0, y1 - y0);
+        match self {
+            FillMark::Check => vec![vec![[x0 + w * 0.15, y0 + h * 0.5], [x0 + w * 0.4, y0 + h * 0.2], [x0 + w * 0.88, y0 + h * 0.85]]],
+            FillMark::Cross => vec![
+                vec![[x0 + w * 0.18, y0 + h * 0.18], [x1 - w * 0.18, y1 - h * 0.18]],
+                vec![[x0 + w * 0.18, y1 - h * 0.18], [x1 - w * 0.18, y0 + h * 0.18]],
+            ],
+            FillMark::Dot => Vec::new(),
+            FillMark::Line => vec![vec![[x0, y0 + h / 2.0], [x1, y0 + h / 2.0]]],
+        }
+    }
 }
 
 /// The stamps of Acrobat's stamp palette (drawn in PdfCraft's own style).
@@ -566,6 +588,11 @@ pub struct Style {
     pub width: f64,
     /// Interior fill for rectangles and ovals (`/IC`), background for text boxes.
     pub fill: Option<Rgb>,
+    /// The fill's own opacity, 0–1 (`/ca`), where it differs from `opacity` (which is then the
+    /// line's or border's); `None`: as `opacity`.
+    pub fill_opacity: Option<f64>,
+    /// A text box's text's own opacity, 0–1 (`/PCTextOpacity`); `None`: as the fill's.
+    pub text_opacity: Option<f64>,
 }
 
 /// The style properties changed by one annotation edit. `None` leaves a property unchanged.
@@ -597,7 +624,7 @@ pub struct TextReplacement<'a> {
 
 impl Default for Style {
     fn default() -> Self {
-        Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None }
+        Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None, fill_opacity: None, text_opacity: None }
     }
 }
 
@@ -615,7 +642,7 @@ impl Style {
             }
             Shape::Callout { .. } => ([0.0, 0.0, 0.0], 1.0),
             Shape::Caret { .. } | Shape::Attachment { .. } => ([0.0, 0.47, 0.84], 1.0),
-            Shape::FreehandHighlight { .. } => return Self { color: [1.0, 0.94, 0.0], opacity: 0.35, width: 14.0, fill: None },
+            Shape::FreehandHighlight { .. } => return Self { color: [1.0, 0.94, 0.0], opacity: 0.35, width: 14.0, ..Self::default() },
             Shape::Ink { .. } => ([0.0, 0.4, 0.87], 2.0),
             Shape::TextBox { .. } | Shape::Typewriter { .. } => ([0.0, 0.0, 0.0], 0.0),
             Shape::Mark { .. } => ([0.0, 0.0, 0.0], 1.5),
@@ -624,9 +651,9 @@ impl Style {
             Shape::CustomStamp { .. } => ([0.0, 0.0, 0.0], 0.0),
             Shape::TypedSignature { .. } => ([0.0, 0.0, 0.0], 0.0),
             // Red outline while marked; a black box once applied.
-            Shape::Redact { .. } => return Self { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: Some([0.0, 0.0, 0.0]) },
+            Shape::Redact { .. } => return Self { color: [0.89, 0.13, 0.13], fill: Some([0.0, 0.0, 0.0]), ..Self::default() },
         };
-        Self { color, opacity: 1.0, width, fill: None }
+        Self { color, width, ..Self::default() }
     }
 }
 

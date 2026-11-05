@@ -276,6 +276,7 @@ pub(super) fn organize_grid(
     doc: &pdfcraft_engine::Document,
     unobstructed: bool,
     show_page_edge_shadows: bool,
+    invert_middle: bool,
     ui: &mut egui::Ui,
     t: &Tokens,
 ) {
@@ -292,7 +293,7 @@ pub(super) fn organize_grid(
     let viewport = ui.available_rect_before_wrap();
     view.viewport_screen = viewport;
     let auto_delta = if unobstructed {
-        view.auto_scroll.update(ui, viewport, &[], true)
+        view.auto_scroll.update(ui, viewport, &[], true, invert_middle)
     } else {
         view.auto_scroll.cancel();
         Vec2::ZERO
