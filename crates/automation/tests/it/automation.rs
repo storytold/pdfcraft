@@ -2135,6 +2135,55 @@ fn numbering_pages_through_tools() {
     assert!(matches!(a.call("page_number", &json!({ "doc": doc, "from": 1, "to": 1, "style": "klingon" })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// Typed text and text boxes take an oval or a circle for their border through the tools;
+/// comment_list reports it (a rectangle is not reported). Only typed text, dates and text boxes
+/// have one, and only the three shapes.
+#[test]
+fn text_borders_take_an_oval_or_a_circle_through_the_tools() {
+    let dir = workdir("border-shape");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(
+        &mut a,
+        "fill_sign_add",
+        json!({ "doc": doc, "page": 1, "type": "text", "at": [20, 40], "text": "12", "border": 1, "border_shape": "circle" }),
+    );
+    ok(
+        &mut a,
+        "comment_add",
+        json!({ "doc": doc, "page": 1, "type": "textbox", "rect": [10, 200, 190, 240], "contents": "Hello", "width": 1, "border_shape": "Oval" }),
+    );
+    let list = |a: &mut Automation| ok(a, "comment_list", json!({ "doc": doc, "page": 1 }))["comments"].as_array().unwrap().clone();
+    let shapes: Vec<Value> = list(&mut a).iter().map(|c| c["border_shape"].clone()).collect();
+    assert_eq!(shapes, [json!("circle"), json!("oval")]);
+    let typed = list(&mut a)[0].clone();
+    // Snug around "12": the box no wider than the text needs, the circle as wide as that box.
+    let r: Vec<f64> = typed["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    let w = pdfcraft_engine::annot_text::text_width("12", 10.0) + 10.0;
+    assert!((r[2] - r[0] - w).abs() < 0.05 && (r[3] - r[1] - w).abs() < 0.05, "{r:?}");
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": typed["page"], "index": typed["index"], "border_shape": "oval" }));
+    assert_eq!(list(&mut a)[0]["border_shape"], "oval");
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": typed["page"], "index": typed["index"], "border_shape": "rectangle" }));
+    assert!(list(&mut a)[0].get("border_shape").is_none(), "a rectangle is not reported");
+    for (tool, args) in [
+        ("fill_sign_add", json!({ "doc": doc, "page": 1, "type": "check", "at": [60, 60], "border_shape": "oval" })),
+        ("fill_sign_add", json!({ "doc": doc, "page": 1, "type": "text", "text": "7", "at": [60, 60], "border_shape": "circle" })),
+        ("comment_add", json!({ "doc": doc, "page": 1, "type": "rectangle", "rect": [80, 10, 120, 40], "border_shape": "oval" })),
+        ("comment_edit", json!({ "doc": doc, "page": typed["page"], "index": typed["index"], "border_shape": "star" })),
+    ] {
+        assert!(matches!(a.call(tool, &args), Err(ToolError::InvalidArgs(_))), "{args}");
+    }
+    let callout = ok(
+        &mut a,
+        "comment_add",
+        json!({ "doc": doc, "page": 1, "type": "callout", "rect": [110, 100, 190, 140], "to": [40, 60], "contents": "Look" }),
+    );
+    assert!(matches!(
+        a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": callout["comment"]["index"], "border_shape": "oval" })),
+        Err(ToolError::Failed(_))
+    ));
+}
+
 /// A rectangle's fill and a text box's text each take an opacity of their own through the tools
 /// (the line or border keeps the comment's `opacity`); `opacity` sets the whole comment's again.
 #[test]
@@ -4071,6 +4120,48 @@ fn fill_sign_text_and_date_colours_are_saved_and_validated() {
         // FreeText stores its text colour in DA; C is the annotation background.
         let da = annotation.as_dict().unwrap().get(b"DA").unwrap().as_string().unwrap();
         assert_eq!(String::from_utf8(da.bytes.to_vec()).unwrap(), "0.2 0.4 0.8 rg /Helv 6.5 Tf");
+    }
+}
+
+#[test]
+fn fill_sign_text_border_is_saved_and_validated() {
+    let dir = workdir("fill-sign-text-border");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "text", "at": [20, 40], "text": "Plain" }));
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "text", "at": [20, 80], "text": "Plain", "border": 1.5 }));
+    let comments = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    let width = |k: usize| {
+        let rect = comments["comments"][k]["rect"].as_array().unwrap();
+        rect[2].as_f64().unwrap() - rect[0].as_f64().unwrap()
+    };
+    assert!((width(1) - width(0) - 3.0).abs() < 1e-6, "1.5 pt on each side: {comments}");
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "framed.pdf" }));
+    let saved = std::fs::read(dir.join("framed.pdf")).unwrap();
+    let pdf = pdfcraft_cos::Document::open(std::sync::Arc::new(saved)).unwrap();
+    let page = pdfcraft_model::pages(&pdf).remove(0);
+    let annotations = pdf.resolve(page.dict.get(b"Annots").unwrap());
+    let annotation = pdf.resolve(annotations.as_array().unwrap().get(1).unwrap());
+    let bs = annotation.as_dict().unwrap().get(b"BS").unwrap().as_dict().unwrap().get(b"W").unwrap().as_f64().unwrap();
+    assert_eq!(bs, 1.5, "saved annotation has the requested border");
+    // Its own colour, then the text's again through comment_edit.
+    ok(
+        &mut a,
+        "fill_sign_add",
+        json!({ "doc": doc, "page": 1, "type": "text", "at": [20, 160], "text": "Red", "border": 1, "border_color": "#ff0000" }),
+    );
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let red = list["comments"].as_array().unwrap().iter().find(|c| c["contents"] == "Red").unwrap()["index"].clone();
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 1, "index": red, "border_color": "text" }));
+    assert!(
+        a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": "text", "at": [20, 200], "text": "No", "border_color": "red" })).is_err(),
+        "no border"
+    );
+    for (kind, border) in [("text", -1.0), ("text", 13.0), ("check", 1.0)] {
+        assert!(matches!(
+            a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": kind, "at": [20, 120], "text": "No", "border": border })),
+            Err(ToolError::InvalidArgs(_))
+        ));
     }
 }
 
@@ -10997,4 +11088,50 @@ fn a_bad_bookmark_tree_is_refused_whole_and_names_the_node() {
     }
     assert!(!out.exists());
     assert_eq!(ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"], json!([]));
+}
+
+/// Copy and paste comments between documents through the tools: the copies carry their replies,
+/// land on the asked-for page under their own names (a second paste gives a second set), and a
+/// plain text is refused.
+#[test]
+fn comments_copy_and_paste_between_documents_through_tools() {
+    let dir = workdir("comments-clipboard");
+    let mut a = auto(&dir);
+    let src = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "comment_add", json!({ "doc": src, "page": 2, "type": "note", "at": [30, 30], "contents": "Please review", "author": "Ada" }));
+    ok(&mut a, "comment_add", json!({ "doc": src, "page": 2, "type": "rectangle", "rect": [20, 20, 80, 60], "contents": "Box" }));
+    ok(&mut a, "comment_reply", json!({ "doc": src, "page": 2, "index": 1, "text": "Done", "author": "Bob" }));
+    // Positions as comment_list reports them (a note's pop-up takes a position of its own).
+    let listed = ok(&mut a, "comment_list", json!({ "doc": src, "page": 2 }));
+    let pairs: Vec<Value> = listed["comments"].as_array().unwrap().iter().map(|c| json!([c["page"], c["index"]])).collect();
+    assert_eq!(pairs.len(), 2, "{listed}");
+    let copied = ok(&mut a, "comments_copy", json!({ "doc": src, "comments": pairs }));
+    assert_eq!(copied["comments"], 2);
+    let xfdf = copied["xfdf"].as_str().unwrap().to_owned();
+    assert!(xfdf.contains("inreplyto=") && xfdf.contains("<square"), "{xfdf}");
+    let dst = ok(&mut a, "doc_open", json!({ "path": "b.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "comments_paste", json!({ "doc": dst, "page": 1, "xfdf": xfdf }));
+    assert_eq!(r["comments"], 3, "two comments and the reply: {r}");
+    assert_eq!(r["undo"], "Paste comments");
+    let list = ok(&mut a, "comment_list", json!({ "doc": dst }));
+    let comments = list["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 2, "the reply is in its thread, not a comment of its own: {list}");
+    assert!(comments.iter().all(|c| c["page"] == 1), "{list}");
+    assert_eq!(comments.iter().filter(|c| c["contents"] == "Please review").count(), 1);
+    // The same again: a second set, not a replacement of the first.
+    ok(&mut a, "comments_paste", json!({ "doc": dst, "page": 1, "xfdf": copied["xfdf"] }));
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": dst }))["comments"].as_array().unwrap().len(), 4);
+    // Placed: the copies' box is centred at `at` (top-left page coordinates, like comment_add).
+    let r = ok(&mut a, "comments_paste", json!({ "doc": dst, "page": 2, "xfdf": copied["xfdf"], "at": [100, 150] }));
+    assert_eq!(r["comments"], 3);
+    let placed = ok(&mut a, "comment_list", json!({ "doc": dst, "page": 2 }));
+    let rects: Vec<Vec<f64>> =
+        placed["comments"].as_array().unwrap().iter().map(|c| c["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect()).collect();
+    let (x0, y0, x1, y1) =
+        rects.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |(a, b, c, d), r| (a.min(r[0]), b.min(r[1]), c.max(r[2]), d.max(r[3])));
+    assert!(((x0 + x1) / 2.0 - 100.0).abs() < 1.0 && ((y0 + y1) / 2.0 - 150.0).abs() < 1.0, "centred at [100, 150]: {rects:?}");
+    assert!(matches!(a.call("comments_paste", &json!({ "doc": dst, "page": 1, "xfdf": "hello" })), Err(ToolError::InvalidArgs(_))));
+    assert!(a.call("comments_copy", &json!({ "doc": src, "comments": [[9, 9]] })).is_err(), "no such comment");
+    assert!(matches!(a.call("comments_copy", &json!({ "doc": src, "comments": [[2]] })), Err(ToolError::InvalidArgs(_))));
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": src }))["comments"].as_array().unwrap().len(), 2, "the source is untouched");
 }

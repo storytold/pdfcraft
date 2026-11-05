@@ -26,6 +26,9 @@ pub struct PropsDraft {
     /// Acrobat's Make Properties Default box: on OK, new comments of this kind take the edited
     /// colour, opacity and line width too.
     pub make_default: bool,
+    /// The other selected comments, each with its own properties: OK makes the same changes to
+    /// them where they apply (a colour to every one, a font size to text boxes, …).
+    pub others: Vec<(usize, usize, CommentProps)>,
 }
 
 const ICONS: [NoteIcon; 14] = NoteIcon::ALL;
@@ -99,6 +102,23 @@ impl PdfCraftApp {
         let Some((_, id)) = self.active_ids() else { return };
         let Some(doc) = self.session.get(id) else { return };
         let Some(a) = doc.info.annotations.iter().find(|a| a.page == page && a.index == index && !a.is_reply()) else { return };
+        // Typed text has no comment tool: Fill & Sign gives new text its size, colour and border,
+        // kept across launches.
+        if crate::comments::typed_text(a) {
+            let kind = crate::i18n::in_sentence(tl!(crate::comments_panel::kind_label(a))).to_string();
+            if let Some(size) = p.font_size.and_then(crate::fill_sign::valid_text_size) {
+                self.fill_text_size = size;
+            }
+            if let Some(color) = p.color.and_then(crate::fill_sign::valid_text_color) {
+                self.fill_text_color = color;
+            }
+            let width = p.width.and_then(crate::fill_sign::valid_text_border).unwrap_or(0.0);
+            let border = crate::fill_sign::TextBorder { width, color: p.border_color, shape: drawn_border_shape(p).unwrap_or_default() };
+            self.fill_text_default = border;
+            (self.fill_text_border, self.fill_text_border_color, self.fill_text_border_shape) = (border.width, border.color, border.shape);
+            self.notify_fmt("New {tool} comments will look like this one", &[("tool", &kind)]);
+            return;
+        }
         let Some(tool) = crate::comments::tool_for_default(a, p.endings.as_deref()) else { return };
         let mut style = self.comment_prefs.style(tool);
         if let Some(c) = p.color {
@@ -108,6 +128,11 @@ impl PdfCraftApp {
             style.fill = p.fill;
         }
         self.comment_prefs.set_style(tool, style);
+        // A text box's or callout's own border colour (cleared for tools that have none).
+        self.comment_prefs.set_border_color(tool, p.border_color);
+        if let Some(shape) = drawn_border_shape(p) {
+            self.comment_prefs.set_border_shape(tool, shape);
+        }
         // The fill's and text's own opacities where they show (else the opacity is the whole
         // comment's). With neither a border nor a fill the text is the whole comment: its drawn
         // opacity, which Comment Properties shows, is the whole comment's default.
@@ -121,13 +146,52 @@ impl PdfCraftApp {
         self.notify_fmt("New {tool} comments will look like this one", &[("tool", &crate::i18n::in_sentence(tl!(tool.label())))]);
     }
 
-    /// Open Comment Properties for the comment at `(page, index)` of the active document.
+    /// Give every selected comment of the active document `color`, as one undo step.
+    pub fn colour_selected_comments(&mut self, color: pdfcraft_engine::Rgb) {
+        self.colour_selection(color, |_| true);
+    }
+
+    /// Give the selected comments that `only` picks `color`, as one undo step: those whose look can
+    /// change and that aren't locked (a locked one would refuse the whole step).
+    pub(crate) fn colour_selection(&mut self, color: pdfcraft_engine::Rgb, only: impl Fn(&pdfcraft_render::Annotation) -> bool) {
+        let Some((i, id)) = self.active_ids() else { return };
+        let Some(doc) = self.session.get(id) else { return };
+        let keys = self.views.get(i).map(|v| v.comments.selection()).unwrap_or_default();
+        let mut edits: Vec<Edit> = keys
+            .into_iter()
+            .filter(|(p, ix)| doc.info.annotations.iter().any(|a| a.page == *p && a.index == *ix && !a.is_reply() && only(a)))
+            .filter(|(p, ix)| doc.comment_props(*p, *ix).is_some_and(|c| c.restylable && !c.locked))
+            .map(|(page, index)| Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None })
+            .collect();
+        match edits.len() {
+            0 => {}
+            1 => {
+                self.apply_edit(edits.remove(0));
+            }
+            _ => {
+                self.apply_edit(Edit::Batch { label: "Change comment properties".into(), edits });
+            }
+        }
+    }
+
+    /// Open Comment Properties for the comment at `(page, index)` of the active document. When it
+    /// is one of several selected comments, the changes go to all of them.
     pub fn open_comment_props(&mut self, page: usize, index: usize) {
-        let Some((_, id)) = self.active_ids() else { return };
-        let Some(p) = self.session.get(id).and_then(|d| d.comment_props(page, index)) else { return };
-        self.comment_props = Some(PropsDraft { page, index, tab: PropsTab::Appearance, original: p.clone(), edited: p, make_default: false });
+        let Some((i, id)) = self.active_ids() else { return };
+        let Some(doc) = self.session.get(id) else { return };
+        let Some(p) = doc.comment_props(page, index) else { return };
+        let selection = self.views.get(i).map(|v| &v.comments).filter(|c| c.is_selected((page, index))).map(|c| c.selection()).unwrap_or_default();
+        let others =
+            selection.into_iter().filter(|k| *k != (page, index)).filter_map(|(pg, ix)| doc.comment_props(pg, ix).map(|c| (pg, ix, c))).collect();
+        self.comment_props = Some(PropsDraft { page, index, tab: PropsTab::Appearance, original: p.clone(), edited: p, make_default: false, others });
         self.dialog = Some(crate::Dialog::CommentProps);
     }
+}
+
+/// The border shape `p` draws: a Thickness of 0 takes an oval or a circle away with the line, as
+/// the toolbar's Border ▸ None does.
+fn drawn_border_shape(p: &CommentProps) -> Option<pdfcraft_engine::BorderShape> {
+    p.border_shape.map(|s| if p.width.is_some_and(|w| w <= 0.0) { pdfcraft_engine::BorderShape::Rectangle } else { s })
 }
 
 /// Which of the comment's parts show an opacity of their own: (its fill, its text). A text box's
@@ -144,53 +208,103 @@ fn has_border(p: &CommentProps) -> bool {
     p.font_size.is_some() && p.width.is_some_and(|w| w > 0.0)
 }
 
-/// The edits that make the comment match the draft (empty when nothing changed).
+/// The edits that make the comment match the draft (empty when nothing changed), and make the
+/// same changes to the other selected comments where they apply. Locks come off first and go on
+/// last, as a locked comment refuses other changes; another comment that stays locked is left
+/// as it is.
 pub fn edits(d: &PropsDraft) -> Vec<Edit> {
     let (o, e) = (&d.original, &d.edited);
+    let targets: Vec<(usize, usize, &CommentProps)> =
+        std::iter::once((d.page, d.index, o)).chain(d.others.iter().map(|(p, i, c)| (*p, *i, c))).collect();
     let mut out = Vec::new();
-    // A locked comment refuses other changes: unlock first, lock last.
-    if o.locked && !e.locked {
-        out.push(Edit::LockAnnotation { page: d.page, index: d.index, locked: false });
+    // Unticking Locked unlocks every selected comment.
+    let unlocking = o.locked && !e.locked;
+    for &(page, index, t) in &targets {
+        if unlocking && t.locked {
+            out.push(Edit::LockAnnotation { page, index, locked: false });
+        }
     }
+    for (n, &(page, index, t)) in targets.iter().enumerate() {
+        if n > 0 && t.locked && !unlocking {
+            continue;
+        }
+        changes(o, e, page, index, t, &mut out);
+    }
+    for &(page, index, t) in &targets {
+        if !o.locked && e.locked && !t.locked {
+            out.push(Edit::LockAnnotation { page, index, locked: true });
+        }
+    }
+    out
+}
+
+/// The changes from `o` to `e` (the draft) for the comment at `(page, index)`, whose own
+/// properties are `t`: only those its kind has (a line width for shapes and lines, a fill for
+/// shapes, a font size for text, …).
+fn changes(o: &CommentProps, e: &CommentProps, page: usize, index: usize, t: &CommentProps, out: &mut Vec<Edit>) {
     let color = (e.color != o.color).then_some(e.color).flatten();
     let opacity = ((e.opacity - o.opacity).abs() > 1e-6).then_some(e.opacity);
-    let width = (e.width != o.width).then_some(e.width).flatten();
-    let endings = (e.endings != o.endings).then(|| e.endings.clone()).flatten();
-    if e.restylable && (color.is_some() || opacity.is_some() || width.is_some() || endings.is_some()) {
-        out.push(Edit::StyleAnnotation { page: d.page, index: d.index, color, opacity, width, endings });
+    let width = (e.width != o.width).then_some(e.width).flatten().filter(|_| t.width.is_some());
+    let endings =
+        (e.endings != o.endings).then(|| e.endings.clone()).flatten().filter(|ends| t.endings.as_ref().is_some_and(|own| own.len() == ends.len()));
+    if t.restylable && (color.is_some() || opacity.is_some() || width.is_some() || endings.is_some()) {
+        out.push(Edit::StyleAnnotation { page, index, color, opacity, width, endings });
     }
-    if e.restylable && e.fillable && e.fill != o.fill {
-        out.push(Edit::FillAnnotation { page: d.page, index: d.index, fill: e.fill });
+    if t.restylable && t.fillable && e.fill != o.fill {
+        out.push(Edit::FillAnnotation { page, index, fill: e.fill });
     }
-    // After the opacity, which is the whole comment's: the parts shown are set again.
-    let (fill, text) = parts_shown(e);
+    // After the opacity, which is the whole comment's: the parts shown are set again. Which
+    // parts show is the comment's own once the draft's fill and line width are on it, so another
+    // selected comment without a border or a fill keeps one opacity for the whole comment.
+    let mut after = t.clone();
+    if t.fillable && e.fill != o.fill {
+        after.fill = e.fill;
+    }
+    if let Some(w) = width {
+        after.width = Some(w);
+    }
+    let (fill, text) = parts_shown(&after);
     let moved = |a: Option<f64>, b: Option<f64>| a.zip(b).is_some_and(|(a, b)| (a - b).abs() > 1e-6);
-    if e.restylable
+    if t.restylable
         && (fill || text)
         && (opacity.is_some() || fill && moved(e.fill_opacity, o.fill_opacity) || text && moved(e.text_opacity, o.text_opacity))
     {
-        out.push(Edit::PartOpacity { page: d.page, index: d.index, fill: e.fill_opacity.filter(|_| fill), text: e.text_opacity.filter(|_| text) });
+        out.push(Edit::PartOpacity { page, index, fill: e.fill_opacity.filter(|_| fill), text: e.text_opacity.filter(|_| text) });
     }
-    if e.restylable
+    if t.restylable
+        && t.font.is_some()
         && let Some(font) = e.font.filter(|f| Some(*f) != o.font)
     {
-        out.push(Edit::SetAnnotationFont { page: d.page, index: d.index, font });
+        out.push(Edit::SetAnnotationFont { page, index, font });
     }
-    if e.restylable
+    if t.restylable
+        && t.font_size.is_some()
         && let Some(size) = e.font_size.filter(|s| Some(*s) != o.font_size)
     {
-        out.push(Edit::FontSizeAnnotation { page: d.page, index: d.index, size });
+        out.push(Edit::FontSizeAnnotation { page, index, size });
+    }
+    if t.restylable && t.font_size.is_some() && e.border_color != o.border_color {
+        out.push(Edit::BorderColorAnnotation { page, index, color: e.border_color });
+    }
+    // After the width (StyleAnnotation), whose border the shape goes around: each selected
+    // text keeps its own shape unless the draft's changed, and loses it with its border.
+    let mut shaped = after;
+    if e.border_shape != o.border_shape {
+        shaped.border_shape = e.border_shape;
+    }
+    if t.restylable
+        && t.border_shape.is_some()
+        && (e.border_shape != o.border_shape || width.is_some())
+        && let Some(shape) = drawn_border_shape(&shaped).filter(|s| Some(*s) != t.border_shape)
+    {
+        out.push(Edit::BorderShapeAnnotation { page, index, shape });
     }
     let author = (e.author != o.author).then(|| e.author.clone());
     let subject = (e.subject != o.subject).then(|| e.subject.clone());
-    let icon = (e.icon != o.icon).then_some(e.icon).flatten();
+    let icon = (e.icon != o.icon).then_some(e.icon).flatten().filter(|_| t.icon.is_some());
     if author.is_some() || subject.is_some() || icon.is_some() {
-        out.push(Edit::SetAnnotationInfo { page: d.page, index: d.index, author, subject, icon });
+        out.push(Edit::SetAnnotationInfo { page, index, author, subject, icon });
     }
-    if !o.locked && e.locked {
-        out.push(Edit::LockAnnotation { page: d.page, index: d.index, locked: true });
-    }
-    out
 }
 
 /// Draw the dialog; returns (apply, cancel).
@@ -209,15 +323,18 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 .collect()
         })
         .unwrap_or_default();
-    let default_tool = app.comment_props.as_ref().and_then(|d| {
-        let (_, id) = app.active_ids()?;
-        let doc = app.session.get(id)?;
-        let a = doc.info.annotations.iter().find(|a| a.page == d.page && a.index == d.index && !a.is_reply())?;
-        crate::comments::tool_for_default(a, d.edited.endings.as_deref())
+    let has_default = app.comment_props.as_ref().is_some_and(|d| {
+        let doc = app.active_ids().and_then(|(_, id)| app.session.get(id));
+        doc.and_then(|doc| doc.info.annotations.iter().find(|a| a.page == d.page && a.index == d.index && !a.is_reply()))
+            .is_some_and(|a| crate::comments::tool_for_default(a, d.edited.endings.as_deref()).is_some() || crate::comments::typed_text(a))
     });
     let Some(d) = app.comment_props.as_mut() else { return (false, true) };
     let kind = tl!(crate::comments_panel::subtype_label(&d.edited.subtype)).to_string();
     ui.label(egui::RichText::new(crate::i18n::fmt(tl!("{kind} Properties"), &[("kind", &kind)])).font(theme::semibold(18.0)));
+    if !d.others.is_empty() {
+        let n = (d.others.len() + 1).to_string();
+        ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Changes here apply to all {n} selected comments"), &[("n", &n)])).color(t.text_muted));
+    }
     ui.add_space(6.0);
     ui.horizontal_wrapped(|ui| {
         for (tab, label) in
@@ -252,6 +369,31 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                         e.color = Some(c);
                     }
                     ui.end_row();
+                    // Text boxes, typewriter text and callouts: the border's own colour.
+                    if e.font_size.is_some() {
+                        ui.label(tl!("Border colour"));
+                        let text = e.color.unwrap_or([0.0; 3]);
+                        ui.horizontal(|ui| {
+                            if let Some(c) = crate::comments::border_colour_button(ui, e.border_color, text) {
+                                e.border_color = c;
+                            }
+                        });
+                        ui.end_row();
+                    }
+                    // Text boxes and typewriter text: an oval or a circle goes around the text.
+                    if let Some(shape) = e.border_shape.as_mut() {
+                        let label = ui.label(tl!("Border shape"));
+                        craft_ui::ComboBox::from_id_salt("border-shape")
+                            .selected_text(tl!(shape.name()))
+                            .show_ui(ui, |ui| {
+                                for s in pdfcraft_engine::BorderShape::ALL {
+                                    ui.selectable_value(shape, s, tl!(s.name()));
+                                }
+                            })
+                            .response
+                            .labelled_by(label.id);
+                        ui.end_row();
+                    }
                     if e.fillable {
                         ui.label(tl!("Fill colour"));
                         if let Some(f) = crate::comments::fill_picker(ui, e.fill) {
@@ -369,8 +511,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     ui.horizontal(|ui| {
         ui.add(widgets::checkbox(&mut d.edited.locked, tl!("Locked")));
         ui.add_space(16.0);
-        // Acrobat's box beside Locked. Only a comment whose look can change, made by a tool.
-        let defaultable = d.edited.restylable && default_tool.is_some();
+        // Acrobat's box beside Locked. Only a comment whose look can change, made by a tool (or
+        // typed text, for Fill & Sign).
+        let defaultable = d.edited.restylable && has_default;
         ui.add_enabled(defaultable, widgets::checkbox(&mut d.make_default, tl!("Make Properties Default")));
     });
     let (mut apply, mut cancel) = (false, false);
