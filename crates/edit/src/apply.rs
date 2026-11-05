@@ -1,9 +1,10 @@
 use super::marks::{
-    Background, Context, HeaderFooter, MarkKind, Watermark, add_picture_resource, bates_start, expand, matrix_number, n, picture, rgb, shrink_matrix,
+    Background, Context, HeaderFooter, HeaderFooterMark, MarkKind, SETTINGS_KEY, Watermark, add_picture_resource, bates_start, expand, matrix_number,
+    n, picture, rgb, shrink_matrix,
 };
 use super::place::{
-    END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, contents, free_font_name, isolation, page_fonts, page_list, place,
-    place_inside_wrapper, stream_tag, text_op, undrawable, wrapper_role,
+    END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, content_list, contents, free_font_name, isolation, page_fonts,
+    page_list, place, place_inside_wrapper, stream_tag, text_op, undrawable, wrapper_role,
 };
 use super::{Document, EditError, Object, added, backdrop, helvetica_width};
 
@@ -22,10 +23,57 @@ fn apply_mark_transaction(doc: &mut Document, apply: impl FnOnce(&mut Document) 
 /// those pages are removed first (Acrobat's Replace Existing). The whole call is atomic:
 /// on error, the document (including earlier selected pages) is unchanged.
 pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter, replace: bool, cx: &Context) -> Result<(), EditError> {
-    apply_mark_transaction(doc, |staged| add_header_footer_in_place(staged, pages, hf, replace, cx))
+    let replacing = if replace { Replacing::OnThosePages } else { Replacing::Nothing };
+    apply_mark_transaction(doc, |staged| add_header_footer_in_place(staged, pages, hf, replacing, cx))
 }
 
-fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFooter, replace: bool, cx: &Context) -> Result<(), EditError> {
+/// Replace one header and footer: `old` (settings from [`header_footers`]) goes from every page
+/// it is on and `hf` is added to `pages`. Any other header or footer stays, on those pages too
+/// (#5785). The whole call is atomic.
+pub fn update_header_footer(doc: &mut Document, old: &HeaderFooter, pages: &[usize], hf: &HeaderFooter, cx: &Context) -> Result<(), EditError> {
+    apply_mark_transaction(doc, |staged| add_header_footer_in_place(staged, pages, hf, Replacing::Only(old), cx))
+}
+
+/// How many different headers and footers [`header_footers`] lists: enough for any real document,
+/// and a limit on the work a file with a different one in every stream can ask for.
+const MAX_HEADER_FOOTERS: usize = 256;
+
+/// The settings a content stream records for its header and footer, if it records any.
+fn recorded_settings(doc: &Document, stream: &Object) -> Option<HeaderFooter> {
+    if stream_tag(doc, stream).as_deref() != Some(MarkKind::HeaderFooter.tag()) {
+        return None;
+    }
+    let resolved = doc.resolve(stream);
+    HeaderFooter::from_object(doc, resolved.as_dict()?.get(SETTINGS_KEY)?)
+}
+
+/// The headers and footers that record their settings, in page order, each with the pages it is
+/// on. Marks from before settings were recorded, or from another tool, are not listed.
+pub fn header_footers(doc: &Document) -> Vec<HeaderFooterMark> {
+    let mut found: Vec<HeaderFooterMark> = Vec::new();
+    for (i, page) in page_list(doc).iter().enumerate() {
+        for settings in content_list(doc, page).iter().filter_map(|o| recorded_settings(doc, o)) {
+            if let Some(mark) = found.iter_mut().find(|m| m.settings == settings) {
+                if mark.pages.last() != Some(&i) {
+                    mark.pages.push(i);
+                }
+            } else if found.len() < MAX_HEADER_FOOTERS {
+                found.push(HeaderFooterMark { pages: vec![i], settings });
+            }
+        }
+    }
+    found
+}
+
+/// Which existing headers and footers an added one takes the place of.
+#[derive(Clone, Copy)]
+enum Replacing<'a> {
+    Nothing,
+    OnThosePages,
+    Only(&'a HeaderFooter),
+}
+
+fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFooter, replacing: Replacing, cx: &Context) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
     if hf.text.iter().all(|t| t.trim().is_empty()) {
@@ -68,9 +116,18 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
     for &i in pages {
         check_on_top(doc, &all[i])?;
     }
-    if replace {
-        remove_marks(doc, pages, MarkKind::HeaderFooter)?;
+    match replacing {
+        Replacing::Nothing => {}
+        Replacing::OnThosePages => {
+            remove_marks(doc, pages, MarkKind::HeaderFooter)?;
+        }
+        Replacing::Only(old) => {
+            let on = header_footers(doc).into_iter().find(|m| m.settings == *old).map(|m| m.pages);
+            let on = on.ok_or_else(|| EditError::Invalid("that header and footer is no longer in the document".into()))?;
+            remove_matching(doc, &on, MarkKind::HeaderFooter, |doc, o| recorded_settings(doc, o).as_ref() == Some(old))?;
+        }
     }
+    let settings = hf.to_object();
     let all = page_list(doc);
     let count = all.len();
     for (k, &i) in pages.iter().enumerate() {
@@ -127,11 +184,15 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
             add_page_resources(doc, page, None, &[(resource.into_bytes(), base)])?;
         }
         let page = &page_list(doc)[i];
-        place(doc, page, MarkKind::HeaderFooter, content, false)?;
+        let mark = place(doc, page, MarkKind::HeaderFooter, content, false)?;
+        doc.update_dict(mark, |d| d.set(SETTINGS_KEY.to_vec(), settings.clone()))?;
         if let Some(Some(m)) = shrinks.get(k) {
             let cm = format!("{} cm\n", m.map(matrix_number).join(" "));
             let page = &page_list(doc)[i];
-            place_inside_wrapper(doc, page, MarkKind::HeaderFooter.tag(), cm.into_bytes())?;
+            // The shrink goes with its header: it records the same settings, so Update takes it too.
+            if let Some(shrink) = place_inside_wrapper(doc, page, MarkKind::HeaderFooter.tag(), cm.into_bytes())? {
+                doc.update_dict(shrink, |d| d.set(SETTINGS_KEY.to_vec(), settings.clone()))?;
+            }
         }
     }
     Ok(())
@@ -266,6 +327,11 @@ fn add_background_in_place(doc: &mut Document, pages: &[usize], bg: &Background,
 /// turns a backdrop [`add_background`] replaced back on where that is still safe; the pages where
 /// it isn't are [`backdrops_left_off`].
 pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Result<usize, EditError> {
+    remove_matching(doc, pages, kind, |_, _| true)
+}
+
+/// [`remove_marks`], only for the mark streams `matches` accepts.
+fn remove_matching(doc: &mut Document, pages: &[usize], kind: MarkKind, matches: impl Fn(&Document, &Object) -> bool) -> Result<usize, EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
     let mut removed = 0;
@@ -276,7 +342,7 @@ pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Resu
         }
         let list = contents(doc, page)?;
         let before = list.len();
-        let mut kept: Vec<Object> = list.into_iter().filter(|o| stream_tag(doc, o).as_deref() != Some(kind.tag())).collect();
+        let mut kept: Vec<Object> = list.into_iter().filter(|o| stream_tag(doc, o).as_deref() != Some(kind.tag()) || !matches(doc, o)).collect();
         removed += before - kept.len();
         // Strip only wrapper pairs whose close ends the list (after stripping the pairs after
         // it): nothing comes after them to need the state they restore. Pairs come from the

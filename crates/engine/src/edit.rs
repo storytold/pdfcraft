@@ -487,6 +487,13 @@ pub enum Edit {
         settings: HeaderFooter,
         replace: bool,
     },
+    /// Update one header and footer: `old` (settings from `Document::header_footers`) goes from
+    /// every page it is on and `settings` is added to `pages`. Others stay.
+    UpdateHeaderFooter {
+        old: HeaderFooter,
+        pages: Vec<usize>,
+        settings: HeaderFooter,
+    },
     /// `file`: a picture from a file (an image, or a page of a PDF) instead of text.
     AddWatermark {
         pages: Vec<usize>,

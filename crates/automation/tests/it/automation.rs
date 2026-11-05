@@ -2929,6 +2929,28 @@ fn duplicating_and_cropping_through_tools() {
 }
 
 #[test]
+fn header_footer_update_changes_the_one_named() {
+    let dir = workdir("marks-update");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_header_footer", json!({ "doc": doc, "pages": [1], "header_left": "FIRST" }));
+    ok(&mut a, "doc_header_footer", json!({ "doc": doc, "pages": [2, 3], "header_left": "SECOND" }));
+    let listed = ok(&mut a, "doc_header_footers", json!({ "doc": doc }));
+    assert_eq!(listed["header_footers"][0]["pages"], json!([1]));
+    assert_eq!(listed["header_footers"][1], json!({ "index": 1, "pages": [2, 3], "text": { "header_left": "SECOND" } }));
+    // Added after listing, so index 0 is still FIRST; it shares page 1 with FIRST and must stay.
+    ok(&mut a, "doc_header_footer", json!({ "doc": doc, "pages": [1], "footer_left": "THIRD" }));
+    ok(&mut a, "doc_header_footer", json!({ "doc": doc, "update": 0, "header_left": "CHANGED" }));
+    let texts = page_text(&mut a, doc);
+    assert!(texts[0].contains("CHANGED") && !texts[0].contains("FIRST"), "{texts:?}");
+    assert!(texts[0].contains("THIRD"), "the other one on that page stays: {texts:?}");
+    assert!(texts[1].contains("SECOND") && !texts[1].contains("CHANGED"), "{texts:?}");
+    for bad in [json!({ "doc": doc, "update": 9, "header_left": "X" }), json!({ "doc": doc, "update": 0, "replace": true, "header_left": "X" })] {
+        assert!(matches!(a.call("doc_header_footer", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+}
+
+#[test]
 fn headers_watermarks_and_backgrounds_through_tools() {
     let dir = workdir("marks");
     let mut a = auto(&dir);

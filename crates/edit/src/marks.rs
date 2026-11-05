@@ -1,4 +1,4 @@
-use super::{Document, EditError, Object, Rgb, added};
+use super::{Dict, Document, EditError, Object, Rgb, added};
 
 /// The kinds of page marks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,6 +83,82 @@ impl HeaderFooter {
         let top = lines(header).map_or(0.0, |n| self.margins[0] + size + (n - 1) as f64 * line_h + size / 2.0);
         let bottom = lines(footer).map_or(0.0, |n| self.margins[1] + size * 0.8 + (n - 1) as f64 * line_h + size / 2.0);
         (top, bottom)
+    }
+}
+
+/// One header and footer in a document: its settings and the pages (0-based, ascending) it is on.
+/// Marks with the same settings count as one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeaderFooterMark {
+    pub pages: Vec<usize>,
+    pub settings: HeaderFooter,
+}
+
+/// The entry of a header and footer's content streams that keeps its settings, so Update can tell
+/// several apart and fill the dialog with the one chosen (#5785). Drawn text alone can't say
+/// which tokens made it. Private to PdfCraft (like `/PCMark`); other readers ignore it.
+pub(crate) const SETTINGS_KEY: &[u8] = b"PCHeaderFooter";
+
+fn numbers<const N: usize>(doc: &Document, o: &Object) -> Option<[f64; N]> {
+    let values: Vec<f64> = doc.resolve(o).as_array()?.iter().map(Object::as_f64).collect::<Option<_>>()?;
+    <[f64; N]>::try_from(values).ok()
+}
+
+impl HeaderFooter {
+    /// These settings as the [`SETTINGS_KEY`] entry.
+    pub(crate) fn to_object(&self) -> Object {
+        let reals = |v: &[f64]| Object::Array(v.iter().copied().map(Object::Real).collect());
+        let mut d = Dict::new();
+        d.set(b"Text".to_vec(), Object::Array(self.text.iter().map(|t| Object::String(pdfcraft_cos::PdfString::text(t))).collect()));
+        d.set(
+            b"Font".to_vec(),
+            Object::name(match self.font {
+                added::Family::Helvetica => "Helvetica",
+                added::Family::Times => "Times",
+                added::Family::Courier => "Courier",
+            }),
+        );
+        d.set(b"Size".to_vec(), Object::Real(self.font_size));
+        d.set(b"Color".to_vec(), reals(&self.color));
+        d.set(b"Underline".to_vec(), Object::Bool(self.underline));
+        d.set(b"Margins".to_vec(), reals(&self.margins));
+        d.set(b"Start".to_vec(), Object::Int(i64::from(self.start_number)));
+        d.set(b"Shrink".to_vec(), Object::Bool(self.shrink));
+        Object::Dict(d)
+    }
+
+    /// Settings back from a [`SETTINGS_KEY`] entry. `None` unless every value is one the dialog
+    /// could have written: a file can say anything here.
+    pub(crate) fn from_object(doc: &Document, o: &Object) -> Option<Self> {
+        let resolved = doc.resolve(o);
+        let d = resolved.as_dict()?;
+        let flag = |key: &[u8]| match &*doc.resolve(d.get(key)?) {
+            Object::Bool(b) => Some(*b),
+            _ => None,
+        };
+        let texts: Vec<String> =
+            doc.resolve(d.get(b"Text")?).as_array()?.iter().map(|t| Some(doc.resolve(t).as_string()?.to_text())).collect::<Option<_>>()?;
+        let hf = Self {
+            text: texts.try_into().ok()?,
+            font: match d.name(b"Font")? {
+                b"Helvetica" => added::Family::Helvetica,
+                b"Times" => added::Family::Times,
+                b"Courier" => added::Family::Courier,
+                _ => return None,
+            },
+            font_size: doc.resolve(d.get(b"Size")?).as_f64()?,
+            color: numbers(doc, d.get(b"Color")?)?,
+            underline: flag(b"Underline")?,
+            margins: numbers(doc, d.get(b"Margins")?)?,
+            start_number: u32::try_from(d.int(b"Start")?).ok()?,
+            shrink: flag(b"Shrink")?,
+        };
+        let sane = hf.font_size.is_finite()
+            && hf.font_size > 0.0
+            && hf.font_size <= 200.0
+            && hf.margins.iter().all(|m| m.is_finite() && *m >= 0.0)
+            && hf.color.iter().all(|c| (0.0..=1.0).contains(c));
+        sane.then_some(hf)
     }
 }
 

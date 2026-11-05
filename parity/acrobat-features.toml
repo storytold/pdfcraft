@@ -2465,9 +2465,9 @@ tier = "P0"
 milestone = "M7"
 status = "shipped"
 commands = ["edit.header_footer.update", "edit.header_footer.remove"]
-tools = ["doc_header_footer", "doc_remove_marks"]
-evidence = ["crates/edit/src/tests.rs::replace_and_remove_restore_the_original_content", "crates/ui-egui/tests/it/marks.rs::header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset", "crates/edit/src/mark_transaction_tests.rs::header_footer_changes_are_atomic_after_a_later_page_failure", "crates/edit/src/mark_transaction_tests.rs::replacements_commit_all_selected_pages_and_preserve_other_marks_and_shared_resources"]
-notes = "Add and Update are atomic across all selected pages: errors preserve existing marks, page content/resources and pending edits (#5657). recognises PdfCraft marks; Acrobat-made headers are not detected yet"
+tools = ["doc_header_footer", "doc_header_footers", "doc_remove_marks"]
+evidence = ["crates/edit/src/tests.rs::update_changes_one_header_and_footer_and_leaves_the_others", "crates/ui-egui/tests/it/marks.rs::update_can_change_an_earlier_header_and_footer", "crates/automation/tests/it/automation.rs::header_footer_update_changes_the_one_named", "crates/edit/src/tests.rs::replace_and_remove_restore_the_original_content", "crates/ui-egui/tests/it/marks.rs::header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset", "crates/edit/src/mark_transaction_tests.rs::header_footer_changes_are_atomic_after_a_later_page_failure", "crates/edit/src/mark_transaction_tests.rs::replacements_commit_all_selected_pages_and_preserve_other_marks_and_shared_resources"]
+notes = "Add and Update are atomic across all selected pages: errors preserve existing marks, page content/resources and pending edits (#5657). Each header and footer records its settings, so Update can choose among several and fills the dialog from the one chosen, leaving the others in place (#5785); marks made before that, which record none, are still replaced page by page, and the dialog's preview still hides every header and footer on the page, not just the one chosen. recognises PdfCraft marks; Acrobat-made headers are not detected yet"
 
 [[feature]]
 id = "edit.header-footer-tokens"

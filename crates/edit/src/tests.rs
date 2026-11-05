@@ -300,6 +300,69 @@ fn replace_and_remove_restore_the_original_content() {
     assert_eq!(streams(&reopen(&doc), 0), original, "back to exactly the original content");
 }
 
+fn with_text(text: &str) -> HeaderFooter {
+    let mut hf = HeaderFooter::default();
+    hf.text[1] = text.into();
+    hf
+}
+
+/// #5785: Update could only reach the newest header and footer, and took every other one on
+/// those pages with it.
+#[test]
+fn update_changes_one_header_and_footer_and_leaves_the_others() {
+    let mut doc = fixture();
+    let (header, footer) = (with_text("Héader <<1>>"), with_text("Footer"));
+    add_header_footer(&mut doc, &[0], &header, false, &cx()).unwrap();
+    add_header_footer(&mut doc, &[0], &footer, false, &cx()).unwrap();
+    // Listed after a save too, in the document's own words: tokens unexpanded, accents kept.
+    let doc = &mut reopen(&doc);
+    let found = header_footers(doc);
+    assert_eq!(found.iter().map(|m| (&m.settings, &m.pages[..])).collect::<Vec<_>>(), [(&header, &[0][..]), (&footer, &[0][..])]);
+
+    update_header_footer(doc, &found[0].settings, &[0], &with_text("New"), &cx()).unwrap();
+    let s = streams(doc, 0);
+    assert!(s.iter().any(|x| x.contains("(New)")) && s.iter().any(|x| x.contains("(Footer)")), "{s:?}");
+    assert!(!s.iter().any(|x| x.contains("eader 1")), "the old header is gone: {s:?}");
+    assert_eq!(header_footers(doc).len(), 2);
+
+    let gone = update_header_footer(doc, &header, &[0], &with_text("Again"), &cx());
+    assert!(matches!(gone, Err(EditError::Invalid(_))), "{gone:?}");
+    assert!(streams(doc, 0).iter().any(|x| x.contains("(New)")), "a refused update changes nothing");
+}
+
+#[test]
+fn updating_a_shrinking_header_takes_its_shrink_away_too() {
+    let mut doc = fixture();
+    let original = streams(&doc, 0);
+    let shrunk = HeaderFooter { shrink: true, ..with_text("Small") };
+    add_header_footer(&mut doc, &[0], &shrunk, false, &cx()).unwrap();
+    update_header_footer(&mut doc, &shrunk, &[0], &with_text("Plain"), &cx()).unwrap();
+    let s = streams(&doc, 0);
+    assert_eq!(s.iter().filter(|x| x.contains("/PCMark")).count(), 1);
+    assert!(original.iter().all(|o| s.contains(o)), "{s:?}");
+    assert_eq!(s.len(), original.len() + 3, "the original, one wrapper and the new mark: {s:?}");
+}
+
+#[test]
+fn settings_a_file_makes_up_are_not_listed() {
+    let mut doc = fixture();
+    add_header_footer(&mut doc, &[0], &with_text("Real"), false, &cx()).unwrap();
+    let page = crate::page_list(&doc).swap_remove(0);
+    let marks: Vec<_> = crate::contents(&mut doc, &page)
+        .unwrap()
+        .iter()
+        .filter_map(Object::as_ref)
+        .filter(|r| doc.get(*r).as_dict().is_some_and(|d| d.contains(b"PCHeaderFooter")))
+        .collect();
+    assert_eq!(marks.len(), 1);
+    let mut hostile = Dict::new();
+    hostile.set(b"Text".to_vec(), Object::Array(vec![Object::Int(1)]));
+    hostile.set(b"Size".to_vec(), Object::Real(f64::NAN));
+    doc.update_dict(marks[0], |d| d.set(b"PCHeaderFooter".to_vec(), Object::Dict(hostile))).unwrap();
+    assert!(header_footers(&doc).is_empty());
+    assert_eq!(marks_present(&doc), [MarkKind::HeaderFooter], "still a mark: Remove and page-wide Update reach it");
+}
+
 /// The six numbers of the first `… cm` in `content`.
 fn first_cm(content: &str) -> [f64; 6] {
     let line = content.lines().find(|l| l.ends_with(" cm")).unwrap_or_else(|| panic!("no cm in {content:?}"));

@@ -90,6 +90,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::ReplaceImage { .. }
         | Edit::PasteContent { .. }
         | Edit::AddHeaderFooter { .. }
+        | Edit::UpdateHeaderFooter { .. }
         | Edit::AddWatermark { .. }
         | Edit::AddBackground { .. }
         | Edit::RemoveMarks { .. } => Scope::Content,

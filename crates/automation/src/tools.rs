@@ -1118,13 +1118,14 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_header_footer",
             "Add header and footer",
-            "Add a header and/or footer to pages. Text boxes: header_left/center/right, footer_left/center/right. Tokens: <<1>> page number, <<n>> page count, <<1 of n>>, <<Page 1 of n>>, <<1/n>>, dates <<m/d/yyyy>> <<yyyy-mm-dd>> <<mmmm d, yyyy>> <<dd.mm.yyyy>> (and more), Bates <<Bates Number#6#1#PREFIX#SUFFIX>>. shrink: true scales the page content down evenly into the room the header and footer leave free, so they don't cover it. font: Helvetica (default), Times or Courier. replace: true swaps out existing ones (Update). Undoable.",
+            "Add a header and/or footer to pages. Text boxes: header_left/center/right, footer_left/center/right. Tokens: <<1>> page number, <<n>> page count, <<1 of n>>, <<Page 1 of n>>, <<1/n>>, dates <<m/d/yyyy>> <<yyyy-mm-dd>> <<mmmm d, yyyy>> <<dd.mm.yyyy>> (and more), Bates <<Bates Number#6#1#PREFIX#SUFFIX>>. shrink: true scales the page content down evenly into the room the header and footer leave free, so they don't cover it. font: Helvetica (default), Times or Courier. replace: true swaps out every one on those pages. update: an index from doc_header_footers changes that one alone, on its own pages unless pages is given; settings left out go back to their defaults. Undoable.",
         )
         .cmd("edit.header_footer")
         .with(schema(
             json!({
                 "doc": doc(),
                 "pages": pages("to mark (default: all)"),
+                "update": { "type": "integer", "minimum": 0, "description": "The index doc_header_footers lists for the header and footer to change. Not with replace." },
                 "header_left": { "type": "string" }, "header_center": { "type": "string" }, "header_right": { "type": "string" },
                 "footer_left": { "type": "string" }, "footer_center": { "type": "string" }, "footer_right": { "type": "string" },
                 "font": { "type": "string", "enum": ["Helvetica", "Times", "Courier"] },
@@ -1168,6 +1169,10 @@ pub fn tools() -> Vec<ToolDef> {
             .ro()
             .cmd("edit.background")
             .with(schema(json!({ "doc": doc(), "pages": pages("to check (default: all)") }), &["doc"])),
+        t("doc_header_footers", "List headers and footers", "The headers and footers in the document, each with an `index` for doc_header_footer's `update`, its 1-based `pages` and the `text` of its boxes, tokens unexpanded. Lists those PdfCraft recorded settings for; older ones and other tools' are left out.")
+            .ro()
+            .cmd("edit.header_footer.update")
+            .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("doc_remove_marks", "Remove header & footer, watermark or background", "Remove every header and footer, watermark or background PdfCraft (or a compatible tool) added. Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "kind": { "type": "string", "enum": ["header_footer", "watermark", "background"] } }), &["doc", "kind"])),

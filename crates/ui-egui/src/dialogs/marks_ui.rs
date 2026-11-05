@@ -44,6 +44,19 @@ impl Default for PageRange {
 }
 
 impl PageRange {
+    /// The range that fits `pages` (0-based, ascending, not empty) most closely: from the first to
+    /// the last, of odd or even pages when they are every other page.
+    fn around(pages: &[usize]) -> Self {
+        let (Some(&first), Some(&last)) = (pages.first(), pages.last()) else { return Self::default() };
+        let every_other = pages.len() > 1 && pages.windows(2).all(|w| matches!(w, [a, b] if a + 2 == *b));
+        let subset = match every_other.then_some((first + 1) % 2) {
+            Some(0) => Subset::Even,
+            Some(_) => Subset::Odd,
+            None => Subset::All,
+        };
+        Self { all: false, from: first + 1, to: last + 1, subset }
+    }
+
     /// The pages (0-based) the range selects in a document of `count` pages.
     pub fn pages(&self, count: usize) -> Vec<usize> {
         let (a, b) = if self.all { (1, count) } else { (self.from.max(1), self.to.min(count)) };
@@ -203,6 +216,11 @@ pub struct MarksDraft {
     pub range: PageRange,
     /// Replace existing marks of this kind (Update).
     pub replace: bool,
+    /// Update: the headers and footers in the document, to pick the one to change (#5785).
+    pub header_footers: Vec<pdfcraft_engine::HeaderFooterMark>,
+    /// Which of [`Self::header_footers`] Update changes, and the range that was filled in for it.
+    /// That range can only approximate pages such as 1, 2 and 5: while it stands, OK means them.
+    pub updating: Option<(usize, PageRange)>,
     /// Which header/footer box Insert Page Number / Insert Date type into.
     pub focused_box: usize,
     pub page_format: usize,
@@ -228,6 +246,8 @@ impl Default for MarksDraft {
             bg: Background::default(),
             range: PageRange::default(),
             replace: false,
+            header_footers: Vec::new(),
+            updating: None,
             focused_box: 1,
             page_format: 0,
             date_format: 0,
@@ -239,6 +259,54 @@ impl Default for MarksDraft {
             preview: None,
         }
     }
+}
+
+impl MarksDraft {
+    /// Update opens on the header and footer of page `current` (0-based), the newest one there,
+    /// or the document's last. No choices (a mark from before settings were recorded, or Add)
+    /// leaves the draft as it is.
+    pub fn update_choices(&mut self, found: Vec<pdfcraft_engine::HeaderFooterMark>, current: usize) {
+        self.header_footers = found;
+        self.updating = None;
+        let on_current = self.header_footers.iter().rposition(|m| m.pages.contains(&current));
+        if let Some(i) = on_current.or(self.header_footers.len().checked_sub(1)) {
+            self.choose_header_footer(i);
+        }
+    }
+
+    /// Fill the dialog with header and footer `i`.
+    pub fn choose_header_footer(&mut self, i: usize) {
+        let Some(mark) = self.header_footers.get(i) else { return };
+        self.hf = mark.settings.clone();
+        self.range = PageRange::around(&mark.pages);
+        self.updating = Some((i, self.range));
+        self.preview = None;
+    }
+
+    /// The header and footer OK replaces.
+    fn updated(&self) -> Option<&pdfcraft_engine::HeaderFooterMark> {
+        self.header_footers.get(self.updating?.0)
+    }
+
+    /// The pages (0-based) OK applies to, in a document of `count` pages.
+    pub fn pages(&self, count: usize) -> Vec<usize> {
+        match (self.updated(), self.updating) {
+            (Some(mark), Some((_, range))) if self.replace && range == self.range => mark.pages.clone(),
+            _ => self.range.pages(count),
+        }
+    }
+}
+
+/// What the Update dialog calls a header and footer: its pages and the start of its text.
+fn header_footer_label(mark: &pdfcraft_engine::HeaderFooterMark) -> String {
+    const SHOWN_CHARS: usize = 40;
+    let pages = pages_phrase(&mark.pages, tl!("Page {pages}"), tl!("Pages {pages}"));
+    let text = mark.settings.text.iter().find(|t| !t.trim().is_empty()).map_or("", |t| t.trim());
+    let mut shown: String = text.chars().take(SHOWN_CHARS).collect();
+    if text.chars().nth(SHOWN_CHARS).is_some() {
+        shown.push('…');
+    }
+    format!("{pages}: {shown}")
 }
 
 const PAGE_FORMATS: [&str; 5] = ["<<1>>", "<<1 of n>>", "<<1/n>>", "<<Page 1>>", "<<Page 1 of n>>"];
@@ -474,6 +542,24 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     };
     ui.label(egui::RichText::new(title).font(theme::semibold(18.0)));
     ui.add_space(8.0);
+    if kind == MarkKind::HeaderFooter && d.replace && d.header_footers.len() > 1 {
+        ui.horizontal(|ui| {
+            ui.label(tl!("Which header and footer:"));
+            let shown = d.updated().map(header_footer_label).unwrap_or_default();
+            let mut picked = None;
+            craft_ui::ComboBox::from_id_salt("mark-header-footer").selected_text(shown).show_ui(ui, |ui| {
+                for (i, mark) in d.header_footers.iter().enumerate() {
+                    if ui.selectable_label(d.updating.is_some_and(|(at, _)| at == i), header_footer_label(mark)).clicked() {
+                        picked = Some(i);
+                    }
+                }
+            });
+            if let Some(i) = picked {
+                d.choose_header_footer(i);
+            }
+        });
+        ui.add_space(6.0);
+    }
     match kind {
         MarkKind::HeaderFooter => {
             ui.horizontal(|ui| {
@@ -736,11 +822,13 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     d.preview = next.or(d.preview);
                 }
             });
-            let n = d.range.pages(count).len();
+            let n = d.pages(count).len();
             let applies =
                 if n == 1 { tl!("Applies to 1 page").to_string() } else { crate::i18n::fmt(tl!("Applies to {n} pages"), &[("n", &n.to_string())]) };
             ui.label(egui::RichText::new(applies).small().color(t.text_faint));
-            if d.replace {
+            if d.replace && kind == MarkKind::HeaderFooter && d.updated().is_some() {
+                ui.label(egui::RichText::new(tl!("Replaces this header and footer, and no other.")).small().color(t.text_faint));
+            } else if d.replace {
                 ui.label(egui::RichText::new(tl!("Replaces the existing one on those pages.")).small().color(t.text_faint));
             }
         });
@@ -767,7 +855,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 }
                 MarkKind::Background => !d.use_file || d.file.is_some(),
             }
-            && !d.range.pages(count).is_empty();
+            && !d.pages(count).is_empty();
         if ui.add_enabled_ui(ready, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
             apply = true;
         }
@@ -869,9 +957,12 @@ fn backdrop_options(ui: &mut egui::Ui, t: &Tokens, d: &mut MarksDraft, doc: &pdf
 
 /// The edit the dialog's OK makes.
 pub fn edit(d: &MarksDraft, kind: MarkKind, count: usize) -> Edit {
-    let pages = d.range.pages(count);
+    let pages = d.pages(count);
     match kind {
-        MarkKind::HeaderFooter => Edit::AddHeaderFooter { pages, settings: d.hf.clone(), replace: d.replace },
+        MarkKind::HeaderFooter => match d.updated().filter(|_| d.replace) {
+            Some(mark) => Edit::UpdateHeaderFooter { old: mark.settings.clone(), pages, settings: d.hf.clone() },
+            None => Edit::AddHeaderFooter { pages, settings: d.hf.clone(), replace: d.replace },
+        },
         MarkKind::Watermark => {
             let mut wm = d.wm.clone();
             if d.fit {

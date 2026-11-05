@@ -293,11 +293,11 @@ pub(crate) fn isolation(doc: &Document, list: &[Object]) -> Isolation {
 
 /// Put a mark's content on a page: behind (with the behind-marks at the start) or on top
 /// (appended, after wrapping the original content in q/Q).
-pub(crate) fn place(doc: &mut Document, page: &pdfcraft_model::Page, kind: MarkKind, content: Vec<u8>, behind: bool) -> Result<(), EditError> {
-    place_tagged(doc, page, kind.tag(), content, behind)?;
+pub(crate) fn place(doc: &mut Document, page: &pdfcraft_model::Page, kind: MarkKind, content: Vec<u8>, behind: bool) -> Result<ObjRef, EditError> {
+    let mark = place_tagged(doc, page, kind.tag(), content, behind)?;
     #[cfg(test)]
     fail_after_mark_placement(kind)?;
-    Ok(())
+    Ok(mark)
 }
 
 #[cfg(test)]
@@ -448,29 +448,38 @@ fn too_deep_on_top() -> EditError {
 /// The refusal [`place_tagged`] gives for a mark on top of `page`, checked before an edit changes
 /// anything (removing old marks, adding resources) so a refused edit leaves the document as it was.
 pub(crate) fn check_on_top(doc: &Document, page: &pdfcraft_model::Page) -> Result<(), EditError> {
-    let obj = doc.get(page.obj);
-    let list = match obj.as_dict().and_then(|d| d.get(b"Contents")) {
-        None => return Ok(()),
-        Some(Object::Ref(r)) => doc.get(*r).as_array().cloned().unwrap_or_else(|| vec![Object::Ref(*r)]),
-        Some(Object::Array(a)) => a.clone(),
-        Some(other) => vec![other.clone()],
-    };
-    match isolation(doc, &list) {
+    match isolation(doc, &content_list(doc, page)) {
         Isolation::TooDeep => Err(too_deep_on_top()),
         _ => Ok(()),
     }
 }
 
+/// The streams of a page's /Contents, read without changing the document.
+pub(crate) fn content_list(doc: &Document, page: &pdfcraft_model::Page) -> Vec<Object> {
+    let obj = doc.get(page.obj);
+    match obj.as_dict().and_then(|d| d.get(b"Contents")) {
+        None => Vec::new(),
+        Some(Object::Ref(r)) => doc.get(*r).as_array().cloned().unwrap_or_else(|| vec![Object::Ref(*r)]),
+        Some(Object::Array(a)) => a.clone(),
+        Some(other) => vec![other.clone()],
+    }
+}
+
 /// Put content tagged `tag` first inside the q/Q wrapper, so it applies to the page's original
 /// content and nothing else (a header's shrink). A page without a wrapper has no original content
-/// on it and is left alone.
-pub(crate) fn place_inside_wrapper(doc: &mut Document, page: &pdfcraft_model::Page, tag: &str, content: Vec<u8>) -> Result<(), EditError> {
+/// on it and is left alone. Returns the new content stream, if one was placed.
+pub(crate) fn place_inside_wrapper(
+    doc: &mut Document,
+    page: &pdfcraft_model::Page,
+    tag: &str,
+    content: Vec<u8>,
+) -> Result<Option<ObjRef>, EditError> {
     let mut list = contents(doc, page)?;
-    let Some(open) = list.iter().position(|o| stream_tag(doc, o).as_deref() == Some("Wrap")) else { return Ok(()) };
-    let stream = Object::Ref(doc.add(Object::Stream(Stream::flate(tagged(tag), &content))));
-    list.insert(open + 1, stream);
+    let Some(open) = list.iter().position(|o| stream_tag(doc, o).as_deref() == Some("Wrap")) else { return Ok(None) };
+    let stream = doc.add(Object::Stream(Stream::flate(tagged(tag), &content)));
+    list.insert(open + 1, Object::Ref(stream));
     doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(list)))?;
-    Ok(())
+    Ok(Some(stream))
 }
 
 /// Draw `content` on top of a page (0-based) as permanent page content, with standard Helvetica
