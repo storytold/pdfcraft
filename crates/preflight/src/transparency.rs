@@ -1,5 +1,6 @@
-//! PDF/A-2 6.2.10: a page that contains transparency, in a file without a PDF/A output intent,
-//! names its blending colour space: its `/Group` dictionary has a `/CS` entry.
+//! PDF/A-2 6.2.10: a graphics state's blend mode is one ISO 32000-1 defines, and a page that
+//! contains transparency, in a file without a PDF/A output intent, names its blending colour
+//! space: its `/Group` dictionary has a `/CS` entry.
 //!
 //! A page contains transparency when something its resources reach can paint transparently (ISO
 //! 32000-1 11.6.4.4 and 11.7.4): a graphics state with a constant alpha (`/CA`, `/ca`) below 1,
@@ -145,6 +146,71 @@ impl Walk<'_> {
         let resources = d.get(b"Resources").cloned();
         resources.is_some_and(|r| self.resources(&r, depth + 1))
     }
+}
+
+/// The blend modes of ISO 32000-1 11.3.5 (Tables 136 and 137), and `Compatible` (Table 58).
+const BLEND_MODES: &[&[u8]] = &[
+    b"Normal",
+    b"Compatible",
+    b"Multiply",
+    b"Screen",
+    b"Overlay",
+    b"Darken",
+    b"Lighten",
+    b"ColorDodge",
+    b"ColorBurn",
+    b"HardLight",
+    b"SoftLight",
+    b"Difference",
+    b"Exclusion",
+    b"Hue",
+    b"Saturation",
+    b"Color",
+    b"Luminosity",
+];
+
+/// The blend modes ISO 32000-1 doesn't define that the object `o` names in a `/BM` entry: its own,
+/// or one of a dictionary written inside it (a page's resources hold their graphics states
+/// directly), within [`MAX_DEPTH`].
+pub(crate) fn unknown_blend_modes(doc: &Document, o: &Object) -> Vec<String> {
+    let mut out = Vec::new();
+    blend_modes_within(doc, o, 0, &mut out);
+    out
+}
+
+fn blend_modes_within(doc: &Document, o: &Object, depth: usize, out: &mut Vec<String>) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    let d = match o {
+        Object::Dict(d) => d,
+        Object::Stream(s) => &s.dict,
+        Object::Array(a) => {
+            for v in a {
+                blend_modes_within(doc, v, depth + 1, out);
+            }
+            return;
+        }
+        _ => return,
+    };
+    out.extend(unknown_in(doc, d));
+    for (k, v) in d.iter() {
+        if k != b"BM" {
+            blend_modes_within(doc, v, depth + 1, out);
+        }
+    }
+}
+
+/// The names in a graphics state's `/BM` (a name, or an array of them) that are not blend modes
+/// ISO 32000-1 defines.
+fn unknown_in(doc: &Document, gs: &Dict) -> Vec<String> {
+    let Some(bm) = gs.get(b"BM").map(|b| doc.resolve(b)) else { return Vec::new() };
+    let names: Vec<Vec<u8>> = match &*bm {
+        Object::Name(n) => vec![n.clone()],
+        Object::Array(a) => a.iter().filter_map(|m| doc.resolve(m).as_name().map(<[u8]>::to_vec)).collect(),
+        _ => Vec::new(),
+    };
+    names.into_iter().filter(|n| !BLEND_MODES.contains(&n.as_slice())).map(|n| String::from_utf8_lossy(&n).into_owned()).collect()
 }
 
 /// Whether a `/BM` value blends: a name other than `Normal` or `Compatible`, or an array whose

@@ -513,7 +513,7 @@ endstream",
         }
         verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect()
     };
-    let said = ["Page 1 uses transparency, but there is no PDF/A output intent and its group names no blending colour space"];
+    let said = ["Page 1 has transparency but no blending colour space or PDF/A output intent"];
     let form = |dict: &str| format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {dict} /Length 0 >>\nstream\n\nendstream");
     let gs = |entries: &str| format!("/ExtGState << /G << {entries} >> >>");
     for (what, resources, extra) in [
@@ -587,4 +587,24 @@ endstream",
         let extra: Vec<&str> = extra.iter().map(String::as_str).collect();
         assert!(blending(false, "", &resources, &extra).is_empty(), "{what}");
     }
+}
+
+/// 6.2.10: a graphics state's blend mode, or each name of a blend mode array, is one ISO 32000-1
+/// 11.3.5 defines, whether the graphics state is an object of its own or written in a page's
+/// resources.
+#[test]
+fn blend_modes_are_the_ones_iso_32000_1_defines() {
+    let modes = |resources: &str, extra: &[&str]| -> Vec<String> {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Group << /S /Transparency /CS /DeviceRGB >> /Resources << {resources} >> >>");
+        let mut objs: Vec<&str> =
+            vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page];
+        objs.extend_from_slice(extra);
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect()
+    };
+    let custom = ["A graphics state uses the blend mode Custom, which ISO 32000-1 doesn't define"];
+    assert_eq!(modes("/ExtGState << /G 4 0 R >>", &["<< /BM /Custom >>"]), custom, "an object of its own");
+    assert_eq!(modes("/ExtGState << /G << /BM /Custom >> >>", &[]), custom, "written in the resources");
+    assert_eq!(modes("/ExtGState << /G << /BM [/Multiply /Custom] >> >>", &[]), custom, "in an array");
+    let all = "/Normal /Compatible /Multiply /Screen /Overlay /Darken /Lighten /ColorDodge /ColorBurn /HardLight /SoftLight /Difference /Exclusion /Hue /Saturation /Color /Luminosity";
+    assert!(modes(&format!("/ExtGState << /G << /BM [{all}] >> >>"), &[]).is_empty());
 }
