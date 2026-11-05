@@ -25,6 +25,8 @@ pub enum AltError {
     NotAFigure(u32),
     #[error("the page has more content than can be edited")]
     TooLarge,
+    #[error("the figure's content is in a content stream damaged partway, which can't be rewritten without losing what follows the damage")]
+    Damaged,
     #[error("{0}")]
     Cos(#[from] pdfcraft_cos::CosError),
 }
@@ -52,6 +54,8 @@ pub enum ArtifactError {
     ParentTree(String),
     #[error("the page has more content than can be edited")]
     TooLarge,
+    #[error("the tag's marked content is in a content stream damaged partway, which can't be rewritten without losing what follows the damage")]
+    Damaged,
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
 }
@@ -372,7 +376,9 @@ fn content_entries(doc: &Document, page: &Dict) -> Vec<Object> {
     }
 }
 
-type DecodedStream = (Object, Option<(Stream, Vec<u8>)>);
+/// A `/Contents` entry and, for a stream, the stream, its decoded data and whether it is damaged
+/// partway (the data is then what decoded before the damage).
+type DecodedStream = (Object, Option<(Stream, Vec<u8>, bool)>);
 
 /// Decode the page's content streams within the page decode budget. `None` when a stream is
 /// rejected because the budget is exhausted.
@@ -383,14 +389,14 @@ fn decode_page_streams(doc: &Document, page: &Dict) -> Option<Vec<DecodedStream>
     for entry in entries {
         let decoded = match &*doc.resolve(&entry) {
             Object::Stream(s) => {
-                let data = match budget.decode(s) {
-                    Ok(data) => data,
+                let (data, damaged) = match budget.decode_with_damage(s, usize::MAX) {
+                    Ok(read) => read,
                     // Content past the budget may hold more of the tag: editing the rest
                     // would leave that part marked as a tag the tree no longer has.
                     Err(_) if budget.exhausted() => return None,
-                    Err(_) => Vec::new(),
+                    Err(_) => (Vec::new(), false),
                 };
-                Some((s.clone(), data))
+                Some((s.clone(), data, damaged))
             }
             _ => None,
         };
@@ -403,6 +409,18 @@ fn marked_id(doc: &Document, props: &Dict, op: &pdfcraft_content::Op, ids: &Hash
     (op.op == b"BDC").then(|| bdc_mcid(doc, props, op)).flatten().filter(|n| ids.contains(n))
 }
 
+/// What [`artifact_marked_content`] did.
+#[derive(Debug, PartialEq)]
+enum Marked {
+    /// The streams holding the content were rewritten.
+    Done,
+    /// None of the content is on the page, or with `require_all` not all of it: nothing changed.
+    NotFound,
+    /// Some of it is in a stream damaged partway, which can't be rewritten without losing what
+    /// follows the damage: nothing changed.
+    Damaged,
+}
+
 /// Turn the tag's marked-content blocks into artifacts, rewriting only the streams that
 /// contain them. Other content streams, and unknown entries on a rewritten stream, stay.
 /// With `require_all`, every id in `ids` must appear on the page before any stream is rewritten.
@@ -412,9 +430,9 @@ fn artifact_marked_content(
     streams: Vec<DecodedStream>,
     ids: &HashSet<i64>,
     require_all: bool,
-) -> Result<bool, pdfcraft_cos::CosError> {
+) -> Result<Marked, pdfcraft_cos::CosError> {
     let props = page_properties(doc, &page.dict);
-    let decoded: Vec<&[u8]> = streams.iter().filter_map(|(_, s)| s.as_ref().map(|(_, bytes)| bytes.as_slice())).collect();
+    let decoded: Vec<&[u8]> = streams.iter().filter_map(|(_, s)| s.as_ref().map(|(_, bytes, _)| bytes.as_slice())).collect();
     let pieces = pdfcraft_content::Pieces::join(&decoded);
     let mut found = HashSet::new();
     let mut edits = Vec::new();
@@ -425,12 +443,17 @@ fn artifact_marked_content(
         }
     }
     if if require_all { found != *ids } else { found.is_empty() } {
-        return Ok(false);
+        return Ok(Marked::NotFound);
     }
-    let mut spliced = pieces.splice(edits).into_iter();
+    let spliced = pieces.splice(edits);
+    // The pieces are the streams that decoded, in order.
+    if streams.iter().filter_map(|(_, s)| s.as_ref()).zip(&spliced).any(|((_, old, damaged), new)| *damaged && old != new) {
+        return Ok(Marked::Damaged);
+    }
+    let mut spliced = spliced.into_iter();
     let mut next = Vec::with_capacity(streams.len());
     for (entry, stream) in streams {
-        let Some((stream, old)) = stream else {
+        let Some((stream, old, _)) = stream else {
             next.push(entry);
             continue;
         };
@@ -456,7 +479,7 @@ fn artifact_marked_content(
         _ => Object::Array(next),
     };
     doc.update_dict(page.obj, |p| p.set(b"Contents".to_vec(), contents))?;
-    Ok(true)
+    Ok(Marked::Done)
 }
 
 /// Decorative figure: its marked content on the page becomes an artifact, and the element
@@ -468,11 +491,15 @@ pub fn mark_decorative(doc: &mut Document, obj: ObjRef) -> Result<(), AltError> 
     let pg = d.get(b"Pg").and_then(Object::as_ref).or_else(|| elements(doc).into_iter().find(|e| e.object == obj).and_then(|e| e.page));
     if let Some(page) = pg.and_then(|p| pages.iter().find(|x| x.obj == p)).filter(|_| !ids.is_empty()) {
         let streams = decode_page_streams(doc, &page.dict).ok_or(AltError::TooLarge)?;
-        // The parent tree no longer points those ids at the figure.
-        if artifact_marked_content(doc, page, streams, &ids, false)?
-            && let Some(key) = page.dict.get(b"StructParents").and_then(Object::as_int)
-        {
-            clear_parent_tree(doc, key, obj)?;
+        match artifact_marked_content(doc, page, streams, &ids, false)? {
+            // The parent tree no longer points those ids at the figure.
+            Marked::Done => {
+                if let Some(key) = page.dict.get(b"StructParents").and_then(Object::as_int) {
+                    clear_parent_tree(doc, key, obj)?;
+                }
+            }
+            Marked::NotFound => {}
+            Marked::Damaged => return Err(AltError::Damaged),
         }
     }
     // Out of its parent's kids.
@@ -513,8 +540,10 @@ pub fn mark_tag_artifact(doc: &mut Document, obj: ObjRef) -> Result<(), Artifact
     let parent = element.dict.get(b"P").and_then(Object::as_ref).ok_or(ArtifactError::NoParent)?;
     let replacement = replacement_kids(doc, parent, obj)?;
     let streams = decode_page_streams(doc, &page.dict).ok_or(ArtifactError::TooLarge)?;
-    if !artifact_marked_content(doc, page, streams, &ids, true)? {
-        return Err(ArtifactError::ContentNotFound);
+    match artifact_marked_content(doc, page, streams, &ids, true)? {
+        Marked::Done => {}
+        Marked::NotFound => return Err(ArtifactError::ContentNotFound),
+        Marked::Damaged => return Err(ArtifactError::Damaged),
     }
     if let Some(key) = page.dict.get(b"StructParents").and_then(Object::as_int) {
         clear_parent_tree(doc, key, obj).map_err(|e| ArtifactError::ParentTree(e.to_string()))?;

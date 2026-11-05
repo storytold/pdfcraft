@@ -1087,6 +1087,48 @@ fn mark_tag_artifact_validates_parent_and_all_mcids_before_mutating_document() {
     assert_eq!(*absent.get(ObjRef::new(9, 0)), before_pt);
 }
 
+/// zlib data that reads as `readable` and is then damaged, with more of the stream after the
+/// damage: a stored block, then a block of the reserved type (RFC 1951 §3.2.3), then `rest`.
+fn damaged_flate(readable: &[u8], rest: &[u8]) -> pdfcraft_cos::Stream {
+    let len = u16::try_from(readable.len()).unwrap();
+    let mut raw = vec![0x78, 0x01, 0x00];
+    raw.extend_from_slice(&len.to_le_bytes());
+    raw.extend_from_slice(&(!len).to_le_bytes());
+    raw.extend_from_slice(readable);
+    raw.push(0x07);
+    raw.extend_from_slice(rest);
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), pdfcraft_cos::Object::name("FlateDecode"));
+    pdfcraft_cos::Stream::from_raw(dict, raw)
+}
+
+/// A tag's content in a stream damaged partway stays tagged: rewriting the stream from what
+/// decoded would lose what follows the damage. Nothing changes, the structure tree included.
+/// Content in a whole stream beside a damaged one is marked, and the damaged one kept as stored.
+#[test]
+fn a_tags_content_in_a_stream_damaged_partway_is_not_rewritten() {
+    use pdfcraft_cos::{ObjRef, Object};
+    let content = b"/Figure << /MCID 0 >> BDC q 40 0 0 20 10 150 cm /Im Do Q EMC /Photo << /MCID 1 >> BDC 100 100 50 30 re f EMC\n";
+    let damaged = damaged_flate(content, b"0 0 1 rg 0 0 10 10 re f");
+    let mut doc = figures_doc();
+    doc.set(ObjRef::new(4, 0), damaged.clone());
+    let contents = |doc: &Document| doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned();
+    let (before_contents, before_pt, before_kids) = (contents(&doc), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0)));
+    assert_eq!(figures(&doc).len(), 2, "read up to the damage");
+    assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::Damaged));
+    assert_eq!(mark_decorative(&mut doc, ObjRef::new(7, 0)), Err(AltError::Damaged));
+    assert_eq!((contents(&doc), doc.get(ObjRef::new(9, 0)), doc.get(ObjRef::new(6, 0))), (before_contents, before_pt, before_kids));
+
+    let mut doc = figures_doc();
+    let other = doc.add(damaged_flate(b"0 g\n", b"0 0 1 rg 0 0 10 10 re f"));
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(other), Object::Ref(ObjRef::new(4, 0))])))
+        .unwrap();
+    mark_tag_artifact(&mut doc, ObjRef::new(7, 0)).unwrap();
+    let Some(Object::Array(list)) = contents(&doc) else { panic!("contents {:?}", contents(&doc)) };
+    assert_eq!(list.first(), Some(&Object::Ref(other)), "kept as stored");
+    assert_ne!(list.get(1), Some(&Object::Ref(ObjRef::new(4, 0))), "the tag's stream is rewritten");
+}
+
 fn ref_(n: u32) -> Option<pdfcraft_cos::ObjRef> {
     Some(pdfcraft_cos::ObjRef::new(n, 0))
 }

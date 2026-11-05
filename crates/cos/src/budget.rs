@@ -38,9 +38,9 @@ const JPEG_WORK: u64 = 2;
 /// and images can share one, so reading it again for each has to count.
 const JPEG_READ_WORK: u64 = 4;
 
-/// A stream decode within a byte bound, with the bytes its filter stages decoded: the data or
-/// the error, each with that count.
-type Decoder = fn(&Stream, usize) -> Result<(Vec<u8>, usize), (FilterError, usize)>;
+/// A stream decode within a byte bound, with the bytes its filter stages decoded: the data and
+/// whether it stopped at damage, or the error, each with that count.
+type Decoder = fn(&Stream, usize) -> Result<(Vec<u8>, bool, usize), (FilterError, usize)>;
 
 /// What one operation over a document's images may still spend decoding them: exporting them,
 /// optimizing them, and storing LZW streams with Flate as it does, clearing them for redaction.
@@ -263,45 +263,56 @@ impl DecodeBudget {
     }
 
     /// `stream` decoded like [`Stream::decoded`], charged to the allowance. Fails, without
-    /// decoding, once the allowance is spent.
+    /// decoding, once the allowance is spent. A stream damaged partway gives what decoded before
+    /// the damage, so code that writes the stream back reads it with
+    /// [`DecodeBudget::decode_with_damage`] instead.
     pub fn decode(&mut self, stream: &Stream) -> Result<Vec<u8>, CosError> {
-        self.charge(stream, usize::MAX, Stream::decoded_within_counted)
+        self.charge(stream, usize::MAX, Stream::decoded_within_counted).map(|(data, _)| data)
     }
 
     /// Like [`DecodeBudget::decode`], for a stream with a tighter bound of its own: decoding
     /// past `max` bytes is an error that charges `max`, the work it took to find out.
     pub fn decode_within(&mut self, stream: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
+        self.charge(stream, max, Stream::decoded_within_counted).map(|(data, _)| data)
+    }
+
+    /// [`DecodeBudget::decode_within`] (`usize::MAX` for no bound of its own), also saying
+    /// whether the stream is damaged: `true` when a filter stopped at corrupt data, so the bytes
+    /// are only what decoded before it. A stream written back from them loses everything after
+    /// the damage, which other readers may still read.
+    pub fn decode_with_damage(&mut self, stream: &Stream, max: usize) -> Result<(Vec<u8>, bool), CosError> {
         self.charge(stream, max, Stream::decoded_within_counted)
     }
 
     /// `stream` decoded like [`Stream::decoded_strict`] (any corruption is an error), charged to
     /// the allowance.
     pub fn decode_strict(&mut self, stream: &Stream) -> Result<Vec<u8>, CosError> {
-        self.charge(stream, usize::MAX, Stream::decoded_strict_within_counted)
+        let strict: Decoder = |s, max| s.decoded_strict_within_counted(max).map(|(data, spent)| (data, false, spent));
+        self.charge(stream, usize::MAX, strict).map(|(data, _)| data)
     }
 
     /// Decodes `stream` within `max` and the allowance, charging what every filter stage
     /// decoded: a stage's output counts even when a later stage shrinks it, and a corrupt stream
     /// pays for the bytes decoded before the error, so referencing a stream again and again
     /// spends the allowance by the work each decode does.
-    fn charge(&mut self, stream: &Stream, max: usize, decode: Decoder) -> Result<Vec<u8>, CosError> {
+    fn charge(&mut self, stream: &Stream, max: usize, decode: Decoder) -> Result<(Vec<u8>, bool), CosError> {
         if self.bytes == 0 && !stream.raw.is_empty() {
             return Err(CosError::Filter(FilterError::LimitExceeded(self.limit).to_string()));
         }
         if max < self.bytes {
             let result = decode(stream, max);
             let spent = match &result {
-                Ok((_, spent)) => *spent,
+                Ok((_, _, spent)) => *spent,
                 Err((FilterError::LimitExceeded(_), _)) => max,
                 Err((_, spent)) => *spent,
             };
             self.bytes = self.bytes.saturating_sub(spent);
-            return result.map(|(data, _)| data).map_err(|(e, _)| CosError::Filter(e.to_string()));
+            return result.map(|(data, damaged, _)| (data, damaged)).map_err(|(e, _)| CosError::Filter(e.to_string()));
         }
         match decode(stream, self.bytes) {
-            Ok((data, spent)) => {
+            Ok((data, damaged, spent)) => {
                 self.bytes = self.bytes.saturating_sub(spent);
-                Ok(data)
+                Ok((data, damaged))
             }
             Err((FilterError::LimitExceeded(_), _)) => {
                 self.bytes = 0;
@@ -799,6 +810,36 @@ mod tests {
         let mut budget = DecodeBudget::new(10 << 20, 1);
         assert!(budget.decode_within(&corrupt, 1 << 30).is_ok());
         assert_eq!(budget.remaining(), (10 << 20) - partial);
+    }
+
+    /// A stream damaged partway decodes to what came before the damage, and says so, so that code
+    /// writing it back can leave it as it is. What every reader takes is no damage: a missing
+    /// checksum, no filter at all.
+    #[test]
+    fn a_stream_damaged_partway_says_so() {
+        let read = |budget: &mut DecodeBudget, s: &Stream, max| budget.decode_with_damage(s, max).map(|(d, damaged)| (d.len(), damaged)).ok();
+        let whole = Stream::flate(Dict::new(), &vec![b' '; 1 << 20]);
+        let cut = Stream::from_raw(whole.dict.clone(), whole.raw.get(..whole.raw.len() / 2).unwrap_or_default().to_vec());
+        let partial = cut.decoded().map(|d| d.len()).unwrap_or(0);
+        assert!(partial > 0, "a cut flate stream decodes in part");
+        let mut budget = DecodeBudget::new(10 << 20, 1);
+        assert_eq!(read(&mut budget, &cut, usize::MAX), Some((partial, true)));
+        assert_eq!(budget.remaining(), (10 << 20) - partial);
+        // Within a bound of its own, under what is left.
+        assert_eq!(read(&mut budget, &cut, 4 << 20), Some((partial, true)));
+        assert_eq!(budget.decode(&cut).map(|d| d.len()).ok(), Some(partial));
+
+        let mut budget = DecodeBudget::new(10 << 20, 1);
+        assert_eq!(read(&mut budget, &whole, usize::MAX), Some((1 << 20, false)));
+        assert_eq!(read(&mut budget, &whole, 4 << 20), Some((1 << 20, false)));
+        let unchecked = Stream::from_raw(whole.dict.clone(), whole.raw.get(..whole.raw.len() - 4).unwrap_or_default().to_vec());
+        assert_eq!(read(&mut budget, &unchecked, usize::MAX), Some((1 << 20, false)));
+        assert_eq!(read(&mut budget, &Stream::from_raw(Dict::new(), b"0 0 m".to_vec()), usize::MAX), Some((5, false)));
+        // A later stage's damage is the stream's.
+        let mut dict = Dict::new();
+        dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("ASCIIHexDecode")]));
+        let hex = Stream::from_raw(dict, Stream::flate(Dict::new(), b"4142zz4344>").raw.to_vec());
+        assert_eq!(budget.decode_with_damage(&hex, usize::MAX).ok(), Some((b"AB".to_vec(), true)));
     }
 
     /// A stream that fails its reading as zlib, and then as raw deflate after decoding all of it,
