@@ -764,3 +764,21 @@ fn xmp_exif_schemas_have_their_value_types() {
     assert_eq!(element("aux:Lens", "<rdf:Seq><rdf:li>50mm</rdf:li></rdf:Seq>"), ["aux:Lens"]);
     assert_eq!(element("aux:SerialNumber", "<rdf:Bag><rdf:li>1</rdf:li></rdf:Bag>"), ["aux:SerialNumber"]);
 }
+
+/// PDF/A-2 6.6.2.3.1, the RDF/XML value forms XMP allows (ISO 16684-1 7.9.2.5): one `rdf:value`
+/// in a qualified value, no parse type but `Resource`, and an `rdf:resource` element left empty.
+#[test]
+fn xmp_value_forms_are_those_xmp_allows() {
+    // A qualified value has exactly one rdf:value.
+    assert_eq!(
+        mistyped(r#"><crs:Contrast rdf:parseType="Resource"><rdf:value>5</rdf:value><rdf:value>five</rdf:value></crs:Contrast>"#),
+        ["crs:Contrast"]
+    );
+    // Only parseType="Resource" has a place in XMP; an rdf:resource element holds no element.
+    assert_eq!(mistyped(r#"><crs:Contrast rdf:parseType="Literal">5</crs:Contrast>"#), ["crs:Contrast"]);
+    assert_eq!(mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Literal" stRef:documentID="d"/>"#), ["xmpMM:DerivedFrom"]);
+    assert_eq!(
+        mistyped(r#"><xmpMM:DerivedFrom rdf:resource="urn:example"><rdf:Description stRef:documentID="d"/></xmpMM:DerivedFrom>"#),
+        ["xmpMM:DerivedFrom"]
+    );
+}
