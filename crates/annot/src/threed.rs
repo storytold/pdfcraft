@@ -200,8 +200,8 @@ fn check_model_size(model: &[u8], max: usize) -> Result<(), AnnotError> {
 /// annotation has its own instance, §13.6.2), `/3DA` stating only `/A`, and the poster as `/AP /N`.
 /// The stream holds [`NewModel3d::view`] as its only and default view, and the document is then
 /// raised to PDF 1.7 (the lighting scheme's version); without one, readers open on the model's own
-/// default view. A document
-/// older than [`ModelFormat::version`] is raised to it. Returns its index in the page's `/Annots`.
+/// default view. A document older than [`ModelFormat::version`] is raised to it. Returns its index
+/// in the page's `/Annots`.
 ///
 /// # Errors
 ///
