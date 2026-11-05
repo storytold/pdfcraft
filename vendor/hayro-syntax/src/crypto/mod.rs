@@ -115,6 +115,48 @@ pub(crate) fn get(
     id: &[u8],
     password: &[u8],
 ) -> Result<Decryptor, DecryptionError> {
+    match decryptor(dict, id, password) {
+        // PdfCraft patch (36): a document that encrypts only its embedded files, authorised when
+        // one is opened (`/AuthEvent /EFOpen`, ISO 32000-2 §7.6.6, Table 25), opens without a
+        // password: its strings and streams are in the clear, and nothing drawn reads an embedded
+        // file.
+        Err(DecryptionError::PasswordProtected) if password.is_empty() && efopen_only(dict) => {
+            Ok(Decryptor::None)
+        }
+        other => other,
+    }
+}
+
+/// PdfCraft patch (36): whether every crypt filter of `dict` that encrypts is authorised only when
+/// an embedded file is opened (`/AuthEvent /EFOpen`), `/EFF` names one, and neither `/StmF` nor
+/// `/StrF` does.
+fn efopen_only(dict: &Dict<'_>) -> bool {
+    let Some(cf) = dict.get::<Dict<'_>>(CF) else {
+        return false;
+    };
+    let mut encrypting = Vec::new();
+    for key in cf.keys() {
+        let Some(filter) = cf.get::<Dict<'_>>(key.as_ref()) else {
+            continue;
+        };
+        let method = filter.get::<Name<'_>>(CFM).and_then(|n| DecryptorTag::from_name(&n));
+        if matches!(method, None | Some(DecryptorTag::None)) {
+            continue;
+        }
+        if filter.get::<Name<'_>>(b"AuthEvent").is_none_or(|e| e.as_str() != "EFOpen") {
+            return false;
+        }
+        encrypting.push(key.as_str().to_string());
+    }
+    let names = |key: &[u8]| dict.get::<Name<'_>>(key).is_some_and(|n| encrypting.iter().any(|e| e == n.as_str()));
+    names(b"EFF") && !names(STM_F) && !names(STR_F)
+}
+
+fn decryptor(
+    dict: &Dict<'_>,
+    id: &[u8],
+    password: &[u8],
+) -> Result<Decryptor, DecryptionError> {
     let filter = dict.get::<Name<'_>>(FILTER).ok_or(InvalidEncryption)?;
 
     if filter.deref() != b"Standard" {

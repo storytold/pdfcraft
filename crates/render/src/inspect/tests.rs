@@ -1912,3 +1912,82 @@ fn inspection_keeps_no_private_page_data() {
     };
     assert_eq!(report(with), report(without), "what inspection reports does not change");
 }
+
+/// The password values (`/O`, `/U`, `/OE`, `/UE`, `/Perms`) of an AES-256 (R6) protection with a
+/// user password, as a save writes them.
+fn r6_password_values() -> String {
+    let plain = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF".to_vec();
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(plain)).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "user pw",
+        owner_password: "owner pw",
+        permissions: -4,
+        encrypt_metadata: true,
+        seed: [5; 32],
+    })
+    .unwrap();
+    let saved = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    let saved = pdfcraft_cos::Document::open_with_password(Arc::new(saved), Some("user pw")).unwrap();
+    let encrypt = saved.resolve(saved.trailer().get(b"Encrypt").unwrap());
+    let encrypt = encrypt.as_dict().unwrap();
+    ["O", "U", "OE", "UE", "Perms"]
+        .iter()
+        .map(|k| {
+            let value = saved.resolve(encrypt.get(k.as_bytes()).unwrap());
+            let hex: String = value.as_string().unwrap().bytes.iter().map(|b| format!("{b:02X}")).collect();
+            format!("/{k} <{hex}>")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A document whose crypt filter `/StdCF` is authorised by `auth_event`, encrypting only its
+/// embedded file (`/StmF /StrF /Identity`, `/EFF /StdCF`), protected by a user password.
+fn efopen_pdf(auth_event: &str) -> Vec<u8> {
+    let encrypt = format!(
+        "<< /Filter /Standard /V 5 /R 6 {} /P -4 /CF << /StdCF << /AuthEvent /{auth_event} /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>",
+        r6_password_values()
+    );
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".to_string(),
+        "<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>".to_string(),
+        "<< /Type /EmbeddedFile /Length 32 >>\nstream\n0123456789abcdef0123456789abcdef\nendstream".to_string(),
+        encrypt,
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!("trailer\n<< /Size {} /Root 1 0 R /Encrypt 6 0 R /ID [<00> <00>] >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes(),
+    );
+    out
+}
+
+/// ISO 32000-2 §7.6.6, Table 25: a crypt filter whose `/AuthEvent` is `/EFOpen` needs its password
+/// only when an embedded file is opened. Such a document opens without one, and its attachment is
+/// listed, but asking for the attachment's bytes is an error, not its encrypted data.
+#[test]
+fn a_document_encrypting_only_its_embedded_files_opens_without_a_password() {
+    let bytes = Arc::new(efopen_pdf("EFOpen"));
+    assert!(check_pages(bytes.clone(), None, 1).is_ok());
+    let info = inspect(bytes.clone(), None).expect("opens without a password");
+    assert_eq!(info.pages.len(), 1);
+    let listed = info.attachments.iter().find(|a| a.name == "note.txt").expect("the attachment is listed");
+    let refused = attachment_data(&bytes, None, listed).expect_err("encrypted bytes aren't the file");
+    assert!(refused.contains("password"), "{refused}");
+    // Authorised when the document opens, the same filter still needs the password.
+    let doc_open = Arc::new(efopen_pdf("DocOpen"));
+    assert!(matches!(inspect(doc_open.clone(), None), Err(OpenError::NeedsPassword)));
+    assert!(matches!(check_pages(doc_open, None, 1), Err(OpenError::NeedsPassword)));
+}

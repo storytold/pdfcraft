@@ -272,6 +272,16 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     if doc.stream_limited() {
         return Err(CosError::ReadOnlyLimit);
     }
+    // Opened without the password its embedded files need, a document holds their data as stored:
+    // new security would encrypt that data again (or drop its encryption), and renumbering breaks
+    // a key that mixes in the object number.
+    if let Some(h) = doc.security().filter(|h| !h.has_key())
+        && (doc.encryption_changed() || !h.survives_renumbering())
+    {
+        return Err(CosError::Security(
+            "the embedded files are encrypted and the document was opened without their password: open it with the password to change its security or save it in full".into(),
+        ));
+    }
     // A full traversal must not fill the editor's shared caches (which undo snapshots also
     // own). Parsed objects and decoded object streams are temporary working data here.
     let mut reader = doc.object_reader();

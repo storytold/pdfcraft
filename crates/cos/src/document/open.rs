@@ -199,11 +199,12 @@ impl Document {
         // Read here, while nothing is decrypted yet.
         let members = self.encryption_members(enc);
         let handler = match credentials {
-            Credentials::Password(password) => Arc::new(pdfcraft_crypt::SecurityHandler::open(params, &id0, *password).map_err(|e| match e {
-                pdfcraft_crypt::CryptError::WrongPassword if password.is_none() => CosError::NeedsPassword,
-                pdfcraft_crypt::CryptError::WrongPassword => CosError::WrongPassword,
-                other => CosError::Security(other.to_string()),
-            })?),
+            Credentials::Password(password) => match pdfcraft_crypt::SecurityHandler::open(params.clone(), &id0, *password) {
+                Ok(handler) => Arc::new(handler),
+                Err(pdfcraft_crypt::CryptError::WrongPassword) if password.is_none() => Arc::new(self.without_password(&dict, params)?),
+                Err(pdfcraft_crypt::CryptError::WrongPassword) => return Err(CosError::WrongPassword),
+                Err(other) => return Err(CosError::Security(other.to_string())),
+            },
             // The same encryption as the document whose key this is: that key opens it.
             Credentials::Handler { handler, id0: known } if *handler.dict() == params && *known == id0 => Arc::clone(handler),
             Credentials::Handler { .. } => return Err(CosError::NeedsPassword),
@@ -215,6 +216,27 @@ impl Document {
         self.cache = Arc::default();
         self.objstms = Arc::default();
         Ok(())
+    }
+
+    /// The handler for a document opened without a password that only its embedded files need
+    /// (see [`crate::security::efopen_only`]), else `NeedsPassword`. Not a repair: ISO 32000-2
+    /// §7.6.6 has such a document open so; [`Document::embedded_files_locked`] tells it.
+    fn without_password(&self, dict: &Dict, params: pdfcraft_crypt::EncryptDict) -> Result<pdfcraft_crypt::SecurityHandler, CosError> {
+        let handler = crate::security::efopen_only(self, dict).then(|| pdfcraft_crypt::SecurityHandler::without_key(params)).flatten();
+        handler.ok_or(CosError::NeedsPassword)
+    }
+
+    /// Whether the document opened without the password its embedded files need (`/AuthEvent
+    /// /EFOpen`): their data is held, and saved, as stored, and isn't to be read as the files.
+    pub fn embedded_files_locked(&self) -> bool {
+        self.security.as_deref().is_some_and(|h| !h.has_key())
+    }
+
+    /// Whether `s`, a stream of this document, holds encrypted data that reads as stored because the
+    /// document opened without the password its embedded files need (see
+    /// [`Document::embedded_files_locked`]). Such data isn't the file it encrypts.
+    pub fn reads_as_stored(&self, s: &crate::Stream) -> bool {
+        self.security.as_deref().is_some_and(|h| crate::security::stream_reads_as_stored(self, h, s))
     }
 
     /// The first file identifier, part of the encryption key (empty when there is none).
