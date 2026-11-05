@@ -7,8 +7,48 @@ pub struct TrustStore {
 }
 
 impl TrustStore {
+    /// Whether `c` is one of the trusted certificates' anchors: it has a trusted certificate's
+    /// subject name and public key (RFC 5280 §6.1.1(d)). Trusting a root trusts its name and key,
+    /// so another certificate carrying both is the same anchor: the copy of a root another CA
+    /// cross-signed, which a chain built from a document's own certificates may reach first.
+    /// Names compare by their DER encoding, as [`build_chain`](crate::x509::build_chain) matches
+    /// issuers to subjects; keys by their parsed value. A certificate with the name and another
+    /// key, or the key and another name, is not the anchor.
     pub(super) fn trusts(&self, c: &Certificate) -> bool {
-        self.certs.iter().any(|t| t.raw == c.raw)
+        self.certs.iter().any(|t| t.subject.raw == c.subject.raw && t.public_key == c.public_key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TrustStore;
+    use crate::der::Time;
+    use crate::keys::PrivateKey;
+    use crate::x509::{Certificate, Name};
+
+    const FROM: Time = Time { year: 2020, month: 6, day: 1, hour: 12, minute: 0, second: 0 };
+
+    fn cert(name: &Name, key: &PrivateKey, serial: u8) -> Certificate {
+        Certificate::self_signed(name, key, FROM, 20, &[serial]).unwrap()
+    }
+
+    #[test]
+    fn a_certificate_with_the_anchors_name_and_key_is_the_anchor() {
+        let name = Name::build("Trust Anchor", "", "Anchor Tests", "", "US");
+        let key = PrivateKey::generate_p256().unwrap();
+        let anchor = cert(&name, &key, 1);
+        let trust = TrustStore { certs: vec![anchor.clone()] };
+        assert!(trust.trusts(&anchor), "the trusted certificate itself");
+        // Another certificate for the same name and key: other bytes, the same anchor.
+        let reissued = cert(&name, &key, 2);
+        assert_ne!(reissued.raw, anchor.raw);
+        assert!(trust.trusts(&reissued), "a reissue of the anchor");
+        // The name with another key is an impostor…
+        let impostor = cert(&name, &PrivateKey::generate_p256().unwrap(), 1);
+        assert!(!trust.trusts(&impostor), "the anchor's name with another key");
+        // …and the key under another name is another identity.
+        let renamed = cert(&Name::build("Someone Else", "", "Anchor Tests", "", "US"), &key, 1);
+        assert!(!trust.trusts(&renamed), "the anchor's key under another name");
     }
 }
 
