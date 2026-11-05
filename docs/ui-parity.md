@@ -1,7 +1,7 @@
 # UI and interaction parity
 
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-11-05 · **Change:** minor (vector paths in the Edit tool, align, distribute and arrange page objects from the selection's right-click menu, #1540; commands, tools and the View area recounted 2026-11-05; earlier: column select #740, multi-object move #844, Shift-⌘-G #810 fixed) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-24 · **Change:** minor (→ / ← scroll a page wider than the window before turning it) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-24 · **Change:** minor (→ / ← scroll a page wider than the window before turning it; a comment's text, border or line, and fill each at an opacity of its own) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft's tools, panels, shortcuts and feel compare with Acrobat Pro's current interface (the
 2023+ "new Acrobat": All tools pane on the left, quick-action toolbar, Home view). Behaviour is
@@ -78,7 +78,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Print dialog with preview | yes | yes | shipped |
 | Document Properties (description, security, fonts, initial view, custom, advanced) | yes | all but Custom and XMP | partial |
 | Field Properties (General, Appearance, Position, Options, Actions, Format, Validate, Calculate, Signed) | yes | all but Signed | partial |
-| Comment properties and properties bar | yes | yes | shipped |
+| Comment properties and properties bar | yes | yes; a text box's text, border and fill and a shape's line and fill each take an opacity of their own (Acrobat: one per comment) | shipped |
 | Preferences | ≈ 20 pages | Interface language, Documents and view, Identity, Fill & Sign, JavaScript | partial (gap 19) |
 
 ## Revision history
@@ -90,6 +90,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | 2026-10-24 | minor | After merging `upstream/main` at d4454108: commands (205), automation tools (184) and the View area (64.2%, unchanged, `cargo xtask parity`) recounted |
 | 2026-10-22 | minor | After merging `upstream/main` at 80b7d215: commands (204), automation tools (180) and the View area (64.2%, `cargo xtask parity`) recounted |
 | 2026-10-24 | minor | → / ← scroll a page wider than the window sideways before turning it, by the current page's or spread's edges in continuous view; ⌘→ / ⌘← turn at once |
+| 2026-10-24 | minor | Comment Properties sets a text box's text, border and fill opacity and a shape's line and fill opacity each on its own (Acrobat: one per comment); Make Properties Default carries them into the tool |
 | 2026-10-21 | minor | Pages inspector thumbnail sizing (#3808), separate from page and Organize zoom; view setting retained on reload and exposed through UI control. Not persisted between sessions. |
 | 2026-10-20 | minor | After merging `upstream/main` at 22bedbf2: commands (201), automation tools (176) and the View area (63.2%, `cargo xtask parity`) recounted |
 | 2026-10-15 | minor | A selected field nudges with the arrow keys in Prepare a form: a point, Shift ten points, one undo step per press (#2608) |
