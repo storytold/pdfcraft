@@ -138,7 +138,7 @@ impl SignDraft {
             field,
             certify,
             step: if ids.is_empty() { SignStep::Configure } else { SignStep::Choose },
-            selected: ids.iter().position(|e| e.unusable.is_none()),
+            selected: first_usable(ids),
             password: String::new(),
             reason: String::new(),
             location: String::new(),
@@ -269,6 +269,33 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
     }
 }
 
+/// The list positions of `ids` in the picker's alphabetical order. Only the picker sorts: the
+/// list itself keeps its order, so `SignDraft::selected` and the saved settings don't move.
+fn picker_order(ids: &[DigitalIdEntry]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..ids.len()).collect();
+    order.sort_by_cached_key(|&i| crate::i18n::name_sort_key(&ids[i].name));
+    order
+}
+
+/// The first ID the picker can select, top down.
+fn first_usable(ids: &[DigitalIdEntry]) -> Option<usize> {
+    picker_order(ids).into_iter().find(|&i| ids[i].unusable.is_none())
+}
+
+/// The usable ID after `selected` in the picker whose name starts with `letter`, wrapping, so
+/// pressing a letter again walks through the IDs that start with it.
+fn next_with_letter(ids: &[DigitalIdEntry], order: &[usize], selected: Option<usize>, letter: char) -> Option<usize> {
+    let letter = crate::i18n::name_sort_key(&letter.to_string());
+    let start = selected.and_then(|s| order.iter().position(|&i| i == s)).map_or(0, |at| at + 1);
+    order
+        .iter()
+        .cycle()
+        .skip(start)
+        .take(order.len())
+        .copied()
+        .find(|&i| ids[i].unusable.is_none() && crate::i18n::name_sort_key(&ids[i].name).starts_with(&letter))
+}
+
 /// A greyed entry for a Windows store certificate that can't sign, with the reason.
 #[cfg(target_os = "windows")]
 fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
@@ -341,6 +368,18 @@ impl PdfCraftApp {
         }
     }
 
+    /// The picker's Refresh: list the OS key store again, keeping the selection on its ID.
+    fn refresh_digital_ids(&mut self) {
+        let selected = self.sign_draft.as_ref().and_then(|d| d.selected).and_then(|i| self.digital_ids.get(i)).map(|e| e.path.clone());
+        self.refresh_os_key_store_ids();
+        if let Some(d) = self.sign_draft.as_mut() {
+            d.confirm_remove = None;
+            d.selected = selected
+                .and_then(|path| self.digital_ids.iter().position(|e| e.path == path && e.unusable.is_none()))
+                .or_else(|| first_usable(&self.digital_ids));
+        }
+    }
+
     /// Add a digital ID file to the list (or select it if it's there).
     pub fn add_digital_id(&mut self, path: &str, cert: &Certificate) -> usize {
         if let Some(i) = self.digital_ids.iter().position(|e| e.path == path) {
@@ -363,7 +402,7 @@ impl PdfCraftApp {
             d.confirm_remove = None;
             d.selected = match d.selected {
                 Some(s) if s > index => Some(s - 1),
-                Some(s) if s == index => self.digital_ids.iter().position(|e| e.unusable.is_none()),
+                Some(s) if s == index => first_usable(&self.digital_ids),
                 s => s,
             };
             if self.digital_ids.is_empty() {
@@ -690,6 +729,44 @@ mod tests {
         app.sign_draft = Some(draft);
         let i = app.create_digital_id()?;
         Ok(PathBuf::from(&app.digital_ids[i].path))
+    }
+
+    fn unusable_id(path: &str, name: &str) -> DigitalIdEntry {
+        DigitalIdEntry { unusable: Some("no key".to_string()), ..listed(path, name) }
+    }
+
+    #[test]
+    fn the_picker_lists_ids_alphabetically_and_selects_the_first_usable_one() {
+        let ids = [listed("/z", "Zeca"), unusable_id("/a", "água Viva"), listed("/b", "beto"), listed("/v", "Ávila")];
+        let order = picker_order(&ids);
+        assert_eq!(order.iter().map(|&i| ids[i].name.as_str()).collect::<Vec<_>>(), ["água Viva", "Ávila", "beto", "Zeca"]);
+        assert_eq!(first_usable(&ids), Some(3), "the greyed ID on top can't be selected");
+    }
+
+    #[test]
+    fn a_letter_walks_through_the_ids_that_start_with_it() {
+        let ids = [listed("/o", "Nora"), listed("/a", "Ana"), listed("/d", "Nádia"), unusable_id("/i", "Nilo")];
+        let order = picker_order(&ids);
+        assert_eq!(next_with_letter(&ids, &order, Some(1), 'n'), Some(2), "accents and case don't matter");
+        assert_eq!(next_with_letter(&ids, &order, Some(2), 'N'), Some(0), "the greyed Nilo is skipped");
+        assert_eq!(next_with_letter(&ids, &order, Some(0), 'n'), Some(2), "wraps to the first");
+        assert_eq!(next_with_letter(&ids, &order, None, 'a'), Some(1));
+        assert_eq!(next_with_letter(&ids, &order, Some(1), 'x'), None);
+        assert_eq!(next_with_letter(&[], &[], None, 'x'), None);
+    }
+
+    #[test]
+    fn refreshing_the_picker_keeps_the_selection_on_its_id() {
+        let mut app = PdfCraftApp::new();
+        app.digital_ids = vec![listed("windows:gone", "Gone"), listed("/ids/a.p12", "Ana"), listed("/ids/b.p12", "Beto")];
+        let mut draft = SignDraft::new(0, None, None, None, &app.digital_ids);
+        draft.selected = Some(2);
+        draft.confirm_remove = Some(1);
+        app.sign_draft = Some(draft);
+        app.refresh_digital_ids();
+        let d = app.sign_draft.as_ref().unwrap();
+        assert_eq!(d.selected.map(|i| app.digital_ids[i].name.as_str()), Some("Beto"), "the store entry above it is gone");
+        assert_eq!(d.confirm_remove, None);
     }
 
     #[test]

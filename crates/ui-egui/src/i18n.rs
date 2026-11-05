@@ -691,7 +691,7 @@ pub fn trn(lang: Lang, n: u64, one: &str, other: &str) -> String {
 
 /// `name` lowercased with the Latin accents that occur in language names folded away, so a
 /// byte-wise sort reads alphabetically. Other scripts are left as they are.
-fn name_sort_key(name: &str) -> String {
+pub(crate) fn name_sort_key(name: &str) -> String {
     name.chars()
         .flat_map(char::to_lowercase)
         .map(|c| match c {

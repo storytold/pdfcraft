@@ -623,6 +623,37 @@ fn windows_store_identity_does_not_ask_for_a_file_password() {
     assert!(h.state().sign_draft.as_ref().unwrap().error.as_ref().unwrap().contains("Windows certificate store"));
 }
 
+/// Typing a letter in the picker selects the next digital ID that starts with it.
+#[test]
+fn typing_a_letter_moves_the_picker_selection() {
+    let mut h = harness(dir());
+    h.state_mut().start_signing(0, None, None, None);
+    for name in ["Zeca", "Nora", "Ana", "Nádia"] {
+        h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
+            path: format!("/ids/{name}.p12"),
+            name: name.into(),
+            issuer: "Test issuer".into(),
+            email: String::new(),
+            expires: "2030.01.01".into(),
+            unusable: None,
+        });
+    }
+    let draft = h.state_mut().sign_draft.as_mut().unwrap();
+    draft.step = SignStep::Choose;
+    draft.selected = Some(2);
+    h.run_steps(3);
+    let chosen = |h: &Harness<'static, PdfCraftApp>| {
+        let state = h.state();
+        state.sign_draft.as_ref().and_then(|d| d.selected).map(|i| state.digital_ids[i].name.clone())
+    };
+    h.event(egui::Event::Text("n".into()));
+    h.run_steps(3);
+    assert_eq!(chosen(&h).as_deref(), Some("Nádia"));
+    h.event(egui::Event::Text("n".into()));
+    h.run_steps(3);
+    assert_eq!(chosen(&h).as_deref(), Some("Nora"));
+}
+
 /// Certificate names are as long as their owners made them: the picker cuts both lines of a
 /// row with "…" instead of painting them past the dialog's edge.
 #[test]

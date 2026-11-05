@@ -35,14 +35,33 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(tl!("Choose the digital ID that you want to use for signing:"));
     ui.add_space(6.0);
     let ids = app.digital_ids.clone();
+    let order = super::picker_order(&ids);
+    // Linux has no OS key store, so there is nothing for Refresh to list again.
+    let os_key_store = cfg!(any(target_os = "macos", target_os = "windows")) && app.os_key_store_ids;
     let Some(d) = app.sign_draft.as_mut() else { return true };
     let mut close = false;
+    // A letter jumps to the IDs that start with it; this step has no text field to type into.
+    let typed = ui.input(|i| {
+        i.events.iter().rev().find_map(|e| match e {
+            egui::Event::Text(text) => text.chars().next().filter(|c| c.is_alphanumeric()),
+            _ => None,
+        })
+    });
+    let jumped = typed.and_then(|letter| super::next_with_letter(&ids, &order, d.selected, letter));
+    if jumped.is_some() {
+        d.selected = jumped;
+        d.confirm_remove = None;
+    }
     egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-        for (i, e) in ids.iter().enumerate() {
+        for &i in &order {
+            let e = &ids[i];
             let selected = d.selected == Some(i);
             let usable = e.unusable.is_none();
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), egui::Sense::click());
             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, usable, selected, &e.name));
+            if jumped == Some(i) {
+                resp.scroll_to_me(None);
+            }
             let fill = if selected {
                 t.accent_soft
             } else if resp.hovered() && usable {
@@ -103,6 +122,7 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.add_space(10.0);
     // Remove takes a digital ID file off the list after asking (#1396); OS key store IDs stay.
     let mut remove = None;
+    let mut refresh = false;
     if let Some(e) = d.confirm_remove.and_then(|i| ids.get(i)) {
         ui.label(crate::i18n::fmt(tl!("Remove \"{name}\" from this list? The file itself is not deleted."), &[("name", &e.name)]));
         ui.horizontal(|ui| {
@@ -124,6 +144,7 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         if d.confirm_remove.is_none() && ui.add_enabled_ui(removable.is_some(), |ui| widgets::pill_button(ui, tl!("Remove"), false)).inner.clicked() {
             d.confirm_remove = removable;
         }
+        refresh = os_key_store && widgets::pill_button(ui, tl!("Refresh"), false).clicked();
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.add_enabled_ui(d.selected.is_some(), |ui| widgets::pill_button(ui, tl!("Continue"), true)).inner.clicked() {
                 d.step = SignStep::SignAs;
@@ -136,6 +157,9 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     });
     if let Some(i) = remove {
         app.remove_digital_id(i);
+    }
+    if refresh {
+        app.refresh_digital_ids();
     }
     close
 }
