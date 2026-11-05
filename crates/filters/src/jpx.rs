@@ -55,7 +55,10 @@ fn components_fit(data: &[u8]) -> bool {
         return fits(data);
     }
     let (mut rest, mut any) = (data, false);
-    while let Some((kind, body, next)) = jp2_box(rest) {
+    while !rest.is_empty() {
+        // Bytes left that aren't a box are refused, not skipped: the decoder's own arithmetic may
+        // still read one there (its XLBox wraps on a 32-bit target).
+        let Some((kind, body, next)) = jp2_box(rest) else { return false };
         if kind == b"jp2c" {
             if !fits(body) {
                 return false;
@@ -67,8 +70,8 @@ fn components_fit(data: &[u8]) -> bool {
     any
 }
 
-/// The first box of `data`: its type, its contents and what follows it. `None` where the decoder
-/// stops reading: too short, a length below its header's, or past the end. Each box is at least 8
+/// The first box of `data`: its type, its contents and what follows it. `None` for one too short,
+/// with a length below its header's, or past the end. Each box is at least 8
 /// bytes, so a walk ends.
 fn jp2_box(data: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
     let l_box = u32::from_be_bytes(data.get(..4)?.try_into().ok()?);
@@ -115,5 +118,6 @@ mod tests {
         assert!(!super::components_fit(&both), "a later one of five doesn't");
         assert!(!super::components_fit(&[&[0, 0, 0, 5][..], b"jp2c", &three[8..]].concat()), "a length below the header's");
         assert!(!super::components_fit(&three[..40]), "a box past the end");
+        assert!(!super::components_fit(&[&three[..], &[0, 0, 0, 1]].concat()), "bytes after the last box");
     }
 }
