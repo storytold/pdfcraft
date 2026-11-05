@@ -588,6 +588,25 @@ fn has_edges(info: &DocInfo, page: usize) -> bool {
     info.pages.get(page).is_some_and(|p| p.rotation % 180 == 0)
 }
 
+/// The resize handles of a selected box (screen): left-top, right-top, left-bottom,
+/// right-bottom, so corner `k`'s opposite is `3 - k`.
+pub(crate) fn corners(b: Rect) -> [Pos2; 4] {
+    [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()]
+}
+
+/// The four resize handles of a selected box `b` (screen).
+pub(crate) fn paint_handles(painter: &egui::Painter, b: Rect) {
+    for c in corners(b) {
+        painter.rect(
+            Rect::from_center_size(c, egui::vec2(8.0, 8.0)),
+            CornerRadius::ZERO,
+            Color32::WHITE,
+            Stroke::new(1.0, ACCENT),
+            egui::StrokeKind::Middle,
+        );
+    }
+}
+
 /// What of the paragraphs `lines` lies under `p` on `page`: the one hit test of Edit text's
 /// paragraphs, for the cursor and the press. A closed paragraph moves when dragged (the four-way
 /// arrow says so; a click still opens it for typing) and its edge rewraps it, from a little way

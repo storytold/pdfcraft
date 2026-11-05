@@ -65,7 +65,7 @@ fn ending_pair(kind: &str, endings: Option<&[LineEnding]>) -> Result<[LineEnding
     }
 }
 
-fn hex(c: [f32; 3]) -> String {
+pub(crate) fn hex(c: [f32; 3]) -> String {
     let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!("#{:02X}{:02X}{:02X}", b(c[0]), b(c[1]), b(c[2]))
 }

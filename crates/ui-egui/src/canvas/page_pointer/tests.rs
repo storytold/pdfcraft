@@ -241,7 +241,7 @@ const RAW_READS: [&str; 21] = [
 
 /// Functions in the page modules that are not page input and read egui's pointer state
 /// themselves: (file, function, why).
-const NOT_PAGE_INPUT: [(&str, &str, &str); 10] = [
+const NOT_PAGE_INPUT: [(&str, &str, &str); 11] = [
     ("canvas/area.rs", "zoom_anchor", "a pinch zooms the whole view, and is read before the pages' widget exists"),
     ("canvas/area.rs", "drawing_edge_pointer", "scrolls the view at its edges, read before the pages' widget exists"),
     ("canvas/area.rs", "glide_interrupted", "a press anywhere stops the touchpad's glide"),
@@ -252,6 +252,7 @@ const NOT_PAGE_INPUT: [(&str, &str, &str); 10] = [
     ("tools/content_ui.rs", "editor", "the added-text editor is an Area of its own over the page"),
     ("tools/edit_text_ui.rs", "overlay", "the paragraph editor is an Area of its own over the page"),
     ("tools/fill_sign/scan.rs", "scan_tab", "the signature dialog's Scan tab"),
+    ("tools/object_ui.rs", "nudge_keys", "keyboard handling: with the pointer over a side panel, Delete is the panel's"),
 ];
 
 /// The function a `fn` line declares, laid out as rustfmt does (`pub`, `const` and the like
@@ -597,7 +598,7 @@ const PRESS_IGNORERS: [(&str, &str, &str); 1] =
 
 /// The module hit tests, called by path: a press handler calls none of them (HIT_TESTERS says who
 /// may).
-const PAGE_HIT_CALLS: [&str; 12] = [
+const PAGE_HIT_CALLS: [&str; 13] = [
     "link_ui::hit(",
     "prepare::hit(",
     "forms_ui::hit(",
@@ -609,6 +610,7 @@ const PAGE_HIT_CALLS: [&str; 12] = [
     "edit_text_ui::picture_handle_hit(",
     "edit_text_ui::crop_hit(",
     "object_ui::hit(",
+    "object_ui::path_hit(",
     "content_ui::hit(",
 ];
 

@@ -76,6 +76,11 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         // Page content, resources and added content/marks only: the page tree, annotations,
         // fields, links and document metadata are untouched (see `refresh_content`).
         Edit::MoveObjects { .. }
+        | Edit::AlignObjects { .. }
+        | Edit::TransformPath { .. }
+        | Edit::RecolourObjects { .. }
+        | Edit::DeleteObjects { .. }
+        | Edit::ArrangeObjects { .. }
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
         | Edit::EditPageImage { .. }

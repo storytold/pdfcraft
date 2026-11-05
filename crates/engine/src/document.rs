@@ -7,8 +7,9 @@ use pdfcraft_render::{DocInfo, RenderConfig, RenderPool};
 
 use crate::history::Editor;
 use crate::{
-    CalculationOrder, CheckStyle, DocId, Edit, EditError, EditableObject, FormFieldKind, Hidden, InitialView, Label, MarkKind, SecuritySummary,
-    SignatureInfo, TabOrder, TrustStore, XfaLayout, a11y, form_appearance, guard, js, measure, optimize, renderer_password, unrestricted,
+    CalculationOrder, CheckStyle, DocId, Edit, EditError, EditableObject, FormFieldKind, Hidden, InitialView, Label, MarkKind, ObjectTarget,
+    PagePath, SecuritySummary, SignatureInfo, TabOrder, TrustStore, XfaLayout, ZOrder, a11y, form_appearance, guard, js, measure, optimize,
+    renderer_password, unrestricted,
 };
 #[cfg(test)]
 use crate::{record_link_scan, record_marker_scan};
@@ -223,6 +224,34 @@ impl Document {
     pub fn editable_objects(&self, page: usize) -> Result<Vec<EditableObject>, String> {
         let editor = self.editor.as_ref().ok_or("the document can't be read")?;
         pdfcraft_edit::editable_objects(&editor.cos, page).map_err(|e| e.to_string())
+    }
+
+    /// Edit a PDF: the vector paths `page` paints (0-based), in painting order. Their indexes
+    /// are the [`crate::ObjectKind::Path`] references of [`Self::editable_objects`].
+    pub fn page_paths(&self, page: usize) -> Result<Vec<PagePath>, String> {
+        let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+        pdfcraft_edit::page_paths(&editor.cos, page).map_err(|e| e.to_string())
+    }
+
+    /// The topmost (last painted) vector path on `page` at a user-space point, within
+    /// `tolerance` points: its index in [`Self::page_paths`].
+    pub fn path_at(&self, page: usize, point: [f64; 2], tolerance: f64) -> Option<usize> {
+        self.page_paths(page).ok()?.iter().rposition(|p| p.contains(point, tolerance))
+    }
+
+    /// Where [`Edit::ArrangeObjects`] would list `target` afterwards (paths and images are
+    /// listed in painting order), or why it would be refused, without changing anything.
+    pub fn arranged_target(&self, page: usize, target: ObjectTarget, order: ZOrder) -> Result<ObjectTarget, String> {
+        let edit = Edit::ArrangeObjects { page, object: target, order };
+        let editor = self.editor.as_ref().ok_or_else(|| EditError::ReadOnly(self.read_only_reason.clone().unwrap_or_default()).to_string())?;
+        // Refuse exactly when `Session::apply` would, for the same reason.
+        if let Some(p) = editor.cos.permissions() {
+            crate::edit::check_permission(&edit, &p).map_err(|e| e.to_string())?;
+        }
+        // It rewrites a copy of the page as the edit would, so it runs inside the same net.
+        guard(|| pdfcraft_edit::arranged_target(&editor.cos, page, target, order))
+            .map_err(|m| format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))?
+            .map_err(|e| e.to_string())
     }
 
     /// Displayed top-left-origin motion to a user-space vector. Use the linear map only,

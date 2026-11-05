@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 use crate::{
     AddedContent, AddedText, Background, BoxSpec, EditError, FieldProps, FieldValue, FillMark, HeaderFooter, Hidden, ImageEdit, InitialView, Label,
-    LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget, PageBox, Protection, ReviewState,
-    Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image, decode_data_file, embed_image, field_table, fit_picture,
-    image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+    LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectAlign, ObjectTarget, PageBox, Protection,
+    ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, ZOrder, a11y, copy_image, decode_data_file, embed_image,
+    field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, open_source, strip_xfa, unrestricted,
+    xfa, xfa_after_data_change,
 };
 
 mod labels;
@@ -441,6 +442,42 @@ pub enum Edit {
         page: usize,
         objects: Vec<ObjectTarget>,
         offset: [f64; 2],
+    },
+    /// Align objects to an edge or centre of their union, or space them evenly, as the page is
+    /// displayed. One group move: each object moves by its own offset.
+    AlignObjects {
+        page: usize,
+        objects: Vec<ObjectTarget>,
+        align: ObjectAlign,
+    },
+    /// Move and resize vector path `index` (from `Document::page_paths`) by scaling its visible
+    /// box onto `rect` (user space). Its line width scales too, so a stroked path's box then
+    /// lands only roughly on `rect` (see `object_resize` in the automation README).
+    TransformPath {
+        page: usize,
+        index: usize,
+        rect: [f64; 4],
+    },
+    /// Paint vector paths (the only kind accepted) in DeviceRGB: `fill` where they fill,
+    /// `stroke` where they stroke; `None` keeps that part's colour.
+    RecolourObjects {
+        page: usize,
+        objects: Vec<ObjectTarget>,
+        fill: Option<[f64; 3]>,
+        stroke: Option<[f64; 3]>,
+    },
+    /// Delete vector paths, images and Form artwork together. Text and added content are refused.
+    DeleteObjects {
+        page: usize,
+        objects: Vec<ObjectTarget>,
+    },
+    /// Bring a vector path, image or Form artwork forward or send it backward among the objects
+    /// it overlaps (see [`ZOrder`]). Text and added content are refused, and so is a move that
+    /// would change nothing. `Document::arranged_target` says where it is listed afterwards.
+    ArrangeObjects {
+        page: usize,
+        object: ObjectTarget,
+        order: ZOrder,
     },
     /// Edit text in a paragraph box: replace paragraph `block` (from `Document::text_blocks`),
     /// rewrapped to the box's width.

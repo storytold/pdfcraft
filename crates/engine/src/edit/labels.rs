@@ -1,4 +1,4 @@
-use super::{Edit, FillMark, ImageEdit, Label, LineEnding, MarkKind, Markup, PageBox, ReviewState, Shape, field_table};
+use super::{Edit, FillMark, ImageEdit, Label, LineEnding, MarkKind, Markup, PageBox, ReviewState, Shape, ZOrder, field_table};
 
 /// Every wording [`Edit::label`] can produce, for an interface to translate. `Edit::Batch` is not
 /// here: its wording is only the hole, because a batch carries its name as text (see
@@ -113,6 +113,12 @@ pub const EDIT_LABELS: &[&str] = &[
     "Load document font",
     "Move object",
     "Move objects",
+    "Align objects",
+    "Distribute objects",
+    "Resize object",
+    "Change colour",
+    "Delete object",
+    "Delete objects",
     "Move image",
     "Transform image",
     "Rotate image",
@@ -267,6 +273,16 @@ impl Edit {
             Edit::EditTextLine { .. } | Edit::EditTextBlock { .. } => Label::of("Edit text"),
             Edit::RegisterTextFont { .. } => Label::of("Load document font"),
             Edit::MoveObjects { objects, .. } => plural("Move object", "Move objects", objects.len()),
+            Edit::AlignObjects { align, .. } => Label::of(if align.is_distribute() { "Distribute objects" } else { "Align objects" }),
+            Edit::TransformPath { .. } => Label::of("Resize object"),
+            Edit::RecolourObjects { .. } => Label::of("Change colour"),
+            Edit::DeleteObjects { objects, .. } => plural("Delete object", "Delete objects", objects.len()),
+            Edit::ArrangeObjects { order, .. } => Label::of(match order {
+                ZOrder::Front => "Bring to front",
+                ZOrder::Forward => "Bring forward",
+                ZOrder::Backward => "Send backward",
+                ZOrder::Back => "Send to back",
+            }),
             Edit::EditPageImage { change, .. } => Label::of(match change {
                 ImageEdit::Move(_) => "Move image",
                 ImageEdit::Transform(_) => "Transform image",

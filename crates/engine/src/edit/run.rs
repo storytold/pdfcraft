@@ -108,6 +108,11 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddImage { .. }
         | Edit::UpdateContent { .. }
         | Edit::MoveObjects { .. }
+        | Edit::AlignObjects { .. }
+        | Edit::TransformPath { .. }
+        | Edit::RecolourObjects { .. }
+        | Edit::DeleteObjects { .. }
+        | Edit::ArrangeObjects { .. }
         | Edit::DeleteContent { .. }
         | Edit::ReplaceImage { .. }
         | Edit::PasteContent { .. }
@@ -710,6 +715,36 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::EnhanceScan { images } => crate::scan_clean::write_back(doc, images)?,
         Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
+        Edit::AlignObjects { page, objects, align } => pdfcraft_edit::align_objects(doc, *page, objects, *align)?,
+        Edit::TransformPath { page, index, rect } => {
+            let invalid = |m: String| EditError::Edit(pdfcraft_edit::EditError::Invalid(m));
+            // An inverted box would flip the path rather than move it.
+            let [x0, y0, x1, y1] = *rect;
+            if !(rect.iter().all(|v| v.is_finite() && v.abs() <= 1e9) && x1 > x0 && y1 > y0) {
+                return Err(invalid("the new box must be finite, no larger than 1e9, and have some width and height".into()));
+            }
+            let path = pdfcraft_edit::page_paths(doc, *page)?
+                .into_iter()
+                .nth(*index)
+                .ok_or_else(|| invalid(format!("page {} has no vector path {}", page.saturating_add(1), index.saturating_add(1))))?;
+            if path.rect == *rect {
+                return Err(invalid("the vector path already has that box".into()));
+            }
+            let change = pdfcraft_edit::PathChange::Transform(pdfcraft_edit::rect_to_rect(path.rect, *rect));
+            pdfcraft_edit::change_path(doc, *page, *index, &change)?;
+        }
+        Edit::RecolourObjects { page, objects, fill, stroke } => {
+            let paths = objects
+                .iter()
+                .map(|o| (o.kind == crate::ObjectKind::Path).then_some(o.index))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid("only vector paths can be recoloured".into())))?;
+            pdfcraft_edit::recolour_paths(doc, *page, &paths, *fill, *stroke)?;
+        }
+        Edit::DeleteObjects { page, objects } => pdfcraft_edit::delete_objects(doc, *page, objects)?,
+        Edit::ArrangeObjects { page, object, order } => {
+            pdfcraft_edit::arrange_object(doc, *page, *object, *order)?;
+        }
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
         }

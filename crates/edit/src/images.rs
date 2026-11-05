@@ -3,12 +3,15 @@
 //! `q … cm … Q` with the extra transform), replace (it draws another XObject in the same place),
 //! or delete. Only the stream that draws it is rewritten, as a new object.
 
-use kurbo::{BezPath, Point, Shape};
-use pdfcraft_content::{Matrix, Op, Pieces, parse, serialize_ops};
-use pdfcraft_cos::{Dict, Document, ObjRef, Object};
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
+use kurbo::{Point, Shape};
+use pdfcraft_content::{Matrix, Op, Pieces, parse, serialize_ops};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object};
+
 use crate::EditError;
+use crate::geometry::{ClipPath, GState as ImageState, intersection};
 use crate::text::content_streams;
 
 /// The identity of a soft mask (`/SMask`) in the PDF graphics state.
@@ -86,13 +89,11 @@ impl PageImage {
             if clip.even_odd { winding % 2 != 0 } else { winding != 0 }
         })
     }
-}
 
-#[derive(Clone, Debug, PartialEq)]
-struct ClipPath {
-    path: Arc<BezPath>,
-    even_odd: bool,
-    app_crop: bool,
+    /// Its `Do`'s index among `ops`, the operators of the page's streams joined, if one is there.
+    pub(crate) fn drawn_at(&self, ops: &[Op]) -> Option<usize> {
+        ops.get(self.op).is_some_and(|op| op.is("Do")).then_some(self.op)
+    }
 }
 
 /// Image draws one page's inventory lists at most: a form drawn many times from other forms
@@ -117,166 +118,6 @@ fn xobjects(doc: &Document, page: &Dict) -> Dict {
         .map(|r| doc.resolve(r))
         .and_then(|r| r.as_dict().and_then(|d| d.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned())))
         .unwrap_or_default()
-}
-
-fn intersection(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
-    let r = [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
-    (r.iter().all(|v| v.is_finite()) && r[2] > r[0] && r[3] > r[1]).then_some(r)
-}
-
-#[derive(Clone)]
-struct Placement {
-    matrix: Matrix,
-    clip: [f64; 4],
-    clips: Vec<ClipPath>,
-}
-
-/// Path coordinates are transformed when constructed; q/Q save clips, not the current path.
-struct ImageState {
-    placement: Placement,
-    stack: Vec<Placement>,
-    path: BezPath,
-    subpath_start: Option<Point>,
-    pending_clip: Option<bool>,
-    app_crop: bool,
-}
-
-impl ImageState {
-    fn new(matrix: Matrix, clip: [f64; 4], clips: Vec<ClipPath>) -> Self {
-        Self {
-            placement: Placement { matrix, clip, clips },
-            stack: Vec::new(),
-            path: BezPath::new(),
-            subpath_start: None,
-            pending_clip: None,
-            app_crop: false,
-        }
-    }
-
-    fn current_point(&self) -> Option<Point> {
-        match self.path.elements().last() {
-            Some(kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p)) => Some(*p),
-            Some(kurbo::PathEl::QuadTo(_, p2) | kurbo::PathEl::CurveTo(_, _, p2)) => Some(*p2),
-            Some(kurbo::PathEl::ClosePath) => self.subpath_start,
-            None => None,
-        }
-    }
-
-    fn has_current_point(&self) -> bool {
-        self.current_point().is_some()
-    }
-
-    fn point(&self, x: f64, y: f64) -> Option<Point> {
-        let (x, y) = self.placement.matrix.apply(x, y);
-        if x.is_finite() && y.is_finite() { Some(Point::new(x, y)) } else { None }
-    }
-
-    fn apply(&mut self, op: &Op) -> Result<(), EditError> {
-        if matches!(op.op.as_slice(), b"cm" | b"m" | b"l" | b"c" | b"v" | b"y" | b"re")
-            && op.operands.iter().any(|v| v.as_f64().is_some_and(|v| !v.is_finite() || v.abs() > 1e12))
-        {
-            return Err(EditError::Invalid("the image path contains invalid coordinates".into()));
-        }
-        if self.path.elements().len() > 16384 || self.stack.len() > 4096 || self.placement.clips.len() > 256 {
-            return Err(EditError::Invalid("the image clip or graphics state exceeds its complexity budget".into()));
-        }
-        match op.op.as_slice() {
-            b"q" => self.stack.push(self.placement.clone()),
-            b"Q" => {
-                if let Some(saved) = self.stack.pop() {
-                    self.placement = saved;
-                }
-            }
-            b"cm" => {
-                if let Some(m) = op.nums::<6>() {
-                    let next_mat = Matrix(m).then(&self.placement.matrix);
-                    if next_mat.0.iter().all(|v| v.is_finite()) {
-                        self.placement.matrix = next_mat;
-                    }
-                }
-            }
-            b"m" => {
-                if let Some([x, y]) = op.nums::<2>()
-                    && let Some(p) = self.point(x, y)
-                {
-                    self.subpath_start = Some(p);
-                    self.path.move_to(p);
-                }
-            }
-            b"l" => {
-                // A segment before any m (or re) has no subpath to extend: BezPath's line_to and
-                // friends panic on an empty path by contract, so the segment is skipped, as the
-                // renderer, MuPDF and pdftotext do (#3581).
-                if let Some([x, y]) = op.nums::<2>()
-                    && self.has_current_point()
-                    && let Some(p) = self.point(x, y)
-                {
-                    self.path.line_to(p);
-                }
-            }
-            b"c" => {
-                if let Some([x1, y1, x2, y2, x3, y3]) = op.nums::<6>()
-                    && self.has_current_point()
-                    && let (Some(p1), Some(p2), Some(p3)) = (self.point(x1, y1), self.point(x2, y2), self.point(x3, y3))
-                {
-                    self.path.curve_to(p1, p2, p3);
-                }
-            }
-            b"v" => {
-                if let Some([x1, y1, x2, y2]) = op.nums::<4>()
-                    && self.has_current_point()
-                    && let (Some(p1), Some(p2)) = (self.point(x1, y1), self.point(x2, y2))
-                    && let Some(current) = self.current_point()
-                {
-                    self.path.curve_to(current, p1, p2);
-                }
-            }
-            b"y" => {
-                if let Some([x1, y1, x2, y2]) = op.nums::<4>()
-                    && self.has_current_point()
-                    && let (Some(p1), Some(end)) = (self.point(x1, y1), self.point(x2, y2))
-                {
-                    self.path.curve_to(p1, end, end);
-                }
-            }
-            b"h" => {
-                // ClosePath with no subpath panics by the same contract (#3581).
-                if self.has_current_point() {
-                    self.path.close_path();
-                }
-            }
-            b"re" => {
-                if let Some([x, y, w, h]) = op.nums::<4>()
-                    && let (Some(p0), Some(p1), Some(p2), Some(p3)) =
-                        (self.point(x, y), self.point(x + w, y), self.point(x + w, y + h), self.point(x, y + h))
-                {
-                    self.subpath_start = Some(p0);
-                    self.path.move_to(p0);
-                    self.path.line_to(p1);
-                    self.path.line_to(p2);
-                    self.path.line_to(p3);
-                    self.path.close_path();
-                }
-            }
-            b"MP" if op.name(0) == Some(b"PdfCraftImageCrop") => self.app_crop = true,
-            b"W" => self.pending_clip = Some(false),
-            b"W*" => self.pending_clip = Some(true),
-            b"n" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
-                if let Some(even_odd) = self.pending_clip.take() {
-                    // Filling/clipping implicitly closes open subpaths. BezPath's winding
-                    // follows the same rule, and its bounds use cubic extrema, not controls.
-                    let bounds = self.path.bounding_box();
-                    self.placement.clip = intersection(self.placement.clip, [bounds.x0, bounds.y0, bounds.x1, bounds.y1]).unwrap_or([0.0; 4]);
-                    self.placement.clips.push(ClipPath { path: Arc::new(std::mem::take(&mut self.path)), even_odd, app_crop: self.app_crop });
-                }
-                self.path = BezPath::new();
-                self.subpath_start = None;
-                self.app_crop = false;
-            }
-            _ => {}
-        }
-        Ok(())
-    }
 }
 
 /// The images and Form artwork page `page` (0-based) draws, in drawing order.
@@ -1503,13 +1344,38 @@ impl ImageScopes {
 
 /// [`ImageScopes`] of the `Do` at `target`. An image inside a text object cannot be `done`.
 fn image_scopes(ops: &[Op], target: usize, done: &str) -> Result<ImageScopes, EditError> {
+    object_scopes(ops, target..=target, &|_| false, done)
+}
+
+/// The saved graphics-state scope to transform a vector path in: the path's operators `target`,
+/// from its first construction operator through its painting one, alone when nothing clips them.
+/// A scope may inherit a clip, which then stays: the outermost scope painting nothing else wins,
+/// since every clip inside it is the path's alone. Scopes whose `q` or `Q` operator `fixed`
+/// names are passed over.
+pub(crate) fn transform_scope(
+    ops: &[Op],
+    target: RangeInclusive<usize>,
+    fixed: &dyn Fn(usize) -> bool,
+) -> Result<Option<(usize, usize, Matrix)>, EditError> {
+    let scopes = object_scopes(ops, target.clone(), fixed, "transformed")?;
+    if !scopes.clipped {
+        return Ok(Some((*target.start(), *target.end(), scopes.placement)));
+    }
+    Ok(scopes.outermost)
+}
+
+/// [`ImageScopes`] of the operators `target` (an image's `Do`, or a path from its first
+/// construction operator through its painting one), passing over scopes whose `q` or `Q`
+/// operator `fixed` names. Content inside a text object cannot be `done`.
+fn object_scopes(ops: &[Op], target: RangeInclusive<usize>, fixed: &dyn Fn(usize) -> bool, done: &str) -> Result<ImageScopes, EditError> {
     struct Scope {
         start: usize,
         matrix: Matrix,
         inherited_clip: bool,
         inherited_path: bool,
         selected: bool,
-        other_paint: bool,
+        /// `other_paint` when it was pushed: more by its `Q` means it paints something else.
+        other_paint: usize,
     }
     let mut stack: Vec<Scope> = Vec::new();
     let mut matrix = Matrix::IDENTITY;
@@ -1520,17 +1386,18 @@ fn image_scopes(ops: &[Op], target: usize, done: &str) -> Result<ImageScopes, Ed
     let mut at_image = None;
     let mut isolated = None;
     let mut outermost = None;
+    let mut other_paint = 0_usize;
     for (index, op) in ops.iter().enumerate() {
         match op.op.as_slice() {
             b"q" => {
                 if stack.len() >= 256 {
-                    return Err(EditError::Invalid("the image graphics state is too deeply nested".into()));
+                    return Err(EditError::Invalid("the page graphics state is too deeply nested to edit this object".into()));
                 }
-                stack.push(Scope { start: index, matrix, inherited_clip: clipped, inherited_path: path, selected: false, other_paint: false });
+                stack.push(Scope { start: index, matrix, inherited_clip: clipped, inherited_path: path, selected: false, other_paint });
             }
             b"Q" => {
                 if let Some(scope) = stack.pop() {
-                    if scope.selected && !scope.other_paint && !scope.inherited_path {
+                    if scope.selected && scope.other_paint == other_paint && !scope.inherited_path && !fixed(scope.start) && !fixed(index) {
                         let found = (scope.start, index, scope.matrix);
                         if !scope.inherited_clip {
                             isolated.get_or_insert(found);
@@ -1555,7 +1422,7 @@ fn image_scopes(ops: &[Op], target: usize, done: &str) -> Result<ImageScopes, Ed
             b"W" | b"W*" => pending_clip = true,
             _ => {}
         }
-        if index == target {
+        if index == *target.start() {
             if text {
                 return Err(EditError::Invalid(format!("an image inside a text object cannot be {done}")));
             }
@@ -1563,13 +1430,13 @@ fn image_scopes(ops: &[Op], target: usize, done: &str) -> Result<ImageScopes, Ed
             for scope in &mut stack {
                 scope.selected = true;
             }
-        } else if matches!(
-            op.op.as_slice(),
-            b"Do" | b"Tj" | b"TJ" | b"'" | b"\"" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*"
-        ) {
-            for scope in &mut stack {
-                scope.other_paint = true;
-            }
+        } else if !target.contains(&index)
+            && matches!(
+                op.op.as_slice(),
+                b"Do" | b"Tj" | b"TJ" | b"'" | b"\"" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*"
+            )
+        {
+            other_paint = other_paint.saturating_add(1);
         }
         if matches!(op.op.as_slice(), b"n" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*") {
             clipped |= pending_clip;
@@ -1709,10 +1576,7 @@ fn transform_image(
     }
     let pieces = joined(streams);
     let ops = pieces.parse().ops;
-    let target = image.op;
-    if !ops.get(target).is_some_and(|op| op.is("Do")) {
-        return Err(EditError::Invalid("the image operation could not be located".into()));
-    }
+    let target = image.drawn_at(&ops).ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
     // A private path crop moves with its image regardless of intervening state operators.
     // Shared crops retain the existing fixed-clip behavior, preserving neighbouring paint.
     let (start, end, placement) =
@@ -1786,10 +1650,7 @@ fn crop_image_impl(
 
     let pieces = joined(streams);
     let ops = pieces.parse().ops;
-    let target = image.op;
-    if !ops.get(target).is_some_and(|op| op.is("Do")) {
-        return Err(EditError::Invalid("the image operation could not be located".into()));
-    }
+    let target = image.drawn_at(&ops).ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
     let (start, end, placement) =
         image_scopes(&ops, target, "cropped")?.transform_scope(target).unwrap_or((target, target, Matrix(image.draw_matrix)));
     let inverse = placement.invert().ok_or_else(|| EditError::Invalid("the image has no area".into()))?;
@@ -1851,16 +1712,16 @@ fn crop_image_impl(
 
 /// Plan all transforms before changing a stream; indexes refer to the original inventory.
 /// Splice only the chosen Do operators and preserve all other bytes and stream dictionaries.
-pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize], offset: [f64; 2]) -> Result<(), EditError> {
-    if indexes.is_empty() {
+pub(crate) fn translate_images(doc: &mut Document, page: usize, moves: &[(usize, [f64; 2])]) -> Result<(), EditError> {
+    if moves.is_empty() {
         return Ok(());
     }
     let images = page_images(doc, page)?;
     let p = page_of(doc, page)?;
     let all = content_streams(doc, &p.dict)?;
     let mut plans = std::collections::BTreeMap::new();
-    for index in indexes {
-        let image = images.get(*index).ok_or_else(|| EditError::Invalid("a selected image no longer exists".into()))?;
+    for &(index, offset) in moves {
+        let image = images.get(index).ok_or_else(|| EditError::Invalid("a selected image no longer exists".into()))?;
         let placement = Matrix(image.draw_matrix);
         let inverse = placement.invert().ok_or_else(|| EditError::Invalid("a selected image has no area".into()))?;
         let [a, b, c, d, _, _] = inverse.0;
