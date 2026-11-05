@@ -60,6 +60,9 @@ fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
 fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> Result<(), AnnotError> {
     // Characters the standard fonts can't draw came out as `?`: mark the annotation with the first.
     let missing = appearance::undrawable_text(d).map(|(_, c)| c);
+    // The invisible text layer's font descriptor must be indirect (ISO 32000-2 §9.8.1).
+    let mut stream = stream;
+    pdfcraft_fonts::hoist_font_descriptors(doc, &mut stream);
     let ap = doc.add(Object::Stream(stream));
     // A copy (a shared /AP is left alone) that keeps unknown entries; the old down and rollover
     // appearances would show the previous look on press or hover, so they go with the old /N.

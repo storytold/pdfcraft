@@ -194,6 +194,30 @@ fn document_faces(faces: &[CraftFont], serif: bool, bold: bool) -> Vec<&CraftFon
     out
 }
 
+/// Every `Kore` face that can stand in for document text, best match first: the serif
+/// (Myeongjo) or sans (Gothic) family the source asks for in its weight, then that family's
+/// Regular, then every other Korean face (Regular first). Missing weights fall back to a real
+/// Regular face, never a synthetic bold. Empty without craft-fonts or without a Korean face.
+pub fn document_korean_fonts_for_style(serif: bool, bold: bool) -> Vec<&'static CraftFont> {
+    korean_faces(CRAFT_FONTS, serif, bold)
+}
+
+fn korean_faces(faces: &[CraftFont], serif: bool, bold: bool) -> Vec<&CraftFont> {
+    let kore = || faces.iter().filter(|f| f.covers("Kore"));
+    // Korean serif families are Myeongjo (or Batang); everything else is a sans.
+    let is_serif = |f: &CraftFont| f.family.contains("Myeongjo") || f.family.contains("Batang");
+    let style = if bold { "Bold" } else { "Regular" };
+    let mut out: Vec<&CraftFont> = Vec::new();
+    let wanted = kore().filter(|f| is_serif(f) == serif);
+    let preferred = wanted.clone().filter(|f| f.style == style).chain(wanted.filter(|f| f.style == "Regular"));
+    for face in preferred.chain(kore().filter(|f| f.style == "Regular")).chain(kore()) {
+        if !out.iter().any(|f| std::ptr::eq(*f, face)) {
+            out.push(face);
+        }
+    }
+    out
+}
+
 const fn str_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     if a.len() != b.len() {
@@ -350,6 +374,27 @@ mod tests {
         }
         assert_eq!(document_latin_fonts(false)[0].style, "Regular");
         assert_eq!(document_latin_fonts(true)[0].style, "SemiBold");
+    }
+
+    #[test]
+    fn korean_document_faces_follow_serif_and_weight() {
+        static KORE_LATN: &[&str] = &["Kore", "Latn"];
+        let faces = [
+            CraftFont { family: "BIZ UDPGothic", style: "Bold", scripts: &["Jpan"], bytes: b"not-korean" },
+            CraftFont { family: "NanumGothic", style: "Regular", scripts: KORE_LATN, bytes: b"sans" },
+            CraftFont { family: "NanumGothic", style: "Bold", scripts: KORE_LATN, bytes: b"sans-bold" },
+            CraftFont { family: "NanumMyeongjo", style: "Regular", scripts: KORE_LATN, bytes: b"serif" },
+            CraftFont { family: "NanumMyeongjo", style: "Bold", scripts: KORE_LATN, bytes: b"serif-bold" },
+        ];
+        let order = |faces: &[CraftFont], serif, bold| korean_faces(faces, serif, bold).iter().map(|f| f.bytes).collect::<Vec<&[u8]>>();
+        assert_eq!(order(&faces, false, false), [&b"sans"[..], b"serif", b"sans-bold", b"serif-bold"]);
+        assert_eq!(order(&faces, false, true), [&b"sans-bold"[..], b"sans", b"serif", b"serif-bold"]);
+        assert_eq!(order(&faces, true, false), [&b"serif"[..], b"sans", b"sans-bold", b"serif-bold"]);
+        assert_eq!(order(&faces, true, true), [&b"serif-bold"[..], b"serif", b"sans", b"sans-bold"]);
+        // No serif face: the sans stands in, Regular before Bold; never another script's face.
+        assert_eq!(order(&faces[..3], true, true), [&b"sans"[..], b"sans-bold"]);
+        assert!(korean_faces(&faces[..1], false, false).is_empty());
+        assert_eq!(document_korean_fonts_for_style(false, false).len(), CRAFT_FONTS.iter().filter(|f| f.covers("Kore")).count());
     }
 
     #[test]

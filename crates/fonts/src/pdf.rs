@@ -13,6 +13,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::sync::OnceLock;
 
 use pdfcraft_cos::{DecodeBudget, Dict, Document, Object};
 
@@ -23,6 +24,130 @@ enum Codes {
     Two,
     /// Codespace ranges `(length, low, high)` from an embedded CMap.
     Ranges(Vec<(usize, Vec<u8>, Vec<u8>)>),
+    /// A byte in `lo..=hi` leads a two-byte code, any other byte is a code of its own (EUC, UHC).
+    Lead(u8, u8),
+}
+
+/// The predefined CMaps a Type0 font may name as its `/Encoding` that we interpret (ISO 32000-2
+/// §9.7.5.2), with the lead bytes of their two-byte codes; `None` means two bytes per code, each a
+/// UTF-16 unit that is also the code's text. All are Adobe-Korea1, whose CID → Unicode table
+/// gives the others their text, so another Korea1 CMap is one more row.
+const PREDEFINED: [(&[u8], LeadBytes); 6] = [
+    (b"KSC-EUC-H", Some((0x81, 0xFE))),
+    (b"KSCms-UHC-H", Some((0x81, 0xFE))),
+    (b"KSCms-UHC-HW-H", Some((0x81, 0xFE))),
+    // The Mac variant: 0x81–0x83, 0xFE and 0xFF are codes of their own.
+    (b"KSCpc-EUC-H", Some((0xA1, 0xFD))),
+    (b"UniKS-UCS2-H", None),
+    (b"UniKS-UTF16-H", None),
+];
+
+/// The lead bytes `(lo, hi)` of a predefined CMap's two-byte codes; `None` for UTF-16 units.
+type LeadBytes = Option<(u8, u8)>;
+
+/// Each row of [`PREDEFINED`], parsed on first use and shared by every font in the process.
+static PREDEFINED_TABLES: [OnceLock<Option<Predefined>>; PREDEFINED.len()] = [const { OnceLock::new() }; PREDEFINED.len()];
+
+/// Adobe-Korea1 CID → Unicode, shared by the [`PREDEFINED`] rows.
+static KOREA1_UCS2: OnceLock<Option<hayro_cmap::CMap>> = OnceLock::new();
+
+/// A parsed predefined CMap and the reverse map writing text needs.
+struct Predefined {
+    name: &'static [u8],
+    cmap: hayro_cmap::CMap,
+    lead: LeadBytes,
+    /// CID → Unicode for the CMap's character collection.
+    ucs2: &'static hayro_cmap::CMap,
+    /// Each single character a code shows → its lowest code.
+    reverse: HashMap<char, u16>,
+}
+
+/// One instance per name, so the name is the identity; comparing or printing the tables would
+/// only cost time and bloat `Debug`.
+impl PartialEq for Predefined {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl std::fmt::Debug for Predefined {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Predefined").field(&String::from_utf8_lossy(self.name)).finish()
+    }
+}
+
+/// The predefined CMap called `name`, if it is one we interpret.
+fn predefined(name: &[u8]) -> Option<&'static Predefined> {
+    let i = PREDEFINED.iter().position(|(n, _)| *n == name)?;
+    let &(name, lead) = PREDEFINED.get(i)?;
+    PREDEFINED_TABLES.get(i)?.get_or_init(|| Predefined::build(name, lead)).as_ref()
+}
+
+impl Predefined {
+    fn build(name: &'static [u8], lead: LeadBytes) -> Option<Self> {
+        use hayro_cmap::{CMap, CMapName, load_embedded};
+        let cmap = CMap::parse(load_embedded(CMapName::from_bytes(name))?, load_embedded)?;
+        let ucs2 = KOREA1_UCS2.get_or_init(|| CMap::parse(load_embedded(CMapName::AdobeKorea1Ucs2)?, load_embedded)).as_ref()?;
+        let mut p = Predefined { name, cmap, lead, ucs2, reverse: HashMap::new() };
+        // Every code a string can split into, in ascending order so the lowest code is kept.
+        let codes: Vec<u32> = match lead {
+            Some((lo, hi)) => {
+                let (lo, hi) = (u32::from(lo), u32::from(hi));
+                (0..=0xFF).filter(|b| !(lo..=hi).contains(b)).chain(lo << 8..=(hi << 8 | 0xFF)).collect()
+            }
+            None => (0..=0xFFFF).collect(),
+        };
+        let mut reverse = HashMap::new();
+        for code in codes {
+            if let (Some(c), Ok(code)) = (p.char_of(code), u16::try_from(code)) {
+                reverse.entry(c).or_insert(code);
+            }
+        }
+        p.reverse = reverse;
+        Some(p)
+    }
+
+    fn is_lead(&self, b: u32) -> bool {
+        self.lead.is_some_and(|(lo, hi)| u8::try_from(b).is_ok_and(|b| (lo..=hi).contains(&b)))
+    }
+
+    /// The bytes `code` is written with, or `None` when no string splits into it.
+    fn code_len(&self, code: u32) -> Option<usize> {
+        match self.lead {
+            Some(_) if code < 0x100 => (!self.is_lead(code)).then_some(1),
+            Some(_) => (code <= 0xFFFF && self.is_lead(code >> 8)).then_some(2),
+            None => (code <= 0xFFFF).then_some(2),
+        }
+    }
+
+    /// The CID of `code`; 0 (`.notdef`) when the CMap has none.
+    fn cid(&self, code: u32) -> u32 {
+        let len = match self.code_len(code) {
+            Some(1) => 1,
+            Some(_) => 2,
+            None => return 0,
+        };
+        self.cmap.lookup_cid_code(code, len).unwrap_or(0)
+    }
+
+    /// The text of a code that shows a glyph other than `.notdef`.
+    fn text(&self, code: u32) -> Option<hayro_cmap::BfString> {
+        let cid = self.cid(code);
+        if cid == 0 {
+            return None;
+        }
+        match self.lead {
+            None => char::from_u32(code).map(hayro_cmap::BfString::Char),
+            Some(_) => self.ucs2.lookup_bf_string(cid),
+        }
+    }
+
+    fn char_of(&self, code: u32) -> Option<char> {
+        match self.text(code)? {
+            hayro_cmap::BfString::Char(c) => Some(c),
+            hayro_cmap::BfString::String(s) => only_char(&s),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -36,6 +161,8 @@ pub struct Metrics {
     cid_ranges: Spans<f64>,
     /// Code → CID for embedded non-identity CMaps (`cidrange` / `cidchar`).
     cid_map: Spans<u32>,
+    /// The predefined CMap named by `/Encoding`: codes, CIDs, and text where ToUnicode has none.
+    predefined: Option<&'static Predefined>,
     default: f64,
     /// Composite fonts with an explicit `/DW`: `/W` may leave out the glyphs that have that
     /// width (Chrome and Skia do), so a CID missing from `/W` is not a missing glyph.
@@ -612,6 +739,7 @@ impl Metrics {
             cid_widths: HashMap::new(),
             cid_ranges: Spans::default(),
             cid_map: Spans::default(),
+            predefined: None,
             default: 500.0,
             explicit_default: false,
             std14: Some(crate::Std14::Helvetica),
@@ -655,6 +783,7 @@ impl Metrics {
             Codes::One => 1,
             Codes::Two => 2,
             Codes::Ranges(r) => r.last().map_or(2, |x| x.0),
+            Codes::Lead(..) => 2,
         };
         m.unicode = unicode_map(doc, font, m.composite);
         if m.std14.is_some() {
@@ -698,6 +827,13 @@ impl Metrics {
                     m.codes = Codes::Ranges(spaces);
                 }
                 m.cid_map = Spans::new(cids);
+            } else if let Some(name) = font.name(b"Encoding")
+                && let Some(p) = predefined(name)
+            {
+                m.predefined = Some(p);
+                if let Some((lo, hi)) = p.lead {
+                    m.codes = Codes::Lead(lo, hi);
+                }
             }
             let desc = font
                 .get(b"DescendantFonts")
@@ -795,6 +931,13 @@ impl Metrics {
                     .iter()
                     .find(|(len, lo, hi)| s.get(i..i + len).is_some_and(|b| b.iter().zip(lo.iter().zip(hi)).all(|(x, (l, h))| x >= l && x <= h)))
                     .map_or(r.first().map_or(1, |x| x.0), |x| x.0),
+                Codes::Lead(lo, hi) => {
+                    if s.get(i).is_some_and(|b| (*lo..=*hi).contains(b)) {
+                        2
+                    } else {
+                        1
+                    }
+                }
             };
             let len = len.min(s.len() - i).max(1);
             out.push((be(&s[i..i + len]), len));
@@ -804,6 +947,9 @@ impl Metrics {
     }
 
     fn cid(&self, code: u32) -> u32 {
+        if let Some(p) = self.predefined {
+            return p.cid(code);
+        }
         if self.cid_map.is_empty() {
             return code;
         }
@@ -857,7 +1003,12 @@ impl Metrics {
     /// The Unicode text of one code, if known.
     #[inline]
     pub fn text_of(&self, code: u32) -> Option<Cow<'_, str>> {
-        self.unicode.text(code)
+        self.unicode.text(code).or_else(|| {
+            Some(match self.predefined?.text(code)? {
+                hayro_cmap::BfString::Char(c) => Cow::Owned(c.to_string()),
+                hayro_cmap::BfString::String(s) => Cow::Owned(s),
+            })
+        })
     }
 
     /// Whether the font has a glyph for `code` (subset fonts lack the glyphs they don't use).
@@ -889,7 +1040,7 @@ impl Metrics {
 
     /// Whether `code` shows exactly `c` and has a glyph for it.
     fn shows(&self, code: u32, c: char) -> bool {
-        self.unicode.text(code).is_some_and(|t| t.chars().eq(std::iter::once(c))) && self.has_glyph(code)
+        self.text_of(code).is_some_and(|t| t.chars().eq(std::iter::once(c))) && self.has_glyph(code)
     }
 
     /// The bytes that show `text` in this font, or `None` if some character has no code or
@@ -911,11 +1062,25 @@ impl Metrics {
                 }
             }
         }
-        let mut out = Vec::with_capacity(text.len() * self.code_len);
+        if let Some(p) = self.predefined {
+            for &c in &wanted {
+                if let Some(&code) = p.reverse.get(&c)
+                    && self.shows(u32::from(code), c)
+                {
+                    keep(&mut reverse, c, u32::from(code));
+                }
+            }
+        }
+        let mut out = Vec::with_capacity(text.len().saturating_mul(self.code_len));
         for ch in text.chars() {
             let code = *reverse.get(&ch)?;
+            let len = match self.predefined {
+                // A ToUnicode code the CMap cannot split back out is no use.
+                Some(p) => p.code_len(code)?,
+                None => self.code_len.clamp(1, 4),
+            };
             let bytes = code.to_be_bytes();
-            out.extend_from_slice(&bytes[4 - self.code_len.clamp(1, 4)..]);
+            out.extend_from_slice(bytes.get(4 - len..)?);
         }
         Some(out)
     }

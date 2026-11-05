@@ -583,14 +583,20 @@ pub fn date_language(code: &str) -> Option<&'static DateLanguage> {
 }
 
 /// The characters of `text` that Fill & Sign can't write into a PDF yet, each once. Its text is
-/// drawn in Helvetica with WinAnsi encoding (Western European letters), so anything else (`ř`,
-/// Japanese, Chinese) would become `?` in the file.
+/// drawn in Helvetica with WinAnsi encoding (Western European letters), and Korean as outlines of
+/// the craft-fonts Korean face when the build has one, so anything else (`ř`, Japanese, Chinese)
+/// would become `?` in the file. A paragraph with Korean is drawn wholly in that face, so it is
+/// checked as a whole: a Western European letter the face lacks can't be written in it either.
 pub fn unwritable(text: &str) -> String {
     let mut out = String::new();
-    for c in text.chars() {
-        let mut buf = [0u8; 4];
-        if c != '?' && pdfcraft_fonts::win_ansi(c.encode_utf8(&mut buf)) == b"?" && !out.contains(c) {
-            out.push(c);
+    for para in text.split(['\n', '\r']) {
+        // Each pass drops the character found, so this ends within the paragraph's distinct characters.
+        let mut rest = para.to_string();
+        while let Some(c) = pdfcraft_fonts::first_unoutlinable(&rest) {
+            if c != '?' && !out.contains(c) {
+                out.push(c);
+            }
+            rest.retain(|x| x != c);
         }
     }
     out
@@ -751,7 +757,7 @@ impl Session {
         match unwritable(&text) {
             bad if bad.is_empty() => Ok(text),
             bad => Err(format!(
-                "\"{text}\" can't be written into the PDF yet: Fill & Sign text is Western European only ({bad}); pick a numeric format such as dd.mm.yyyy"
+                "\"{text}\" can't be written into the PDF yet: Fill & Sign text is Western European (and Korean) only ({bad}); pick a numeric format such as dd.mm.yyyy"
             )),
         }
     }
@@ -914,8 +920,9 @@ mod tests {
         assert_eq!(s.today_text_for_pdf(Some("d mmmm yyyy"), None).as_deref(), Ok("14 November 2023"));
     }
 
-    /// Hindi and Korean names are the same with and after a day number. Neither is Western
-    /// European, so the date-text path refuses them with what to use instead.
+    /// Hindi and Korean names are the same with and after a day number. Hindi is not Western
+    /// European, so the date-text path refuses it with what to use instead; Korean is written with
+    /// the craft-fonts Korean face, and refused the same way only in a build without one.
     #[test]
     fn hindi_and_korean_month_and_weekday_names() {
         assert_eq!(in_lang("d mmmm yyyy", "hi"), "7 मार्च 2026");
@@ -924,9 +931,14 @@ mod tests {
         assert_eq!(in_lang("yyyy\\년 mmmm d\\일 dddd", "ko"), "2026년 3월 7일 토요일");
         assert_eq!(in_lang("ddd", "ko"), "토");
         let mut s = Session::new().with_clock(|| 1_700_000_000);
-        for code in ["hi", "ko"] {
-            s.set_date_language(Some(code)).unwrap();
-            assert!(s.today_text_for_pdf(Some("d mmmm yyyy"), None).unwrap_err().contains("dd.mm.yyyy"), "{code}");
+        s.set_date_language(Some("hi")).unwrap();
+        assert!(s.today_text_for_pdf(Some("d mmmm yyyy"), None).unwrap_err().contains("dd.mm.yyyy"));
+        s.set_date_language(Some("ko")).unwrap();
+        let korean = s.today_text_for_pdf(Some("d mmmm yyyy"), None);
+        if pdfcraft_fonts::document_korean_fonts_for_style(false, false).is_empty() {
+            assert!(korean.unwrap_err().contains("dd.mm.yyyy"));
+        } else {
+            assert_eq!(korean.as_deref(), Ok("14 11월 2023"));
         }
     }
 
@@ -1014,5 +1026,35 @@ mod tests {
         assert!(e.contains("火曜日") && e.contains("can't be written into the PDF yet"), "{e}");
         assert!(s.today_text_for_pdf(Some("dd.mm.yyyy"), Some("ja")).is_ok(), "numbers are fine in any language");
         assert!(s.today_text_for_pdf(Some("yyyy\\年mm\\月"), Some("ja")).unwrap_err().contains("年月"));
+        // Korean is drawn with the craft-fonts Korean face, when the build has one.
+        let korean = s.today_text_for_pdf(Some("yyyy년 m월 d일"), None);
+        if pdfcraft_fonts::document_korean_fonts_for_style(false, false).is_empty() {
+            assert!(korean.unwrap_err().contains("can't be written into the PDF yet"));
+        } else {
+            assert_eq!(korean.as_deref(), Ok("2023년 11월 14일"));
+            assert_eq!(unwritable("2026년 10월 8일 목요일"), "");
+        }
+    }
+
+    /// A paragraph with Korean is drawn wholly in the Korean face, so a Western European character
+    /// that face lacks can't be written in it, though it can in a paragraph of its own.
+    #[test]
+    fn korean_paragraphs_are_checked_against_the_korean_face() {
+        if pdfcraft_fonts::document_korean_fonts_for_style(false, false).is_empty() {
+            eprintln!("built without a craft-fonts Kore face: no Korean face to check");
+            return;
+        }
+        let Some(c) = ['ƒ', '‰', '†', '‡', 'Œ', 'Ÿ', '˜'].into_iter().find(|c| !pdfcraft_fonts::korean_has(false, false, *c)) else {
+            eprintln!("the Korean face has every candidate character: nothing to check");
+            return;
+        };
+        let mixed = format!("2026년 {c}");
+        assert_eq!(pdfcraft_fonts::first_unoutlinable(&mixed), Some(c));
+        assert_eq!(unwritable(&mixed), c.to_string(), "{mixed}");
+        assert_eq!(unwritable(&format!("2026년\n{c}")), "", "a paragraph without Korean stays in Helvetica");
+        assert_eq!(
+            unwritable(&format!("2026년 {c}{c} 欢\n{c}")),
+            if pdfcraft_fonts::korean_has(false, false, '欢') { format!("{c}") } else { format!("欢{c}") }
+        );
     }
 }

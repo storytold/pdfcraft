@@ -795,3 +795,129 @@ fn low_codes_resolve_to_the_covering_range() {
     assert_eq!(covered, [5, 6, 7, 100, 101]);
     assert_eq!((u.covering(0xFFFF).is_some(), u.covering(0x1_0001).is_some(), u.covering(0x1_0002).is_none()), (true, true, true));
 }
+
+/// Adobe-Korea1 CIDs of 가 and 나 (the same in every Korea1 CMap).
+const CID_GA: i64 = 1086;
+const CID_NA: i64 = 1377;
+
+/// A Type0 font named by a predefined CMap, with `/W` widths `(cid, width)` and an optional ToUnicode.
+fn korean(encoding: &str, base: &str, widths: &[(i64, i64)], to_unicode: Option<&[u8]>) -> Metrics {
+    let mut doc = Document::new_empty();
+    let mut desc = Dict::new();
+    desc.set(b"Subtype".to_vec(), Object::name("CIDFontType0"));
+    let w = widths.iter().flat_map(|&(cid, w)| [Object::Int(cid), Object::Array(vec![Object::Int(w)])]).collect();
+    desc.set(b"W".to_vec(), Object::Array(w));
+    let mut entries = vec![
+        ("Subtype", Object::name("Type0")),
+        ("BaseFont", Object::name(base)),
+        ("Encoding", Object::name(encoding)),
+        ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
+    ];
+    if let Some(cmap) = to_unicode {
+        entries.push(("ToUnicode", Object::Ref(doc.add(Object::Stream(Stream::from_raw(Dict::new(), cmap.to_vec()))))));
+    }
+    let f = font(&mut doc, entries);
+    Metrics::from_dict(&doc, &f)
+}
+
+#[test]
+fn ksc_euc_fonts_split_decode_and_measure_without_to_unicode() {
+    let m = korean("KSC-EUC-H", "Batang", &[(CID_GA, 700)], None);
+    let bytes = [0xB0, 0xA1, 0x41, 0xB3, 0xAA];
+    let lens: Vec<usize> = m.codes(&bytes).into_iter().map(|(_, len)| len).collect();
+    assert_eq!(lens, [2, 1, 2]);
+    assert_eq!(m.decode(&bytes), "가A나");
+    // Widths are keyed by the Korea1 CID, not the code.
+    assert!((m.width(0xB0A1) - 0.7).abs() < 1e-9 && (m.width(0xB3AA) - 1.0).abs() < 1e-9);
+    assert_eq!(m.encode("가A나").as_deref(), Some(&bytes[..]));
+    // KS X 1001 has no 똠; only UHC does.
+    assert_eq!(m.decode(&[0x8C, 0x63]), "");
+    assert_eq!(m.encode("똠"), None);
+    // The shared table compares by name.
+    assert_eq!(m.clone(), m);
+    assert_ne!(korean("KSCpc-EUC-H", "Batang", &[(CID_GA, 700)], None), m);
+}
+
+#[test]
+fn uhc_fonts_decode_and_encode_the_extended_syllables() {
+    for name in ["KSCms-UHC-H", "KSCms-UHC-HW-H"] {
+        let m = korean(name, "Dotum", &[], None);
+        assert_eq!(m.decode(&[0x8C, 0x63, 0xB0, 0xA1]), "똠가", "{name}");
+        assert_eq!(m.encode("똠가").as_deref(), Some(&[0x8C, 0x63, 0xB0, 0xA1][..]), "{name}");
+        assert_eq!(m.encode("ث"), None, "{name}");
+        assert_eq!(m.encode("😀"), None, "{name}");
+    }
+}
+
+#[test]
+fn unicode_korean_cmaps_decode_and_encode_hangul() {
+    for name in ["UniKS-UCS2-H", "UniKS-UTF16-H"] {
+        let m = korean(name, "Gulim", &[(CID_NA, 800)], None);
+        let bytes = [0xAC, 0x00, 0x00, 0x41, 0xB0, 0x98];
+        assert_eq!(m.decode(&bytes), "가A나", "{name}");
+        assert_eq!(m.encode("가A나").as_deref(), Some(&bytes[..]), "{name}");
+        assert!((m.width(0xB098) - 0.8).abs() < 1e-9, "{name}");
+        assert_eq!(m.encode("😀"), None, "{name}");
+    }
+}
+
+#[test]
+fn to_unicode_overrides_the_predefined_cmap() {
+    let tu = b"1 begincodespacerange <00> <80> endcodespacerange 1 beginbfchar <B0A1> <062B> endbfchar";
+    let m = korean("KSC-EUC-H", "Batang", &[], Some(tu));
+    assert_eq!(m.decode(&[0xB0, 0xA1, 0xB3, 0xAA]), "ث나");
+    assert_eq!(m.encode("ث나").as_deref(), Some(&[0xB0, 0xA1, 0xB3, 0xAA][..]));
+    // The CMap says B0A1 is 가, but ToUnicode says it shows ث, so nothing writes 가.
+    assert_eq!(m.encode("가"), None);
+    // A ToUnicode code that the CMap would split differently (a lone lead byte) is not written.
+    let lone = korean("KSC-EUC-H", "Batang", &[], Some(b"1 beginbfchar <B0> <062B> endbfchar"));
+    assert_eq!(lone.encode("ث"), None);
+}
+
+#[test]
+fn subset_predefined_fonts_only_encode_cids_with_widths() {
+    let m = korean("KSC-EUC-H", "ABCDEF+Batang", &[(CID_GA, 1000)], None);
+    assert!(m.subset);
+    assert_eq!(m.encode("가").as_deref(), Some(&[0xB0, 0xA1][..]));
+    assert_eq!(m.encode("나"), None);
+    assert_eq!(m.encode("가나"), None);
+}
+
+#[test]
+fn hostile_bytes_in_predefined_fonts_never_panic() {
+    let all: Vec<u8> = (0..=255).collect();
+    let inputs: [&[u8]; 8] = [&[], &[0xB0], &[0xFF], &[0xFF, 0xFF], &[0x41, 0xB0], &[0xAC, 0x00, 0xD8], &[0xD8, 0x00, 0xDC, 0x00], &all];
+    for (name, _) in PREDEFINED {
+        let m = korean(std::str::from_utf8(name).unwrap(), "ABCDEF+Batang", &[(CID_GA, 900)], None);
+        for s in inputs {
+            let codes = m.codes(s);
+            assert_eq!(codes.iter().map(|c| c.1).sum::<usize>(), s.len());
+            for (code, _) in codes {
+                let _ = (m.width(code), m.text_of(code));
+            }
+            let _ = m.decode(s);
+        }
+        assert_eq!(m.encode("").as_deref(), Some(&[][..]));
+        for code in [0, 0x80, 0xFF, 0xFFFF, 0x1_0000, u32::MAX] {
+            let _ = (m.width(code), m.text_of(code));
+        }
+    }
+    // A name we don't interpret keeps fixed two-byte codes.
+    let other = korean("KSC-EUC-V", "Batang", &[], None);
+    assert_eq!(other.codes(&[0x41, 0xB0, 0xA1]), [(0x41B0, 2), (0xA1, 1)]);
+    assert_eq!(other.decode(&[0xB0, 0xA1]), "");
+}
+
+#[test]
+fn kscpc_euc_one_byte_codes_stay_one_byte() {
+    // KSCpc-EUC-H (Mac) has codes of their own at 0x81–0x83, 0xFE and 0xFF; its two-byte codes lead with 0xA1–0xFD.
+    let m = korean("KSCpc-EUC-H", "Batang", &[], None);
+    for b in [0x81u8, 0x83, 0xFE] {
+        let bytes = [b, 0x41];
+        assert_eq!(m.codes(&bytes).into_iter().map(|(_, len)| len).collect::<Vec<_>>(), [1, 1], "{b:02X}");
+        let text = m.decode(&bytes);
+        assert!(text.ends_with('A') && text.chars().count() == 2, "{b:02X}: {text:?}");
+        assert_eq!(m.encode(&text).as_deref(), Some(&bytes[..]), "{b:02X}");
+    }
+    assert_eq!(m.decode(&[0xB0, 0xA1, 0xFD, 0xFE]).chars().next(), Some('가'));
+}

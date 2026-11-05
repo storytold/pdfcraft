@@ -432,6 +432,9 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
             None => appearance::field_appearance_drawn(doc, f, w, values, true),
         };
         undrawn |= missing.is_some();
+        // The invisible text layer's font descriptor must be indirect (ISO 32000-2 §9.8.1).
+        let mut stream = stream;
+        pdfcraft_fonts::hoist_font_descriptors(doc, &mut stream);
         let existing_ap = in_place
             .then(|| {
                 doc.get(w.obj)
