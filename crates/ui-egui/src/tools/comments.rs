@@ -460,7 +460,7 @@ impl PdfCraftApp {
             self.notify_tr("All comments are locked");
             return;
         }
-        self.views[i].comments.selected = None;
+        self.views[i].comments.clear_selection();
         if self.apply_edit(Edit::DeleteAnnotations { pages: None }) {
             if unlocked == 1 {
                 self.notify_tr("Removed 1 comment");
@@ -483,7 +483,7 @@ impl PdfCraftApp {
             self.notify_tr("All comments on this page are locked");
             return;
         }
-        self.views[i].comments.selected = None;
+        self.views[i].comments.clear_selection();
         if self.apply_edit(Edit::DeleteAnnotations { pages: Some(vec![page]) }) {
             if unlocked == 1 {
                 self.notify_tr("Removed 1 comment");

@@ -4358,6 +4358,30 @@ fn a_comment_with_a_locked_reply_is_not_deleted() {
     assert_eq!(comments(&h).len(), 2);
 }
 
+/// A bulk delete leaves no group selection behind, from the menu or through an edit.
+#[test]
+fn a_bulk_delete_clears_a_group_selection() {
+    use pdfcraft_engine::Edit;
+    let delete: [fn(&mut PdfCraftApp); 3] = [
+        |app| assert!(app.execute("comment.delete_all")),
+        |app| assert!(app.execute("comment.delete_page")),
+        |app| assert!(app.apply_edit(Edit::DeleteAnnotations { pages: None })),
+    ];
+    for run in delete {
+        let mut h = harness(|_| {});
+        add_two_boxes_and_a_reply(&mut h);
+        {
+            let c = &mut h.state_mut().views[0].comments;
+            c.selected = Some((0, 0));
+            c.also = vec![(0, 1)];
+        }
+        run(h.state_mut());
+        h.run_steps(2);
+        let c = &h.state().views[0].comments;
+        assert!(c.selected.is_none() && c.also.is_empty(), "the whole selection goes: {:?} {:?}", c.selected, c.also);
+    }
+}
+
 /// A page delete that removes a thread also closes an editor open on a reply on another page.
 #[test]
 fn deleting_comments_on_a_page_closes_an_editor_open_on_a_reply_on_another_page() {
