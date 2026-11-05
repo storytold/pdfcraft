@@ -863,9 +863,13 @@ pub fn tools() -> Vec<ToolDef> {
                 "icon": { "type": "string", "description": "note: Comment, Note, Help, Insert, Key, NewParagraph, Paragraph (the standard names), Check, Circle, Cross, CrossHairs, Star, RightArrow, UpArrow; attachment: PushPin, Paperclip, Graph, Tag." },
                 "color": color(),
                 "fill": color(),
-                "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+                "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "The whole comment's opacity (its line or border's, where its fill or text has its own)." },
+                "fill_opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "The fill's own opacity: rectangle, oval, polygon, cloud, text box, typewriter text or callout." },
+                "text_opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "The text's own opacity: text box, typewriter text or callout." },
                 "width": { "type": "number", "minimum": 0, "description": "Line width in points." },
+                "border_shape": { "type": "string", "enum": ["rectangle", "oval", "circle"], "description": "A text box's or typewriter text's border shape: an oval or a circle goes around the text box." },
                 "endings": { "type": "array", "items": { "type": "string", "enum": ["None", "Square", "Circle", "Diamond", "OpenArrow", "ClosedArrow", "Butt", "ROpenArrow", "RClosedArrow", "Slash"] }, "minItems": 1, "maxItems": 2, "description": "Line endings. Two names (start, end) for a line, arrow or polyline; one name for a callout." },
+                "ortho": { "type": "boolean", "description": "line/arrow/polygon/cloud/polyline: hold each end or corner level or plumb with the one before, whichever is nearer (Shift while drawing)." },
                 "font_size": { "type": "number", "exclusiveMinimum": 0 },
             }),
             &["doc", "page", "type"],
@@ -996,13 +1000,17 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "sort": { "type": "string", "enum": ["page", "author", "date", "type"] }, "out": save_out, "open": open }),
                 &["doc"],
             )),
-        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity, line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), rectangle (rectangle/oval/text box/stamp), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, or the corners of connected lines, a polygon or a cloud). Stamps keep their original appearance when resized. One undo step.").with(schema(
+        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity (the whole comment's, or its fill's and text's own), line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), border colour (`border_color`, text box/typewriter/callout; \"text\" gives it the text's colour again), rectangle (rectangle/oval/text box/stamp), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, or the corners of connected lines, a polygon or a cloud). Stamps keep their original appearance when resized. One undo step.").with(schema(
             comment_ref(json!({
                 "contents": { "type": "string" },
                 "color": color(),
-                "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+                "opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "The whole comment's opacity: its fill and text drop opacities of their own." },
+                "fill_opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "The fill's own opacity (rectangle, oval, polygon, cloud, text box, typewriter text, callout); the line or border keeps the comment's." },
+                "text_opacity": { "type": "number", "minimum": 0, "maximum": 1, "description": "The text's own opacity (text box, typewriter text, callout)." },
                 "width": { "type": "number", "minimum": 0 },
                 "fill": { "type": "string", "description": "Interior colour of a rectangle, oval, polygon, text box or callout: #RRGGBB, a colour name, or \"none\" for no fill." },
+                "border_color": { "type": "string", "description": "A text box's, typewriter text's or callout's border colour: #RRGGBB, a colour name, or \"text\" for the text's colour." },
+                "border_shape": { "type": "string", "enum": ["rectangle", "oval", "circle"], "description": "A text box's or typewriter text's border shape: an oval or a circle goes around the text, which keeps its place." },
                 "font_size": { "type": "number", "minimum": 1, "maximum": 400, "description": "Font size in points of a text box, typewriter text or callout; the box grows to hold the text." },
                 "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
                 "move": point(),
@@ -1013,6 +1021,25 @@ pub fn tools() -> Vec<ToolDef> {
         t("comment_image_preview", "Preview image signature layers", "Return a PNG of the page without the selected image signature/initials (layer=background, default), or its embedded image with alpha (layer=image). Includes the displayed rectangle, document rotation, image_rotation (how far clockwise the image is shown turned) and annotation opacity. Cache these layers for live placement/resizing; commit once with comment_edit. Does not change the document or undo history.")
             .ro().with(schema(comment_ref(json!({ "layer": { "type": "string", "enum": ["background", "image"], "default": "background" }, "dpi": { "type": "number", "minimum": 1, "maximum": 600, "default": 96 } })), &["doc"])),
         t("comment_delete", "Delete a comment", "Delete a comment with its pop-up and replies, or one reply (its id, or page and index, from comment_list) with its pop-up and the replies to it; the comment and its other replies stay. Undoable.").destructive().with(schema(comment_ref(json!({})), &["doc"])),
+        t(
+            "comments_copy",
+            "Copy comments",
+            "The XFDF of these comments, each with its replies: what Copy puts on the clipboard. Paste it into this or another document with comments_paste. `comments`: [[page, index], …], 1-based as comment_list reports them.",
+        )
+        .ro()
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "comments": { "type": "array", "items": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 2, "maxItems": 2 }, "minItems": 1 }
+            }),
+            &["doc", "comments"],
+        )),
+        t(
+            "comments_paste",
+            "Paste comments",
+            "Add the comments of an XFDF text (from comments_copy) to `page` as new comments: copies under names of their own, so nothing in the document is replaced and pasting twice gives two sets; replies keep their copied parent. `at` [x, y] (points, origin at the top-left of the displayed page, y down, as comment_add takes them) puts the centre of the copies' bounding box there; without it they keep their positions. Undoable.",
+        )
+        .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "xfdf": { "type": "string" }, "at": point() }), &["doc", "page", "xfdf"])),
         t(
             "doc_protect",
             "Protect with passwords",
@@ -1408,7 +1435,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "fill_sign_add",
             "Fill & Sign: type text or place a mark",
-            "Fill in a form that has no fields, as Acrobat's Fill & Sign does: type text (`text`, default 10 pt; `font_size` 4–300 pt; optional `color` as #RRGGBB for text/date, default black), place a check, cross, dot or line, today's date (in Preferences ▸ Date format, see fill_sign_date_format, or `format`; `font_size` also applies), or a signature or initials (either `text` drawn in a script font, or `path` to a local PNG/JPEG image up to 4 MiB and 32 megapixels, scaled down to 4 megapixels, preserving transparency; with `scan: true`, `path` is instead a photo of a signature on paper, within the same limits: the signature is found, and the paper, shadows and table around it are removed, with `sensitivity` 0–100, default 50, picking up fainter ink when higher). `at` [x, y] is in points from the top-left of the page: text's top-left, mark's centre, signature's left edge centred vertically. Image signatures fit within 150 pt wide and 32 pt tall (24 pt for initials). Creates movable, undoable annotations. Typed text the standard fonts can't draw is saved and drawn as `?` (`warnings` in the result says so); a typed signature neither the script font nor its fallback can draw is refused (pass `path` instead).",
+            "Fill in a form that has no fields, as Acrobat's Fill & Sign does: type text (`text`, default 10 pt; `font_size` 4–300 pt; optional `color` as #RRGGBB for text/date, default black; `border` 0–12 pt around it, default none, in its colour or `border_color`), place a check, cross, dot or line, today's date (in Preferences ▸ Date format, see fill_sign_date_format, or `format`; `font_size` also applies), or a signature or initials (either `text` drawn in a script font, or `path` to a local PNG/JPEG image up to 4 MiB and 32 megapixels, scaled down to 4 megapixels, preserving transparency; with `scan: true`, `path` is instead a photo of a signature on paper, within the same limits: the signature is found, and the paper, shadows and table around it are removed, with `sensitivity` 0–100, default 50, picking up fainter ink when higher). `at` [x, y] is in points from the top-left of the page: text's top-left, mark's centre, signature's left edge centred vertically. Image signatures fit within 150 pt wide and 32 pt tall (24 pt for initials). Creates movable, undoable annotations. Typed text the standard fonts can't draw is saved and drawn as `?` (`warnings` in the result says so); a typed signature neither the script font nor its fallback can draw is refused (pass `path` instead).",
         )
         .cmd("sign.fill.text")
         .with(schema(
@@ -1420,6 +1447,9 @@ pub fn tools() -> Vec<ToolDef> {
                 "text": { "type": "string", "minLength": 1 },
                 "font_size": { "type": "number", "minimum": 4, "maximum": 300, "description": "For type text or date (default 10 pt)." },
                 "color": color(),
+                "border": { "type": "number", "minimum": 0, "maximum": 12, "description": "For type text or date: a border around it in points, in the text's colour (default 0, none)." },
+                "border_color": { "type": "string", "description": "With border: its own colour, #RRGGBB or a colour name." },
+                "border_shape": { "type": "string", "enum": ["rectangle", "oval", "circle"], "description": "With border, for type text or date: the border's shape (default rectangle); an oval or a circle goes around the text." },
                 "path": { "type": "string", "description": "PNG or JPEG for signature/initials; pass either path or text." },
                 "scan": { "type": "boolean", "description": "With path: scan a photo of a signature on paper (default false)." },
                 "sensitivity": { "type": "integer", "minimum": 0, "maximum": 100, "description": "With scan: how faint ink may be, 0–100 (default 50)." },
