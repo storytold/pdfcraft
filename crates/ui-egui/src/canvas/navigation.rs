@@ -367,6 +367,23 @@ fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) 
     }
 }
 
+/// Esc on the page closes one thing: the camera, then a form field being filled, then a
+/// selection, then the find bar ([`DocView::escape_closes_something`] says whether there is one).
+fn escape_closes_one(view: &mut DocView) {
+    if view.camera.is_some() || view.camera_done.is_some() {
+        view.pending_action = Some(ViewAction::CancelCamera);
+    } else if view.forms.focus.is_some() {
+        // A form field being filled takes this Esc: its editor closes it, and nothing else on
+        // the page closes with it (a selection stays for the next Esc).
+    } else if view.selection.is_some() || view.all_text {
+        view.selection = None;
+        view.all_text = false;
+    } else if view.presentation.is_none() || view.find.as_ref().is_some_and(|f| !f.in_panel) {
+        // Full screen hides the Search panel: its search stays for when the panel is back.
+        view.find = None;
+    }
+}
+
 pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_speed::ScrollSpeed) {
     use egui::{Key, KeyboardShortcut, Modifiers};
     if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::F))) {
@@ -413,18 +430,7 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     let key = |k| (arrows || !matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown)) && ctx.input(|i| i.key_pressed(k));
     // An open menu takes Escape first and closes; the selection stays for the next one (#3535).
     if key(Key::Escape) && !egui::Popup::is_any_open(ctx) {
-        if view.camera.is_some() || view.camera_done.is_some() {
-            view.pending_action = Some(ViewAction::CancelCamera);
-        } else if view.forms.focus.is_some() {
-            // A form field being filled takes this Esc: its editor closes it, and nothing else on
-            // the page closes with it (a selection stays for the next Esc).
-        } else if view.selection.is_some() || view.all_text {
-            view.selection = None;
-            view.all_text = false;
-        } else if view.presentation.is_none() || view.find.as_ref().is_some_and(|f| !f.in_panel) {
-            // Full screen hides the Search panel: its search stays for when the panel is back.
-            view.find = None;
-        }
+        escape_closes_one(view);
     }
     if key(Key::Home) {
         view.go_to_page(0);
