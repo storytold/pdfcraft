@@ -18,8 +18,9 @@ fn be32(out: &mut Vec<u8>, n: u32) {
     out.extend_from_slice(&n.to_be_bytes());
 }
 
-/// The font, its `loca` offsets long when `long`, its `head.indexToLocFormat` set to `format`.
-fn square_font(long: bool, format: u16) -> Vec<u8> {
+/// The font, its `loca` offsets long when `long` and followed by `padding` zero bytes, its
+/// `head.indexToLocFormat` set to `format`.
+fn square_font(long: bool, padding: usize, format: u16) -> Vec<u8> {
     // Glyph 1: one contour, the square 0..1000 on both axes (glyph 0 is empty).
     let mut glyf = Vec::new();
     for n in [1u16, 0, 0, 1000, 1000] {
@@ -38,6 +39,7 @@ fn square_font(long: bool, format: u16) -> Vec<u8> {
     for offset in [0u32, 0, glyf.len() as u32] {
         if long { be32(&mut loca, offset) } else { be16(&mut loca, (offset / 2) as u16) }
     }
+    loca.resize(loca.len() + padding, 0);
 
     let mut head = vec![0; 54];
     head[0..4].copy_from_slice(&[0, 1, 0, 0]);
@@ -130,14 +132,16 @@ fn page_with_font(font: &[u8]) -> Vec<u8> {
 #[test]
 fn a_truetype_font_with_an_out_of_range_loca_format_draws_its_glyphs() {
     // The square covers (5, 5)–(35, 35) in page space: row 20 from the top is inside it.
-    let square_drawn = |long: bool, format: u16| {
-        let page = render_first_page(page_with_font(&square_font(long, format)));
+    let square_drawn = |long: bool, padding: usize, format: u16| {
+        let page = render_first_page(page_with_font(&square_font(long, padding, format)));
         let at = |x: u32, y: u32| page.rgba.get(((y * page.width + x) * 4) as usize).copied().unwrap_or(255);
         assert_eq!(at(2, 2), 255, "nothing is drawn outside the square");
         at(20, 20) < 128
     };
-    assert!(square_drawn(true, 1), "long offsets, marked long");
-    assert!(square_drawn(false, 0), "short offsets, marked short");
-    assert!(square_drawn(true, 0x0100), "long offsets marked 256: the table's length says long");
-    assert!(square_drawn(false, 0x0100), "short offsets marked 256: the table's length says short");
+    assert!(square_drawn(true, 0, 1), "long offsets, marked long");
+    assert!(square_drawn(false, 0, 0), "short offsets, marked short");
+    assert!(square_drawn(true, 0, 0x0100), "long offsets marked 256: the table's length says long");
+    assert!(square_drawn(false, 0, 0x0100), "short offsets marked 256: the table's length says short");
+    // Three short offsets are 6 bytes and three long ones 12: 8 bytes is short ones and padding.
+    assert!(square_drawn(false, 2, 0x0100), "short offsets and padding marked 256: still short");
 }

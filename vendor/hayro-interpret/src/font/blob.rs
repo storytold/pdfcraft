@@ -200,8 +200,9 @@ impl Debug for OpenTypeFontBlob {
 /// it needs no change. The glyph outline reader takes only 1 as long, so a font whose field reads
 /// 256 (the value's bytes swapped) had its long `loca` read as short offsets: every glyph came
 /// out wrong, and a line of text set in it drew boxes (pdf.js `issue2537r.pdf`). The `loca`
-/// table's length decides (`numGlyphs + 1` offsets of 4 bytes or of 2); a length that fits
-/// neither keeps the rule that any value other than 0 means long offsets.
+/// table's length decides: room for `numGlyphs + 1` offsets of 4 bytes is long, room for only
+/// that many of 2 bytes short (a table may carry padding after its offsets), and a table too
+/// short for either is left as it is.
 fn with_loca_format_fixed(data: &[u8], index: u32) -> Option<Vec<u8>> {
     use skrifa::raw::types::Tag;
     const HEAD: Tag = Tag::new(b"head");
@@ -215,7 +216,13 @@ fn with_loca_format_fixed(data: &[u8], index: u32) -> Option<Vec<u8>> {
     }
     let offsets = usize::from(f.maxp().ok()?.num_glyphs()).checked_add(1)?;
     let loca_len = f.table_data(LOCA)?.len();
-    let long = loca_len != offsets.checked_mul(2)? || loca_len == offsets.checked_mul(4)?;
+    let long = if loca_len >= offsets.checked_mul(4)? {
+        true
+    } else if loca_len >= offsets.checked_mul(2)? {
+        false
+    } else {
+        return None;
+    };
     let head_at = f.table_directory.table_records().iter().find(|r| r.tag() == HEAD)?.offset() as usize;
     let at = head_at.checked_add(FORMAT_AT)?;
     let mut fixed = data.to_vec();
