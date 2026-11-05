@@ -535,10 +535,21 @@ fn trailer_file_identifier_is_checked_and_added() {
     // A malformed one keeps its non-empty first string, the permanent identifier (14.4).
     let first = |doc: &Document| doc.trailer().get(b"ID").and_then(|id| id.as_array()?.first()?.as_string().map(|s| s.bytes.clone()));
     let mut doc = build(&objs, "/ID [<0011> <>]");
-    convert(&mut doc, Level::A2b).unwrap();
+    let report = convert(&mut doc, Level::A2b).unwrap();
+    assert!(report.fixed.iter().any(|f| f == "Completed the file identifier (ID)"));
     assert_eq!(first(&doc), Some(vec![0x00, 0x11]));
     assert!(verify(&doc, Level::A2b).iter().all(|i| i.clause != "6.1.3"));
     let mut doc = build(&objs, "/ID [<> <0011>]");
     convert(&mut doc, Level::A2b).unwrap();
     assert_eq!(first(&doc).map(|b| b.len()), Some(16));
+    // A first string longer than a conforming file may hold (Annex C) is made afresh too.
+    let long = format!("/ID [<{}> <>]", "ab".repeat(32768));
+    let mut doc = build(&objs, &long);
+    let report = convert(&mut doc, Level::A2b).unwrap();
+    assert!(report.fixed.iter().any(|f| f == "Added a file identifier (ID)"));
+    assert_eq!(first(&doc).map(|b| b.len()), Some(16));
+    let longest = format!("/ID [<{}> <>]", "ab".repeat(32767));
+    let mut doc = build(&objs, &longest);
+    convert(&mut doc, Level::A2b).unwrap();
+    assert_eq!(first(&doc).map(|b| b.len()), Some(32767));
 }
