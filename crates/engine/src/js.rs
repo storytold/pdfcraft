@@ -321,6 +321,33 @@ impl Scripts for JsRunner {
     /// Run field `target`'s script for `event` over the form's fields, keeping what it showed and
     /// asked for; a refusal carries its last message.
     fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult {
+        match self.run_logged(event, script, target, value, fields, true) {
+            Ok(r) | Err(r) => r,
+        }
+    }
+
+    fn rerun_with_english_dates(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> Option<ScriptResult> {
+        pdfcraft_js::with_english_printd(true, || self.run_logged(event, script, target, value, fields, false)).ok()
+    }
+
+    /// On the console, as a script error: the field kept its value.
+    fn refused(&mut self, why: &str) {
+        self.output.errors.push(format!("A script set a value the field does not take, so the field keeps its own: {why}"));
+    }
+}
+
+impl JsRunner {
+    /// [`Scripts::run`], keeping what the script showed and asked for only when `log`; `Err` when
+    /// the script failed, with the value left alone and what it wrote to other fields first.
+    fn run_logged(
+        &mut self,
+        event: FieldEvent,
+        script: &str,
+        target: &Field,
+        value: &str,
+        fields: &[Field],
+        log: bool,
+    ) -> Result<ScriptResult, ScriptResult> {
         let states: Vec<_> = fields
             .iter()
             .map(|f| {
@@ -334,23 +361,20 @@ impl Scripts for JsRunner {
         let states = std::sync::Arc::new(states);
         let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
         let o = self.run_timed(script, &ev, std::sync::Arc::clone(&states));
-        self.output.absorb(&o);
+        if log {
+            self.output.absorb(&o);
+        }
         if o.error.is_some() {
             // As in Acrobat, a failing script leaves the value alone (the error goes to the console);
             // what it wrote to other fields before it failed stays written.
-            return ScriptResult { rc: true, value: value.to_string(), changes: changes(&states, &o.changed), message: None };
+            return Err(ScriptResult { rc: true, value: value.to_string(), changes: changes(&states, &o.changed), message: None });
         }
-        ScriptResult {
+        Ok(ScriptResult {
             rc: o.rc,
             value: o.value.clone(),
             changes: changes(&states, &o.changed),
             message: (!o.rc).then(|| o.alerts.last().map(|m| m.text.clone())).flatten(),
-        }
-    }
-
-    /// On the console, as a script error: the field kept its value.
-    fn refused(&mut self, why: &str) {
-        self.output.errors.push(format!("A script set a value the field does not take, so the field keeps its own: {why}"));
+        })
     }
 }
 
