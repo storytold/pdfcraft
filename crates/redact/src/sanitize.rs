@@ -418,7 +418,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
                 let mut xo = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
                 // A full save keeps whatever is still referenced: unlink the originals this page no
                 // longer draws so the removed form or image bytes cannot survive in the saved file.
-                crate::interp::prune(&mut xo, &out.replaced, &page_content);
+                crate::interp::prune(doc, &mut xo, &out.replaced, &page_content)?;
                 for (n, r) in &out.xobjects {
                     xo.set(n.clone(), Object::Ref(*r));
                 }

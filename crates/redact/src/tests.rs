@@ -1570,6 +1570,79 @@ fn an_image_a_form_drew_through_the_pages_resources_does_not_survive() {
     assert!(!bytes.windows(16).any(|w| w == b"REDIMGONECOVERED"), "the image the form drew survived the save");
 }
 
+/// The page draws an image under the mark and, outside it, a form without /Resources of its own
+/// that draws the same image through the page's: the page keeps the name, whether the form lies
+/// wholly outside the mark or is entered and left as it was.
+#[test]
+fn an_image_a_form_draws_again_through_the_pages_resources_is_kept() {
+    for bbox in ["[0 0 100 100]", "[0 0 300 300]"] {
+        let mut doc = one_page(
+            b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do",
+            "/XObject << /FmBare 7 0 R /Im1 8 0 R >>",
+            vec![
+                stream(&format!("/Type /XObject /Subtype /Form /BBox {bbox}"), b"q 50 0 0 50 20 20 cm /Im1 Do Q"),
+                stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBIMGSHOWNAGAIN"),
+            ],
+        );
+        mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!((r.images_removed, r.forms_rewritten), (1, 0), "{bbox}: {r:?}");
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert!(content(&saved, 0).contains("/FmBare Do"), "{bbox}");
+        assert_eq!(named_image(&saved, 0, b"Im1").as_deref(), Some(&b"PUBIMGSHOWNAGAIN"[..]), "{bbox}: the form still draws it");
+    }
+}
+
+/// The same one level down: a form with resources of its own draws the image under the mark and,
+/// outside it, a form without any that draws it again through the first form's.
+#[test]
+fn an_image_a_nested_form_draws_again_through_its_callers_resources_is_kept() {
+    let mut doc = one_page(
+        b"/FmOwn Do",
+        "/XObject << /FmOwn 7 0 R >>",
+        vec![
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /FmBare 8 0 R /Im1 9 0 R >> >>",
+                b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do",
+            ),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100]", b"q 50 0 0 50 20 20 cm /Im1 Do Q"),
+            stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBIMGSHOWNAGAIN"),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.images_removed, r.forms_rewritten), (1, 1), "{r:?}");
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert!(content(&saved, 0).contains("/PCRedacted1 Do"));
+    let form = named_stream(&saved, 0, b"PCRedacted1").expect("the rewritten form");
+    assert!(form.decoded().unwrap().windows(10).any(|w| w == b"/FmBare Do"));
+    let res = saved.resolve(form.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = saved.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    let image = xo.get(b"Im1").and_then(Object::as_ref).expect("the rewritten form still names /Im1");
+    let Object::Stream(image) = &*saved.get(image) else { panic!("/Im1 is a stream") };
+    assert_eq!(decoded_image(&saved, image).unwrap(), b"PUBIMGSHOWNAGAIN");
+}
+
+/// A form without /Resources that won't decode may draw the image under the mark through the
+/// page's: the redaction is refused. A page with fonts or properties to clean up refused it
+/// already; this one has neither.
+#[test]
+fn a_form_that_cannot_be_read_refuses_the_redaction_of_an_image_it_may_draw() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /XObject << /FmBroken 5 0 R /Im1 6 0 R >> >> >>"
+            .to_vec(),
+        stream("", b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBroken Do"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Filter /DCTDecode", b"q 50 0 0 50 20 20 cm /Im1 Do Q"),
+        stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBIMGSHOWNAGAIN"),
+    ]);
+    let Object::Stream(broken) = &*doc.get(ObjRef::new(5, 0)) else { panic!("the form is a stream") };
+    assert!(broken.decoded().is_err(), "the fixture's form must not decode");
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::Cos(pdfcraft_cos::CosError::Filter(_)))));
+}
+
 /// Remove Hidden Information has the same rewrite: an off layer's image named by an inherited
 /// /Resources must leave the saved file too.
 #[test]

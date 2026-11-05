@@ -1053,11 +1053,11 @@ fn xobject(
             let mut cleaned_res = res.clone();
             // Install rewritten nested forms before finding live property names: a new form may
             // still inherit its caller's resources, and its new Do name must resolve here.
-            if !inner.xobjects.is_empty() || !inner.replaced.is_empty() {
+            // `prune_form_resources` below then drops the XObjects this form no longer draws, the
+            // ones it replaced among them, keeping those a form drawing through these resources
+            // still draws.
+            if !inner.xobjects.is_empty() {
                 let mut xo = res_dict(doc, &cleaned_res, b"XObject");
-                if let Some(data) = &new_data {
-                    prune(&mut xo, &inner.replaced, std::slice::from_ref(data));
-                }
                 for (name, reference) in &inner.xobjects {
                     xo.set(name.clone(), Object::Ref(*reference));
                 }

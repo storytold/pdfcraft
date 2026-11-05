@@ -3,21 +3,25 @@ use super::{
     overlaps, page_streams, res_dict,
 };
 
-/// Drop every `replaced` resource name whose `Do` no longer appears in the rewritten `content`,
-/// so a full-rewrite save stops reaching the original image or form it named. A name that some
-/// surviving `Do` still draws (the same image shown again outside a mark) is kept.
-pub(crate) fn prune(xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) {
+/// Drop every `replaced` name of the XObject resources `xo` that the rewritten `content` no
+/// longer draws, so a full-rewrite save stops reaching the original image or form it named. A
+/// name still drawn is kept: by a surviving `Do` (the same image shown again outside a mark), or
+/// by a form without /Resources of its own, which draws through `xo` too. Fails, as the cleanup of
+/// the fonts and properties these forms draw with does, when that can't be told: such a form
+/// won't decode, or the parser can't read all of it or of `content`.
+pub(crate) fn prune(doc: &Document, xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) -> Result<(), CosError> {
     if replaced.is_empty() {
-        return;
+        return Ok(());
     }
-    let joined = Pieces::join(content);
-    let ops = joined.parse().ops;
-    let still_drawn = |n: &[u8]| ops.iter().any(|op| op.is("Do") && op.last_name() == Some(n));
+    let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(xo.clone()))]);
+    let ops = resource_ops(doc, &res, content)?;
+    let drawn: HashSet<&[u8]> = ops.iter().filter(|op| op.is("Do")).filter_map(Op::last_name).collect();
     for n in replaced {
-        if !still_drawn(n) {
+        if !drawn.contains(n.as_slice()) {
             xo.remove(n);
         }
     }
+    Ok(())
 }
 
 /// Whether `content` draws the XObject `name` of the resource dictionary `xo`: directly, or

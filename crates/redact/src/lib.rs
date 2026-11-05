@@ -825,7 +825,7 @@ fn redact_page_content(
                     _ => Vec::new(),
                 })
                 .collect();
-            interp::prune(&mut xo, &out.replaced, &page_content);
+            interp::prune(doc, &mut xo, &out.replaced, &page_content)?;
             for (n, r) in &out.xobjects {
                 xo.set(n.clone(), Object::Ref(*r));
             }
