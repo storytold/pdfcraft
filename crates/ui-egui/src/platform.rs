@@ -13,5 +13,7 @@ pub mod portable;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) mod system_fonts;
 pub mod ui_scale;
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) mod unicode_path;
 pub mod updates;
 pub mod window_controls;
