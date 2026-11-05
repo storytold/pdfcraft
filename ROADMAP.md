@@ -1,7 +1,6 @@
 # PdfCraft roadmap
 
 > **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M9: Arabic signature review fixes mixed-script fallback, bidi ordering, logical wrapping, line breaks and hidden-name shaping; estimates unchanged)
-
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
@@ -229,6 +228,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-05 (M9, PR #6264 Markdown review):** Removed unquoted blank separators introduced between the M9 roadmap blockquotes. Previously added Rust docstrings remain intact; CodeRabbit's current hosted review is still in progress. No behavior or estimate changes.
 
 - **2026-11-05 (M9, PR #6264 documentation review):** Documented the signature font, coverage, rendering and regression helpers introduced by this PR, including unbounded measurement semantics. No behavior, parity claims or estimates changed; hosted docstring coverage must be rechecked after publication.
 

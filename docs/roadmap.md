@@ -1,13 +1,9 @@
 # PdfCraft roadmap: milestones and what's next
 
 > **2026-11-05, M9 / PR #6264 documentation review:** Added missing Rust doc comments to signature helpers and regressions. Behavior and milestone estimates are unchanged; the hosted docstring-coverage check remains to be rerun.
-
 > **2026-11-05, M9 / PR #6264 performance review:** Unbounded signature-name measurement now shapes each paragraph once; finite-width wrapping and milestone estimates remain unchanged. Regression coverage checks call counts and spacing/break preservation.
-
 > **2026-11-05, M9 / PR #6264 review:** Full-candidate bidi/shaping measurements now govern signature word and grapheme wrapping; tight mixed-script and joined-Arabic regression tests cover clipping and unnecessary breaks. Milestone estimates and parity claims unchanged.
-
 > **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M9: Arabic visible-signature review fixes mixed-script fallback, directional runs, logical wrapping, explicit breaks and hidden-name shaping; tests pass with and without craft-fonts; cross-viewer visual fidelity remains unqualified; estimates unchanged)
-
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
