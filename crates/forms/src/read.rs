@@ -763,12 +763,13 @@ fn withhold_below(doc: &Document, r: ObjRef, seen: &mut Seen) -> usize {
         let node = doc.get(n);
         let Some(d) = node.as_dict() else { continue };
         let has_named = match d.get(b"Kids") {
-            // A `/Kids` array given by reference is read once in a reading: each reference on the
-            // way to it is noted, with whether the array holds a named kid, before what it names
-            // is loaded, so a node naming one already reached loads nothing.
+            // A `/Kids` array given by reference is read once in a reading: the references on the
+            // way to it, followed as far as `Document::resolve` follows them, are noted with
+            // whether it holds a named kid once the walk reaches it, and a node naming one of them
+            // loads nothing. A chain that ends nowhere notes only its first.
             Some(Object::Ref(first)) => {
                 let (mut r, mut hops, mut has_named) = (*first, Vec::new(), None);
-                for _ in 0..32 {
+                for _ in 0..=32 {
                     if let Some(&known) = seen.withheld_arrays.get(&r) {
                         has_named = Some(known);
                         break;
@@ -785,11 +786,11 @@ fn withhold_below(doc: &Document, r: ObjRef, seen: &mut Seen) -> usize {
                         }
                     }
                 }
-                let has_named = has_named.unwrap_or(false);
-                for hop in hops {
-                    seen.withheld_arrays.insert(hop, has_named);
+                match has_named {
+                    Some(known) => seen.withheld_arrays.extend(hops.into_iter().map(|hop| (hop, known))),
+                    None => seen.withheld_arrays.extend(hops.first().map(|&hop| (hop, false))),
                 }
-                has_named
+                has_named.unwrap_or(false)
             }
             Some(list) => withhold_kids(doc, list, seen, &mut stack),
             None => false,
@@ -804,7 +805,7 @@ fn withhold_below(doc: &Document, r: ObjRef, seen: &mut Seen) -> usize {
 /// Withholds the kids `list` holds, pushing those not withheld before onto `stack`; whether one of
 /// them has a name.
 fn withhold_kids(doc: &Document, list: &Object, seen: &mut Seen, stack: &mut Vec<ObjRef>) -> bool {
-    let kids: Vec<ObjRef> = doc.resolve(list).as_array().into_iter().flatten().filter_map(Object::as_ref).collect();
+    let kids: Vec<ObjRef> = list.as_array().into_iter().flatten().filter_map(Object::as_ref).collect();
     #[cfg(test)]
     WITHHELD_ENTRIES.with(|c| c.set(c.get() + kids.len()));
     let has_named = kids.iter().any(|k| doc.get(*k).as_dict().is_some_and(|d| d.contains(b"T")));

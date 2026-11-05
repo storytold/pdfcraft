@@ -4422,6 +4422,32 @@ fn a_kids_array_nodes_share_is_read_once_under_fields_left_out() {
     assert!(entries <= 2 * k && loads == 1, "{entries} entries read, {loads} loads");
 }
 
+/// Under a field left out for its name, a widget behind 32 references to references, as far as
+/// `Document::resolve` follows them, is withheld, and so isn't adopted from the page.
+#[test]
+fn a_widget_behind_references_under_a_field_left_out_is_withheld() {
+    let refs = 32u32;
+    let widget = 6 + refs;
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [{widget} 0 R] >>"),
+        "<< /FT /Tx /T (f) /V (old) /Kids 5 0 R >>".into(),
+    ];
+    objs.extend((0..refs).map(|i| format!("{} 0 R", 6 + i)));
+    objs.push(format!("[{widget} 0 R]"));
+    objs.push("<< /Type /Annot /Subtype /Widget /FT /Tx /Rect [0 0 10 10] >>".into());
+    assert_eq!(objs.len(), usize::try_from(widget).unwrap());
+    let mut doc = document(&objs);
+    assert_eq!(fields(&doc).iter().map(|f| f.widgets.len()).collect::<Vec<_>>(), [1], "read whole, the field has its widget");
+    doc.update_dict(ObjRef::new(4, 0), |f| {
+        f.set(b"T".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(vec![b'n'; crate::read::MAX_TEXT_BYTES])))
+    })
+    .unwrap();
+    let read = fields_with_adopted(&doc);
+    assert_eq!((read.items.len(), read.adopted_page_fields, read.left_out), (0, 0, 1));
+}
+
 /// A widget's `/AS` is copied within the text allowance like the rest of the field's text: one
 /// that doesn't fit leaves the field out.
 #[test]

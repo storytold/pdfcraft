@@ -150,6 +150,47 @@ fn a_kids_array_nodes_share_is_read_once_by_the_form_tree() {
     assert_eq!((entries, loads), (k, 2), "the reference and the array, each once");
 }
 
+/// A `/Kids` array behind references to references is reached as far as `Document::resolve`
+/// follows them, and a walk that runs out of references on a long chain doesn't hide the array
+/// from a node naming a reference further down it.
+#[test]
+fn the_form_tree_follows_references_as_far_as_resolve() {
+    // 1 catalog, 2 the field, then `refs` references ending at the array, then the array and the
+    // widget it lists. `entry` is how many references in the field's /Kids names; `head` adds a
+    // node naming the chain's first, before or after the field in /Fields.
+    let build = |refs: u32, entry: u32, head: Option<bool>| {
+        let widget = 4 + refs;
+        let fields = match head {
+            Some(true) => format!("[{} 0 R 2 0 R]", widget + 1),
+            Some(false) => format!("[2 0 R {} 0 R]", widget + 1),
+            None => "[2 0 R]".into(),
+        };
+        let mut objs: Vec<Vec<u8>> = vec![
+            format!("<< /Type /Catalog /AcroForm << /Fields {fields} >> >>").into_bytes(),
+            format!("<< /T (f) /Kids {} 0 R >>", 3 + entry).into_bytes(),
+        ];
+        objs.extend((0..refs).map(|i| format!("{} 0 R", 4 + i).into_bytes()));
+        objs.push(format!("[{widget} 0 R]").into_bytes());
+        objs.push(b"<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] >>".to_vec());
+        if head.is_some() {
+            objs.push(b"<< /Kids 3 0 R >>".to_vec());
+        }
+        (pdf(objs), ObjRef::new(widget, 0), ObjRef::new(3 + entry, 0))
+    };
+    for refs in [31, 32, 33] {
+        let (doc, widget, first) = build(refs, 0, None);
+        let resolved = doc.resolve(&Object::Ref(first)).as_array().is_some();
+        assert_eq!(form_tree(&doc).contains(&widget), resolved, "{refs} references");
+        assert_eq!(resolved, refs <= 32, "{refs} references");
+    }
+    // A node names a chain of 40, too long; the field names its 12th. Whichever is walked first,
+    // the field reaches the array.
+    for before in [true, false] {
+        let (doc, widget, _) = build(40, 11, Some(before));
+        assert!(form_tree(&doc).contains(&widget), "head node first in /Fields: {before}");
+    }
+}
+
 /// A surviving form shares the page's resource dictionary, which lists the image the mark
 /// removes; the form never draws it.
 #[test]

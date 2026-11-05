@@ -776,19 +776,21 @@ fn form_tree(doc: &Document) -> HashSet<ObjRef> {
     });
     let mut stack = fields.unwrap_or_default();
     let mut tree: HashSet<ObjRef> = stack.iter().copied().collect();
-    // A `/Kids` array given by reference is read once: each reference on the way to it is noted
-    // before what it names is loaded, so a node naming one already reached loads nothing.
+    // A `/Kids` array given by reference is read once: the references on the way to it, followed
+    // as far as `Document::resolve` follows them, are noted once the walk reaches it, and a node
+    // naming one of them loads nothing. A chain that ends nowhere notes only its first.
     let mut reached = HashSet::new();
     while let Some(n) = stack.pop() {
         let node = doc.get(n);
         let Some(kids) = node.as_dict().and_then(|d| d.get(b"Kids")) else { continue };
         let kids = match kids {
             Object::Ref(first) => {
-                let (mut r, mut list) = (*first, None);
-                for _ in 0..32 {
-                    if !reached.insert(r) {
+                let (mut r, mut hops, mut list) = (*first, Vec::new(), None);
+                for _ in 0..=32 {
+                    if reached.contains(&r) {
                         break;
                     }
+                    hops.push(r);
                     let o = doc.get(r);
                     #[cfg(test)]
                     TREE_LOADS.with(|c| c.set(c.get() + 1));
@@ -800,7 +802,11 @@ fn form_tree(doc: &Document) -> HashSet<ObjRef> {
                         }
                     }
                 }
-                list.map(|o| refs(&o)).unwrap_or_default()
+                match &list {
+                    Some(_) => reached.extend(hops),
+                    None => reached.extend(hops.first().copied()),
+                }
+                list.map(|o| o.as_array().into_iter().flatten().filter_map(Object::as_ref).collect()).unwrap_or_default()
             }
             direct => refs(direct),
         };
