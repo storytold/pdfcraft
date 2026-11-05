@@ -3,6 +3,15 @@
 version = 4
 
 [[package]]
+name = "aho-corasick"
+version = "1.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "accesskit"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4575,6 +4584,7 @@ dependencies = [
 name = "pdfcraft-redact"
 version = "0.16.1"
 dependencies = [
+ "aho-corasick",
  "pdfcraft-annot",
  "pdfcraft-content",
  "pdfcraft-cos",

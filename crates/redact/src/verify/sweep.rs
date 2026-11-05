@@ -7,9 +7,9 @@ use std::sync::Arc;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 
 use super::extract::extract_page;
-use super::util::{Ctx, count, decode_text, find, find_all, image_codec, spellings, squash, survivor_encodings, xml_unescape};
+use super::util::{Ctx, decode_text, find, image_codec, spellings, squash, survivor_encodings, xml_unescape};
 use super::{SURFACES, Surface, SurfaceReport, Verdict};
-use crate::verify::limits::{MAX_NEEDLE_CHARGE, MAX_NESTING, MAX_WALK, MIN_NEEDLE, MIN_STRUCTURED_NEEDLE};
+use crate::verify::limits::{MAX_NESTING, MAX_WALK, MIN_NEEDLE, MIN_STRUCTURED_NEEDLE};
 
 /// A string the sweep looks for.
 pub(super) struct Needle {
@@ -198,107 +198,155 @@ impl Tally {
     }
 }
 
-/// The needles (at least `min` long) found in `hay` as bytes, or `None` once the search work
-/// limit is used up.
-pub(super) fn bytes_hits(needles: &[Needle], hay: &[u8], min: usize, ctx: &Ctx) -> Option<Vec<usize>> {
-    // The haystack is the region actually scanned: it is charged in full once per scan, so a
-    // haystack past the budget fails closed and a bulk of needles over one haystack does not
-    // multiply it. Each needle's own search is charged too, capped (see
-    // [`MAX_NEEDLE_CHARGE`]): the searches really do walk the haystack once per needle, but the
-    // budget must not charge the haystack once per needle, which would spend it many times over
-    // for one ordinary bulk redaction.
+/// Search all encodings in one bounded pass, including overlapping matches.
+fn pattern_matches<'a>(
+    patterns: impl IntoIterator<Item = (usize, &'a [u8])>,
+    hay: &[u8],
+    ctx: &Ctx,
+    mut found: impl FnMut(usize, usize, usize) -> bool,
+) -> Option<()> {
+    const MAX_PATTERNS: usize = 100_000;
+    const MAX_PATTERN_BYTES: usize = 16 << 20;
+    const MAX_MATCHES: usize = 1 << 20;
     if !ctx.charge(hay.len()) {
         return None;
     }
-    let per_needle = hay.len().min(MAX_NEEDLE_CHARGE);
-    let mut out = Vec::new();
-    for (i, n) in needles.iter().enumerate().filter(|(_, n)| n.at_least(min)) {
-        for b in &n.bytes {
-            if !ctx.charge(per_needle) {
-                return None;
-            }
-            if find(hay, b) {
-                out.push(i);
-                break;
-            }
-        }
-    }
-    Some(out)
-}
-
-/// Most matches kept per needle and haystack when counting (more is "plenty").
-pub(super) const MAX_COUNTED: usize = 1 << 16;
-
-/// How often each needle (at least `min` long) occurs in `hay` as bytes, in any spelling, as
-/// `(needle, occurrences)` for those that occur; `None` once the search work limit is used up.
-/// Spellings that overlap (a UTF-16 string with and without its byte order mark) count once.
-pub(super) fn bytes_counts(needles: &[Needle], hay: &[u8], min: usize, ctx: &Ctx) -> Option<Vec<(usize, usize)>> {
-    // The haystack charged once per scan, each needle's search capped: see [`bytes_hits`].
-    if !ctx.charge(hay.len()) {
-        return None;
-    }
-    let per_needle = hay.len().min(MAX_NEEDLE_CHARGE);
-    let mut out = Vec::new();
-    for (i, n) in needles.iter().enumerate().filter(|(_, n)| n.at_least(min)) {
-        let mut spans: Vec<(usize, usize)> = Vec::new();
-        for b in &n.bytes {
-            if !ctx.charge(per_needle) {
-                return None;
-            }
-            find_all(hay, b, MAX_COUNTED, &mut spans);
-        }
-        spans.sort_unstable();
-        let mut occurrences = 0usize;
-        let mut end = 0usize;
-        for (a, z) in spans {
-            if occurrences == 0 || a >= end {
-                occurrences += 1;
-            }
-            end = end.max(z);
-        }
-        if occurrences > 0 {
-            out.push((i, occurrences));
-        }
-    }
-    Some(out)
-}
-
-/// The needles a string object shows: by its bytes in any encoding, and by what it reads as
-/// (`None` once the search work limit is used up). Strings are never page content.
-pub(super) fn string_hits(needles: &[Needle], s: &PdfString, ctx: &Ctx) -> Option<Vec<usize>> {
-    let text = s.to_text();
-    let key = squash(&text);
-    let tokens: Vec<&str> = text.split(|c: char| !c.is_alphanumeric()).filter(|t| !t.is_empty()).collect();
-    // The string is the region scanned: charged once, with each needle's own comparison
-    // capped, so a bulk of needles does not multiply a string by their count (see
-    // [`bytes_hits`]).
-    if !ctx.charge(s.bytes.len().saturating_add(key.len())) {
-        return None;
-    }
-    let mut out = Vec::new();
-    for (i, n) in needles.iter().enumerate() {
-        // A needle too short to look for in bytes is only matched as a whole token, and is
-        // dropped when its copies legitimately remain.
-        if n.short() && n.allowance > 0 {
+    let mut map: BTreeMap<Vec<u8>, Vec<usize>> = BTreeMap::new();
+    let (mut bytes, mut links) = (0usize, 0usize);
+    for (owner, pattern) in patterns {
+        if pattern.is_empty() {
             continue;
         }
-        if !ctx.charge(n_bytes_charge(n.bytes.len(), s.bytes.len(), key.len())) {
+        if !ctx.charge(pattern.len().saturating_add(1)) {
             return None;
         }
-        let bytes = !n.short() && n.bytes.iter().any(|b| find(&s.bytes, b));
-        let read = !n.raw_view && if n.short() { tokens.contains(&n.shown.as_str()) } else { key.contains(&n.key) };
-        if bytes || read {
-            out.push(i);
+        if !map.contains_key(pattern) {
+            bytes = bytes.checked_add(pattern.len())?;
+            if bytes > MAX_PATTERN_BYTES || map.len() >= MAX_PATTERNS {
+                return None;
+            }
+        }
+        let owners = map.entry(pattern.to_vec()).or_default();
+        if owners.last() != Some(&owner) {
+            links = links.checked_add(1)?;
+            if links > MAX_PATTERNS {
+                return None;
+            }
+            owners.push(owner);
         }
     }
-    Some(out)
+    if map.is_empty() {
+        return Some(());
+    }
+    let matcher = aho_corasick::AhoCorasick::new(map.keys()).ok()?;
+    let owners: Vec<Vec<usize>> = map.into_values().collect();
+    let mut matches = 0usize;
+    for hit in matcher.find_overlapping_iter(hay) {
+        for &owner in owners.get(hit.pattern().as_usize())? {
+            matches = matches.checked_add(1)?;
+            if matches > MAX_MATCHES || !ctx.charge(1) || !found(owner, hit.start(), hit.end()) {
+                return None;
+            }
+        }
+    }
+    Some(())
 }
 
-/// What one needle's check of one string may cost against the work budget: the needle's
-/// spellings compared against the string, capped like every per-needle charge (see
-/// [`MAX_NEEDLE_CHARGE`]).
-fn n_bytes_charge(spellings: usize, string_len: usize, key_len: usize) -> usize {
-    spellings.saturating_mul(string_len).saturating_add(key_len).min(MAX_NEEDLE_CHARGE)
+/// Count normalized text keys in one pass, with the same non-overlap rule as `str::matches`.
+pub(super) fn key_counts(needles: &[Needle], hay: &str, raw: bool, ctx: &Ctx) -> Option<Vec<(usize, usize)>> {
+    let patterns = needles.iter().enumerate().filter(|(_, n)| n.raw_view == raw).map(|(i, n)| (i, n.key.as_bytes()));
+    let mut spans: BTreeMap<usize, Vec<(usize, usize)>> = BTreeMap::new();
+    pattern_matches(patterns, hay.as_bytes(), ctx, |i, a, b| {
+        let hits = spans.entry(i).or_default();
+        if hits.len() >= MAX_COUNTED {
+            return false;
+        }
+        hits.push((a, b));
+        true
+    })?;
+    Some(
+        spans
+            .into_iter()
+            .map(|(i, mut hits)| {
+                hits.sort_unstable();
+                let (mut count, mut end) = (0, 0);
+                for (a, b) in hits {
+                    if a >= end {
+                        count += 1;
+                        end = b;
+                    }
+                }
+                (i, count)
+            })
+            .collect(),
+    )
+}
+
+pub(super) fn bytes_hits(needles: &[Needle], hay: &[u8], min: usize, ctx: &Ctx) -> Option<Vec<usize>> {
+    let patterns = needles.iter().enumerate().filter(|(_, n)| n.at_least(min)).flat_map(|(i, n)| n.bytes.iter().map(move |b| (i, b.as_slice())));
+    let mut found = BTreeSet::new();
+    pattern_matches(patterns, hay, ctx, |i, _, _| {
+        found.insert(i);
+        true
+    })?;
+    Some(found.into_iter().collect())
+}
+
+/// A larger count is incomplete evidence, never a silently truncated count.
+pub(super) const MAX_COUNTED: usize = 1 << 16;
+
+pub(super) fn bytes_counts(needles: &[Needle], hay: &[u8], min: usize, ctx: &Ctx) -> Option<Vec<(usize, usize)>> {
+    let patterns = needles.iter().enumerate().filter(|(_, n)| n.at_least(min)).flat_map(|(i, n)| n.bytes.iter().map(move |b| (i, b.as_slice())));
+    let mut spans: BTreeMap<usize, Vec<(usize, usize)>> = BTreeMap::new();
+    pattern_matches(patterns, hay, ctx, |i, a, b| {
+        let hits = spans.entry(i).or_default();
+        if hits.len() >= MAX_COUNTED {
+            return false;
+        }
+        hits.push((a, b));
+        true
+    })?;
+    Some(
+        spans
+            .into_iter()
+            .map(|(i, mut spans)| {
+                spans.sort_unstable();
+                spans.dedup();
+                let (mut count, mut end) = (0usize, 0usize);
+                for (a, b) in spans {
+                    if count == 0 || a >= end {
+                        count += 1;
+                    }
+                    end = end.max(b);
+                }
+                (i, count)
+            })
+            .collect(),
+    )
+}
+
+pub(super) fn string_hits(needles: &[Needle], value: &PdfString, ctx: &Ctx) -> Option<Vec<usize>> {
+    let text = value.to_text();
+    let key = squash(&text);
+    if !ctx.charge(value.bytes.len().saturating_add(key.len())) {
+        return None;
+    }
+    let mut found: BTreeSet<usize> = bytes_hits(needles, &value.bytes, MIN_NEEDLE, ctx)?.into_iter().collect();
+    let patterns = needles.iter().enumerate().filter(|(_, n)| !n.raw_view && !n.short()).map(|(i, n)| (i, n.key.as_bytes()));
+    pattern_matches(patterns, key.as_bytes(), ctx, |i, _, _| {
+        found.insert(i);
+        true
+    })?;
+    let tokens: BTreeSet<&str> = text.split(|c: char| !c.is_alphanumeric()).filter(|s| !s.is_empty()).collect();
+    for (i, needle) in needles.iter().enumerate().filter(|(_, n)| n.short() && n.allowance == 0 && !n.raw_view) {
+        if !ctx.charge(needle.shown.len().saturating_add(1)) {
+            return None;
+        }
+        if tokens.contains(needle.shown.as_str()) {
+            found.insert(i);
+        }
+    }
+    Some(found.into_iter().collect())
 }
 
 /// Streams whose data is binary rather than text: images, embedded font programs, colour
@@ -612,10 +660,15 @@ pub(super) fn sweep_payload(needles: &[Needle], payload: &[u8], depth: usize, lo
     }
     if !image {
         let key = squash(&decode_text(payload));
-        for (i, n) in needles.iter().enumerate() {
-            if n.at_least(MIN_NEEDLE) && !n.raw_view && key.contains(&n.key) {
-                acc.survivor(Surface::EmbeddedFiles, loc.to_string(), Some(i));
+        match key_counts(needles, &key, false, &acc.ctx) {
+            Some(counts) => {
+                for (i, count) in counts {
+                    if count > 0 && needles.get(i).is_some_and(|n| n.at_least(MIN_NEEDLE)) {
+                        acc.survivor(Surface::EmbeddedFiles, loc.to_string(), Some(i));
+                    }
+                }
             }
+            None => acc.problem(Surface::EmbeddedFiles, format!("{loc} could not be searched in full")),
         }
     }
 }
@@ -629,19 +682,14 @@ pub(super) fn sweep_pages(needles: &[Needle], doc: &Document, depth: usize, tag:
             acc.problem(Surface::ExtractedText, format!("{loc} can't be read"));
             continue;
         };
-        // The page's text is the region scanned: charged once, each needle's own count capped
-        // (see [`bytes_hits`]).
-        if !acc.ctx.charge(e.text.len().max(e.raw.len())) {
-            acc.problem(Surface::ExtractedText, "the search work limit was reached".into());
-            break;
-        }
-        for (ni, n) in needles.iter().enumerate() {
-            let hay = if n.raw_view { &e.raw } else { &e.text };
-            if !acc.ctx.charge(hay.len().min(MAX_NEEDLE_CHARGE)) {
+        for (hay, raw) in [(&e.text, false), (&e.raw, true)] {
+            let Some(counts) = key_counts(needles, hay, raw, &acc.ctx) else {
                 acc.problem(Surface::ExtractedText, "the search work limit was reached".into());
                 break 'pages;
+            };
+            for (ni, count) in counts {
+                shown.add(ni, &loc, count);
             }
-            shown.add(ni, &loc, count(hay, &n.key));
         }
     }
     // A surplus over what legitimately remains anywhere in the document is a survivor. The

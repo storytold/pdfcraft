@@ -75,6 +75,7 @@ impl Snapshot {
         let ctx = Ctx::new(HashSet::new());
         let mut regions: Vec<RegionSnap> = Vec::new();
         let mut pages = BTreeMap::new();
+        let mut images = pdfcraft_cos::ImageBudget::new(doc);
         for &pi in &by_page {
             let page = page_list.get(pi).ok_or(RedactError::Unreadable(pi + 1))?;
             let page_marks: Vec<&&Mark> = chosen.iter().filter(|m| m.page == pi).collect();
@@ -86,7 +87,7 @@ impl Snapshot {
             let mut scratch = doc.clone();
             let mut sink = Report::default();
             let removed: Vec<Removed> = {
-                let mut scope = Scope::new(&rects, Mode::Apply, &mut sink, pdfcraft_cos::DecodeBudget::page());
+                let mut scope = Scope::new(&rects, Mode::Apply, &mut sink, pdfcraft_cos::DecodeBudget::page(), &mut images);
                 scope.removed = Some(Vec::new());
                 process(&mut scratch, &mut scope, &data, &resources, Matrix::IDENTITY);
                 scope.removed.take().unwrap_or_default()
@@ -147,9 +148,18 @@ impl Snapshot {
                 }
             }
         }
-        for n in &mut needles {
-            let (src, cut) = if n.raw_view { (&src_raw, &cut_raw) } else { (&src_text, &cut_text) };
-            n.allowance = count(src, &n.key).saturating_sub(count(cut, &n.key));
+        for (src, cut, raw) in [(&src_text, &cut_text, false), (&src_raw, &cut_raw, true)] {
+            match (super::sweep::key_counts(&needles, src, raw, &ctx), super::sweep::key_counts(&needles, cut, raw, &ctx)) {
+                (Some(source), Some(removed)) => {
+                    let removed: BTreeMap<usize, usize> = removed.into_iter().collect();
+                    for (i, total) in source {
+                        if let Some(n) = needles.get_mut(i) {
+                            n.allowance = total.saturating_sub(removed.get(&i).copied().unwrap_or(0));
+                        }
+                    }
+                }
+                _ => problems.push("the source text allowances could not be counted in full".into()),
+            }
         }
         // The names the removed text legitimately sits in (a redacted word that is also a
         // `/Subtype`, a `/Filter`, a `/BaseFont`): names are structure redaction never edits,

@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+aho-corasick = "1"
 pdfcraft-cos = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-fonts = { workspace = true }

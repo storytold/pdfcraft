@@ -5,14 +5,8 @@
 pub(crate) const MAX_STREAM: usize = 64 << 20;
 /// Most decoded bytes the whole proof reads, over every stream and every pass.
 pub(crate) const MAX_TOTAL_DECODED: u64 = 2 << 30;
-/// Most byte comparisons the needle search may spend in one proof (about 4 GiB of haystack).
+/// Most units of linear search work (input, patterns and reported matches) in one proof.
 pub(crate) const MAX_WORK: u64 = 4 << 30;
-/// Most of a haystack one needle's search may be charged to [`MAX_WORK`]. The haystack itself —
-/// the region actually scanned — is charged in full once per scan, so a haystack past the budget
-/// still fails closed; what is capped is the per-needle charge, so a bulk of needles over one
-/// large document (many removed strings, which is ordinary) does not multiply the haystack by
-/// the needle count and spend the whole budget many times over.
-pub(crate) const MAX_NEEDLE_CHARGE: usize = 1 << 20;
 /// Nested attachment levels that are swept (deeper ones are reported as unswept).
 pub(crate) const MAX_NESTING: usize = 4;
 /// Nesting bound of object walks (deeper is reported, never skipped silently).

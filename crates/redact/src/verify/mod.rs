@@ -64,6 +64,8 @@ use pdfcraft_cos::ObjRef;
 mod extract;
 mod geometry;
 pub(crate) mod limits;
+#[cfg(test)]
+mod search_tests;
 mod snapshot;
 mod sweep;
 mod util;
