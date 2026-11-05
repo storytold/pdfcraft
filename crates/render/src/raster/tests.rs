@@ -8200,7 +8200,7 @@ mod icc_profile_cache;
 mod symbolic_truetype_cmap;
 
 // A TrueType font whose `head.indexToLocFormat` is out of range reads `loca` in the format its
-// length gives (vendored hayro-interpret patch 79).
+// length gives (vendored hayro-interpret patch 83).
 mod truetype_loca_format;
 
 /// Render `pdf`'s first page at 72 dpi with no time limit beyond the test's own.

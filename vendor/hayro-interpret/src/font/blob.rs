@@ -195,7 +195,7 @@ impl Debug for OpenTypeFontBlob {
     }
 }
 
-/// PdfCraft patch (79): a copy of the font with its `head.indexToLocFormat` set to the format its
+/// PdfCraft patch (83): a copy of the font with its `head.indexToLocFormat` set to the format its
 /// `loca` table is in, when the field holds neither 0 (short offsets) nor 1 (long), or `None` when
 /// it needs no change. The glyph outline reader takes only 1 as long, so a font whose field reads
 /// 256 (the value's bytes swapped) had its long `loca` read as short offsets: every glyph came
@@ -232,7 +232,7 @@ fn with_loca_format_fixed(data: &[u8], index: u32) -> Option<Vec<u8>> {
 
 impl OpenTypeFontBlob {
     pub(crate) fn new(data: FontData, index: u32) -> Option<Self> {
-        // PdfCraft patch (79): see `with_loca_format_fixed`.
+        // PdfCraft patch (83): see `with_loca_format_fixed`.
         let data = match with_loca_format_fixed(data.as_ref().as_ref(), index) {
             Some(fixed) => Arc::new(fixed) as FontData,
             None => data,

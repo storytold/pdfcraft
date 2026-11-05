@@ -1,5 +1,5 @@
 //! A TrueType font whose `head.indexToLocFormat` holds neither 0 nor 1 draws through the `loca`
-//! format its table is in (vendored hayro-interpret patch 79). The OpenType `head` table allows
+//! format its table is in (vendored hayro-interpret patch 83). The OpenType `head` table allows
 //! only 0 (short offsets) and 1 (long); the glyph reader took anything but 1 as short, so a font
 //! whose field reads 256 (pdf.js `issue2537r.pdf`) had its long offsets read as short ones, and
 //! "LINE UP" drew as boxes. ISO 32000-2 §9.9 has an embedded TrueType program drawn as the
