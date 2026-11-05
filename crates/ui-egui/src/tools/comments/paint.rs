@@ -1,18 +1,30 @@
-use super::geometry::{HANDLES, grabs_points, handle_pos, is_markup, reshapable, reshaped, resizable};
-use super::state::{Gesture, PageCx, SETTLE_SECS};
+use super::geometry::{HANDLES, handle_pos, held, is_markup, reaches_points, reshapable, reshaped, resizable};
+use super::state::{CommentView, Gesture, PageCx, SETTLE_SECS};
 use super::{
     Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Shape,
     Stroke, color32, vec2,
 };
+use crate::page_router::{CommentPart, Hit, Owner};
 
-/// Paint comment selection, hover and gesture previews on a page.
-pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
+/// The comment outlined under the pointer: the one a press there would take (`hover`, the top hit),
+/// with the Select tool or, over its own marks, Fill & Sign. Not the selected comment, nor while a
+/// comment is moved, resized or drawn, nor one under a form field or added text that would take
+/// the press.
+pub(super) fn hover_outline<'c>(cx: &'c PageCx<'_>, cv: &CommentView, hover: Option<&Hit>) -> Option<&'c Annotation> {
+    let Some(Owner::Comment { index, part: CommentPart::Body }) = hover.map(|h| h.owner) else { return None };
+    let tool_outlines = matches!(cx.tool, QuickTool::Select | QuickTool::Fill(_));
+    (cv.gesture.is_none() && tool_outlines && cv.selected != Some((cx.page, index))).then(|| cx.get(index)).flatten()
+}
+
+/// Paint comment selection, hover and gesture previews on a page. `hover` is the top hit under the
+/// pointer.
+pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, hover: Option<&Hit>) {
     let cv = &view.comments;
     let pointer = cx.ptr.pos;
     // A redaction mark shows its fill while the pointer is over it, as Acrobat's does, so the
     // marked area reads before anything is applied.
     if cv.gesture.is_none()
-        && let Some(a) = pointer.and_then(|p| cx.hit(p))
+        && let Some(a) = pointer.and_then(|p| cx.comment_at(p))
         && a.subtype == "Redact"
     {
         let ([r, g, b], opacity) = cx.redact_mark;
@@ -21,11 +33,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             painter.rect_filled(rect, CornerRadius::ZERO, fill);
         }
     }
-    if cv.gesture.is_none()
-        && let Some(a) = pointer.and_then(|p| cx.hit(p))
-        && (cx.tool == QuickTool::Select || matches!(cx.tool, QuickTool::Fill(_)) && a.fill_sign)
-        && cv.selected != Some((cx.page, a.index))
-    {
+    if let Some(a) = hover_outline(cx, cv, hover) {
         for r in cx.screen_rects(a) {
             painter.rect_stroke(r.expand(2.0), CornerRadius::same(2), Stroke::new(1.0, SELECT_BLUE.gamma_multiply(0.7)), egui::StrokeKind::Outside);
         }
@@ -45,7 +53,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
             return paint_gesture(painter, cx, view);
         }
         let shift = ui.input(|i| i.modifiers.shift);
-        if cx.allowed && grabs_points(cx.tool) && reshapable(a) {
+        if cx.allowed && reaches_points(cx.tool) && reshapable(a) {
             return paint_points(painter, cx, view, a, pointer, shift);
         }
         let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
@@ -127,10 +135,10 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
     {
         let style = cx.prefs.style(*tool);
         let zoom = cx.xf.zoom();
-        let stroke = Stroke::new((style.width as f32 * zoom).max(1.0), color32(style.color));
+        let stroke = Stroke::new((style.width as f32 * zoom).max(1.0), color32(style.color).gamma_multiply(style.opacity as f32));
         let pts: Vec<Pos2> = points.iter().map(|p| cx.to_screen(*p)).collect();
         match tool {
-            CommentTool::Ink => {
+            CommentTool::Ink | CommentTool::FreehandHighlight => {
                 painter.add(egui::Shape::line(pts, stroke));
             }
             CommentTool::Eraser => {
@@ -157,10 +165,12 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
                 painter.add(egui::Shape::ellipse_stroke(r.center(), r.size() / 2.0, stroke));
             }
             CommentTool::Polygon | CommentTool::PolyLine | CommentTool::Cloud => {
-                // The vertices so far, and a rubber band to the pointer.
+                // The vertices so far, and a rubber band to where a click would put the next one: the
+                // first, where the click closes the shape, Shift or not.
                 let mut line = pts.clone();
                 if let Some(p) = cx.ptr.pos {
-                    line.push(p);
+                    let shift = painter.ctx().input(|i| i.modifiers.shift);
+                    line.push(if closes_at(cx, *tool, points, p) { pts[0] } else { cx.to_screen(held(points.last(), cx.to_user(p), shift)) });
                 }
                 painter.add(egui::Shape::line(line, stroke));
                 if let Some(first) = pts.first().filter(|_| *tool != CommentTool::PolyLine && pts.len() >= 3) {
@@ -179,6 +189,12 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
     }
 }
 
+/// Whether a click at `p` (on screen) closes the polygon or cloud drawn so far (`points`, user
+/// space): on its first point again, once it has three.
+pub(super) fn closes_at(cx: &PageCx<'_>, tool: CommentTool, points: &[[f64; 2]], p: Pos2) -> bool {
+    points.len() >= 3 && tool != CommentTool::PolyLine && cx.to_screen(points[0]).distance(p) <= 6.0
+}
+
 /// The shape a finished drawing gesture makes (`None` if it is too small to mean anything).
 pub(super) fn drawn_shape(tool: CommentTool, points: &[[f64; 2]]) -> Option<Shape> {
     let (first, last) = (*points.first()?, *points.last()?);
@@ -186,6 +202,7 @@ pub(super) fn drawn_shape(tool: CommentTool, points: &[[f64; 2]]) -> Option<Shap
     let rect = [first[0].min(last[0]), first[1].min(last[1]), first[0].max(last[0]), first[1].max(last[1])];
     let big = rect[2] - rect[0] >= 2.0 && rect[3] - rect[1] >= 2.0;
     match tool {
+        CommentTool::FreehandHighlight if !points.is_empty() => Some(Shape::FreehandHighlight { strokes: vec![points.to_vec()] }),
         CommentTool::Ink if !points.is_empty() => Some(Shape::Ink { strokes: vec![points.to_vec()] }),
         CommentTool::Line | CommentTool::Arrow if far => Some(Shape::Line {
             from: first,
@@ -209,7 +226,7 @@ pub(super) fn drawn_shape(tool: CommentTool, points: &[[f64; 2]]) -> Option<Shap
 /// per point, so the default 2 pt keeps the 12-pixel eraser it always had, and the thickness
 /// slider's 0.5–12 pt gives 3 to 72 pixels across. A setting that isn't a number is the default.
 fn eraser_radius_px(width: f64) -> f64 {
-    3.0 * if width.is_finite() { width.clamp(0.5, 12.0) } else { 2.0 }
+    3.0 * if width.is_finite() { width.clamp(0.5, super::MAX_LINE_WIDTH) } else { 2.0 }
 }
 
 /// Eraser: rub out drawings along `path` (user space); one undo step for all of them. It rubs

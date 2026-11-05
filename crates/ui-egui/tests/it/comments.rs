@@ -143,6 +143,53 @@ fn sidebar_comment_centres_the_annotation_at_high_zoom() {
     }
 }
 
+/// A double-click on the text of a card in the Comments panel edits it, as one on its header does
+/// (a click there would select a word): on a selected card, and on one the first click selects.
+#[test]
+fn double_clicking_a_cards_text_edits_it() {
+    for selected in [true, false] {
+        double_click_a_cards_text(selected);
+    }
+}
+
+fn double_click_a_cards_text(selected: bool) {
+    // Frames 1/60 s apart, so two clicks make a double-click.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "comments").unwrap();
+        let shape = pdfcraft_engine::Shape::Note { at: [150.0, 90.0], icon: pdfcraft_engine::NoteIcon::Comment };
+        assert!(app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page: 0,
+            style: pdfcraft_engine::Style::default_for(&shape),
+            shape,
+            contents: "Edit this note".into(),
+            author: "Tester".into(),
+        })));
+        app.views[0].comments.selected = selected.then_some((0, 0));
+        app
+    });
+    h.run_steps(4);
+    crate::support::settle(&mut h);
+    assert_eq!(h.state().views[0].comments.selected.is_some(), selected);
+    let p = h.query_all_by_label("Edit this note").next().expect("the card's text").rect().center();
+    h.hover_at(p);
+    h.run_steps(1);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        }
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "selected: {selected}");
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 0, "Edit this note".into())), "selected: {selected}");
+    // And the editor is drawn.
+    note_editor(&h);
+}
+
 #[test]
 fn dragging_over_text_with_the_highlighter_highlights_it() {
     let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
@@ -909,8 +956,8 @@ fn comments_are_selected_moved_and_deleted_with_the_select_tool() {
 }
 
 /// A line's ends have handles: dragging one with the Select tool changes the line's length and
-/// angle (Shift holds it to 45°), as one undo step. The line tool keeps drawing from an end: a
-/// new line starts there rather than dragging the one just drawn.
+/// angle (Shift holds it level or plumb with the other end), as one undo step. The line tool keeps
+/// drawing from an end: a new line starts there rather than dragging the one just drawn.
 #[test]
 fn line_ends_are_dragged_to_change_length_and_angle() {
     let mut h = harness(|app| app.set_option("quick", "line").unwrap());
@@ -934,7 +981,7 @@ fn line_ends_are_dragged_to_change_length_and_angle() {
     assert!((p[1][0] - 200.0).abs() < 1.0 && (p[1][1] - 160.0).abs() < 1.0, "the dragged end follows: {p:?}");
     let id = h.state().views[0].id;
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Reshape comment"));
-    // Shift: held to the nearest 45° from the other end (39° here).
+    // Shift: held level or plumb with the other end, here level (110 pt across, 90 up).
     let a = at(&h, 200.0, 160.0);
     let b = at(&h, 150.0, 190.0);
     h.hover_at(a);
@@ -951,8 +998,7 @@ fn line_ends_are_dragged_to_change_length_and_angle() {
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
     h.run_steps(1);
     let p = ends(&h);
-    let (dx, dy) = (p[1][0] - p[0][0], p[1][1] - p[0][1]);
-    assert!(dx > 50.0 && (dx - dy).abs() < 0.5, "45°: {p:?}");
+    assert!((p[1][1] - p[0][1]).abs() < 0.01 && (p[1][0] - 150.0).abs() < 1.0, "level: {p:?}");
     // Undo puts the line back as it was before the drag.
     h.state_mut().undo();
     h.run_steps(2);
@@ -1036,6 +1082,80 @@ fn alt_arrows_navigate_instead_of_nudging_the_selected_comment() {
     assert!(comments(&h)[0].rect[0] > before[0], "→ nudged it");
 }
 
+/// Over the first corner, where a click closes the polygon, the rubber band runs to that corner
+/// with Shift held too: the closing side the click will make, not a level or plumb one.
+#[test]
+fn the_rubber_band_shows_the_closing_side_with_shift_held() {
+    let _gpu = crate::gpu();
+    let mut h = harness(|app| app.set_option("quick", "polygon").unwrap());
+    for p in [(40.0, 40.0), (140.0, 40.0), (140.0, 140.0)] {
+        click_pt(&mut h, p);
+    }
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    h.hover_at(at(&h, 40.0, 40.0) + egui::vec2(2.0, 2.0));
+    h.run_steps(3);
+    let pixels = h.render().unwrap();
+    // Halfway along the diagonal closing side, (90, 90).
+    let m = at(&h, 90.0, 90.0);
+    let drawn = (-2..=2).any(|d: i32| {
+        let v = pixels.get_pixel((m.x as i32 + d) as u32, (m.y as i32 + d) as u32).0;
+        v[0] > 150 && v[1] < 100 && v[2] < 100
+    });
+    assert!(drawn, "the closing side is drawn");
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(1);
+}
+
+/// Shift holds a new line or arrow level or plumb with where it starts, and each new side of
+/// connected lines or a polygon with the corner before (a CAD drawing's ortho mode). Without
+/// Shift they go where the pointer is.
+#[test]
+fn shift_holds_new_lines_and_sides_level_or_plumb() {
+    let mut h = harness(|app| app.set_option("quick", "line").unwrap());
+    let shift = |h: &mut Harness<'static, PdfCraftApp>, on: bool| {
+        h.event(egui::Event::ModifiersChanged(if on { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE }));
+        h.run_steps(1);
+    };
+    let points = |h: &Harness<'static, PdfCraftApp>, subtype: &str| {
+        // In the order drawn: the list isn't sorted by index.
+        let mut drawn: Vec<_> = comments(h).into_iter().filter(|a| a.subtype == subtype).collect();
+        drawn.sort_by_key(|a| a.index);
+        drawn.into_iter().map(|a| a.points).collect::<Vec<_>>()
+    };
+    let close = |p: [f32; 2], q: [f32; 2]| (p[0] - q[0]).abs() < 1.0 && (p[1] - q[1]).abs() < 1.0;
+    shift(&mut h, true);
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 120.0));
+    drag_pt(&mut h, (200.0, 40.0), (215.0, 150.0));
+    shift(&mut h, false);
+    drag_pt(&mut h, (40.0, 160.0), (140.0, 190.0));
+    let lines = points(&h, "Line");
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(close(lines[0][0], [40.0, 100.0]) && close(lines[0][1], [140.0, 100.0]), "mostly across: level: {lines:?}");
+    assert!(close(lines[1][0], [200.0, 40.0]) && close(lines[1][1], [200.0, 150.0]), "mostly up: plumb: {lines:?}");
+    assert!(close(lines[2][1], [140.0, 190.0]), "no Shift, no hold: {lines:?}");
+
+    h.state_mut().set_option("quick", "arrow").unwrap();
+    shift(&mut h, true);
+    drag_pt(&mut h, (260.0, 180.0), (150.0, 170.0));
+    shift(&mut h, false);
+    let arrow = points(&h, "Line").pop().expect("an arrow");
+    assert!(close(arrow[1], [150.0, 180.0]), "an arrow too, leftwards: {arrow:?}");
+
+    // Connected lines: each click with Shift is held to the corner before.
+    h.state_mut().set_option("quick", "polyline").unwrap();
+    click_pt(&mut h, (20.0, 20.0));
+    shift(&mut h, true);
+    click_pt(&mut h, (90.0, 30.0));
+    click_pt(&mut h, (95.0, 80.0));
+    shift(&mut h, false);
+    click_pt(&mut h, (130.0, 60.0));
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let poly = points(&h, "PolyLine").pop().expect("connected lines");
+    assert_eq!(poly.len(), 4, "{poly:?}");
+    assert!(close(poly[1], [90.0, 20.0]) && close(poly[2], [90.0, 80.0]) && close(poly[3], [130.0, 60.0]), "{poly:?}");
+}
+
 #[test]
 fn a_shape_just_drawn_resizes_from_its_handles_without_the_select_tool() {
     // #2338: the new shape showed its handles, but only the Select tool answered them.
@@ -1090,6 +1210,9 @@ fn panel_width(h: &Harness<'static, PdfCraftApp>) -> f32 {
 
 #[test]
 fn the_panel_keeps_its_width_with_a_reply_box_open() {
+    if crate::support::skip_without_catalogs("the_panel_keeps_its_width_with_a_reply_box_open") {
+        return;
+    }
     // The reply row reserved 48 px for "Post"; Russian's wider button overflowed it, and a
     // resizable panel keeps the width its content used, so every repaint widened the panel.
     let mut h = harness(|app| app.set_option("panel", "comments").unwrap());
@@ -1235,6 +1358,91 @@ fn shapes_take_a_fill_colour_from_the_quick_bar_and_properties() {
     // Make Current Properties Default carries the fill into the tool.
     h.state_mut().make_comment_default(0, 1);
     assert_eq!(h.state().comment_prefs.style(CommentTool::Rectangle).fill, Some([0.0, 0.0, 1.0]));
+}
+
+/// A filled rectangle's line and fill, and a text box's text, border and fill, each take an
+/// opacity of their own in Properties; Make Properties Default carries them into the tool, so
+/// the next rectangle is drawn with a see-through fill and an opaque line.
+#[test]
+fn comment_properties_set_each_parts_opacity() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    h.state_mut().comment_prefs.set_fill(CommentTool::Rectangle, Some([1.0, 1.0, 0.0]));
+    h.run_steps(2);
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    let props = |h: &Harness<'static, PdfCraftApp>, index: usize| {
+        let s = h.state();
+        let p = s.session.get(s.views[0].id).unwrap().comment_props(0, index).unwrap();
+        (p.opacity, p.fill_opacity, p.text_opacity)
+    };
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    // The sliders (each labelled by its row, which shares the name).
+    h.get_by_role_and_label(egui::accesskit::Role::Slider, "Line opacity");
+    h.get_by_role_and_label(egui::accesskit::Role::Slider, "Fill opacity");
+    assert_eq!(h.query_all_by_label("Text opacity").count(), 0, "a rectangle has no text");
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        d.edited.fill_opacity = Some(0.3);
+        d.make_default = true;
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(props(&h, 0), (1.0, Some(0.3), None));
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Change comment properties"));
+    assert_eq!(h.state().comment_prefs.style(CommentTool::Rectangle).fill_opacity, Some(0.3));
+    h.state_mut().set_option("quick", "square").unwrap();
+    h.run_steps(2);
+    drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
+    assert_eq!(props(&h, 1), (1.0, Some(0.3), None), "the next rectangle takes the default");
+
+    // A text box with a border and a fill: its text, border and fill.
+    let shape = pdfcraft_engine::Shape::TextBox { rect: [40.0, 120.0, 200.0, 160.0], font_size: 12.0 };
+    let mut style = pdfcraft_engine::Style::default_for(&shape);
+    (style.width, style.fill) = (1.0, Some([1.0, 1.0, 0.6]));
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Note".into(),
+        author: "Tester".into(),
+    })));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    h.state_mut().open_comment_props(0, 2);
+    h.run_steps(2);
+    for label in ["Text opacity", "Border opacity", "Fill opacity"] {
+        h.get_by_role_and_label(egui::accesskit::Role::Slider, label);
+    }
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        let _gpu = crate::gpu();
+        h.render().unwrap().save(format!("{dir}/comment-part-opacity.png")).unwrap();
+    }
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        (d.edited.opacity, d.edited.fill_opacity) = (0.5, Some(0.2));
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(props(&h, 2), (0.5, Some(0.2), Some(1.0)), "the border at half, the fill at a fifth, the text opaque");
+    // Without its fill and border, the text is the whole text box: its opacity is the comment's.
+    h.state_mut().open_comment_props(0, 2);
+    h.run_steps(2);
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        (d.edited.fill, d.edited.width) = (None, Some(0.0));
+    }
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    h.state_mut().open_comment_props(0, 2);
+    h.run_steps(2);
+    let shown = egui_kittest::kittest::NodeT::accesskit_node(&h.get_by_role_and_label(egui::accesskit::Role::Slider, "Text opacity")).numeric_value();
+    assert_eq!(shown, Some(100.0), "the text's slider shows the opacity it is drawn at, not the border's half");
+    h.state_mut().comment_props.as_mut().expect("open").edited.opacity = 0.4;
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(props(&h, 2), (0.4, Some(0.4), Some(0.4)));
 }
 
 #[test]
@@ -2124,6 +2332,43 @@ fn properties_dialog_makes_the_strikethrough_colour_default() {
     assert!(made.iter().zip(green).all(|(m, r)| (f64::from(*m) - r).abs() < 0.01), "the next strikethrough is green: {made:?}");
 }
 
+/// A text box with neither a border nor a fill is all text: Make Properties Default (and the
+/// context menu's Make Current Properties Default) gives the tool the opacity its text is drawn
+/// at, the one Comment Properties shows, not the comment's /CA.
+#[test]
+fn a_text_only_text_box_made_default_gives_the_tool_its_texts_opacity() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|_| {});
+    let shape = Shape::TextBox { rect: [100.0, 600.0, 220.0, 630.0], font_size: 12.0 };
+    let style = Style { width: 0.0, fill: None, ..Style::default_for(&shape) };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Faint".into(),
+        author: "Tester".into()
+    })));
+    h.run_steps(2);
+    let index = comments(&h).iter().find(|a| a.contents.as_deref() == Some("Faint")).map(|a| a.index).expect("the text box");
+    // As the automation's comment_edit sets it.
+    assert!(h.state_mut().apply_edit(Edit::PartOpacity { page: 0, index, fill: None, text: Some(0.5) }));
+    h.run_steps(2);
+    let opacity = |h: &Harness<'static, PdfCraftApp>| h.state().comment_prefs.style(CommentTool::TextBox).opacity;
+    assert!((opacity(&h) - 1.0).abs() < 1e-6);
+    h.state_mut().open_comment_props(0, index);
+    h.run_steps(2);
+    h.get_by_label("Make Properties Default").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!((opacity(&h) - 0.5).abs() < 1e-6, "the text's 50 %: {}", opacity(&h));
+    // The context menu's way, from a tool at 100 % again.
+    h.state_mut().comment_prefs.set_opacity(CommentTool::TextBox, 1.0);
+    h.state_mut().make_comment_default(0, index);
+    assert!((opacity(&h) - 0.5).abs() < 1e-6, "the text's 50 %: {}", opacity(&h));
+}
+
 /// #1302: making an arrow's properties the default updates the Arrow tool, not later plain lines.
 #[test]
 fn an_arrows_default_does_not_restyle_lines() {
@@ -2939,7 +3184,14 @@ fn a_moved_comment_is_drawn_where_it_goes_before_release() {
     for shape in
         [pdfcraft_engine::Shape::Rectangle { rect: [30.0, 30.0, 70.0, 70.0] }, pdfcraft_engine::Shape::Oval { rect: [230.0, 30.0, 270.0, 70.0] }]
     {
-        let style = pdfcraft_engine::Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: Some([1.0, 0.0, 0.0]) };
+        let style = pdfcraft_engine::Style {
+            color: [1.0, 0.0, 0.0],
+            opacity: 1.0,
+            width: 2.0,
+            fill: Some([1.0, 0.0, 0.0]),
+            fill_opacity: None,
+            text_opacity: None,
+        };
         assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
             page: 0,
             shape,
@@ -2999,7 +3251,7 @@ fn moved_fill_and_sign_text_is_drawn_where_it_goes_before_release() {
     click_pt(&mut h, (40.0, 150.0));
     h.event(egui::Event::Text("WWWWWW".into()));
     h.run_steps(1);
-    h.key_press(egui::Key::Enter);
+    click(&mut h, pos2(350.0, 850.0)); // Outside the field: Enter now inserts a line break.
     h.run_steps(3);
     let a = comments(&h).into_iter().find(|a| a.contents.as_deref() == Some("WWWWWW")).expect("the typed text");
     assert!(a.fill_sign && a.subtype == "FreeText", "{a:?}");
@@ -3095,4 +3347,446 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation, "pointer frames never edit the document");
     h.drop_at(from + delta);
     h.run_steps(3);
+}
+
+/// `n` pages with one comment each, "Card 1" to "Card n".
+fn one_comment_per_page(n: usize) -> Vec<u8> {
+    let mut objs = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string()];
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 3 + 2 * i)).collect();
+    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 300 200] >>", kids.join(" ")));
+    for i in 0..n {
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Annots [{} 0 R] >>", 4 + 2 * i));
+        objs.push(format!("<< /Type /Annot /Subtype /Square /Rect [20 20 80 80] /C [1 0 0] /T (Ada) /Contents (Card {}) >>", i + 1));
+    }
+    let mut out = b"%PDF-1.7\n".to_vec();
+    for (i, o) in objs.iter().enumerate() {
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    out.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+    out
+}
+
+/// #5488: the panel laid out every card on every frame, which put a few hundred comments over the
+/// frame budget. Cards out of view now only take up their height, and the selected one is still
+/// drawn wherever it is, so it can scroll into view.
+#[test]
+fn the_comments_panel_lays_out_only_the_cards_in_view() {
+    let mut h = harness_with_bytes(one_comment_per_page(120), |app| app.set_option("panel", "comments").unwrap());
+    h.run_steps(4);
+    let drawn = h.query_all_by_label_contains("Card ").count();
+    assert!((1..40).contains(&drawn), "{drawn} of 120 cards laid out");
+    h.state_mut().views[0].comments.selected = Some((100, 0));
+    h.state_mut().views[0].comments.reveal = true;
+    h.run_steps(4);
+    assert!(h.query_by_label("Card 101").is_some(), "the selected card is drawn and scrolled to");
+    assert!(h.query_by_label("Card 1").is_none(), "the top of the list scrolled out of view");
+}
+
+/// CodeRabbit on #5583: a card's measured height belongs to what it showed. Card 1, far above the
+/// cards in view, grows by two replies; the cards in view move down by its growth, not stay where
+/// card 1's old height would put them.
+#[test]
+fn a_card_out_of_view_that_grows_moves_the_cards_below_it() {
+    let mut h = harness_with_bytes(one_comment_per_page(120), |app| app.set_option("panel", "comments").unwrap());
+    h.run_steps(4);
+    h.state_mut().views[0].comments.selected = Some((60, 0));
+    h.state_mut().views[0].comments.reveal = true;
+    h.run_steps(4);
+    assert!(h.query_by_label("Card 1").is_none(), "card 1 is out of view");
+    let before = h.get_by_label("Card 61").rect().top();
+    for text in ["A first reply", "A second reply"] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::ReplyToAnnotation { page: 0, index: 0, text: text.into(), author: "Bo".into() });
+    }
+    h.run_steps(4);
+    let after = h.get_by_label("Card 61").rect().top();
+    assert!(after > before + 40.0, "the cards below a grown card move down: {before} → {after}");
+}
+
+/// CodeRabbit on #5583: a card with an editor open on it is drawn wherever it is, so the cards
+/// below it make room for the editor rather than keep the card's height from before it opened.
+#[test]
+fn a_card_with_an_editor_open_out_of_view_is_drawn_at_its_size() {
+    let mut h = harness_with_bytes(one_comment_per_page(120), |app| app.set_option("panel", "comments").unwrap());
+    h.run_steps(4);
+    h.state_mut().views[0].comments.selected = Some((60, 0));
+    h.state_mut().views[0].comments.reveal = true;
+    h.run_steps(4);
+    assert!(h.query_by_label("Card 1").is_none(), "card 1 is out of view");
+    let before = h.get_by_label("Card 61").rect().top();
+    h.state_mut().views[0].comments.editing = Some((0, 0, "Card 1".into()));
+    h.run_steps(4);
+    let after = h.get_by_label("Card 61").rect().top();
+    assert!(after > before + 20.0, "the cards below make room for card 1's editor: {before} → {after}");
+}
+
+#[test]
+fn freehand_highlighter_draws_translucent_yellow_ink() {
+    let mut h = harness(|app| app.set_option("quick", "freehand_highlight").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (240.0, 100.0));
+
+    let c = comments(&h);
+    assert_eq!(c.len(), 1, "{c:?}");
+    assert_eq!(c[0].subtype, "Ink");
+    assert_eq!(c[0].intent.as_deref(), Some("FreehandHighlight"));
+    let props = h.state().session.get(h.state().views[0].id).unwrap().comment_props(0, c[0].index).expect("ink properties");
+    assert_eq!(props.color, Some([1.0, 0.94, 0.0]));
+    assert!((props.opacity - 0.35).abs() < 0.001);
+    assert_eq!(props.width, Some(14.0));
+    assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::FreehandHighlight));
+    h.state_mut().comment_prefs.set_width(pdfcraft_ui_egui::comments::CommentTool::FreehandHighlight, 100.0);
+    drag_pt(&mut h, (40.0, 160.0), (240.0, 160.0));
+    let c = comments(&h);
+    assert_eq!(c.len(), 2);
+    let props = h.state().session.get(h.state().views[0].id).unwrap().comment_props(0, c.iter().map(|a| a.index).max().unwrap()).unwrap();
+    assert_eq!(props.width, Some(100.0));
+    assert_eq!(h.state().views[0].comments.selected, None);
+}
+
+#[test]
+fn hotbar_picker_adds_and_runs_freehand_highlight() {
+    let mut h = harness(|_| {});
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    field(&h, "Search all tools…").click();
+    h.run_steps(2);
+    field(&h, "Search all tools…").type_text("freehand");
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::CheckBox, "Freehand-Highlight").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "picker stays open after adding a tool");
+    h.get_by_role_and_label(Role::CheckBox, "Draw freehand").click();
+    h.run_steps(3);
+    h.get_by_label("Close menu").click();
+    h.run_steps(3);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["tools"], serde_json::json!(["comment.freehand_highlight", "comment.ink"]));
+    h.state_mut().set_option("hotbar-side", "bottom").unwrap();
+    h.run_steps(3);
+    // The new tool is available directly from its custom shortcut.
+    h.query_all_by_role_and_label(Role::Button, "Freehand-Highlight").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::FreehandHighlight));
+}
+
+#[test]
+fn hotbar_picker_searches_translated_tool_labels() {
+    if crate::support::skip_without_catalogs("hotbar_picker_searches_translated_tool_labels") {
+        return;
+    }
+    let mut h = harness(|app| {
+        app.set_option("language", "fr").unwrap();
+    });
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    field(&h, "Search all tools…").click();
+    h.run_steps(2);
+    field(&h, "Search all tools…").type_text("Dessiner");
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::CheckBox, "Dessiner à main levée").click();
+    h.run_steps(3);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["tools"], serde_json::json!(["comment.ink"]));
+}
+
+#[test]
+fn hotbar_drag_moves_and_persists_position() {
+    let mut h = harness(|_| {});
+    let before: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    let from = h.get_by_label("Drag hotbar").rect().center();
+    drag(&mut h, from, from + egui::vec2(90.0, 90.0));
+    let after: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_ne!(before["hotbar"]["position"], after["hotbar"]["position"]);
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    let saved: serde_json::Value = serde_json::from_str(&restored.persist()).unwrap();
+    assert_eq!(saved["hotbar"], after["hotbar"]);
+}
+
+#[test]
+fn hotbar_vertical_size_and_docking() {
+    let mut h = harness(|app| {
+        app.set_option("hotbar-tools", "comment.ink,comment.freehand_highlight").unwrap();
+        app.set_option("hotbar-side", "right").unwrap();
+    });
+    for size in [24, 48, 64] {
+        h.state_mut().set_option("hotbar-size", &size.to_string()).unwrap();
+        h.run_steps(5);
+        let measured = h.ctx.data_mut(|d| d.get_temp::<egui::Vec2>(egui::Id::unique("custom-hotbar"))).unwrap();
+        assert!(measured.x <= size as f32 + 24.0, "vertical bar too wide: {measured:?}");
+        assert!(measured.x >= size as f32);
+    }
+    let from = h.get_by_label("Drag hotbar").rect().center();
+    drag(&mut h, from, from - egui::vec2(90.0, 90.0));
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["position"], serde_json::json!([1.0, 0.5]));
+    assert_eq!(saved["hotbar"]["dock"], "right");
+    h.state_mut().set_option("hotbar-side", "float").unwrap();
+    h.run_steps(3);
+    let from = h.get_by_label("Drag hotbar").rect().center();
+    drag(&mut h, from, from - egui::vec2(90.0, 90.0));
+    let moved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_ne!(saved["hotbar"]["position"], moved["hotbar"]["position"]);
+}
+
+#[test]
+fn hotbar_settings_layout_and_side_controls_are_reachable_by_label() {
+    let mut h = harness(|_| {});
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    fn vertical(h: &Harness<'static, PdfCraftApp>) -> serde_json::Value {
+        serde_json::from_str::<serde_json::Value>(&h.state().persist()).unwrap()["hotbar"]["vertical"].clone()
+    }
+    let before = vertical(&h);
+    h.get_by_role_and_label(Role::Switch, "Vertical layout").click();
+    h.run_steps(3);
+    assert_ne!(vertical(&h), before, "the layout switch toggles by its label");
+    h.get_by_role_and_label(Role::RadioButton, "Right").click();
+    h.run_steps(3);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["dock"], "right");
+    assert_eq!(saved["hotbar"]["vertical"], true, "docking at the side lays the bar out vertically");
+    h.get_by_role_and_label(Role::RadioButton, "Float").click();
+    h.run_steps(3);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert!(saved["hotbar"]["dock"].is_null());
+}
+
+#[test]
+fn hotbar_settings_reopen_even_with_remembered_collapsed_state() {
+    let mut h = harness(|_| {});
+    let mut collapsed =
+        egui::collapsing_header::CollapsingState::load_with_default_open(&h.ctx, egui::Id::unique("hotbar-picker").with("collapsing"), false);
+    collapsed.set_open(false);
+    collapsed.store(&h.ctx);
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(5);
+    assert!(h.query_by_label("Close menu").is_some());
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "Hotbar settings always shows settings");
+    h.get_by_label("Close menu").click();
+    h.run_steps(3);
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some());
+}
+
+#[test]
+fn hotbar_full_side_strip_spans_each_edge_and_returns_to_float() {
+    let mut h = harness(|app| {
+        app.set_option("hotbar-side", "right").unwrap();
+        app.set_option("hotbar-size", "48").unwrap();
+    });
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(5);
+    h.get_by_label("Full-side strip").click();
+    h.run_steps(3);
+    let enabled: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(enabled["hotbar"]["full_side"], true, "settings checkbox enables strip");
+    h.get_by_label("Close menu").click();
+    for side in ["right", "left", "top", "bottom"] {
+        h.state_mut().set_option("hotbar-side", side).unwrap();
+        h.run_steps(5);
+        let size = h.ctx.data_mut(|d| d.get_temp::<egui::Vec2>(egui::Id::unique("custom-hotbar"))).unwrap();
+        let (length, thickness) = if matches!(side, "left" | "right") { (size.y, size.x) } else { (size.x, size.y) };
+        assert!(length > 300.0, "strip must fill the edge: {side} {size:?}");
+        assert!(thickness <= 64.0, "strip must stay narrow: {size:?}");
+        h.get_by_label("Hotbar settings");
+    }
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["full_side"], true);
+    h.state_mut().set_option("hotbar-side", "float").unwrap();
+    h.run_steps(5);
+    let size = h.ctx.data_mut(|d| d.get_temp::<egui::Vec2>(egui::Id::unique("custom-hotbar"))).unwrap();
+    let (length, thickness) = if size.y > size.x { (size.y, size.x) } else { (size.x, size.y) };
+    assert!(thickness <= 64.0 && length < 550.0, "floating toolbar is compact: {size:?}");
+}
+
+#[test]
+fn hotbar_docked_left_does_not_override_quick_tools() {
+    let mut h = harness(|app| {
+        app.set_option("hotbar-side", "left").unwrap();
+    });
+    h.run_steps(5);
+    // Controls in the docked bar share one layout, so none may overlap (#5890).
+    let labels = ["Drag hotbar", "Select (V)", "Hand (H)", "Add a sticky note", "Highlight", "Draw", "Fill & Sign: Add signature", "Hotbar settings"];
+    let rects: Vec<_> = labels.iter().map(|&label| h.get_by_label(label).rect()).collect();
+    for (i, a) in rects.iter().enumerate() {
+        for (j, b) in rects.iter().enumerate().skip(i + 1) {
+            let overlap = a.min.x < b.max.x && b.min.x < a.max.x && a.min.y < b.max.y && b.min.y < a.max.y;
+            assert!(!overlap, "{} overlaps {}: {a:?} / {b:?}", labels[i], labels[j]);
+        }
+    }
+}
+
+#[test]
+fn hotbar_docked_in_compact_window_keeps_settings_button_visible() {
+    for side in ["left", "right"] {
+        let mut h = Harness::builder().with_size(egui::vec2(800.0, 480.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+            app.set_option("left", "closed").unwrap();
+            app.set_option("hotbar-side", side).unwrap();
+            app.set_option("hotbar-size", "48").unwrap();
+            app
+        });
+        h.run_steps(5);
+        let settings_rect = h.get_by_label("Hotbar settings").rect();
+        assert!(settings_rect.max.y <= 480.0, "{side} hotbar settings button must stay within window height: {settings_rect:?}");
+    }
+}
+
+#[test]
+fn hotbar_settings_menu_closes_on_click_outside() {
+    let mut h = harness(|app| {
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+    });
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some());
+
+    // Clicking outside on the canvas dismisses the settings menu
+    h.event(egui::Event::PointerButton {
+        pos: egui::pos2(600.0, 300.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.event(egui::Event::PointerButton {
+        pos: egui::pos2(600.0, 300.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_none(), "clicking outside closes the hotbar settings menu");
+
+    // Reopening and clicking another tool outside dismisses the menu and activates that tool
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some());
+    h.get_by_label("Hand (H)").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_none());
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+}
+
+#[test]
+fn hotbar_picker_in_narrow_viewport_fits_within_screen_width() {
+    let mut h = Harness::builder().with_size(egui::vec2(270.0, 480.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app
+    });
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(5);
+    let close_btn = h.get_by_label("Close menu");
+    assert!(close_btn.rect().max.x <= 270.0, "Close menu button must stay within viewport width: {:?}", close_btn.rect());
+}
+
+#[test]
+fn hotbar_floating_picker_does_not_overlap_rendered_bar() {
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app
+    });
+    let settings_btn = h.get_by_label("Hotbar settings");
+    let settings_rect = settings_btn.rect();
+    settings_btn.click();
+    h.run_steps(5);
+
+    let picker_close = h.get_by_label("Close menu");
+    let picker_rect = picker_close.rect();
+    assert!(
+        picker_rect.min.x >= settings_rect.max.x || picker_rect.max.x <= settings_rect.min.x,
+        "picker ({:?}) must not overlap the settings button ({:?}) on the floating bar",
+        picker_rect,
+        settings_rect
+    );
+}
+
+fn edit_composer_preserves_only_typewriter_whitespace(kind: u8) {
+    let shots = std::env::var_os("PDFCRAFT_COMPOSER_SHOTS").is_some();
+    let _gpu = shots.then(crate::gpu);
+    use pdfcraft_engine::{Edit, NewAnnotation, NoteIcon, Shape, Style};
+    let mut h = harness(move |app| {
+        app.set_option("layout", "single").unwrap();
+        app.set_option("panel", "comments").unwrap();
+        app.quick_tool = QuickTool::Select;
+        // Both pages use index 0, with opposite intents. The lookup must use page AND index.
+        for page in 0..2 {
+            let typewriter = if page == 0 { kind != 0 } else { kind == 0 };
+            let shape = if typewriter {
+                Shape::Typewriter { rect: [40.0, 40.0, 180.0, 90.0], font_size: 10.0 }
+            } else if kind == 2 {
+                Shape::Note { at: [80.0, 80.0], icon: NoteIcon::Comment }
+            } else {
+                Shape::TextBox { rect: [40.0, 40.0, 180.0, 90.0], font_size: 10.0 }
+            };
+            let style = Style::default_for(&shape);
+            assert!(app.apply_edit(Edit::AddAnnotation(NewAnnotation { page, shape, style, contents: "Original".into(), author: "Tester".into() })));
+        }
+    });
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(4);
+    support::settle(&mut h);
+    let point = {
+        let s = h.state();
+        let v = &s.views[0];
+        let doc = s.session.get(v.id).unwrap();
+        let a = doc.info.annotations.iter().find(|a| a.page == 1 && a.index == 0).unwrap();
+        let page = v.page_screen_rect(1).expect("the second page is visible");
+        let info = &doc.info.pages[1];
+        let p = info.user_to_view((a.rect[0] + a.rect[2]) / 2.0, (a.rect[1] + a.rect[3]) / 2.0);
+        page.min + egui::vec2(p[0], p[1]) * (page.width() / info.width)
+    };
+    support::input::double_click(&mut h, point);
+    h.run_steps(3);
+    let c = h.state().views[0].comments.composer.as_ref().expect("double-click opens the edit composer");
+    assert_eq!(c.page, 1);
+    assert_eq!(c.kind, pdfcraft_ui_egui::comments::ComposerKind::Edit(0));
+    h.input_mut().events.push(egui::Event::Text(" edited\n\n".into()));
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.composer.as_ref().unwrap().text, "Original edited\n\n");
+    if shots {
+        h.render().unwrap().save(format!("/tmp/5954-composer-{kind}.png")).unwrap();
+    }
+    h.get_all_by_label("Post").last().unwrap().click();
+    h.run_steps(3);
+    assert!(h.state().views[0].comments.composer.is_none());
+    let id = h.state().views[0].id;
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    // Check the raw saved string: ordinary-comment reader trimming must not hide a bad post.
+    let cos = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+    let pages = pdfcraft_model::pages(&cos);
+    let annots = cos.resolve(pages[1].dict.get(b"Annots").unwrap());
+    let annot = cos.resolve(&annots.as_array().unwrap()[0]);
+    let contents = cos.resolve(annot.as_dict().unwrap().get(b"Contents").unwrap());
+    let expected = if kind == 0 { "Original edited\n\n" } else { "Original edited" };
+    assert_eq!(contents.as_string().unwrap().to_text(), expected, "only a typewriter edit preserves trailing blank lines");
+    let mut reopened = pdfcraft_engine::Session::new();
+    let again = reopened.open("edited.pdf", None, bytes, None).unwrap();
+    let saved = reopened.get(again).unwrap().info.annotations.iter().find(|a| a.page == 1 && a.index == 0).unwrap();
+    assert_eq!(saved.contents.as_deref(), Some(expected));
+}
+
+#[test]
+fn typewriter_edit_composer_keeps_trailing_blank_lines() {
+    edit_composer_preserves_only_typewriter_whitespace(0);
+}
+
+#[test]
+fn other_edit_composers_keep_trimming_trailing_whitespace() {
+    for kind in [1, 2] {
+        edit_composer_preserves_only_typewriter_whitespace(kind);
+    }
 }

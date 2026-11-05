@@ -6,8 +6,8 @@ use crate::{
     AddedContent, AddedText, AnnotFont, Background, BoxSpec, EditError, FieldProps, FieldValue, FillMark, HeaderFooter, Hidden, ImageEdit,
     InitialView, Label, LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget, PageBox,
     Protection, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image, decode_data_file, embed_image,
-    field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, open_source, strip_xfa, unrestricted, xfa,
-    xfa_after_data_change,
+    field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, open_source, strip_xfa, unrestricted,
+    xfa, xfa_after_data_change,
 };
 
 mod labels;
@@ -120,6 +120,15 @@ pub enum Edit {
         bold: Option<bool>,
         italic: Option<bool>,
     },
+    /// Write `bookmarks` as children of `parent` from child `index` on, or with `replace` in
+    /// place of the whole outline (`parent` must then be `[]`). A bookmark whose page this
+    /// document lacks is kept without a destination (see [`pdfcraft_organize::import_outline`]).
+    ImportBookmarks {
+        parent: Vec<usize>,
+        index: usize,
+        bookmarks: Vec<pdfcraft_organize::OutlineNode>,
+        replace: bool,
+    },
     /// Bookmarks for the tagged headings (H, H1–H6), nested by level under a new first
     /// "Untitled" bookmark (New Bookmarks from Structure).
     BookmarksFromStructure,
@@ -157,6 +166,17 @@ pub enum Edit {
         name: String,
         file: MarkFile,
         author: String,
+    },
+    /// Rich Media ▸ Add 3D: a U3D or PRC `model` as a 3D annotation in `rect` on `page`, named
+    /// `name` (its alternate description). Its poster is the picture in `poster` (a PDF page or an
+    /// image) fitted inside `rect`, keeping its shape and centred, or a labelled frame without one.
+    AddModel3d {
+        page: usize,
+        rect: [f64; 4],
+        model: Arc<Vec<u8>>,
+        poster: Option<MarkFile>,
+        activation: pdfcraft_annot::Activation3d,
+        name: String,
     },
     /// Delete the comment at `index` in the page's `/Annots`, with its pop-up and replies.
     DeleteAnnotation {
@@ -243,6 +263,15 @@ pub enum Edit {
         page: usize,
         index: usize,
         fill: Option<Rgb>,
+    },
+    /// Draw a rectangle's, oval's, polygon's or text box's fill, or a text box's text, at an
+    /// opacity of its own (0–1), the line or border keeping the comment's; `None` leaves that
+    /// part as it is. `StyleAnnotation`'s opacity sets the whole comment's.
+    PartOpacity {
+        page: usize,
+        index: usize,
+        fill: Option<f64>,
+        text: Option<f64>,
     },
     /// Change the font size (pt) of a text box, typewriter text or callout.
     FontSizeAnnotation {
@@ -392,6 +421,13 @@ pub enum Edit {
     AddOcrText {
         page: usize,
         words: Vec<pdfcraft_ocr::PlacedWord>,
+    },
+    /// Scan & OCR ▸ Enhance ▸ Scanned document: put the scan images
+    /// [`ScanCleanJob::run`](crate::scan_clean::ScanCleanJob::run) cleaned in place of the old
+    /// ones (each object must still be an image). Built by
+    /// [`Session::apply_scan_clean`](crate::Session::apply_scan_clean).
+    EnhanceScan {
+        images: Vec<(pdfcraft_cos::ObjRef, pdfcraft_cos::Stream)>,
     },
     /// Edit a PDF ▸ Edit text: replace the text of line `line` (from `Document::text_lines`) on
     /// `page`, in its own font when it can show it, else in Helvetica.
