@@ -353,7 +353,7 @@ fn optimize_converts_cmyk_to_rgb_when_opted_in() {
 }
 
 #[test]
-fn optimize_converts_cmyk_ycck_to_rgb_and_preserves_appearance() {
+fn optimize_converts_cmyk_ycck_to_rgb_with_subtractive_approximation() {
     let (w, h) = (256u16, 256u16);
     let block = |bx: u16, by: u16| [(bx * 8) as u8, (by * 8) as u8, (255 - (bx + by) * 4) as u8, ((bx ^ by) * 8) as u8];
     // Adobe APP14 marker = Some(2) (YCCK)
@@ -368,7 +368,7 @@ fn optimize_converts_cmyk_ycck_to_rgb_and_preserves_appearance() {
     assert_eq!(new_stream.dict.name(b"Filter"), Some(&b"DCTDecode"[..]));
     let after = render(&doc, 2.0);
     let diff = mean_difference(&before, &after);
-    assert!(diff < 20.0, "YCCK conversion must preserve visual appearance (diff: {diff:.1})");
+    assert!(diff < 20.0, "YCCK subtractive approximation must stay close to rendered appearance (diff: {diff:.1})");
 }
 
 #[test]

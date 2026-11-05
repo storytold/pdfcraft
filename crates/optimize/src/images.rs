@@ -817,7 +817,8 @@ fn process(
     (after < before).then_some((new, smask))
 }
 
-/// Convert a CMYK pixel slice to RGB using subtractive color mixing, applying /Decode array mapping if present.
+/// Convert 8-bit `DeviceCMYK` samples to `DeviceRGB` using the uncalibrated subtractive
+/// approximation (ISO 32000-2 §10.3.5), applying the `/Decode` mapping if present.
 pub(crate) fn cmyk_to_rgb(cmyk: &[u8], decode: Option<[f32; 8]>) -> Vec<u8> {
     let dec = decode.unwrap_or([0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
     let mut rgb = Vec::with_capacity((cmyk.len() / 4) * 3);
@@ -840,11 +841,13 @@ pub(crate) fn cmyk_to_rgb(cmyk: &[u8], decode: Option<[f32; 8]>) -> Vec<u8> {
     rgb
 }
 
+/// Map an 8-bit sample `v` linearly into `[dmin, dmax]` (ISO 32000-2 §8.9.5.2), clamped to `[0.0, 1.0]`.
 fn apply_decode(v: u8, dmin: f32, dmax: f32) -> f32 {
     let t = f32::from(v) / 255.0;
     (dmin + t * (dmax - dmin)).clamp(0.0, 1.0)
 }
 
+/// Read and validate an optional 8-element `/Decode` array for a four-component CMYK image.
 fn read_cmyk_decode(doc: &Document, decode_obj: Option<&Object>) -> Result<Option<[f32; 8]>, ()> {
     let Some(obj) = decode_obj else {
         return Ok(None);
@@ -864,11 +867,14 @@ fn read_cmyk_decode(doc: &Document, decode_obj: Option<&Object>) -> Result<Optio
     Ok(Some(out))
 }
 
+/// Whether colour space `cs` is direct `DeviceCMYK` (or its inline abbreviation `/CMYK`).
 fn is_cmyk_space(doc: &Document, cs: &Object) -> bool {
     let cs = doc.resolve(cs);
     matches!(&*cs, Object::Name(n) if matches!(n.as_slice(), b"DeviceCMYK" | b"CMYK"))
 }
 
+/// Decode a four-component JPEG's CMYK samples as stored, converting YCCK to CMYK when the
+/// Adobe APP14 marker indicates YCCK.
 fn decode_cmyk_jpeg(data: &[u8], w: usize, h: usize) -> Option<Vec<u8>> {
     use zune_jpeg::zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
     let options = DecoderOptions::default().set_strict_mode(false).set_max_width(usize::from(u16::MAX)).set_max_height(usize::from(u16::MAX));
@@ -895,6 +901,8 @@ fn decode_cmyk_jpeg(data: &[u8], w: usize, h: usize) -> Option<Vec<u8>> {
     Some(px)
 }
 
+/// Convert an eligible 8-bit `DeviceCMYK` image to `DeviceRGB`, resampling and/or recompressing
+/// per `settings` when the resulting stream is smaller.
 fn process_cmyk(
     doc: &Document,
     s: &Stream,
@@ -2175,7 +2183,8 @@ mod cmyk_tests {
     use pdfcraft_cos::{Document, Object};
 
     #[test]
-    fn cmyk_to_rgb_standard_colors() {
+    fn cmyk_to_rgb_subtractive_approximation() {
+        // Uncalibrated ISO 32000-2 §10.3.5 subtractive formula: 255 * (1 - c) * (1 - k)
         // [C, M, Y, K]
         // White: 0 0 0 0 -> 255 255 255
         assert_eq!(cmyk_to_rgb(&[0, 0, 0, 0], None), vec![255, 255, 255]);
