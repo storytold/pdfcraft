@@ -22,6 +22,7 @@ inherited attributes without copying them (`inherited`, `inherited_from`).
 
 Its limits are `MAX_PAGE_TREE_NODES`, `MAX_KIDS_ENTRIES` and `MAX_INHERITED_COPIES` (the
 inherited copies of one walk; leaf dictionaries themselves are cloned uncharged, so this is not a
-bound on all allocation). Meeting one yields `Err(PageTreeLimit)`, never a shorter walk that looks
+bound on all allocation). Exceeding one yields `Err(PageTreeLimit)`, never a shorter walk that looks
 whole. `page_refs`, `try_pages` and `page` return it; `pages` stays lenient and gives the pages
-before the limit. `with_limits` lowers the limits on one thread, for tests.
+before the limit. `page` and `page_by_ref` copy one page. `with_limits` (the `test-support` feature,
+for other crates' tests) lowers the limits on one thread.
