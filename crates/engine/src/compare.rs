@@ -291,17 +291,24 @@ const MAX_LOOK_BYTES: usize = 64 * 1024;
 fn widget_look(cos: &pdfcraft_cos::Document, w: &pdfcraft_forms::Widget) -> (Option<pdfcraft_export::Stroke>, Option<[f64; 3]>) {
     let Some(d) = cos.dict(&pdfcraft_cos::Object::Ref(w.obj)) else { return (None, None) };
     let Some(mk) = d.get(b"MK").and_then(|o| cos.dict(o)) else { return (None, None) };
-    // Any state of the normal appearance shows the widget's outline.
-    let appearance = d.get(b"AP").and_then(|o| cos.dict(o)).and_then(|ap| ap.get(b"N").map(|n| cos.resolve(n))).and_then(|n| match &*n {
+    // The shape is the one the widget shows: the normal appearance of its appearance state
+    // (`/AS`), or its only one. A state that draws nothing (a radio button's empty off state), or
+    // none at all, leaves it to the form reader, which takes every radio button as round.
+    let decoded = |o: &pdfcraft_cos::Object| match o {
         pdfcraft_cos::Object::Stream(s) => s.decoded_within(MAX_LOOK_BYTES).ok(),
-        pdfcraft_cos::Object::Dict(states) => states.iter().find_map(|(_, v)| match &*cos.resolve(v) {
-            pdfcraft_cos::Object::Stream(s) => s.decoded_within(MAX_LOOK_BYTES).ok(),
-            _ => None,
-        }),
         _ => None,
+    };
+    let shown = d.get(b"AP").and_then(|o| cos.dict(o)).and_then(|ap| ap.get(b"N").map(|n| cos.resolve(n))).and_then(|n| match &*n {
+        pdfcraft_cos::Object::Dict(states) => w.state.as_ref().and_then(|state| states.get(state.as_bytes())).and_then(|v| decoded(&cos.resolve(v))),
+        other => decoded(other),
     });
-    let round = match appearance {
-        Some(data) => pdfcraft_content::parse(&data).ops.iter().any(|op| matches!(op.op.as_slice(), b"c" | b"v" | b"y")),
+    // A stream draws when it paints a path, shows text, or draws an XObject, shading or image.
+    let draws = |op: &[u8]| {
+        matches!(op, b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"Tj" | b"TJ" | b"'" | b"\"" | b"Do" | b"sh" | b"EI")
+    };
+    let ops = shown.map(|data| pdfcraft_content::parse(&data).ops).filter(|ops| ops.iter().any(|op| draws(&op.op)));
+    let round = match ops {
+        Some(ops) => ops.iter().any(|op| matches!(op.op.as_slice(), b"c" | b"v" | b"y")),
         None => w.round,
     };
     if round {

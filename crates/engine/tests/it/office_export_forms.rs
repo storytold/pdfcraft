@@ -152,23 +152,30 @@ fn word_export_reports_a_page_whose_paths_it_leaves_out() {
 }
 
 /// A field's border and fill come from its widget's `/MK /BC` and `/BG`, at `/BS /W` points
-/// (1 by default; dashed for `/S /D`); a widget drawn round (its appearance curves, a radio
-/// button's circle) gets none, as a square Word box can't draw it, nor does one without `/MK`.
+/// (1 by default; dashed for `/S /D`); a widget drawn round (the appearance it shows, its `/AS`
+/// state, curves; or, when that draws nothing, a radio button) gets none, as a square Word box
+/// can't draw it, nor does one without `/MK`.
 #[test]
 fn a_fields_border_and_fill_come_from_its_widget() {
     let widget =
         |t: &str, x: i32, extra: &str| format!("<< /Type /Annot /Subtype /Widget /FT /Btn /T ({t}) /Rect [{x} 10 {} 20] /P 3 0 R {extra} >>", x + 10);
     let bytes = pdf(&[
-        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R 7 0 R 8 0 R] >> >>".into(),
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R 7 0 R 8 0 R 11 0 R 12 0 R] >> >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R 11 0 R 12 0 R] >>".into(),
         stream("", ""),
-        widget("Square", 10, "/MK << /BC [0] /BG [1] >> /AP << /N << /Off 9 0 R >> >>"),
-        widget("Round", 30, "/MK << /BC [0] /BG [1] >> /AP << /N << /Off 10 0 R >> >>"),
+        widget("Square", 10, "/MK << /BC [0] /BG [1] >> /AS /Off /AP << /N << /Off 9 0 R >> >>"),
+        widget("Round", 30, "/MK << /BC [0] /BG [1] >> /AS /Off /AP << /N << /Off 10 0 R >> >>"),
         widget("Dashed", 50, "/MK << /BC [1 0 0] >> /BS << /W 2 /S /D >>"),
         widget("Plain", 70, ""),
         stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", "0 G 0.5 0.5 9 9 re S"),
         stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", "0 G 5 0 m 7.8 0 10 2.2 10 5 c 10 7.8 7.8 10 5 10 c S"),
+        // A square box whose on state, listed first, draws a round mark: it shows its off state.
+        widget("CurveFirst", 90, "/MK << /BC [0] >> /AS /Off /AP << /N << /Yes 13 0 R /Off 9 0 R >> >>"),
+        // A radio button showing an empty off state: the reader's round, not a square box.
+        widget("Dot", 110, "/Ff 49152 /MK << /BC [0] >> /AS /Off /AP << /N << /Off 14 0 R /A 10 0 R >> >>"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", "0 g 5 3 m 6.1 3 7 3.9 7 5 c 7 6.1 6.1 7 5 7 c f"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", ""),
     ]);
     let mut s = Session::new();
     let id = s.open("boxes.pdf", None, Arc::new(bytes), None).unwrap();
@@ -181,6 +188,12 @@ fn a_fields_border_and_fill_come_from_its_widget() {
     assert_eq!(look("Round"), (None, None), "a round widget keeps the page's own drawing");
     assert_eq!(look("Dashed"), (Some(pdfcraft_export::Stroke { color: [1.0, 0.0, 0.0], width: 2.0, dashed: true }), None));
     assert_eq!(look("Plain"), (None, None));
+    assert_eq!(
+        look("CurveFirst"),
+        (Some(pdfcraft_export::Stroke { color: [0.0; 3], width: 1.0, dashed: false }), None),
+        "the state it shows is square"
+    );
+    assert_eq!(look("Dot"), (None, None), "an empty shown state leaves it to the reader");
 }
 
 /// A page of text past the path reader's limit (a detailed chart, a hatched background) flows in
