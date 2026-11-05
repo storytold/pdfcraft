@@ -9646,4 +9646,10 @@ fn a_to_unicode_cmap_reads_its_mappings_past_a_token_it_cannot_parse() {
     // the scan rather than costing its length squared, and what came before is kept.
     let flood = format!("{body}{}", "-".repeat(1 << 16));
     assert!(CMap::parse(flood.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x2B).is_some()));
+    // What a failed read went through is not read again: unclosed strings, each of which reads
+    // to the end of the data, cost one pass over it, not one pass each.
+    let unclosed = format!("{body}{}{}", "(".repeat(4096), "x".repeat(1 << 23));
+    let started = std::time::Instant::now();
+    assert!(CMap::parse(unclosed.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x48).is_some()));
+    assert!(started.elapsed() < std::time::Duration::from_secs(3), "{:?}", started.elapsed());
 }

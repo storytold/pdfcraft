@@ -60,14 +60,16 @@ impl<'a> Scanner<'a> {
         object::read(&mut self.reader)
     }
 
-    /// PdfCraft patch (2): parse the next object; when it can't be read, move one byte past
-    /// where it started, so a caller can read on past a token it can't parse (a stray `>`
-    /// in a name, a CMap name with spaces in it) instead of stopping there. Every failure
-    /// moves forward, so a loop over this ends.
+    /// PdfCraft patch (2): parse the next object; when it can't be read, read on from where
+    /// the failed read stopped, or, when it read nothing, from one byte past where it started,
+    /// so a caller can read on past a token it can't parse (a stray `>` in a name, a CMap name
+    /// with spaces in it) instead of stopping there. Every failure moves forward, and what a
+    /// failed read went through (an unclosed string, to the end of the data) is not read
+    /// again, so a loop over this ends and reads the data about once.
     pub fn parse_object_or_skip(&mut self) -> Result<Object<'a>> {
         let start = self.reader.offset();
         let read = object::read(&mut self.reader);
-        if read.is_err() {
+        if read.is_err() && self.reader.offset() <= start {
             self.reader.jump(start.saturating_add(1).min(self.reader.data.len()));
         }
         read
