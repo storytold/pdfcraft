@@ -286,10 +286,10 @@ impl DecodeBudget {
     }
 
     /// `stream` decoded like [`Stream::decoded_strict`] (any corruption is an error), charged to
-    /// the allowance.
-    pub fn decode_strict(&mut self, stream: &Stream) -> Result<Vec<u8>, CosError> {
+    /// the allowance, with its `/DecodeParms` given by reference read in `doc`.
+    pub fn decode_strict(&mut self, doc: &Document, stream: &Stream) -> Result<Vec<u8>, CosError> {
         let strict: Decoder = |s, max| s.decoded_strict_within_counted(max).map(|(data, spent)| (data, false, spent));
-        self.charge(stream, usize::MAX, strict).map(|(data, _)| data)
+        self.charge(&doc.decoding_view(stream), usize::MAX, strict).map(|(data, _)| data)
     }
 
     /// Decodes `stream` within `max` and the allowance, charging what every filter stage
@@ -788,7 +788,7 @@ mod tests {
         assert_eq!(budget.remaining(), 0);
         let mut budget = DecodeBudget::new((1 << 20) - 1, 1);
         let Object::Stream(stream) = &*doc.get(bomb) else { panic!("not a stream") };
-        assert!(budget.decode_strict(stream).is_err());
+        assert!(budget.decode_strict(&doc, stream).is_err());
         assert_eq!(budget.remaining(), 0);
 
         let mut budget = DecodeBudget::new(10 << 20, 1);
@@ -812,8 +812,9 @@ mod tests {
         let corrupt = Stream::from_raw(whole.dict.clone(), whole.raw.get(..cut).unwrap_or_default().to_vec());
         let partial = corrupt.decoded().map(|d| d.len()).unwrap_or(0);
         assert!(partial > 0, "a cut flate stream decodes in part");
+        let doc = Document::new_empty();
         let mut budget = DecodeBudget::new(10 << 20, 1);
-        assert!(budget.decode_strict(&corrupt).is_err());
+        assert!(budget.decode_strict(&doc, &corrupt).is_err());
         assert_eq!(budget.remaining(), (10 << 20) - partial);
         let mut budget = DecodeBudget::new(10 << 20, 1);
         assert!(budget.decode_within(&corrupt, 1 << 30).is_ok());
@@ -877,6 +878,7 @@ mod tests {
             dict.set(b"Other".to_vec(), Object::Array(vec![Object::Int(0); 1000]));
             let s = Stream::from_raw(dict, raw.to_vec());
             assert_eq!(DecodeBudget::page().decode_with_damage(&doc, &s, usize::MAX).ok(), Some((content.to_vec(), false)), "{parms:?}");
+            assert_eq!(DecodeBudget::page().decode_strict(&doc, &s).ok(), Some(content.to_vec()), "{parms:?}");
             let r = doc.add(Object::Stream(s.clone()));
             let read = DecodeBudget::page().decode_contents_with_damage(&doc, &Object::Array(vec![Object::Ref(r)]));
             assert_eq!(read, [Ok((content.to_vec(), false))], "{parms:?}");
@@ -935,7 +937,7 @@ mod tests {
         assert_eq!(budget.remaining(), (10 << 20) - charged);
         assert!(budget.decode_within(&chained, 2 << 20).is_ok());
         assert_eq!(budget.remaining(), (10 << 20) - 2 * charged);
-        assert!(budget.decode_strict(&chained).is_ok());
+        assert!(budget.decode_strict(&Document::new_empty(), &chained).is_ok());
         assert_eq!(budget.remaining(), (10 << 20) - 3 * charged);
     }
 }
