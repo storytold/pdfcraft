@@ -21,7 +21,10 @@ mod script;
 use calc::{Notation, eval_notation, notation_name, notation_tokens, unique};
 pub use calc::{calculate, calculation_reads, notation_js, reads_built_names, rename_in_calculation};
 use format::parse_date_split;
-pub use format::{DATE_PRESETS, DateTime, TIME_PRESETS, format_date, format_value, js_number, keystroke, make_number, parse_date, validate};
+pub use format::{
+    DATE_PRESETS, DateNames, DateTime, ENGLISH_DATE_NAMES, TIME_PRESETS, date_names, format_date, format_date_in, format_value, format_value_in,
+    js_number, keystroke, make_number, parse_date, set_date_names, validate,
+};
 use script::{Arg, call};
 pub use script::{NOTATION_NOT_STORABLE, calculate_js, format_js, notation_storable, parse_calculate, parse_format, parse_validate, validate_js};
 
@@ -151,17 +154,22 @@ impl Actions {
     /// two-digit year read as XFA reads it, [`XFA_CENTURY_SPLIT`]) or as an ISO date (`2026-10-18`
     /// or `20261018`); anything else, which its format would read loosely, shows as typed.
     pub fn format_value(&self, value: &str) -> String {
+        self.format_value_in(value, &date_names())
+    }
+
+    /// [`Self::format_value`] with month and weekday names from `names`.
+    pub fn format_value_in(&self, value: &str, names: &DateNames) -> String {
         match (&self.format, self.edit_pattern()) {
             (Format::Date(fmt), Some(edit)) => {
                 let t = value.trim();
                 match parse_date_split(t, edit, XFA_CENTURY_SPLIT).filter(|dt| format_date(*dt, edit).eq_ignore_ascii_case(t)) {
                     // Typed as it shows: kept as it is, its case too.
                     Some(_) if edit == fmt => value.to_string(),
-                    Some(dt) => format_date(dt, fmt),
-                    None => iso_date(t).map_or_else(|| value.to_string(), |dt| format_date(dt, fmt)),
+                    Some(dt) => format_date_in(dt, fmt, names),
+                    None => iso_date(t).map_or_else(|| value.to_string(), |dt| format_date_in(dt, fmt, names)),
                 }
             }
-            (f, _) => format_value(f, value),
+            (f, _) => format_value_in(f, value, names),
         }
     }
 
