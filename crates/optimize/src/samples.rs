@@ -5,7 +5,7 @@
 
 use pdfcraft_cos::{Document, ImageBudget, Object, Stream};
 
-use crate::images::{MAX_PIXELS, components, is_dct, is_identity_decode, jpeg, pixels, ycc_encoded};
+use crate::images::{MAX_PIXELS, allowance, components, is_dct, is_identity_decode, jpeg, pixels, ycc_encoded};
 
 /// An image's samples, one byte each, row-major.
 #[derive(Clone, Debug, PartialEq)]
@@ -83,7 +83,7 @@ pub fn decode_samples(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> R
             Some(a) if is_inverted_decode(doc, a) => true,
             Some(_) => return Err(NotDecoded::Decode),
         };
-        let data = unpack_bits(s, width, height, inverted).ok_or(NotDecoded::Corrupt)?;
+        let data = unpack_bits(doc, s, width, height, inverted, budget).ok_or(NotDecoded::Corrupt)?;
         return Ok(Samples { width, height, components: 1, data, jpeg: false, bilevel: true, inverted });
     }
     if d.get(b"Decode").is_some_and(|a| !is_identity_decode(doc, a, n)) {
@@ -107,12 +107,12 @@ fn packed_len(w: u32, h: u32) -> Option<usize> {
     usize::try_from(w).ok()?.div_ceil(8).checked_mul(usize::try_from(h).ok()?)
 }
 
-/// A bi-level image's pixels, 0 (black) or 255 (white) as drawn.
-fn unpack_bits(s: &Stream, w: u32, h: u32, inverted: bool) -> Option<Vec<u8>> {
+/// A bi-level image's pixels, 0 (black) or 255 (white) as drawn, decoded within `budget` with
+/// its `/DecodeParms` resolved, as the 8-bit images are.
+fn unpack_bits(doc: &Document, s: &Stream, w: u32, h: u32, inverted: bool, budget: &mut ImageBudget) -> Option<Vec<u8>> {
     let stride = usize::try_from(w).ok()?.div_ceil(8);
     let need = packed_len(w, h)?;
-    // Some writers pad the data; anything far longer than the image needs is not this image.
-    let bits = s.decoded_within(need.saturating_add(need / 2).saturating_add(4096)).ok()?;
+    let bits = budget.decode_filters(doc, s, allowance(need, h)?).ok()?;
     let bits = bits.get(..need)?;
     let (w, h) = (usize::try_from(w).ok()?, usize::try_from(h).ok()?);
     let mut out = Vec::with_capacity(w.checked_mul(h)?);
@@ -244,6 +244,37 @@ mod tests {
         assert_eq!(back.dict.int(b"BitsPerComponent"), Some(1));
         assert!(back.dict.get(b"Decode").is_some());
         assert_eq!(back.decoded().unwrap(), raw);
+    }
+
+    #[test]
+    fn bilevel_decode_parms_by_reference_decode_like_direct_ones() {
+        // 10 × 2 with a TIFF predictor: each 1 bit flips the pixel from the one to its left.
+        let packed = vec![0b1000_0000, 0b0000_0000, 0b0100_0000, 0b0000_0000];
+        let parms = || {
+            let mut p = pdfcraft_cos::Dict::new();
+            for (k, v) in [("Predictor", 2), ("Colors", 1), ("BitsPerComponent", 1), ("Columns", 10)] {
+                p.set(k.as_bytes().to_vec(), Object::Int(v));
+            }
+            Object::Dict(p)
+        };
+        let dict = [
+            ("Width", Object::Int(10)),
+            ("Height", Object::Int(2)),
+            ("ColorSpace", Object::name("DeviceGray")),
+            ("BitsPerComponent", Object::Int(1)),
+        ];
+        let mut d = doc();
+        let mut direct = Stream::flate(image(&dict, vec![]).dict, &packed);
+        direct.dict.set(b"DecodeParms".to_vec(), parms());
+        let mut indirect = direct.clone();
+        let r = d.add(parms());
+        indirect.dict.set(b"DecodeParms".to_vec(), Object::Ref(r));
+        let a = decode_samples(&d, &direct, &mut ImageBudget::with_work(u64::MAX)).unwrap();
+        let b = decode_samples(&d, &indirect, &mut ImageBudget::with_work(u64::MAX)).unwrap();
+        // Row 1: white from x = 0 on; row 2: black at x = 0, white from x = 1 on.
+        assert_eq!(&a.data[..10], &[255; 10]);
+        assert_eq!(&a.data[10..], &[0, 255, 255, 255, 255, 255, 255, 255, 255, 255]);
+        assert_eq!(b, a);
     }
 
     #[test]
