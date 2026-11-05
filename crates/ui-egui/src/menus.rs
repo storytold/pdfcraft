@@ -109,6 +109,7 @@ const SEP: &str = "---";
 const FILE: &[&str] = &[
     "create.blank",
     "file.open",
+    "file.open_cloud",
     "file.open_recent",
     "file.pin_folder",
     SEP,
@@ -116,6 +117,7 @@ const FILE: &[&str] = &[
     SEP,
     "file.save",
     "file.save_as",
+    "file.save_as_cloud",
     "file.revert",
     SEP,
     "file.close",
@@ -297,6 +299,12 @@ impl PdfCraftApp {
                 let recent = matches!(&node, Node::Item(it) if it.command.id == "file.open_recent");
                 if recent {
                     nodes.push(self.recent_menu());
+                    continue;
+                }
+                // Cloud-specific items are absent (not just dimmed) when no service is connected.
+                // A greyed "Open from cloud…" with no service reads as a broken feature.
+                let cloud_only = matches!(&node, Node::Item(it) if matches!(it.command.id.as_str(), "file.open_cloud" | "file.save_as_cloud"));
+                if cloud_only && !crate::cloud::available(self) {
                     continue;
                 }
                 let after = match &node {
@@ -695,6 +703,9 @@ mod tests {
         for spec in commands::COMMANDS.iter().filter(|s| s.menu.is_some()) {
             if spec.id == "file.open_recent" {
                 continue; // A submenu of the recent files.
+            }
+            if matches!(spec.id, "file.open_cloud" | "file.save_as_cloud") && !crate::cloud::available(&app) {
+                continue; // Absent, not dimmed, while no cloud backend is connected (pending craft-libs#160).
             }
             let it = item(&bar, &CommandRef::new(spec.id));
             let shortcut = spec.shortcut.or((spec.id == "edit.copy").then_some(crate::commands::COPY));

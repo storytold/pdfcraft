@@ -21,7 +21,7 @@ fn main() {
             .start(
                 canvas,
                 options,
-                Box::new(|cc| {
+                Box::new(move |cc| {
                     let mut app = PdfCraftApp::new();
                     // "printcraft": settings saved under the app's former name, PrintCraft.
                     if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string("printcraft"))) {
@@ -75,6 +75,9 @@ fn main() {
                             &"PdfCraft: ?host=parent needs a framing page on the same origin; saves download instead".into(),
                         );
                     }
+                    // Open and Save against cloud storage: pending craft-libs#160, see
+                    // crates/ui-egui/src/cloud.rs's module doc. Nothing connects a backend
+                    // today, so the cloud UI stays hidden and the app runs local-only.
                     Ok(Box::new(app))
                 }),
             )

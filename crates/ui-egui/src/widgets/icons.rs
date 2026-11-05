@@ -33,6 +33,17 @@ pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
     image(name, size, tint).paint_at(ui, Rect::from_center_size(rect.center(), Vec2::splat(size)));
 }
 
+/// Paint an icon at `rect` using only a [`egui::Painter`].
+///
+/// The cloud file list has only a painter; a temporary child UI is built from the painter's
+/// context so the SVG image loader can be reached. The icon is centred in `rect`.
+pub fn paint_on(painter: &egui::Painter, rect: Rect, name: &str, tint: Color32) {
+    let size = rect.size().min_elem();
+    let id = egui::Id::new("icon_paint").with(name);
+    let ui = egui::Ui::new(painter.ctx().clone(), id, egui::UiBuilder::new().max_rect(rect));
+    image(name, size, tint).paint_at(&ui, Rect::from_center_size(rect.center(), Vec2::splat(size)));
+}
+
 /// Square icon button: transparent until hovered; `selected` gets the accent treatment.
 pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tooltip: &str) -> Response {
     let t = Tokens::get(ui.ctx());

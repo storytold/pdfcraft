@@ -36,6 +36,8 @@ macro_rules! tl_ctx {
 }
 pub mod canvas;
 mod chrome;
+pub mod cloud;
+pub mod esign;
 mod image_engine;
 pub use combine_grid::ThumbState as CombineThumb;
 pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
@@ -683,4 +685,28 @@ pub struct PdfCraftApp {
     pub pending_full_screen: Option<DocId>,
     /// An absolute GoToR target waiting for approval, before any target-file I/O (#1364).
     pub pending_remote_link: Option<PendingRemoteLink>,
+    /// Open and Save against cloud storage, and sharing and presence: folded into one state
+    /// object (pending craft-libs#160; see `cloud.rs`'s module doc). Connected by the host
+    /// application when a backend exists; disconnected leaves the app local-only.
+    pub cloud: cloud::CloudFiles,
+    /// Which cloud page is shown in the central panel, when any. `None` is the normal state.
+    pub cloud_page: Option<CloudPage>,
+    /// The number of open document tabs when `cloud_page` became `Some(Open)`. Used to detect
+    /// that a successful cloud open completed so the page can dismiss itself.
+    cloud_page_doc_count: usize,
+    /// Request-signatures dialog (pending craft-libs#160; see `esign.rs`'s module doc).
+    pub esign: esign::EsignDialog,
+}
+
+/// Which cloud page is shown in the central panel instead of the document or home screen.
+///
+/// `None` (the common case) means the normal document / home / docking view. Nothing renders
+/// `Open` or `SaveAs` today: no backend ever connects, so `file.open_cloud` and
+/// `file.save_as_cloud` stay hidden and this state is never reached (pending craft-libs#160;
+/// see `cloud.rs`'s module doc). The variants stay so wiring a real backend back in only needs
+/// to draw something for them, not a new navigation state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloudPage {
+    Open,
+    SaveAs,
 }

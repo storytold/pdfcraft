@@ -302,6 +302,10 @@ impl PdfCraftApp {
             replace_draft: None,
             number_draft: NumberDraft { from: 1, to: 1, style: pdfcraft_engine::LabelStyle::Decimal, prefix: String::new(), start: 1 },
             word_count_draft: word_count_ui::Draft::default(),
+            cloud: cloud::CloudFiles::new(),
+            cloud_page: None,
+            cloud_page_doc_count: 0,
+            esign: esign::EsignDialog::new(),
         }
     }
 
@@ -619,6 +623,16 @@ impl eframe::App for PdfCraftApp {
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
+        // Drain answers from a connected cloud backend. A no-op today: nothing connects one
+        // (crates/ui-egui/src/cloud.rs's module doc explains why, pending craft-libs#160).
+        cloud::pump(self, ctx);
+        // E-sign dialog: capability probe, even when closed. A no-op today for the same reason.
+        esign::pump(&mut self.esign, ctx);
+        // After pump: if we were on the cloud Open page and a new document tab appeared
+        // (the open completed), dismiss the page and show the document.
+        if self.cloud_page == Some(CloudPage::Open) && self.views.len() > self.cloud_page_doc_count && self.cloud.busy.is_none() {
+            self.cloud_page = None;
+        }
         // Last, after everything that can open or answer the "save changes?" question.
         self.attend_save_prompt(ctx);
         self.sync_native_menu(ctx);

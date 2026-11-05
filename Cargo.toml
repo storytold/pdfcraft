@@ -12,9 +12,16 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/pdfcraft"
 
 [workspace.dependencies]
-# Shared frontend components; engines remain independent of egui.
+# Shared frontend components; engines remain independent of egui. Pinned to storytold/craft-libs
+# at the same 787a7a0f rev as the other craft-libs crates below (787a7a0f is a descendant of
+# 92d392cf, the ComboBox rev (#387) this crate needs, so one rev covers both; pinning craft-ui
+# separately to 92d392cf previously left it behind craft-menu/craft-keymap's panel and scroll
+# fixes). No cloud-feature reference: craft-libs#160 is building a storytold-reviewable
+# CloudBackend reference implementation to replace the personal-fork cloud/esign/share/presence
+# modules this PR used to depend on; until that lands, PdfCraft's own cloud.rs and esign.rs carry
+# a small local placeholder instead (crates/ui-egui/src/cloud.rs, crates/ui-egui/src/esign.rs).
 craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff", features = ["serde"] }
-# Quit the macOS way (#1136): ⌘Q asks about unsaved changes, and closing quits through `terminate:`.
+# Quit the macOS way (#1136): Cmd+Q asks about unsaved changes, and closing quits through `terminate:`.
 craft-quit = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
 # One menu definition for the native macOS menu bar and the in-window bar elsewhere.
 craft-menu = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
@@ -23,12 +30,12 @@ craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1
 # catalogs that `crates/ui-egui/build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, at
 # the commit in `craft-i18n.rev`). Already in the tree through craft-ui.
 craft-i18n = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
+# craft-update: app-specific pretend versions apply to startup and manual checks.
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff", features = ["egui"] }
 # Shared system spooler; document composition remains in pdfcraft-print.
 craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
 # Whether a path stored in a document may be opened (GoToR link targets).
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
-# craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff", features = ["egui"] }
 # internal
 pdfcraft-geom = { path = "crates/geom", version = "0.18.1" }
 pdfcraft-filters = { path = "crates/filters", version = "0.18.1" }

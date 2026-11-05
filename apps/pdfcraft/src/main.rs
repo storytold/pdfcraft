@@ -476,6 +476,9 @@ fn app_creator<'a>(
                 log::warn!("--{k} {v}: {e}");
             }
         }
+        // Open and Save against cloud storage, and request-signatures: pending
+        // craft-libs#160, see crates/ui-egui/src/cloud.rs's module doc. Nothing connects a
+        // backend today, so the cloud and e-sign UI stay hidden and the app runs local-only.
         Ok(Box::new(app))
     })
 }
