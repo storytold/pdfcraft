@@ -89,6 +89,6 @@ cargo test -p <crate>
 cargo xtask cover -p <crate>
 ```
 
-Add `cargo test -p pdfcraft-ui-egui --test play` when the change is something a person does on screen, and `cargo test -p pdfcraft-automation --test automation` when a tool changed.
+Add `cargo test -p pdfcraft-ui-egui --test play` when the change is something a person does on screen, and `cargo test -p pdfcraft-automation --test it` when a tool changed. The automation checks live in one integration binary, `tests/it`.
 
 For a bug fix, list the command, the failure observed before the fix, and the pass after it. For other changes, list the applicable checks and their results. Name any similar issue you ran and whether its own steps passed.
