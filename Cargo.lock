@@ -4549,6 +4549,7 @@ version = "0.18.1"
 dependencies = [
  "async-channel",
  "futures-lite",
+ "log",
  "rustix 1.1.5",
  "zbus",
 ]

@@ -448,3 +448,76 @@ fn a_replaced_link_keeps_its_own_attributes_not_its_targets() {
     assert_ne!(std::fs::metadata(&referent).unwrap().file_attributes() & HIDDEN, 0, "and still hidden");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// #5001, #4593: a save overwriting an existing file preserves its original attributes even if
+/// the server (such as Samba/QNAP NAS hiding dot-files) marks the temporary staging file hidden.
+#[cfg(windows)]
+#[test]
+fn a_replaced_file_restores_attributes_if_server_hides_staging_file() {
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    const HIDDEN: u32 = 0x2;
+    let dir = test_dir("server-hides-staging");
+    let target = dir.join("plain.pdf");
+    std::fs::write(&target, b"OLD").unwrap();
+    assert_eq!(std::fs::metadata(&target).unwrap().file_attributes() & HIDDEN, 0, "target starts visible");
+
+    // Create a temporary hidden reference file to obtain permissions with the HIDDEN attribute.
+    let hidden_ref = dir.join("hidden_ref");
+    let _ = std::fs::OpenOptions::new().write(true).create_new(true).attributes(HIDDEN).open(&hidden_ref).unwrap();
+    let hidden_perm = std::fs::metadata(&hidden_ref).unwrap().permissions();
+    let _ = std::fs::remove_file(&hidden_ref);
+
+    for form in [StagingName::TagThenSuffix, StagingName::SuffixThenTag] {
+        write_atomically_with(&target, b"NEW", form, [77], |_file| {
+            // Find the staging file in dir (the file that is not target):
+            for entry in std::fs::read_dir(&dir)? {
+                let path = entry?.path();
+                if path != target {
+                    // Mark the staging file as HIDDEN on disk (simulating Samba hiding dot-files).
+                    std::fs::set_permissions(&path, hidden_perm.clone())?;
+                    assert_ne!(std::fs::metadata(&path)?.file_attributes() & HIDDEN, 0, "staging file was marked hidden");
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().file_attributes() & HIDDEN,
+            0,
+            "the saved file remains visible despite server hiding the staging file"
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"NEW");
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+#[cfg(windows)]
+fn a_replaced_local_file_keeps_archive_bit_intact() {
+    use std::os::windows::fs::MetadataExt as _;
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("pdfcraft-platform-test-archive-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let target = dir.join("plain.pdf");
+    std::fs::write(&target, b"OLD").unwrap();
+
+    // Clear the archive bit on the replaced file (simulating backup tools like robocopy /M or attrib -A).
+    const ARCHIVE: u32 = 0x20;
+    let status = std::process::Command::new("attrib").arg("-A").arg(&target).status().unwrap();
+    assert!(status.success(), "attrib -A succeeded");
+    let old_attrs = std::fs::metadata(&target).unwrap().file_attributes();
+    assert_eq!(old_attrs & ARCHIVE, 0, "archive bit was cleared on the old file");
+
+    write_atomically(&target, b"NEW", StagingName::TagThenSuffix).unwrap();
+
+    // The newly written file must have the archive bit set by the system (#5001, #4593, #6029, #6119).
+    let new_attrs = std::fs::metadata(&target).unwrap().file_attributes();
+    assert_ne!(new_attrs & ARCHIVE, 0, "the newly saved file has the archive bit set by the file system");
+    assert_eq!(std::fs::read(&target).unwrap(), b"NEW");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
