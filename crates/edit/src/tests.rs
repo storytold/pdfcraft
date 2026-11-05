@@ -15593,6 +15593,45 @@ fn arabic_fallback_keeps_the_source_weight_and_latin_slant() {
     }
 }
 
+/// Bold asked for on an Arabic paragraph whose subset can't draw it (a Word or browser PDF) takes
+/// the Arabic fallback's bold instance, alone or with a size; it was refused through the Japanese
+/// fallback instead ("BIZ UDPGothic has no glyph for ا"). Regular asked for on it again draws the
+/// regular instance. Without a bold instance it is refused and the PDF is left as it was.
+#[test]
+fn bold_asked_for_on_an_arabic_paragraph_takes_the_fallbacks_bold_instance() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    for size in [None, Some(14.0)] {
+        let mut doc = arabic_ligature_page("BT /F1 12 Tf 300 700 Td (BYA) Tj ET BT /F1 12 Tf 300 500 Td (AB) Tj ET", false);
+        let bold = text::BlockStyle { bold: Some(true), size, ..Default::default() };
+        if !pdfcraft_fonts::arabic_bold_available() {
+            let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+            assert!(text::rewrite_block(&mut doc, 0, 0, None, &bold).is_err(), "bold Arabic must be drawn bold or refused");
+            assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before, "a refused bold edit changed the PDF");
+            continue;
+        }
+        let edit = text::rewrite_block(&mut doc, 0, 0, None, &bold).unwrap_or_else(|e| panic!("size {size:?}: {e}"));
+        assert!(edit.substituted.as_deref().is_some_and(|s| s.contains("Noto Sans Arabic")), "the fallback is reported: {:?}", edit.substituted);
+        doc = reopen(&doc);
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks[0].editor_text.replace('\n', ""), "سلام", "size {size:?}");
+        assert_eq!(blocks[1].editor_text, "مس", "the other paragraph is untouched");
+        let faces = shown_faces(&doc, 0);
+        assert!(faces.contains("NotoSansArabic-Bold") && !faces.contains("NotoSansArabic"), "size {size:?}: {faces:?}");
+        if let Some(size) = size {
+            assert!((blocks[0].size - size).abs() < 0.01, "the size asked for: {}", blocks[0].size);
+        }
+        // And back to regular.
+        text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { bold: Some(false), ..Default::default() }).unwrap();
+        let doc = reopen(&doc);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text.replace('\n', ""), "سلام");
+        // The bold run's emptied text object may still select its font; what draws is regular.
+        let drawn: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().filter(|l| l.text == "سلام").map(|l| l.base_font).collect();
+        assert!(!drawn.is_empty() && drawn.iter().all(|f| f.contains("NotoSansArabic") && !f.contains("Bold")), "regular again: {drawn:?}");
+    }
+}
+
 /// A right-to-left row drawn as two runs, the Arabic first and a Latin word to its left (as
 /// browsers print "مصادر SharePoint"), is one row: it is not split at the Latin word, and the
 /// gap between them still reads as a space.

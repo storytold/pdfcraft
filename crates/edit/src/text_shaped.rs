@@ -3,8 +3,8 @@
 
 use super::interp::{Carry, Shown, Ts, interpret};
 use super::{
-    BlockStyle, Dict, Document, EditError, HashMap, LineEdit, Matrix, Metrics, Object, Op, TextBlock, TextLine, coincident_ops,
-    content_streams, page_dict, parse, reveal_ops, rewritten_contents, splice,
+    BlockStyle, Dict, Document, EditError, HashMap, LineEdit, Matrix, Metrics, Object, Op, TextBlock, TextLine, coincident_ops, content_streams,
+    page_dict, parse, reveal_ops, rewritten_contents, splice,
 };
 use pdfcraft_fonts::appearance_text;
 
@@ -23,7 +23,6 @@ pub(super) fn eligible(members: &[&TextLine], text: &str, style: &BlockStyle) ->
         || style.aligns.iter().any(Option::is_some)
         || style.resource.is_some()
         || style.family.is_some()
-        || style.bold.is_some()
         || style.char_spacing.is_some()
         || style.scale.is_some()
         || style.line_spacing.is_some()
@@ -76,12 +75,12 @@ pub(super) fn rewrite(
     let page = page_dict(doc, page)?;
     let size = style.size.unwrap_or(first.size);
     let color = style.color.unwrap_or(first.color);
-    // Every run keeps its source look (a size or colour asked for applies to all of them).
+    // Every run keeps its source look (a size, colour or weight asked for applies to all of them).
     // Italic is for the Latin runs: Arabic script has no italic and stays upright.
     let look = |line: &TextLine| appearance_text::SpanStyle {
         size: style.size.unwrap_or(line.size),
         color: style.color.unwrap_or(line.color),
-        bold: line.bold,
+        bold: style.bold.unwrap_or(line.bold),
         italic: line.italic,
     };
     let spans: Vec<_> = row_sources(block, draft, block.edited_spans(draft))
