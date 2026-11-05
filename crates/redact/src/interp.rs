@@ -68,6 +68,9 @@ struct Gs {
     scale: f64,
     leading: f64,
     rise: f64,
+    /// A Type 3 font's glyph box in text space per unit of font size: its `/FontBBox` through its
+    /// whole `/FontMatrix`, translation included, which the metrics' box leaves out.
+    glyph_box: Option<[f64; 4]>,
 }
 
 /// What processing a scope produced.
@@ -205,6 +208,24 @@ fn is_vertical(doc: &Document, font: &Dict) -> bool {
     }
 }
 
+/// Where a Type 3 font's glyphs can paint, in text space per unit of font size: its `/FontBBox`
+/// through its whole `/FontMatrix`. The renderer applies the whole matrix, translation and skew
+/// included, so a box from its scale alone can lie beside the glyph a mark covers.
+fn type3_glyph_box(doc: &Document, font: &Dict) -> Option<[f64; 4]> {
+    if font.name(b"Subtype") != Some(b"Type3".as_slice()) {
+        return None;
+    }
+    let numbers = |key: &[u8]| -> Vec<f64> {
+        font.get(key)
+            .map(|v| doc.resolve(v))
+            .and_then(|v| v.as_array().map(|a| a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect()))
+            .unwrap_or_default()
+    };
+    let (matrix, bbox) = (numbers(b"FontMatrix"), numbers(b"FontBBox"));
+    let (&[a, b, c, d, e, f], &[x0, y0, x1, y1]) = (matrix.as_slice(), bbox.as_slice()) else { return None };
+    Some(Matrix([a, b, c, d, e, f]).bbox([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]))
+}
+
 fn fresh_name(scope: &mut Scope<'_>, xobjects: &Dict) -> Vec<u8> {
     let mut i = scope.used_names.len() + 1;
     loop {
@@ -238,6 +259,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         scale: 1.0,
         leading: 0.0,
         rise: 0.0,
+        glyph_box: None,
     };
     process_from(doc, scope, streams, resources, gs)
 }
@@ -456,8 +478,10 @@ impl Walk {
             }
             b"Tf" => self.select_font(doc, scope, op),
             _ => {
-                if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
-                    (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
+                if let Some((font, vertical, size, glyph_box)) =
+                    op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback))
+                {
+                    (self.gs.font, self.gs.vertical, self.gs.size, self.gs.glyph_box) = (font, vertical, size, glyph_box);
                 }
             }
         }
@@ -468,6 +492,7 @@ impl Walk {
         let Some(name) = op.name(0) else { return };
         let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
         self.gs.vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
+        self.gs.glyph_box = font_dict.as_ref().and_then(|d| type3_glyph_box(doc, d));
         self.gs.font = match scope.fonts.get(name) {
             Some(f) => f.clone(),
             None => {
@@ -671,7 +696,12 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                     let w0 = f.width(code);
                     let spacing = gs.char_spacing + if f.is_space(code, len) { gs.word_spacing } else { 0.0 };
                     let trm = Matrix([size * gs.scale, 0.0, 0.0, size, 0.0, gs.rise]).then(tm).then(&gs.ctm);
-                    let b = trm.bbox([0.0, f.descent, w0, f.ascent]);
+                    let metrics = trm.bbox([0.0, f.descent, w0, f.ascent]);
+                    // A Type 3 glyph paints where its whole font matrix puts it: the box covers both.
+                    let b = gs.glyph_box.map_or(metrics, |g| {
+                        let p = trm.bbox(g);
+                        [metrics[0].min(p[0]), metrics[1].min(p[1]), metrics[2].max(p[2]), metrics[3].max(p[3])]
+                    });
                     let origin = trm.apply(0.0, 0.0);
                     let advance = w0 * size + spacing;
                     let hit = match scope.hidden_text {
@@ -680,7 +710,8 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                             let degenerate = b[2] - b[0] < 0.01 && b[3] - b[1] < 0.01;
                             matches!(gs.render_mode, 3 | 7) || !(overlaps(page, b, 0.0) || degenerate)
                         }
-                        None => scope.glyph_hit(b, origin),
+                        // (the metrics box is a second test: the union's overlap threshold is wider than a narrow glyph's own)
+                        None => scope.glyph_hit(b, origin) || scope.glyph_hit(metrics, origin),
                     };
                     glyphs.push(Glyph { bytes: pos..pos + len, advance, hit });
                     *tm = Matrix::translate(advance * gs.scale, 0.0).then(tm);
