@@ -1,6 +1,6 @@
 //! Unit tests for the sign tabs on empty signature fields (`area.rs`).
 
-use super::area::{SIGN_TAB_MAX, sign_tab_layout, sign_tab_on_page};
+use super::area::{SIGN_TAB_MAX, sign_tab_layout, sign_tab_on_page, sign_tabs};
 use super::*;
 use pdfcraft_engine::{FormField, FormFieldKind, FormWidget, SignatureInfo};
 

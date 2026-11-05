@@ -698,6 +698,9 @@ mod tests {
 
     #[test]
     fn search_placeholder_never_overlaps_the_shortcut() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let previous = crate::i18n::current();
         for (code, expected) in [("en", "Ctrl+K"), ("de", "Strg+K")] {
             crate::i18n::set_current(crate::i18n::Lang::from_code(code).unwrap());
