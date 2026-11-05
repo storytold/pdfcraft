@@ -230,6 +230,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-05 (M9, PR #6264 documentation review):** Documented the signature font, coverage, rendering and regression helpers introduced by this PR, including unbounded measurement semantics. No behavior, parity claims or estimates changed; hosted docstring coverage must be rechecked after publication.
+
 - **2026-11-05 (M9, PR #6264 performance review):** The unbounded signature-name measurement shapes each paragraph once, preserving leading-space removal, internal/trailing spaces and explicit breaks. A call-count regression covers empty paragraphs and a near-limit name; finite-width candidate measurements are unchanged. Estimates unchanged.
 
 - **2026-11-05 (M9, PR #6264 review):** Signature wrapping measures each complete word/grapheme candidate with the same bidi shaping as drawing. Tight mixed-script lines no longer overflow from independently measured spaces, and joined Arabic letters no longer wrap unnecessarily. Both regressions failed before the fix; estimates unchanged.

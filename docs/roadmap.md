@@ -1,5 +1,7 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **2026-11-05, M9 / PR #6264 documentation review:** Added missing Rust doc comments to signature helpers and regressions. Behavior and milestone estimates are unchanged; the hosted docstring-coverage check remains to be rerun.
+
 > **2026-11-05, M9 / PR #6264 performance review:** Unbounded signature-name measurement now shapes each paragraph once; finite-width wrapping and milestone estimates remain unchanged. Regression coverage checks call counts and spacing/break preservation.
 
 > **2026-11-05, M9 / PR #6264 review:** Full-candidate bidi/shaping measurements now govern signature word and grapheme wrapping; tight mixed-script and joined-Arabic regression tests cover clipping and unnecessary breaks. Milestone estimates and parity claims unchanged.

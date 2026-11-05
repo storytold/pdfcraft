@@ -423,10 +423,13 @@ pub fn display_date(pdf: &str) -> String {
 
 type ClusterKey = (String, Vec<(u32, [u64; 2])>, u64);
 
+/// Identify an Arabic cluster by its text, glyph ids, offsets and advance for font-code reuse.
 fn cluster_key(c: &pdfcraft_fonts::ShapedCluster) -> ClusterKey {
     (c.text.clone(), c.glyphs.iter().map(|(id, [x, y])| (*id, [x.to_bits(), y.to_bits()])).collect(), c.advance.to_bits())
 }
 
+/// Add an outlined Arabic Type 3 font and return its reference and cluster-to-code mapping.
+/// Includes ToUnicode text; refuses more than 240 unique clusters or unavailable glyph outlines.
 fn type3_arabic(
     doc: &mut Document,
     clusters: &[pdfcraft_fonts::ShapedCluster],
@@ -528,6 +531,7 @@ enum SignatureAtom {
 }
 
 impl SignatureAtom {
+    /// Return the advance in em units using the same Arabic or Latin fallback face as drawing.
     fn advance(&self) -> f64 {
         match self {
             Self::Arabic(c) => c.advance,
@@ -544,6 +548,7 @@ impl SignatureAtom {
     }
 }
 
+/// Recognize direction controls that affect bidi ordering but must not produce visible glyphs.
 fn bidi_control(c: char) -> bool {
     matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
@@ -596,6 +601,9 @@ struct SignatureLine {
 
 /// Break logical text before applying bidi and shaping each final line. In particular the
 /// first RTL line must contain the beginning, not the end, of the logical paragraph.
+/// `f64::MAX` measures without wrapping, shaping each paragraph once. Finite widths measure
+/// complete candidates and split oversized words at grapheme boundaries. Refuses text over
+/// 16,384 UTF-8 bytes and propagates shaping errors.
 fn signature_lines(text: &str, size: f64, width: f64) -> Result<Vec<SignatureLine>, SignError> {
     use unicode_segmentation::UnicodeSegmentation;
     // Bound shaping, layout retries, and the generated appearance even for hostile certificate
@@ -647,14 +655,19 @@ fn signature_lines(text: &str, size: f64, width: f64) -> Result<Vec<SignatureLin
     Ok(lines)
 }
 
+/// Recognize the Arabic Unicode blocks supported by the signature appearance dispatcher.
 fn is_arabic(c: char) -> bool {
     matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x0870..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFC)
 }
 
+/// Whether visible text contains a character from the Arabic blocks requiring Arabic rendering.
 fn contains_arabic(text: &str) -> bool {
     text.chars().any(is_arabic)
 }
 
+/// Validate displayed fields and labels, returning Arabic and Latin-Extended font requirements.
+/// Invisible boxes skip validation; missing fonts, unsupported characters and oversized Arabic
+/// appearance fields return actionable errors before drawing.
 fn check_appearance_text(name: &str, dn: &str, opts: &SignOptions, w: f64, h: f64) -> Result<(bool, bool), SignError> {
     use pdfcraft_fonts::{first_undrawable, undrawable_message};
     if w <= 1.0 || h <= 1.0 {
@@ -754,6 +767,8 @@ struct SignatureFonts {
 }
 
 impl SignatureFonts {
+    /// Append one visual line at baseline `y`, aligned within `[left, width, padding]`.
+    /// Uses the Arabic cluster map or Latin fallback fonts and refuses unmapped glyphs.
     fn draw_line(&self, out: &mut Vec<u8>, line: &SignatureLine, size: f64, rect: [f64; 3], y: f64) -> Result<(), SignError> {
         let [left, width, pad] = rect;
         let line_w = line.atoms.iter().map(SignatureAtom::advance).sum::<f64>() * size;
@@ -783,6 +798,9 @@ impl SignatureFonts {
     }
 }
 
+/// Lay out and draw the visible name/graphic and details with bidi-aware Arabic and Latin fonts.
+/// Returns PDF drawing operators, font resources and an optional image reference, propagating
+/// layout, font and graphic errors without publishing a partially signed document.
 fn draw_arabic_appearance(
     doc: &mut Document,
     b: &AppearanceBox,
@@ -866,6 +884,8 @@ fn draw_arabic_appearance(
     Ok((out, fonts, image))
 }
 
+/// Draw a non-Arabic signature's name/graphic and details with Helvetica or embedded Inter.
+/// Returns drawing operators, font resources and an optional image reference.
 fn draw_standard_appearance(
     doc: &mut Document,
     b: &AppearanceBox,
@@ -1049,6 +1069,7 @@ mod arabic_tests {
         pub(super) static ATOM_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     }
 
+    /// Recover the logical text of each atom in visual order for layout assertions.
     fn visual_text(line: &SignatureLine) -> String {
         line.atoms
             .iter()
@@ -1059,6 +1080,7 @@ mod arabic_tests {
             .collect()
     }
 
+    /// Check that Arabic ordering does not reverse adjacent Latin text or numbers.
     #[test]
     fn mixed_script_runs_keep_latin_and_numbers_in_reading_order() {
         if pdfcraft_fonts::document_arabic_font().is_none() {
@@ -1073,6 +1095,7 @@ mod arabic_tests {
         assert!(!visual_text(&lines[0]).chars().any(bidi_control));
     }
 
+    /// Check that wrapping consumes the logical beginning of an RTL paragraph first.
     #[test]
     fn rtl_wrap_starts_with_the_beginning_of_the_logical_paragraph() {
         if pdfcraft_fonts::document_arabic_font().is_none() {
@@ -1087,6 +1110,7 @@ mod arabic_tests {
         assert_eq!(visual_text(&lines[0]), visual_text(&first[0]));
     }
 
+    /// Pin one shaping call per unbounded paragraph while preserving spacing and explicit breaks.
     #[test]
     fn unbounded_name_shapes_each_paragraph_once_without_changing_spacing() {
         if pdfcraft_fonts::document_arabic_font().is_none() {
@@ -1115,6 +1139,7 @@ mod arabic_tests {
         assert_eq!(ATOM_CALLS.with(std::cell::Cell::get), 1);
     }
 
+    /// Check tight mixed-script lines against their fully shaped width, not summed word widths.
     #[test]
     fn wrapping_measures_complete_bidi_candidates() {
         if pdfcraft_fonts::document_arabic_font().is_none() {
@@ -1133,6 +1158,7 @@ mod arabic_tests {
         }
     }
 
+    /// Check that joined Arabic graphemes fit together without unnecessary line breaks.
     #[test]
     fn oversized_arabic_words_measure_joined_grapheme_candidates() {
         if pdfcraft_fonts::document_arabic_font().is_none() {
@@ -1145,6 +1171,7 @@ mod arabic_tests {
         assert!(lines.iter().all(|line| visual_text(line) == visual_text(&pair[0])));
     }
 
+    /// Preserve CR/LF breaks and base-letter/mark groups, and enforce the text-size bound.
     #[test]
     fn explicit_breaks_and_long_words_preserve_graphemes() {
         if pdfcraft_fonts::document_arabic_font().is_none() {

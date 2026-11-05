@@ -2618,6 +2618,7 @@ fn visible_arabic_appearance_supports_latin_fallback_and_line_breaks() {
     }
 }
 
+/// A hidden unsupported signer name must not prevent drawing an otherwise supported Arabic reason.
 #[test]
 fn visible_arabic_appearance_does_not_shape_a_hidden_name() {
     if pdfcraft_fonts::document_arabic_font().is_none() {
