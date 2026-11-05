@@ -16,7 +16,7 @@ use pdfcraft_fonts::{
 };
 use unicode_bidi::{Level, ParagraphBidiInfo};
 
-use crate::{EditError, MarkKind, check, contents, matrix_number, n, page_list, place_tagged};
+use crate::{EditError, MarkKind, contents, matrix_number, n, place_tagged};
 
 mod draw;
 mod layout;

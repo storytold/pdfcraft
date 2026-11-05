@@ -108,9 +108,7 @@ fn joined(streams: &[(Object, Vec<u8>)]) -> Pieces {
     Pieces::join(&streams.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>())
 }
 
-fn page_of(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
-    pdfcraft_model::page(doc, page)?.ok_or(EditError::NoSuchPage(page))
-}
+use crate::one_page as page_of;
 
 fn xobjects(doc: &Document, page: &Dict) -> Dict {
     page.get(b"Resources")

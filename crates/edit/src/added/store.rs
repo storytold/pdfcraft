@@ -1,7 +1,7 @@
 use super::draw::{draw, params};
 use super::layout::{first_undrawable, is_thai, nums, shaped_arabic, thai_error};
 use super::types::{Added, AddedImage, AddedText, CHAR_SPACING_LIMIT, Family, MarkerScan, TAG};
-use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, align_from, check, contents, page_list, place_tagged};
+use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, align_from, contents, place_tagged};
 
 fn parse(doc: &Document, d: &Dict) -> Option<Content> {
     let r = nums(doc, d.get(b"Rect"));
@@ -75,7 +75,10 @@ fn for_each_content_entry(doc: &Document, page: &pdfcraft_model::Page, mut visit
 /// Finds page marks and editable added content in one pass over the page content entries.
 pub fn scan_markers(doc: &Document) -> MarkerScan {
     let mut scan = MarkerScan::default();
-    for (pi, page) in page_list(doc).iter().enumerate() {
+    // The leaves' own dictionaries: `/Contents` and `/UserUnit` aren't inherited, so no inherited
+    // copy is needed, and a page past the copy budget of a whole `pages` walk is scanned too.
+    for (pi, leaf) in pdfcraft_model::PageLeaves::new(doc).map_while(Result::ok).enumerate() {
+        let page = &pdfcraft_model::Page { obj: leaf.obj, dict: leaf.dict().cloned().unwrap_or_default() };
         for_each_content_entry(doc, page, |entry| {
             with_resolved(doc, entry, |resolved| {
                 let Some(dict) = resolved.as_dict() else { return };
@@ -171,9 +174,7 @@ fn validate(c: &Content) -> Result<(), EditError> {
 /// Write an item's stream (new, or replacing `obj`) and make its resources available to the page.
 fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> Result<ObjRef, EditError> {
     validate(c)?;
-    let all = page_list(doc);
-    check(&[page], all.len())?;
-    let p = &all[page];
+    let p = &crate::one_page(doc, page)?;
     let view = p.view_matrix(doc);
     let user_unit = p.user_unit(doc);
     // The page gets its own copy of its resources with the item's fonts and images added, and
@@ -210,9 +211,9 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
         }
         None => {
             // place_tagged appends a new stream; recover its reference.
-            let p = page_list(doc).swap_remove(page);
+            let p = crate::one_page(doc, page)?;
             place_tagged(doc, &p, TAG, content.clone(), false)?;
-            let p = page_list(doc).swap_remove(page);
+            let p = crate::one_page(doc, page)?;
             let r = contents(doc, &p)?.last().and_then(Object::as_ref).ok_or_else(|| EditError::Invalid("could not add the content".into()))?;
             doc.set(r, Object::Stream(stream));
             Ok(r)
@@ -228,7 +229,7 @@ pub fn list_added(doc: &Document) -> Vec<Added> {
 /// Add an item to a page (0-based). Returns its index among the page's added items.
 pub fn add_content(doc: &mut Document, page: usize, c: &Content) -> Result<usize, EditError> {
     write(doc, page, c, None)?;
-    Ok(list_added(doc).iter().filter(|a| a.page == page).count() - 1)
+    list_added(doc).iter().filter(|a| a.page == page).count().checked_sub(1).ok_or_else(|| EditError::Invalid("could not add the content".into()))
 }
 
 fn find(doc: &Document, page: usize, index: usize) -> Result<Added, EditError> {
@@ -252,7 +253,7 @@ pub fn update_content(doc: &mut Document, page: usize, index: usize, c: &Content
 /// Remove item `index` of `page`.
 pub fn delete_content(doc: &mut Document, page: usize, index: usize) -> Result<(), EditError> {
     let a = find(doc, page, index)?;
-    let p = page_list(doc).swap_remove(page);
+    let p = crate::one_page(doc, page)?;
     let list: Vec<Object> = contents(doc, &p)?.into_iter().filter(|o| o.as_ref() != Some(a.obj)).collect();
     let fonts = own_fonts(doc, a.obj);
     // Only the page's own resources carry an item's fonts (`write` gives the page a copy).
@@ -278,7 +279,7 @@ pub fn delete_content(doc: &mut Document, page: usize, index: usize) -> Result<(
 /// alone. For previews on a copy of the document; the page's resources stay as they are.
 pub fn isolate_content(doc: &mut Document, page: usize, index: usize) -> Result<(), EditError> {
     let a = find(doc, page, index)?;
-    let p = page_list(doc).swap_remove(page);
+    let p = crate::one_page(doc, page)?;
     // An item's stream starts from the page's initial graphics state: `place_tagged` closes
     // everything drawn before it, so it draws the same on its own.
     doc.update_dict(p.obj, |d| {

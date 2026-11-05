@@ -5,6 +5,12 @@ pub(crate) fn page_list(doc: &Document) -> Vec<pdfcraft_model::Page> {
     pdfcraft_model::pages(doc)
 }
 
+/// Page `page` with its inherited attributes; `NoSuchPage` past the last, and a page-tree walk limit
+/// as `PageTree`, never as a missing page.
+pub(crate) fn one_page(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
+    pdfcraft_model::page(doc, page)?.ok_or(EditError::NoSuchPage(page))
+}
+
 pub(crate) fn check(pages: &[usize], count: usize) -> Result<(), EditError> {
     match pages.iter().find(|p| **p >= count) {
         Some(p) => Err(EditError::NoSuchPage(*p)),

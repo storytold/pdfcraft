@@ -142,9 +142,7 @@ pub(crate) fn rewritten_contents(doc: &mut Document, streams: &[(Object, Vec<u8>
     }
 }
 
-pub(crate) fn page_dict(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
-    pdfcraft_model::page(doc, page)?.ok_or(EditError::NoSuchPage(page))
-}
+pub(crate) use crate::one_page as page_dict;
 
 fn fill_color(fill: &[Op]) -> [f64; 3] {
     let Some(op) = fill.iter().rev().find(|op| matches!(op.op.as_slice(), b"g" | b"rg" | b"k" | b"sc" | b"scn")) else {

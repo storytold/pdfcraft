@@ -800,6 +800,21 @@ fn flattening_refuses_what_would_bake_in_question_marks() {
 }
 
 /// Display space is in points, so on a `/UserUnit 2` page an item's box maps to half as many
+/// Text added to a page past the copy budget of a whole page walk lands on that page: the writer
+/// reads its one page, not the walk's list, which ends before it.
+#[test]
+fn content_is_added_to_a_page_past_the_whole_walk_copy_budget() {
+    let mut doc = fixture();
+    let one_copy = pdfcraft_model::Limits { inherited_copies: 400, ..pdfcraft_model::Limits::DEFAULT };
+    let text = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Late".into(), size: 14.0, ..AddedText::default() };
+    let added = pdfcraft_model::with_limits(one_copy, || {
+        assert_eq!(pdfcraft_model::pages(&doc).len(), 1, "the whole walk stops after one page");
+        add_content(&mut doc, 2, &Content::Text(text.clone()))
+    });
+    assert_eq!(added, Ok(0));
+    assert_eq!(list_added(&doc).iter().filter(|a| a.page == 2).count(), 1);
+}
+
 /// user-space units. Items record the `/UserUnit` they were written for; one without it was
 /// written when display space was in user-space units, and reads back scaled to points.
 #[test]
