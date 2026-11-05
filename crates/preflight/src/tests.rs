@@ -489,25 +489,32 @@ fn an_output_intent_profile_header_is_read_within_a_size_cap() {
     }
 }
 
-/// PDF/A-2 6.6.2.3.1: the properties of the predefined XMP schemas have the value types XMP gives
-/// them (ISO 16684-1 8.2 and XMP Part 2), in every RDF/XML form a value can take.
-#[test]
-fn xmp_properties_of_predefined_schemas_have_their_value_types() {
-    const NS: &str = concat!(
-        r#"xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" "#,
-        r#"xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" "#,
-        r#"xmlns:stRef="http://ns.adobe.com/xap/1.0/sType/ResourceRef#" xmlns:xmpDM="http://ns.adobe.com/xmp/1.0/DynamicMedia/" "#,
-        r#"xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:xmpTPg="http://ns.adobe.com/xap/1.0/t/pg/" "#,
-        r#"xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#" xmlns:pdf="http://ns.adobe.com/pdf/1.3/""#
+const XMP_NS: &str = concat!(
+    r#"xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" "#,
+    r#"xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" "#,
+    r#"xmlns:stRef="http://ns.adobe.com/xap/1.0/sType/ResourceRef#" xmlns:xmpDM="http://ns.adobe.com/xmp/1.0/DynamicMedia/" "#,
+    r#"xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:xmpTPg="http://ns.adobe.com/xap/1.0/t/pg/" "#,
+    r#"xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#" xmlns:pdf="http://ns.adobe.com/pdf/1.3/""#
+);
+
+/// The mistyped predefined properties of a packet whose one description holds `body` (its
+/// attributes, then `>` and its elements).
+fn mistyped(body: &str) -> Vec<String> {
+    let xmp = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" {body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
     );
-    let mistyped = |body: &str| -> Vec<String> {
-        let xmp = format!(
-            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {NS}><rdf:Description rdf:about="" {body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
-        );
-        let parsed = xmp::parse(&xmp).expect("parses");
-        xmp_types::mistyped(&parsed).into_iter().collect()
-    };
-    let element = |p: &str, v: &str| mistyped(&format!("><{p}>{v}</{p}>"));
+    let parsed = xmp::parse(&xmp).expect("parses");
+    xmp_types::mistyped(&parsed).into_iter().collect()
+}
+
+/// [`mistyped`] for the property `p` written as an element holding `v`.
+fn element(p: &str, v: &str) -> Vec<String> {
+    mistyped(&format!("><{p}>{v}</{p}>"))
+}
+
+/// PDF/A-2 6.6.2.3.1, simple values: their lexical forms (ISO 16684-1 8.2.1), as elements and attributes.
+#[test]
+fn xmp_simple_values_have_their_lexical_forms() {
     // Simple types, as elements and as attributes.
     assert!(element("crs:Contrast", "-25").is_empty());
     assert_eq!(element("crs:Contrast", "25.0"), ["crs:Contrast"]);
@@ -529,6 +536,11 @@ fn xmp_properties_of_predefined_schemas_have_their_value_types() {
     }
     assert!(element("xmpDM:videoPixelAspectRatio", "1001/30000").is_empty());
     assert_eq!(element("xmpDM:videoPixelAspectRatio", "1.5"), ["xmpDM:videoPixelAspectRatio"]);
+}
+
+/// PDF/A-2 6.6.2.3.1, arrays: the kind, every item, and the languages of a language alternative.
+#[test]
+fn xmp_arrays_have_their_kind_and_item_types() {
     // Text can't be an array or a structure; a simple value can be given as rdf:resource.
     assert_eq!(element("crs:RawFileName", "<rdf:Seq><rdf:li>a</rdf:li></rdf:Seq>"), ["crs:RawFileName"]);
     assert_eq!(mistyped(r#"><crs:RawFileName rdf:parseType="Resource"><crs:Exposure>1</crs:Exposure></crs:RawFileName>"#), ["crs:RawFileName"]);
@@ -542,6 +554,11 @@ fn xmp_properties_of_predefined_schemas_have_their_value_types() {
     assert!(element("dc:title", r#"<rdf:Alt><rdf:li xml:lang="x-default">T</rdf:li></rdf:Alt>"#).is_empty());
     assert_eq!(element("dc:title", "<rdf:Alt><rdf:li>T</rdf:li></rdf:Alt>"), ["dc:title"]);
     assert_eq!(element("dc:title", "T"), ["dc:title"]);
+}
+
+/// PDF/A-2 6.6.2.3.1, structures in their three RDF/XML forms, nested, and qualified values.
+#[test]
+fn xmp_structures_have_their_field_types() {
     // Structures in their three forms, with each known field checked.
     assert!(mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Resource"><stRef:documentID>d</stRef:documentID><stRef:lastModifyDate>2016</stRef:lastModifyDate></xmpMM:DerivedFrom>"#).is_empty());
     assert!(mistyped(r#"><xmpMM:DerivedFrom><rdf:Description stRef:documentID="d"/></xmpMM:DerivedFrom>"#).is_empty());
@@ -566,9 +583,14 @@ fn xmp_properties_of_predefined_schemas_have_their_value_types() {
     // A qualified value is checked by its rdf:value.
     assert!(mistyped(r#"><crs:Contrast rdf:parseType="Resource"><rdf:value>5</rdf:value><xmp:Label>q</xmp:Label></crs:Contrast>"#).is_empty());
     assert_eq!(mistyped(r#"><crs:Contrast rdf:parseType="Resource"><rdf:value>five</rdf:value></crs:Contrast>"#), ["crs:Contrast"]);
+}
+
+/// PDF/A-2 6.6.2.3.1 through verify: one issue per mistyped property, not fixable.
+#[test]
+fn xmp_value_types_are_reported_by_verify() {
     // Through verify: reported under 6.6.2.3.1, not fixable.
     let xmp =
-        format!(r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {NS}><rdf:Description rdf:about="" crs:Contrast="high"/></rdf:RDF></x:xmpmeta>"#);
+        format!(r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" crs:Contrast="high"/></rdf:RDF></x:xmpmeta>"#);
     let stream = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
     let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
     let issues: Vec<Issue> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.2.3.1").collect();
