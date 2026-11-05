@@ -1038,6 +1038,39 @@ fn check_boxes_and_radios_switch_states() {
     assert!(field(&fields(&doc), "agree").value.is_empty());
 }
 
+/// A check box field whose widgets have their own on-states (#6262): setting one widget's state
+/// turns on that widget alone, not the first.
+#[test]
+fn a_check_box_group_turns_on_the_widget_whose_state_is_set() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),                 // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(), // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [9 0 R 10 0 R 11 0 R] >>".into(),     // 3
+        "<< /Fields [8 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),                        // 4
+        "null".into(),                                                              // 5
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                              // 6
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                              // 7
+        "<< /FT /Btn /T (cap) /V /Off /Kids [9 0 R 10 0 R 11 0 R] >>".into(),       // 8 check boxes
+        "<< /Type /Annot /Subtype /Widget /Parent 8 0 R /AS /Off /Rect [50 700 65 715] /P 3 0 R /AP << /N << /Owner 6 0 R /Off 7 0 R >> >> >>".into(), // 9
+        "<< /Type /Annot /Subtype /Widget /Parent 8 0 R /AS /Off /Rect [80 700 95 715] /P 3 0 R /AP << /N << /Lodger 6 0 R /Off 7 0 R >> >> >>"
+            .into(), // 10
+        "<< /Type /Annot /Subtype /Widget /Parent 8 0 R /AS /Off /Rect [110 700 125 715] /P 3 0 R /AP << /N << /Tenant 6 0 R /Off 7 0 R >> >> >>"
+            .into(), // 11
+    ];
+    let mut doc = document(&objs);
+    assert_eq!(field(&fields(&doc), "cap").kind, FieldKind::CheckBox);
+    let states = |doc: &Document| field(&fields(doc), "cap").widgets.iter().map(|w| w.state.clone().unwrap_or_default()).collect::<Vec<_>>();
+    set_value(&mut doc, "cap", &FieldValue::Text("Lodger".into())).unwrap();
+    assert_eq!(field(&fields(&doc), "cap").value, ["Lodger"]);
+    assert_eq!(states(&doc), ["Off", "Lodger", "Off"]);
+    set_value(&mut doc, "cap", &FieldValue::Text("Tenant".into())).unwrap();
+    assert_eq!(field(&fields(&doc), "cap").value, ["Tenant"]);
+    assert_eq!(states(&doc), ["Off", "Off", "Tenant"]);
+    set_value(&mut doc, "cap", &FieldValue::Check(false)).unwrap();
+    assert!(field(&fields(&doc), "cap").value.is_empty());
+    assert_eq!(states(&doc), ["Off", "Off", "Off"]);
+}
+
 #[test]
 fn check_boxes_keep_non_utf8_state_names() {
     // Japanese forms often name a check box's on state 「はい」 in Shift-JIS: ticking it has to

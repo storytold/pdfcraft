@@ -137,7 +137,12 @@ fn select_edit(f: &FormField, w: &FormWidget) -> Option<Edit> {
 /// What clicking a check box or radio button does.
 fn toggle_edit(f: &FormField, w: &FormWidget) -> Option<Edit> {
     let value = match f.kind {
-        FormFieldKind::CheckBox => FieldValue::Check(f.value.is_empty()),
+        // A check box of a group turns on its own state, and off when it is the one on.
+        FormFieldKind::CheckBox => match &w.on_state {
+            Some(on) if f.value.first() != Some(on) => FieldValue::Text(on.clone()),
+            Some(_) => FieldValue::Check(false),
+            None => FieldValue::Check(f.value.is_empty()),
+        },
         FormFieldKind::Radio => {
             let on = w.on_state.clone();
             // Clicking the selected button again turns it off unless the group forbids it.
@@ -1034,5 +1039,55 @@ mod tests {
         assert_eq!(largest.get(), MAX_SCREEN_FONT, "laid out at the bound");
         assert_eq!(bounded_line_width(10.0, measure), 30.0, "below it, at the size itself");
         assert_eq!(largest.get(), MAX_SCREEN_FONT);
+    }
+
+    /// A check box field with widgets `states`, the field set to `value`.
+    fn check_boxes(states: &[&str], value: Option<&str>) -> super::FormField {
+        let widget = |i: usize, s: &str| super::FormWidget {
+            obj: pdfcraft_cos::ObjRef { num: 10 + i as u32, generation: 0 },
+            page: Some(0),
+            rect: [0.0, 0.0, 10.0, 10.0],
+            on_state: Some(s.into()),
+            state: Some(if value == Some(s) { s.into() } else { "Off".into() }),
+            tab: i,
+            locked: false,
+            hidden: false,
+            read_only: false,
+            rotation: 0,
+            caption: None,
+            list: None,
+            round: false,
+        };
+        super::FormField {
+            name: "cap".into(),
+            obj: pdfcraft_cos::ObjRef { num: 9, generation: 0 },
+            kind: super::FormFieldKind::CheckBox,
+            value: value.map(String::from).into_iter().collect(),
+            default: Vec::new(),
+            flags: 0,
+            max_len: None,
+            options: Vec::new(),
+            da: String::new(),
+            quadding: 0,
+            tooltip: None,
+            widgets: states.iter().enumerate().map(|(i, s)| widget(i, s)).collect(),
+            actions: Default::default(),
+            button: None,
+        }
+    }
+
+    /// Clicking a check box of a group turns on that one, not the first (#6262).
+    #[test]
+    fn clicking_a_check_box_of_a_group_turns_on_that_check_box() {
+        use super::{Edit, FieldValue, toggle_edit};
+        let value = |e: Option<Edit>| match e {
+            Some(Edit::SetFieldValue { value, .. }) => Some(value),
+            _ => None,
+        };
+        let off = check_boxes(&["Owner", "Lodger", "Tenant"], None);
+        assert_eq!(value(toggle_edit(&off, &off.widgets[1])), Some(FieldValue::Text("Lodger".into())));
+        let owner = check_boxes(&["Owner", "Lodger", "Tenant"], Some("Owner"));
+        assert_eq!(value(toggle_edit(&owner, &owner.widgets[2])), Some(FieldValue::Text("Tenant".into())));
+        assert_eq!(value(toggle_edit(&owner, &owner.widgets[0])), Some(FieldValue::Check(false)));
     }
 }
