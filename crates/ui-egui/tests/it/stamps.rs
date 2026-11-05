@@ -69,9 +69,11 @@ fn editing_the_second_custom_stamp_keeps_both_library_entries() {
     }
     let first_id = h.state().custom_stamps[0].id;
     let second_id = h.state().custom_stamps[1].id;
+    h.get_by_label("Second").scroll_to_me();
+    h.run_steps(2);
     h.get_by_label("Second").click_secondary();
     h.run_steps(2);
-    h.get_by_label("Rename / change category…").click();
+    h.get_by_role(Role::Menu).get_by_label("Rename / change category…").click();
     h.run_steps(2);
     let category = h.get_by_role_and_label(Role::TextInput, "Category:");
     category.click();
