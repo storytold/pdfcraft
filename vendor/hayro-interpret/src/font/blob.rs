@@ -122,7 +122,7 @@ impl CffFontBlob {
         path.take()
     }
 
-    /// PdfCraft patch (see vendor/README.md hayro-interpret (67)): the glyph's own advance from
+    /// PdfCraft patch (see vendor/README.md hayro-interpret (77)): the glyph's own advance from
     /// its charstring, in thousandths of an em like [`Self::outline_glyph`], or `None` when the
     /// charstring can't be read or gives no usable width.
     pub(crate) fn advance_width(&self, glyph: GlyphId) -> Option<f32> {
