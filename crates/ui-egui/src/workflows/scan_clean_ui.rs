@@ -230,6 +230,10 @@ impl PdfCraftApp {
         self.progress_notice = None;
         match result.and_then(|cleaned| self.session.apply_scan_clean(doc, cleaned)) {
             Ok(report) => {
+                // The page rasters, tiles and thumbnails show the old pixels at the same scale.
+                for v in self.views.iter_mut().filter(|v| v.id == doc) {
+                    v.invalidate_content();
+                }
                 let msg = summary(&report);
                 self.notify(msg);
             }
