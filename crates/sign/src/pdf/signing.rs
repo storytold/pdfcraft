@@ -1,5 +1,5 @@
 use super::listing::{mk_rotation, nums, sig_fields};
-use super::{Certificate, Dict, DigestAlg, DigitalId, Document, HashSet, Object, PdfString, SaveOptions, SignError, SignedData, Stream};
+use super::{Certificate, Dict, DigestAlg, DigitalId, Document, HashSet, ObjRef, Object, PdfString, SaveOptions, SignError, SignedData, Stream};
 
 // ── signing ─────────────────────────────────────────────────────────────────────────────────
 
@@ -421,33 +421,190 @@ pub fn display_date(pdf: &str) -> String {
     format!("{}.{}.{} {}:{}:{}{tz}", g(0..4), g(4..6), g(6..8), g(8..10), g(10..12), g(12..14))
 }
 
-/// The visible signature: the signer's name large on the left, or the graphic in its place, and
-/// the details on the right (Acrobat's standard layout), in Helvetica, or in the bundled Inter
-/// font when a detail needs characters beyond Western European. A graphic with no details beside
-/// it fills the box. An error, before anything is drawn, when a detail it writes (the signer's
-/// name, the certificate's subject, the reason or the location) has a character neither font can
-/// draw: signing invisibly, or leaving that part out, still works. A graphic doesn't change this:
-/// the name it replaces on the left is still among the details. A label that is drawn
-/// ([`AppearanceLabels`], the caller's words) must be drawable in Helvetica, and is refused otherwise.
-///
-/// `turn` is the widget's `/MK /R` (0, 90, 180 or 270; anything else counts as 0): the layout is
-/// drawn upright in the box as turned by it, and a `/Matrix` maps that box onto `rect`.
-fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &Certificate, opts: &SignOptions) -> Result<Stream, SignError> {
-    use pdfcraft_fonts::{first_undrawable, helvetica_width, inter_width, literal, undrawable_message, win_ansi, wrap, wrap_with};
-    let turn = if matches!(turn, 90 | 180 | 270) { turn } else { 0 };
-    let (rw, rh) = ((rect[2] - rect[0]).max(0.0), (rect[3] - rect[1]).max(0.0));
-    // The upright layout box: a quarter turn swaps its sides.
-    let (w, h) = if turn % 180 == 0 { (rw, rh) } else { (rh, rw) };
+type ClusterKey = (String, Vec<(u32, [u64; 2])>, u64);
+
+fn cluster_key(c: &pdfcraft_fonts::ShapedCluster) -> ClusterKey {
+    (c.text.clone(), c.glyphs.iter().map(|(id, [x, y])| (*id, [x.to_bits(), y.to_bits()])).collect(), c.advance.to_bits())
+}
+
+fn type3_arabic(
+    doc: &mut Document,
+    clusters: &[pdfcraft_fonts::ShapedCluster],
+) -> Result<(ObjRef, std::collections::HashMap<ClusterKey, u8>), SignError> {
+    let mut charprocs = Dict::new();
+    let mut differences = vec![Object::Int(1)];
+    let mut widths = Vec::with_capacity(clusters.len());
+    let mut bbox = [0.0f64; 4];
+    let mut to_unicode = Vec::new();
+    let mut unique_clusters: Vec<pdfcraft_fonts::ShapedCluster> = Vec::new();
+    let mut cluster_to_code = std::collections::HashMap::new();
+
+    for c in clusters {
+        let key = cluster_key(c);
+        if let std::collections::hash_map::Entry::Vacant(e) = cluster_to_code.entry(key) {
+            if unique_clusters.len() >= 240 {
+                return Err(SignError::Pdf("too many Arabic characters in signature appearance".into()));
+            }
+            unique_clusters.push(c.clone());
+            let code = u8::try_from(unique_clusters.len()).map_err(|_| SignError::Pdf("character code overflow".into()))?;
+            e.insert(code);
+        }
+    }
+
+    for (i, c) in unique_clusters.iter().enumerate() {
+        let code = i + 1;
+        let mut paths = Vec::new();
+        let mut ink: Option<[f64; 4]> = None;
+        for (id, [dx, dy]) in &c.glyphs {
+            let g = pdfcraft_fonts::arabic_glyph(*id).map_err(|e| SignError::Pdf(format!("missing Arabic glyph {id}: {e:?}")))?;
+            for contour in &g.contours {
+                for (j, p) in contour.iter().enumerate() {
+                    paths.extend(format!("{} {} {}\n", fmt((p[0] + dx) * 1000.0), fmt((p[1] + dy) * 1000.0), if j == 0 { "m" } else { "l" }).bytes());
+                }
+                paths.extend_from_slice(b"h\n");
+                let b = [g.bbox[0] + dx, g.bbox[1] + dy, g.bbox[2] + dx, g.bbox[3] + dy];
+                ink = Some(ink.map_or(b, |a| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]));
+            }
+        }
+        let [x0, y0, x1, y1] =
+            ink.map_or([0.0; 4], |b| [(b[0] * 1000.0).floor(), (b[1] * 1000.0).floor(), (b[2] * 1000.0).ceil(), (b[3] * 1000.0).ceil()]);
+        bbox = [bbox[0].min(x0), bbox[1].min(y0), bbox[2].max(x1), bbox[3].max(y1)];
+        let mut proc = format!("{} 0 {} {} {} {} d1\n", fmt(c.advance * 1000.0), fmt(x0), fmt(y0), fmt(x1), fmt(y1)).into_bytes();
+        if !paths.is_empty() {
+            proc.extend(paths);
+            proc.extend_from_slice(b"f\n");
+        }
+        let glyph = format!("g{code:02X}");
+        charprocs.set(glyph.clone().into_bytes(), Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), &proc)))));
+        differences.push(Object::name(&glyph));
+        widths.push(Object::Real((c.advance * 1000.0).round()));
+        if !c.text.is_empty() {
+            let hex: String = c.text.encode_utf16().map(|u| format!("{u:04X}")).collect();
+            to_unicode.push(format!("<{code:02X}> <{hex}>\n"));
+        }
+    }
+    let mut cmap = String::from(
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapType 2 def\n1 begincodespacerange\n<01> <FF>\nendcodespacerange\n",
+    );
+    for block in to_unicode.chunks(100) {
+        cmap.push_str(&format!("{} beginbfchar\n{}endbfchar\n", block.len(), block.concat()));
+    }
+    cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+    let cmap_ref = doc.add(Object::Stream(Stream::flate(Dict::new(), cmap.as_bytes())));
+
+    let mut descriptor = Dict::new();
+    descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
+    descriptor.set(b"FontName".to_vec(), Object::name("PCFull0"));
+    descriptor.set(b"FontFamily".to_vec(), Object::String(PdfString::literal(b"Noto Sans Arabic".to_vec())));
+    descriptor.set(b"Flags".to_vec(), Object::Int(4));
+    descriptor.set(b"ItalicAngle".to_vec(), Object::Int(0));
+
+    let mut encoding = Dict::new();
+    encoding.set(b"Type".to_vec(), Object::name("Encoding"));
+    encoding.set(b"Differences".to_vec(), Object::Array(differences));
+
+    let mut font = Dict::new();
+    font.set(b"Type".to_vec(), Object::name("Font"));
+    font.set(b"Subtype".to_vec(), Object::name("Type3"));
+    font.set(b"FontDescriptor".to_vec(), Object::Ref(doc.add(Object::Dict(descriptor))));
+    font.set(b"FontBBox".to_vec(), Object::Array(bbox.iter().map(|v| Object::Real(*v)).collect()));
+    font.set(
+        b"FontMatrix".to_vec(),
+        Object::Array(vec![Object::Real(0.001), Object::Int(0), Object::Int(0), Object::Real(0.001), Object::Int(0), Object::Int(0)]),
+    );
+    font.set(b"FirstChar".to_vec(), Object::Int(1));
+    font.set(b"LastChar".to_vec(), Object::Int(unique_clusters.len() as i64));
+    font.set(b"Widths".to_vec(), Object::Array(widths));
+    font.set(b"Encoding".to_vec(), Object::Dict(encoding));
+    font.set(b"CharProcs".to_vec(), Object::Dict(charprocs));
+    font.set(b"ToUnicode".to_vec(), Object::Ref(cmap_ref));
+    let font_ref = doc.add(Object::Dict(font));
+    Ok((font_ref, cluster_to_code))
+}
+
+fn wrap_clusters(clusters: &[pdfcraft_fonts::ShapedCluster], size: f64, max_w: f64) -> Vec<Vec<pdfcraft_fonts::ShapedCluster>> {
+    let mut lines = Vec::new();
+    let mut current_line: Vec<pdfcraft_fonts::ShapedCluster> = Vec::new();
+    let mut current_w = 0.0;
+    for c in clusters {
+        let cw = c.advance * size;
+        if current_w + cw > max_w && !current_line.is_empty() {
+            if let Some(pos) = current_line.iter().rposition(|cl| cl.text == " ") {
+                let remainder: Vec<pdfcraft_fonts::ShapedCluster> = current_line.drain((pos + 1)..).collect();
+                current_line.pop();
+                lines.push(std::mem::take(&mut current_line));
+                current_w = remainder.iter().map(|cl| cl.advance * size).sum();
+                current_line = remainder;
+            } else {
+                lines.push(std::mem::take(&mut current_line));
+                current_w = 0.0;
+            }
+        }
+        current_w += cw;
+        current_line.push(c.clone());
+    }
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+    lines
+}
+
+fn is_arabic(c: char) -> bool {
+    matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x0870..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFC)
+}
+
+fn contains_arabic(text: &str) -> bool {
+    text.chars().any(is_arabic)
+}
+
+fn check_appearance_text(name: &str, dn: &str, opts: &SignOptions, w: f64, h: f64) -> Result<(bool, bool), SignError> {
+    use pdfcraft_fonts::{first_undrawable, undrawable_message};
+    if w <= 1.0 || h <= 1.0 {
+        return Ok((false, false));
+    }
     let a = &opts.appearance;
-    let dn = cert.subject.display();
+    let shown = [
+        (a.name, "the signer's name", Some(name)),
+        (a.distinguished_name, "the certificate's subject", Some(dn)),
+        (a.reason, "the reason", opts.reason.as_deref()),
+        (a.location, "the location", opts.location.as_deref()),
+    ];
+    let mut needs_arabic = false;
     let mut needs_unicode = false;
-    if w > 1.0 && h > 1.0 {
-        let shown = [
-            (a.name, "the signer's name", Some(name)),
-            (a.distinguished_name, "the certificate's subject", Some(dn.as_str())),
-            (a.reason, "the reason", opts.reason.as_deref()),
-            (a.location, "the location", opts.location.as_deref()),
-        ];
+    for (on, _, text) in shown {
+        if on && let Some(s) = text {
+            if contains_arabic(s) {
+                needs_arabic = true;
+            } else if first_undrawable(s).is_some() {
+                needs_unicode = true;
+            }
+        }
+    }
+    if needs_arabic {
+        let arabic_face = pdfcraft_fonts::document_arabic_font().ok_or_else(|| {
+            SignError::Unsupported(
+                "this text needs PdfCraft's Arabic font (Noto Sans Arabic), which this build doesn't include (official releases do; to build it in, set CRAFT_FONTS_DIR to a craft-fonts checkout)".into(),
+            )
+        })?;
+        for (on, what, text) in shown {
+            if on && let Some(s) = text {
+                for c in s.chars() {
+                    if matches!(c, '\n' | '\r') {
+                        continue;
+                    }
+                    if !pdfcraft_fonts::embedding::covers(arabic_face.bytes, &c.to_string())
+                        && !pdfcraft_fonts::embedding::covers(pdfcraft_fonts::INTER_REGULAR, &c.to_string())
+                        && !pdfcraft_fonts::win_ansi_encodable(c)
+                    {
+                        return Err(SignError::Unsupported(format!(
+                            "{}; sign without a visible appearance, or leave {what} out of it",
+                            undrawable_message(&format!("{what} of the visible signature"), c)
+                        )));
+                    }
+                }
+            }
+        }
+    } else if needs_unicode {
         for (on, what, text) in shown {
             if on
                 && let Some(s) = text
@@ -464,21 +621,219 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
                         )));
                     }
                 }
-                needs_unicode = true;
             }
         }
-        // The labels are the caller's words (a translation), checked as the details are: only
-        // those that are drawn, as each is drawn only beside its detail.
-        let has = |v: Option<&str>| v.is_some_and(|v| !v.is_empty());
-        let drawn = [a.name, a.distinguished_name, a.reason && has(opts.reason.as_deref()), a.location && has(opts.location.as_deref()), a.date];
-        let mut labels = opts.appearance_labels.fields().into_iter().zip(drawn).filter(|&(_, on)| a.labels && on);
-        if let Some((field, c)) = labels.find_map(|((field, text), _)| first_undrawable(text).map(|c| (field, c))) {
-            return Err(SignError::Unsupported(format!(
-                "{}; pass that label in Western European characters, or leave the labels out of the visible signature",
-                undrawable_message(&format!("the {field} label of the visible signature"), c)
-            )));
+    }
+    let has = |v: Option<&str>| v.is_some_and(|v| !v.is_empty());
+    let drawn = [a.name, a.distinguished_name, a.reason && has(opts.reason.as_deref()), a.location && has(opts.location.as_deref()), a.date];
+    let mut labels = opts.appearance_labels.fields().into_iter().zip(drawn).filter(|&(_, on)| a.labels && on);
+    if let Some((field, c)) = labels.find_map(|((field, text), _)| first_undrawable(text).map(|c| (field, c))) {
+        return Err(SignError::Unsupported(format!(
+            "{}; pass that label in Western European characters, or leave the labels out of the visible signature",
+            undrawable_message(&format!("the {field} label of the visible signature"), c)
+        )));
+    }
+    Ok((needs_arabic, needs_unicode))
+}
+
+struct AppearanceBox {
+    h: f64,
+    pad: f64,
+    left_w: f64,
+    right_x: f64,
+    right_w: f64,
+}
+
+fn draw_arabic_appearance(
+    doc: &mut Document,
+    b: &AppearanceBox,
+    name: &str,
+    lines: &[String],
+    opts: &SignOptions,
+) -> Result<(Vec<u8>, Dict, Option<ObjRef>), SignError> {
+    let a = &opts.appearance;
+    let mut out = Vec::new();
+    let mut fonts = Dict::new();
+    let mut image = None;
+
+    let mut name_size = (b.h * 0.4).min(36.0);
+    let fit = (b.left_w - 2.0 * b.pad).max(1.0);
+    let name_clusters = pdfcraft_fonts::shape_arabic(name, true).map_err(|e| SignError::Pdf(format!("failed to shape Arabic: {e:?}")))?;
+    let longest = name_clusters.iter().map(|c| c.advance).sum::<f64>().max(0.01);
+    name_size = name_size.min(fit / longest).max(4.0);
+    let name_lines = if a.name && opts.graphic.is_none() { wrap_clusters(&name_clusters, name_size, fit) } else { Vec::new() };
+
+    let shaped_detail_lines: Vec<Vec<pdfcraft_fonts::ShapedCluster>> = lines
+        .iter()
+        .map(|l| pdfcraft_fonts::shape_arabic(l, contains_arabic(l)))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| SignError::Pdf(format!("failed to shape Arabic details: {e:?}")))?;
+
+    let mut detail_size = (b.h / (lines.len().max(1) as f64 * 1.15)).min(12.0);
+    let wrapped_detail_lines = loop {
+        let all: Vec<Vec<pdfcraft_fonts::ShapedCluster>> =
+            shaped_detail_lines.iter().flat_map(|l| wrap_clusters(l, detail_size, b.right_w)).collect();
+        if all.len() as f64 * detail_size * 1.15 <= b.h - 2.0 * b.pad || detail_size <= 3.0 {
+            break all;
+        }
+        detail_size *= 0.9;
+    };
+
+    let mut all_clusters = Vec::new();
+    for line in &name_lines {
+        all_clusters.extend(line.iter().cloned());
+    }
+    for line in &wrapped_detail_lines {
+        all_clusters.extend(line.iter().cloned());
+    }
+
+    let (font_ref, cluster_to_code) = type3_arabic(doc, &all_clusters)?;
+    fonts.set(b"PCFull0".to_vec(), Object::Ref(font_ref));
+    let font_tag = "PCFull0";
+
+    if let Some(g) = &opts.graphic {
+        let (ops, im) = g.draw(doc, [b.pad, b.pad, (b.left_w - 2.0 * b.pad).max(0.0), (b.h - 2.0 * b.pad).max(0.0)])?;
+        out.extend(ops.bytes());
+        image = im;
+    }
+    out.extend_from_slice(b"BT\n0 g\n");
+    if a.name && opts.graphic.is_none() {
+        let total = name_lines.len() as f64 * name_size * 1.1;
+        let mut y = (b.h + total) / 2.0 - name_size * 0.85;
+        for line in &name_lines {
+            let line_w = line.iter().map(|c| c.advance).sum::<f64>() * name_size;
+            let is_rtl = line.iter().any(|c| contains_arabic(&c.text));
+            let x = if is_rtl { (b.left_w - b.pad - line_w).max(b.pad) } else { b.pad };
+            let mut pen = x;
+            for c in line {
+                let key = cluster_key(c);
+                if let Some(&code) = cluster_to_code.get(&key) {
+                    out.extend(format!("/{font_tag} {} Tf 1 0 0 1 {} {} Tm <{code:02X}> Tj\n", fmt(name_size), fmt(pen), fmt(y)).bytes());
+                }
+                pen += c.advance * name_size;
+            }
+            y -= name_size * 1.1;
         }
     }
+    let mut y = b.h - b.pad - detail_size * 0.9;
+    for line in &wrapped_detail_lines {
+        let line_w = line.iter().map(|c| c.advance).sum::<f64>() * detail_size;
+        let is_rtl = line.iter().any(|c| contains_arabic(&c.text));
+        let x = if is_rtl { (b.right_x + b.right_w - line_w).max(b.right_x) } else { b.right_x };
+        let mut pen = x;
+        for c in line {
+            let key = cluster_key(c);
+            if let Some(&code) = cluster_to_code.get(&key) {
+                out.extend(format!("/{font_tag} {} Tf 1 0 0 1 {} {} Tm <{code:02X}> Tj\n", fmt(detail_size), fmt(pen), fmt(y)).bytes());
+            }
+            pen += c.advance * detail_size;
+        }
+        y -= detail_size * 1.15;
+    }
+    out.extend_from_slice(b"ET\n");
+    Ok((out, fonts, image))
+}
+
+fn draw_standard_appearance(
+    doc: &mut Document,
+    b: &AppearanceBox,
+    name: &str,
+    lines: &[String],
+    needs_unicode: bool,
+    opts: &SignOptions,
+) -> Result<(Vec<u8>, Dict, Option<ObjRef>), SignError> {
+    use pdfcraft_fonts::{helvetica_width, inter_width, literal, win_ansi, wrap, wrap_with};
+    let a = &opts.appearance;
+    let mut out = Vec::new();
+    let mut fonts = Dict::new();
+    let mut image = None;
+
+    let wrap_text =
+        |s: &str, sz: f64, max_w: f64| -> Vec<String> { if needs_unicode { wrap_with(s, sz, max_w, inter_width) } else { wrap(s, sz, max_w) } };
+
+    let (font_tag, metrics) = if needs_unicode {
+        let tag = pdfcraft_fonts::embedding::embed(doc, &mut fonts, pdfcraft_fonts::INTER_REGULAR, "Inter")
+            .map_err(|e| SignError::Pdf(format!("failed to embed signature font: {e}")))?;
+        let font_dict = fonts
+            .get(tag.as_bytes())
+            .map(|o| doc.resolve(o))
+            .and_then(|o| o.as_dict().cloned())
+            .ok_or_else(|| SignError::Pdf("embedded signature font dictionary not found".into()))?;
+        let m = pdfcraft_fonts::pdf::Metrics::from_dict(doc, &font_dict);
+        (tag, Some(m))
+    } else {
+        let mut font = Dict::new();
+        font.set(b"Type".to_vec(), Object::name("Font"));
+        font.set(b"Subtype".to_vec(), Object::name("Type1"));
+        font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+        font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+        fonts.set(b"Helv".to_vec(), Object::Dict(font));
+        ("Helv".to_string(), None)
+    };
+    let encode_line =
+        |l: &str| -> Vec<u8> { if let Some(m) = &metrics { literal(&m.encode(l).unwrap_or_else(|| win_ansi(l))) } else { literal(&win_ansi(l)) } };
+
+    if let Some(g) = &opts.graphic {
+        let (ops, im) = g.draw(doc, [b.pad, b.pad, (b.left_w - 2.0 * b.pad).max(0.0), (b.h - 2.0 * b.pad).max(0.0)])?;
+        out.extend(ops.bytes());
+        image = im;
+    }
+    out.extend_from_slice(b"BT\n0 g\n");
+    if a.name && opts.graphic.is_none() {
+        let mut size = (b.h * 0.4).min(36.0);
+        let fit = (b.left_w - 2.0 * b.pad).max(1.0);
+        let longest = (if needs_unicode { inter_width(name, 1.0) } else { helvetica_width(name, 1.0) }).max(0.01);
+        size = size.min(fit / longest).max(4.0);
+        let words = wrap_text(name, size, fit);
+        let total = words.len() as f64 * size * 1.1;
+        let mut y = (b.h + total) / 2.0 - size * 0.85;
+        for l in &words {
+            out.extend(format!("/{font_tag} {} Tf 1 0 0 1 {} {} Tm ", fmt(size), fmt(b.pad), fmt(y)).bytes());
+            out.extend(encode_line(l));
+            out.extend_from_slice(b" Tj\n");
+            y -= size * 1.1;
+        }
+    }
+    let mut size = (b.h / (lines.len().max(1) as f64 * 1.15)).min(12.0);
+    let wrapped = loop {
+        let all: Vec<String> = lines.iter().flat_map(|l| wrap_text(l, size, b.right_w)).collect();
+        if all.len() as f64 * size * 1.15 <= b.h - 2.0 * b.pad || size <= 3.0 {
+            break all;
+        }
+        size *= 0.9;
+    };
+    let mut y = b.h - b.pad - size * 0.9;
+    for l in &wrapped {
+        out.extend(format!("/{font_tag} {} Tf 1 0 0 1 {} {} Tm ", fmt(size), fmt(b.right_x), fmt(y)).bytes());
+        out.extend(encode_line(l));
+        out.extend_from_slice(b" Tj\n");
+        y -= size * 1.15;
+    }
+    out.extend_from_slice(b"ET\n");
+    Ok((out, fonts, image))
+}
+
+/// The visible signature: the signer's name large on the left, or the graphic in its place, and
+/// the details on the right (Acrobat's standard layout), in Helvetica, or in the bundled Inter
+/// font when a detail needs characters beyond Western European, or in Noto Sans Arabic from
+/// craft-fonts when Arabic characters are present. A graphic with no details beside it fills the
+/// box. An error, before anything is drawn, when a detail it writes (the signer's name, the
+/// certificate's subject, the reason or the location) has a character none of the fonts can draw:
+/// signing invisibly, or leaving that part out, still works. A graphic doesn't change this: the
+/// name it replaces on the left is still among the details. A label that is drawn
+/// ([`AppearanceLabels`], the caller's words) must be drawable in Helvetica, and is refused otherwise.
+///
+/// `turn` is the widget's `/MK /R` (0, 90, 180 or 270; anything else counts as 0): the layout is
+/// drawn upright in the box as turned by it, and a `/Matrix` maps that box onto `rect`.
+fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &Certificate, opts: &SignOptions) -> Result<Stream, SignError> {
+    let turn = if matches!(turn, 90 | 180 | 270) { turn } else { 0 };
+    let (rw, rh) = ((rect[2] - rect[0]).max(0.0), (rect[3] - rect[1]).max(0.0));
+    // The upright layout box: a quarter turn swaps its sides.
+    let (w, h) = if turn % 180 == 0 { (rw, rh) } else { (rh, rw) };
+    let a = &opts.appearance;
+    let dn = cert.subject.display();
+    let (needs_arabic, needs_unicode) = check_appearance_text(name, &dn, opts, w, h)?;
+
     let mut lines: Vec<String> = Vec::new();
     let label = |l: &str, v: &str| if a.labels { format!("{l}{v}") } else { v.to_string() };
     // The labels are the caller's words, so a signature signed in another language reads in it.
@@ -504,34 +859,8 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
         lines.push(label(&wording.date, &display_date(&opts.date)));
     }
     lines.retain(|l| !l.is_empty());
-    let mut out = Vec::new();
-    let mut image = None;
-    let mut fonts = Dict::new();
-    let (font_tag, metrics) = if needs_unicode {
-        let tag = pdfcraft_fonts::embedding::embed(doc, &mut fonts, pdfcraft_fonts::INTER_REGULAR, "Inter")
-            .map_err(|e| SignError::Pdf(format!("failed to embed signature font: {e}")))?;
-        let font_dict = fonts
-            .get(tag.as_bytes())
-            .map(|o| doc.resolve(o))
-            .and_then(|o| o.as_dict().cloned())
-            .ok_or_else(|| SignError::Pdf("embedded signature font dictionary not found".into()))?;
-        let m = pdfcraft_fonts::pdf::Metrics::from_dict(doc, &font_dict);
-        (tag, Some(m))
-    } else {
-        let mut font = Dict::new();
-        font.set(b"Type".to_vec(), Object::name("Font"));
-        font.set(b"Subtype".to_vec(), Object::name("Type1"));
-        font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
-        font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-        fonts.set(b"Helv".to_vec(), Object::Dict(font));
-        ("Helv".to_string(), None)
-    };
-    let measure = |s: &str, sz: f64| -> f64 { if needs_unicode { inter_width(s, sz) } else { helvetica_width(s, sz) } };
-    let wrap_text =
-        |s: &str, sz: f64, max_w: f64| -> Vec<String> { if needs_unicode { wrap_with(s, sz, max_w, inter_width) } else { wrap(s, sz, max_w) } };
-    let encode_line =
-        |l: &str| -> Vec<u8> { if let Some(m) = &metrics { literal(&m.encode(l).unwrap_or_else(|| win_ansi(l))) } else { literal(&win_ansi(l)) } };
-    if w > 1.0 && h > 1.0 {
+
+    let (out, fonts, image) = if w > 1.0 && h > 1.0 {
         let pad = (h * 0.06).clamp(1.0, 6.0);
         let (left_w, right_x) = match (&opts.graphic, a.name) {
             (Some(_), _) if lines.is_empty() => (w, pad),
@@ -539,46 +868,17 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
             (None, false) => (0.0, pad),
         };
         let right_w = (w - right_x - pad).max(1.0);
-        if let Some(g) = &opts.graphic {
-            let (ops, im) = g.draw(doc, [pad, pad, (left_w - 2.0 * pad).max(0.0), (h - 2.0 * pad).max(0.0)])?;
-            out.extend(ops.bytes());
-            image = im;
+        let ab = AppearanceBox { h, pad, left_w, right_x, right_w };
+
+        if needs_arabic {
+            draw_arabic_appearance(doc, &ab, name, &lines, opts)?
+        } else {
+            draw_standard_appearance(doc, &ab, name, &lines, needs_unicode, opts)?
         }
-        out.extend_from_slice(b"BT\n0 g\n");
-        if a.name && opts.graphic.is_none() {
-            // The name fills the left half.
-            let mut size = (h * 0.4).min(36.0);
-            let fit = (left_w - 2.0 * pad).max(1.0);
-            let longest = measure(name, 1.0).max(0.01);
-            size = size.min(fit / longest).max(4.0);
-            let words = wrap_text(name, size, fit);
-            let total = words.len() as f64 * size * 1.1;
-            let mut y = (h + total) / 2.0 - size * 0.85;
-            for l in &words {
-                out.extend(format!("/{font_tag} {} Tf 1 0 0 1 {} {} Tm ", fmt(size), fmt(pad), fmt(y)).bytes());
-                out.extend(encode_line(l));
-                out.extend_from_slice(b" Tj\n");
-                y -= size * 1.1;
-            }
-        }
-        // The details, shrunk to fit the right side.
-        let mut size = (h / (lines.len().max(1) as f64 * 1.15)).min(12.0);
-        let wrapped = loop {
-            let all: Vec<String> = lines.iter().flat_map(|l| wrap_text(l, size, right_w)).collect();
-            if all.len() as f64 * size * 1.15 <= h - 2.0 * pad || size <= 3.0 {
-                break all;
-            }
-            size *= 0.9;
-        };
-        let mut y = h - pad - size * 0.9;
-        for l in &wrapped {
-            out.extend(format!("/{font_tag} {} Tf 1 0 0 1 {} {} Tm ", fmt(size), fmt(right_x), fmt(y)).bytes());
-            out.extend(encode_line(l));
-            out.extend_from_slice(b" Tj\n");
-            y -= size * 1.15;
-        }
-        out.extend_from_slice(b"ET\n");
-    }
+    } else {
+        (Vec::new(), Dict::new(), None)
+    };
+
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("XObject"));
     d.set(b"Subtype".to_vec(), Object::name("Form"));

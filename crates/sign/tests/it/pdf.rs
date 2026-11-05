@@ -2545,6 +2545,57 @@ fn visible_appearance_draws_central_european_characters_with_embedded_font() {
     assert_eq!(s.reason.as_deref(), Some("Podpisano s potrdilom"));
 }
 
+/// A visible signature with Arabic characters embeds the Arabic font and shapes and draws
+/// them cleanly instead of refusing or writing `?`.
+#[test]
+fn visible_appearance_draws_arabic_characters_with_embedded_font() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let name = Name::build("فراس شماس", "مجلس الإدارة", "SMSA", "firas@example.com", "SY");
+    let cert = Certificate::self_signed(&name, &id.key, Time::from_unix(1_700_000_000), 5, &[1]).unwrap();
+    let firas_id = DigitalId { key: id.key, certificate: cert, chain: Vec::new(), friendly_name: None };
+    let shown =
+        pdfcraft_sign::Appearance { name: true, distinguished_name: true, reason: true, location: true, ..pdfcraft_sign::Appearance::default() };
+    let sl = SignOptions {
+        rect: Some([150.0, 20.0, 280.0, 70.0]),
+        reason: Some("موافق على المستند".into()),
+        location: Some("دمشق، سورية".into()),
+        appearance: shown,
+        ..opts()
+    };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &firas_id, &sl).unwrap();
+    let (content, res) = appearance_of(&signed, "Signature1");
+    // Verify that the appearance stream does not write `?` in place of Arabic characters.
+    assert!(!content.contains('?'), "appearance content should not write '?' for Arabic characters: {content}");
+    // Verify an embedded font was added to the appearance resources.
+    let fonts = res.get(b"Font").and_then(|o| o.as_dict()).unwrap();
+    assert!(fonts.contains(b"PCFull0") || fonts.contains(b"PCNotoSansArabic0"), "appearance should reference the embedded font: {fonts:?}");
+    // Verify signature validation still passes.
+    let doc = open(&signed);
+    let trust = TrustStore { certs: vec![firas_id.certificate.clone()] };
+    let s = signatures(&doc, &signed, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Valid);
+    assert_eq!(s.reason.as_deref(), Some("موافق على المستند"));
+}
+
+/// When built without craft-fonts, signing with Arabic characters returns an actionable error.
+#[test]
+fn visible_appearance_arabic_without_craft_fonts_returns_actionable_error() {
+    if pdfcraft_fonts::document_arabic_font().is_some() {
+        return;
+    }
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let name = Name::build("فراس", "SMSA", "SMSA", "firas@example.com", "SY");
+    let cert = Certificate::self_signed(&name, &id.key, Time::from_unix(1_700_000_000), 5, &[1]).unwrap();
+    let firas_id = DigitalId { key: id.key, certificate: cert, chain: Vec::new(), friendly_name: None };
+    let sl = SignOptions { rect: Some([150.0, 20.0, 280.0, 70.0]), ..opts() };
+    let err = pdfcraft_sign::sign(&open(&fixture()), &firas_id, &sl).unwrap_err();
+    assert!(matches!(err, SignError::Unsupported(_)), "{err:?}");
+    assert!(err.to_string().contains("Noto Sans Arabic"), "{err}");
+}
+
 /// A label Helvetica can't draw is refused even when a detail already needs the embedded font: the
 /// labels never choose the font, so a Japanese label beside a Latin Extended name is never written
 /// as the wrong glyphs.
