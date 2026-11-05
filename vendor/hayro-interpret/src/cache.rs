@@ -108,7 +108,7 @@ pub(crate) struct DecodedImageKey {
     pub(crate) default_space: Option<u128>,
     pub(crate) target: Option<(u32, u32)>,
     pub(crate) preview: bool,
-    /// PdfCraft patch (77): the size a soft mask far larger than where it is drawn was averaged
+    /// PdfCraft patch (82): the size a soft mask far larger than where it is drawn was averaged
     /// down to (`ImageXObject::decoded_soft_mask`), `None` for a mask kept at its own size.
     pub(crate) shrunk_to: Option<(u32, u32)>,
 }

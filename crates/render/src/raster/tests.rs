@@ -8191,13 +8191,13 @@ fn decoded_images_serve_every_size_they_are_drawn_at() {
     };
     assert_eq!(decodes("A"), 1, "a Flate image decodes the same at every size");
     // The image and its JPX soft mask each decode once for each of the five sizes: the mask goes
-    // through the cache too since hayro-interpret patch 77, so its decodes are counted with the
+    // through the cache too since hayro-interpret patch 82, so its decodes are counted with the
     // image's.
     assert_eq!(decodes("B"), 10, "a JPX soft mask decodes for the size it is drawn at");
 }
 
 /// A soft mask far larger than where its image is drawn is averaged down to that size and cached
-/// there (vendored hayro-interpret patch 77): a 2 × 2 image whose mask is 34,862 × 4,332, drawn 40
+/// there (vendored hayro-interpret patch 82): a 2 × 2 image whose mask is 34,862 × 4,332, drawn 40
 /// times on one slide (pdf.js `issue16263.pdf`), was decoded and drawn at full size each time and
 /// the page took minutes. Drawn ten times at one size, the mask is now decoded once and handed
 /// over at that size rounded up to a power of two; a mask no larger than twice its drawn size
@@ -8275,7 +8275,7 @@ fn a_soft_mask_far_larger_than_where_it_is_drawn_is_shrunk_once() {
 
 /// The soft masks a small image is handed, drawn at each of `sizes` (width × height points at 72
 /// dpi): its `mask` (`width`, `height`, 8-bit samples) is larger than the 2 × 1 image, so it may
-/// be averaged down (vendored hayro-interpret patch 77). Each mask is given as its size and
+/// be averaged down (vendored hayro-interpret patch 82). Each mask is given as its size and
 /// samples.
 fn soft_masks_handed(width: u32, height: u32, mask: &[u8], sizes: &[(u32, u32)]) -> (Vec<(u32, u32, Vec<u8>)>, usize) {
     soft_masks_handed_keyed(width, height, mask, sizes, ("Width", "Height"))
@@ -8339,7 +8339,7 @@ fn soft_masks_handed_keyed(width: u32, height: u32, mask: &[u8], sizes: &[(u32, 
     (device.0, cache.decoded_image_decodes())
 }
 
-/// An averaged-down soft mask (vendored hayro-interpret patch 77):
+/// An averaged-down soft mask (vendored hayro-interpret patch 82):
 /// - takes each source sample into the target sample its centre falls in: seven columns
 ///   `0 0 0 255 0 0 0`, drawn three wide and so averaged to four, give `0 0 127 0` (by left edges,
 ///   `0 127 0 0`);
