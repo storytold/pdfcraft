@@ -20,7 +20,7 @@ impl<'a> Scope<'a> {
         // groups. A membership dictionary's default policy is AnyOn.
         let d = doc.resolve(o);
         let Some(d) = d.as_dict() else { return false };
-        if d.name(b"Type") != Some(b"OCMD") {
+        if !has_type(doc, d, b"OCMD") {
             return false;
         }
         let groups: Vec<ObjRef> = match d.get(b"OCGs").map(|g| (*doc.resolve(g)).clone()) {
@@ -102,7 +102,7 @@ impl<'a> Scope<'a> {
         }
         let resolved = doc.resolve(expression);
         let complete = match &*resolved {
-            Object::Dict(d) if d.name(b"Type") == Some(b"OCG") => {
+            Object::Dict(d) if has_type(doc, d, b"OCG") => {
                 if let Some(r) = reference
                     && hidden_layers.contains(&r)
                 {
@@ -151,7 +151,7 @@ impl<'a> Scope<'a> {
         }
         let resolved = doc.resolve(expression);
         let result = match &*resolved {
-            Object::Dict(d) if d.name(b"Type") == Some(b"OCG") => reference.map(|r| !self.hidden_layers.contains(&r)),
+            Object::Dict(d) if has_type(doc, d, b"OCG") => reference.map(|r| !self.hidden_layers.contains(&r)),
             Object::Array(items) if (2..=4097).contains(&items.len()) => {
                 let operator = match items.first() {
                     Some(Object::Name(n)) => n.as_slice(),
@@ -202,7 +202,7 @@ impl<'a> Scope<'a> {
         let resolved = doc.resolve(expression);
         let found = match &*resolved {
             Object::Array(items) => items.iter().any(|item| self.expression_mentions_hidden(doc, item, depth + 1, path, budget)),
-            Object::Dict(d) if d.name(b"Type") == Some(b"OCG") => expression.as_ref().is_none_or(|r| self.hidden_layers.contains(&r)),
+            Object::Dict(d) if has_type(doc, d, b"OCG") => expression.as_ref().is_none_or(|r| self.hidden_layers.contains(&r)),
             Object::Dict(_) => true,
             _ => false,
         };
@@ -253,4 +253,10 @@ pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Ve
         }
     }
     (out, removed)
+}
+
+/// Is this dictionary's `/Type` the given name? An indirect `/Type` is followed, as a viewer
+/// follows it: a group or membership dictionary must not escape classification through one.
+fn has_type(doc: &Document, d: &Dict, name: &[u8]) -> bool {
+    d.get(b"Type").is_some_and(|t| crate::resolve_chain(doc, t).as_name() == Some(name))
 }

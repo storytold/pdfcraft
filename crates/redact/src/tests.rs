@@ -3872,6 +3872,78 @@ fn a_reply_on_another_page_to_a_removed_popup_goes_too() {
     }
 }
 
+/// One page drawing `SECRET` in the `/OC /L` block, with layer 7 0 R in the default
+/// configuration `config` (objects 8 and up are `extra`).
+fn layer_state_page(config: Vec<(&str, Object)>, resource: &str, extra: Vec<Vec<u8>>) -> Document {
+    let mut objects = vec![b"<< /Type /OCG /Name (Secret) >>".to_vec()];
+    objects.extend(extra);
+    let mut doc = one_page(b"/OC /L BDC BT /F1 10 Tf 10 100 Td (SECRET) Tj ET EMC", &format!("/Properties << /L {resource} >>"), objects);
+    let config = Object::Dict(Dict::from_iter(config.into_iter().map(|(k, v)| (k.as_bytes().to_vec(), v))));
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |d| {
+        d.set(
+            b"OCProperties".to_vec(),
+            Object::Dict(Dict::from_iter([(b"OCGs".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0))])), (b"D".to_vec(), config)])),
+        );
+    })
+    .unwrap();
+    doc
+}
+
+fn assert_layer_secret_removed(mut doc: Document) {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let counts = scan(&doc);
+    assert!(counts.iter().any(|(h, n)| *h == Hidden::HiddenLayers && *n > 0), "{counts:?}");
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert!(!pdfcraft_edit::text_lines(&saved, 0).unwrap().iter().any(|line| line.text.contains("SECRET")));
+}
+
+#[test]
+fn an_indirect_base_state_off_hides_the_layer() {
+    assert_layer_secret_removed(layer_state_page(vec![("BaseState", Object::Ref(ObjRef::new(8, 0)))], "7 0 R", vec![b"/OFF".to_vec()]));
+}
+
+#[test]
+fn a_chained_base_state_off_hides_the_layer() {
+    assert_layer_secret_removed(layer_state_page(
+        vec![("BaseState", Object::Ref(ObjRef::new(8, 0)))],
+        "7 0 R",
+        vec![b"9 0 R".to_vec(), b"/OFF".to_vec()],
+    ));
+}
+
+#[test]
+fn a_chained_membership_type_is_evaluated() {
+    assert_layer_secret_removed(layer_state_page(
+        vec![("BaseState", Object::name("ON"))],
+        "8 0 R",
+        vec![b"<< /Type 9 0 R /OCGs [7 0 R] /P /AllOff >>".to_vec(), b"10 0 R".to_vec(), b"/OCMD".to_vec()],
+    ));
+}
+
+#[test]
+fn off_wins_over_on_when_the_base_state_is_off() {
+    assert_layer_secret_removed(layer_state_page(
+        vec![
+            ("BaseState", Object::name("OFF")),
+            ("ON", Object::Array(vec![Object::Ref(ObjRef::new(7, 0))])),
+            ("OFF", Object::Array(vec![Object::Ref(ObjRef::new(7, 0))])),
+        ],
+        "7 0 R",
+        Vec::new(),
+    ));
+}
+
+#[test]
+fn a_membership_dictionary_with_an_indirect_type_is_evaluated() {
+    assert_layer_secret_removed(layer_state_page(
+        vec![("BaseState", Object::name("ON"))],
+        "8 0 R",
+        vec![b"<< /Type 9 0 R /OCGs [7 0 R] /P /AllOff >>".to_vec(), b"/OCMD".to_vec()],
+    ));
+}
+
 #[test]
 fn a_rewritten_form_xobject_drops_the_source_text_of_added_content() {
     // A form drawing invisible text whose dictionary repeats it in /PCAdded.

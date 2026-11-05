@@ -859,3 +859,16 @@ pub fn clear_marks(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize,
     }
     Ok(targets.len())
 }
+
+/// `o` with a chain of references followed, as a viewer follows it, to at most 16 links (so a
+/// reference cycle ends): hidden-layer state must not escape classification through one.
+pub(crate) fn resolve_chain(doc: &pdfcraft_cos::Document, o: &pdfcraft_cos::Object) -> std::sync::Arc<pdfcraft_cos::Object> {
+    let mut o = doc.resolve(o);
+    for _ in 0..16 {
+        if !matches!(*o, pdfcraft_cos::Object::Ref(_)) {
+            break;
+        }
+        o = doc.resolve(&o);
+    }
+    o
+}
