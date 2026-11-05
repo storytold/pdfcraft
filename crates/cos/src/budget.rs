@@ -348,12 +348,18 @@ impl DecodeBudget {
     /// A stream that fails to decode, or arrives after the allowance is spent, is an `Err` in its
     /// place, so the caller chooses between skipping it and giving up.
     pub fn decode_contents(&mut self, doc: &Document, contents: &Object) -> Vec<Result<Vec<u8>, CosError>> {
+        self.decode_contents_with_damage(doc, contents).into_iter().map(|read| read.map(|(data, _)| data)).collect()
+    }
+
+    /// [`DecodeBudget::decode_contents`], each stream also saying whether it is damaged partway
+    /// ([`DecodeBudget::decode_with_damage`]).
+    pub fn decode_contents_with_damage(&mut self, doc: &Document, contents: &Object) -> Vec<Result<(Vec<u8>, bool), CosError>> {
         match &*doc.resolve(contents) {
-            Object::Stream(s) => vec![self.decode(s)],
+            Object::Stream(s) => vec![self.decode_with_damage(s, usize::MAX)],
             Object::Array(list) => list
                 .iter()
                 .filter_map(|entry| match &*doc.resolve(entry) {
-                    Object::Stream(s) => Some(self.decode(s)),
+                    Object::Stream(s) => Some(self.decode_with_damage(s, usize::MAX)),
                     _ => None,
                 })
                 .collect(),
@@ -840,6 +846,24 @@ mod tests {
         dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("ASCIIHexDecode")]));
         let hex = Stream::from_raw(dict, Stream::flate(Dict::new(), b"4142zz4344>").raw.to_vec());
         assert_eq!(budget.decode_with_damage(&hex, usize::MAX).ok(), Some((b"AB".to_vec(), true)));
+    }
+
+    /// A page's content streams each say whether they are damaged, in their places.
+    #[test]
+    fn a_pages_streams_each_say_whether_they_are_damaged() {
+        let mut doc = Document::new_empty();
+        let whole = doc.add(Object::Stream(Stream::flate(Dict::new(), b"0 0 m 1 1 l S")));
+        let Object::Stream(s) = &*doc.get(whole) else { panic!("not a stream") };
+        let cut = Stream::from_raw(s.dict.clone(), s.raw.get(..s.raw.len() - 6).unwrap_or_default().to_vec());
+        let cut = doc.add(Object::Stream(cut));
+        let contents = Object::Array(vec![Object::Ref(whole), Object::Null, Object::Ref(cut)]);
+        let mut budget = DecodeBudget::page();
+        let read: Vec<_> = budget.decode_contents_with_damage(&doc, &contents).into_iter().map(|r| r.map(|(_, damaged)| damaged).ok()).collect();
+        assert_eq!(read, [Some(false), Some(true)]);
+        let one: Vec<_> =
+            budget.decode_contents_with_damage(&doc, &Object::Ref(cut)).into_iter().map(|r| r.map(|(_, damaged)| damaged).ok()).collect();
+        assert_eq!(one, [Some(true)]);
+        assert_eq!(budget.decode_contents(&doc, &contents).iter().filter(|r| r.is_ok()).count(), 2, "read up to the damage");
     }
 
     /// A stream that fails its reading as zlib, and then as raw deflate after decoding all of it,
