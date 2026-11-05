@@ -299,6 +299,30 @@ fn core_tool_buttons(ui: &mut egui::Ui, app: &mut PdfCraftApp, cell: f32, popup_
     });
 }
 
+fn controls_divider(ui: &mut egui::Ui, t: &Tokens, vertical: bool) {
+    let (r, _) = if vertical {
+        ui.allocate_exact_size(vec2(crate::canvas::bars::QUICK_BAR_WIDTH, 9.0), Sense::hover())
+    } else {
+        ui.allocate_exact_size(vec2(9.0, crate::canvas::bars::QUICK_BAR_WIDTH), Sense::hover())
+    };
+    if vertical {
+        ui.painter().hline(r.x_range().shrink(6.0), r.center().y, Stroke::new(1.0, t.divider));
+    } else {
+        ui.painter().vline(r.center().x, r.y_range().shrink(6.0), Stroke::new(1.0, t.divider));
+    }
+}
+
+fn selected_fill_text(app: &PdfCraftApp) -> Option<(usize, usize)> {
+    let (index, id) = app.active_ids()?;
+    let (page, annotation) = app.views.get(index)?.comments.selected?;
+    let doc = app.session.get(id).filter(|doc| doc.allows_annotation())?;
+    doc.info
+        .annotations
+        .iter()
+        .any(|a| a.page == page && a.index == annotation && a.fill_sign && a.subtype == "FreeText" && !a.locked)
+        .then_some((page, annotation))
+}
+
 /// Extra controls rendered below/beside the buttons when a comment or fill tool is active.
 fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, vertical: bool) {
     let current_fill = match app.quick_tool {
@@ -306,47 +330,44 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
         _ => None,
     };
     if matches!(current_fill, Some(crate::fill_sign::FillTool::Text | crate::fill_sign::FillTool::Date)) {
-        if vertical {
-            ui.label(tl!("Font size:"));
-        }
-        let size = ui.add(
-            egui::DragValue::new(&mut app.fill_text_size)
-                .range(crate::fill_sign::MIN_TEXT_SIZE..=crate::fill_sign::MAX_TEXT_SIZE)
-                .speed(0.25)
-                .suffix(" pt"),
-        );
-        if ((size.changed() && !size.dragged()) || size.drag_stopped())
-            && let Some((index, id)) = app.active_ids()
-            && let Some((page, annotation)) = app.views.get(index).and_then(|view| view.comments.selected)
-            && app.session.get(id).is_some_and(|doc| {
-                doc.allows_annotation()
-                    && doc
-                        .info
-                        .annotations
-                        .iter()
-                        .any(|a| a.page == page && a.index == annotation && a.fill_sign && a.subtype == "FreeText" && !a.locked)
-            })
-        {
-            app.apply_edit(Edit::FontSizeAnnotation { page, index: annotation, size: app.fill_text_size });
-        }
-        ui.menu_button(tl!("Colour"), |ui| {
-            if let Some(color) = comments::swatch_grid(ui, Some(app.fill_text_color)) {
-                app.fill_text_color = color;
-                ui.close();
+        controls_divider(ui, t, vertical);
+        if let Some(color) = comments::quick_bar_colour(ui, app.fill_text_color) {
+            app.fill_text_color = color;
+            if let Some((page, index)) = selected_fill_text(app) {
+                app.apply_edit(Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None });
             }
-        });
+        }
+        let resp = icons::button(ui, "a-large-small", 32.0, false, tl!("Font size"));
+        let resized = egui::Popup::menu(&resp)
+            .align(egui::RectAlign::RIGHT_START)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.set_min_width(180.0);
+                ui.label(egui::RichText::new(tl!("Font size")).font(theme::semibold(12.0)));
+                let size = ui.add(
+                    egui::Slider::new(&mut app.fill_text_size, crate::fill_sign::MIN_TEXT_SIZE..=crate::fill_sign::MAX_TEXT_SIZE)
+                        .logarithmic(true)
+                        .suffix(" pt"),
+                );
+                // #1274: the size also applies to the Fill & Sign text that is selected,
+                // once per change (a typed value, or the end of a drag), so a drag adds
+                // one undo step and not one per frame.
+                (size.changed() && !size.dragged()) || size.drag_stopped()
+            })
+            .is_some_and(|popup| popup.inner);
+        let size = app.fill_text_size;
+        if resized
+            && let Some((page, index)) = selected_fill_text(app)
+            && app
+                .active_ids()
+                .and_then(|(_, id)| app.session.get(id)?.comment_props(page, index)?.font_size)
+                .is_none_or(|stored| format!("{stored:.3}") != format!("{size:.3}"))
+        {
+            app.apply_edit(Edit::FontSizeAnnotation { page, index, size });
+        }
     }
     if let QuickTool::Comment(tool) = app.quick_tool {
-        let (r, _) = if vertical {
-            ui.allocate_exact_size(vec2(crate::canvas::bars::QUICK_BAR_WIDTH, 9.0), Sense::hover())
-        } else {
-            ui.allocate_exact_size(vec2(9.0, crate::canvas::bars::QUICK_BAR_WIDTH), Sense::hover())
-        };
-        if vertical {
-            ui.painter().hline(r.x_range().shrink(6.0), r.center().y, Stroke::new(1.0, t.divider));
-        } else {
-            ui.painter().vline(r.center().x, r.y_range().shrink(6.0), Stroke::new(1.0, t.divider));
-        }
+        controls_divider(ui, t, vertical);
         if let Some(color) = comments::quick_bar_controls(ui, tool, &mut app.comment_prefs)
             && let Some((index, id)) = app.active_ids()
             && let Some((page, annotation)) = app.views.get(index).and_then(|view| view.comments.selected)
