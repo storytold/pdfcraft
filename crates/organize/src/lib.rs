@@ -89,14 +89,8 @@ fn leaves(doc: &Document) -> Result<pdfcraft_model::PageLeaves<'_>, OrganizeErro
 /// whole is an error ([`OrganizeError::PageTree`]): organize rebuilds the page tree from this list,
 /// and a list cut short would drop the pages past the cut.
 fn walk(doc: &Document) -> Result<Vec<(ObjRef, Dict)>, OrganizeError> {
-    attributes(leaves(doc)?)
-}
-
-/// [`walk`] over `leaves`: each leaf with its own and inherited attributes, the inherited copies
-/// within `MAX_INHERITED_COPIES`.
-fn attributes(leaves: pdfcraft_model::PageLeaves<'_>) -> Result<Vec<(ObjRef, Dict)>, OrganizeError> {
-    let mut budget = pdfcraft_model::MAX_INHERITED_COPIES;
-    leaves
+    let mut budget = pdfcraft_model::Limits::current().inherited_copies;
+    leaves(doc)?
         .map(|leaf| {
             let leaf = leaf?;
             let mut attrs = Dict::new();
@@ -136,7 +130,7 @@ fn resolved_rotation(doc: &Document, attrs: &Dict) -> i64 {
 /// Refused, before anything changes, when the flat tree would hold more nodes (its root and its
 /// pages) than the page-tree walk reads: every later walk would then stop short of its last page.
 fn rebuild(doc: &mut Document, order: &[(ObjRef, Dict)]) -> Result<(), OrganizeError> {
-    if order.len() >= pdfcraft_model::MAX_PAGE_TREE_NODES {
+    if order.len() >= pdfcraft_model::Limits::current().nodes {
         return Err(OrganizeError::PageTree(pdfcraft_model::PageTreeLimit::Nodes));
     }
     let root = pages_root(doc)?;
@@ -195,6 +189,10 @@ pub fn recover_page_tree(doc: &mut Document) -> Result<usize, OrganizeError> {
         .collect();
     if found.is_empty() {
         return Ok(0);
+    }
+    // Checked before the new root is published: `rebuild` would refuse it after the catalog changed.
+    if found.len() >= pdfcraft_model::Limits::current().nodes {
+        return Err(pdfcraft_model::PageTreeLimit::Nodes.into());
     }
     found.sort();
     let root = doc.add(Dict::new());

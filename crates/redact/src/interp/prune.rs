@@ -67,9 +67,6 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         return Ok(());
     }
     let doomed: HashSet<ObjRef> = doomed.iter().copied().collect();
-    if doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))).is_none() {
-        return Ok(());
-    }
     let holders = crate::holders::resource_holders(doc)?;
     // Page index by number, from the same walk (both give each page at its current generation).
     let index: HashMap<u32, usize> = pdfcraft_model::page_refs(doc)?.into_iter().enumerate().map(|(i, p)| (p.num, i)).collect();

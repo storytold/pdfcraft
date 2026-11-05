@@ -1701,9 +1701,9 @@ fn page_walk_reads_a_shared_kids_array_once() {
     doc.update_dict(root, |d| d.set(b"Kids".to_vec(), Object::Array(nodes))).unwrap();
     assert_eq!(page_refs(&doc).unwrap(), [first, second]);
     // page_refs is this walk: it reads the shared array once, not under each of the 1,000 nodes.
-    let mut walk = pdfcraft_model::PageLeaves::under(&doc, root);
-    assert_eq!(walk.by_ref().count(), 2);
-    assert!(walk.entries_read() <= 10_000, "{} kids entries read", walk.entries_read());
+    let mut nodes = pdfcraft_model::PageNodes::new(&doc);
+    nodes.by_ref().for_each(drop);
+    assert!(nodes.entries_read() <= 10_000, "{} kids entries read", nodes.entries_read());
 }
 
 /// A `/Type /Pages` node without `/Kids` lists no pages and is not a page itself, as in

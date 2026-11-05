@@ -171,17 +171,9 @@ fn walks_nested_tree_in_order() {
     assert_eq!(labels(&doc), ["Page 1", "Page 2", "Page 3"]);
 }
 
-/// A walk cut off at a cap is an error where the tree is rebuilt from it, which would drop the
-/// pages past the cut.
-#[test]
-fn a_walk_cut_off_at_a_cap_is_not_rebuilt_from() {
-    let doc = open(fixture());
-    let top = pages_root(&doc).unwrap();
-    assert_eq!(attributes(pdfcraft_model::PageLeaves::with_limits(&doc, top, 100, 100)).unwrap().len(), 3);
-    let entries = attributes(pdfcraft_model::PageLeaves::with_limits(&doc, top, 100, 2)).map(|p| p.len());
-    assert_eq!(entries, Err(OrganizeError::PageTree(pdfcraft_model::PageTreeLimit::KidsEntries)));
-    let nodes = attributes(pdfcraft_model::PageLeaves::with_limits(&doc, top, 2, 100)).map(|p| p.len());
-    assert_eq!(nodes, Err(OrganizeError::PageTree(pdfcraft_model::PageTreeLimit::Nodes)));
+/// Run `f` with the page-tree walk held to `nodes` nodes and `kids_entries` `/Kids` entries.
+fn capped<T>(nodes: usize, kids_entries: usize, f: impl FnOnce() -> T) -> T {
+    pdfcraft_model::with_limits(pdfcraft_model::Limits { nodes, kids_entries, ..pdfcraft_model::Limits::DEFAULT }, f)
 }
 
 /// `doc` with `extra` ahead of its first and last pages in its root `/Kids` (its middle page is
@@ -197,34 +189,40 @@ fn with_padded_kids(mut doc: Document, extra: impl Iterator<Item = Object>) -> D
 }
 
 /// A tree whose `/Kids` holds more entries than the walk reads is refused by everything that takes
-/// every page, never cut short: counting, listing, Combine, Split and the page-tree recovery on
-/// open. (One test, so the 4M-entry fixture is built once.)
+/// every page, never cut short: counting, listing, rotation, page edits, Combine, Split and the
+/// page-tree recovery on open.
 #[test]
 fn a_tree_past_the_entry_cap_is_refused_not_cut_short() {
     fn refused<T>(result: Result<T, OrganizeError>) -> bool {
         matches!(result, Err(OrganizeError::PageTree(pdfcraft_model::PageTreeLimit::KidsEntries)))
     }
-    let mut doc = with_padded_kids(open(fixture()), std::iter::repeat_n(Object::Null, pdfcraft_model::MAX_KIDS_ENTRIES));
-    assert_eq!(page_count(&doc), Err(OrganizeError::PageTree(pdfcraft_model::PageTreeLimit::KidsEntries)));
-    assert!(refused(pages(&doc)));
-    assert!(refused(combine(&[("A", &doc)])));
-    assert!(refused(split(&doc, &SplitBy::PageCount(1))));
-    // The tree is there, just too large: it is not treated as lost and rebuilt from a scan.
-    assert!(refused(recover_page_tree(&mut doc)));
-    assert!(refused(page_count(&doc)), "recovery left the tree as it was");
+    let mut doc = with_padded_kids(open(fixture()), std::iter::repeat_n(Object::Null, 5));
+    assert_eq!(page_count(&doc), Ok(2), "within the default limits");
+    capped(100, 5, || {
+        assert_eq!(page_count(&doc), Err(OrganizeError::PageTree(pdfcraft_model::PageTreeLimit::KidsEntries)));
+        assert!(refused(pages(&doc)));
+        assert!(refused(page_rotation(&doc, 0)));
+        assert!(refused(combine(&[("A", &doc)])));
+        assert!(refused(split(&doc, &SplitBy::PageCount(1))));
+        assert!(refused(move_pages(&mut doc.clone(), &[0], 1)));
+        // The tree is there, just too large: it is not treated as lost and rebuilt from a scan.
+        assert!(refused(recover_page_tree(&mut doc)));
+    });
+    assert_eq!(page_count(&doc), Ok(2), "recovery left the tree as it was");
 }
 
-/// A million generation aliases of a few missing objects are a few nodes, so a tree listing them
-/// is counted whole. Before the shared walk, organize told nodes apart by number and generation:
-/// the aliases were a million nodes, the walk stopped at its cap, and Combine silently dropped the
-/// last page.
+/// Generation aliases of one missing object are one node, so a tree listing them is counted whole.
+/// Before the shared walk, organize told nodes apart by number and generation: the aliases were as
+/// many nodes, the walk stopped at its cap, and Combine dropped the last page without a word.
 #[test]
 fn generation_aliases_do_not_cut_a_combine_short() {
-    let aliases = (9_000u32..9_016).flat_map(|num| (0..=u16::MAX).map(move |generation| Object::Ref(ObjRef { num, generation })));
+    let aliases = (0..16u16).map(|generation| Object::Ref(ObjRef { num: 9_000, generation }));
     let doc = with_padded_kids(open(fixture()), aliases);
-    assert_eq!(page_count(&doc), Ok(2));
-    let out = combine(&[("A", &doc)]).unwrap();
-    assert_eq!(page_count(&out), Ok(2));
+    capped(10, 100, || {
+        assert_eq!(page_count(&doc), Ok(2));
+        let out = combine(&[("A", &doc)]).unwrap();
+        assert_eq!(page_count(&out), Ok(2));
+    });
 }
 
 /// A flat tree with as many pages as the walk visits nodes (its root counts too) could never be
@@ -232,12 +230,27 @@ fn generation_aliases_do_not_cut_a_combine_short() {
 #[test]
 fn a_rebuild_past_the_node_cap_is_refused_before_any_change() {
     let mut doc = open(fixture());
-    let before = pages(&doc).unwrap();
-    let page = before[0].obj;
-    let order = vec![(page, Dict::new()); pdfcraft_model::MAX_PAGE_TREE_NODES];
-    assert_eq!(rebuild(&mut doc, &order), Err(OrganizeError::PageTree(pdfcraft_model::PageTreeLimit::Nodes)));
-    assert_eq!(pages(&doc).unwrap(), before);
-    assert!(rebuild(&mut doc, &order[..3]).is_ok());
+    let before = walk(&doc).unwrap();
+    capped(3, 100, || {
+        assert_eq!(rebuild(&mut doc, &before), Err(OrganizeError::PageTree(pdfcraft_model::PageTreeLimit::Nodes)));
+        assert!(matches!(reverse_pages(&mut doc, &[0, 1, 2]), Err(OrganizeError::PageTree(_))));
+    });
+    assert_eq!(walk(&doc).unwrap(), before);
+    capped(4, 100, || assert!(rebuild(&mut doc, &before).is_ok(), "the root and three pages fit"));
+}
+
+/// A lost tree whose scanned pages would make a flat tree past the node cap is refused before the
+/// catalog changes, not after it points at a new, empty root.
+#[test]
+fn recovering_a_lost_tree_past_the_node_cap_changes_nothing() {
+    let mut doc = open(fixture());
+    let catalog = doc.root().unwrap();
+    doc.update_dict(catalog, |d| d.set(b"Pages".to_vec(), Object::Ref(ObjRef { num: 999, generation: 0 }))).unwrap();
+    let before = doc.get(catalog);
+    let refused = capped(3, 100, || recover_page_tree(&mut doc));
+    assert_eq!(refused, Err(OrganizeError::PageTree(pdfcraft_model::PageTreeLimit::Nodes)));
+    assert_eq!(doc.get(catalog), before, "the catalog still names the lost tree");
+    assert_eq!(recover_page_tree(&mut doc), Ok(3));
 }
 
 /// A rebuilt tree names each page at the generation the document holds it at, not a stale one its
@@ -3640,9 +3653,9 @@ fn page_walk_reads_a_shared_kids_array_once() {
     doc.update_dict(root, |d| d.set(b"Kids".to_vec(), Object::Array(nodes))).unwrap();
     assert_eq!(crate::walk(&doc).unwrap().iter().map(|(p, _)| *p).collect::<Vec<_>>(), [first]);
     // walk is this walk: it reads the shared array once, not under each of the 1,000 nodes.
-    let mut leaves = pdfcraft_model::PageLeaves::new(&doc);
-    assert_eq!(leaves.by_ref().count(), 1);
-    assert!(leaves.entries_read() <= 3_000, "{} kids entries read", leaves.entries_read());
+    let mut nodes = pdfcraft_model::PageNodes::new(&doc);
+    nodes.by_ref().for_each(drop);
+    assert!(nodes.entries_read() <= 3_000, "{} kids entries read", nodes.entries_read());
 }
 
 /// A `/Type /Pages` node without `/Kids` lists no pages and is not a page itself.

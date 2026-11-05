@@ -404,10 +404,6 @@ pub(crate) fn prune_type3_from_resources(doc: &Document, res: &mut Dict, content
 /// font's `/Resources`, and remove completely unused Type 3 fonts across all reachable resource
 /// holders in the document. Fails closed if safe cleanup cannot be established.
 pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
-    if doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))).is_none() {
-        return Ok(());
-    }
-
     let holders = crate::holders::resource_holders(doc)?;
 
     let form_holders = reachable_form_holders(doc, &holders)?;

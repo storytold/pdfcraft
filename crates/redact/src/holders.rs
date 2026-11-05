@@ -9,22 +9,14 @@ use crate::RedactError;
 /// Every page-tree node with a `/Resources` of its own, and the pages that draw through it (the
 /// nearest such node above a page, or the page itself), in document order.
 ///
-/// This is `pdfcraft_model::PageNodes`, the walk every page list comes from, with the nodes kept:
-/// a leaf-only walk would miss a node whose resources no page inherits (every page under it has
-/// its own, or its `/Kids` is broken), and an image or Type 3 font it still names would stay linked
-/// after redaction. A page listed under two holders draws through the first, as `pages` inherits.
-/// A tree too large to walk whole is an error rather than a shorter list: a resource a page past
-/// the cut uses could look unused, and one a redaction removed could stay linked.
+/// Built on `pdfcraft_model::PageNodes`, not the leaves: a node whose resources no page inherits
+/// still keeps what it names linked, so redaction must see it. A walk limit is an error, since a
+/// resource a page past the cut uses would look unused.
 pub(crate) fn resource_holders(doc: &Document) -> Result<Vec<(ObjRef, Vec<ObjRef>)>, RedactError> {
-    holders_in(pdfcraft_model::PageNodes::new(doc))
-}
-
-/// [`resource_holders`] over `nodes`.
-fn holders_in(nodes: pdfcraft_model::PageNodes<'_>) -> Result<Vec<(ObjRef, Vec<ObjRef>)>, RedactError> {
     let mut holders: Vec<(ObjRef, Vec<ObjRef>)> = Vec::new();
     // Holder index by object number.
     let mut index: HashMap<u32, usize> = HashMap::new();
-    for node in nodes {
+    for node in pdfcraft_model::PageNodes::new(doc) {
         let node = node?;
         if node.dict().is_some_and(|d| d.contains(b"Resources")) {
             index.insert(node.obj.num, holders.len());
@@ -45,10 +37,10 @@ mod tests {
     use std::sync::Arc;
 
     use pdfcraft_cos::{Document, ObjRef};
-    use pdfcraft_model::{PageNodes, PageTreeLimit};
+    use pdfcraft_model::{Limits, PageNodes, PageTreeLimit};
     use pdfcraft_testkit::Pdf;
 
-    use super::{holders_in, resource_holders};
+    use super::resource_holders;
     use crate::RedactError;
 
     fn r(num: u32) -> ObjRef {
@@ -104,7 +96,7 @@ mod tests {
         }
         let doc = open(pdf);
         let mut nodes = PageNodes::new(&doc);
-        assert_eq!(holders_in(PageNodes::new(&doc)).unwrap(), [(r(2), vec![r(3)])]);
+        assert_eq!(resource_holders(&doc).unwrap(), [(r(2), vec![r(3)])]);
         nodes.by_ref().for_each(drop);
         // The root's 2,000 kids and the shared array's 2,000 entries once, not 2,000 times over.
         assert!(nodes.entries_read() <= 3 * n, "{} kids entries read", nodes.entries_read());
@@ -122,6 +114,10 @@ mod tests {
         assert_eq!(resource_holders(&doc).unwrap(), [(r(2), vec![r(3)])]);
     }
 
+    fn capped<T>(limits: Limits, f: impl FnOnce() -> T) -> T {
+        pdfcraft_model::with_limits(limits, f)
+    }
+
     /// Past either cap the walk is an error, every entry counted (references or not), so redaction
     /// refuses rather than miss pages.
     #[test]
@@ -133,7 +129,7 @@ mod tests {
                 .obj(format!("<< /Type /Pages /Kids [3 0 R {nulls}] /Count 1 /Resources << >> >>"))
                 .obj("<< /Type /Page /Parent 2 0 R >>"),
         );
-        let limited = |nodes, entries| holders_in(PageNodes::with_limits(&doc, r(2), nodes, entries));
+        let limited = |nodes, kids_entries| capped(Limits { nodes, kids_entries, ..Limits::DEFAULT }, || resource_holders(&doc));
         assert!(limited(100, 100).is_ok(), "within the caps");
         assert!(matches!(limited(100, 5), Err(RedactError::PageTree(PageTreeLimit::KidsEntries))), "past the entry cap, nulls included");
         assert!(matches!(limited(1, 100), Err(RedactError::PageTree(PageTreeLimit::Nodes))), "past the node cap");
@@ -141,24 +137,26 @@ mod tests {
         assert!(limited(100, 11).is_ok(), "exactly at the entry cap");
     }
 
-    /// Type 3 cleanup and resource unlinking refuse a tree past the walk's entry cap, rather than
-    /// judge glyphs and images unused from the pages before it. (One test, so the 4M-entry tree is
-    /// built once.)
+    /// Two pages inheriting a Type 3 font from the tree node: the holders walk copies nothing, so
+    /// only Type 3's own page scan meets an inherited-copy limit, and it refuses rather than judge
+    /// glyphs unused from the first page alone.
     #[test]
-    fn type3_cleanup_and_unlinking_fail_closed_at_the_walk_cap() {
+    fn type3_cleanup_refuses_a_page_scan_cut_by_the_copy_budget() {
         let mut doc = open(
             Pdf::new()
                 .obj("<< /Type /Catalog /Pages 2 0 R >>") // 1
-                .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /Resources << /Font << /T3 4 0 R >> >> >>") // 2
+                .obj("<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 /Resources << /Font << /T3 4 0 R >> >> >>") // 2
                 .obj("<< /Type /Page /Parent 2 0 R >>") // 3
-                .obj("<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << >> /Encoding << /Differences [] >> /FirstChar 0 /LastChar 0 /Widths [0] >>"), // 4
+                .obj("<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << >> /Encoding << /Differences [] >> /FirstChar 0 /LastChar 0 /Widths [0] >>") // 4
+                .obj("<< /Type /Page /Parent 2 0 R >>"), // 5
         );
-        let mut kids = vec![pdfcraft_cos::Object::Null; pdfcraft_model::MAX_KIDS_ENTRIES];
-        kids.push(pdfcraft_cos::Object::Ref(r(3)));
-        doc.update_dict(r(2), |d| d.set(b"Kids".to_vec(), pdfcraft_cos::Object::Array(kids))).unwrap();
-        let refused = |result: Result<(), RedactError>| matches!(result, Err(RedactError::PageTree(PageTreeLimit::KidsEntries)));
-        assert!(refused(crate::type3::unlink_type3(&mut doc)), "Type 3 cleanup");
-        assert!(refused(crate::interp::unlink_doomed(&mut doc, &[r(9)], &[])), "resource unlinking");
+        assert!(crate::type3::unlink_type3(&mut doc.clone()).is_ok(), "within the default limits");
+        let refused = capped(Limits { inherited_copies: 300, ..Limits::DEFAULT }, || {
+            assert_eq!(pdfcraft_model::pages(&doc).len(), 1, "the budget covers one page's copy");
+            assert!(resource_holders(&doc).is_ok(), "the holders walk copies nothing");
+            crate::type3::unlink_type3(&mut doc)
+        });
+        assert!(matches!(refused, Err(RedactError::PageTree(PageTreeLimit::InheritedCopies))), "{refused:?}");
     }
 
     /// A page listed under two nodes with resources draws through the first, as `pages` inherits.
