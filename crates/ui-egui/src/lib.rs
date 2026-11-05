@@ -9,6 +9,15 @@
 // The settings object in `persist` is one `json!` literal past the default limit of 128.
 #![recursion_limit = "256"]
 
+/// PdfCraft as craft-update knows it, with its 128 px icon and accent colour: the update
+/// prompt shows both, and an AppImage's menu entry gets the icon.
+#[cfg(not(target_arch = "wasm32"))]
+pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
+    icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.pdfcraft.png")),
+    accent: Some([0xb7, 0x02, 0x28]),
+    ..craft_update::suite::PDFCRAFT
+};
+
 use crate::control::Host as _;
 
 /// Translate an English UI string into the current language (see [`i18n`]).
@@ -27,6 +36,7 @@ macro_rules! tl_ctx {
 }
 pub mod canvas;
 mod chrome;
+mod image_engine;
 pub use combine_grid::ThumbState as CombineThumb;
 pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
 mod commands;
@@ -36,15 +46,17 @@ mod menus;
 pub mod marks {
     pub use crate::marks_ui::{MarksDraft, PageRange, Subset};
 }
+pub use content_ui::TextDraft;
 pub use create_ui::Clip;
 pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignGraphic, SignStep};
 mod bidi;
 mod dialogs;
-pub use edit_text_ui::CropMode;
+pub use edit_text_ui::{CropMode, DragTarget, ImageDrag, ImageHandle, ImageSelection};
 mod editing;
 mod home;
+mod hotbar;
 mod panels;
 pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
@@ -69,19 +81,25 @@ mod tools;
 mod workflows;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod os_clipboard;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use app::same_file;
 pub(crate) use app::{MAX_AUTHOR_CHARS, copy_refused, date_text_for_pdf, print_refused};
 use canvas::autoscroll;
 use canvas::crop;
 use canvas::fling;
 use canvas::image_pick;
+use canvas::page_cursor;
 use canvas::page_pointer;
+use canvas::page_router;
 pub use canvas::scroll_speed;
 use canvas::signature_drag;
 use canvas::wheel_boost;
 use canvas::wheel_pager;
 use canvas::zoom_snap;
 use dialogs::appearance;
+pub use dialogs::bookmark_styles_ui;
 use dialogs::comment_props;
 use dialogs::credits;
 use dialogs::marks_ui;
@@ -102,11 +120,13 @@ use panels::search_ui;
 pub use panels::side_panels;
 pub use persist::last_session;
 pub use persist::last_view;
+pub use persist::paper;
 use persist::recovery;
 pub use persist::units;
 #[cfg(not(target_arch = "wasm32"))]
 pub use persist::window_state;
 use platform::drag_pointer;
+use platform::file_filter;
 #[cfg(not(target_arch = "wasm32"))]
 pub use platform::file_watch;
 #[cfg(target_os = "macos")]
@@ -127,8 +147,9 @@ use state::CopyPage;
 #[cfg(not(target_arch = "wasm32"))]
 use state::OpenRequest;
 pub use state::{
-    CustomDraft, Dialog, DuplicateDraft, LeftPanel, LinkOrigin, Mode, NumberDraft, OpenOutcome, PageClip, PasswordPrompt, PendingLink,
-    PendingRemoteLink, PropsTab, QuickTool, RecentFile, RightPanel, UnlockPrompt,
+    CommentClip, CustomDraft, Dialog, DuplicateDraft, LeftPanel, LinkOrigin, Mode, NumberDraft, OpenOutcome, PageClip, PagePropsDraft,
+    PasswordPrompt, PendingLink, PendingRemoteLink, PropsTab, QuickTool, RECENT_FILES_DEFAULT, RECENT_FILES_MAX, RecentFile, RightPanel,
+    UnlockPrompt,
 };
 use state::{DocumentCopyJob, GridFile};
 pub use tools::bulk_fields;
@@ -162,6 +183,7 @@ use workflows::js_ui;
 use workflows::ocr_ui;
 use workflows::optimize_ui;
 use workflows::print_ui;
+use workflows::scan_clean_ui;
 use workflows::web_print;
 
 /// Files dropped on a document's page grid or its Pages panel.
@@ -227,6 +249,7 @@ struct PendingOpen {
     after_open: Option<pdfcraft_render::RemoteDestination>,
     recovered: Option<RecoveryMeta>,
     then: Option<&'static str>,
+    display_override: Option<(canvas::PageLayout, bool)>,
 }
 
 pub struct PdfCraftApp {
@@ -246,6 +269,8 @@ pub struct PdfCraftApp {
     pub view_defaults: canvas::ViewDefaults,
     /// The unit page sizes and margins are shown in (Preferences ▸ Documents and view).
     pub units: units::Unit,
+    /// The paper Create ▸ Blank page makes (#5644): the system region's.
+    pub blank_paper: paper::Paper,
     /// The Preferences ▸ Date format box while it's being edited, or while it holds an invalid
     /// pattern (the session keeps the last valid one).
     pub date_format_draft: Option<String>,
@@ -273,12 +298,15 @@ pub struct PdfCraftApp {
     full_screen_tool: Option<QuickTool>,
     /// Comment author, per-tool colours and widths, pin.
     pub comment_prefs: comments::CommentPrefs,
+    pub(crate) hotbar: hotbar::Hotbar,
     /// Resolved colours, including the current OS theme when following the system.
     pub theme: ThemeKind,
     pub theme_preference: ThemePreference,
     /// The reading-colours preference (Preferences ▸ Reading colours): applied to every open
     /// document, and documents open with it (Acrobat's Replace Document Colors).
     pub reading_colors: pdfcraft_render::ReadingColors,
+    /// App-wide page decoration only; never part of a PDF edit or render request.
+    pub show_page_edge_shadows: bool,
     /// The Linux portal is enabled only by the native host, and starts on the first System choice.
     #[cfg(target_os = "linux")]
     desktop_theme: Option<pdfcraft_platform::desktop_theme::DesktopTheme>,
@@ -286,6 +314,9 @@ pub struct PdfCraftApp {
     desktop_theme_enabled: bool,
     /// How far a mouse-wheel notch scrolls.
     pub scroll_speed: scroll_speed::ScrollSpeed,
+    /// Preferences ▸ Invert middle-button drag: the middle button's pan or auto-scroll moves the
+    /// view the other way. Off by default.
+    pub invert_middle_drag: bool,
     /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.
     pub animation_effects: motion::AnimationEffects,
     /// Whether the system asked for no animations, and how the desktop app asks it.
@@ -303,6 +334,19 @@ pub struct PdfCraftApp {
     pub flatten_fill_sign_on_save: bool,
     /// Point size for new Fill & Sign text and dates, kept across launches.
     pub fill_text_size: f64,
+    pub fill_tool: fill_sign::FillTool,
+    /// Colour for new Fill & Sign text and dates, kept across launches.
+    pub fill_text_color: [f64; 3],
+    /// Border around new Fill & Sign text and dates, in points (0: none), until PdfCraft quits:
+    /// each launch starts from [`Self::fill_text_default`].
+    pub fill_text_border: f64,
+    /// That border's own colour (`None`: the text's).
+    pub fill_text_border_color: Option<pdfcraft_engine::Rgb>,
+    /// That border's shape (an oval or a circle goes around the text).
+    pub fill_text_border_shape: pdfcraft_engine::BorderShape,
+    /// The border new Fill & Sign text starts each launch with, kept across launches: what Make
+    /// Current Properties Default last took from typed text (none at first).
+    pub fill_text_default: fill_sign::TextBorder,
     pub dialog: Option<Dialog>,
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
     pub(crate) updates: updates::Updates,
@@ -324,6 +368,8 @@ pub struct PdfCraftApp {
     /// tab coming to the front (Home, a document, Combine files) puts the view away.
     all_tools_tab: (Option<DocId>, bool),
     pub recent: Vec<RecentFile>,
+    /// How many recent files to keep, 0 for no list (Preferences ▸ Documents and view, #5572).
+    pub recent_limit: usize,
     /// Preferences: reopen the files that were open when PdfCraft last closed (#442).
     pub reopen_last_session: bool,
     /// Restore last view settings when reopening documents (Preferences ▸ Documents and view;
@@ -338,6 +384,9 @@ pub struct PdfCraftApp {
     quit_session: Option<last_session::LastSession>,
     /// Preferences: reload a document when its file changes on disk (#431).
     pub reload_changed_files: bool,
+    /// Preferences: ask for a newer release when the desktop app starts (#5737). Off, the app
+    /// asks only from Help ▸ Check for updates.
+    pub update_check_at_start: bool,
     /// Preferences: tell the user, above the pages, that a document is secured (its security
     /// settings restrict changes). Off only hides that notice (#4035); kept in the settings.
     pub show_secured_notice: bool,
@@ -354,11 +403,33 @@ pub struct PdfCraftApp {
     pending_opens: Vec<PendingOpen>,
     #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
+    /// Explicit CLI layout waits for flagged launch opens, never targeting restored tabs.
+    #[cfg(not(target_arch = "wasm32"))]
+    launch_layout: Option<(canvas::PageLayout, bool)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    launch_display_target: Option<DocId>,
     #[cfg(all(test, not(target_arch = "wasm32")))]
     open_prepare_gate: Option<std::sync::Arc<open_worker::PrepareGate>>,
     /// Folders pinned to Home, and what they held when last listed.
     pub pinned: folders_ui::PinnedFolders,
+    /// The recent files restored from settings, checked off the UI thread (#5682).
+    recent_check: persist::recent_check::RecentCheck,
+    /// Tools pinned to Home, in user-defined order.
+    pub pinned_tools: Vec<String>,
+    /// Search query for the Pin a tool selection dialog.
+    pub pin_tool_search: String,
     pub toast: Option<(String, f64)>,
+    /// The form script message the toast shows now, if it shows one: drawn with its title and
+    /// icon (#4293).
+    pub toast_script: Option<pdfcraft_engine::js::Message>,
+    /// Form script messages waiting for the toast, in the order the scripts showed them: each
+    /// takes the toast when the one before it is gone, so every one is seen (#4294).
+    pub script_messages: std::collections::VecDeque<pdfcraft_engine::js::Message>,
+    /// Form script messages the waiting queue had no room for, since the toast last said how many.
+    pub script_messages_dropped: u64,
+    /// The left-out count the toast is saying now ([`Self::next_script_message`]): put back to be
+    /// said again if another notice replaces the toast before it has been shown its time.
+    pub toast_dropped: u64,
     /// Whether the macOS title bar is drawn by us (traffic lights over our tab strip).
     pub integrated_titlebar: bool,
     /// Set when the desktop leaves the window frame to the app (GNOME on Wayland): the tab strip
@@ -494,10 +565,15 @@ pub struct PdfCraftApp {
     pub optimize_draft: OptimizeDraft,
     /// The running optimization (Optimize PDF ▸ Advanced optimization).
     pub optimize_run: Option<optimize_ui::OptimizeRun>,
+    /// Scan & OCR ▸ Enhance scanned file: the dialog's choices and the running clean-up.
+    pub scan_clean_draft: scan_clean_ui::ScanCleanDraft,
+    pub scan_clean_run: Option<scan_clean_ui::ScanCleanRun>,
     /// A background job's progress card (see [`widgets::progress_notice`]).
     pub progress_notice: Option<widgets::ProgressNotice>,
     /// Pages copied or cut in Organize Pages, ready to paste (into any document).
     pub page_clipboard: Option<PageClip>,
+    /// Copied comments (XFDF), to paste into this or another document (M14).
+    pub comment_clipboard: Option<CommentClip>,
     /// Files dropped on the page grid, waiting for the pointer to say which gap they go to.
     grid_drop: Option<GridDrop>,
     /// The last snapshot (width, height, RGBA); `system_clipboard` also puts it on the
@@ -512,12 +588,12 @@ pub struct PdfCraftApp {
     pub system_clipboard: bool,
     /// What ⌘V reads instead of the system clipboard (tests).
     pub clipboard_override: Option<create_ui::Clip>,
-    /// V is down as a plain key press (see [`Self::paste_key_released`]).
-    v_pressed: bool,
     /// Attach file: the file to attach instead of asking (tests, automation).
     pub attach_override: Option<(String, Vec<u8>)>,
     /// Duplicate Field: which field and onto which pages.
     pub duplicate_draft: Option<DuplicateDraft>,
+    /// Page Properties: which pages, and the tab order chosen for them.
+    pub page_props_draft: Option<PagePropsDraft>,
     /// Text field table: the table being set up, and the page it goes on.
     pub field_table_draft: Option<field_table_ui::FieldTableDraft>,
     /// Prepare a form ▸ Preview: fill the form instead of editing its fields.
@@ -551,19 +627,28 @@ pub struct PdfCraftApp {
     fonts_cjk: theme::CjkPreference,
     /// The window title last sent to the platform.
     pub window_title: String,
+    /// The web page's title last set: the window title, but always with the file's name.
+    pub page_title: String,
     /// The UI control channel, when enabled (`--control`; off by default).
     control: Option<control::Control>,
     /// A bookmark being renamed in the Bookmarks panel: (path, text so far).
     pub bookmark_rename: Option<(Vec<usize>, String)>,
+    /// Bookmarks copied or cut in the Bookmarks panel, with their subtrees, ready to paste into
+    /// any document. Destinations are page indices.
+    pub bookmark_clipboard: Option<Vec<pdfcraft_engine::OutlineNode>>,
     /// Number pages dialog settings (1-based pages).
     pub number_draft: NumberDraft,
     pub(crate) word_count_draft: word_count_ui::Draft,
     /// Protect Using Password dialog state.
     pub protect_draft: protect::ProtectDraft,
+    /// New bookmarks from text styles dialog state (#1693).
+    pub text_style_draft: bookmark_styles_ui::TextStyleDraft,
     /// Set Page Boxes dialog state.
     pub boxes_draft: pageboxes::BoxesDraft,
     /// Header & footer / watermark / background dialog state.
     pub marks_draft: marks_ui::MarksDraft,
+    /// The Update dialogs' preview page without the marks they replace.
+    pub(crate) unmarked_page: marks_ui::UnmarkedPage,
     /// Export dialog settings.
     pub export_draft: export_ui::ExportDraft,
     /// A running export's progress.

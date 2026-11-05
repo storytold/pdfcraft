@@ -26,6 +26,7 @@ pub(crate) const NEXT_VIEW: Shortcut = Shortcut::cmd("]");
 pub(crate) const FIND_NEXT: Shortcut = Shortcut::cmd("G");
 pub(crate) const FIND_PREV: Shortcut = Shortcut::cmd_shift("G");
 pub(crate) const COPY: Shortcut = Shortcut::cmd("C");
+pub(crate) const PASTE: Shortcut = Shortcut::cmd("V");
 pub(crate) const SELECT_ALL: Shortcut = Shortcut::cmd("A");
 pub(crate) const PAGE_PREV: Shortcut = Shortcut::cmd("←");
 pub(crate) const PAGE_NEXT: Shortcut = Shortcut::cmd("→");
@@ -83,7 +84,11 @@ impl PdfCraftApp {
         if self.combine_showing() && matches!(spec.needs, commands::Needs::Undo | commands::Needs::Redo) {
             return self.combine_can_undo(spec.needs == commands::Needs::Undo);
         }
-        commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
+        // Undo also takes back typing in a box open on the page, and Redo what Undo took there,
+        // with no document step.
+        (commands::is_enabled(spec, &self.session, self.active_ids().map(|(_, id)| id))
+            || spec.needs == commands::Needs::Undo && self.page_typing_unapplied()
+            || spec.needs == commands::Needs::Redo && self.open_box_can_redo())
             && (spec.id != "edit.copy"
                 || self
                     .active
@@ -91,6 +96,8 @@ impl PdfCraftApp {
                     .is_some_and(|v| !v.organize && (v.all_text || v.selected_text().is_some_and(|t| !t.is_empty()))))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
             && match spec.id {
+                "comment.copy" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| v.comments.selected.is_some()),
+                "comment.paste" => self.comment_clipboard.is_some(),
                 "view.previous_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.back.is_empty()),
                 "view.next_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.forward.is_empty()),
                 _ => true,
@@ -255,6 +262,8 @@ impl PdfCraftApp {
                     self.notify(error);
                 }
             }
+            "view.select_tool" => self.quick_tool = crate::QuickTool::Select,
+            "view.hand_tool" => self.quick_tool = crate::QuickTool::Hand,
             "view.side_panel" => self.toggle_side_panel(),
             "view.tools_pane" => self.left_open = !self.left_open,
             "view.focus_page_input" => {
@@ -355,8 +364,23 @@ impl PdfCraftApp {
                 }
                 self.dialog = Some(Dialog::NumberPages);
             }
+            "page.properties" => {
+                if let Some(i) = active
+                    && let Some(doc) = self.session.get(self.views[i].id)
+                {
+                    let pages = self.views[i].target_pages();
+                    let orders = doc.tab_orders();
+                    let mut theirs = pages.iter().map(|p| orders.get(*p).copied());
+                    let first = theirs.next().flatten();
+                    let before = if theirs.all(|o| o == first) { first } else { None };
+                    let generation = doc.edit_generation();
+                    self.page_props_draft = Some(crate::PagePropsDraft { doc: self.views[i].id, generation, pages, before, tab_order: before });
+                    self.dialog = Some(Dialog::PageProps);
+                }
+            }
             "bookmark.add" => self.bookmark_action(crate::panels::BmAction::New),
             "bookmark.from_structure" => self.bookmark_action(crate::panels::BmAction::FromStructure),
+            "bookmark.from_text_styles" => self.bookmark_action(crate::panels::BmAction::FromTextStyles),
             "page.organize" => {
                 if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
                     if v.organize {
@@ -474,6 +498,7 @@ impl PdfCraftApp {
                     K::Background
                 };
                 self.marks_draft.replace = id.ends_with(".update");
+                self.marks_draft.opened(kind);
                 self.marks_draft.preview = None;
                 self.dialog = Some(Dialog::Marks(kind));
             }
@@ -500,6 +525,7 @@ impl PdfCraftApp {
             "export.image" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Image)),
             "export.text" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Text)),
             "ocr.recognize" => self.dialog = Some(Dialog::RecognizeText),
+            "ocr.enhance" => self.dialog = Some(Dialog::EnhanceScan),
             "ocr.recognize_batch" => self.ocr_files_dialog(),
             "edit.edit_text" => {
                 self.quick_tool = crate::QuickTool::EditText;
@@ -528,7 +554,8 @@ impl PdfCraftApp {
             }
             "edit.links_from_urls" => self.links_from_urls(),
             "edit.remove_links" => self.remove_all_links(),
-            "comment.import" | "form.import_data" => self.import_data_dialog(),
+            "comment.import" => self.import_comments_dialog(),
+            "form.import_data" => self.import_data_dialog(),
             "comment.stamp" => {
                 self.left = crate::LeftPanel::Tool("stamp");
                 self.reveal_tools();
@@ -545,6 +572,14 @@ impl PdfCraftApp {
                     return Some(self.copy_selected_text(i, &ctx));
                 }
                 return Some(false);
+            }
+            "comment.copy" => {
+                let Some(i) = active else { return Some(false) };
+                return Some(self.copy_selected_comments(i));
+            }
+            "comment.paste" => {
+                let Some(i) = active else { return Some(false) };
+                return Some(self.paste_comments(i, None, None));
             }
             "comment.hide_all" => {
                 if let Some(i) = active {
@@ -674,6 +709,7 @@ impl PdfCraftApp {
             }
             fill if crate::fill_sign::FillTool::from_command(fill).is_some() => {
                 let Some(tool) = crate::fill_sign::FillTool::from_command(fill) else { return Some(false) };
+                self.fill_tool = tool;
                 self.quick_tool = crate::QuickTool::Fill(tool);
                 let initials = tool == crate::fill_sign::FillTool::Initials;
                 if (tool == crate::fill_sign::FillTool::Signature && self.signature.is_none()) || (initials && self.initials.is_none()) {
@@ -781,7 +817,16 @@ impl PdfCraftApp {
             if matches!(spec.id, "view.previous_view" | "view.next_view") && !self.command_enabled(spec) {
                 continue;
             }
-            if typing && !spec.in_text {
+            // A box typed into on the page (a paragraph being edited, added text) keeps Undo and
+            // Redo only while it holds typing the page doesn't have, or Redo has typing to put
+            // back; then they reach the document. ⌘⇧Z is also ⌘Z to the Undo shortcut, so a
+            // Redo the box keeps is never taken as Undo.
+            let page_box = matches!(spec.id, "edit.undo" | "edit.redo")
+                && self.page_box_focused(ctx)
+                && !self.page_typing_unapplied()
+                && !(spec.id == "edit.redo" && self.page_box_can_redo(ctx))
+                && !(spec.id == "edit.undo" && ctx.input(|i| i.modifiers.shift));
+            if typing && !spec.in_text && !page_box {
                 continue;
             }
             let Some(key) = Key::from_name(s.key) else { continue };
@@ -846,6 +891,9 @@ mod tests {
 
     #[test]
     fn localized_shortcut_labels_follow_language_and_platform() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let previous = crate::i18n::current();
         let ctx = egui::Context::default();
         for os in [OperatingSystem::Windows, OperatingSystem::Nix] {
