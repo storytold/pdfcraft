@@ -65,6 +65,11 @@ another. Edits never touch the original bytes.
   damaged live slot, including through snapshots, and require full rewrite. Headers beyond
   this bounded probe are not additionally recovered. Materialized primary and hybrid rows are
   diagnosed before folding, so a newer row does not hide a retained disagreement.
+  `canonical_ref(r)` answers whether `r` is accepted, and names the object as this snapshot holds
+  it (its number at `generation`). Acceptance is not loading: an accepted object may be a literal
+  `null` or unreadable, which `get` returns as null. The canonical reference is local to the
+  snapshot; compare objects across revisions by number after each revision accepts its own
+  reference.
 - **Tolerant, never fatal.** The lexer works on a byte slice and a position; it allocates nothing
   for skipped data, bounds-checks every index, and caps nesting depth. Malformed input yields
   `CosError`, never a panic — this crate is the first thing a hostile file meets. Exhausted xref entries are skipped with a repair log; exhausted /Size hints allocate unused numbers without overflowing or replacing existing objects.

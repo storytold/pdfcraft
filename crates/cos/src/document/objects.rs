@@ -160,6 +160,21 @@ impl Document {
         self.try_get_reference(r).unwrap_or_else(|_| Arc::new(Object::Null))
     }
 
+    /// The canonical reference for `r` in this document snapshot: its number at [`Self::generation`],
+    /// when `r` is accepted (the live slot's generation, or either generation of a slot a damaged
+    /// xref row repaired, or 0 in an object stream); `None` for a stale, freed or absent reference.
+    ///
+    /// - It tests slot and generation acceptance without loading the object, so an accepted object
+    ///   that is a literal `null`, or that can't be read, still gives `Some`. Whether the object
+    ///   loads is [`Self::get`]'s question.
+    /// - The result is canonical within this snapshot only: another revision of the file, or this
+    ///   document after an edit through the other accepted generation, can hold the same object at
+    ///   another generation. Compare objects across snapshots by object number after each snapshot
+    ///   has accepted its own reference, never by canonical references chosen separately.
+    pub fn canonical_ref(&self, r: ObjRef) -> Option<ObjRef> {
+        self.reference_matches(r).then(|| ObjRef::new(r.num, self.generation(r.num)))
+    }
+
     pub(super) fn reference_matches(&self, r: ObjRef) -> bool {
         match self.overlay.get(&r.num) {
             Some(Slot::Set(generation, _)) => r.generation == *generation,
