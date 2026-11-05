@@ -131,9 +131,12 @@ impl Type0Font {
             .is_some_and(|n| matches!(n.as_ref(), b"Identity-H" | b"Identity-V"));
         let mut to_unicode_is_cid_indexed = false;
 
-        // If there is no ToUnicode map, try to get the UCS2 CMap.
-        if fallback
-            && to_unicode.is_none()
+        // If there is no ToUnicode map, try to get the UCS2 CMap. PdfCraft patch (84): for an
+        // embedded font too, not only a substitute: ISO 32000-2 §9.10.2 maps the CIDs of a font
+        // whose descendant uses the Adobe-GB1, -CNS1, -Japan1 or -Korea1 collection through that
+        // collection's UCS2 CMap, embedded or not. Without it such text extracted nothing. Glyph
+        // lookup is unchanged: only a substitute finds its glyphs through Unicode (`map_code`).
+        if to_unicode.is_none()
             && let Some(cc) = character_collection.as_ref()
             && let Some(ucs2_name) = cc.family.ucs2_cmap()
             && let Some(data) = (cmap_resolver)(ucs2_name)

@@ -1965,3 +1965,42 @@ fn text_outside_the_crop_box_is_clipped() {
         assert!(text.is_empty(), "expected no glyphs on {crop:?}, got {:?}", text.plain_text());
     }
 }
+
+/// An embedded CID font whose descendant uses the Adobe-Japan1 character collection and that has
+/// no `/ToUnicode` reads its CIDs through the collection's UCS2 CMap (ISO 32000-2 §9.10.2,
+/// vendored hayro-interpret patch 84). Only a substitute used it, so such text extracted nothing
+/// (pdf.js `arial_unicode_en_cidfont`). Japan1 CIDs 1–95 are the proportional ASCII forms: CID 53
+/// is "T".
+#[test]
+fn an_embedded_cid_font_of_an_adobe_collection_reads_its_cids_as_text() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut doc = Document::with_version("1.7");
+    let program = doc.add_object(Stream::new(dictionary! {}, include_bytes!("../../../../assets/fonts/Inter-Regular.ttf").to_vec()));
+    let descriptor = doc.add_object(dictionary! { "Type" => "FontDescriptor", "FontName" => "Inter-Regular", "Flags" => 4, "FontFile2" => program });
+    let cid_font = doc.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "CIDFontType2",
+        "BaseFont" => "Inter-Regular",
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Japan1"), "Supplement" => 2 },
+        "FontDescriptor" => descriptor,
+        "CIDToGIDMap" => "Identity",
+    });
+    let font = doc.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type0",
+        "BaseFont" => "Inter-Regular",
+        "Encoding" => "Identity-H",
+        "DescendantFonts" => vec![Object::Reference(cid_font)],
+    });
+    // "Text" as Japan1 CIDs: T 53, e 70, x 89, t 85.
+    let content = doc.add_object(Stream::new(dictionary! {}, b"BT /F1 20 Tf 20 200 Td <0035004600590055> Tj ET".to_vec()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(400), Object::Integer(400)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    assert_eq!(extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text().trim(), "Text");
+}
