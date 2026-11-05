@@ -156,6 +156,53 @@ fn sidebar_comment_centres_the_annotation_at_high_zoom() {
     }
 }
 
+/// A double-click on the text of a card in the Comments panel edits it, as one on its header does
+/// (a click there would select a word): on a selected card, and on one the first click selects.
+#[test]
+fn double_clicking_a_cards_text_edits_it() {
+    for selected in [true, false] {
+        double_click_a_cards_text(selected);
+    }
+}
+
+fn double_click_a_cards_text(selected: bool) {
+    // Frames 1/60 s apart, so two clicks make a double-click.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "comments").unwrap();
+        let shape = pdfcraft_engine::Shape::Note { at: [150.0, 90.0], icon: pdfcraft_engine::NoteIcon::Comment };
+        assert!(app.apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page: 0,
+            style: pdfcraft_engine::Style::default_for(&shape),
+            shape,
+            contents: "Edit this note".into(),
+            author: "Tester".into(),
+        })));
+        app.views[0].comments.selected = selected.then_some((0, 0));
+        app
+    });
+    h.run_steps(4);
+    crate::support::settle(&mut h);
+    assert_eq!(h.state().views[0].comments.selected.is_some(), selected);
+    let p = h.query_all_by_label("Edit this note").next().expect("the card's text").rect().center();
+    h.hover_at(p);
+    h.run_steps(1);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        }
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "selected: {selected}");
+    assert_eq!(h.state().views[0].comments.editing, Some((0, 0, "Edit this note".into())), "selected: {selected}");
+    // And the editor is drawn.
+    note_editor(&h);
+}
+
 #[test]
 fn dragging_over_text_with_the_highlighter_highlights_it() {
     let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
@@ -922,8 +969,8 @@ fn comments_are_selected_moved_and_deleted_with_the_select_tool() {
 }
 
 /// A line's ends have handles: dragging one with the Select tool changes the line's length and
-/// angle (Shift holds it to 45°), as one undo step. The line tool keeps drawing from an end: a
-/// new line starts there rather than dragging the one just drawn.
+/// angle (Shift holds it level or plumb with the other end), as one undo step. The line tool keeps
+/// drawing from an end: a new line starts there rather than dragging the one just drawn.
 #[test]
 fn line_ends_are_dragged_to_change_length_and_angle() {
     let mut h = harness(|app| app.set_option("quick", "line").unwrap());
@@ -947,7 +994,7 @@ fn line_ends_are_dragged_to_change_length_and_angle() {
     assert!((p[1][0] - 200.0).abs() < 1.0 && (p[1][1] - 160.0).abs() < 1.0, "the dragged end follows: {p:?}");
     let id = h.state().views[0].id;
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Reshape comment"));
-    // Shift: held to the nearest 45° from the other end (39° here).
+    // Shift: held level or plumb with the other end, here level (110 pt across, 90 up).
     let a = at(&h, 200.0, 160.0);
     let b = at(&h, 150.0, 190.0);
     h.hover_at(a);
@@ -964,8 +1011,7 @@ fn line_ends_are_dragged_to_change_length_and_angle() {
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
     h.run_steps(1);
     let p = ends(&h);
-    let (dx, dy) = (p[1][0] - p[0][0], p[1][1] - p[0][1]);
-    assert!(dx > 50.0 && (dx - dy).abs() < 0.5, "45°: {p:?}");
+    assert!((p[1][1] - p[0][1]).abs() < 0.01 && (p[1][0] - 150.0).abs() < 1.0, "level: {p:?}");
     // Undo puts the line back as it was before the drag.
     h.state_mut().undo();
     h.run_steps(2);
@@ -1047,6 +1093,80 @@ fn alt_arrows_navigate_instead_of_nudging_the_selected_comment() {
     h.key_press(Key::ArrowRight);
     h.run_steps(3);
     assert!(comments(&h)[0].rect[0] > before[0], "→ nudged it");
+}
+
+/// Over the first corner, where a click closes the polygon, the rubber band runs to that corner
+/// with Shift held too: the closing side the click will make, not a level or plumb one.
+#[test]
+fn the_rubber_band_shows_the_closing_side_with_shift_held() {
+    let _gpu = crate::gpu();
+    let mut h = harness(|app| app.set_option("quick", "polygon").unwrap());
+    for p in [(40.0, 40.0), (140.0, 40.0), (140.0, 140.0)] {
+        click_pt(&mut h, p);
+    }
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    h.hover_at(at(&h, 40.0, 40.0) + egui::vec2(2.0, 2.0));
+    h.run_steps(3);
+    let pixels = h.render().unwrap();
+    // Halfway along the diagonal closing side, (90, 90).
+    let m = at(&h, 90.0, 90.0);
+    let drawn = (-2..=2).any(|d: i32| {
+        let v = pixels.get_pixel((m.x as i32 + d) as u32, (m.y as i32 + d) as u32).0;
+        v[0] > 150 && v[1] < 100 && v[2] < 100
+    });
+    assert!(drawn, "the closing side is drawn");
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(1);
+}
+
+/// Shift holds a new line or arrow level or plumb with where it starts, and each new side of
+/// connected lines or a polygon with the corner before (a CAD drawing's ortho mode). Without
+/// Shift they go where the pointer is.
+#[test]
+fn shift_holds_new_lines_and_sides_level_or_plumb() {
+    let mut h = harness(|app| app.set_option("quick", "line").unwrap());
+    let shift = |h: &mut Harness<'static, PdfCraftApp>, on: bool| {
+        h.event(egui::Event::ModifiersChanged(if on { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE }));
+        h.run_steps(1);
+    };
+    let points = |h: &Harness<'static, PdfCraftApp>, subtype: &str| {
+        // In the order drawn: the list isn't sorted by index.
+        let mut drawn: Vec<_> = comments(h).into_iter().filter(|a| a.subtype == subtype).collect();
+        drawn.sort_by_key(|a| a.index);
+        drawn.into_iter().map(|a| a.points).collect::<Vec<_>>()
+    };
+    let close = |p: [f32; 2], q: [f32; 2]| (p[0] - q[0]).abs() < 1.0 && (p[1] - q[1]).abs() < 1.0;
+    shift(&mut h, true);
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 120.0));
+    drag_pt(&mut h, (200.0, 40.0), (215.0, 150.0));
+    shift(&mut h, false);
+    drag_pt(&mut h, (40.0, 160.0), (140.0, 190.0));
+    let lines = points(&h, "Line");
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(close(lines[0][0], [40.0, 100.0]) && close(lines[0][1], [140.0, 100.0]), "mostly across: level: {lines:?}");
+    assert!(close(lines[1][0], [200.0, 40.0]) && close(lines[1][1], [200.0, 150.0]), "mostly up: plumb: {lines:?}");
+    assert!(close(lines[2][1], [140.0, 190.0]), "no Shift, no hold: {lines:?}");
+
+    h.state_mut().set_option("quick", "arrow").unwrap();
+    shift(&mut h, true);
+    drag_pt(&mut h, (260.0, 180.0), (150.0, 170.0));
+    shift(&mut h, false);
+    let arrow = points(&h, "Line").pop().expect("an arrow");
+    assert!(close(arrow[1], [150.0, 180.0]), "an arrow too, leftwards: {arrow:?}");
+
+    // Connected lines: each click with Shift is held to the corner before.
+    h.state_mut().set_option("quick", "polyline").unwrap();
+    click_pt(&mut h, (20.0, 20.0));
+    shift(&mut h, true);
+    click_pt(&mut h, (90.0, 30.0));
+    click_pt(&mut h, (95.0, 80.0));
+    shift(&mut h, false);
+    click_pt(&mut h, (130.0, 60.0));
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let poly = points(&h, "PolyLine").pop().expect("connected lines");
+    assert_eq!(poly.len(), 4, "{poly:?}");
+    assert!(close(poly[1], [90.0, 20.0]) && close(poly[2], [90.0, 80.0]) && close(poly[3], [130.0, 60.0]), "{poly:?}");
 }
 
 #[test]
@@ -1251,6 +1371,91 @@ fn shapes_take_a_fill_colour_from_the_quick_bar_and_properties() {
     // Make Current Properties Default carries the fill into the tool.
     h.state_mut().make_comment_default(0, 1);
     assert_eq!(h.state().comment_prefs.style(CommentTool::Rectangle).fill, Some([0.0, 0.0, 1.0]));
+}
+
+/// A filled rectangle's line and fill, and a text box's text, border and fill, each take an
+/// opacity of their own in Properties; Make Properties Default carries them into the tool, so
+/// the next rectangle is drawn with a see-through fill and an opaque line.
+#[test]
+fn comment_properties_set_each_parts_opacity() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    h.state_mut().comment_prefs.set_fill(CommentTool::Rectangle, Some([1.0, 1.0, 0.0]));
+    h.run_steps(2);
+    drag_pt(&mut h, (40.0, 100.0), (140.0, 40.0));
+    let props = |h: &Harness<'static, PdfCraftApp>, index: usize| {
+        let s = h.state();
+        let p = s.session.get(s.views[0].id).unwrap().comment_props(0, index).unwrap();
+        (p.opacity, p.fill_opacity, p.text_opacity)
+    };
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    // The sliders (each labelled by its row, which shares the name).
+    h.get_by_role_and_label(egui::accesskit::Role::Slider, "Line opacity");
+    h.get_by_role_and_label(egui::accesskit::Role::Slider, "Fill opacity");
+    assert_eq!(h.query_all_by_label("Text opacity").count(), 0, "a rectangle has no text");
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        d.edited.fill_opacity = Some(0.3);
+        d.make_default = true;
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(props(&h, 0), (1.0, Some(0.3), None));
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Change comment properties"));
+    assert_eq!(h.state().comment_prefs.style(CommentTool::Rectangle).fill_opacity, Some(0.3));
+    h.state_mut().set_option("quick", "square").unwrap();
+    h.run_steps(2);
+    drag_pt(&mut h, (160.0, 100.0), (260.0, 40.0));
+    assert_eq!(props(&h, 1), (1.0, Some(0.3), None), "the next rectangle takes the default");
+
+    // A text box with a border and a fill: its text, border and fill.
+    let shape = pdfcraft_engine::Shape::TextBox { rect: [40.0, 120.0, 200.0, 160.0], font_size: 12.0 };
+    let mut style = pdfcraft_engine::Style::default_for(&shape);
+    (style.width, style.fill) = (1.0, Some([1.0, 1.0, 0.6]));
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Note".into(),
+        author: "Tester".into(),
+    })));
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    h.state_mut().open_comment_props(0, 2);
+    h.run_steps(2);
+    for label in ["Text opacity", "Border opacity", "Fill opacity"] {
+        h.get_by_role_and_label(egui::accesskit::Role::Slider, label);
+    }
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        let _gpu = crate::gpu();
+        h.render().unwrap().save(format!("{dir}/comment-part-opacity.png")).unwrap();
+    }
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        (d.edited.opacity, d.edited.fill_opacity) = (0.5, Some(0.2));
+    }
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(props(&h, 2), (0.5, Some(0.2), Some(1.0)), "the border at half, the fill at a fifth, the text opaque");
+    // Without its fill and border, the text is the whole text box: its opacity is the comment's.
+    h.state_mut().open_comment_props(0, 2);
+    h.run_steps(2);
+    {
+        let d = h.state_mut().comment_props.as_mut().expect("open");
+        (d.edited.fill, d.edited.width) = (None, Some(0.0));
+    }
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    h.state_mut().open_comment_props(0, 2);
+    h.run_steps(2);
+    let shown = egui_kittest::kittest::NodeT::accesskit_node(&h.get_by_role_and_label(egui::accesskit::Role::Slider, "Text opacity")).numeric_value();
+    assert_eq!(shown, Some(100.0), "the text's slider shows the opacity it is drawn at, not the border's half");
+    h.state_mut().comment_props.as_mut().expect("open").edited.opacity = 0.4;
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(props(&h, 2), (0.4, Some(0.4), Some(0.4)));
 }
 
 #[test]
@@ -2140,6 +2345,43 @@ fn properties_dialog_makes_the_strikethrough_colour_default() {
     assert!(made.iter().zip(green).all(|(m, r)| (f64::from(*m) - r).abs() < 0.01), "the next strikethrough is green: {made:?}");
 }
 
+/// A text box with neither a border nor a fill is all text: Make Properties Default (and the
+/// context menu's Make Current Properties Default) gives the tool the opacity its text is drawn
+/// at, the one Comment Properties shows, not the comment's /CA.
+#[test]
+fn a_text_only_text_box_made_default_gives_the_tool_its_texts_opacity() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|_| {});
+    let shape = Shape::TextBox { rect: [100.0, 600.0, 220.0, 630.0], font_size: 12.0 };
+    let style = Style { width: 0.0, fill: None, ..Style::default_for(&shape) };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Faint".into(),
+        author: "Tester".into()
+    })));
+    h.run_steps(2);
+    let index = comments(&h).iter().find(|a| a.contents.as_deref() == Some("Faint")).map(|a| a.index).expect("the text box");
+    // As the automation's comment_edit sets it.
+    assert!(h.state_mut().apply_edit(Edit::PartOpacity { page: 0, index, fill: None, text: Some(0.5) }));
+    h.run_steps(2);
+    let opacity = |h: &Harness<'static, PdfCraftApp>| h.state().comment_prefs.style(CommentTool::TextBox).opacity;
+    assert!((opacity(&h) - 1.0).abs() < 1e-6);
+    h.state_mut().open_comment_props(0, index);
+    h.run_steps(2);
+    h.get_by_label("Make Properties Default").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!((opacity(&h) - 0.5).abs() < 1e-6, "the text's 50 %: {}", opacity(&h));
+    // The context menu's way, from a tool at 100 % again.
+    h.state_mut().comment_prefs.set_opacity(CommentTool::TextBox, 1.0);
+    h.state_mut().make_comment_default(0, index);
+    assert!((opacity(&h) - 0.5).abs() < 1e-6, "the text's 50 %: {}", opacity(&h));
+}
+
 /// #1302: making an arrow's properties the default updates the Arrow tool, not later plain lines.
 #[test]
 fn an_arrows_default_does_not_restyle_lines() {
@@ -2881,7 +3123,14 @@ fn a_moved_comment_is_drawn_where_it_goes_before_release() {
     for shape in
         [pdfcraft_engine::Shape::Rectangle { rect: [30.0, 30.0, 70.0, 70.0] }, pdfcraft_engine::Shape::Oval { rect: [230.0, 30.0, 270.0, 70.0] }]
     {
-        let style = pdfcraft_engine::Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: Some([1.0, 0.0, 0.0]) };
+        let style = pdfcraft_engine::Style {
+            color: [1.0, 0.0, 0.0],
+            opacity: 1.0,
+            width: 2.0,
+            fill: Some([1.0, 0.0, 0.0]),
+            fill_opacity: None,
+            text_opacity: None,
+        };
         assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
             page: 0,
             shape,
@@ -3299,7 +3548,7 @@ fn hotbar_docked_left_does_not_override_quick_tools() {
     });
     h.run_steps(5);
     // Controls in the docked bar share one layout, so none may overlap (#5890).
-    let labels = ["Drag hotbar", "Select (V)", "Hand (H)", "Add a sticky note", "Highlight", "Draw", "Fill & Sign", "Hotbar settings"];
+    let labels = ["Drag hotbar", "Select (V)", "Hand (H)", "Add a sticky note", "Highlight", "Draw", "Fill & Sign: Add signature", "Hotbar settings"];
     let rects: Vec<_> = labels.iter().map(|&label| h.get_by_label(label).rect()).collect();
     for (i, a) in rects.iter().enumerate() {
         for (j, b) in rects.iter().enumerate().skip(i + 1) {
@@ -3851,4 +4100,71 @@ fn properties_change_every_selected_comment_where_it_applies() {
         assert_eq!(props(&h, index).color, Some([1.0, 0.0, 0.0]), "comment {index}");
     }
     assert_ne!(props(&h, 3).color, Some([1.0, 0.0, 0.0]));
+}
+
+/// Comment Properties' text opacity, set with several comments selected, goes to the other text
+/// boxes whose text shows an opacity of its own (a border or a fill), and leaves a text-only box,
+/// whose one opacity is the whole comment's, as it was.
+#[test]
+fn part_opacity_changes_every_selected_comment_that_shows_the_part() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    let mut h = harness(|_| {});
+    for (n, width) in [1.0, 1.0, 0.0].into_iter().enumerate() {
+        let x = 20.0 + 100.0 * n as f64;
+        let shape = Shape::TextBox { rect: [x, 20.0, x + 80.0, 40.0], font_size: 12.0 };
+        let style = Style { width, ..Style::default_for(&shape) };
+        assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+            page: 0,
+            shape,
+            style,
+            contents: "x".into(),
+            author: "Tester".into()
+        })));
+    }
+    let props = |h: &Harness<'static, PdfCraftApp>, index: usize| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().comment_props(0, index).unwrap()
+    };
+    let text_only = props(&h, 2);
+    {
+        let c = &mut h.state_mut().views[0].comments;
+        c.selected = Some((0, 0));
+        c.also = vec![(0, 1), (0, 2)];
+    }
+    h.run_steps(2);
+    h.state_mut().open_comment_props(0, 0);
+    h.run_steps(2);
+    h.state_mut().comment_props.as_mut().expect("open").edited.text_opacity = Some(0.4);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    for index in [0, 1] {
+        let text = props(&h, index).text_opacity.expect("a text box's text opacity");
+        assert!((text - 0.4).abs() < 1e-3, "bordered box {index}: {text}");
+    }
+    let after = props(&h, 2);
+    assert_eq!((after.text_opacity, after.opacity), (text_only.text_opacity, text_only.opacity), "the text-only box keeps its look");
+}
+
+/// Escape with a Fill & Sign tool on and several comments selected deselects them all first,
+/// then drops the tool.
+#[test]
+fn escape_with_a_fill_tool_deselects_every_comment_then_drops_the_tool() {
+    use pdfcraft_ui_egui::fill_sign::FillTool;
+    let mut h = harness(|_| {});
+    add_two_boxes_and_a_reply(&mut h);
+    h.state_mut().quick_tool = QuickTool::Fill(FillTool::Text);
+    {
+        let c = &mut h.state_mut().views[0].comments;
+        c.selected = Some((0, 0));
+        c.also = vec![(0, 1)];
+    }
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    let c = &h.state().views[0].comments;
+    assert!(c.selected.is_none() && c.also.is_empty(), "the whole selection goes");
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Text), "the tool stays for now");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
 }

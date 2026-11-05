@@ -102,6 +102,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Set alternate text",
     "Mark figure as decorative",
     "Recognize text",
+    "Enhance scanned file",
     "Run JavaScript",
     "Run form script",
     "Save as {level}",
@@ -231,9 +232,11 @@ impl Edit {
             Edit::MoveAnnotation { .. } => Label::of("Move comment"),
             Edit::ReshapeAnnotation { .. } => Label::of("Reshape comment"),
             Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
-            Edit::StyleAnnotation { .. } | Edit::FillAnnotation { .. } | Edit::FontSizeAnnotation { .. } | Edit::SetAnnotationInfo { .. } => {
-                Label::of("Change comment properties")
-            }
+            Edit::StyleAnnotation { .. }
+            | Edit::FillAnnotation { .. }
+            | Edit::PartOpacity { .. }
+            | Edit::FontSizeAnnotation { .. }
+            | Edit::SetAnnotationInfo { .. } => Label::of("Change comment properties"),
             Edit::SetFieldValue { name, .. } => Label::with("Fill in {name}", name.as_str()),
             Edit::SetFieldImage { name, .. } => Label::with("Set the image of {name}", name.as_str()),
             Edit::ResetForm { .. } => Label::of("Clear form"),
@@ -254,6 +257,7 @@ impl Edit {
             Edit::MarkDecorative { .. } => Label::of("Mark figure as decorative"),
             Edit::MarkTagArtifact { .. } => Label::of("Mark content as artifact"),
             Edit::AddOcrText { .. } => Label::of("Recognize text"),
+            Edit::EnhanceScan { .. } => Label::of("Enhance scanned file"),
             Edit::ApplyScriptChanges { .. } => Label::of("Run JavaScript"),
             Edit::XfaEvent { .. } => Label::of("Run form script"),
             // The level is the standard's own name ("PDF/A-2b"), so it goes in as it stands.
