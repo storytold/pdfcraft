@@ -7515,6 +7515,134 @@ trailer << /Root 1 0 R >>
     }
 }
 
+/// A page of `/ImageMask` stencils painted with a tiling pattern: the 4 × 4 stencil inks a ring
+/// (its centre 2 × 2 samples are `1`, unpainted under the default `/Decode [0 1]`), filled with
+/// a red coloured pattern.
+fn patterned_stencil_page(media: (u32, u32), content: &str) -> RenderedPage {
+    let tile = "1 0 0 rg 0 0 10 10 re f";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Contents 4 0 R /Resources << /XObject << /Msk 5 0 R >> /Pattern << /P 6 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /XObject /Subtype /Image /Width 4 /Height 4 /ImageMask true /Filter /ASCIIHexDecode /Length 9 >> stream
+00606000>
+endstream endobj
+6 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >> /Length {} >> stream
+{tile}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        media.0,
+        media.1,
+        content.len(),
+        tile.len()
+    );
+    let page = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default()).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    page
+}
+
+/// A stencil mask filled with a pattern shows the pattern where the stencil inks and nothing
+/// elsewhere: not in its unpainted samples, and not around it, also when it is drawn smaller
+/// than its samples and lands on whole device pixels.
+#[test]
+fn a_patterned_stencil_mask_paints_only_where_it_inks() {
+    // Pixel rows run top down: PDF (x, y) is pixel (x, 200 - y).
+    let px = |p: &RenderedPage, x: u32, y: u32| p.rgba[(((200 - y) * p.width + x) * 4) as usize..][..3].to_vec();
+    let page = patterned_stencil_page((200, 200), "/Pattern cs /P scn q 40 0 0 40 20 20 cm /Msk Do Q q 3 0 0 3 100.4 100.4 cm /Msk Do Q");
+    assert_eq!(px(&page, 25, 25), [255, 0, 0], "the ring is red");
+    assert_eq!(px(&page, 40, 40), [255, 255, 255], "the stencil's unpainted centre stays white");
+    for (x, y) in [(15, 40), (65, 40), (40, 15), (40, 65)] {
+        assert_eq!(px(&page, x, y), [255, 255, 255], "outside the stencil at ({x}, {y})");
+    }
+    assert!((100..104).any(|x| px(&page, x, 101) != [255, 255, 255]), "the shrunk stencil is drawn");
+    for edge in [97, 98, 106, 107] {
+        for along in 97..=107 {
+            assert_eq!(px(&page, edge, along), [255, 255, 255], "beside the shrunk stencil at ({edge}, {along})");
+            assert_eq!(px(&page, along, edge), [255, 255, 255], "above or below the shrunk stencil at ({along}, {edge})");
+        }
+    }
+}
+
+/// pdf.js issue 8078 paints 73,047 small stencil masks with one tiling pattern. Each was drawn
+/// through a canvas-sized luminance mask (a full-page render and composite per stencil), which
+/// took minutes for the page; a stencil now costs what its rectangle covers. Here 5,000
+/// patterned stencils on a 1000 × 2000 page.
+#[test]
+fn many_patterned_stencil_masks_render_in_time() {
+    let mut content = String::from("/Pattern cs /P scn ");
+    for i in 0..5000u32 {
+        content.push_str(&format!("q 16 0 0 16 {} {} cm /Msk Do Q ", (i % 50) * 20, (i / 50) * 20));
+    }
+    let started = std::time::Instant::now();
+    let page = patterned_stencil_page((1000, 2000), &content);
+    let took = started.elapsed();
+    assert!(took < std::time::Duration::from_secs(10), "5,000 patterned stencils took {took:?}");
+    // The last stencil sits at (980, 1980): its ring is red, its centre white.
+    let px = |x: u32, y: u32| page.rgba[(((2000 - y) * page.width + x) * 4) as usize..][..3].to_vec();
+    assert_eq!(px(981, 1981), [255, 0, 0]);
+    assert_eq!(px(988, 1988), [255, 255, 255]);
+}
+
+/// A coloured tiling pattern's cell is drawn once for all the fills of one setting (`scn`): here
+/// 3,000 small squares filled with a pattern whose cell holds 5,000 paths. Drawn again for each
+/// fill, the cells took seconds, and each was kept until the page was composited (pdf.js issue
+/// 8078 ran out of memory that way, its 3.5 MB cell drawn for each of 73,047 stencils). The
+/// squares all show the pattern in place.
+#[test]
+fn fills_of_one_pattern_setting_share_its_cell() {
+    let mut content = String::from("/Pattern cs /P scn ");
+    for i in 0..3000u32 {
+        content.push_str(&format!("{} {} 4 4 re f ", (i % 60) * 5, (i / 60) * 5));
+    }
+    // The cell is blue with a red lower-left quarter, under 5,000 blue specks; at `/Matrix` scale
+    // 10 a step is 100 units, so red shows where both coordinates, modulo 100, are below 50.
+    let mut cell = String::from("0 0 1 rg 0 0 10 10 re f 1 0 0 rg 0 0 5 5 re f 0 0 1 rg");
+    for i in 0..5000u32 {
+        cell.push_str(&format!(" {}.{} 9.5 0.01 0.01 re f", i % 10, i % 7));
+    }
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Pattern << /P 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Matrix [10 0 0 10 0 0] /Resources << >> /Length {} >> stream
+{cell}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+        cell.len()
+    );
+    let started = std::time::Instant::now();
+    let page = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default()).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    let took = started.elapsed();
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert!(took < std::time::Duration::from_secs(10), "3,000 fills of one pattern took {took:?}");
+    // Pixel rows run top down: PDF (x, y) is pixel (x, 300 - y).
+    let px = |x: u32, y: u32| page.rgba[(((300 - y) * page.width + x) * 4) as usize..][..3].to_vec();
+    // The first square, at (0, 0), and the last, at (295, 245).
+    assert_eq!(px(1, 1), [255, 0, 0]);
+    assert_eq!(px(296, 246), [0, 0, 255]);
+}
+
 /// #2971: in a knockout transparency group (`/K true`) each element composites with the
 /// group's initial backdrop, not with the elements drawn before it in the group, over the
 /// element's shape. A blue square at 50 % opacity over a red one at 50 % shows only the blue
