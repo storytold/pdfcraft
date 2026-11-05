@@ -153,6 +153,7 @@ fn sign_inner(
     }
     check_signing_permissions(doc, opts)?;
     let mut doc = doc.clone();
+    let earlier_signatures = !super::validate::signature_contents(&doc).is_empty();
     let root = doc.root().ok_or_else(|| SignError::Pdf("the document has no catalog".into()))?;
     let alg = id.key.preferred_digest();
     let reserve =
@@ -292,6 +293,22 @@ fn sign_inner(
         if let Some(Object::Ref(r)) = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()) {
             doc.update_dict(r, |af| af.set(b"SigFlags".to_vec(), Object::Int(3)))?;
         }
+    }
+    // Acrobat does not recognise a signature in a form that asks viewers to redraw its fields
+    // (`/NeedAppearances true`): redrawing would change what the signature covers. The first
+    // signature drops the flag; a later one leaves it, as removing it would count as a change
+    // to the earlier signatures.
+    if !earlier_signatures {
+        if let Some(Object::Ref(r)) = doc.get(root).as_dict().and_then(|c| c.get(b"AcroForm").cloned()) {
+            doc.update_dict(r, |af| {
+                af.remove(b"NeedAppearances");
+            })?;
+        }
+        doc.update_dict(root, |c| {
+            if let Some(Object::Dict(af)) = c.get_mut(b"AcroForm") {
+                af.remove(b"NeedAppearances");
+            }
+        })?;
     }
     // The appearance.
     let ap = appearance(&mut doc, rect, turn, &name, &id.certificate, opts)?;
