@@ -11,6 +11,28 @@
 # Adobe-authored non-visual technical data allowed by AGENTS.md §1.1.
 
 [[asset]]
+path = "assets/icons/scroll-continuous.svg"
+title = "Continuous scrolling indicator"
+author = "PdfCraft local mod contributors (Codex-generated)"
+source = "Contributor-original SVG generated for the page-display rail on 2026-10-16; colour follows the UI theme"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "icon"
+usage = "Right-rail scrolling mode toggle"
+sha256 = "25d1bb17776ce38ac0af3c59c996cc4e0e196fc141fe8ac5d6186f6c0693105f"
+
+[[asset]]
+path = "assets/icons/scroll-normal.svg"
+title = "Normal page scrolling indicator"
+author = "PdfCraft local mod contributors (Codex-generated)"
+source = "Contributor-original SVG generated for the page-display rail on 2026-10-16; colour follows the UI theme"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "icon"
+usage = "Right-rail scrolling mode toggle"
+sha256 = "daf792ab90d53535c7cf8b26a7f0c95aff660ed9fc2fdea096bc0c6af8d066b5"
+
+[[asset]]
 path = "assets/icons/accessibility.svg"
 title = "Lucide icon \"accessibility\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"
