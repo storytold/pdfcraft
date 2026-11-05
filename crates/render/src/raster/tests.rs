@@ -8278,6 +8278,11 @@ fn a_soft_mask_far_larger_than_where_it_is_drawn_is_shrunk_once() {
 /// be averaged down (vendored hayro-interpret patch 77). Each mask is given as its size and
 /// samples.
 fn soft_masks_handed(width: u32, height: u32, mask: &[u8], sizes: &[(u32, u32)]) -> (Vec<(u32, u32, Vec<u8>)>, usize) {
+    soft_masks_handed_keyed(width, height, mask, sizes, ("Width", "Height"))
+}
+
+/// `soft_masks_handed`, with the mask's dimensions under `keys` (`/W` and `/H`, say).
+fn soft_masks_handed_keyed(width: u32, height: u32, mask: &[u8], sizes: &[(u32, u32)], keys: (&str, &str)) -> (Vec<(u32, u32, Vec<u8>)>, usize) {
     use hayro::hayro_interpret::font::Glyph;
     use hayro::hayro_interpret::hayro_syntax::Pdf;
     use hayro::hayro_interpret::{
@@ -8317,7 +8322,9 @@ fn soft_masks_handed(width: u32, height: u32, mask: &[u8], sizes: &[(u32, u32)])
     );
     let alpha = flate(mask);
     let mask_dict = format!(
-        "<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>",
+        "<< /Type /XObject /Subtype /Image /{} {width} /{} {height} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>",
+        keys.0,
+        keys.1,
         alpha.len()
     );
     let content = sizes.iter().map(|(w, h)| format!("q {w} 0 0 {h} 0 0 cm /A Do Q")).collect::<Vec<_>>().join(" ");
@@ -8340,7 +8347,8 @@ fn soft_masks_handed(width: u32, height: u32, mask: &[u8], sizes: &[(u32, u32)])
 ///   but holds 10, drawn 20 high, is handed no rows that no sample covers;
 /// - is cached per drawn size, rounded up to a power of two: the same image drawn 20 and then 200
 ///   points wide is handed its mask at 32 and then at its own 100, not the first draw's 32 again,
-///   and drawn 20 and 21 wide it is handed one mask of 32 both times;
+///   and drawn 20 and 21 wide it is handed one mask of 32 both times, whether the mask's
+///   dimensions are under `/Width` and `/Height` or `/W` and `/H`;
 /// - is made, at every size, from one intermediate mask at most 4096 on a side, so a mask wider
 ///   than that, drawn at four sizes, is decoded in full once and not four times.
 #[test]
@@ -8354,6 +8362,11 @@ fn an_averaged_down_soft_mask_follows_its_samples_and_its_drawn_size() {
     };
     assert_eq!(sizes(&[(20, 20), (200, 200)]), vec![(32, 32), (100, 100)], "each draw at its own size");
     assert_eq!(sizes(&[(20, 20), (21, 21)]), vec![(32, 32), (32, 32)], "draws a pixel apart share one");
+    // The same with the mask's dimensions under the abbreviated `/W` and `/H`, which an image is
+    // read with too.
+    let (handed, _) = soft_masks_handed_keyed(100, 100, &[255; 100 * 100], &[(20, 20), (200, 200)], ("W", "H"));
+    let abbreviated: Vec<(u32, u32)> = handed.iter().map(|(w, h, _)| (*w, *h)).collect();
+    assert_eq!(abbreviated, vec![(32, 32), (100, 100)], "each draw at its own size, under /W and /H");
     // Columns alternating 0 and 255, so every averaged-down sample is about half: within 8, as a
     // sample covering 19 or 20 columns, say, holds 9 or 10 opaque ones.
     let wide: Vec<u8> = (0..5000 * 2).map(|i| if i % 2 == 0 { 0 } else { 255 }).collect();

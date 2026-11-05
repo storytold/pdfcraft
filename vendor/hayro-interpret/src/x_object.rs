@@ -710,7 +710,9 @@ impl<'a> ImageXObject<'a> {
         let dict = self.stream.dict();
         let larger = |s: &Stream<'_>| {
             let d = s.dict();
-            d.get::<u32>(WIDTH).is_some_and(|w| w > self.width) || d.get::<u32>(HEIGHT).is_some_and(|h| h > self.height)
+            // The dimension keys as `ImageXObject::new` reads them, abbreviations first.
+            let (w, h) = (d.get::<u32>(W).or_else(|| d.get::<u32>(WIDTH)), d.get::<u32>(H).or_else(|| d.get::<u32>(HEIGHT)));
+            w.is_some_and(|w| w > self.width) || h.is_some_and(|h| h > self.height)
         };
         dict.get::<Stream<'_>>(SMASK).is_some_and(|s| larger(&s)) || dict.get::<Stream<'_>>(MASK).is_some_and(|s| larger(&s))
     }
