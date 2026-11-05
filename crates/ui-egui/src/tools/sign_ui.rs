@@ -331,9 +331,18 @@ impl PdfCraftApp {
         self.dialog = Some(crate::Dialog::Sign);
     }
 
-    /// List OS key store signing identities (after the file-based IDs).
+    /// List OS key store signing identities (after the file-based IDs). A failed listing keeps
+    /// the entries already listed.
     fn refresh_os_key_store_ids(&mut self) {
+        let Some(listed) = self.list_os_key_store_ids() else { return };
         self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:"));
+        self.digital_ids.extend(listed);
+    }
+
+    /// The OS key store's signing identities, or `None` after telling the user it couldn't be read.
+    fn list_os_key_store_ids(&mut self) -> Option<Vec<DigitalIdEntry>> {
+        #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(unused_mut))]
+        let mut listed = Vec::new();
         #[cfg(target_os = "macos")]
         if self.os_key_store_ids {
             match sign::keychain::identities(None) {
@@ -344,10 +353,13 @@ impl PdfCraftApp {
                         if let Some(name) = id.friendly_name {
                             entry.name = name;
                         }
-                        self.digital_ids.push(entry);
+                        listed.push(entry);
                     }
                 }
-                Err(e) => self.notify_fmt("The Keychain's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
+                Err(e) => {
+                    self.notify_fmt("The Keychain's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]);
+                    return None;
+                }
             }
         }
         #[cfg(target_os = "windows")]
@@ -355,20 +367,25 @@ impl PdfCraftApp {
             match sign::windows::list() {
                 Ok(listing) => {
                     for id in &listing.ids {
-                        self.digital_ids.push(entry_for(&sign::windows::reference(&id.certificate), &id.certificate));
+                        listed.push(entry_for(&sign::windows::reference(&id.certificate), &id.certificate));
                     }
                     // Certificates without a private key aren't identities; the rest are shown
                     // greyed with why they can't sign (issue #179).
                     for u in listing.unusable.iter().filter(|u| !u.no_private_key) {
-                        self.digital_ids.push(entry_unusable(u));
+                        listed.push(entry_unusable(u));
                     }
                 }
-                Err(e) => self.notify_fmt("The Windows store's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
+                Err(e) => {
+                    self.notify_fmt("The Windows store's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]);
+                    return None;
+                }
             }
         }
+        Some(listed)
     }
 
-    /// The picker's Refresh: list the OS key store again, keeping the selection on its ID.
+    /// Refresh: list the OS key store again, keeping the selection on its ID. Refresh on the
+    /// empty Configure step goes to the picker once there is something to pick.
     fn refresh_digital_ids(&mut self) {
         let selected = self.sign_draft.as_ref().and_then(|d| d.selected).and_then(|i| self.digital_ids.get(i)).map(|e| e.path.clone());
         self.refresh_os_key_store_ids();
@@ -377,6 +394,9 @@ impl PdfCraftApp {
             d.selected = selected
                 .and_then(|path| self.digital_ids.iter().position(|e| e.path == path && e.unusable.is_none()))
                 .or_else(|| first_usable(&self.digital_ids));
+            if !self.digital_ids.is_empty() {
+                d.step = SignStep::Choose;
+            }
         }
     }
 
@@ -767,6 +787,18 @@ mod tests {
         let d = app.sign_draft.as_ref().unwrap();
         assert_eq!(d.selected.map(|i| app.digital_ids[i].name.as_str()), Some("Beto"), "the store entry above it is gone");
         assert_eq!(d.confirm_remove, None);
+    }
+
+    #[test]
+    fn refreshing_the_empty_configure_step_opens_the_picker() {
+        let mut app = PdfCraftApp::new();
+        app.sign_draft = Some(SignDraft::new(0, None, None, None, &app.digital_ids));
+        app.refresh_digital_ids();
+        assert_eq!(app.sign_draft.as_ref().unwrap().step, SignStep::Configure, "still nothing to pick");
+        app.digital_ids = vec![listed("/ids/a.p12", "Ana")];
+        app.refresh_digital_ids();
+        let d = app.sign_draft.as_ref().unwrap();
+        assert_eq!((d.step, d.selected), (SignStep::Choose, Some(0)));
     }
 
     #[test]

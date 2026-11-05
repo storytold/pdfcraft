@@ -5,6 +5,9 @@ use super::{
 #[cfg(not(target_arch = "wasm32"))]
 use crate::file_filter::AddFilterAnyCase as _;
 
+/// Linux has no OS key store, so there is nothing for Refresh to list again.
+const HAS_OS_KEY_STORE: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+
 /// Draw the signing dialogs; returns `true` when the dialog should close.
 pub(crate) fn dialog(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let Some(step) = app.sign_draft.as_ref().map(|d| d.step) else { return true };
@@ -36,21 +39,21 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.add_space(6.0);
     let ids = app.digital_ids.clone();
     let order = super::picker_order(&ids);
-    // Linux has no OS key store, so there is nothing for Refresh to list again.
-    let os_key_store = cfg!(any(target_os = "macos", target_os = "windows")) && app.os_key_store_ids;
+    let os_key_store = HAS_OS_KEY_STORE && app.os_key_store_ids;
     let Some(d) = app.sign_draft.as_mut() else { return true };
     let mut close = false;
     // A letter jumps to the IDs that start with it; this step has no text field to type into.
-    let typed = ui.input(|i| {
-        i.events.iter().rev().find_map(|e| match e {
-            egui::Event::Text(text) => text.chars().next().filter(|c| c.is_alphanumeric()),
-            _ => None,
-        })
+    let typed: Vec<char> = ui.input(|i| {
+        let text = i.events.iter().filter_map(|e| if let egui::Event::Text(text) = e { Some(text.as_str()) } else { None });
+        text.flat_map(str::chars).filter(|c| c.is_alphanumeric()).collect()
     });
-    let jumped = typed.and_then(|letter| super::next_with_letter(&ids, &order, d.selected, letter));
-    if jumped.is_some() {
-        d.selected = jumped;
-        d.confirm_remove = None;
+    let mut jumped = None;
+    for letter in typed {
+        if let Some(i) = super::next_with_letter(&ids, &order, d.selected, letter) {
+            jumped = Some(i);
+            d.selected = jumped;
+            d.confirm_remove = None;
+        }
     }
     egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
         for &i in &order {
@@ -172,6 +175,7 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     // Browse… is desktop-only.
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut browse = false;
+    let mut refresh = false;
     widgets::radio_value(ui, &mut d.new_id.create, false, tl!("Use a Digital ID from a file"));
     widgets::radio_value(ui, &mut d.new_id.create, true, tl!("Create a new Digital ID (self-signed, saved to a password-protected file)"));
     ui.add_space(8.0);
@@ -233,6 +237,8 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             d.step = SignStep::Choose;
             d.error = None;
         }
+        // An ID installed after the dialog opened on an empty list has no picker to appear in.
+        refresh = HAS_OS_KEY_STORE && app.os_key_store_ids && app.digital_ids.is_empty() && widgets::pill_button(ui, tl!("Refresh"), false).clicked();
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if widgets::pill_button(ui, if d.new_id.create { tl!("Save") } else { tl!("Continue") }, true).clicked() {
                 go = true;
@@ -272,6 +278,9 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     }
     #[cfg(target_arch = "wasm32")]
     let _ = browse;
+    if refresh {
+        app.refresh_digital_ids();
+    }
     close
 }
 

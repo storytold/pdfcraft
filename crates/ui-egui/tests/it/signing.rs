@@ -652,6 +652,36 @@ fn typing_a_letter_moves_the_picker_selection() {
     h.event(egui::Event::Text("n".into()));
     h.run_steps(3);
     assert_eq!(chosen(&h).as_deref(), Some("Nora"));
+    // Letters that land in one frame all count.
+    h.input_mut().events.extend([egui::Event::Text("n".into()), egui::Event::Text("n".into())]);
+    h.run_steps(3);
+    assert_eq!(chosen(&h).as_deref(), Some("Nora"));
+}
+
+/// The ID a letter selects may start below the list's fold: the list scrolls to it.
+#[test]
+fn typing_a_letter_scrolls_to_the_selected_id() {
+    let mut h = harness(dir());
+    h.state_mut().start_signing(0, None, None, None);
+    for name in ('a'..='z').map(|c| format!("{c} signer")) {
+        h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
+            path: format!("/ids/{name}.p12"),
+            name,
+            issuer: "Test issuer".into(),
+            email: String::new(),
+            expires: "2030.01.01".into(),
+            unusable: None,
+        });
+    }
+    let draft = h.state_mut().sign_draft.as_mut().unwrap();
+    draft.step = SignStep::Choose;
+    draft.selected = Some(0);
+    h.run_steps(3);
+    let buttons_top = h.get_by_label("Continue").rect().top();
+    assert!(h.get_by_label("t signer").rect().bottom() > buttons_top, "the row starts below the list");
+    h.event(egui::Event::Text("t".into()));
+    h.run_steps(5);
+    assert!(h.get_by_label("t signer").rect().bottom() <= buttons_top, "the list scrolled to the row");
 }
 
 /// Certificate names are as long as their owners made them: the picker cuts both lines of a
