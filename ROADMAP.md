@@ -37,7 +37,7 @@
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
-> **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
+> **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M2: scans keep their strokes at screen size and are smoothed when zoomed; M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M14 localization current state: Arabic logical catalog, explicit RTL label direction and mirrored stock chrome; native/browser RTL workflows unqualified. Native release Hans face via LXGW WenKai Lite; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M7, #2636 partial: pasting added text boxes and images in the engine and through `content_copy`; estimates unchanged)
@@ -237,6 +237,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-03 (M11, shared JBIG2 dictionary):** With Monochrome Images set to JBIG2, Optimize has up to 16 JBIG2 images share one symbol dictionary (`/JBIG2Globals`), the letters found on more than one page stored once, when that is smaller (`pdfcraft_filters::encode_jbig2_shared`). Eight pages of 10 pt text rendered at 300 dpi take 41% less in Helvetica and 42% in Times than coded alone, 10% in Courier; groups of 16 save 45%, of 32 only 47%. Only images redaction can store again without the dictionary share one (image masks and DeviceGray named directly, at most 64 Mi pixels), and redacting one stores the rest of its group so, which the group bounds to 15.
+
 - **2026-11-03 (local Arabic/Syriac M2/M3):** Auto Arabic generated form/comment/page-mark/signature surfaces and bounded cluster-colour/quarter-turn source editing pass 900 unit tests, 13 integration cases, affected WASM, unchanged-source strict lint, layers/assets/parity and fresh CLI render/save/reopen/refusal replays. This remains an uncommitted combined candidate; no upstream merge, release, variable-font conversion or human/platform acceptance is claimed. Estimates unchanged.
 
 - **2026-11-02 (M6 local integration):** Combined the reviewed Arabic/Syriac tracks and adapted PR #3465's generated-text infrastructure for bounded Auto single-line Arabic form fallback. Formatting, selected-font priority, measured overflow, text-state isolation and output budgets have local regressions. Headless integration and release/native-reader qualification remain separate; see `docs/arabic-generated-appearances.md`.
@@ -265,7 +267,11 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-11-03 (M7, #5835):** In image crop mode, a right-click on the image, its crop box or its handles keeps the crop and opens no menu, so the menu no longer switches as the pointer moves. A right-click elsewhere clears the selection and opens the page menu. UI tests cover all four page rotations, overlapping images, a 45° image, and a check that the Done/Cancel/Remove Crop pills at a page edge still keep the crop.
 
+- **2026-11-02 (M12, #1297):** `model_add` embeds a U3D or PRC file, recognised by its header, as a 3D annotation with a chosen activation and a poster (an image or PDF page fitted in the box, or a labelled frame); an older file's catalog `/Version` is raised to what the model needs. Views, a rendered poster and a UI command are later steps. Estimates unchanged.
+
 - **2026-11-02 (M10, #5743):** macOS print jobs name their title and owner (`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`), as the system print dialog does, because a Kyocera filter crashes on a job without them. Checked by a test and through `doc_print` against a stand-in `lp`; not yet on a physical printer.
+
+- **2026-11-02 (M14, #5737, #5460):** Preferences can turn off the update check at start. It stays on by default, and Help ▸ Check for updates still asks.
 
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
 
@@ -301,6 +307,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-26 (M2, PR #4172):** Reconciled current main, preserving its Japanese serif/weight selection and both branches' progress records. Installed CJK viewer and preview fallback remains display-only; estimates unchanged.
 
 - **2026-10-29 (M7, #2517):** Widening a paragraph rejoins a wrap with the number of spaces that wrap consumed, including a typed run and none for a Chinese or Japanese word split. The count survives an incremental save and a full rewrite, and a width-only `text_edit` uses it. Estimates unchanged.
+- **2026-10-29 (M2):** Scanned pages look like the paper again. An image that doesn't ask for /Interpolate was shrunk by nearest-neighbour (since #635), which kept one sample in N per axis, so the text of a 300 dpi scan at 100% lost most of its strokes; it is now area-averaged to whole device pixels (on a 13-page 300 dpi scan every sample at 96–192 dpi is within 1 of the exact area average; it was up to 255 off). Enlarged, an image of page-scan size is smoothed bilinearly, so a zoomed scan has no staircases; icons, QR codes and pixel art keep hard pixels. Estimates unchanged.
 - **2026-10-26 (M11, JBIG2 symbols):** Lossless JBIG2 now stores each distinct mark of a black-and-white image once, as a symbol, and places its exact copies, when that is smaller than the generic region: on six pages of rendered 300 dpi text 28% of the generic region's size and 17% of Group 4's, and the same bits back through two independent decoders (hayro-jbig2 and Poppler). Scans, whose letters are seldom identical, gain little until refinement coding; a dictionary shared between pages (`/JBIG2Globals`) is next. Estimates unchanged.
 - **2026-10-25 (M5, comment replies):** One reply can be deleted from the Comments panel without its thread. On the selected card each reply has its own "…" menu (Edit, Copy text, Delete); Delete takes that reply with its pop-up and the replies to it, as `comment_delete` already did headlessly, and the comment and its other replies stay. The card stays selected, and the panel's editor stays open, on what they were on though the delete moved it in `/Annots`. Undo and Redo close the editor, since either can move what it was open on. A locked reply can't be deleted. Estimates unchanged.
 - **2026-10-24 (M10, #4158 partial):** Word, HTML, RTF and PowerPoint export keep a block that continues another on its line (an italic case name, a link, a superscript) as a run in its own style inside that paragraph, with the source's word space, instead of a paragraph of its own. Style changes that wrap onto the next line still split paragraphs (the reading blocks keep style boundaries). Estimates unchanged.

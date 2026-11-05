@@ -311,6 +311,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     let mut list_picked = None;
     let (sort_items, old_selection) = items_to_sort(doc, &f, props);
     let parent_default = ancestor_sets(doc, f.obj, b"DV");
+    let parent_limit = ancestor_sets(doc, f.obj, b"MaxLen");
     doc.update_dict(f.obj, |d| {
         d.set(b"Ff".to_vec(), Object::Int(ff as i64));
         if let Some(family) = props.syriac_family {
@@ -326,6 +327,8 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         if let Some(m) = props.max_len {
             match m {
                 Some(m) => d.set(b"MaxLen".to_vec(), Object::Int(m as i64)),
+                // An absent key would inherit the parent's limit; zero is "no limit" (`read.rs`).
+                None if parent_limit => d.set(b"MaxLen".to_vec(), Object::Int(0)),
                 None => {
                     d.remove(b"MaxLen");
                 }
@@ -667,10 +670,15 @@ fn apply_late_widget_props(
 }
 
 /// Name field `old` `new` in each field's Calculate script that reads it
-/// ([`crate::af::rename_in_calculation`]).
+/// ([`crate::af::rename_in_calculation`]). Script streams share one budget, as a reading of the
+/// form's scripts does, however many fields name the same stream; past it, a script is left as
+/// it is, like one that won't decode. A Calculate action several fields share by reference is
+/// read and rewritten once, in place, so they all read the new name.
 fn rename_in_calculations(doc: &mut Document, all: &[Field], old: &str, new: &str) -> Result<(), FormError> {
     let aa_of =
         |doc: &Document, r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"AA").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned());
+    let mut scripts = crate::script_budget();
+    let mut shared = std::collections::HashSet::new();
     for f in all {
         // The script is the field's, or its only widget's when the field has none, as
         // `actions_of` reads it.
@@ -679,12 +687,16 @@ fn rename_in_calculations(doc: &mut Document, all: &[Field], old: &str, new: &st
             _ => None,
         };
         let Some((owner, mut aa)) = aa_of(doc, f.obj).map(|aa| (f.obj, aa)).or_else(only_widget) else { continue };
+        let by_ref = aa.get(b"C").and_then(Object::as_ref);
+        if by_ref.is_some_and(|r| !shared.insert(r)) {
+            continue;
+        }
         let Some(mut action) = aa.get(b"C").and_then(|a| doc.resolve(a).as_dict().cloned()) else { continue };
         let js = match action.get(b"JS").map(|js| doc.resolve(js)).as_deref() {
             Some(Object::String(s)) => s.to_text(),
             // A stream that isn't UTF-8 reads with replacement characters, which must not be
             // written back in place of what it holds.
-            Some(Object::Stream(s)) => match s.decoded().ok().and_then(|b| String::from_utf8(b).ok()) {
+            Some(Object::Stream(s)) => match scripts.decode(s).ok().and_then(|b| String::from_utf8(b).ok()) {
                 Some(js) => js,
                 None => continue,
             },
@@ -692,6 +704,10 @@ fn rename_in_calculations(doc: &mut Document, all: &[Field], old: &str, new: &st
         };
         let Some(js) = crate::af::rename_in_calculation(&js, old, new) else { continue };
         action.set(b"JS".to_vec(), PdfString::text(&js));
+        if let Some(r) = by_ref {
+            doc.update_dict(r, |d| *d = action)?;
+            continue;
+        }
         aa.set(b"C".to_vec(), Object::Dict(action));
         doc.update_dict(owner, |d| d.set(b"AA".to_vec(), Object::Dict(aa)))?;
     }

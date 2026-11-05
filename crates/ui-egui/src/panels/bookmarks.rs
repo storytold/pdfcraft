@@ -19,6 +19,15 @@ pub enum BmAction {
     Indent(Vec<usize>),
     /// Move it out to follow its parent.
     Outdent(Vec<usize>),
+    /// Copy the bookmark and everything under it to the bookmark clipboard.
+    Copy(Vec<usize>),
+    /// Copy it, then delete it (one undo step: only the delete changes the document).
+    Cut(Vec<usize>),
+    /// Paste the bookmark clipboard under `parent` at `index` (past the end appends).
+    Paste {
+        parent: Vec<usize>,
+        index: usize,
+    },
     /// Bookmarks from the tagged headings, under a new first "Untitled" bookmark.
     FromStructure,
     /// Open New bookmarks from text styles, to choose a style per bookmark level (#1693).
@@ -55,6 +64,8 @@ pub(super) struct OutlineCtx<'a> {
     pub(super) action: &'a mut Option<BmAction>,
     pub(super) rename: &'a mut Option<(Vec<usize>, String)>,
     pub(super) editable: bool,
+    /// The bookmark clipboard holds something to paste.
+    pub(super) can_paste: bool,
     pub(super) current: usize,
     /// Expand all (`Some(usize::MAX)`), collapse all (`Some(0)`) or expand to a depth, this frame.
     pub(super) expand: Option<usize>,
@@ -248,6 +259,11 @@ pub(super) fn outline_item(
                 pick(ui, tl!("Move down"), i + 1 < siblings, BmAction::MoveDown(path.to_vec()));
                 pick(ui, tl!("Indent"), i > 0, BmAction::Indent(path.to_vec()));
                 pick(ui, tl!("Outdent"), depth > 0, BmAction::Outdent(path.to_vec()));
+                ui.separator();
+                pick(ui, tl!("Cut"), true, BmAction::Cut(path.to_vec()));
+                pick(ui, tl!("Copy"), true, BmAction::Copy(path.to_vec()));
+                let parent = path.get(..depth).unwrap_or_default().to_vec();
+                pick(ui, tl!("Paste"), cx.can_paste, BmAction::Paste { parent, index: i.saturating_add(1) });
                 ui.separator();
                 pick(ui, tl!("Delete"), true, BmAction::Delete(path.to_vec()));
                 if let Some(a) = styled {

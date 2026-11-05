@@ -192,11 +192,17 @@ fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Decode
     out
 }
 
-fn values_of(doc: &Document, o: Option<&Object>) -> Vec<String> {
+/// Text streams of field values (`/V`, `/DV`) one reading of the form may decode in all, however
+/// many fields name the same stream.
+pub(crate) const MAX_VALUE_BYTES: usize = 64 << 20;
+
+/// A field's value or default value (`/V`, `/DV`). A text stream is decoded against `budget`, and
+/// reads as no value once it is spent, as one that won't decode does.
+fn values_of(doc: &Document, o: Option<&Object>, budget: &mut DecodeBudget) -> Vec<String> {
     let Some(o) = o else { return Vec::new() };
     match &*doc.resolve(o) {
         Object::Array(a) => a.iter().filter_map(|x| text_of(&doc.resolve(x))).collect(),
-        Object::Stream(s) => s.decoded().ok().map(|b| PdfString::literal(b).to_text()).into_iter().collect(),
+        Object::Stream(s) => budget.decode(s).ok().map(|b| PdfString::literal(b).to_text()).into_iter().collect(),
         other => text_of(other).filter(|s| s != "Off" && !s.is_empty()).into_iter().collect(),
     }
 }
@@ -346,7 +352,12 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
         None => Inherited::default(),
     };
     let mut out = Vec::new();
-    let mut seen = Seen { fields: std::collections::HashSet::new(), widgets: std::collections::HashSet::new(), scripts: script_budget() };
+    let mut seen = Seen {
+        fields: std::collections::HashSet::new(),
+        widgets: std::collections::HashSet::new(),
+        scripts: script_budget(),
+        values: DecodeBudget::new(MAX_VALUE_BYTES, 0),
+    };
     if let Some(af) = &af {
         for f in af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default() {
             if let Some(r) = f.as_ref() {
@@ -417,13 +428,14 @@ fn unlisted_root(doc: &Document, r: ObjRef, seen: &std::collections::HashSet<Obj
     }
 }
 
-/// What one reading of the form's fields has used: the field and widget dictionaries read, and
-/// the script budget their actions share.
+/// What one reading of the form's fields has used: the field and widget dictionaries read, the
+/// script budget their actions share, and the budget their value streams share.
 struct Seen {
     fields: std::collections::HashSet<ObjRef>,
     /// A widget belongs to the first field that lists it, however often it is listed.
     widgets: std::collections::HashSet<ObjRef>,
     scripts: DecodeBudget,
+    values: DecodeBudget,
 }
 
 /// Read the field at `r` and the fields under it into `out`, with what they inherit from
@@ -555,8 +567,8 @@ fn walk(
         name: inh.name.clone(),
         obj: r,
         kind,
-        value: values_of(doc, inh.v.as_ref()),
-        default: values_of(doc, inh.dv.as_ref()),
+        value: values_of(doc, inh.v.as_ref(), &mut seen.values),
+        default: values_of(doc, inh.dv.as_ref(), &mut seen.values),
         flags: ff,
         max_len: inh.max_len,
         options,
