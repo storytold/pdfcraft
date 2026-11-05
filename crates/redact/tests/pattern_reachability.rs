@@ -43,7 +43,6 @@ fn saved_contains(doc: &Document, needle: &[u8]) -> bool {
     })
 }
 
-
 /// Ok means confidential; Err must be a pattern refusal that leaves the document unchanged.
 /// Returns whether it applied.
 fn confidential_or_refused(mut doc: Document, page: usize) -> bool {
@@ -69,7 +68,6 @@ fn catalog() -> Vec<u8> {
     b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()
 }
 
-
 fn glyph_pixel(doc: &Document, x: u32, row: u32) -> Vec<u8> {
     let bytes = write_full(doc, &SaveOptions::default()).unwrap();
     let mut r = pdfcraft_render::PageRenderer::new(Arc::new(bytes), pdfcraft_render::RenderConfig::default());
@@ -87,7 +85,8 @@ const BLUE_CELL: &[u8] = b"0 0 1 rg 0 0 500 300 re f\n";
 fn a_direct_parent_dictionary_on_the_root_does_not_keep_the_pruned_cell() {
     let doc = open(vec![
         catalog(),
-        format!("<< /Type /Pages /Kids [3 0 R] /Count 1 /Parent << /Type /Pages /Kids [] /Count 0 /Resources {RES} >> /Resources {RES} >>").into_bytes(),
+        format!("<< /Type /Pages /Kids [3 0 R] /Count 1 /Parent << /Type /Pages /Kids [] /Count 0 /Resources {RES} >> /Resources {RES} >>")
+            .into_bytes(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 300] /Contents 5 0 R >>".to_vec(),
         FONT.to_vec(),
         stream_obj("", CONTENT),
@@ -206,4 +205,36 @@ fn hostile_wide_tree_probe() {
     let start = std::time::Instant::now();
     let result = apply(&mut doc, None);
     eprintln!("WIDE k={k} m={m} apply={:?} in {:?}", result.as_ref().map(|r| r.patterns_removed), start.elapsed());
+}
+/// The Type 3 font has `/Resources null`, which readers treat as absent.
+#[test]
+fn a_type3_font_with_null_resources_keeps_the_page_pattern() {
+    let mut doc = type3_page("", b"BT /T3 1 Tf 300 230 Td (a) Tj ET\n/Pattern cs /P0 scn 35 110 170 35 re f\n", vec![]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(7, 0), |d| d.set(b"Resources".to_vec(), Object::Null)).unwrap();
+    assert_glyph_kept(doc);
+}
+/// Known limit (fidelity only, never a leak: a missed use can only prune more). Kept annotation
+/// appearances are not interpreted for pattern use, so a Type 3 font without resources shown in
+/// one does not keep the page's patterns. ISO 32000 resolves the glyph's names in the
+/// appearance's own resources, where `/P0` does not exist, so only a lenient renderer draws it.
+/// The Type 3 font is shown by a kept annotation's appearance stream (outside the mark).
+#[test]
+#[ignore = "known limit: kept annotation appearances are not interpreted, so a resourceless Type 3 glyph in one does not keep the page pattern; ISO 32000 resolves it in the appearance's own resources, which pdfcraft's renderer does not"]
+fn a_type3_glyph_in_an_annotation_appearance_renders_the_same() {
+    let mut doc = type3_page(
+        "",
+        b"/Pattern cs /P0 scn 35 110 170 35 re f\n",
+        vec![
+            stream_obj("/Type /XObject /Subtype /Form /BBox [0 0 40 40] /Resources << /Font << /T3 7 0 R >> >>", b"BT /T3 1 Tf 0 0 Td (a) Tj ET\n"),
+            b"<< /Type /Annot /Subtype /Stamp /Rect [300 230 340 270] /F 4 /AP << /N 9 0 R >> >>".to_vec(),
+        ],
+    );
+    doc.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |d| {
+        d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(pdfcraft_cos::ObjRef::new(10, 0))]))
+    })
+    .unwrap();
+    let before = glyph_pixel(&doc, 320, 50);
+    mark(&mut doc, 0);
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!(glyph_pixel(&doc, 320, 50), before, "the annotation renders differently ({report:?}, before {before:?})");
 }

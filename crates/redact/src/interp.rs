@@ -552,7 +552,7 @@ impl Walk {
         let Some(name) = op.name(0) else { return };
         let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
         self.gs.vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
-        self.gs.type3_inherits = font_dict.as_ref().is_some_and(|d| d.name(b"Subtype") == Some(b"Type3") && !d.contains(b"Resources"));
+        self.gs.type3_inherits = font_dict.as_ref().is_some_and(|d| type3_without_resources(doc, d));
         self.gs.font = match scope.fonts.get(name) {
             Some(f) => f.clone(),
             None => {
@@ -1035,5 +1035,11 @@ fn extgstate_type3_inherits(doc: &Document, ext_gstates: &Dict, name: &[u8]) -> 
     let Some(font) = state.as_dict().and_then(|d| d.get(b"Font")).map(|f| doc.resolve(f)) else { return false };
     let Some(reference) = font.as_array().and_then(|a| a.first()) else { return false };
     let dict = doc.resolve(reference);
-    dict.as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type3") && !d.contains(b"Resources"))
+    dict.as_dict().is_some_and(|d| type3_without_resources(doc, d))
+}
+
+/// A Type 3 font whose glyph descriptions use the resources of whatever shows them: no
+/// `/Resources`, or `/Resources null`, which is the same thing.
+fn type3_without_resources(doc: &Document, font: &Dict) -> bool {
+    font.name(b"Subtype") == Some(b"Type3") && font.get(b"Resources").is_none_or(|r| matches!(&*doc.resolve(r), Object::Null))
 }
