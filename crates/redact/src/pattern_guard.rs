@@ -357,8 +357,72 @@ fn normalized_stream(doc: &Document, stream: &Stream) -> Result<Stream, PatternP
     Ok(normalized)
 }
 
-/// Validate the requested pages before `apply` commits its working copy.
-pub(crate) fn check(doc: &Document, selected: &[usize]) -> Result<(), RedactError> {
+/// Every `/Pages` node Root reaches -- down `/Kids`, and up each page's `/Parent` chain, which a
+/// full save follows too -- that has `/Resources` of its own. Page leaves are left out: the pages
+/// to check are walked with their effective resources.
+fn tree_holders(doc: &Document) -> Result<Vec<ObjRef>, PatternProblem> {
+    let Some(top) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))) else { return Ok(Vec::new()) };
+    let mut holders = Vec::new();
+    let mut seen = HashSet::new();
+    let mut stack = vec![top];
+    let mut leaves = Vec::new();
+    while let Some(node) = stack.pop() {
+        if !seen.insert(node) {
+            continue;
+        }
+        if seen.len() > MAX_OBJECTS {
+            return Err(PatternProblem::Limit);
+        }
+        let object = doc.try_get(node.num).map_err(|_| PatternProblem::Unreadable)?;
+        let Some(dict) = object.as_dict() else { continue };
+        let is_pages = dict.name(b"Type") == Some(b"Pages") || (dict.contains(b"Kids") && dict.name(b"Type") != Some(b"Page"));
+        if !is_pages {
+            leaves.push(node);
+            continue;
+        }
+        if dict.contains(b"Resources") {
+            holders.push(node);
+        }
+        let kids = resolved(doc, dict.get(b"Kids"))?;
+        if let Some(kids) = kids.as_array() {
+            stack.extend(kids.iter().filter_map(Object::as_ref));
+        }
+    }
+    for leaf in leaves {
+        let mut node = leaf;
+        for _ in 0..MAX_DEPTH {
+            let object = doc.try_get(node.num).map_err(|_| PatternProblem::Unreadable)?;
+            let Some(parent) = object.as_dict().and_then(|d| d.get(b"Parent")).and_then(Object::as_ref) else { break };
+            if !seen.insert(parent) {
+                // Already counted, as a /Kids node or through another page's chain.
+                break;
+            }
+            let parent_object = doc.try_get(parent.num).map_err(|_| PatternProblem::Unreadable)?;
+            if parent_object.as_dict().is_some_and(|d| d.contains(b"Resources")) {
+                holders.push(parent);
+            }
+            node = parent;
+        }
+    }
+    Ok(holders)
+}
+
+/// Validate the requested pages before `apply` commits its working copy. With `tree`, the
+/// `/Resources` of every page-tree node above the pages is inspected as well: a node no page
+/// inherits from, or one a page with a broken `/Parent` link still reaches, can keep a pruned
+/// cell in the saved file.
+pub(crate) fn check(doc: &Document, selected: &[usize], tree: bool) -> Result<(), RedactError> {
+    if tree && let Some(&first) = selected.first() {
+        let page = first.saturating_add(1);
+        let holders = tree_holders(doc).map_err(|reason| RedactError::Pattern { page, reason })?;
+        for holder in holders {
+            let mut guard = Guard::new();
+            let object = doc.try_get(holder.num).map_err(|_| RedactError::Pattern { page, reason: PatternProblem::Unreadable })?;
+            if let Some(resources) = object.as_dict().and_then(|d| d.get(b"Resources")) {
+                guard.resources(doc, resources, false, 0).map_err(|reason| RedactError::Pattern { page, reason })?;
+            }
+        }
+    }
     let pages = pdfcraft_model::pages(doc);
     for &index in selected {
         let Some(page) = pages.get(index) else { return Err(RedactError::Unreadable(index.saturating_add(1))) };

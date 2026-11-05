@@ -489,6 +489,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         images,
         removed_appearances: HashSet::new(),
         appearance_scan_limit: false,
+        pruned_patterns: Vec::new(),
     };
     for &(pi, page_marks) in &groups {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
@@ -508,6 +509,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         mut images,
         removed_appearances,
         appearance_scan_limit,
+        pruned_patterns,
         ..
     } = applying;
 
@@ -592,6 +594,8 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     // A removed image or form must not stay reachable through another resource dictionary (an
     // inherited or shared /Resources): a full save keeps whatever is still referenced.
     interp::unlink_doomed(doc, &doomed_xobjects, &retired_properties)?;
+    // Likewise a pruned pattern: a /Pages node above the page can still name its cell.
+    interp::unlink_pruned_patterns(doc, &pruned_patterns)?;
     report.images_restored = restore_shared_jbig2(doc, &doomed_xobjects, &mut images)?;
 
     // 5. Verify: nothing readable may remain under a region.
@@ -630,7 +634,9 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
             });
     let check_pages =
         if shared_pattern_possible || shared_appearance_possible { (0..pdfcraft_model::pages(doc).len()).collect::<Vec<_>>() } else { by_page };
-    pattern_guard::check(doc, &check_pages)?;
+    // A pruned pattern may also stay named by a /Pages node no page inherits from, or by one a
+    // page with a broken /Parent link still reaches: then every page-tree node is inspected too.
+    pattern_guard::check(doc, &check_pages, shared_pattern_possible || !pruned_patterns.is_empty())?;
     // The previous revision still holds the removed content: the next save must rewrite.
     doc.require_full_save();
     Ok(report)
@@ -722,6 +728,8 @@ struct Applying {
     removed_appearances: HashSet<ObjRef>,
     /// Too many appearance references to track: the pattern guard inspects every page.
     appearance_scan_limit: bool,
+    /// Pattern objects pruned from a page's resources, which page-tree nodes may still name.
+    pruned_patterns: Vec<ObjRef>,
 }
 
 /// Step 1 for one page: rewrites its content so nothing readable stays under a mark, and cleans the tags it no longer shows.
@@ -732,7 +740,7 @@ fn redact_page_content(
     page: &pdfcraft_model::Page,
     rects: &[[f64; 4]],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_xobjects, retired_properties, images, .. } = applying;
+    let Applying { report, doomed_xobjects, retired_properties, images, pruned_patterns, .. } = applying;
     // 1. Content.
     let mut budget = pdfcraft_cos::DecodeBudget::page();
     let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
@@ -807,7 +815,7 @@ fn redact_page_content(
         )?;
         // A pattern this page selected but no surviving paint draws leaves its resources, so
         // its cell -- a content stream this pass does not enter -- cannot stay in the file.
-        report.patterns_removed += interp::prune_patterns(doc, &mut res, &out.patterns_seen, &out.patterns_painted);
+        report.patterns_removed += interp::prune_patterns(doc, &mut res, &out.patterns_seen, &out.patterns_painted, pruned_patterns);
         retired_properties.extend(interp::prune_properties(doc, &mut res, &cleaned_data)?);
         type3::prune_type3_from_resources(doc, &mut res, &cleaned_data)?;
         doc.update_dict(page.obj, |d| {
