@@ -3041,6 +3041,50 @@ usage = "Signature validation tests (crates/sign/tests/it/pdf.rs): a signature P
 sha256 = "8b91c3b4e39c4a31717a0dd0685bd7d0468671df32aee5b9818d44dc72c2bc3c"
 
 [[asset]]
+path = "crates/redact/tests/data/cmyk.jpg"
+title = "16×16 CMYK JPEG that the standard decoder converts to RGB"
+author = "PdfCraft contributors"
+source = "Contributor-original: synthetic 16×16 four-component (CMYK) JPEG with an APP14 transform marker, generated for the redaction regression; no third-party content"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "image"
+usage = "DCT redaction test (crates/redact/src/tests.rs): a CMYK JPEG declared /DeviceRGB is removed, not cleared"
+sha256 = "ee688af975e1a9c1c445468887351bea1df2429049c43cdaac7a28aae00b6757"
+
+[[asset]]
+path = "crates/redact/tests/data/rgb.jp2"
+title = "16×16 RGB JPEG 2000 image with a dark border"
+author = "PdfCraft contributors"
+source = "Contributor-original: synthetic 16×16 lossless JPEG 2000 (JP2) image, flat colour with a one-pixel dark border, generated for the redaction regression; no third-party content"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "image"
+usage = "JPX redaction test (crates/redact/src/tests.rs): a partly covered JPEG 2000 image is cleared in place, not removed"
+sha256 = "3494146a66cc0e30fca447b929b45c36279cc9db6cda3adb54f0b74799303788"
+
+[[asset]]
+path = "crates/filters/tests/data/five-components.jp2"
+title = "16×16 JPEG 2000 image of five components"
+author = "PdfCraft contributors"
+source = "Contributor-original: synthetic 16×16 five-component lossless JPEG 2000 (JP2) gradient, its colour box set to an unknown method; no third-party content"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "image"
+usage = "JPX decoder test (crates/filters/src/jpx.rs): an image of more than four components is refused before it is decoded"
+sha256 = "7795ab788717b2447ce5e42184e1bb58103bf05f62985b2af54b965f7c04dab0"
+
+[[asset]]
+path = "crates/filters/tests/data/palette-five-components.jp2"
+title = "16×16 JPEG 2000 image with a three-column palette over five components"
+author = "PdfCraft contributors"
+source = "Contributor-original: synthetic 16×16 five-component lossless JPEG 2000 (JP2) gradient with a hand-written 256-entry pclr box and cmap box added; no third-party content"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "image"
+usage = "JPX decoder test (crates/filters/src/jpx.rs): a palette image whose codestream has more than four components is refused before it is decoded"
+sha256 = "90fcdcee4e3fc795a83b92b6f9b8073de43354a03ad28b82892e29eba2b8f805"
+
+[[asset]]
 path = "assets/icons/clipboard-paste.svg"
 title = "Lucide icon \"clipboard-paste\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"

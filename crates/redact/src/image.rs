@@ -4,8 +4,10 @@
 //! was JBIG2, whichever is smallest; the original object is untouched (other pages may use it).
 //! CCITT fax and JBIG2 images decode through `ImageBudget::decode`, but for Group 3 on
 //! bytes, which PdfCraft's renderer may draw as other rows, and a JBIG2 page of other rows than the
-//! image's. Images whose codec PdfCraft can't decode (DCT, JPX), and those, return `None`, and the
-//! caller removes the whole image instead; that is fail-closed.
+//! image's. JPEG and JPEG 2000 images in a device space (grey, RGB, CMYK) decode through
+//! `pdfcraft_filters::decode_dct` and `decode_jpx`, paid for first, so a scanned page keeps
+//! everything a mark doesn't cover. Images this path can't decode, and those, return `None`, and
+//! the caller removes the whole image instead; that is fail-closed.
 
 use pdfcraft_content::{Matrix, overlaps};
 use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
@@ -13,6 +15,18 @@ use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
 /// Most pixels an image may have to be cleared in place (larger ones are removed), or to be stored
 /// again without shared `/JBIG2Globals` (see [`without_globals`]).
 const MAX_PIXELS: u64 = pdfcraft_cos::MAX_REDACTED_IMAGE_PIXELS;
+
+/// The component count of a JPEG or JPEG 2000 image whose `/ColorSpace` names a device space,
+/// which is what their decoders give samples in. Another space (Indexed, ICCBased) is removed
+/// whole, like any layout this path doesn't decode (#2246).
+fn device_components(doc: &Document, s: &Stream) -> Option<usize> {
+    match &*doc.resolve(s.dict.get(b"ColorSpace")?) {
+        Object::Name(name) if matches!(name.as_slice(), b"DeviceGray" | b"G") => Some(1),
+        Object::Name(name) if matches!(name.as_slice(), b"DeviceRGB" | b"RGB") => Some(3),
+        Object::Name(name) if matches!(name.as_slice(), b"DeviceCMYK" | b"CMYK") => Some(4),
+        _ => None,
+    }
+}
 
 fn components(doc: &Document, s: &Stream) -> Option<usize> {
     let cs = doc.resolve(s.dict.get(b"ColorSpace")?);
@@ -44,46 +58,125 @@ pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     decode_and_clear(doc, s, ctm, rects, budget).ok_or(())
 }
 
-fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], budget: &mut ImageBudget) -> Option<Option<Stream>> {
-    // Separate masks can retain the original image data.
-    if s.dict.contains(b"SMask") || s.dict.contains(b"Mask") {
-        return None;
-    }
+/// How an image's samples are reached.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Codec {
+    /// Through general filters alone (or none).
+    Filters,
+    /// CCITT fax or JBIG2, after the filters before it, through `ImageBudget::decode`.
+    Fax,
+    Jbig2,
+    /// JPEG or JPEG 2000, whose decoders read the coded bytes themselves and give 8-bit samples.
+    Dct,
+    Jpx,
+}
+
+/// What the stream's filter chain says about the codecs this path can clear. `None` when the
+/// image cannot be decoded at all, which the caller answers by removing it whole. A fax or JBIG2
+/// codec must be the last filter; a JPEG or JPEG 2000 codec must be the only one, since its
+/// decoder reads the encoded bytes itself.
+fn filters(s: &Stream) -> Option<Codec> {
     let supported = |n: &[u8]| {
         matches!(
             n,
             b"FlateDecode" | b"Fl" | b"LZWDecode" | b"LZW" | b"ASCII85Decode" | b"A85" | b"ASCIIHexDecode" | b"AHx" | b"RunLengthDecode" | b"RL"
         )
     };
-    // A CCITT fax or JBIG2 image (its last filter) decodes through `ImageBudget::decode`,
-    // after the filters before it, so a scan stored as Group 4 or JBIG2 is cleared like any other
-    // image.
-    let fax = |f: &Object| f.as_name().is_some_and(|n| matches!(n, b"CCITTFaxDecode" | b"CCF"));
-    let jbig2 = |f: &Object| f.as_name() == Some(b"JBIG2Decode".as_slice());
+    let codec = |f: &Object| match f.as_name()? {
+        b"CCITTFaxDecode" | b"CCF" => Some(Codec::Fax),
+        b"JBIG2Decode" => Some(Codec::Jbig2),
+        b"DCTDecode" | b"DCT" => Some(Codec::Dct),
+        b"JPXDecode" => Some(Codec::Jpx),
+        _ => None,
+    };
     let readable = |f: &Object| f.as_name().is_some_and(supported);
     // `/Crypt` was undone when the object was loaded (ISO 32000-2 §7.4.10), and decoding leaves it
     // out wherever it stands.
     let crypt = |f: &Object| f.as_name() == Some(b"Crypt".as_slice());
-    let (ok, is_fax, is_jbig2) = match s.dict.get(b"Filter") {
-        None => (true, false, false),
-        Some(f @ Object::Name(_)) => (readable(f) || crypt(f) || fax(f) || jbig2(f), fax(f), jbig2(f)),
+    match s.dict.get(b"Filter") {
+        None => Some(Codec::Filters),
+        Some(f @ Object::Name(_)) if readable(f) || crypt(f) => Some(Codec::Filters),
+        Some(f @ Object::Name(_)) => codec(f),
         Some(Object::Array(a)) => {
             let chain: Vec<&Object> = a.iter().filter(|f| !crypt(f)).collect();
             match chain.split_last() {
-                Some((last, before)) if fax(last) || jbig2(last) => (before.iter().all(|f| readable(f)), fax(last), jbig2(last)),
-                _ => (chain.iter().all(|f| readable(f)), false, false),
+                Some((last, before)) => match codec(last) {
+                    Some(c @ (Codec::Fax | Codec::Jbig2)) => before.iter().all(|f| readable(f)).then_some(c),
+                    Some(c @ (Codec::Dct | Codec::Jpx)) => before.is_empty().then_some(c),
+                    _ => chain.iter().all(|f| readable(f)).then_some(Codec::Filters),
+                },
+                None => Some(Codec::Filters),
             }
         }
-        _ => (false, false, false),
-    };
-    if !ok {
+        _ => None,
+    }
+}
+
+/// The 8-bit samples of a JPEG or JPEG 2000 image `s` (`codec`), paid for first, with their
+/// component count and, for a JPEG 2000 image whose dictionary names no colour space, the device
+/// space its file states (its cleared copy has to name one). `None` for what isn't cleared in
+/// place: an image mask, another colour space than a device one (Indexed, ICCBased), a JPEG of
+/// another depth than 8 bits or with a `/ColorTransform` of its own, a JPEG 2000 image with alpha
+/// or of another component count than its colour space, data that doesn't decode to its
+/// dictionary's size, and a decode past what is left of `budget` (which refuses the run).
+fn coded_samples(
+    doc: &Document,
+    s: &Stream,
+    codec: Codec,
+    w: usize,
+    h: usize,
+    budget: &mut ImageBudget,
+) -> Option<(Vec<u8>, usize, Option<&'static str>)> {
+    if matches!(s.dict.get(b"ImageMask"), Some(Object::Bool(true))) {
         return None;
     }
+    let pixels = (w as u64).saturating_mul(h as u64);
+    if codec == Codec::Dct {
+        // shortcut: a `/ColorTransform` of the image's own is removed whole, since the decoder
+        // follows the JPEG's markers; read it into `decode_dct` if such scans turn up.
+        let transform = |p: &Object| doc.resolve(p).as_dict().is_some_and(|p| p.contains(b"ColorTransform"));
+        // The lone filter's parameters are a dictionary or the entry of a one-filter array.
+        let own_transform = match s.dict.get(b"DecodeParms").map(|p| doc.resolve(p)).as_deref() {
+            Some(Object::Array(a)) => a.iter().any(transform),
+            Some(p) => transform(p),
+            None => false,
+        };
+        if own_transform || s.dict.int(b"BitsPerComponent") != Some(8) {
+            return None;
+        }
+        let n = device_components(doc, s)?;
+        if !budget.pay_jpeg(pixels.saturating_mul(n as u64), &s.raw) {
+            return None;
+        }
+        return Some((pdfcraft_filters::decode_dct(&s.raw, w, h, n)?, n, None));
+    }
+    // The dictionary's colour space, when it gives one, is the one the page draws the samples in
+    // (ISO 32000-2 §8.9.5.1, `/ColorSpace`); otherwise the file's own. A space that isn't a device
+    // one is refused before paying, so it is removed whole rather than stopping the run.
+    let declared = if s.dict.contains(b"ColorSpace") { Some(device_components(doc, s)?) } else { None };
+    // shortcut: JPEG 2000 pays as a JPEG of four components whatever it holds (its count is known
+    // only once decoded); give it a rate of its own if a run of JPEG 2000 scans proves slower.
+    if !budget.pay_jpeg(pixels.saturating_mul(4), &s.raw) {
+        return None;
+    }
+    let jpx = pdfcraft_filters::decode_jpx(&s.raw, w, h)?;
+    match declared {
+        Some(n) => (n == jpx.components).then_some((jpx.data, jpx.components, None)),
+        None => Some((jpx.data, jpx.components, Some(jpx.device?))),
+    }
+}
+
+fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], budget: &mut ImageBudget) -> Option<Option<Stream>> {
+    // Separate masks can retain the original image data.
+    if s.dict.contains(b"SMask") || s.dict.contains(b"Mask") {
+        return None;
+    }
+    let codec = filters(s)?;
     // Group 3 on bytes is removed whole for now. The decoder reads it by its end-of-line codes
     // when the data starts with one, but PdfCraft's renderer draws such rows (the fill ending
     // each code on a byte) as other rows, so the pixels a mark covers on screen needn't be the
     // ones cleared.
-    if is_fax && doc.fax_params(s).is_none_or(|p| p.k >= 0 && p.encoded_byte_align) {
+    if codec == Codec::Fax && doc.fax_params(s).is_none_or(|p| p.k >= 0 && p.encoded_byte_align) {
         return None;
     }
     let (w, h) = (s.dict.int(b"Width")?, s.dict.int(b"Height")?);
@@ -92,9 +185,14 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     }
     let (w, h) = (w as usize, h as usize);
     let mask = matches!(s.dict.get(b"ImageMask"), Some(Object::Bool(true)));
-    let (ncomp, bpc) = if mask { (1, 1) } else { (components(doc, s)?, s.dict.int(b"BitsPerComponent")? as usize) };
+    let coded = if matches!(codec, Codec::Dct | Codec::Jpx) { Some(coded_samples(doc, s, codec, w, h, budget)?) } else { None };
+    let (ncomp, bpc) = match &coded {
+        Some((_, n, _)) => (*n, 8),
+        None if mask => (1, 1),
+        None => (components(doc, s)?, s.dict.int(b"BitsPerComponent")? as usize),
+    };
     // JBIG2 codes one-bit images of one component (ISO 32000-2 §7.4.7).
-    if !matches!(bpc, 1 | 2 | 4 | 8 | 16) || (is_jbig2 && (ncomp, bpc) != (1, 1)) {
+    if !matches!(bpc, 1 | 2 | 4 | 8 | 16) || (codec == Codec::Jbig2 && (ncomp, bpc) != (1, 1)) {
         return None;
     }
     // Every size comes from the file: multiply checked, so an overflowing product refuses the image
@@ -110,7 +208,7 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     // code, which the filters before its decoder produce, takes at most about a byte per pixel
     // plus each row's end. Data past that can only be a decompression bomb; the image is then
     // removed whole.
-    let allowance = if is_fax {
+    let allowance = if codec == Codec::Fax {
         w.checked_mul(h)?.checked_add(h.checked_mul(4)?)?.checked_add(4096)?
     } else {
         bytes.checked_add(h)?.checked_mul(3)?.checked_add(4096)?
@@ -119,7 +217,10 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     // alone would skip such a predictor, and the cleared bytes would then miss the covered pixels),
     // and refuses a JBIG2 page of another size than the image: the renderer draws the whole page
     // into the image, so the rows cleared wouldn't be the ones a mark covers on screen.
-    let mut data = budget.decode(doc, s, allowance).ok()?;
+    let (mut data, jpx_space) = match coded {
+        Some((data, _, space)) => (data, space),
+        None => (budget.decode(doc, s, allowance).ok()?, None),
+    };
     if data.len() < bytes {
         return None;
     }
@@ -173,7 +274,22 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     dict.remove(b"Length");
     dict.remove(b"DecodeParms");
     dict.remove(b"Alternates");
-    Some(Some(smallest(dict, &data, w, h, ncomp == 1 && bpc == 1, is_jbig2)))
+    if codec == Codec::Jpx {
+        as_decoded_jpx(&mut dict, jpx_space);
+    }
+    Some(Some(smallest(dict, &data, w, h, ncomp == 1 && bpc == 1, codec == Codec::Jbig2)))
+}
+
+/// What JPEG 2000 leaves to its file a Flate copy's `dict` has to say: 8-bit samples, and their
+/// `space` when the dictionary names none. `/Decode` is ignored for JPEG 2000 (ISO 32000-2
+/// §8.9.5.1) and would apply to the copy, and `/SMaskInData` means nothing to it.
+fn as_decoded_jpx(dict: &mut Dict, space: Option<&'static str>) {
+    dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    if let Some(space) = space {
+        dict.set(b"ColorSpace".to_vec(), Object::name(space));
+    }
+    dict.remove(b"Decode");
+    dict.remove(b"SMaskInData");
 }
 
 /// The cleared samples `data` of a `w` × `h` image as a stream with `dict`: Flate, or, for one bit

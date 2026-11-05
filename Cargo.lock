@@ -4450,9 +4450,11 @@ dependencies = [
  "flate2",
  "hayro-ccitt",
  "hayro-jbig2",
+ "hayro-jpeg2000",
  "proptest",
  "thiserror 2.0.21",
  "weezl 0.2.1",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -4607,6 +4609,7 @@ dependencies = [
 name = "pdfcraft-redact"
 version = "0.18.1"
 dependencies = [
+ "image",
  "pdfcraft-annot",
  "pdfcraft-content",
  "pdfcraft-cos",

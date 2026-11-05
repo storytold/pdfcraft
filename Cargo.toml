@@ -77,6 +77,9 @@ fax = "0.2.7"
 # Independent CCITT and JBIG2 codecs, already in the tree through hayro.
 hayro-ccitt = "0.3"
 hayro-jbig2 = "0.3"
+# JPEG 2000 and JPEG decoding to samples (pdfcraft-filters), already in the tree through hayro.
+hayro-jpeg2000 = { version = "0.3", default-features = false, features = ["std", "simd"] }
+zune-jpeg = "0.5"
 
 # foundation
 thiserror = "2"
