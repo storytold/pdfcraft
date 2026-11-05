@@ -36,14 +36,15 @@ fn r(num: u32) -> ObjRef {
     ObjRef { num, generation: 0 }
 }
 
-/// Two pages; page 3 holds text field 5, listed in /Fields.
+/// Two pages, listed by the /Kids array object 6; page 3 holds text field 5, listed in /Fields.
 fn form() -> Vec<u8> {
     write_pdf(&[
         "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>",
-        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+        "<< /Type /Pages /Kids 6 0 R /Count 2 >>",
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [5 0 R] >>",
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] >>",
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /V (Ann) /Rect [20 200 120 220] /P 3 0 R >>",
+        "[3 0 R 4 0 R]",
     ])
 }
 
@@ -73,9 +74,13 @@ fn verdict(bytes: &[u8]) -> (Status, Modification) {
     (s.status, s.modification)
 }
 
-fn assert_refused(what: &str, bytes: &[u8]) {
+/// `bytes` is refused, for (among others) `expected`.
+fn assert_refused(what: &str, bytes: &[u8], expected: &str) {
     let (status, modification) = verdict(bytes);
-    assert!(matches!(modification, Modification::Disallowed(_)) && status != Status::Valid, "{what}: {status:?} {modification:?}");
+    assert!(
+        matches!(&modification, Modification::Disallowed(kinds) if kinds.contains(&expected)) && status != Status::Valid,
+        "{what}: {status:?} {modification:?}, expected {expected}"
+    );
 }
 
 #[test]
@@ -93,6 +98,7 @@ fn a_signed_page_tree_node_is_judged_as_the_page_tree() {
             })
             .unwrap();
         }),
+        kind::PAGES,
     );
     // Turning every page through an inherited attribute.
     assert_refused(
@@ -104,6 +110,13 @@ fn a_signed_page_tree_node_is_judged_as_the_page_tree() {
             })
             .unwrap();
         }),
+        kind::PAGES,
+    );
+    // Reordering the pages through the node's /Kids array object.
+    assert_refused(
+        "pages reordered",
+        &edit_after(&signed, |doc| doc.set(r(6), Object::Array(vec![Object::Ref(r(4)), Object::Ref(r(3))]))),
+        kind::PAGES,
     );
 }
 
@@ -133,6 +146,7 @@ fn a_signed_catalog_is_judged_as_the_catalog_whatever_its_type() {
             })
             .unwrap();
         }),
+        kind::STRUCTURE,
     );
 }
 
@@ -160,8 +174,17 @@ fn a_field_dropped_from_the_form_is_no_change_any_level_permits() {
                 doc.update_dict(root, |c| c.set(b"AcroForm".to_vec(), Object::Dict(form))).unwrap();
             })
         };
-        assert_refused(&format!("P={p} field dropped"), &set_fields(Vec::new()));
-        assert_refused(&format!("P={p} field listed by a dead generation"), &set_fields(vec![Object::Ref(ObjRef { num: 5, generation: 3 })]));
+        assert_refused(&format!("P={p} field dropped"), &set_fields(Vec::new()), kind::OTHER);
+        let dead = ObjRef { num: 5, generation: 3 };
+        assert_refused(&format!("P={p} field listed by a dead generation"), &set_fields(vec![Object::Ref(dead)]), kind::OTHER);
+        // The field's slot taken by a newer generation: another object, listed in its place.
+        let newer = ObjRef { num: 5, generation: 1 };
+        let replaced = edit_after(&set_fields(vec![Object::Ref(newer)]), |doc| {
+            let mut field = doc.get(r(5)).as_dict().cloned().unwrap();
+            field.set(b"V".to_vec(), PdfString::text("Eve"));
+            doc.set(newer, Object::Dict(field));
+        });
+        assert_refused(&format!("P={p} field replaced by a newer generation"), &replaced, kind::OTHER);
     }
 }
 
@@ -171,6 +194,6 @@ fn a_signed_fields_widget_may_be_filled_but_not_hidden_or_moved() {
     let edit = |f: &dyn Fn(&mut pdfcraft_cos::Dict)| edit_after(&signed, |doc| doc.update_dict(r(5), |w| f(w)).unwrap());
     let filled = edit(&|w| w.set(b"V".to_vec(), PdfString::text("Bob")));
     assert_eq!(verdict(&filled), (Status::Valid, Modification::Allowed(vec![kind::FORM_FILL])));
-    assert_refused("hidden", &edit(&|w| w.set(b"F".to_vec(), Object::Int(2))));
-    assert_refused("moved", &edit(&|w| w.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0); 4]))));
+    assert_refused("hidden", &edit(&|w| w.set(b"F".to_vec(), Object::Int(2))), kind::PAGE_CONTENT);
+    assert_refused("moved", &edit(&|w| w.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0); 4]))), kind::PAGE_CONTENT);
 }

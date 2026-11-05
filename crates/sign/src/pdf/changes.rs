@@ -37,11 +37,17 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
     let signed_annots: HashSet<ObjRef> =
         signed_pages.iter().filter_map(|pg| old.get(*pg).as_dict().and_then(|d| d.get(b"Annots").and_then(Object::as_ref))).collect();
     // The signed page tree's nodes: a change to one changes the pages, whatever it is labelled now.
-    let page_nodes = page_tree_nodes(&old);
+    // Past its bound the tree is not known in full, and no change is judged against it.
+    let page_tree = page_tree_nodes(&old);
+    let page_tree_unbounded = page_tree.is_none();
+    let (page_nodes, kids_arrays) = page_tree.unwrap_or_default();
     // What each signed page draws from, by the role it held when signed (#1787).
     let signed_resources = signed_page_resources(&old, &signed_pages);
     let old_info = old.trailer().get(b"Info").and_then(Object::as_ref);
     let (mut allowed, mut disallowed): (Vec<&'static str>, Vec<&'static str>) = (Vec::new(), Vec::new());
+    if page_tree_unbounded {
+        disallowed.push(kind::PAGES);
+    }
     let dss = dss_parts(doc, &old);
     // Stored at the same place in both (and not edited since): the same bytes, unchanged.
     let same_place = |num: u32| -> bool {
@@ -83,6 +89,7 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         signed_pages: &signed_pages,
         signed_annots: &signed_annots,
         page_nodes: &page_nodes,
+        kids_arrays: &kids_arrays,
         signed_resources: &signed_resources,
         old_info,
         dss: &dss,
@@ -151,6 +158,7 @@ struct ChangedObjectClassifier<'a> {
     signed_pages: &'a HashSet<ObjRef>,
     signed_annots: &'a HashSet<ObjRef>,
     page_nodes: &'a HashSet<u32>,
+    kids_arrays: &'a HashSet<u32>,
     signed_resources: &'a HashMap<ObjRef, bool>,
     old_info: Option<ObjRef>,
     dss: &'a HashSet<u32>,
@@ -165,6 +173,8 @@ impl ChangedObjectClassifier<'_> {
             return Some(kind::SECURITY_STORE);
         }
         match new {
+            // A signed page-tree node's /Kids array of its own lists the pages.
+            Object::Array(_) if before.is_some() && self.kids_arrays.contains(&r.num) => Some(kind::PAGES),
             Object::Array(now) if self.is_signed_annotation_array(r, before) => Some(self.annotation_array_change(now, before)),
             Object::Dict(dict) => Some(self.dictionary_change(r, dict, before)),
             Object::Stream(stream) => self.stream_change(r, stream, before),
@@ -577,16 +587,17 @@ fn catalog_kind(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> &'static 
     }
 }
 
-/// The nodes of `doc`'s page tree, by number: every dictionary with /Kids from the catalog's
-/// /Pages down. Each node, and each /Kids array object, is read once; at most a million nodes.
-fn page_tree_nodes(doc: &Document) -> HashSet<u32> {
+/// The nodes of `doc`'s page tree and the /Kids arrays that are objects of their own, by number:
+/// every dictionary with /Kids from the catalog's /Pages down. Each node, and each /Kids array
+/// object, is read once. `None` past a million nodes.
+fn page_tree_nodes(doc: &Document) -> Option<(HashSet<u32>, HashSet<u32>)> {
     const MAX_NODES: usize = 1_000_000;
     let (mut nodes, mut arrays) = (HashSet::new(), HashSet::new());
     let top = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|c| c.get(b"Pages").and_then(Object::as_ref)));
     let mut stack: Vec<ObjRef> = top.into_iter().collect();
     while let Some(r) = stack.pop() {
         if nodes.len() >= MAX_NODES {
-            break;
+            return None;
         }
         let node = doc.get(r);
         // A leaf (a page) has no /Kids.
@@ -598,18 +609,17 @@ fn page_tree_nodes(doc: &Document) -> HashSet<u32> {
             stack.extend(kids.iter().filter_map(Object::as_ref));
         }
     }
-    nodes
+    Some((nodes, arrays))
 }
 
 /// Whether a list of references (`/Fields`) no longer holds an entry it held when signed. An
-/// entry counts only where it resolves: one rewritten to a generation its slot does not accept
-/// names nothing.
+/// entry is still held only by a reference that resolves now and that the signed revision
+/// resolved too, so to the same slot (a repaired alias counts): one rewritten to a generation
+/// the slot does not accept names nothing, and one to a newer generation names another object.
 fn lost_entries(doc: &Document, old: &Document, was: Option<&Object>, now: Option<&Object>) -> bool {
-    let live = |d: &Document, list: Vec<ObjRef>| -> HashSet<u32> {
-        list.into_iter().filter(|r| !matches!(*d.get(*r), Object::Null)).map(|r| r.num).collect()
-    };
-    let now = live(doc, refs(doc, now));
-    live(old, refs(old, was)).iter().any(|num| !now.contains(num))
+    let live = |d: &Document, r: &ObjRef| !matches!(*d.get(*r), Object::Null);
+    let now: HashSet<u32> = refs(doc, now).into_iter().filter(|r| live(doc, r) && live(old, r)).map(|r| r.num).collect();
+    refs(old, was).iter().filter(|r| live(old, r)).any(|r| !now.contains(&r.num))
 }
 
 fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) -> &'static str {
