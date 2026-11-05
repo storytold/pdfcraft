@@ -332,6 +332,7 @@ pub struct PdfCraftApp {
     pub flatten_fill_sign_on_save: bool,
     /// Point size for new Fill & Sign text and dates, kept across launches.
     pub fill_text_size: f64,
+    pub fill_tool: fill_sign::FillTool,
     /// Colour for new Fill & Sign text and dates, kept across launches.
     pub fill_text_color: [f64; 3],
     pub dialog: Option<Dialog>,
@@ -612,6 +613,9 @@ pub struct PdfCraftApp {
     control: Option<control::Control>,
     /// A bookmark being renamed in the Bookmarks panel: (path, text so far).
     pub bookmark_rename: Option<(Vec<usize>, String)>,
+    /// Bookmarks copied or cut in the Bookmarks panel, with their subtrees, ready to paste into
+    /// any document. Destinations are page indices.
+    pub bookmark_clipboard: Option<Vec<pdfcraft_engine::OutlineNode>>,
     /// Number pages dialog settings (1-based pages).
     pub number_draft: NumberDraft,
     pub(crate) word_count_draft: word_count_ui::Draft,

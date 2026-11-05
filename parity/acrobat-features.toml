@@ -3434,6 +3434,18 @@ evidence = ["crates/organize/src/tests.rs::an_exported_outline_imports_into_anot
 notes = "#6018, headless only. The bookmark tree (or one bookmark's subtree) goes out as JSON with titles, nesting, open state, colour, bold/italic and destinations as page plus view in PDF user space, and comes back unchanged: into another document, under any bookmark, at any position, or in place of its outline, as one undoable step; bookmark_copy does the same between open documents by page number. A bookmark whose page the target lacks keeps its place without a destination and is reported, never dropped. Not yet: a panel command and preview, CSV/Markdown/pdftk formats, remapping by named destination (named destinations travel resolved to their page), actions other than go-to-page, structure links (/SE)"
 
 [[feature]]
+id = "organize.bookmark-clipboard"
+title = "Cut, copy and paste bookmarks"
+area = "D"
+tier = "P2"
+milestone = "M4"
+status = "shipped"
+commands = []
+tools = ["bookmark_copy", "bookmark_export", "bookmark_import", "bookmark_delete"]
+evidence = ["crates/ui-egui/tests/it/bookmarks.rs::cut_copy_and_paste_a_bookmark_subtree_within_and_between_documents", "crates/automation/tests/it/automation.rs::bookmarks_export_import_and_copy_between_documents"]
+notes = "#3994 (the cut/copy/paste part). Cut, Copy and Paste in a bookmark's menu, and Paste bookmarks in Bookmark options, carry a bookmark with its whole subtree within a document or into another one, each as one undo step. A destination is a page index: a bookmark whose page the target lacks keeps its place without a destination and the toast counts them. Headless, bookmark_copy copies between open documents directly (there is no clipboard). Not yet: keyboard shortcuts in the panel, the system clipboard (the bookmarks stay inside the app), several bookmarks at once, copying out of a document that cannot be edited (the bookmark menu is hidden there), page-ordered insertion (the other half of #3994), actions other than go-to-page"
+
+[[feature]]
 id = "organize.attachments-add"
 title = "Add file attachments"
 area = "D"
@@ -6683,8 +6695,8 @@ milestone = "M10"
 status = "partial"
 commands = ["edit.edit_text"]
 tools = ["text_edit"]
-evidence = ["crates/engine/tests/it/ocr_edit.rs::editing_an_ocr_word_covers_the_scan_and_shows_the_new_text", "crates/engine/tests/it/ocr_edit.rs::an_explicit_colour_is_kept_for_the_new_text", "crates/engine/tests/it/ocr_edit.rs::ocr_words_group_into_phrases_that_edit_in_place", "crates/engine/tests/it/ocr_edit.rs::a_longer_ocr_phrase_grows_rightwards", "crates/engine/tests/it/ocr_edit.rs::a_rewritten_ocr_phrase_keeps_its_word_widths", "crates/ui-egui/tests/it/ocr.rs::an_ocr_word_opens_for_editing_and_stays_open", "crates/ui-egui/tests/it/ocr.rs::editing_a_scanned_page_recognizes_its_text_first_and_only_once"]
-notes = "On demand, per edit: in Edit text & images, recognised text (the invisible OCR layer over a scan) is grouped into phrases (words across a word space; a wider gap such as a table cell, and each scanned line, stay separate) and opens for editing on a click. Applying draws the new text visibly in the scan's sampled ink colour (or the chosen one) and first covers the old words with the paper colour sampled around them, so the scanned word no longer shows; the phrase keeps each word's position and width and grows rightwards instead of wrapping. Turning Edit text & images on for a scanned page (an image covering at least half of a page that has no text of its own, once per page per window; comments and text boxes over it do not count as text, a page with real text and a background picture is left alone; one undoable \"Recognize text\" step) now recognizes its words first, as Acrobat's \"Converting scanned page to Editable Text and Images\" does (English only until more OCR languages exist, gap 7). Still missing: separating the photographs on the page from the lettering, matching the scanned typeface (the layer's Helvetica is used), and covering on a textured or patterned background (one flat colour is used)."
+evidence = ["crates/engine/tests/it/ocr_edit.rs::editing_an_ocr_word_covers_the_scan_and_shows_the_new_text", "crates/engine/tests/it/ocr_edit.rs::an_explicit_colour_is_kept_for_the_new_text", "crates/engine/tests/it/ocr_edit.rs::ocr_words_group_into_phrases_that_edit_in_place", "crates/engine/tests/it/ocr_edit.rs::a_longer_ocr_phrase_grows_rightwards", "crates/engine/tests/it/ocr_edit.rs::a_rewritten_ocr_phrase_keeps_its_word_widths", "crates/engine/tests/it/ocr_edit.rs::an_ocr_layer_under_the_scan_image_shows_its_edit", "crates/engine/tests/it/ocr_edit.rs::an_ocr_phrase_split_from_visible_text_under_the_scan_shows_its_edit", "crates/ui-egui/tests/it/ocr.rs::an_ocr_word_opens_for_editing_and_stays_open", "crates/ui-egui/tests/it/ocr.rs::editing_a_scanned_page_recognizes_its_text_first_and_only_once"]
+notes = "On demand, per edit: in Edit text & images, recognised text (the invisible OCR layer over a scan) is grouped into phrases (words across a word space; a wider gap such as a table cell, and each scanned line, stay separate) and opens for editing on a click. Applying draws the new text visibly in the scan's sampled ink colour (or the chosen one) and first covers the old words with the paper colour sampled around them, so the scanned word no longer shows; when an image or form is drawn after the OCR layer over where the edit lands (its old box, moved, rewrapped or grown to more lines), or an inline image or shading after it (a layer written under its scan, #3973), the cover and new text are drawn on top of the page instead, so they show; the phrase keeps each word's position and width and grows rightwards instead of wrapping. Turning Edit text & images on for a scanned page (an image covering at least half of a page that has no text of its own, once per page per window; comments and text boxes over it do not count as text, a page with real text and a background picture is left alone; one undoable \"Recognize text\" step) now recognizes its words first, as Acrobat's \"Converting scanned page to Editable Text and Images\" does (English only until more OCR languages exist, gap 7). Still missing: separating the photographs on the page from the lettering, matching the scanned typeface (the layer's Helvetica is used), covering on a textured or patterned background (one flat colour is used), a scan painted by a pattern fill or a filled rectangle over a layer written under it, and, for text drawn on top, the clip, optional content and marked content (tags) that enclosed the OCR layer."
 
 [[feature]]
 id = "ocr.ocr-downsample"
@@ -9908,11 +9920,11 @@ title = "View 3D (U3D/PRC) content"
 area = "N"
 tier = "P3"
 milestone = "M12"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["model_render"]
+evidence = ["crates/automation/tests/it/model_render.rs::a_prc_model_is_drawn_over_the_background", "crates/annot/src/model3d/tests.rs::a_3dref_leads_to_the_stream_it_names", "crates/prc-render/tests/model.rs::a_synthetic_prc_renders_its_nearer_triangle_over_the_farther"]
+notes = "headless only: model_render draws a page's PRC model (through a /3DRef too) to a PNG, framed from a chosen direction, with headlight shading. Missing: the 3D view in the app (no activation, no navigation), U3D (an error), the annotation's /3DV views, lighting schemes and /RM render modes, materials and textures, compressed tessellation, picking, cross sections, the model tree, and measurements"
 
 [[feature]]
 id = "misc.3d-add"
