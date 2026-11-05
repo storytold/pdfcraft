@@ -188,35 +188,38 @@ pub(crate) fn annots_of(doc: &Document, page: &Dict) -> Vec<Object> {
     page.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default()
 }
 
-/// Every annotation the pages list. Compared before and after a removal, what is no longer listed
-/// leaves the structure tree too ([`tags::drop_object_refs`]).
+/// Every annotation the pages list, from the whole tree or an error. Compared before and after a
+/// removal, what is no longer listed leaves the structure tree too ([`tags::drop_object_refs`]).
 pub(crate) fn listed_annotations(doc: &Document) -> Result<HashSet<ObjRef>, RedactError> {
     let mut listed = HashSet::new();
-    for leaf in pdfcraft_model::PageLeaves::new(doc) {
-        listed.extend(leaf?.dict().map(|page| annots_of(doc, page)).unwrap_or_default().iter().filter_map(Object::as_ref));
+    for page in pdfcraft_annot::page_annots(doc) {
+        listed.extend(page?.1.iter().filter_map(Object::as_ref));
     }
     Ok(listed)
 }
 
-/// Every redaction mark in the document, page by page.
+/// Every redaction mark in the document, page by page; past a walk limit, those before it.
 pub fn marks(doc: &Document) -> Vec<Mark> {
-    marks_in(doc, pdfcraft_model::PageLeaves::new(doc).map_while(Result::ok)).0
+    marks_in(doc, pdfcraft_annot::page_annots(doc).map_while(Result::ok).map(Ok)).map(|(marks, _)| marks).unwrap_or_default()
 }
 
 /// [`marks`], and the 0-based page of each Redact annotation that has no readable area, which
-/// [`apply`] refuses rather than skipping. Every page or an error:
-/// marks on a page past a walk limit would be left unapplied.
+/// [`apply`] refuses rather than skipping. Every page or an error: marks on a page past a walk
+/// limit would be left unapplied.
 pub(crate) fn marks_checked(doc: &Document) -> Result<(Vec<Mark>, Vec<usize>), RedactError> {
-    let leaves = pdfcraft_model::PageLeaves::new(doc).collect::<Result<Vec<_>, _>>()?;
-    Ok(marks_in(doc, leaves.into_iter()))
+    Ok(marks_in(doc, pdfcraft_annot::page_annots(doc))?)
 }
 
-/// The marks on `leaves` (`/Annots` isn't inherited, so each page's own dictionary is enough).
-fn marks_in(doc: &Document, leaves: impl Iterator<Item = pdfcraft_model::PageNode>) -> (Vec<Mark>, Vec<usize>) {
+/// The marks on `pages` (each page's object and `/Annots`, as [`pdfcraft_annot::page_annots`]
+/// gives them), in one pass; the first `Err` ends it.
+fn marks_in(
+    doc: &Document,
+    pages: impl Iterator<Item = Result<(ObjRef, Vec<Object>), pdfcraft_model::PageTreeLimit>>,
+) -> Result<(Vec<Mark>, Vec<usize>), pdfcraft_model::PageTreeLimit> {
     let (mut out, mut unreadable) = (Vec::new(), Vec::new());
-    for (pi, leaf) in leaves.enumerate() {
-        let Some(page) = leaf.dict() else { continue };
-        for a in annots_of(doc, page) {
+    for (pi, page) in pages.enumerate() {
+        let (_, annots) = page?;
+        for a in annots {
             let Some(r) = a.as_ref() else {
                 // A mark written in place has no object to find, apply or remove: refuse it
                 // rather than apply the others as if it were not there.
@@ -263,7 +266,7 @@ fn marks_in(doc: &Document, leaves: impl Iterator<Item = pdfcraft_model::PageNod
             out.push(Mark { page: pi, obj: r, rects, fill: color(doc, d, b"IC"), overlay, look: overlay_look(doc, d) });
         }
     }
-    (out, unreadable)
+    Ok((out, unreadable))
 }
 
 /// A page's content streams: (the references or inline objects as listed, their decoded data),
@@ -863,19 +866,23 @@ fn remove_page_annotations(
 /// deleting a comment does: a reply left behind would keep its mark in the file through `/IRT`.
 /// Returns how many marks went.
 pub fn clear_marks(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize, RedactError> {
-    let targets: HashSet<ObjRef> = marks(doc).iter().filter(|m| pages.is_none_or(|p| p.contains(&m.page))).map(|m| m.obj).collect();
+    // One inventory of every page and its `/Annots`, taken before anything changes, serves finding
+    // the marks, their replies and pop-ups, and removing them: past a walk limit some marks would
+    // be counted as removed and stay.
+    let inventory: Vec<(ObjRef, Vec<Object>)> = pdfcraft_annot::page_annots(doc).collect::<Result<_, _>>()?;
+    let (marks, _) = marks_in(doc, inventory.iter().cloned().map(Ok))?;
+    let targets: HashSet<ObjRef> = marks.iter().filter(|m| pages.is_none_or(|p| p.contains(&m.page))).map(|m| m.obj).collect();
     if targets.is_empty() {
         return Err(RedactError::NothingToApply);
     }
-    let listed: Vec<Object> = pdfcraft_model::pages(doc).iter().flat_map(|p| annots_of(doc, &p.dict)).collect();
+    let listed: Vec<Object> = inventory.iter().flat_map(|(_, annots)| annots.iter().cloned()).collect();
     let doomed = pdfcraft_annot::with_replies_and_popups(doc, &listed, targets.iter().copied());
-    for p in pdfcraft_model::pages(doc) {
-        let annots = annots_of(doc, &p.dict);
+    for (page, annots) in inventory {
         let kept: Vec<Object> = annots.iter().filter(|a| !pdfcraft_annot::goes_with(a, &doomed)).cloned().collect();
         // As deleting a comment does: a page whose marks were all it had loses `/Annots` again,
         // and an indirect array stays the one object the page points to.
         if kept.len() != annots.len() {
-            pdfcraft_annot::set_annots(doc, p.obj, kept)?;
+            pdfcraft_annot::set_annots(doc, page, kept)?;
         }
     }
     Ok(targets.len())

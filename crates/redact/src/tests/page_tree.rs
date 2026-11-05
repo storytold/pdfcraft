@@ -72,3 +72,27 @@ fn sanitize_and_remove_hidden_refuse_a_tree_past_a_walk_limit() {
     assert!(done.iter().any(|(h, n)| *h == Hidden::HiddenText && *n > 0), "within the default limits: {done:?}");
     assert!(!content(&doc, 1).contains("SECRET"));
 }
+
+/// Clearing marks reads one inventory of every page's `/Annots` (nothing inherited, so the copy
+/// budget doesn't cut it): what it counts as cleared is gone, on every page and on a late page
+/// alone. Past a walk limit it refuses before removing anything.
+#[test]
+fn clear_marks_removes_what_it_counts_or_refuses() {
+    let marked = || {
+        let mut doc = two_inheriting_pages(b"BT /F1 10 Tf 20 200 Td (SECRET) Tj ET");
+        mark(&mut doc, 0, &[[15.0, 195.0, 90.0, 215.0]], "");
+        mark(&mut doc, 1, &[[15.0, 195.0, 90.0, 215.0]], "");
+        doc
+    };
+    let mut all = marked();
+    assert_eq!(with_limits(ONE_COPY, || clear_marks(&mut all, None)), Ok(2));
+    assert!(marks(&all).is_empty(), "both marks are gone: {:?}", marks(&all));
+    let mut late = marked();
+    assert_eq!(with_limits(ONE_COPY, || clear_marks(&mut late, Some(&[1]))), Ok(1));
+    assert_eq!(marks(&late).iter().map(|m| m.page).collect::<Vec<_>>(), [0], "only the late page's mark went");
+    let mut padded_doc = padded(marked(), 5);
+    let before = marks(&padded_doc).len();
+    let refused = with_limits(Limits { kids_entries: 4, ..Limits::DEFAULT }, || clear_marks(&mut padded_doc, None));
+    assert_eq!(refused, Err(RedactError::PageTree(PageTreeLimit::KidsEntries)));
+    assert_eq!(marks(&padded_doc).len(), before, "nothing removed");
+}

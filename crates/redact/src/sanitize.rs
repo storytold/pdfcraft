@@ -563,14 +563,14 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     };
     // The annotations to remove, on every page first, so a pop-up listed on another page than
     // its parent goes with it.
-    let removed: std::collections::HashSet<ObjRef> = pdfcraft_model::try_pages(doc)?
+    let inventory: Vec<(ObjRef, Vec<Object>)> = pdfcraft_annot::page_annots(doc).collect::<Result<_, _>>()?;
+    let removed: std::collections::HashSet<ObjRef> = inventory
         .iter()
-        .flat_map(|p| annots_of(doc, &p.dict))
+        .flat_map(|(_, list)| list.iter())
         .filter_map(|a| a.as_ref())
         .filter(|&r| doc.get(r).as_dict().is_some_and(drop_annot))
         .collect();
-    for p in pdfcraft_model::try_pages(doc)? {
-        let list = annots_of(doc, &p.dict);
+    for (page, list) in inventory {
         let mut kept = Vec::new();
         for a in list {
             let Some(r) = a.as_ref() else {
@@ -592,7 +592,7 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
             }
             kept.push(a);
         }
-        doc.update_dict(p.obj, |d| {
+        doc.update_dict(page, |d| {
             if kept.is_empty() {
                 d.remove(b"Annots");
             } else {
