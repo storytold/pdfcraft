@@ -22,4 +22,5 @@ pdfcraft-filters = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+pdfcraft-model = { workspace = true, features = ["test-support"] }
 pdfcraft-testkit = { workspace = true }

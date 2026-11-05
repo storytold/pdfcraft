@@ -10,3 +10,7 @@ workspace = true
 
 [dependencies]
 pdfcraft-cos = { workspace = true }
+
+[features]
+# `with_limits`: lower the page-tree walk limits on one thread, for tests in other crates.
+test-support = []

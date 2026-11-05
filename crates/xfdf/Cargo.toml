@@ -15,3 +15,6 @@ pdfcraft-forms = { workspace = true }
 pdfcraft-model = { workspace = true }
 roxmltree = "0.21"
 thiserror = { workspace = true }
+
+[dev-dependencies]
+pdfcraft-model = { workspace = true, features = ["test-support"] }

@@ -18,6 +18,11 @@ pub struct Page {
     pub dict: Dict,
 }
 
+/// [`Page::user_unit`] of a page dictionary (`/UserUnit` is the page's own entry; it isn't inherited).
+pub fn user_unit(doc: &Document, page: &Dict) -> f64 {
+    page.get(b"UserUnit").and_then(|o| doc.resolve(o).as_f64()).filter(|u| *u >= 1.0).map_or(1.0, |u| u.min(MAX_USER_UNIT))
+}
+
 fn rect(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
     let o = doc.resolve(o?);
     let v: Vec<f64> = o.as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
@@ -47,7 +52,7 @@ impl Page {
     /// The size of the page's user-space unit in points (`/UserUnit`; it isn't inherited), read
     /// as Acrobat reads it: a number from 1 up, at most [`MAX_USER_UNIT`]; anything else is 1.
     pub fn user_unit(&self, doc: &Document) -> f64 {
-        self.dict.get(b"UserUnit").and_then(|o| doc.resolve(o).as_f64()).filter(|u| *u >= 1.0).map_or(1.0, |u| u.min(MAX_USER_UNIT))
+        user_unit(doc, &self.dict)
     }
 
     /// The displayed size (width, height) in points, after `/UserUnit` and `/Rotate`.
@@ -85,12 +90,12 @@ pub fn view_matrix_for(rotation: i64, crop: [f64; 4]) -> [f64; 6] {
 /// [`PageTreeLimit`] the list just ends, so it may be a prefix. Callers that act on every page use
 /// [`try_pages`], [`page_refs`] or [`PageLeaves`].
 pub fn pages(doc: &Document) -> Vec<Page> {
-    PageTree::new(doc).map_while(Result::ok).collect()
+    copied_pages(doc).map_while(Result::ok).collect()
 }
 
 /// [`pages`], or the limit the walk met.
 pub fn try_pages(doc: &Document) -> Result<Vec<Page>, PageTreeLimit> {
-    PageTree::new(doc).collect()
+    copied_pages(doc).collect()
 }
 
 /// The leaf page at `index`, with its inherited attributes; `Ok(None)` past the last page. Only
@@ -99,6 +104,20 @@ pub fn try_pages(doc: &Document) -> Result<Vec<Page>, PageTreeLimit> {
 pub fn page(doc: &Document, index: usize) -> Result<Option<Page>, PageTreeLimit> {
     let mut budget = Limits::current().inherited_copies;
     PageLeaves::new(doc).nth_page(index)?.map(|leaf| leaf.copied(&mut budget)).transpose()
+}
+
+/// The leaf page that is object `obj` (told apart by number, as [`Document::get`] does), with its
+/// inherited attributes; `Ok(None)` when no page is. As with [`page`], only that page is copied, and
+/// a limit exceeded before it is reached is an error, never "not a page".
+pub fn page_by_ref(doc: &Document, obj: ObjRef) -> Result<Option<Page>, PageTreeLimit> {
+    let mut budget = Limits::current().inherited_copies;
+    for leaf in PageLeaves::new(doc) {
+        let leaf = leaf?;
+        if leaf.obj.num == obj.num {
+            return leaf.copied(&mut budget).map(Some);
+        }
+    }
+    Ok(None)
 }
 
 /// The page object of each leaf page, in document order, without copying any dictionary.
@@ -128,19 +147,36 @@ pub struct Limits {
 impl Limits {
     pub const DEFAULT: Self = Self { nodes: MAX_PAGE_TREE_NODES, kids_entries: MAX_KIDS_ENTRIES, inherited_copies: MAX_INHERITED_COPIES };
 
-    /// The limits walks on this thread apply now.
+    /// The limits walks on this thread apply now: [`Limits::DEFAULT`], unless the `test-support`
+    /// feature's `with_limits` lowered them.
     pub fn current() -> Self {
-        LIMITS.with(std::cell::Cell::get)
+        #[cfg(any(test, feature = "test-support"))]
+        return LIMITS.with(std::cell::Cell::get);
+        #[cfg(not(any(test, feature = "test-support")))]
+        Self::DEFAULT
+    }
+
+    /// Each limit the smaller of `self`'s and `other`'s.
+    #[cfg(any(test, feature = "test-support"))]
+    fn min(self, other: Self) -> Self {
+        Self {
+            nodes: self.nodes.min(other.nodes),
+            kids_entries: self.kids_entries.min(other.kids_entries),
+            inherited_copies: self.inherited_copies.min(other.inherited_copies),
+        }
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static LIMITS: std::cell::Cell<Limits> = const { std::cell::Cell::new(Limits::DEFAULT) };
 }
 
-/// Run `f` with walks on this thread held to `limits` (never above [`Limits::DEFAULT`]): the test
-/// seam that reaches a limit without building a tree that large.
-#[doc(hidden)]
+/// Run `f` with walks on this thread held to `limits`, never above the limits already in force
+/// (so a nested scope can't raise an outer one), and put them back afterwards, on unwind too: the
+/// test seam that reaches a limit without building a tree that large. Only with the
+/// `test-support` feature, which consumers enable for their tests alone.
+#[cfg(any(test, feature = "test-support"))]
 pub fn with_limits<T>(limits: Limits, f: impl FnOnce() -> T) -> T {
     struct Restore(Limits);
     impl Drop for Restore {
@@ -148,12 +184,8 @@ pub fn with_limits<T>(limits: Limits, f: impl FnOnce() -> T) -> T {
             LIMITS.with(|l| l.set(self.0));
         }
     }
-    let lowered = Limits {
-        nodes: limits.nodes.min(MAX_PAGE_TREE_NODES),
-        kids_entries: limits.kids_entries.min(MAX_KIDS_ENTRIES),
-        inherited_copies: limits.inherited_copies.min(MAX_INHERITED_COPIES),
-    };
-    let _restore = Restore(LIMITS.with(|l| l.replace(lowered)));
+    let outer = Limits::current();
+    let _restore = Restore(LIMITS.with(|l| l.replace(limits.min(outer))));
     f()
 }
 
@@ -436,29 +468,11 @@ impl Iterator for PageLeaves<'_> {
     }
 }
 
-/// [`pages`]: each leaf copied, the inherited copies of the whole walk within
-/// [`Limits::inherited_copies`].
-struct PageTree<'a> {
-    leaves: PageLeaves<'a>,
-    budget: usize,
-}
-
-impl<'a> PageTree<'a> {
-    fn new(doc: &'a Document) -> Self {
-        Self { leaves: PageLeaves::new(doc), budget: Limits::current().inherited_copies }
-    }
-}
-
-impl Iterator for PageTree<'_> {
-    type Item = Result<Page, PageTreeLimit>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let page = self.leaves.next()?.and_then(|leaf| leaf.copied(&mut self.budget));
-        if page.is_err() {
-            self.leaves.0.pending.clear();
-        }
-        Some(page)
-    }
+/// Each leaf copied ([`pages`], [`try_pages`]), the inherited copies of the whole walk within
+/// [`Limits::inherited_copies`]. Its consumers stop at the first `Err`.
+fn copied_pages(doc: &Document) -> impl Iterator<Item = Result<Page, PageTreeLimit>> + '_ {
+    let mut budget = Limits::current().inherited_copies;
+    PageLeaves::new(doc).map(move |leaf| leaf.and_then(|leaf| leaf.copied(&mut budget)))
 }
 
 #[cfg(test)]
@@ -529,11 +543,13 @@ mod tests {
             dict.set(b"Resources".to_vec(), Object::Dict(resources));
         })
         .unwrap();
-        let mut walk = PageTree::new(&d);
-        let p = walk.next().unwrap().unwrap();
-        assert_eq!(p.obj, leaf);
+        let all = pages(&d);
+        assert_eq!(all.iter().map(|p| p.obj).collect::<Vec<_>>(), [leaf]);
+        let p = &all[0];
         assert_eq!(p.dict.get(b"Resources").unwrap().as_dict().unwrap().get(b"Payload").unwrap().as_array().unwrap().len(), 1024);
-        assert!(walk.leaves.0.pending.len() <= 2, "duplicate edges retained {} pending entries", walk.leaves.0.pending.len());
+        let mut walk = PageLeaves::new(&d);
+        assert_eq!(walk.next().map(|l| l.map(|l| l.obj)), Some(Ok(leaf)));
+        assert!(walk.0.pending.len() <= 2, "duplicate edges retained {} pending entries", walk.0.pending.len());
         assert!(walk.next().is_none());
     }
 
@@ -570,10 +586,10 @@ mod tests {
         let leaf = d.get(ObjRef { num: 3, generation: 0 }).as_dict().unwrap().clone();
         let kids: Vec<Object> = (0..64).map(|_| Object::Ref(d.add(leaf.clone()))).collect();
         d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(kids.clone()))).unwrap();
-        let mut walk = PageTree::new(&d);
+        let mut walk = PageLeaves::new(&d);
         for kid in kids {
             assert_eq!(walk.next().unwrap().unwrap().obj, kid.as_ref().unwrap());
-            assert!(walk.leaves.0.pending.len() <= 2);
+            assert!(walk.0.pending.len() <= 2);
         }
         assert!(walk.next().is_none());
     }
@@ -742,11 +758,20 @@ mod tests {
     }
 
     /// The seam only lowers the limits, and puts them back afterwards.
+    /// The seam only lowers the limits, never below an outer scope's, and puts them back on return
+    /// and on unwind; another thread keeps the defaults.
     #[test]
     fn with_limits_only_lowers_them_and_puts_them_back() {
         let lowered = with_limits(Limits { nodes: usize::MAX, kids_entries: 1, inherited_copies: usize::MAX }, Limits::current);
         assert_eq!(lowered, Limits { kids_entries: 1, ..Limits::DEFAULT });
-        assert_eq!(Limits::current(), Limits::DEFAULT);
+        let outer = Limits { nodes: 1, ..Limits::DEFAULT };
+        let nested = with_limits(outer, || with_limits(Limits { kids_entries: 2, ..Limits::DEFAULT }, Limits::current));
+        assert_eq!(nested, Limits { nodes: 1, kids_entries: 2, ..Limits::DEFAULT }, "a nested scope can't raise the outer node limit");
+        let other_thread = with_limits(outer, || std::thread::spawn(Limits::current).join().unwrap());
+        assert_eq!(other_thread, Limits::DEFAULT);
+        let unwound = std::panic::catch_unwind(|| with_limits(outer, || panic!("inside the scope")));
+        assert!(unwound.is_err());
+        assert_eq!(Limits::current(), Limits::DEFAULT, "restored on unwind");
     }
 
     /// `page` copies one page's inherited values only, so it finds a page past the copy budget of
@@ -762,9 +787,6 @@ mod tests {
         let tree = tree.as_dict().unwrap();
         let one_page: usize = INHERITABLE.iter().filter_map(|k| tree.get(k).map(|v| weight(v, 0))).sum();
         let copies = Limits { inherited_copies: one_page, ..Limits::DEFAULT };
-        let walk: Vec<_> = with_limits(copies, || PageTree::new(&d).map(|p| p.map(|p| p.obj.num)).collect());
-        assert_eq!(walk.last(), Some(&Err(PageTreeLimit::InheritedCopies)), "the whole walk stops after one page: {walk:?}");
-        assert_eq!(walk.len(), 2);
         assert_eq!(with_limits(copies, || pages(&d).len()), 1);
         assert_eq!(with_limits(copies, || try_pages(&d).map(|p| p.len())), Err(PageTreeLimit::InheritedCopies));
         assert_eq!(with_limits(copies, || page(&d, 2).map(|p| p.map(|p| p.rotation(&d)))), Ok(Some(90)), "the same budget, one page");
