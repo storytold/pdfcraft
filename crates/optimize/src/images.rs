@@ -1345,6 +1345,19 @@ pub(crate) fn run(
             _ => None,
         })
         .collect();
+    // How many images name each soft mask, anywhere in the document: one resampled for an image
+    // that shares it gets a copy of its own, so the others keep a mask of their own size (ISO
+    // 32000-1 11.6.5.3: a soft mask has its parent image's Width and Height). The last image left
+    // naming it may change it in place.
+    let mut mask_uses: std::collections::HashMap<ObjRef, usize> = std::collections::HashMap::new();
+    for n in doc.object_numbers() {
+        let r = ObjRef::new(n, doc.generation(n));
+        if let Object::Stream(s) = &*doc.get(r)
+            && let Some(m) = s.dict.reference(b"SMask")
+        {
+            *mask_uses.entry(m).or_insert(0) += 1;
+        }
+    }
     let mut refs: Vec<(ObjRef, f64)> = ppi.into_iter().filter(|(r, _)| !masks.contains(r)).collect();
     refs.sort_by_key(|(r, _)| r.num);
     let total = refs.len();
@@ -1429,10 +1442,18 @@ pub(crate) fn run(
         } else {
             report.images_recompressed += 1;
         }
-        doc.set(r, Object::Stream(new));
+        let mut new = new;
         if let Some((mr, m)) = smask {
-            doc.set(mr, Object::Stream(m));
+            match mask_uses.get_mut(&mr) {
+                Some(uses) if *uses > 1 => {
+                    *uses -= 1;
+                    let copy = doc.add(Object::Stream(m));
+                    new.dict.set(b"SMask".to_vec(), Object::Ref(copy));
+                }
+                _ => doc.set(mr, Object::Stream(m)),
+            }
         }
+        doc.set(r, Object::Stream(new));
     }
     share(doc, &mut group, report);
     if !progress(Stage::Images { done: total, total }) {

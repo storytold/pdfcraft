@@ -4208,3 +4208,41 @@ fn a_picture_whose_mask_is_not_a_stencil_is_left_alone() {
         assert_eq!(stream(&doc, img), before, "{what}");
     }
 }
+
+/// A soft mask two images share keeps the size of the one that isn't resampled: the one that is
+/// gets a resampled copy of its own (ISO 32000-1 11.6.5.3: a soft mask has its parent's Width and
+/// Height). When both are resampled, the last one changes the mask in place, so no copy is left
+/// unused.
+#[test]
+fn a_shared_soft_mask_is_copied_for_the_image_that_is_resampled() {
+    let mut doc = Document::new_empty();
+    let mask = image(&mut doc, 800, 800, 1, false, None);
+    let dense = image(&mut doc, 800, 800, 3, false, Some(mask));
+    let wide = image(&mut doc, 800, 800, 3, false, Some(mask));
+    // `dense` at 72 pt (800 ppi) is resampled; `wide` at 800 pt (72 ppi) is not.
+    page(&mut doc, &[("A", dense), ("B", wide)], "q 72 0 0 72 36 36 cm /A Do Q q 800 0 0 800 0 0 cm /B Do Q");
+    optimize(&mut doc, &Settings::default()).unwrap();
+    let size = |s: &Stream| (s.dict.int(b"Width"), s.dict.int(b"Height"));
+    let (d, w) = (stream(&doc, dense), stream(&doc, wide));
+    let (dm, wm) = (d.dict.reference(b"SMask").unwrap(), w.dict.reference(b"SMask").unwrap());
+    assert_eq!(size(&d), (Some(150), Some(150)));
+    assert_eq!(size(&stream(&doc, dm)), size(&d), "the resampled image's mask follows it");
+    assert_eq!(size(&w), (Some(800), Some(800)));
+    assert_eq!(wm, mask, "the other image keeps the original mask");
+    assert_eq!(size(&stream(&doc, wm)), size(&w), "at its own size");
+
+    // Both resampled: one copy, and the original changed for the last one.
+    let mut doc = Document::new_empty();
+    let mask = image(&mut doc, 800, 800, 1, false, None);
+    let a = image(&mut doc, 800, 800, 3, false, Some(mask));
+    let b = image(&mut doc, 800, 800, 3, false, Some(mask));
+    page(&mut doc, &[("A", a), ("B", b)], "q 72 0 0 72 36 36 cm /A Do Q q 72 0 0 72 300 36 cm /B Do Q");
+    optimize(&mut doc, &Settings::default()).unwrap();
+    for r in [a, b] {
+        let s = stream(&doc, r);
+        assert_eq!(size(&stream(&doc, s.dict.reference(b"SMask").unwrap())), size(&s));
+    }
+    let masks: std::collections::HashSet<ObjRef> = [a, b].iter().map(|r| stream(&doc, *r).dict.reference(b"SMask").unwrap()).collect();
+    assert!(masks.contains(&mask), "the original is still used");
+    assert_eq!(masks.len(), 2);
+}
