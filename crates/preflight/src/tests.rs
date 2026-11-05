@@ -632,11 +632,22 @@ fn a_blending_space_is_device_independent_and_an_intent_has_a_profile() {
     let page = |group: &str, colour_spaces: &str| format!("/Group << /S /Transparency {group} >> /Resources << {alpha} {colour_spaces} >>");
     assert_eq!(check("", &page("/CS null", ""), &[]), page_said, "a null /CS");
     assert_eq!(check("", &page("/CS 9 0 R", ""), &[]), page_said, "a /CS naming no object");
-    for (device, default) in [("DeviceGray", "DefaultGray"), ("DeviceRGB", "DefaultRGB"), ("DeviceCMYK", "DefaultCMYK")] {
-        assert_eq!(check("", &page(&format!("/CS /{device}"), ""), &[]), page_said, "{device}");
-        let defaults = format!("/ColorSpace << /{default} [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >>");
-        assert!(check("", &page(&format!("/CS /{device}"), &defaults), &[]).is_empty(), "{device} with {default}");
+    // A device space needs a default of as many components (ISO 32000-1 8.6.5.6).
+    let cmyk_profile = "<< /N 4 /Length 0 >>\nstream\n\nendstream";
+    let cal = |family: &str| format!("[/{family} << /WhitePoint [0.9505 1 1.089] >>]");
+    for (device, default, space) in [
+        ("DeviceGray", "DefaultGray", cal("CalGray")),
+        ("DeviceRGB", "DefaultRGB", cal("CalRGB")),
+        ("DeviceCMYK", "DefaultCMYK", "[/ICCBased 4 0 R]".to_owned()),
+    ] {
+        assert_eq!(check("", &page(&format!("/CS /{device}"), ""), &[cmyk_profile]), page_said, "{device}");
+        let defaults = format!("/ColorSpace << /{default} {space} >>");
+        assert!(check("", &page(&format!("/CS /{device}"), &defaults), &[cmyk_profile]).is_empty(), "{device} with {default}");
+        let null = format!("/ColorSpace << /{default} null >>");
+        assert_eq!(check("", &page(&format!("/CS /{device}"), &null), &[cmyk_profile]), page_said, "{device} with a null {default}");
     }
+    let wrong = format!("/ColorSpace << /DefaultGray {} >>", cal("CalRGB"));
+    assert_eq!(check("", &page("/CS /DeviceGray", &wrong), &[]), page_said, "DeviceGray with a CalRGB default");
     // Only CalGray, CalRGB and gray, RGB or CMYK ICCBased spaces blend (ISO 32000-1 11.3.4).
     assert!(check("", &page("/CS [/CalGray << /WhitePoint [0.9505 1 1.089] >>]", ""), &[]).is_empty(), "CalGray");
     let icc = |n: u8, data: &str| format!("<< /N {n} /Length {} >>\nstream\n{data}\nendstream", data.len());
@@ -651,6 +662,11 @@ fn a_blending_space_is_device_independent_and_an_intent_has_a_profile() {
         ),
         ("an ICC profile of two components", "/CS [/ICCBased 4 0 R]".to_owned(), vec![icc(2, "")]),
         ("a Lab ICC profile", "/CS [/ICCBased 4 0 R]".to_owned(), vec![icc(3, &format!("{}Lab ", "\0".repeat(16)))]),
+        (
+            "an ICC profile of one component whose header says RGB",
+            "/CS [/ICCBased 4 0 R]".to_owned(),
+            vec![icc(1, &format!("{}RGB ", "\0".repeat(16)))],
+        ),
         ("a pattern space", "/CS /Pattern".to_owned(), vec![]),
     ] {
         let extra: Vec<&str> = extra.iter().map(String::as_str).collect();

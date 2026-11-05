@@ -66,43 +66,50 @@ pub(crate) fn page_painting(doc: &Document, page: &Dict) -> Painting {
 /// `CalGray`, `CalRGB`, or an `ICCBased` space of 1, 3 or 4 components whose profile describes
 /// gray, RGB or CMYK; not Lab, Indexed, Pattern, Separation or DeviceN), and not a device colour
 /// space unless the page's resources give that device space a default (`DefaultGray`,
-/// `DefaultRGB`, `DefaultCMYK`), as PDF/A-2 6.2.4.3 asks of any device colour.
+/// `DefaultRGB`, `DefaultCMYK`) that is itself such a space with as many components (ISO
+/// 32000-1 8.6.5.6), as PDF/A-2 6.2.4.3 asks of any device colour.
 pub(crate) fn page_names_blending_space(doc: &Document, page: &Dict) -> bool {
     let group = page.get(b"Group").map(|g| doc.resolve(g));
     let Some(cs) = group.as_deref().and_then(Object::as_dict).and_then(|g| g.get(b"CS")).map(|c| doc.resolve(c)) else { return false };
-    let default: &[u8] = match &*cs {
-        Object::Name(n) if n == b"DeviceGray" => b"DefaultGray",
-        Object::Name(n) if n == b"DeviceRGB" => b"DefaultRGB",
-        Object::Name(n) if n == b"DeviceCMYK" => b"DefaultCMYK",
-        Object::Array(a) => return independent_blending_space(doc, a),
+    let (default, components): (&[u8], i64) = match &*cs {
+        Object::Name(n) if n == b"DeviceGray" => (b"DefaultGray", 1),
+        Object::Name(n) if n == b"DeviceRGB" => (b"DefaultRGB", 3),
+        Object::Name(n) if n == b"DeviceCMYK" => (b"DefaultCMYK", 4),
+        Object::Array(a) => return independent_blending_space(doc, a).is_some(),
         _ => return false,
     };
     let resources = page.get(b"Resources").map(|r| doc.resolve(r));
     let spaces = resources.as_deref().and_then(Object::as_dict).and_then(|r| r.get(b"ColorSpace")).map(|c| doc.resolve(c));
-    spaces.as_deref().and_then(Object::as_dict).is_some_and(|s| s.get(default).is_some())
+    let space = spaces.as_deref().and_then(Object::as_dict).and_then(|s| s.get(default)).map(|d| doc.resolve(d));
+    space.as_deref().and_then(Object::as_array).and_then(|a| independent_blending_space(doc, a)) == Some(components)
 }
 
-/// Whether the colour space array `a` is a device-independent blending colour space: `CalGray`,
-/// `CalRGB`, or `ICCBased` with 1, 3 or 4 components and, where the profile header can be read
-/// (within the output intent's profile cap), a gray, RGB or CMYK data colour space.
-fn independent_blending_space(doc: &Document, a: &[Object]) -> bool {
+/// The number of components of the colour space array `a` when it is a device-independent
+/// blending colour space: `CalGray` (1), `CalRGB` (3), or `ICCBased` with 1, 3 or 4 components
+/// whose profile header, where it can be read (within the output intent's profile cap), says
+/// gray, RGB or CMYK to match.
+fn independent_blending_space(doc: &Document, a: &[Object]) -> Option<i64> {
     let family = a.first().map(|f| doc.resolve(f));
-    match family.as_deref().and_then(Object::as_name) {
-        Some(b"CalGray" | b"CalRGB") => true,
-        Some(b"ICCBased") => {
+    match family.as_deref().and_then(Object::as_name)? {
+        b"CalGray" => Some(1),
+        b"CalRGB" => Some(3),
+        b"ICCBased" => {
             let profile = a.get(1).map(|p| doc.resolve(p));
-            let Some(Object::Stream(s)) = profile.as_deref() else { return false };
-            let components = s.dict.get(b"N").and_then(|n| doc.resolve(n).as_int());
-            if !matches!(components, Some(1 | 3 | 4)) {
-                return false;
-            }
+            let Some(Object::Stream(s)) = profile.as_deref() else { return None };
+            let components = s.dict.get(b"N").and_then(|n| doc.resolve(n).as_int())?;
             // ICC.1 header: the data colour space is bytes 16–19.
-            match s.decoded_within(crate::MAX_ICC_PROFILE).ok().and_then(|data| data.get(16..20).map(<[u8]>::to_vec)) {
-                Some(space) => matches!(space.as_slice(), b"GRAY" | b"RGB " | b"CMYK"),
-                None => true,
-            }
+            let header: Option<i64> = match s.decoded_within(crate::MAX_ICC_PROFILE).ok().and_then(|data| data.get(16..20).map(<[u8]>::to_vec)) {
+                Some(space) => match space.as_slice() {
+                    b"GRAY" => Some(1),
+                    b"RGB " => Some(3),
+                    b"CMYK" => Some(4),
+                    _ => return None,
+                },
+                None => None,
+            };
+            (matches!(components, 1 | 3 | 4) && header.is_none_or(|h| h == components)).then_some(components)
         }
-        _ => false,
+        _ => None,
     }
 }
 
