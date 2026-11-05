@@ -32,7 +32,8 @@ pub(crate) fn workers(asked: Option<usize>) -> usize {
 
 /// `work` on each of `items`, results in the order of `items`. `tick` hears how many are done, and
 /// stops the run by returning false. With more than one worker an item whose work panics gets
-/// `None`, so it is left as it was; with one, the panic goes on up as it does for any other work.
+/// `None`, and the caller decides what becomes of it; with one, the panic goes on up as it does for
+/// any other work.
 pub(crate) fn map<T: Sync, R: Send>(
     items: &[T],
     workers: usize,
@@ -54,7 +55,7 @@ pub(crate) fn map<T: Sync, R: Send>(
     let mut stopped = false;
     std::thread::scope(|scope| {
         let (results, finished) = channel();
-        for _ in 0..workers {
+        for _ in 0..workers.min(items.len()) {
             let results = results.clone();
             let (next, stop, work) = (&next, &stop, &work);
             // A thread that can't start only leaves more for the others, or for below.
@@ -94,7 +95,10 @@ pub(crate) fn map<T: Sync, R: Send>(
     }
     // No thread could start, or the last of them stopped early: the rest are done here.
     let claimed = next.load(Ordering::Relaxed).min(items.len());
-    for (item, slot) in items.iter().zip(out.iter_mut()).skip(claimed) {
+    for (done, (item, slot)) in items.iter().zip(out.iter_mut()).enumerate().skip(claimed) {
+        if !tick(done) {
+            return Err(OptimizeError::Cancelled);
+        }
         *slot = Some(work(item));
     }
     Ok(out)

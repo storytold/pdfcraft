@@ -1368,18 +1368,24 @@ pub(crate) fn run(
         Object::Stream(s) => s.dict.reference(b"SMask"),
         _ => None,
     };
-    let mut smask_uses: HashMap<ObjRef, usize> = HashMap::new();
+    // By number, as `Document::get` finds objects.
+    let mut smask_uses: HashMap<u32, usize> = HashMap::new();
     for (r, _) in &refs {
         if let Some(m) = smask_of(doc, *r) {
-            *smask_uses.entry(m).or_default() += 1;
+            *smask_uses.entry(m.num).or_default() += 1;
         }
     }
     // Too few to be worth the threads, which keeps a small file's progress in step too.
-    let threads = if total < MIN_FOR_THREADS { 1 } else { crate::pool::workers(settings.workers) };
+    let threads = if total < MIN_FOR_THREADS {
+        1
+    } else {
+        let largest = refs.iter().filter_map(|(r, _)| picture_pixels(doc, *r)).max().unwrap_or(0);
+        threads_for(crate::pool::workers(settings.workers), largest)
+    };
     let mut done = 0;
     while let Some(rest) = refs.get(done..).filter(|rest| !rest.is_empty()) {
         let run = if threads > 1 {
-            rest.iter().take(PICTURES_AT_ONCE).take_while(|(r, _)| smask_of(doc, *r).is_none_or(|m| smask_uses.get(&m) == Some(&1))).count()
+            rest.iter().take(PICTURES_AT_ONCE).take_while(|(r, _)| smask_of(doc, *r).is_none_or(|m| smask_uses.get(&m.num) == Some(&1))).count()
         } else {
             0
         };
@@ -1445,6 +1451,27 @@ const MIN_FOR_THREADS: usize = 16;
 
 /// How many pictures run beside each other before what they used is paid for.
 const PICTURES_AT_ONCE: usize = 32;
+
+/// What the pictures being worked out may hold in memory together.
+const PICTURE_MEMORY: u64 = 1 << 30;
+
+/// What a picture holds while it is worked out, for each pixel: decoded, and resampled or encoded.
+const PICTURE_BYTES_PER_PIXEL: u64 = 8;
+
+/// A picture's pixels, if it is small enough to be decoded at all.
+fn picture_pixels(doc: &Document, r: ObjRef) -> Option<u64> {
+    let object = doc.get(r);
+    let Object::Stream(s) = &*object else { return None };
+    let (w, h) = (u64::try_from(s.dict.int(b"Width")?).ok()?, u64::try_from(s.dict.int(b"Height")?).ok()?);
+    w.checked_mul(h).filter(|pixels| *pixels <= MAX_PIXELS)
+}
+
+/// How many pictures of `largest` pixels to work on at once: `workers`, or as many as
+/// [`PICTURE_MEMORY`] holds, and at least one.
+fn threads_for(workers: usize, largest: u64) -> usize {
+    let fit = PICTURE_MEMORY / largest.saturating_mul(PICTURE_BYTES_PER_PIXEL).max(1);
+    workers.min(usize::try_from(fit).unwrap_or(usize::MAX)).max(1)
+}
 
 /// What's to become of one picture.
 enum Decision {
@@ -1583,6 +1610,14 @@ mod dimension_tests {
             hold_in(&mut group, held(1), usize::MAX, |g| count += std::mem::take(g).len());
         }
         assert_eq!((count, group.len()), (SHARED_IMAGES, 0), "coded on the 16th");
+    }
+
+    #[test]
+    fn threads_are_limited_by_the_memory_of_the_largest_picture() {
+        assert_eq!(threads_for(8, 1_000_000), 8);
+        assert_eq!(threads_for(8, 40_000_000), 3);
+        assert_eq!(threads_for(8, MAX_PIXELS), 1);
+        assert_eq!(threads_for(8, 0), 8);
     }
 
     /// Only what redaction can store again without the dictionary shares one: an image mask, or

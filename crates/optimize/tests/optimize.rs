@@ -2667,7 +2667,10 @@ fn progress_is_reported_per_image_and_a_refusal_cancels() {
 
     // Stopping after the first image.
     let mut calls = 0;
-    let r = optimize_with_progress(&mut build(), &Settings::default(), &mut |_| {
+    let r = optimize_with_progress(&mut build(), &Settings::default(), &mut |s| {
+        if matches!(s, Stage::Reading { .. }) {
+            return true;
+        }
         calls += 1;
         calls < 2
     });
@@ -4220,7 +4223,9 @@ fn the_same_file_comes_out_with_any_number_of_threads() {
         // Under a soft mask they share, at different sizes on the page: the second must start from
         // the mask the first left. Each needs the mask at a different size.
         let first = image(&mut doc, 1200, 1200, 3, true, Some(shared_mask));
-        let second = image(&mut doc, 1000, 1000, 3, true, Some(shared_mask));
+        // The same mask by another generation, which finds the same object.
+        let same_mask = ObjRef { num: shared_mask.num, generation: shared_mask.generation + 1 };
+        let second = image(&mut doc, 1000, 1000, 3, true, Some(same_mask));
         page(&mut doc, &[("Im0", first)], "q 144 0 0 144 100 100 cm /Im0 Do Q");
         page(&mut doc, &[("Im0", second)], "q 180 0 0 180 100 100 cm /Im0 Do Q");
         // Enough others for the threads.
