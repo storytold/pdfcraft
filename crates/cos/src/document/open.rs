@@ -36,6 +36,7 @@ impl Document {
             unfound: Arc::default(),
             encryption_changed: false,
             full_save: false,
+            new_id: false,
             out_security: None,
             out_encrypt_num: None,
         };
@@ -123,6 +124,7 @@ impl Document {
             unfound: Arc::default(),
             encryption_changed: false,
             full_save: false,
+            new_id: false,
             out_security: None,
             out_encrypt_num: None,
         };
@@ -292,10 +294,23 @@ impl Document {
         self.full_save = true;
     }
 
+    /// Like [`Document::require_full_save`], and the rewritten file also gets a new file identifier
+    /// (`/ID`), so that a redacted or sanitized copy never claims to be its source (ISO 32000-2
+    /// §14.4). An encrypted file keeps the first string of its identifier, which its key depends on.
+    pub fn require_full_save_with_new_id(&mut self) {
+        self.full_save = true;
+        self.new_id = true;
+    }
+
     /// The next save must rewrite the whole file (see [`Document::require_full_save`]).
     /// Repair-aware edits retaining two accepted generations cannot use one incremental slot.
     pub fn full_save_required(&self) -> bool {
         self.full_save || self.version != self.saved_version || self.overlay.values().any(|slot| matches!(slot, Slot::RepairedSet(..)))
+    }
+
+    /// The next full save gives the file a new identifier (see [`Document::require_full_save_with_new_id`]).
+    pub fn new_id_required(&self) -> bool {
+        self.new_id
     }
 
     /// Security was set or removed since the document was opened (the next save applies it).

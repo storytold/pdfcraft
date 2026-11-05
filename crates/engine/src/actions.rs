@@ -197,14 +197,14 @@ fn apply_step(s: &mut Session, id: DocId, step: &Step, log: &mut Vec<String>) ->
             return Ok(None);
         }
     };
-    // Steps that find nothing to do (no comments to flatten, …) aren't failures. A removal step
-    // that didn't remove is: the file would be passed on as cleaned with the data still in it.
+    // A step that finds nothing to do is not a failure. Any other error fails the file, so nothing is
+    // published for it: the file would otherwise be passed on without the step it was asked to apply.
     let removes = matches!(step, Step::RemoveHiddenInformation | Step::Sanitize);
     match s.apply(id, edit) {
         Ok(()) => log.push(step.label().to_string()),
         Err(EditError::Redact(pdfcraft_redact::RedactError::NothingToApply)) if removes => log.push(format!("{}: nothing to remove", step.label())),
-        Err(e) if removes => return Err(e),
-        Err(e) => log.push(format!("{}: {e}", step.label())),
+        Err(EditError::Redact(pdfcraft_redact::RedactError::NothingToApply)) => log.push(format!("{}: nothing to do", step.label())),
+        Err(e) => return Err(e),
     }
     Ok(None)
 }

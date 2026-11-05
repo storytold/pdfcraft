@@ -2,7 +2,7 @@
 
 > Integration update 2026-10-30: lossless JBIG2 generic and exact-copy symbol coding are included; no lossy substitution. Combined tests passed at bdf5620; the subsequent review fixes require fresh CI.
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** minor (§7.4: JBIG2 decoding in `pdfcraft-filters`, so redaction clears JBIG2 scans; earlier, §7.4: redaction decodes CCITT fax images, Group 3 on bytes aside) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (subset standards: the PDF/A rows name 2b and 3b only, and the PDF/X row says what is there — the identification is carried through Combine and can be removed; no verifier, no converter) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How much of ISO 32000-2 (PDF 2.0) and the PDF subset standards PdfCraft implements, set against
 what Acrobat Pro implements. This is PdfCraft's equivalent of a "geometry" or "codec" checklist:
@@ -121,7 +121,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | PDF/A-1a/b (ISO 19005-1) | verify, convert | none | |
 | PDF/A-2a/b/u, PDF/A-3a/b/u | verify, convert | **partial**: 2b and 3b structural rules and conversion (sRGB intent; not CMYK) | |
 | PDF/A-4, 4e, 4f | verify, convert | none | |
-| PDF/X-1a, X-3, X-4 (ISO 15930) | verify, convert | none | |
+| PDF/X-1a, X-3, X-4 (ISO 15930) | verify, convert | **partial**: PDF/X declarations are carried through Combine and can be removed (`standards_remove_id`, which matches the `pdfxid:` prefix only); no verifier, no converter | |
 | PDF/UA-1, PDF/UA-2 (ISO 14289) | verify (Preflight), checker | Accessibility Checker (32 rules, Acrobat's own), no PDF/UA verification | |
 | PDF/E, PDF/VT | verify, convert | none | |
 | Preflight (profiles, fixups, reports) | hundreds of profiles | none | |
@@ -132,6 +132,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | Subset standards: the PDF/A rows name 2b and 3b only, and the PDF/X row says what is there — the identification is carried through Combine and can be removed; no verifier, no converter. No feature status changed |
 | 2026-10-30 | minor | §7.4: JBIG2 decoding (`hayro-jbig2`) in `pdfcraft-filters`, which `Document::decoded_image` uses with the image's `/JBIG2Globals`: export reads JBIG2 behind other filters too, and redaction clears pixels in JBIG2 images instead of removing them whole (one whose page isn't its size still is) |
 | 2026-10-27 | minor | §7.9.2 UTF-8 writing for 2.0 files (bookmark titles) and §14.13 `/AF` kept across saves: both partial |
 | 2026-10-26 | minor | §7.4: redaction clears pixels in CCITT fax images through the CCITT decoder, instead of removing them whole (Group 4 and Group 3 off bytes; Group 3 on bytes is still removed whole, as the bootstrap renderer may draw it as other rows than the decoder reads) |
