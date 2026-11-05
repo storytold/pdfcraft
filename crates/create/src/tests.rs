@@ -2724,6 +2724,51 @@ fn a_jpeg_2000_images_own_opacity_is_its_alpha_when_it_says_so() {
         Stream::from_raw(d, jpx_midpoint(2, 1, &[8, 8]))
     });
     assert_eq!(alphas(&exported_rgba(&reopen(&doc)).1), [0, 255]);
+    // With 2 its colours are premultiplied by it, which the export can't undo yet: refused, not
+    // exported opaque and darkened.
+    let premultiplied = jpx_doc(2, 1, &[8, 8], None, |d| d.set(b"SMaskInData".to_vec(), Object::Int(2)));
+    let out = extract_images(&premultiplied, &[0], 0);
+    assert!(out.images.is_empty(), "{out:?}");
+    let why: Vec<_> = out.skipped.into_iter().map(|(_, _, why)| why).collect();
+    assert_eq!(why, ["JPEG 2000 images with premultiplied opacity (/SMaskInData 2) can't be exported yet"]);
+    // Without an opacity channel there is nothing premultiplied.
+    let opaque = jpx_doc(2, 1, &[8], None, |d| d.set(b"SMaskInData".to_vec(), Object::Int(2)));
+    assert_eq!(exported_rgba(&opaque).1, [128, 128, 128, 255].repeat(2));
+}
+
+/// A colour-key /Mask is in the image's sample values (8.9.6.4): a JPEG 2000 image's at its own
+/// precision, which the decoder scales to 8 bits, and an /Indexed one's palette indices.
+#[test]
+fn a_jpeg_2000_images_colour_key_is_in_its_own_sample_values() {
+    let keyed = |precision: u8, space: &str, lo: i64, hi: i64| {
+        let doc = jpx_doc(2, 1, &[precision], Some(Object::name(space)), |d| {
+            d.set(b"Mask".to_vec(), Object::Array(vec![Object::Int(lo), Object::Int(hi)]))
+        });
+        alphas(&exported_rgba(&doc).1)
+    };
+    // Every sample is at its precision's midpoint: 8 of 4 bits, 1 of 1 bit, 2 of 2 bits, 128 of 8.
+    assert_eq!(keyed(4, "DeviceGray", 8, 8), [0, 0]);
+    assert_eq!(keyed(4, "DeviceGray", 7, 7), [255, 255]);
+    assert_eq!(keyed(4, "DeviceGray", 9, 15), [255, 255]);
+    assert_eq!(keyed(4, "DeviceGray", 0, 8), [0, 0]);
+    assert_eq!(keyed(1, "DeviceGray", 1, 1), [0, 0]);
+    assert_eq!(keyed(1, "DeviceGray", 0, 0), [255, 255]);
+    assert_eq!(keyed(2, "DeviceGray", 2, 3), [0, 0]);
+    assert_eq!(keyed(8, "DeviceGray", 128, 128), [0, 0]);
+    assert_eq!(keyed(8, "DeviceGray", 127, 127), [255, 255]);
+    // A range past the precision's largest value is held to it.
+    assert_eq!(keyed(4, "DeviceGray", 8, 1000), [0, 0]);
+    // An /Indexed image's key is in palette indices, which the export keeps.
+    let palette: Vec<u8> = (0..16u8).flat_map(|i| [i * 10, 0, 255 - i]).collect();
+    let indexed = || {
+        Object::Array(vec![Object::name("Indexed"), Object::name("DeviceRGB"), Object::Int(15), Object::String(PdfString::literal(palette.clone()))])
+    };
+    let key = |lo: i64, hi: i64| {
+        let doc = jpx_doc(2, 1, &[4], Some(indexed()), |d| d.set(b"Mask".to_vec(), Object::Array(vec![Object::Int(lo), Object::Int(hi)])));
+        alphas(&exported_rgba(&doc).1)
+    };
+    assert_eq!(key(8, 8), [0, 0]);
+    assert_eq!(key(9, 15), [255, 255]);
 }
 
 /// A JPEG 2000 image that isn't what its dictionary says, or can't be decoded, is left out with
@@ -2757,6 +2802,9 @@ fn a_damaged_or_mismatched_jpeg_2000_image_is_reported_not_exported() {
         d.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("JPXDecode")]))
     }))
     .0;
+    assert_eq!(why, ["JPEG 2000 images inside other filters can't be exported yet"]);
+    // An entry of the array that isn't a filter's name is still something before it.
+    let why = skipped(&jpx_doc(2, 1, &[8], None, |d| d.set(b"Filter".to_vec(), Object::Array(vec![Object::Int(42), Object::name("JPXDecode")])))).0;
     assert_eq!(why, ["JPEG 2000 images inside other filters can't be exported yet"]);
     let why = skipped(&jpx_doc(2, 1, &[1], None, |d| d.set(b"ImageMask".to_vec(), Object::Bool(true)))).0;
     assert_eq!(why, ["JPEG 2000 stencil masks can't be exported yet"]);

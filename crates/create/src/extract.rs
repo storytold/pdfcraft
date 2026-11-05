@@ -122,10 +122,12 @@ fn collect(doc: &Document, res: &Dict, depth: usize, forms: &mut HashSet<ObjRef>
     }
 }
 
+/// The names in `/Filter`, one a filter: an entry that isn't a name is an empty one, so a JPEG
+/// behind it still counts as behind another filter.
 fn filters(s: &Stream) -> Vec<Vec<u8>> {
     match s.dict.get(b"Filter") {
         Some(Object::Name(n)) => vec![n.to_vec()],
-        Some(Object::Array(a)) => a.iter().filter_map(|f| f.as_name().map(<[u8]>::to_vec)).collect(),
+        Some(Object::Array(a)) => a.iter().map(|f| f.as_name().map(<[u8]>::to_vec).unwrap_or_default()).collect(),
         _ => Vec::new(),
     }
 }
@@ -172,7 +174,7 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
     if budget.refused() > refused {
         return Err(FilterError::Spent.to_string());
     }
-    let key = if mask { None } else { colour_key(doc, s) };
+    let mut key = if mask { None } else { colour_key(doc, s) };
     // Keep the existing JPEG and stencil-mask Decode handling separate from lossless colour images.
     let endpoint = |value: Option<&Object>| value.map(|v| doc.resolve(v)).and_then(|v| v.as_f64()).filter(|v| v.is_finite());
     let inverted = (jpeg || mask)
@@ -204,10 +206,24 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
         let decoded = jpx_samples(&s.raw, (!own_colours).then_some(&space), w, h).ok_or("the JPEG 2000 image can't be decoded")?;
         space = decoded.space;
         // Its opacity channel is the image's soft mask only when it says so, and a /SMask
-        // overrides it (8.9.5.1, Table 87).
-        let in_data = s.dict.get(b"SMaskInData").is_some_and(|v| doc.resolve(v).as_f64() == Some(1.0));
-        if alpha.is_none() && in_data && s.dict.get(b"SMask").is_none() {
-            alpha = decoded.alpha;
+        // overrides it (8.9.5.1, Table 87). With 2 its colours are premultiplied by it: as an
+        // opaque image they would come out darkened.
+        let in_data = s.dict.get(b"SMaskInData").and_then(|v| doc.resolve(v).as_f64());
+        if alpha.is_none() && s.dict.get(b"SMask").is_none() {
+            if in_data == Some(2.0) && decoded.alpha.is_some() {
+                return Err("JPEG 2000 images with premultiplied opacity (/SMaskInData 2) can't be exported yet".into());
+            }
+            if in_data == Some(1.0) {
+                alpha = decoded.alpha;
+            }
+        }
+        // A colour key is in the image's own sample values (8.9.6.4), which the decoder took to
+        // 8 bits; an /Indexed image keeps its indices, and 16 bits their high byte.
+        if let (Some(key), Some(max)) = (key.as_mut(), decoded.scaled_from) {
+            let to_8 = |v: u32| ((u64::from(v.min(max)) * 255 + u64::from(max) / 2) / u64::from(max)) as u32;
+            for (lo, hi) in key.iter_mut() {
+                (*lo, *hi) = (to_8(*lo), to_8(*hi));
+            }
         }
         (decoded.samples, decoded.bpc)
     } else if jpeg {
@@ -393,6 +409,9 @@ struct Jpx {
     bpc: usize,
     /// Its opacity channel, 8 bits a pixel, if it has one.
     alpha: Option<Vec<u8>>,
+    /// The largest sample of the codestream's precision when the decoder scaled its colours to 8
+    /// bits from it (1 to 15 bits but 8, not /Indexed).
+    scaled_from: Option<u32>,
 }
 
 /// JPEG 2000 file or codestream `data` decoded as the page draws it, if it is `w` × `h` (7.4.9):
@@ -449,7 +468,8 @@ fn jpx_samples(data: &[u8], given: Option<&Space>, w: usize, h: usize) -> Option
         }
         (samples, Some(alpha))
     };
-    Some(Jpx { samples, space, bpc, alpha })
+    let scaled_from = ((1..16).contains(&depth) && depth != 8 && !matches!(space, Space::Indexed(..))).then(|| (1u32 << depth) - 1);
+    Some(Jpx { samples, space, bpc, alpha, scaled_from })
 }
 
 /// The colour-key `/Mask` (8.9.6.4): a [min max] pair per colour component, in sample values.
