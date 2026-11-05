@@ -1,6 +1,6 @@
 use super::{
     Arc, BookmarkPage, BookmarkRow, DocId, Document, EditError, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, Session, SummarySort,
-    apply_layer_state, comment_summary, display_config, local_utc_offset, outline_rows, parse_ymd, render_threads, use_layer_choices,
+    apply_layer_state, comment_summary, dates, display_config, local_utc_offset, outline_rows, parse_ymd, render_threads, use_layer_choices,
 };
 
 impl Session {
@@ -62,20 +62,36 @@ impl Session {
         return None;
     }
 
-    /// Today's date in local time: (year, month, day). With an injected clock (tests) the clock
-    /// is taken as local time.
-    /// A dynamic stamp's second line: "By Ada at 2:14 pm, Oct 02, 2026" (local time).
+    /// A dynamic stamp's second line in the session's date language and local time.
+    /// See [`Session::stamp_by_line_in_language`] for supported locales and fallback behavior.
     pub fn stamp_by_line(&self, author: &str) -> String {
-        let offset = self.local_offset();
-        let d = self.now().map(|t| pdfcraft_cos::pdf_date(t + offset)).unwrap_or_default();
-        let num = |a: usize, b: usize| d.get(a..b).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
-        let (y, mo, day, hh, mm) = (num(2, 6), num(6, 8), num(8, 10), num(10, 12), num(12, 14));
-        const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-        let h12 = if hh % 12 == 0 { 12 } else { hh % 12 };
-        let who = if author.trim().is_empty() { String::new() } else { format!("By {} ", author.trim()) };
-        format!("{who}at {h12}:{mm:02} {}, {} {day:02}, {y}", if hh < 12 { "am" } else { "pm" }, MONTHS[(mo.clamp(1, 12) - 1) as usize])
+        self.stamp_by_line_in_language(author, None)
     }
 
+    /// A dynamic stamp's second line in `lang`, or the session's date language when omitted.
+    /// Brazilian Portuguese uses "Por Ana às 15:45, 15/10/2026"; other languages retain the
+    /// English fallback "By Ada at 3:45 pm, Oct 15, 2026" until their stamp text is localized.
+    /// The UI passes its interface language when the date-language preference is automatic.
+    /// Stamp dates keep their own format, independent of the Fill & Sign date pattern.
+    pub fn stamp_by_line_in_language(&self, author: &str, lang: Option<&str>) -> String {
+        let offset = self.local_offset();
+        let d = self.now().map(|t| pdfcraft_cos::pdf_date(t.saturating_add(offset))).unwrap_or_default();
+        let num = |a: usize, b: usize| d.get(a..b).and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+        let (y, mo, day, hh, mm) = (num(2, 6), num(6, 8), num(8, 10), num(10, 12), num(12, 14));
+        let author = author.trim();
+        if lang.or(self.date_language()).and_then(dates::date_language).is_some_and(|language| language.code == "pt-br") {
+            let who = if author.is_empty() { String::new() } else { format!("Por {author} ") };
+            return format!("{who}às {hh:02}:{mm:02}, {day:02}/{mo:02}/{y:04}");
+        }
+        let month =
+            dates::date_language("en").and_then(|language| language.months_short.get((mo.clamp(1, 12) - 1) as usize)).copied().unwrap_or("Jan");
+        let h12 = if hh % 12 == 0 { 12 } else { hh % 12 };
+        let who = if author.is_empty() { String::new() } else { format!("By {author} ") };
+        format!("{who}at {h12}:{mm:02} {}, {month} {day:02}, {y}", if hh < 12 { "am" } else { "pm" })
+    }
+
+    /// Today's date in local time: (year, month, day). With an injected clock (tests) the clock
+    /// is taken as local time.
     pub fn today(&self) -> (i64, u32, u32) {
         let offset = self.local_offset();
         self.now().map(|t| pdfcraft_cos::pdf_date(t + offset)).as_deref().and_then(parse_ymd).unwrap_or((1970, 1, 1))

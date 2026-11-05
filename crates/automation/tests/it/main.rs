@@ -13,4 +13,6 @@ mod model_render;
 mod optimize_content_boundaries;
 mod redact_after_stray_q_form;
 mod redact_text_after_q;
+mod stamp_locale;
+
 mod render_warnings;

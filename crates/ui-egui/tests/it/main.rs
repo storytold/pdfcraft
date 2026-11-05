@@ -75,6 +75,7 @@ mod script_noop;
 mod scroll_prefetch;
 mod side_panels;
 mod signing;
+mod stamp_locale;
 mod stamps;
 mod text_select;
 mod theme;
