@@ -1233,7 +1233,7 @@ pub fn glyph_unicode(name: &str) -> Option<char> {
 /// Standard or WinAnsi: FrameMaker files distilled with Distiller 3 number them in the Macintosh
 /// glyph order, 29 below ASCII, so `Solid` read as `6ROLG` and typing set the wrong glyphs (#3962).
 /// Codes without a glyph are left out. A code whose glyph has no name with a Unicode value reads
-/// as WinAnsi, as the renderer reads it (vendored hayro-interpret patch (53)), so the editor and
+/// as WinAnsi, as the renderer reads it (vendored hayro-interpret patch (79)), so the editor and
 /// extraction agree: `€` for code 0x80, which Standard leaves without a character.
 fn symbolic_glyph_texts(doc: &Document, font: &Dict) -> Vec<(u32, String)> {
     use skrifa::GlyphId;
