@@ -38,7 +38,9 @@ only `.pdf` inputs are processed. Unsupported extensions are reported as skipped
   default 300), `--language` (default `en`) and `--ocr-all-pages` configure it.
   By default pages already containing text are skipped. `--pdfa 2b` or `--pdfa 3b`
   saves each recognised file as PDF/A (as Save as PDF/A does; the file's `pdfa`
-  entry says whether it complies or what remains). Missing models are
+  entry says whether the OCR result complies or what remains). A later `optimize`
+  step can replace those bytes and is not checked again, so verify the published
+  file when using both. Missing models are
   reported as file errors; nothing is downloaded or installed by the batch.
 - `--stop-on-error` stops processing after the first file error. By default the
   remaining files continue. Earlier successful outputs stay, and unprocessed
