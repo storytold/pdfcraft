@@ -95,6 +95,16 @@ pub(crate) fn body(
     let settings = d.settings(sizes.len(), labels);
     let sheets = settings.as_ref().ok().and_then(|s| print::layout(sizes, s).ok()).unwrap_or_default();
     d.sheet = d.sheet.min(sheets.len().saturating_sub(1));
+    // Cap the settings+preview area to the screen's available height (#offscreen-print-dialog):
+    // on a short screen, or with the driver's own Properties… panel expanded below, this row can
+    // otherwise grow taller than the display and push the Print/Cancel buttons off both edges.
+    // The title and the button row stay outside, so they are always reachable.
+    // `viewport_rect()` is egui's own idea of the current viewport, kept from the latest
+    // `RawInput::screen_rect` it was handed — unlike reading `raw.screen_rect` directly, it
+    // does not go blank on a frame where the backend didn't resend it.
+    let screen_h = ui.ctx().input(|i| i.viewport_rect().height());
+    let max_h = (screen_h - 220.0).max(300.0);
+    egui::ScrollArea::vertical().max_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
     ui.horizontal_top(|ui| {
         // Settings.
         ui.vertical(|ui| {
@@ -532,6 +542,7 @@ pub(crate) fn body(
             }
         });
     });
+    }); // end ScrollArea (#offscreen-print-dialog)
     ui.add_space(12.0);
     let (mut go, mut cancel) = (false, false);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -545,4 +556,32 @@ pub(crate) fn body(
         }
     });
     (go, cancel)
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    use crate::{Dialog, PdfCraftApp};
+
+    /// #offscreen-print-dialog: on a short screen the settings+preview area used to grow past
+    /// both the top and bottom of the screen (centered modals overflow both edges equally),
+    /// taking the Cancel button with it. It must now stay reachable, scrolling instead.
+    #[test]
+    fn the_print_dialog_keeps_its_buttons_within_a_short_screen() {
+        let screen = egui::vec2(1000.0, 480.0); // shorter than the settings+preview column alone
+        let mut h = Harness::builder().with_size(screen).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            let bytes = app.session.create_blank(612.0, 792.0, 1).unwrap();
+            app.open_bytes("one-page.pdf", None, bytes.as_ref().clone()).unwrap();
+            app.dialog = Some(Dialog::Print);
+            app
+        });
+        h.run_steps(4);
+
+        let cancel = h.get_by_label("Cancel").rect();
+        assert!(cancel.min.y >= 0.0 && cancel.max.y <= screen.y, "Cancel must stay within the {}×{} screen, got {cancel:?}", screen.x, screen.y);
+    }
 }
