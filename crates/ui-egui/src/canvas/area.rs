@@ -24,14 +24,6 @@ pub(crate) fn signature_badges(signatures: &[pdfcraft_engine::SignatureInfo], pa
         .collect()
 }
 
-/// Suppression window for egui's eased copy of point input.
-///
-/// egui 0.36.2 drains `WheelState::after_events` tail deltas by 90% per 0.1 s.
-pub(super) const SUPPRESS_SECS: f64 = 0.25;
-
-/// Short rolling extension while egui still has an unprocessed wheel tail.
-pub(super) const SUPPRESS_TAIL_SECS: f64 = 0.05;
-
 // Keep the viewer's scroll identity tied to the document instead of its parent UI. Without
 // `fades` (Show Page Edge Shadows off) the viewport-edge gradients are off for this area only.
 pub(super) fn page_scroll<R>(

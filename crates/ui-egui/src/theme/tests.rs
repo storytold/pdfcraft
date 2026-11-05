@@ -4,6 +4,9 @@ use super::*;
 /// back. This is the `Style::right_to_left` half of the explicit RTL policy.
 #[test]
 fn arabic_chrome_is_right_to_left_after_the_language_changes() {
+    if !crate::i18n::needs_catalogs() {
+        return;
+    }
     let previous = crate::i18n::current();
     let ctx = egui::Context::default();
     crate::i18n::set_current(crate::i18n::Lang::from_code("ar").expect("registered language"));

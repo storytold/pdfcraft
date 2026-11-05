@@ -22,7 +22,7 @@
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: document installed-font helpers and regression contracts; behavior and estimates unchanged)
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: print-preview font policy matches output, with isolated caches and GBK switching regressions; estimates unchanged)
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: reconcile current main and retain Japanese serif/weight selection alongside display-only CJK fallback; estimates unchanged)
-> **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
+> **Last reviewed:** 2026-10-29 | **Last updated:** 2026-10-29 | **Change:** minor (M2: scans keep their strokes at screen size and are smoothed when zoomed; M7 #2517: a narrowed then widened paragraph keeps the typed spaces the wrap consumed, after save and reopen; estimates unchanged)
 > **Last reviewed:** 2026-10-27 | **Last updated:** 2026-10-27 | **Change:** minor (M10: OCR model downloads use verified ONNX pairs with legacy discovery fallback; estimates unchanged)
 > **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M5: one reply in the Comments panel is edited, copied or deleted from its own "…" menu; estimates unchanged)
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (M11: lossless JBIG2 stores each distinct mark once, as a symbol; estimates unchanged)
@@ -304,9 +304,11 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | M11: Optimize's JBIG2 images share a symbol dictionary (`/JBIG2Globals`), up to 16 at a time and when smaller (`pdfcraft_filters::encode_jbig2_shared`): 41–46% smaller on rendered text in proportional fonts, 10% in Courier |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
 | 2026-11-02 | patch | M10 #5743: macOS print jobs carry the job name and owner some vendors' filters need; not yet checked on a physical printer |
+| 2026-11-02 | patch | M14 #5737, #5460: Preferences turns off the update check at start, on by default |
 | 2026-11-01 | minor | M10, gap 8: Word export keeps a form's layout (vector rules and boxes, text line by line in PDF font families, AcroForm fields as content controls); every export declares Word 2013 compatibility. Estimates unchanged. |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
 | 2026-10-31 | patch | #1577: reconcile optional page shadows with current viewer/organizer and settings modules; CI validation pending. |
@@ -322,6 +324,7 @@ Estimates unchanged.
 | 2026-10-23 | minor | M11: black-and-white images (1-bit, and image masks) are stored losslessly as CCITT Group 4 when that is smaller: PDF Optimizer ▸ Images ▸ Monochrome Images (on by default, so Reduce File Size too), `doc_optimize` `mono`; `pdfcraft_filters::encode_g4`. JBIG2 and monochrome downsampling not yet. Estimates unchanged. |
 | 2026-10-23 | minor | M6: calculation checks: a formula reading a field the form doesn't have, and a script building the names it reads, are flagged by `form_calculation_order` and on the Calculation order page (a red mark, a card naming the broken formulas, a note for built names); `form_calculation_order` gives each formula and `form_fields` a custom Calculate script. Estimates unchanged. |
 | 2026-10-29 | minor | M7 #2517: widening a paragraph rejoins a wrap with the spaces that wrap consumed, including a typed run and none for a Chinese or Japanese word split, after an incremental save and a full rewrite. Estimates unchanged. |
+| 2026-10-29 | minor | M2: non-interpolated images drawn below their resolution are area-averaged to whole device pixels instead of nearest-neighbour (scanned text kept one sample in N per axis); page-scan-size images are smoothed when enlarged. Estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
 | 2026-10-24 | minor | M3, #3970 follow-up: the button release given back after a window move or resize goes before the pointer leaving, so hover doesn't stick. Estimates unchanged. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |
