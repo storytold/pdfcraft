@@ -1,5 +1,6 @@
 //! Add a stamp: the palette and placing stamps on the page.
 
+use egui::{Key, Modifiers, PointerButton};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
@@ -43,6 +44,60 @@ fn choosing_and_placing_stamps() {
         let _gpu = crate::gpu();
         h.render().unwrap().save(format!("{dir}/stamps.png")).unwrap();
     }
+}
+
+#[test]
+fn editing_the_second_custom_stamp_keeps_both_library_entries() {
+    use egui::accesskit::Role;
+
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app
+    });
+    h.run_steps(5);
+    assert!(h.state_mut().execute("comment.stamp"));
+    h.run_steps(2);
+    for (file, name, byte) in [("first.png", "First", 1), ("second.png", "Second", 2)] {
+        h.state_mut().start_custom_stamp(file.into(), vec![byte]);
+        h.state_mut().stamp_draft.category = "Tools".into();
+        h.state_mut().stamp_draft.name = name.into();
+        h.run_steps(1);
+        h.get_by_label("OK").click();
+        h.run_steps(2);
+    }
+    let first_id = h.state().custom_stamps[0].id;
+    let second_id = h.state().custom_stamps[1].id;
+    let at = h.get_by_label("Second").rect().center();
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::default() });
+    h.run_steps(2);
+    h.get_by_label("Rename / change category…").click();
+    h.run_steps(2);
+    let category = h.get_by_role_and_label(Role::TextInput, "Category:");
+    category.click();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.get_by_role_and_label(Role::TextInput, "Category:").type_text("Archive");
+    let name = h.get_by_role_and_label(Role::TextInput, "Name:");
+    name.click();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.get_by_role_and_label(Role::TextInput, "Name:").type_text("Second edited");
+    h.run_steps(1);
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+
+    assert_eq!(h.state().custom_stamps.len(), 2);
+    assert_eq!(
+        (h.state().custom_stamps[0].id, h.state().custom_stamps[0].name.as_str(), h.state().custom_stamps[0].category.as_str()),
+        (first_id, "First", "Tools")
+    );
+    assert_eq!(
+        (h.state().custom_stamps[1].id, h.state().custom_stamps[1].name.as_str(), h.state().custom_stamps[1].category.as_str()),
+        (second_id, "Second edited", "Archive")
+    );
 }
 
 #[test]

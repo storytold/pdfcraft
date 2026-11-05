@@ -4298,7 +4298,7 @@ milestone = "M5"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/stamps.rs::creating_placing_and_keeping_custom_stamps", "crates/ui-egui/src/tools/stamps_ui.rs::edit_stamp_dialog_fields_have_accessible_labels", "crates/ui-egui/src/tools/stamps_ui.rs::editing_a_saved_stamp_keeps_its_selected_identity_and_source_bytes", "crates/ui-egui/src/tools/stamps_ui.rs::edited_stamp_settings_restore_the_new_name_and_category", "crates/ui-egui/src/tools/stamps_ui.rs::stamp_identity_survives_settings_round_trip_and_old_settings_get_ids"]
+evidence = ["crates/ui-egui/tests/it/stamps.rs::creating_placing_and_keeping_custom_stamps", "crates/ui-egui/tests/it/stamps.rs::editing_the_second_custom_stamp_keeps_both_library_entries", "crates/ui-egui/src/tools/stamps_ui.rs::edit_stamp_dialog_fields_have_accessible_labels", "crates/ui-egui/src/tools/stamps_ui.rs::editing_a_saved_stamp_keeps_its_selected_identity_and_source_bytes", "crates/ui-egui/src/tools/stamps_ui.rs::edited_stamp_settings_restore_the_new_name_and_category", "crates/ui-egui/src/tools/stamps_ui.rs::stamp_identity_survives_settings_round_trip_and_old_settings_get_ids"]
 notes = "Rename a saved custom stamp and move it to another category from its palette menu. The entry keeps a stable identity and source bytes through edits, sorting and settings restore; blank fields and missing entries are refused."
 
 [[feature]]

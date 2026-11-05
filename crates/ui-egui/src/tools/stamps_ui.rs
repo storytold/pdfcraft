@@ -314,10 +314,8 @@ fn new_stamp_id(next_id: &mut u64, stamps: &[CustomStamp]) -> Result<u64, String
         },
         None => 1,
     };
-    let mut candidate = (*next_id).max(floor);
-    while stamps.iter().any(|stamp| stamp.id == candidate) {
-        candidate = candidate.checked_add(1).ok_or_else(|| "custom stamp library has no available identity".to_string())?;
-    }
+    // `floor` is greater than every existing ID, so the candidate cannot collide.
+    let candidate = (*next_id).max(floor);
     *next_id = candidate.checked_add(1).unwrap_or_default();
     Ok(candidate)
 }
@@ -380,6 +378,14 @@ mod tests {
         let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|_| {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
+            app.custom_stamps.push(CustomStamp {
+                id: 202,
+                category: "Company".into(),
+                name: "seal".into(),
+                file: "seal.png".into(),
+                page: 0,
+                data: Arc::new(vec![1, 2, 3]),
+            });
             app.stamp_edit = Some(StampEdit { id: 202, name: "seal".into(), category: "Company".into() });
             app.dialog = Some(Dialog::EditStamp);
             app
@@ -388,8 +394,27 @@ mod tests {
         h.get_by_label("Edit Custom Stamp");
         h.get_by_role_and_label(Role::TextInput, "Category:");
         h.get_by_role_and_label(Role::TextInput, "Name:");
-        h.get_by_label("Save");
-        h.get_by_label("Cancel");
+        h.get_by_role_and_label(Role::TextInput, "Category:").click();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_role_and_label(Role::TextInput, "Category:").type_text("Archive");
+        h.get_by_role_and_label(Role::TextInput, "Name:").click();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_role_and_label(Role::TextInput, "Name:").type_text("Seal");
+        h.run_steps(1);
+        h.get_by_label("Save").click();
+        h.run_steps(2);
+        assert_eq!(
+            (h.state().custom_stamps[0].id, h.state().custom_stamps[0].name.as_str(), h.state().custom_stamps[0].category.as_str()),
+            (202, "Seal", "Archive")
+        );
+        assert_eq!(h.state().custom_stamps[0].data.as_slice(), &[1, 2, 3]);
+
+        h.state_mut().stamp_edit = Some(StampEdit { id: 202, name: "Discarded".into(), category: "Discarded".into() });
+        h.state_mut().dialog = Some(Dialog::EditStamp);
+        h.run_steps(2);
+        h.get_by_label("Cancel").click();
+        h.run_steps(2);
+        assert_eq!((h.state().custom_stamps[0].name.as_str(), h.state().custom_stamps[0].category.as_str()), ("Seal", "Archive"));
     }
 
     #[test]
@@ -485,6 +510,20 @@ mod tests {
         let (restored, next_id) = decode(&old, None);
         assert_eq!(restored[0].id, 1);
         assert_eq!(next_id, 2);
+    }
+
+    #[test]
+    fn decode_repairs_duplicate_stamp_ids() {
+        let saved = serde_json::json!([
+            {"id": 7, "category":"Tools", "name":"First", "file":"first.png", "page":0, "data":"AQ=="},
+            {"id": 7, "category":"Tools", "name":"Second", "file":"second.png", "page":0, "data":"Ag=="}
+        ]);
+
+        let (restored, _) = decode(&saved, None);
+
+        assert_eq!(restored.len(), 2);
+        assert_ne!(restored[0].id, restored[1].id);
+        assert_eq!((restored[0].name.as_str(), restored[1].name.as_str()), ("First", "Second"));
     }
 
     #[test]
