@@ -4095,7 +4095,19 @@ status = "shipped"
 commands = []
 tools = ["comment_edit"]
 evidence = ["crates/annot/src/tests.rs::lines_and_polygons_are_reshaped_by_their_points", "crates/ui-egui/tests/it/comments.rs::line_ends_are_dragged_to_change_length_and_angle", "crates/automation/tests/it/automation.rs::comments_are_reshaped_through_the_tool"]
-notes = "A selected line, arrow, connected lines, polygon or cloud has a handle on each end or corner (instead of the frame); dragging one changes the length and angle (Shift holds it to 45° from the point before), with the new shape drawn while dragging, as one undo step (Edit::ReshapeAnnotation). The drawing tools keep drawing from an end (a new line starts there); the Select tool reshapes. /Rect follows the points with room for the width and arrowheads, and the appearance is drawn anew. Headless: comment_edit `points`; comment_list reports them. Measurements keep the points they measured; locked comments keep their shape. Not yet: adding or removing a corner."
+notes = "A selected line, arrow, connected lines, polygon or cloud has a handle on each end or corner (instead of the frame); dragging one changes the length and angle (Shift holds it level or plumb with the point before, comment.draw-ortho), with the new shape drawn while dragging, as one undo step (Edit::ReshapeAnnotation). The drawing tools keep drawing from an end (a new line starts there); the Select tool reshapes. /Rect follows the points with room for the width and arrowheads, and the appearance is drawn anew. Headless: comment_edit `points`; comment_list reports them. Measurements keep the points they measured; locked comments keep their shape. Not yet: adding or removing a corner."
+
+[[feature]]
+id = "comment.draw-ortho"
+title = "Shift holds lines level or plumb while drawing (ortho)"
+area = "E"
+tier = "P1"
+milestone = "M5"
+status = "shipped"
+commands = []
+tools = ["comment_add"]
+evidence = ["crates/measure/src/tests.rs::ortho_holds_a_vertex_level_or_plumb_with_the_last", "crates/ui-egui/tests/it/comments.rs::shift_holds_new_lines_and_sides_level_or_plumb", "crates/ui-egui/tests/it/comments.rs::the_rubber_band_shows_the_closing_side_with_shift_held", "crates/ui-egui/tests/it/comments.rs::line_ends_are_dragged_to_change_length_and_angle", "crates/automation/tests/it/automation.rs::lines_and_corners_are_held_level_or_plumb_through_the_tool"]
+notes = "With Shift held, a new line or arrow runs level or plumb from where it starts, whichever is nearer to the pointer (a CAD drawing's ortho mode), and each new side of connected lines, a polygon or a cloud from the corner before, the rubber band included. Over the first corner, where a click closes a polygon or cloud, the closing side runs straight to that corner, Shift or not. A dragged end or corner of a drawn one is held the same way (comment.reshape). Acrobat holds lines to 45° steps instead; on drawings and plans the level and plumb lines are the ones wanted. Headless: comment_add `ortho`. Measuring tools keep their 45° steps."
 
 [[feature]]
 id = "comment.move-preview"
@@ -6753,10 +6765,10 @@ area = "I"
 tier = "P1"
 milestone = "M10"
 status = "partial"
-commands = ["ocr.enhance_camera"]
-tools = ["page_enhance_camera"]
-evidence = ["crates/engine/src/camera_clean.rs::a_shadow_and_a_yellow_cast_become_white_paper", "crates/engine/src/tests.rs::enhance_camera_page_at_a_level_whitens_a_shadowed_sheet", "crates/ui-egui/tests/it/camera.rs::the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn"]
-notes = "Camera images only: from clean-up level 60, isolated dark pixels are removed. Missing: for scanned pages and as an OCR option."
+commands = ["ocr.enhance_camera", "ocr.enhance"]
+tools = ["page_enhance_camera", "page_enhance_scan"]
+evidence = ["crates/engine/src/camera_clean.rs::a_shadow_and_a_yellow_cast_become_white_paper", "crates/engine/src/tests.rs::enhance_camera_page_at_a_level_whitens_a_shadowed_sheet", "crates/ui-egui/tests/it/camera.rs::the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn", "crates/engine/src/scan_clean/tests.rs::despeckle_is_its_own_switch", "crates/automation/tests/it/automation.rs::enhance_scanned_file_cleans_the_scan_in_place_through_tools", "crates/ui-egui/tests/it/scan_clean.rs::enhance_scanned_file_cleans_the_chosen_pages_and_says_what_it_did"]
+notes = "Camera images, and scanned pages through Enhance scanned file (ocr.enhance, page_enhance_scan despeckle): isolated dark pixels (at most one dark neighbour) turn white, on grey, RGB and 1-bit scans, in place (the OCR text layer, comments and links stay). Missing: as an option of Recognize text; specks larger than two pixels; CMYK, indexed, JPEG 2000, JBIG2 and CCITT scans and scans inside form XObjects (reported, not changed)."
 
 [[feature]]
 id = "ocr.background-removal"
@@ -6765,10 +6777,10 @@ area = "I"
 tier = "P1"
 milestone = "M10"
 status = "partial"
-commands = ["ocr.enhance_camera"]
-tools = ["page_enhance_camera"]
-evidence = ["crates/engine/src/camera_clean.rs::a_shadow_and_a_yellow_cast_become_white_paper", "crates/engine/src/tests.rs::enhance_camera_page_at_a_level_whitens_a_shadowed_sheet", "crates/ui-egui/tests/it/camera.rs::the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn"]
-notes = "Camera images only: Enhance camera image's clean-up level (and page_enhance_camera level) evens out the paper's illumination per channel, so the background turns white and colour casts go; colour ink stays. Missing: the same for scanned pages and as an OCR option."
+commands = ["ocr.enhance_camera", "ocr.enhance"]
+tools = ["page_enhance_camera", "page_enhance_scan"]
+evidence = ["crates/engine/src/camera_clean.rs::a_shadow_and_a_yellow_cast_become_white_paper", "crates/engine/src/tests.rs::enhance_camera_page_at_a_level_whitens_a_shadowed_sheet", "crates/ui-egui/tests/it/camera.rs::the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn", "crates/engine/src/scan_clean/tests.rs::a_scan_gets_white_paper_even_edges_dark_strokes_and_no_specks_in_place", "crates/automation/tests/it/automation.rs::enhance_scanned_file_cleans_the_scan_in_place_through_tools", "crates/ui-egui/tests/it/scan_clean.rs::enhance_scanned_file_cleans_the_chosen_pages_and_says_what_it_did"]
+notes = "Camera images (Enhance camera image level) and scanned pages (Enhance scanned file ▸ Background removal, page_enhance_scan level): the paper's illumination is evened out per channel so a grey, yellowed or unevenly lit background turns white, then the contrast is raised; colour ink stays. Scans are cleaned in place in their own image objects (JPEG stays JPEG at quality 90, others lossless), so the OCR text layer, comments and links stay; one undo step. Missing: as an option of Recognize text; CMYK, indexed, JPEG 2000, JBIG2 and CCITT scans and scans inside form XObjects (reported, not changed); a preview."
 
 [[feature]]
 id = "ocr.descreen"
@@ -6801,10 +6813,10 @@ area = "I"
 tier = "P2"
 milestone = "M10"
 status = "partial"
-commands = ["ocr.enhance_camera"]
-tools = ["page_enhance_camera"]
-evidence = ["crates/engine/src/camera_clean.rs::a_shadow_and_a_yellow_cast_become_white_paper", "crates/engine/src/tests.rs::enhance_camera_page_at_a_level_whitens_a_shadowed_sheet", "crates/ui-egui/tests/it/camera.rs::the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn"]
-notes = "Camera images only: the clean-up level divides out a smooth illumination estimate, which removes shadows and darker edges on the straightened photo. Missing: for scanned pages (book gutters) and as an OCR option."
+commands = ["ocr.enhance_camera", "ocr.enhance"]
+tools = ["page_enhance_camera", "page_enhance_scan"]
+evidence = ["crates/engine/src/camera_clean.rs::a_shadow_and_a_yellow_cast_become_white_paper", "crates/engine/src/tests.rs::enhance_camera_page_at_a_level_whitens_a_shadowed_sheet", "crates/ui-egui/tests/it/camera.rs::the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn", "crates/engine/src/scan_clean/tests.rs::edge_shadow_removal_whitens_the_gutter_background_removal_alone_leaves", "crates/automation/tests/it/automation.rs::enhance_scanned_file_cleans_the_scan_in_place_through_tools", "crates/ui-egui/tests/it/scan_clean.rs::enhance_scanned_file_cleans_the_chosen_pages_and_says_what_it_did"]
+notes = "Camera images (the clean-up level divides out a smooth illumination estimate) and scanned pages (Enhance scanned file ▸ Edge shadow removal, page_enhance_scan edge_shadows): within the outer fifth of each side, every column and row is lightened to the brightest paper of that band, which removes book gutters and copier borders the coarse estimate misses; a black scanner border is left alone. Missing: as an option of Recognize text; curved gutters that also bend the text (no dewarping); the scan formats background removal also skips."
 
 [[feature]]
 id = "ocr.camera-perspective"
