@@ -23,6 +23,7 @@ mod draw;
 mod group;
 mod info;
 mod lookup;
+mod model3d;
 mod modify;
 mod threed;
 mod types;
@@ -39,15 +40,17 @@ use lookup::{annots, page_ref};
 pub use lookup::{
     has_visible_fill_sign, is_fill_sign, isolate_annotation, isolate_annotations, page_refs, picture_rotation, set_annots, signature_image,
 };
+pub use model3d::{Model3d, Model3dKind, model_3d, model_3d_annotations};
 pub(crate) use modify::n;
 pub use modify::{
     add_reply, add_text_replacement, deletable, delete_annotation, erase_ink, fillable, goes_with, lift_annotation, move_annotation, release_members,
-    set_contents, set_fill, set_font_size, set_locked, set_marked, set_points, set_rect, set_review_state, set_style, with_replies_and_popups,
+    set_border_color, set_border_shape, set_contents, set_fill, set_font_size, set_locked, set_marked, set_part_opacity, set_points, set_rect,
+    set_review_state, set_style, with_replies_and_popups,
 };
 pub use threed::{Activation as Activation3d, MAX_MODEL_BYTES, ModelFormat, NewModel3d, PosterPicture, add_3d_model, check_model};
 pub use types::{
-    AttachIcon, FillMark, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook, ReviewState, Rgb, Shape,
-    StampGroup, StampKind, Style, StyleChange, TextReplacement, rect_quad,
+    AttachIcon, BorderShape, FillMark, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook, ReviewState, Rgb,
+    Shape, StampGroup, StampKind, Style, StyleChange, TextReplacement, rect_quad,
 };
 
 pub mod appearance;
