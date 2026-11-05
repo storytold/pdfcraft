@@ -70,8 +70,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = ["doc_info"]
-evidence = ["crates/ui-egui/tests/it/viewer.rs::damaged_files_say_they_were_repaired"]
-notes = "a notice says the file was repaired; Document Properties ▸ Advanced lists the repairs; doc_info reports them"
+evidence = ["crates/ui-egui/tests/it/viewer.rs::damaged_files_say_they_were_repaired", "crates/cos/tests/it/generations.rs::contradictory_xref_generation_recovers_the_matching_header_and_records_repair", "crates/cos/tests/it/generations.rs::generation_repair_diagnostics_are_bounded_without_disabling_recovery", "crates/cos/tests/it/generations.rs::retained_generation_disagreements_are_reported_in_materialized_mode_too", "crates/cos/tests/it/generations.rs::hybrid_generation_diagnostics_observe_rows_before_the_table_hides_them", "crates/cos/tests/it/generations.rs::discarded_xref_repair_notes_do_not_survive_object_header_reconstruction"]
+notes = "a notice says the file was repaired; Document Properties ▸ Advanced lists the repairs; doc_info reports them. COS records bounded live xref/header generation disagreements on open, including retained materialized and hybrid rows before folding; this follow-up validates the COS policy, without a fresh GUI claim."
 
 [[feature]]
 id = "core.xref-streams"
@@ -82,8 +82,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/cos/tests/it/writer.rs::incremental_saves_stack_on_an_xref_stream_file", "crates/cos/tests/it/writer.rs::page_tree_loops_in_object_streams_do_not_crash_readers"]
-notes = ""
+evidence = ["crates/cos/tests/it/generations.rs::indirect_stream_lengths_require_the_referenced_generation", "crates/cos/tests/it/generations.rs::compressed_objects_only_accept_generation_zero", "crates/cos/tests/it/writer.rs::incremental_saves_stack_on_an_xref_stream_file", "crates/cos/tests/it/writer.rs::page_tree_loops_in_object_streams_do_not_crash_readers"]
+notes = "Compressed objects accept generation zero only; indirect stream lengths are resolved by their complete reference. Synthetic regression coverage."
 
 [[feature]]
 id = "core.hybrid-xref"
@@ -298,8 +298,8 @@ milestone = "M1"
 status = "shipped"
 commands = ["file.save_as"]
 tools = ["doc_save"]
-evidence = ["crates/organize/src/tests.rs::full_save_drops_unreachable_objects", "crates/engine/src/tests.rs::full_save_is_readable_and_smaller_after_deletes"]
-notes = ""
+evidence = ["crates/cos/tests/it/generations.rs::full_save_does_not_turn_stale_references_into_live_ones", "crates/cos/tests/it/generations.rs::repaired_page_tree_aliases_keep_one_identity_in_full_saves", "crates/organize/src/tests.rs::full_save_drops_unreachable_objects", "crates/engine/src/tests.rs::full_save_is_readable_and_smaller_after_deletes"]
+notes = "Full rewrites coalesce accepted repair aliases to one output object, preserving page-tree parent identity. They preserve reference-generation identity: stale references become null while live replacement objects remain reachable. Synthetic classic and object-stream save tests; this does not establish general rendering fidelity."
 
 [[feature]]
 id = "core.object-stream-compression"
@@ -334,8 +334,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/cos/src/document/tests.rs::reads_classic_revision_and_edits_are_copy_on_write"]
-notes = ""
+evidence = ["crates/cos/tests/it/generations.rs::free_xref_slots_never_revive_retained_object_headers", "crates/cos/tests/it/generations.rs::restoring_equal_values_still_restores_the_accepted_generation_aliases", "crates/cos/tests/it/generations.rs::restoring_explicit_sets_removes_old_generation_aliases", "crates/preflight/tests/generation_repairs.rs::preflight_preserves_repaired_image_references_in_snapshots_and_saves", "crates/cos/tests/it/generations.rs::repaired_header_references_survive_full_saves_and_dictionary_edits", "crates/cos/tests/it/generations.rs::incremental_generation_identity_is_visible_to_an_independent_reader", "crates/cos/tests/it/generations.rs::restoring_snapshot_preserves_changes_to_nonzero_generation_objects", "crates/cos/tests/it/generations.rs::overlay_generation_changes_do_not_retarget_old_references_or_clones", "crates/cos/tests/it/generations.rs::references_require_the_current_generation_even_with_a_warm_cache", "crates/cos/src/document/tests.rs::reads_classic_revision_and_edits_are_copy_on_write"]
+notes = "Generation-aware references stay distinct across warm caches, edit overlays and snapshots, including restoration and incremental save/reopen of edited nonzero-generation objects. A damaged live xref row may additionally resolve the matching same-number object header; unrelated generations and free slots remain null. Repair-aware edits preserve both aliases and require full rewrite; explicit replacement keeps only its supplied generation. Synthetic preflight/snapshot and classic/packed full/incremental controls include an independent reader. Broader real-file fidelity remains tracked separately."
 
 [[feature]]
 id = "core.write-validity"
@@ -1154,8 +1154,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/control.rs::state_and_view_options", "crates/ui-egui/tests/it/ui.rs::theme_and_view_options_apply", "crates/ui-egui/tests/it/viewer.rs::two_page_view_steps_a_spread_at_a_time", "crates/ui-egui/tests/it/viewer.rs::arrow_and_page_keys_move_through_a_scrolling_document"]
-notes = "in two-page view, next and previous page move a whole spread (with or without a cover page); → / ← turn pages in every layout, ↓ / ↑ scroll a line and Page Down / Page Up a screen (the page in single-page view), as in Acrobat; in single-page view ↓ / ↑ turn the page once there is nothing left to scroll that way, like the wheel"
+evidence = ["crates/ui-egui/tests/it/control.rs::state_and_view_options", "crates/ui-egui/tests/it/ui.rs::theme_and_view_options_apply", "crates/ui-egui/tests/it/viewer.rs::two_page_view_steps_a_spread_at_a_time", "crates/ui-egui/tests/it/viewer.rs::arrow_and_page_keys_move_through_a_scrolling_document", "crates/ui-egui/tests/it/viewer.rs::left_and_right_scroll_a_page_wider_than_the_window_before_turning_it"]
+notes = "in two-page view, next and previous page move a whole spread (with or without a cover page); → / ← turn pages in every layout (on a page wider than the window, a plan zoomed in, they scroll sideways a line first and turn the page at its edge; ⌘→ / ⌘← turn at once), ↓ / ↑ scroll a line and Page Down / Page Up a screen (the page in single-page view), as in Acrobat; in single-page view ↓ / ↑ turn the page once there is nothing left to scroll that way, like the wheel"
 
 [[feature]]
 id = "view.goto-page-label"
@@ -3966,6 +3966,18 @@ evidence = ["crates/ui-egui/tests/it/comments.rs::comment_properties_change_appe
 notes = "Appearance (colour, fill colour for rectangles/ovals/polygons/text boxes/callouts, opacity, thickness, note icon, font size of text boxes, typewriter text and callouts: 1-400 pt, written to /DA and the rich-text strings, the box grows to fit and never shrinks; comment_edit font_size), General (author, subject), Review History. Still missing: font family, bold/italic, alignment and per-run formatting of text boxes; the quick bar has no font size for new text boxes (they start at 12 pt, callouts 10 pt)"
 
 [[feature]]
+id = "comment.part-opacity"
+title = "A comment's text, border or line, and fill each at an opacity of its own"
+area = "E"
+tier = "P1"
+milestone = "M5"
+status = "shipped"
+commands = []
+tools = ["comment_add", "comment_edit", "comment_list"]
+evidence = ["crates/annot/src/tests.rs::parts_are_drawn_at_opacities_of_their_own", "crates/ui-egui/tests/it/comments.rs::comment_properties_set_each_parts_opacity", "crates/automation/tests/it/automation.rs::comment_parts_take_opacities_of_their_own_through_the_tools", "crates/ui-egui/tests/it/ui.rs::part_opacity_defaults_persist_and_clamp"]
+notes = "Comment Properties shows an opacity for each part instead of one for the whole comment: a text box, typewriter text or callout its Text, Border and Fill opacity, a rectangle, oval, polygon or cloud its Line and Fill opacity (a part that isn't drawn, such as an unset fill, is greyed); lines, drawings and the rest keep one Opacity. A see-through fill with an opaque line marks an area on a plan without hiding it. Stored as the line's /CA, the fill's /ca (PDF 2.0's opacity for what is filled) and the text's /PCTextOpacity (PdfCraft's own), each only where it differs, and drawn with two graphics states in the appearance, so every viewer shows it; an app that redraws the comment from its keys (Acrobat after editing it) uses one opacity again. The quick bar's Opacity and comment_edit `opacity` set the whole comment's; Make Properties Default carries the parts into the tool (saved with the settings). Headless: comment_add / comment_edit `fill_opacity`, `text_opacity`; comment_list reports `opacity`, `fill_opacity`, `text_opacity`. Acrobat has one opacity per comment."
+
+[[feature]]
 id = "comment.properties-bar"
 title = "Comment properties bar"
 area = "E"
@@ -4095,7 +4107,19 @@ status = "shipped"
 commands = []
 tools = ["comment_edit"]
 evidence = ["crates/annot/src/tests.rs::lines_and_polygons_are_reshaped_by_their_points", "crates/ui-egui/tests/it/comments.rs::line_ends_are_dragged_to_change_length_and_angle", "crates/automation/tests/it/automation.rs::comments_are_reshaped_through_the_tool"]
-notes = "A selected line, arrow, connected lines, polygon or cloud has a handle on each end or corner (instead of the frame); dragging one changes the length and angle (Shift holds it to 45° from the point before), with the new shape drawn while dragging, as one undo step (Edit::ReshapeAnnotation). The drawing tools keep drawing from an end (a new line starts there); the Select tool reshapes. /Rect follows the points with room for the width and arrowheads, and the appearance is drawn anew. Headless: comment_edit `points`; comment_list reports them. Measurements keep the points they measured; locked comments keep their shape. Not yet: adding or removing a corner."
+notes = "A selected line, arrow, connected lines, polygon or cloud has a handle on each end or corner (instead of the frame); dragging one changes the length and angle (Shift holds it level or plumb with the point before, comment.draw-ortho), with the new shape drawn while dragging, as one undo step (Edit::ReshapeAnnotation). The drawing tools keep drawing from an end (a new line starts there); the Select tool reshapes. /Rect follows the points with room for the width and arrowheads, and the appearance is drawn anew. Headless: comment_edit `points`; comment_list reports them. Measurements keep the points they measured; locked comments keep their shape. Not yet: adding or removing a corner."
+
+[[feature]]
+id = "comment.draw-ortho"
+title = "Shift holds lines level or plumb while drawing (ortho)"
+area = "E"
+tier = "P1"
+milestone = "M5"
+status = "shipped"
+commands = []
+tools = ["comment_add"]
+evidence = ["crates/measure/src/tests.rs::ortho_holds_a_vertex_level_or_plumb_with_the_last", "crates/ui-egui/tests/it/comments.rs::shift_holds_new_lines_and_sides_level_or_plumb", "crates/ui-egui/tests/it/comments.rs::the_rubber_band_shows_the_closing_side_with_shift_held", "crates/ui-egui/tests/it/comments.rs::line_ends_are_dragged_to_change_length_and_angle", "crates/automation/tests/it/automation.rs::lines_and_corners_are_held_level_or_plumb_through_the_tool"]
+notes = "With Shift held, a new line or arrow runs level or plumb from where it starts, whichever is nearer to the pointer (a CAD drawing's ortho mode), and each new side of connected lines, a polygon or a cloud from the corner before, the rubber band included. Over the first corner, where a click closes a polygon or cloud, the closing side runs straight to that corner, Shift or not. A dragged end or corner of a drawn one is held the same way (comment.reshape). Acrobat holds lines to 45° steps instead; on drawings and plans the level and plumb lines are the ones wanted. Headless: comment_add `ortho`. Measuring tools keep their 45° steps."
 
 [[feature]]
 id = "comment.move-preview"
@@ -4118,8 +4142,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.list"]
 tools = ["comment_edit"]
-evidence = ["crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn", "crates/annot/src/tests.rs::editing_a_text_box_refits_its_rectangle", "crates/automation/tests/it/automation.rs::comments_through_tools", "crates/ui-egui/tests/it/comments.rs::ctrl_enter_posts_a_highlight_comment_and_shift_enter_adds_a_line", "crates/ui-egui/tests/it/comments.rs::one_reply_is_deleted_from_its_menu_and_the_thread_stays", "crates/ui-egui/tests/it/comments.rs::undo_and_redo_close_a_reply_editor_left_open"]
-notes = "double-click a comment or card, or Edit in the menus (a reply from its own \"…\" menu); Ctrl+Enter (also Command+Enter) saves text in the focused comment editor, Shift+Enter adds a newline; a text box's rectangle follows the new text (wrap width and top edge stay, the height fits the wrapped lines). Undo or Redo closes the panel's editor without saving it, since either can move the comment it was open on"
+evidence = ["crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn", "crates/annot/src/tests.rs::editing_a_text_box_refits_its_rectangle", "crates/automation/tests/it/automation.rs::comments_through_tools", "crates/ui-egui/tests/it/comments.rs::ctrl_enter_posts_a_highlight_comment_and_shift_enter_adds_a_line", "crates/ui-egui/tests/it/comments.rs::one_reply_is_deleted_from_its_menu_and_the_thread_stays", "crates/ui-egui/tests/it/comments.rs::undo_and_redo_close_a_reply_editor_left_open", "crates/ui-egui/tests/it/comments.rs::double_clicking_a_cards_text_edits_it"]
+notes = "double-click a comment or card (its header or its text), or Edit in the menus; double-click a comment or card, or Edit in the menus (a reply from its own \"…\" menu); Ctrl+Enter (also Command+Enter) saves text in the focused comment editor, Shift+Enter adds a newline; a text box's rectangle follows the new text (wrap width and top edge stay, the height fits the wrapped lines). Undo or Redo closes the panel's editor without saving it, since either can move the comment it was open on"
 
 [[feature]]
 id = "comment.copy-comment-text"
@@ -5423,8 +5447,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["sign.fill.text"]
 tools = ["fill_sign_add"]
-evidence = ["crates/annot/src/tests.rs::indirect_typewriter_names_keep_outer_whitespace_in_summaries", "crates/ui-egui/tests/it/comments.rs::typewriter_edit_composer_keeps_trailing_blank_lines", "crates/ui-egui/tests/it/comments.rs::other_edit_composers_keep_trimming_trailing_whitespace", "crates/ui-egui/tests/it/comments.rs::moved_fill_and_sign_text_is_drawn_where_it_goes_before_release", "crates/engine/src/tests.rs::fill_sign_multiline_text_survives_engine_save_reopen_and_render", "crates/ui-egui/tests/it/fill_sign.rs::fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels", "crates/automation/tests/it/automation.rs::multiline_fill_sign_engine_round_trip_preserves_lines_and_appearance", "crates/ui-egui/tests/it/fill_sign.rs::text_marks_and_date", "crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/automation/tests/it/automation.rs::fill_and_sign_through_tools", "crates/engine/src/tests.rs::typed_text_reads_across_as_displayed_on_rotated_pages", "crates/ui-egui/tests/it/fill_sign.rs::fill_text_colour_survives_preview_commit_settings_and_save", "crates/automation/tests/it/automation.rs::fill_sign_text_and_date_colours_are_saved_and_validated"]
-notes = "Indirect IT is resolved when recognizing typewriter contents and Fill & Sign marks; comment listing and properties retain direct Subtype as before; composer edits preserve the typewriter text as written, while other comments retain their existing trimming. Enter inserts a newline; the editor grows with its lines, outside clicks commit and Escape cancels. Nonempty text preserves leading/internal/trailing line breaks, including after save/reopen; fill_sign_add sizes all wrapped rows for the saved appearance (#5850). typewriter FreeText, 10 pt Helvetica. Reads across as displayed on pages with /Rotate (sideways-stored scans): the box follows the displayed axes and the appearance is turned back (PdfCraft key /PCTextRotate); other apps that regenerate the appearance from /DA draw it unturned. A later page rotation does not re-turn it. Field detection does not work on scanned (image-only) forms yet; typed fractional font sizes commit once; Fill & Sign text/date colour is remembered and preserved in preview and saved appearances (#2444)"
+evidence = ["crates/annot/src/tests.rs::indirect_typewriter_names_keep_outer_whitespace_in_summaries", "crates/ui-egui/tests/it/comments.rs::typewriter_edit_composer_keeps_trailing_blank_lines", "crates/ui-egui/tests/it/comments.rs::other_edit_composers_keep_trimming_trailing_whitespace", "crates/ui-egui/tests/it/comments.rs::moved_fill_and_sign_text_is_drawn_where_it_goes_before_release", "crates/engine/src/tests.rs::fill_sign_multiline_text_survives_engine_save_reopen_and_render", "crates/ui-egui/tests/it/fill_sign.rs::fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels", "crates/automation/tests/it/automation.rs::multiline_fill_sign_engine_round_trip_preserves_lines_and_appearance", "crates/ui-egui/tests/it/fill_sign.rs::text_marks_and_date", "crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/automation/tests/it/automation.rs::fill_and_sign_through_tools", "crates/engine/src/tests.rs::typed_text_reads_across_as_displayed_on_rotated_pages", "crates/ui-egui/tests/it/fill_sign.rs::fill_text_colour_survives_preview_commit_settings_and_save", "crates/automation/tests/it/automation.rs::fill_sign_text_and_date_colours_are_saved_and_validated", "crates/ui-egui/tests/it/fill_sign.rs::escape_leaves_the_fill_and_sign_tools"]
+notes = "Indirect IT is resolved when recognizing typewriter contents and Fill & Sign marks; comment listing and properties retain direct Subtype as before; composer edits preserve the typewriter text as written, while other comments retain their existing trimming. Enter inserts a newline; the editor grows with its lines, outside clicks commit and Escape cancels. Nonempty text preserves leading/internal/trailing line breaks, including after save/reopen; fill_sign_add sizes all wrapped rows for the saved appearance (#5850). typewriter FreeText, 10 pt Helvetica. Escape closes the open box, and a second Escape leaves the Fill & Sign tool for Select, as it leaves a comment tool. Reads across as displayed on pages with /Rotate (sideways-stored scans): the box follows the displayed axes and the appearance is turned back (PdfCraft key /PCTextRotate); other apps that regenerate the appearance from /DA draw it unturned. A later page rotation does not re-turn it. Field detection does not work on scanned (image-only) forms yet; typed fractional font sizes commit once; Fill & Sign text/date colour is remembered and preserved in preview and saved appearances (#2444)"
 
 [[feature]]
 id = "form.fill-sign-marks"
@@ -6753,10 +6777,10 @@ area = "I"
 tier = "P1"
 milestone = "M10"
 status = "partial"
-commands = ["ocr.enhance_camera"]
-tools = ["page_enhance_camera"]
-evidence = ["crates/engine/src/camera_clean.rs::a_shadow_and_a_yellow_cast_become_white_paper", "crates/engine/src/tests.rs::enhance_camera_page_at_a_level_whitens_a_shadowed_sheet", "crates/ui-egui/tests/it/camera.rs::the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn"]
-notes = "Camera images only: from clean-up level 60, isolated dark pixels are removed. Missing: for scanned pages and as an OCR option."
+commands = ["ocr.enhance_camera", "ocr.enhance"]
+tools = ["page_enhance_camera", "page_enhance_scan"]
+evidence = ["crates/engine/src/camera_clean.rs::a_shadow_and_a_yellow_cast_become_white_paper", "crates/engine/src/tests.rs::enhance_camera_page_at_a_level_whitens_a_shadowed_sheet", "crates/ui-egui/tests/it/camera.rs::the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn", "crates/engine/src/scan_clean/tests.rs::despeckle_is_its_own_switch", "crates/automation/tests/it/automation.rs::enhance_scanned_file_cleans_the_scan_in_place_through_tools", "crates/ui-egui/tests/it/scan_clean.rs::enhance_scanned_file_cleans_the_chosen_pages_and_says_what_it_did"]
+notes = "Camera images, and scanned pages through Enhance scanned file (ocr.enhance, page_enhance_scan despeckle): isolated dark pixels (at most one dark neighbour) turn white, on grey, RGB and 1-bit scans, in place (the OCR text layer, comments and links stay). Missing: as an option of Recognize text; specks larger than two pixels; CMYK, indexed, JPEG 2000, JBIG2 and CCITT scans and scans inside form XObjects (reported, not changed)."
 
 [[feature]]
 id = "ocr.background-removal"
@@ -6765,10 +6789,10 @@ area = "I"
 tier = "P1"
 milestone = "M10"
 status = "partial"
-commands = ["ocr.enhance_camera"]
-tools = ["page_enhance_camera"]
-evidence = ["crates/engine/src/camera_clean.rs::a_shadow_and_a_yellow_cast_become_white_paper", "crates/engine/src/tests.rs::enhance_camera_page_at_a_level_whitens_a_shadowed_sheet", "crates/ui-egui/tests/it/camera.rs::the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn"]
-notes = "Camera images only: Enhance camera image's clean-up level (and page_enhance_camera level) evens out the paper's illumination per channel, so the background turns white and colour casts go; colour ink stays. Missing: the same for scanned pages and as an OCR option."
+commands = ["ocr.enhance_camera", "ocr.enhance"]
+tools = ["page_enhance_camera", "page_enhance_scan"]
+evidence = ["crates/engine/src/camera_clean.rs::a_shadow_and_a_yellow_cast_become_white_paper", "crates/engine/src/tests.rs::enhance_camera_page_at_a_level_whitens_a_shadowed_sheet", "crates/ui-egui/tests/it/camera.rs::the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn", "crates/engine/src/scan_clean/tests.rs::a_scan_gets_white_paper_even_edges_dark_strokes_and_no_specks_in_place", "crates/automation/tests/it/automation.rs::enhance_scanned_file_cleans_the_scan_in_place_through_tools", "crates/ui-egui/tests/it/scan_clean.rs::enhance_scanned_file_cleans_the_chosen_pages_and_says_what_it_did"]
+notes = "Camera images (Enhance camera image level) and scanned pages (Enhance scanned file ▸ Background removal, page_enhance_scan level): the paper's illumination is evened out per channel so a grey, yellowed or unevenly lit background turns white, then the contrast is raised; colour ink stays. Scans are cleaned in place in their own image objects (JPEG stays JPEG at quality 90, others lossless), so the OCR text layer, comments and links stay; one undo step. Missing: as an option of Recognize text; CMYK, indexed, JPEG 2000, JBIG2 and CCITT scans and scans inside form XObjects (reported, not changed); a preview."
 
 [[feature]]
 id = "ocr.descreen"
@@ -6801,10 +6825,10 @@ area = "I"
 tier = "P2"
 milestone = "M10"
 status = "partial"
-commands = ["ocr.enhance_camera"]
-tools = ["page_enhance_camera"]
-evidence = ["crates/engine/src/camera_clean.rs::a_shadow_and_a_yellow_cast_become_white_paper", "crates/engine/src/tests.rs::enhance_camera_page_at_a_level_whitens_a_shadowed_sheet", "crates/ui-egui/tests/it/camera.rs::the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn"]
-notes = "Camera images only: the clean-up level divides out a smooth illumination estimate, which removes shadows and darker edges on the straightened photo. Missing: for scanned pages (book gutters) and as an OCR option."
+commands = ["ocr.enhance_camera", "ocr.enhance"]
+tools = ["page_enhance_camera", "page_enhance_scan"]
+evidence = ["crates/engine/src/camera_clean.rs::a_shadow_and_a_yellow_cast_become_white_paper", "crates/engine/src/tests.rs::enhance_camera_page_at_a_level_whitens_a_shadowed_sheet", "crates/ui-egui/tests/it/camera.rs::the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn", "crates/engine/src/scan_clean/tests.rs::edge_shadow_removal_whitens_the_gutter_background_removal_alone_leaves", "crates/automation/tests/it/automation.rs::enhance_scanned_file_cleans_the_scan_in_place_through_tools", "crates/ui-egui/tests/it/scan_clean.rs::enhance_scanned_file_cleans_the_chosen_pages_and_says_what_it_did"]
+notes = "Camera images (the clean-up level divides out a smooth illumination estimate) and scanned pages (Enhance scanned file ▸ Edge shadow removal, page_enhance_scan edge_shadows): within the outer fifth of each side, every column and row is lightened to the brightest paper of that band, which removes book gutters and copier borders the coarse estimate misses; a black scanner border is left alone. Missing: as an option of Recognize text; curved gutters that also bend the text (no dewarping); the scan formats background removal also skips."
 
 [[feature]]
 id = "ocr.camera-perspective"
