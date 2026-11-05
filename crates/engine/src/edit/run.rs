@@ -96,6 +96,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         }
         Edit::SetInfo { .. }
         | Edit::AddHeaderFooter { .. }
+        | Edit::UpdateHeaderFooter { .. }
         | Edit::AddWatermark { .. }
         | Edit::AddBackground { .. }
         | Edit::RemoveMarks { .. }
@@ -707,6 +708,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::AddHeaderFooter { pages, settings, replace } => {
             let date = cx.today;
             pdfcraft_edit::add_header_footer(doc, pages, settings, *replace, &pdfcraft_edit::Context { date })?;
+        }
+        Edit::UpdateHeaderFooter { old, pages, settings } => {
+            let date = cx.today;
+            pdfcraft_edit::update_header_footer(doc, old, pages, settings, &pdfcraft_edit::Context { date })?;
         }
         Edit::AddWatermark { pages, settings, replace, file } => {
             let mut s = settings.clone();

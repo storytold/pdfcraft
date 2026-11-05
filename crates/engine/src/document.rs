@@ -455,6 +455,11 @@ impl Document {
             .marks
     }
 
+    /// The headers and footers Update can tell apart (`pdfcraft_edit::header_footers`).
+    pub fn header_footers(&self) -> Vec<pdfcraft_edit::HeaderFooterMark> {
+        self.editor.as_ref().map(|e| pdfcraft_edit::header_footers(&e.cos)).unwrap_or_default()
+    }
+
     /// Text and images added with Edit a PDF ▸ Add content (still editable).
     pub fn added(&self) -> &[pdfcraft_edit::Added] {
         &self
