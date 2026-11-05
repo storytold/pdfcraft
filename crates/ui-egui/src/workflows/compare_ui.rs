@@ -52,13 +52,16 @@ pub fn colour(kind: Kind) -> Color32 {
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     ui.label(egui::RichText::new(tl!("Compare Files")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
-    let Some((_, new)) = app.active_ids() else { return (false, true) };
+    let Some((active_i, new)) = app.active_ids() else { return (false, true) };
     let others: Vec<(DocId, String)> =
         app.views.iter().filter(|v| v.id != new).filter_map(|v| app.session.get(v.id).map(|d| (d.id, d.name.clone()))).collect();
     if app.compare_old.is_none_or(|o| !others.iter().any(|(id, _)| *id == o)) {
         app.compare_old = others.first().map(|(id, _)| *id);
     }
     let new_name = app.session.get(new).map(|d| d.name.clone()).unwrap_or_default();
+    let page_count = app.views.get(active_i).map_or(0, |v| v.page_count());
+    let pages = app.compare_pages.clone();
+    let pages_invalid = crate::page_selection_ui::parse(&pages, page_count).is_err();
     egui::Grid::new("compare-files").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
         ui.label(tl!("Old file:"));
         let shown =
@@ -72,6 +75,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.label(tl!("New file:"));
         ui.label(egui::RichText::new(new_name).strong());
         ui.end_row();
+        ui.label(tl!("Pages:"));
+        let field = ui.add(egui::TextEdit::singleline(&mut app.compare_pages).desired_width(320.0).hint_text(format!("1-{page_count}")));
+        field.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), tl!("Pages")));
+        ui.end_row();
     });
     ui.add_space(4.0);
     ui.label(egui::RichText::new(tl!("Text is compared word by word; the differences are shown on the new file.")).small().color(t.text_muted));
@@ -79,8 +86,16 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     let (mut go, mut cancel) = (false, false);
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.add_enabled_ui(app.compare_old.is_some(), |ui| widgets::pill_button(ui, tl!("Compare"), true)).inner.clicked() {
-                go = true;
+            if ui.add_enabled_ui(app.compare_old.is_some() && !pages_invalid, |ui| widgets::pill_button(ui, tl!("Compare"), true)).inner.clicked() {
+                let bad = if let Some(active_i) = app.active_ids().map(|(i, _)| i) {
+                    let count = app.views.get(active_i).map_or(0, |v| v.page_count());
+                    crate::page_selection_ui::parse(&app.compare_pages, count).is_err()
+                } else {
+                    false
+                };
+                if !bad {
+                    go = true;
+                }
             }
             if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
                 cancel = true;

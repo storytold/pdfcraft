@@ -522,6 +522,7 @@ pub struct PdfCraftApp {
     pub pdfa: standards_ui::PdfaState,
     /// Compare files: the chosen older document and the last result.
     pub compare_old: Option<DocId>,
+    pub compare_pages: String,
     pub compare: Option<compare_ui::CompareState>,
     /// The JavaScript console and the Document JavaScripts draft.
     pub js_console: js_ui::JsConsole,
