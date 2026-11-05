@@ -37,11 +37,11 @@ pub(crate) use geometry::{corner_ratio, page_rotation, resized};
 pub use geometry::{drawn_text_box_rect, text_box_rect};
 #[cfg(test)]
 use input::hover_tip;
-pub(crate) use input::{describe, fill_grabs, hit, keys, nudge_keys, page_after_text, page_input};
+pub(crate) use input::{anchor, context, context_hit, describe, hit, keys, moving_on, nudge_keys, page_after_text, page_input};
 pub use menu::{CanvasAction, fill_picker, recent_custom_colours, remember_custom_colour, status_badge, swatch_grid};
 #[cfg(test)]
 use menu::{RECENT_CUSTOM, same_colour};
-pub(crate) use menu::{attachment_items, context_menu, quick_bar_controls};
+pub(crate) use menu::{attachment_items, context_menu, quick_bar_colour, quick_bar_controls};
 pub(crate) use paint::paint_page;
 #[cfg(test)]
 use paint::{changing_points, drawn_shape, edited_in_view};
@@ -350,6 +350,15 @@ impl CommentPrefs {
     pub fn set_opacity(&mut self, tool: CommentTool, o: f64) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
             s.opacity = if o.is_finite() { o.clamp(0.1, 1.0) } else { 1.0 };
+        }
+    }
+
+    /// The tool's fill's own opacity (0–100 %) and a text box's or callout's text's (10–100 %),
+    /// for new comments; `None`: as the tool's opacity.
+    pub fn set_part_opacity(&mut self, tool: CommentTool, fill: Option<f64>, text: Option<f64>) {
+        if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
+            s.fill_opacity = fill.filter(|o| o.is_finite() && tool.has_fill()).map(|o| o.clamp(0.0, 1.0));
+            s.text_opacity = text.filter(|o| o.is_finite() && matches!(tool, CommentTool::TextBox | CommentTool::Callout)).map(|o| o.clamp(0.1, 1.0));
         }
     }
 
