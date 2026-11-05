@@ -238,3 +238,65 @@ fn a_type3_glyph_in_an_annotation_appearance_renders_the_same() {
     let report = apply(&mut doc, None).unwrap();
     assert_eq!(glyph_pixel(&doc, 320, 50), before, "the annotation renders differently ({report:?}, before {before:?})");
 }
+/// A form wholly under the mark is removed; its own `/Pattern` cell carries text. Nothing prunes
+/// that pattern, so the backstop never looks, and a stray reference (`/Shading`) keeps the cell.
+#[test]
+fn a_removed_form_s_pattern_does_not_survive_through_a_stray_reference() {
+    let doc = open(vec![
+        catalog(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 300] /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> /XObject << /Fm 7 0 R >> /Shading << /Sh 6 0 R >> >> >>".to_vec(),
+        FONT.to_vec(),
+        stream_obj("", b"BT /F1 20 Tf 40 250 Td (PUBLIC) Tj ET\nq 1 0 0 1 35 110 cm /Fm Do Q\n"),
+        stream_obj(PATTERN, TEXT_CELL),
+        stream_obj("/Type /XObject /Subtype /Form /BBox [0 0 170 35] /Resources << /Pattern << /P0 6 0 R >> >>", b"/Pattern cs /P0 scn 0 0 170 35 re f\n"),
+    ]);
+    let mut doc = doc;
+    mark(&mut doc, 0);
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    match apply(&mut doc, None) {
+        Ok(report) => assert!(!saved_contains(&doc, SECRET), "Apply succeeded but the removed form's cell is in the saved file ({report:?})"),
+        Err(error) => {
+            assert!(matches!(error, RedactError::Pattern { .. }), "{error}");
+            assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+        }
+    }
+}
+/// `/P0` names an indirect object whose value is a reference to the cell; the cell is also named
+/// by a stray reference. The backstop checks the number it pruned, not what it points at.
+#[test]
+fn a_pruned_pattern_named_through_a_reference_object_does_not_dodge_the_backstop() {
+    let doc = open(vec![
+        catalog(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 300] /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> /Pattern << /P0 7 0 R >> /Shading << /Sh 6 0 R >> >> >>".to_vec(),
+        FONT.to_vec(),
+        stream_obj("", CONTENT),
+        stream_obj(PATTERN, TEXT_CELL),
+        b"6 0 R".to_vec(),
+    ]);
+    confidential_or_refused(doc, 0);
+}
+/// The backstop's reachability is a full save's: after Apply an incremental save must be that
+/// full save, byte for byte, never an appended revision over the old bytes.
+#[test]
+fn an_incremental_save_after_apply_is_the_full_save() {
+    let doc = open(vec![
+        catalog(),
+        format!("<< /Type /Pages /Kids [3 0 R] /Count 1 /Resources {RES} >>").into_bytes(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 300] /Contents 5 0 R >>".to_vec(),
+        FONT.to_vec(),
+        stream_obj("", CONTENT),
+        stream_obj(PATTERN, TEXT_CELL),
+    ]);
+    let mut doc = doc;
+    mark(&mut doc, 0);
+    apply(&mut doc, None).unwrap();
+    for object_streams in [true, false] {
+        let opts = SaveOptions { object_streams, ..SaveOptions::default() };
+        assert_eq!(write_incremental(&doc, &opts).unwrap(), write_full(&doc, &opts).unwrap());
+    }
+    // A later edit after a save-and-reopen starts from the clean file.
+    let reopened = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert!(!reopened.bytes().windows(SECRET.len()).any(|w| w == SECRET));
+}

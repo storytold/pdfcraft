@@ -376,8 +376,16 @@ pub(crate) fn prune_patterns(doc: &Document, res: &mut Dict, seen: &[Vec<u8>], p
         if !painted.contains(n)
             && let Some(value) = pat.get(n)
         {
-            if let Some(reference) = value.as_ref() {
+            // Every object along the reference chain: a name can lead to a reference-valued
+            // object whose value is the cell, and the cell is what must not stay reachable.
+            let mut next = value.as_ref();
+            for _ in 0..MAX_DEPTH {
+                let Some(reference) = next else { break };
                 pruned.push(reference);
+                next = match &*doc.get(reference) {
+                    Object::Ref(r) => Some(*r),
+                    _ => None,
+                };
             }
             pat.remove(n);
             dropped += 1;
