@@ -1965,3 +1965,43 @@ fn text_outside_the_crop_box_is_clipped() {
         assert!(text.is_empty(), "expected no glyphs on {crop:?}, got {:?}", text.plain_text());
     }
 }
+
+/// A Type 0 font whose `/ToUnicode` is written as a CID CMap (`begincidchar`, destinations as
+/// numbers, as Word writes it) reads each number as the code's Unicode value (vendored
+/// hayro-interpret patch 85), as glyph lookup already did and as pdftotext and PDFium extract it.
+/// Read as a bfchar map only, such text extracted nothing (pdf.js `issue9367`).
+#[test]
+fn a_tounicode_written_as_cid_ranges_gives_text() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut doc = Document::with_version("1.7");
+    let program = doc.add_object(Stream::new(dictionary! {}, include_bytes!("../../../../assets/fonts/Inter-Regular.ttf").to_vec()));
+    let descriptor = doc.add_object(dictionary! { "Type" => "FontDescriptor", "FontName" => "Inter-Regular", "Flags" => 4, "FontFile2" => program });
+    let cid_font = doc.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "CIDFontType2",
+        "BaseFont" => "Inter-Regular",
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Identity"), "Supplement" => 0 },
+        "FontDescriptor" => descriptor,
+        "CIDToGIDMap" => "Identity",
+    });
+    let cmap = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Words def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 3 begincidchar <0001> 84 <0002> 101 <0004> 116 endcidchar 1 begincidrange <0003> <0003> 120 endcidrange endcmap CMapName currentdict /CMap defineresource pop end end";
+    let to_unicode = doc.add_object(Stream::new(dictionary! {}, cmap.to_vec()));
+    let font = doc.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type0",
+        "BaseFont" => "Inter-Regular",
+        "Encoding" => "Identity-H",
+        "DescendantFonts" => vec![Object::Reference(cid_font)],
+        "ToUnicode" => to_unicode,
+    });
+    let content = doc.add_object(Stream::new(dictionary! {}, b"BT /F1 20 Tf 20 200 Td <0001000200030004> Tj ET".to_vec()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(400), Object::Integer(400)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    assert_eq!(extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text().trim(), "Text");
+}
