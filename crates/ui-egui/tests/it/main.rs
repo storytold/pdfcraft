@@ -19,6 +19,7 @@ fn gpu() -> std::sync::MutexGuard<'static, ()> {
 
 mod accessibility;
 mod actions;
+mod ai;
 mod animate;
 mod attach_picker_target;
 mod attachment_row;

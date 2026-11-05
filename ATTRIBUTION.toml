@@ -2240,6 +2240,18 @@ usage = "Character-code mapping tables required to read CJK PDFs. Non-visual dat
 sha256 = "ddf37af521d904d5646c2fc37b2b7e912dc1b56f0d210190b61f598154758e46"
 
 [[bundled]]
+crate = "latex-rust"
+version = "2.1.1"
+path = "fonts/stix-two-math/STIXTwoMath-Regular.otf"
+title = "STIX Two Math"
+author = "The STI Pub Companies / STIX Fonts project"
+source = "https://github.com/stipub/stixfonts"
+licence = "OFL-1.1"
+kind = "font"
+usage = "outlines for LaTeX formulas in AI assistant answers (crates/ui-egui/src/ai_md.rs)"
+sha256 = "f2076b9f1676438439dd41e23676f5ab99056e83d6b8f8c27841591ef2ccfa72"
+
+[[bundled]]
 crate = "hayro-interpret"
 version = "0.7.0"
 path = "src/font/generated/metrics.rs"

@@ -242,6 +242,7 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
         ui.add_space(6.0);
     }
     let mut run = None;
+    let ai_ready = app.ai_provider.is_some() && app.ai_settings.is_ready();
     // Redact a PDF has Acrobat's footer: Clear all / Redact all.
     let footer = g.id == "redact";
     let marks = if footer { app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(0, |d| d.redaction_marks()) } else { 0 };
@@ -257,7 +258,8 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                 }
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!(item.label)));
-                let ready = item.availability == Availability::Ready;
+                // AI items work once a provider is set up (Preferences ▸ AI assistant).
+                let ready = item.availability == Availability::Ready || (item.availability == Availability::Provider && ai_ready);
                 let press = theme::Press::track(ui, &resp);
                 press.wash(ui, rect, 6, false);
                 let body = rect.translate(press.offset());
@@ -272,7 +274,8 @@ fn tool_detail(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static
                 let (chip, fill, cfg) = match item.availability {
                     Availability::Ready => (tl!("Ready"), Color32::from_rgb(0xDD, 0xF3, 0xE4), Color32::from_rgb(0x1E, 0x7B, 0x43)),
                     Availability::Planned(m) => (m, t.pressed, t.text_muted),
-                    Availability::Provider => ("AI", t.pressed, t.text_muted),
+                    Availability::Provider if ready => ("AI", Color32::from_rgb(0xDD, 0xF3, 0xE4), Color32::from_rgb(0x1E, 0x7B, 0x43)),
+                    Availability::Provider => ("Set up", t.pressed, t.text_muted),
                 };
                 let font = theme::semibold(9.5);
                 let chip_label = tl!(chip).to_string();
