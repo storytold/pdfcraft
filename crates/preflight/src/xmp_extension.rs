@@ -2,15 +2,19 @@
 //! extends XMP with in `pdfaExtension:schemas`, a bag of schema descriptions, and each description
 //! is complete.
 //!
-//! The entries each description needs, and the prefixes it is written with, are those of the
-//! requirement as stated with the conformance corpus:
-//! - a schema (`pdfaSchema`) has `schema`, `namespaceURI` and `prefix`; its `property` and
-//!   `valueType` lists are optional;
-//! - a property (`pdfaProperty`) has `name`, `valueType`, `category` and `description`;
-//! - a value type (`pdfaType`) has `type`, `namespaceURI`, `prefix`, `description` and `field`;
-//! - a field (`pdfaField`) has `name`, `valueType` and `description`;
-//! - each of the four namespaces is written with its own prefix (`pdfaSchema`, `pdfaProperty`,
-//!   `pdfaType`, `pdfaField`), as a PDF/A reader matches them by prefix.
+//! The schemas, their entries and their prefixes are those of PDF Association TechNote 0009, "XMP
+//! Extension Schemas in PDF/A-1" (2008), section 4, for PDF/A-2 6.6.2.3.3:
+//! - a schema (`pdfaSchema`, 4.3) has `schema`, `namespaceURI` and `prefix`; its `property` and
+//!   `valueType` lists are optional. TechNote 0009, written for PDF/A-1, calls `schema` an
+//!   optional description; PDF/A-2 requires it, as its conformance tests show;
+//! - a property (`pdfaProperty`, 4.4) has `name`, `valueType`, `category` and `description`;
+//! - a value type (`pdfaType`, 4.5) has `type`, `namespaceURI`, `prefix`, `description` and
+//!   `field`. TechNote 0009 calls `field` optional; PDF/A-2 requires it, as its conformance tests
+//!   show;
+//! - a field (`pdfaField`, 4.6) has `name`, `valueType` and `description`;
+//! - each of the five namespaces is written with its own prefix (`pdfaExtension`, `pdfaSchema`,
+//!   `pdfaProperty`, `pdfaType`, `pdfaField`): "Unlike predefined XMP schemas, the namespace
+//!   prefixes are not only preferred, but required" (4.1).
 //!
 //! An entry counts as present written as an element or as an attribute of the description.
 
@@ -25,8 +29,9 @@ const PROPERTY: &str = "http://www.aiim.org/pdfa/ns/property#";
 const TYPE: &str = "http://www.aiim.org/pdfa/ns/type#";
 const FIELD: &str = "http://www.aiim.org/pdfa/ns/field#";
 
-/// Each description namespace with its prefix.
-const PREFIXES: [(&str, &str); 4] = [(SCHEMA, "pdfaSchema"), (PROPERTY, "pdfaProperty"), (TYPE, "pdfaType"), (FIELD, "pdfaField")];
+/// Each container namespace with its required prefix (TechNote 0009, 4.1).
+const PREFIXES: [(&str, &str); 5] =
+    [(EXTENSION, "pdfaExtension"), (SCHEMA, "pdfaSchema"), (PROPERTY, "pdfaProperty"), (TYPE, "pdfaType"), (FIELD, "pdfaField")];
 
 /// What the extension schema descriptions of a document break of 6.6.2.3.3.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -67,7 +72,8 @@ impl Findings {
         }
     }
 
-    /// Notes description namespaces written in `container` with another prefix than their own.
+    /// Notes container namespaces written in `container` (itself included) with another prefix
+    /// than their own.
     fn prefixes_in(&mut self, doc: &Document<'_>, container: &Node<'_, '_>) {
         let text = doc.input_text();
         for n in container.descendants().filter(Node::is_element) {

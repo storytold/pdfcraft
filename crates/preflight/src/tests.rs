@@ -853,6 +853,18 @@ fn xmp_extension_schema_descriptions_are_complete() {
         let schema = schema_without("").replace(&format!("{own}:"), "other:");
         assert_eq!(extension(&schema, prefixes), (vec![], vec![*own]), "{own}");
     }
+    // The container itself is written as pdfaExtension too (TechNote 0009, 4.1).
+    let xmp = concat!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
+        r#"<rdf:Description rdf:about="" xmlns:ext="http://www.aiim.org/pdfa/ns/extension/" "#,
+        r#"xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#"><ext:schemas><rdf:Bag><rdf:li rdf:parseType="Resource">"#,
+        r#"<pdfaSchema:schema>S</pdfaSchema:schema><pdfaSchema:namespaceURI>http://e/</pdfaSchema:namespaceURI>"#,
+        r#"<pdfaSchema:prefix>e</pdfaSchema:prefix></rdf:li></rdf:Bag></ext:schemas></rdf:Description></rdf:RDF></x:xmpmeta>"#
+    );
+    let mut found = xmp_extension::Findings::default();
+    found.add(&xmp::parse(xmp).expect("parses"));
+    assert!(found.missing.is_empty());
+    assert_eq!(found.prefixes.into_iter().collect::<Vec<_>>(), ["pdfaExtension"]);
     // Through verify, under 6.6.2.3.3 and not fixable.
     let xmp = concat!(
         r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,
