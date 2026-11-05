@@ -4213,6 +4213,17 @@ fn flatten_refuses_a_page_tree_cut_at_a_walk_limit() {
     assert_eq!(fields(&s), 0, "within the default limits");
 }
 
+/// An edit to every page takes "every page" from the whole tree: past the entry limit Remove
+/// Marks refuses with the walk limit, not with "there is nothing to remove" from the pages before
+/// it. (Remove Marks reads its pages leniently itself, so this is the engine's count alone.)
+#[test]
+fn every_page_refuses_a_page_tree_past_the_entry_limit() {
+    let (mut s, id) = session_with(2);
+    let one_entry = pdfcraft_model::Limits { kids_entries: 1, ..pdfcraft_model::Limits::DEFAULT };
+    let refused = pdfcraft_model::with_limits(one_entry, || s.apply(id, Edit::RemoveMarks { kind: pdfcraft_edit::MarkKind::Watermark }));
+    assert_eq!(refused, Err(EditError::Edit(pdfcraft_edit::EditError::PageTree(pdfcraft_model::PageTreeLimit::KidsEntries))));
+}
+
 /// Edit ▸ Copy and Paste of added content (#2636): a text box comes back with all its style, an
 /// image with its picture and transforms, in the same document and in another.
 #[test]

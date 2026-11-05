@@ -1505,23 +1505,45 @@ fn marking_a_tag_artifact_refuses_content_past_the_decode_budget() {
     assert_eq!(doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents"), Some(&contents), "the page keeps its content");
 }
 
-/// A figure on a page past a walk limit is refused before anything changes: marked decorative, its
-/// tag would leave its parent while its marked content and the parent tree still named it.
-#[test]
-fn a_figure_on_a_page_past_a_walk_limit_is_refused_before_any_change() {
+/// `figures_doc` with two null `/Kids` entries ahead of its page, so a two-entry limit stops
+/// the walk before the page; and that limit.
+fn figure_behind_a_limit() -> (Document, pdfcraft_model::Limits) {
     use pdfcraft_cos::{ObjRef, Object};
-    use pdfcraft_model::{Limits, PageTreeLimit, with_limits};
     let mut doc = figures_doc();
     doc.update_dict(ObjRef::new(2, 0), |d| d.set(b"Kids".to_vec(), Object::Array(vec![Object::Null, Object::Null, Object::Ref(ObjRef::new(3, 0))])))
         .unwrap();
-    let parent_kids = |doc: &Document| doc.get(ObjRef::new(6, 0)).as_dict().unwrap().get(b"K").cloned();
-    let contents = |doc: &Document| doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned();
-    let (kids_before, contents_before) = (parent_kids(&doc), contents(&doc));
-    let capped = Limits { kids_entries: 2, ..Limits::DEFAULT };
-    assert_eq!(with_limits(capped, || mark_decorative(&mut doc, ObjRef::new(7, 0))), Err(AltError::PageTree(PageTreeLimit::KidsEntries)));
-    assert_eq!(with_limits(capped, || mark_tag_artifact(&mut doc, ObjRef::new(7, 0))), Err(ArtifactError::PageTree(PageTreeLimit::KidsEntries)));
-    assert_eq!((parent_kids(&doc), contents(&doc)), (kids_before.clone(), contents_before.clone()), "nothing changed");
-    mark_decorative(&mut doc, ObjRef::new(7, 0)).unwrap();
-    assert_ne!(parent_kids(&doc), kids_before, "within the default limits the figure leaves its parent");
-    assert_ne!(contents(&doc), contents_before, "and its content becomes an artifact");
+    (doc, pdfcraft_model::Limits { kids_entries: 2, ..pdfcraft_model::Limits::DEFAULT })
+}
+
+/// The figure's parent's `/K` and its page's `/Contents`.
+fn figure_state(doc: &Document) -> (Option<pdfcraft_cos::Object>, Option<pdfcraft_cos::Object>) {
+    use pdfcraft_cos::ObjRef;
+    (doc.get(ObjRef::new(6, 0)).as_dict().unwrap().get(b"K").cloned(), doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned())
+}
+
+/// A figure on a page past a walk limit is refused before anything changes: marked decorative, its
+/// tag would leave its parent while its marked content and the parent tree still named it.
+#[test]
+fn mark_decorative_refuses_a_figure_on_a_page_past_a_walk_limit() {
+    let (mut doc, capped) = figure_behind_a_limit();
+    let before = figure_state(&doc);
+    let refused = pdfcraft_model::with_limits(capped, || mark_decorative(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)));
+    assert_eq!(refused, Err(AltError::PageTree(pdfcraft_model::PageTreeLimit::KidsEntries)));
+    assert_eq!(figure_state(&doc), before, "nothing changed");
+    mark_decorative(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)).unwrap();
+    let after = figure_state(&doc);
+    assert!(after.0 != before.0 && after.1 != before.1, "within the default limits the tag leaves and its content becomes an artifact");
+}
+
+/// The same for marking a tag an artifact: its page past a walk limit is an error, not "the tag
+/// has no page".
+#[test]
+fn mark_tag_artifact_refuses_a_tag_on_a_page_past_a_walk_limit() {
+    let (mut doc, capped) = figure_behind_a_limit();
+    let before = figure_state(&doc);
+    let refused = pdfcraft_model::with_limits(capped, || mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)));
+    assert_eq!(refused, Err(ArtifactError::PageTree(pdfcraft_model::PageTreeLimit::KidsEntries)));
+    assert_eq!(figure_state(&doc), before, "nothing changed");
+    mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)).unwrap();
+    assert_ne!(figure_state(&doc), before, "within the default limits");
 }

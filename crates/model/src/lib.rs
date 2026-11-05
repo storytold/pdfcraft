@@ -775,6 +775,62 @@ mod tests {
     }
 
     /// `page` copies one page's inherited values only, so it finds a page past the copy budget of
+    /// Pages `a` (listed first through the alias `a.num 17 R`, then as itself) and `b`, both
+    /// inheriting `/Rotate 90` from the tree node.
+    fn aliased() -> (Document, ObjRef, ObjRef, ObjRef) {
+        let mut d = Document::new_empty();
+        let tree = d.get(d.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        let a = d.add(page.clone());
+        let b = d.add(page);
+        d.update_dict(tree, |t| {
+            t.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(a.num, 17)), Object::Ref(a), Object::Ref(b)]));
+            t.set(b"Rotate".to_vec(), Object::Int(90));
+        })
+        .unwrap();
+        (d, tree, a, b)
+    }
+
+    /// `page_by_ref` finds a page by number, whatever generation names it, gives it at the
+    /// document's generation, and with its inherited attributes.
+    #[test]
+    fn page_by_ref_finds_a_page_by_number_at_its_current_generation() {
+        let (d, _, a, _) = aliased();
+        for generation in [0, 17, u16::MAX] {
+            let page = page_by_ref(&d, ObjRef::new(a.num, generation)).unwrap().unwrap();
+            assert_eq!(page.obj, a, "generation {generation}");
+            assert_eq!(page.rotation(&d), 90, "inherited");
+        }
+        let mut newer = d.clone();
+        let canonical = ObjRef::new(a.num, 7);
+        newer.set(canonical, (*d.get(a)).clone());
+        assert_eq!(page_by_ref(&newer, a).unwrap().map(|p| p.obj), Some(canonical), "the document's generation, not the asked one");
+    }
+
+    /// A tree node, or an object no page is, is no page.
+    #[test]
+    fn page_by_ref_finds_nothing_for_a_node_or_a_missing_object() {
+        let (d, tree, _, _) = aliased();
+        assert_eq!(page_by_ref(&d, tree), Ok(None));
+        assert_eq!(page_by_ref(&d, ObjRef::new(u32::MAX, 0)), Ok(None));
+    }
+
+    /// `page_by_ref` copies one page within the budget, finds a page before a later limit, and
+    /// refuses a page behind one.
+    #[test]
+    fn page_by_ref_copies_one_page_and_refuses_a_page_behind_a_limit() {
+        let (d, _, a, b) = aliased();
+        let one_copy = Limits { inherited_copies: std::mem::size_of::<Object>(), ..Limits::DEFAULT };
+        assert_eq!(with_limits(one_copy, || pages(&d).len()), 1, "a whole walk stops after one copy");
+        assert_eq!(with_limits(one_copy, || page_by_ref(&d, b).map(|p| p.map(|p| p.obj))), Ok(Some(b)));
+        let no_copy = Limits { inherited_copies: 0, ..Limits::DEFAULT };
+        assert_eq!(with_limits(no_copy, || page_by_ref(&d, b)), Err(PageTreeLimit::InheritedCopies));
+        let one_entry = Limits { kids_entries: 1, ..Limits::DEFAULT };
+        assert_eq!(with_limits(one_entry, || page_by_ref(&d, a).map(|p| p.map(|p| p.obj))), Ok(Some(a)), "found before the limit");
+        assert_eq!(with_limits(one_entry, || page_by_ref(&d, b)), Err(PageTreeLimit::KidsEntries), "behind the limit");
+    }
+
     /// a whole walk, with its inherited rotation; `try_pages` refuses the walk the budget cuts.
     #[test]
     fn one_page_is_found_past_the_budget_of_a_whole_walk() {

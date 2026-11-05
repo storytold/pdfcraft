@@ -2113,22 +2113,29 @@ fn redact_pages(doc: &Document) -> Vec<usize> {
     out
 }
 
-/// Redaction marks for both pages, imported where the page tree is past a walk limit after the
-/// first page: the import refuses as a whole rather than place the first and report success without
-/// the second. XFDF and FDF alike.
-#[test]
-fn an_import_refuses_a_page_tree_past_a_walk_limit() {
+/// Import `data` (redaction marks for both pages) where the page tree is past a walk limit after
+/// the first page: refused as a whole, nothing placed; within the default limits, both placed.
+fn assert_refused_whole(data: &[u8]) {
     use pdfcraft_model::{Limits, PageTreeLimit, with_limits};
-    let xfdf: &[u8] =
-        br#"<xfdf><annots><redact page="0" name="early" rect="0,0,50,50"/><redact page="1" name="late" rect="0,0,50,50"/></annots></xfdf>"#;
-    let fdf: &[u8] = b"%FDF-1.2\n1 0 obj\n<< /FDF << /Annots [<< /Subtype /Redact /NM (early) /Page 0 /Rect [0 0 50 50] >> << /Subtype /Redact /NM (late) /Page 1 /Rect [0 0 50 50] >>] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
-    let one_page = Limits { kids_entries: 1, ..Limits::DEFAULT };
-    for data in [xfdf, fdf] {
-        let mut doc = blank();
-        let refused = with_limits(one_page, || import(&mut doc, data));
-        assert!(matches!(refused, Err(DataError::PageTree(PageTreeLimit::KidsEntries))), "{refused:?}");
-        assert!(redact_pages(&doc).is_empty(), "nothing imported");
-        import(&mut doc, data).unwrap();
-        assert_eq!(redact_pages(&doc), [0, 1], "within the default limits");
-    }
+    let mut doc = blank();
+    let refused = with_limits(Limits { kids_entries: 1, ..Limits::DEFAULT }, || import(&mut doc, data));
+    assert!(matches!(refused, Err(DataError::PageTree(PageTreeLimit::KidsEntries))), "{refused:?}");
+    assert!(redact_pages(&doc).is_empty(), "nothing imported");
+    import(&mut doc, data).unwrap();
+    assert_eq!(redact_pages(&doc), [0, 1], "within the default limits");
+}
+
+/// XFDF redaction marks past a walk limit: the import refuses rather than place the first and
+/// report success without the second.
+#[test]
+fn an_xfdf_import_refuses_a_page_tree_past_a_walk_limit() {
+    assert_refused_whole(
+        br#"<xfdf><annots><redact page="0" name="early" rect="0,0,50,50"/><redact page="1" name="late" rect="0,0,50,50"/></annots></xfdf>"#,
+    );
+}
+
+/// The same for FDF.
+#[test]
+fn an_fdf_import_refuses_a_page_tree_past_a_walk_limit() {
+    assert_refused_whole(b"%FDF-1.2\n1 0 obj\n<< /FDF << /Annots [<< /Subtype /Redact /NM (early) /Page 0 /Rect [0 0 50 50] >> << /Subtype /Redact /NM (late) /Page 1 /Rect [0 0 50 50] >>] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n");
 }
