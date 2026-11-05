@@ -31,6 +31,8 @@ const USER_PW: &str = "interop-user";
 const OWNER_PW: &str = "interop-owner";
 const SIGN_PW: &str = "interop-signing-pw";
 const FIXTURE_TEXT: &str = "PdfCraft interop fixture\ninterop line two";
+const OUTPUT_MARKER: &str = ".pdfcraft-interop-owned";
+const OUTPUT_MARKER_CONTENT: &str = "PdfCraft interop output directory v1\n";
 /// Low enough to keep the renders small; this checks that pages render, not how they look.
 const RENDER_DPI: &str = "36";
 
@@ -547,8 +549,48 @@ fn clean(out: &Path) {
     let _ = std::fs::remove_file(out.join("interop.json"));
 }
 
+fn prepare_output_dir(out: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(out).with_context(|| format!("{}: cannot create", out.display()))?;
+    let marker = out.join(OUTPUT_MARKER);
+    match std::fs::symlink_metadata(&marker) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_file() {
+                bail!("{}: ownership marker must be a regular file", marker.display());
+            }
+            let contents = std::fs::read_to_string(&marker).with_context(|| format!("{}: cannot read", marker.display()))?;
+            if contents != OUTPUT_MARKER_CONTENT {
+                bail!("{}: ownership marker has unexpected contents", marker.display());
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut entries = std::fs::read_dir(out).with_context(|| format!("{}: cannot read directory", out.display()))?;
+            if entries.next().is_some() {
+                bail!("{}: refusing to clean a non-empty directory without an interop ownership marker", out.display());
+            }
+            std::fs::write(&marker, OUTPUT_MARKER_CONTENT).with_context(|| format!("{}: cannot create ownership marker", marker.display()))?;
+        }
+        Err(error) => return Err(error).with_context(|| format!("{}: cannot inspect", marker.display())),
+    }
+    Ok(())
+}
+
+fn output_dir(args: &[String]) -> anyhow::Result<PathBuf> {
+    let mut requested = None;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--out" if requested.is_none() => {
+                requested = Some(PathBuf::from(rest.next().context("--out needs a directory: cargo xtask interop [--out DIR]")?));
+            }
+            "--out" => bail!("--out may be provided only once: cargo xtask interop [--out DIR]"),
+            other => bail!("unknown argument `{other}`; usage: cargo xtask interop [--out DIR]"),
+        }
+    }
+    Ok(requested.unwrap_or_else(|| gates::target_dir().join("interop")))
+}
+
 pub fn run(args: &[String]) -> anyhow::Result<()> {
-    let out = args.iter().position(|a| a == "--out").and_then(|i| args.get(i + 1)).map_or_else(|| gates::target_dir().join("interop"), PathBuf::from);
+    let out = output_dir(args)?;
     let out = std::path::absolute(&out).with_context(|| format!("{}: not a usable directory", out.display()))?;
     let readers = [
         probe("mupdf", false, pdfcraft_oracle::mutool(), pdfcraft_oracle::mutool())?,
@@ -559,7 +601,7 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
     }
 
     gates::run_args(&["build", "--release", "-p", "pdfcraft-cli"])?;
-    std::fs::create_dir_all(&out).with_context(|| format!("{}: cannot create", out.display()))?;
+    prepare_output_dir(&out)?;
     clean(&out);
     let results = run_suite(&gates::release_cli(), &out, &readers);
 
@@ -577,6 +619,29 @@ pub fn run(args: &[String]) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interop_arguments_reject_missing_unknown_and_duplicate_options() {
+        assert!(output_dir(&["--out".to_owned()]).is_err());
+        assert!(output_dir(&["--oops".to_owned()]).is_err());
+        assert!(output_dir(&["--out".to_owned(), "one".to_owned(), "--out".to_owned(), "two".to_owned()]).is_err());
+        assert_eq!(output_dir(&["--out".to_owned(), "custom".to_owned()]).unwrap(), PathBuf::from("custom"));
+    }
+
+    #[test]
+    fn interop_output_requires_ownership_before_cleaning_existing_contents() {
+        let out = std::env::temp_dir().join(format!("pdfcraft-interop-owned-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(out.join("notes.txt"), b"keep").unwrap();
+        assert!(prepare_output_dir(&out).is_err());
+        assert_eq!(std::fs::read(out.join("notes.txt")).unwrap(), b"keep");
+
+        std::fs::remove_file(out.join("notes.txt")).unwrap();
+        prepare_output_dir(&out).unwrap();
+        assert_eq!(std::fs::read_to_string(out.join(OUTPUT_MARKER)).unwrap(), OUTPUT_MARKER_CONTENT);
+        let _ = std::fs::remove_dir_all(&out);
+    }
 
     fn result(generated: Outcome, checks: Vec<(&'static str, Outcome)>) -> CaseResult {
         CaseResult {
@@ -617,9 +682,10 @@ mod tests {
 
         clean(&out);
 
+        std::fs::write(out.join(OUTPUT_MARKER), OUTPUT_MARKER_CONTENT).unwrap();
         let mut left: Vec<_> = std::fs::read_dir(&out).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         left.sort();
-        assert_eq!(left, ["notes.txt", "other"]);
+        assert_eq!(left, [OUTPUT_MARKER, "notes.txt", "other"]);
         assert!(out.join("other").join("kept.txt").exists());
         let _ = std::fs::remove_dir_all(&out);
     }
