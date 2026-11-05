@@ -22,6 +22,7 @@
 > **2026-11-04 (M6, PR #5699 reset ordering):** Reset live field values synchronously, commit resets before final script deltas using a reset baseline, and cover Doc Open reinitialization, save/reopen, Undo/Redo and replay-sensitive UI counters.
 > **2026-11-04 (M6, PR #5699 review):** Bound worker capacity and synchronous deadlines, isolate expired/pending realms before edits, keep script prompts above other dialogs, and cover block ASI, control-position regex literals, event routing and complete undo state. Validation is reported in the PR; parity remains partial.
 > **2026-11-03 (M6, PR #5699 follow-up):** Accept independent top-level statements separated by automatic semicolon insertion while retaining continuation-chain limits; assert cyclic calculation results and preserve upstream multiline Fill & Sign coverage.
+> **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** minor (M3: Preferences ▸ Smooth images; off keeps the own samples of images that don't ask for /Interpolate, on screen, in exports and in print; estimates unchanged)
 
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
@@ -376,6 +377,7 @@ Estimates unchanged.
 | 2026-11-07 | patch | M10 `ocr.ocr-web` ported onto #977's engines and preprocessing: the page prepares each page, a Web Worker runs ocrs, the downloaded models join the engine cache. Estimates unchanged. |
 | 2026-11-05 | patch | M7 #2964 / #3185: grouped text and Thai source-font preservation; limitations and estimates unchanged. |
 | 2026-10-25 | minor | M7, #2750: Single-style Keep source fonts edits retain source glyphs and batch only missing glyphs in fallback fonts. Per-rewrite character eligibility and widths are cached; source and fallback edge spaces stay extractable. Estimates unchanged. |
+| 2026-11-05 | minor | M3: Preferences ▸ Smooth images (Acrobat's Page Display preference), on by default; off draws images that don't ask for /Interpolate with their own samples (hayro patch 29), so barcodes and labels keep hard edges on screen, in exports and in print. `view_smooth_images` tool. Estimates unchanged. |
 | 2026-11-03 | minor | M11: Optimize's JBIG2 images share a symbol dictionary (`/JBIG2Globals`), up to 16 at a time and when smaller (`pdfcraft_filters::encode_jbig2_shared`): 41–46% smaller on rendered text in proportional fonts, 10% in Courier |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
