@@ -63,7 +63,7 @@ fn editing_the_second_custom_stamp_keeps_both_library_entries() {
         h.state_mut().start_custom_stamp(file.into(), vec![byte]);
         h.state_mut().stamp_draft.category = "Tools".into();
         h.state_mut().stamp_draft.name = name.into();
-        h.run_steps(1);
+        h.run_steps(2);
         h.get_by_label("OK").click();
         h.run_steps(2);
     }
