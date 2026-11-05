@@ -1003,6 +1003,11 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "mode"],
             )),
+        t("view_smooth_images", "Smooth images", "Turn image smoothing on or off for the document (Acrobat's Page Display ▸ Smooth images, on by default). Off, an image that doesn't ask for /Interpolate is drawn with its own samples, neither averaged when shrunk nor smoothed when enlarged, so barcodes, QR codes and pixel art keep hard edges in page_render, page exports and printing. A view setting: the file doesn't change.")
+            .with(schema(
+                json!({ "doc": doc(), "smooth": { "type": "boolean", "description": "true smooths (the default), false keeps each image's own samples." } }),
+                &["doc", "smooth"],
+            )),
         t("comments_summarize", "Summarize comments", "Make a PDF summarising every comment (number, author, type, date, text, replies), sorted by page, author, date or type.")
             .cmd("comment.summarize")
             .with(schema(

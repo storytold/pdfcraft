@@ -9763,6 +9763,46 @@ fn reading_colors_through_tools() {
     assert_eq!(render(&mut a, 1), page1_off);
 }
 
+/// Smooth images as a tool (AGENTS.md §3): with `smooth: false`, page_render draws a large
+/// picture enlarged with its own samples; `true` smooths it again.
+#[test]
+fn smooth_images_through_tools() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-automation-smooth-images-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // A page-scan-sized picture, its left half black.
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 512, 512);
+        enc.set_color(png::ColorType::Grayscale);
+        enc.set_depth(png::BitDepth::Eight);
+        let samples: Vec<u8> = (0..512 * 512).map(|i| if i % 512 < 256 { 0 } else { 255 }).collect();
+        enc.write_header().unwrap().write_image_data(&samples).unwrap();
+    }
+    let pdf = pdfcraft_engine::Session::new().create_from_images(&[("label.png".into(), png)]).unwrap();
+    std::fs::write(dir.join("label.pdf"), pdf.as_slice()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "label.pdf" }))["doc"].as_u64().unwrap();
+    // Grey pixels across the middle row of the page, rendered at three times its size.
+    let grey = |a: &mut Automation| {
+        let rendered = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 216 })).unwrap();
+        let Content::Png { data, .. } = &rendered[0] else { panic!("expected a PNG") };
+        let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut pixels).unwrap();
+        let row = (info.height as usize / 2) * info.line_size;
+        pixels[row..row + info.line_size].chunks(info.color_type.samples()).filter(|p| p[0] != 0 && p[0] != 255).count()
+    };
+    assert!(grey(&mut a) > 0, "smoothed by default");
+    assert_eq!(ok(&mut a, "view_smooth_images", json!({ "doc": doc, "smooth": false })), json!({ "smooth": false }));
+    assert_eq!(grey(&mut a), 0, "drawn with the picture's own samples");
+    assert_eq!(ok(&mut a, "view_smooth_images", json!({ "doc": doc, "smooth": true })), json!({ "smooth": true }));
+    assert!(grey(&mut a) > 0, "smoothed again");
+    let missing = a.call("view_smooth_images", &json!({ "doc": doc }));
+    assert!(matches!(&missing, Err(ToolError::InvalidArgs(m)) if m.contains("smooth")), "{missing:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn private_crops_with_nested_state_resize_save_reopen_through_tools() {
     use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};

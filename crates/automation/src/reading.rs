@@ -1,7 +1,9 @@
-//! Reading colours: Acrobat's Replace Document Colors as a tool (#897, AGENTS.md §3).
+//! Reading colours (Acrobat's Replace Document Colors, #897) and Smooth images (Acrobat's Page
+//! Display ▸ Smooth images) as tools (AGENTS.md §3).
 //!
-//! A per-document view setting: solid text and line-art paints remap for readability and the
-//! page clears to the setting's background when rendering. The file itself never changes.
+//! Per-document view settings: with reading colours, solid text and line-art paints remap for
+//! readability and the page clears to the setting's background; with Smooth images off, images
+//! that don't ask for `/Interpolate` are drawn with their own samples. The file never changes.
 
 use pdfcraft_render::ReadingColors;
 use serde_json::{Value, json};
@@ -32,5 +34,19 @@ impl Automation {
             "only_black": colors.params.is_some_and(|p| p.only_black),
             "line_art": colors.params.is_some_and(|p| p.line_art),
         }))
+    }
+
+    /// Smooth images on or off for the document (`smooth: false` draws its images that don't
+    /// ask for `/Interpolate` with their own samples, in page_render, exports and printing).
+    pub(crate) fn view_smooth_images(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        let Some(smooth) = a.opt_bool("smooth")? else {
+            return Err(ToolError::InvalidArgs("smooth is required (true or false)".into()));
+        };
+        if self.session.set_sharp_images(id, !smooth) {
+            // Cached renderers baked the old setting into their config; page_render must re-read it.
+            self.renderers.remove(&id);
+        }
+        Ok(json!({ "smooth": smooth }))
     }
 }
