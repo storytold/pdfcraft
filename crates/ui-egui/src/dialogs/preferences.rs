@@ -801,9 +801,26 @@ fn card_fill_and_sign(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx:
 
 /// Content for Card 6: JavaScript
 fn card_javascript(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
-    let mut on = app.session.javascript();
-    if ctx.checkbox(ui, &mut on, tl!("Enable Acrobat JavaScript"), t).changed() {
-        app.session.set_javascript(on);
+    if let Some(lock) = app.session.javascript_lock().cloned() {
+        // An administrator's policy: shown off and locked, with where it comes from. The
+        // person's own choice is kept for when the policy goes away.
+        let mut off = false;
+        ui.add_enabled_ui(false, |ui| ctx.checkbox(ui, &mut off, tl!("Enable Acrobat JavaScript"), t));
+        let note = match lock.unreadable {
+            None => tl!("Turned off by your administrator."),
+            Some(_) => tl!("Turned off because your administrator's policy couldn't be read."),
+        };
+        ctx.label_primary(ui, note, t);
+        let detail = match &lock.unreadable {
+            Some(why) => format!("{}: {why}", lock.source),
+            None => lock.source.clone(),
+        };
+        ui.label(egui::RichText::new(detail).small().monospace().color(t.text_muted));
+    } else {
+        let mut on = app.session.javascript();
+        if ctx.checkbox(ui, &mut on, tl!("Enable Acrobat JavaScript"), t).changed() {
+            app.session.set_javascript(on);
+        }
     }
     ctx.label_secondary(
         ui,

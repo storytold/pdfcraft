@@ -163,8 +163,18 @@ impl Automation {
 
     pub(crate) fn js_enabled(&mut self, a: &Args) -> Result<Value> {
         if let Some(on) = a.opt_bool("enabled")? {
+            if on && let Some(lock) = self.session.javascript_lock() {
+                return Err(ToolError::Failed(format!(
+                    "JavaScript is turned off by an administrator's policy ({}) and can't be turned on",
+                    lock.source
+                )));
+            }
             self.session.set_javascript(on);
         }
-        Ok(json!({ "enabled": self.session.javascript() }))
+        let mut out = json!({ "enabled": self.session.javascript() });
+        if let Some(lock) = self.session.javascript_lock() {
+            out["policy"] = json!({ "source": lock.source, "unreadable": lock.unreadable });
+        }
+        Ok(out)
     }
 }

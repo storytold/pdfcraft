@@ -44,6 +44,21 @@ pub(crate) fn scripts_off_notice() -> String {
 }
 
 impl PdfCraftApp {
+    /// Apply the machine's administrator policies (`pdfcraft_platform::policy`): read once, at
+    /// launch, after saved preferences are restored. Not in tests, which set the lock
+    /// themselves, and not on the web, which has no machine policy.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn apply_admin_policy(&mut self) {
+        let lock = pdfcraft_platform::policy::Policy::load().javascript_lock();
+        if let Some((source, unreadable)) = &lock {
+            match unreadable {
+                Some(why) => log::warn!("JavaScript is off: the policy at {source} couldn't be read ({why})"),
+                None => log::info!("JavaScript is off: turned off by the policy at {source}"),
+            }
+        }
+        self.session.set_javascript_lock(lock.map(|(source, unreadable)| pdfcraft_engine::js::JavaScriptLock { source, unreadable }));
+    }
+
     /// Act on what scripts produced in document `id`: alerts are shown, console output goes to
     /// the console, print and page requests are carried out, links wait for the user's permission
     /// (form submissions are reported, never sent).
@@ -231,7 +246,9 @@ fn buttons(ui: &mut egui::Ui, primary: &str, others: &[&str]) -> Option<String> 
 pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new(tl!("JavaScript Console")).font(theme::semibold(18.0)));
     ui.add_space(6.0);
-    if !app.session.javascript() {
+    if app.session.javascript_lock().is_some() {
+        ui.label(egui::RichText::new(tl!("JavaScript is turned off by your administrator.")).small().color(t.text_muted));
+    } else if !app.session.javascript() {
         ui.label(egui::RichText::new(tl!("JavaScript is turned off (Preferences ▸ JavaScript).")).small().color(t.text_muted));
     }
     egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {

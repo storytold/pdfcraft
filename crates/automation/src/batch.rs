@@ -19,6 +19,8 @@ struct Recipe<'a> {
     images: optimize::ImageSettings,
     mono: optimize::MonoSettings,
     ocr: ocr::OcrSettings,
+    /// The calling session's JavaScript setting, for each file's own session.
+    scripting: pdfcraft_engine::js::Scripting,
 }
 
 impl<'a> Recipe<'a> {
@@ -60,7 +62,7 @@ impl<'a> Recipe<'a> {
         if args.opt_num("dpi")?.is_some_and(|dpi| !(72.0..=600.0).contains(&dpi)) {
             return Err(Args::wrong("dpi", "72 to 600"));
         }
-        Ok(Self { steps, images, mono, ocr: auto.ocr_settings(args)? })
+        Ok(Self { steps, images, mono, ocr: auto.ocr_settings(args)?, scripting: auto.session.scripting() })
     }
 
     fn accepts(&self, path: &Path) -> bool {
@@ -71,6 +73,7 @@ impl<'a> Recipe<'a> {
     fn process(&self, path: &Path) -> Result<(Arc<Vec<u8>>, Vec<Value>)> {
         // A fresh session per file bounds retained document state and never touches caller tabs.
         let mut session = Session::new();
+        session.set_scripting(&self.scripting);
         let mut input = Vec::new();
         std::fs::File::open(path).map_err(failed)?.take(MAX_INPUT + 1).read_to_end(&mut input).map_err(failed)?;
         if input.len() as u64 > MAX_INPUT {
@@ -85,7 +88,7 @@ impl<'a> Recipe<'a> {
                 "convert" => bytes = session.convert_to_pdf(name, &bytes)?.1,
                 "ocr" => {
                     let engine = ocr::engine().map_err(failed)?;
-                    let result = ocr::recognize_file(name, bytes, None, self.ocr.clone(), &engine, |_, _| true).map_err(failed)?;
+                    let result = ocr::recognize_file(name, bytes, None, self.ocr.clone(), &engine, &self.scripting, |_, _| true).map_err(failed)?;
                     log.push(
                         json!({"step":"ocr","words":result.words(),"skipped_pages":result.pages.iter().filter(|p| p.skipped.is_some()).count()}),
                     );
