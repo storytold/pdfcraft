@@ -1067,37 +1067,45 @@ impl Reader<'_> {
         // PdfCraft patch: expand the object streams one at a time in object-number order, from one
         // node budget for the whole load, so many streams, each inside the decompression limit,
         // cannot together build billions of objects, and the members a spent budget skips are the
-        // same on every load. Each stream parses only the members the table places in it (or
-        // doesn't place at all), so stale copies spend nothing.
+        // same on every load. A stream parses only the members it would add: none the table
+        // places in another stream (stale copies), and none already loaded, as an ordinary object
+        // or from an earlier stream, since a member never replaces an object. Those spend nothing.
+        // Members the table doesn't list at all are still parsed (a rebuilt table lists no
+        // compressed objects) and share the budget.
         let node_budget = NodeBudget::new(MAX_LOAD_NODES);
         let mut object_stream_ids = object_stream_ids.into_inner().unwrap_or_else(PoisonError::into_inner);
         object_stream_ids.sort_unstable();
         object_stream_ids.dedup();
-        let mut object_streams = Vec::new();
         for object_id in object_stream_ids {
             let container_id = object_id.0;
+            let loaded = &self.document.objects;
             let keep = |obj_num: u32| {
                 compressed_obj_containers
                     .get(&obj_num)
                     .is_none_or(|&c| c == container_id)
+                    && !loaded.contains_key(&(obj_num, 0))
             };
-            let parsed = match self.document.objects.get(&object_id).map(Object::as_stream) {
+            let parsed = match loaded.get(&object_id).map(Object::as_stream) {
                 Some(Ok(stream)) => {
                     ObjectStream::new_members_within(stream, self.max_decompressed_size, &node_budget, keep)
                 }
                 _ => continue,
             };
             match parsed {
-                Ok(obj_stream) => match filter_func {
-                    Some(filter_func) => object_streams.extend(
-                        obj_stream
+                Ok(obj_stream) => {
+                    let members: BTreeMap<_, _> = match filter_func {
+                        Some(filter_func) => obj_stream
                             .objects
                             .into_iter()
                             .filter_map(|(object_id, mut object)| filter_func(object_id, &mut object))
-                            .collect::<BTreeMap<_, _>>(),
-                    ),
-                    None => object_streams.extend(obj_stream.objects),
-                },
+                            .collect(),
+                        None => obj_stream.objects,
+                    };
+                    // Only add entries, but never replace entries
+                    for (id, entry) in members {
+                        self.document.objects.entry(id).or_insert(entry);
+                    }
+                }
                 // Not an encryption-related loss, so it obeys the same strict-mode policy as
                 // any other load error; a lenient load drops the stream, as it drops any object
                 // that fails to load.
@@ -1109,11 +1117,6 @@ impl Reader<'_> {
                     self.document.objects.remove(&object_id);
                 }
             }
-        }
-
-        // Only add entries, but never replace entries
-        for (id, entry) in object_streams {
-            self.document.objects.entry(id).or_insert(entry);
         }
 
         for object_id in zero_length_streams.into_inner().unwrap() {

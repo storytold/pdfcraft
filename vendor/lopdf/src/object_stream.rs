@@ -137,8 +137,8 @@ impl ObjectStream {
 
     /// PdfCraft patch: [`ObjectStream::new_within`], parsing only the members whose object
     /// number `keep` accepts. The others are never parsed, so they spend nothing from `budget`:
-    /// a loader passes the members the cross-reference table places in this stream, and a
-    /// lookup the one member it wants.
+    /// a loader passes the members it would add (not placed in another stream by the
+    /// cross-reference table, and not already loaded), and a lookup the one member it wants.
     pub(crate) fn new_members_within(
         stream: &Stream, max_decompressed_size: Option<usize>, budget: &NodeBudget, keep: impl Fn(u32) -> bool,
     ) -> Result<ObjectStream> {
