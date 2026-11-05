@@ -25,7 +25,9 @@ pub enum AltError {
     NotAFigure(u32),
     #[error("the page has more content than can be edited")]
     TooLarge,
-    #[error("the figure's content is in a content stream damaged partway, which can't be rewritten without losing what follows the damage")]
+    #[error(
+        "the figure's content is, or may be, in a content stream damaged partway, which can't be rewritten without losing what follows the damage"
+    )]
     Damaged,
     #[error("{0}")]
     Cos(#[from] pdfcraft_cos::CosError),
@@ -54,7 +56,9 @@ pub enum ArtifactError {
     ParentTree(String),
     #[error("the page has more content than can be edited")]
     TooLarge,
-    #[error("the tag's marked content is in a content stream damaged partway, which can't be rewritten without losing what follows the damage")]
+    #[error(
+        "the tag's marked content is, or may be, in a content stream damaged partway, which can't be rewritten without losing what follows the damage"
+    )]
     Damaged,
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
