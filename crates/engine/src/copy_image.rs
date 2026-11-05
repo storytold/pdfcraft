@@ -2,7 +2,7 @@
 //! file in its original format. A picture drawn through grouped
 //! Form artwork (as Word, InDesign and many scanners write them) is found inside the group.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document as Cos, ObjRef, Object};
 
@@ -24,12 +24,14 @@ pub fn picture_at(pictures: &[PagePicture], at: [f64; 2]) -> Option<&PagePicture
 /// The pictures on `page`, bottom first: raster images, and Form artwork that holds one.
 fn pictures(cos: &Cos, page: usize) -> Vec<PagePicture> {
     let images = pdfcraft_edit::page_images(cos, page).unwrap_or_default();
+    // Artwork drawn many times is searched once.
+    let mut holds_one: HashMap<ObjRef, bool> = HashMap::new();
     images
         .into_iter()
         .enumerate()
         .filter(|(_, i)| match (i.is_form, i.object) {
             (false, Some(_)) => true,
-            (true, Some(form)) => picture_in_form(cos, form).is_some(),
+            (true, Some(form)) => *holds_one.entry(form).or_insert_with(|| picture_in_form(cos, form).is_some()),
             _ => false,
         })
         .collect()
@@ -40,7 +42,14 @@ impl Document {
     /// [`Document::page_images`]: a raster image, or Form artwork that holds one.
     pub fn page_image_at(&self, page: usize, at: [f64; 2]) -> Option<usize> {
         let editor = self.editor.as_ref()?;
-        picture_at(&pictures(&editor.cos, page), at).map(|(index, _)| *index)
+        self.page_images(page).iter().rposition(|i| {
+            i.contains(at)
+                && match (i.is_form, i.object) {
+                    (false, Some(_)) => true,
+                    (true, Some(form)) => picture_in_form(&editor.cos, form).is_some(),
+                    _ => false,
+                }
+        })
     }
 
     /// Work that lists the pictures on `page`, for another thread: it reads every drawing operator

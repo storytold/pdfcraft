@@ -152,13 +152,16 @@ mod picture_tests {
             let _ = late.send(());
         });
         let mut pictures = PagePictures::default();
+        let caller = std::thread::current().id();
+        let (ran_on, ran) = std::sync::mpsc::channel();
         pictures.start(&egui::Context::default(), (3, 1), move || {
+            let _ = ran_on.send(std::thread::current().id());
             let _ = wait.recv();
             Vec::new()
         });
         pictures.poll();
-        assert!(pictures.ready.is_none(), "the answer can't be there before the search is let go");
-        release.send(()).unwrap();
+        assert_ne!(ran.recv().unwrap(), caller, "the search must not run on the calling thread");
+        let _ = release.send(());
         for _ in 0..500 {
             std::thread::sleep(std::time::Duration::from_millis(10));
             pictures.poll();
@@ -167,6 +170,20 @@ mod picture_tests {
             }
         }
         assert_eq!(pictures.ready, Some(((3, 1), Vec::new())));
+    }
+
+    /// Escape takes back a click whose picture isn't known yet: it isn't selected when it is.
+    #[test]
+    fn escape_cancels_a_click_on_a_page_still_being_read() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
+        let (i, _) = app.active_ids().unwrap();
+        app.views[i].pending_pick = Some((0, [1.0, 1.0], 0));
+        let escape = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
+        egui::Context::default()
+            .run_ui(egui::RawInput { events: vec![escape], ..Default::default() }, |ui| app.image_pick_keys(i, ui.ctx()))
+            .drop_without_applying_deltas();
+        assert_eq!(app.views[i].pending_pick, None);
     }
 }
 
@@ -276,16 +293,20 @@ fn write_clipboard_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> Resu
 }
 
 impl PdfCraftApp {
-    /// ⌘C / Ctrl+C copies the selected picture in its original format; Escape deselects it.
+    /// ⌘C / Ctrl+C copies the selected picture in its original format; Escape deselects it, or
+    /// takes back a click whose picture isn't known yet.
     pub(crate) fn image_pick_keys(&mut self, i: usize, ctx: &egui::Context) {
-        let Some(picked) = self.views.get(i).and_then(|v| v.picked_image) else { return };
         if ctx.egui_wants_keyboard_input() {
             return;
         }
         if ctx.input(|inp| inp.key_pressed(egui::Key::Escape)) {
-            self.views[i].picked_image = None;
+            if let Some(view) = self.views.get_mut(i) {
+                view.picked_image = None;
+                view.pending_pick = None;
+            }
             return;
         }
+        let Some(picked) = self.views.get(i).and_then(|v| v.picked_image) else { return };
         let copy = ctx.input(|inp| inp.events.iter().any(|e| matches!(e, egui::Event::Copy)));
         if !copy || self.views[i].selected_text().is_some() {
             return;
