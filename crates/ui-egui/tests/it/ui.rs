@@ -834,6 +834,8 @@ fn find_shortcut_replaces_the_existing_query_but_clicking_keeps_editing() {
         app.set_option("find", "brown").unwrap();
     });
     crate::support::settle(&mut h);
+    h.get_by_role_and_label(Role::TextInput, "Find text").click();
+    h.key_press_modifiers(egui::Modifiers::NONE, egui::Key::End);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
     h.run_steps(2);
     h.get_by_role_and_label(Role::TextInput, "Find text").type_text("fox");

@@ -83,7 +83,7 @@ impl DocView {
     }
 
     /// Open or focus Find from ⌘/Ctrl+F and select its existing query.
-    pub(super) fn open_find_from_shortcut(&mut self) {
+    pub(crate) fn open_find_from_shortcut(&mut self) {
         self.open_find();
         if let Some(f) = self.find.as_mut() {
             f.select_all_requested = true;
