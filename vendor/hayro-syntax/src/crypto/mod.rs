@@ -127,10 +127,14 @@ pub(crate) fn get(
     }
 }
 
-/// PdfCraft patch (36): whether every crypt filter of `dict` that encrypts is authorised only when
-/// an embedded file is opened (`/AuthEvent /EFOpen`), `/EFF` names one, and neither `/StmF` nor
-/// `/StrF` does.
+/// PdfCraft patch (36): whether `dict` has crypt filters (V4 or later) that encrypt, each
+/// authorised only when an embedded file is opened (`/AuthEvent /EFOpen`), and neither `/StmF` nor
+/// `/StrF` names one. The embedded files use them through `/EFF` or a `/Crypt` filter of their
+/// own; earlier handlers (V1, V2) encrypt everything with RC4.
 fn efopen_only(dict: &Dict<'_>) -> bool {
+    if dict.get::<u8>(V).is_none_or(|v| v < 4) {
+        return false;
+    }
     let Some(cf) = dict.get::<Dict<'_>>(CF) else {
         return false;
     };
@@ -149,7 +153,7 @@ fn efopen_only(dict: &Dict<'_>) -> bool {
         encrypting.push(key.as_str().to_string());
     }
     let names = |key: &[u8]| dict.get::<Name<'_>>(key).is_some_and(|n| encrypting.iter().any(|e| e == n.as_str()));
-    names(b"EFF") && !names(STM_F) && !names(STR_F)
+    !encrypting.is_empty() && !names(STM_F) && !names(STR_F)
 }
 
 fn decryptor(

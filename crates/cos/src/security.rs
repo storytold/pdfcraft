@@ -128,12 +128,12 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
     }
 }
 
-/// Whether every crypt filter of `d`, an `/Encrypt` dictionary, that encrypts at all (`/CFM`
-/// `V2`, `AESV2` or `AESV3`) is authorised only when an embedded file is opened (`/AuthEvent
-/// /EFOpen`, ISO 32000-2 §7.6.6, Table 25), and `/EFF` names one of them: what a document asks
-/// for its embedded files alone, which it opens without (§7.6.6: "EFOpen Authorization shall be
-/// required when accessing embedded files"). Its strings and streams have to be in the clear too,
-/// which [`SecurityHandler::without_key`] checks.
+/// Whether `d`, an `/Encrypt` dictionary, has crypt filters that encrypt (`/CFM` `V2`, `AESV2` or
+/// `AESV3`), each authorised only when an embedded file is opened (`/AuthEvent /EFOpen`, ISO
+/// 32000-2 §7.6.6, Table 25): what a document asks for its embedded files alone, which it opens
+/// without (§7.6.6: "EFOpen Authorization shall be required when accessing embedded files"). The
+/// files use them through `/EFF` or through a `/Crypt` filter of their own. Its strings and streams
+/// have to be in the clear too, which [`SecurityHandler::without_key`] checks.
 pub(crate) fn efopen_only(doc: &Document, d: &Dict) -> bool {
     let name = |d: &Dict, k: &[u8]| d.get(k).and_then(|v| doc.resolve(v).as_name().map(<[u8]>::to_vec));
     let Some(cf) = d.get(b"CF").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()) else { return false };
@@ -148,7 +148,7 @@ pub(crate) fn efopen_only(doc: &Document, d: &Dict) -> bool {
         }
         encrypting.push(k.clone());
     }
-    name(d, b"EFF").is_some_and(|eff| encrypting.contains(&eff))
+    !encrypting.is_empty()
 }
 
 /// Whether `s`, read from a document whose handler has no file key, holds data that handler would

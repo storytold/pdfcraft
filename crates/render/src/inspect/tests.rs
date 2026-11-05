@@ -1942,19 +1942,24 @@ fn r6_password_values() -> String {
         .join(" ")
 }
 
-/// A document whose crypt filter `/StdCF` is authorised by `auth_event`, encrypting only its
-/// embedded file (`/StmF /StrF /Identity`, `/EFF /StdCF`), protected by a user password.
-fn efopen_pdf(auth_event: &str) -> Vec<u8> {
+/// A page with text in the clear and an attachment, `note.txt`, encrypted with `/StdCF` (through
+/// `/EFF`, or a `/Crypt` filter of its own when `named`). `/StdCF` is authorised by `auth_event`,
+/// under the handler `version`.
+fn efopen_pdf_with(auth_event: &str, named: bool, version: &str) -> Vec<u8> {
+    let (eff, crypt) = if named { ("", " /Filter [/Crypt] /DecodeParms [<< /Name /StdCF >>]") } else { (" /EFF /StdCF", "") };
     let encrypt = format!(
-        "<< /Filter /Standard /V 5 /R 6 {} /P -4 /CF << /StdCF << /AuthEvent /{auth_event} /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity /EFF /StdCF >>",
+        "<< /Filter /Standard {version} {} /P -4 /CF << /StdCF << /AuthEvent /{auth_event} /CFM /AESV3 /Length 32 >> >> /StmF /Identity /StrF /Identity{eff} >>",
         r6_password_values()
     );
+    let page = "BT /F1 12 Tf 20 100 Td (Visible page) Tj ET";
     let objs = [
         "<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(note.txt) 4 0 R] >> >> >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>".to_string(),
         "<< /Type /Filespec /F (note.txt) /EF << /F 5 0 R >> >>".to_string(),
-        "<< /Type /EmbeddedFile /Length 32 >>\nstream\n0123456789abcdef0123456789abcdef\nendstream".to_string(),
+        format!("<< /Type /EmbeddedFile{crypt} /Length 32 >>\nstream\n0123456789abcdef0123456789abcdef\nendstream"),
+        format!("<< /Length {} >>\nstream\n{page}\nendstream", page.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
         encrypt,
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
@@ -1969,25 +1974,45 @@ fn efopen_pdf(auth_event: &str) -> Vec<u8> {
         out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
     out.extend_from_slice(
-        format!("trailer\n<< /Size {} /Root 1 0 R /Encrypt 6 0 R /ID [<00> <00>] >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes(),
+        format!("trailer\n<< /Size {} /Root 1 0 R /Encrypt {} 0 R /ID [<00> <00>] >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1, objs.len())
+            .as_bytes(),
     );
     out
 }
 
+fn efopen_pdf(auth_event: &str) -> Vec<u8> {
+    efopen_pdf_with(auth_event, false, "/V 5 /R 6")
+}
+
 /// ISO 32000-2 §7.6.6, Table 25: a crypt filter whose `/AuthEvent` is `/EFOpen` needs its password
-/// only when an embedded file is opened. Such a document opens without one, and its attachment is
-/// listed, but asking for the attachment's bytes is an error, not its encrypted data.
+/// only when an embedded file is opened. Such a document opens without one, its page reads, and
+/// its attachment is listed; asking for the attachment's bytes is an error, not its encrypted data.
 #[test]
 fn a_document_encrypting_only_its_embedded_files_opens_without_a_password() {
     let bytes = Arc::new(efopen_pdf("EFOpen"));
     assert!(check_pages(bytes.clone(), None, 1).is_ok());
     let info = inspect(bytes.clone(), None).expect("opens without a password");
     assert_eq!(info.pages.len(), 1);
-    let listed = info.attachments.iter().find(|a| a.name == "note.txt").expect("the attachment is listed");
-    let refused = attachment_data(&bytes, None, listed).expect_err("encrypted bytes aren't the file");
+    let mut renderer = crate::PageRenderer::new(bytes.clone(), crate::RenderConfig::default());
+    let text = renderer.render(crate::RenderRequest { page: 0, kind: crate::RequestKind::Text, ..Default::default() });
+    assert!(text.text.is_some_and(|page| page.plain_text().contains("Visible page")), "{:?}", text.error);
+    let listed = |name: &str| info.attachments.iter().find(|a| a.name == name).unwrap_or_else(|| panic!("{name} is listed")).clone();
+    let refused = attachment_data(&bytes, None, &listed("note.txt")).expect_err("encrypted bytes aren't the file");
     assert!(refused.contains("password"), "{refused}");
     // Authorised when the document opens, the same filter still needs the password.
     let doc_open = Arc::new(efopen_pdf("DocOpen"));
     assert!(matches!(inspect(doc_open.clone(), None), Err(OpenError::NeedsPassword)));
     assert!(matches!(check_pages(doc_open, None, 1), Err(OpenError::NeedsPassword)));
+}
+
+/// From the review of the EFOpen change: an attachment naming its own EFOpen crypt filter, with no
+/// `/EFF`, opens the same way; a handler older than crypt filters (V2) still needs the password.
+#[test]
+fn efopen_filters_named_by_the_file_open_and_older_handlers_do_not() {
+    let named = Arc::new(efopen_pdf_with("EFOpen", true, "/V 5 /R 6"));
+    let info = inspect(named.clone(), None).expect("opens without a password");
+    let note = info.attachments.iter().find(|a| a.name == "note.txt").expect("listed").clone();
+    assert!(attachment_data(&named, None, &note).is_err());
+    let legacy = Arc::new(efopen_pdf_with("EFOpen", false, "/V 2 /R 3 /Length 128"));
+    assert!(matches!(check_pages(legacy, None, 1), Err(OpenError::NeedsPassword)));
 }
