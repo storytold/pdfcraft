@@ -3742,6 +3742,62 @@ fn enhance_camera_image_through_tools() {
 }
 
 #[test]
+fn enhance_scanned_file_cleans_the_scan_in_place_through_tools() {
+    let dir = workdir("enhance-scan");
+    // A 300 × 400 grey scan: dull paper, a dark gutter at the left, text bars and a speck.
+    let img = image::GrayImage::from_fn(300, 400, |x, y| {
+        let light = 0.55 + 0.45 * (x as f32 / 60.0).min(1.0);
+        let ink = if ((60..360).contains(&y) && (y - 60) % 40 < 6 && (60..240).contains(&x)) || (x, y) == (150, 25) { 0.12 } else { 0.78 };
+        image::Luma([(ink * light * 255.0) as u8])
+    });
+    img.save(dir.join("scan.jpg")).unwrap();
+    let mut a = auto(&dir);
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["scan.jpg"] }))["doc"].as_u64().unwrap();
+    ok(&mut a, "image_save", json!({ "doc": scan, "page": 1, "image": 1, "path": "before.jpg" }));
+
+    let r = ok(&mut a, "page_enhance_scan", json!({ "doc": scan, "level": 100 }));
+    assert_eq!(r["undo"], "Enhance scanned file");
+    assert_eq!((r["pages_cleaned"].clone(), r["images"].clone(), r["not_scanned"].clone()), (json!([1]), json!(1), json!([])));
+    assert_eq!(r["skipped"], json!([]));
+    // In place: still one picture of the same size, still a JPEG, now with white paper.
+    let images = ok(&mut a, "page_images", json!({ "doc": scan, "page": 1 }));
+    assert_eq!((images["count"].clone(), images["images"][0]["pixels"].clone()), (json!(1), json!([300, 400])));
+    let saved = ok(&mut a, "image_save", json!({ "doc": scan, "page": 1, "image": 1, "path": "after" }));
+    assert_eq!(saved["format"], "jpg");
+    let (before, after) = (image::open(dir.join("before.jpg")).unwrap().to_luma8(), image::open(dir.join("after.jpg")).unwrap().to_luma8());
+    for (x, y) in [(150, 40), (3, 40), (3, 380), (150, 25)] {
+        assert!(
+            before.get_pixel(x, y)[0] < 200 && after.get_pixel(x, y)[0] >= 230,
+            "({x}, {y}): {:?} → {:?}",
+            before.get_pixel(x, y),
+            after.get_pixel(x, y)
+        );
+    }
+    assert!(after.get_pixel(150, 62)[0] <= 60, "a stroke stays dark");
+    // Undo puts the scan back as it was.
+    ok(&mut a, "edit_undo", json!({ "doc": scan }));
+    ok(&mut a, "image_save", json!({ "doc": scan, "page": 1, "image": 1, "path": "undone.jpg" }));
+    assert_eq!(std::fs::read(dir.join("undone.jpg")).unwrap(), std::fs::read(dir.join("before.jpg")).unwrap());
+
+    // Switches: despeckle alone leaves everything but the speck.
+    let r = ok(&mut a, "page_enhance_scan", json!({ "doc": scan, "pages": [1], "level": 0, "despeckle": true, "edge_shadows": false }));
+    assert_eq!(r["images"], 1);
+    // A document of text pages has no scans: nothing changes, and it says so.
+    let text = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "page_enhance_scan", json!({ "doc": text }));
+    assert_eq!((r["images"].clone(), r["not_scanned"].clone(), r["undo"].clone()), (json!(0), json!([1, 2, 3]), Value::Null));
+    // Bad arguments are refused before anything changes.
+    for bad in [
+        json!({ "doc": scan, "level": 101 }),
+        json!({ "doc": scan, "pages": [9] }),
+        json!({ "doc": scan, "despeckle": "yes" }),
+        json!({ "doc": scan, "pages": [] }),
+    ] {
+        assert!(matches!(a.call("page_enhance_scan", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+}
+
+#[test]
 fn enhance_camera_image_finds_the_edges_by_itself() {
     let dir = workdir("enhance-camera-auto");
     // A 600 × 450 photo: a white sheet, tilted, on a dark table.
@@ -6435,6 +6491,44 @@ fn drawing_comments_through_tools() {
     assert!(info.to_string().contains("notes.txt"), "{info}");
     let png = a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap();
     assert!(matches!(png[0], Content::Png { .. }));
+}
+
+/// comment_add `ortho`, Shift's hold while drawing: a line's end is held level or plumb with its
+/// start, and each corner of connected lines or a polygon with the corner before.
+#[test]
+fn lines_and_corners_are_held_level_or_plumb_through_the_tool() {
+    let dir = workdir("ortho");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for args in [
+        json!({ "type": "line", "from": [20, 40], "to": [120, 52], "ortho": true }),
+        json!({ "type": "arrow", "from": [180, 40], "to": [170, 140], "ortho": true }),
+        json!({ "type": "polyline", "points": [[20, 200], [90, 210], [95, 260], [130, 250]], "ortho": true }),
+        json!({ "type": "line", "from": [20, 280], "to": [120, 290] }),
+    ] {
+        let mut args = args;
+        args.as_object_mut().unwrap().extend([("doc".to_string(), json!(doc)), ("page".to_string(), json!(1))]);
+        ok(&mut a, "comment_add", args);
+    }
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    // In the order added: the list isn't sorted by index.
+    let mut listed = list["comments"].as_array().unwrap().clone();
+    listed.sort_by_key(|c| c["index"].as_u64());
+    let points: Vec<Vec<[f64; 2]>> =
+        listed.iter().map(|c| c["points"].as_array().unwrap().iter().map(|p| [p[0].as_f64().unwrap(), p[1].as_f64().unwrap()]).collect()).collect();
+    let want: [&[[f64; 2]]; 4] = [
+        &[[20.0, 40.0], [120.0, 40.0]],
+        &[[180.0, 40.0], [180.0, 140.0]],
+        &[[20.0, 200.0], [90.0, 200.0], [90.0, 260.0], [130.0, 260.0]],
+        &[[20.0, 280.0], [120.0, 290.0]],
+    ];
+    assert_eq!(points.len(), want.len(), "{points:?}");
+    for (got, want) in points.iter().zip(want) {
+        assert_eq!(got.len(), want.len(), "{got:?}");
+        assert!(got.iter().zip(want).all(|(g, w)| (g[0] - w[0]).abs() < 0.01 && (g[1] - w[1]).abs() < 0.01), "{got:?} for {want:?}");
+    }
+    let refused = a.call("comment_add", &json!({ "doc": doc, "page": 1, "type": "rectangle", "rect": [10, 10, 50, 50], "ortho": true }));
+    assert!(matches!(refused, Err(ToolError::InvalidArgs(_))), "ortho is for lines and corners: {refused:?}");
 }
 
 #[test]

@@ -182,10 +182,13 @@ update the numbers.
   are read straightened even without deskew. OCR repairs a few reliably confused characters per language
   (dashes, German quotes, French/Italian/Catalan `l'`, Catalan `l·l`), and search matches `'` and `’`.
   Clear paper edges can now define an automatic crop with safety padding; ambiguous white borders
-  stay unchanged, and original image pixels remain in the PDF.
+  stay unchanged, and original image pixels remain in the PDF. Enhance scanned file removes the
+  background and edge shadows on grey and RGB scans and despeckles those and 1-bit ones; it reports
+  CMYK, indexed, JPEG 2000, JBIG2 and CCITT scans and scans drawn inside Form XObjects and leaves
+  them as they are.
 - **Missing:** additional language choices, vertical Japanese and Chinese, reliable reading order and word spacing
-  across complex layouts, editable-text output, deskew on pages with annotations, despeckle, MRC
-  compression, browser OCR and scanner input. Camera perspective
+  across complex layouts, editable-text output, deskew on pages with annotations, cleanup of the scan types
+  Enhance scanned file skips, MRC compression, pluggable engines, browser OCR and scanner input. Camera perspective
   and colour cleanup use the separate Enhance camera image command; broader photo fidelity remains open.
 - **Evidence:** `crates/engine/tests/scan_ocr.rs` and the OCR automation/UI tests; model tests require
   `cargo xtask models`, Japanese fixture generation requires the release `CRAFT_FONTS_DIR` input.

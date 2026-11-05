@@ -71,8 +71,8 @@ impl OcrDraft {
         }
     }
 
-    /// Recognize text in multiple files always adds text, even straight after Enhance scanned
-    /// file turned recognition off.
+    /// Recognize text in multiple files always adds text, even straight after Correct scanned
+    /// pages turned recognition off.
     pub fn batch_settings(&self) -> OcrSettings {
         OcrSettings { recognize: true, skip_text_pages: !self.text_pages, ..self.settings() }
     }
@@ -715,12 +715,12 @@ mod tests {
         app.session.apply(id, add).unwrap();
         assert_eq!(found(&mut app), Some(0), "a picture over the page makes it a scan");
     }
-    /// Enhance scanned file turns recognition off in the shared draft; a batch run started after it
+    /// Correct scanned pages turns recognition off in the shared draft; a batch run started after it
     /// still adds text, and skips pages with text unless the dialog says otherwise.
     #[test]
-    fn batch_recognition_adds_text_after_enhance_scanned_file() {
+    fn batch_recognition_adds_text_after_correct_scanned_pages() {
         let mut app = app_with(scan());
-        assert!(app.execute("ocr.enhance"));
+        assert!(app.execute("ocr.correct_scan"));
         assert!(!app.ocr_draft.settings().recognize);
         let batch = app.ocr_draft.batch_settings();
         assert!(batch.recognize && batch.skip_text_pages, "{batch:?}");

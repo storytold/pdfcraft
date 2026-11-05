@@ -110,7 +110,7 @@ fn scan_settings_preserve_corrections_and_existing_text_choice() {
 }
 
 #[test]
-fn enhance_scan_dialog_offers_correction_without_recognition() {
+fn correct_scanned_pages_offers_correction_without_recognition() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
@@ -118,7 +118,7 @@ fn enhance_scan_dialog_offers_correction_without_recognition() {
         app
     });
     h.run_steps(4);
-    assert!(h.state_mut().execute("ocr.enhance"));
+    assert!(h.state_mut().execute("ocr.correct_scan"));
     h.run_steps(2);
     h.get_by_label("Correct scans");
     assert!(!h.state().ocr_draft.recognize);
