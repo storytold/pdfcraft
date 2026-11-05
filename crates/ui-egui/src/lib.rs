@@ -495,6 +495,7 @@ pub struct PdfCraftApp {
     /// Accessibility Checker: options, the last check, and rules skipped by hand.
     pub a11y_options: a11y_ui::A11yOptions,
     /// Scan & OCR: the Recognize Text choices, the running job, and (tests) run it inline.
+    pub auto_ocr: bool,
     pub ocr_draft: ocr_ui::OcrDraft,
     pub ocr_run: Option<ocr_ui::OcrRun>,
     pub ocr_batch: Option<std::sync::Arc<std::sync::Mutex<ocr_ui::BatchProgress>>>,

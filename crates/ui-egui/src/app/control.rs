@@ -56,6 +56,14 @@ impl PdfCraftApp {
             ("invert_middle_drag", _) => {
                 self.invert_middle_drag = value.parse::<bool>().map_err(|_| "invert_middle_drag must be true or false")?;
             }
+            ("auto_ocr", _) => {
+                let enabled = match value {
+                    "on" | "true" => true,
+                    "off" | "false" => false,
+                    _ => return Err("auto_ocr must be on or off".into()),
+                };
+                self.set_auto_ocr(enabled);
+            }
             ("animation_effects", _) => {
                 self.animation_effects = motion::AnimationEffects::parse(value).ok_or("animation_effects must be system, on, or off")?;
             }

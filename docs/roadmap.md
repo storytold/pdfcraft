@@ -1,5 +1,7 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **2026-11-03, M3/M10 / #4241 refresh:** OCR page choices and Windows-frame theme tracking use the current module layout and craft-i18n build input. Local scoped validation passed; upstream review remains pending. Estimates unchanged.
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)

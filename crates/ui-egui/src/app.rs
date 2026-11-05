@@ -195,6 +195,7 @@ impl PdfCraftApp {
             digital_ids: Vec::new(),
             sig_expanded: Vec::new(),
             a11y_options: a11y_ui::A11yOptions::default(),
+            auto_ocr: true,
             ocr_draft: ocr_ui::OcrDraft::default(),
             ocr_run: None,
             ocr_batch: None,
@@ -609,7 +610,7 @@ impl eframe::App for PdfCraftApp {
             }
         }
         self.poll_export();
-        self.auto_ocr_scanned_page();
+        self.prompt_scan_ocr();
         self.poll_ocr();
         self.poll_optimize();
         self.poll_action();

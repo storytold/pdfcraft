@@ -145,6 +145,7 @@ impl Host for crate::PdfCraftApp {
             "theme_preference": self.theme_preference,
             "show_page_edge_shadows": self.show_page_edge_shadows,
             "language": self.language,
+            "auto_ocr": self.auto_ocr,
             "notice": self.toast.as_ref().map(|t| t.0.clone()),
             "progress": self.progress_notice.as_ref().map(|p| json!({ "label": p.label, "fraction": p.fraction })),
             "password_prompt": self.password_prompt.is_some(),

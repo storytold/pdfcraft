@@ -166,6 +166,11 @@ pub enum Dialog {
     AccessibilityOptions,
     /// Scan & OCR ▸ Recognize text.
     RecognizeText,
+    RecognizeScan {
+        doc: pdfcraft_engine::DocId,
+        page: usize,
+        generation: u64,
+    },
     /// The JavaScript console (⌘J).
     JsConsole,
     /// Document JavaScripts.
