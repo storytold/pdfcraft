@@ -209,6 +209,21 @@ fn an_indirect_annots_array_is_judged_by_the_annotations_it_gains() {
     assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::OTHER])));
 }
 
+/// A signature widget taken off the page's inline /Annots array is covered by no permission (the
+/// indirect-array case is the test above), and stays a change whatever level the signature has.
+#[test]
+fn removing_a_widget_from_an_inline_annots_array_is_not_a_comment_change() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let page = pdfcraft_cos::ObjRef { num: 3, generation: 0 };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let inline = open(&signed).get(page).as_dict().and_then(|d| d.get(b"Annots").cloned()).unwrap();
+    assert!(matches!(inline, Object::Array(ref a) if !a.is_empty()), "the page keeps its widgets inline");
+    let stripped = edit_after(&signed, |doc| doc.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Array(vec![]))).unwrap());
+    let s = signatures(&open(&stripped), &stripped, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!((s.status, s.modification), (Status::Invalid, Modification::Disallowed(vec![kind::OTHER])));
+}
+
 /// Issue #1328: a signature field whose /V is null, directly or through a reference, is unsigned:
 /// it is listed as unsigned and can be signed by name.
 #[test]

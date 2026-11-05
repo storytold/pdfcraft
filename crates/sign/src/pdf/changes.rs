@@ -187,20 +187,9 @@ impl ChangedObjectClassifier<'_> {
     }
 
     fn annotation_array_change(&self, now: &[Object], before: Option<&Object>) -> &'static str {
-        let was: HashSet<ObjRef> =
-            before.and_then(Object::as_array).map(|items| items.iter().filter_map(Object::as_ref).collect()).unwrap_or_default();
-        let kept: HashSet<ObjRef> = now.iter().filter_map(Object::as_ref).collect();
-        let removed: Vec<ObjRef> = was.iter().filter(|reference| !kept.contains(reference)).copied().collect();
-        if removed.is_empty() {
-            let added: Vec<ObjRef> = now.iter().filter_map(Object::as_ref).filter(|reference| !was.contains(reference)).collect();
-            added_annots(self.doc, &added)
-        } else if removed.iter().any(|reference| self.old.get(*reference).as_dict().is_some_and(|dict| dict.name(b"Subtype") == Some(b"Widget"))) {
-            // A form field or signature widget taken off the page: no permission covers it.
-            kind::OTHER
-        } else {
-            // Deleting comments is a comment change (permitted at P 3 only).
-            kind::COMMENTS
-        }
+        let refs_of = |items: &[Object]| items.iter().filter_map(Object::as_ref).collect::<Vec<ObjRef>>();
+        let was = before.and_then(Object::as_array).map(|a| refs_of(a)).unwrap_or_default();
+        annot_change(self.doc, self.old, &was, &refs_of(now))
     }
 
     fn dictionary_change(&self, r: ObjRef, dict: &Dict, before: Option<&Object>) -> &'static str {
@@ -391,6 +380,22 @@ fn added_annots(doc: &Document, added: &[ObjRef]) -> &'static str {
     }
 }
 
+/// What changing an annotation array from `was` to `now` amounts to, additions and removals judged
+/// together. Taking a widget (form field or signature) off a page is covered by no permission.
+/// Deleting comments is a comment change, permitted at P 3 only: no weaker than anything added
+/// beside it, so it is the verdict whatever else the array gained.
+fn annot_change(doc: &Document, old: &Document, was: &[ObjRef], now: &[ObjRef]) -> &'static str {
+    let mut removed = was.iter().filter(|r| !now.contains(r)).peekable();
+    if removed.peek().is_none() {
+        let added: Vec<ObjRef> = now.iter().filter(|r| !was.contains(r)).copied().collect();
+        added_annots(doc, &added)
+    } else if removed.any(|r| old.get(*r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget"))) {
+        kind::OTHER
+    } else {
+        kind::COMMENTS
+    }
+}
+
 fn refs(doc: &Document, o: Option<&Object>) -> Vec<ObjRef> {
     o.map(|o| doc.resolve(o)).and_then(|a| a.as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
 }
@@ -522,11 +527,7 @@ fn signed_page_resources(old: &Document, pages: &HashSet<ObjRef>) -> HashMap<Obj
 fn page_change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) -> &'static str {
     match before {
         Some(b) if without(d, &[b"Annots"]) != without(b, &[b"Annots"]) => kind::PAGE_CONTENT,
-        Some(b) => {
-            let was = refs(old, b.get(b"Annots"));
-            let added: Vec<ObjRef> = refs(doc, d.get(b"Annots")).into_iter().filter(|r| !was.contains(r)).collect();
-            added_annots(doc, &added)
-        }
+        Some(b) => annot_change(doc, old, &refs(old, b.get(b"Annots")), &refs(doc, d.get(b"Annots"))),
         None => kind::PAGE_CONTENT,
     }
 }
@@ -585,11 +586,7 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
         Some(b"Page") => {
             return match before {
                 Some(b) if without(d, &[b"Annots"]) != without(b, &[b"Annots"]) => kind::PAGE_CONTENT,
-                Some(b) => {
-                    let was = refs(old, b.get(b"Annots"));
-                    let added: Vec<ObjRef> = refs(doc, d.get(b"Annots")).into_iter().filter(|r| !was.contains(r)).collect();
-                    added_annots(doc, &added)
-                }
+                Some(b) => annot_change(doc, old, &refs(old, b.get(b"Annots")), &refs(doc, d.get(b"Annots"))),
                 None => kind::COMMENTS,
             };
         }
