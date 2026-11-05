@@ -44,6 +44,207 @@ fn recognize_text_dialog_adds_searchable_text() {
 }
 
 #[test]
+fn chinese_ocr_language_runs_from_the_dialog() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app.run_inline = true;
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("ocr.recognize"));
+    h.run_steps(2);
+    h.get_by_value("English").click();
+    h.run_steps(2);
+    h.get_by_label("Chinese (Simplified) and English").click();
+    // The menu closes on the following frame. A click before that hits the menu.
+    h.run_steps(2);
+    assert_eq!(h.state().ocr_draft.language, "zh");
+    assert!(h.query_by_label("Polish").is_none(), "the language menu stayed open");
+    if !pdfcraft_engine::ocr::available_for("zh") {
+        eprintln!("skipped: Chinese OCR models not installed");
+        return;
+    }
+    h.get_by_label("Recognize text").click();
+    h.run_steps(3);
+    assert!(h.state().ocr_run.is_none());
+    let app = h.state();
+    let id = app.active_ids().unwrap().1;
+    assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"));
+}
+
+/// #3264: German is a document language in the Recognize Text dialog.
+#[test]
+fn german_is_a_document_language() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app.run_inline = true;
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("ocr.recognize"));
+    h.run_steps(2);
+    h.get_by_value("English").click();
+    h.run_steps(2);
+    h.get_by_label("German").click();
+    h.run_steps(1);
+    assert_eq!(h.state().ocr_draft.language, "de");
+}
+
+/// #1819: when the worker thread cannot start, the run is not left active and a retry works.
+#[test]
+fn recognition_that_cannot_start_a_thread_reports_an_error_and_can_retry() {
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("scan.pdf", None, scan()).unwrap();
+    app.fail_spawn = true;
+    app.start_ocr();
+    assert!(app.ocr_run.is_none(), "single run not left active");
+    assert_eq!(app.toast.clone().unwrap().0, "could not start a background thread");
+    app.toast = None;
+    app.start_ocr();
+    assert!(app.ocr_run.is_none());
+    assert_eq!(app.toast.clone().unwrap().0, "could not start a background thread", "not refused as already running");
+
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-spawn-{}", std::process::id()));
+    app.export_dir_override = Some(dir.to_string_lossy().into_owned());
+    app.toast = None;
+    app.ocr_files(vec![("one.pdf".into(), scan())]);
+    assert!(app.ocr_batch.is_none(), "batch not left active");
+    assert_eq!(app.toast.clone().unwrap().0, "could not start a background thread");
+    app.toast = None;
+    app.ocr_files(vec![("one.pdf".into(), scan())]);
+    assert_eq!(app.toast.clone().unwrap().0, "could not start a background thread", "not refused as already running");
+}
+
+#[test]
+fn latin_ocr_language_runs_from_the_dialog() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app.run_inline = true;
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("ocr.recognize"));
+    h.run_steps(2);
+    h.get_by_value("English").click();
+    h.run_steps(2);
+    h.get_by_label("Latin (accented)").click();
+    // The menu closes on the following frame. A click before that hits the menu.
+    h.run_steps(2);
+    assert_eq!(h.state().ocr_draft.language, "la");
+    assert!(h.query_by_label("Polish").is_none(), "the language menu stayed open");
+    if !pdfcraft_engine::ocr::available_for("la") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    h.get_by_label("Recognize text").click();
+    h.run_steps(3);
+    assert!(h.state().ocr_run.is_none());
+    let app = h.state();
+    let id = app.active_ids().unwrap().1;
+    assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"), "{:?}", app.toast);
+}
+
+/// The same dialog reads a line wider than the recogniser. That line used to skip the page.
+#[test]
+fn recognize_text_dialog_reads_a_line_wider_than_the_recogniser() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.ocr_draft.dpi = 600;
+        app.open_bytes("wide.pdf", None, wide_scan()).unwrap();
+        app.run_inline = true;
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("ocr.recognize"));
+    h.run_steps(2);
+    h.get_by_value("English").click();
+    h.run_steps(2);
+    h.get_by_label("Latin (accented)").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ocr_draft.language, "la");
+    h.state_mut().ocr_draft.dpi = 600;
+    if !pdfcraft_engine::ocr::available_for("la") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    h.get_by_label("Recognize text").click();
+    h.run_steps(8);
+    assert!(h.state().ocr_run.is_none(), "{:?}", h.state().toast);
+    let app = h.state();
+    let id = app.active_ids().unwrap().1;
+    assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"), "{:?}", app.toast);
+    let text = export::Exporter::new(app.session.get(id).unwrap()).text(0).unwrap().to_lowercase();
+    assert!(text.contains("aaron") && text.contains("zurich"), "{text}");
+}
+
+fn wide_scan() -> Vec<u8> {
+    let png = wide_line_png(&newspaper_line());
+    let session = Session::new();
+    let scan = session.create_from_images(&[("paper.png".into(), png)]).unwrap();
+    scan.to_vec()
+}
+
+fn newspaper_line() -> String {
+    let pool = ["north", "south", "east", "west", "river", "field", "stone", "cloud"];
+    let mut words = Vec::with_capacity(66);
+    words.push("Aaron");
+    for _ in 0..8 {
+        words.extend(pool);
+    }
+    words.push("Zurich");
+    words.join(" ")
+}
+
+fn wide_line_png(text: &str) -> Vec<u8> {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+    let font = FontRef::try_from_slice(include_bytes!("../../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+    let size = 36.0;
+    let scaled = font.as_scaled(PxScale::from(size));
+    let mut advance = 24.0_f32;
+    for ch in text.chars() {
+        let id = scaled.glyph_id(ch);
+        assert_ne!(id.0, 0, "fixture font must cover {ch}");
+        advance += scaled.h_advance(id);
+    }
+    advance += 24.0;
+    let width = advance.ceil() as u32;
+    let height = 52u32;
+    let mut rgba = vec![255u8; width as usize * height as usize * 4];
+    let mut x = 24.0_f32;
+    for ch in text.chars() {
+        let id = scaled.glyph_id(ch);
+        let glyph = id.with_scale_and_position(size, point(x, 40.0));
+        if let Some(outline) = font.outline_glyph(glyph) {
+            let bounds = outline.px_bounds();
+            outline.draw(|gx, gy, coverage| {
+                let px = bounds.min.x as i32 + gx as i32;
+                let py = bounds.min.y as i32 + gy as i32;
+                if px < 0 || py < 0 {
+                    return;
+                }
+                let (px, py) = (px as u32, py as u32);
+                if px >= width || py >= height {
+                    return;
+                }
+                let v = (255.0 * (1.0 - coverage)) as u8;
+                let i = (py as usize * width as usize + px as usize) * 4;
+                if let Some(pixel) = rgba.get_mut(i..i + 4) {
+                    pixel[0] = v;
+                    pixel[1] = v;
+                    pixel[2] = v;
+                    pixel[3] = 255;
+                }
+            });
+        }
+        x += scaled.h_advance(id);
+    }
+    export::encode_png(width, height, &rgba).unwrap()
+}
+
+#[test]
 fn recognize_text_in_multiple_files_writes_searchable_copies() {
     if !pdfcraft_engine::ocr::available() {
         eprintln!("skipped: OCR models not installed");
@@ -64,6 +265,31 @@ fn recognize_text_in_multiple_files_writes_searchable_copies() {
         let bytes = std::fs::read(dir.join(name)).unwrap();
         assert!(bytes.len() > scan().len(), "an incremental update was appended");
     }
+}
+
+/// #572: recognizing several files never replaces a file already at the output name, including
+/// the input's own file run in place, or an earlier run's output.
+#[test]
+fn recognize_text_in_multiple_files_never_replaces_an_existing_output() {
+    if !pdfcraft_engine::ocr::available_for("la") {
+        eprintln!("skipped: Latin OCR models not installed");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-ui-clobber-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let original = scan();
+    std::fs::write(dir.join("one.pdf"), &original).unwrap();
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.ocr_draft.language = "la".into();
+    app.run_inline = true;
+    app.export_dir_override = Some(dir.to_string_lossy().into_owned());
+    app.use_files(pdfcraft_ui_egui::FilePurpose::Ocr, vec![("one.pdf".into(), scan())]);
+    assert!(app.ocr_batch.is_none(), "finished");
+    assert_eq!(std::fs::read(dir.join("one.pdf")).unwrap(), original, "the existing file is untouched");
+    let numbered = std::fs::read(dir.join("one (2).pdf")).unwrap();
+    assert!(numbered.len() > original.len(), "the searchable copy got the next free name instead");
 }
 
 /// #1028: "Also recognize pages that already have text" reads a picture on a page that has its own

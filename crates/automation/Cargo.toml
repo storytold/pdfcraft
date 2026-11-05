@@ -18,6 +18,7 @@ pdfcraft-prc = { workspace = true }
 pdfcraft-prc-render = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.11"
+# Bates numbering writes the numbered file beside the original through a temporary name.
 tempfile = "3.27"
 base64 = { version = "0.23", optional = true }
 
@@ -28,6 +29,7 @@ default = ["mcp"]
 mcp = ["dep:base64"]
 
 [dev-dependencies]
+ab_glyph = "0.2"
 pdfcraft-fonts = { workspace = true }
 png = "0.18"
 flate2.workspace = true

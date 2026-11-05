@@ -61,6 +61,11 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; Linux a11y stack via accesskit_unix" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; Linux a11y stack via accesskit_unix" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; Linux a11y stack via accesskit_unix" },
+    # ttf-parser is unmaintained (RUSTSEC-2026-0192) and has no fixed release. It reaches the
+    # tree only through ab_glyph, which the OCR tests use to draw fixture images. It is a
+    # dev-dependency of pdfcraft-engine, pdfcraft-automation and pdfcraft-ui-egui, and it is not
+    # in the shipped binary. Revisit when those fixtures move to a maintained rasterizer.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; OCR test fixtures via ab_glyph only" },
 ]
 
 # egui's default UI fonts (Ubuntu-Light, Hack, emoji-icon-font): font licences on the AGENTS.md
