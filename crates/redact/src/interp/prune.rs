@@ -399,8 +399,9 @@ pub(crate) fn prune_patterns(doc: &Document, res: &mut Dict, seen: &[Vec<u8>], p
 /// when the page's nearest holder was retired but a holder further up, which it shadowed, still
 /// names the pattern. A holder some page still inherits from is left alone; whatever stays
 /// reachable is checked by `pattern_guard`, which refuses a retained cell it cannot prove safe.
-/// When a page's `/Parent` disagrees with where the `/Kids` tree puts it, which holder it
-/// inherits from is ambiguous, so nothing is unlinked and the guard decides.
+/// When any node's `/Parent` disagrees with where the `/Kids` tree puts it (or the root has
+/// one), which holder a page inherits from is ambiguous and a node may be reached only through
+/// `/Parent`, so nothing is unlinked and the guard, which follows `/Parent` too, decides.
 pub(crate) fn unlink_pruned_patterns(doc: &mut Document, pruned: &[ObjRef]) -> Result<(), RedactError> {
     if pruned.is_empty() {
         return Ok(());
@@ -419,7 +420,10 @@ pub(crate) fn unlink_pruned_patterns(doc: &mut Document, pruned: &[ObjRef]) -> R
         }
         let obj = doc.get(node);
         let Some(d) = obj.as_dict() else { continue };
-        if parent.is_some() && d.get(b"Parent").and_then(Object::as_ref) != parent {
+        // Every node's /Parent must be the node /Kids reached it from, and the root has none.
+        // A node reached only through a /Parent link is then impossible here; when the links
+        // disagree, the guard inspects every node they reach instead.
+        if d.get(b"Parent").and_then(Object::as_ref) != parent {
             consistent = false;
         }
         if d.contains(b"Resources") {

@@ -357,15 +357,16 @@ fn normalized_stream(doc: &Document, stream: &Stream) -> Result<Stream, PatternP
     Ok(normalized)
 }
 
-/// Every `/Pages` node Root reaches -- down `/Kids`, and up each page's `/Parent` chain, which a
-/// full save follows too -- that has `/Resources` of its own. Page leaves are left out: the pages
-/// to check are walked with their effective resources.
+/// Every node a full save reaches through the page tree -- down `/Kids` and up the `/Parent` of
+/// every node visited, page or `/Pages`, so a node reached only through a `/Parent` link counts
+/// too -- that has `/Resources` of its own and is not one of the document's pages: those are
+/// walked with their effective resources. Cycles are cut by the seen-set.
 fn tree_holders(doc: &Document) -> Result<Vec<ObjRef>, PatternProblem> {
     let Some(top) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))) else { return Ok(Vec::new()) };
+    let pages: HashSet<ObjRef> = pdfcraft_model::pages(doc).iter().map(|p| p.obj).collect();
     let mut holders = Vec::new();
     let mut seen = HashSet::new();
     let mut stack = vec![top];
-    let mut leaves = Vec::new();
     while let Some(node) = stack.pop() {
         if !seen.insert(node) {
             continue;
@@ -375,33 +376,18 @@ fn tree_holders(doc: &Document) -> Result<Vec<ObjRef>, PatternProblem> {
         }
         let object = doc.try_get(node.num).map_err(|_| PatternProblem::Unreadable)?;
         let Some(dict) = object.as_dict() else { continue };
-        let is_pages = dict.name(b"Type") == Some(b"Pages") || (dict.contains(b"Kids") && dict.name(b"Type") != Some(b"Page"));
-        if !is_pages {
-            leaves.push(node);
-            continue;
+        if let Some(parent) = dict.get(b"Parent").and_then(Object::as_ref) {
+            stack.push(parent);
         }
-        if dict.contains(b"Resources") {
+        if dict.contains(b"Resources") && !pages.contains(&node) {
             holders.push(node);
         }
-        let kids = resolved(doc, dict.get(b"Kids"))?;
-        if let Some(kids) = kids.as_array() {
-            stack.extend(kids.iter().filter_map(Object::as_ref));
-        }
-    }
-    for leaf in leaves {
-        let mut node = leaf;
-        for _ in 0..MAX_DEPTH {
-            let object = doc.try_get(node.num).map_err(|_| PatternProblem::Unreadable)?;
-            let Some(parent) = object.as_dict().and_then(|d| d.get(b"Parent")).and_then(Object::as_ref) else { break };
-            if !seen.insert(parent) {
-                // Already counted, as a /Kids node or through another page's chain.
-                break;
+        let is_pages = dict.name(b"Type") == Some(b"Pages") || (dict.contains(b"Kids") && dict.name(b"Type") != Some(b"Page"));
+        if is_pages {
+            let kids = resolved(doc, dict.get(b"Kids"))?;
+            if let Some(kids) = kids.as_array() {
+                stack.extend(kids.iter().filter_map(Object::as_ref));
             }
-            let parent_object = doc.try_get(parent.num).map_err(|_| PatternProblem::Unreadable)?;
-            if parent_object.as_dict().is_some_and(|d| d.contains(b"Resources")) {
-                holders.push(parent);
-            }
-            node = parent;
         }
     }
     Ok(holders)
