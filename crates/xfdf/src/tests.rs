@@ -2099,3 +2099,97 @@ fn an_fdf_comment_popup_without_a_rect_is_dropped() {
     let popups = page.iter().filter(|a| dst.resolve(a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Popup".as_slice()))).count();
     assert_eq!(popups, 0);
 }
+
+/// Tab-delimited export guards a formula-like cell as CSV does, and the import takes the guard
+/// off, so a spreadsheet never runs form data and the value survives the round trip.
+#[test]
+fn tab_delimited_export_guards_formula_cells_and_round_trips() {
+    let mut doc = blank();
+    set_value(&mut doc, "Name", &FieldValue::Text("=SUM(A1:A9)".into())).unwrap();
+    let text = export_data(&doc, Format::Txt);
+    let row = text.lines().nth(1).unwrap();
+    assert!(row.starts_with("'=SUM(A1:A9)"), "{row:?}");
+    let mut again = blank();
+    import(&mut again, text.as_bytes()).unwrap();
+    assert_eq!(values(&again).iter().find(|(k, _)| k == "Name").map(|(_, v)| v.clone()), Some(vec!["=SUM(A1:A9)".to_string()]));
+}
+
+/// Merging many files with many distinct names stays linear: every column once, in first-seen
+/// order, and a row looks its names up rather than scanning them.
+#[test]
+fn merge_csv_lists_each_column_once_in_order() {
+    let files: Vec<Vec<(String, Vec<String>)>> =
+        (0..3).map(|f| (0..4).map(|i| (format!("c{}", (i + f) % 5), vec![format!("{f}-{i}")])).collect()).collect();
+    let csv = merge_csv(&files);
+    let mut lines = csv.lines();
+    assert_eq!(lines.next(), Some("c0,c1,c2,c3,c4"));
+    assert_eq!(lines.next(), Some("0-0,0-1,0-2,0-3,"));
+    assert_eq!(lines.next(), Some(",1-0,1-1,1-2,1-3"));
+    assert_eq!(lines.next(), Some("2-3,,2-0,2-1,2-2"));
+}
+
+/// A long parent name is written into every descendant's full name: past the import's text
+/// bound the file is refused rather than expanded.
+#[test]
+fn xfdf_field_names_past_the_text_bound_are_refused() {
+    let parent = "p".repeat(1 << 20);
+    let kids: String = (0..100).map(|i| format!("<field name=\"k{i}\"><value>v</value></field>")).collect();
+    let xfdf =
+        format!("<?xml version=\"1.0\"?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><fields><field name=\"{parent}\">{kids}</field></fields></xfdf>");
+    let mut doc = blank();
+    match import(&mut doc, xfdf.as_bytes()) {
+        Err(DataError::Malformed(m)) => assert!(m.contains("64 MiB"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A same-name import never replaces a widget whose field type is inherited, or whose subtype is
+/// written as a reference: the field keeps its dictionary and the import goes beside it.
+#[test]
+fn same_name_import_keeps_a_widget_with_an_inherited_field_type() {
+    let mut doc = blank();
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    // A field with one widget kid: /FT on the field, the widget names it as /Parent.
+    let mut field = Dict::new();
+    field.set(b"FT".to_vec(), Object::name("Tx"));
+    field.set(b"T".to_vec(), Object::String(PdfString::text("inherited")));
+    let field = doc.add(field);
+    let subtype = doc.add(Object::name("Widget"));
+    let mut widget = Dict::new();
+    widget.set(b"Type".to_vec(), Object::name("Annot"));
+    widget.set(b"Subtype".to_vec(), Object::Ref(subtype));
+    widget.set(b"Rect".to_vec(), arr(&[10.0, 10.0, 60.0, 30.0]));
+    widget.set(b"NM".to_vec(), Object::String(PdfString::text("w1")));
+    widget.set(b"Parent".to_vec(), Object::Ref(field));
+    let widget = doc.add(widget);
+    doc.update_dict(field, |d| d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(widget)]))).unwrap();
+    doc.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(widget)]))).unwrap();
+    let mut note = Dict::new();
+    note.set(b"Type".to_vec(), Object::name("Annot"));
+    note.set(b"Subtype".to_vec(), Object::name("Text"));
+    note.set(b"Rect".to_vec(), arr(&[10.0, 10.0, 30.0, 30.0]));
+    note.set(b"NM".to_vec(), Object::String(PdfString::text("w1")));
+    let added = xfdf::place(&mut doc, page, note).unwrap();
+    assert_ne!(added, widget);
+    assert_eq!(doc.get(widget).as_dict().unwrap().name(b"Type"), Some(b"Annot".as_slice()));
+    assert!(doc.get(widget).as_dict().unwrap().reference(b"Parent").is_some(), "the widget was replaced");
+    let annots = doc.get(page).as_dict().unwrap().get(b"Annots").unwrap().as_array().unwrap().len();
+    assert_eq!(annots, 2);
+}
+
+#[test]
+fn a_field_type_up_to_64_parents_away_protects_the_annotation() {
+    // the forms crate follows /Parent 64 levels: so does the import's protection check
+    let mut doc = blank();
+    let mut top = Dict::new();
+    top.set(b"FT".to_vec(), Object::name("Tx"));
+    let mut parent = doc.add(Object::Dict(top));
+    for _ in 0..40 {
+        let mut d = Dict::new();
+        d.set(b"Parent".to_vec(), Object::Ref(parent));
+        parent = doc.add(Object::Dict(d));
+    }
+    let mut annot = Dict::new();
+    annot.set(b"Parent".to_vec(), Object::Ref(parent));
+    assert!(crate::xfdf::is_field(&doc, &annot));
+}

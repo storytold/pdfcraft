@@ -148,6 +148,8 @@ fn xfdf_fields(doc: &Document, out: &mut String) {
     struct Node {
         values: Vec<String>,
         kids: Vec<(String, Node)>,
+        /// Each child's place in `kids`, by name: a wide level is not scanned per field.
+        index: std::collections::HashMap<String, usize>,
     }
     let mut root = Node::default();
     for f in pdfcraft_forms::fields(doc) {
@@ -162,10 +164,11 @@ fn xfdf_fields(doc: &Document, out: &mut String) {
         // the last level stay together in the deepest element's name, and the import joins them
         // back with periods into the same full name.
         for part in f.name.splitn(MAX_DEPTH, '.') {
-            let i = match node.kids.iter().position(|(k, _)| k == part) {
-                Some(i) => i,
+            let i = match node.index.get(part) {
+                Some(&i) => i,
                 None => {
                     node.kids.push((part.to_string(), Node::default()));
+                    node.index.insert(part.to_string(), node.kids.len() - 1);
                     node.kids.len() - 1
                 }
             };
@@ -214,8 +217,13 @@ pub fn export_xfdf(doc: &Document, comments: bool, fields: bool, file: &str) -> 
 /// Set the values of fields named in `values` (full names), counting what took.
 pub(crate) fn apply_values(doc: &mut Document, values: &[(String, Vec<String>)], report: &mut Report) {
     let all = pdfcraft_forms::fields(doc);
+    // The first field of a name, as the scan it replaces found it.
+    let mut by_name: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (i, f) in all.iter().enumerate() {
+        by_name.entry(f.name.as_str()).or_insert(i);
+    }
     for (name, vals) in values {
-        let Some(f) = all.iter().find(|f| &f.name == name) else { continue };
+        let Some(f) = by_name.get(name.as_str()).and_then(|&i| all.get(i)) else { continue };
         let first = vals.first().cloned().unwrap_or_default();
         let v = match f.kind {
             FieldKind::Text => FieldValue::Text(first),
@@ -369,7 +377,27 @@ pub(crate) const LOCKED: i64 = 128;
 /// widget or field (replacing it would set the field's value and policy around the form setter).
 fn import_protected(doc: &Document, x: &Dict) -> bool {
     let flags = x.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
-    flags & LOCKED != 0 || matches!(x.name(b"Subtype"), Some(b"Redact" | b"Widget")) || x.contains(b"FT")
+    let subtype = x.get(b"Subtype").map(|s| doc.resolve(s));
+    flags & LOCKED != 0 || matches!(subtype.as_deref().and_then(Object::as_name), Some(b"Redact" | b"Widget")) || is_field(doc, x)
+}
+
+/// Whether `x` is a form field or a widget of one: it has `/FT`, or a `/Parent` up the field
+/// tree does (a widget inherits its field's type).
+pub(crate) fn is_field(doc: &Document, x: &Dict) -> bool {
+    if x.contains(b"FT") {
+        return true;
+    }
+    let mut parent = x.reference(b"Parent");
+    let mut seen = std::collections::HashSet::new();
+    while let Some(r) = parent.filter(|r| seen.len() < 64 && seen.insert(*r)) {
+        let o = doc.get(r);
+        let Some(d) = o.as_dict() else { return false };
+        if d.contains(b"FT") {
+            return true;
+        }
+        parent = d.reference(b"Parent");
+    }
+    false
 }
 
 pub(crate) fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result<ObjRef, DataError> {
@@ -389,7 +417,19 @@ pub(crate) fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result
             let (quads, rest) = v.as_chunks::<8>();
             v.len() == q.len() && rest.is_empty() && !quads.is_empty() && quads.iter().all(quad_has_area)
         });
-        if !quads_drawable {
+        if quads_drawable {
+            // The rectangle holds all the mark removes: its review outline is clipped to the
+            // rectangle, so a quad outside it would be removed unseen.
+            let v: Vec<f64> = d.get(b"QuadPoints").and_then(Object::as_array).into_iter().flatten().filter_map(Object::as_f64).collect();
+            let mut r = rect_strict(doc, d.get(b"Rect"))
+                .map_or([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |[x0, y0, x1, y1]| {
+                    [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]
+                });
+            for [x, y] in v.as_chunks::<2>().0 {
+                r = [r[0].min(*x), r[1].min(*y), r[2].max(*x), r[3].max(*y)];
+            }
+            d.set(b"Rect".to_vec(), arr(&r));
+        } else {
             // Quads the outline can't draw, or any quad that encloses no area, are replaced by the
             // /Rect's, or dropped when there is no usable /Rect either; such a mark then removes
             // nothing.
@@ -418,9 +458,11 @@ pub(crate) fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result
     // and add the imported dict beside it under no name of its own.
     let mut clash = false;
     for a in annots {
-        let existing = a.as_ref().and_then(|r| doc.get(r).as_dict().cloned());
-        let same = nm.is_some() && existing.as_ref().and_then(|x| x.get(b"NM").and_then(|n| doc.resolve(n).as_string().map(|s| s.to_text()))) == nm;
-        if same && existing.as_ref().is_some_and(|x| import_protected(doc, x)) {
+        // Borrowed: the page's annotations are read once per imported one, never copied.
+        let held = a.as_ref().map(|r| doc.get(r));
+        let existing = held.as_deref().and_then(Object::as_dict);
+        let same = nm.is_some() && existing.and_then(|x| x.get(b"NM").and_then(|n| doc.resolve(n).as_string().map(|s| s.to_text()))) == nm;
+        if same && existing.is_some_and(|x| import_protected(doc, x)) {
             clash = true;
             kept.push(a);
         } else if same {
@@ -434,7 +476,8 @@ pub(crate) fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result
     }
     // The replaced note's pop-up goes with it; otherwise it stays on the page pointing at a note that is no longer there.
     kept.retain(|a| {
-        let Some(x) = a.as_ref().map(|r| doc.get(r)).and_then(|o| o.as_dict().cloned()) else { return true };
+        let Some(held) = a.as_ref().map(|r| doc.get(r)) else { return true };
+        let Some(x) = held.as_dict() else { return true };
         x.name(b"Subtype") != Some(b"Popup".as_slice()) || x.reference(b"Parent").is_none_or(|p| !removed.contains(&p))
     });
     // Keep the replaced comment's identity: replies and review statuses not included in a
@@ -516,7 +559,7 @@ pub(crate) fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, Data
     // Fields.
     if let Some(fields) = root.children().find(|c| c.has_tag_name("fields")) {
         let mut values = Vec::new();
-        walk_xfdf(fields, "", &mut values, 0)?;
+        walk_xfdf(fields, "", &mut values, 0, &mut 0)?;
         apply_values(doc, &values, &mut report);
     }
     Ok(report)
