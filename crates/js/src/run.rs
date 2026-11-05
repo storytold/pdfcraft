@@ -94,16 +94,20 @@ pub fn run_shared_calculations(
     let (kept, skipped) = (&kept, &skipped);
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // The script's thread writes dates as this one asked (`with_english_printd`).
+        let english = crate::format::printd_english();
         std::thread::scope(|scope| {
             let spawned = std::thread::Builder::new().name("pdfcraft-js".into()).stack_size(SCRIPT_STACK).spawn_scoped(scope, || {
-                run_here(
-                    script,
-                    event,
-                    doc,
-                    fields,
-                    ScriptSetup { doc_scripts: kept, skipped, calculations, initialize: true, reset_calls: 0 },
-                    limits,
-                )
+                crate::format::with_english_printd(english, || {
+                    run_here(
+                        script,
+                        event,
+                        doc,
+                        fields,
+                        ScriptSetup { doc_scripts: kept, skipped, calculations, initialize: true, reset_calls: 0 },
+                        limits,
+                    )
+                })
             });
             match spawned {
                 Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),

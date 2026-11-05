@@ -441,6 +441,29 @@ impl Scripts for JsRunner {
             message: (!o.rc).then(|| o.alerts.last().map(|m| m.text.clone())).flatten(),
         }
     }
+
+    /// Retry appearance formatting in isolation so the font fallback cannot replay persistent side effects.
+    fn rerun_with_english_dates(
+        &mut self,
+        event: FieldEvent,
+        script: &str,
+        target: &Field,
+        value: &str,
+        fields: &[Field],
+        doc: &pdfcraft_cos::Document,
+    ) -> Option<ScriptResult> {
+        let states = std::sync::Arc::new(fields.iter().map(|f| field_state(doc, f, &self.doc)).collect());
+        let mut ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
+        ev.target_id = Some(field_object_id(target.obj));
+        let calculations = self.calculations.get_or_insert_with(|| calculation_scripts(doc, fields));
+        let o = pdfcraft_js::with_english_printd(true, || {
+            pdfcraft_js::run_shared_calculations(script, &ev, &self.doc, states, &self.doc_scripts, calculations, Limits::default())
+        });
+        if o.error.is_some() || o.reset_limit_exceeded {
+            return None;
+        }
+        Some(ScriptResult { rc: o.rc, value: o.value.clone(), changes: Vec::new(), message: None })
+    }
 }
 
 /// A document-level JavaScript: its name and source.
