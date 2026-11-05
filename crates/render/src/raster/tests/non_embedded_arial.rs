@@ -82,10 +82,11 @@ fn without_and_with_unicode(font: Font<'_>) -> (Vec<u8>, Vec<u8>) {
     (without.rgba.to_vec(), with.rgba.to_vec())
 }
 
+/// Each Arial face, as Windows exporters name it and as Word names a face it doesn't embed, draws
+/// "Low É" from its glyph indexes, with `/CIDToGIDMap /Identity` and with a map stream. The name
+/// is read without regard to case, `MT` included.
 #[test]
 fn an_arial_the_pdf_does_not_embed_draws_the_glyphs_its_codes_name() {
-    // Each face as Windows exporters name it, and as Word names a face it doesn't embed. The name
-    // is read without regard to case, `MT` included.
     for base_font in [
         "ArialMT",
         "Arial-BoldMT",
