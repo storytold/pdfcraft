@@ -857,6 +857,14 @@ mod tests {
     use proptest::prelude::*;
 
     #[test]
+    fn the_same_entropy_and_bytes_give_the_same_identifier_on_every_platform() {
+        // Computed from the formula outside this crate: fixed-width big-endian fields and FNV-1a.
+        let opts = super::SaveOptions { id_entropy: Some([0x42; 16]), id_seed: 7, ..super::SaveOptions::default() };
+        let want = [0x96, 0xf8, 0xcb, 0x7d, 0x5b, 0xb0, 0x09, 0xc8, 0x92, 0xc9, 0xb7, 0x51, 0xdf, 0xe6, 0xab, 0xd1];
+        assert_eq!(super::new_id_bytes(&opts, b"%PDF-1.7\n"), want);
+    }
+
+    #[test]
     fn fnv1a_is_the_published_64_bit_algorithm() {
         // Published FNV-1a (64 bit) test vectors, so the identifier can be reproduced outside this crate.
         assert_eq!(super::fnv1a(super::FNV_OFFSET, b""), 0xcbf2_9ce4_8422_2325);
