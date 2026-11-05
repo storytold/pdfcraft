@@ -279,7 +279,9 @@ impl Session {
 
     /// Draw the document's images that don't ask for `/Interpolate` with their own samples,
     /// unsmoothed (`sharp`: Smooth images off, `RenderConfig::sharp_images`). It applies to
-    /// what the document draws everywhere: the viewer, page exports and printing. Returns
+    /// what PdfCraft draws of the document: the viewer, page exports and pages printed as
+    /// pictures (Print as image, or low-quality printing only; printed as pages, the document's
+    /// own content goes to the printer, which draws its images). Returns
     /// whether anything changed; callers must drop cached rasters for the document.
     pub fn set_sharp_images(&mut self, id: DocId, sharp: bool) -> bool {
         let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) else { return false };

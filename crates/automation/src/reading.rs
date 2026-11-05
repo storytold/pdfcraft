@@ -37,7 +37,8 @@ impl Automation {
     }
 
     /// Smooth images on or off for the document (`smooth: false` draws its images that don't
-    /// ask for `/Interpolate` with their own samples, in page_render, exports and printing).
+    /// ask for `/Interpolate` with their own samples, in page_render, exports and pages printed
+    /// as pictures).
     pub(crate) fn view_smooth_images(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
         let Some(smooth) = a.opt_bool("smooth")? else {

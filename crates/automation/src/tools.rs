@@ -1003,7 +1003,7 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "mode"],
             )),
-        t("view_smooth_images", "Smooth images", "Turn image smoothing on or off for the document (Acrobat's Page Display ▸ Smooth images, on by default). Off, an image that doesn't ask for /Interpolate is drawn with its own samples, neither averaged when shrunk nor smoothed when enlarged (as before #3858: a soft mask of another size is still filtered when shrunk, and a JPEG 2000 image drawn small is still decoded at a reduced resolution), so barcodes, QR codes and pixel art keep hard edges in page_render, page exports and printing. A view setting: the file doesn't change.")
+        t("view_smooth_images", "Smooth images", "Turn image smoothing on or off for the document (Acrobat's Page Display ▸ Smooth images, on by default). Off, an image that doesn't ask for /Interpolate is drawn with its own samples, neither averaged when shrunk nor smoothed when enlarged (as before #3858: a soft mask of another size is still filtered when shrunk, and a JPEG 2000 image drawn small is still decoded at a reduced resolution), so barcodes, QR codes and pixel art keep hard edges in page_render, page exports and pages printed as pictures (doc_print with as_image, or a document that allows only low-quality printing; otherwise doc_print sends the document's own content and the printer draws its images). A view setting: the file doesn't change.")
             .with(schema(
                 json!({ "doc": doc(), "smooth": { "type": "boolean", "description": "true smooths (the default), false keeps each image's own samples." } }),
                 &["doc", "smooth"],

@@ -4677,7 +4677,7 @@ fn reading_colors_set_and_invalidated() {
 
 /// Smooth images off (`set_sharp_images`) reaches the document's renderer, which draws a large
 /// picture enlarged with its own samples, and stays across a reload of the file, as reading
-/// colours do (#3443). Exports and printing read the same configuration.
+/// colours do (#3443). Exports and Print as image read the same configuration.
 #[test]
 fn sharp_images_reach_the_renderer_and_survive_a_reload() {
     // A page-scan-sized picture, its left half black: smoothed when enlarged, by default.
@@ -4718,9 +4718,41 @@ fn sharp_images_reach_the_renderer_and_survive_a_reload() {
     s.reload(id, pdf).unwrap();
     assert_eq!(s.sharp_images(id), Some(true));
     assert_eq!(grey(&s), 0, "the reloaded file is drawn unsmoothed too");
-    assert!(s.render_config(id).unwrap().sharp_images, "exports and printing read it");
+    assert!(s.render_config(id).unwrap().sharp_images, "exports and Print as image read it");
     assert_eq!(s.sharp_images(DocId(u64::MAX)), None);
     assert!(!s.set_sharp_images(DocId(u64::MAX), true));
+}
+
+/// Smooth images reaches printing only where PdfCraft draws the pages: printed as pictures, the
+/// picture follows it; printed as pages, the document's own content goes to the printer, the
+/// same whatever the setting.
+#[test]
+fn sharp_images_reach_print_as_image_only() {
+    // The page-scan-sized picture above, on a 512 pt page, printed at three times its size.
+    let picture = image::GrayImage::from_fn(512, 512, |x, _| image::Luma([if x < 256 { 0 } else { 255 }]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    picture.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let pdf = Session::new().create_from_images(&[("label.png".into(), png.into_inner())]).unwrap();
+    let mut s = Session::new();
+    let id = s.open("label.pdf", None, pdf, None).unwrap();
+    let as_pages =
+        print::Settings { pages: vec![0], paper: (512.0, 512.0), layout: print::Layout::Size(print::SizeMode::Actual), ..Default::default() };
+    let as_image = print::Settings { raster: Some(print::Raster { dpi: 216.0, grayscale: false }), ..as_pages.clone() };
+    // Grey pixels across the middle row of the printed picture, drawn back one sample a pixel.
+    let grey = |printed: Vec<u8>| {
+        let config = pdfcraft_render::RenderConfig { sharp_images: true, ..Default::default() };
+        let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(printed), config);
+        let r = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 3.0, ..Default::default() });
+        assert!(r.error.is_none(), "{:?}", r.error);
+        let (px, _) = r.rgba.as_chunks::<4>();
+        let (width, row) = (r.width as usize, r.height as usize / 2);
+        px[row * width..(row + 1) * width].iter().filter(|p| p[0] != 0 && p[0] != 255).count()
+    };
+    let smooth_pages = s.print_pdf(id, &as_pages).unwrap();
+    assert!(grey(s.print_pdf(id, &as_image).unwrap()) > 0, "printed as a picture: smoothed by default");
+    assert!(s.set_sharp_images(id, true));
+    assert_eq!(grey(s.print_pdf(id, &as_image).unwrap()), 0, "Smooth images off: the picture's own samples");
+    assert!(s.print_pdf(id, &as_pages).unwrap() == smooth_pages, "printed as pages: the document's own content");
 }
 
 #[test]

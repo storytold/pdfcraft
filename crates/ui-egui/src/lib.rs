@@ -310,7 +310,7 @@ pub struct PdfCraftApp {
     /// Preferences ▸ Smooth images (Acrobat's Page Display ▸ Smooth images, on by default):
     /// off, images that don't ask for `/Interpolate` are drawn with their own samples, so
     /// barcodes and pixel art keep hard edges. Applied to every open document and to documents
-    /// as they open; it reaches printing and page export too.
+    /// as they open; it reaches page export and Print as image too.
     pub smooth_images: bool,
     /// App-wide page decoration only; never part of a PDF edit or render request.
     pub show_page_edge_shadows: bool,
