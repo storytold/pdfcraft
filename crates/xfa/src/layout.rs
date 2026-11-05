@@ -32,7 +32,7 @@ use common::collect_values;
 pub(crate) use common::date_pattern;
 pub use common::formatted_value;
 pub(crate) use items::UNDERLINE_DROP;
-pub use items::{Action, BorderShape, Form, Item, Page, Rounded, Widget, WidgetBorder, WidgetKind};
+pub use items::{Action, BorderShape, Form, Item, Page, Rounded, Turned, Widget, WidgetBorder, WidgetKind};
 
 /// Most pages a form may lay out to.
 pub const MAX_PAGES: usize = 500;
@@ -212,15 +212,20 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
     let total = l.pages.len();
     let count = total.to_string();
     for p in &mut l.pages {
-        for it in &mut p.items {
-            if let Item::Text(s) = it
-                && s.text.contains(PAGE_COUNT_MARK)
-            {
-                s.text = s.text.replace(PAGE_COUNT_MARK, &count);
-            }
-        }
+        fill_page_count(&mut p.items, &count);
     }
     Ok(Form { pages: l.pages, fields: l.fields, warnings: l.warnings })
+}
+
+/// Puts the page count, known once every page is, where `items` left room for it.
+fn fill_page_count(items: &mut [Item], count: &str) {
+    for it in items {
+        match it {
+            Item::Text(s) if s.text.contains(PAGE_COUNT_MARK) => s.text = s.text.replace(PAGE_COUNT_MARK, count),
+            Item::Turned(t) => fill_page_count(&mut t.items, count),
+            _ => {}
+        }
+    }
 }
 
 // Bytes of embedded field values copied out on this thread, for tests that bound layout work.

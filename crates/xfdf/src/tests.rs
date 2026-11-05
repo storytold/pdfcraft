@@ -149,7 +149,7 @@ fn values(doc: &Document) -> Vec<(String, Vec<String>)> {
 fn a_replace_text_pair_survives_an_xfdf_round_trip() {
     let mut src = blank();
     let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
-    let style = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
+    let style = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None, ..Style::default() };
     let meta = |id: &str| Meta { date: Some("D:20261001120000Z".into()), id: id.into() };
     add_text_replacement(
         &mut src,
@@ -1240,6 +1240,39 @@ fn duplicate_xfdf_annotation_flags_do_not_turn_on_unrelated_bits() {
         let annotations = doc.get(page).as_dict().and_then(|p| p.get(b"Annots")).map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap();
         let square = annotations.iter().filter_map(|a| doc.resolve(a).as_dict().cloned()).find(|d| d.name(b"Subtype") == Some(b"Square")).unwrap();
         assert_eq!(square.get(b"F").and_then(Object::as_int), Some(expected), "flags={flags}");
+    }
+}
+
+#[test]
+fn edited_button_export_values_round_trip_in_all_data_formats() {
+    use pdfcraft_forms::{FieldProps, set_props};
+    let mut doc = blank();
+    add_field(&mut doc, 0, [80.0, 650.0, 94.0, 664.0], &NewField::Radio { group: Some("Size".into()), export: "S".into() }, None).unwrap();
+    add_field(&mut doc, 0, [100.0, 650.0, 114.0, 664.0], &NewField::Radio { group: Some("Size".into()), export: "L".into() }, None).unwrap();
+    set_props(&mut doc, "Agree", &FieldProps { export_value: Some((0, "Accepted".into())), ..Default::default() }).unwrap();
+    set_props(&mut doc, "Size", &FieldProps { export_value: Some((0, "Small".into())), ..Default::default() }).unwrap();
+    set_value(&mut doc, "Agree", &FieldValue::Check(true)).unwrap();
+    set_value(&mut doc, "Size", &FieldValue::Radio(Some("Small".into()))).unwrap();
+    let doc = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let mut exports = vec![export_xfdf(&doc, false, true, "").into_bytes(), export_fdf(&doc, false, true, "").unwrap()];
+    exports.extend([Format::Xml, Format::Csv, Format::Txt].map(|f| export_data(&doc, f).into_bytes()));
+    for (index, bytes) in exports.into_iter().enumerate() {
+        if index < 2 {
+            let values = data_values(&bytes).unwrap();
+            assert_eq!(values.iter().find(|(n, _)| n == "Agree").unwrap().1, vec!["Accepted"]);
+            assert_eq!(values.iter().find(|(n, _)| n == "Size").unwrap().1, vec!["Small"]);
+        } else {
+            // data_values reads XFDF/FDF/PDF; import also handles XML/CSV/TXT.
+            let text = std::str::from_utf8(&bytes).unwrap();
+            assert!(text.contains("Accepted") && text.contains("Small"), "{text}");
+        }
+        let mut target = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        set_value(&mut target, "Agree", &FieldValue::Check(false)).unwrap();
+        set_value(&mut target, "Size", &FieldValue::Radio(Some("L".into()))).unwrap();
+        import(&mut target, &bytes).unwrap();
+        let fs = fields(&target);
+        assert_eq!(fs.iter().find(|f| f.name == "Agree").unwrap().export_values(), vec!["Accepted"]);
+        assert_eq!(fs.iter().find(|f| f.name == "Size").unwrap().export_values(), vec!["Small"]);
     }
 }
 

@@ -75,7 +75,7 @@ fn to_user(p: &PageInfo, x: f64, y: f64) -> [f64; 2] {
     [ux as f64, uy as f64]
 }
 
-fn rect_to_user(p: &PageInfo, r: [f64; 4]) -> [f64; 4] {
+pub(crate) fn rect_to_user(p: &PageInfo, r: [f64; 4]) -> [f64; 4] {
     let (a, b) = (to_user(p, r[0], r[1]), to_user(p, r[2], r[3]));
     [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
 }
@@ -183,12 +183,26 @@ impl Automation {
                 "page": c.page + 1,
                 "index": c.index + 1,
                 "type": c.subtype,
+                "intent": c.intent,
                 "author": c.author,
                 "contents": c.contents,
                 "modified": c.modified,
                 "rect": crate::view_rect(&doc.info, c.page, c.shown_rect(doc.info.pages.get(c.page).map_or(0, |p| p.rotation))),
                 "color": c.color.map(hex),
             });
+            // How opaque it is drawn: as a whole, or its fill and text each at their own.
+            // Not for replies, which are drawn with the comment they answer.
+            if !c.is_reply()
+                && let Some(p) = doc.comment_props(c.page, c.index)
+            {
+                v["opacity"] = json!(p.opacity);
+                if let Some(f) = p.fill_opacity {
+                    v["fill_opacity"] = json!(f);
+                }
+                if let Some(t) = p.text_opacity {
+                    v["text_opacity"] = json!(t);
+                }
+            }
             // A line's ends, or the corners of connected lines, a polygon or a cloud, as
             // comment_edit's `points` takes them.
             // Unchanged on a page the viewer could not read, as `rect` is.
@@ -252,6 +266,12 @@ impl Automation {
         if endings.is_some() && !matches!(kind, "line" | "arrow" | "polyline" | "callout") {
             return Err(ToolError::InvalidArgs("endings apply to a line, arrow, polyline or callout".into()));
         }
+        // Shift while drawing: each end or corner held level or plumb with the one before.
+        let ortho = a.opt_bool("ortho")?.unwrap_or(false);
+        if ortho && !matches!(kind, "line" | "arrow" | "polygon" | "cloud" | "polyline") {
+            return Err(ToolError::InvalidArgs("ortho applies to a line, arrow, polygon, cloud or polyline".into()));
+        }
+        let held = |last: [f64; 2], p: [f64; 2]| if ortho { pdfcraft_engine::measure::snap::ortho(last, p) } else { p };
         let markup = match kind {
             "highlight" => Some(Markup::Highlight),
             "underline" => Some(Markup::Underline),
@@ -324,11 +344,12 @@ impl Automation {
                     Shape::TextBox { rect: rect_to_user(&info, a.need::<4>("rect", "a text box")?), font_size }
                 }
                 "line" | "arrow" => {
-                    let (f, t) = (a.need::<2>("from", "a line")?, a.need::<2>("to", "a line")?);
+                    let f = a.need::<2>("from", "a line")?;
+                    let t = held(f, a.need::<2>("to", "a line")?);
                     let [start, end] = ending_pair(kind, endings.as_deref())?;
                     Shape::Line { from: to_user(&info, f[0], f[1]), to: to_user(&info, t[0], t[1]), start, end }
                 }
-                "ink" => {
+                "ink" | "freehand_highlight" => {
                     let wrong = || ToolError::InvalidArgs("strokes must be an array of arrays of [x, y] points".into());
                     let strokes = a.get("strokes").ok_or_else(|| ToolError::InvalidArgs("ink needs `strokes`".into()))?;
                     let strokes = strokes
@@ -346,15 +367,20 @@ impl Automation {
                                 .collect::<Result<Vec<_>>>()
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Shape::Ink { strokes }
+                    if kind == "freehand_highlight" { Shape::FreehandHighlight { strokes } } else { Shape::Ink { strokes } }
                 }
                 "polygon" | "cloud" | "polyline" => {
                     let wrong = || ToolError::InvalidArgs(format!("{kind} needs `points`: an array of [x, y] points"));
                     let pts = a.get("points").and_then(|p| p.as_array()).ok_or_else(wrong)?;
+                    let mut last = None;
                     let vertices = pts
                         .iter()
                         .map(|p| match p.as_array().map(|p| p.iter().map(|v| v.as_f64()).collect::<Vec<_>>()).as_deref() {
-                            Some([Some(x), Some(y)]) => Ok(to_user(&info, *x, *y)),
+                            Some([Some(x), Some(y)]) => {
+                                let p = last.map_or([*x, *y], |l| held(l, [*x, *y]));
+                                last = Some(p);
+                                Ok(to_user(&info, p[0], p[1]))
+                            }
                             _ => Err(wrong()),
                         })
                         .collect::<Result<Vec<_>>>()?;
@@ -424,6 +450,19 @@ impl Automation {
         if let Some(o) = a.opt_num("opacity")? {
             style.opacity = o.clamp(0.0, 1.0);
         }
+        // The fill's and a text box's text's own opacities (the line keeps `opacity`).
+        let (fill_opacity, text_opacity) = (a.opt_num("fill_opacity")?, a.opt_num("text_opacity")?);
+        let texts = matches!(shape, Shape::TextBox { .. } | Shape::Typewriter { .. } | Shape::Callout { .. });
+        if fill_opacity.is_some() && !(texts || matches!(shape, Shape::Rectangle { .. } | Shape::Oval { .. } | Shape::Polygon { .. })) {
+            return Err(ToolError::InvalidArgs(
+                "fill_opacity applies to a rectangle, oval, polygon, cloud, text box, typewriter text or callout".into(),
+            ));
+        }
+        if text_opacity.is_some() && !texts {
+            return Err(ToolError::InvalidArgs("text_opacity applies to a text box, typewriter text or callout".into()));
+        }
+        style.fill_opacity = fill_opacity.map(|o| o.clamp(0.0, 1.0));
+        style.text_opacity = text_opacity.map(|o| o.clamp(0.0, 1.0));
         if let Some(w) = a.opt_num("width")? {
             style.width = w.max(0.0);
         }
@@ -502,6 +541,10 @@ impl Automation {
         if sensitivity.is_some() && !scan {
             return Err(ToolError::InvalidArgs("sensitivity is only for scan: true".into()));
         }
+        let requested_color = a.color("color")?;
+        if requested_color.is_some() && !matches!(kind, "text" | "date") {
+            return Err(ToolError::InvalidArgs("color is only for type text or date".into()));
+        }
         let requested_size = a.opt_num("font_size")?;
         if requested_size.is_some() && !matches!(kind, "text" | "date") {
             return Err(ToolError::InvalidArgs("font_size is only for type text or date".into()));
@@ -534,8 +577,10 @@ impl Automation {
             return self.apply(a, edit);
         }
         let text_at = |t: &str| {
-            let w = (pdfcraft_engine::annot_text::text_width(t, size) + 8.0).clamp(20.0, 600.0);
-            let h = size * 1.2 + 6.0;
+            let longest = t.lines().map(|line| pdfcraft_engine::annot_text::text_width(line, size)).fold(0.0, f64::max);
+            let w = (longest + 8.0).clamp(20.0, 600.0);
+            let rows = pdfcraft_engine::annot_text::wrap(t, size, w - 4.0).len().max(1);
+            let h = rows as f64 * size * 1.2 + 6.0;
             let rect = pdfcraft_engine::text_box_at(i64::from(info.rotation), at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]]);
             Shape::Typewriter { rect, font_size: size }
         };
@@ -579,7 +624,10 @@ impl Automation {
                 (Shape::Mark { rect: mark.rect_at(at, i64::from(info.rotation)), mark }, String::new())
             }
         };
-        let style = Style::default_for(&shape);
+        let mut style = Style::default_for(&shape);
+        if let Some(color) = requested_color {
+            style.color = color;
+        }
         self.apply(a, Edit::AddAnnotation(NewAnnotation { page, shape, style, contents, author }))
     }
 
@@ -646,6 +694,14 @@ impl Automation {
             let fill = if f.eq_ignore_ascii_case("none") { None } else { Some(parse_color(f)?) };
             edits.push(Edit::FillAnnotation { page, index, fill });
         }
+        // After `opacity`, which sets the whole comment's.
+        let (fill_opacity, text_opacity) = (a.opt_num("fill_opacity")?, a.opt_num("text_opacity")?);
+        if fill_opacity.into_iter().chain(text_opacity).any(|o| !(0.0..=1.0).contains(&o)) {
+            return Err(ToolError::InvalidArgs("fill_opacity and text_opacity are 0–1".into()));
+        }
+        if fill_opacity.is_some() || text_opacity.is_some() {
+            edits.push(Edit::PartOpacity { page, index, fill: fill_opacity, text: text_opacity });
+        }
         if let Some(size) = a.opt_num("font_size")? {
             if !(1.0..=400.0).contains(&size) {
                 return Err(ToolError::InvalidArgs("font_size must be 1–400 pt".into()));
@@ -679,7 +735,7 @@ impl Automation {
         }
         if edits.is_empty() {
             return Err(ToolError::InvalidArgs(
-                "nothing to change: pass contents, color, opacity, width, fill, font_size, rect, move or points".into(),
+                "nothing to change: pass contents, color, opacity, fill_opacity, text_opacity, width, fill, font_size, rect, move or points".into(),
             ));
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Edit comment".into(), edits } };

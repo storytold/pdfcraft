@@ -41,6 +41,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Set bookmark destination",
     "Colour",
     "Style",
+    "Import bookmarks",
     "New bookmarks from structure",
     "New bookmarks from text styles",
     "Number pages",
@@ -71,6 +72,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Add inserted text",
     "Add file attachment",
     "Add stamp",
+    "Add 3D model",
     "Delete comment",
     "Edit comment",
     "Reply",
@@ -102,6 +104,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Set alternate text",
     "Mark figure as decorative",
     "Recognize text",
+    "Enhance scanned file",
     "Run JavaScript",
     "Run form script",
     "Save as {level}",
@@ -114,10 +117,17 @@ pub const EDIT_LABELS: &[&str] = &[
     "Move object",
     "Move objects",
     "Move image",
+    "Transform image",
     "Rotate image",
+    "Crop image",
     "Flip image",
     "Replace image",
     "Delete image",
+    "Bring to front",
+    "Bring forward",
+    "Send backward",
+    "Send to back",
+    "Remove crop",
     "Add header & footer",
     "Update header & footer",
     "Add watermark",
@@ -192,6 +202,7 @@ impl Edit {
             // The bookmark Style and Colour menus' own names, already said in every language.
             Edit::SetBookmarkColor { .. } => Label::of("Colour"),
             Edit::SetBookmarkStyle { .. } => Label::of("Style"),
+            Edit::ImportBookmarks { .. } => Label::of("Import bookmarks"),
             Edit::BookmarksFromStructure => Label::of("New bookmarks from structure"),
             Edit::BookmarksFromTextStyles { .. } => Label::of("New bookmarks from text styles"),
             Edit::NumberPages { .. } => Label::of("Number pages"),
@@ -204,6 +215,7 @@ impl Edit {
             Edit::SetMeasurementScale { .. } => Label::of("Set measurement scale"),
             Edit::AddAnnotation(a) => Label::of(add_annotation(&a.shape)),
             Edit::AddCustomStamp { .. } => Label::of("Add stamp"),
+            Edit::AddModel3d { .. } => Label::of("Add 3D model"),
             Edit::DeleteAnnotation { .. } => Label::of("Delete comment"),
             Edit::SetAnnotationContents { .. } => Label::of("Edit comment"),
             Edit::ReplyToAnnotation { .. } => Label::of("Reply"),
@@ -224,9 +236,11 @@ impl Edit {
             Edit::MoveAnnotation { .. } => Label::of("Move comment"),
             Edit::ReshapeAnnotation { .. } => Label::of("Reshape comment"),
             Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
-            Edit::StyleAnnotation { .. } | Edit::FillAnnotation { .. } | Edit::FontSizeAnnotation { .. } | Edit::SetAnnotationInfo { .. } => {
-                Label::of("Change comment properties")
-            }
+            Edit::StyleAnnotation { .. }
+            | Edit::FillAnnotation { .. }
+            | Edit::PartOpacity { .. }
+            | Edit::FontSizeAnnotation { .. }
+            | Edit::SetAnnotationInfo { .. } => Label::of("Change comment properties"),
             Edit::SetFieldValue { name, .. } => Label::with("Fill in {name}", name.as_str()),
             Edit::SetFieldImage { name, .. } => Label::with("Set the image of {name}", name.as_str()),
             Edit::ResetForm { .. } => Label::of("Clear form"),
@@ -247,6 +261,7 @@ impl Edit {
             Edit::MarkDecorative { .. } => Label::of("Mark figure as decorative"),
             Edit::MarkTagArtifact { .. } => Label::of("Mark content as artifact"),
             Edit::AddOcrText { .. } => Label::of("Recognize text"),
+            Edit::EnhanceScan { .. } => Label::of("Enhance scanned file"),
             Edit::ApplyScriptChanges { .. } => Label::of("Run JavaScript"),
             Edit::XfaEvent { .. } => Label::of("Run form script"),
             // The level is the standard's own name ("PDF/A-2b"), so it goes in as it stands.
@@ -260,11 +275,19 @@ impl Edit {
             Edit::MoveObjects { objects, .. } => plural("Move object", "Move objects", objects.len()),
             Edit::EditPageImage { change, .. } => Label::of(match change {
                 ImageEdit::Move(_) => "Move image",
+                ImageEdit::Transform(_) => "Transform image",
                 ImageEdit::Rotate(_) | ImageEdit::RotateBy(_) => "Rotate image",
                 ImageEdit::Crop(_) => "Crop image",
                 ImageEdit::Flip { .. } => "Flip image",
                 ImageEdit::Replace { .. } => "Replace image",
                 ImageEdit::Delete => "Delete image",
+                ImageEdit::Arrange(ord) => match ord {
+                    pdfcraft_edit::ArrangeOrder::BringToFront => "Bring to front",
+                    pdfcraft_edit::ArrangeOrder::BringForward => "Bring forward",
+                    pdfcraft_edit::ArrangeOrder::SendBackward => "Send backward",
+                    pdfcraft_edit::ArrangeOrder::SendToBack => "Send to back",
+                },
+                ImageEdit::RemoveCrop => "Remove crop",
             }),
             Edit::AddHeaderFooter { replace: false, .. } => Label::of("Add header & footer"),
             Edit::AddHeaderFooter { .. } => Label::of("Update header & footer"),
@@ -318,6 +341,7 @@ fn add_annotation(s: &Shape) -> &'static str {
         Shape::Oval { .. } => "Add oval",
         Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. } => "Add arrow",
         Shape::Line { .. } => "Add line",
+        Shape::FreehandHighlight { .. } => "Add freehand highlight",
         Shape::Ink { .. } => "Add drawing",
         Shape::TextBox { .. } => "Add text box",
         Shape::Typewriter { .. } => "Add text",
