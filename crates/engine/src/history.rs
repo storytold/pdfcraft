@@ -54,6 +54,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
         | Edit::AddCustomStamp { .. }
+        | Edit::AddModel3d { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
         | Edit::ReplyToAnnotation { .. }
@@ -67,6 +68,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
         | Edit::FillAnnotation { .. }
+        | Edit::PartOpacity { .. }
         | Edit::FontSizeAnnotation { .. }
         | Edit::SetAnnotationInfo { .. } => Scope::Comments,
         Edit::AddLink { .. } | Edit::SetLink { .. } | Edit::DeleteLink { .. } | Edit::RemoveLinks { .. } | Edit::AddLinks { .. } => Scope::Links,
@@ -77,6 +79,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
         | Edit::EditPageImage { .. }
+        | Edit::EnhanceScan { .. }
         | Edit::AddText { .. }
         | Edit::AddImage { .. }
         | Edit::UpdateContent { .. }
