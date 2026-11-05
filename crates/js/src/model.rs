@@ -239,6 +239,10 @@ pub enum Request {
     Beep,
     /// `app.execMenuItem("SaveAs")` (XFA forms' Save buttons).
     SaveAs,
+    /// `app.popUpMenu(item1, item2, …)` or `app.popUpMenuEx({cName, cReturn}, …)`: show the
+    /// items as a popup menu. The script gets `null` back (no synchronous reply yet), but the
+    /// viewer shows the items in a panel for the user to read.
+    PopUpMenu(Vec<String>),
     /// `app.execMenuItem("ShowHide…")`: show the side panel, or hide it when it is showing.
     ShowPanel(Panel),
 }

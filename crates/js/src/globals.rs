@@ -125,6 +125,35 @@ fn exec_menu_item(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<
     Ok(JsValue::undefined())
 }
 
+/// `app.popUpMenu(item1, item2, …)` and `app.popUpMenuEx({cName, cReturn}, …)`: collect the
+/// display labels from all arguments and queue them as a `Request::PopUpMenu`. Returns `null`
+/// (no synchronous reply; the viewer shows the items separately). Separators (`-`) are included.
+fn pop_up_menu(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let mut items = Vec::new();
+    let mut bytes = 0usize;
+    for a in args {
+        // popUpMenuEx: each arg is an object with cName; popUpMenu: each arg is a plain string.
+        let label = if let Some(o) = a.as_object()
+            && o.has_property(js_string!("cName"), ctx)?
+        {
+            text_line(&o.get(js_string!("cName"), ctx)?, ctx)?
+        } else {
+            text_line(a, ctx)?
+        };
+        if !label.is_empty() {
+            bytes = bytes.saturating_add(label.len()).saturating_add(std::mem::size_of::<String>());
+            if bytes > super::xfa::MAX_PAYLOAD {
+                return Err(super::host::error("popup menu exceeds the script output budget"));
+            }
+            items.push(label);
+        }
+    }
+    if !items.is_empty() {
+        host(ctx)?.borrow_mut().request(Request::PopUpMenu(items));
+    }
+    Ok(JsValue::null())
+}
+
 /// `app.response(…)`: always `null`, the answer for a canceled dialog, since no one is there to
 /// type one.
 fn response(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
@@ -226,6 +255,8 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         .function(NativeFunction::from_fn_ptr(alert), js_string!("alert"), 1)
         .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 0)
         .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)
+        .function(NativeFunction::from_fn_ptr(pop_up_menu), js_string!("popUpMenuEx"), 1)
+        .function(NativeFunction::from_fn_ptr(pop_up_menu), js_string!("popUpMenu"), 1)
         .function(NativeFunction::from_fn_ptr(launch_url), js_string!("launchURL"), 2)
         .function(NativeFunction::from_fn_ptr(exec_menu_item), js_string!("execMenuItem"), 1)
         .function(NativeFunction::from_fn_ptr(timer), js_string!("setTimeOut"), 2)

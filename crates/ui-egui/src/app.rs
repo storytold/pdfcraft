@@ -165,6 +165,7 @@ impl PdfCraftApp {
             pin_tool_search: String::new(),
             toast: None,
             toast_script: None,
+            popup_menu: None,
             script_messages: std::collections::VecDeque::new(),
             script_messages_dropped: 0,
             toast_dropped: 0,
@@ -759,6 +760,7 @@ impl PdfCraftApp {
             dialogs::show(self, &ctx);
             // Notices too: a refused field value or a failed save must be seen in full screen.
             self.show_progress(&ctx);
+            widgets::popup_menu(self, &ctx);
             widgets::toast(self, &ctx);
             self.finish_render_frame(&ctx);
             if let Some(mut control) = self.control.take() {
@@ -812,6 +814,7 @@ impl PdfCraftApp {
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
         self.show_progress(&ctx);
+        widgets::popup_menu(self, &ctx);
         widgets::toast(self, &ctx);
         self.finish_render_frame(&ctx);
         // Screenshots are issued only after a settled pass that really drew the window.

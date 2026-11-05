@@ -8978,6 +8978,25 @@ fn javascript_through_tools() {
 }
 
 #[test]
+fn schematic_component_properties_through_tools() {
+    let dir = workdir("schematic-popup");
+    let pdf = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [20 20 50 50] /A << /S /JavaScript /JS (app.popUpMenu\\('Designator: R1', 'Value: 10k'\\)) >> >>",
+    ]);
+    std::fs::write(dir.join("schematic.pdf"), pdf).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "schematic.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    let script = info["links"][0]["target"]["javascript"].as_str().unwrap();
+    let out = ok(&mut a, "js_run", json!({ "doc": doc, "script": script }));
+    assert!(out["error"].is_null(), "{out}");
+    assert_eq!(out["requests"], json!([{ "popup_menu": ["Designator: R1", "Value: 10k"] }]));
+}
+
+#[test]
 fn merging_form_data_into_a_spreadsheet() {
     let dir = workdir("merge-data");
     let mut a = auto(&dir);

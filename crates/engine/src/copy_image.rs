@@ -43,11 +43,18 @@ impl Document {
     /// [`Document::page_images`]: a raster image, or Form artwork that holds one.
     pub fn page_image_at(&self, page: usize, at: [f64; 2]) -> Option<usize> {
         let editor = self.editor.as_ref()?;
+        let pictures = std::cell::OnceCell::new();
         self.page_images(page).iter().rposition(|i| {
             i.contains(at)
                 && match (i.is_form, i.object) {
                     (false, Some(_)) => true,
-                    (true, Some(form)) => picture_in_form(&editor.cos, form).is_some(),
+                    (true, Some(form)) => picture_in_form(&editor.cos, form).is_some_and(|picture| {
+                        // A page-sized CAD group may contain only a tiny bitmap logo.
+                        pictures
+                            .get_or_init(|| pdfcraft_edit::reading_images(&editor.cos, page).unwrap_or_default())
+                            .iter()
+                            .any(|p| p.same_draw_as(i) && p.object == Some(picture) && p.contains(at))
+                    }),
                     _ => false,
                 }
         })

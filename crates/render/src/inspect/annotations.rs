@@ -145,7 +145,7 @@ impl<'a> Inspector<'a> {
             }
             if subtype == "Link" {
                 if let Some(link) = self.link(page, index, d, info.uri_base.as_deref(), text_budget, &mut unfit_quads) {
-                    if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
+                    if matches!(&link.target, LinkTarget::JavaScript(_)) || matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
                         info.has_javascript = true;
                     }
                     info.links.push(link);
@@ -313,7 +313,21 @@ impl<'a> Inspector<'a> {
             let (page, view) = self.dest(dest, 0)?;
             LinkTarget::Page(page, view)
         } else {
-            match self.action_target(d.get(b"A").ok().and_then(|a| self.dict(a))?, text_budget)? {
+            let a = d.get(b"A").ok().and_then(|a| self.dict(a))?;
+            let target = if self.name(a, b"S").as_deref() == Some("JavaScript") {
+                let js = a.get(b"JS").ok().and_then(|js| match self.resolve(js) {
+                    Object::String(bytes, _) => spend(bytes, text_budget, text_string),
+                    Object::Stream(s) if *text_budget > 0 => s.decompressed_content_with_limit(*text_budget).ok().and_then(|b| spend(&b, text_budget, text_string)),
+                    _ => None,
+                });
+                match js {
+                    Some(script) if !script.is_empty() => LinkTarget::JavaScript(script),
+                    _ => LinkTarget::Other("JavaScript".into()),
+                }
+            } else {
+                self.action_target(a, text_budget)?
+            };
+            match target {
                 LinkTarget::Uri(uri) => match crate::resolve_uri(base, &uri) {
                     // The raw address is spent already. What the base adds is spent too, or the
                     // link keeps the raw address.

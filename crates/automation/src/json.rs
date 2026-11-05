@@ -416,6 +416,7 @@ fn link_target(i: &pdfcraft_render::DocInfo, target: &pdfcraft_render::LinkTarge
             },
             "new_window": new_window,
         }),
+        pdfcraft_render::LinkTarget::JavaScript(script) => json!({ "javascript": script }),
         pdfcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
     }
 }
