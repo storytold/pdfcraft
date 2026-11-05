@@ -368,29 +368,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         }
     }
     batch.flush(&reader.document, &mut next, &mut rows, &mut out)?;
-    let mut trailer = Dict::new();
-    for key in [&b"Root"[..], b"Info", b"Encrypt"] {
-        if let Some(r) = trailer_in.reference(key).and_then(|r| map.get(&r)) {
-            trailer.set(key.to_vec(), Object::Ref(ObjRef::new(*r, 0)));
-        }
-    }
-    if let Some(Object::Dict(d)) = trailer_in.get(b"Encrypt") {
-        trailer.set(b"Encrypt".to_vec(), Object::Dict(d.clone()));
-    }
-    if let Some(id) = trailer_in.get(b"ID") {
-        trailer.set(b"ID".to_vec(), id.clone());
-    }
-    for (key, value) in trailer_in.iter() {
-        if !trailer_key_rewritten(key) {
-            trailer.set(key.clone(), renumber(value, &map));
-        }
-    }
-    if reader.document.output_security().0.is_none() {
-        ensure_id(&mut trailer, opts, reader.document.bytes());
-    }
-    if doc.new_id_required() {
-        regenerate_id(&mut trailer, opts, &out, reader.document.output_security().0.is_some());
-    }
+    let mut trailer = full_save_trailer(&reader.document, &trailer_in, &map, opts, &out);
     if opts.object_streams {
         write_xref_stream(&mut out, 0, &mut trailer, rows, next);
     } else {
@@ -407,6 +385,34 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     // kept as a document's working bytes for as long as it's open: drop the unused capacity.
     out.shrink_to_fit();
     Ok(out)
+}
+
+/// Assemble the full rewrite's trailer and apply its identifier policy.
+fn full_save_trailer(doc: &Document, trailer_in: &Dict, map: &HashMap<ObjRef, u32>, opts: &SaveOptions, out: &[u8]) -> Dict {
+    let mut trailer = Dict::new();
+    for key in [&b"Root"[..], b"Info", b"Encrypt"] {
+        if let Some(r) = trailer_in.reference(key).and_then(|r| map.get(&r)) {
+            trailer.set(key.to_vec(), Object::Ref(ObjRef::new(*r, 0)));
+        }
+    }
+    if let Some(Object::Dict(d)) = trailer_in.get(b"Encrypt") {
+        trailer.set(b"Encrypt".to_vec(), Object::Dict(d.clone()));
+    }
+    if let Some(id) = trailer_in.get(b"ID") {
+        trailer.set(b"ID".to_vec(), id.clone());
+    }
+    for (key, value) in trailer_in.iter() {
+        if !trailer_key_rewritten(key) {
+            trailer.set(key.clone(), renumber(value, map));
+        }
+    }
+    if doc.output_security().0.is_none() {
+        ensure_id(&mut trailer, opts, doc.bytes());
+    }
+    if doc.new_id_required() {
+        regenerate_id(&mut trailer, opts, out, doc.output_security().0.is_some());
+    }
+    trailer
 }
 
 /// Object `r` read again for writing. The traversal read it once and only kept its number, so
