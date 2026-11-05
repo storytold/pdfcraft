@@ -251,6 +251,8 @@ pub enum FieldValue {
     Check(bool),
     /// Radio group: the on-state to select (`None`: none selected).
     Radio(Option<String>),
+    /// Radio button targeting a specific widget: (widget object, on-state).
+    RadioWidget(ObjRef, Option<String>),
     /// Combo box or list box: export values (several only for multi-select lists).
     Choice(Vec<String>),
 }
