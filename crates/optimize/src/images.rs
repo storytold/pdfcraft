@@ -1362,12 +1362,6 @@ pub(crate) fn run(
     let total = refs.len();
     let mut jbig2 = false;
     let mut group: Vec<Held> = Vec::new();
-    // A soft mask two pictures share is changed by the first of them, and the second must see that,
-    // so they don't run beside others. Each of the others changes nothing another reads.
-    let smask_of = |doc: &Document, r: ObjRef| match &*doc.get(r) {
-        Object::Stream(s) => s.dict.reference(b"SMask"),
-        _ => None,
-    };
     // By number: a repaired object answers to two generations.
     let mut smask_uses: HashMap<u32, usize> = HashMap::new();
     for (r, _) in &refs {
@@ -1384,19 +1378,7 @@ pub(crate) fn run(
     };
     let mut done = 0;
     while let Some(rest) = refs.get(done..).filter(|rest| !rest.is_empty()) {
-        let run = if threads > 1 {
-            // One object under two generations: the second must see what the first left. Under one
-            // of them it can be a picture, and under the other another's soft mask.
-            let mut numbers = HashSet::new();
-            rest.iter()
-                .take(PICTURES_AT_ONCE)
-                .take_while(|(r, _)| {
-                    !smask_uses.contains_key(&r.num) && numbers.insert(r.num) && smask_of(doc, *r).is_none_or(|m| smask_uses.get(&m.num) == Some(&1))
-                })
-                .count()
-        } else {
-            0
-        };
+        let run = if threads > 1 { batch_len(doc, rest, &smask_uses, settings.mono.compression == MonoCompression::Jbig2) } else { 0 };
         let Some(batch) = rest.get(..run).filter(|batch| batch.len() > 1) else {
             if !progress(Stage::Images { done, total }) {
                 return Err(OptimizeError::Cancelled);
@@ -1452,6 +1434,47 @@ pub(crate) fn run(
         at_least_pdf_1_4(doc)?;
     }
     Ok(())
+}
+
+/// A picture's soft mask, if it names one.
+fn smask_of(doc: &Document, r: ObjRef) -> Option<ObjRef> {
+    match &*doc.get(r) {
+        Object::Stream(s) => s.dict.reference(b"SMask"),
+        _ => None,
+    }
+}
+
+/// How many of `rest`, from the first, can be worked out beside each other.
+fn batch_len(doc: &Document, rest: &[(ObjRef, f64)], smask_uses: &HashMap<u32, usize>, holds_samples: bool) -> usize {
+    // One object under two generations: the second must see what the first left. Under one of them
+    // it can be a picture, and under the other another's soft mask.
+    let mut numbers = HashSet::new();
+    let mut samples = 0usize;
+    rest.iter()
+        .take(PICTURES_AT_ONCE)
+        .take_while(|(r, _)| {
+            // Results wait for the end of the batch, samples kept to share a dictionary with them.
+            samples = samples.saturating_add(if holds_samples { held_samples(doc, *r) } else { 0 });
+            // A soft mask two pictures share is changed by the first of them, and the second must
+            // see that, so they don't run beside others.
+            samples <= SHARED_BYTES
+                && !smask_uses.contains_key(&r.num)
+                && numbers.insert(r.num)
+                && smask_of(doc, *r).is_none_or(|m| smask_uses.get(&m.num) == Some(&1))
+        })
+        .count()
+}
+
+/// The most bytes of 1-bit samples picture `r` could keep to share a dictionary: whole bytes a row.
+fn held_samples(doc: &Document, r: ObjRef) -> usize {
+    let object = doc.get(r);
+    let Object::Stream(s) = &*object else { return 0 };
+    let side = |key: &[u8]| s.dict.int(key).and_then(|v| u64::try_from(v).ok());
+    let Some((w, h)) = side(b"Width").zip(side(b"Height")) else { return 0 };
+    if w.saturating_mul(h) > SHARED_PIXELS {
+        return 0;
+    }
+    usize::try_from(w.div_ceil(8).saturating_mul(h)).unwrap_or(usize::MAX)
 }
 
 /// Below this many pictures, one thread does them.
@@ -1618,6 +1641,29 @@ mod dimension_tests {
             hold_in(&mut group, held(1), usize::MAX, |g| count += std::mem::take(g).len());
         }
         assert_eq!((count, group.len()), (SHARED_IMAGES, 0), "coded on the 16th");
+    }
+
+    #[test]
+    fn a_batch_holds_no_more_samples_than_a_group_may() {
+        let mut doc = Document::new_empty();
+        let mut add = |width: i64, height: i64| {
+            let mut d = Dict::new();
+            d.set(b"Width".to_vec(), Object::Int(width));
+            d.set(b"Height".to_vec(), Object::Int(height));
+            (doc.add(Object::Stream(Stream::from_raw(d, Vec::new()))), 72.0)
+        };
+        // Eight megabytes of samples each, and one byte a pixel when one pixel wide.
+        let large: Vec<_> = (0..12).map(|_| add(8192, 8192)).collect();
+        let thin: Vec<_> = (0..8).map(|_| add(1, 32 << 20)).collect();
+        let small: Vec<_> = (0..40).map(|_| add(100, 100)).collect();
+        // Past what may share a dictionary, so never held.
+        let huge: Vec<_> = (0..12).map(|_| add(16384, 16384)).collect();
+        let none = HashMap::new();
+        assert_eq!(batch_len(&doc, &large, &none, true), 8);
+        assert_eq!(batch_len(&doc, &thin, &none, true), 2);
+        assert_eq!(batch_len(&doc, &small, &none, true), PICTURES_AT_ONCE);
+        assert_eq!(batch_len(&doc, &huge, &none, true), huge.len());
+        assert_eq!(batch_len(&doc, &large, &none, false), large.len(), "nothing is held but for JBIG2");
     }
 
     #[test]
