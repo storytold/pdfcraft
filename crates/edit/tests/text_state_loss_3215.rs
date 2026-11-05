@@ -979,3 +979,118 @@ fn mixed_spacing_subset_missing_glyph_refuses_without_mutation() {
     assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
     assert_eq!(text_lines(&reopen(&doc), 0).unwrap()[0].text, "ab");
 }
+
+#[test]
+fn mixed_spacing_ocr_rewrite_on_top_restates_paint_and_exact_states() {
+    use pdfcraft_cos::{Dict, ObjRef, Object};
+    use pdfcraft_edit::text::{BlockStyle, rewrite_block};
+    let mut doc = fixture(
+        "q /GS1 gs BT /F1 24 Tf 3 Tr 72 700 Td (A ) Tj 0.001 Tc 95 Tz (tail) Tj ET \
+         BI /W 1 /H 1 /CS /G /BPC 8 ID x EI Q",
+    );
+    doc.update_dict(ObjRef::new(3, 0), |page| {
+        let Object::Dict(resources) = page.get_mut(b"Resources").unwrap() else { panic!("resources") };
+        let mut paint = Dict::new();
+        paint.set(b"CA".to_vec(), Object::Real(0.25));
+        paint.set(b"ca".to_vec(), Object::Real(0.25));
+        let mut states = Dict::new();
+        states.set(b"GS1".to_vec(), Object::Dict(paint));
+        resources.set(b"ExtGState".to_vec(), Object::Dict(states));
+    })
+    .unwrap();
+    let before = character_states(&doc);
+    assert!(text_blocks(&doc, 0).unwrap()[0].invisible);
+    rewrite_block(&mut doc, 0, 0, Some("B tail"), &BlockStyle { underline: Some(true), ..Default::default() }).unwrap();
+    let saved = reopen(&doc);
+    assert_no_graphics_stack_inside_text(&saved);
+    let ops = pdfcraft_content::parse(&content_bytes(&saved)).ops;
+    let image = ops.iter().position(|op| op.is("BI")).unwrap();
+    let overlay = &ops[image + 1..];
+    assert!(overlay.iter().any(|op| op.is("Tj") || op.is("TJ")), "rewritten text is above the image");
+    let mut state = None;
+    let mut stack = Vec::new();
+    let mut painted = 0;
+    for op in overlay {
+        match op.op.as_slice() {
+            b"q" => stack.push(state.clone()),
+            b"Q" => state = stack.pop().unwrap_or(None),
+            b"gs" => state = op.name(0).map(<[u8]>::to_vec),
+            b"Tj" | b"TJ" | b"S" => {
+                assert_eq!(state.as_deref(), Some(b"GS1".as_slice()), "overlay text and underlines restate the source alpha");
+                painted += 1;
+            }
+            _ => {}
+        }
+    }
+    assert!(painted >= 4, "both exact-spacing runs and their underlines are drawn");
+    assert_eq!(text_blocks(&saved, 0).unwrap()[0].editor_text, "B tail");
+    let after = character_states(&saved);
+    assert_eq!(before.len(), after.len());
+    for (old, new) in before.iter().zip(&after).skip(1) {
+        assert_eq!(old, new, "untouched characters keep the exact source spacing state");
+    }
+}
+
+#[test]
+fn moved_mixed_spacing_row_and_underlines_keep_soft_mask_anchor() {
+    use pdfcraft_content::Matrix;
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    use pdfcraft_edit::text::{BlockStyle, rewrite_block};
+    let mut doc = fixture("BT /GS1 gs /F1 24 Tf 72 700 Td (A ) Tj 0.001 Tc 95 Tz (tail) Tj ET");
+    let mut group = Dict::new();
+    group.set(b"S".to_vec(), Object::name("Transparency"));
+    group.set(b"I".to_vec(), Object::Bool(true));
+    let mut form = Dict::new();
+    form.set(b"Type".to_vec(), Object::name("XObject"));
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(612), Object::Int(792)]));
+    form.set(b"Group".to_vec(), Object::Dict(group));
+    let group = doc.add(Object::Stream(Stream::from_raw(form, b"0 g 0 0 612 792 re f".to_vec())));
+    doc.update_dict(ObjRef::new(3, 0), |page| {
+        let Object::Dict(resources) = page.get_mut(b"Resources").unwrap() else { panic!("resources") };
+        let mut mask = Dict::new();
+        mask.set(b"S".to_vec(), Object::name("Alpha"));
+        mask.set(b"G".to_vec(), Object::Ref(group));
+        let mut paint = Dict::new();
+        paint.set(b"SMask".to_vec(), Object::Dict(mask));
+        let mut states = Dict::new();
+        states.set(b"GS1".to_vec(), Object::Dict(paint));
+        resources.set(b"ExtGState".to_vec(), Object::Dict(states));
+    })
+    .unwrap();
+    let before = glyph_positions(&doc);
+    let states = character_states(&doc);
+    rewrite_block(&mut doc, 0, 0, None, &BlockStyle { offset: Some([10.0, 20.0]), underline: Some(true), ..Default::default() }).unwrap();
+    let saved = reopen(&doc);
+    assert_no_graphics_stack_inside_text(&saved);
+    assert_eq!(character_states(&saved), states);
+    let after = glyph_positions(&saved);
+    assert_eq!(before.len(), after.len());
+    for ((old, x, y), (new, moved_x, moved_y)) in before.iter().zip(&after) {
+        assert_eq!(old, new);
+        assert!((moved_x - x - 10.0).abs() < 0.001 && (moved_y - y - 20.0).abs() < 0.001);
+    }
+    let mut ctm = Matrix::IDENTITY;
+    let mut stack = Vec::new();
+    let mut masks = 0;
+    let mut strokes = 0;
+    for op in pdfcraft_content::parse(&content_bytes(&saved)).ops {
+        match op.op.as_slice() {
+            b"q" => stack.push(ctm),
+            b"Q" => ctm = stack.pop().unwrap(),
+            b"cm" => ctm = Matrix(op.nums::<6>().unwrap()).then(&ctm),
+            b"gs" if op.name(0) == Some(b"GS1") => {
+                assert_eq!(ctm.0, Matrix::IDENTITY.0, "soft mask is reselected at its original anchor, not the moved text CTM");
+                masks += 1;
+            }
+            b"Tj" | b"TJ" | b"S" => {
+                assert_eq!(ctm.0, [1.0, 0.0, 0.0, 1.0, 10.0, 20.0], "drawing returns to the moved CTM");
+                if op.is("S") {
+                    strokes += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(masks >= 3 && strokes >= 2, "the exact row and both underlines restate anchored mask paint");
+}

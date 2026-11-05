@@ -401,6 +401,16 @@ fn paragraph_geometry(doc: &Document, page: &pdfcraft_model::Page, block: &TextB
     Ok((dx, dy, style.width.unwrap_or(natural).clamp(1.0, 14_400.0)))
 }
 
+/// How far below a row of `size` the next one is written: the source's leading unless a size
+/// or line spacing is chosen.
+fn row_step(style: &BlockStyle, size: f64, source_leading: f64) -> f64 {
+    if style.line_spacing.is_none() && style.size.is_none() {
+        source_leading
+    } else {
+        style.line_spacing.unwrap_or(1.5).clamp(0.5, 5.0) * style.size.unwrap_or(size)
+    }
+}
+
 type WrappedStyledRows = (StyledRows, RowRanges, Vec<usize>, Vec<bool>, Vec<usize>);
 
 fn wrap_styled_rows(
@@ -1116,6 +1126,7 @@ pub(crate) fn rewrite_styled_block(
     let o = &lead.origin;
     // What is in force where the rewrite is drawn, and what the text after it expects.
     let after = if split { &o.state } else { &o.bt_state };
+    let at = if split { start } else { o.bt_op };
     validate_contextual_rows(&rows, &kept)?;
     let measured: Vec<_> = rows.iter().map(|row| measure(row, &positioning)).collect::<Result<_, _>>()?;
     let shaped = prepare_shaped_rows(doc, &fonts, &rows, &kept, |item| advance(item, &positioning))?;
@@ -1129,6 +1140,7 @@ pub(crate) fn rewrite_styled_block(
         .ok_or_else(|| EditError::Invalid("the paragraph is drawn in a space it cannot be edited in".into()))?;
     let (tx, ty) = back.apply(dx, dy);
     block_ops.push(Op::new("cm", vec![n(1.0), n(0.0), n(0.0), n(1.0), n(tx), n(ty)]));
+    let run_ctm = Matrix([1.0, 0.0, 0.0, 1.0, tx, ty]).then(&Matrix(o.ctm)).0;
     // A new row can land one leading above the next paragraph and look like the same
     // paragraph. When every row is in this rewrite, a paragraph marker keeps them in one
     // scope so the neighbour stays out (#2517). A row left in the source stream cannot share
@@ -1147,6 +1159,19 @@ pub(crate) fn rewrite_styled_block(
         })
         .rfind(|v| *v > 0.0)
         .unwrap_or(first.size * 1.5);
+    // Revealed OCR text that something is painted over goes on top of the page, where it starts
+    // from the initial state.
+    let largest =
+        block.lines.iter().filter_map(|i| lines.get(*i)).map(|l| l.size).chain(style.ranges.iter().filter_map(|r| r.size)).fold(first.size, f64::max);
+    // At least one line of the largest glyphs, so a larger range reaches up as far as it draws.
+    const LINE_EM: f64 = 1.2;
+    let pitch = source_leading.max(row_step(style, largest, source_leading)).max(largest * LINE_EM);
+    let widest = measured.iter().copied().fold(width, f64::max);
+    // This path lays rows out along user-space baselines, so the paragraph is upright here.
+    let reach = crate::Reach { rect: block.rect, offset: [dx, dy], width: widest, rows: rows.len(), pitch, upright: true };
+    let over = crate::revealed_under_paint(doc, page, block.invisible, reach.bounds(), &ops, at);
+    let initial = TextState::initial();
+    let drawn_from = if over { &initial } else { after };
     let mut baseline = first.origin.baseline;
     for (row_index, row) in rows.iter().enumerate() {
         let anchor = block.rows.get(row_index).and_then(|r| r.first()).and_then(|i| lines.get(*i));
@@ -1177,10 +1202,10 @@ pub(crate) fn rewrite_styled_block(
             // Share only an identical paint program from the same baseline; otherwise a
             // gs has no inverse and one segment could silently repaint its neighbour.
             let source = row.first().and_then(|item| lines.get(item.1)).unwrap_or(first);
-            let paint = source.origin.state.paint_ops(after);
+            let paint = source.origin.state.paint_ops(drawn_from, run_ctm);
             if row.iter().any(|item| {
                 let other = lines.get(item.1).unwrap_or(first);
-                other.origin.state.render_mode != source.origin.state.render_mode || other.origin.state.paint_ops(after) != paint
+                other.origin.state.render_mode != source.origin.state.render_mode || other.origin.state.paint_ops(drawn_from, run_ctm) != paint
             }) {
                 return Err(EditError::Invalid(
                     "mixed text spacing with incompatible row paint is not supported; the document was not changed".into(),
@@ -1226,7 +1251,7 @@ pub(crate) fn rewrite_styled_block(
             // drawn in: a `gs` has no inverse, so one run's ExtGState would stay for the next.
             if !exact_spacing {
                 block_ops.push(Op::new("q", vec![]));
-                block_ops.extend(state.paint_ops(after));
+                block_ops.extend(state.paint_ops(drawn_from, run_ctm));
             }
             if let Some((_, shaped, _)) = shaped_runs.get(&(row_index, pos)) {
                 let resource = glyph_resources.get(&(row_index, pos)).ok_or_else(|| EditError::Invalid("shaped font is missing".into()))?;
@@ -1278,7 +1303,7 @@ pub(crate) fn rewrite_styled_block(
                 if exact_spacing {
                     // Deferred path operators run after the text run's Q; restore its paint too.
                     out.push(Op::new("q", vec![]));
-                    out.extend(state.paint_ops(after));
+                    out.extend(state.paint_ops(drawn_from, run_ctm));
                 }
                 let [r, g, b] = overrides.get(&item.1).and_then(|r| r.color).or(style.color).unwrap_or(source.color);
                 let underline_size = size_of(source, item.1) * source.origin.k;
@@ -1304,21 +1329,17 @@ pub(crate) fn rewrite_styled_block(
             block_ops.push(Op::new("Q", vec![]));
             block_ops.extend(row_underlines);
         }
-        baseline -= if style.line_spacing.is_none() && style.size.is_none() {
-            source_leading
-        } else {
-            style.line_spacing.unwrap_or(1.5).clamp(0.5, 5.0) * style.size.unwrap_or(anchor.size)
-        };
+        baseline -= row_step(style, anchor.size, source_leading);
     }
     push_whole_paragraph_marker(&mut block_ops, marked, "EMC");
     block_ops.push(Op::new("Q", vec![]));
+    let on_top = crate::lift_on_top(over, &mut block_ops);
     block_ops.extend(styled_state_ops(after, exact_spacing));
     if split {
         block_ops.insert(0, Op::new("ET", vec![]));
         block_ops.push(Op::new("BT", vec![]));
         block_ops.push(Op::new("Tm", o.tlm.iter().map(|v| if exact_spacing { Object::Real(*v) } else { n(*v) }).collect()));
     }
-    let at = if split { start } else { o.bt_op };
     // A kept source row sits outside `block_ops`. Bound the whole paragraph when a marker is
     // safe. The close is not part of `block_ops`: that vector can end inside a text object
     // when the rewrite splits one, and a kept row's operators come later in the stream.
@@ -1330,5 +1351,6 @@ pub(crate) fn rewrite_styled_block(
         d.set(b"Contents".to_vec(), contents);
         d.set(b"Resources".to_vec(), Object::Dict(res));
     })?;
+    crate::draw_on_top(doc, &p, o.ctm, &on_top)?;
     Ok(LineEdit { substituted })
 }
