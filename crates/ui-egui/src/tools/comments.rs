@@ -34,14 +34,16 @@ use geometry::handle_pos;
 #[cfg(test)]
 pub(crate) use geometry::{caret_snap, snapped_caret};
 pub(crate) use geometry::{corner_ratio, page_rotation, resized};
-pub use geometry::{drawn_text_box_rect, text_box_rect};
+pub use geometry::{drawn_text_box_rect, snug_text_box_rect, text_box_rect};
 #[cfg(test)]
 use input::hover_tip;
 pub(crate) use input::{anchor, context, context_hit, describe, hit, keys, moving_on, nudge_keys, page_after_text, page_input};
 pub use menu::{CanvasAction, fill_picker, recent_custom_colours, remember_custom_colour, status_badge, swatch_grid};
+pub(crate) use menu::{
+    MenuRights, apply_quick_bar_color, attachment_items, border_colour_button, context_menu, quick_bar_colour, quick_bar_controls,
+};
 #[cfg(test)]
 use menu::{RECENT_CUSTOM, same_colour};
-pub(crate) use menu::{apply_quick_bar_color, attachment_items, context_menu, quick_bar_colour, quick_bar_controls};
 pub(crate) use paint::paint_page;
 #[cfg(test)]
 use paint::{changing_points, drawn_shape, edited_in_view};
@@ -247,6 +249,12 @@ impl CommentTool {
         if matches!(self, Self::TextBox | Self::Callout) { 0.0 } else { 0.5 }
     }
 
+    /// Whether the border-colour control applies to this tool: text boxes and callouts, whose
+    /// border takes the text colour unless it has its own.
+    pub fn has_border_color(self) -> bool {
+        matches!(self, Self::TextBox | Self::Callout)
+    }
+
     /// Whether the fill-colour control applies to this tool.
     pub fn has_fill(self) -> bool {
         matches!(self, Self::Rectangle | Self::Oval | Self::Polygon | Self::Cloud | Self::TextBox | Self::Callout)
@@ -353,10 +361,34 @@ impl CommentPrefs {
         }
     }
 
+    /// The text box tool's border shape (the other tools keep a rectangle).
+    pub fn set_border_shape(&mut self, tool: CommentTool, shape: pdfcraft_engine::BorderShape) {
+        if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
+            s.border_shape = if tool == CommentTool::TextBox { shape } else { pdfcraft_engine::BorderShape::Rectangle };
+        }
+    }
+
+    /// The tool's fill's own opacity (0–100 %) and a text box's or callout's text's (10–100 %),
+    /// for new comments; `None`: as the tool's opacity.
+    pub fn set_part_opacity(&mut self, tool: CommentTool, fill: Option<f64>, text: Option<f64>) {
+        if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
+            s.fill_opacity = fill.filter(|o| o.is_finite() && tool.has_fill()).map(|o| o.clamp(0.0, 1.0));
+            s.text_opacity = text.filter(|o| o.is_finite() && matches!(tool, CommentTool::TextBox | CommentTool::Callout)).map(|o| o.clamp(0.1, 1.0));
+        }
+    }
+
     /// The tool's fill (`None`: no fill).
     pub fn set_fill(&mut self, tool: CommentTool, fill: Option<Rgb>) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
             s.fill = if tool.has_fill() { fill.filter(|c| c.iter().all(|x| x.is_finite())).map(|c| c.map(|x| x.clamp(0.0, 1.0))) } else { None };
+        }
+    }
+
+    /// The border's own colour for new text boxes and callouts (`None`: the text colour).
+    pub fn set_border_color(&mut self, tool: CommentTool, color: Option<Rgb>) {
+        if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
+            s.border_color =
+                if tool.has_border_color() { color.filter(|c| c.iter().all(|x| x.is_finite())).map(|c| c.map(|x| x.clamp(0.0, 1.0))) } else { None };
         }
     }
 
@@ -389,6 +421,17 @@ pub(crate) fn tool_for_default(a: &Annotation, endings: Option<&[LineEnding]>) -
 
 fn arrow_ending(ending: LineEnding) -> bool {
     matches!(ending, LineEnding::OpenArrow | LineEnding::ClosedArrow | LineEnding::ROpenArrow | LineEnding::RClosedArrow)
+}
+
+/// Typed text (Fill & Sign's, or a typewriter's): no comment tool makes it, so Make Current
+/// Properties Default sets what Fill & Sign gives new text.
+pub(crate) fn typed_text(a: &Annotation) -> bool {
+    a.subtype == "FreeText" && a.intent.as_deref() == Some("FreeTextTypeWriter")
+}
+
+/// Whether Make Current Properties Default has defaults to set from `a`.
+pub(crate) fn defaultable(a: &Annotation) -> bool {
+    tool_for(a).is_some() || typed_text(a)
 }
 
 /// The tool that makes comments like `a` (for Make Current Properties Default).
