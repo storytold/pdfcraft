@@ -4277,6 +4277,8 @@ dependencies = [
  "pdfcraft-model",
  "pdfcraft-organize",
  "pdfcraft-platform",
+ "pdfcraft-prc",
+ "pdfcraft-prc-render",
  "pdfcraft-render",
  "pdfcraft-xfa",
  "png 0.18.1",
@@ -4559,6 +4561,24 @@ dependencies = [
  "futures-lite",
  "rustix 1.1.5",
  "zbus",
+]
+
+[[package]]
+name = "pdfcraft-prc"
+version = "0.18.1"
+dependencies = [
+ "flate2",
+ "proptest",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-prc-render"
+version = "0.18.1"
+dependencies = [
+ "flate2",
+ "pdfcraft-prc",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
