@@ -1129,6 +1129,23 @@ fn a_tags_content_in_a_stream_damaged_partway_is_not_rewritten() {
     assert_ne!(list.get(1), Some(&Object::Ref(ObjRef::new(4, 0))), "the tag's stream is rewritten");
 }
 
+/// A content stream that doesn't decode at all is kept as stored, and a tag in the page's other
+/// streams is still marked: only running past the decode budget refuses.
+#[test]
+fn a_tag_beside_a_stream_that_does_not_decode_is_marked() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let mut doc = figures_doc();
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    let other = doc.add(Object::Stream(Stream::from_raw(dict, b"0 g".to_vec())));
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(other), Object::Ref(ObjRef::new(4, 0))])))
+        .unwrap();
+    mark_tag_artifact(&mut doc, ObjRef::new(7, 0)).unwrap();
+    let contents = doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned();
+    let Some(Object::Array(list)) = contents else { panic!("contents {contents:?}") };
+    assert_eq!(list.first(), Some(&Object::Ref(other)), "kept as stored");
+}
+
 fn ref_(n: u32) -> Option<pdfcraft_cos::ObjRef> {
     Some(pdfcraft_cos::ObjRef::new(n, 0))
 }
