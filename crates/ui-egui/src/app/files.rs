@@ -182,7 +182,11 @@ impl PdfCraftApp {
                     Ok(()) => {
                         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) {
                             if let Some(override_rect) = pending.display_override {
-                                view.display_override = Some(override_rect);
+                                if let Some((layout, continuous)) = pending.display_override {
+                                let id = view.id;
+                                view.set_display(layout, continuous);
+                                self.launch_display_target = Some(id);
+                            }
                             }
                         }
                         if let Some(command) = pending.then {
