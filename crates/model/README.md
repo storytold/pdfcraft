@@ -17,8 +17,11 @@ L3/L4 crates need:
 The page-tree walk is `PageNodes` (every node, in document order) and `PageLeaves` (its leaves).
 `pages`, `try_pages`, `page`, `page_refs`, forms, annot, organize and redact's resource holders
 all use it; its doc comment gives the rules (leaf rule, object identity by number, a shared
-`/Kids` array read once). Each `PageNode` is given at the document's generation, and reads its
-inherited attributes without copying them (`inherited`, `inherited_from`).
+`/Kids` array read once). Each `/Kids` entry is resolved as cos resolves references (#1143): a
+stale generation is null and lists nothing, a repaired alias is the object. Each `PageNode` is
+given at the reference cos accepts as its own (`accepted_ref` maps any reference to it, for
+comparing destinations), and reads its inherited attributes without copying them (`inherited`,
+`inherited_from`).
 
 Its limits are `MAX_PAGE_TREE_NODES`, `MAX_KIDS_ENTRIES` and `MAX_INHERITED_COPIES` (the
 inherited copies of one walk; leaf dictionaries themselves are cloned uncharged, so this is not a

@@ -45,7 +45,8 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
         b"GoTo" => {
             let dest = doc.resolve(a.get(b"D")?);
             let target = dest.as_array()?.first()?.as_ref()?;
-            af::ButtonAction::GoTo(page_refs(doc).iter().position(|p| p.num == target.num)?)
+            let target = pdfcraft_model::accepted_ref(doc, target)?;
+            af::ButtonAction::GoTo(page_refs(doc).iter().position(|p| *p == target)?)
         }
         b"Hide" => {
             // /T: a field name, an annotation (or field) reference, or an array of them.

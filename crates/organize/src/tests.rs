@@ -253,12 +253,13 @@ fn recovering_a_lost_tree_past_the_node_cap_changes_nothing() {
     assert_eq!(recover_page_tree(&mut doc), Ok(3));
 }
 
-/// A rebuilt tree names each page at the generation the document holds it at, not a stale one its
-/// old `/Kids` used.
+/// A `/Kids` entry with a stale generation names no object, as cos resolves it (#1143): organize
+/// neither lists nor edits that page, and a rebuild keeps the pages that are listed, unchanged.
 #[test]
-fn a_rebuild_names_pages_at_their_current_generation() {
+fn a_stale_kids_entry_is_no_page_to_organize() {
     let mut doc = open(fixture());
-    let first = pages(&doc).unwrap()[0].obj;
+    let all = pages(&doc).unwrap();
+    let first = all[0].obj;
     let parent = doc.get(first).as_dict().unwrap().reference(b"Parent").unwrap();
     doc.update_dict(parent, |d| {
         let mut kids = d.get(b"Kids").unwrap().as_array().unwrap().clone();
@@ -266,14 +267,11 @@ fn a_rebuild_names_pages_at_their_current_generation() {
         d.set(b"Kids".to_vec(), Object::Array(kids));
     })
     .unwrap();
-    // An edit in place keeps the page at its generation too, and a bookmark naming it by its
-    // current generation still finds it.
-    assert_eq!(pages(&doc).unwrap()[0].obj, first);
-    rotate_pages(&mut doc, &[0], 90).unwrap();
-    assert_eq!(doc.generation(first.num), first.generation);
-    reverse_pages(&mut doc, &[0, 1, 2]).unwrap();
-    assert!(pages(&doc).unwrap().iter().any(|p| p.obj == first), "{:?}", pages(&doc).unwrap());
-    assert_eq!(doc.generation(first.num), first.generation);
+    let listed: Vec<ObjRef> = pages(&doc).unwrap().iter().map(|p| p.obj).collect();
+    assert_eq!(listed, all[1..].iter().map(|p| p.obj).collect::<Vec<_>>(), "the stale entry lists nothing");
+    reverse_pages(&mut doc, &[0, 1]).unwrap();
+    assert_eq!(pages(&doc).unwrap().iter().map(|p| p.obj).collect::<Vec<_>>(), listed.iter().rev().copied().collect::<Vec<_>>());
+    assert_eq!(doc.generation(first.num), first.generation, "the unlisted page object is untouched");
 }
 
 #[test]
@@ -4128,4 +4126,19 @@ fn an_outline_deeper_than_the_listing_is_exported_as_truncated() {
     let mut target = doc_a();
     crate::import_outline(&mut target, &[], 0, &tree.nodes, false).unwrap();
     assert_eq!(crate::bookmarks(&target).len(), 33);
+}
+
+/// The opening destination names its page as cos resolves the reference: the live generation opens
+/// on that page, a stale one names no page (and the document opens on page 1).
+#[test]
+fn an_opening_destination_with_a_stale_generation_names_no_page() {
+    let mut doc = open(fixture());
+    let third = pages(&doc).unwrap()[2].obj;
+    let root = doc.root().unwrap();
+    let open_at = |doc: &mut Document, page: ObjRef| {
+        doc.update_dict(root, |c| c.set(b"OpenAction".to_vec(), Object::Array(vec![Object::Ref(page), Object::name("Fit")]))).unwrap();
+        initial_view(doc).page
+    };
+    assert_eq!(open_at(&mut doc, third), 2);
+    assert_eq!(open_at(&mut doc, ObjRef { num: third.num, generation: third.generation + 1 }), 0);
 }

@@ -131,7 +131,7 @@ pub fn initial_view(doc: &Document) -> InitialView {
         v.page = d
             .first()
             .and_then(|p| match p {
-                Object::Ref(r) => pages.iter().position(|(pr, _)| pr.num == r.num),
+                Object::Ref(r) => pdfcraft_model::accepted_ref(doc, *r).and_then(|r| pages.iter().position(|(pr, _)| *pr == r)),
                 Object::Int(i) => usize::try_from(*i).ok(),
                 _ => None,
             })

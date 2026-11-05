@@ -175,14 +175,15 @@ impl<'a> Visit<'a> {
 /// Page targets for a listing: the page index of each page object, and the named destinations
 /// (read once, the first time one is needed).
 struct Targets {
-    /// Page index by object number: a destination may name a page with another generation.
-    pages: HashMap<u32, usize>,
+    /// Page index by the reference the walk gives each page; a destination's reference is looked up
+    /// through `pdfcraft_model::accepted_ref`, as cos resolves it.
+    pages: HashMap<ObjRef, usize>,
     names: Option<HashMap<Vec<u8>, Object>>,
 }
 
 impl Targets {
     fn new(doc: &Document) -> Self {
-        let pages = walk(doc).unwrap_or_default().into_iter().enumerate().map(|(i, (r, _))| (r.num, i)).collect();
+        let pages = walk(doc).unwrap_or_default().into_iter().enumerate().map(|(i, (r, _))| (r, i)).collect();
         Self { pages, names: None }
     }
 
@@ -284,9 +285,9 @@ pub(crate) fn resolve_dest(doc: &Document, dest: &Object) -> Option<Vec<Object>>
 }
 
 /// The page index an explicit destination array names.
-fn page_of_explicit(targets: &Targets, dest: &[Object]) -> Option<usize> {
+fn page_of_explicit(doc: &Document, targets: &Targets, dest: &[Object]) -> Option<usize> {
     match dest.first()? {
-        Object::Ref(page) => targets.pages.get(&page.num).copied(),
+        Object::Ref(page) => targets.pages.get(&pdfcraft_model::accepted_ref(doc, *page)?).copied(),
         // Some producers write a page number in a remote-style destination.
         Object::Int(n) => usize::try_from(*n).ok().filter(|&p| p < targets.pages.len()),
         _ => None,
@@ -305,7 +306,7 @@ fn view_of_explicit(doc: &Document, dest: &[Object]) -> Option<(Vec<u8>, Vec<Opt
 /// destination of its GoTo action `/A`.
 fn item_dest(doc: &Document, targets: &mut Targets, d: &Dict) -> Option<Vec<Object>> {
     if let Some(dest) = d.get(b"Dest").and_then(|dest| explicit_dest(doc, targets, dest, 0))
-        && page_of_explicit(targets, &dest).is_some()
+        && page_of_explicit(doc, targets, &dest).is_some()
     {
         return Some(dest);
     }
@@ -331,7 +332,7 @@ fn describe(doc: &Document, targets: &mut Targets, obj: ObjRef, path: Vec<usize>
         Some(d) => (title_of(doc, d), d.int(b"Count").is_some_and(|c| c > 0), item_dest(doc, targets, d)),
         None => (String::new(), false, None),
     };
-    let page = dest.as_deref().and_then(|d| page_of_explicit(targets, d));
+    let page = dest.as_deref().and_then(|d| page_of_explicit(doc, targets, d));
     let view = dest.as_deref().filter(|_| page.is_some()).and_then(|d| view_of_explicit(doc, d));
     let color = item.as_dict().and_then(|d| d.get(b"C").map(|c| doc.resolve(c))).and_then(|c| title_color(doc, &c));
     let flags = item.as_dict().and_then(|d| d.get(b"F").and_then(|f| doc.resolve(f).as_int())).unwrap_or(0);

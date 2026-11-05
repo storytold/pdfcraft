@@ -330,7 +330,10 @@ fn goes_to(doc: &Document, dest: &Object, gone: &[ObjRef]) -> bool {
         Some(d) => d.get(b"D").map(|d| doc.resolve(d)),
         None => Some(dest.clone()),
     };
-    array.and_then(|a| a.as_array().and_then(|a| a.first()).and_then(Object::as_ref)).is_some_and(|r| gone.iter().any(|g| g.num == r.num))
+    array
+        .and_then(|a| a.as_array().and_then(|a| a.first()).and_then(Object::as_ref))
+        .and_then(|r| pdfcraft_model::accepted_ref(doc, r))
+        .is_some_and(|r| gone.contains(&r))
 }
 
 /// Remove the named destinations (the catalog's /Names /Dests tree and the legacy /Dests
