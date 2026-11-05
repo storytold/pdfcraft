@@ -575,6 +575,9 @@ fn xmp_arrays_have_their_kind_and_item_types() {
     // Only white space around an array's items.
     assert_eq!(element("dc:creator", "stray<rdf:Seq><rdf:li>A</rdf:li></rdf:Seq>"), ["dc:creator"]);
     assert_eq!(element("dc:creator", "<rdf:Seq>stray<rdf:li>A</rdf:li></rdf:Seq>"), ["dc:creator"]);
+    // rdf:parseType or rdf:resource on the property makes its value something other than the array.
+    assert_eq!(mistyped(r#"><dc:creator rdf:parseType="Resource"><rdf:Seq><rdf:li>A</rdf:li></rdf:Seq></dc:creator>"#), ["dc:creator"]);
+    assert_eq!(mistyped(r#"><dc:creator rdf:resource="http://example.com/a"><rdf:Seq><rdf:li>A</rdf:li></rdf:Seq></dc:creator>"#), ["dc:creator"]);
     assert!(element("dc:creator", "\n  <rdf:Seq>\n    <rdf:li>A</rdf:li>\n  </rdf:Seq>\n").is_empty());
     // An rdf:resource element is empty.
     assert_eq!(mistyped(r#"><dc:source rdf:resource="http://example.com/a"><rdf:Seq><rdf:li>x</rdf:li></rdf:Seq></dc:source>"#), ["dc:source"]);
