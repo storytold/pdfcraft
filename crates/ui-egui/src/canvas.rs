@@ -919,6 +919,9 @@ impl DocView {
         self.org_drag = None;
         self.panel_drag = None;
         self.selection_drag = false;
+        // The Recognize text bar a press on a page with no text opened goes with the press. Left
+        // open over the page, it took the right-click that follows an Escape-cancelled press.
+        self.no_text = None;
         self.router.cancel();
         self.auto_scroll.cancel();
         self.prepare.cancel_pointer_gesture();
