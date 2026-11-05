@@ -323,6 +323,96 @@ fn selected_fill_text(app: &PdfCraftApp) -> Option<(usize, usize)> {
         .then_some((page, annotation))
 }
 
+/// Fill & Sign's Border controls for typed text: its width, colour and shape, for the selected
+/// text (`picked`), or for new text when none is selected. The label shows in a vertical bar, as the
+/// font size's does.
+fn fill_text_border_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, picked: Option<(usize, usize)>, vertical: bool) {
+    // The selected text's own border (Comment Properties may have changed it
+    // since): the controls below show it and change only it. Without one they
+    // set what new text gets until PdfCraft quits; Make Current Properties
+    // Default on typed text keeps it.
+    let selected = picked.and_then(|(page, annotation)| {
+        let p = app.active_ids().and_then(|(_, id)| app.session.get(id))?.comment_props(page, annotation)?;
+        let own = crate::fill_sign::TextBorder { width: p.width.unwrap_or(0.0), color: p.border_color, shape: p.border_shape.unwrap_or_default() };
+        Some((page, annotation, own))
+    });
+    let was = selected.map_or(
+        crate::fill_sign::TextBorder { width: app.fill_text_border, color: app.fill_text_border_color, shape: app.fill_text_border_shape },
+        |(_, _, own)| own,
+    );
+    let mut border = was;
+    // A border around the text, in its colour; the text keeps its place.
+    let border_label = |w: f64| if w > 0.0 { format!("{w} pt") } else { tl!("None").to_string() };
+    let label = vertical.then(|| ui.label(tl!("Border:")));
+    let combo = craft_ui::ComboBox::from_id_salt("fill-text-border")
+        .selected_text(border_label(was.width))
+        .width(72.0)
+        .show_ui(ui, |ui| {
+            for w in crate::fill_sign::TEXT_BORDERS {
+                ui.selectable_value(&mut border.width, w, border_label(w));
+            }
+        })
+        .response;
+    match label {
+        Some(label) => {
+            combo.labelled_by(label.id);
+        }
+        None => {
+            combo.on_hover_text(tl!("Border:"));
+        }
+    }
+    // The border's own colour (the text's unless picked).
+    if was.width > 0.0
+        && let Some(color) = comments::border_colour_button(ui, was.color, [0.0; 3])
+    {
+        border.color = color;
+    }
+    // Its shape: an oval or a circle goes around the text, which keeps its place.
+    if was.width > 0.0 {
+        craft_ui::ComboBox::from_id_salt("fill-text-border-shape")
+            .selected_text(tl!(was.shape.name()))
+            .width(96.0)
+            .show_ui(ui, |ui| {
+                for shape in pdfcraft_engine::BorderShape::ALL {
+                    ui.selectable_value(&mut border.shape, shape, tl!(shape.name()));
+                }
+            })
+            .response
+            .on_hover_text(tl!("Border shape"));
+    }
+    // No border, no shape: an oval or a circle left without its line would
+    // keep its box grown around a shape that isn't drawn.
+    if border.width <= 0.0 {
+        border.shape = pdfcraft_engine::BorderShape::Rectangle;
+    }
+    match selected {
+        Some((page, index, _)) => {
+            // One undo step for what one choice changed (Border ▸ None takes a
+            // circle's line and its shape).
+            let mut edits = Vec::new();
+            if border.width != was.width {
+                edits.push(Edit::StyleAnnotation { page, index, color: None, opacity: None, width: Some(border.width), endings: None });
+            }
+            if border.color != was.color {
+                edits.push(Edit::BorderColorAnnotation { page, index, color: border.color });
+            }
+            if border.shape != was.shape {
+                edits.push(Edit::BorderShapeAnnotation { page, index, shape: border.shape });
+            }
+            if edits.len() > 1 {
+                app.apply_edit(Edit::Batch { label: "Change comment properties".into(), edits });
+            } else if let Some(edit) = edits.pop() {
+                app.apply_edit(edit);
+            }
+        }
+        None => {
+            app.fill_text_border = border.width;
+            app.fill_text_border_color = border.color;
+            app.fill_text_border_shape = border.shape;
+        }
+    }
+}
+
 /// Extra controls rendered below/beside the buttons when a comment or fill tool is active.
 fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, vertical: bool) {
     let current_fill = match app.quick_tool {
@@ -365,9 +455,34 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
         {
             app.apply_edit(Edit::FontSizeAnnotation { page, index, size });
         }
+        // After the text's own controls, so they keep their place in a bar that scrolls.
+        fill_text_border_controls(ui, app, selected_fill_text(app), vertical);
     }
     if let QuickTool::Comment(tool) = app.quick_tool {
         controls_divider(ui, t, vertical);
+        // Text boxes and callouts: the border's own colour, for new ones and the selected one
+        // this tool made (not a locked one). With one selected the button shows its colours
+        // (Comment Properties may have changed them), else the tool's.
+        if tool.has_border_color() {
+            let style = app.comment_prefs.style(tool);
+            let selected = app.active_ids().and_then(|(index, id)| {
+                let (page, annotation) = app.views.get(index)?.comments.selected?;
+                let doc = app.session.get(id)?;
+                let made = doc.allows_annotation()
+                    && doc.info.annotations.iter().any(|a| a.page == page && a.index == annotation && !a.locked && comments::made_by(a, tool));
+                made.then(|| (page, annotation, doc.comment_props(page, annotation)))
+            });
+            let (shown, text) = match selected.as_ref().and_then(|(.., p)| p.as_ref()) {
+                Some(p) => (p.border_color, p.color.unwrap_or(style.color)),
+                None => (style.border_color, style.color),
+            };
+            if let Some(color) = comments::border_colour_button(ui, shown, text) {
+                app.comment_prefs.set_border_color(tool, color);
+                if let Some((page, annotation, _)) = selected {
+                    app.apply_edit(Edit::BorderColorAnnotation { page, index: annotation, color });
+                }
+            }
+        }
         // The selected comments this tool made take the colour too (locked ones keep theirs).
         if let Some(color) = comments::quick_bar_controls(ui, tool, &mut app.comment_prefs)
             && let Some((_, id)) = app.active_ids()
