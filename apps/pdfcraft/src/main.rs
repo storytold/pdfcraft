@@ -5,12 +5,16 @@
 //! An explicit `--layout` takes precedence for the active document, regardless of argument order.
 //! `--create-images [images…]` stages the images in one PDF and asks for the page DPI.
 //!
+//! Preferences for documents opened from now on (set before the files open, so they get them too;
+//! `startup::with_options`):
+//! `--default-layout single|continuous|two-up|two-page  --default-continuous on|off  --default-zoom fit-width|fit-page|<percent>
+//!  --always-default-view on|off  --default-panel auto|none|pages|bookmarks|comments  --default-page-gaps on|off  --default-mode all|read|edit|convert|sign`
+//!
 //! View options (applied after the files open; also the seed of the UI control channel):
 //! `--page N  --zoom 150  --layout single|continuous|two-up|two-page  --continuous on|off  --panel comments|bookmarks|pages|fields|layers|attachments|none
 //!  --theme light|dark|system  --language auto|<code>  --mode all|read|edit|convert|sign  --tool <catalogue id>  --left open|closed
 //!  --organize on  --fields on  --dialog properties|shortcuts|about  --palette <query>  --home on
-//!  --cover on|off  --default-layout single|continuous|two-up|two-page  --default-continuous on|off  --default-zoom fit-width|fit-page|<percent>  --always-default-view on|off
-//!  --page-gaps on|off  --default-page-gaps on|off  --recent-files 0..50
+//!  --cover on|off  --page-gaps on|off  --recent-files 0..50
 //!  --combine-view grid|list  --combine-zoom 60..200`
 //!
 //! `--new-window` opens a window of its own. Without it, on Windows, a launch that only names files
@@ -70,6 +74,8 @@ Options:
   --new-window                open a window of its own instead of passing the files to a running PdfCraft
   --create-images [images…]   put the images in one PDF and ask for the page DPI
   --control <file>            enable the UI control channel (pdfcraft-cli ui --control <file> …)
+  --default-panel pages, --default-zoom fit-width, --default-layout continuous, …
+                              preferences for new documents, set before the files open
   --page N, --zoom 150, --layout continuous, --theme dark, …
                               view settings applied once the files are open
   -h, --help                  print this and exit
@@ -460,22 +466,18 @@ fn app_creator<'a>(
             );
         }
         let defer_layout = two_paged && !files.is_empty() && !create_images;
-        if create_images {
-            if let Err(e) = app.begin_image_import_paths(&files) {
-                app.notify(e);
+        startup::with_options(&mut app, options, defer_layout, |app| {
+            if create_images {
+                if let Err(e) = app.begin_image_import_paths(&files) {
+                    app.notify(e);
+                }
+            } else {
+                // With the preference on, last session's files come back first; files named on
+                // the command line open after them, in front (#442).
+                app.reopen_last_files(&files);
+                startup::open_files(app, &files, two_paged);
             }
-        } else {
-            // With the preference on, last session's files come back first; files named on
-            // the command line open after them, in front (#442).
-            app.reopen_last_files(&files);
-            startup::open_files(&mut app, &files, two_paged);
-        }
-        for (k, v) in options {
-            let result = if defer_layout && k == "layout" { app.set_launch_layout(&v) } else { app.set_option(&k, &v) };
-            if let Err(e) = result {
-                log::warn!("--{k} {v}: {e}");
-            }
-        }
+        });
         Ok(Box::new(app))
     })
 }

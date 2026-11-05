@@ -74,6 +74,12 @@ fn catalog(doc: &Document) -> Result<(pdfcraft_cos::ObjRef, Dict), OrganizeError
     Ok((r, doc.get(r).as_dict().cloned().ok_or(OrganizeError::NoPageTree)?))
 }
 
+/// Whether the document asks to open with no navigation panel in so many words (`/PageMode
+/// /UseNone`), rather than naming none: [`InitialView::navigation`] is `PageOnly` either way.
+pub fn asks_for_no_panel(doc: &Document) -> bool {
+    catalog(doc).is_ok_and(|(_, c)| c.get(b"PageMode").map(|o| doc.resolve(o)).is_some_and(|o| o.as_name() == Some(b"UseNone".as_slice())))
+}
+
 /// The document's initial view as stored.
 pub fn initial_view(doc: &Document) -> InitialView {
     let Ok((_, c)) = catalog(doc) else { return InitialView::default() };
@@ -230,6 +236,9 @@ pub fn set_initial_view(doc: &mut Document, v: &InitialView) -> Result<(), Organ
         };
         match mode {
             Some(m) => c.set(b"PageMode".to_vec(), Object::name(m)),
+            // An explicit `/UseNone` is kept: it asks for no panel, which a viewer's default panel
+            // doesn't override, where no entry leaves the panel to the viewer (CodeRabbit on #5599).
+            None if c.get(b"PageMode").and_then(|o| o.as_name()) == Some(b"UseNone".as_slice()) => {}
             None => {
                 c.remove(b"PageMode");
             }
