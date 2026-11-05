@@ -549,6 +549,85 @@ fn pdf_page_stamps_fit_inside_an_explicit_box() {
     assert!(content.contains("/Pic Do") && !content.contains("BI"), "{content}");
 }
 
+/// #1297: a 3D model on a page keeps the whole box as its rectangle and draws a PDF poster as a
+/// form XObject fitted inside it, keeping its shape and centred.
+#[test]
+fn a_3d_model_gets_a_fitted_vector_poster_and_a_file_that_is_not_one_is_refused() {
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let blank = session.create_blank(595.0, 842.0, 1).unwrap();
+    let id = session.open_new("model.pdf", blank).unwrap();
+    let mut prc = b"PRC".to_vec();
+    prc.extend_from_slice(&[1; 64]);
+    let add = |model: Vec<u8>| Edit::AddModel3d {
+        page: 0,
+        rect: [56.0, 400.0, 539.0, 700.0],
+        model: Arc::new(model),
+        poster: Some(MarkFile { name: "poster.pdf".into(), bytes: Arc::new(half_red_page()), page: 0 }),
+        activation: Activation3d::default(),
+        name: "Bracket".into(),
+    };
+    assert!(session.apply(id, add(b"%PDF-1.7 not a model".to_vec())).is_err());
+    session.apply(id, add(prc)).unwrap();
+
+    let doc = pdfcraft_cos::Document::open(session.save_bytes(id).unwrap()).unwrap();
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let annots = doc.resolve(page.dict.get(b"Annots").unwrap());
+    let [only] = annots.as_array().unwrap().as_slice() else { panic!("the refused model added nothing: {annots:?}") };
+    let annot = doc.get(only.as_ref().unwrap());
+    let annot = annot.as_dict().unwrap();
+    assert_eq!(annot.name(b"Subtype"), Some(&b"3D"[..]));
+    let rect: Vec<f64> = annot.get(b"Rect").unwrap().as_array().unwrap().iter().filter_map(pdfcraft_cos::Object::as_f64).collect();
+    assert_eq!(rect, [56.0, 400.0, 539.0, 700.0], "the whole box, not the fitted picture");
+    assert_eq!(doc.resolve(annot.get(b"3DA").unwrap()).as_dict().unwrap().name(b"A"), Some(&b"XA"[..]));
+    let ap = doc.resolve(annot.get(b"AP").unwrap());
+    let pdfcraft_cos::Object::Stream(normal) = doc.get(ap.as_dict().unwrap().reference(b"N").unwrap()).as_ref().clone() else {
+        panic!("an appearance stream")
+    };
+    let pic = doc.resolve(normal.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+    let pic = doc.resolve(pic.get(b"XObject").unwrap()).as_dict().unwrap().reference(b"Pic").unwrap();
+    let pdfcraft_cos::Object::Stream(picture) = doc.get(pic).as_ref().clone() else { panic!("the picture is a stream") };
+    assert_eq!(picture.dict.name(b"Subtype"), Some(&b"Form"[..]), "the page is kept as a form XObject");
+    // The 80 × 40 page in the 483 × 300 box: 483 × 241.5 from y 429.25.
+    let content = String::from_utf8(normal.decoded().unwrap().to_vec()).unwrap();
+    assert!(content.contains(" 56 429.25 cm /Pic Do"), "{content}");
+}
+
+/// A PDF poster whose page has no area is refused rather than drawn as nothing.
+#[test]
+fn a_3d_poster_page_without_area_is_refused() {
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let blank = session.create_blank(595.0, 842.0, 1).unwrap();
+    let id = session.open_new("model.pdf", blank).unwrap();
+    let flat = String::from_utf8(half_red_page()).unwrap().replace("[0 0 80 40]", "[0 0 80 0 ]");
+    let add = Edit::AddModel3d {
+        page: 0,
+        rect: [56.0, 400.0, 539.0, 700.0],
+        model: Arc::new(b"PRC rest".to_vec()),
+        poster: Some(MarkFile { name: "flat.pdf".into(), bytes: Arc::new(flat.into_bytes()), page: 0 }),
+        activation: Activation3d::default(),
+        name: "Bracket".into(),
+    };
+    assert!(matches!(session.apply(id, add), Err(EditError::Source(_))));
+    assert!(session.get(id).unwrap().info.annotations.is_empty(), "nothing was added");
+}
+
+/// Adding a 3D model is a comment change: refused without the comments permission, and only the
+/// comments are rebuilt after it.
+#[test]
+fn a_3d_model_needs_the_comments_permission_and_changes_the_comments() {
+    let edit = Edit::AddModel3d {
+        page: 0,
+        rect: [0.0, 0.0, 100.0, 100.0],
+        model: Arc::new(b"PRC rest".to_vec()),
+        poster: None,
+        activation: Activation3d::default(),
+        name: String::new(),
+    };
+    let p = pdfcraft_cos::Permissions { bits: 0, owner: false };
+    assert_eq!(check_permission(&edit, &p), Err(EditError::NotPermitted("comments")));
+    assert_eq!(crate::history::scope_of(&edit), crate::history::Scope::Comments);
+}
+
 fn page_texts(s: &Session, id: DocId) -> Vec<String> {
     let doc = s.get(id).unwrap();
     let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
@@ -2132,7 +2211,7 @@ fn rect_comment(page: usize, rect: [f64; 4]) -> Edit {
     Edit::AddAnnotation(NewAnnotation {
         page,
         shape: Shape::Rectangle { rect },
-        style: Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: Some([1.0, 0.0, 0.0]) },
+        style: Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: Some([1.0, 0.0, 0.0]), ..Style::default() },
         contents: "Look here".into(),
         author: "Reviewer".into(),
     })
@@ -10106,6 +10185,42 @@ fn need_appearances_buttons_are_displayed_from_their_captions() {
     }
 }
 
+/// Copy and paste: the copies of a comment and its reply land on the asked-for page of another
+/// document under names of their own (nothing replaced; a second paste gives a second set),
+/// undo takes a paste away as one step, and a clipboard without comments is refused.
+#[test]
+fn pasting_copied_comments_adds_copies_that_undo_as_one_step() {
+    let (mut s, id) = session_with(2);
+    s.apply(id, rect_comment(1, [80.0, 80.0, 120.0, 120.0])).unwrap();
+    s.apply(id, Edit::ReplyToAnnotation { page: 1, index: 0, text: "Done".into(), author: "Ada".into() }).unwrap();
+    let xfdf = s.export_comments(id, &[(1, 0)]).unwrap();
+    assert!(xfdf.contains("<square") && xfdf.contains("inreplyto="), "{xfdf}");
+    let other = s.open("other.pdf", None, Arc::new(fixture(2)), None).expect("opens");
+    s.apply(other, Edit::PasteComments { xfdf: xfdf.clone(), page: 0, offset: None }).unwrap();
+    let a = s.get(other).unwrap().info.annotations.clone();
+    assert_eq!(a.len(), 2, "{a:?}");
+    assert!(a.iter().all(|x| x.page == 0), "on the asked-for page: {a:?}");
+    let parent = a.iter().find(|x| x.in_reply_to.is_none()).unwrap();
+    let reply = a.iter().find(|x| x.in_reply_to.is_some()).unwrap();
+    assert_eq!(reply.in_reply_to, parent.name, "the reply follows its copied parent");
+    assert_ne!(parent.name, s.get(id).unwrap().info.annotations[0].name, "a name of its own");
+    assert_eq!(parent.contents.as_deref(), Some("Look here"));
+    assert_eq!(s.get(other).unwrap().can_undo(), Some("Paste comments"));
+    s.apply(other, Edit::PasteComments { xfdf: xfdf.clone(), page: 1, offset: Some([30.0, -10.0]) }).unwrap();
+    let a = s.get(other).unwrap().info.annotations.clone();
+    assert_eq!(a.len(), 4, "a second set");
+    let placed = a.iter().find(|x| x.page == 1 && x.in_reply_to.is_none()).unwrap();
+    assert!((placed.rect[0] - 110.0).abs() < 0.5 && (placed.rect[1] - 70.0).abs() < 0.5, "moved by the offset: {:?}", placed.rect);
+    assert_eq!(comment_count(&xfdf), 1);
+    assert_eq!(comments_bounds(&xfdf).map(|b| b.map(|v| v.round())), Some([80.0, 80.0, 120.0, 120.0]));
+    s.undo(other).unwrap();
+    assert_eq!(s.get(other).unwrap().info.annotations.len(), 2);
+    assert!(s.apply(other, Edit::PasteComments { xfdf: "hello".into(), page: 0, offset: None }).is_err(), "no comments in it");
+    assert!(s.apply(other, Edit::PasteComments { xfdf, page: 9, offset: None }).is_err(), "no such page");
+    assert_eq!(s.get(other).unwrap().info.annotations.len(), 2, "a refused paste changes nothing");
+    assert_eq!(s.get(id).unwrap().info.annotations.len(), 2, "the source is untouched");
+}
+
 #[test]
 fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes() {
     let white = "1 g";
@@ -10368,4 +10483,36 @@ fn fill_sign_multiline_text_survives_engine_save_reopen_and_render() {
     let again = reopened.open("multiline.pdf", None, bytes, None).unwrap();
     assert_eq!(reopened.get(again).unwrap().info.annotations[0].contents.as_deref(), Some(text), "reopening preserves all blank lines");
     assert_eq!(before.rgba, render_page(&reopened, again).rgba, "the saved appearance is identical");
+}
+
+/// A whole tree goes in as one undoable step, and a refused tree changes nothing.
+#[test]
+fn imported_bookmarks_undo_in_one_step() {
+    let (mut s, id) = session_with(2);
+    let node = |title: &str, page, children| pdfcraft_organize::OutlineNode {
+        title: title.into(),
+        page,
+        view: None,
+        color: None,
+        italic: false,
+        bold: false,
+        open: true,
+        children,
+    };
+    let bookmarks = vec![node("Intro", Some(0), vec![node("Detail", Some(5), vec![])]), node("End", Some(1), vec![])];
+    s.apply(id, Edit::ImportBookmarks { parent: vec![], index: 0, bookmarks: bookmarks.clone(), replace: false }).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Intro→1[Detail→0]", "End→2"]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Import bookmarks"));
+    assert_eq!(s.outline_tree(id, &[]).unwrap().unwrap().nodes[0].title, "Intro");
+    s.undo(id).unwrap();
+    assert!(s.get(id).unwrap().info.outline.is_empty());
+    s.apply(id, Edit::ImportBookmarks { parent: vec![], index: 0, bookmarks: bookmarks.clone(), replace: false }).unwrap();
+    s.apply(id, Edit::ImportBookmarks { parent: vec![], index: 0, bookmarks: vec![node("New", Some(1), vec![])], replace: true }).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["New→2"]);
+    s.undo(id).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Intro→1[Detail→0]", "End→2"]);
+    s.undo(id).unwrap();
+    let err = s.apply(id, Edit::ImportBookmarks { parent: vec![4], index: 0, bookmarks, replace: false }).unwrap_err();
+    assert!(err.to_string().contains("no bookmark"), "{err}");
+    assert!(s.get(id).unwrap().info.outline.is_empty());
 }
