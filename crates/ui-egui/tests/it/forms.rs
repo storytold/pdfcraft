@@ -563,6 +563,9 @@ fn the_calendar_picks_today_in_the_fields_format_from_any_month() {
 
 #[test]
 fn lithuanian_calendar_localizes_months_and_weekdays_without_changing_field_values() {
+    if crate::support::skip_without_catalogs("lithuanian_calendar_localizes_months_and_weekdays_without_changing_field_values") {
+        return;
+    }
     use egui_kittest::kittest::Queryable;
     let mut h = harness();
     h.state_mut().set_option("language", "lt").unwrap();
