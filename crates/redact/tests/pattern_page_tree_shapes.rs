@@ -179,3 +179,47 @@ fn a_root_resource_dictionary_shared_with_a_form_is_confidential_or_refused() {
     ]);
     confidential_or_refused(doc, 0);
 }
+/// A document of 17,000 pages whose first page names a pattern: only that page has patterns.
+/// Redacting it should apply as it does in a short document.
+#[test]
+fn a_long_document_with_a_pattern_on_one_page_still_applies() {
+    const PAGES: usize = 17_000;
+    let kids: String = (0..PAGES).map(|i| format!("{} 0 R ", if i == 0 { 3 } else { 7 + i - 1 })).collect();
+    let mut objs = vec![
+        catalog(),
+        format!("<< /Type /Pages /Kids [{kids}] /Count {PAGES} >>").into_bytes(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 300] /Contents 5 0 R /Resources {RES} >>").into_bytes(),
+        FONT.to_vec(),
+        stream_obj("", CONTENT),
+        stream_obj(PATTERN, TEXT_CELL),
+    ];
+    for _ in 1..PAGES {
+        objs.push(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 300] >>".to_vec());
+    }
+    let mut doc = open(objs);
+    mark(&mut doc, 0);
+    let result = apply(&mut doc, None);
+    assert!(result.is_ok(), "a long document refuses: {result:?}");
+    assert!(!saved_contains(&doc, SECRET));
+}
+/// Control for the above: the same with 1,000 pages.
+#[test]
+fn control_a_shorter_document_with_a_pattern_on_one_page_applies() {
+    const PAGES: usize = 1000;
+    let kids: String = (0..PAGES).map(|i| format!("{} 0 R ", if i == 0 { 3 } else { 7 + i - 1 })).collect();
+    let mut objs = vec![
+        catalog(),
+        format!("<< /Type /Pages /Kids [{kids}] /Count {PAGES} >>").into_bytes(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 300] /Contents 5 0 R /Resources {RES} >>").into_bytes(),
+        FONT.to_vec(),
+        stream_obj("", CONTENT),
+        stream_obj(PATTERN, TEXT_CELL),
+    ];
+    for _ in 1..PAGES {
+        objs.push(b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 300] >>".to_vec());
+    }
+    let mut doc = open(objs);
+    mark(&mut doc, 0);
+    assert!(apply(&mut doc, None).is_ok());
+    assert!(!saved_contains(&doc, SECRET));
+}

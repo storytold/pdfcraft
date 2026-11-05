@@ -357,10 +357,16 @@ fn normalized_stream(doc: &Document, stream: &Stream) -> Result<Stream, PatternP
     Ok(normalized)
 }
 
+/// Page-tree nodes a walk of the tree may visit, pages included, before it refuses: the page tree
+/// is walked whole elsewhere too (`pdfcraft_model::pages`, `unlink_doomed`), so a long document
+/// must not refuse here.
+const MAX_TREE_NODES: usize = 1_000_000;
+
 /// Every node a full save reaches through the page tree -- down `/Kids` and up the `/Parent` of
 /// every node visited, page or `/Pages`, so a node reached only through a `/Parent` link counts
 /// too -- that has `/Resources` of its own and is not one of the document's pages: those are
-/// walked with their effective resources. Cycles are cut by the seen-set.
+/// walked with their effective resources. Cycles are cut by the seen-set. Holders are bounded by
+/// `MAX_OBJECTS`, pages are not.
 fn tree_holders(doc: &Document) -> Result<Vec<ObjRef>, PatternProblem> {
     let Some(top) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))) else { return Ok(Vec::new()) };
     let pages: HashSet<ObjRef> = pdfcraft_model::pages(doc).iter().map(|p| p.obj).collect();
@@ -371,7 +377,7 @@ fn tree_holders(doc: &Document) -> Result<Vec<ObjRef>, PatternProblem> {
         if !seen.insert(node) {
             continue;
         }
-        if seen.len() > MAX_OBJECTS {
+        if seen.len() > MAX_TREE_NODES {
             return Err(PatternProblem::Limit);
         }
         let object = doc.try_get(node.num).map_err(|_| PatternProblem::Unreadable)?;
@@ -381,6 +387,9 @@ fn tree_holders(doc: &Document) -> Result<Vec<ObjRef>, PatternProblem> {
         }
         if dict.contains(b"Resources") && !pages.contains(&node) {
             holders.push(node);
+            if holders.len() > MAX_OBJECTS {
+                return Err(PatternProblem::Limit);
+            }
         }
         let is_pages = dict.name(b"Type") == Some(b"Pages") || (dict.contains(b"Kids") && dict.name(b"Type") != Some(b"Page"));
         if is_pages {
