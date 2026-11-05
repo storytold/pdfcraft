@@ -1302,6 +1302,12 @@ impl Renderer {
         };
         let has_alpha = alpha_data.is_some();
         let mut may_have_transparency = has_alpha || self.force_images_may_have_transparency();
+        // PdfCraft patch: a smooth (Catmull-Rom) sizing can be refused — a source side over
+        // MAX_RESAMPLING_SOURCE_SIDE, for example — while a nearest-neighbour sizing still fits.
+        // Retry with nearest sizing before falling back to the original resolution, so a wide
+        // interpolated source is shrunk and drawn rather than skipped (a u16 pixmap side cannot
+        // hold it at source size).
+        let mut smooth = interpolate;
         let (new_width, new_height) = match image_resampling_size(
             source_width,
             source_height,
@@ -1314,21 +1320,50 @@ impl Renderer {
         ) {
             Some(target) => target,
             None => {
-                if image_byte_len(source_width, source_height, 4, MAX_IMAGE_PIXELS).is_none() {
-                    log::warn!(
-                        "Image resampling exceeded its buffer limit and the original resolution cannot fit the backend; image skipped"
-                    );
-                    return;
+                let nearest_target = if interpolate {
+                    image_resampling_size(
+                        source_width,
+                        source_height,
+                        channels,
+                        data_len,
+                        x_scale,
+                        y_scale,
+                        MAX_IMAGE_PIXELS,
+                        false,
+                    )
+                } else {
+                    None
+                };
+                match nearest_target {
+                    Some(target) => {
+                        smooth = false;
+                        quality = ImageQuality::Low;
+                        log::warn!(
+                            "Smooth image sizing was refused; falling back to nearest-neighbour sizing"
+                        );
+                        target
+                    }
+                    None => {
+                        if image_byte_len(source_width, source_height, 4, MAX_IMAGE_PIXELS)
+                            .is_none()
+                        {
+                            log::warn!(
+                                "Image resampling exceeded its buffer limit and the original resolution cannot fit the backend; image skipped"
+                            );
+                            return;
+                        }
+                        log::warn!(
+                            "Image resampling exceeded its buffer limit; retaining the original resolution"
+                        );
+                        (source_width, source_height)
+                    }
                 }
-                log::warn!(
-                    "Image resampling exceeded its buffer limit; retaining the original resolution"
-                );
-                (source_width, source_height)
             }
         };
         // PdfCraft patch (#624): High is bicubic and would blend the nearest pre-resize of an image
-        // that did not request interpolation, so only interpolated glyph images are promoted.
-        if requested_resize && self.in_type3_glyph && interpolate {
+        // that did not request interpolation, so only interpolated glyph images are promoted —
+        // and not after a refused smooth sizing fell back to nearest.
+        if requested_resize && self.in_type3_glyph && smooth {
             quality = ImageQuality::High;
         }
         // PdfCraft patch: an image the size of a page scan is smoothed when drawn above its
@@ -1352,7 +1387,7 @@ impl Renderer {
         // corner. Otherwise the shrunk raster (rounded up to a whole size) is sampled a second time
         // at a fractional scale and offset, which blurs scans and photos (or, by the nearest
         // sampler of a non-interpolated image, drops samples again).
-        let snapped = if (interpolate || area)
+        let snapped = if (smooth || area)
             && requested_resize
             && !self.in_type3_glyph
             && (new_width, new_height) != (source_width, source_height)
@@ -1373,14 +1408,15 @@ impl Renderer {
         };
         let needs_resize = (new_width, new_height) != (source_width, source_height);
 
-        // PdfCraft patch (#624): a minified image with a soft mask that is neither interpolated nor
-        // area-averaged (a Type 3 glyph image, or a source wider than MAX_RESAMPLING_SOURCE_SIDE)
-        // is nearest-sampled straight into premultiplied target RGBA. That skips the
+        // PdfCraft patch (#624): a minified image with a soft mask that is neither interpolated
+        // (nor nearest-sized after a refused smooth sizing) nor area-averaged (a Type 3 glyph
+        // image, or a source wider than MAX_RESAMPLING_SOURCE_SIDE) is nearest-sampled straight
+        // into premultiplied target RGBA. That skips the
         // full-resolution RGBA copy below and the premultiply pass after it. PdfCraft patch: an
         // area-averaged one (a stencil's ink, or an image under its mask) skips them too, and is
         // premultiplied a source row at a time as it is averaged (`area_shrink_premultiplied`).
         let direct = match &alpha_data {
-            Some(alpha) if needs_resize && !interpolate && !area => nearest_premultiplied_rgba(
+            Some(alpha) if needs_resize && !smooth && !area => nearest_premultiplied_rgba(
                 &image_data,
                 &alpha.data,
                 (source_width, source_height),
@@ -1454,7 +1490,7 @@ impl Renderer {
                 new_width,
                 new_height,
                 format,
-                interpolate,
+                smooth,
             )
         } else {
             (data, source_width, source_height)
