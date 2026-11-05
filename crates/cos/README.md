@@ -53,7 +53,18 @@ another. Edits never touch the original bytes.
 - **Every cross-reference form:** classic tables with their quirky subsections, cross-reference
   streams, hybrid-reference files (`/XRefStm`), and object streams.
 - **Repair.** A file whose xref is wrong or missing is reconstructed by scanning for `obj`
-  headers. Repairs are *recorded*, never silent, so the UI can say the file was damaged.
+  headers. Repairs are *recorded*, never silent, so the UI can say the file was damaged. A live
+  in-file reference may match either its xref generation or a same-number object header at
+  that indexed offset; a missing, free, or neither-matching slot still resolves to null.
+  Header probes inspect at most 128 bytes at the indexed and header-relative offsets, without
+  parsing object bodies. On open, disagreements in retained xref revisions are recorded once
+  per object, up to 256 objects plus an omitted-details summary. This diagnostic scan does
+  not expand compact xref ranges; the winning xref entry remains authoritative for free
+  slots. Compressed objects require generation zero. Explicit `set` overlays accept only the
+  supplied generation; `set_existing` and `update_dict` retain both accepted generations of a
+  damaged live slot, including through snapshots, and require full rewrite. Headers beyond
+  this bounded probe are not additionally recovered. Materialized primary and hybrid rows are
+  diagnosed before folding, so a newer row does not hide a retained disagreement.
 - **Tolerant, never fatal.** The lexer works on a byte slice and a position; it allocates nothing
   for skipped data, bounds-checks every index, and caps nesting depth. Malformed input yields
   `CosError`, never a panic — this crate is the first thing a hostile file meets. Exhausted xref entries are skipped with a repair log; exhausted /Size hints allocate unused numbers without overflowing or replacing existing objects.
@@ -66,14 +77,17 @@ another. Edits never touch the original bytes.
 
 ## Writing
 
-`write_incremental` appends only the edited objects, a cross-reference section **in the same
-style as the file's last one**, and a trailer with `/Prev`. The original bytes are never modified,
-which is what keeps a signature over an earlier revision valid.
+`write_incremental` ordinarily appends only the edited objects, a cross-reference section **in
+the same style as the file's last one**, and a trailer with `/Prev`, preserving the original
+bytes and signatures over earlier revisions. It delegates to `write_full` when reconstruction,
+encryption changes or `full_save_required()` demand a rewrite. Repair-aware edits to a live
+xref/header generation disagreement use this fallback rather than append a contradictory row.
 
 `write_full` writes only what the trailer can reach, renumbered densely — the Save As and
 garbage-collecting path. By default (`SaveOptions::object_streams`) it packs non-stream objects
 into compressed object streams with a cross-reference stream (PDF 1.5+); turning that off writes a
-classic table any reader accepts.
+classic table any reader accepts. Both forms map accepted xref/header aliases to one output
+object, retaining shared identity such as page-tree parent links; unrelated generations stay null.
 
 A full save keeps the file's `/ID` as it is, unless the document asked for a new identifier with
 `Document::require_full_save_with_new_id` (redaction and sanitizing do). Then both strings are
