@@ -130,8 +130,8 @@ fn form_of(bytes: &[u8]) -> Dict {
 }
 
 /// A form with `/NeedAppearances true` makes Acrobat ignore the signature (#5939): the first
-/// signature drops the flag, whether the AcroForm is inline or indirect, and leaves the rest of
-/// the form alone.
+/// signature drops the flag, whether the AcroForm is inline or indirect, and keeps /Fields and
+/// sets /SigFlags.
 #[test]
 fn signing_drops_need_appearances() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
@@ -170,6 +170,8 @@ fn a_later_signature_does_not_change_need_appearances() {
     let flagged = write_incremental(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     let second = pdfcraft_sign::sign(&open(&flagged), &id, &opts()).unwrap();
     assert_eq!(form_of(&second).get(b"NeedAppearances"), Some(&Object::Bool(true)));
+    let doc = open(&second);
+    assert!(signatures(&doc, &second, &TrustStore::default()).iter().any(|s| s.field == "Approval" && s.signed));
 }
 
 #[test]
