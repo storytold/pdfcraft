@@ -646,9 +646,11 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         _ => op.operands.last().cloned().into_iter().collect(),
     };
     // The gap `Tc` opens after each glyph (§9.3.2), in text space. A negative `Tc` tightens the
-    // letters but never closes a word gap the adjustments open, so it counts as none.
-    let spacing = if ts.vertical.is_some() { 0.0 } else { (ts.char_spacing * ts.scale).max(0.0) };
-    let tracking = tj_tracking(&pieces, &m, ts.size, ts.scale, spacing);
+    // letters but never closes a word gap the adjustments open, so it counts as none, whichever
+    // way `Tz` runs the glyphs.
+    let char_gap = if ts.vertical.is_some() || ts.char_spacing <= 0.0 { 0.0 } else { (ts.char_spacing * ts.scale).max(0.0) };
+    let tracking = tj_tracking(&pieces, &m, ts.size, ts.scale, char_gap);
+    let word_gap = (ts.size * ts.scale).abs() * 0.2;
     let trm0 = tm.then(&ts.ctm);
     let start = trm0.apply(0.0, ts.rise);
     let mut text = String::new();
@@ -663,8 +665,10 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     let mut words: Vec<(f64, f64)> = Vec::new();
     let mut in_word = false;
     let mut glyph_count = 0_usize;
-    // Whether the last piece was a glyph, whose `Tc` is then the start of the gap before the next.
+    // Since the last glyph: whether there was one (its `Tc` starts the gap to the next), and the
+    // TJ adjustments, summed as `tj_tracking` sums them.
     let mut after_glyph = false;
+    let mut adjust = 0.0;
     for p in &pieces {
         match p {
             Object::String(s) => {
@@ -672,13 +676,22 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                     glyph_count = glyph_count.saturating_add(1);
                     let shown = m.text_of(code);
                     let blank = m.is_space(code, len) || shown.as_deref().is_some_and(|t| !t.is_empty() && t.chars().all(char::is_whitespace));
-                    // Letter-spaced small caps (TeX's `\textsc`, `[(As) 378 (e) 378 (c)…] TJ`
-                    // under a wide `Tc`) leave only `Tc` between two words of one string.
-                    if after_glyph && !blank && spacing - tracking > (ts.size * ts.scale).abs() * 0.2 && !text.is_empty() && !text.ends_with(' ') {
-                        text.push(' ');
-                        in_word = false;
+                    // A large gap inside TJ reads as a space, and so does `Tc` alone between two
+                    // words of one string: letter-spaced small caps (TeX's `\textsc`, `[(As) 378
+                    // (e) 378 (c)…] TJ` under a wide `Tc`) leave nothing else there.
+                    let gap = adjust + if after_glyph { char_gap } else { 0.0 };
+                    if !blank {
+                        if gap - tracking > word_gap && !text.ends_with(char::is_whitespace) {
+                            text.push(' ');
+                        }
+                        // Tracking and kerning keep a word together; a larger jump
+                        // ends it (whatever the sign of the size or `Tz`).
+                        if gap - tracking > word_gap || gap < -word_gap {
+                            in_word = false;
+                        }
                     }
                     after_glyph = true;
+                    adjust = 0.0;
                     match shown {
                         Some(t) => {
                             carry.text_left = carry
@@ -734,21 +747,15 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                         continue;
                     }
                     let dx = -n / 1000.0 * ts.size * ts.scale;
-                    let gap = dx + if after_glyph { spacing } else { 0.0 };
-                    after_glyph = false;
-                    // A large gap inside TJ reads as a space.
-                    if gap - tracking > (ts.size * ts.scale).abs() * 0.2 && !text.ends_with(' ') {
-                        text.push(' ');
-                    }
-                    // Tracking and kerning keep a word together; a larger jump
-                    // ends it (whatever the sign of the size or `Tz`).
-                    if gap - tracking > (ts.size * ts.scale).abs() * 0.2 || gap < -(ts.size * ts.scale).abs() * 0.2 {
-                        in_word = false;
-                    }
+                    adjust += dx;
                     x_text += dx;
                 }
             }
         }
+    }
+    // A large adjustment after the last glyph still reads as a space; its `Tc` alone doesn't.
+    if adjust - tracking > word_gap && !text.ends_with(char::is_whitespace) {
+        text.push(' ');
     }
     *tm = Matrix([1.0, 0.0, 0.0, 1.0, x_text, y_text]).then(tm);
     let end = tm.then(&ts.ctm).apply(0.0, ts.rise);

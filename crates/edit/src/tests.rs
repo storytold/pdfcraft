@@ -1457,6 +1457,12 @@ fn character_spacing_the_adjustments_take_back_leaves_a_word_gap() {
         ("4 Tc [(As) 400 (e) 400 (c) 400 (t) 400 (i) 400 (o) 400 (n)] TJ", "A section"),
         ("4 Tc [(As) 400 (e)] TJ", "A se"),
         ("4 Tc [(AN) 400 (e) 400 (wP) 400 (a) 400 (r) 400 (t)] TJ", "A New Part"),
+        // The gap is the glyph's `Tc` and every adjustment up to the next glyph, a `0` among them.
+        ("4 Tc [(As) 0 400 (e) 400 0 (c) 200 200 (t) 400 (i) 400 (o) 400 (n)] TJ", "A section"),
+        // No glyph follows the last `Tc`: it opens no space at the end.
+        ("4 Tc [(As) 400 (e) 400 (c) 400 (t) 400 (i) 400 (o) 400 (n) 0] TJ", "A section"),
+        // Negative `Tc` under a mirroring `Tz` still opens no gap.
+        ("-4 Tc -100 Tz [(As) -400 (e) -400 (c) -400 (t)] TJ", "Asect"),
         // `Tc` that spaces every letter alike is tracking, however wide and however short the word.
         ("3 Tc (TOP) Tj", "TOP"),
         ("3 Tc (AB) Tj", "AB"),
@@ -1474,9 +1480,21 @@ fn character_spacing_the_adjustments_take_back_leaves_a_word_gap() {
         assert_eq!(crate::objects::editable_objects(&doc, 0).unwrap()[0].text.as_deref(), Some(expected), "{content}");
     }
     // The letters of each word are one word of ink, not one box a letter.
-    let doc = text_page("BT /F1 10 Tf 72 700 Td 4 Tc [(As) 400 (e) 400 (c) 400 (t) 400 (i) 400 (o) 400 (n)] TJ ET");
+    let mut doc = text_page("BT /F1 10 Tf 72 700 Td 4 Tc [(As) 400 (e) 400 (c) 400 (t) 400 (i) 400 (o) 400 (n)] TJ ET");
     let line = &text::text_lines(&doc, 0).unwrap()[0];
     assert_eq!(line.ink.len(), 2, "{:?}", line.ink);
+    // An edit writes the word space it read, and the saved page reads it back.
+    text::replace_block(&mut doc, 0, 0, "A subsection").unwrap();
+    assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].text, "A subsection");
+    // A no-break space the font draws there is the word gap; no second space joins it.
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        &stream("", "BT /F1 10 Tf 72 700 Td 4 Tc [(A!s) 400 (e) 400 (c) 400 (t) 400 (i) 400 (o) 400 (n)] TJ ET"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [33 /nbspace] >> >>",
+    ]);
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "A\u{a0}section");
 }
 
 fn descriptor_text_page() -> Document {
