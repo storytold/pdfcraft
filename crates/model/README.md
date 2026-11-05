@@ -14,12 +14,21 @@ L3/L4 crates need:
   `view_matrix_for(rotation, rect)` is the same matrix for any rectangle, e.g. to draw a
   comment's picture upright inside its user-space `/Rect` on a turned page.
 
-The page-tree walk keeps one cursor per ancestor and shares inherited attribute owners.
-Repeated child references are skipped before copying attributes, with first depth-first
-occurrence order preserved. Returned page dictionaries still own their effective attributes.
-A walk copies at most `MAX_INHERITED_COPIES` (1 GiB, approximate heap bytes) of inherited
-values into the leaves; past it the walk stops, as it does past its leaf cap, and the pages
-after that point are not listed.
+The page-tree walk is `PageNodes` (every node, page-tree nodes before the nodes under them) and
+`PageLeaves` (its leaves), the one walk `pages`, `try_pages`, `page`, `page_refs`, `forms`,
+`annot`, `organize` and redact's resource holders use. It keeps one cursor per ancestor and shares
+inherited attribute owners (`PageNode::inherited` reads them without copying, and
+`PageNode::inherited_from` names the node that sets them). Repeated child references are skipped
+before anything is copied, with first depth-first occurrence order preserved; a `/Kids` array
+shared by several nodes is read once; objects are told apart by number and given at the generation
+the document holds them at. A `/Type /Pages` node without `/Kids` lists no pages, and `/Kids` that
+refers to anything but an array lists nothing.
 
-`organize`, `annot` and `forms` still carry their own small walkers; they move here as the model
-grows (ADR-0004).
+Limits: at most `MAX_PAGE_TREE_NODES` nodes and `MAX_KIDS_ENTRIES` `/Kids` entries (every entry
+counts; the entry cap matters even though each array is read once by number, because an object
+stream can give many numbers the same bytes), and `MAX_INHERITED_COPIES` (1 GiB, approximate heap
+bytes) of inherited values copied into the leaves of one walk. A walk that meets a limit yields
+`Err(PageTreeLimit)` and then ends; it never ends early as if it had read the whole tree.
+`page_refs`, `try_pages` and `page` return that error. `pages` stays lenient for its many read-only
+callers: it gives the pages before the limit. `page(doc, index)` copies only that page's inherited
+values, so a page past the whole walk's copy budget is still found.

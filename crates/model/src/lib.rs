@@ -81,15 +81,73 @@ pub fn view_matrix_for(rotation: i64, crop: [f64; 4]) -> [f64; 6] {
     }
 }
 
-/// Leaf pages in document order, with inherited attributes resolved. Cycles and absurdly deep
-/// trees are cut off rather than followed, as is a tree whose inherited values would take more
-/// than [`MAX_INHERITED_COPIES`] bytes to copy into its leaves.
+/// Leaf pages in document order, with inherited attributes resolved: [`PageLeaves`] with each
+/// leaf's inherited values copied into its dictionary. Lenient: the list ends where the walk meets
+/// one of its limits (a [`PageTreeLimit`]), so it may be a prefix of the tree's pages. A caller
+/// that must see every page, or must not act on part of them, uses [`try_pages`].
 pub fn pages(doc: &Document) -> Vec<Page> {
+    PageTree::new(doc).map_while(Result::ok).collect()
+}
+
+/// [`pages`], or the limit the walk met: the whole tree or nothing.
+pub fn try_pages(doc: &Document) -> Result<Vec<Page>, PageTreeLimit> {
     PageTree::new(doc).collect()
+}
+
+/// The leaf page at `index` in document order, with its inherited attributes; `Ok(None)` past the
+/// last page. Only that page's inherited values are copied (at most [`MAX_INHERITED_COPIES`]), so
+/// unlike `pages(doc).get(index)` a page past the copy budget of a whole walk is found. A limit met
+/// before the page is reached is an error, never "no such page".
+pub fn page(doc: &Document, index: usize) -> Result<Option<Page>, PageTreeLimit> {
+    page_within(doc, index, MAX_INHERITED_COPIES)
+}
+
+/// [`page`], charging only that page's inherited copies against `budget`.
+fn page_within(doc: &Document, index: usize, mut budget: usize) -> Result<Option<Page>, PageTreeLimit> {
+    PageLeaves::new(doc).nth_page(index)?.map(|leaf| leaf.copied(&mut budget)).transpose()
+}
+
+/// The page object of each leaf page, in document order, without copying any dictionary; or the
+/// limit the walk met.
+pub fn page_refs(doc: &Document) -> Result<Vec<ObjRef>, PageTreeLimit> {
+    PageLeaves::new(doc).map(|leaf| leaf.map(|leaf| leaf.obj)).collect()
 }
 
 /// Approximate bytes of inherited values copied into leaf dictionaries by one page walk.
 pub const MAX_INHERITED_COPIES: usize = 1 << 30;
+
+/// Most page-tree nodes one walk visits.
+pub const MAX_PAGE_TREE_NODES: usize = 1_000_000;
+
+/// Most `/Kids` entries one walk reads, whatever they hold. Each node and each indirect `/Kids`
+/// array is read once by object number, but an object stream can give many numbers the same
+/// bytes, so N alias numbers of one N-entry `/Pages` node would otherwise be N nodes reading N
+/// entries each. A real tree has about as many entries as nodes, well under this.
+pub const MAX_KIDS_ENTRIES: usize = 4_000_000;
+
+/// The limit a page-tree walk met before it had read the whole tree. The pages after that point
+/// are unknown, so a caller must not treat the pages before it as all of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageTreeLimit {
+    /// More than [`MAX_PAGE_TREE_NODES`] nodes (or the walk's own node cap).
+    Nodes,
+    /// More than [`MAX_KIDS_ENTRIES`] `/Kids` entries (or the walk's own entry cap).
+    KidsEntries,
+    /// Inherited values weighing more than [`MAX_INHERITED_COPIES`] to copy into the leaves.
+    InheritedCopies,
+}
+
+impl std::fmt::Display for PageTreeLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Nodes => "the page tree has too many nodes to read whole",
+            Self::KidsEntries => "the page tree has too many /Kids entries to read whole",
+            Self::InheritedCopies => "the page tree's inherited values are too large to copy into every page",
+        })
+    }
+}
+
+impl std::error::Error for PageTreeLimit {}
 
 /// Approximate heap bytes of `o`: one [`Object`] per node plus string, name and key bytes.
 /// Values nested deeper than the parser allows weigh as too large.
@@ -108,32 +166,296 @@ fn weight(o: &Object, depth: usize) -> usize {
     }
 }
 
-// Retain the owner of each inherited value rather than deep-cloning direct Resources on
-// every edge. Only the final Page dictionaries need owned copies of those values. Each owner
-// carries the value's weight, measured once where the value is declared.
-type Inherited = [Option<(std::sync::Arc<Object>, usize)>; 4];
+/// The nearest node (the node itself included) that sets one of [`INHERITABLE`]: its reference,
+/// the node itself (shared, never copied), and the value's weight, measured once where it is set.
+#[derive(Clone)]
+struct Owner {
+    node: ObjRef,
+    obj: std::sync::Arc<Object>,
+    weight: usize,
+}
+
+type Inherited = [Option<Owner>; 4];
 
 struct Children {
+    /// The node whose direct `/Kids` array this is (`direct`), or the indirect array itself.
     owner: std::sync::Arc<Object>,
+    direct: bool,
+    /// Whether its entries count toward the entry cap: every array but the one-entry list the walk
+    /// starts from.
+    counted: bool,
     next: usize,
     inherited: Inherited,
 }
 
 impl Children {
     fn kids(&self) -> Option<&Vec<Object>> {
-        match &*self.owner {
-            Object::Dict(d) => d.get(b"Kids")?.as_array(),
-            other => other.as_array(),
+        if self.direct { self.owner.as_dict()?.get(b"Kids")?.as_array() } else { self.owner.as_array() }
+    }
+}
+
+/// A page-tree node as [`PageNodes`] finds it, before anything is copied: a page-tree node or a
+/// leaf page, its own dictionary, and for each of [`INHERITABLE`] the nearest node (itself
+/// included) that sets it.
+pub struct PageNode {
+    /// The node's object, at the generation the document holds it at: `/Kids` may name it with a
+    /// stale generation, which [`Document::get`] overlooks but an edit through it would not.
+    pub obj: ObjRef,
+    node: std::sync::Arc<Object>,
+    inherited: Inherited,
+    leaf: bool,
+}
+
+impl PageNode {
+    /// The node's own dictionary, without inherited values.
+    pub fn dict(&self) -> Option<&Dict> {
+        self.node.as_dict()
+    }
+
+    /// Whether this is a leaf page rather than a page-tree node.
+    pub fn is_leaf(&self) -> bool {
+        self.leaf
+    }
+
+    /// The value the node has for `key` (one of [`INHERITABLE`]), its own or inherited from the
+    /// nearest node above it that sets it.
+    pub fn inherited(&self, key: &[u8]) -> Option<&Object> {
+        self.owner(key)?.obj.as_dict()?.get(key)
+    }
+
+    /// The node that supplies [`Self::inherited`]`(key)`: this one, or the nearest above it.
+    pub fn inherited_from(&self, key: &[u8]) -> Option<ObjRef> {
+        Some(self.owner(key)?.node)
+    }
+
+    fn owner(&self, key: &[u8]) -> Option<&Owner> {
+        let i = INHERITABLE.iter().position(|k| *k == key)?;
+        self.inherited.get(i)?.as_ref()
+    }
+
+    /// Copy into `into` each of [`INHERITABLE`] the node has and `into` lacks. A value from a node
+    /// above this one is charged its weight against `budget` first; past it, the copy stops with
+    /// [`PageTreeLimit::InheritedCopies`].
+    pub fn fill_inherited(&self, into: &mut Dict, budget: &mut usize) -> Result<(), PageTreeLimit> {
+        for (key, owner) in INHERITABLE.iter().zip(&self.inherited) {
+            if into.contains(key) {
+                continue;
+            }
+            let Some(owner) = owner else { continue };
+            let Some(value) = owner.obj.as_dict().and_then(|d| d.get(key)) else { continue };
+            if owner.node.num != self.obj.num {
+                *budget = budget.checked_sub(owner.weight).ok_or(PageTreeLimit::InheritedCopies)?;
+            }
+            into.set(key.to_vec(), value.clone());
+        }
+        Ok(())
+    }
+
+    /// The node as a [`Page`]: its dictionary with the inherited values it lacks copied in.
+    fn copied(&self, budget: &mut usize) -> Result<Page, PageTreeLimit> {
+        let mut dict = self.dict().cloned().unwrap_or_default();
+        self.fill_inherited(&mut dict, budget)?;
+        Ok(Page { obj: self.obj, dict })
+    }
+}
+
+/// Depth-first walk over every node of a page tree in document order, each page-tree node before
+/// the nodes under it: the one walk every crate uses ([`PageLeaves`] keeps the leaves, and
+/// [`pages`], [`page`] and [`page_refs`] are built on that).
+///
+/// - One cursor per open `/Kids` array, never one entry per child, so a child listed many times
+///   or shared between nodes is skipped by the seen check without being queued first.
+/// - A `/Kids` array object shared by several nodes is read under the first one only. Every entry
+///   of it is read under that node's cursor, so under the others it could list no node that walk
+///   doesn't (in a cyclic tree it could only list one earlier), and re-reading it made trees whose
+///   nodes all share one long indirect array take quadratic work.
+/// - Objects are told apart by number, as [`Document::get`] finds them: `3 0 R` and `3 1 R` are
+///   one node, given at the generation the document holds it at. Cycles end at the seen check.
+/// - A node is a page-tree node when it is `/Type /Pages`, or has `/Kids` and is not
+///   `/Type /Page`; one whose `/Kids` is missing or not an array lists nothing. Any other
+///   dictionary is a leaf page; anything else is skipped.
+/// - At most [`MAX_PAGE_TREE_NODES`] nodes are visited and [`MAX_KIDS_ENTRIES`] `/Kids` entries
+///   read (every entry counts, references or not). Meeting either cap with part of the tree unread
+///   yields one `Err` naming it, and then nothing: the walk never ends early as if it were whole.
+pub struct PageNodes<'a> {
+    doc: &'a Document,
+    /// Numbers of the nodes visited.
+    seen: std::collections::HashSet<u32>,
+    /// Numbers of the indirect `/Kids` arrays already read.
+    seen_kids: std::collections::HashSet<u32>,
+    pending: Vec<Children>,
+    /// `/Kids` entries read so far.
+    examined: usize,
+    max_nodes: usize,
+    max_entries: usize,
+}
+
+impl<'a> PageNodes<'a> {
+    /// The nodes of the catalog's `/Pages` tree; none when there is no such tree.
+    pub fn new(doc: &'a Document) -> Self {
+        let top = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages")));
+        Self::from(doc, top, MAX_PAGE_TREE_NODES, MAX_KIDS_ENTRIES)
+    }
+
+    /// The nodes of the tree under the node `top`, `top` included.
+    pub fn under(doc: &'a Document, top: ObjRef) -> Self {
+        Self::from(doc, Some(top), MAX_PAGE_TREE_NODES, MAX_KIDS_ENTRIES)
+    }
+
+    /// [`Self::under`] with other caps than [`MAX_PAGE_TREE_NODES`] and [`MAX_KIDS_ENTRIES`]: for
+    /// tests, which can't build trees that large, and callers with a smaller budget.
+    pub fn with_limits(doc: &'a Document, top: ObjRef, max_nodes: usize, max_entries: usize) -> Self {
+        Self::from(doc, Some(top), max_nodes, max_entries)
+    }
+
+    fn from(doc: &'a Document, top: Option<ObjRef>, max_nodes: usize, max_entries: usize) -> Self {
+        let pending = top
+            .into_iter()
+            .map(|r| Children {
+                owner: std::sync::Arc::new(Object::Array(vec![Object::Ref(r)])),
+                direct: false,
+                counted: false,
+                next: 0,
+                inherited: Default::default(),
+            })
+            .collect();
+        Self { doc, seen: Default::default(), seen_kids: Default::default(), pending, examined: 0, max_nodes, max_entries }
+    }
+
+    /// How many `/Kids` entries the walk has read so far: at most its entry cap + 1.
+    pub fn entries_read(&self) -> usize {
+        self.examined
+    }
+
+    /// End the walk at a cap: this `Err`, then nothing.
+    fn cut_off(&mut self, limit: PageTreeLimit) -> Option<Result<PageNode, PageTreeLimit>> {
+        self.pending.clear();
+        Some(Err(limit))
+    }
+}
+
+impl Iterator for PageNodes<'_> {
+    type Item = Result<PageNode, PageTreeLimit>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(parent) = self.pending.last_mut() {
+            let Some(child) = parent.kids().and_then(|kids| kids.get(parent.next)) else {
+                self.pending.pop();
+                continue;
+            };
+            let node = child.as_ref();
+            // A successful get means next is strictly below the allocated array length.
+            parent.next += 1;
+            if parent.counted {
+                self.examined = self.examined.saturating_add(1);
+            }
+            // Every entry counts, so a long run of nulls or numbers can't get past the cap.
+            if self.examined > self.max_entries {
+                return self.cut_off(PageTreeLimit::KidsEntries);
+            }
+            let Some(node) = node else { continue };
+            if self.seen.contains(&node.num) {
+                continue;
+            }
+            // Checked for a node about to be visited, so a repeat after the last one isn't a cut.
+            if self.seen.len() >= self.max_nodes {
+                return self.cut_off(PageTreeLimit::Nodes);
+            }
+            self.seen.insert(node.num);
+            let node = ObjRef { num: node.num, generation: self.doc.generation(node.num) };
+            let obj = self.doc.get(node);
+            let Some(d) = obj.as_dict() else { continue };
+            let mut inherited = parent.inherited.clone();
+            for (key, owner) in INHERITABLE.iter().zip(&mut inherited) {
+                if let Some(value) = d.get(key) {
+                    *owner = Some(Owner { node, obj: obj.clone(), weight: weight(value, 0) });
+                }
+            }
+            let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
+            if !is_pages {
+                return Some(Ok(PageNode { obj: node, node: obj, inherited, leaf: true }));
+            }
+            let kids = match d.get(b"Kids") {
+                // Read a shared array under the first node that lists it only.
+                Some(Object::Ref(r)) if self.seen_kids.insert(r.num) => Some((self.doc.get(*r), false)),
+                Some(Object::Array(_)) => Some((obj.clone(), true)),
+                _ => None,
+            };
+            if let Some((owner, direct)) = kids {
+                self.pending.push(Children { owner, direct, counted: true, next: 0, inherited: inherited.clone() });
+            }
+            return Some(Ok(PageNode { obj: node, node: obj, inherited, leaf: false }));
+        }
+        None
+    }
+}
+
+/// The leaf pages of [`PageNodes`], in document order, with its limits: the walk behind
+/// [`pages`], [`page`] and [`page_refs`], and the page lists of forms, annot and organize.
+pub struct PageLeaves<'a>(PageNodes<'a>);
+
+impl<'a> PageLeaves<'a> {
+    /// The leaves of the catalog's `/Pages` tree; none when there is no such tree.
+    pub fn new(doc: &'a Document) -> Self {
+        Self(PageNodes::new(doc))
+    }
+
+    /// The leaves of the tree under the node `top`.
+    pub fn under(doc: &'a Document, top: ObjRef) -> Self {
+        Self(PageNodes::under(doc, top))
+    }
+
+    /// [`PageNodes::with_limits`], keeping the leaves.
+    pub fn with_limits(doc: &'a Document, top: ObjRef, max_nodes: usize, max_entries: usize) -> Self {
+        Self(PageNodes::with_limits(doc, top, max_nodes, max_entries))
+    }
+
+    /// [`PageNodes::entries_read`].
+    pub fn entries_read(&self) -> usize {
+        self.0.entries_read()
+    }
+
+    /// The leaf at `index`; `Ok(None)` past the last; the limit when the walk meets one first.
+    /// (`Iterator::nth` would count the `Err` as a leaf and then report the page missing.)
+    pub fn nth_page(&mut self, index: usize) -> Result<Option<PageNode>, PageTreeLimit> {
+        for (i, leaf) in self.enumerate() {
+            let leaf = leaf?;
+            if i == index {
+                return Ok(Some(leaf));
+            }
+        }
+        Ok(None)
+    }
+
+    /// How many leaves the tree has, or the limit the walk met. (`Iterator::count` would count
+    /// the `Err` as a leaf.)
+    pub fn page_count(self) -> Result<usize, PageTreeLimit> {
+        let mut n = 0usize;
+        for leaf in self {
+            leaf?;
+            n = n.saturating_add(1);
+        }
+        Ok(n)
+    }
+}
+
+impl Iterator for PageLeaves<'_> {
+    type Item = Result<PageNode, PageTreeLimit>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.0.next()? {
+                Ok(node) if !node.leaf => continue,
+                item => return Some(item),
+            }
         }
     }
 }
 
+/// [`pages`]: [`PageLeaves`] with each leaf's inherited values copied into its dictionary, within
+/// [`MAX_INHERITED_COPIES`].
 struct PageTree<'a> {
-    doc: &'a Document,
-    seen: std::collections::HashSet<ObjRef>,
-    // One cursor per ancestor, never one entry per child. This also preserves the first
-    // depth-first occurrence's attributes when malformed trees share a child.
-    pending: Vec<Children>,
+    leaves: PageLeaves<'a>,
     // Weight left for copying inherited values into leaves. A large direct value on an
     // ancestor of many leaves would otherwise be copied once per leaf.
     budget: usize,
@@ -145,71 +467,20 @@ impl<'a> PageTree<'a> {
     }
 
     fn with_budget(doc: &'a Document, budget: usize) -> Self {
-        let top = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages")));
-        let pending = top
-            .into_iter()
-            .map(|r| Children { owner: std::sync::Arc::new(Object::Array(vec![Object::Ref(r)])), next: 0, inherited: Default::default() })
-            .collect();
-        Self { doc, seen: Default::default(), pending, budget }
+        Self { leaves: PageLeaves::new(doc), budget }
     }
 }
 
 impl Iterator for PageTree<'_> {
-    type Item = Page;
+    type Item = Result<Page, PageTreeLimit>;
 
-    fn next(&mut self) -> Option<Page> {
-        while let Some(parent) = self.pending.last_mut() {
-            let Some(child) = parent.kids().and_then(|kids| kids.get(parent.next)) else {
-                self.pending.pop();
-                continue;
-            };
-            let node = child.as_ref();
-            // A successful get means next is strictly below the allocated array length.
-            parent.next += 1;
-            let Some(node) = node else { continue };
-            if self.seen.len() >= 1_000_000 {
-                self.pending.clear();
-                return None;
-            }
-            if !self.seen.insert(node) {
-                continue;
-            }
-            let obj = self.doc.get(node);
-            let Some(d) = obj.as_dict() else { continue };
-            let mut inherited = parent.inherited.clone();
-            for (key, owner) in INHERITABLE.iter().zip(&mut inherited) {
-                if let Some(value) = d.get(key) {
-                    *owner = Some((obj.clone(), weight(value, 0)));
-                }
-            }
-            let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
-            if is_pages {
-                let owner = match d.get(b"Kids") {
-                    Some(Object::Ref(r)) => self.doc.get(*r),
-                    Some(Object::Array(_)) => obj.clone(),
-                    _ => continue,
-                };
-                self.pending.push(Children { owner, next: 0, inherited });
-            } else {
-                let mut dict = d.clone();
-                for (key, owner) in INHERITABLE.iter().zip(&inherited) {
-                    if !dict.contains(key)
-                        && let Some((owner, weight)) = owner
-                        && let Some(value) = owner.as_dict().and_then(|d| d.get(key))
-                    {
-                        // Past the budget the walk is cut off, like a tree too large to follow.
-                        let Some(left) = self.budget.checked_sub(*weight) else {
-                            self.pending.clear();
-                            return None;
-                        };
-                        self.budget = left;
-                        dict.set(key.to_vec(), value.clone());
-                    }
-                }
-                return Some(Page { obj: node, dict });
-            }
+    fn next(&mut self) -> Option<Self::Item> {
+        let page = self.leaves.next()?.and_then(|leaf| leaf.copied(&mut self.budget));
+        if page.is_err() {
+            // Past the budget the walk ends, as at a cap: one Err, then nothing.
+            self.leaves.0.pending.clear();
         }
-        None
+        Some(page)
     }
 }
 
@@ -261,7 +532,7 @@ mod tests {
         })
         .unwrap();
         let budget = 1 << 20;
-        let pages: Vec<Page> = PageTree::with_budget(&d, budget).collect();
+        let pages: Vec<Page> = PageTree::with_budget(&d, budget).map_while(Result::ok).collect();
         let copied: usize = pages.iter().filter_map(|p| p.dict.get(b"Resources")).map(|r| weight(r, 0)).sum();
         assert!(copied <= budget, "{copied} bytes of inherited values copied into {} pages", pages.len());
         assert_eq!(pages.len(), budget / each);
@@ -282,10 +553,10 @@ mod tests {
         })
         .unwrap();
         let mut walk = PageTree::new(&d);
-        let p = walk.next().unwrap();
+        let p = walk.next().unwrap().unwrap();
         assert_eq!(p.obj, leaf);
         assert_eq!(p.dict.get(b"Resources").unwrap().as_dict().unwrap().get(b"Payload").unwrap().as_array().unwrap().len(), 1024);
-        assert!(walk.pending.len() <= 2, "duplicate edges retained {} pending entries", walk.pending.len());
+        assert!(walk.leaves.0.pending.len() <= 2, "duplicate edges retained {} pending entries", walk.leaves.0.pending.len());
         assert!(walk.next().is_none());
     }
 
@@ -324,10 +595,189 @@ mod tests {
         d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(kids.clone()))).unwrap();
         let mut walk = PageTree::new(&d);
         for kid in kids {
-            assert_eq!(walk.next().unwrap().obj, kid.as_ref().unwrap());
-            assert!(walk.pending.len() <= 2);
+            assert_eq!(walk.next().unwrap().unwrap().obj, kid.as_ref().unwrap());
+            assert!(walk.leaves.0.pending.len() <= 2);
         }
         assert!(walk.next().is_none());
+    }
+
+    fn leaf_refs(walk: PageLeaves<'_>) -> Vec<ObjRef> {
+        walk.map(|leaf| leaf.unwrap().obj).collect()
+    }
+
+    /// A tree whose root lists `n` copies of the page at object 3.
+    fn wide(n: usize) -> (Document, ObjRef) {
+        let mut d = doc(0);
+        let root = ObjRef { num: 2, generation: 0 };
+        let leaf = d.get(ObjRef { num: 3, generation: 0 }).as_dict().unwrap().clone();
+        let kids: Vec<Object> = (0..n).map(|_| Object::Ref(d.add(leaf.clone()))).collect();
+        d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
+        (d, root)
+    }
+
+    /// Many page-tree nodes sharing one indirect `/Kids` array read it once, not once per node
+    /// (quadratic work on a hostile file, commit 05d09de1 in annot).
+    #[test]
+    fn a_kids_array_shared_by_many_nodes_is_read_once() {
+        let mut d = doc(0);
+        let root = ObjRef { num: 2, generation: 0 };
+        let leaf = ObjRef { num: 3, generation: 0 };
+        let shared = d.add(Object::Array(vec![Object::Ref(leaf); 1_000]));
+        let nodes: Vec<Object> = (0..1_000)
+            .map(|_| {
+                let mut node = Dict::new();
+                node.set(b"Type".to_vec(), Object::name("Pages"));
+                node.set(b"Kids".to_vec(), Object::Ref(shared));
+                Object::Ref(d.add(node))
+            })
+            .collect();
+        d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(nodes))).unwrap();
+        let mut walk = PageLeaves::new(&d);
+        assert_eq!(walk.by_ref().map(|l| l.unwrap().obj).collect::<Vec<_>>(), [leaf]);
+        assert!(walk.entries_read() <= 3_000, "{} kids entries read", walk.entries_read());
+        assert_eq!(page_refs(&d), Ok(vec![leaf]));
+        assert_eq!(pages(&d).iter().map(|p| p.obj).collect::<Vec<_>>(), [leaf]);
+    }
+
+    /// Every `/Kids` entry counts toward the cap, references or not, and meeting it is an error,
+    /// not a shorter list.
+    #[test]
+    fn entries_that_are_not_references_count_toward_the_cap() {
+        let mut d = doc(0);
+        let root = ObjRef { num: 2, generation: 0 };
+        let leaf = ObjRef { num: 3, generation: 0 };
+        let mut kids = vec![Object::Null; 100];
+        kids.push(Object::Ref(leaf));
+        d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
+        let mut walk = PageLeaves::with_limits(&d, root, 10, 50);
+        assert_eq!(walk.next().map(|l| l.err()), Some(Some(PageTreeLimit::KidsEntries)), "the walk ends at the cap, before the page");
+        assert!(walk.next().is_none(), "and then ends");
+        assert!(walk.entries_read() <= 51, "{} entries read", walk.entries_read());
+        assert_eq!(leaf_refs(PageLeaves::under(&d, root)), [leaf]);
+    }
+
+    /// The cap counts the tree's own `/Kids` entries, not the start: a tree with exactly that many
+    /// lists all its pages.
+    #[test]
+    fn the_entry_cap_counts_only_the_tree_s_kids_entries() {
+        let (d, root) = wide(3);
+        assert_eq!(PageLeaves::with_limits(&d, root, 100, 3).page_count(), Ok(3), "exactly at the cap");
+        assert_eq!(PageLeaves::with_limits(&d, root, 100, 2).page_count(), Err(PageTreeLimit::KidsEntries), "one past the cap");
+    }
+
+    /// A walk that meets either cap ends with that limit as an error, after the leaves before it;
+    /// a repeated entry or a null after the last node is not a node left unvisited.
+    #[test]
+    fn a_walk_cut_off_at_a_cap_says_so() {
+        let (mut d, root) = wide(3);
+        let whole: Vec<_> = PageLeaves::with_limits(&d, root, 100, 3).collect();
+        assert_eq!(whole.len(), 3);
+        assert!(whole.iter().all(Result::is_ok), "exactly at the entry cap");
+        let entries: Vec<_> = PageLeaves::with_limits(&d, root, 100, 2).map(|l| l.map(|l| l.obj.num)).collect();
+        assert_eq!(entries, [Ok(4), Ok(5), Err(PageTreeLimit::KidsEntries)]);
+        let nodes: Vec<_> = PageLeaves::with_limits(&d, root, 2, 100).map(|l| l.map(|l| l.obj.num)).collect();
+        assert_eq!(nodes, [Ok(4), Err(PageTreeLimit::Nodes)]);
+        let kids = d.get(root).as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap().clone();
+        let mut repeated = kids.clone();
+        repeated.extend([kids[0].clone(), Object::Null]);
+        d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(repeated))).unwrap();
+        assert_eq!(PageLeaves::with_limits(&d, root, 4, 100).page_count(), Ok(3), "the root and its three pages are every node");
+    }
+
+    /// `nth_page` and `page` report a limit met before the page, never "no such page".
+    #[test]
+    fn a_page_behind_a_cap_is_an_error_not_missing() {
+        let (d, root) = wide(3);
+        assert_eq!(PageLeaves::with_limits(&d, root, 100, 2).nth_page(1).map(|l| l.map(|l| l.obj.num)), Ok(Some(5)));
+        assert_eq!(PageLeaves::with_limits(&d, root, 100, 2).nth_page(2).map(|l| l.is_some()), Err(PageTreeLimit::KidsEntries));
+        assert_eq!(PageLeaves::with_limits(&d, root, 100, 100).nth_page(3).map(|l| l.is_some()), Ok(false));
+        assert_eq!(page(&d, 3), Ok(None));
+    }
+
+    /// `3 1 R` names object 3, as `3 0 R` does ([`Document::get`] goes by number): one page, once,
+    /// at the generation the document holds it at, whichever alias comes first.
+    #[test]
+    fn references_differing_only_in_generation_are_one_page() {
+        let mut d = doc(0);
+        let root = ObjRef { num: 2, generation: 0 };
+        let aliases: Vec<Object> = (0..5).rev().map(|generation| Object::Ref(ObjRef { num: 3, generation })).collect();
+        d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(aliases))).unwrap();
+        assert_eq!(page_refs(&d), Ok(vec![ObjRef { num: 3, generation: 0 }]));
+        assert_eq!(pages(&d).iter().map(|p| p.obj).collect::<Vec<_>>(), [ObjRef { num: 3, generation: 0 }]);
+    }
+
+    /// `/Kids` that refers to a dictionary lists no pages, whatever that dictionary holds.
+    #[test]
+    fn kids_referring_to_a_dictionary_list_nothing() {
+        let mut d = doc(0);
+        let root = ObjRef { num: 2, generation: 0 };
+        let leaf = ObjRef { num: 3, generation: 0 };
+        let mut hidden = Dict::new();
+        hidden.set(b"Type".to_vec(), Object::name("Page"));
+        let hidden = d.add(hidden);
+        let mut decoy = Dict::new();
+        decoy.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(hidden)]));
+        let decoy = d.add(decoy);
+        let mut branch = Dict::new();
+        branch.set(b"Type".to_vec(), Object::name("Pages"));
+        branch.set(b"Kids".to_vec(), Object::Ref(decoy));
+        let branch = d.add(branch);
+        d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(branch), Object::Ref(leaf)]))).unwrap();
+        assert_eq!(page_refs(&d), Ok(vec![leaf]));
+    }
+
+    /// A `/Type /Pages` node without `/Kids` lists no pages; it is not a page itself.
+    #[test]
+    fn a_pages_node_without_kids_is_not_a_page() {
+        let mut d = doc(0);
+        let root = ObjRef { num: 2, generation: 0 };
+        let leaf = ObjRef { num: 3, generation: 0 };
+        let mut empty = Dict::new();
+        empty.set(b"Type".to_vec(), Object::name("Pages"));
+        empty.set(b"Count".to_vec(), Object::Int(0));
+        let empty = d.add(empty);
+        d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(empty), Object::Ref(leaf)]))).unwrap();
+        assert_eq!(page_refs(&d), Ok(vec![leaf]));
+        assert_eq!(pages(&d).iter().map(|p| p.obj).collect::<Vec<_>>(), [leaf]);
+        // The node walk still sees it, as a page-tree node.
+        let nodes: Vec<(u32, bool)> = PageNodes::new(&d).map(|n| n.map(|n| (n.obj.num, n.is_leaf()))).collect::<Result<_, _>>().unwrap();
+        assert_eq!(nodes, [(2, false), (empty.num, false), (3, true)]);
+    }
+
+    /// A leaf carries the nodes that set its inherited attributes, not copies of them.
+    #[test]
+    fn a_leaf_reads_inherited_values_without_copying_them() {
+        let d = doc_with(90, "", "/MediaBox [0 0 100 100]");
+        let leaf = PageLeaves::new(&d).next().unwrap().unwrap();
+        assert_eq!(leaf.obj, ObjRef { num: 3, generation: 0 });
+        assert_eq!(leaf.inherited(b"Rotate").and_then(Object::as_int), Some(90), "from the tree node");
+        assert_eq!(leaf.inherited_from(b"Rotate"), Some(ObjRef { num: 2, generation: 0 }));
+        let media = leaf.inherited(b"MediaBox").and_then(Object::as_array).map(|m| m.iter().filter_map(Object::as_int).collect::<Vec<_>>());
+        assert_eq!(media, Some(vec![0, 0, 100, 100]), "the page's own value wins");
+        assert_eq!(leaf.inherited_from(b"MediaBox"), Some(leaf.obj));
+        assert!(leaf.inherited(b"Resources").is_some_and(|r| r.as_dict().is_some()));
+        assert_eq!(leaf.inherited(b"Contents"), None, "not inheritable");
+        assert!(leaf.dict().is_some_and(|dict| !dict.contains(b"Rotate")), "the page's own dictionary is untouched");
+    }
+
+    /// `page` copies one page's inherited values only, so it finds a page past the copy budget of
+    /// a whole walk, with its inherited rotation; `try_pages` refuses the walk the budget cuts.
+    #[test]
+    fn one_page_is_found_past_the_budget_of_a_whole_walk() {
+        let mut d = doc(90);
+        let root = ObjRef { num: 2, generation: 0 };
+        let leaf = d.get(ObjRef { num: 3, generation: 0 }).as_dict().unwrap().clone();
+        let kids: Vec<Object> = (0..3).map(|_| Object::Ref(d.add(leaf.clone()))).collect();
+        d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
+        let tree = d.get(root);
+        let tree = tree.as_dict().unwrap();
+        let one_page: usize = INHERITABLE.iter().filter_map(|k| tree.get(k).map(|v| weight(v, 0))).sum();
+        let walk: Vec<_> = PageTree::with_budget(&d, one_page).map(|p| p.map(|p| p.obj.num)).collect();
+        assert_eq!(walk.last(), Some(&Err(PageTreeLimit::InheritedCopies)), "the whole walk stops after one page: {walk:?}");
+        assert_eq!(walk.len(), 2);
+        assert_eq!(page_within(&d, 2, one_page).map(|p| p.map(|p| p.rotation(&d))), Ok(Some(90)), "the same budget for one page");
+        assert_eq!(page(&d, 2).map(|p| p.map(|p| p.rotation(&d))), Ok(Some(90)));
+        assert_eq!(try_pages(&d).map(|p| p.len()), Ok(3));
     }
 
     fn apply(m: [f64; 6], x: f64, y: f64) -> [f64; 2] {
