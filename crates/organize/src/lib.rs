@@ -12,6 +12,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, XrefEntry};
+use pdfcraft_model::INHERITABLE;
 
 mod attachments;
 mod boxes;
@@ -60,9 +61,11 @@ pub enum OrganizeError {
     Invalid(String),
     #[error("{0}")]
     Cos(#[from] pdfcraft_cos::CosError),
+    /// The page tree is too large to read whole: acting on the pages before the limit would drop
+    /// or miss the rest.
+    #[error("{0}")]
+    PageTree(#[from] pdfcraft_model::PageTreeLimit),
 }
-
-const INHERITABLE: [&[u8]; 4] = [b"Resources", b"MediaBox", b"CropBox", b"Rotate"];
 
 /// A leaf page in document order.
 #[derive(Clone, Debug, PartialEq)]
@@ -76,92 +79,53 @@ fn pages_root(doc: &Document) -> Result<ObjRef, OrganizeError> {
     catalog.as_dict().and_then(|d| d.reference(b"Pages")).ok_or(OrganizeError::NoPageTree)
 }
 
-/// All leaf pages in order, with their effective inherited attributes.
+/// The leaf walk organize reads and rebuilds from: the shared page-tree walk
+/// (`pdfcraft_model::PageLeaves`) under the catalog's `/Pages`.
+fn leaves(doc: &Document) -> Result<pdfcraft_model::PageLeaves<'_>, OrganizeError> {
+    Ok(pdfcraft_model::PageLeaves::under(doc, pages_root(doc)?))
+}
+
+/// All leaf pages in order, with their effective inherited attributes. A tree the walk can't read
+/// whole is an error ([`OrganizeError::PageTree`]): organize rebuilds the page tree from this list,
+/// and a list cut short would drop the pages past the cut.
 fn walk(doc: &Document) -> Result<Vec<(ObjRef, Dict)>, OrganizeError> {
-    Ok(PageWalk::new(doc, pages_root(doc)?).collect())
+    attributes(leaves(doc)?)
 }
 
-/// For each of `INHERITABLE`, the nearest node that sets it, shared rather than copied.
-type Owners = [Option<std::sync::Arc<Object>>; 4];
-
-/// Depth-first walk over the leaf pages under `top`. It keeps one cursor per open `/Kids` array,
-/// never one entry per child, and carries inherited attributes as the nodes that set them, so a
-/// child listed many times or shared between nodes is skipped by the seen check before anything
-/// is queued or copied (`pdfcraft_model::pages` walks the same way). Cycles in broken trees end
-/// at the seen check and at most a million nodes are visited.
-struct PageWalk<'a> {
-    doc: &'a Document,
-    seen: std::collections::HashSet<ObjRef>,
-    pending: Vec<(std::sync::Arc<Object>, usize, Owners)>,
+/// [`walk`] over `leaves`: each leaf with its own and inherited attributes, the inherited copies
+/// within `MAX_INHERITED_COPIES`.
+fn attributes(leaves: pdfcraft_model::PageLeaves<'_>) -> Result<Vec<(ObjRef, Dict)>, OrganizeError> {
+    let mut budget = pdfcraft_model::MAX_INHERITED_COPIES;
+    leaves
+        .map(|leaf| {
+            let leaf = leaf?;
+            let mut attrs = Dict::new();
+            leaf.fill_inherited(&mut attrs, &mut budget)?;
+            Ok((leaf.obj, attrs))
+        })
+        .collect()
 }
 
-impl<'a> PageWalk<'a> {
-    fn new(doc: &'a Document, top: ObjRef) -> Self {
-        let top = std::sync::Arc::new(Object::Array(vec![Object::Ref(top)]));
-        Self { doc, seen: Default::default(), pending: vec![(top, 0, Default::default())] }
-    }
-}
-
-impl Iterator for PageWalk<'_> {
-    type Item = (ObjRef, Dict);
-
-    fn next(&mut self) -> Option<(ObjRef, Dict)> {
-        while let Some((kids, next, inherited)) = self.pending.last_mut() {
-            let Some(kid) = kids.as_array().and_then(|a| a.get(*next)) else {
-                self.pending.pop();
-                continue;
-            };
-            let node = kid.as_ref();
-            *next += 1;
-            let Some(node) = node else { continue };
-            if self.seen.len() >= 1_000_000 {
-                self.pending.clear();
-                return None;
-            }
-            if !self.seen.insert(node) {
-                continue;
-            }
-            let obj = self.doc.get(node);
-            let Some(d) = obj.as_dict() else { continue };
-            let mut owners = inherited.clone();
-            for (k, owner) in INHERITABLE.iter().zip(&mut owners) {
-                if d.contains(k) {
-                    *owner = Some(obj.clone());
-                }
-            }
-            let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
-            if is_pages {
-                if let Some(kids) = d.get(b"Kids") {
-                    self.pending.push((self.doc.resolve(kids), 0, owners));
-                }
-            } else {
-                let mut attrs = Dict::new();
-                for (k, owner) in INHERITABLE.iter().zip(&owners) {
-                    if let Some(v) = owner.as_ref().and_then(|o| o.as_dict()).and_then(|o| o.get(k)) {
-                        attrs.set(k.to_vec(), v.clone());
-                    }
-                }
-                return Some((node, attrs));
-            }
-        }
-        None
-    }
-}
-
-/// Leaf pages in document order.
+/// Leaf pages in document order; an error when the tree can't be read whole.
 pub fn pages(doc: &Document) -> Result<Vec<PageRef>, OrganizeError> {
-    Ok(walk(doc)?.into_iter().map(|(obj, _)| PageRef { obj }).collect())
+    // The refs alone: building each leaf's inherited attributes only to drop them would copy a
+    // large inherited value once per page.
+    Ok(leaves(doc)?.map(|leaf| leaf.map(|leaf| PageRef { obj: leaf.obj })).collect::<Result<_, _>>()?)
 }
 
 /// Effective inherited page rotation, clockwise in degrees.
 pub fn page_rotation(doc: &Document, index: usize) -> Result<i64, OrganizeError> {
-    let pages = walk(doc)?;
-    let (_, attrs) = pages.get(index).ok_or(OrganizeError::NoSuchPage(index))?;
-    Ok(resolved_rotation(doc, attrs).rem_euclid(360))
+    // The one leaf's value, without copying every leaf's inherited attributes first.
+    let leaf = leaves(doc)?.nth_page(index)?.ok_or(OrganizeError::NoSuchPage(index))?;
+    Ok(leaf.inherited(b"Rotate").and_then(|value| doc.resolve(value).as_int()).unwrap_or(0).rem_euclid(360))
 }
 
+/// How many leaf pages the document has. A tree the walk can't read whole is an error, never a
+/// smaller count: Combine, Split, Extract and Insert from File take every page by this count, and
+/// a short one would drop the pages past it without a word.
 pub fn page_count(doc: &Document) -> Result<usize, OrganizeError> {
-    Ok(walk(doc)?.len())
+    // Counted, not collected: a large inherited value would be copied once per leaf.
+    Ok(leaves(doc)?.page_count()?)
 }
 
 fn resolved_rotation(doc: &Document, attrs: &Dict) -> i64 {
@@ -169,7 +133,12 @@ fn resolved_rotation(doc: &Document, attrs: &Dict) -> i64 {
 }
 
 /// Rebuild the page tree as one flat node with `order` as its kids (attributes pushed down).
+/// Refused, before anything changes, when the flat tree would hold more nodes (its root and its
+/// pages) than the page-tree walk reads: every later walk would then stop short of its last page.
 fn rebuild(doc: &mut Document, order: &[(ObjRef, Dict)]) -> Result<(), OrganizeError> {
+    if order.len() >= pdfcraft_model::MAX_PAGE_TREE_NODES {
+        return Err(OrganizeError::PageTree(pdfcraft_model::PageTreeLimit::Nodes));
+    }
     let root = pages_root(doc)?;
     for (page, inherited) in order {
         doc.update_dict(*page, |d| {
@@ -201,8 +170,14 @@ fn rebuild(doc: &mut Document, order: &[(ObjRef, Dict)]) -> Result<(), OrganizeE
 /// scanning the file, in file order, and edits must address those same pages. Returns how many
 /// pages were gathered; 0 leaves the document unchanged.
 pub fn recover_page_tree(doc: &mut Document) -> Result<usize, OrganizeError> {
-    if walk(doc).is_ok_and(|pages| !pages.is_empty()) {
-        return Ok(0);
+    if let Ok(mut leaves) = leaves(doc) {
+        match leaves.next() {
+            Some(Ok(_)) => return Ok(0),
+            // The tree is there but too large to read: rebuilding it from scanned pages would drop
+            // it, so refuse rather than treat it as lost.
+            Some(Err(limit)) => return Err(limit.into()),
+            None => {}
+        }
     }
     let catalog = doc.root().ok_or(OrganizeError::NoPageTree)?;
     let position = |num: u32| match doc.xref_entry(num) {
@@ -357,7 +332,7 @@ fn goes_to(doc: &Document, dest: &Object, gone: &[ObjRef]) -> bool {
         Some(d) => d.get(b"D").map(|d| doc.resolve(d)),
         None => Some(dest.clone()),
     };
-    array.and_then(|a| a.as_array().and_then(|a| a.first()).and_then(Object::as_ref)).is_some_and(|r| gone.contains(&r))
+    array.and_then(|a| a.as_array().and_then(|a| a.first()).and_then(Object::as_ref)).is_some_and(|r| gone.iter().any(|g| g.num == r.num))
 }
 
 /// Remove the named destinations (the catalog's /Names /Dests tree and the legacy /Dests

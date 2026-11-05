@@ -175,13 +175,14 @@ impl<'a> Visit<'a> {
 /// Page targets for a listing: the page index of each page object, and the named destinations
 /// (read once, the first time one is needed).
 struct Targets {
-    pages: HashMap<ObjRef, usize>,
+    /// Page index by object number: a destination may name a page with another generation.
+    pages: HashMap<u32, usize>,
     names: Option<HashMap<Vec<u8>, Object>>,
 }
 
 impl Targets {
     fn new(doc: &Document) -> Self {
-        let pages = walk(doc).unwrap_or_default().into_iter().enumerate().map(|(i, (r, _))| (r, i)).collect();
+        let pages = walk(doc).unwrap_or_default().into_iter().enumerate().map(|(i, (r, _))| (r.num, i)).collect();
         Self { pages, names: None }
     }
 
@@ -285,7 +286,7 @@ pub(crate) fn resolve_dest(doc: &Document, dest: &Object) -> Option<Vec<Object>>
 /// The page index an explicit destination array names.
 fn page_of_explicit(targets: &Targets, dest: &[Object]) -> Option<usize> {
     match dest.first()? {
-        Object::Ref(page) => targets.pages.get(page).copied(),
+        Object::Ref(page) => targets.pages.get(&page.num).copied(),
         // Some producers write a page number in a remote-style destination.
         Object::Int(n) => usize::try_from(*n).ok().filter(|&p| p < targets.pages.len()),
         _ => None,

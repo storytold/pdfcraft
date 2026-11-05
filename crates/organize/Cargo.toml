@@ -11,6 +11,8 @@ workspace = true
 [dependencies]
 pdfcraft-content = { workspace = true }
 pdfcraft-cos = { workspace = true }
+# The page-tree walk is pdfcraft_model::PageLeaves.
+pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

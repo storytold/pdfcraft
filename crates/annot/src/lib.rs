@@ -33,7 +33,7 @@ pub use create::{add_annotation, callout_attach, orient_image_stamp};
 pub use draw::{AppearanceCache, set_appearance, with_missing_appearances, with_missing_appearances_cached};
 pub use info::{Props, Summary, is_comment_subtype, props, set_info, summaries};
 #[cfg(test)]
-use lookup::{ANNOTS_ENTRIES_COPIED, PageWalk, annot_dict, annot_ref};
+use lookup::{ANNOTS_ENTRIES_COPIED, annot_dict, annot_ref};
 use lookup::{annots, page_ref};
 pub use lookup::{
     has_visible_fill_sign, is_fill_sign, isolate_annotation, isolate_annotations, page_refs, picture_rotation, set_annots, signature_image,
@@ -60,6 +60,9 @@ mod tests;
 pub enum AnnotError {
     #[error("the document has no page tree")]
     NoPageTree,
+    /// The page tree is too large to read whole, so its page numbers are unknown.
+    #[error("{0}")]
+    PageTree(#[from] pdfcraft_model::PageTreeLimit),
     /// Holds the 0-based index; the message names the 1-based page a user counts (#1550).
     #[error("page {} does not exist", .0.saturating_add(1))]
     NoSuchPage(usize),

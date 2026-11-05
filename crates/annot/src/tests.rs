@@ -1659,7 +1659,7 @@ fn lines_and_polygons_are_reshaped_by_their_points() {
 }
 
 #[test]
-fn page_walk_skips_repeated_and_cyclic_kids_without_queueing_them() {
+fn page_walk_skips_repeated_and_cyclic_kids() {
     let mut doc = fixture();
     let root = ObjRef { num: 2, generation: 0 };
     let (first, second) = (ObjRef { num: 3, generation: 0 }, ObjRef { num: 4, generation: 0 });
@@ -1667,11 +1667,6 @@ fn page_walk_skips_repeated_and_cyclic_kids_without_queueing_them() {
     let mut kids = vec![Object::Ref(root)];
     kids.extend([Object::Ref(first), Object::Ref(second)].into_iter().cycle().take(256));
     doc.update_dict(root, |d| d.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
-    let mut walk = PageWalk::new(&doc, root);
-    assert_eq!(walk.next(), Some(first));
-    assert!(walk.pending.len() <= 2, "repeated kids retained {} pending entries", walk.pending.len());
-    assert_eq!(walk.next(), Some(second));
-    assert_eq!(walk.next(), None);
     assert_eq!(page_refs(&doc).unwrap(), [first, second]);
 }
 
@@ -1704,10 +1699,28 @@ fn page_walk_reads_a_shared_kids_array_once() {
         })
         .collect();
     doc.update_dict(root, |d| d.set(b"Kids".to_vec(), Object::Array(nodes))).unwrap();
-    let mut walk = PageWalk::new(&doc, root);
-    let pages: Vec<ObjRef> = walk.by_ref().collect();
-    assert_eq!(pages, [first, second]);
-    assert!(walk.examined <= 10_000, "{} kids entries read", walk.examined);
+    assert_eq!(page_refs(&doc).unwrap(), [first, second]);
+    // page_refs is this walk: it reads the shared array once, not under each of the 1,000 nodes.
+    let mut walk = pdfcraft_model::PageLeaves::under(&doc, root);
+    assert_eq!(walk.by_ref().count(), 2);
+    assert!(walk.entries_read() <= 10_000, "{} kids entries read", walk.entries_read());
+}
+
+/// A `/Type /Pages` node without `/Kids` lists no pages and is not a page itself, as in
+/// `pdfcraft_model::pages`, so annotation page numbers agree with every other crate's.
+#[test]
+fn a_pages_node_without_kids_is_not_a_page() {
+    let mut doc = fixture();
+    let root = ObjRef { num: 2, generation: 0 };
+    let (first, second) = (ObjRef { num: 3, generation: 0 }, ObjRef { num: 4, generation: 0 });
+    let mut empty = Dict::new();
+    empty.set(b"Type".to_vec(), Object::name("Pages"));
+    empty.set(b"Count".to_vec(), Object::Int(0));
+    let empty = doc.add(empty);
+    doc.update_dict(root, |d| d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(empty), Object::Ref(first), Object::Ref(second)]))).unwrap();
+    assert_eq!(page_refs(&doc).unwrap(), [first, second]);
+    let model: Vec<ObjRef> = pdfcraft_model::pages(&doc).iter().map(|p| p.obj).collect();
+    assert_eq!(page_refs(&doc).unwrap(), model);
 }
 
 /// Adding many links to a page extends its `/Annots` once, not once per link.

@@ -7,9 +7,16 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
     let Some(old) = old else {
         return Modification::Disallowed(vec![kind::UNREADABLE]);
     };
-    let old_content: HashSet<ObjRef> = pdfcraft_annot::page_refs(&old)
-        .unwrap_or_default()
-        .into_iter()
+    // The signed revision's pages. A page tree too large to read whole leaves its signed pages
+    // unknown, so no change could be judged against them: the signed version counts as unreadable.
+    let old_pages = match pdfcraft_annot::page_refs(&old) {
+        Ok(pages) => pages,
+        Err(pdfcraft_annot::AnnotError::PageTree(_)) => return Modification::Disallowed(vec![kind::UNREADABLE]),
+        Err(_) => Vec::new(),
+    };
+    let old_content: HashSet<ObjRef> = old_pages
+        .iter()
+        .copied()
         .flat_map(|pg| {
             let c = old.get(pg).as_dict().and_then(|d| d.get(b"Contents").cloned());
             match c {
@@ -30,7 +37,7 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
     // object is judged by the role it held when signed, never by the labels or keys its new,
     // attacker-written version carries (relabelling a signed page /Type /Sig, or dropping its
     // /Type and adding /ModDate, must not reclassify it away from page content).
-    let signed_pages: HashSet<ObjRef> = pdfcraft_annot::page_refs(&old).unwrap_or_default().into_iter().collect();
+    let signed_pages: HashSet<ObjRef> = old_pages.into_iter().collect();
     // The signed pages' /Annots arrays that are objects of their own. Adding an annotation updates
     // such an array in place (the page dictionary does not change), so it is judged like a
     // page's inline /Annots: by the annotations it gained.

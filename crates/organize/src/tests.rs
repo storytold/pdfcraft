@@ -171,6 +171,98 @@ fn walks_nested_tree_in_order() {
     assert_eq!(labels(&doc), ["Page 1", "Page 2", "Page 3"]);
 }
 
+/// A walk cut off at a cap is an error where the tree is rebuilt from it, which would drop the
+/// pages past the cut.
+#[test]
+fn a_walk_cut_off_at_a_cap_is_not_rebuilt_from() {
+    let doc = open(fixture());
+    let top = pages_root(&doc).unwrap();
+    assert_eq!(attributes(pdfcraft_model::PageLeaves::with_limits(&doc, top, 100, 100)).unwrap().len(), 3);
+    let entries = attributes(pdfcraft_model::PageLeaves::with_limits(&doc, top, 100, 2)).map(|p| p.len());
+    assert_eq!(entries, Err(OrganizeError::PageTree(pdfcraft_model::PageTreeLimit::KidsEntries)));
+    let nodes = attributes(pdfcraft_model::PageLeaves::with_limits(&doc, top, 2, 100)).map(|p| p.len());
+    assert_eq!(nodes, Err(OrganizeError::PageTree(pdfcraft_model::PageTreeLimit::Nodes)));
+}
+
+/// `doc` with `extra` ahead of its first and last pages in its root `/Kids` (its middle page is
+/// left out), so a walk must read `extra` before it reaches any page.
+fn with_padded_kids(mut doc: Document, extra: impl Iterator<Item = Object>) -> Document {
+    let all = pages(&doc).unwrap();
+    let (first, last) = (all[0].obj, all[2].obj);
+    let root = pages_root(&doc).unwrap();
+    let mut kids: Vec<Object> = extra.collect();
+    kids.extend([Object::Ref(first), Object::Ref(last)]);
+    doc.update_dict(root, |d| d.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
+    doc
+}
+
+/// A tree whose `/Kids` holds more entries than the walk reads is refused by everything that takes
+/// every page, never cut short: counting, listing, Combine, Split and the page-tree recovery on
+/// open. (One test, so the 4M-entry fixture is built once.)
+#[test]
+fn a_tree_past_the_entry_cap_is_refused_not_cut_short() {
+    fn refused<T>(result: Result<T, OrganizeError>) -> bool {
+        matches!(result, Err(OrganizeError::PageTree(pdfcraft_model::PageTreeLimit::KidsEntries)))
+    }
+    let mut doc = with_padded_kids(open(fixture()), std::iter::repeat_n(Object::Null, pdfcraft_model::MAX_KIDS_ENTRIES));
+    assert_eq!(page_count(&doc), Err(OrganizeError::PageTree(pdfcraft_model::PageTreeLimit::KidsEntries)));
+    assert!(refused(pages(&doc)));
+    assert!(refused(combine(&[("A", &doc)])));
+    assert!(refused(split(&doc, &SplitBy::PageCount(1))));
+    // The tree is there, just too large: it is not treated as lost and rebuilt from a scan.
+    assert!(refused(recover_page_tree(&mut doc)));
+    assert!(refused(page_count(&doc)), "recovery left the tree as it was");
+}
+
+/// A million generation aliases of a few missing objects are a few nodes, so a tree listing them
+/// is counted whole. Before the shared walk, organize told nodes apart by number and generation:
+/// the aliases were a million nodes, the walk stopped at its cap, and Combine silently dropped the
+/// last page.
+#[test]
+fn generation_aliases_do_not_cut_a_combine_short() {
+    let aliases = (9_000u32..9_016).flat_map(|num| (0..=u16::MAX).map(move |generation| Object::Ref(ObjRef { num, generation })));
+    let doc = with_padded_kids(open(fixture()), aliases);
+    assert_eq!(page_count(&doc), Ok(2));
+    let out = combine(&[("A", &doc)]).unwrap();
+    assert_eq!(page_count(&out), Ok(2));
+}
+
+/// A flat tree with as many pages as the walk visits nodes (its root counts too) could never be
+/// read whole again, so `rebuild` refuses it before changing anything.
+#[test]
+fn a_rebuild_past_the_node_cap_is_refused_before_any_change() {
+    let mut doc = open(fixture());
+    let before = pages(&doc).unwrap();
+    let page = before[0].obj;
+    let order = vec![(page, Dict::new()); pdfcraft_model::MAX_PAGE_TREE_NODES];
+    assert_eq!(rebuild(&mut doc, &order), Err(OrganizeError::PageTree(pdfcraft_model::PageTreeLimit::Nodes)));
+    assert_eq!(pages(&doc).unwrap(), before);
+    assert!(rebuild(&mut doc, &order[..3]).is_ok());
+}
+
+/// A rebuilt tree names each page at the generation the document holds it at, not a stale one its
+/// old `/Kids` used.
+#[test]
+fn a_rebuild_names_pages_at_their_current_generation() {
+    let mut doc = open(fixture());
+    let first = pages(&doc).unwrap()[0].obj;
+    let parent = doc.get(first).as_dict().unwrap().reference(b"Parent").unwrap();
+    doc.update_dict(parent, |d| {
+        let mut kids = d.get(b"Kids").unwrap().as_array().unwrap().clone();
+        kids[0] = Object::Ref(ObjRef { num: first.num, generation: first.generation + 1 });
+        d.set(b"Kids".to_vec(), Object::Array(kids));
+    })
+    .unwrap();
+    // An edit in place keeps the page at its generation too, and a bookmark naming it by its
+    // current generation still finds it.
+    assert_eq!(pages(&doc).unwrap()[0].obj, first);
+    rotate_pages(&mut doc, &[0], 90).unwrap();
+    assert_eq!(doc.generation(first.num), first.generation);
+    reverse_pages(&mut doc, &[0, 1, 2]).unwrap();
+    assert!(pages(&doc).unwrap().iter().any(|p| p.obj == first), "{:?}", pages(&doc).unwrap());
+    assert_eq!(doc.generation(first.num), first.generation);
+}
+
 #[test]
 fn rotate_uses_inherited_rotation_and_round_trips() {
     let mut doc = open(fixture());
@@ -3510,27 +3602,66 @@ fn a_bookmark_position_that_is_not_a_number_is_refused_and_changes_nothing() {
 }
 
 #[test]
-fn page_walk_skips_repeated_and_cyclic_kids_without_copying_attributes() {
+fn page_walk_skips_repeated_and_cyclic_kids_and_keeps_inherited_attributes() {
     let mut doc = open(fixture());
-    let (root, branch) = (ObjRef { num: 2, generation: 0 }, ObjRef { num: 3, generation: 0 });
+    let branch = ObjRef { num: 3, generation: 0 };
     let (first, second) = (ObjRef { num: 4, generation: 0 }, ObjRef { num: 5, generation: 0 });
     // The branch node carries Resources for its pages: a cycle back to it, then both pages
     // 128 times over.
     let mut kids = vec![Object::Ref(branch)];
     kids.extend([Object::Ref(first), Object::Ref(second)].into_iter().cycle().take(256));
     doc.update_dict(branch, |d| d.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
-    let mut walk = PageWalk::new(&doc, root);
-    let (page, attrs) = walk.next().unwrap();
-    assert_eq!(page, first);
-    assert!(walk.pending.len() <= 3, "repeated kids retained {} pending entries", walk.pending.len());
+    let pages = crate::walk(&doc).unwrap();
+    assert_eq!(pages.len(), 3);
+    let (page, attrs) = &pages[0];
+    assert_eq!(*page, first);
     assert!(attrs.get(b"Resources").and_then(|r| r.as_dict()).is_some_and(|r| r.contains(b"Font")), "Resources from the branch");
     assert_eq!(attrs.get(b"Rotate").and_then(Object::as_int), Some(90), "Rotate from the root");
-    assert_eq!(walk.next().map(|(p, _)| p), Some(second));
-    let (_, last) = walk.next().unwrap();
-    let media_box = last.get(b"MediaBox").and_then(Object::as_array).map(|m| m.iter().filter_map(Object::as_int).collect::<Vec<_>>());
+    assert_eq!(pages[1].0, second);
+    let media_box = pages[2].1.get(b"MediaBox").and_then(Object::as_array).map(|m| m.iter().filter_map(Object::as_int).collect::<Vec<_>>());
     assert_eq!(media_box, Some(vec![0, 0, 500, 500]), "own MediaBox kept over the root's");
-    assert!(walk.next().is_none());
     assert_eq!(labels(&doc), ["Page 1", "Page 2", "Page 3"]);
+}
+
+/// Many page-tree nodes sharing one indirect `/Kids` array read it once, not once per node.
+#[test]
+fn page_walk_reads_a_shared_kids_array_once() {
+    let mut doc = open(fixture());
+    let (root, first) = (ObjRef { num: 2, generation: 0 }, ObjRef { num: 4, generation: 0 });
+    let shared = doc.add(Object::Array(vec![Object::Ref(first); 1_000]));
+    let nodes: Vec<Object> = (0..1_000)
+        .map(|_| {
+            let mut d = Dict::new();
+            d.set(b"Type".to_vec(), Object::name("Pages"));
+            d.set(b"Kids".to_vec(), Object::Ref(shared));
+            Object::Ref(doc.add(d))
+        })
+        .collect();
+    doc.update_dict(root, |d| d.set(b"Kids".to_vec(), Object::Array(nodes))).unwrap();
+    assert_eq!(crate::walk(&doc).unwrap().iter().map(|(p, _)| *p).collect::<Vec<_>>(), [first]);
+    // walk is this walk: it reads the shared array once, not under each of the 1,000 nodes.
+    let mut leaves = pdfcraft_model::PageLeaves::new(&doc);
+    assert_eq!(leaves.by_ref().count(), 1);
+    assert!(leaves.entries_read() <= 3_000, "{} kids entries read", leaves.entries_read());
+}
+
+/// A `/Type /Pages` node without `/Kids` lists no pages and is not a page itself.
+#[test]
+fn a_pages_node_without_kids_is_not_a_page() {
+    let mut doc = open(fixture());
+    let root = ObjRef { num: 2, generation: 0 };
+    let before: Vec<ObjRef> = crate::walk(&doc).unwrap().into_iter().map(|(p, _)| p).collect();
+    let mut empty = Dict::new();
+    empty.set(b"Type".to_vec(), Object::name("Pages"));
+    empty.set(b"Count".to_vec(), Object::Int(0));
+    let empty = doc.add(empty);
+    doc.update_dict(root, |d| {
+        let mut kids = d.get(b"Kids").and_then(Object::as_array).cloned().unwrap_or_default();
+        kids.insert(0, Object::Ref(empty));
+        d.set(b"Kids".to_vec(), Object::Array(kids));
+    })
+    .unwrap();
+    assert_eq!(crate::walk(&doc).unwrap().into_iter().map(|(p, _)| p).collect::<Vec<_>>(), before);
 }
 
 /// A one-page document whose page carries `annots` (object bodies 5…), with `extra` bodies after them.
