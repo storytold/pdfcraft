@@ -33,9 +33,11 @@ const XML: &str = "http://www.w3.org/XML/1998/namespace";
 /// A value type.
 #[derive(Debug, Clone, Copy)]
 enum Ty {
-    /// Any simple value: Text and the types derived from it (AgentName, Choice of Text, GUID,
-    /// Locale, MIMEType, ProperName, RenditionClass, URI, URL, XPath, and the like).
+    /// Any simple value: Text and the types derived from it (AgentName, Choice of Text, Locale,
+    /// MIMEType, ProperName, RenditionClass, URI, URL, XPath, and the like).
     Text,
+    /// A GUID: any simple value, but not a URI (ISO 16684-1 8.2.2.3), so not an `rdf:resource`.
+    Guid,
     Integer,
     Real,
     Boolean,
@@ -113,7 +115,7 @@ const THUMBNAIL: &[Field] = &[(XMP_G_IMG, "format", Text), (XMP_G_IMG, "height",
 const RESOURCE_EVENT: &[Field] = &[
     (ST_EVT, "action", Text),
     (ST_EVT, "changed", Text),
-    (ST_EVT, "instanceID", Text),
+    (ST_EVT, "instanceID", Ty::Guid),
     (ST_EVT, "parameters", Text),
     (ST_EVT, "softwareAgent", Text),
     (ST_EVT, "when", Date),
@@ -121,10 +123,10 @@ const RESOURCE_EVENT: &[Field] = &[
 /// ISO 16684-1 Table 3 and Part 2 Table 9.
 const RESOURCE_REF: &[Field] = &[
     (ST_REF, "alternatePaths", Ty::Seq(&Text)),
-    (ST_REF, "documentID", Text),
+    (ST_REF, "documentID", Ty::Guid),
     (ST_REF, "filePath", Text),
     (ST_REF, "fromPart", Text),
-    (ST_REF, "instanceID", Text),
+    (ST_REF, "instanceID", Ty::Guid),
     (ST_REF, "lastModifyDate", Date),
     (ST_REF, "manager", Text),
     (ST_REF, "managerVariant", Text),
@@ -249,16 +251,16 @@ const SCHEMAS: &[Schema] = &[
         prefix: "xmpMM",
         properties: &[
             ("DerivedFrom", Ty::Struct(RESOURCE_REF)),
-            ("DocumentID", Text),
+            ("DocumentID", Ty::Guid),
             ("History", Ty::Seq(&Ty::Struct(RESOURCE_EVENT))),
             ("Ingredients", Ty::Bag(&Ty::Struct(RESOURCE_REF))),
-            ("InstanceID", Text),
+            ("InstanceID", Ty::Guid),
             ("ManagedFrom", Ty::Struct(RESOURCE_REF)),
             ("Manager", Text),
             ("ManageTo", Text),
             ("ManageUI", Text),
             ("ManagerVariant", Text),
-            ("OriginalDocumentID", Text),
+            ("OriginalDocumentID", Ty::Guid),
             ("Pantry", Ty::Bag(&Ty::AnyStruct)),
             ("RenditionClass", Text),
             ("RenditionParams", Text),
@@ -461,12 +463,28 @@ pub(crate) fn mistyped_in(objs: &[(ObjRef, std::sync::Arc<Object>)]) -> BTreeSet
             break;
         }
         let Ok(bytes) = budget.decode_within(s, crate::xmp::MAX_XMP_BYTES) else { continue };
-        let text = String::from_utf8_lossy(&bytes);
+        let text = unicode(&bytes);
         if let Some(parsed) = crate::xmp::parse(&text) {
             out.extend(mistyped(&parsed));
         }
     }
     out
+}
+
+/// A packet's text in the Unicode encoding its byte order mark gives: UTF-16 big- or
+/// little-endian, or UTF-8 (ISO 16684-1 7.3).
+fn unicode(bytes: &[u8]) -> String {
+    let utf16 = |data: &[u8], big: bool| -> String {
+        let (units, _) = data.as_chunks::<2>();
+        let units = units.iter().map(|&[a, b]| if big { u16::from_be_bytes([a, b]) } else { u16::from_le_bytes([a, b]) });
+        char::decode_utf16(units).map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER)).collect()
+    };
+    match bytes {
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, true),
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, false),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    }
 }
 
 /// The properties of predefined schemas in the packet `doc` whose values don't have their type,
@@ -531,7 +549,7 @@ fn fits(ty: Ty, e: &Node<'_, '_>, depth: usize) -> bool {
         return simple(ty, v);
     }
     match ty {
-        Ty::Text | Ty::Integer | Ty::Real | Ty::Boolean | Ty::Date | Ty::Rational => {
+        Ty::Text | Ty::Guid | Ty::Integer | Ty::Real | Ty::Boolean | Ty::Date | Ty::Rational => {
             // `rdf:resource` makes the value a URI, which only a text type takes.
             if e.attribute((RDF, "resource")).is_some() {
                 return matches!(ty, Ty::Text);
@@ -624,7 +642,7 @@ fn simple(ty: Ty, v: &str) -> bool {
         Ty::Boolean => matches!(v, "True" | "False"),
         Ty::Date => date(v),
         Ty::Rational => v.split_once('/').is_some_and(|(n, d)| integer(n) && integer(d)),
-        Ty::Text => true,
+        Ty::Text | Ty::Guid => true,
         Ty::OneOf(types) => types.iter().any(|t| simple(*t, v)),
         _ => false,
     }

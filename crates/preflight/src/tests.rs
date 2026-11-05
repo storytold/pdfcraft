@@ -550,6 +550,13 @@ fn xmp_simple_values_have_their_lexical_forms() {
     assert!(element("pdf:Trapped", "Tr<!-- c -->ue").is_empty());
     // rdf:resource makes a URI, which only a text type takes.
     assert_eq!(mistyped(r#"><crs:Contrast rdf:resource="5"/>"#), ["crs:Contrast"]);
+    // A GUID is a simple value but not a URI (ISO 16684-1 8.2.2.3).
+    assert!(element("xmpMM:DocumentID", "uuid:1234").is_empty());
+    assert_eq!(mistyped(r#"><xmpMM:DocumentID rdf:resource="uuid:1234"/>"#), ["xmpMM:DocumentID"]);
+    assert_eq!(
+        mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Resource"><stRef:instanceID rdf:resource="uuid:1"/></xmpMM:DerivedFrom>"#),
+        ["xmpMM:DerivedFrom"]
+    );
 }
 
 /// PDF/A-2 6.6.2.3.1, arrays: the kind, every item, and the languages of a language alternative.
@@ -651,6 +658,18 @@ fn xmp_value_types_are_reported_by_verify() {
         ]
     );
     assert!(found.iter().all(|i| !i.fixable));
+    // A UTF-16 packet, either byte order, is read.
+    for big in [true, false] {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {XMP_NS}><rdf:Description rdf:about="" crs:Contrast="high"/></rdf:RDF></x:xmpmeta>"#
+        );
+        let mut data = if big { vec![0xFE, 0xFF] } else { vec![0xFF, 0xFE] };
+        data.extend(xmp.encode_utf16().flat_map(|u| if big { u.to_be_bytes() } else { u.to_le_bytes() }));
+        let hex: String = data.iter().map(|b| format!("{b:02X}")).collect();
+        let stream = format!("<< /Type /Metadata /Subtype /XML /Filter /ASCIIHexDecode /Length {} >>\nstream\n{hex}>\nendstream", hex.len() + 1);
+        let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
+        assert_eq!(issues(&doc).len(), 1, "big-endian: {big}");
+    }
     // A metadata stream of a page counts as well as the catalog's.
     let good = metadata(r#"crs:Contrast="5""#);
     let doc = build(
