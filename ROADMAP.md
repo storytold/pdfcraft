@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M9: Arabic signature review fixes mixed-script fallback, bidi ordering, logical wrapping, line breaks and hidden-name shaping; estimates unchanged)
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
@@ -222,6 +224,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-05 (M9, Arabic signature review):** Visible signatures use directional runs with Inter/Helvetica fallback beside Arabic outlines, wrap logical paragraphs before bidi shaping, preserve CR/LF and vowel-mark groups, and skip hidden signer-name shaping. Type 3 ToUnicode CMaps now declare their name and system information. Added regression coverage; 152 signing tests pass with craft-fonts, and the no-font refusal test passes separately. Scoped Clippy, formatting, assets, layering and parity checks pass. Cross-viewer visual fidelity is not qualified; estimates unchanged.
 
 - **2026-11-03 (M11, shared JBIG2 dictionary):** With Monochrome Images set to JBIG2, Optimize has up to 16 JBIG2 images share one symbol dictionary (`/JBIG2Globals`), the letters found on more than one page stored once, when that is smaller (`pdfcraft_filters::encode_jbig2_shared`). Eight pages of 10 pt text rendered at 300 dpi take 41% less in Helvetica and 42% in Times than coded alone, 10% in Courier; groups of 16 save 45%, of 32 only 47%. Only images redaction can store again without the dictionary share one (image masks and DeviceGray named directly, at most 64 Mi pixels), and redacting one stores the rest of its group so, which the group bounds to 15.
 

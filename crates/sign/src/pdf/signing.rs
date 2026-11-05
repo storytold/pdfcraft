@@ -484,7 +484,7 @@ fn type3_arabic(
         }
     }
     let mut cmap = String::from(
-        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapType 2 def\n1 begincodespacerange\n<01> <FF>\nendcodespacerange\n",
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /PdfCraftSignature def\n/CIDSystemInfo << /Registry (PdfCraft) /Ordering (Signature) /Supplement 0 >> def\n/CMapType 2 def\n1 begincodespacerange\n<01> <FF>\nendcodespacerange\n",
     );
     for block in to_unicode.chunks(100) {
         cmap.push_str(&format!("{} beginbfchar\n{}endbfchar\n", block.len(), block.concat()));
@@ -522,31 +522,125 @@ fn type3_arabic(
     Ok((font_ref, cluster_to_code))
 }
 
-fn wrap_clusters(clusters: &[pdfcraft_fonts::ShapedCluster], size: f64, max_w: f64) -> Vec<Vec<pdfcraft_fonts::ShapedCluster>> {
-    let mut lines = Vec::new();
-    let mut current_line: Vec<pdfcraft_fonts::ShapedCluster> = Vec::new();
-    let mut current_w = 0.0;
-    for c in clusters {
-        let cw = c.advance * size;
-        if current_w + cw > max_w && !current_line.is_empty() {
-            if let Some(pos) = current_line.iter().rposition(|cl| cl.text == " ") {
-                let remainder: Vec<pdfcraft_fonts::ShapedCluster> = current_line.drain((pos + 1)..).collect();
-                current_line.pop();
-                lines.push(std::mem::take(&mut current_line));
-                current_w = remainder.iter().map(|cl| cl.advance * size).sum();
-                current_line = remainder;
-            } else {
-                lines.push(std::mem::take(&mut current_line));
-                current_w = 0.0;
+enum SignatureAtom {
+    Arabic(pdfcraft_fonts::ShapedCluster),
+    Latin(char),
+}
+
+impl SignatureAtom {
+    fn advance(&self) -> f64 {
+        match self {
+            Self::Arabic(c) => c.advance,
+            Self::Latin(c) => {
+                let mut buf = [0; 4];
+                let text = c.encode_utf8(&mut buf);
+                if pdfcraft_fonts::embedding::covers(pdfcraft_fonts::INTER_REGULAR, text) {
+                    pdfcraft_fonts::inter_width(text, 1.0)
+                } else {
+                    pdfcraft_fonts::helvetica_width(text, 1.0)
+                }
             }
         }
-        current_w += cw;
-        current_line.push(c.clone());
     }
-    if !current_line.is_empty() {
-        lines.push(current_line);
+}
+
+fn bidi_control(c: char) -> bool {
+    matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Shape directional runs, not the whole mixed-script row. Latin keeps its own font.
+fn signature_atoms(text: &str, base: Option<unicode_bidi::Level>) -> Result<Vec<SignatureAtom>, SignError> {
+    if text.is_empty() {
+        // visual_runs requires a nonempty range.
+        return Ok(Vec::new());
     }
-    lines
+    let bidi = unicode_bidi::ParagraphBidiInfo::new(text, base);
+    let (levels, runs) = bidi.visual_runs(0..text.len());
+    let mut atoms = Vec::new();
+    for run in runs {
+        let rtl = levels.get(run.start).is_some_and(unicode_bidi::Level::is_rtl);
+        let Some(text) = text.get(run) else { continue };
+        let mut segments: Vec<(bool, String)> = Vec::new();
+        for c in text.chars().filter(|c| !bidi_control(*c)) {
+            let arabic = is_arabic(c) || (rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c));
+            match segments.last_mut() {
+                Some((kind, s)) if *kind == arabic => s.push(c),
+                _ => segments.push((arabic, c.to_string())),
+            }
+        }
+        if rtl {
+            segments.reverse();
+        }
+        for (arabic, text) in segments {
+            if arabic {
+                atoms.extend(
+                    pdfcraft_fonts::shape_arabic(&text, rtl)
+                        .map_err(|e| SignError::Pdf(format!("failed to shape Arabic: {e:?}")))?
+                        .into_iter()
+                        .map(SignatureAtom::Arabic),
+                );
+            } else {
+                atoms.extend(text.chars().map(SignatureAtom::Latin));
+            }
+        }
+    }
+    Ok(atoms)
+}
+
+struct SignatureLine {
+    atoms: Vec<SignatureAtom>,
+    rtl: bool,
+}
+
+/// Break logical text before applying bidi and shaping each final line. In particular the
+/// first RTL line must contain the beginning, not the end, of the logical paragraph.
+fn signature_lines(text: &str, size: f64, width: f64) -> Result<Vec<SignatureLine>, SignError> {
+    use unicode_segmentation::UnicodeSegmentation;
+    // Bound shaping, layout retries, and the generated appearance even for hostile certificate
+    // subjects and script arguments. Labels are included by the caller in `text`.
+    if text.len() > 16_384 {
+        return Err(SignError::Unsupported("visible signature text is limited to 16384 UTF-8 bytes per row; shorten it or hide that detail".into()));
+    }
+    let mut lines = Vec::new();
+    for para in text.replace("\r\n", "\n").split(['\r', '\n']) {
+        let bidi = unicode_bidi::ParagraphBidiInfo::new(para, None);
+        let base = bidi.paragraph_level;
+        let measure =
+            |s: &str| -> Result<f64, SignError> { Ok(signature_atoms(s, Some(base))?.iter().map(SignatureAtom::advance).sum::<f64>() * size) };
+        let space = measure(" ")?;
+        let (mut line, mut used) = (String::new(), 0.0);
+        for word in para.split(' ') {
+            let word_w = measure(word)?;
+            let gap = if line.is_empty() { 0.0 } else { space };
+            if !line.is_empty() && used + gap + word_w > width {
+                lines.push(SignatureLine { atoms: signature_atoms(&line, Some(base))?, rtl: base.is_rtl() });
+                line.clear();
+                used = 0.0;
+            }
+            if !line.is_empty() {
+                line.push(' ');
+                used += space;
+            }
+            if word_w <= width {
+                line.push_str(word);
+                used += word_w;
+            } else {
+                // Never detach vowel marks from a letter when breaking a long word.
+                for grapheme in word.graphemes(true) {
+                    let advance = measure(grapheme)?;
+                    if !line.is_empty() && used + advance > width {
+                        lines.push(SignatureLine { atoms: signature_atoms(&line, Some(base))?, rtl: base.is_rtl() });
+                        line.clear();
+                        used = 0.0;
+                    }
+                    line.push_str(grapheme);
+                    used += advance;
+                }
+            }
+        }
+        lines.push(SignatureLine { atoms: signature_atoms(&line, Some(base))?, rtl: base.is_rtl() });
+    }
+    Ok(lines)
 }
 
 fn is_arabic(c: char) -> bool {
@@ -588,8 +682,13 @@ fn check_appearance_text(name: &str, dn: &str, opts: &SignOptions, w: f64, h: f6
         })?;
         for (on, what, text) in shown {
             if on && let Some(s) = text {
+                if s.len() > 16_384 {
+                    return Err(SignError::Unsupported(format!(
+                        "{what} of the visible signature exceeds 16384 UTF-8 bytes; shorten it or leave it out of the appearance"
+                    )));
+                }
                 for c in s.chars() {
-                    if matches!(c, '\n' | '\r') {
+                    if matches!(c, '\n' | '\r') || bidi_control(c) {
                         continue;
                     }
                     if !pdfcraft_fonts::embedding::covers(arabic_face.bytes, &c.to_string())
@@ -644,6 +743,42 @@ struct AppearanceBox {
     right_w: f64,
 }
 
+struct SignatureFonts {
+    codes: std::collections::HashMap<ClusterKey, u8>,
+    latin_tag: String,
+    latin: pdfcraft_fonts::pdf::Metrics,
+}
+
+impl SignatureFonts {
+    fn draw_line(&self, out: &mut Vec<u8>, line: &SignatureLine, size: f64, rect: [f64; 3], y: f64) -> Result<(), SignError> {
+        let [left, width, pad] = rect;
+        let line_w = line.atoms.iter().map(SignatureAtom::advance).sum::<f64>() * size;
+        let mut pen = if line.rtl { (left + width - line_w).max(left) } else { left } + pad;
+        for atom in &line.atoms {
+            let (tag, encoded) = match atom {
+                SignatureAtom::Arabic(c) => {
+                    let code = self.codes.get(&cluster_key(c)).ok_or_else(|| SignError::Pdf("signature glyph is not in its font".into()))?;
+                    ("PCFull0", format!("<{code:02X}>"))
+                }
+                SignatureAtom::Latin(c) => {
+                    let text = c.to_string();
+                    let (tag, bytes) = if let Some(bytes) = self.latin.encode(&text) {
+                        (self.latin_tag.as_str(), bytes)
+                    } else if let Some(byte) = pdfcraft_fonts::win_ansi_byte(*c) {
+                        ("Helv", vec![byte])
+                    } else {
+                        return Err(SignError::Unsupported(format!("the visible signature font cannot draw {c:?}")));
+                    };
+                    (tag, format!("<{}>", bytes.iter().map(|b| format!("{b:02X}")).collect::<String>()))
+                }
+            };
+            out.extend(format!("/{tag} {} Tf 1 0 0 1 {} {} Tm {encoded} Tj\n", fmt(size), fmt(pen), fmt(y)).bytes());
+            pen += atom.advance() * size;
+        }
+        Ok(())
+    }
+}
+
 fn draw_arabic_appearance(
     doc: &mut Document,
     b: &AppearanceBox,
@@ -658,21 +793,21 @@ fn draw_arabic_appearance(
 
     let mut name_size = (b.h * 0.4).min(36.0);
     let fit = (b.left_w - 2.0 * b.pad).max(1.0);
-    let name_clusters = pdfcraft_fonts::shape_arabic(name, true).map_err(|e| SignError::Pdf(format!("failed to shape Arabic: {e:?}")))?;
-    let longest = name_clusters.iter().map(|c| c.advance).sum::<f64>().max(0.01);
+    let shown_name = if a.name && opts.graphic.is_none() { name } else { "" };
+    let longest =
+        signature_lines(shown_name, 1.0, f64::MAX)?.iter().map(|l| l.atoms.iter().map(SignatureAtom::advance).sum::<f64>()).fold(0.01, f64::max);
     name_size = name_size.min(fit / longest).max(4.0);
-    let name_lines = if a.name && opts.graphic.is_none() { wrap_clusters(&name_clusters, name_size, fit) } else { Vec::new() };
-
-    let shaped_detail_lines: Vec<Vec<pdfcraft_fonts::ShapedCluster>> = lines
-        .iter()
-        .map(|l| pdfcraft_fonts::shape_arabic(l, contains_arabic(l)))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| SignError::Pdf(format!("failed to shape Arabic details: {e:?}")))?;
+    let name_lines = signature_lines(shown_name, name_size, fit)?;
 
     let mut detail_size = (b.h / (lines.len().max(1) as f64 * 1.15)).min(12.0);
     let wrapped_detail_lines = loop {
-        let all: Vec<Vec<pdfcraft_fonts::ShapedCluster>> =
-            shaped_detail_lines.iter().flat_map(|l| wrap_clusters(l, detail_size, b.right_w)).collect();
+        let all = lines
+            .iter()
+            .map(|l| signature_lines(l, detail_size, b.right_w))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
         if all.len() as f64 * detail_size * 1.15 <= b.h - 2.0 * b.pad || detail_size <= 3.0 {
             break all;
         }
@@ -680,16 +815,29 @@ fn draw_arabic_appearance(
     };
 
     let mut all_clusters = Vec::new();
-    for line in &name_lines {
-        all_clusters.extend(line.iter().cloned());
-    }
-    for line in &wrapped_detail_lines {
-        all_clusters.extend(line.iter().cloned());
+    for line in name_lines.iter().chain(&wrapped_detail_lines) {
+        all_clusters.extend(line.atoms.iter().filter_map(|atom| match atom {
+            SignatureAtom::Arabic(c) => Some(c.clone()),
+            SignatureAtom::Latin(_) => None,
+        }));
     }
 
     let (font_ref, cluster_to_code) = type3_arabic(doc, &all_clusters)?;
     fonts.set(b"PCFull0".to_vec(), Object::Ref(font_ref));
-    let font_tag = "PCFull0";
+    let latin_tag = pdfcraft_fonts::embedding::embed(doc, &mut fonts, pdfcraft_fonts::INTER_REGULAR, "Inter")
+        .map_err(|e| SignError::Pdf(format!("failed to embed signature font: {e}")))?;
+    let latin_dict = fonts
+        .get(latin_tag.as_bytes())
+        .map(|o| doc.resolve(o))
+        .and_then(|o| o.as_dict().cloned())
+        .ok_or_else(|| SignError::Pdf("embedded signature font dictionary not found".into()))?;
+    let font_data = SignatureFonts { codes: cluster_to_code, latin_tag, latin: pdfcraft_fonts::pdf::Metrics::from_dict(doc, &latin_dict) };
+    let mut helvetica = Dict::new();
+    helvetica.set(b"Type".to_vec(), Object::name("Font"));
+    helvetica.set(b"Subtype".to_vec(), Object::name("Type1"));
+    helvetica.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+    helvetica.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    fonts.set(b"Helv".to_vec(), Object::Dict(helvetica));
 
     if let Some(g) = &opts.graphic {
         let (ops, im) = g.draw(doc, [b.pad, b.pad, (b.left_w - 2.0 * b.pad).max(0.0), (b.h - 2.0 * b.pad).max(0.0)])?;
@@ -701,33 +849,13 @@ fn draw_arabic_appearance(
         let total = name_lines.len() as f64 * name_size * 1.1;
         let mut y = (b.h + total) / 2.0 - name_size * 0.85;
         for line in &name_lines {
-            let line_w = line.iter().map(|c| c.advance).sum::<f64>() * name_size;
-            let is_rtl = line.iter().any(|c| contains_arabic(&c.text));
-            let x = if is_rtl { (b.left_w - b.pad - line_w).max(b.pad) } else { b.pad };
-            let mut pen = x;
-            for c in line {
-                let key = cluster_key(c);
-                if let Some(&code) = cluster_to_code.get(&key) {
-                    out.extend(format!("/{font_tag} {} Tf 1 0 0 1 {} {} Tm <{code:02X}> Tj\n", fmt(name_size), fmt(pen), fmt(y)).bytes());
-                }
-                pen += c.advance * name_size;
-            }
+            font_data.draw_line(&mut out, line, name_size, [0.0, fit, b.pad], y)?;
             y -= name_size * 1.1;
         }
     }
     let mut y = b.h - b.pad - detail_size * 0.9;
     for line in &wrapped_detail_lines {
-        let line_w = line.iter().map(|c| c.advance).sum::<f64>() * detail_size;
-        let is_rtl = line.iter().any(|c| contains_arabic(&c.text));
-        let x = if is_rtl { (b.right_x + b.right_w - line_w).max(b.right_x) } else { b.right_x };
-        let mut pen = x;
-        for c in line {
-            let key = cluster_key(c);
-            if let Some(&code) = cluster_to_code.get(&key) {
-                out.extend(format!("/{font_tag} {} Tf 1 0 0 1 {} {} Tm <{code:02X}> Tj\n", fmt(detail_size), fmt(pen), fmt(y)).bytes());
-            }
-            pen += c.advance * detail_size;
-        }
+        font_data.draw_line(&mut out, line, detail_size, [b.right_x, b.right_w, 0.0], y)?;
         y -= detail_size * 1.15;
     }
     out.extend_from_slice(b"ET\n");
@@ -907,4 +1035,67 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
 pub(crate) fn fmt(v: f64) -> String {
     let s = format!("{v:.2}");
     s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+#[cfg(test)]
+mod arabic_tests {
+    use super::*;
+
+    fn visual_text(line: &SignatureLine) -> String {
+        line.atoms
+            .iter()
+            .map(|a| match a {
+                SignatureAtom::Arabic(c) => c.text.clone(),
+                SignatureAtom::Latin(c) => c.to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn mixed_script_runs_keep_latin_and_numbers_in_reading_order() {
+        if pdfcraft_fonts::document_arabic_font().is_none() {
+            return;
+        }
+        for (logical, visual) in [("فراس Smith 123", "Smith 123 سارف"), ("Reason: موافق", "Reason: قفاوم")] {
+            let lines = signature_lines(logical, 12.0, 1000.0).unwrap();
+            assert_eq!(lines.len(), 1);
+            assert_eq!(visual_text(&lines[0]), visual);
+        }
+        let lines = signature_lines("\u{2067}فراس\u{2069} Smith", 12.0, 1000.0).unwrap();
+        assert!(!visual_text(&lines[0]).chars().any(bidi_control));
+    }
+
+    #[test]
+    fn rtl_wrap_starts_with_the_beginning_of_the_logical_paragraph() {
+        if pdfcraft_fonts::document_arabic_font().is_none() {
+            return;
+        }
+        let first = signature_lines("موافق", 12.0, 1000.0).unwrap();
+        let width = first[0].atoms.iter().map(SignatureAtom::advance).sum::<f64>() * 12.0 + 0.01;
+        let lines = signature_lines("موافق موافق موافق", 12.0, width).unwrap();
+        assert_eq!(lines.len(), 3);
+        assert!(lines.iter().all(|l| l.rtl && visual_text(l) == visual_text(&first[0])));
+        let lines = signature_lines("موافق دمشق", 12.0, width).unwrap();
+        assert_eq!(visual_text(&lines[0]), visual_text(&first[0]));
+    }
+
+    #[test]
+    fn explicit_breaks_and_long_words_preserve_graphemes() {
+        if pdfcraft_fonts::document_arabic_font().is_none() {
+            return;
+        }
+        let lines = signature_lines("موافق\r\n\nSmith\r123", 12.0, 1000.0).unwrap();
+        assert_eq!(lines.len(), 4);
+        assert!(lines[1].atoms.is_empty());
+        assert_eq!(visual_text(&lines[2]), "Smith");
+        assert_eq!(visual_text(&lines[3]), "123");
+        let lines = signature_lines("بَبَبَ", 12.0, 1.0).unwrap();
+        assert_eq!(lines.len(), 3);
+        for line in lines {
+            let text = visual_text(&line);
+            assert_eq!(text.chars().filter(|c| *c == 'ب').count(), 1);
+            assert_eq!(text.chars().filter(|c| *c == '\u{064e}').count(), 1);
+        }
+        assert!(signature_lines(&"a".repeat(16_385), 12.0, 100.0).is_err());
+    }
 }
