@@ -1304,6 +1304,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-web-host"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=2e2312ddaf21bc3d85cd3395d0955c7d239306f6#2e2312ddaf21bc3d85cd3395d0955c7d239306f6"
+dependencies = [
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "craft-winprint-gdi"
 version = "0.1.0"
 source = "git+https://github.com/storytold/winprint.rs?rev=417ac3c4d14d3da5485a99c7d5ce8f05664ec312#417ac3c4d14d3da5485a99c7d5ce8f05664ec312"
@@ -4732,6 +4741,7 @@ dependencies = [
 name = "pdfcraft-web"
 version = "0.18.1"
 dependencies = [
+ "craft-web-host",
  "eframe",
  "egui",
  "js-sys",
