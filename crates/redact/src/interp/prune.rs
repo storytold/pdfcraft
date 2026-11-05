@@ -342,15 +342,15 @@ pub(super) fn extgstate_font(
     let entry = doc.resolve(state.get(b"Font")?).as_array().cloned()?;
     let [font, size] = entry.as_slice() else { return None };
     let size = doc.resolve(size).as_f64()?;
-    let font_dict = doc.resolve(font).as_dict().cloned();
-    let vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
     let key = [b"\0".as_slice(), name].concat();
-    let metrics = match scope.fonts.get(&key) {
-        Some(m) => m.clone(),
+    let (metrics, vertical) = match scope.fonts.get(&key) {
+        Some(f) => f.clone(),
         None => {
+            let font_dict = doc.resolve(font).as_dict().cloned();
             let m = font_dict.as_ref().map(|d| Rc::new(Metrics::from_dict(doc, d))).unwrap_or_else(|| fallback.clone());
-            scope.fonts.insert(key, m.clone());
-            m
+            let f = (m, font_dict.as_ref().is_some_and(|d| is_vertical(doc, d)));
+            scope.fonts.insert(key, f.clone());
+            f
         }
     };
     Some((metrics, vertical, size))

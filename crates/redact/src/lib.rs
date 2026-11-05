@@ -52,7 +52,7 @@ pub enum RedactError {
     #[error("{0}")]
     Undrawable(String),
     #[error(
-        "page {0} has vertical-writing text while a redaction mark is pending, and PdfCraft cannot tell whether that text lies under the mark yet, so nothing was changed"
+        "page {0} has vertical-writing text, and PdfCraft cannot tell whether that text lies under a redaction mark or off the page yet, so the operation was refused"
     )]
     VerticalText(usize),
     #[error(

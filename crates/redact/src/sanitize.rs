@@ -381,11 +381,16 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         if let Some(error) = out.error {
             return Err(error.into());
         }
+        // Vertical text is laid out horizontally here, so whether it lies off the page can't be
+        // told: removal refuses the page, and a scan counts it so that removal runs and refuses.
+        if out.vertical && write {
+            return Err(RedactError::VerticalText(pi + 1));
+        }
         let blocks = scope.layer_blocks;
         let glyphs = scope.report.glyphs;
         let retained_for_page = std::mem::take(&mut scope.retained_off_layers);
         drop(scope);
-        total += out.residue + blocks + glyphs;
+        total += out.residue + blocks + glyphs + usize::from(out.vertical);
         retained_off_layers.extend(retained_for_page);
         if !write {
             continue;
