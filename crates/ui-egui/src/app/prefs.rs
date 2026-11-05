@@ -89,6 +89,7 @@ impl PdfCraftApp {
             "pinned_folders": self.pinned.folders,
             "theme": self.theme_preference,
             "scroll_speed": self.scroll_speed,
+            "invert_middle_drag": self.invert_middle_drag,
             "animation_effects": self.animation_effects,
             "default_mode": self.default_mode,
             "default_layout": canvas::display_token(self.view_defaults.layout, self.view_defaults.continuous),
@@ -102,6 +103,9 @@ impl PdfCraftApp {
             "ui_scale": self.ui_scale,
             "flatten_fill_sign": self.flatten_fill_sign_on_save,
             "fill_text_size": self.fill_text_size,
+            "fill_text_border": self.fill_text_default.width,
+            "fill_text_border_color": self.fill_text_default.color,
+            "fill_text_border_shape": self.fill_text_default.shape.name(),
             "date_format": self.session.date_format(),
             // Null follows the interface language.
             "date_language": self.session.date_language(),
@@ -115,8 +119,12 @@ impl PdfCraftApp {
                     "tool": t.command(),
                     "color": s.color,
                     "opacity": s.opacity,
+                    "fill_opacity": s.fill_opacity,
+                    "text_opacity": s.text_opacity,
                     "width": s.width,
                     "fill": s.fill,
+                    "border_color": s.border_color,
+                    "border_shape": s.border_shape.name(),
                 }))
                 .collect::<Vec<_>>(),
             // Drawn signatures keep their original form (older settings read the same).
@@ -148,6 +156,9 @@ impl PdfCraftApp {
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
         v["show_page_edge_shadows"] = self.show_page_edge_shadows.into();
+        // Not `check_updates_at_start`: that key was an opt-in of its own, off unless chosen, and
+        // settings written then would turn this off unasked.
+        v["update_check_at_start"] = self.update_check_at_start.into();
         v["hotbar"] = serde_json::to_value(&self.hotbar).unwrap_or_default();
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
@@ -161,6 +172,9 @@ impl PdfCraftApp {
     pub fn restore(&mut self, json: &str) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
         if let Ok(mut bar) = serde_json::from_value::<crate::hotbar::Hotbar>(v["hotbar"].clone()) {
+            if v["hotbar"].get("placed").is_none() {
+                bar.adopt_legacy();
+            }
             bar.normalize();
             self.hotbar = bar;
         }
@@ -217,6 +231,9 @@ impl PdfCraftApp {
         if let Some(on) = v["reload_changed_files"].as_bool() {
             self.reload_changed_files = on;
         }
+        if let Some(on) = v["update_check_at_start"].as_bool() {
+            self.update_check_at_start = on;
+        }
         if let Some(on) = v["show_secured_notice"].as_bool() {
             self.show_secured_notice = on;
         }
@@ -238,6 +255,9 @@ impl PdfCraftApp {
         }
         if let Ok(speed) = serde_json::from_value::<scroll_speed::ScrollSpeed>(v["scroll_speed"].clone()) {
             self.scroll_speed = speed;
+        }
+        if let Some(invert) = v["invert_middle_drag"].as_bool() {
+            self.invert_middle_drag = invert;
         }
         if let Ok(effects) = serde_json::from_value::<motion::AnimationEffects>(v["animation_effects"].clone()) {
             self.animation_effects = effects;
@@ -303,6 +323,26 @@ impl PdfCraftApp {
         if let Some(show) = v["show_page_edge_shadows"].as_bool() {
             self.show_page_edge_shadows = show;
         }
+        if let Some(width) = v["fill_text_border"].as_f64().and_then(fill_sign::valid_text_border) {
+            self.fill_text_default.width = width;
+        }
+        if let Some(shape) = v["fill_text_border_shape"].as_str().and_then(pdfcraft_engine::BorderShape::parse) {
+            self.fill_text_default.shape = shape;
+        }
+        // `null` is a saved "the text's colour"; a missing or malformed one keeps the setting.
+        match v.get("fill_text_border_color") {
+            Some(serde_json::Value::Null) => self.fill_text_default.color = None,
+            Some(c) => {
+                if let Some(c) = rgb_triple(c) {
+                    self.fill_text_default.color = Some(c.map(|x| x.clamp(0.0, 1.0)));
+                }
+            }
+            None => {}
+        }
+        // Fill & Sign text starts from the saved border.
+        self.fill_text_border = self.fill_text_default.width;
+        self.fill_text_border_color = self.fill_text_default.color;
+        self.fill_text_border_shape = self.fill_text_default.shape;
         if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"]) {
             self.redact_prefs = prefs.clone();
             self.redact_defaults = prefs;
@@ -351,6 +391,8 @@ impl PdfCraftApp {
                 if let Some(o) = e["opacity"].as_f64() {
                     self.comment_prefs.set_opacity(tool, o);
                 }
+                // The fill's and text's own opacities, where saved (older settings have none).
+                self.comment_prefs.set_part_opacity(tool, e["fill_opacity"].as_f64(), e["text_opacity"].as_f64());
                 if let Some(w) = e["width"].as_f64() {
                     self.comment_prefs.set_width(tool, w);
                 }
@@ -365,6 +407,20 @@ impl PdfCraftApp {
                     let mut s = self.comment_prefs.style(tool);
                     s.fill = fill;
                     self.comment_prefs.set_style(tool, s);
+                }
+                // `"border_color": null` is a saved "Same as text", which clears a tool's own border
+                // colour; a missing or malformed one keeps it.
+                match e.get("border_color") {
+                    Some(serde_json::Value::Null) => self.comment_prefs.set_border_color(tool, None),
+                    Some(c) => {
+                        if let Some(c) = rgb_triple(c) {
+                            self.comment_prefs.set_border_color(tool, Some(c));
+                        }
+                    }
+                    None => {}
+                }
+                if let Some(shape) = e["border_shape"].as_str().and_then(pdfcraft_engine::BorderShape::parse) {
+                    self.comment_prefs.set_border_shape(tool, shape);
                 }
             }
         }
