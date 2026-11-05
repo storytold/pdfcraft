@@ -1549,6 +1549,145 @@ fn a_dictionary_labelled_metadata_is_not_a_metadata_change() {
     });
 }
 
+/// A one-page document whose text sits in an optional-content group (object 8) that the
+/// catalog's indirect `/OCProperties` (object 7) lists as shown.
+fn fixture_with_layer() -> Vec<u8> {
+    let content = b"/OC /oc1 BDC BT /F1 14 Tf 20 250 Td (Clause 4: the buyer pays) Tj ET EMC";
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> /OCProperties 7 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /Properties << /oc1 8 0 R >> >> /Annots [6 0 R] >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 >>".to_vec(),
+        b"<< /OCGs [8 0 R] /D << /ON [8 0 R] >> >>".to_vec(),
+        b"<< /Type /OCG /Name (Clause 4) >>".to_vec(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// Hide the clause: rewrite `/OCProperties` (object 7) so its group starts off, adding `extra`.
+fn hide_layer(doc: &mut Document, extra: &[(&str, Object)]) {
+    let mut d = dict_of(vec![("OCGs", Object::Array(vec![oref(8)])), ("D", Object::Dict(dict_of(vec![("OFF", Object::Array(vec![oref(8)]))])))]);
+    for (k, v) in extra {
+        d.set(k.as_bytes().to_vec(), v.clone());
+    }
+    doc.set(pdfcraft_cos::ObjRef { num: 7, generation: 0 }, Object::Dict(d));
+}
+
+#[test]
+fn an_existing_object_given_form_keys_after_signing_is_still_judged() {
+    // An existing object is judged by the role it had when signed, not only when a signed page
+    // draws it (#1787): the catalog's indirect /OCProperties decides which layers show, and a
+    // rewrite that hides the clause stays a change whatever form-field keys it adds.
+    assert_refused_at_every_level(&fixture_with_layer(), "other changes", |doc| hide_layer(doc, &[]));
+    let zeros = Object::Array(vec![Object::Int(0); 4]);
+    for extra in [
+        vec![("FT", Object::name("Tx"))],
+        vec![("DR", Object::Dict(pdfcraft_cos::Dict::new()))],
+        vec![("T", Object::String(PdfString::text("x"))), ("Kids", Object::Array(Vec::new()))],
+        vec![("Subtype", Object::name("Widget")), ("Rect", zeros.clone())],
+        vec![("Subtype", Object::name("Square")), ("Rect", zeros)],
+    ] {
+        assert_refused_at_every_level(&fixture_with_layer(), "other changes", |doc| hide_layer(doc, &extra));
+    }
+}
+
+#[test]
+fn an_unsigned_signature_widget_turned_into_a_comment_is_no_edit_of_it() {
+    // The empty signature field "Approval" (object 6) rewritten as a white /Square annotation that
+    // covers the signed text. Judged by what it was, it is a signature widget; but an annotation
+    // of another kind is no edit that widget permits, at any level.
+    assert_refused_at_every_level(&fixture(), "other changes", |doc| {
+        let white = Object::Array(vec![Object::Int(1); 3]);
+        doc.set(
+            pdfcraft_cos::ObjRef { num: 6, generation: 0 },
+            Object::Dict(dict_of(vec![
+                ("Type", Object::name("Annot")),
+                ("Subtype", Object::name("Square")),
+                ("Rect", Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(300), Object::Int(300)])),
+                ("C", white.clone()),
+                ("IC", white),
+                ("P", oref(3)),
+            ])),
+        );
+    });
+}
+
+/// `fixture()` with the form an indirect dictionary (object 7) listing the unsigned field.
+fn fixture_with_indirect_acroform() -> Vec<u8> {
+    let objs: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm 7 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>",
+        b"<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 250 Td (Contract text) Tj ET\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
+        b"<< /Fields [6 0 R] >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn the_forms_signed_fields_are_not_dropped_after_signing() {
+    // Signed, then timestamped. A later revision drops the form's /Fields, or empties it: the
+    // fields the timestamp covered, the signature among them, are gone from the form. That is no
+    // signature change, so the timestamp reports it as not permitted.
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let tsa = TestTsa {
+        id: pkcs12::open(&data("rsa-aes.p12"), "test").unwrap(),
+        time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 },
+    };
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let signed = pdfcraft_sign::sign(&open(&fixture_with_indirect_acroform()), &id, &opts()).unwrap();
+    let stamped = pdfcraft_sign::timestamp_document(&open(&signed), &tsa, "D:20261006120000Z").unwrap();
+    let mut failures = Vec::new();
+    for (how, fields) in [("dropped", None), ("emptied", Some(Object::Array(Vec::new())))] {
+        let edited = edit_after(&stamped, |doc| {
+            doc.update_dict(pdfcraft_cos::ObjRef { num: 7, generation: 0 }, |af| match &fields {
+                Some(f) => af.set(b"Fields".to_vec(), f.clone()),
+                None => {
+                    af.remove(b"Fields");
+                }
+            })
+            .unwrap();
+        });
+        let stamp = signatures(&open(&edited), &edited, &trust).into_iter().find(|s| s.doc_timestamp).expect("the document timestamp");
+        if !matches!(stamp.modification, Modification::Disallowed(_)) {
+            failures.push(format!("/Fields {how}: {:?}, {:?}", stamp.status, stamp.modification));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// A one-page document like `fixture()` (objects 1–6) plus a stream, object 7, with the given
 /// dictionary entries and body. `catalog_extra` goes into the catalog; the page draws object 7
 /// as a Form XObject when `drawn`.
