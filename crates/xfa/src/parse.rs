@@ -198,6 +198,16 @@ fn parse_para(n: Option<XmlNode>) -> ParaSpec {
     }
 }
 
+/// `rotate` as quarter turns (XFA 3.3: degrees counter-clockwise, a multiple of 90, `deg` optional):
+/// anything else leaves the object as it stands.
+fn quarter_turns(rotate: Option<&str>) -> u8 {
+    let degrees = rotate.map(str::trim).map(|v| v.strip_suffix("deg").unwrap_or(v).trim_end());
+    let turns = degrees.and_then(|v| v.parse::<f64>().ok()).map(|v| v.rem_euclid(360.0) / 90.0);
+    // Whole, which NaN and infinities aren't, and in range, so the cast is exact; a tiny negative
+    // angle rounds to a full turn.
+    turns.filter(|t| t.fract() == 0.0).map_or(0, |t| t as u8 % 4)
+}
+
 fn parse_common(n: XmlNode) -> Common {
     Common {
         name: n.attribute("name").map(str::to_string).filter(|s| !s.is_empty()),
@@ -205,6 +215,7 @@ fn parse_common(n: XmlNode) -> Common {
         x: attr_measure(n, "x"),
         y: attr_measure(n, "y"),
         anchor: Anchor::parse(n.attribute("anchorType")),
+        rotate: quarter_turns(n.attribute("rotate")),
         w: attr_measure(n, "w"),
         h: attr_measure(n, "h"),
         min_w: attr_measure(n, "minW"),
@@ -878,10 +889,12 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
             && n.tag_name().name() == "template"
             && (n.tag_name().namespace().is_some_and(|ns| ns.contains("xfa-template")) || children(*n, "subform").next().is_some())
     };
+    // The template is a packet of the XDP itself, a child of its root: one nested deeper is
+    // data (an imported dataset, say), which must not supply the form's scripts.
     let template = if is_template(&root) {
         root
     } else {
-        root.descendants().find(is_template).ok_or_else(|| XfaError::Malformed("no <template> element".into()))?
+        root.children().find(is_template).ok_or_else(|| XfaError::Malformed("no <template> element".into()))?
     };
     let mut warnings = Vec::new();
     let sf = children(template, "subform").next().ok_or_else(|| XfaError::Malformed("the template has no root subform".into()))?;
@@ -892,7 +905,7 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     }
     // The form packet beside the template holds the state the form was saved in.
     let saved = root
-        .descendants()
+        .children()
         .find(|n| n.is_element() && n.tag_name().name() == "form" && n.tag_name().namespace().is_some_and(|ns| ns.contains("xfa-form")));
     if let Some(saved_root) = saved.and_then(|f| children(f, "subform").next()) {
         if let Some(p) = saved_root.attribute("presence") {
