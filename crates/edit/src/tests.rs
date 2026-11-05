@@ -3664,6 +3664,54 @@ fn growing_into_a_blank_line_keeps_the_neighbour_after_save() {
 
 /// No `TL`: `Td` does not set the leading (`TD` does). Three rows at one repeated step are one
 /// paragraph. A single large gap, with no third row at that step, stays a break.
+/// Word sets each row with its own `Tm` and no TL: a 20 pt heading, a two-row 12 pt paragraph and
+/// another after its "space after". The heading is a paragraph of its own (#1756), and so is the
+/// last one, so a size or bold change to one paragraph restyles only it. A heading over body rows
+/// set at its own step still joins them, as a mixed region does.
+#[test]
+fn a_word_heading_and_its_spaced_paragraphs_stay_apart() {
+    let rows = |heading: f64, body: [f64; 3], bold: &str| {
+        format!(
+            "BT /{bold} 20.04 Tf 1 0 0 1 72 {heading} Tm (Quarterly Storage Report) Tj ET \
+             BT /F1 12 Tf 1 0 0 1 72 {} Tm (This report covers the storage usage of all departments) Tj ET \
+             BT /F1 12 Tf 1 0 0 1 72 {} Tm (usage grew by twelve percent compared with last quarter.) Tj ET \
+             BT /F1 12 Tf 1 0 0 1 72 {} Tm (Recommendation: archive old project files.) Tj ET",
+            body[0], body[1], body[2]
+        )
+    };
+    let texts = |doc: &Document| text::text_blocks(doc, 0).unwrap().into_iter().map(|b| b.editor_text).collect::<Vec<_>>();
+    // The English and the Arabic Word files' baselines: their leading and spacing differ a little.
+    for (heading, body) in [(750.82, [722.26, 705.22, 680.26]), (751.06, [723.94, 707.98, 683.98])] {
+        for bold in ["F1", "F2"] {
+            let doc = text_page(&rows(heading, body, bold));
+            assert_eq!(
+                texts(&doc),
+                [
+                    "Quarterly Storage Report",
+                    "This report covers the storage usage of all departments\nusage grew by twelve percent compared with last quarter.",
+                    "Recommendation: archive old project files."
+                ],
+                "heading at {heading}, {bold}"
+            );
+        }
+    }
+    // A title set at the body's own step is part of the region.
+    let doc = text_page(&rows(746.0, [722.0, 698.0, 674.0], "F1"));
+    assert_eq!(texts(&doc).len(), 1, "{:?}", texts(&doc));
+    // Right to left, as the Arabic Word file sets it: rows of different widths share a right edge.
+    // Synthetic codes: A س, B م, Y lam-alef (see `arabic_ligature_page`).
+    let rtl = |x: f64, y: f64, size: f64, codes: &str| format!("BT /F1 {size} Tf 1 0 0 1 {x} {y} Tm ({codes}) Tj ET ");
+    let width = |codes: &str, size: f64| codes.len() as f64 * 0.5 * size;
+    let right = 500.0;
+    let page = [(751.06, 20.04, "BYA"), (723.94, 12.0, "BYABYABYABYA"), (707.98, 12.0, "BYABYA"), (683.98, 12.0, "BYABYABYA")]
+        .iter()
+        .map(|(y, size, codes)| rtl(right - width(codes, *size), *y, *size, codes))
+        .collect::<String>();
+    let doc = arabic_ligature_page(&page, false);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.iter().map(|b| b.lines.len()).collect::<Vec<_>>(), [1, 2, 1], "{:?}", texts(&doc));
+}
+
 #[test]
 fn a_repeated_step_without_tl_is_the_paragraph_leading() {
     let step = 27.6_f64;

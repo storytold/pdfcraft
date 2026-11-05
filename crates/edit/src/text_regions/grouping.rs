@@ -417,6 +417,27 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 let scale = gap.abs().max(ngap.abs());
                 if same && ngap > tol * 0.8 && scale < tol * 4.0 && (ngap - gap).abs() <= scale * 0.08 + 0.5 { Some(gap) } else { None }
             });
+            // A row's own paragraph sets its leading too: a heading over body rows of one size
+            // (Word sets each row with its own `Tm`, no TL) is followed by a gap well past the
+            // step between those rows, so the heading stays a paragraph of its own (#1756). The
+            // step is measured with the row's own size, not the heading's.
+            let below = rows.get(row_at.saturating_add(1)).and_then(|next| {
+                let nfirst = next.first().and_then(|i| lines.get(*i))?;
+                let nframe = frame_row_rect(next, lines)?;
+                let ngap = first.frame_origin().1 - nfirst.frame_origin().1;
+                let own = first.size.max(1.0);
+                // Aligned at either edge or the centre: right-to-left body rows share a right edge.
+                let lined_up = (nframe[0] - frame[0]).abs() < own
+                    || (nframe[2] - frame[2]).abs() < own
+                    || ((nframe[0] + nframe[2] - frame[0] - frame[2]) / 2.0).abs() < own;
+                let same = same_plane(first, nfirst) && (mixed || same_style(first, nfirst)) && (nfirst.size - first.size).abs() < 0.01 && lined_up;
+                (same && ngap > own * 0.8 && ngap < own * 2.05).then_some(ngap)
+            });
+            // Paragraph spacing (Word's "space after" under body text) is about 1.45 times the
+            // leading or more. That holds for rows of one size, whose steps vary by a few tenths
+            // at most; rows of different sizes (a card's title lines) step unevenly, so they keep
+            // the wider margin.
+            let uniform = block.lines.iter().filter_map(|i| lines.get(*i)).all(|l| (l.size - first.size).abs() < 0.01);
             // A lone row with none of those: the step to the row after it is the leading of the
             // paragraph it opens, and the gap above it is a heading's or a blank line's when it
             // is much wider (#3577).
@@ -427,9 +448,12 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
             });
             let max_gap = own_leading
                 .filter(|lead| *lead > tol * 0.4)
-                .or(stated)
-                .or(repeated)
-                .map_or_else(|| following.map_or(tol * 2.05, |lead| (lead * 1.35).min(tol * 2.05)), |lead| lead * 1.5);
+                .map(|lead| lead * if uniform { 1.4 } else { 1.5 })
+                .or(stated.map(|lead| lead * 1.5))
+                .or(repeated.map(|lead| lead * 1.5))
+                .or(below.filter(|_| prev.size > first.size).map(|lead| lead * 1.5))
+                .or(following.map(|lead| (lead * 1.35).min(tol * 2.05)))
+                .unwrap_or(tol * 2.05);
             // OCR lines stay apart: the scan fixes where each one is, so they never rewrap together.
             (!mixed || !(invisible(prev) || invisible(first)))
                 && (mixed || same_style(prev, first))
