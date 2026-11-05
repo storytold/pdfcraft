@@ -7,7 +7,8 @@
 //! Camera Raw namespaces, with the structures they use. A value is read as RDF/XML serializes it
 //! (ISO 16684-1 7.9): a simple value as text or an attribute, an array as `rdf:Seq`, `rdf:Bag` or
 //! `rdf:Alt`, a structure as `rdf:parseType="Resource"`, an `rdf:Description` or attributes, and a
-//! qualified value through its `rdf:value`.
+//! qualified value through its `rdf:value` (element or attribute). Every metadata stream of the
+//! document is read, not only the catalog's, within one decode allowance.
 //!
 //! The simple types are checked by their lexical form (ISO 16684-1 8.2.1): Boolean is `True` or
 //! `False`; Integer an optionally signed run of digits; Real a decimal; Date one of the six forms
@@ -17,10 +18,14 @@
 
 use std::collections::BTreeSet;
 
+use pdfcraft_cos::{DecodeBudget, ObjRef, Object};
 use roxmltree::Node;
 
-/// How deep arrays and structures are followed.
+/// How deep arrays, structures and qualifiers are followed. No type nests nearly this deep, so a
+/// value nested deeper doesn't have its type.
 const MAX_DEPTH: usize = 32;
+/// The decoded bytes all metadata streams of a document may take together.
+const MAX_METADATA_BYTES: usize = 64 << 20;
 
 const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const XML: &str = "http://www.w3.org/XML/1998/namespace";
@@ -442,8 +447,30 @@ const SCHEMAS: &[Schema] = &[
     },
 ];
 
-/// The properties of predefined schemas in `doc` whose values don't have their type, as
-/// `prefix:name` in name order.
+/// The properties of predefined schemas whose values don't have their type, in every metadata
+/// stream among the indirect objects `objs` (ISO 32000-1 14.3.2), as `prefix:name` in name order.
+pub(crate) fn mistyped_in(objs: &[(ObjRef, std::sync::Arc<Object>)]) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut budget = DecodeBudget::new(MAX_METADATA_BYTES, 0);
+    for (_, o) in objs {
+        let Object::Stream(s) = &**o else { continue };
+        if s.dict.name(b"Type") != Some(b"Metadata") {
+            continue;
+        }
+        if budget.remaining() == 0 {
+            break;
+        }
+        let Ok(bytes) = budget.decode_within(s, crate::xmp::MAX_XMP_BYTES) else { continue };
+        let text = String::from_utf8_lossy(&bytes);
+        if let Some(parsed) = crate::xmp::parse(&text) {
+            out.extend(mistyped(&parsed));
+        }
+    }
+    out
+}
+
+/// The properties of predefined schemas in the packet `doc` whose values don't have their type,
+/// as `prefix:name` in name order.
 pub(crate) fn mistyped(doc: &roxmltree::Document<'_>) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     let descriptions = doc.descendants().filter(|n| is(n, RDF, "Description") && n.parent_element().is_some_and(|p| is(&p, RDF, "RDF")));
@@ -484,7 +511,7 @@ fn field_attributes<'a, 'i>(n: &Node<'a, 'i>) -> impl Iterator<Item = roxmltree:
 /// Whether the value of the property or array item element `e` has type `ty`.
 fn fits(ty: Ty, e: &Node<'_, '_>, depth: usize) -> bool {
     if depth > MAX_DEPTH {
-        return true;
+        return false;
     }
     let deeper = depth + 1;
     let children: Vec<Node<'_, '_>> = e.children().filter(Node::is_element).collect();
@@ -500,12 +527,16 @@ fn fits(ty: Ty, e: &Node<'_, '_>, depth: usize) -> bool {
     {
         return fits(ty, &v, deeper);
     }
+    if let Some(v) = description.and_then(|d| d.attribute((RDF, "value"))) {
+        return simple(ty, v);
+    }
     match ty {
         Ty::Text | Ty::Integer | Ty::Real | Ty::Boolean | Ty::Date | Ty::Rational => {
-            if let Some(uri) = e.attribute((RDF, "resource")) {
-                return simple(ty, uri);
+            // `rdf:resource` makes the value a URI, which only a text type takes.
+            if e.attribute((RDF, "resource")).is_some() {
+                return matches!(ty, Ty::Text);
             }
-            children.is_empty() && !resource && field_attributes(e).next().is_none() && simple(ty, e.text().unwrap_or_default())
+            children.is_empty() && !resource && field_attributes(e).next().is_none() && simple(ty, &text(e))
         }
         Ty::LangAlt => match array(e, &children, "Alt") {
             Some(items) => items.iter().all(|i| i.attribute((XML, "lang")).is_some() && fits(Ty::Text, i, deeper)),
@@ -534,7 +565,18 @@ fn fits(ty: Ty, e: &Node<'_, '_>, depth: usize) -> bool {
             });
             attrs_ok && elements_ok
         }
-        Ty::AnyStruct => structure(e, &children, resource, description).is_some(),
+        // A structure of any fields, such as a Pantry item: predefined properties in it still have
+        // their types.
+        Ty::AnyStruct => {
+            let Some(holder) = structure(e, &children, resource, description) else { return false };
+            let attrs_ok =
+                field_attributes(&holder).all(|a| a.namespace().and_then(|ns| property(ns, a.name())).is_none_or(|(_, t)| simple(t, a.value())));
+            let elements_ok = holder.children().filter(Node::is_element).all(|f| {
+                let n = f.tag_name();
+                n.namespace().and_then(|ns| property(ns, n.name())).is_none_or(|(_, t)| fits(t, &f, deeper))
+            });
+            attrs_ok && elements_ok
+        }
         Ty::OneOf(types) => types.iter().any(|t| fits(*t, e, depth)),
     }
 }
@@ -546,8 +588,10 @@ fn field(fields: &[Field], ns: &str, name: &str) -> Option<Ty> {
 /// The items of `e`'s value when it is an `rdf:<kind>` array.
 fn array<'a, 'i>(e: &Node<'a, 'i>, children: &[Node<'a, 'i>], kind: &str) -> Option<Vec<Node<'a, 'i>>> {
     match children {
+        // Items are `rdf:li` (ISO 16684-1 7.9.2.4); any other element breaks the array.
         [a] if is(a, RDF, kind) && field_attributes(e).next().is_none() => {
-            Some(a.children().filter(Node::is_element).filter(|i| is(i, RDF, "li")).collect())
+            let items: Vec<Node<'a, 'i>> = a.children().filter(Node::is_element).collect();
+            items.iter().all(|i| is(i, RDF, "li")).then_some(items)
         }
         _ => None,
     }
@@ -556,14 +600,20 @@ fn array<'a, 'i>(e: &Node<'a, 'i>, children: &[Node<'a, 'i>], kind: &str) -> Opt
 /// The node holding the fields of `e`'s value when it is a structure.
 fn structure<'a, 'i>(e: &Node<'a, 'i>, children: &[Node<'a, 'i>], resource: bool, description: Option<Node<'a, 'i>>) -> Option<Node<'a, 'i>> {
     if resource {
-        return Some(*e);
+        // A structure's fields are elements; character data has no place in it.
+        return text(e).trim().is_empty().then_some(*e);
     }
     if let Some(d) = description {
         return Some(d);
     }
     // Fields written as attributes of the property element, with no content.
-    let text = e.text().unwrap_or_default().trim().is_empty();
-    (children.is_empty() && text && e.attribute((RDF, "resource")).is_none() && field_attributes(e).next().is_some()).then_some(*e)
+    let empty = text(e).trim().is_empty();
+    (children.is_empty() && empty && e.attribute((RDF, "resource")).is_none() && field_attributes(e).next().is_some()).then_some(*e)
+}
+
+/// All the character data directly in `e`, however comments or other nodes split it.
+fn text(e: &Node<'_, '_>) -> String {
+    e.children().filter(Node::is_text).filter_map(|t| t.text()).collect()
 }
 
 /// Whether the simple value `v` has the simple type `ty`.
@@ -624,7 +674,7 @@ fn date(v: &str) -> bool {
     };
     let zone_ok = match zone {
         "" | "Z" => true,
-        z => z.get(1..).and_then(|z| z.split_once(':')).is_some_and(|(h, m)| num(h, 2, 23) && num(m, 2, 59)),
+        z => z.strip_prefix(['+', '-']).and_then(|z| z.split_once(':')).is_some_and(|(h, m)| num(h, 2, 23) && num(m, 2, 59)),
     };
     let clock_ok = match clock.split(':').collect::<Vec<_>>().as_slice() {
         [h, m] => num(h, 2, 23) && num(m, 2, 59),

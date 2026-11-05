@@ -449,11 +449,6 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
             if part.as_deref() != Some(&level.part().to_string()) || conf.as_deref().map(str::to_uppercase).as_deref() != Some("B") {
                 issue("6.6.4", "The metadata doesn't identify the file as {}", Some(level.label().to_owned()), None, true);
             }
-            if let Some(parsed) = xmp::parse(&x) {
-                for name in xmp_types::mistyped(&parsed) {
-                    issue("6.6.2.3.1", "The XMP property {} doesn't have the value type the XMP Specification gives it", Some(name), None, false);
-                }
-            }
             if let Some(title) = info(doc, "Title")
                 && xmp::value(&x, "dc:title").is_some_and(|t| t != title)
             {
@@ -467,6 +462,10 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     // 6.2.2: output intent when device colour is used.
     let objs = objects(doc);
+    // 6.6.2.3.1: the value types of predefined XMP properties, in every metadata stream.
+    for name in xmp_types::mistyped_in(&objs) {
+        issue("6.6.2.3.1", "The XMP property {} doesn't have the value type the XMP Specification gives it", Some(name), None, false);
+    }
     let used = uses_device_colour(doc, &objs);
     match pdfa_intent_profile(doc) {
         None if used.any() => {
