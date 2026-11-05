@@ -285,6 +285,36 @@ fn assert_trust_and_id_persist(h: &Harness<'static, PdfCraftApp>) {
     assert_eq!((fresh.digital_ids.len(), fresh.session.trusted_certificates().len()), (1, 1));
 }
 
+/// The picker greys an expired ID when it lists it. One that expires with the dialog open gets
+/// past that, so signing itself has to refuse it.
+#[test]
+fn an_id_that_expired_with_the_dialog_open_signs_nothing() {
+    use pdfcraft_engine::sign::{Certificate, DigitalId, Name, PrivateKey, Time, pkcs12};
+
+    let dir = dir().join("expired");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = harness(dir.clone());
+    let key = PrivateKey::generate_p256().unwrap();
+    let certificate = Certificate::self_signed(&Name::build("Old Signer", "", "", "", ""), &key, Time::from_unix(0), 1, &[1]).unwrap();
+    let id = DigitalId { key, certificate: certificate.clone(), chain: Vec::new(), friendly_name: None };
+    let p12 = dir.join("old.p12");
+    std::fs::write(&p12, pkcs12::write(&id, "secret12").unwrap()).unwrap();
+    assert!(h.state_mut().execute("sign.certify_invisible"));
+    h.run_steps(2);
+    let entry = h.state_mut().add_digital_id(&p12.to_string_lossy(), &certificate);
+    {
+        let d = h.state_mut().sign_draft.as_mut().unwrap();
+        d.selected = Some(entry);
+        d.step = SignStep::SignAs;
+        d.password = "secret12".into();
+    }
+    h.run_steps(2);
+    support::outside_menus(&h, "Sign").click();
+    h.run_steps(6);
+    assert_eq!(h.state().sign_draft.as_ref().and_then(|d| d.error.as_deref()), Some("This digital ID has expired."));
+    assert!(!dir.join("contract_signed.pdf").exists());
+}
+
 #[test]
 fn certifying_without_a_visible_signature() {
     let dir = dir().join("certify");

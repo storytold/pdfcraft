@@ -264,9 +264,39 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
         name: c.display_name(),
         issuer: c.issuer.common_name().map(str::to_string).unwrap_or_else(|| c.issuer.display()),
         email: c.subject.email().unwrap_or("").to_string(),
-        expires: format!("{:04}.{:02}.{:02}", c.not_after.year, c.not_after.month, c.not_after.day),
+        expires: expiry_stamp(c.not_after),
         unusable: None,
     }
+}
+
+/// The current time, in the form certificates state theirs.
+fn time_now() -> sign::Time {
+    let elapsed = web_time::SystemTime::now().duration_since(web_time::SystemTime::UNIX_EPOCH);
+    sign::Time::from_unix(elapsed.ok().and_then(|d| i64::try_from(d.as_secs()).ok()).unwrap_or(0))
+}
+
+/// A date as `DigitalIdEntry::expires` holds it. These compare in date order.
+fn expiry_stamp(t: sign::Time) -> String {
+    format!("{:04}.{:02}.{:02}", t.year, t.month, t.day)
+}
+
+/// Whether `entry` expired before the day `today` (an `expiry_stamp`). An entry with no date,
+/// such as a greyed Windows certificate, isn't known to have expired.
+fn has_expired(entry: &DigitalIdEntry, today: &str) -> bool {
+    !entry.expires.is_empty() && entry.expires.as_str() < today
+}
+
+/// Remove the expired IDs of an OS key store listing and say how many went.
+fn drop_expired(listed: &mut Vec<DigitalIdEntry>, today: &str) -> usize {
+    let before = listed.len();
+    listed.retain(|e| !has_expired(e, today));
+    before - listed.len()
+}
+
+/// Refuse a certificate past its end. The picker works by the day and from what it saved, so
+/// this is what stops an ID that expired while the dialog was open.
+fn refuse_expired(c: &Certificate, now: sign::Time) -> Result<(), String> {
+    if c.not_after < now { Err(tl!("This digital ID has expired.").to_string()) } else { Ok(()) }
 }
 
 /// The list positions of `ids` in the picker's alphabetical order. Only the picker sorts: the
@@ -332,11 +362,20 @@ impl PdfCraftApp {
     }
 
     /// List OS key store signing identities (after the file-based IDs). A failed listing keeps
-    /// the entries already listed.
+    /// the entries already listed. Expired OS IDs aren't listed; an expired ID file stays,
+    /// greyed, because the picker is where it can be removed.
     fn refresh_os_key_store_ids(&mut self) {
-        let Some(listed) = self.list_os_key_store_ids() else { return };
+        let today = expiry_stamp(time_now());
+        for e in self.digital_ids.iter_mut().filter(|e| e.unusable.is_none() && has_expired(e, &today)) {
+            e.unusable = Some(tl!("This digital ID has expired.").to_string());
+        }
+        let Some(mut listed) = self.list_os_key_store_ids() else { return };
+        let dropped = drop_expired(&mut listed, &today);
         self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:"));
         self.digital_ids.extend(listed);
+        if dropped > 0 && first_usable(&self.digital_ids).is_none() {
+            self.notify(tl!("The digital IDs on this computer have expired."));
+        }
     }
 
     /// The OS key store's signing identities, or `None` after telling the user it couldn't be read.
@@ -503,6 +542,7 @@ impl PdfCraftApp {
                 e => e.to_string(),
             })?
         };
+        refuse_expired(&id.certificate, time_now())?;
         let some = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
         // Only a visible signature shows its graphic.
         let graphic = match self.graphic_sig(&d.graphic) {
@@ -787,6 +827,35 @@ mod tests {
         let d = app.sign_draft.as_ref().unwrap();
         assert_eq!(d.selected.map(|i| app.digital_ids[i].name.as_str()), Some("Beto"), "the store entry above it is gone");
         assert_eq!(d.confirm_remove, None);
+    }
+
+    #[test]
+    fn an_expired_os_id_is_not_listed() {
+        let dated = |path, expires: &str| DigitalIdEntry { expires: expires.into(), ..listed(path, path) };
+        let mut ids = vec![dated("windows:old", "2026.11.04"), dated("windows:today", "2026.11.05"), unusable_id("windows:nokey", "No key")];
+        assert_eq!(drop_expired(&mut ids, "2026.11.05"), 1);
+        let left: Vec<_> = ids.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(left, ["windows:today", "windows:nokey"], "it lasts through its last day, and no date isn't expired");
+    }
+
+    #[test]
+    fn an_expired_id_file_stays_greyed_and_is_not_selected() {
+        let mut app = PdfCraftApp::new();
+        app.digital_ids = vec![DigitalIdEntry { expires: "2000.01.01".into(), ..listed("/ids/a.p12", "Ana") }, listed("/ids/b.p12", "Bia")];
+        app.sign_draft = Some(SignDraft::new(0, None, None, None, &app.digital_ids));
+        app.sign_draft.as_mut().unwrap().selected = Some(0);
+        app.refresh_digital_ids();
+        assert_eq!(app.digital_ids.len(), 2, "still there to be removed");
+        assert!(app.digital_ids[0].unusable.is_some());
+        assert_eq!(app.sign_draft.as_ref().unwrap().selected, Some(1));
+    }
+
+    #[test]
+    fn signing_refuses_a_certificate_past_its_end() {
+        let key = PrivateKey::generate_p256().unwrap();
+        let cert = Certificate::self_signed(&Name::build("Old", "", "", "", ""), &key, sign::Time::from_unix(0), 1, &[1]).unwrap();
+        assert!(refuse_expired(&cert, cert.not_after).is_ok(), "valid up to its last second");
+        assert!(refuse_expired(&cert, time_now()).is_err());
     }
 
     #[test]
