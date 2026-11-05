@@ -21,6 +21,24 @@ pub fn page_annots(doc: &Document) -> impl Iterator<Item = Result<(ObjRef, Vec<O
     pdfcraft_model::PageLeaves::new(doc).map(|leaf| leaf.map(|leaf| (leaf.obj, annots(doc, leaf.obj))))
 }
 
+/// Each page object as its parent's `/Kids` writes it, in order: the list annot gave before the
+/// shared walk named pages canonically, for comparing with references another revision wrote down
+/// (signature change classification). Unlike [`page_refs`], two accepted generations of one object
+/// are listed separately ([`pdfcraft_model::PageNodes::as_written`]), and a `/Type /Pages` node
+/// without `/Kids` counts as a page. `NoPageTree` and `PageTree` as [`page_refs`].
+pub fn written_page_refs(doc: &Document) -> Result<Vec<ObjRef>, AnnotError> {
+    let root = doc.root().ok_or(AnnotError::NoPageTree)?;
+    let pages = doc.get(root).as_dict().and_then(|d| d.reference(b"Pages")).ok_or(AnnotError::NoPageTree)?;
+    let mut out = Vec::new();
+    for node in pdfcraft_model::PageNodes::as_written(doc, pages) {
+        let node = node?;
+        if node.is_leaf() || node.dict().is_some_and(|d| !d.contains(b"Kids")) {
+            out.push(node.written);
+        }
+    }
+    Ok(out)
+}
+
 pub(crate) fn page_ref(doc: &Document, page: usize) -> Result<ObjRef, AnnotError> {
     page_refs(doc)?.get(page).copied().ok_or(AnnotError::NoSuchPage(page))
 }

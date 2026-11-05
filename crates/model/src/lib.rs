@@ -261,6 +261,11 @@ pub struct PageNode {
     /// holds it at: [`Document::canonical_ref`] of the reference), whichever accepted generation `/Kids`
     /// names.
     pub obj: ObjRef,
+    /// The reference as its parent's `/Kids` writes it (an accepted generation, possibly not
+    /// `obj`'s). Use `obj` to name the page: identity, destinations, edits. Use `written` only to
+    /// compare with references written elsewhere as they stood, as signature change classification
+    /// compares a signed revision's page references with a later one's.
+    pub written: ObjRef,
     node: std::sync::Arc<Object>,
     inherited: Inherited,
     leaf: bool,
@@ -334,6 +339,9 @@ pub struct PageNodes<'a> {
     doc: &'a Document,
     seen: std::collections::HashSet<u32>,
     seen_kids: std::collections::HashSet<u32>,
+    /// In the written-identity walk ([`Self::as_written`]): the references seen, nodes and `/Kids`
+    /// arrays alike, as written.
+    seen_written: Option<std::collections::HashSet<ObjRef>>,
     pending: Vec<Children>,
     examined: usize,
     limits: Limits,
@@ -356,7 +364,16 @@ impl<'a> PageNodes<'a> {
                 inherited: Default::default(),
             })
             .collect();
-        Self { doc, seen: Default::default(), seen_kids: Default::default(), pending, examined: 0, limits: Limits::current() }
+        Self { doc, seen: Default::default(), seen_kids: Default::default(), seen_written: None, pending, examined: 0, limits: Limits::current() }
+    }
+
+    /// The nodes under `top` with nodes told apart by the reference as written, not by object number:
+    /// two accepted generations of one object (a repaired alias) are two nodes, and nodes and `/Kids`
+    /// arrays share one seen set, as annot's own walk did before this one. For callers that compare
+    /// [`PageNode::written`] with references another revision wrote down (signature change
+    /// classification); everything else walks by object number.
+    pub fn as_written(doc: &'a Document, top: ObjRef) -> Self {
+        Self { seen_written: Some(Default::default()), ..Self::from(doc, Some(top)) }
     }
 
     /// `/Kids` entries read so far.
@@ -388,21 +405,32 @@ impl Iterator for PageNodes<'_> {
             if self.examined > self.limits.kids_entries {
                 return self.cut_off(PageTreeLimit::KidsEntries);
             }
-            let Some(node) = node else { continue };
-            if self.seen.contains(&node.num) {
+            let Some(written) = node else { continue };
+            if let Some(seen) = &mut self.seen_written {
+                // Seen by the reference as written, before it resolves, as annot's walk did.
+                if seen.contains(&written) {
+                    continue;
+                }
+                if seen.len() >= self.limits.nodes {
+                    return self.cut_off(PageTreeLimit::Nodes);
+                }
+                seen.insert(written);
+            } else if self.seen.contains(&written.num) {
                 continue;
             }
             // Accepted as cos accepts references (a stale generation names nothing; a repaired alias is
             // the object), then loaded. Only a node that resolves to a dictionary is marked seen, so a
             // stale entry can't hide a live one listed after it.
-            let Some(node) = self.doc.canonical_ref(node) else { continue };
+            let Some(node) = self.doc.canonical_ref(written) else { continue };
             let obj = self.doc.get(node);
             let Some(d) = obj.as_dict() else { continue };
-            // Only a node about to be visited counts, so a repeat after the last isn't a cut.
-            if self.seen.len() >= self.limits.nodes {
-                return self.cut_off(PageTreeLimit::Nodes);
+            if self.seen_written.is_none() {
+                // Only a node about to be visited counts, so a repeat after the last isn't a cut.
+                if self.seen.len() >= self.limits.nodes {
+                    return self.cut_off(PageTreeLimit::Nodes);
+                }
+                self.seen.insert(node.num);
             }
-            self.seen.insert(node.num);
             let mut inherited = parent.inherited.clone();
             for (key, owner) in INHERITABLE.iter().zip(&mut inherited) {
                 if let Some(value) = d.get(key) {
@@ -411,9 +439,12 @@ impl Iterator for PageNodes<'_> {
             }
             let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
             if !is_pages {
-                return Some(Ok(PageNode { obj: node, node: obj, inherited, leaf: true }));
+                return Some(Ok(PageNode { obj: node, written, node: obj, inherited, leaf: true }));
             }
             let kids = match d.get(b"Kids") {
+                Some(Object::Ref(r)) if self.seen_written.is_some() => {
+                    self.seen_written.as_mut().is_some_and(|seen| seen.insert(*r)).then(|| (self.doc.get(*r), false))
+                }
                 // Marked read only once it resolves to an array, so a stale reference to it can't hide it.
                 Some(Object::Ref(r)) if !self.seen_kids.contains(&r.num) => {
                     let array = self.doc.get(*r);
@@ -425,7 +456,7 @@ impl Iterator for PageNodes<'_> {
             if let Some((owner, direct)) = kids {
                 self.pending.push(Children { owner, direct, counted: true, next: 0, inherited: inherited.clone() });
             }
-            return Some(Ok(PageNode { obj: node, node: obj, inherited, leaf: false }));
+            return Some(Ok(PageNode { obj: node, written, node: obj, inherited, leaf: false }));
         }
         None
     }
@@ -898,6 +929,23 @@ mod tests {
         assert!(matches!(packed.xref_entry(listed[0].num), Some(pdfcraft_cos::XrefEntry::InStream { .. })), "packed into an object stream");
         assert_eq!(listed[0].generation, 0);
         assert_eq!(page_by_ref(&packed, ObjRef { num: listed[0].num, generation: 1 }), Ok(None));
+    }
+
+    /// The written-identity walk tells nodes apart by the reference as written: a repaired page
+    /// listed through both its generations is two leaves, each with its `written` reference and the
+    /// one canonical `obj`; a stale entry is still nothing.
+    #[test]
+    fn the_written_identity_walk_lists_each_accepted_reference() {
+        let root = ObjRef { num: 2, generation: 0 };
+        let page = ObjRef { num: 3, generation: 0 };
+        let leaves = |d: &Document| -> Vec<(ObjRef, ObjRef)> {
+            PageNodes::as_written(d, root).map(Result::unwrap).filter(PageNode::is_leaf).map(|n| (n.written, n.obj)).collect()
+        };
+        let d = repaired("[3 5 R 3 0 R 3 1 R]");
+        assert_eq!(leaves(&d), [(ObjRef { num: 3, generation: 5 }, page), (page, page)]);
+        assert_eq!(page_refs(&d), Ok(vec![page]), "the walk by number lists the page once");
+        let by_number: Vec<ObjRef> = PageLeaves::new(&d).map(|l| l.unwrap().written).collect();
+        assert_eq!(by_number, [ObjRef { num: 3, generation: 5 }], "written is the entry that named it");
     }
 
     /// `page_by_ref` finds a page with its inherited attributes; a stale generation of it, which cos

@@ -243,7 +243,7 @@ pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
 /// Which page holds each annotation.
 fn annot_pages(doc: &Document) -> HashMap<ObjRef, usize> {
     let mut map = HashMap::new();
-    for (i, p) in pdfcraft_annot::page_refs(doc).unwrap_or_default().into_iter().enumerate() {
+    for (i, p) in pdfcraft_annot::written_page_refs(doc).unwrap_or_default().into_iter().enumerate() {
         if let Some(a) = doc.get(p).as_dict().and_then(|d| d.get(b"Annots").map(|a| doc.resolve(a))).and_then(|a| a.as_array().cloned()) {
             for r in a.iter().filter_map(Object::as_ref) {
                 map.insert(r, i);
@@ -360,7 +360,7 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
 }
 
 fn page_index(doc: &Document, p: ObjRef) -> Option<usize> {
-    pdfcraft_annot::page_refs(doc).ok()?.iter().position(|r| *r == p)
+    pdfcraft_annot::written_page_refs(doc).ok()?.iter().position(|r| *r == p)
 }
 
 /// A widget's `/MK /R` as a quarter turn (0, 90, 180 or 270); missing, malformed or not a

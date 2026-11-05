@@ -9,7 +9,7 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
     };
     // The signed revision's pages. A page tree too large to read whole leaves its signed pages
     // unknown, so no change could be judged against them: the signed version counts as unreadable.
-    let old_pages = match pdfcraft_annot::page_refs(&old) {
+    let old_pages = match pdfcraft_annot::written_page_refs(&old) {
         Ok(pages) => pages,
         Err(pdfcraft_annot::AnnotError::PageTree(_)) => return Modification::Disallowed(vec![kind::UNREADABLE]),
         Err(_) => Vec::new(),
@@ -627,10 +627,90 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
 
 #[cfg(test)]
 mod tests {
-    use pdfcraft_cos::{Dict, Document, Object};
+    use std::sync::Arc;
+
+    use pdfcraft_cos::{Dict, Document, ObjRef, Object};
     use pdfcraft_model::{Limits, with_limits};
 
     use super::{Modification, classify_changes, kind};
+
+    /// A classic-xref file of `objs` (number, object header generation, body) whose xref rows all
+    /// say generation 0: an object whose header says otherwise is a slot cos repairs, accepted at
+    /// both generations and named at 0. Its bytes, and the offset of its xref table.
+    fn repaired_file(objs: &[(u32, u16, &str)]) -> (Vec<u8>, usize) {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offs = Vec::new();
+        for (num, generation, body) in objs {
+            offs.push((*num, out.len()));
+            out.extend_from_slice(format!("{num} {generation} obj\n{body}\nendobj\n").as_bytes());
+        }
+        let x = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for (_, o) in offs {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+        (out, x)
+    }
+
+    fn open(bytes: &[u8]) -> Document {
+        Document::open(Arc::new(bytes.to_vec())).unwrap()
+    }
+
+    /// Page 3 repaired: its xref row says generation 0, its object header and `/Kids` say 5.
+    const REPAIRED_PAGE: [(u32, u16, &str); 3] = [
+        (1, 0, "<< /Type /Catalog /Pages 2 0 R >>"),
+        (2, 0, "<< /Type /Pages /Kids [3 5 R] /Count 1 >>"),
+        (3, 5, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>"),
+    ];
+
+    /// Relabel the signed page a form field and turn it over, through `page`.
+    fn relabel(doc: &mut Document, page: ObjRef) {
+        doc.update_dict(page, |d| {
+            d.remove(b"Type");
+            d.set(b"FT".to_vec(), Object::name("Tx"));
+            d.set(b"Rotate".to_vec(), Object::Int(180));
+        })
+        .unwrap();
+    }
+
+    fn is_page_content(verdict: &Modification) -> bool {
+        matches!(verdict, Modification::Disallowed(kinds) if kinds.contains(&kind::PAGE_CONTENT))
+    }
+
+    /// The signed page relabelled a form field and turned over in an appended revision that gives
+    /// it xref generation 5: it is still the signed page, and the change is page content, which
+    /// DocMDP P=2 doesn't permit. Sign reads the signed pages as `/Kids` writes them (`3 5 R`); fed the
+    /// canonical list (`3 0 R`) it took the page for a form fill.
+    #[test]
+    fn a_repaired_signed_page_relabelled_in_an_appended_revision_is_still_page_content() {
+        let (signed, xref) = repaired_file(&REPAIRED_PAGE);
+        let old = open(&signed);
+        assert_eq!(pdfcraft_annot::page_refs(&old).unwrap(), [ObjRef::new(3, 0)]);
+        let relabelled = "<< /FT /Tx /T (x) /Parent 2 0 R /MediaBox [0 0 100 100] /Rotate 180 >>";
+        let mut appended = signed;
+        let at = appended.len();
+        appended.extend_from_slice(format!("3 5 obj\n{relabelled}\nendobj\n").as_bytes());
+        let x = appended.len();
+        appended.extend_from_slice(
+            format!("xref\n3 1\n{at:010} 00005 n \ntrailer\n<< /Size 4 /Root 1 0 R /Prev {xref} >>\nstartxref\n{x}\n%%EOF\n").as_bytes(),
+        );
+        let current = open(&appended);
+        assert_eq!(current.canonical_ref(ObjRef::new(3, 5)), Some(ObjRef::new(3, 5)));
+        let verdict = classify_changes(&current, Some(old), Some(2));
+        assert!(is_page_content(&verdict), "{verdict:?}");
+    }
+
+    /// The same change made by editing the signed page through its other accepted generation
+    /// (`3 5 R`, a repaired slot cos keeps both generations of).
+    #[test]
+    fn a_repaired_signed_page_relabelled_through_its_alias_is_still_page_content() {
+        let old = open(&repaired_file(&REPAIRED_PAGE).0);
+        let mut edited = old.clone();
+        relabel(&mut edited, ObjRef::new(3, 5));
+        let verdict = classify_changes(&edited, Some(old), Some(2));
+        assert!(is_page_content(&verdict), "{verdict:?}");
+    }
 
     /// A signed revision whose page tree can't be read whole leaves its signed pages unknown, so
     /// no change can be judged against them: it reads as unreadable, never as a revision with

@@ -196,7 +196,7 @@ fn sign_inner(
         doc.update_dict(root, |c| c.set(b"Perms".to_vec(), Object::Dict(perms)))?;
     }
     // The field and its widget.
-    let pages = pdfcraft_annot::page_refs(&doc).map_err(|e| SignError::Pdf(e.to_string()))?;
+    let pages = pdfcraft_annot::written_page_refs(&doc).map_err(|e| SignError::Pdf(e.to_string()))?;
     let existing = opts
         .field
         .as_deref()

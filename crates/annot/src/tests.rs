@@ -2460,3 +2460,21 @@ fn link_destinations_follow_cos_acceptance() {
     assert_eq!(&actions[..2], [LinkAction::Page(1), LinkAction::Page(1)]);
     assert_ne!(actions[2], LinkAction::Page(1), "a stale generation names no page: {:?}", actions[2]);
 }
+
+/// `written_page_refs` gives the pages as `/Kids` writes them: a repaired page listed through both
+/// its generations twice, each as written; a stale entry not at all; and a `/Type /Pages` node
+/// without `/Kids` as a page. `page_refs` names the page once, canonically.
+#[test]
+fn written_page_refs_lists_each_accepted_reference_as_written() {
+    let doc = repaired_doc(&[
+        (0, "<< /Type /Catalog /Pages 2 0 R >>"),
+        (0, "<< /Type /Pages /Kids [3 5 R 4 0 R 3 0 R 3 1 R] /Count 2 >>"),
+        (5, "<< /Type /Page /Parent 2 0 R >>"),
+        (0, "<< /Type /Pages /Parent 2 0 R /Count 0 >>"),
+    ]);
+    assert_eq!(
+        written_page_refs(&doc).unwrap(),
+        [ObjRef { num: 3, generation: 5 }, ObjRef { num: 4, generation: 0 }, ObjRef { num: 3, generation: 0 }]
+    );
+    assert_eq!(page_refs(&doc).unwrap(), [ObjRef { num: 3, generation: 0 }]);
+}
