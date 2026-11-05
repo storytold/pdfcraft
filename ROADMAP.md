@@ -223,7 +223,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
-- **2026-10-29 (M3):** Side panels narrow to 220 points. Pages hides its thumbnail size controls below 280 points of content width and restores them without changing the selected size. Estimates unchanged.
+- **2026-11-05 (M3):** Side panels narrow to 240 points, Acrobat's minimum (was 260). Pages hides its thumbnail size controls below 280 points of content width and restores them without changing the selected size. Estimates unchanged.
 
 - **2026-11-03 (M11, shared JBIG2 dictionary):** With Monochrome Images set to JBIG2, Optimize has up to 16 JBIG2 images share one symbol dictionary (`/JBIG2Globals`), the letters found on more than one page stored once, when that is smaller (`pdfcraft_filters::encode_jbig2_shared`). Eight pages of 10 pt text rendered at 300 dpi take 41% less in Helvetica and 42% in Times than coded alone, 10% in Courier; groups of 16 save 45%, of 32 only 47%. Only images redaction can store again without the dictionary share one (image masks and DeviceGray named directly, at most 64 Mi pixels), and redacting one stores the rest of its group so, which the group bounds to 15.
 

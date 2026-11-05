@@ -1716,9 +1716,9 @@ fn narrow_side_panels_hide_thumbnail_controls_and_preserve_the_size() {
     h.get_by_role_and_label(egui::accesskit::Role::Slider, "Thumbnail size");
 
     let state = ok(&mut h, &c, "ui.panel", json!({"panel":"side", "width":1}));
-    assert_eq!(state["side_panels"]["side_width"], 220.0);
+    assert_eq!(state["side_panels"]["side_width"], 240.0);
     h.run_steps(4);
-    assert_eq!(h.state().side_panels.side_width, 220.0);
+    assert_eq!(h.state().side_panels.side_width, 240.0);
     assert!(h.query_by_role_and_label(egui::accesskit::Role::Slider, "Thumbnail size").is_none());
     assert!(h.query_by_label("Smaller thumbnails").is_none());
     assert!(h.query_by_label("Larger thumbnails").is_none());
@@ -1729,7 +1729,7 @@ fn narrow_side_panels_hide_thumbnail_controls_and_preserve_the_size() {
     let saved = h.state().persist();
     h.state_mut().restore(&saved);
     h.run_steps(3);
-    assert_eq!(h.state().side_panels.side_width, 220.0);
+    assert_eq!(h.state().side_panels.side_width, 240.0);
     ok(&mut h, &c, "ui.panel", json!({"panel":"side", "width":330}));
     h.run_steps(3);
     h.get_by_role_and_label(egui::accesskit::Role::Slider, "Thumbnail size");

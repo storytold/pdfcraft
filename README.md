@@ -336,7 +336,7 @@ pdfcraft-cli ui --control ~/.pdfcraft-control.json quit
 
 `ui.panel` opens, closes or sizes a side panel: `{"panel":"tools"|"side","open":true|false,"width":320}`.
 `tools` is the Tools panel and `side` the panel the rail opens (reopening it shows the one open last).
-`width` is clamped to the panel's limits (Tools 240–520, side panel 220–520 points). `ui.dock.reset`
+`width` is clamped to the panel's limits (Tools 240–520, side panel 240–520 points). `ui.dock.reset`
 resets the side panels: Tools open on the left, default widths. The control channel accepts these
 methods directly; `ui.command` also accepts `{"id":"ui.panel","params":{...}}`. Saved preferences keep
 the Tools side, the open panels and their widths. Invalid requests return an error without changing
