@@ -208,12 +208,17 @@ fn is_lpoptions_custom_template(choice: &str) -> bool {
 /// optional-hardware entry that [`parse_ppd`] drops may appear here. The starred choice is the
 /// driver's default. Options Craft handles itself ([`HANDLED_OPTIONS`]) and custom-value templates
 /// ([`is_lpoptions_custom_template`]) are skipped.
+///
+/// The line is split at its **last** colon, not its first: `list_group()` prints the option as
+/// `"%s/%s:"` from the PPD's keyword and translated text, then every choice as a bare `" %s"`, so
+/// text such as `Supporto: Tipo` carries colons while a choice keyword cannot. Splitting at the
+/// first colon would turn the rest of the label into invented choices.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 fn parse_lpoptions_list(out: &str) -> Vec<PrinterOption> {
     let mut options = Vec::new();
     for line in out.lines() {
         let line = line.trim_end_matches('\r');
-        let Some((head, choices)) = line.split_once(':') else {
+        let Some((head, choices)) = line.rsplit_once(':') else {
             continue;
         };
         let (key, label) = lpoptions_name_label(head);
@@ -222,13 +227,18 @@ fn parse_lpoptions_list(out: &str) -> Vec<PrinterOption> {
         }
         let mut choice_list = Vec::new();
         let mut default = String::new();
+        // Set when the choice CUPS marks is a template the dialog cannot collect. The printer keeps
+        // that value, so standing in the first retained choice would show a default the job does not
+        // use: only options changed away from the default are submitted.
+        let mut marked_template = false;
         for token in choices.split_whitespace() {
-            let starred = token.strip_prefix('*').unwrap_or(token);
-            let (choice_key, choice_label) = lpoptions_name_label(starred);
+            let starred = token.starts_with('*');
+            let (choice_key, choice_label) = lpoptions_name_label(token.strip_prefix('*').unwrap_or(token));
             if !is_lpoptions_keyword(choice_key) || is_lpoptions_custom_template(choice_key) {
+                marked_template |= starred && is_lpoptions_custom_template(choice_key);
                 continue;
             }
-            if token.starts_with('*') {
+            if starred {
                 default = choice_key.to_string();
             }
             if choice_list.len() < MAX_LPOPTIONS_CHOICES && choice_list.iter().all(|(c, _)| c != choice_key) {
@@ -238,7 +248,9 @@ fn parse_lpoptions_list(out: &str) -> Vec<PrinterOption> {
         if choice_list.is_empty() || options.len() >= MAX_LPOPTIONS_OPTIONS {
             continue;
         }
-        if !choice_list.iter().any(|(c, _)| *c == default) {
+        if default.is_empty() && !marked_template {
+            // No choice marked at all: the dialog needs something selected, and the listing has
+            // nothing better than the first one to offer.
             default = choice_list.first().map(|(c, _)| c.clone()).unwrap_or_default();
         }
         options.push(PrinterOption { key: key.to_string(), label: lpoptions_label(label), group: String::new(), choices: choice_list, default });

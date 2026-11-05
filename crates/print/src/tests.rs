@@ -839,10 +839,28 @@ mod cups_options {
         assert_eq!(media_type.choices, [("Plain".into(), "Plain".into()), ("Matte".into(), "Matte".into())]);
         assert_eq!(media_type.default, "Plain");
 
-        // A starred template must not become the default either: the first real choice takes over.
+        // A starred template is never offered as a choice, and never replaced by an invented
+        // default: the printer keeps the template, so standing the first real choice in its
+        // place would show a value the job does not use.
         let options = spool::printer_options_via_within("Office", &dir, command(&dir, "Pin/Pin: *Custom.PASSCODE 1234\n"), LIMIT, "en");
         assert_eq!(options.len(), 1);
-        assert_eq!(options[0].default, "1234");
+        assert_eq!(options[0].choices, [("1234".into(), "1234".into())]);
+        assert_eq!(options[0].default, "", "an uncollectable default is not a choice");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `list_group()` prints `Keyword/Text:` and then bare choice keywords, so the text may carry a
+    /// colon while the choices cannot: the split belongs at the last one.
+    #[test]
+    fn an_option_text_may_contain_a_colon() {
+        let dir = folder();
+        let lpoptions_out = "Media/Supporto: Tipo: *A B\n";
+        let options = spool::printer_options_via_within("Office", &dir, command(&dir, lpoptions_out), LIMIT, "en");
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].key, "Media");
+        assert_eq!(options[0].label, "Supporto: Tipo", "the text keeps its colon");
+        assert_eq!(options[0].choices, [("A".into(), "A".into()), ("B".into(), "B".into())], "no choice is invented from the text");
+        assert_eq!(options[0].default, "A");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
