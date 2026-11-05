@@ -340,7 +340,9 @@ pub(crate) const MAX_DSS_BYTES: usize = 64 << 20;
 pub(crate) struct DssEvidence<'a> {
     doc: &'a Document,
     items: std::vec::IntoIter<Object>,
-    seen: HashSet<ObjRef>,
+    /// Object numbers read: `Document::get` resolves a reference by number, so `5 0 R` and `5 1 R`
+    /// are one stream.
+    seen: HashSet<u32>,
     taken: usize,
     left: usize,
     /// A cap stopped the array being read in full.
@@ -364,7 +366,7 @@ impl Iterator for DssEvidence<'_> {
         // Repeats are skipped before the caps count anything, so repeating one stream cannot use
         // them up; the scan of the array itself is bounded by the parser's cap on array length.
         for item in self.items.by_ref() {
-            if item.as_ref().is_some_and(|r| !self.seen.insert(r)) {
+            if item.as_ref().is_some_and(|r| !self.seen.insert(r.num)) {
                 continue;
             }
             let o = self.doc.resolve(&item);
