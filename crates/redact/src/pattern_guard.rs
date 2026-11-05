@@ -367,26 +367,45 @@ const MAX_TREE_NODES: usize = 1_000_000;
 /// too -- that has `/Resources` of its own and is not one of the document's pages: those are
 /// walked with their effective resources. Cycles are cut by the seen-set. Holders are bounded by
 /// `MAX_OBJECTS`, pages are not.
-fn tree_holders(doc: &Document) -> Result<Vec<ObjRef>, PatternProblem> {
+fn tree_holders(doc: &Document) -> Result<Vec<Object>, PatternProblem> {
     let Some(top) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))) else { return Ok(Vec::new()) };
     let pages: HashSet<ObjRef> = pdfcraft_model::pages(doc).iter().map(|p| p.obj).collect();
+    // The `/Resources` values to inspect. A direct `/Parent` dictionary is written inline by a
+    // full save, so it is a node like any other: its resources, `/Parent` and `/Kids` count.
     let mut holders = Vec::new();
     let mut seen = HashSet::new();
     let mut stack = vec![top];
-    while let Some(node) = stack.pop() {
-        if !seen.insert(node) {
-            continue;
+    let mut inline: Vec<Dict> = Vec::new();
+    loop {
+        let (dict, is_page) = if let Some(node) = stack.pop() {
+            if !seen.insert(node) {
+                continue;
+            }
+            if seen.len() > MAX_TREE_NODES {
+                return Err(PatternProblem::Limit);
+            }
+            let object = doc.try_get(node.num).map_err(|_| PatternProblem::Unreadable)?;
+            let Some(dict) = object.as_dict() else { continue };
+            (dict.clone(), pages.contains(&node))
+        } else if let Some(dict) = inline.pop() {
+            (dict, false)
+        } else {
+            break;
+        };
+        match dict.get(b"Parent") {
+            Some(Object::Ref(parent)) => stack.push(*parent),
+            Some(Object::Dict(parent)) => {
+                if inline.len() >= MAX_DEPTH {
+                    return Err(PatternProblem::Limit);
+                }
+                inline.push(parent.clone());
+            }
+            _ => {}
         }
-        if seen.len() > MAX_TREE_NODES {
-            return Err(PatternProblem::Limit);
-        }
-        let object = doc.try_get(node.num).map_err(|_| PatternProblem::Unreadable)?;
-        let Some(dict) = object.as_dict() else { continue };
-        if let Some(parent) = dict.get(b"Parent").and_then(Object::as_ref) {
-            stack.push(parent);
-        }
-        if dict.contains(b"Resources") && !pages.contains(&node) {
-            holders.push(node);
+        if let Some(resources) = dict.get(b"Resources")
+            && !is_page
+        {
+            holders.push(resources.clone());
             if holders.len() > MAX_OBJECTS {
                 return Err(PatternProblem::Limit);
             }
@@ -410,12 +429,9 @@ pub(crate) fn check(doc: &Document, selected: &[usize], tree: bool) -> Result<()
     if tree && let Some(&first) = selected.first() {
         let page = first.saturating_add(1);
         let holders = tree_holders(doc).map_err(|reason| RedactError::Pattern { page, reason })?;
-        for holder in holders {
+        for resources in holders {
             let mut guard = Guard::new();
-            let object = doc.try_get(holder.num).map_err(|_| RedactError::Pattern { page, reason: PatternProblem::Unreadable })?;
-            if let Some(resources) = object.as_dict().and_then(|d| d.get(b"Resources")) {
-                guard.resources(doc, resources, false, 0).map_err(|reason| RedactError::Pattern { page, reason })?;
-            }
+            guard.resources(doc, &resources, false, 0).map_err(|reason| RedactError::Pattern { page, reason })?;
         }
     }
     let pages = pdfcraft_model::pages(doc);

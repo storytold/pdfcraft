@@ -423,7 +423,14 @@ pub(crate) fn unlink_pruned_patterns(doc: &mut Document, pruned: &[ObjRef]) -> R
         // Every node's /Parent must be the node /Kids reached it from, and the root has none.
         // A node reached only through a /Parent link is then impossible here; when the links
         // disagree, the guard inspects every node they reach instead.
-        if d.get(b"Parent").and_then(Object::as_ref) != parent {
+        // A /Parent that is not a reference (a direct dictionary, written inline by a full save)
+        // is never the node /Kids came from.
+        let agrees = match d.get(b"Parent") {
+            None => parent.is_none(),
+            Some(Object::Ref(r)) => Some(*r) == parent,
+            Some(_) => false,
+        };
+        if !agrees {
             consistent = false;
         }
         if d.contains(b"Resources") {
