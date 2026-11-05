@@ -513,7 +513,7 @@ endstream",
         }
         verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect()
     };
-    let said = ["Page 1 has transparency but no blending colour space or PDF/A output intent"];
+    let said = ["Page 1 has transparency but no device-independent blending colour space or PDF/A output intent"];
     let form = |dict: &str| format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {dict} /Length 0 >>\nstream\n\nendstream");
     let gs = |entries: &str| format!("/ExtGState << /G << {entries} >> >>");
     for (what, resources, extra) in [
@@ -552,7 +552,11 @@ endstream",
         let extra: Vec<&str> = extra.iter().map(String::as_str).collect();
         assert_eq!(blending(false, "", &resources, &extra), said, "{what}");
         // A page group with a blending colour space, or a PDF/A output intent, satisfies the rule.
-        assert!(blending(false, "/Group << /S /Transparency /CS /DeviceRGB >>", &resources, &extra).is_empty(), "{what}: page /CS");
+        assert!(
+            blending(false, "/Group << /S /Transparency /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >>", &resources, &extra).is_empty(),
+            "{what}: page /CS"
+        );
+        assert_eq!(blending(false, "/Group << /S /Transparency >>", &resources, &extra), said, "{what}: page group without /CS");
         assert!(blending(true, "", &resources, &extra).is_empty(), "{what}: output intent");
     }
     // Annotation appearances, as one stream or a dictionary of streams by state.
@@ -595,7 +599,9 @@ endstream",
 #[test]
 fn blend_modes_are_the_ones_iso_32000_1_defines() {
     let modes = |resources: &str, extra: &[&str]| -> Vec<String> {
-        let page = format!("<< /Type /Page /Parent 2 0 R /Group << /S /Transparency /CS /DeviceRGB >> /Resources << {resources} >> >>");
+        let page = format!(
+            "<< /Type /Page /Parent 2 0 R /Group << /S /Transparency /CS [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >> /Resources << {resources} >> >>"
+        );
         let mut objs: Vec<&str> =
             vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page];
         objs.extend_from_slice(extra);
@@ -607,4 +613,56 @@ fn blend_modes_are_the_ones_iso_32000_1_defines() {
     assert_eq!(modes("/ExtGState << /G << /BM [/Multiply /Custom] >> >>", &[]), custom, "in an array");
     let all = "/Normal /Compatible /Multiply /Screen /Overlay /Darken /Lighten /ColorDodge /ColorBurn /HardLight /SoftLight /Difference /Exclusion /Hue /Saturation /Color /Luminosity";
     assert!(modes(&format!("/ExtGState << /G << /BM [{all}] >> >>"), &[]).is_empty());
+}
+
+/// 6.2.10's blending colour space is one PDF/A accepts without an output intent: not null, and
+/// not a device space unless the page gives it a default (6.2.4.3). An output intent stands in
+/// for it only with a profile.
+#[test]
+fn a_blending_space_is_device_independent_and_an_intent_has_a_profile() {
+    let page_said = ["Page 1 has transparency but no device-independent blending colour space or PDF/A output intent"];
+    let check = |catalog_extra: &str, page_extra: &str, extra: &[&str]| -> Vec<String> {
+        let catalog = format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} >>");
+        let page = format!("<< /Type /Page /Parent 2 0 R {page_extra} >>");
+        let mut objs: Vec<&str> = vec![&catalog, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page];
+        objs.extend_from_slice(extra);
+        verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect()
+    };
+    let alpha = "/ExtGState << /G << /ca 0.5 >> >>";
+    let page = |group: &str, colour_spaces: &str| format!("/Group << /S /Transparency {group} >> /Resources << {alpha} {colour_spaces} >>");
+    assert_eq!(check("", &page("/CS null", ""), &[]), page_said, "a null /CS");
+    assert_eq!(check("", &page("/CS 9 0 R", ""), &[]), page_said, "a /CS naming no object");
+    for (device, default) in [("DeviceGray", "DefaultGray"), ("DeviceRGB", "DefaultRGB"), ("DeviceCMYK", "DefaultCMYK")] {
+        assert_eq!(check("", &page(&format!("/CS /{device}"), ""), &[]), page_said, "{device}");
+        let defaults = format!("/ColorSpace << /{default} [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >>");
+        assert!(check("", &page(&format!("/CS /{device}"), &defaults), &[]).is_empty(), "{device} with {default}");
+    }
+    let intent = |profile: &str| format!("/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (sRGB) {profile} >>]");
+    let opaque_group = format!("/Resources << {alpha} >>");
+    assert_eq!(check(&intent("/DestOutputProfile null"), &opaque_group, &[]), page_said, "a null profile");
+    assert_eq!(check(&intent(""), &opaque_group, &[]), page_said, "no profile");
+    assert!(check(&intent("/DestOutputProfile 4 0 R"), &opaque_group, &["<< /N 3 /Length 0 >>\nstream\n\nendstream"]).is_empty(), "a profile");
+    // Private data is no graphics state: a /BM there is not a blend mode.
+    assert!(check("/PieceInfo << /App << /Private << /BM /Bookkeeping >> >> >>", "", &[]).is_empty(), "/PieceInfo");
+}
+
+/// A form XObject first reached at the depth limit, where its resources go unread, is read again
+/// when a shallower place names it, so what it holds is not missed.
+#[test]
+fn transparency_reached_first_too_deep_is_found_from_a_shallower_place() {
+    let form = |dict: &str| format!("<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] {dict} /Length 0 >>\nstream\n\nendstream");
+    // A chain of 32 forms, objects 4 to 35, the last naming form 36, which holds a translucent
+    // graphics state; the page names the chain first and form 36 after it.
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /A 4 0 R /B 36 0 R >> >> >>".to_owned(),
+    ];
+    for n in 4..=35 {
+        objs.push(form(&format!("/Resources << /XObject << /X {} 0 R >> >>", n + 1)));
+    }
+    objs.push(form("/Resources << /ExtGState << /G << /ca 0.5 >> >> >>"));
+    let objs: Vec<&str> = objs.iter().map(String::as_str).collect();
+    let said: Vec<String> = verify(&build(&objs, ""), Level::A2b).into_iter().filter(|i| i.clause == "6.2.10").map(|i| i.message).collect();
+    assert_eq!(said, ["Page 1 has transparency but no device-independent blending colour space or PDF/A output intent"]);
 }

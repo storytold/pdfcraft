@@ -1,6 +1,7 @@
 //! PDF/A-2 6.2.10: a graphics state's blend mode is one ISO 32000-1 defines, and a page that
 //! contains transparency, in a file without a PDF/A output intent, names its blending colour
-//! space: its `/Group` dictionary has a `/CS` entry.
+//! space: its `/Group` dictionary has a `/CS` entry, which as any colour space in such a file is
+//! not a device space without a default (6.2.4.3).
 //!
 //! A page contains transparency when something its resources reach can paint transparently (ISO
 //! 32000-1 11.6.4.4 to 11.6.6): a graphics state with a constant alpha (`/CA`, `/ca`) below 1,
@@ -8,9 +9,10 @@
 //! (`/SMask`, or `/SMaskInData` above 0); or a transparency group XObject. The resources looked
 //! through are the page's own, those of the form XObjects, tiling patterns and Type 3 fonts they
 //! hold, and those of the appearance streams of the page's annotations. Whether the content uses
-//! a resource is not asked: a resource a page holds is one it may paint with.
+//! a resource is not asked: a resource a page holds is one it may paint with. Blend modes are read
+//! from the same graphics states, so private data (`/PieceInfo`) is never taken for one.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
@@ -19,132 +21,197 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 const MAX_VISITS: usize = 4096;
 /// How deep resources nest (a form XObject in a form XObject, ...).
 const MAX_DEPTH: usize = 32;
+/// The resource categories that hold what a page paints with, read in this order.
+const CATEGORIES: [&[u8]; 4] = [b"ExtGState", b"XObject", b"Pattern", b"Font"];
 
-/// Whether the page `page` contains transparency.
-pub(crate) fn page_has_transparency(doc: &Document, page: &Dict) -> bool {
-    let mut walk = Walk { doc, seen: HashSet::new(), visits: 0 };
-    if page.get(b"Resources").is_some_and(|r| walk.resources(r, 0)) {
-        return true;
-    }
-    let Some(annots) = page.get(b"Annots").map(|a| doc.resolve(a)) else { return false };
-    let Some(annots) = annots.as_array() else { return false };
-    annots.iter().any(|a| {
-        let a = doc.resolve(a);
-        let Some(ap) = a.as_dict().and_then(|a| a.get(b"AP")).map(|ap| doc.resolve(ap)) else { return false };
-        let Some(ap) = ap.as_dict() else { return false };
-        // Each appearance (normal, rollover, down) is a stream, or a dictionary of streams by state.
-        ap.iter().any(|(_, v)| match &*doc.resolve(v) {
-            Object::Stream(_) => walk.xobject(v, 0),
-            Object::Dict(states) => states.iter().any(|(_, s)| walk.xobject(s, 0)),
-            _ => false,
-        })
-    })
+/// What the graphics a page's resources reach paint with.
+#[derive(Debug, Default)]
+pub(crate) struct Painting {
+    /// Something paints transparently.
+    pub(crate) transparency: bool,
+    /// The blend modes graphics states name that ISO 32000-1 doesn't define.
+    pub(crate) unknown_blend_modes: Vec<String>,
 }
 
-/// Whether `page` names its blending colour space: a `/Group` dictionary with a `/CS` entry.
+/// What the page `page` paints with: its resources, and the appearance streams of its
+/// annotations.
+pub(crate) fn page_painting(doc: &Document, page: &Dict) -> Painting {
+    let mut walk = Walk { doc, seen: HashMap::new(), visits: 0, found: Painting::default() };
+    if let Some(r) = page.get(b"Resources") {
+        walk.resources(r, 0);
+    }
+    let annots = page.get(b"Annots").map(|a| doc.resolve(a));
+    for a in annots.as_deref().and_then(Object::as_array).into_iter().flatten() {
+        let a = doc.resolve(a);
+        let Some(ap) = a.as_dict().and_then(|a| a.get(b"AP")).map(|ap| doc.resolve(ap)) else { continue };
+        let Some(ap) = ap.as_dict() else { continue };
+        // Each appearance (normal, rollover, down) is a stream, or a dictionary of streams by state.
+        for (_, v) in ap.iter() {
+            match &*doc.resolve(v) {
+                Object::Stream(_) => walk.xobject(v, 0),
+                Object::Dict(states) => {
+                    for (_, s) in states.iter() {
+                        walk.xobject(s, 0);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    walk.found
+}
+
+/// Whether `page` names a blending colour space PDF/A accepts without an output intent: its
+/// `/Group` has a `/CS` that is not null and not a device colour space, unless the page's
+/// resources give that device space a default (`DefaultGray`, `DefaultRGB`, `DefaultCMYK`), as
+/// PDF/A-2 6.2.4.3 asks of any device colour.
 pub(crate) fn page_names_blending_space(doc: &Document, page: &Dict) -> bool {
-    page.get(b"Group").map(|g| doc.resolve(g)).is_some_and(|g| g.as_dict().is_some_and(|g| g.get(b"CS").is_some()))
+    let group = page.get(b"Group").map(|g| doc.resolve(g));
+    let Some(cs) = group.as_deref().and_then(Object::as_dict).and_then(|g| g.get(b"CS")).map(|c| doc.resolve(c)) else { return false };
+    let default: &[u8] = match &*cs {
+        Object::Null => return false,
+        Object::Name(n) if n == b"DeviceGray" => b"DefaultGray",
+        Object::Name(n) if n == b"DeviceRGB" => b"DefaultRGB",
+        Object::Name(n) if n == b"DeviceCMYK" => b"DefaultCMYK",
+        _ => return true,
+    };
+    let resources = page.get(b"Resources").map(|r| doc.resolve(r));
+    let spaces = resources.as_deref().and_then(Object::as_dict).and_then(|r| r.get(b"ColorSpace")).map(|c| doc.resolve(c));
+    spaces.as_deref().and_then(Object::as_dict).is_some_and(|s| s.get(default).is_some())
 }
 
 struct Walk<'a> {
     doc: &'a Document,
-    /// The indirect objects already read: each is looked at once, and a cycle ends there.
-    seen: HashSet<ObjRef>,
+    /// The indirect objects already read, each with the shallowest depth it was read at: an
+    /// object is read again only from a shallower place, so a cycle ends and a deep first visit
+    /// doesn't hide what a shallower one would read.
+    seen: HashMap<ObjRef, usize>,
     visits: usize,
+    found: Painting,
 }
 
 impl Walk<'_> {
-    /// Whether `o` may be read: within the budget, and an indirect object not read before.
-    fn enter(&mut self, o: &Object) -> bool {
-        if self.visits >= MAX_VISITS {
+    /// Whether `o`, reached `depth` levels down, may be read: within the budget and the depth, and
+    /// an indirect object not read before from as shallow a place.
+    fn enter(&mut self, o: &Object, depth: usize) -> bool {
+        if self.visits >= MAX_VISITS || depth > MAX_DEPTH {
             return false;
+        }
+        if let Object::Ref(r) = o {
+            if self.seen.get(r).is_some_and(|&d| d <= depth) {
+                return false;
+            }
+            self.seen.insert(*r, depth);
         }
         self.visits += 1;
-        match o {
-            Object::Ref(r) => self.seen.insert(*r),
-            _ => true,
+        true
+    }
+
+    fn resources(&mut self, r: &Object, depth: usize) {
+        if !self.enter(r, depth) {
+            return;
+        }
+        let doc = self.doc;
+        let Some(res) = doc.resolve(r).as_dict().cloned() else { return };
+        for category in CATEGORIES {
+            // Once the budget is spent nothing more is read, so nothing more is gathered either.
+            if self.visits >= MAX_VISITS {
+                return;
+            }
+            let entries: Vec<Object> = res
+                .get(category)
+                .map(|d| doc.resolve(d))
+                .and_then(|d| d.as_dict().map(|d| d.iter().map(|(_, v)| v.clone()).collect()))
+                .unwrap_or_default();
+            for v in &entries {
+                match category {
+                    b"ExtGState" => self.ext_gstate(v, depth),
+                    b"XObject" => self.xobject(v, depth),
+                    b"Pattern" => self.pattern(v, depth),
+                    _ => self.type3(v, depth),
+                }
+            }
         }
     }
 
-    fn resources(&mut self, r: &Object, depth: usize) -> bool {
-        if depth > MAX_DEPTH || !self.enter(r) {
-            return false;
+    /// A graphics state (ISO 32000-1 Table 58): whether it paints transparently, and the blend
+    /// modes it names that ISO 32000-1 doesn't define.
+    fn ext_gstate(&mut self, g: &Object, depth: usize) {
+        if !self.enter(g, depth) {
+            return;
         }
         let doc = self.doc;
-        let Some(res) = doc.resolve(r).as_dict().cloned() else { return false };
-        let entries = |key: &[u8]| -> Vec<Object> {
-            res.get(key).map(|d| doc.resolve(d)).and_then(|d| d.as_dict().map(|d| d.iter().map(|(_, v)| v.clone()).collect())).unwrap_or_default()
-        };
-        entries(b"ExtGState").iter().any(|g| self.ext_gstate(g))
-            || entries(b"XObject").iter().any(|x| self.xobject(x, depth))
-            || entries(b"Pattern").iter().any(|p| self.pattern(p, depth))
-            || entries(b"Font").iter().any(|f| self.type3(f, depth))
-    }
-
-    /// A graphics state that paints transparently (ISO 32000-1 Table 58).
-    fn ext_gstate(&mut self, g: &Object) -> bool {
-        if !self.enter(g) {
-            return false;
-        }
-        let g = self.doc.resolve(g);
-        let Some(g) = g.as_dict() else { return false };
-        let doc = self.doc;
+        let g = doc.resolve(g);
+        let Some(g) = g.as_dict() else { return };
         let below_one = |key: &[u8]| g.get(key).and_then(|v| doc.resolve(v).as_f64()).is_some_and(|a| a < 1.0);
-        let blend = g.get(b"BM").map(|b| doc.resolve(b)).is_some_and(|b| blends(doc, &b));
+        let bm = g.get(b"BM").map(|b| doc.resolve(b));
+        let blend = bm.as_deref().is_some_and(|b| blends(doc, b));
         let mask = g.get(b"SMask").map(|m| doc.resolve(m)).is_some_and(|m| !matches!(&*m, Object::Name(n) if n == b"None"));
-        below_one(b"CA") || below_one(b"ca") || blend || mask
+        self.found.transparency |= below_one(b"CA") || below_one(b"ca") || blend || mask;
+        for name in bm.as_deref().map(|b| unknown_blend_modes(doc, b)).unwrap_or_default() {
+            if !self.found.unknown_blend_modes.contains(&name) {
+                self.found.unknown_blend_modes.push(name);
+            }
+        }
     }
 
     /// An image with a soft mask, or a form XObject that is a transparency group or holds
     /// transparency in its resources.
-    fn xobject(&mut self, x: &Object, depth: usize) -> bool {
-        if !self.enter(x) {
-            return false;
+    fn xobject(&mut self, x: &Object, depth: usize) {
+        if !self.enter(x, depth) {
+            return;
         }
         let doc = self.doc;
         let x = doc.resolve(x);
-        let Object::Stream(s) = &*x else { return false };
+        let Object::Stream(s) = &*x else { return };
         let d = &s.dict;
         if d.name(b"Subtype") == Some(b"Image") {
             let soft_mask = d.get(b"SMask").is_some_and(|m| matches!(&*doc.resolve(m), Object::Stream(_)));
             let in_data = d.get(b"SMaskInData").and_then(|v| doc.resolve(v).as_int()).is_some_and(|v| v > 0);
-            return soft_mask || in_data;
+            self.found.transparency |= soft_mask || in_data;
+            return;
         }
         let group = d.get(b"Group").map(|g| doc.resolve(g)).is_some_and(|g| g.as_dict().is_some_and(|g| g.name(b"S") == Some(b"Transparency")));
-        group || d.get(b"Resources").is_some_and(|r| self.resources(r, depth + 1))
+        self.found.transparency |= group;
+        if let Some(r) = d.get(b"Resources") {
+            self.resources(r, depth + 1);
+        }
     }
 
     /// A tiling pattern's resources, or a shading pattern's graphics state.
-    fn pattern(&mut self, p: &Object, depth: usize) -> bool {
-        if !self.enter(p) {
-            return false;
+    fn pattern(&mut self, p: &Object, depth: usize) {
+        if !self.enter(p, depth) {
+            return;
         }
-        let doc = self.doc;
-        let p = doc.resolve(p);
+        let p = self.doc.resolve(p);
         let Some(d) = (match &*p {
             Object::Stream(s) => Some(&s.dict),
             Object::Dict(d) => Some(d),
             _ => None,
         }) else {
-            return false;
+            return;
         };
-        let state = d.get(b"ExtGState").cloned();
-        let resources = d.get(b"Resources").cloned();
-        state.is_some_and(|g| self.ext_gstate(&g)) || resources.is_some_and(|r| self.resources(&r, depth + 1))
+        if let Some(g) = d.get(b"ExtGState") {
+            self.ext_gstate(g, depth + 1);
+        }
+        if let Some(r) = d.get(b"Resources") {
+            self.resources(r, depth + 1);
+        }
     }
 
     /// A Type 3 font's resources, which its glyph procedures paint with.
-    fn type3(&mut self, f: &Object, depth: usize) -> bool {
-        if !self.enter(f) {
-            return false;
+    fn type3(&mut self, f: &Object, depth: usize) {
+        if !self.enter(f, depth) {
+            return;
         }
         let f = self.doc.resolve(f);
-        let Some(d) = f.as_dict() else { return false };
+        let Some(d) = f.as_dict() else { return };
         if d.name(b"Subtype") != Some(b"Type3") {
-            return false;
+            return;
         }
-        let resources = d.get(b"Resources").cloned();
-        resources.is_some_and(|r| self.resources(&r, depth + 1))
+        if let Some(r) = d.get(b"Resources") {
+            self.resources(r, depth + 1);
+        }
     }
 }
 
@@ -169,43 +236,10 @@ const BLEND_MODES: &[&[u8]] = &[
     b"Luminosity",
 ];
 
-/// The blend modes ISO 32000-1 doesn't define that the object `o` names in a `/BM` entry: its own,
-/// or one of a dictionary written inside it (a page's resources hold their graphics states
-/// directly), within [`MAX_DEPTH`].
-pub(crate) fn unknown_blend_modes(doc: &Document, o: &Object) -> Vec<String> {
-    let mut out = Vec::new();
-    blend_modes_within(doc, o, 0, &mut out);
-    out
-}
-
-fn blend_modes_within(doc: &Document, o: &Object, depth: usize, out: &mut Vec<String>) {
-    if depth > MAX_DEPTH {
-        return;
-    }
-    let d = match o {
-        Object::Dict(d) => d,
-        Object::Stream(s) => &s.dict,
-        Object::Array(a) => {
-            for v in a {
-                blend_modes_within(doc, v, depth + 1, out);
-            }
-            return;
-        }
-        _ => return,
-    };
-    out.extend(unknown_in(doc, d));
-    for (k, v) in d.iter() {
-        if k != b"BM" {
-            blend_modes_within(doc, v, depth + 1, out);
-        }
-    }
-}
-
-/// The names in a graphics state's `/BM` (a name, or an array of them) that are not blend modes
-/// ISO 32000-1 defines.
-fn unknown_in(doc: &Document, gs: &Dict) -> Vec<String> {
-    let Some(bm) = gs.get(b"BM").map(|b| doc.resolve(b)) else { return Vec::new() };
-    let names: Vec<Vec<u8>> = match &*bm {
+/// The names in a `/BM` value (a name, or an array of them) that are not blend modes ISO 32000-1
+/// defines.
+fn unknown_blend_modes(doc: &Document, bm: &Object) -> Vec<String> {
+    let names: Vec<Vec<u8>> = match bm {
         Object::Name(n) => vec![n.clone()],
         Object::Array(a) => a.iter().filter_map(|m| doc.resolve(m).as_name().map(<[u8]>::to_vec)).collect(),
         _ => Vec::new(),
