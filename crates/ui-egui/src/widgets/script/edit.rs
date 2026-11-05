@@ -25,7 +25,7 @@ pub(super) fn byte_of(text: &str, index: usize) -> usize {
     text.char_indices().nth(index).map_or(text.len(), |(b, _)| b)
 }
 
-/// The character index of byte `byte` (rounded down to a character start).
+/// How many characters start before byte `byte`: its character's index, for a byte that starts one.
 pub(super) fn char_of(text: &str, byte: usize) -> usize {
     text.char_indices().take_while(|(b, _)| *b < byte).count()
 }

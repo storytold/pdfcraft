@@ -198,6 +198,10 @@ fn editor(ui: &mut egui::Ui, text: &mut String, id: egui::Id, rows: usize, width
     // against another dialog, and the box keeps a height it is clamped to).
     let frame = ui.ctx().cumulative_frame_nr();
     let last = ui.data(|d| d.get_temp::<(u64, f32)>(height_id)).filter(|(at, _)| at.saturating_add(1) >= frame).map(|(_, h)| h);
+    // Not there last frame, it has just opened, and a refusal from the last time isn't news.
+    if last.is_none() {
+        seen.refused = false;
+    }
     let max_height = match (crate::widgets::dialog_room(ui), last) {
         (Some(room), Some(last)) if (last + room).is_finite() => (last + room).clamp(min_height, MAX_HEIGHT.max(min_height)),
         _ => MAX_HEIGHT,
@@ -307,24 +311,21 @@ fn editor_keys(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> Keys {
     if ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(pasted) if edit::has_indented_line(pasted)))) {
         ui.data_mut(|d| d.remove_temp::<String>(indent_id));
     }
-    // On what edits or copies there (typing, Backspace or Delete would split the line end, and Copy
-    // take half of it), and on nothing else. Not on the keys that only move: moved back every frame,
-    // Right could never cross a line end. Not on Undo and Redo, which go by whether the caret is
-    // still where the undo point has it: moved, Undo would go back to that same point every time. And
-    // not on a Cut or Copy with nothing selected, or a shortcut that isn't for editing: moving the
-    // caret for those would lose the Redo that Undo left.
+    // On what edits there (typing, Backspace or Delete would split the line end), and on nothing
+    // else. Not on the keys that only move: moved back every frame, Right could never cross a line
+    // end. Not on Undo and Redo, which go by whether the caret is still where the undo point has it:
+    // moved, Undo would go back to that same point every time. And not on Copy, a Cut with nothing
+    // selected, or a shortcut that isn't for editing: moving the caret for those would lose the Redo
+    // that Undo left.
+    copy_off_crlf(ui, id, text);
     let selected = selection(ui.ctx(), id).is_some_and(|s| !s.is_empty());
     let editing = ui.input(|i| {
         i.events.iter().any(|e| match e {
             egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Ime(_) => true,
-            egui::Event::Cut | egui::Event::Copy => selected,
-            egui::Event::Key { key, pressed: true, modifiers, .. } => match key {
-                egui::Key::Backspace | egui::Key::Delete => true,
-                egui::Key::Enter | egui::Key::Tab => !modifiers.ctrl && !modifiers.command,
-                // egui's Emacs-like deletes.
-                egui::Key::H | egui::Key::K | egui::Key::U | egui::Key::W => modifiers.ctrl,
-                _ => false,
-            },
+            egui::Event::Cut => selected,
+            egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                deletes(*key, *modifiers) || (matches!(key, egui::Key::Enter | egui::Key::Tab) && !modifiers.ctrl && !modifiers.command)
+            }
             _ => false,
         })
     });
@@ -343,9 +344,9 @@ fn editor_keys(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> Keys {
         (i.consume_key(none, egui::Key::Tab), shift_tab, i.consume_key(none, egui::Key::Enter))
     });
     // Only a `}` typed on its own: one among other edits this frame goes in with them, in order. By
-    // AltGr, as it is on many layouts, it can follow a key reported as Ctrl and Alt, and from an input
-    // method it is a commit.
-    let is_brace = |e: &egui::Event| matches!(e, egui::Event::Text(t) | egui::Event::Ime(egui::ImeEvent::Commit(t)) if t == "}");
+    // AltGr, as it is on many layouts, it can follow a key reported as Ctrl and Alt. From an input
+    // method it goes in as it comes.
+    let is_brace = |e: &egui::Event| matches!(e, egui::Event::Text(t) if t == "}");
     let brace = ui.input(|i| {
         let mut acting = i.events.iter().filter(|e| acts_on_text(e) && !is_alt_gr(e));
         acting.next().is_some_and(is_brace) && acting.next().is_none()
@@ -371,6 +372,10 @@ fn editor_keys(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> Keys {
         edit::close_brace(text, selection, &unit)
     };
     let Some(done) = done else { return keys };
+    // A Shift+Tab with nothing to take off: touching the selection would lose the Redo that Undo left.
+    if done.text == *text {
+        return keys;
+    }
     ui.data_mut(|d| d.insert_temp(indent_id, unit));
     if brace {
         ui.input_mut(|i| i.events.retain(|e| !is_brace(e)));
@@ -409,8 +414,6 @@ fn acts_on_text(event: &egui::Event) -> bool {
                         | egui::Key::ArrowDown
                         | egui::Key::Home
                         | egui::Key::End
-                        | egui::Key::PageUp
-                        | egui::Key::PageDown
                 )
         }
         _ => false,
@@ -431,14 +434,7 @@ fn taken_out_of_turn(event: &egui::Event) -> bool {
 fn moves_caret(event: &egui::Event) -> bool {
     let egui::Event::Key { key, pressed: true, modifiers, .. } = event else { return false };
     match key {
-        egui::Key::ArrowLeft
-        | egui::Key::ArrowRight
-        | egui::Key::ArrowUp
-        | egui::Key::ArrowDown
-        | egui::Key::Home
-        | egui::Key::End
-        | egui::Key::PageUp
-        | egui::Key::PageDown => true,
+        egui::Key::ArrowLeft | egui::Key::ArrowRight | egui::Key::ArrowUp | egui::Key::ArrowDown | egui::Key::Home | egui::Key::End => true,
         egui::Key::A | egui::Key::B | egui::Key::E | egui::Key::F | egui::Key::N | egui::Key::P => {
             modifiers.ctrl && !modifiers.command && !modifiers.shift
         }
@@ -446,9 +442,19 @@ fn moves_caret(event: &egui::Event) -> bool {
     }
 }
 
-/// Whether `event` is a key reported with both Ctrl and Alt, as AltGr can be: it types, or does nothing.
+/// Whether the box deletes for this key: Backspace, Delete and egui's Emacs-like deletes.
+fn deletes(key: egui::Key, modifiers: egui::Modifiers) -> bool {
+    match key {
+        egui::Key::Backspace | egui::Key::Delete => true,
+        egui::Key::H | egui::Key::K | egui::Key::U | egui::Key::W => modifiers.ctrl,
+        _ => false,
+    }
+}
+
+/// Whether `event` is a key reported with both Ctrl and Alt, as AltGr can be, and which doesn't delete:
+/// it types, or does nothing.
 fn is_alt_gr(event: &egui::Event) -> bool {
-    matches!(event, egui::Event::Key { modifiers, .. } if modifiers.ctrl && modifiers.alt)
+    matches!(event, egui::Event::Key { key, modifiers, .. } if modifiers.ctrl && modifiers.alt && !deletes(*key, *modifiers))
 }
 
 /// Keeps the order of a frame's keys when frames are slow and several come at once. The editor takes
@@ -497,22 +503,40 @@ fn selection(ctx: &egui::Context, id: egui::Id) -> Option<Range<usize>> {
 fn snap_off_crlf(ctx: &egui::Context, id: egui::Id, text: &str) {
     let Some(mut state) = egui::text_edit::TextEditState::load(ctx, id) else { return };
     let Some(range) = state.cursor.char_range() else { return };
-    let snap = |c: CCursor| if edit::inside_crlf(text, c.index.0) { CCursor::new(c.index.0.saturating_sub(1)) } else { c };
-    let (mut primary, mut secondary) = (snap(range.primary), snap(range.secondary));
-    // A selection of only the `\r` would snap to a caret, and the edit act on what is before it. The
-    // line end is what was selected.
-    if primary == secondary && range.primary != range.secondary {
-        let end = CCursor::new(primary.index.0.saturating_add(2));
-        if range.primary.index > range.secondary.index {
-            primary = end;
-        } else {
-            secondary = end;
-        }
-    }
+    let (primary, secondary) = off_crlf(text, range);
     if (primary, secondary) != (range.primary, range.secondary) {
         state.cursor.set_char_range(Some(CCursorRange::two(secondary, primary)));
         state.store(ctx, id);
     }
+}
+
+/// The caret and the other end of `range`, neither inside a line end. A selection of only the `\r`
+/// would become a caret, and an edit act on what is before it: the line end is what was selected.
+fn off_crlf(text: &str, range: CCursorRange) -> (CCursor, CCursor) {
+    let snap = |c: CCursor| if edit::inside_crlf(text, c.index.0) { CCursor::new(c.index.0.saturating_sub(1)) } else { c };
+    let (primary, secondary) = (snap(range.primary), snap(range.secondary));
+    if primary != secondary || range.primary == range.secondary {
+        return (primary, secondary);
+    }
+    let end = CCursor::new(primary.index.0.saturating_add(2));
+    if range.primary.index > range.secondary.index { (end, secondary) } else { (primary, end) }
+}
+
+/// For a Copy next among this frame's events, with a selection that ends inside a line end: copies it
+/// without half of that line end, as a lone `\r` pasted elsewhere is a line break. It takes the Copy
+/// from the box, and leaves the selection where it is, as moving it would lose the Redo that Undo left.
+fn copy_off_crlf(ui: &egui::Ui, id: egui::Id, text: &str) {
+    if !ui.input(|i| matches!(i.events.iter().find(|e| acts_on_text(e)), Some(egui::Event::Copy))) {
+        return;
+    }
+    let Some(range) = egui::text_edit::TextEditState::load(ui.ctx(), id).and_then(|s| s.cursor.char_range()) else { return };
+    let (primary, secondary) = off_crlf(text, range);
+    if range.primary == range.secondary || (primary, secondary) == (range.primary, range.secondary) {
+        return;
+    }
+    let (from, to) = (primary.index.0.min(secondary.index.0), primary.index.0.max(secondary.index.0));
+    ui.ctx().copy_text(text.get(edit::byte_of(text, from)..edit::byte_of(text, to)).unwrap_or_default().to_owned());
+    ui.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Copy)));
 }
 
 /// Whether the selection of text box `id` was made backward (its caret at the start).

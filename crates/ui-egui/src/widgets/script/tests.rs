@@ -174,7 +174,7 @@ fn a_script_past_the_engine_s_limit_gets_a_note_and_is_not_laid_out() {
 }
 
 #[test]
-fn a_script_at_the_engine_s_limit_is_still_edited() {
+fn a_script_at_the_engine_s_limit_gets_the_box() {
     let ctx = egui::Context::default();
     let mut text = "x".repeat(MAX_EDITED_BYTES);
     let said = drawn(&ctx, &mut text, 1.0);
@@ -342,6 +342,8 @@ struct Typing {
     said: Vec<String>,
     /// Each text painted: what it says, where, and the rectangle it is clipped to.
     shapes: Vec<(String, egui::Rect, egui::Rect)>,
+    /// What the last frame put on the clipboard.
+    copied: Vec<String>,
     /// Room above the box, as a dialog has (the top of the screen would hide what is painted above it).
     above: f32,
 }
@@ -355,6 +357,7 @@ impl Typing {
             id: egui::Id::NULL,
             said: Vec::new(),
             shapes: Vec::new(),
+            copied: Vec::new(),
             above: 0.0,
         };
         t.frame(Vec::new());
@@ -381,6 +384,15 @@ impl Typing {
             })
             .collect();
         self.said = self.shapes.iter().map(|(s, _, _)| s.clone()).collect();
+        self.copied = output
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                egui::OutputCommand::CopyText(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
         output.drop_without_applying_deltas();
     }
 
@@ -628,7 +640,38 @@ fn copy_takes_no_half_of_a_windows_line_end() {
     let mut t = Typing::new("ab\r\nc");
     t.select(0..3);
     t.frame(vec![egui::Event::Copy]);
-    assert_eq!(t.caret(), Some(0..2));
+    assert_eq!(t.copied, ["ab"]);
+    assert_eq!(t.caret(), Some(0..3), "the selection stays");
+    // With nothing half in it, the box copies it as ever.
+    t.select(0..4);
+    t.frame(vec![egui::Event::Copy]);
+    assert_eq!(t.copied, ["ab\r\n"]);
+    // A caret inside the line end copies nothing, and leaves the clipboard alone.
+    t.select(3..3);
+    t.frame(vec![egui::Event::Copy]);
+    assert_eq!(t.copied, Vec::<String>::new());
+}
+
+/// Undo, copy what it brought back, Redo: on a script of Windows line ends with a selection made by
+/// Shift+End. Moving the selection for the Copy lost the Redo, and with it what was typed.
+#[test]
+fn copy_between_undo_and_redo_leaves_the_redo() {
+    let cmd = egui::Modifiers::COMMAND;
+    let mut t = Typing::new("ab\r\nc");
+    t.select(0..0);
+    t.key(egui::Key::End, egui::Modifiers::SHIFT);
+    t.idle();
+    assert_eq!(t.caret(), Some(0..3), "the selection ends inside the line end");
+    t.typed("x");
+    t.idle();
+    t.key(egui::Key::Z, cmd);
+    t.settle();
+    assert_eq!(t.text, "ab\r\nc");
+    t.frame(vec![egui::Event::Copy]);
+    assert_eq!(t.copied, ["ab"]);
+    t.key(egui::Key::Z, cmd | egui::Modifiers::SHIFT);
+    t.settle();
+    assert_eq!(t.text, "x\r\nc");
 }
 
 /// A script past the limit gets the note with its Clear button and no box; one at the limit gets the
@@ -702,6 +745,29 @@ fn undo_and_typing_in_one_frame_leave_a_windows_line_end_whole() {
     t.idle();
     assert_eq!(t.caret(), Some(4..4), "inside the line end");
     t.frame(vec![press(egui::Key::Z, egui::Modifiers::COMMAND), egui::Event::Text("y".into())]);
+    t.settle();
+    assert_eq!(t.text, "a;xy\r\nb;");
+}
+
+/// Redo goes by the caret being where its undo point has it, so typing in its frame waits for it.
+#[test]
+fn redo_and_typing_in_one_frame_keep_the_redo() {
+    let cmd = egui::Modifiers::COMMAND;
+    let mut t = Typing::new("a;\r\nb;");
+    t.select(0..0);
+    t.key(egui::Key::End, egui::Modifiers::NONE);
+    t.idle();
+    t.typed("x");
+    t.idle();
+    t.key(egui::Key::End, egui::Modifiers::NONE);
+    t.idle();
+    t.key(egui::Key::Z, cmd);
+    t.idle();
+    t.key(egui::Key::Z, cmd);
+    t.idle();
+    assert_eq!(t.text, "a;\r\nb;");
+    assert_eq!(t.caret(), Some(3..3), "inside the line end");
+    t.frame(vec![press(egui::Key::Z, cmd | egui::Modifiers::SHIFT), egui::Event::Text("y".into())]);
     t.settle();
     assert_eq!(t.text, "a;xy\r\nb;");
 }
@@ -1129,28 +1195,72 @@ fn a_selection_of_half_a_line_end_is_of_all_of_it() {
     // A selection of only the `\n` is the same; one with more than half a line end keeps the rest.
     assert_eq!(edit(backspace.clone(), 3..4), "a;b;");
     assert_eq!(edit(backspace, 0..3), "\r\nb;");
-    // Made backward, it stays so.
-    let mut t = Typing::new("a;\r\nb;");
-    set_selection_facing(&t.ctx, t.id, 2..3, true);
-    t.frame(vec![egui::Event::Copy]);
-    assert_eq!(t.caret(), Some(2..4));
-    assert!(selected_backward(&t.ctx, t.id), "backward still");
+    // A Copy of it takes the whole line end.
     let mut t = Typing::new("a;\r\nb;");
     t.select(2..3);
     t.frame(vec![egui::Event::Copy]);
-    assert_eq!(t.caret(), Some(2..4));
-    assert!(!selected_backward(&t.ctx, t.id), "forward still");
+    assert_eq!(t.copied, ["\r\n"]);
+    // It faces the way it was made, which Tab keeps.
+    for backward in [false, true] {
+        let mut t = Typing::new("a;\r\nb;");
+        set_selection_facing(&t.ctx, t.id, 2..3, backward);
+        t.frame(vec![press(egui::Key::Tab, egui::Modifiers::NONE)]);
+        assert_eq!(selected_backward(&t.ctx, t.id), backward);
+    }
+}
+
+/// A Shift+Tab with nothing to take off changes nothing, and touches nothing that Redo goes by: an
+/// arrow leaves a remembered column in the selection, which setting it again cleared.
+#[test]
+fn a_shift_tab_with_nothing_to_take_off_leaves_the_redo() {
+    let (cmd, none) = (egui::Modifiers::COMMAND, egui::Modifiers::NONE);
+    let mut t = Typing::new("abc\nabc");
+    t.select(1..1);
+    t.key(egui::Key::ArrowDown, none);
+    t.idle();
+    t.typed("x");
+    t.idle();
+    t.key(egui::Key::Z, cmd);
+    t.settle();
+    assert_eq!(t.text, "abc\nabc");
+    t.key(egui::Key::Tab, egui::Modifiers::SHIFT);
+    t.settle();
+    assert_eq!(t.text, "abc\nabc");
+    t.key(egui::Key::Z, cmd | egui::Modifiers::SHIFT);
+    t.settle();
+    assert_eq!(t.text, "abc\naxbc");
+}
+
+/// A box that opens again has nothing to say about what it refused the last time.
+#[test]
+fn a_box_opened_again_says_nothing_of_a_refusal() {
+    let mut t = Typing::new("");
+    t.frame(vec![egui::Event::Paste("y".repeat(MAX_EDITED_BYTES + 1))]);
+    t.frame(Vec::new());
+    assert!(t.said.iter().any(|s| s.starts_with(REFUSED)), "said while the box stays open: {:?}", t.said);
+    t.ctx.run_ui(egui::RawInput { time: Some(t.time), ..Default::default() }, |_| {}).drop_without_applying_deltas();
+    t.frame(Vec::new());
+    assert!(!t.said.iter().any(|s| s.starts_with(REFUSED)), "{:?}", t.said);
 }
 
 /// The Emacs-like keys that move the caret on a Mac are keys that move it: an edit waits behind them.
 #[test]
 fn an_edit_behind_ctrl_e_keeps_a_windows_line_end_whole() {
     let (ctrl, none) = (egui::Modifiers::CTRL, egui::Modifiers::NONE);
+    // Only on a Mac do they move it, whatever this test runs on.
+    let on_a_mac = |events: Vec<egui::Event>| {
+        let mut t = Typing::new("a;\r\nb;");
+        t.ctx.set_os(egui::os::OperatingSystem::Mac);
+        t.select(0..0);
+        t.frame(events);
+        t.settle();
+        t.text
+    };
     let ctrl_e = press(egui::Key::E, ctrl);
-    assert_eq!(after_one_frame("a;\r\nb;", 0, vec![ctrl_e.clone(), press(egui::Key::Delete, none)]), "a;b;");
-    assert_eq!(after_one_frame("a;\r\nb;", 0, vec![ctrl_e.clone(), press(egui::Key::K, ctrl)]), "a;b;");
-    assert_eq!(after_one_frame("a;\r\nb;", 0, vec![ctrl_e, press(egui::Key::Backspace, none)]), "a\r\nb;");
-    assert_eq!(after_one_frame("a;\r\nb;", 0, vec![press(egui::Key::N, ctrl), press(egui::Key::Delete, none)]), "a;\r\n;");
+    assert_eq!(on_a_mac(vec![ctrl_e.clone(), press(egui::Key::Delete, none)]), "a;b;");
+    assert_eq!(on_a_mac(vec![ctrl_e.clone(), press(egui::Key::K, ctrl)]), "a;b;");
+    assert_eq!(on_a_mac(vec![ctrl_e, press(egui::Key::Backspace, none)]), "a\r\nb;");
+    assert_eq!(on_a_mac(vec![press(egui::Key::N, ctrl), press(egui::Key::Delete, none)]), "a;\r\n;");
 }
 
 /// In a string or template, white space is what it holds: Enter adds a bare line end, and a typed `}`
@@ -1178,16 +1288,14 @@ fn enter_and_a_brace_leave_a_string_or_template_as_typed() {
     assert_eq!(typed("  x = `a${b", enter), "  x = `a${b\n  ");
 }
 
-/// A `}` lines up however it arrives: behind AltGr, reported as Ctrl and Alt, or from an input method.
+/// A `}` lines up behind AltGr, reported as Ctrl and Alt. Those with a key that deletes aren't AltGr:
+/// lining the `}` up first would have it deleted, so it goes in behind the delete.
 #[test]
-fn a_brace_by_alt_gr_or_an_input_method_lines_up() {
+fn a_brace_by_alt_gr_lines_up() {
     let alt_gr = egui::Modifiers { alt: true, ctrl: true, shift: false, mac_cmd: false, command: true };
-    for events in [vec![press(egui::Key::Num0, alt_gr), egui::Event::Text("}".into())], vec![egui::Event::Ime(egui::ImeEvent::Commit("}".into()))]] {
-        let script = "if (a) {\n    ";
-        let mut t = Typing::new(script);
-        t.select(script.chars().count()..script.chars().count());
-        t.frame(events);
-        t.settle();
-        assert_eq!(t.text, "if (a) {\n  }");
-    }
+    let brace = egui::Event::Text("}".into());
+    let script = "if (a) {\n    ";
+    let at_end = script.chars().count();
+    assert_eq!(after_one_frame(script, at_end, vec![press(egui::Key::Num0, alt_gr), brace.clone()]), "if (a) {\n  }");
+    assert_eq!(after_one_frame(script, at_end, vec![press(egui::Key::Backspace, alt_gr), brace]), "if (a) {\n}");
 }
