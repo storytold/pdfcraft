@@ -527,7 +527,18 @@ fn trailer_file_identifier_is_checked_and_added() {
         let saved = Document::open(std::sync::Arc::new(saved)).unwrap();
         assert!(verify(&saved, Level::A2b).iter().all(|i| i.clause != "6.1.3"), "{extra}");
     }
-    // A good one is kept.
+    // A good one is kept as it is.
     let mut doc = build(&objs, "/ID [<0011> <0022>]");
+    let before = doc.trailer().get(b"ID").cloned();
     assert!(!convert(&mut doc, Level::A2b).unwrap().fixed.iter().any(|f| f.contains("identifier")));
+    assert_eq!(doc.trailer().get(b"ID").cloned(), before);
+    // A malformed one keeps its non-empty first string, the permanent identifier (14.4).
+    let first = |doc: &Document| doc.trailer().get(b"ID").and_then(|id| id.as_array()?.first()?.as_string().map(|s| s.bytes.clone()));
+    let mut doc = build(&objs, "/ID [<0011> <>]");
+    convert(&mut doc, Level::A2b).unwrap();
+    assert_eq!(first(&doc), Some(vec![0x00, 0x11]));
+    assert!(verify(&doc, Level::A2b).iter().all(|i| i.clause != "6.1.3"));
+    let mut doc = build(&objs, "/ID [<> <0011>]");
+    convert(&mut doc, Level::A2b).unwrap();
+    assert_eq!(first(&doc).map(|b| b.len()), Some(16));
 }

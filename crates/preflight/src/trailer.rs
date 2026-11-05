@@ -27,10 +27,21 @@ pub(crate) fn check(doc: &Document) -> Option<IdProblem> {
     }
 }
 
-/// Gives `doc` a new file identifier when it lacks a good one; what it fixed, if anything.
+/// Gives `doc` a file identifier when it lacks a good one; what it fixed, if anything. A
+/// non-empty first string, the permanent identifier (ISO 32000-1 14.4), is kept, and only the
+/// second is made afresh.
 pub(crate) fn fix(doc: &mut Document) -> Option<String> {
     check(doc)?;
-    let id = pdfcraft_cos::new_file_id(doc.bytes(), 0);
-    doc.trailer_mut().set(b"ID".to_vec(), id);
+    let Object::Array(mut id) = pdfcraft_cos::new_file_id(doc.bytes(), 0) else { return None };
+    let permanent = doc
+        .trailer()
+        .get(b"ID")
+        .map(|old| doc.resolve(old))
+        .and_then(|old| old.as_array().and_then(|parts| parts.first().map(|p| doc.resolve(p))))
+        .filter(|first| first.as_string().is_some_and(|s| !s.bytes.is_empty()));
+    if let (Some(permanent), Some(slot)) = (permanent, id.first_mut()) {
+        *slot = (*permanent).clone();
+    }
+    doc.trailer_mut().set(b"ID".to_vec(), Object::Array(id));
     Some("Added a file identifier (ID)".into())
 }
