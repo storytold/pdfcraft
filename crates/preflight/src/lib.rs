@@ -126,8 +126,12 @@ pub const WORDINGS: &[&str] = &[
     "A graphics state has a transfer function (TR2) other than Default",
     "A graphics state has a halftone phase (HTP)",
     "A halftone has type {}: only types 1 and 5 are allowed",
+    "A halftone has no HalftoneType",
     "A halftone has a HalftoneName",
+    "A halftone has a transfer function, which only a non-primary colorant's halftone may have",
+    "The halftone for the colorant {} has no transfer function",
     "A graphics state has the rendering intent {}, which isn't a standard one",
+    "A graphics state has a rendering intent that isn't a name",
     "The form asks viewers to make appearances (NeedAppearances)",
     // Pages, actions, annotations and fields.
     "Page {} has additional actions",
@@ -536,11 +540,23 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     for kind in gs.halftone_types {
         issue("6.2.5", "A halftone has type {}: only types 1 and 5 are allowed", Some(kind.to_string()), None, false);
     }
+    if gs.untyped {
+        issue("6.2.5", "A halftone has no HalftoneType", None, None, false);
+    }
     if gs.halftone_name {
         issue("6.2.5", "A halftone has a HalftoneName", None, None, false);
     }
+    if gs.halftone_transfer {
+        issue("6.2.5", "A halftone has a transfer function, which only a non-primary colorant's halftone may have", None, None, false);
+    }
+    for colorant in gs.missing_transfer {
+        issue("6.2.5", "The halftone for the colorant {} has no transfer function", Some(colorant), None, false);
+    }
     for intent in gs.intents {
         issue("6.2.5", "A graphics state has the rendering intent {}, which isn't a standard one", Some(intent), None, false);
+    }
+    if gs.intent_not_name {
+        issue("6.2.5", "A graphics state has a rendering intent that isn't a name", None, None, false);
     }
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
     let mut seen = std::collections::HashSet::new();

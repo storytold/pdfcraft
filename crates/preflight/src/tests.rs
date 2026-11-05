@@ -507,7 +507,8 @@ fn extended_graphics_states_are_checked() {
             ],
             "",
         );
-        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.5").map(|i| i.message).collect()
+        let issues = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.5");
+        issues.inspect(|i| assert!(!i.fixable, "{}", i.message)).map(|i| i.message).collect()
     };
     let tr = "A graphics state has a transfer function (TR)";
     let tr2 = "A graphics state has a transfer function (TR2) other than Default";
@@ -533,6 +534,21 @@ fn extended_graphics_states_are_checked() {
     assert_eq!(gs("/A << /HT << /HalftoneType 5 /Default << /HalftoneType 1 /HalftoneName (S) >> >> >>"), [name]);
     // Rendering intents.
     assert_eq!(gs("/A << /RI /Custom >>"), ["A graphics state has the rendering intent Custom, which isn't a standard one"]);
+    assert_eq!(gs("/A << /RI (Perceptual) >>"), ["A graphics state has a rendering intent that isn't a name"]);
+    // A halftone's type is required; a null name is no name.
+    assert_eq!(gs("/A << /HT << /Frequency 60 >> >>"), ["A halftone has no HalftoneType"]);
+    assert!(gs("/A << /HT << /HalftoneType 1 /HalftoneName null >> >>").is_empty());
+    // Transfer functions in halftones: only, and always, for a non-primary colorant.
+    let in_halftone = "A halftone has a transfer function, which only a non-primary colorant's halftone may have";
+    assert_eq!(gs("/A << /HT << /HalftoneType 1 /TransferFunction 4 0 R >> >>"), [in_halftone]);
+    assert_eq!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Cyan << /HalftoneType 1 /TransferFunction /Identity >> >> >>"), [in_halftone]);
+    assert_eq!(
+        gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Spot 5 0 R /Red 5 0 R >> >>"),
+        ["The halftone for the colorant Red has no transfer function", "The halftone for the colorant Spot has no transfer function"]
+    );
+    assert!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Black 5 0 R /Spot << /HalftoneType 1 /TransferFunction 4 0 R >> >> >>").is_empty());
+    // Private application data isn't graphics resources.
+    assert!(gs("/A << /RI /Perceptual >> >> /PieceInfo << /App << /Private << /ExtGState << /X << /TR 4 0 R >> >> >> >> >>").is_empty());
     // A shading pattern holds one graphics state, not a dictionary of them.
     let pattern = |gs: &str| format!("/A << /RI /Perceptual >> >> /Pattern << /P << /PatternType 2 /Shading << /ShadingType 2 >> /ExtGState {gs} >>");
     assert_eq!(gs(&pattern("<< /TR 4 0 R >>")), [tr]);
