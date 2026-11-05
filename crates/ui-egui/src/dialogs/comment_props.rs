@@ -113,8 +113,9 @@ impl PdfCraftApp {
                 self.fill_text_color = color;
             }
             let width = p.width.and_then(crate::fill_sign::valid_text_border).unwrap_or(0.0);
-            self.fill_text_default = crate::fill_sign::TextBorder { width, color: p.border_color };
-            (self.fill_text_border, self.fill_text_border_color) = (width, p.border_color);
+            let border = crate::fill_sign::TextBorder { width, color: p.border_color, shape: drawn_border_shape(p).unwrap_or_default() };
+            self.fill_text_default = border;
+            (self.fill_text_border, self.fill_text_border_color, self.fill_text_border_shape) = (border.width, border.color, border.shape);
             self.notify_fmt("New {tool} comments will look like this one", &[("tool", &kind)]);
             return;
         }
@@ -129,6 +130,9 @@ impl PdfCraftApp {
         self.comment_prefs.set_style(tool, style);
         // A text box's or callout's own border colour (cleared for tools that have none).
         self.comment_prefs.set_border_color(tool, p.border_color);
+        if let Some(shape) = drawn_border_shape(p) {
+            self.comment_prefs.set_border_shape(tool, shape);
+        }
         // The fill's and text's own opacities where they show (else the opacity is the whole
         // comment's). With neither a border nor a fill the text is the whole comment: its drawn
         // opacity, which Comment Properties shows, is the whole comment's default.
@@ -182,6 +186,12 @@ impl PdfCraftApp {
         self.comment_props = Some(PropsDraft { page, index, tab: PropsTab::Appearance, original: p.clone(), edited: p, make_default: false, others });
         self.dialog = Some(crate::Dialog::CommentProps);
     }
+}
+
+/// The border shape `p` draws: a Thickness of 0 takes an oval or a circle away with the line, as
+/// the toolbar's Border ▸ None does.
+fn drawn_border_shape(p: &CommentProps) -> Option<pdfcraft_engine::BorderShape> {
+    p.border_shape.map(|s| if p.width.is_some_and(|w| w <= 0.0) { pdfcraft_engine::BorderShape::Rectangle } else { s })
 }
 
 /// Which of the comment's parts show an opacity of their own: (its fill, its text). A text box's
@@ -270,6 +280,19 @@ fn changes(o: &CommentProps, e: &CommentProps, page: usize, index: usize, t: &Co
     if t.restylable && t.font_size.is_some() && e.border_color != o.border_color {
         out.push(Edit::BorderColorAnnotation { page, index, color: e.border_color });
     }
+    // After the width (StyleAnnotation), whose border the shape goes around: each selected
+    // text keeps its own shape unless the draft's changed, and loses it with its border.
+    let mut shaped = after;
+    if e.border_shape != o.border_shape {
+        shaped.border_shape = e.border_shape;
+    }
+    if t.restylable
+        && t.border_shape.is_some()
+        && (e.border_shape != o.border_shape || width.is_some())
+        && let Some(shape) = drawn_border_shape(&shaped).filter(|s| Some(*s) != t.border_shape)
+    {
+        out.push(Edit::BorderShapeAnnotation { page, index, shape });
+    }
     let author = (e.author != o.author).then(|| e.author.clone());
     let subject = (e.subject != o.subject).then(|| e.subject.clone());
     let icon = (e.icon != o.icon).then_some(e.icon).flatten().filter(|_| t.icon.is_some());
@@ -349,6 +372,20 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                                 e.border_color = c;
                             }
                         });
+                        ui.end_row();
+                    }
+                    // Text boxes and typewriter text: an oval or a circle goes around the text.
+                    if let Some(shape) = e.border_shape.as_mut() {
+                        let label = ui.label(tl!("Border shape"));
+                        craft_ui::ComboBox::from_id_salt("border-shape")
+                            .selected_text(tl!(shape.name()))
+                            .show_ui(ui, |ui| {
+                                for s in pdfcraft_engine::BorderShape::ALL {
+                                    ui.selectable_value(shape, s, tl!(s.name()));
+                                }
+                            })
+                            .response
+                            .labelled_by(label.id);
                         ui.end_row();
                     }
                     if e.fillable {
