@@ -238,10 +238,17 @@ fn value_for(f: &FormField, v: &Value) -> Result<FieldValue> {
         // button, not the second one's state. A value matching neither is refused when written,
         // with the options listed.
         (FormFieldKind::Radio, Value::String(s)) => FieldValue::Radio(Some(f.state_for_export(s).unwrap_or(s).to_owned())),
-        // A number is the same option written without quotes (`1` for the export value `1`).
+        // A number is the same option written without quotes (`1` for the export value `1`). It
+        // is compared as a number with the export values first, so `1.0` names the button
+        // exported as `1.0` (`/Opt [(1.0) (2.0)]`, states `/0 /1`) and not the one whose state is
+        // `/1`; then as text, as a string would be.
         (FormFieldKind::Radio, Value::Number(n)) => {
-            let s = number_option(n);
-            FieldValue::Radio(Some(f.state_for_export(&s).map_or_else(|| s.clone(), str::to_owned)))
+            if let Some(state) = n.as_f64().and_then(|x| f.state_for_number(x)) {
+                FieldValue::Radio(Some(state.to_owned()))
+            } else {
+                let s = number_option(n);
+                FieldValue::Radio(Some(f.state_for_export(&s).map_or_else(|| s.clone(), str::to_owned)))
+            }
         }
         (FormFieldKind::Combo | FormFieldKind::List, Value::Array(a)) => FieldValue::Choice(
             a.iter().map(|x| x.as_str().map(str::to_owned).ok_or_else(|| wrong("list values must be strings"))).collect::<Result<_>>()?,

@@ -2770,6 +2770,44 @@ fn form_fill_reads_a_radio_number_by_its_integer_spelling() {
     }
 }
 
+/// Export values written as decimals (`/Opt [(1.0) (2.0)]`, states `/0 /1`): a number is compared
+/// with them as a number first, so `1`, `1.0` and `1e0` all pick the first button and `2.0` the
+/// second, where `1.0` had become `"1"`, matched no export value and picked the button whose state
+/// is `/1`. A string is still matched as written, and a number no export value equals is refused.
+#[test]
+fn form_fill_matches_a_radio_number_to_decimal_export_values() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>",
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>",
+        "<< /FT /Btn /T (rate) /Ff 49152 /Opt [(1.0) (2.0)] /V /Off /Kids [6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [10 250 22 262] /P 3 0 R /AP << /N << /0 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [40 250 52 262] /P 3 0 R /AP << /N << /1 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Length 0 >>
+stream
+
+endstream",
+    ];
+    let dir = workdir("radio-decimal-exports");
+    std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let fill = |lit: &str| -> Value { serde_json::from_str(&format!(r#"{{"doc": {doc}, "values": {{"rate": {lit}}}}}"#)).unwrap() };
+    let on = |a: &Automation| -> Vec<usize> {
+        let f = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().form[0].clone();
+        f.widgets.iter().enumerate().filter(|(_, w)| w.state.as_deref().is_some_and(|s| s != "Off")).map(|(i, _)| i).collect()
+    };
+    for (lit, button) in [("1.0", 0), ("2.0", 1), ("1", 0), ("2", 1), ("1e0", 0), ("\"1.0\"", 0), ("\"2.0\"", 1)] {
+        // From the other button, so a fill that does nothing would show.
+        ok(&mut a, "form_fill", fill(if button == 0 { "2.0" } else { "1.0" }));
+        ok(&mut a, "form_fill", fill(lit));
+        assert_eq!(on(&a), [button], "{lit} selects button {}", button + 1);
+    }
+    let e = err(&mut a, "form_fill", fill("3")).to_string();
+    assert!(e.contains("has no option"), "{e}");
+}
+
 /// A form whose fields are only page widgets (the `/Fields` list is empty) still lists, fills and
 /// resets through the tools, and the leniency shows up as a repair note.
 #[test]

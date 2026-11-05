@@ -229,6 +229,19 @@ impl Field {
         by_export.or_else(|| self.state_for(value))
     }
 
+    /// The on-state name of the button whose export value is the number `value` (`/Opt [(1.0)
+    /// (2.0)]`: `1` and `1.0` both name the first button), compared as numbers, so the spelling a
+    /// caller writes a number in doesn't matter. `None` when no export value is that number, or
+    /// the field has no `/Opt`.
+    pub fn state_for_number(&self, value: f64) -> Option<&str> {
+        if !value.is_finite() {
+            return None;
+        }
+        let exports = self.button_exports()?;
+        let i = exports.iter().position(|(e, _)| e.trim().parse::<f64>().is_ok_and(|x| x == value))?;
+        self.widgets.get(i)?.on_state.as_deref()
+    }
+
     /// The export value for an on-state name such as the field's value; the name itself when the
     /// field has no `/Opt`.
     pub fn export_for_state<'a>(&'a self, state: &'a str) -> &'a str {
