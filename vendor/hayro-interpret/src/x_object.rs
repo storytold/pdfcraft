@@ -634,7 +634,37 @@ impl<'a> ImageXObject<'a> {
                 None
             },
             preview: cache.preview,
+            shrunk_to: None,
         })
+    }
+
+    /// PdfCraft patch (77): this soft mask (or `/Mask` image) for an image drawn at
+    /// `target_dimension` device pixels. A mask more than [`SOFT_MASK_SHRINK_FACTOR`] times larger
+    /// than that on a side is averaged down to it, and the result is cached at that size: drawn
+    /// through a form many times (a 2 × 2 image whose mask is 34,862 × 4,332, drawn 40 times on
+    /// one slide, pdf.js `issue16263.pdf`), it was decoded, copied and drawn at full size each
+    /// time, about 3.6 s apiece, and the page took minutes. Any other mask decodes as before.
+    pub(crate) fn decoded_soft_mask(&self, target_dimension: Option<(u32, u32)>) -> Option<DecodedMask> {
+        let shrink_to = target_dimension.filter(|&(tw, th)| {
+            tw > 0
+                && th > 0
+                && (u64::from(self.width) > u64::from(tw) * SOFT_MASK_SHRINK_FACTOR
+                    || u64::from(self.height) > u64::from(th) * SOFT_MASK_SHRINK_FACTOR)
+        });
+        let Some((tw, th)) = shrink_to else {
+            return self.decoded_mask(target_dimension);
+        };
+        // Averaged down only on the sides that are larger than where they are drawn.
+        let to = (tw.min(self.width).max(1), th.min(self.height).max(1));
+        let shrink = || {
+            let full = decode_mask(self, target_dimension)?;
+            Some(DecodedMask { luma: shrink_luma(full.luma, to)? })
+        };
+        let Some(cache) = &self.decoded_cache else {
+            return shrink();
+        };
+        let key = self.decode_key(cache, true, target_dimension).map(|key| DecodedImageKey { shrunk_to: Some(to), ..key });
+        cache.get_or_insert_with(key, MAX_DECODED_IMAGE_BYTES, decoded_mask_size, shrink)
     }
 
     /// PdfCraft patch (32): whether decoding this image depends on the size it is drawn at.
@@ -671,6 +701,38 @@ impl<'a> ImageXObject<'a> {
 /// PdfCraft patch: budget for [`DecodedImageCache`] entries per interpreter cache: decoded
 /// image pixels shared across tiles and scales. Past it the cache starts a fresh epoch.
 const MAX_DECODED_IMAGE_BYTES: usize = 64 << 20;
+
+/// PdfCraft patch (77): how many times larger than where it is drawn, on a side, a soft mask must be
+/// before it is averaged down to that size (`ImageXObject::decoded_soft_mask`). Below it the mask
+/// keeps its own resolution, which the renderer filters as it draws.
+const SOFT_MASK_SHRINK_FACTOR: u64 = 2;
+
+/// PdfCraft patch (77): `luma` averaged down to `to` (no larger than it on either side): each
+/// target sample is the mean of the source samples whose centres fall in it.
+fn shrink_luma(luma: LumaData, to: (u32, u32)) -> Option<LumaData> {
+    let (sw, sh) = (luma.width as usize, luma.height as usize);
+    let (tw, th) = (to.0 as usize, to.1 as usize);
+    if sw == 0 || sh == 0 || tw == 0 || th == 0 || luma.data.len() != sw.checked_mul(sh)? {
+        return None;
+    }
+    let mut sums = vec![0u64; tw.checked_mul(th)?];
+    let mut counts = vec![0u32; tw.checked_mul(th)?];
+    // Which target column each source column falls in, worked out once.
+    let column: Vec<usize> = (0..sw).map(|x| (x * tw / sw).min(tw - 1)).collect();
+    for (y, row) in luma.data.chunks_exact(sw).enumerate() {
+        let ty = (y * th / sh).min(th - 1);
+        let base = ty * tw;
+        for (&v, &tx) in row.iter().zip(&column) {
+            let i = base + tx;
+            if let (Some(sum), Some(count)) = (sums.get_mut(i), counts.get_mut(i)) {
+                *sum += u64::from(v);
+                *count += 1;
+            }
+        }
+    }
+    let data = sums.iter().zip(&counts).map(|(&sum, &count)| if count == 0 { 0 } else { (sum / u64::from(count)) as u8 }).collect();
+    Some(LumaData { data, width: to.0, height: to.1, ..luma })
+}
 
 /// PdfCraft patch: pixel bytes held by a decoded mask.
 fn decoded_mask_size(mask: &DecodedMask) -> usize {
@@ -1127,7 +1189,8 @@ fn resolve_alpha(
     {
         let obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
 
-        decode_mask(&obj, target_dimension).map(|decoded| decoded.luma)
+        // PdfCraft patch (77): averaged down when far larger than where it is drawn, and cached.
+        obj.decoded_soft_mask(target_dimension).map(|decoded| decoded.luma)
     } else if let Some(color_key_mask) = dict.get::<SmallVec<[u16; 4]>>(MASK) {
         let mut mask_data = vec![];
 
