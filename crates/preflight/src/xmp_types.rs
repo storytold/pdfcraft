@@ -588,10 +588,9 @@ const SCHEMAS: &[Schema] = &[
     Schema { uri: "http://ns.adobe.com/exif/1.0/aux/", prefix: "aux", properties: &[("Lens", Text), ("SerialNumber", Text)] },
 ];
 
-/// The properties of predefined schemas whose values don't have their type, in every metadata
-/// stream among the indirect objects `objs` (ISO 32000-1 14.3.2), as `prefix:name` in name order.
-pub(crate) fn mistyped_in(objs: &[(ObjRef, std::sync::Arc<Object>)]) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
+/// Calls `f` with every metadata stream among the indirect objects `objs` (ISO 32000-1 14.3.2) that
+/// parses as XML, each decoded once within one allowance.
+pub(crate) fn for_each_packet(objs: &[(ObjRef, std::sync::Arc<Object>)], mut f: impl FnMut(&roxmltree::Document<'_>)) {
     let mut budget = DecodeBudget::new(MAX_METADATA_BYTES, 0);
     for (_, o) in objs {
         let Object::Stream(s) = &**o else { continue };
@@ -604,10 +603,9 @@ pub(crate) fn mistyped_in(objs: &[(ObjRef, std::sync::Arc<Object>)]) -> BTreeSet
         let Ok(bytes) = budget.decode_within(s, crate::xmp::MAX_XMP_BYTES) else { continue };
         let text = unicode(&bytes);
         if let Some(parsed) = crate::xmp::parse(&text) {
-            out.extend(mistyped(&parsed));
+            f(&parsed);
         }
     }
-    out
 }
 
 /// A packet's text in the Unicode encoding its byte order mark gives: UTF-16 big- or

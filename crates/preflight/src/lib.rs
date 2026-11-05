@@ -23,6 +23,7 @@
 
 pub mod icc;
 mod xmp;
+mod xmp_extension;
 mod xmp_types;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
@@ -115,6 +116,8 @@ pub const WORDINGS: &[&str] = &[
     "The metadata doesn't identify the file as {}",
     "The title in the metadata and the document information differ",
     "The XMP property {} doesn't have the value type the XMP Specification gives it",
+    "An XMP extension schema description has no {} entry",
+    "An XMP extension schema description writes the {} namespace with another prefix",
     // The document as a whole.
     "The document is encrypted",
     "Device colour is used, but there is no PDF/A output intent",
@@ -462,9 +465,21 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     // 6.2.2: output intent when device colour is used.
     let objs = objects(doc);
-    // 6.6.2.3.1: the value types of predefined XMP properties, in every metadata stream.
-    for name in xmp_types::mistyped_in(&objs) {
+    // 6.6.2.3.1 and 6.6.2.3.3: predefined XMP value types and extension schema descriptions, in
+    // every metadata stream.
+    let (mut mistyped, mut extension) = (std::collections::BTreeSet::new(), xmp_extension::Findings::default());
+    xmp_types::for_each_packet(&objs, |packet| {
+        mistyped.extend(xmp_types::mistyped(packet));
+        extension.add(packet);
+    });
+    for name in mistyped {
         issue("6.6.2.3.1", "The XMP property {} doesn't have the value type the XMP Specification gives it", Some(name), None, false);
+    }
+    for entry in extension.missing {
+        issue("6.6.2.3.3", "An XMP extension schema description has no {} entry", Some(entry), None, false);
+    }
+    for prefix in extension.prefixes {
+        issue("6.6.2.3.3", "An XMP extension schema description writes the {} namespace with another prefix", Some(prefix.to_owned()), None, false);
     }
     let used = uses_device_colour(doc, &objs);
     match pdfa_intent_profile(doc) {
