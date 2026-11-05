@@ -1528,8 +1528,15 @@ fn text_typed_on_a_signed_document_is_added_once_after_the_question() {
     // Fill & Sign's type box.
     let mut h = harness_bytes(signed);
     h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
-    h.state_mut().views[0].fill_text =
-        Some(pdfcraft_ui_egui::fill_sign::TypeBox { page: 0, at: [40.0, 100.0], text: "Ada".into(), size: 10.0, color: [0.0; 3], focus: false });
+    h.state_mut().views[0].fill_text = Some(pdfcraft_ui_egui::fill_sign::TypeBox {
+        page: 0,
+        at: [40.0, 100.0],
+        text: "Ada".into(),
+        size: 10.0,
+        color: [0.0; 3],
+        border: pdfcraft_ui_egui::fill_sign::TextBorder::NONE,
+        focus: false,
+    });
     assert!(!h.state_mut().save_active(pdfcraft_ui_egui::SaveTarget::InPlace), "waits for the answer");
     assert!(h.state().views[0].fill_text.is_none(), "the question holds the text, not the box");
     h.run_steps(2);
