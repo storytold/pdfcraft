@@ -181,6 +181,13 @@ pub fn tools() -> Vec<ToolDef> {
                 "hide_text_block": { "type": "integer", "minimum": 1, "description": "Render an inline editor background without this paragraph (number from text_paragraphs, resolved as text_edit does: refused once an edit merged that paragraph into a neighbour). Does not modify the document." },
                 "hide_added_text": { "type": "integer", "minimum": 1, "description": "Render a retyping background without this added text item (added index from object_list). Mutually exclusive with hide_text_block. Does not modify the document." }
             }), &["doc", "page"])),
+        t("model_render", "Render a 3D model", "Draw a page's 3D model (a 3D annotation's PRC stream) to a PNG, framed to fill the image, with headlight shading on a white background. model is its 1-based position among the page's 3D models (default 1). direction is the view direction [x, y, z] from the eye towards the model (default [-1, 1, -1]); Z is up unless the view looks along Z. perspective defaults to true. U3D models can't be drawn yet and give an error. Does not modify the document.")
+            .ro()
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "model": { "type": "integer", "minimum": 1 },
+                "width": { "type": "integer", "minimum": 1, "maximum": 4096 }, "height": { "type": "integer", "minimum": 1, "maximum": 4096 },
+                "direction": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                "perspective": { "type": "boolean" }
+            }), &["doc", "page"])),
         t("object_list", "List editable objects", "List existing paragraphs, Image/Form artwork and added content once, with source kind/index references, displayed rectangles and document generation. Indexes change when content changes; use generation in object_move to reject stale references.")
             .ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1}}), &["doc","page"])),
         t("object_move", "Move objects together", "Atomically translate 1–1000 mixed references from object_list by [dx, dy] in displayed points (right/down). Preserves glyph codes, fonts, image data and relative spacing; success is one undo step. Text used as a clipping path and vertical text are refused. A bad/stale reference refuses the entire move.")
@@ -232,6 +239,18 @@ pub fn tools() -> Vec<ToolDef> {
                     "mode": { "type": "string", "enum": ["original", "colour", "greyscale", "bw"] },
                 }),
                 &["doc", "page"],
+            )),
+        t("page_enhance_scan", "Enhance scanned file", "Clean up scanned pages in place (Scan & OCR ▸ Enhance ▸ Scanned document). A page is a scan when its pictures cover at least half of it; the pictures covering at least a tenth of it are cleaned and written back into the same image objects at the same size and colour space (a JPEG stays a JPEG at quality 90, other grey/RGB images are stored losslessly, a 1-bit image stays 1-bit), so the page's invisible OCR text, comments, links and other content stay as they were, and an image drawn on several pages is cleaned once. level (0–100, default 50) is background removal: the paper's illumination is evened out so a grey, yellowed or unevenly lit background turns white, then the contrast is raised so faint strokes darken; colour ink stays colour. edge_shadows (default: on unless level is 0) lightens shadows along the scan's edges (book gutters, a copier's dark border). despeckle (default: from level 60) turns isolated dark specks white; it is the only change a 1-bit scan takes. Returns pages_cleaned (1-based), images (rewritten), not_scanned (pages that are no scan) and skipped ([{pages, name, reason}]: CMYK, indexed, JPEG 2000, JBIG2 or CCITT images, a scan drawn inside grouped Form artwork, broken data, or nothing to change). One undoable step; none when nothing changed.")
+            .cmd("ocr.enhance")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "pages": pages("to clean up (default: all)"),
+                    "level": { "type": "integer", "minimum": 0, "maximum": 100 },
+                    "edge_shadows": { "type": "boolean" },
+                    "despeckle": { "type": "boolean" },
+                }),
+                &["doc"],
             )),
         t("page_delete", "Delete pages", "Delete pages. Undoable until saved.")
             .destructive()
@@ -842,6 +861,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
                 "width": { "type": "number", "minimum": 0, "description": "Line width in points." },
                 "endings": { "type": "array", "items": { "type": "string", "enum": ["None", "Square", "Circle", "Diamond", "OpenArrow", "ClosedArrow", "Butt", "ROpenArrow", "RClosedArrow", "Slash"] }, "minItems": 1, "maxItems": 2, "description": "Line endings. Two names (start, end) for a line, arrow or polyline; one name for a callout." },
+                "ortho": { "type": "boolean", "description": "line/arrow/polygon/cloud/polyline: hold each end or corner level or plumb with the one before, whichever is nearer (Shift while drawing)." },
                 "font_size": { "type": "number", "exclusiveMinimum": 0 },
             }),
             &["doc", "page", "type"],
