@@ -52,6 +52,32 @@ fn image_import_dialog_chooses_dpi_and_cancels() {
     assert_eq!(h.state().session.docs().len(), 2);
 }
 
+/// #6327: Create PDF from images puts the picked images in file-name order, numbers by value,
+/// whatever order the picker hands them back in, which had reversed the pages.
+#[test]
+fn create_from_images_orders_the_picked_images_by_name() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-create-images-order-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let picked = ["scan10.png", "Scan2.png", "cover.png", "scan1.png"];
+    for name in picked {
+        std::fs::write(dir.join(name), png()).unwrap();
+    }
+    let paths: Vec<String> = picked.iter().map(|n| dir.join(n).to_string_lossy().into_owned()).collect();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 720.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.pick_override = Some(paths);
+        app
+    });
+    assert!(h.state_mut().execute("create.images"));
+    h.run_steps(2);
+    let import = h.state().image_import.as_ref().expect("the images wait for the DPI chooser");
+    let names: Vec<&str> = import.images.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["cover.png", "scan1.png", "Scan2.png", "scan10.png"]);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn opening_images_and_text_converts_them_to_new_pdfs() {
     let mut app = PdfCraftApp::new();
