@@ -414,17 +414,14 @@ pub(crate) fn unlink_pruned_patterns(doc: &mut Document, pruned: &[ObjRef]) -> R
     let mut seen = HashSet::new();
     let mut consistent = true;
     let mut stack: Vec<(ObjRef, Option<ObjRef>, Option<usize>)> = vec![(top, None, None)];
+    seen.insert(top);
     while let Some((node, parent, mut holder)) = stack.pop() {
-        if !seen.insert(node) || seen.len() > 1_000_000 {
-            continue;
-        }
         let obj = doc.get(node);
         let Some(d) = obj.as_dict() else { continue };
         // Every node's /Parent must be the node /Kids reached it from, and the root has none.
         // A node reached only through a /Parent link is then impossible here; when the links
-        // disagree, the guard inspects every node they reach instead.
-        // A /Parent that is not a reference (a direct dictionary, written inline by a full save)
-        // is never the node /Kids came from.
+        // disagree, the guard inspects every node they reach instead. A /Parent that is not a
+        // reference (a direct dictionary, written inline by a full save) never agrees.
         let agrees = match d.get(b"Parent") {
             None => parent.is_none(),
             Some(Object::Ref(r)) => Some(*r) == parent,
@@ -432,6 +429,7 @@ pub(crate) fn unlink_pruned_patterns(doc: &mut Document, pruned: &[ObjRef]) -> R
         };
         if !agrees {
             consistent = false;
+            break;
         }
         if d.contains(b"Resources") {
             holders.push((node, false));
@@ -439,8 +437,20 @@ pub(crate) fn unlink_pruned_patterns(doc: &mut Document, pruned: &[ObjRef]) -> R
         }
         let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
         if is_pages {
-            let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-            stack.extend(kids.iter().filter_map(Object::as_ref).map(|k| (k, Some(node), holder)));
+            // Borrowed, not copied: a /Kids array can be shared by many hostile nodes.
+            let kids_object = d.get(b"Kids").map(|k| doc.resolve(k));
+            for kid in kids_object.as_deref().and_then(Object::as_array).into_iter().flatten().filter_map(Object::as_ref) {
+                // A node reached twice (a shared /Kids entry or a cycle) has a /Parent that agrees
+                // with at most one of the nodes above it.
+                if !seen.insert(kid) || seen.len() > 1_000_000 {
+                    consistent = false;
+                    break;
+                }
+                stack.push((kid, Some(node), holder));
+            }
+            if !consistent {
+                break;
+            }
         } else if let Some(h) = holder.and_then(|i| holders.get_mut(i)) {
             h.1 = true;
         }

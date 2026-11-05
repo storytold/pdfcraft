@@ -374,48 +374,66 @@ fn tree_holders(doc: &Document) -> Result<Vec<Object>, PatternProblem> {
     // full save, so it is a node like any other: its resources, `/Parent` and `/Kids` count.
     let mut holders = Vec::new();
     let mut seen = HashSet::new();
+    seen.insert(top);
     let mut stack = vec![top];
     let mut inline: Vec<Dict> = Vec::new();
-    loop {
-        let (dict, is_page) = if let Some(node) = stack.pop() {
-            if !seen.insert(node) {
-                continue;
+    // One node: queue what it links to that was not seen yet (so a /Kids array shared by many
+    // nodes costs its length once per node, never a copy), and keep its resources.
+    let mut visit =
+        |dict: &Dict, is_page: bool, stack: &mut Vec<ObjRef>, inline: &mut Vec<Dict>, holders: &mut Vec<Object>| -> Result<(), PatternProblem> {
+            match dict.get(b"Parent") {
+                Some(Object::Ref(parent)) => {
+                    if seen.insert(*parent) {
+                        stack.push(*parent);
+                    }
+                }
+                Some(Object::Dict(parent)) => {
+                    if inline.len() >= MAX_DEPTH {
+                        return Err(PatternProblem::Limit);
+                    }
+                    inline.push(parent.clone());
+                }
+                _ => {}
+            }
+            if let Some(resources) = dict.get(b"Resources")
+                && !is_page
+            {
+                holders.push(resources.clone());
+                if holders.len() > MAX_OBJECTS {
+                    return Err(PatternProblem::Limit);
+                }
+            }
+            let is_pages = dict.name(b"Type") == Some(b"Pages") || (dict.contains(b"Kids") && dict.name(b"Type") != Some(b"Page"));
+            if is_pages {
+                let kids_object = match dict.get(b"Kids") {
+                    Some(Object::Ref(reference)) => Some(doc.try_get(reference.num).map_err(|_| PatternProblem::Unreadable)?),
+                    _ => None,
+                };
+                let kids = match &kids_object {
+                    Some(object) => object.as_array(),
+                    None => dict.get(b"Kids").and_then(Object::as_array),
+                };
+                for kid in kids.into_iter().flatten().filter_map(Object::as_ref) {
+                    if seen.insert(kid) {
+                        stack.push(kid);
+                    }
+                }
             }
             if seen.len() > MAX_TREE_NODES {
                 return Err(PatternProblem::Limit);
             }
+            Ok(())
+        };
+    loop {
+        if let Some(node) = stack.pop() {
             let object = doc.try_get(node.num).map_err(|_| PatternProblem::Unreadable)?;
-            let Some(dict) = object.as_dict() else { continue };
-            (dict.clone(), pages.contains(&node))
+            if let Some(dict) = object.as_dict() {
+                visit(dict, pages.contains(&node), &mut stack, &mut inline, &mut holders)?;
+            }
         } else if let Some(dict) = inline.pop() {
-            (dict, false)
+            visit(&dict, false, &mut stack, &mut inline, &mut holders)?;
         } else {
             break;
-        };
-        match dict.get(b"Parent") {
-            Some(Object::Ref(parent)) => stack.push(*parent),
-            Some(Object::Dict(parent)) => {
-                if inline.len() >= MAX_DEPTH {
-                    return Err(PatternProblem::Limit);
-                }
-                inline.push(parent.clone());
-            }
-            _ => {}
-        }
-        if let Some(resources) = dict.get(b"Resources")
-            && !is_page
-        {
-            holders.push(resources.clone());
-            if holders.len() > MAX_OBJECTS {
-                return Err(PatternProblem::Limit);
-            }
-        }
-        let is_pages = dict.name(b"Type") == Some(b"Pages") || (dict.contains(b"Kids") && dict.name(b"Type") != Some(b"Page"));
-        if is_pages {
-            let kids = resolved(doc, dict.get(b"Kids"))?;
-            if let Some(kids) = kids.as_array() {
-                stack.extend(kids.iter().filter_map(Object::as_ref));
-            }
         }
     }
     Ok(holders)
