@@ -88,6 +88,7 @@ impl Session {
         }
         doc.dirty = false;
         doc.generation += 1;
+        doc.saves += 1;
         Self::refresh(doc).inspect_err(|_| Self::show_released(doc))
     }
 
@@ -329,6 +330,10 @@ impl Session {
     pub fn mark_signed(&mut self, id: DocId, bytes: Arc<Vec<u8>>, path: Option<String>) -> Result<(), EditError> {
         self.mark_saved(id, bytes, path)?;
         let doc = self.doc_mut(id)?;
+        // Unlike a plain save, signing changes what any later edit means (it would come after
+        // the signature), so work begun before it must not be applied: move the content
+        // generation too.
+        doc.generation += 1;
         if let Some(e) = doc.editor.as_mut() {
             e.undo.clear();
             e.redo.clear();

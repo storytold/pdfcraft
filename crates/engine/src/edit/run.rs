@@ -143,6 +143,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::MarkTagArtifact { .. }
         | Edit::AddOcrText { .. }
         | Edit::EnhanceScan { .. }
+        | Edit::DownsampleImages { .. }
         | Edit::SetDocumentScript { .. }
         | Edit::SetFieldScript { .. }
         | Edit::RemoveStandardId { .. }
@@ -193,6 +194,8 @@ pub(crate) struct EditCtx {
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
+    /// What [`Edit::DownsampleImages`] did, added up over a batch.
+    pub(crate) scan_images: Option<pdfcraft_optimize::ScanImages>,
 }
 
 impl EditCtx {
@@ -222,6 +225,7 @@ impl EditCtx {
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
+            scan_images: None,
         }
     }
 
@@ -721,6 +725,30 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::stamp(doc, *page, "OCR", pdfcraft_ocr::text_layer(words))?;
         }
         Edit::EnhanceScan { images } => crate::scan_clean::write_back(doc, images)?,
+        Edit::DownsampleImages { pages, ppi } => {
+            // The optimizer quietly does nothing at such a resolution; as an edit it would leave
+            // an undo step and a dirty document that changed nothing.
+            if !ppi.is_finite() || *ppi <= 0.0 {
+                return Err(EditError::Invalid(format!("the resolution must be a positive number of pixels per inch, not {ppi}")));
+            }
+            let all = pdfcraft_annot::page_refs(doc).map_err(|e| EditError::Invalid(e.to_string()))?;
+            let mut refs = Vec::with_capacity(pages.len());
+            for p in pages {
+                refs.push(*all.get(*p).ok_or_else(|| EditError::Invalid(format!("there is no page {}", p.saturating_add(1))))?);
+            }
+            let r = pdfcraft_optimize::downsample_page_images(doc, &refs, *ppi).map_err(|e| EditError::Invalid(e.to_string()))?;
+            // The file gets smaller only when the old images leave it: an incremental update
+            // would keep them in the earlier revision.
+            if r.resampled > 0 {
+                doc.require_full_save();
+            }
+            let total = cx.scan_images.get_or_insert_with(Default::default);
+            total.images += r.images;
+            total.resampled += r.resampled;
+            total.bytes_before = total.bytes_before.saturating_add(r.bytes_before);
+            total.bytes_after = total.bytes_after.saturating_add(r.bytes_after);
+            total.skipped.extend(r.skipped);
+        }
         Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
         Edit::EditTextBlock { page, block, text, style } => {

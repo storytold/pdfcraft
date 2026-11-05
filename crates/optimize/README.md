@@ -118,6 +118,14 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
     1,000 scanned pages' worth, plus more for each byte of the file, enough to decode a stream
     about 8 times at Flate's best. Images past it stay as they are, and `Report::images_refused`
     counts those the image step read. Streams it only stores with Flate (below) aren't counted.
+- **Scan images for OCR** (`downsample_page_images`, Recognize Text's Searchable Image output):
+  the images drawn on given pages whose effective resolution (smallest over every use in the
+  document) is more than 5% above a target are resampled down to it in place, keeping their
+  kind: same object, colour space, decode array and masks (soft and stencil masks are mapped to
+  the unit square, so they still fit); JPEG stays JPEG, other 8-bit grey/RGB becomes Flate, 1-bit
+  images and image masks stay 1-bit and lossless (averaged, thresholded at half). Anything else
+  (CMYK, indexed, other bit depths, JPEG 2000, JBIG2, CCITT, colour-key masks, `/Matte` soft
+  masks) is left alone and reported with why.
 - **Discard objects:** thumbnails, alternate images, document tags, print settings.
 - **Clean up:** Flate for streams with no filter; for streams with an outer ASCII85 or ASCIIHex
   layer, that layer is removed when the result is smaller (the inner filters keep their encoded
