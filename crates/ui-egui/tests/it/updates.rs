@@ -129,16 +129,33 @@ fn run_until_asked(h: &mut Harness<'static, PdfCraftApp>, calls: &std::sync::ato
     }
 }
 
+/// Whether this executable uses the internal-build startup policy.
+fn labelled_build() -> bool {
+    pdfcraft_engine::build_info::LABEL.is_some_and(|s| !s.trim().is_empty())
+}
+
+/// An offered dialog proves the worker result was consumed, unlike a source-call counter.
+fn wait_for_offer(h: &mut Harness<'static, PdfCraftApp>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while h.query_by_label_contains("is available").is_none() {
+        h.run_steps(2);
+        assert!(std::time::Instant::now() < deadline, "timed out waiting for the update offer");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// The preference and compiled policy both prevent automatic calls; manual checks still work.
 #[test]
 fn the_preference_keeps_the_check_at_start_from_reaching_the_network() {
     use std::sync::atomic::Ordering::SeqCst;
     assert!(PdfCraftApp::new().update_check_at_start, "on by default");
 
-    // The same start with the preference left on does ask, so a count of none below means
-    // the preference held the check back and not that it hadn't run yet.
+    // Ordinary builds ask with the preference on; labelled builds suppress startup checks.
     let (mut h, calls) = started_with("{}");
-    run_until_asked(&mut h, &calls, std::time::Duration::from_secs(30));
-    assert_eq!(calls.load(SeqCst), 1, "on, the app asks at start");
+    let automatic = usize::from(!labelled_build());
+    let wait = if automatic == 1 { std::time::Duration::from_secs(30) } else { std::time::Duration::from_millis(500) };
+    run_until_asked(&mut h, &calls, wait);
+    assert_eq!(calls.load(SeqCst), automatic, "startup obeys the compiled policy");
 
     let (mut h, calls) = started_with(r#"{"update_check_at_start": false}"#);
     run_until_asked(&mut h, &calls, std::time::Duration::from_millis(500));
@@ -187,6 +204,7 @@ fn settings_from_the_old_opt_in_leave_the_check_at_start_on() {
     assert!(app.update_check_at_start, "a key of the removed option decides nothing");
 }
 
+/// Ordinary startup offers a release; labelled builds offer it only through the manual command.
 #[test]
 fn the_check_at_start_offers_the_prompt_and_later_dismisses_it() {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
@@ -196,46 +214,55 @@ fn the_check_at_start_offers_the_prompt_and_later_dismisses_it() {
         app.set_startup_update_check(true);
         app
     });
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while h.query_by_label_contains("is available").is_none() {
-        h.run_steps(2);
-        assert!(std::time::Instant::now() < deadline, "timed out waiting for the startup prompt");
-        std::thread::sleep(std::time::Duration::from_millis(5));
+    if labelled_build() {
+        h.run_steps(20);
+        assert!(h.query_by_label_contains("is available").is_none(), "labelled builds never offer at startup");
+        h.state_mut().execute("help.check_updates");
     }
+    wait_for_offer(&mut h);
     h.get_by_label("LATER").click();
     h.run_steps(3);
     assert!(h.query_by_label_contains("is available").is_none(), "Later closes the prompt");
 }
 
+/// Complete a deliberately held startup request before requiring a fresh manual request.
 #[test]
 fn compiled_build_policy_keeps_manual_checks_available() {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    let labelled = labelled_build();
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = calls.clone();
+    let (release_startup, startup_ready) = std::sync::mpsc::channel::<()>();
+    let startup_ready = Arc::new(std::sync::Mutex::new(startup_ready));
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         let calls = observed.clone();
+        let startup_ready = startup_ready.clone();
         app.set_update_source(Arc::new(move || {
-            calls.fetch_add(1, Ordering::SeqCst);
-            Ok(None)
+            let call = calls.fetch_add(1, Ordering::SeqCst);
+            if !labelled && call == 0 {
+                startup_ready.lock().unwrap().recv_timeout(std::time::Duration::from_secs(30)).map_err(|e| e.to_string())?;
+                Ok(Some(release("v99.0.0")))
+            } else {
+                Ok(None)
+            }
         }));
         app.set_startup_update_check(true);
         app
     });
-    let labelled = pdfcraft_engine::build_info::LABEL.is_some_and(|s| !s.trim().is_empty());
     for _ in 0..20 {
         h.run_steps(2);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    let automatic = if labelled { 0 } else { 1 };
+    let automatic = usize::from(!labelled);
     if !labelled {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while calls.load(Ordering::SeqCst) == 0 {
-            h.run_steps(2);
-            assert!(std::time::Instant::now() < deadline, "timed out waiting for the ordinary startup check");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        run_until_asked(&mut h, &calls, std::time::Duration::from_secs(30));
+        assert!(h.query_by_label_contains("is available").is_none(), "the source started but has not returned");
+        release_startup.send(()).unwrap();
+        wait_for_offer(&mut h);
+        h.get_by_label("LATER").click();
+        h.run_steps(3);
     }
     assert_eq!(calls.load(Ordering::SeqCst), automatic, "compiled labels suppress startup network requests");
     h.state_mut().execute("help.check_updates");
