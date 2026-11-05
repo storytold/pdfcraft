@@ -42,11 +42,13 @@ only `.pdf` inputs are processed. Unsupported extensions are reported as skipped
   remaining files continue. Earlier successful outputs stay, and unprocessed
   files are listed as skipped. A file is published only after all its steps succeed.
 
-Existing output names are never replaced, even by concurrent batch writers:
+For `batch`, existing output names are never replaced, even by concurrent batch writers:
 `book.pdf`, `book (2).pdf`, and so on. A temporary file in the destination folder
 is published without overwriting. Sources are never moved or deleted. An output
 folder inside an input folder is excluded from discovery, including on reruns.
 The output folder cannot equal or contain a selected input folder.
+
+The Action Wizard (`action_run`) and folder OCR (`ocr_recognize_files`) do not give this guarantee yet.
 
 The report contains `completed`, `failed`, `skipped`, `stopped` and `files`.
 Each file records its status, output and step results, or the error/skip reason.
