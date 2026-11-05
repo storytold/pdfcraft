@@ -457,9 +457,12 @@ fn the_tabs_of_field_properties_stay_put() {
         h.get_by_label("General").rect().top()
     };
     let tallest = tabs_at(&mut h, T::Actions);
+    let ok = h.get_by_label("OK").rect().top();
     for tab in [T::General, T::Position, T::Format, T::Validate, T::Calculate] {
         let y = tabs_at(&mut h, tab);
         assert!((y - tallest).abs() < 1.0, "{tab:?}: the tabs moved from {tallest} to {y}");
+        let y = h.get_by_label("OK").rect().top();
+        assert!((y - ok).abs() < 1.0, "{tab:?}: OK moved from {ok} to {y}");
     }
     // In a window too short for the tallest tab they move no more than its room for the box does.
     let mut h = sized(egui::vec2(1200.0, 600.0));

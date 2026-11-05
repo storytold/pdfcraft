@@ -650,6 +650,17 @@ fn copy_takes_no_half_of_a_windows_line_end() {
     t.select(3..3);
     t.frame(vec![egui::Event::Copy]);
     assert_eq!(t.copied, Vec::<String>::new());
+    // A browser sends Cmd+C itself ahead of its Copy, and other shortcuts can come first. Select All
+    // changes what there is to copy, so it goes through the box.
+    let cmd = egui::Modifiers::COMMAND;
+    for shortcut in [egui::Key::C, egui::Key::S] {
+        t.select(0..3);
+        t.frame(vec![press(shortcut, cmd), egui::Event::Copy]);
+        assert_eq!(t.copied, ["ab"], "{shortcut:?}");
+    }
+    t.select(0..3);
+    t.frame(vec![press(egui::Key::A, cmd), egui::Event::Copy]);
+    assert_eq!(t.copied, ["ab\r\nc"]);
 }
 
 /// Undo, copy what it brought back, Redo: on a script of Windows line ends with a selection made by
@@ -1229,6 +1240,60 @@ fn a_shift_tab_with_nothing_to_take_off_leaves_the_redo() {
     t.key(egui::Key::Z, cmd | egui::Modifiers::SHIFT);
     t.settle();
     assert_eq!(t.text, "abc\naxbc");
+}
+
+/// Over a selection that is just what they would type, Enter and Tab leave the same text, and still
+/// move on past it. They did nothing when an unchanged text counted as nothing done.
+#[test]
+fn enter_and_tab_over_what_they_type_move_past_it() {
+    let (enter, tab) = (press(egui::Key::Enter, egui::Modifiers::NONE), press(egui::Key::Tab, egui::Modifiers::NONE));
+    let over = |start: &str, range: Range<usize>, event: egui::Event| {
+        let mut t = Typing::new(start);
+        t.select(range);
+        t.frame(vec![event]);
+        t.settle();
+        (t.text.clone(), t.caret())
+    };
+    assert_eq!(over("a\n\nb", 2..3, enter.clone()), ("a\n\nb".to_owned(), Some(3..3)));
+    assert_eq!(over("a;\r\nb;", 2..4, enter), ("a;\r\nb;".to_owned(), Some(4..4)));
+    assert_eq!(over("  x", 0..2, tab), ("  x".to_owned(), Some(2..2)));
+}
+
+/// The frame stays around the box, which keeps its size, and not around its text, which scrolled the
+/// frame's edges out of sight. It is outlined in the selection's colour while focused.
+#[test]
+fn the_frame_goes_around_the_box_however_long_the_script() {
+    let script = "x;\n".repeat(200);
+    let edges = |t: &mut Typing| {
+        let input = egui::RawInput { time: Some(t.time), ..Default::default() };
+        let text = &mut t.text;
+        let output = t.ctx.run_ui(input, |ui| {
+            script_editor(ui, text, "probe", 6, 400.0, None);
+        });
+        // Each edge, and each fill given as a colour with no width.
+        let rects: Vec<(egui::Rect, Color32)> = output
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Rect(r) if r.stroke.width > 0.0 => Some((r.rect, r.stroke.color)),
+                egui::Shape::Rect(r) if r.fill.a() > 0 => Some((r.rect, r.fill)),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        rects
+    };
+    let mut t = Typing::new(&script);
+    t.frame(Vec::new());
+    let rects = edges(&mut t);
+    let accent = t.ctx.global_style().visuals.selection.stroke.color;
+    assert!(rects.iter().all(|(r, _)| r.height() < 300.0), "nothing outlined as long as the text: {rects:?}");
+    assert!(rects.iter().any(|(r, c)| *c == accent && r.height() > 80.0 && r.width() > 300.0), "the whole box, focused: {rects:?}");
+    let fill = t.ctx.global_style().visuals.text_edit_bg_color();
+    assert!(rects.iter().any(|(r, c)| *c == fill && r.height() > 80.0 && r.width() > 300.0), "filled: {rects:?}");
+    t.ctx.memory_mut(|m| m.surrender_focus(t.id));
+    t.frame(Vec::new());
+    assert!(!edges(&mut t).iter().any(|(r, c)| *c == accent && r.height() > 80.0), "not while unfocused");
 }
 
 /// A box that opens again has nothing to say about what it refused the last time.

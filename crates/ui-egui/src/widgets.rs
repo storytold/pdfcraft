@@ -74,7 +74,8 @@ fn window_room(ui: &egui::Ui) -> f32 {
 }
 
 /// The row of buttons at the bottom of a dialog with tabs. Laid out right to left it takes all the
-/// height left, so the card never shrinks and the tabs above it stay put when a shorter tab is picked.
+/// height left, so the card never shrinks and the tabs above it stay put when a shorter tab is picked,
+/// and the buttons, at the bottom of that height, do too.
 /// So the card says nothing of what the dialog holds, and this tells [`dialog_room`] instead. A card
 /// too tall for the window does shrink, as the row then takes only its own height.
 pub(crate) fn dialog_buttons_keeping_height(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
@@ -83,7 +84,7 @@ pub(crate) fn dialog_buttons_keeping_height(ui: &mut egui::Ui, add: impl FnOnce(
     let frame = ui.ctx().cumulative_frame_nr();
     ui.ctx().data_mut(|d| d.insert_temp(layer.with("held"), (frame, held)));
     let card: Option<Rect> = ui.ctx().data(|d| d.get_temp(layer.with("card")));
-    let layout = egui::Layout::right_to_left(egui::Align::Center);
+    let layout = egui::Layout::right_to_left(egui::Align::Max);
     if card.is_some_and(|c| c.height() > window_room(ui)) {
         // Down to what the window has, and no further: shrunk to what this tab holds, the tabs would move.
         ui.add_space((window_room(ui) - held).max(0.0));

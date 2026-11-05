@@ -211,6 +211,11 @@ fn editor(ui: &mut egui::Ui, text: &mut String, id: egui::Id, rows: usize, width
     let mut viewport = egui::Rect::NOTHING;
     // How tall the box is, whether or not it all shows: partly off the screen, what shows is less.
     let mut height = f32::NAN;
+    // The whole box. The frame goes on this rather than the text box, which is as long as its text
+    // and would scroll its edges out of sight.
+    let mut outer = egui::Rect::NOTHING;
+    let corner = ui.visuals().widgets.inactive.corner_radius;
+    let fill = ui.visuals().text_edit_bg_color();
     egui::Resize::default()
         .id_salt(id.with("size"))
         .resizable([false, true])
@@ -223,6 +228,8 @@ fn editor(ui: &mut egui::Ui, text: &mut String, id: egui::Id, rows: usize, width
         .max_height(max_height)
         .with_stroke(false)
         .show(ui, |ui| {
+            outer = ui.max_rect();
+            ui.painter().rect_filled(outer, corner, fill);
             egui::ScrollArea::vertical().id_salt(id.with("scroll")).auto_shrink([false, false]).show(ui, |ui| {
                 viewport = ui.clip_rect();
                 height = ui.available_height();
@@ -230,7 +237,7 @@ fn editor(ui: &mut egui::Ui, text: &mut String, id: egui::Id, rows: usize, width
                 let mut bounded = Bounded { text: &mut *text, refused: &mut refused, selection: None };
                 let mut edit = crate::widgets::block(&mut bounded)
                     .code_editor()
-                    .margin(margin)
+                    .frame(egui::Frame::NONE.inner_margin(margin))
                     // As tall as the box, set below: its own four rows would scroll a short box for nothing.
                     .desired_rows(1)
                     .desired_width(f32::INFINITY)
@@ -259,6 +266,9 @@ fn editor(ui: &mut egui::Ui, text: &mut String, id: egui::Id, rows: usize, width
         response.mark_changed();
     }
     paint_gutter(ui, &output, text, gutter, &font, viewport);
+    // As a text box's: the selection's colour while focused. Over the text, so nothing scrolls across it.
+    let stroke = if response.has_focus() { ui.visuals().selection.stroke } else { ui.style().interact(&response).bg_stroke };
+    ui.painter().rect_stroke(outer, corner, stroke, egui::StrokeKind::Inside);
 
     // Said until the script changes: an edit the box refused, which would otherwise look like nothing.
     let h = hash(text);
@@ -369,11 +379,12 @@ fn editor_keys(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> Keys {
     } else if edit::in_literal(text, selection.start) {
         None
     } else {
-        edit::close_brace(text, selection, &unit)
+        edit::close_brace(text, selection.clone(), &unit)
     };
     let Some(done) = done else { return keys };
     // A Shift+Tab with nothing to take off: touching the selection would lose the Redo that Undo left.
-    if done.text == *text {
+    // Enter over a selected line end leaves the same text too, but it moves on past it.
+    if done.text == *text && done.selection == selection {
         return keys;
     }
     ui.data_mut(|d| d.insert_temp(indent_id, unit));
@@ -525,8 +536,13 @@ fn off_crlf(text: &str, range: CCursorRange) -> (CCursor, CCursor) {
 /// For a Copy next among this frame's events, with a selection that ends inside a line end: copies it
 /// without half of that line end, as a lone `\r` pasted elsewhere is a line break. It takes the Copy
 /// from the box, and leaves the selection where it is, as moving it would lose the Redo that Undo left.
+/// Next, whatever shortcuts come first that leave the selection alone: a browser sends Cmd+C itself
+/// ahead of its Copy. Select All and keys that delete don't, and what moves the caret waits its turn
+/// ([`hold_until_their_turn`]).
 fn copy_off_crlf(ui: &egui::Ui, id: egui::Id, text: &str) {
-    if !ui.input(|i| matches!(i.events.iter().find(|e| acts_on_text(e)), Some(egui::Event::Copy))) {
+    let leaves_selection =
+        |e: &egui::Event| matches!(e, egui::Event::Key { key, modifiers, .. } if *key != egui::Key::A && !deletes(*key, *modifiers));
+    if !ui.input(|i| matches!(i.events.iter().filter(|e| acts_on_text(e)).find(|e| !leaves_selection(e)), Some(egui::Event::Copy))) {
         return;
     }
     let Some(range) = egui::text_edit::TextEditState::load(ui.ctx(), id).and_then(|s| s.cursor.char_range()) else { return };
