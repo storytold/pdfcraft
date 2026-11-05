@@ -4655,6 +4655,15 @@ wheat"
     let xdp = crate::read_packets(&doc).unwrap().unwrap().xdp;
     assert!(xdp.contains("xmlns:pcxfa1=\"http://www.xfa.org/schema/xfa-data/1.0/\" pcxfa1:dataNode=\"dataGroup\""), "{xdp}");
     assert!(xdp.contains("xmlns:pcxfa=\"urn:taken\" pcxfa:note=\"x\""), "the taken prefix keeps its namespace: {xdp}");
+    // With every candidate prefix taken, no marker can be written: the group keeps its pick
+    // and the skip is reported, rather than emptied into what would load as a data value.
+    let taken: String = (0..16).map(|i| if i == 0 { " xmlns:pcxfa=\"urn:t\"".to_string() } else { format!(" xmlns:pcxfa{i}=\"urn:t\"") }).collect();
+    let crowded =
+        crate::fixtures::static_shell(&format!("<form1><page1><grains xmlns:xfa=\"urn:other\"{taken}><value>rye</value></grains></page1></form1>"));
+    let mut doc = Document::open(Arc::new(crowded)).unwrap();
+    let r = write_data_value(&mut doc, &path, "").unwrap();
+    assert!(!r.written && r.warnings.iter().any(|w| w.contains("structured content")), "{:?}", r.warnings);
+    assert_eq!(crate::script::data_of(&doc).unwrap().value_at(&path).as_deref(), Some("rye"));
     // One `value` whose text holds a line break is one pick, not the two it would join to.
     let one = crate::fixtures::static_shell(
         "<form1><page1><grains><value>one

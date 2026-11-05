@@ -367,7 +367,14 @@ fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Ve
                 }
                 let inner: String = wanted.iter().map(|v| format!("<value>{}</value>", escape(v).0)).collect();
                 // Emptied, the group keeps saying it is one (XFA 3.3 p. 150).
-                let mark = if wanted.is_empty() && !marked_data_group(node) { mark_data_group_edit(src, node) } else { None };
+                let needs_mark = wanted.is_empty() && !marked_data_group(node);
+                let mark = if needs_mark { mark_data_group_edit(src, node) } else { None };
+                if needs_mark && mark.is_none() {
+                    // No marker can be written (no free prefix): emptied, the group would load
+                    // as a data value, so it keeps its picks and the skip is reported.
+                    skipped(warnings, STRUCTURED, &w.som);
+                    continue;
+                }
                 match replace_edit(src, node, &inner) {
                     Some(e) => {
                         edits.extend(mark);
