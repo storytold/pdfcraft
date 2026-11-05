@@ -1,7 +1,7 @@
 # UI and interaction parity
 
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-11-05 · **Change:** minor (vector paths in the Edit tool, align, distribute and arrange page objects from the selection's right-click menu, #1540; commands, tools and the View area recounted 2026-11-05; earlier: column select #740, multi-object move #844, Shift-⌘-G #810 fixed) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (Pages inspector thumbnail size slider and buttons #3808; full screen presents one page at a time #1459; the selected field nudges with the arrow keys in Prepare a form #2608) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-24 · **Change:** minor (→ / ← scroll a page wider than the window before turning it) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft's tools, panels, shortcuts and feel compare with Acrobat Pro's current interface (the
 2023+ "new Acrobat": All tools pane on the left, quick-action toolbar, Home view). Behaviour is
@@ -12,10 +12,10 @@ interface is copied. Gaps ranked in [gaps.md](gaps.md).
 
 ## Measured
 
-- **212 registered commands** (`crates/engine/src/commands.rs`), every one in the menus, the
+- **213 registered commands** (`crates/engine/src/commands.rs`), every one in the menus, the
   command palette and the automation `command_run` tool; menus are generated from the registry
   (`view.menus-from-registry`).
-- **194 automation tools** (`crates/automation/src/tools.rs`), so every UI action can be checked
+- **195 automation tools** (`crates/automation/src/tools.rs`), so every UI action can be checked
   headlessly.
 - **View area of the checklist: 64.7% breadth** (54 shipped, 15 partial of 95). All three counted on
   2026-11-05.
@@ -46,11 +46,12 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Zoom: wheel, pinch, keys, marquee, fit page/width/height/visible | yes | yes | shipped |
 | Fixed zoom percentages match Acrobat's physical size | yes | differ (#739, documented in #736) | gap |
 | Dynamic zoom, loupe, pan-and-zoom window | yes | no | planned |
-| Hand tool, middle-button pan, autoscroll | yes | hand tool; Linux autoscroll | partial |
+| Hand tool, middle-button pan, autoscroll | yes | hand tool; Linux autoscroll; → / ← scroll a page wider than the window before turning it | partial |
 | Text selection, column select | yes, Alt-drag columns | reading-order selection; Alt/Option-drag or Edit ▸ Column select (#740) | shipped |
 | Select and move several objects at once | yes | on one page: Shift/Ctrl/⌘-click and marquee, one undo step (#844), vector paths included (#1540); not across pages, no group resize | partial |
 | Moved comments drawn where they go while dragged | yes | yes: the comment's own pixels follow the pointer, the page shows it where it was until release; stamps and Fill & Sign marks also hide the original | shipped |
 | Object handles: corners keep proportion, edges free | yes | yes for added images and signatures; Shift on a corner keeps the proportions of comments, stamps and form fields (#2199); a selected vector path's corners resize it freely (#1540); no Alt resize from the centre | shipped |
+| Shift while drawing a line | holds it to 45° steps | holds it level or plumb (a CAD drawing's ortho): new lines and arrows, each side of connected lines, polygons and clouds, and a dragged end or corner | shipped |
 | Arrange, align and distribute page objects | yes | fields; in Edit text & images, the selection's right-click menu aligns and distributes any mix of objects and arranges one vector path or image (#1540); text isn't arranged | shipped |
 | Rulers, grids, snap to grid, guides | yes | no | planned |
 | Cursor coordinates, line weights | yes | no | planned |
@@ -84,10 +85,11 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | minor | After merging `upstream/main` at 863af864: automation tools (194) recounted; commands (212) and the View area (64.7%, `cargo xtask parity`) unchanged |
+| 2026-11-05 | minor | After merging `upstream/main` at 863af864 and 983e2f2a: automation tools (195) and commands (213) recounted; the View area (64.7%, `cargo xtask parity`) unchanged |
 | 2026-11-04 | minor | After merging `upstream/main` at 9ce6d89f: commands (212), automation tools (189) and the View area (64.7%, `cargo xtask parity`) recounted |
 | 2026-10-24 | minor | After merging `upstream/main` at d4454108: commands (205), automation tools (184) and the View area (64.2%, unchanged, `cargo xtask parity`) recounted |
 | 2026-10-22 | minor | After merging `upstream/main` at 80b7d215: commands (204), automation tools (180) and the View area (64.2%, `cargo xtask parity`) recounted |
+| 2026-10-24 | minor | → / ← scroll a page wider than the window sideways before turning it, by the current page's or spread's edges in continuous view; ⌘→ / ⌘← turn at once |
 | 2026-10-21 | minor | Pages inspector thumbnail sizing (#3808), separate from page and Organize zoom; view setting retained on reload and exposed through UI control. Not persisted between sessions. |
 | 2026-10-20 | minor | After merging `upstream/main` at 22bedbf2: commands (201), automation tools (176) and the View area (63.2%, `cargo xtask parity`) recounted |
 | 2026-10-15 | minor | A selected field nudges with the arrow keys in Prepare a form: a point, Shift ten points, one undo step per press (#2608) |

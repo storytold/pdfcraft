@@ -1,7 +1,8 @@
 # PdfCraft parity with Adobe Acrobat Pro
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (212 registered commands and 194 automation tools recounted 2026-11-05; vector editing, align, distribute and arrange shipped, #1540; checklist recounted with `cargo xtask parity`, last on 2026-11-05: 61.7% unweighted, ≈ 71% tier-weighted; readiness, scores and hours not re-judged); earlier: web printing shipped, gap 4 closed, scores not re-judged; exclusive image-crop resize follow-up; minor (document-font subset completion, source styles and curved/shared image clips in the contributor fork; closed issues synced, scores not re-judged: #774, #756, #740, #759, #799–#821, #825, #844; earlier: readiness table with hours per audience; full number restated as the standard's additive weighted sum, 47% → 49%; earlier: second look: cross-cutting double count removed, mainstream-practitioner number added, core-workflow gate applied → alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (213 registered commands and 195 automation tools recounted 2026-11-05; vector editing, align, distribute and arrange shipped, #1540; checklist recounted with `cargo xtask parity`, last on 2026-11-05: 61.8% unweighted, ≈ 71% tier-weighted; readiness, scores and hours not re-judged); earlier: web printing shipped, gap 4 closed, scores not re-judged; exclusive image-crop resize follow-up; minor (document-font subset completion, source styles and curved/shared image clips in the contributor fork; closed issues synced, scores not re-judged: #774, #756, #740, #759, #799–#821, #825, #844; earlier: readiness table with hours per audience; full number restated as the standard's additive weighted sum, 47% → 49%; earlier: second look: cross-cutting double count removed, mainstream-practitioner number added, core-workflow gate applied → alpha) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
+> **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > Integration update 2026-10-30: lossless JBIG2 generic and exact-copy symbol coding are included; no lossy substitution. Combined tests passed at bdf5620; the subsequent review fixes require fresh CI.
 
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-26 · **Change:** minor (K Optimize and standards no longer lists monochrome downsampling as missing; scores and estimates unchanged)
@@ -26,7 +27,7 @@ Approved Trust List) are out of scope: 23 such features are tracked as `na` in
 | | Value | Kind |
 |---|---|---|
 | **Feature breadth**, tier-weighted | **≈ 71%** | measured (checklist; weights below) |
-| Feature breadth, unweighted | 61.7% (456 shipped + 109 partial of 827) | measured (`cargo xtask parity`) |
+| Feature breadth, unweighted | 61.8% (457 shipped + 109 partial of 828) | measured (`cargo xtask parity`) |
 | Must-have (P0) features | 94.6% (228 + 21 partial of 252) | measured |
 | Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.3% unweighted: 292 + 45 partial of 497; P0 95.3%) | measured 2026-10-26, not recounted ([split below](#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 50%** (range 45–53%) | estimated (weighted sum over dimensions, [below](#by-dimension)) |
@@ -65,8 +66,8 @@ never been measured side by side with Acrobat, and the first public releases (0.
   `Contents/Frameworks/` (AdobeJP2K, Adobe3D, AdobeCoolType, AdobeLinguistic, the OCR-capable
   `OnDeviceIntelligence_SDK`, …) and the `PDF Optimizer` and `Sequences` (Action Wizard) folders.
   Names and listings only.
-- **Feature breadth from the checklist.** `parity/acrobat-features.toml` tracks 850 Acrobat Pro
-  features (827 in scope). `cargo xtask parity` (in `xtask ci`) rejects any `shipped` claim whose
+- **Feature breadth from the checklist.** `parity/acrobat-features.toml` tracks 851 Acrobat Pro
+  features (828 in scope). `cargo xtask parity` (in `xtask ci`) rejects any `shipped` claim whose
   command, automation tool or cited test does not exist. The numbers here are its report of
   2026-11-05 on the vector-editing work (#1540) merged with `upstream/main` at 863af864 (partial
   counts half). The mainstream and specialist split below is not recounted with it (2026-10-10,
@@ -74,7 +75,7 @@ never been measured side by side with Acrobat, and the first public releases (0.
   written from Acrobat's public documentation, not diffed against a menu dump, so it can miss
   features; that risk is one of the gaps.
 - **Ready for real work by judgement, from evidence:** the code (152k lines of Rust in `crates/`,
-  `apps/` and `xtask` and 1,765 tests on 2026-10-10; 212 registered commands and 194 automation
+  `apps/` and `xtask` and 1,765 tests on 2026-10-10; 213 registered commands and 195 automation
   tools on 2026-11-05); the vendored
   renderer's patch list (`vendor/README.md`); user reports on GitHub (245 open, 107 closed issues on
   2026-10-10); release packaging (`.github/workflows/release.yml`); and knowledge of Acrobat Pro's
@@ -86,7 +87,7 @@ never been measured side by side with Acrobat, and the first public releases (0.
 ### Weights
 
 Feature breadth weights the checklist's tiers by how much Acrobat users rely on them: **P0 50%,
-P1 30%, P2 15%, P3 5%** → 0.50 × 94.6 + 0.30 × 66.7 + 0.15 × 24.8 + 0.05 × 5.6 ≈ **71%**
+P1 30%, P2 15%, P3 5%** → 0.50 × 94.6 + 0.30 × 66.8 + 0.15 × 24.8 + 0.05 × 5.6 ≈ **71%**
 (2026-10-10: 94.2 for P0, 61.0 for P1 and 12.0 for P2, ≈ 67%).
 
 Ready for real work weights the areas by how often an Acrobat Pro user reaches for them (judgement:
@@ -214,19 +215,19 @@ full parity in that area.
 | B View and navigation | 95 | 54 | 15 | 64.7% | 55% | 110–190 | Shell, layouts, zoom, find, panels, tiles, web build, 500-page scrolling. **Pages are drawn by the vendored `hayro`** (22 + 9 local patches): all 7 rendering P0s are partial. Missing: own renderer or a decided replacement (#841), multiple windows, split view, rulers/guides, loupe, reflow, search across files |
 | C Content editing | 63 | 35 | 12 | 65.1% | 30% | 100–180 | Edit existing paragraphs (font reused or Helvetica substituted, rewrapped), added text and images stay editable, header/footer, watermarks, backgrounds, Bates, links. Vector paths selected, moved, resized, recoloured and deleted; page objects aligned, distributed and arranged (#1540). Missing: robust editing of real-world text (subset fonts, CJK, RTL #766, rotated), lists, objects inside Form artwork, rotating and restyling vector paths, arranging text, spell check, multi-select move across pages (same-page shipped, #844) |
 | D Organize pages | 80 | 54 | 6 | 71.2% | 70% | 12–25 | Organize grid, insert/extract/replace/split/combine with links, fields, layers and bookmarks carried over; page labels, boxes, bookmarks from structure. Missing: transitions, attachments editing, portfolios, struct-tree merge, field-name conflicts (destination and annotation fixes #817, #818, #821 shipped) |
-| E Comments and review | 69 | 51 | 9 | 80.4% | 70% | 12–25 | Every markup type with appearances, replies, status, filters, stamps (custom, dynamic), XFDF/FDF, summaries, flatten, 2D measuring. Missing: rich-text runs, popup windows, summary layouts with pages, per-type hiding (XFDF fidelity fixes #807, #809, #819 shipped) |
+| E Comments and review | 70 | 52 | 9 | 80.7% | 70% | 12–25 | Every markup type with appearances, replies, status, filters, stamps (custom, dynamic), XFDF/FDF, summaries, flatten, 2D measuring. Missing: rich-text runs, popup windows, summary layouts with pages, per-type hiding (XFDF fidelity fixes #807, #809, #819 shipped) |
 | F Forms and JavaScript | 79 | 59 | 9 | 80.4% | 65% | 40–75 | Fill and author every AcroForm field type, Acrobat's AF functions in Acrobat's event order, sandboxed JavaScript (boa), data exchange, Fill & Sign; XFA static/dynamic layout, FormCalc and XFA data (partial). CLI info, text and render use the laid-out dynamic pages (#1645). Missing: wider JavaScript object model, document actions, submit, debugger, barcode fields, XFA flattening and full dynamic fidelity |
 | G Protect, redact, sanitize | 42 | 24 | 2 | 59.5% | 55% | 15–30 | Passwords and permissions, Remove security, redaction that removes glyphs, pixels, vectors, annotations and tags, with verification; word lists, patterns, FOIA/Privacy Act codes; sanitize. Missing: certificate security, pattern locales, custom code sets, partial-word redaction, folder redaction, protected view |
 | H Digital signatures | 45 | 23 | 10 | 62.2% | 45% | 40–70 | PAdES B-B signing and validation (PKCS #12, macOS Keychain, Windows store with PIN prompts), certification, encrypted documents, certificate usage checks; B-T, LTV, OCSP/CRL with caller-supplied evidence. Missing: PKCS #11 and smart cards outside Windows, timestamp-server preferences, online revocation fetching, FieldMDP and field locking, OS trust store, EU Trusted Lists, compare signed version |
-| I Scan and OCR | 26 | 5 | 7 | 32.7% | 15% | 40–75 | Searchable image (ocrs, Latin script without accents) on pages, ranges and many files. Missing: every other language (#744 Dutch; accents, CJK, Cyrillic, Arabic), editable-text output, deskew, rotation, despeckle, camera images beyond straightening (found or placed corners): orientation, clean-up, MRC compression, scanners |
+| I Scan and OCR | 26 | 5 | 7 | 32.7% | 15% | 40–75 | Searchable image (ocrs, Latin script without accents) on pages, ranges and many files. Missing: every other language (#744 Dutch; accents, CJK, Cyrillic, Arabic), editable-text output, deskew, rotation, camera images beyond straightening (found or placed corners): orientation, clean-up, MRC compression, scanners. Background removal, edge shadow removal and despeckle work on scanned pages (Enhance scanned file) but not yet as options of Recognize text, nor on CMYK, indexed, JBIG2 or CCITT scans |
 | J Create and export | 35 | 12 | 5 | 41.4% | 25% | 55–100 | Create from images, multipage TIFF, text, clipboard, blank, many files at once; export PNG/JPEG/TIFF, text, RTF; Word and HTML partial. Missing: Office/HTML/web/PostScript to PDF, Excel and PowerPoint export, Word layout fidelity (#773), SVG/XML/EPS/PS/JPEG 2000 export, accessible text |
 | K Optimize and standards | 58 | 17 | 11 | 38.8% | 20% | 65–115 | Reduce File Size and the Optimizer (images, CCITT and lossless JBIG2 monochrome compression, discards, clean-up, space audit); PDF/A-2b/3b verify and convert (partial). Missing: Preflight (profiles, fixups, reports), PDF/A-1/4 and a/u levels, PDF/X, PDF/UA, PDF/E, PDF/VT, transparency flattening, font unembedding, lossy/refinement JBIG2 |
 | L Print | 39 | 17 | 0 | 43.6% | 35% | 30–55 | Acrobat's sizing, n-up, booklet, poster, comments & forms, preview, print-ready PDF, CUPS on macOS/Linux, the Windows spooler (#756) and the browser's print dialog on the web. Missing: print as image, PostScript, all print-production tools (output preview, separations, ink manager, printer marks, colour conversion) |
 | M Accessibility | 61 | 39 | 10 | 72.1% | 30% | 40–70 | Accessibility Checker (all 32 rules, report, fixes), alternate text, title and language. Missing: autotag, Tags/Order/Content panels, Reading Order tool, artifact marking, table editor, Read Out Loud, full keyboard operation of the app, screen-reader audit |
-| N Automation, preferences, misc | 76 | 21 | 11 | 34.9% | 35% | 25–45 | CLI, MCP, UI control channel, 194 automation tools, Action Wizard (run, create), compare (text, visual, report, side by side, Text/Visual filter). Missing: most Preferences pages, Acrobat's finer compare filters, Action Wizard management, custom commands, AI providers, rich media/3D, hosted web app |
-| **All** | **827** | **456** | **109** | **61.7%** | **≈ 49%** | **610–1,100** | Plus 175–325 h of cross-cutting work (dimension table) |
+| N Automation, preferences, misc | 76 | 21 | 11 | 34.9% | 35% | 25–45 | CLI, MCP, UI control channel, 195 automation tools, Action Wizard (run, create), compare (text, visual, report, side by side, Text/Visual filter). Missing: most Preferences pages, Acrobat's finer compare filters, Action Wizard management, custom commands, AI providers, rich media/3D, hosted web app |
+| **All** | **828** | **457** | **109** | **61.8%** | **≈ 49%** | **610–1,100** | Plus 175–325 h of cross-cutting work (dimension table) |
 
-Shipped features rest on thin evidence: 108 of 456 cite exactly one test (counted 2026-11-05), and
+Shipped features rest on thin evidence: 108 of 457 cite exactly one test (counted 2026-11-05), and
 only a handful cite an external oracle (`pdftotext`, `pdfsig`, OpenSSL, `qpdf --check`, a corpus).
 
 The checklist lags reality in two places: `misc.localization` is still `planned` although 15
@@ -306,7 +307,7 @@ licensed OCR or AI model.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | minor | Checklist recounted with `cargo xtask parity` after merging `upstream/main` at 863af864 into the vector-editing work (#1540): 850 features, 827 in scope, 456 shipped + 109 partial = 61.7%, P0 94.6%, P1 66.7%, P2 24.8%, P3 5.6%, tier-weighted ≈ 71%; areas D (80 features, 54 shipped + 6 partial, 71.2%) and N (76, 21 + 11, 34.9%), the one-test count (108 of 456) and automation tools (194; registered commands still 212) updated. The mainstream/specialist split, readiness, scores and hours not re-judged |
+| 2026-11-05 | minor | Checklist recounted with `cargo xtask parity` after merging `upstream/main` at 863af864 and 983e2f2a into the vector-editing work (#1540): 851 features, 828 in scope, 457 shipped + 109 partial = 61.8%, P0 94.6%, P1 66.8%, P2 24.8%, P3 5.6%, tier-weighted ≈ 71%; areas D (80 features, 54 shipped + 6 partial, 71.2%), E (70, 52 + 9, 80.7%) and N (76, 21 + 11, 34.9%), the one-test count (108 of 457), automation tools (195) and registered commands (213) updated. The mainstream/specialist split, readiness, scores and hours not re-judged |
 | 2026-11-04 | minor | Checklist recounted with `cargo xtask parity` after merging `upstream/main` at 9ce6d89f into the vector-editing work (#1540): 847 features, 824 in scope, 455 shipped + 106 partial = 61.7%, P0 94.6%, P1 66.7%, P2 24.2%, P3 3.4%, tier-weighted ≈ 71%; area breadths, the one-test count (111 of 455), registered commands (212) and automation tools (189) updated. The mainstream/specialist split, readiness, scores and hours not re-judged |
 | 2026-10-24 | minor | After merging `upstream/main` at d4454108: registered commands (205, `crates/engine/src/commands.rs`) and automation tools (184, `crates/automation/src/tools.rs`) recounted; the evidence paragraph had still listed the 2026-10-10 counts (184 and 141). Lines of code and tests not recounted |
 | 2026-10-22 | minor | Checklist recounted with `cargo xtask parity` after merging `upstream/main` at 80b7d215 into the vector-editing work (#1540): 840 features, 817 in scope, 444 shipped + 99 partial = 60.4%, P0 94.6%, P1 65.5%, P2 20.1%, tier-weighted ≈ 70%; area breadths, the one-test count (119 of 444) and the automation tool count (180) updated. Readiness, scores and hours not re-judged |
