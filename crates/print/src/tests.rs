@@ -742,6 +742,13 @@ mod cups_options {
             long_queue.as_str(),
             long_queue_instance.as_str(),
             long_instance.as_str(),
+            // A destination cannot be an argument: `lpoptions` would take these as options.
+            "-Office",
+            "-E",
+            "-",
+            "--",
+            "Office/-l",
+            "Office/--",
         ] {
             assert!(
                 spool::printer_options_via_within(destination, &dir, command(&dir, "InputSlot: *Auto"), LIMIT, "en").is_empty(),

@@ -111,10 +111,14 @@ pub(crate) fn printer_options_via_within(
 ) -> Vec<PrinterOption> {
     let (queue, instance) = printer.split_once('/').map_or((printer, None), |(q, i)| (q, Some(i)));
     // Retain the conservative name checks, applied to each component. Neither component is
-    // a path: reject dot components, backslashes and any additional separator before I/O.
+    // a path: reject dot components, backslashes and any additional separator before I/O. A
+    // leading `-` is refused too: `lpoptions` parses its argv with getopt, so `-p -E -l` would
+    // read `-E` as an option rather than as the destination, and `--` cannot help because it
+    // ends option parsing before the `-p` that names the queue.
     let valid = |name: &str| {
         !name.is_empty()
             && name.len() <= 64
+            && !name.starts_with('-')
             && !matches!(name, "." | "..")
             && name.bytes().all(|b| b.is_ascii_graphic() && !matches!(b, b'/' | b'\\' | b':' | b'=' | b'"'))
     };
