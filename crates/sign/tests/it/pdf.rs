@@ -603,6 +603,51 @@ fn tsa_id_with(ekus: &[&str]) -> DigitalId {
     DigitalId { key, certificate, chain: Vec::new(), friendly_name: None }
 }
 
+/// A timestamp authority issued by a root, and that root: the authority's chain holds the
+/// root's cross-signed copy (the root's own name and key, issued by another root), so a trust
+/// store holding only the self-signed root meets the copy, not the root, at the chain's top.
+fn tsa_id_cross_signed() -> (DigitalId, Certificate) {
+    let from = Time { year: 2026, month: 10, day: 2, hour: 0, minute: 0, second: 0 };
+    let until = Time { year: 2036, ..from };
+    let issue = |subject: &Name,
+                 key: &pdfcraft_sign::PrivateKey,
+                 issuer: &Name,
+                 signer: &pdfcraft_sign::PrivateKey,
+                 serial: u8,
+                 extensions: &[&[u8]]|
+     -> Certificate {
+        let alg = signer.preferred_digest();
+        let sig_alg = signer.signature_algorithm(alg);
+        let tbs = der::seq(&[
+            &der::explicit(0, &der::int(2)),
+            &der::uint(&[serial]),
+            &sig_alg,
+            &issuer.raw,
+            &der::seq(&[&from.encode(), &until.encode()]),
+            &subject.raw,
+            &key.public_key().spki(),
+            &der::explicit(3, &der::seq(extensions)),
+        ]);
+        let signature = signer.sign(alg, &tbs).unwrap();
+        Certificate::parse(&der::seq(&[&tbs, &sig_alg, &der::bit_string(&signature)])).unwrap()
+    };
+    // basicConstraints critical, cA — and keyUsage critical, keyCertSign + cRLSign (bits 5, 6).
+    let ca = der::seq(&[&der::oid("2.5.29.19"), &der::boolean(true), &der::octets(&der::seq(&[&der::boolean(true)]))]);
+    let ku = der::seq(&[&der::oid("2.5.29.15"), &der::boolean(true), &der::octets(&der::bit_string(&[0b0000_0110]))]);
+    // The time-stamping extended key usage, critical, as in [`tsa_id_with`].
+    let eku = der::seq(&[&der::oid("2.5.29.37"), &der::boolean(true), &der::octets(&der::seq(&[&der::oid("1.3.6.1.5.5.7.3.8")]))]);
+    let root_key = pdfcraft_sign::PrivateKey::generate_p256().unwrap();
+    let root_name = Name::build("Test Root", "", "PdfCraft Tests", "", "US");
+    let root = Certificate::self_signed(&root_name, &root_key, from, 10, &[0x41]).unwrap();
+    let other_key = pdfcraft_sign::PrivateKey::generate_p256().unwrap();
+    let other_name = Name::build("Other Root", "", "PdfCraft Tests", "", "US");
+    let cross = issue(&root_name, &root_key, &other_name, &other_key, 0x42, &[&ca, &ku]);
+    let tsa_key = pdfcraft_sign::PrivateKey::generate_p256().unwrap();
+    let tsa_name = Name::build("Chained TSA", "", "PdfCraft Tests", "", "US");
+    let tsa = issue(&tsa_name, &tsa_key, &root_name, &root_key, 0x43, &[&eku]);
+    (DigitalId { key: tsa_key, certificate: tsa, chain: vec![cross], friendly_name: None }, root)
+}
+
 impl TimestampAuthority for TestTsa {
     fn timestamp(&self, request: &[u8]) -> Result<Vec<u8>, SignError> {
         let q = pdfcraft_sign::timestamp::parse_request(request)?;
@@ -641,6 +686,25 @@ fn signing_with_a_timestamp_embeds_a_verified_rfc3161_token() {
     let s = signatures(&open(&signed), &signed, &TrustStore::default()).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Unknown);
     assert!(s.timestamp && s.timestamp_time.is_none());
+}
+
+#[test]
+fn a_timestamp_whose_chain_reaches_a_cross_signed_root_is_trusted() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let (tsa_id, root) = tsa_id_cross_signed();
+    let tsa = TestTsa { id: tsa_id, time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let signed = pdfcraft_sign::sign_with_timestamp(&open(&fixture()), &id, &opts(), &tsa).unwrap();
+    let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
+    // The trust store holds the signer's anchor and the TSA's root — not the TSA's certificate,
+    // and not the cross-signed copy the token's chain reaches.
+    let trust = TrustStore { certs: vec![anchor.clone(), root] };
+    let s = signatures(&open(&signed), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert_eq!(s.timestamp_time, Some(tsa.time), "the token's time, trusted through the cross-signed copy: {:?}", s.details);
+    // Without the root in the store, the same token's time is unverified.
+    let s = signatures(&open(&signed), &signed, &TrustStore { certs: vec![anchor] }).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert_eq!(s.timestamp_time, None);
 }
 
 #[test]

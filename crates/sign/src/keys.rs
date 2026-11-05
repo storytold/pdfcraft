@@ -339,6 +339,40 @@ impl PublicKey {
         }
     }
 
+    /// Whether `other` is the same key as this one. An elliptic-curve point has two SEC 1
+    /// encodings, compressed and uncompressed, and a certificate may carry either: a compressed
+    /// point carries the uncompressed form's `x` coordinate plus the parity of `y`, which
+    /// together name the point, so curve points compare by those. RSA and Ed25519 keys have a
+    /// single encoding and compare by value; an encoding of neither form compares by its
+    /// stored bytes.
+    pub fn same_key(&self, other: &PublicKey) -> bool {
+        fn point(a: &[u8], b: &[u8], field: usize) -> bool {
+            fn xy(p: &[u8], field: usize) -> Option<(&[u8], bool)> {
+                match p.first()? {
+                    0x04 if p.len() == 1 + 2 * field => Some((&p[1..1 + field], p[p.len() - 1] & 1 == 1)),
+                    t @ (0x02 | 0x03) if p.len() == 1 + field => Some((&p[1..], *t == 0x03)),
+                    _ => None,
+                }
+            }
+            if a == b {
+                return true;
+            }
+            match (xy(a, field), xy(b, field)) {
+                (Some(x), Some(y)) => x == y,
+                _ => false,
+            }
+        }
+        match (self, other) {
+            (PublicKey::P256(a), PublicKey::P256(b)) => point(a, b, 32),
+            (PublicKey::P384(a), PublicKey::P384(b)) => point(a, b, 48),
+            (PublicKey::P521(a), PublicKey::P521(b)) => point(a, b, 66),
+            (PublicKey::BrainpoolP256(a), PublicKey::BrainpoolP256(b)) => point(a, b, 32),
+            (PublicKey::BrainpoolP384(a), PublicKey::BrainpoolP384(b)) => point(a, b, 48),
+            (PublicKey::BrainpoolP512(a), PublicKey::BrainpoolP512(b)) => point(a, b, 64),
+            _ => self == other,
+        }
+    }
+
     pub fn from_spki(spki: &Tlv<'_>) -> Result<PublicKey, SignError> {
         let parts = spki.children()?;
         let [alg, key] = parts.as_slice() else { return Err(SignError::Malformed("SubjectPublicKeyInfo".into())) };
@@ -761,5 +795,36 @@ impl PrivateKey {
                 Ok(s.to_der().as_bytes().to_vec())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PublicKey;
+    use crate::keys::PrivateKey;
+
+    #[test]
+    fn the_two_sec1_encodings_of_one_point_are_the_same_key() {
+        let key = PrivateKey::generate_p256().unwrap();
+        let public = key.public_key();
+        let PublicKey::P256(point) = &public else { panic!("a P-256 key") };
+        assert_eq!(point.len(), 65, "the stored form is the uncompressed point");
+        assert_eq!(point[0], 0x04);
+        // The compressed encoding of the same point: x alone, under 0x02 or 0x03 by y's parity.
+        let mut compressed = vec![if point[64] & 1 == 1 { 0x03 } else { 0x02 }];
+        compressed.extend_from_slice(&point[1..33]);
+        assert_ne!(compressed, *point, "the encodings really differ");
+        let compressed_key = PublicKey::P256(compressed);
+        assert!(public.same_key(&compressed_key), "uncompressed against compressed");
+        assert!(compressed_key.same_key(public), "compressed against uncompressed");
+        // The same x with the other parity is the point's mirror image, not the key.
+        let mut mirrored = compressed_key.clone();
+        let PublicKey::P256(m) = &mut mirrored else { panic!("a P-256 key") };
+        m[0] = if m[0] == 0x02 { 0x03 } else { 0x02 };
+        assert!(!public.same_key(&mirrored), "the mirror point");
+        let other_key = PrivateKey::generate_p256().unwrap();
+        let other = other_key.public_key();
+        assert!(!public.same_key(other), "another point");
+        assert!(!compressed_key.same_key(other), "another point, compressed");
     }
 }

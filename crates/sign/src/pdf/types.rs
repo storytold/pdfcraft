@@ -12,17 +12,31 @@ impl TrustStore {
     /// so another certificate carrying both is the same anchor: the copy of a root another CA
     /// cross-signed, which a chain built from a document's own certificates may reach first.
     /// Names compare by their DER encoding, as [`build_chain`](crate::x509::build_chain) matches
-    /// issuers to subjects; keys by their parsed value. A certificate with the name and another
-    /// key, or the key and another name, is not the anchor.
+    /// issuers to subjects; keys by the key itself, across a curve point's two encodings
+    /// ([`PublicKey::same_key`](crate::keys::PublicKey::same_key)). A certificate with the name
+    /// and another key, or the key and another name, is not the anchor — and neither is a copy
+    /// whose `pathLenConstraint` allows more CA certificates below it than the trusted
+    /// certificate's does: the restriction the user configured governs, not the copy's.
     pub(super) fn trusts(&self, c: &Certificate) -> bool {
-        self.certs.iter().any(|t| t.subject.raw == c.subject.raw && t.public_key == c.public_key)
+        self.certs.iter().any(|t| t.subject.raw == c.subject.raw && t.public_key.same_key(&c.public_key) && !loosens_path_len(t, c))
+    }
+}
+
+/// Whether `c`'s `pathLenConstraint` allows more CA certificates below it than the trusted
+/// certificate `t`'s does. A copy of the anchor may carry a stricter limit than the anchor,
+/// never a looser one.
+fn loosens_path_len(t: &Certificate, c: &Certificate) -> bool {
+    match (t.path_len, c.path_len) {
+        (Some(limit), Some(n)) => n > limit,
+        (Some(_), None) => true,
+        _ => false,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::TrustStore;
-    use crate::der::Time;
+    use crate::der::{self, Time};
     use crate::keys::PrivateKey;
     use crate::x509::{Certificate, Name};
 
@@ -30,6 +44,32 @@ mod tests {
 
     fn cert(name: &Name, key: &PrivateKey, serial: u8) -> Certificate {
         Certificate::self_signed(name, key, FROM, 20, &[serial]).unwrap()
+    }
+
+    /// A CA certificate for `key` under `name`, self-issued, with a critical basicConstraints
+    /// extension whose `pathLenConstraint` is `path_len` (absent when `None`).
+    fn ca_cert(name: &Name, key: &PrivateKey, serial: u8, path_len: Option<u32>) -> Certificate {
+        let alg = key.preferred_digest();
+        let sig_alg = key.signature_algorithm(alg);
+        let until = Time { year: FROM.year + 20, ..FROM };
+        let mut bc_fields: Vec<Vec<u8>> = vec![der::boolean(true)];
+        if let Some(n) = path_len {
+            bc_fields.push(der::int(u64::from(n)));
+        }
+        let bc_refs: Vec<&[u8]> = bc_fields.iter().map(Vec::as_slice).collect();
+        let bc = der::seq(&[&der::oid("2.5.29.19"), &der::boolean(true), &der::octets(&der::seq(&bc_refs))]);
+        let tbs = der::seq(&[
+            &der::explicit(0, &der::int(2)),
+            &der::uint(&[serial]),
+            &sig_alg,
+            &name.raw,
+            &der::seq(&[&FROM.encode(), &until.encode()]),
+            &name.raw,
+            &key.public_key().spki(),
+            &der::explicit(3, &der::seq(&[&bc])),
+        ]);
+        let signature = key.sign(alg, &tbs).unwrap();
+        Certificate::parse(&der::seq(&[&tbs, &sig_alg, &der::bit_string(&signature)])).unwrap()
     }
 
     #[test]
@@ -49,6 +89,19 @@ mod tests {
         // …and the key under another name is another identity.
         let renamed = cert(&Name::build("Someone Else", "", "Anchor Tests", "", "US"), &key, 1);
         assert!(!trust.trusts(&renamed), "the anchor's key under another name");
+    }
+
+    #[test]
+    fn a_copy_of_the_anchor_may_not_loosen_its_path_length() {
+        let name = Name::build("Trust Anchor", "", "Anchor Tests", "", "US");
+        let key = PrivateKey::generate_p256().unwrap();
+        let trust = TrustStore { certs: vec![ca_cert(&name, &key, 1, Some(0))] };
+        assert!(trust.trusts(&ca_cert(&name, &key, 2, Some(0))), "a copy with the anchor's own limit");
+        assert!(!trust.trusts(&ca_cert(&name, &key, 3, Some(1))), "a copy allowing one more CA below it");
+        assert!(!trust.trusts(&ca_cert(&name, &key, 4, None)), "a copy with no limit at all");
+        // A stricter copy of an unlimited anchor is still the anchor.
+        let trust = TrustStore { certs: vec![ca_cert(&name, &key, 1, None)] };
+        assert!(trust.trusts(&ca_cert(&name, &key, 2, Some(0))), "a stricter copy");
     }
 }
 
