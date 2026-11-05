@@ -57,7 +57,7 @@
 > **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (M4 #2997: Ctrl-drag (Option on macOS) in the Organize grid copies the pages into the drop gap; `page_duplicate` takes `at`; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M6: AcroForm XML text; estimates unchanged)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M2/gap 12: the Annex D.2 alias codes read as the ink they draw in both tables; the text oracle scores reading order; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-11-04 · **Change:** minor (M7 #1540: vector paths selected, moved, resized, recoloured and deleted; page objects aligned, distributed and arranged; checklist recounted with `cargo xtask parity`, last after merging `upstream/main` at 9ce6d89f: ≈ 67% → ≈ 71% tier-weighted; readiness not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-11-05 · **Change:** minor (M7 #1540: vector paths selected, moved, resized, recoloured and deleted; page objects aligned, distributed and arranged; checklist recounted with `cargo xtask parity`, last after merging `upstream/main` at 863af864: ≈ 67% → ≈ 71% tier-weighted; readiness not re-judged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (M14/#2383 GPU-limit candidate; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (M4: indirect page rotations; M13: CLI check visits each directory once through aliases and cycles; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (M6: preserve XML/XFDF attribute whitespace; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -124,7 +124,7 @@ and add a line to the [progress log](#progress-log); when a gap closes, remove i
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **≈ 71%** tier-weighted (61.7% unweighted: 455 shipped + 106 partial of 824; P0 94.6%) | measured, `parity/acrobat-features.toml` (`cargo xtask parity`, 2026-11-04) |
+| **Feature breadth** | **≈ 71%** tier-weighted (61.7% unweighted: 456 shipped + 109 partial of 827; P0 94.6%) | measured, `parity/acrobat-features.toml` (`cargo xtask parity`, 2026-11-05) |
 | Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.3% unweighted; P0 95.3%) | measured 2026-10-26 ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, full Acrobat Pro | **≈ 50%** (45–53%) | estimated, weighted sum over [dimensions](#by-dimension) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (50–60%) | estimated ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
@@ -183,7 +183,7 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 | K Optimize and standards | 38.8% | 20% | 65–115 |
 | L Print | 43.6% | 35% | 30–55 |
 | M Accessibility | 72.1% | 30% | 40–70 |
-| N Automation, preferences, misc | 34.0% | 35% | 25–45 |
+| N Automation, preferences, misc | 34.9% | 35% | 25–45 |
 
 What's strong and missing in each: [target-app-parity.md](docs/target-app-parity.md#by-feature-area).
 
@@ -775,6 +775,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | M7 #1540, merge of `upstream/main` at 863af864: checklist recounted with `cargo xtask parity` (61.7% unweighted: 456 shipped + 109 partial of 827; P0 94.6%; ≈ 71% tier-weighted) and area N updated (34.9%); readiness and hours not re-judged |
 | 2026-11-04 | minor | M7 #1540, merge of `upstream/main` at 9ce6d89f: checklist recounted with `cargo xtask parity` (61.7% unweighted: 455 shipped + 106 partial of 824; P0 94.6%; ≈ 71% tier-weighted) and area breadths updated; readiness and hours not re-judged |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
