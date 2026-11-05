@@ -23,9 +23,11 @@ pub struct RichCopy {
     pub text: ClipText,
     /// The HTML fragment for the clipboard (empty when nothing was selected).
     pub html: String,
-    /// Styles were left out: reading stopped at its limits on this page, or matching glyphs to
-    /// blocks ran out of steps.
+    /// Styles were left out: the document has no editor to read them, reading stopped at its
+    /// limits on this page, or matching glyphs to blocks ran out of steps.
     pub styles_incomplete: bool,
+    /// A cap left part of the selection out of `text` and `html`; the plain text has all of it.
+    pub truncated: bool,
 }
 
 struct StyledBlock {
@@ -44,25 +46,28 @@ impl crate::Document {
     fn rich_copy_within(&self, page: usize, text: &PageText, glyphs: &[usize], mut steps: usize) -> Result<RichCopy, EditError> {
         self.check_copying()?;
         let (blocks, mut incomplete) = self.styled_blocks(page);
+        let mut nested = vec![None; blocks.len()];
         let mut b = ClipBuilder::new();
-        // The previous glyph's line and block, and whether it was a hyphen.
-        let mut prev: Option<(usize, Option<usize>, bool)> = None;
+        // The previous glyph's line, block and box, and whether it was a hyphen.
+        let mut prev: Option<(usize, Option<usize>, [f32; 4], bool)> = None;
         for &i in glyphs {
             let (Some(g), Some(&line)) = (text.glyphs.get(i), text.line_of.get(i)) else { continue };
-            let found = block_at(&blocks, g.rect, prev.and_then(|(_, b, _)| b), &mut steps).unwrap_or_else(|| {
+            let hint = prev.and_then(|(_, b, _, _)| b).filter(|&k| !holds_smaller(&blocks, &mut nested, k, &mut steps));
+            let found = block_at(&blocks, g.rect, hint, &mut steps).unwrap_or_else(|| {
                 incomplete = true;
                 None
             });
             let line = usize::try_from(line).unwrap_or(usize::MAX);
-            if let Some((prev_line, prev_block, hyphen)) = prev {
+            if let Some((prev_line, prev_block, prev_rect, hyphen)) = prev {
                 if line != prev_line {
-                    if found == prev_block && found.is_some() {
+                    let style = |k: Option<usize>| k.and_then(|k| blocks.get(k)).map(|s| &s.style);
+                    if found.is_none() && prev_block.is_none() {
+                        b.line_break();
+                    } else if found == prev_block || wraps(style(prev_block), style(found), prev_rect, g.rect) {
                         // A paragraph wrapping: one space, none after a hyphen.
                         if !hyphen {
                             b.space();
                         }
-                    } else if found.is_none() && prev_block.is_none() {
-                        b.line_break();
                     } else {
                         b.paragraph();
                     }
@@ -74,16 +79,16 @@ impl crate::Document {
             if !b.push(&g.text, style.unwrap_or(&ClipStyle::default())) {
                 break;
             }
-            prev = Some((line, found, g.text.ends_with('-')));
+            prev = Some((line, found, g.rect, g.text.ends_with('-')));
         }
-        let text = b.finish();
-        Ok(RichCopy { html: clip_html(&text), text, styles_incomplete: incomplete })
+        Ok(finish(b, incomplete))
     }
 
     /// `page`'s reading blocks in view space with their style, and whether reading stopped at
     /// its limits.
     fn styled_blocks(&self, page: usize) -> (Vec<StyledBlock>, bool) {
-        let (Some(editor), Some(info)) = (self.editor.as_ref(), self.info.pages.get(page)) else { return (Vec::new(), false) };
+        let Some(info) = self.info.pages.get(page) else { return (Vec::new(), false) };
+        let Some(editor) = self.editor.as_ref() else { return (Vec::new(), true) };
         let Ok(reading) = pdfcraft_edit::reading_blocks_checked(&editor.cos, page) else { return (Vec::new(), true) };
         let unit = display_unit(info);
         let blocks = reading
@@ -93,7 +98,7 @@ impl crate::Document {
             .map(|b| {
                 let (bold, italic) = weight_and_slant(&b.base_font);
                 let style = ClipStyle {
-                    family: pdfcraft_export::font_family(&b.base_font),
+                    families: pdfcraft_export::font_family(&b.base_font),
                     size: b.size * unit,
                     bold: b.bold || bold,
                     italic: b.italic || italic,
@@ -113,8 +118,56 @@ fn view_rect(info: &PageInfo, r: [f64; 4]) -> [f32; 4] {
     [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
 }
 
-/// The block whose box holds the centre of `glyph` (view space): `hint` first, then the
-/// smallest that holds it. Each block tested costs a step; `None` when the steps ran out first.
+/// The copy `b` collected, with its HTML; `truncated` when a cap cut the text or the HTML.
+fn finish(b: ClipBuilder, styles_incomplete: bool) -> RichCopy {
+    let text = b.finish();
+    let (html, cut) = clip_html(&text);
+    RichCopy { html, truncated: text.truncated || cut, text, styles_incomplete }
+}
+
+/// Whether the next line starts inside the same paragraph although its first glyph is in another
+/// block: blocks split where the style changes, so a style change at a line's end is still a
+/// wrap when the size stays and the lines sit no further apart than their own height allows.
+/// Two blocks of the same style, a change of size, or a gap of over half a line are paragraphs.
+fn wraps(prev: Option<&ClipStyle>, next: Option<&ClipStyle>, prev_rect: [f32; 4], rect: [f32; 4]) -> bool {
+    let (Some(prev), Some(next)) = (prev, next) else { return false };
+    if prev == next || (prev.size - next.size).abs() > 0.01 {
+        return false;
+    }
+    let height = (prev_rect[3] - prev_rect[1]).max(rect[3] - rect[1]);
+    let gap = rect[1] - prev_rect[3];
+    height > 0.0 && gap.is_finite() && gap <= height / 2.0
+}
+
+/// Whether a block smaller than block `k` overlaps it, so a glyph inside `k` may belong to that
+/// one instead. Worked out once per block (`nested` keeps it), at a step per block tested; when
+/// the steps run out the answer is yes, so the full search decides.
+fn holds_smaller(blocks: &[StyledBlock], nested: &mut [Option<bool>], k: usize, steps: &mut usize) -> bool {
+    if let Some(Some(known)) = nested.get(k) {
+        return *known;
+    }
+    let Some(outer) = blocks.get(k) else { return true };
+    let area = |r: &[f32; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+    let overlaps = |r: &[f32; 4]| r[0] <= outer.rect[2] && r[2] >= outer.rect[0] && r[1] <= outer.rect[3] && r[3] >= outer.rect[1];
+    let mut found = false;
+    for (j, b) in blocks.iter().enumerate() {
+        if *steps == 0 {
+            return true;
+        }
+        *steps -= 1;
+        if j != k && overlaps(&b.rect) && area(&b.rect) < area(&outer.rect) {
+            found = true;
+            break;
+        }
+    }
+    if let Some(slot) = nested.get_mut(k) {
+        *slot = Some(found);
+    }
+    found
+}
+
+/// The block whose box holds the centre of `glyph` (view space): `hint` first (a block no
+/// smaller one overlaps), then the smallest that holds it. Each block tested costs a step; `None` when the steps ran out first.
 fn block_at(blocks: &[StyledBlock], glyph: [f32; 4], hint: Option<usize>, steps: &mut usize) -> Option<Option<usize>> {
     let (x, y) = ((glyph[0] + glyph[2]) / 2.0, (glyph[1] + glyph[3]) / 2.0);
     let holds = |r: &[f32; 4]| x >= r[0] - SLACK && x <= r[2] + SLACK && y >= r[1] - SLACK && y <= r[3] + SLACK;
@@ -144,6 +197,8 @@ fn block_at(blocks: &[StyledBlock], glyph: [f32; 4], hint: Option<usize>, steps:
 mod tests {
     use std::sync::Arc;
 
+    use pdfcraft_export::{ClipBuilder, ClipStyle};
+
     use crate::Session;
 
     /// A heading in bold, a body paragraph of two lines with HTML-special characters, and a red
@@ -153,6 +208,11 @@ mod tests {
             BT /F2 12 Tf 20 200 Td (Body text) Tj ET \
             BT 1 0 0 rg /F2 12 Tf 90 200 Td (red) Tj ET \
             BT /F2 12 Tf 20 186 Td (a<b & c) Tj ET";
+        page_with(content)
+    }
+
+    /// A one-page PDF drawing `content` with `/F1` Helvetica-Bold and `/F2` Helvetica.
+    fn page_with(content: &[u8]) -> Vec<u8> {
         pdfcraft_testkit::Pdf::new()
             .obj("<< /Type /Catalog /Pages 2 0 R >>")
             .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>")
@@ -226,6 +286,67 @@ mod tests {
         // A page without blocks to match needs no steps.
         let page_less = doc.rich_copy_within(5, &text, &all, 0).unwrap();
         assert!(!page_less.styles_incomplete);
+    }
+
+    fn copy_all(s: &Session, id: crate::DocId) -> super::RichCopy {
+        let text = page_text(s, id);
+        let all: Vec<usize> = (0..text.glyphs.len()).collect();
+        s.get(id).unwrap().rich_copy(0, &text, &all).unwrap()
+    }
+
+    #[test]
+    fn a_style_change_at_a_line_end_stays_in_its_paragraph() {
+        let content = b"BT /F2 12 Tf 20 200 Td (plain then) Tj ET \
+            BT /F1 12 Tf 85 200 Td (bold) Tj ET \
+            BT /F2 12 Tf 20 186 Td (continues here) Tj ET \
+            BT /F2 12 Tf 20 120 Td (Another paragraph) Tj ET";
+        let mut s = Session::new();
+        let id = s.open("wrap.pdf", None, Arc::new(page_with(content)), None).unwrap();
+        let copy = copy_all(&s, id);
+        let text = |p: &Vec<pdfcraft_export::ClipSpan>| p.iter().map(|s| s.text.as_str()).collect::<String>();
+        let paragraphs: Vec<String> = copy.text.paragraphs.iter().map(text).collect();
+        assert!(paragraphs.iter().any(|p| p.contains("bold") && p.contains("continues")), "{paragraphs:?}");
+        assert!(paragraphs.iter().any(|p| p.contains("Another") && !p.contains("continues")), "a wide gap is still a paragraph: {paragraphs:?}");
+    }
+
+    #[test]
+    fn a_styled_word_inside_a_paragraph_keeps_its_style() {
+        let content = b"BT /F2 12 Tf 20 200 Td (first row of the text) Tj ET \
+            BT /F2 12 Tf 20 186 Td (second) Tj ET \
+            BT /F1 12 Tf 62 186 Td (bold) Tj ET \
+            BT /F2 12 Tf 92 186 Td (row) Tj ET";
+        let mut s = Session::new();
+        let id = s.open("nested.pdf", None, Arc::new(page_with(content)), None).unwrap();
+        let copy = copy_all(&s, id);
+        let spans: Vec<_> = copy.text.paragraphs.iter().flatten().collect();
+        assert!(spans.iter().any(|s| s.text.contains("bold") && s.style.bold), "{spans:?}");
+        assert!(spans.iter().any(|s| s.text.contains("second") && !s.style.bold), "{spans:?}");
+    }
+
+    #[test]
+    fn a_capped_copy_is_marked_truncated() {
+        let (plain, bold) = (ClipStyle::default(), ClipStyle { bold: true, ..ClipStyle::default() });
+        let mut b = ClipBuilder::new();
+        for k in 0..=pdfcraft_export::MAX_CLIP_SPANS {
+            b.push("x", if k % 2 == 0 { &plain } else { &bold });
+        }
+        let copy = super::finish(b, false);
+        assert!(copy.truncated && copy.text.truncated);
+        let mut b = ClipBuilder::new();
+        b.push("x", &plain);
+        assert!(!super::finish(b, false).truncated);
+    }
+
+    #[test]
+    fn without_an_editor_the_styles_are_incomplete() {
+        let mut s = Session::new();
+        let id = s.open("styled.pdf", None, Arc::new(styled_page()), None).unwrap();
+        let text = page_text(&s, id);
+        let all: Vec<usize> = (0..text.glyphs.len()).collect();
+        s.doc_mut(id).unwrap().editor = None;
+        let copy = s.get(id).unwrap().rich_copy(0, &text, &all).unwrap();
+        assert!(copy.styles_incomplete && !copy.html.contains("font-size"), "{}", copy.html);
+        assert!(!copy.truncated);
     }
 
     #[test]

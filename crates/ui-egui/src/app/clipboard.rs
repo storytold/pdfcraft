@@ -133,6 +133,8 @@ impl PdfCraftApp {
                 .get(i)
                 .and_then(DocView::selected_glyphs)
                 .and_then(|(page, layer, glyphs)| self.session.get(id)?.rich_copy(page, &layer, &glyphs).ok())
+                // A capped copy would paste less than the plain text holds; paste that instead.
+                .filter(|copy| !copy.truncated)
                 .map(|copy| copy.html)
                 .filter(|html| !html.is_empty())
         } else {

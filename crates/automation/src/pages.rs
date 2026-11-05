@@ -230,14 +230,16 @@ impl Automation {
         };
         let doc = self.doc(a)?;
         let mut out = Vec::with_capacity(pages.len());
-        let (mut html_left, mut html_truncated) = (html_budget, false);
+        // `spent`: the budget ran out, so later pages get no HTML. `cut`: some page's HTML is
+        // missing part of its text, by the budget or by the copy's own caps.
+        let (mut html_left, mut spent, mut cut) = (html_budget, false, false);
         for (&p, t) in pages.iter().zip(texts) {
             let mut page = json!({ "page": p + 1, "text": text(&t) });
             if html {
                 // Copy with formatting: the same glyphs as an HTML fragment, within one budget for
                 // the whole call; a page past it gets none and the call says so.
                 let mut copy = pdfcraft_engine::RichCopy::default();
-                if !html_truncated {
+                if !spent {
                     let glyphs: Vec<usize> = match rect {
                         Some(r) => t.glyphs_in(r),
                         None => (0..t.glyphs.len()).collect(),
@@ -246,19 +248,20 @@ impl Automation {
                     match html_left.checked_sub(copy.html.len()) {
                         Some(left) => html_left = left,
                         None => {
-                            html_truncated = true;
+                            spent = true;
                             copy = pdfcraft_engine::RichCopy::default();
                         }
                     }
                 }
+                cut |= spent || copy.truncated;
                 page["html"] = json!(copy.html);
-                page["styles_incomplete"] = json!(copy.styles_incomplete || html_truncated);
+                page["styles_incomplete"] = json!(copy.styles_incomplete || spent);
             }
             out.push(page);
         }
         let mut result = json!({ "pages": out });
         if html {
-            result["html_truncated"] = json!(html_truncated);
+            result["html_truncated"] = json!(cut);
         }
         Ok(result)
     }

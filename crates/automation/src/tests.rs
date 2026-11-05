@@ -570,4 +570,15 @@ fn text_extract_html_has_one_budget_across_pages() {
     assert_eq!(pages[2]["text"], "Page 3", "the plain text is not capped by the HTML budget");
     // Plain text alone says nothing about HTML.
     assert!(a.text_extract(&Args(&json!({ "doc": id.0 }))).unwrap().get("html_truncated").is_none());
+    // A smaller page after the one that overflowed still gets none: "Page 1" fits what "Page 10"
+    // did not.
+    let id = search_document(&mut a, 10);
+    let args = json!({ "doc": id.0, "pages": [10, 1], "format": "html" });
+    let full = a.text_extract(&Args(&args)).unwrap();
+    let (ten, one) = (full["pages"][0]["html"].as_str().unwrap().len(), full["pages"][1]["html"].as_str().unwrap().len());
+    assert!(one < ten, "{full}");
+    let capped = a.text_extract_within(&Args(&args), ten - 1).unwrap();
+    assert_eq!(capped["pages"][0]["html"], "");
+    assert_eq!(capped["pages"][1]["html"], "", "no HTML after the budget ran out: {capped}");
+    assert_eq!(capped["pages"][1]["styles_incomplete"], true);
 }

@@ -19,8 +19,8 @@ const MAX_FAMILY_CHARS: usize = 64;
 /// How a span looks.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ClipStyle {
-    /// The family a word processor knows ([`font_family`]); `None` keeps the target's own.
-    pub family: Option<String>,
+    /// Family names to try in order ([`font_family`]); empty keeps the target's own.
+    pub families: Vec<String>,
     /// Size in points; zero or not finite leaves the target's size, and any other is written
     /// within 1 to 1000.
     pub size: f64,
@@ -46,7 +46,7 @@ pub struct ClipText {
 
 /// Builds a [`ClipText`] piece by piece, merging pieces of equal style into one span and
 /// stopping at the caps.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ClipBuilder {
     out: ClipText,
     /// The separator owed before the next piece in this paragraph (a space or a line break).
@@ -56,9 +56,15 @@ pub struct ClipBuilder {
     bytes: usize,
 }
 
+impl Default for ClipBuilder {
+    fn default() -> Self {
+        Self { out: ClipText::default(), pending: None, new_paragraph: true, spans: 0, bytes: 0 }
+    }
+}
+
 impl ClipBuilder {
     pub fn new() -> Self {
-        Self { new_paragraph: true, ..Self::default() }
+        Self::default()
     }
 
     /// A word space before the next piece (dropped at the start of a paragraph).
@@ -91,6 +97,11 @@ impl ClipBuilder {
             self.out.truncated = true;
             return false;
         };
+        let new_span = self.new_paragraph || self.out.paragraphs.last().and_then(|p| p.last()).is_none_or(|last| last.style != *style);
+        if new_span && self.spans >= MAX_CLIP_SPANS {
+            self.out.truncated = true;
+            return false;
+        }
         if self.new_paragraph {
             self.out.paragraphs.push(Vec::new());
             self.new_paragraph = false;
@@ -103,10 +114,6 @@ impl ClipBuilder {
                 last.text.push_str(text);
             }
             last => {
-                if self.spans >= MAX_CLIP_SPANS {
-                    self.out.truncated = true;
-                    return false;
-                }
                 // A separator belongs to the span before it, so a new style starts at its text.
                 if let (Some(last), Some(sep)) = (last, sep) {
                     last.text.push(sep);
@@ -124,16 +131,22 @@ impl ClipBuilder {
     }
 }
 
-/// The family a word processor knows, from a font's `/BaseFont`: subset tag and style suffix
-/// removed, `PSMT`/`MT`/`PS` dropped, camel case spaced (`ABCDEF+TimesNewRomanPSMT` →
-/// `Times New Roman`). Only letters, digits, spaces, `-`, `_` and `.` are kept, so the name
-/// cannot leave its CSS string. `None` when nothing is left.
-pub fn font_family(base_font: &str) -> Option<String> {
+/// The family names to try for a font's `/BaseFont`, best first: subset tag and style suffix
+/// removed, `PSMT`/`MT`/`PS` dropped. The first has camel case and hyphens spaced
+/// (`ABCDEF+TimesNewRomanPSMT` → `Times New Roman`, `MS-Gothic` → `MS Gothic`); the second,
+/// when it differs, is the name as spelt (`SimSun`). A hyphen ends the family only before a
+/// style word (`Arial-BoldMT`). Only letters, digits, spaces, `-`, `_` and `.` are kept, so a
+/// name cannot leave its CSS string. Empty when nothing is left.
+pub fn font_family(base_font: &str) -> Vec<String> {
     let name = match base_font.split_once('+') {
         Some((tag, rest)) if tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()) => rest,
         _ => base_font,
     };
-    let family = name.split_once([',', '-']).map_or(name, |(family, _)| family);
+    let name = name.split_once(',').map_or(name, |(family, _)| family);
+    let family = match name.split_once('-') {
+        Some((family, style)) if STYLE_WORDS.iter().any(|w| style.starts_with(w)) => family,
+        _ => name,
+    };
     let family = family.strip_suffix("PSMT").or_else(|| family.strip_suffix("MT")).or_else(|| family.strip_suffix("PS")).unwrap_or(family);
     let mut spaced = String::with_capacity(family.len().min(MAX_FAMILY_CHARS * 2));
     let mut prev_lower = false;
@@ -142,10 +155,23 @@ pub fn font_family(base_font: &str) -> Option<String> {
             spaced.push(' ');
         }
         prev_lower = c.is_ascii_lowercase();
-        spaced.push(c);
+        spaced.push(if c == '-' { ' ' } else { c });
     }
-    safe_family(&spaced)
+    let spelt: String = family.chars().take(MAX_FAMILY_CHARS).collect();
+    let mut out: Vec<String> = Vec::with_capacity(2);
+    for f in [safe_family(&spaced), safe_family(&spelt)].into_iter().flatten() {
+        if !out.contains(&f) {
+            out.push(f);
+        }
+    }
+    out
 }
+
+/// What may follow a hyphen in a `/BaseFont` when the rest names the style, not the family.
+const STYLE_WORDS: &[&str] = &[
+    "Bold", "Italic", "Oblique", "Regular", "Roman", "Light", "Medium", "Semi", "Demi", "Black", "Heavy", "Thin", "Book", "Cond", "Extra", "Ultra",
+    "Narrow", "Plain", "Normal", "It", "Bd", "Lt", "Md", "Blk", "MT", "PS",
+];
 
 /// `family` with only letters, digits, spaces, `-`, `_` and `.`, so it cannot leave a CSS
 /// string; `None` when nothing is left.
@@ -155,47 +181,57 @@ fn safe_family(family: &str) -> Option<String> {
     (!kept.is_empty()).then(|| kept.to_owned())
 }
 
-/// The copied text as an HTML fragment: one `<p>` per paragraph, a `<span>` per run with its
-/// family, size and colour inline, bold as `<strong>` and italic as `<em>` (so a target that
-/// drops style attributes still keeps them). Text is escaped; a line break is `<br>` and a run
-/// of spaces keeps its width. Never longer than [`MAX_CLIP_HTML_BYTES`]: a span that would pass
-/// it ends the fragment.
-pub fn clip_html(text: &ClipText) -> String {
+/// The copied text as an HTML fragment, and whether [`MAX_CLIP_HTML_BYTES`] cut it: one `<p>`
+/// per paragraph, a `<span>` per run with its families, size and colour inline, bold as
+/// `<strong>` and italic as `<em>` (so a target that drops style attributes still keeps them).
+/// Text is escaped; a line break is `<br>`, and a space HTML would collapse (after another
+/// space, at a paragraph's start or after a break, across runs too) is `&nbsp;`. Never longer
+/// than the cap: a paragraph or run that would pass it ends the fragment.
+pub fn clip_html(text: &ClipText) -> (String, bool) {
     const OPEN: &str = "<p style=\"margin:0\">";
     const CLOSE: &str = "</p>\n";
+    let fits = |len: usize, more: usize| len.saturating_add(more).saturating_add(CLOSE.len()) <= MAX_CLIP_HTML_BYTES;
     let mut out = String::new();
     for spans in &text.paragraphs {
+        if !fits(out.len(), OPEN.len()) {
+            return (out, true);
+        }
         let mut p = String::from(OPEN);
+        // A paragraph's first space would collapse.
+        let mut space_before = true;
         for span in spans {
-            let s = span_html(span);
-            if out.len().saturating_add(p.len()).saturating_add(s.len()).saturating_add(CLOSE.len()) > MAX_CLIP_HTML_BYTES {
+            let s = span_html(span, &mut space_before);
+            if !fits(out.len().saturating_add(p.len()), s.len()) {
                 if p.len() > OPEN.len() {
                     out.push_str(&p);
                     out.push_str(CLOSE);
                 }
-                return out;
+                return (out, true);
             }
             p.push_str(&s);
         }
         p.push_str(CLOSE);
         out.push_str(&p);
     }
-    out
+    (out, false)
 }
 
-fn span_html(span: &ClipSpan) -> String {
+/// One run as HTML. `space_before` says whether the text before it ended in a space or a break,
+/// and is left saying so for the next run.
+fn span_html(span: &ClipSpan, space_before: &mut bool) -> String {
     let st = &span.style;
     let mut css = Vec::new();
-    if let Some(f) = st.family.as_deref().and_then(safe_family) {
-        css.push(format!("font-family:'{f}'"));
+    let families: Vec<String> = st.families.iter().filter_map(|f| safe_family(f)).map(|f| format!("'{f}'")).collect();
+    if !families.is_empty() {
+        css.push(format!("font-family:{}", families.join(",")));
     }
-    if st.size.is_finite() && st.size > 0.0 {
+    if st.size.is_finite() && st.size != 0.0 {
         css.push(format!("font-size:{}pt", num(st.size.clamp(*CLIP_SIZE_PT.start(), *CLIP_SIZE_PT.end()))));
     }
     if let Some(h) = hex(st.color) {
         css.push(format!("color:#{h}"));
     }
-    let mut body = text_html(&span.text);
+    let mut body = text_html(&span.text, space_before);
     if st.italic {
         body = format!("<em>{body}</em>");
     }
@@ -205,23 +241,23 @@ fn span_html(span: &ClipSpan) -> String {
     if css.is_empty() { body } else { format!("<span style=\"{}\">{body}</span>", esc(&css.join(";"))) }
 }
 
-/// Escape for HTML text in one pass; `\n` becomes `<br>` and a run of spaces keeps its width
-/// with `&nbsp;`. Dropped: what [`esc`] drops (C0 controls), C1 controls, a carriage return
+/// Escape for HTML text in one pass; `\n` becomes `<br>`, and a space after a space or a break
+/// (`space_before` carries that in and out) is `&nbsp;`, so a run of spaces keeps its width.
+/// Dropped: what [`esc`] drops (C0 controls), C1 controls, a carriage return
 /// and the bidirectional overrides and isolates, which would reorder the pasted text.
-fn text_html(text: &str) -> String {
+fn text_html(text: &str, space_before: &mut bool) -> String {
     let mut out = String::with_capacity(text.len());
-    let mut prev_space = false;
     for c in text.chars().filter(|c| clip_char(*c)) {
         match c {
             '\n' => out.push_str("<br>"),
-            ' ' if prev_space => out.push_str("&nbsp;"),
+            ' ' if *space_before => out.push_str("&nbsp;"),
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             c => out.push(c),
         }
-        prev_space = c == ' ';
+        *space_before = matches!(c, ' ' | '\n');
     }
     out
 }
@@ -242,7 +278,7 @@ mod tests {
     use super::*;
 
     fn style(size: f64, bold: bool, italic: bool, color: [f64; 3]) -> ClipStyle {
-        ClipStyle { family: font_family("ABCDEF+Helvetica-Bold"), size, bold, italic, color }
+        ClipStyle { families: font_family("ABCDEF+Helvetica-Bold"), size, bold, italic, color }
     }
 
     #[test]
@@ -261,7 +297,8 @@ mod tests {
         let clip = b.finish();
         assert_eq!(clip.paragraphs.len(), 2);
         assert_eq!(clip.paragraphs.get(1).map(Vec::len), Some(2), "{clip:?}");
-        let html = clip_html(&clip);
+        let (html, cut) = clip_html(&clip);
+        assert!(!cut);
         assert_eq!(
             html,
             "<p style=\"margin:0\"><span style=\"font-family:'Helvetica';font-size:24pt\"><strong>Title</strong></span></p>\n\
@@ -272,10 +309,10 @@ mod tests {
 
     #[test]
     fn special_characters_are_escaped_and_cannot_leave_the_style() {
-        let st = ClipStyle { family: Some("Evil';}</style><script>\\\n".into()), size: f64::NAN, ..ClipStyle::default() };
+        let st = ClipStyle { families: vec!["Evil';}</style><script>\\\n".into()], size: f64::NAN, ..ClipStyle::default() };
         let mut b = ClipBuilder::new();
         b.push("<a href=\"x\">&\u{0}\u{1b}</a>  two\nline", &st);
-        let html = clip_html(&b.finish());
+        let (html, _) = clip_html(&b.finish());
         assert_eq!(
             html,
             "<p style=\"margin:0\"><span style=\"font-family:'Evilstylescript'\">&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt; &nbsp;two<br>line</span></p>\n"
@@ -286,35 +323,65 @@ mod tests {
     fn invisible_controls_and_bidi_overrides_are_dropped() {
         let mut b = ClipBuilder::new();
         b.push("a\u{85}b\u{9F}c\rd\u{202E}e\u{2066}f\u{2069}g\u{202A}h\u{2067}i\tj", &ClipStyle::default());
-        assert_eq!(clip_html(&b.finish()), "<p style=\"margin:0\">abcdefghi\tj</p>\n");
+        assert_eq!(clip_html(&b.finish()).0, "<p style=\"margin:0\">abcdefghi\tj</p>\n");
     }
 
     #[test]
     fn font_sizes_stay_within_range() {
-        for (size, want) in [(1e300, "1000"), (f64::MAX, "1000"), (2e306, "1000"), (0.2, "1"), (9.96, "10")] {
+        for (size, want) in [(1e300, "1000"), (f64::MAX, "1000"), (2e306, "1000"), (0.2, "1"), (9.96, "10"), (-12.0, "1"), (f64::MIN, "1")] {
             let st = ClipStyle { size, ..ClipStyle::default() };
             let mut b = ClipBuilder::new();
             b.push("x", &st);
-            let html = clip_html(&b.finish());
+            let (html, _) = clip_html(&b.finish());
             assert_eq!(html, format!("<p style=\"margin:0\"><span style=\"font-size:{want}pt\">x</span></p>\n"), "{size}");
         }
     }
 
     #[test]
     fn families_read_like_a_word_processor_names_them() {
-        assert_eq!(font_family("ABCDEF+TimesNewRomanPSMT").as_deref(), Some("Times New Roman"));
-        assert_eq!(font_family("Arial,BoldItalic").as_deref(), Some("Arial"));
-        assert_eq!(font_family("Arial-BoldMT").as_deref(), Some("Arial"));
-        assert_eq!(font_family("abcdef+Foo").as_deref(), Some("abcdefFoo"), "a lower-case prefix is not a subset tag");
-        assert_eq!(font_family(""), None);
-        assert_eq!(font_family("+'\"\\;"), None);
-        assert!(font_family(&"Ab".repeat(10_000)).is_some_and(|f| f.chars().count() <= MAX_FAMILY_CHARS * 2));
+        let f = |b: &str| font_family(b);
+        assert_eq!(f("ABCDEF+TimesNewRomanPSMT"), ["Times New Roman", "TimesNewRoman"]);
+        assert_eq!(f("Arial,BoldItalic"), ["Arial"]);
+        assert_eq!(f("Arial-BoldMT"), ["Arial"]);
+        assert_eq!(f("Helvetica-Oblique"), ["Helvetica"]);
+        assert_eq!(f("MS-Gothic"), ["MS Gothic", "MS-Gothic"], "a hyphen before a family word stays in the name");
+        assert_eq!(f("SimSun"), ["Sim Sun", "SimSun"], "the name as spelt is tried too");
+        assert_eq!(f("abcdef+Foo"), ["abcdefFoo"], "a lower-case prefix is not a subset tag");
+        assert!(f("").is_empty());
+        assert!(f("+'\"\\;").is_empty());
+        assert!(f(&"Ab".repeat(10_000)).iter().all(|f| f.chars().count() <= MAX_FAMILY_CHARS * 2));
+        let st = ClipStyle { families: f("SimSun"), ..ClipStyle::default() };
+        let mut b = ClipBuilder::new();
+        b.push("x", &st);
+        assert_eq!(clip_html(&b.finish()).0, "<p style=\"margin:0\"><span style=\"font-family:'Sim Sun','SimSun'\">x</span></p>\n");
+    }
+
+    #[test]
+    fn spaces_html_would_collapse_keep_their_width() {
+        let (a, c) = (ClipStyle::default(), ClipStyle { bold: true, ..ClipStyle::default() });
+        let mut b = ClipBuilder::new();
+        b.push(" lead a ", &a);
+        b.push(" b", &c);
+        b.line_break();
+        b.push(" c", &a);
+        assert_eq!(
+            clip_html(&b.finish()).0,
+            "<p style=\"margin:0\">&nbsp;lead a <strong>&nbsp;b<br></strong>&nbsp;c</p>\n",
+            "at a paragraph's start, across runs and after a break"
+        );
+    }
+
+    #[test]
+    fn a_default_builder_starts_a_paragraph() {
+        let mut b = ClipBuilder::default();
+        assert!(b.push("x", &ClipStyle::default()));
+        assert_eq!(b.finish().paragraphs.len(), 1);
     }
 
     #[test]
     fn empty_and_huge_selections_are_bounded() {
         let b = ClipBuilder::new();
-        assert_eq!(clip_html(&b.finish()), "");
+        assert_eq!(clip_html(&b.finish()), (String::new(), false));
         let mut b = ClipBuilder::new();
         b.space();
         assert!(b.push("", &ClipStyle::default()));
@@ -332,19 +399,34 @@ mod tests {
         let clip = b.finish();
         assert!(clip.truncated);
         assert_eq!(kept, MAX_CLIP_SPANS);
+        // Exactly at the cap, a new paragraph is refused before it is opened.
+        let mut b = ClipBuilder::new();
+        for i in 0..MAX_CLIP_SPANS {
+            assert!(b.push("x", if i % 2 == 0 { &a } else { &c }));
+        }
+        b.paragraph();
+        assert!(!b.push("x", &a));
+        let clip = b.finish();
+        assert!(clip.truncated);
+        assert_eq!(clip.paragraphs.len(), 1, "no empty paragraph past the cap");
         // One style: the text cap stops it.
         let mut b = ClipBuilder::new();
         let chunk = "y".repeat(1 << 16);
         // Bounded, so the test fails rather than runs on when the cap is gone.
         let pushes = (0..MAX_CLIP_TEXT_BYTES / chunk.len() + 2).take_while(|_| b.push(&chunk, &a)).count();
-        assert!(pushes <= MAX_CLIP_TEXT_BYTES / chunk.len(), "the cap stopped it: {pushes}");
+        assert_eq!(pushes, MAX_CLIP_TEXT_BYTES / chunk.len(), "the cap stopped it");
         let clip = b.finish();
         assert!(clip.truncated);
         assert!(clip.paragraphs.iter().flatten().map(|s| s.text.len()).sum::<usize>() <= MAX_CLIP_TEXT_BYTES);
         // HTML: escaping grows text up to sixfold; the writer still stops at its cap.
         let big = ClipText { paragraphs: vec![vec![ClipSpan { text: "<".repeat(1 << 20), style: a.clone() }]; 8], truncated: false };
-        let html = clip_html(&big);
+        let (html, cut) = clip_html(&big);
+        assert!(cut, "the cut is reported");
         assert!(html.len() <= MAX_CLIP_HTML_BYTES && html.ends_with("</p>\n"), "{}", html.len());
         assert!(html.len() > MAX_CLIP_HTML_BYTES / 2);
+        // Empty paragraphs count against the cap too.
+        let empty = ClipText { paragraphs: vec![Vec::new(); MAX_CLIP_HTML_BYTES / 20], truncated: false };
+        let (html, cut) = clip_html(&empty);
+        assert!(cut && html.len() <= MAX_CLIP_HTML_BYTES, "{}", html.len());
     }
 }

@@ -8918,27 +8918,15 @@ fn a_deleted_image_is_not_kept_by_reduce_or_optimize() {
 /// page is turned with /Rotate 90.
 fn table_pdf() -> Vec<u8> {
     let body = "BT /F1 12 Tf 20 250 Td (Name) Tj 130 0 Td (Qty) Tj -130 -20 Td (Apple) Tj 130 0 Td (12) Tj -130 -20 Td (Pear) Tj 130 0 Td (7) Tj ET";
-    let objs = [
-        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-        "<< /Type /Pages /Kids [4 0 R 5 0 R] /Count 2 /MediaBox [0 0 300 300] >>".to_string(),
-        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /Rotate 90 /Contents 6 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_string(),
-        format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
-    ];
-    let mut out = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, o) in objs.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
-    }
-    let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    out
+    let stream = format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len());
+    pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [4 0 R 5 0 R] /Count 2 /MediaBox [0 0 300 300] >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 3 0 R >> >> >>",
+        "<< /Type /Page /Parent 2 0 R /Rotate 90 /Contents 6 0 R /Resources << /Font << /F1 3 0 R >> >> >>",
+        &stream,
+    ])
 }
 
 /// Issue #740: `text_extract` with `rect` takes what Column select takes, in the displayed-page
@@ -9006,6 +8994,27 @@ fn text_extract_as_html_keeps_the_formatting() {
         let e = a.call("text_extract", &json!({ "doc": doc, "format": bad })).unwrap_err();
         assert!(matches!(e, ToolError::InvalidArgs(_)), "{bad}: {e}");
     }
+    // Bold, italic, colour and size come through end to end.
+    let body = "BT /F1 18 Tf 20 250 Td (Big) Tj ET BT /F2 12 Tf 20 200 Td (Strong) Tj ET \
+        BT /F3 12 Tf 20 150 Td (Slanted) Tj ET BT 0 0 1 rg /F1 12 Tf 20 100 Td (Blue) Tj ET";
+    let stream = format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len());
+    let styled = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R >> >> >>",
+        &stream,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >>",
+    ]);
+    std::fs::write(dir.join("styled.pdf"), styled).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "styled.pdf" }))["doc"].as_u64().unwrap();
+    let page = &ok(&mut a, "text_extract", json!({ "doc": doc, "format": "html" }))["pages"][0];
+    let html = page["html"].as_str().unwrap();
+    assert!(html.contains("font-size:18pt\">Big"), "{html}");
+    assert!(html.contains("<strong>Strong</strong>"), "{html}");
+    assert!(html.contains("<em>Slanted</em>"), "{html}");
+    assert!(html.contains("color:#0000FF\">Blue"), "{html}");
 }
 
 #[test]
