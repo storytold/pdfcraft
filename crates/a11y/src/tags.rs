@@ -211,7 +211,9 @@ pub fn class_map(doc: &Document, offset: usize, limit: usize) -> (usize, Vec<Cla
         counts
     });
     let mut assignments = assignments;
-    if let Some(kids) = alt::tree_root(doc).and_then(|root| root.get(b"K")) {
+    if let Some(root) = alt::tree_root(doc)
+        && let Some(kids) = root.get(b"K")
+    {
         let mut budget = 1_000_000usize;
         count_inline_class_assignments(doc, kids, &mut assignments, 0, &mut budget, &mut HashSet::new());
     }
