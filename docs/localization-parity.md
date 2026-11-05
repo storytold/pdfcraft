@@ -14,9 +14,10 @@ add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../R
   strings the scan can't see. On `main` at `14ae839a` (2026-11-03) that is **2,897** strings, and
   every count and percentage in the tables below is of that number. A key only some catalogs have
   counts as missing in the others; a contextual one (such as `theme`/`Appearance`) is met by a
-  plain translation of the same English. The denominator still grows whenever the interface gains
-  a string, so a catalog that was complete falls behind without losing a translation, and every
-  figure here carries its date. English is built in.
+  plain translation of the same English, but a `@plural` one only by its own plural forms. The
+  denominator still grows whenever the interface gains a string, so a catalog that was complete
+  falls behind without losing a translation, and every figure here carries its date. English is
+  built in.
 - **Catalogs:** the figures above were taken from the in-repo catalogs
   (`crates/ui-egui/src/i18n/<code>.tsv`), which have since moved to craft-i18n's `locales/<code>/`.
   The report reads the catalogs the build embeds, so measuring again needs `CRAFT_I18N_DIR` set to a
