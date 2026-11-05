@@ -59,6 +59,45 @@ impl PdfCraftApp {
         }
     }
 
+    /// Gives document `id` the app-wide inverted view: whether it is on, its mode and its palette.
+    /// The engine decides what that means for drawing, so the reading-colours preference is left
+    /// alone and comes back when the view is turned off. `true` when anything changed.
+    pub(crate) fn apply_invert(&mut self, id: pdfcraft_engine::DocId) -> bool {
+        let keep = self.session.set_invert_keep_images(id, self.invert_keep_images);
+        let palette = self.session.set_invert_palette(id, self.invert_palette);
+        let on = self.session.set_invert_colors(id, self.invert_colors);
+        keep || palette || on
+    }
+
+    /// [`Self::apply_invert`] for every open document; the ones it touches re-render.
+    fn apply_invert_all(&mut self) {
+        for i in 0..self.views.len() {
+            let id = self.views[i].id;
+            if self.apply_invert(id) {
+                self.views[i].invalidate_content();
+            }
+        }
+    }
+
+    /// Invert page colours (View ▸ Invert colors): sets the app-wide preference and applies it to
+    /// every open document. The files never change.
+    pub fn set_invert_colors(&mut self, invert: bool) {
+        self.invert_colors = invert;
+        self.apply_invert_all();
+    }
+
+    /// Set the paper and ink colours of the inverted view, for every open document.
+    pub fn set_invert_palette(&mut self, palette: pdfcraft_render::InvertPalette) {
+        self.invert_palette = palette;
+        self.apply_invert_all();
+    }
+
+    /// Whether the inverted view keeps pictures as they are (text only) or inverts every pixel.
+    pub fn set_invert_keep_images(&mut self, keep: bool) {
+        self.invert_keep_images = keep;
+        self.apply_invert_all();
+    }
+
     /// Enable the Linux desktop portal in a native window. Headless contexts keep
     /// their supplied input and never connect to the user's session bus.
     #[cfg(target_os = "linux")]
@@ -99,6 +138,9 @@ impl PdfCraftApp {
             "units": self.units,
             "language": self.language,
             "reading_colors": self.reading_colors,
+            "invert_colors": self.invert_colors,
+            "invert_palette": self.invert_palette,
+            "invert_keep_images": self.invert_keep_images,
             // Null follows the system's text scaling.
             "ui_scale": self.ui_scale,
             "flatten_fill_sign": self.flatten_fill_sign_on_save,
@@ -341,6 +383,16 @@ impl PdfCraftApp {
         // fails to deserialize and keeps Off.
         if let Ok(colors) = serde_json::from_value::<pdfcraft_render::ReadingColors>(v["reading_colors"].clone()) {
             self.reading_colors = colors;
+        }
+        if let Some(on) = v["invert_colors"].as_bool() {
+            self.invert_colors = on;
+        }
+        // Settings are untrusted: a palette that isn't two #rgb byte triples keeps the default.
+        if let Ok(palette) = serde_json::from_value::<pdfcraft_render::InvertPalette>(v["invert_palette"].clone()) {
+            self.invert_palette = palette;
+        }
+        if let Some(keep) = v["invert_keep_images"].as_bool() {
+            self.invert_keep_images = keep;
         }
         // Settings are untrusted: a size out of range follows the system instead.
         self.ui_scale = v["ui_scale"].as_f64().and_then(ui_scale::valid);

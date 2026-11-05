@@ -984,6 +984,44 @@ fn reading_colours_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
         }
     });
     ctx.label_secondary(ui, tl!("Colours are remapped while rendering; the document itself never changes."), t);
+    invert_colours_section(ui, app, t, ctx);
+}
+
+/// Invert colours settings: the switch, its mode and palette. While it is on it replaces the
+/// reading colours above, which come back when it is off.
+fn invert_colours_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
+    ui.add_space(8.0);
+    let mut invert = app.invert_colors;
+    if ctx.checkbox(ui, &mut invert, tl!("Invert colors"), t).changed() {
+        app.set_invert_colors(invert);
+    }
+    let mut keep = app.invert_keep_images;
+    if ctx.pill_choice(ui, t, &mut keep, &[(false, tl!("Invert everything")), (true, tl!("Text only, keep images"))]) {
+        app.set_invert_keep_images(keep);
+    }
+    let mut palette = app.invert_palette;
+    let presets = [
+        (pdfcraft_render::InvertPalette::SOFT_DARK, tl!("Soft dark gray")),
+        (pdfcraft_render::InvertPalette::PURE, tl!("Black and white")),
+        (pdfcraft_render::InvertPalette::SEPIA, tl!("Sepia night")),
+    ];
+    if ctx.pill_choice(ui, t, &mut palette, &presets) {
+        app.set_invert_palette(palette);
+    }
+    // The colours of the inverted page: the dark paper and the light ink (default black and white).
+    ui.horizontal(|ui| {
+        let mut custom = app.invert_palette;
+        let paper = ctx.label_primary(ui, tl!("Inverted page background"), t);
+        let a = ui.color_edit_button_srgb(&mut custom.paper).labelled_by(paper.id).changed();
+        let ink = ctx.label_primary(ui, tl!("Inverted text"), t);
+        let b = ui.color_edit_button_srgb(&mut custom.ink).labelled_by(ink.id).changed();
+        if a || b {
+            app.set_invert_palette(custom);
+        }
+        if ui.button(tl!("Reset")).clicked() {
+            app.set_invert_palette(pdfcraft_render::InvertPalette::default());
+        }
+    });
 }
 
 #[cfg(test)]

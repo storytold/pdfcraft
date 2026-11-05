@@ -69,9 +69,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     app.active = None;
                     app.combine_tab.focused = false;
                 }
-                // Reserve the three icon buttons, Discord and their gaps outside the scrolling tabs.
+                // Reserve the four icon buttons, Discord and their gaps outside the scrolling tabs.
                 let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x)
-                    + 3.0 * button
+                    + 4.0 * button
                     + 54.0
                     + window_controls::width(&controls.right);
                 // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
@@ -306,6 +306,16 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         });
                     }
                     egui::Popup::context_menu(&response).id(response.id.with("theme_menu")).show(|ui| appearance_menu(app, ui));
+                    // Night reading: a click inverts the page colours; a right-click picks mode and palette.
+                    let invert_tip = match pdfcraft_engine::commands::command("view.invert_colors").and_then(|c| c.shortcut) {
+                        Some(shortcut) => format!("{} ({})", tl!("Invert colors"), crate::commands::shortcut_label(ui.ctx(), shortcut)),
+                        None => tl!("Invert colors").to_string(),
+                    };
+                    let invert = icons::button(ui, "contrast", button, app.invert_colors, &invert_tip);
+                    if invert.clicked() {
+                        app.execute("view.invert_colors");
+                    }
+                    egui::Popup::context_menu(&invert).id(invert.id.with("invert_menu")).show(|ui| invert_colors_menu(app, ui));
                     if icons::button(ui, "circle-help", button, false, tl!("Keyboard shortcuts")).clicked() {
                         app.dialog = Some(Dialog::Shortcuts);
                     }
@@ -316,6 +326,39 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 });
             });
         });
+}
+
+/// The right-click menu on the title bar's invert-colours button: the switch, the mode and the palette.
+fn invert_colors_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    let mut invert = app.invert_colors;
+    if ui.add(widgets::checkbox(&mut invert, tl!("Invert colors"))).changed() {
+        app.set_invert_colors(invert);
+    }
+    ui.separator();
+    for (keep, label) in [(false, "Invert everything"), (true, "Text only, keep images")] {
+        if ui.add(widgets::radio(app.invert_keep_images == keep, tl!(label))).clicked() {
+            app.set_invert_keep_images(keep);
+            app.set_invert_colors(true);
+            ui.close();
+        }
+    }
+    ui.separator();
+    for (palette, label) in [
+        (pdfcraft_render::InvertPalette::SOFT_DARK, "Soft dark gray"),
+        (pdfcraft_render::InvertPalette::PURE, "Black and white"),
+        (pdfcraft_render::InvertPalette::SEPIA, "Sepia night"),
+    ] {
+        if ui.add(widgets::radio(app.invert_palette == palette, tl!(label))).clicked() {
+            app.set_invert_palette(palette);
+            app.set_invert_colors(true);
+            ui.close();
+        }
+    }
+    ui.separator();
+    if ui.button(tl!("Appearance settings…")).clicked() {
+        app.dialog = Some(Dialog::Preferences);
+        ui.close();
+    }
 }
 
 /// The right-click menu on the title bar's theme button.

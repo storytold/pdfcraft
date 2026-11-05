@@ -4661,6 +4661,49 @@ fn comment_summary_includes_replies_to_replies() {
 }
 
 #[test]
+fn invert_view_set_and_invalidated() {
+    use pdfcraft_render::InvertPalette;
+    let (mut s, id) = session_with(1);
+    // Every open document holds the settings; the view is off, the palette black and white.
+    assert_eq!(s.invert_colors(id), Some(false));
+    assert_eq!(s.invert_palette(id), Some(InvertPalette::PURE));
+    assert!(s.set_invert_colors(id, true));
+    assert!(!s.set_invert_colors(id, true), "unchanged");
+    // A palette or mode change shows while the view is on...
+    assert!(s.set_invert_palette(id, InvertPalette::SEPIA));
+    assert!(s.set_invert_keep_images(id, true));
+    assert!(!s.set_invert_keep_images(id, true), "unchanged");
+    assert_eq!(s.invert_keep_images(id), Some(true));
+    // ...and is only kept while it is off.
+    assert!(s.set_invert_colors(id, false));
+    assert!(!s.set_invert_palette(id, InvertPalette::SOFT_DARK), "nothing on screen changes while off");
+    assert_eq!(s.invert_palette(id), Some(InvertPalette::SOFT_DARK));
+    assert!(!s.set_invert_keep_images(id, false));
+    assert_eq!(s.invert_keep_images(id), Some(false));
+    // No such document.
+    assert_eq!(s.invert_colors(DocId(u64::MAX)), None);
+    assert!(!s.set_invert_colors(DocId(u64::MAX), true));
+    assert!(!s.set_invert_palette(DocId(u64::MAX), InvertPalette::SEPIA));
+}
+
+/// A reloaded document (its file changed on disk) keeps the reader's inverted view: it is how the
+/// document is shown, not part of the file.
+#[test]
+fn reload_keeps_the_inverted_view() {
+    use pdfcraft_render::InvertPalette;
+    let (mut s, id) = session_with(1);
+    s.set_invert_palette(id, InvertPalette::SEPIA);
+    s.set_invert_keep_images(id, true);
+    s.set_invert_colors(id, true);
+    s.reload(id, Arc::new(fixture(2))).unwrap();
+    assert_eq!(s.invert_colors(id), Some(true));
+    assert_eq!(s.invert_palette(id), Some(InvertPalette::SEPIA));
+    assert_eq!(s.invert_keep_images(id), Some(true));
+    let config = s.render_config(id).expect("open");
+    assert!(config.invert_colors && config.invert_keep_images);
+}
+
+#[test]
 fn reading_colors_set_and_invalidated() {
     let (mut s, id) = session_with(1);
     // Every open document holds a value; the default is Off.

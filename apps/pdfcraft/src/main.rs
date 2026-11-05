@@ -11,7 +11,7 @@
 //!  --organize on  --fields on  --dialog properties|shortcuts|about  --palette <query>  --home on
 //!  --cover on|off  --default-layout single|continuous|two-up|two-page  --default-continuous on|off  --default-zoom fit-width|fit-page|<percent>  --always-default-view on|off
 //!  --page-gaps on|off  --default-page-gaps on|off  --recent-files 0..50
-//!  --combine-view grid|list  --combine-zoom 60..200`
+//!  --combine-view grid|list  --combine-zoom 60..200  --invert-colors on|off`
 //!
 //! `--new-window` opens a window of its own. Without it, on Windows, a launch that only names files
 //! hands them to the PdfCraft already running, where they open as tabs (`single_instance`).

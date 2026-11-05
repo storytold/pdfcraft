@@ -7465,6 +7465,78 @@ fn reading_colors_map_solid_paints_and_leave_images() {
     assert_eq!(pixel(&on, 150, 55), &[255, 255, 255, 255], "the image's white quadrant stays white");
 }
 
+/// The inverted view: it keeps pictures (text and line art take the palette through the
+/// reading-colours mapping) or inverts every pixel; either way it replaces the reading-colours
+/// setting instead of stacking on it, and print previews ignore it.
+#[test]
+fn inverted_view_modes_replace_reading_colours_and_leave_print_previews() {
+    use crate::InvertPalette;
+    let content = "0 0 0 rg 10 10 30 20 re f\nq 20 0 0 10 60 20 cm /Im Do Q";
+    let pdf = format!(
+        "%PDF-1.4\n\
+             1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 50] /Contents 4 0 R /Resources << /XObject << /Im 6 0 R >> >> >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             6 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length 25 >> stream\nFF000000FF00000000FFFFFFFF>\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes();
+    let render = |config: RenderConfig, tag: u64| {
+        let req = RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag, preview: false };
+        let page = PageRenderer::new(Arc::new(pdf.clone()), config).render(req);
+        assert!(page.error.is_none(), "{:?}", page.error);
+        page
+    };
+    fn pixel(page: &RenderedPage, x: u32, y: u32) -> [u8; 4] {
+        let at = ((y * page.width + x) * 4) as usize;
+        [page.rgba[at], page.rgba[at + 1], page.rgba[at + 2], page.rgba[at + 3]]
+    }
+    let inverted = |keep: bool, reading_colors: ReadingColors| RenderConfig {
+        reading_colors,
+        invert_colors: true,
+        invert_keep_images: keep,
+        invert_palette: InvertPalette::PURE,
+        ..Default::default()
+    };
+    let off = render(RenderConfig::default(), 0);
+
+    // Keep images: paper and ink follow the palette, the picture is byte-identical to the plain render.
+    let keep = render(inverted(true, ReadingColors::default()), 0);
+    assert_eq!(pixel(&keep, 5, 5), [0, 0, 0, 255], "the page clears to the palette's paper");
+    assert_eq!(pixel(&keep, 50, 60), [255, 255, 255, 255], "black text takes the palette's ink");
+    for y in 44..56u32 {
+        for x in 124..156u32 {
+            assert_eq!(pixel(&keep, x, y), pixel(&off, x, y), "image pixel {x},{y} is untouched");
+        }
+    }
+
+    // Invert everything: every pixel, the picture included (the red quadrant becomes cyan).
+    let all = render(inverted(false, ReadingColors::default()), 0);
+    assert_eq!(pixel(&all, 5, 5), [0, 0, 0, 255]);
+    assert_eq!(pixel(&all, 50, 60), [255, 255, 255, 255]);
+    for y in 44..56u32 {
+        for x in 124..156u32 {
+            let (a, b) = (pixel(&off, x, y), pixel(&all, x, y));
+            assert_eq!([255 - a[0], 255 - a[1], 255 - a[2]], [b[0], b[1], b[2]], "image pixel {x},{y} is inverted");
+        }
+    }
+
+    // A reading-colours setting does not stack on the inverted view, in either mode.
+    for keep_images in [true, false] {
+        let plain = render(inverted(keep_images, ReadingColors::default()), 0);
+        let stacked = render(inverted(keep_images, ReadingColors::WHITE_ON_BLACK), 0);
+        assert_eq!(plain.rgba, stacked.rgba, "keep_images = {keep_images}");
+    }
+
+    // Print previews render the document's true colours.
+    for keep_images in [true, false] {
+        let preview = render(inverted(keep_images, ReadingColors::WHITE_ON_BLACK), PRINT_TAG);
+        assert_eq!(preview.rgba, off.rgba, "keep_images = {keep_images}");
+    }
+}
+
 /// #2975: a stencil mask (`/ImageMask true`) is painted in the fill colour at the fill
 /// opacity, once: at `ca 0.5` it is as opaque as a rectangle filled at `ca 0.5` beside it
 /// (it was a quarter as opaque, the opacity applied by both the image's group and its paint).

@@ -988,6 +988,19 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "mode"],
             )),
+        t("view_invert_colors", "Invert colors", "Toggle or set the document's inverted view (night reading) and choose its mode and palette. mode keep_images (the app's default) maps text and line art to the palette and leaves pictures untouched; mode everything inverts every rendered pixel, pictures included, so photographs become negatives. palette is soft_dark, black_and_white or sepia, or custom with paper and ink as #RRGGBB: what white paper and black ink become. While the view is on it replaces the reading colours, which never stack on it, and print previews ignore it. A view setting: the file doesn't change; page_render shows it. A call with only doc toggles the view; choosing a mode or palette without invert keeps it as it is, and an omitted mode or palette keeps the document's. Returns the resulting settings.")
+            .cmd("view.invert_colors")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "invert": { "type": "boolean", "description": "When omitted, a call with neither mode nor palette toggles the current setting; otherwise it is kept." },
+                    "mode": { "type": "string", "enum": ["keep_images", "everything"], "description": "keep_images maps text and line art to the palette and keeps pictures; everything inverts every pixel. Omitted keeps the document's mode (keep_images for a document that never set one)." },
+                    "palette": { "type": "string", "enum": ["soft_dark", "black_and_white", "sepia", "custom"], "description": "The paper and ink colours of the inverted page. custom needs paper and ink." },
+                    "paper": { "type": "string", "description": "#RRGGBB: what white paper becomes. Only with palette custom." },
+                    "ink": { "type": "string", "description": "#RRGGBB: what black text becomes. Only with palette custom." },
+                }),
+                &["doc"],
+            )),
         t("comments_summarize", "Summarize comments", "Make a PDF summarising every comment (number, author, type, date, text, replies), sorted by page, author, date or type.")
             .cmd("comment.summarize")
             .with(schema(
