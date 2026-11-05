@@ -234,6 +234,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     let mut list_picked = None;
     let (sort_items, old_selection) = items_to_sort(doc, &f, props);
     let parent_default = ancestor_sets(doc, f.obj, b"DV");
+    let parent_limit = ancestor_sets(doc, f.obj, b"MaxLen");
     doc.update_dict(f.obj, |d| {
         d.set(b"Ff".to_vec(), Object::Int(ff as i64));
         if let Some(t) = &props.tooltip {
@@ -246,6 +247,8 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         if let Some(m) = props.max_len {
             match m {
                 Some(m) => d.set(b"MaxLen".to_vec(), Object::Int(m as i64)),
+                // An absent key would inherit the parent's limit; zero is "no limit" (`read.rs`).
+                None if parent_limit => d.set(b"MaxLen".to_vec(), Object::Int(0)),
                 None => {
                     d.remove(b"MaxLen");
                 }

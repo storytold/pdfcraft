@@ -358,11 +358,32 @@ fn objects_referenced_by_the_encrypt_dictionary_stay_outside_object_streams() {
     let cf = doc.get(enc_ref).as_dict().unwrap().get(b"CF").cloned().unwrap();
     let cf_ref = doc.add(cf);
     doc.update_dict(enc_ref, |d| d.set(b"CF".to_vec(), Object::Ref(cf_ref))).unwrap();
-    let packed = write_full(&doc, &SaveOptions::default()).unwrap();
-    let back = Document::open(Arc::new(packed.clone())).expect("reopens");
-    assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
-    assert_eq!(title(&back), b"Caf\xe9 (draft)");
-    assert_eq!(hayro_pages(&packed), 4);
+    // Visit this alias from Root before the encryption walk reaches /CF's other alias.
+    doc.update_dict(doc.root().unwrap(), |d| d.set(b"CFProbe".to_vec(), Object::Ref(cf_ref))).unwrap();
+    let classic = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let saved = Document::open(Arc::new(classic.clone())).unwrap();
+    let cf_num = saved.get(saved.root().unwrap()).as_dict().unwrap().reference(b"CFProbe").unwrap().num;
+    for damaged in [false, true] {
+        let mut bytes = classic.clone();
+        if damaged {
+            // Equal-length edits preserve the xref offsets and its generation-zero row.
+            for (from, to) in [(format!("\n{cf_num} 0 obj"), format!("\n{cf_num} 1 obj")), (format!("/CF {cf_num} 0 R"), format!("/CF {cf_num} 1 R"))]
+            {
+                let start = bytes.windows(from.len()).position(|w| w == from.as_bytes()).unwrap();
+                bytes[start..start + from.len()].copy_from_slice(to.as_bytes());
+            }
+        }
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        let packed = write_full(&doc, &SaveOptions::default()).unwrap();
+        let back = Document::open(Arc::new(packed.clone())).expect("reopens");
+        assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
+        assert_eq!(title(&back), b"Caf\xe9 (draft)");
+        assert_eq!(hayro_pages(&packed), 4);
+        let probe = back.get(back.root().unwrap()).as_dict().unwrap().reference(b"CFProbe").unwrap();
+        let encrypt = back.get(back.trailer().reference(b"Encrypt").unwrap());
+        assert_eq!(encrypt.as_dict().unwrap().reference(b"CF"), Some(probe));
+        assert!(matches!(back.xref_entry(probe.num), Some(pdfcraft_cos::XrefEntry::InFile { .. })), "crypt filters must stay outside object streams");
+    }
 }
 
 #[test]
