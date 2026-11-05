@@ -84,7 +84,7 @@ fn samples(s: &Session, id: DocId) -> optimize::Samples {
     let object = doc.page_images(0)[0].object.unwrap();
     let cos = &doc.editor.as_ref().unwrap().cos;
     let Object::Stream(img) = &*cos.get(object) else { panic!("the image") };
-    optimize::decode_samples(cos, img).unwrap()
+    optimize::decode_samples(cos, img, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)).unwrap()
 }
 
 fn grey_at(px: &optimize::Samples, x: usize, y: usize) -> u8 {
@@ -326,6 +326,44 @@ fn a_scan_drawn_inside_a_form_xobject_is_reported_not_called_no_scan() {
     let (mut s, id) = open(logo);
     let report = s.enhance_scanned_pages(id, &[], ScanCleanSettings::at(100)).unwrap();
     assert_eq!((report.not_scanned.as_slice(), report.skipped.len()), (&[0][..], 0), "{report:?}");
+}
+
+#[test]
+fn a_page_mixing_its_own_image_and_a_scan_in_a_form_cleans_the_one_and_reports_the_other() {
+    // Page 1: its own image covers 40% and a Form holding a scan 20%: a scan only together.
+    // Page 2: its own image covers the page and the Form 20% more. Both pages clean Im1 and
+    // report Fm0.
+    let page = |contents: usize| {
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {W} {H}] /Resources << /XObject << /Fm0 4 0 R /Im1 6 0 R >> >> /Contents {contents} 0 R >>"
+        )
+    };
+    let gray = format!("/Type /XObject /Subtype /Image /Width {W} /Height {H} /ColorSpace /DeviceGray /BitsPerComponent 8");
+    let bytes = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R 8 0 R] /Count 2 >>")
+        .obj(page(7))
+        .stream(
+            &format!("/Type /XObject /Subtype /Form /BBox [0 0 {W} {H}] /Resources << /XObject << /Im0 5 0 R >> >>"),
+            format!("q {W} 0 0 {H} 0 0 cm /Im0 Do Q"),
+        )
+        .stream(&gray, scan_pixels(1))
+        .stream(&gray, scan_pixels(1))
+        .stream("", format!("q {W} 0 0 160 0 240 cm /Im1 Do Q q 1 0 0 0.2 0 0 cm /Fm0 Do Q"))
+        .obj(page(9))
+        .stream("", format!("q {W} 0 0 {H} 0 0 cm /Im1 Do Q q 1 0 0 0.2 0 0 cm /Fm0 Do Q"))
+        .build();
+    let (mut s, id) = open(bytes);
+    let (form_picture, own) = (object(&s, id, 5), object(&s, id, 6));
+    let report = s.enhance_scanned_pages(id, &[], ScanCleanSettings::at(100)).unwrap();
+    assert_eq!((report.pages.as_slice(), report.images), (&[0, 1][..], 1), "Im1 is cleaned on both pages: {report:?}");
+    assert!(report.not_scanned.is_empty(), "{report:?}");
+    assert_eq!(report.skipped.len(), 1, "the form is reported once: {report:?}");
+    let k = &report.skipped[0];
+    assert_eq!((k.pages.as_slice(), k.name.as_str()), (&[0, 1][..], "Fm0"));
+    assert!(k.reason.contains("form XObject"), "{k:?}");
+    assert_ne!(object(&s, id, 6), own, "the page's own image is cleaned");
+    assert_eq!(object(&s, id, 5), form_picture, "the picture in the form is left as it was");
 }
 
 #[test]

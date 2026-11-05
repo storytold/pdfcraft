@@ -144,27 +144,31 @@ impl Session {
         let mut forms_reported: Vec<(ObjRef, usize)> = Vec::new();
         for page in wanted {
             let Some(info) = doc.info.pages.get(page) else { continue };
-            let Some(images) = crate::scan_fields::scan_images(doc, page, info) else {
-                // A scan drawn through a Form XObject is a scan all the same: say why it stays.
-                let forms: Vec<_> = crate::scan_fields::scan_forms(doc, page, info).into_iter().filter(|(_, share)| *share >= PART_OF_SCAN).collect();
-                if forms.is_empty() {
-                    report.not_scanned.push(page);
-                }
-                for (form, _) in forms {
-                    let known = form.object.and_then(|o| forms_reported.iter().find(|(r, _)| *r == o)).and_then(|(_, k)| report.skipped.get_mut(*k));
-                    match known {
-                        Some(s) if !s.pages.contains(&page) => s.pages.push(page),
-                        Some(_) => {}
-                        None => {
-                            if let Some(o) = form.object {
-                                forms_reported.push((o, report.skipped.len()));
-                            }
-                            report.skipped.push(SkippedImage { pages: vec![page], name: form.name, reason: IN_FORM.into() });
-                        }
-                    }
-                }
+            // Ordinary images and scan-holding Forms are classified together, so a page that
+            // mixes them gets its images cleaned and its Forms reported.
+            let Some((images, forms, own_scan)) = crate::scan_fields::scan_parts(doc, page, info) else {
+                report.not_scanned.push(page);
                 continue;
             };
+            let forms: Vec<_> = forms.into_iter().filter(|(_, share)| *share >= PART_OF_SCAN).collect();
+            if !own_scan && forms.is_empty() {
+                report.not_scanned.push(page);
+                continue;
+            }
+            // A scan drawn through a Form XObject is a scan all the same: say why it stays.
+            for (form, _) in forms {
+                let known = form.object.and_then(|o| forms_reported.iter().find(|(r, _)| *r == o)).and_then(|(_, k)| report.skipped.get_mut(*k));
+                match known {
+                    Some(s) if !s.pages.contains(&page) => s.pages.push(page),
+                    Some(_) => {}
+                    None => {
+                        if let Some(o) = form.object {
+                            forms_reported.push((o, report.skipped.len()));
+                        }
+                        report.skipped.push(SkippedImage { pages: vec![page], name: form.name, reason: IN_FORM.into() });
+                    }
+                }
+            }
             for (image, _) in images.into_iter().filter(|(_, share)| *share >= PART_OF_SCAN) {
                 let Some(object) = image.object else {
                     report.skipped.push(SkippedImage {
@@ -225,12 +229,14 @@ impl ScanCleanJob {
         let total = targets.len();
         let mut images = Vec::new();
         let mut changed_pages: Vec<usize> = Vec::new();
+        // One decoding allowance for the whole run, sized by the file.
+        let mut budget = pdfcraft_cos::ImageBudget::new(&cos);
         for (done, target) in targets.into_iter().enumerate() {
             if !progress(done, total) {
                 return Err(EditError::Cancelled);
             }
             let mut skip = |reason: String| report.skipped.push(SkippedImage { pages: target.pages.clone(), name: target.name.clone(), reason });
-            match clean_image(&cos, target.object, settings) {
+            match clean_image(&cos, target.object, settings, &mut budget) {
                 Ok(Some(stream)) => {
                     images.push((target.object, stream));
                     changed_pages.extend(target.pages.iter().copied());
@@ -250,7 +256,12 @@ impl ScanCleanJob {
 
 /// Image `object` cleaned with `settings`: the new stream, `None` when nothing changes, or why it
 /// can't be cleaned.
-fn clean_image(cos: &pdfcraft_cos::Document, object: ObjRef, settings: ScanCleanSettings) -> Result<Option<Stream>, String> {
+fn clean_image(
+    cos: &pdfcraft_cos::Document,
+    object: ObjRef,
+    settings: ScanCleanSettings,
+    budget: &mut pdfcraft_cos::ImageBudget,
+) -> Result<Option<Stream>, String> {
     let obj = cos.get(object);
     let Object::Stream(s) = &*obj else { return Err("it is not an image".into()) };
     if s.dict.name(b"Subtype") != Some(b"Image") {
@@ -260,7 +271,7 @@ fn clean_image(cos: &pdfcraft_cos::Document, object: ObjRef, settings: ScanClean
     if matches!(s.dict.get(b"Mask").map(|m| cos.resolve(m)).as_deref(), Some(Object::Array(_))) {
         return Err("it has a colour-key mask, which cleaning would change".into());
     }
-    let samples = optimize::decode_samples(cos, s).map_err(|e| e.to_string())?;
+    let samples = optimize::decode_samples(cos, s, budget).map_err(|e| e.to_string())?;
     let cleaned = if samples.bilevel {
         if !settings.despeckle {
             return Err("it is black and white, which only Despeckle changes, and Despeckle is off".into());

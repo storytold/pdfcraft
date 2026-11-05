@@ -47,26 +47,37 @@ pub(crate) fn scan_images(doc: &Document, page: usize, info: &PageInfo) -> Optio
     (covered >= COVERED).then_some(images)
 }
 
-/// The grouped Form artwork on `page` that holds a raster picture, each with the share of the
-/// page it covers, when it and the page's own images together cover most of the page: a scan
-/// drawn through a Form XObject, which [`scan_images`] does not count and Enhance ▸ Scanned
-/// document can't clean yet, so it reports these. Empty otherwise.
-pub(crate) fn scan_forms(doc: &Document, page: usize, info: &PageInfo) -> Vec<(pdfcraft_edit::PageImage, f64)> {
-    let (Some(area), Some(editor)) = (page_area(info), doc.editor.as_ref()) else { return Vec::new() };
-    let mut covered = 0.0;
-    let mut forms = Vec::new();
+/// A page that is a scan, classified in one pass: its raster images (larger than one pixel) and
+/// the grouped Form artwork that holds a raster picture, each with the share of the page it
+/// covers, when together they cover most of the page; `None` otherwise. The flag says whether the
+/// raster images alone do ([`scan_images`]). Enhance ▸ Scanned document cleans the images and
+/// reports the Forms, which it can't clean yet, so a page mixing both gets both.
+#[allow(clippy::type_complexity)]
+pub(crate) fn scan_parts(
+    doc: &Document,
+    page: usize,
+    info: &PageInfo,
+) -> Option<(Vec<(pdfcraft_edit::PageImage, f64)>, Vec<(pdfcraft_edit::PageImage, f64)>, bool)> {
+    let area = page_area(info)?;
+    let editor = doc.editor.as_ref();
+    let (mut images, mut forms) = (Vec::new(), Vec::new());
+    let (mut own, mut covered) = (0.0, 0.0);
     for i in doc.page_images(page) {
         let Some(share) = share(info, area, &i) else { continue };
         if !i.is_form {
             if i.width > 1 && i.height > 1 {
+                own += share;
                 covered += share;
+                images.push((i, share));
             }
-        } else if i.object.is_some_and(|form| holds_scan(&editor.cos, form, share * area)) {
+        } else if let (Some(form), Some(editor)) = (i.object, editor)
+            && holds_scan(&editor.cos, form, share * area)
+        {
             covered += share;
             forms.push((i, share));
         }
     }
-    if covered >= COVERED { forms } else { Vec::new() }
+    (covered >= COVERED).then_some((images, forms, own >= COVERED))
 }
 
 /// Whether Form `form`, covering `points` square points of the page, draws a picture that could

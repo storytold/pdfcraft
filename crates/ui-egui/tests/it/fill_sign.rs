@@ -2,7 +2,7 @@
 
 use egui::{Pos2, pos2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::fill_sign::{FillTool, SavedSig};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool};
 
@@ -130,7 +130,7 @@ fn text_marks_and_date() {
     click(&mut h, 50.0, 250.0);
     h.event(egui::Event::Text("Ada Lovelace".into()));
     h.run_steps(1);
-    h.key_press(egui::Key::Enter);
+    commit_typed_text(&mut h);
     h.run_steps(4);
     let v = items(&h);
     assert_eq!(v.len(), 4, "{v:?}");
@@ -139,9 +139,9 @@ fn text_marks_and_date() {
     assert!(v.iter().any(|(t, _)| t == "Stamp"));
 }
 
-/// The open type box, found as the focused text input.
+/// The open type box, found by its accessible name for either input role.
 fn type_box_rect(h: &Harness<'static, PdfCraftApp>) -> egui::Rect {
-    h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| n.is_focused()).expect("an open type box").rect()
+    h.get_by_label("Text to place").rect()
 }
 
 #[test]
@@ -149,13 +149,13 @@ fn clicking_elsewhere_with_add_text_keeps_the_typed_text() {
     let mut h = harness();
     h.state_mut().execute("sign.fill.text");
     click(&mut h, 50.0, 250.0);
-    h.event(egui::Event::Text("Ada Lovelace".into()));
+    h.event(egui::Event::Text("\nAda\nLovelace\n".into()));
     h.run_steps(1);
     // Still on Add text: the next click starts a new box, and must keep the first one.
     click(&mut h, 50.0, 150.0);
     h.run_steps(2);
     let v = items(&h);
-    assert_eq!(v, vec![("FreeText".to_string(), Some("Ada Lovelace".to_string()))]);
+    assert_eq!(v, vec![("FreeText".to_string(), Some("\nAda\nLovelace\n".to_string()))]);
     assert!(h.state().views[0].fill_text.as_ref().is_some_and(|t| t.text.is_empty()), "a new, empty box is open");
 }
 
@@ -164,13 +164,13 @@ fn fill_text_size_controls_new_text_and_survives_settings_restore() {
     let mut h = harness();
     h.state_mut().execute("sign.fill.text");
     h.run_steps(2);
-    h.get_by_label("Font size:");
+    h.get_by_label("Font size");
     h.state_mut().fill_text_size = 24.0;
     click(&mut h, 50.0, 250.0);
     assert_eq!(h.state().views[0].fill_text.as_ref().map(|t| t.size), Some(24.0));
     h.event(egui::Event::Text("Larger text".into()));
     h.run_steps(1);
-    h.key_press(egui::Key::Enter);
+    commit_typed_text(&mut h);
     h.run_steps(3);
     let annotation =
         h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("Larger text")).unwrap();
@@ -192,7 +192,7 @@ fn fill_text_size_resizes_the_selected_text() {
     click(&mut h, 50.0, 250.0);
     h.event(egui::Event::Text("Resize me".into()));
     h.run_steps(1);
-    h.key_press(egui::Key::Enter);
+    commit_typed_text(&mut h);
     h.run_steps(3);
     let height = |h: &Harness<'static, PdfCraftApp>| {
         let s = h.state();
@@ -201,6 +201,8 @@ fn fill_text_size_resizes_the_selected_text() {
     };
     let before = height(&h);
     let set_size = |h: &mut Harness<'static, PdfCraftApp>, value: &str| {
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Font size").click();
+        h.run_steps(2);
         h.query_all_by_role(egui::accesskit::Role::SpinButton)
             .find(|n| n.value().is_some_and(|v| v.ends_with(" pt")))
             .expect("the Font size control")
@@ -211,6 +213,8 @@ fn fill_text_size_resizes_the_selected_text() {
         h.run_steps(1);
         h.key_press(egui::Key::Enter);
         h.run_steps(4);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Font size").click();
+        h.run_steps(2);
     };
     // Nothing selected: only the size for new text changes.
     h.state_mut().views[0].comments.selected = None;
@@ -280,6 +284,53 @@ fn the_type_box_text_matches_the_page_zoom_in_a_turned_view() {
             assert!((d - size * zoom).abs() < 0.5, "{rotate}°: drawn at {d}, the page shows it at {}", size * zoom);
         }
     }
+}
+
+#[test]
+fn fill_text_colour_survives_preview_commit_settings_and_save() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    h.run_steps(2);
+    h.get_by_label("Colour").click();
+    h.run_steps(2);
+    h.get_by_label("Blue").click();
+    h.run_steps(2);
+    let color = h.state().fill_text_color;
+    assert!(color[2] > color[0], "blue was selected: {color:?}");
+    click(&mut h, 50.0, 250.0);
+    assert_eq!(h.state().views[0].fill_text.as_ref().unwrap().color, color, "the editor uses the selected colour");
+    h.event(egui::Event::Text("Blue form text".into()));
+    h.run_steps(2);
+    commit_typed_text(&mut h);
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let expected = color.map(|v| v as f32);
+    let annotation = h.state().session.get(id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("Blue form text")).unwrap();
+    assert_eq!(annotation.color, Some(expected));
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    let reopened = harness_bytes(&bytes);
+    let saved = reopened
+        .state()
+        .session
+        .get(reopened.state().views[0].id)
+        .unwrap()
+        .info
+        .annotations
+        .iter()
+        .find(|a| a.contents.as_deref() == Some("Blue form text"))
+        .unwrap();
+    assert_eq!(saved.color, Some(expected));
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert_eq!(restored.fill_text_color, color);
+    restored.restore(r#"{"fill_text_color":[2,0,0]}"#);
+    assert_eq!(restored.fill_text_color, color, "invalid saved colours are ignored");
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert!(!items(&h).iter().any(|(_, text)| text.as_deref() == Some("Blue form text")));
+    h.state_mut().execute("edit.redo");
+    h.run_steps(2);
+    assert!(items(&h).iter().any(|(_, text)| text.as_deref() == Some("Blue form text")));
 }
 
 #[test]
@@ -376,9 +427,9 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     let original = format!("{:?}", h.state().session.get(h.state().views[0].id).unwrap().info.annotations);
 
     // The quick toolbar exposes replacement without changing the normal placement action.
-    h.get_by_label("Fill & Sign").click();
+    h.get_by_label("Fill & Sign: Place saved signature").click();
     h.run_steps(2);
-    h.get_by_label("Fill & Sign").click();
+    h.get_by_label("Fill & Sign: Sign").click();
     h.run_steps(2);
     h.get_by_label("Change signature").click();
     h.run_steps(2);
@@ -398,9 +449,9 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     click(&mut h, 40.0, 200.0);
     assert_eq!(items(&h).len(), 2);
 
-    h.get_by_label("Fill & Sign").click();
+    h.get_by_label("Fill & Sign: Place saved signature").click();
     h.run_steps(2);
-    h.get_by_label("Fill & Sign").click();
+    h.get_by_label("Fill & Sign: Sign").click();
     h.run_steps(2);
     h.get_by_label("Change initials").click();
     h.run_steps(2);
@@ -1109,7 +1160,7 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     app.open_bytes("form.pdf", None, FIXTURE.to_vec()).unwrap();
     let id = app.views[0].id;
     app.session.apply(id, mark).unwrap();
-    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 200.0], text: "Typed".into(), size: 10.0, focus: false });
+    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 200.0], text: "Typed".into(), size: 10.0, color: [0.0; 3], focus: false });
     let kept = dir.join("kept.pdf");
     app.save_override = Some(kept.to_string_lossy().into_owned());
     assert!(app.save_active(SaveTarget::InPlace));
@@ -1120,7 +1171,7 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     assert!(texts.iter().any(|t| t == "Typed"), "an open type box is saved: {texts:?}");
     assert_eq!(reopened.session.get(reopened.views[0].id).unwrap().info.annotations.len(), 2, "the check mark stays too");
 
-    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 160.0], text: "More".into(), size: 10.0, focus: false });
+    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 160.0], text: "More".into(), size: 10.0, color: [0.0; 3], focus: false });
     app.flatten_fill_sign_on_save = true;
     let flat = dir.join("flat.pdf");
     app.save_override = Some(flat.to_string_lossy().into_owned());
@@ -1764,4 +1815,343 @@ fn mode_tabs_keep_the_hand_over_a_type_box_scrolled_under_them() {
     h.drop_at(convert);
     h.run_steps(3);
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the text box");
+}
+
+fn place_selected_text(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
+    h.state_mut().execute("sign.fill.text");
+    click(h, 50.0, 250.0);
+    h.event(egui::Event::Text(text.into()));
+    h.run_steps(1);
+    commit_typed_text(h);
+    let selected = {
+        let s = h.state();
+        s.session
+            .get(s.views[0].id)
+            .unwrap()
+            .info
+            .annotations
+            .iter()
+            .find(|a| a.contents.as_deref() == Some(text))
+            .map(|a| (a.page, a.index))
+            .unwrap()
+    };
+    h.state_mut().views[0].comments.selected = Some(selected);
+    h.run_steps(2);
+}
+
+fn placed_height(h: &Harness<'static, PdfCraftApp>, text: &str) -> f32 {
+    let s = h.state();
+    let a = s.session.get(s.views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some(text)).unwrap();
+    a.rect[3] - a.rect[1]
+}
+
+fn placed_color(h: &Harness<'static, PdfCraftApp>, text: &str) -> Option<[f32; 3]> {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some(text)).unwrap().color
+}
+
+#[test]
+fn the_fill_text_size_flyout_opens_from_an_icon_and_leaves_a_stored_size_alone() {
+    let mut h = harness();
+    h.state_mut().fill_text_size = 9.1;
+    place_selected_text(&mut h, "Keep me");
+    let height = placed_height(&h, "Keep me");
+    assert_eq!(h.query_all_by_role(egui::accesskit::Role::SpinButton).filter(|n| n.value().is_some_and(|v| v.ends_with(" pt"))).count(), 0);
+    h.get_by_label("Font size").click();
+    h.run_steps(4);
+    assert!(
+        h.query_all_by_role(egui::accesskit::Role::SpinButton).any(|n| n.value().is_some_and(|v| v.ends_with(" pt"))),
+        "the flyout holds the size"
+    );
+    assert_eq!(h.state().fill_text_size, 9.1, "opening the flyout does not round the size");
+    assert_eq!(placed_height(&h, "Keep me"), height, "opening the flyout does not resize the selected text");
+}
+
+#[test]
+fn dragging_the_fill_text_size_slider_is_one_undo_step() {
+    let mut h = harness();
+    place_selected_text(&mut h, "Drag me");
+    let height = placed_height(&h, "Drag me");
+    h.get_by_label("Font size").click();
+    h.run_steps(2);
+    let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
+    let y = (slider.min.y + slider.max.y) / 2.0;
+    let from = pos2(slider.min.x + 10.0, y);
+    let to = pos2(slider.max.x - 10.0, y);
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    assert_eq!(placed_height(&h, "Drag me"), height, "nothing is applied before the release");
+    h.drop_at(to);
+    h.run_steps(3);
+    assert!(placed_height(&h, "Drag me") > height, "the release resizes the selected text");
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    assert_eq!(placed_height(&h, "Drag me"), height, "one undo takes the whole drag back");
+}
+
+#[test]
+fn pressing_the_fill_text_size_slider_without_moving_it_adds_no_undo_step() {
+    let mut h = harness();
+    place_selected_text(&mut h, "Hold me");
+    let height = placed_height(&h, "Hold me");
+    h.get_by_label("Font size").click();
+    h.run_steps(2);
+    let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
+    let at = pos2(slider.min.x + (slider.max.x - slider.min.x) * 0.75, (slider.min.y + slider.max.y) / 2.0);
+    let press = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.hover_at(at);
+        h.run_steps(1);
+        h.drag_at(at);
+        h.run_steps(1);
+        h.drop_at(at);
+        h.run_steps(3);
+    };
+    press(&mut h);
+    let resized = placed_height(&h, "Hold me");
+    assert!(resized > height, "the first press moves the size: {height} -> {resized}");
+    press(&mut h);
+    assert_eq!(placed_height(&h, "Hold me"), resized);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    assert_eq!(placed_height(&h, "Hold me"), height, "one undo takes back the only change; the second press added no step");
+}
+
+#[test]
+fn typing_a_fill_text_size_that_rounds_to_the_stored_one_adds_no_undo_step() {
+    let mut h = harness();
+    place_selected_text(&mut h, "Round me");
+    let height = placed_height(&h, "Round me");
+    h.get_by_label("Font size").click();
+    h.run_steps(2);
+    let type_size = |h: &mut Harness<'static, PdfCraftApp>, value: &str| {
+        h.query_all_by_role(egui::accesskit::Role::SpinButton)
+            .find(|n| n.value().is_some_and(|v| v.ends_with(" pt")))
+            .expect("the Font size control")
+            .click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(value.into()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(4);
+    };
+    type_size(&mut h, "36.1234");
+    let resized = placed_height(&h, "Round me");
+    assert!(resized > height, "the first size applies: {height} -> {resized}");
+    type_size(&mut h, "36.1231");
+    assert_eq!(h.state().fill_text_size, 36.1231);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    assert_eq!(placed_height(&h, "Round me"), height, "one undo takes back the only change; the rounded retype added no step");
+}
+
+#[test]
+fn the_fill_colour_dot_recolours_the_selected_text() {
+    let mut h = harness();
+    place_selected_text(&mut h, "Paint me");
+    let before = placed_color(&h, "Paint me");
+    h.get_by_label("Colour").click();
+    h.run_steps(2);
+    h.get_by_label("Blue").click();
+    h.run_steps(3);
+    let color = h.state().fill_text_color.map(|v| v as f32);
+    assert!(color[2] > color[0], "blue was selected: {color:?}");
+    assert_ne!(before, Some(color));
+    assert_eq!(placed_color(&h, "Paint me"), Some(color));
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    assert_eq!(placed_color(&h, "Paint me"), before, "one undo takes the colour back");
+}
+
+#[test]
+fn the_quick_bar_fill_button_shows_the_tool_it_picks() {
+    let mut h = harness();
+    h.get_by_label("Fill & Sign: Add signature").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature));
+    assert_eq!(h.state().dialog, Some(Dialog::Signature));
+
+    h.state_mut().dialog = None;
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Place saved signature").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Signature));
+    assert_eq!(h.state().dialog, None);
+    h.get_by_label("Fill & Sign: Sign").click();
+    h.run_steps(2);
+    assert_eq!(h.get_by_label("Use signature").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "the active tool's card is marked");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+
+    h.state_mut().execute("sign.fill.check");
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Checkmark").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check), "the button keeps the last Fill & Sign tool");
+}
+
+#[test]
+fn a_restored_fill_tool_shows_without_replacing_the_last_selection() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.date");
+    h.run_steps(2);
+    h.state_mut().apply_full_screen(true);
+    h.run_steps(2);
+    h.state_mut().execute("sign.fill.check");
+    h.run_steps(2);
+    h.state_mut().apply_full_screen(false);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date));
+    h.get_by_label("Fill & Sign: Date");
+
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Checkmark").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check));
+}
+
+#[test]
+fn a_fill_tool_selected_while_the_quick_bar_is_hidden_is_remembered() {
+    let mut h = harness();
+    let mode = h.state().mode;
+    h.state_mut().set_option("mode", "read").unwrap();
+    h.run_steps(2);
+    h.state_mut().set_option("quick", "fill-date").unwrap();
+    h.run_steps(2);
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.state_mut().mode = mode;
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Date");
+
+    h.state_mut().initials = Some(SavedSig::Typed("AL".into()));
+    h.state_mut().set_option("mode", "read").unwrap();
+    h.run_steps(2);
+    h.state_mut().execute("sign.fill.initials.change");
+    h.run_steps(2);
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Initials));
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.state_mut().mode = mode;
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Place saved initials");
+}
+
+#[test]
+fn the_quick_bar_fill_button_keeps_date_after_deselecting_and_across_documents() {
+    let mut h = harness();
+    h.get_by_label("Fill & Sign: Add signature").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Date").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date));
+    h.get_by_label("Select (V)").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+
+    h.state_mut().open_bytes("second.pdf", None, FIXTURE.to_vec()).unwrap();
+    h.state_mut().active = Some(1);
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Date").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date), "a click picks the shown tool, not the default");
+    assert_eq!(h.state().dialog, None, "the default tool's dialog stays closed");
+    h.get_by_label("Select (V)").click();
+    h.run_steps(2);
+
+    h.state_mut().close_tab(1);
+    h.state_mut().close_tab(0);
+    h.run_steps(2);
+    h.state_mut().open_bytes("third.pdf", None, FIXTURE.to_vec()).unwrap();
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Date").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date), "the tool outlives closing every document");
+}
+
+fn commit_typed_text(h: &mut Harness<'static, PdfCraftApp>) {
+    let p = pos2(350.0, 850.0); // Blank canvas outside the page and the type box.
+    h.hover_at(p);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+}
+
+fn fill_input(h: &mut Harness<'static, PdfCraftApp>, events: impl IntoIterator<Item = egui::Event>) {
+    h.input_mut().events.extend(events);
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    h.run_steps(2);
+}
+
+fn fill_key(h: &mut Harness<'static, PdfCraftApp>, key: egui::Key) {
+    fill_input(
+        h,
+        [true, false].map(|pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: egui::Modifiers::NONE }),
+    );
+}
+
+#[test]
+fn fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels() {
+    let shots = std::env::var_os("PDFCRAFT_FILL_SIGN_SHOTS").is_some();
+    let _gpu = shots.then(gpu);
+    let mut h = harness();
+    assert!(h.state_mut().execute("sign.fill.text"));
+    click(&mut h, 50.0, 300.0);
+    let initial_height = type_box_rect(&h).height();
+    fill_key(&mut h, egui::Key::Enter);
+    assert_eq!(h.state().views[0].fill_text.as_ref().map(|t| t.text.as_str()), Some("\n"), "Enter inserts a newline and keeps the editor open");
+    fill_input(&mut h, [egui::Event::Text("Ada".into())]);
+    fill_key(&mut h, egui::Key::Enter);
+    fill_key(&mut h, egui::Key::Enter);
+    fill_input(&mut h, [egui::Event::Text("Lovelace".into())]);
+    fill_key(&mut h, egui::Key::Enter);
+    let text = "\nAda\n\nLovelace\n";
+    assert_eq!(h.state().views[0].fill_text.as_ref().unwrap().text, text);
+    assert!(items(&h).is_empty(), "Enter never places an annotation");
+    let galley = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == text => Some(&t.galley),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(galley.rows.len(), 5, "short typed lines fit without accidental soft wraps");
+    assert!(type_box_rect(&h).height() > initial_height * 3.0, "the editor grows with its lines");
+    if shots {
+        h.render().unwrap().save("/tmp/5850-multiline.png").unwrap();
+    }
+    commit_typed_text(&mut h);
+    assert!(h.state().views[0].fill_text.is_none());
+    assert_eq!(items(&h), [("FreeText".to_owned(), Some(text.to_owned()))]);
+    let id = h.state().views[0].id;
+    let saved = h.state().session.save_bytes(id).unwrap();
+    let mut session = pdfcraft_engine::Session::new();
+    let reopened = session.open("again.pdf", None, saved.clone(), None).unwrap();
+    let annot = &session.get(reopened).unwrap().info.annotations[0];
+    assert_eq!(annot.contents.as_deref(), Some(text));
+    assert!(annot.rect[3] - annot.rect[1] >= 5.0 * 10.0 * 1.2, "the saved box keeps all five lines");
+    click(&mut h, 50.0, 180.0);
+    fill_input(&mut h, [egui::Event::Text("Cancel me".into())]);
+    fill_key(&mut h, egui::Key::Enter);
+    fill_key(&mut h, egui::Key::Escape);
+    assert!(h.state().views[0].fill_text.is_none());
+    assert_eq!(h.state().session.save_bytes(id).unwrap(), saved, "Escape cancels without writing");
 }

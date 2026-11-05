@@ -1,5 +1,7 @@
 //! Measure objects: page-space clicks, live readings and persistent drawing scales.
-use crate::{LeftPanel, PdfCraftApp, QuickTool, canvas::DocView, theme::Tokens, widgets};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::file_filter::AddFilterAnyCase as _;
+use crate::{LeftPanel, PdfCraftApp, QuickTool, canvas::DocView, page_cursor::Layer, theme::Tokens, widgets};
 use egui::{Color32, Pos2, Stroke};
 use pdfcraft_engine::{
     Document, Edit, Style,
@@ -202,9 +204,23 @@ fn snap_to_content(
     None
 }
 
+/// The Measure tools' own clicks this frame: those of a press nobody holds.
+#[derive(Clone, Copy)]
+pub(crate) struct Clicks {
+    pub single: bool,
+    pub double: bool,
+}
+
+impl Clicks {
+    /// `resp`'s clicks, when the press is the tool's (`free`).
+    pub(crate) fn of(resp: &egui::Response, free: bool) -> Self {
+        Clicks { single: free && resp.clicked(), double: free && resp.double_clicked() }
+    }
+}
+
 pub(crate) fn page_input(
     ui: &egui::Ui,
-    resp: &egui::Response,
+    clicks: Clicks,
     doc: &Document,
     view: &mut DocView,
     cx: &crate::comments::PageCx<'_>,
@@ -236,7 +252,7 @@ pub(crate) fn page_input(
     let mut hover = None;
     let mut snap = None;
     if let Some(pos) = pos {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         let (vx, vy) = xf.screen_to_view(pos);
         let [x, y] = info.view_to_user(vx, vy);
         let mut point = [f64::from(x), f64::from(y)];
@@ -254,7 +270,7 @@ pub(crate) fn page_input(
             point = measure::snap::constrain(*last, point);
         }
         hover = Some(point);
-        if resp.clicked() {
+        if clicks.single {
             if state.page != Some(page) {
                 state.cancel();
                 state.page = Some(page);
@@ -284,7 +300,7 @@ pub(crate) fn page_input(
         }
     }
     if state.page == Some(page) && !state.points.is_empty() {
-        if (resp.double_clicked() || !typing && ui.input(|i| i.key_pressed(egui::Key::Enter))) && matches!(tool, Tool::Perimeter | Tool::Area) {
+        if (clicks.double || !typing && ui.input(|i| i.key_pressed(egui::Key::Enter))) && matches!(tool, Tool::Perimeter | Tool::Area) {
             finish(state, &mut view.pending_edit, doc, page, tool, author, units);
         }
         if !typing && ui.input(|i| i.key_pressed(egui::Key::Backspace)) {
@@ -613,7 +629,7 @@ fn export_csv(app: &mut PdfCraftApp) {
                 match app.export_dir_override.as_ref().map(|d| std::path::PathBuf::from(d).join("measurements.csv")) {
                     Some(path) => write(app, path),
                     None => {
-                        let dialog = rfd::AsyncFileDialog::new().set_file_name("measurements.csv").add_filter("CSV", &["csv"]);
+                        let dialog = rfd::AsyncFileDialog::new().set_file_name("measurements.csv").add_filter_any_case("CSV", &["csv"]);
                         app.ask_one(crate::pickers::Ask::Save(dialog), None, write);
                     }
                 }

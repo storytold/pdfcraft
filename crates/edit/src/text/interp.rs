@@ -18,13 +18,33 @@ pub(super) struct TextState {
     /// graphics state the text was painted with that [`TextState::ops`] doesn't restate.
     pub(super) stroke: Vec<Op>,
     pub(super) line_width: Option<f64>,
-    ext_gstate: Vec<Vec<u8>>,
+    ext_gstate: Vec<GsSelection>,
     /// The dash pattern and line cap in force (see [`Ts`]): compared, not restated.
     pub(super) dash: Dash,
     pub(super) line_cap: i64,
 }
 
 impl TextState {
+    /// The state a page's content starts in (ISO 32000-2 §8.4.1, §9.3.1): what is in force on
+    /// top of the page, after its content wrapped in `q`/`Q`.
+    pub(crate) fn initial() -> Self {
+        TextState {
+            font: None,
+            char_spacing: 0.0,
+            word_spacing: 0.0,
+            scale: 1.0,
+            leading: 0.0,
+            rise: 0.0,
+            fill: Vec::new(),
+            render_mode: 0,
+            stroke: Vec::new(),
+            line_width: None,
+            ext_gstate: Vec::new(),
+            dash: (Vec::new(), 0.0),
+            line_cap: 0,
+        }
+    }
+
     pub(super) fn of(ts: &Ts) -> Self {
         TextState {
             font: ts.font.as_ref().map(|(n, _)| (String::from_utf8_lossy(n).into_owned(), ts.size)),
@@ -54,13 +74,17 @@ impl TextState {
     ///
     /// A `gs` has no inverse, so a selection `current` has and this state doesn't stays in force:
     /// run these inside a `q`/`Q` that starts from `current`, one per state drawn.
-    pub(crate) fn paint_ops(&self, current: &TextState) -> Vec<Op> {
+    ///
+    /// `ctm` is the CTM where they run. A soft mask is placed by the CTM its `gs` ran at
+    /// (ISO 32000-2 §11.6.5.2), so one selected at another CTM is selected there and the CTM
+    /// set back.
+    pub(crate) fn paint_ops(&self, current: &TextState, ctm: [f64; 6]) -> Vec<Op> {
         let n = pdfcraft_content::num;
         let mut v = Vec::new();
         // The selections both share stay in force; the ones after them are selected again in order.
         let shared = self.ext_gstate.iter().zip(&current.ext_gstate).take_while(|(a, b)| a == b).count();
-        for name in self.ext_gstate.iter().skip(shared) {
-            v.push(Op::new("gs", vec![Object::Name(name.clone())]));
+        for sel in self.ext_gstate.iter().skip(shared) {
+            sel.push_ops(&mut v, ctm);
         }
         // A reselected ExtGState may set `/LW`, so the width (already the effective one) follows it.
         let reselected = !v.is_empty();
@@ -222,7 +246,7 @@ pub(super) struct Ts {
     /// The line width a `w` or an ExtGState's `/LW` set (`None`: the initial 1.0).
     pub(super) line_width: Option<f64>,
     /// The ExtGState resources selected with `gs`, oldest first (see [`select_gs`]).
-    pub(super) ext_gstate: Vec<Vec<u8>>,
+    pub(super) ext_gstate: Vec<GsSelection>,
     /// The dash pattern a `d` or an ExtGState's `/D` set (initially solid: `[] 0`).
     pub(super) dash: Dash,
     /// The line cap a `J` or an ExtGState's `/LC` set (initially 0, butt).
@@ -255,12 +279,38 @@ const MAX_GS: usize = 32;
 /// Record `gs /name` in `list`. A `gs` sets every parameter its dictionary names to an absolute
 /// value, so a later selection of the same dictionary overrides the earlier one completely: the
 /// earlier entry goes, which keeps replaying the list equivalent to replaying the stream.
-fn select_gs(list: &mut Vec<Vec<u8>>, name: &[u8]) {
-    list.retain(|n| n != name);
+fn select_gs(list: &mut Vec<GsSelection>, name: &[u8], anchor: Option<[f64; 6]>) {
+    list.retain(|s| s.name != name);
     if list.len() >= MAX_GS {
         list.remove(0);
     }
-    list.push(name.to_vec());
+    list.push(GsSelection { name: name.to_vec(), anchor });
+}
+
+/// One `gs` selection: the ExtGState's resource name, and the CTM it ran at when the dictionary
+/// has a soft mask, which that CTM places (ISO 32000-2 §11.6.5.2).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct GsSelection {
+    name: Vec<u8>,
+    anchor: Option<[f64; 6]>,
+}
+
+impl GsSelection {
+    /// Select this ExtGState from where the CTM is `ctm`: at its anchor, then back to `ctm`. Both
+    /// moves need an invertible matrix; without one it is selected where it runs.
+    fn push_ops(&self, v: &mut Vec<Op>, ctm: [f64; 6]) {
+        let gs = Op::new("gs", vec![Object::Name(self.name.clone())]);
+        let moves = self.anchor.filter(|a| *a != ctm).and_then(|a| {
+            let (anchor, here) = (Matrix(a), Matrix(ctm));
+            Some((anchor.then(&here.invert()?), here.then(&anchor.invert()?)))
+        });
+        let Some((to, back)) = moves else {
+            v.push(gs);
+            return;
+        };
+        let cm = |m: Matrix| Op::new("cm", m.0.iter().map(|x| pdfcraft_content::num(*x)).collect());
+        v.extend([cm(to), gs, cm(back)]);
+    }
 }
 
 /// The text-showing operators of one stream with their text, font, box and baseline.
@@ -301,6 +351,14 @@ pub(super) struct Shown {
     pub(super) paint: Paint,
     pub(super) logical_order: bool,
     pub(super) actual_text: bool,
+    /// Set when a `/PCSoft` or `/PCHard` marker was seen since the previous text line.
+    pub(super) soft_break: bool,
+    pub(super) hard_break: bool,
+    /// The `/N` a `/PCSoft` marker carried: how many separator characters the wrap consumed (0
+    /// for a Chinese/Japanese word split). Meaningless unless `soft_break` is set; 1 for a
+    /// `/PCSoft` with no `/N` (a file saved before this was tracked, or by another writer),
+    /// matching the single space a rejoin always used before #2529.
+    pub(super) soft_gap: usize,
 }
 
 impl Shown {
@@ -425,7 +483,10 @@ fn positioned_tracking(shown: &mut [Shown]) {
 /// stream), an unbalanced `q`, the font and the colour still apply in the streams after it.
 pub(super) struct Carry {
     pub(super) ts: Ts,
-    pub(super) stack: Vec<Ts>,
+    /// Each saved state with the text and text line matrices: inside a text object `q`/`Q`
+    /// save and restore them too (ISO 32000-2 §9.4.1, as corrected by the PDF Association's
+    /// errata, issue 368), as the renderer does.
+    pub(super) stack: Vec<(Ts, Matrix, Matrix)>,
     pub(super) marked: Vec<Option<usize>>,
     /// For each open marked-content sequence, its optional content group when it is `/OC`.
     pub(super) layers: Vec<Option<Vec<u8>>>,
@@ -546,6 +607,9 @@ struct TextRunState<'a> {
     marked: &'a MarkedContent,
     carry: &'a mut Carry,
     out: &'a mut Vec<Shown>,
+    soft_break: bool,
+    hard_break: bool,
+    soft_gap: usize,
 }
 
 fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), EditError> {
@@ -742,6 +806,9 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone() },
         logical_order: false,
         actual_text: false,
+        soft_break: state.soft_break,
+        hard_break: state.hard_break,
+        soft_gap: state.soft_gap,
     });
     Ok(())
 }
@@ -756,30 +823,59 @@ pub(super) fn interpret(
     // `Some(properties)`: read `/ActualText`, looking named property lists up in `properties`.
     logical_text: Option<&Dict>,
 ) -> Result<Vec<Shown>, EditError> {
-    let fonts_res = resources.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
-    let states = resources.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
+    let (mut held_fonts, mut held_states, none) = (None, None, Dict::new());
+    let fonts_res = super::resource_dict(doc, resources, b"Font", &mut held_fonts).unwrap_or(&none);
+    let states = super::resource_dict(doc, resources, b"ExtGState", &mut held_states).unwrap_or(&none);
     let mut out: Vec<Shown> = Vec::new();
     let mut ts = carry.ts.clone();
     let mut at_bt = (0usize, ts.clone());
-    let mut stack: Vec<Ts> = std::mem::take(&mut carry.stack);
+    let mut stack: Vec<(Ts, Matrix, Matrix)> = std::mem::take(&mut carry.stack);
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let mut bt = 0usize;
     let mut marked =
         MarkedContent { regions: std::mem::take(&mut carry.marked), layers: std::mem::take(&mut carry.layers), ..MarkedContent::default() };
+    // A rewrite names a wrap (`/PCSoft`) or a break it kept (`/PCHard`) in an empty marker
+    // before the next line. Neither name is a paragraph region, so it does not change scope.
+    let mut soft_break = false;
+    let mut hard_break = false;
+    // `/PCSoft`'s `/N` property: how many separator characters the wrap consumed. A `/PCSoft`
+    // with no properties dict (a file saved before this was tracked, or by another writer) reads
+    // as 1, the single space a rejoin always used before #2529.
+    let mut soft_gap = 1usize;
     for (i, op) in ops.iter().enumerate() {
         match op.op.as_slice() {
             // No depth cap: every `EMC` pops, so a capped push would pair it with the enclosing
             // sequence (#3573). Both stacks stay bounded by the number of operators.
             b"BMC" | b"BDC" => {
+                if op.name(0) == Some(b"PCSoft") {
+                    soft_break = true;
+                    hard_break = false;
+                    soft_gap = op
+                        .operands
+                        .get(1)
+                        .and_then(Object::as_dict)
+                        .and_then(|d| d.get(b"N"))
+                        .and_then(Object::as_int)
+                        .and_then(|n| usize::try_from(n).ok())
+                        .unwrap_or(1);
+                    // The marker is untrusted and later expands into spaces during reflow.
+                    // Charge it to the same page-wide budget as glyph text, so many individually
+                    // small markers cannot multiply the allocation past the limit either.
+                    carry.text_left =
+                        carry.text_left.checked_sub(soft_gap).ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
+                } else if op.name(0) == Some(b"PCHard") {
+                    hard_break = true;
+                    soft_break = false;
+                }
                 marked.begin(doc, op, i, logical_text, out.len());
             }
             b"EMC" => {
                 marked.end(i, &mut out);
             }
-            b"q" => stack.push(ts.clone()),
+            b"q" => stack.push((ts.clone(), tm, tlm)),
             b"Q" => {
-                if let Some(s) = stack.pop() {
-                    ts = s;
+                if let Some(saved) = stack.pop() {
+                    (ts, tm, tlm) = saved;
                 }
             }
             b"cm" => {
@@ -833,11 +929,16 @@ pub(super) fn interpret(
             b"Ts" => ts.rise = op.num(0).unwrap_or(0.0),
             b"Tr" => ts.render_mode = op.operands.first().and_then(Object::as_int).unwrap_or(-1),
             b"gs" => {
+                let mut held = None;
+                let params = match op.name(0).and_then(|name| states.get(name)) {
+                    Some(p) => super::dict_in_place(doc, p, &mut held),
+                    None => None,
+                };
                 if let Some(name) = op.name(0) {
-                    select_gs(&mut ts.ext_gstate, name);
+                    let masked = params.and_then(|p| p.get(b"SMask")).is_some_and(|m| doc.resolve(m).as_dict().is_some());
+                    select_gs(&mut ts.ext_gstate, name, masked.then_some(ts.ctm.0));
                 }
-                let params = op.name(0).and_then(|name| states.get(name)).map(|p| doc.resolve(p));
-                if let Some(params) = params.as_deref().and_then(Object::as_dict) {
+                if let Some(params) = params {
                     ts.gs.apply(doc, params);
                     // `/LW` sets the line width as `w` does (ISO 32000-2 §8.4.5).
                     let lw = params.get(b"LW").and_then(|w| doc.resolve(w).as_f64()).filter(|w| w.is_finite());
@@ -875,8 +976,28 @@ pub(super) fn interpret(
                 tm = tlm;
             }
             b"Tj" | b"TJ" | b"'" | b"\"" => {
-                let mut state = TextRunState { ts: &mut ts, tm: &mut tm, tlm: &mut tlm, at_bt: &at_bt, bt, marked: &marked, carry, out: &mut out };
+                let before = out.len();
+                let mut state = TextRunState {
+                    ts: &mut ts,
+                    tm: &mut tm,
+                    tlm: &mut tlm,
+                    at_bt: &at_bt,
+                    bt,
+                    marked: &marked,
+                    carry,
+                    out: &mut out,
+                    soft_break,
+                    hard_break,
+                    soft_gap,
+                };
                 show_text(op, i, &mut state)?;
+                // A numeric-only TJ adjustment shows no glyphs and pushes nothing: the break
+                // belongs to whichever text-showing operator comes next.
+                if out.len() > before {
+                    soft_break = false;
+                    hard_break = false;
+                    soft_gap = 1;
+                }
             }
             _ => {}
         }

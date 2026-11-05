@@ -3,7 +3,7 @@
 //! stays as it was apart from the encoding: its size, colour space, masks, `/Interpolate`,
 //! `/Intent`, `/Metadata` and every other entry are kept.
 
-use pdfcraft_cos::{Document, Object, Stream};
+use pdfcraft_cos::{Document, ImageBudget, Object, Stream};
 
 use crate::images::{MAX_PIXELS, components, is_dct, is_identity_decode, jpeg, pixels, ycc_encoded};
 
@@ -47,8 +47,9 @@ pub enum NotDecoded {
     Corrupt,
 }
 
-/// Read the samples of image stream `s` (a dictionary with `/Subtype /Image`).
-pub fn decode_samples(doc: &Document, s: &Stream) -> Result<Samples, NotDecoded> {
+/// Read the samples of image stream `s` (a dictionary with `/Subtype /Image`), decoding it within
+/// `budget` (an operation over many images shares one).
+pub fn decode_samples(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<Samples, NotDecoded> {
     let d = &s.dict;
     if matches!(d.get(b"ImageMask").map(|v| doc.resolve(v)).as_deref(), Some(Object::Bool(true))) {
         return Err(NotDecoded::StencilMask);
@@ -91,7 +92,7 @@ pub fn decode_samples(doc: &Document, s: &Stream) -> Result<Samples, NotDecoded>
     if jpeg && n == 3 && ycc_encoded(doc, s).is_none() {
         return Err(NotDecoded::Ambiguous);
     }
-    let data = pixels(doc, s, n).ok_or(NotDecoded::Corrupt)?;
+    let data = pixels(doc, s, n, budget).ok_or(NotDecoded::Corrupt)?;
     Ok(Samples { width, height, components: n, data, jpeg, bilevel: false, inverted: false })
 }
 
@@ -211,13 +212,13 @@ mod tests {
             ],
             px.clone(),
         );
-        let got = decode_samples(&doc(), &s).unwrap();
+        let got = decode_samples(&doc(), &s, &mut ImageBudget::with_work(u64::MAX)).unwrap();
         assert_eq!((got.width, got.height, got.components, got.jpeg, got.bilevel), (12, 5, 1, false, false));
         assert_eq!(got.data, px);
         let back = encode_samples(&s, &got, 90).unwrap();
         assert_eq!(back.dict.name(b"Filter"), Some(&b"FlateDecode"[..]));
         assert_eq!(back.dict.get(b"Interpolate"), Some(&Object::Bool(true)));
-        assert_eq!(decode_samples(&doc(), &back).unwrap().data, px);
+        assert_eq!(decode_samples(&doc(), &back, &mut ImageBudget::with_work(u64::MAX)).unwrap().data, px);
     }
 
     #[test]
@@ -234,7 +235,7 @@ mod tests {
             ],
             raw.clone(),
         );
-        let got = decode_samples(&doc(), &s).unwrap();
+        let got = decode_samples(&doc(), &s, &mut ImageBudget::with_work(u64::MAX)).unwrap();
         assert!(got.bilevel);
         assert_eq!(&got.data[..10], &[0, 0, 0, 0, 0, 255, 255, 255, 255, 255]);
         assert!(got.data[10..].iter().all(|&v| v == 255));
@@ -255,13 +256,13 @@ mod tests {
                 ("BitsPerComponent", Object::Int(8)),
             ];
             d.extend(extra.iter().cloned());
-            decode_samples(&doc(), &image(&d, raw))
+            decode_samples(&doc(), &image(&d, raw), &mut ImageBudget::with_work(u64::MAX))
         };
         assert_eq!(base(&[("ColorSpace", Object::name("DeviceCMYK"))], vec![0; 64]), Err(NotDecoded::ColourSpace));
         assert_eq!(base(&[("BitsPerComponent", Object::Int(4))], vec![0; 8]), Err(NotDecoded::BitDepth(4)));
         assert_eq!(base(&[("Filter", Object::name("JBIG2Decode"))], vec![0; 8]), Err(NotDecoded::Filter));
         // JPEG 2000 may leave the colour space and bit depth to its data: the format is the reason.
-        let jpx = |dict: &[(&str, Object)]| decode_samples(&doc(), &image(dict, vec![0; 8]));
+        let jpx = |dict: &[(&str, Object)]| decode_samples(&doc(), &image(dict, vec![0; 8]), &mut ImageBudget::with_work(u64::MAX));
         let size = [("Width", Object::Int(4)), ("Height", Object::Int(4)), ("Filter", Object::name("JPXDecode"))];
         assert_eq!(jpx(&size), Err(NotDecoded::Filter));
         assert_eq!(jpx(&[size[0].clone(), size[1].clone(), size[2].clone(), ("ColorSpace", Object::name("DeviceRGB"))]), Err(NotDecoded::Filter));
