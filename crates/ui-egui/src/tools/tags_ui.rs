@@ -190,62 +190,6 @@ impl State {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn tag(object: ObjRef, classes: &[&str]) -> TagInfo {
-        TagInfo {
-            object,
-            parent: None,
-            depth: 0,
-            kind: "P".to_owned(),
-            title: None,
-            actual_text: None,
-            alt: None,
-            language: None,
-            summary: None,
-            scope: None,
-            classes: classes.iter().map(|name| (*name).to_owned()).collect(),
-            page: None,
-        }
-    }
-
-    #[test]
-    fn classes_load_across_pages_until_total_or_an_empty_page() {
-        let loaded = load_class_pages(|offset, limit| {
-            let total = 201;
-            let end = offset.saturating_add(limit).min(total);
-            let page = (offset..end).map(|index| ClassMapEntry { name: format!("Class{index}"), assignments: 0 }).collect();
-            (total, page)
-        });
-        assert_eq!(loaded.len(), 201);
-        assert_eq!(loaded.last().map(|entry| entry.name.as_str()), Some("Class200"));
-
-        let mut calls = 0;
-        let stopped = load_class_pages(|offset, _| {
-            calls += 1;
-            if offset == 0 { (201, vec![ClassMapEntry { name: "First".to_owned(), assignments: 0 }]) } else { (201, Vec::new()) }
-        });
-        assert_eq!(stopped.len(), 1);
-        assert_eq!(calls, 2);
-    }
-
-    #[test]
-    fn rename_history_syncs_only_a_clean_classes_draft() {
-        let object = ObjRef::new(4, 0);
-        let mut state = State { selected: Some(object), ..State::default() };
-        state.draft.classes = "Old".to_owned();
-        assert!(state.class_draft_matches_tag(&tag(object, &["Old"])));
-        state.sync_classes_from_tag(&tag(object, &["New"]));
-        assert_eq!(state.draft.classes, "New");
-
-        state.draft.classes = "An unfinished edit".to_owned();
-        assert!(!state.class_draft_matches_tag(&tag(object, &["New"])));
-        state.sync_classes_from_tag(&tag(object, &["Old"]));
-        assert_eq!(state.draft.classes, "An unfinished edit");
-    }
-}
 
 /// The chosen page and an edit to apply after the panel releases its document borrow.
 pub(crate) fn panel(
@@ -451,5 +395,62 @@ fn field(ui: &mut Ui, label: &str, value: &mut String, multiline: bool) {
         ui.add(widgets::block(value).desired_rows(2).desired_width(f32::INFINITY)).labelled_by(l.id);
     } else {
         ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY)).labelled_by(l.id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tag(object: ObjRef, classes: &[&str]) -> TagInfo {
+        TagInfo {
+            object,
+            parent: None,
+            depth: 0,
+            kind: "P".to_owned(),
+            title: None,
+            actual_text: None,
+            alt: None,
+            language: None,
+            summary: None,
+            scope: None,
+            classes: classes.iter().map(|name| (*name).to_owned()).collect(),
+            page: None,
+        }
+    }
+
+    #[test]
+    fn classes_load_across_pages_until_total_or_an_empty_page() {
+        let loaded = load_class_pages(|offset, limit| {
+            let total = 201;
+            let end = offset.saturating_add(limit).min(total);
+            let page = (offset..end).map(|index| ClassMapEntry { name: format!("Class{index}"), assignments: 0 }).collect();
+            (total, page)
+        });
+        assert_eq!(loaded.len(), 201);
+        assert_eq!(loaded.last().map(|entry| entry.name.as_str()), Some("Class200"));
+
+        let mut calls = 0;
+        let stopped = load_class_pages(|offset, _| {
+            calls += 1;
+            if offset == 0 { (201, vec![ClassMapEntry { name: "First".to_owned(), assignments: 0 }]) } else { (201, Vec::new()) }
+        });
+        assert_eq!(stopped.len(), 1);
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn rename_history_syncs_only_a_clean_classes_draft() {
+        let object = ObjRef::new(4, 0);
+        let mut state = State { selected: Some(object), ..State::default() };
+        state.draft.classes = "Old".to_owned();
+        assert!(state.class_draft_matches_tag(&tag(object, &["Old"])));
+        state.sync_classes_from_tag(&tag(object, &["New"]));
+        assert_eq!(state.draft.classes, "New");
+
+        state.draft.classes = "An unfinished edit".to_owned();
+        assert!(!state.class_draft_matches_tag(&tag(object, &["New"])));
+        state.sync_classes_from_tag(&tag(object, &["Old"]));
+        assert_eq!(state.draft.classes, "An unfinished edit");
     }
 }
