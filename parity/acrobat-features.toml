@@ -70,8 +70,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = ["doc_info"]
-evidence = ["crates/ui-egui/tests/it/viewer.rs::damaged_files_say_they_were_repaired"]
-notes = "a notice says the file was repaired; Document Properties ▸ Advanced lists the repairs; doc_info reports them"
+evidence = ["crates/ui-egui/tests/it/viewer.rs::damaged_files_say_they_were_repaired", "crates/cos/tests/it/generations.rs::contradictory_xref_generation_recovers_the_matching_header_and_records_repair", "crates/cos/tests/it/generations.rs::generation_repair_diagnostics_are_bounded_without_disabling_recovery", "crates/cos/tests/it/generations.rs::retained_generation_disagreements_are_reported_in_materialized_mode_too", "crates/cos/tests/it/generations.rs::hybrid_generation_diagnostics_observe_rows_before_the_table_hides_them", "crates/cos/tests/it/generations.rs::discarded_xref_repair_notes_do_not_survive_object_header_reconstruction"]
+notes = "a notice says the file was repaired; Document Properties ▸ Advanced lists the repairs; doc_info reports them. COS records bounded live xref/header generation disagreements on open, including retained materialized and hybrid rows before folding; this follow-up validates the COS policy, without a fresh GUI claim."
 
 [[feature]]
 id = "core.xref-streams"
@@ -82,8 +82,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/cos/tests/it/writer.rs::incremental_saves_stack_on_an_xref_stream_file", "crates/cos/tests/it/writer.rs::page_tree_loops_in_object_streams_do_not_crash_readers"]
-notes = ""
+evidence = ["crates/cos/tests/it/generations.rs::indirect_stream_lengths_require_the_referenced_generation", "crates/cos/tests/it/generations.rs::compressed_objects_only_accept_generation_zero", "crates/cos/tests/it/writer.rs::incremental_saves_stack_on_an_xref_stream_file", "crates/cos/tests/it/writer.rs::page_tree_loops_in_object_streams_do_not_crash_readers"]
+notes = "Compressed objects accept generation zero only; indirect stream lengths are resolved by their complete reference. Synthetic regression coverage."
 
 [[feature]]
 id = "core.hybrid-xref"
@@ -298,8 +298,8 @@ milestone = "M1"
 status = "shipped"
 commands = ["file.save_as"]
 tools = ["doc_save"]
-evidence = ["crates/organize/src/tests.rs::full_save_drops_unreachable_objects", "crates/engine/src/tests.rs::full_save_is_readable_and_smaller_after_deletes"]
-notes = ""
+evidence = ["crates/cos/tests/it/generations.rs::full_save_does_not_turn_stale_references_into_live_ones", "crates/cos/tests/it/generations.rs::repaired_page_tree_aliases_keep_one_identity_in_full_saves", "crates/organize/src/tests.rs::full_save_drops_unreachable_objects", "crates/engine/src/tests.rs::full_save_is_readable_and_smaller_after_deletes"]
+notes = "Full rewrites coalesce accepted repair aliases to one output object, preserving page-tree parent identity. They preserve reference-generation identity: stale references become null while live replacement objects remain reachable. Synthetic classic and object-stream save tests; this does not establish general rendering fidelity."
 
 [[feature]]
 id = "core.object-stream-compression"
@@ -334,8 +334,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/cos/src/document/tests.rs::reads_classic_revision_and_edits_are_copy_on_write"]
-notes = ""
+evidence = ["crates/cos/tests/it/generations.rs::free_xref_slots_never_revive_retained_object_headers", "crates/cos/tests/it/generations.rs::restoring_equal_values_still_restores_the_accepted_generation_aliases", "crates/cos/tests/it/generations.rs::restoring_explicit_sets_removes_old_generation_aliases", "crates/preflight/tests/generation_repairs.rs::preflight_preserves_repaired_image_references_in_snapshots_and_saves", "crates/cos/tests/it/generations.rs::repaired_header_references_survive_full_saves_and_dictionary_edits", "crates/cos/tests/it/generations.rs::incremental_generation_identity_is_visible_to_an_independent_reader", "crates/cos/tests/it/generations.rs::restoring_snapshot_preserves_changes_to_nonzero_generation_objects", "crates/cos/tests/it/generations.rs::overlay_generation_changes_do_not_retarget_old_references_or_clones", "crates/cos/tests/it/generations.rs::references_require_the_current_generation_even_with_a_warm_cache", "crates/cos/src/document/tests.rs::reads_classic_revision_and_edits_are_copy_on_write"]
+notes = "Generation-aware references stay distinct across warm caches, edit overlays and snapshots, including restoration and incremental save/reopen of edited nonzero-generation objects. A damaged live xref row may additionally resolve the matching same-number object header; unrelated generations and free slots remain null. Repair-aware edits preserve both aliases and require full rewrite; explicit replacement keeps only its supplied generation. Synthetic preflight/snapshot and classic/packed full/incremental controls include an independent reader. Broader real-file fidelity remains tracked separately."
 
 [[feature]]
 id = "core.write-validity"
