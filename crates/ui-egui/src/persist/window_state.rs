@@ -7,7 +7,9 @@
 //! A window that opens larger than its monitor (the 1440 × 920 first-start size on a 1366 × 768
 //! laptop, or 1536 × 864 points at 125 % scaling, or a size saved on a bigger monitor) runs off
 //! the screen, and with it the foot of every dialog and drop-down list fitted to the window. So
-//! such a window is made to fit and, on the main monitor, centred.
+//! such a window is made to fit and, on the main monitor, centred. A window that starts maximized
+//! keeps that size to return to, so it is checked again when it comes back from maximized or full
+//! screen.
 
 /// eframe's storage key for the window settings.
 const WINDOW_KEY: &str = "window";
@@ -51,15 +53,18 @@ fn fit_to_monitor(outer: egui::Rect, inner: egui::Rect, monitor: egui::Vec2) -> 
 pub struct WindowState {
     /// The settings eframe last stored for a shown (not minimized) window.
     shown: Option<String>,
-    /// The size at start has been checked ([`Self::repair`]).
+    /// The size has been checked ([`Self::repair`]): once at start, and again on coming back from
+    /// maximized or full screen.
     checked: bool,
+    /// The window was maximized or full screen when last shown.
+    was_filling: bool,
 }
 
 impl WindowState {
     /// The settings the window started with: what to put back if it is minimized before eframe
     /// stores a shown one.
     pub fn started_with(storage: Option<&dyn eframe::Storage>) -> Self {
-        Self { shown: storage.and_then(|s| s.get_string(WINDOW_KEY)), checked: false }
+        Self { shown: storage.and_then(|s| s.get_string(WINDOW_KEY)), ..Self::default() }
     }
 
     /// After eframe has stored the window: remember it while the window is shown, and while it
@@ -78,11 +83,8 @@ impl WindowState {
     /// Once the window's size is known: a shown window at egui's floor in both directions came
     /// from settings stored while it was minimized (before this fix), so give it a usable size. A
     /// shown window larger than its monitor (not maximized or full screen, which fit by
-    /// definition) is fitted to it ([`fit_to_monitor`]).
+    /// definition) is fitted to it ([`fit_to_monitor`]), at start and on coming back from either.
     pub fn repair(&mut self, ctx: &egui::Context) {
-        if self.checked {
-            return;
-        }
         let (rect, outer, minimized, maximized, fullscreen, monitor) = ctx.input(|i| {
             let v = i.viewport();
             (v.inner_rect, v.outer_rect, v.minimized, v.maximized, v.fullscreen, v.monitor_size)
@@ -91,13 +93,21 @@ impl WindowState {
         if minimized == Some(true) {
             return;
         }
+        let filling = maximized == Some(true) || fullscreen == Some(true);
+        if self.was_filling && !filling {
+            self.checked = false;
+        }
+        self.was_filling = filling;
+        if self.checked {
+            return;
+        }
         self.checked = true;
         if rect.width() <= EGUI_FLOOR + 0.5 && rect.height() <= EGUI_FLOOR + 0.5 {
             // The stored settings are the broken ones: never put them back.
             self.shown = None;
             let size = monitor.map_or(USABLE, |m| USABLE.min(m * 0.9));
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-        } else if maximized != Some(true) && fullscreen != Some(true) {
+        } else if !filling {
             let Some(monitor) = monitor else { return };
             // Without the outer rectangle (Wayland) the size is checked and the window not moved.
             let outer = outer.unwrap_or(egui::Rect::from_min_size(egui::pos2(-1.0, -1.0), rect.size()));
@@ -170,7 +180,7 @@ mod tests {
         info.inner_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size));
         info.minimized = minimized;
         info.monitor_size = Some(egui::vec2(2674.0, 1504.0));
-        let mut state = WindowState { shown: Some(MINIMIZED.into()), checked: false };
+        let mut state = WindowState { shown: Some(MINIMIZED.into()), ..WindowState::default() };
         let out = ctx.run_logic(&input, |ctx| state.repair(ctx));
         let commands = out.viewport_commands.get(&egui::ViewportId::ROOT).cloned().unwrap_or_default();
         // Repaired: the settings it started with are not put back by a minimized close.
@@ -265,5 +275,55 @@ mod tests {
         // A maximized window reaches past the monitor by its borders, and is left alone.
         let maxed = egui::Rect::from_min_size(egui::pos2(-8.0, -8.0), LAPTOP + egui::vec2(16.0, 60.0));
         assert!(started(maxed, maxed.shrink(8.0), true).is_empty());
+    }
+
+    /// One frame of a window with these rectangles, keeping `state` between frames.
+    fn frame(state: &mut WindowState, rects: (egui::Rect, egui::Rect), maximized: bool, minimized: bool) -> Vec<egui::ViewportCommand> {
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        let info = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+        info.outer_rect = Some(rects.0);
+        info.inner_rect = Some(rects.1);
+        info.minimized = Some(minimized);
+        info.maximized = Some(maximized);
+        info.fullscreen = Some(false);
+        info.monitor_size = Some(LAPTOP);
+        let out = ctx.run_logic(&input, |ctx| state.repair(ctx));
+        out.viewport_commands.get(&egui::ViewportId::ROOT).cloned().unwrap_or_default()
+    }
+
+    /// A window that starts maximized keeps a too-big size to return to: restored down, it ran
+    /// off the screen with the start-up check long past.
+    #[test]
+    fn a_window_restored_down_from_maximized_is_fitted() {
+        let filling = egui::Rect::from_min_size(egui::pos2(-8.0, -8.0), LAPTOP + egui::vec2(16.0, 16.0));
+        let filling = (filling, filling.shrink(8.0));
+        let big = window(egui::pos2(96.0, 0.0), egui::vec2(1440.0, 864.0));
+        let small = window(egui::pos2(96.0, 40.0), egui::vec2(1000.0, 600.0));
+        let mut state = WindowState::default();
+        assert!(frame(&mut state, filling, true, false).is_empty(), "maximized at start");
+        let commands = frame(&mut state, big, false, false);
+        let (size, place) = fit_to_monitor(big.0, big.1, LAPTOP).expect("it does not fit");
+        assert_eq!(commands, [egui::ViewportCommand::InnerSize(size), egui::ViewportCommand::OuterPosition(place.expect("main monitor"))]);
+        assert!(frame(&mut state, big, false, false).is_empty(), "once for each return");
+        // Maximized and back again, to a size that fits: nothing to do.
+        let mut state = WindowState::default();
+        assert!(frame(&mut state, small, false, false).is_empty());
+        assert!(frame(&mut state, filling, true, false).is_empty());
+        assert!(frame(&mut state, small, false, false).is_empty());
+    }
+
+    /// Windows reports a minimized window as not maximized: back from the taskbar, a maximized
+    /// window has not come back to its normal size, and is not checked as if it had.
+    #[test]
+    fn minimizing_a_maximized_window_is_not_a_return_from_maximized() {
+        let filling = egui::Rect::from_min_size(egui::pos2(-8.0, -8.0), LAPTOP + egui::vec2(16.0, 16.0));
+        let filling = (filling, filling.shrink(8.0));
+        let mut state = WindowState::default();
+        assert!(frame(&mut state, filling, true, false).is_empty());
+        let gone = egui::Rect::from_min_size(egui::pos2(-32000.0, -32000.0), egui::Vec2::ZERO);
+        assert!(frame(&mut state, (gone, gone), false, true).is_empty());
+        assert!(frame(&mut state, filling, true, false).is_empty());
+        assert!(state.was_filling);
     }
 }
