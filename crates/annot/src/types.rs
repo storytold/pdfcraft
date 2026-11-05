@@ -355,6 +355,10 @@ pub enum Shape {
         start: LineEnding,
         end: LineEnding,
     },
+    /// Translucent freehand highlighting, stored as ink with a distinct intent.
+    FreehandHighlight {
+        strokes: Vec<Vec<[f64; 2]>>,
+    },
     /// Freehand strokes (Draw tool).
     Ink {
         strokes: Vec<Vec<[f64; 2]>>,
@@ -474,6 +478,7 @@ pub fn rect_quad(r: [f64; 4]) -> [f64; 8] {
 }
 
 impl Shape {
+    /// Return the PDF `/Subtype` name for this annotation shape.
     pub fn subtype(&self) -> &'static str {
         match self {
             Shape::Note { .. } => "Text",
@@ -481,7 +486,7 @@ impl Shape {
             Shape::Rectangle { .. } => "Square",
             Shape::Oval { .. } => "Circle",
             Shape::Line { .. } => "Line",
-            Shape::Ink { .. } | Shape::Signature { .. } => "Ink",
+            Shape::Ink { .. } | Shape::FreehandHighlight { .. } | Shape::Signature { .. } => "Ink",
             Shape::TextBox { .. } | Shape::Typewriter { .. } | Shape::Callout { .. } => "FreeText",
             Shape::Mark { .. } | Shape::Stamp { .. } | Shape::CustomStamp { .. } | Shape::TypedSignature { .. } => "Stamp",
             Shape::Redact { .. } => "Redact",
@@ -561,6 +566,11 @@ pub struct Style {
     pub width: f64,
     /// Interior fill for rectangles and ovals (`/IC`), background for text boxes.
     pub fill: Option<Rgb>,
+    /// The fill's own opacity, 0–1 (`/ca`), where it differs from `opacity` (which is then the
+    /// line's or border's); `None`: as `opacity`.
+    pub fill_opacity: Option<f64>,
+    /// A text box's text's own opacity, 0–1 (`/PCTextOpacity`); `None`: as the fill's.
+    pub text_opacity: Option<f64>,
 }
 
 /// The style properties changed by one annotation edit. `None` leaves a property unchanged.
@@ -592,7 +602,7 @@ pub struct TextReplacement<'a> {
 
 impl Default for Style {
     fn default() -> Self {
-        Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None }
+        Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None, fill_opacity: None, text_opacity: None }
     }
 }
 
@@ -610,6 +620,7 @@ impl Style {
             }
             Shape::Callout { .. } => ([0.0, 0.0, 0.0], 1.0),
             Shape::Caret { .. } | Shape::Attachment { .. } => ([0.0, 0.47, 0.84], 1.0),
+            Shape::FreehandHighlight { .. } => return Self { color: [1.0, 0.94, 0.0], opacity: 0.35, width: 14.0, ..Self::default() },
             Shape::Ink { .. } => ([0.0, 0.4, 0.87], 2.0),
             Shape::TextBox { .. } | Shape::Typewriter { .. } => ([0.0, 0.0, 0.0], 0.0),
             Shape::Mark { .. } => ([0.0, 0.0, 0.0], 1.5),
@@ -618,9 +629,9 @@ impl Style {
             Shape::CustomStamp { .. } => ([0.0, 0.0, 0.0], 0.0),
             Shape::TypedSignature { .. } => ([0.0, 0.0, 0.0], 0.0),
             // Red outline while marked; a black box once applied.
-            Shape::Redact { .. } => return Self { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: Some([0.0, 0.0, 0.0]) },
+            Shape::Redact { .. } => return Self { color: [0.89, 0.13, 0.13], fill: Some([0.0, 0.0, 0.0]), ..Self::default() },
         };
-        Self { color, opacity: 1.0, width, fill: None }
+        Self { color, width, ..Self::default() }
     }
 }
 
