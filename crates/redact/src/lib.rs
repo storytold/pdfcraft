@@ -275,7 +275,7 @@ pub(crate) fn page_streams_within(
         match &*doc.resolve(o) {
             // Strict: a tolerant decode keeps what precedes corruption and drops the rest, which
             // still draws in viewers that read further; anything not read can't be cleaned.
-            Object::Stream(s) => data.push(budget.decode_strict(s).map_err(|_| RedactError::Unreadable(index + 1))?),
+            Object::Stream(s) => data.push(budget.decode_strict(doc, s).map_err(|_| RedactError::Unreadable(index + 1))?),
             Object::Null => data.push(Vec::new()),
             _ => return Err(RedactError::Unreadable(index + 1)),
         }

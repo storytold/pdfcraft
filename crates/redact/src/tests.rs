@@ -81,6 +81,54 @@ fn glyphs_under_a_mark_go_and_the_rest_stays_put() {
     assert!(!content(&doc, 0).contains("1234"));
 }
 
+/// Content whose `/DecodeParms` is given by reference is read through the reference, on the page
+/// and in a form: the text under a mark goes. Read with the predictor's tag bytes left in, no glyph
+/// was found under the mark, and the redaction left the text in the file and said it was done.
+#[test]
+fn content_with_parameters_given_by_reference_is_redacted() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    // PNG Up, one column: each byte a row of its own, tagged 2.
+    let predicted = |doc: &mut Document, mut dict: Dict| {
+        let mut rows = Vec::new();
+        let mut above = 0u8;
+        for &b in b"BT /F1 10 Tf 10 100 Td (SECRET) Tj ET" {
+            rows.extend([2, b.wrapping_sub(above)]);
+            above = b;
+        }
+        let parms = doc.add(Object::Dict([(b"Predictor".to_vec(), Object::Int(12))].into_iter().collect::<Dict>()));
+        dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+        let mut s = Stream::flate(Dict::new(), &rows);
+        for (k, v) in dict.iter() {
+            s.dict.set(k.to_vec(), v.clone());
+        }
+        s
+    };
+    let marked = [[5.0, 90.0, 120.0, 115.0]];
+    let mut page = one_page(b"", "", vec![]);
+    let s = predicted(&mut page, Dict::new());
+    page.set(ObjRef::new(4, 0), s);
+    // The parameters take object 7 and the form 8.
+    let mut form = one_page(b"/Fm Do", "/XObject << /Fm 8 0 R >>", vec![]);
+    let mut dict = Dict::new();
+    dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    dict.set(b"BBox".to_vec(), Object::Array([0, 0, 300, 300].into_iter().map(Object::Int).collect()));
+    dict.set(
+        b"Resources".to_vec(),
+        Object::Dict(
+            [(b"Font".to_vec(), Object::Dict([(b"F1".to_vec(), Object::Ref(ObjRef::new(5, 0)))].into_iter().collect()))].into_iter().collect(),
+        ),
+    );
+    let s = predicted(&mut form, dict);
+    form.set(ObjRef::new(8, 0), s);
+    for (mut doc, what) in [(page, "page"), (form, "form")] {
+        assert_eq!(under(&mut doc, 0, &marked), 6, "{what}");
+        mark(&mut doc, 0, &marked, "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!((r.marks, r.glyphs), (1, 6), "{what}");
+        assert_eq!(under(&mut reopen(&doc), 0, &marked), 0, "{what}");
+    }
+}
+
 /// #2130: a font with no /Widths is drawn with its embedded program's advances. Measured with a
 /// guess from its name instead (Courier's 600 units for "Mono"), the end of the line seemed to
 /// lie past a mark that covers all of it on screen, and was kept.
