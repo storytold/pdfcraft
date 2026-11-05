@@ -664,6 +664,44 @@ fn tool_table_is_well_formed() {
     }
 }
 
+fn assert_homogeneous_enums(schema: &Value, path: &str) {
+    fn json_kind(value: &Value) -> &'static str {
+        match value {
+            Value::Null => "null",
+            Value::Bool(_) => "boolean",
+            Value::Number(_) => "number",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Object(_) => "object",
+        }
+    }
+
+    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
+        let first = values.first().map(json_kind);
+        assert!(values.iter().map(json_kind).all(|kind| Some(kind) == first), "mixed enum types at {path}: {values:?}");
+    }
+    match schema {
+        Value::Object(object) => {
+            for (key, child) in object {
+                assert_homogeneous_enums(child, &format!("{path}.{key}"));
+            }
+        }
+        Value::Array(array) => {
+            for (index, child) in array.iter().enumerate() {
+                assert_homogeneous_enums(child, &format!("{path}[{index}]"));
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn tool_schema_enums_have_one_json_type() {
+    for tool in tools() {
+        assert_homogeneous_enums(&tool.input_schema, tool.name);
+    }
+}
+
 #[test]
 fn explicit_font_and_disjoint_ranges_save_reopen_through_tools() {
     let dir = workdir("font-ranges");
@@ -2111,6 +2149,27 @@ fn comments_through_tools() {
     save_and_reopen_comments(&dir, &mut a, doc);
 }
 
+#[test]
+fn freehand_highlight_through_tools() {
+    let dir = workdir("freehand-highlight");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(
+        &mut a,
+        "comment_add",
+        json!({ "doc": doc, "page": 1, "type": "freehand_highlight", "width": 100,
+        "strokes": [[[20, 100], [120, 100]]] }),
+    );
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(list["count"], 1);
+    assert_eq!(list["comments"][0]["type"], "Ink");
+    assert_eq!(list["comments"][0]["intent"], "FreehandHighlight");
+    assert_eq!(list["comments"][0]["color"], "#FFF000");
+    let undone = ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(undone["undone"], "Add freehand highlight");
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 0);
+}
+
 fn add_comment_examples(a: &mut Automation, doc: u64) -> String {
     // "Page 2" sits at y = 150 (user space) = 150 from the top of the 300 pt page.
     let hl = ok(a, "comment_add", json!({ "doc": doc, "page": 2, "type": "highlight", "find": "page 2", "contents": "check", "author": "Ada" }));
@@ -2774,6 +2833,74 @@ fn headers_watermarks_and_backgrounds_through_tools() {
 }
 
 #[test]
+fn bates_numbers_continue_across_files_and_report_preflight_and_permission_failures() {
+    let dir = workdir("bates-multi");
+    let files = json!([
+        {"input":"b.pdf","output":"b-numbered.pdf"},
+        {"input":"a.pdf","output":"a-numbered.pdf"}
+    ]);
+    let mut a = auto(&dir);
+    let allocation = ok(&mut a, "doc_bates_multi", json!({"files":files,"start_number":50,"dry_run":true}));
+    assert_eq!(allocation["files"][0]["first"], 50);
+    assert_eq!(allocation["files"][0]["last"], 51);
+    assert_eq!(allocation["files"][1]["first"], 52);
+    assert_eq!(allocation["files"][1]["last"], 54);
+    assert!(!dir.join("a-numbered.pdf").exists());
+
+    let applied = ok(&mut a, "doc_bates_multi", json!({"files":files,"start_number":17,"prefix":"CASE-"}));
+    assert_eq!(applied["completed"], 2);
+    let mut out = auto(&dir);
+    let first = ok(&mut out, "doc_open", json!({"path":"a-numbered.pdf"}))["doc"].as_u64().unwrap();
+    let second = ok(&mut out, "doc_open", json!({"path":"b-numbered.pdf"}))["doc"].as_u64().unwrap();
+    assert!(page_text(&mut out, second)[0].contains("CASE-000017"));
+    assert!(page_text(&mut out, first)[0].contains("CASE-000019"));
+
+    let overflow = err(&mut a, "doc_bates_multi", json!({"files":[{"input":"b.pdf","output":"overflow.pdf"}],"start_number":u64::MAX}));
+    assert!(overflow.to_string().contains("overflows"));
+    assert!(!dir.join("overflow.pdf").exists());
+    // A range may end at u64::MAX itself.
+    let at_max = ok(&mut a, "doc_bates_multi", json!({"files":[{"input":"b.pdf","output":"max.pdf"}],"start_number":u64::MAX - 1,"dry_run":true}));
+    assert_eq!(at_max["files"][0]["last"], u64::MAX);
+    for bad in
+        [json!({"start_number":-3}), json!({"start_number":2.5}), json!({"start_number":"7"}), json!({"prefix":"CASE>>"}), json!({"suffix":"A>>B"})]
+    {
+        let mut args = json!({"files":[{"input":"b.pdf","output":"bad.pdf"}],"dry_run":true});
+        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        assert!(a.call("doc_bates_multi", &args).is_err(), "{bad}");
+    }
+
+    use pdfcraft_engine::{Changes, Edit, Protection, Session};
+    let mut session = Session::new();
+    let id = session.open("locked.pdf", None, std::sync::Arc::new(fixture(1)), None).unwrap();
+    session
+        .apply(
+            id,
+            Edit::Protect(Protection {
+                open_password: Some("open".into()),
+                permissions_password: Some("owner".into()),
+                changes: Changes::None,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    std::fs::write(dir.join("locked.pdf"), session.save_bytes(id).unwrap().as_ref()).unwrap();
+    let result = ok(
+        &mut a,
+        "doc_bates_multi",
+        json!({"files":[
+            {"input":"b.pdf","output":"partial-numbered.pdf"},
+            {"input":"locked.pdf","output":"locked-numbered.pdf","password":"open"}
+        ]}),
+    );
+    assert_eq!(result["completed"], 1);
+    assert_eq!(result["failed"], 1);
+    assert_eq!(result["files"][1]["first"], 3);
+    assert!(result["files"][1]["error"].as_str().unwrap().contains("owner password"), "{result}");
+    assert!(dir.join("partial-numbered.pdf").exists());
+    assert!(!dir.join("locked-numbered.pdf").exists());
+}
+
+#[test]
 fn a_shrinking_header_and_footer_moves_the_page_content_out_of_their_way_through_tools() {
     let dir = workdir("hf-shrink");
     let mut a = auto(&dir);
@@ -3286,6 +3413,39 @@ fn editing_existing_text_through_tools() {
     assert_eq!(p["lines"].as_array().map(Vec::len), Some(2), "{p}");
 }
 
+/// Format text ▸ Superscript and Subscript without the GUI: a range, then back again over a space
+/// (which has no superscript form), each one undo step; refusals change nothing.
+#[test]
+fn superscript_and_subscript_through_tools() {
+    let dir = workdir("text-script");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let paragraph =
+        |a: &mut Automation| ok(a, "text_paragraphs", json!({ "doc": doc, "page": 2 }))["paragraphs"][0]["text"].as_str().unwrap().to_string();
+    let script = |script: &str, range: Value| json!({ "doc": doc, "page": 2, "paragraph": 1, "script": script, "range": range });
+    // "Page 2": the 2 is byte 5.
+    let r = ok(&mut a, "text_script", script("superscript", json!([5, 6])));
+    assert_eq!((r["script"].as_str(), r["paragraph"]["text"].as_str()), (Some("superscript"), Some("Page ²")), "{r}");
+    assert_eq!(page_text(&mut a, doc)[1], "Page ²");
+    // " ²": the space has no superscript form, and the range still toggles back.
+    ok(&mut a, "text_script", script("superscript", json!([4, 7])));
+    assert_eq!(paragraph(&mut a), "Page 2");
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Edit text");
+    assert_eq!(paragraph(&mut a), "Page ²");
+    // Refused, changing nothing: a range that splits ², one past the end, an empty one, a range
+    // with nothing that has a subscript form, an unknown script.
+    for (name, range) in [
+        ("superscript", json!([5, 6])),
+        ("superscript", json!([0, 99])),
+        ("superscript", json!([3, 3])),
+        ("subscript", json!([4, 5])),
+        ("italic", json!([0, 1])),
+    ] {
+        assert!(matches!(a.call("text_script", &script(name, range.clone())), Err(ToolError::InvalidArgs(_))), "{name} {range}");
+    }
+    assert_eq!(paragraph(&mut a), "Page ²");
+}
+
 #[test]
 fn styled_cyrillic_fallback_is_batched_through_tools_and_reopen() {
     if pdfcraft_fonts::document_japanese_font().is_none() {
@@ -3453,6 +3613,13 @@ fn editing_page_images_through_tools() {
     assert_eq!(cropped["visible_rect"], json!([10.0, 10.0, 25.0, 30.0]));
     ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "rotate" }));
     ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "flip_horizontal" }));
+    // A single image is already in front and at the back; no-op arrange is refused without dirtying undo.
+    assert!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "bring_to_front" })).is_err());
+    assert!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "send_to_back" })).is_err());
+    assert!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "bring_forward" })).is_err());
+    assert!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "send_backward" })).is_err());
+    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "remove_crop" }));
+    assert_eq!(r["undo"], "Remove crop");
     // Any angle: the box grows to the turned picture's bounds, and it undoes like a quarter turn.
     let before = ok(&mut a, "page_images", json!({ "doc": made, "page": 1 }))["images"][0]["rect"].clone();
     let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "rotate_by", "degrees": 30.5 }));
@@ -3470,6 +3637,80 @@ fn editing_page_images_through_tools() {
     ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "delete" }));
     assert_eq!(ok(&mut a, "page_images", json!({ "doc": made, "page": 1 }))["count"], 0);
     assert!(matches!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "delete" })), Err(ToolError::InvalidArgs(_))));
+}
+
+#[test]
+fn arranging_page_images_through_tools() {
+    let dir = workdir("arrange-page-images");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 18, "pages": [1, 2] }));
+    let made = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["src/a_page_1.png"] }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_image", json!({ "doc": made, "page": 1, "path": "src/a_page_2.png", "rect": [50, 50, 100, 100] }));
+    assert_eq!(ok(&mut a, "page_images", json!({ "doc": made, "page": 1 }))["count"], 2);
+    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "bring_to_front" }));
+    assert_eq!(r["undo"], "Bring to front");
+    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 2, "action": "send_to_back" }));
+    assert_eq!(r["undo"], "Send to back");
+    ok(&mut a, "doc_save", json!({ "doc": made, "path": "arranged.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "arranged.pdf" }))["doc"].as_u64().unwrap();
+    let after_reopen = ok(&mut a, "page_images", json!({ "doc": reopened, "page": 1 }));
+    assert_eq!(after_reopen["count"], 2);
+    assert_eq!(after_reopen["images"][0]["rect"], json!([0.0, 0.0, 50.0, 75.0]));
+    assert_eq!(after_reopen["images"][1]["rect"], json!([50.0, 50.0, 100.0, 100.0]));
+}
+
+/// The transform a rotated-image resize sends (`ImageEdit::Transform`) is reachable headlessly,
+/// in the same top-left-origin points as the other image tools, also on a turned page.
+#[test]
+fn transforming_page_images_through_tools() {
+    let dir = workdir("transform-page-images");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 18, "pages": [1] }));
+    let made = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["src/a_page_1.png"] }))["doc"].as_u64().unwrap();
+    let rect = |a: &mut Automation| ok(a, "page_images", json!({ "doc": made, "page": 1 }))["images"][0]["rect"].clone();
+    let transform =
+        |a: &mut Automation, m: Value| ok(a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "transform", "matrix": m }));
+    ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "move", "rect": [5, 5, 25, 35] }));
+
+    // Right 10, down 20.
+    assert_eq!(transform(&mut a, json!([1, 0, 0, 1, 10, 20]))["undo"], "Transform image");
+    assert_eq!(rect(&mut a), json!([15.0, 25.0, 35.0, 55.0]));
+    // Twice the size about the top-left corner of the page.
+    transform(&mut a, json!([2, 0, 0, 2, 0, 0]));
+    assert_eq!(rect(&mut a), json!([30.0, 50.0, 70.0, 110.0]));
+    // A quarter turn, (x, y) → (200 − y, x): the box turns with it, and it undoes in one step.
+    transform(&mut a, json!([0, 1, -1, 0, 200, 0]));
+    assert_eq!(rect(&mut a), json!([90.0, 30.0, 150.0, 70.0]));
+    ok(&mut a, "edit_undo", json!({ "doc": made }));
+    assert_eq!(rect(&mut a), json!([30.0, 50.0, 70.0, 110.0]));
+
+    // On a turned page "right" is still right on screen.
+    ok(&mut a, "page_rotate", json!({ "doc": made, "pages": [1], "degrees": 90 }));
+    let numbers = |v: Value| [0, 1, 2, 3].map(|i| v[i].as_f64().unwrap());
+    let [x0, y0, x1, y1] = numbers(rect(&mut a));
+    transform(&mut a, json!([1, 0, 0, 1, 10, 0]));
+    let after = numbers(rect(&mut a));
+    for (got, want) in after.into_iter().zip([x0 + 10.0, y0, x1 + 10.0, y1]) {
+        assert!((got - want).abs() < 0.015, "{after:?} is not ({x0}, {y0}, {x1}, {y1}) moved right by 10");
+    }
+
+    // Flat, non-finite, short and missing matrices are refused before anything changes.
+    let before = rect(&mut a);
+    for bad in [
+        json!([1, 2, 2, 4, 0, 0]),
+        json!([0, 0, 0, 0, 0, 0]),
+        json!([1e300, 0, 0, 1e300, 0, 0]),
+        json!([1, 0, 0, 1]),
+        json!([1, 0, "invalid", 0, 1, 10, 0]),
+        json!([1, 0, null, 0, 1, 10, 0]),
+    ] {
+        let r = a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "transform", "matrix": bad }));
+        assert!(matches!(r, Err(ToolError::InvalidArgs(_))), "{bad}: {r:?}");
+    }
+    assert!(matches!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "transform" })), Err(ToolError::InvalidArgs(_))));
+    assert_eq!(rect(&mut a), before);
 }
 
 #[test]
@@ -4521,12 +4762,23 @@ fn removing_hidden_information_through_tools() {
     assert_eq!(r["undo"], "Remove hidden information");
     assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 0);
     assert!(count(&ok(&mut a, "doc_hidden_info", json!({ "doc": doc })), "metadata") >= 1, "only comments went");
+    // With none left, removing them again says so, and Optimize discarding them still runs.
+    let again = a.call("doc_remove_hidden", &json!({ "doc": doc, "categories": ["comments"] }));
+    assert!(matches!(&again, Err(ToolError::Failed(m)) if m.starts_with("nothing to remove")), "{again:?}");
+    let optimized = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "optimized.pdf", "discard": ["comments", "bookmarks"] }));
+    assert_eq!(optimized["discarded"], json!([]), "{optimized}");
     let r = ok(&mut a, "doc_remove_hidden", json!({ "doc": doc }));
     assert_eq!(r["undo"], "Sanitize document");
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "clean.pdf" }));
     let bytes = std::fs::read(dir.join("clean.pdf")).unwrap();
     assert!(!bytes.windows(11).any(|w| w == b"Secret plan"), "the old revision is gone");
     assert!(matches!(a.call("doc_remove_hidden", &json!({ "doc": doc, "categories": ["nonsense"] })), Err(ToolError::InvalidArgs(_))));
+    // A document that can't be edited has no scan: the refusal says why, not that nothing is there.
+    let junk = [vec![b'x'; 5000], std::fs::read(dir.join("a.pdf")).unwrap()].concat();
+    std::fs::write(dir.join("junk.pdf"), junk).unwrap();
+    let read_only = ok(&mut a, "doc_open", json!({ "path": "junk.pdf" }))["doc"].as_u64().unwrap();
+    let refused = a.call("doc_remove_hidden", &json!({ "doc": read_only, "categories": ["comments"] }));
+    assert!(matches!(&refused, Err(ToolError::Failed(m)) if m.contains("can't be edited")), "{refused:?}");
 }
 
 /// A one-page PDF whose text "TOP SECRET" sits under an opaque black rectangle.
@@ -6502,10 +6754,12 @@ fn optimizing_through_tools() {
     let reduced = ok(&mut a, "doc_reduce", json!({ "doc": doc, "path": "reduced.pdf" }));
     assert!(reduced["bytes_after"].as_u64().unwrap() < reduced["bytes_before"].as_u64().unwrap());
     assert_eq!(reduced["written"], true);
+    assert_eq!(reduced["images_refused"], 0);
     assert_eq!(std::fs::metadata(dir.join("reduced.pdf")).unwrap().len(), reduced["bytes_after"].as_u64().unwrap());
 
     // Target PDF 1.4 (disables object streams) and PDF 2.0 (with object_streams toggled off).
     let v14 = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "v14.pdf", "compatibility": "1.4" }));
+    assert_eq!(v14["images_refused"], 0);
     assert_eq!((v14["pdf_version"].as_str(), v14["object_streams"].as_bool()), (Some("1.4"), Some(false)), "{v14}");
     let v14_bytes = std::fs::read(dir.join("v14.pdf")).unwrap();
     assert!(v14_bytes.starts_with(b"%PDF-1.4\n") && !v14_bytes.windows(7).any(|w| w == b"/ObjStm"));
@@ -7453,6 +7707,17 @@ fn exporting_to_word_html_and_rtf() {
     }
     let html = std::fs::read_to_string(dir.join("a.html")).unwrap();
     assert!(html.contains("Page 1") && html.contains("Page 3") && html.matches("<hr>").count() == 2, "{html}");
+    ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "simple.html", "html_mode": "simple" }));
+    let simple_html = std::fs::read_to_string(dir.join("simple.html")).unwrap();
+    assert!(
+        simple_html.contains("Page 1")
+            && !simple_html.contains("<style")
+            && !simple_html.contains("style=")
+            && !simple_html.contains("<span")
+            && !simple_html.contains("<div")
+    );
+    assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "bad.html", "html_mode": "compact" })).is_err());
+    assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "bad.docx", "html_mode": "simple" })).is_err());
     assert!(std::fs::read(dir.join("a.docx")).unwrap().starts_with(b"PK"));
     assert!(std::fs::read(dir.join("a.pptx")).unwrap().starts_with(b"PK"));
     assert!(std::fs::read_to_string(dir.join("a.rtf")).unwrap().contains("Page 2"));
@@ -9788,7 +10053,11 @@ fn added_text_lines_take_their_own_alignments() {
     let dir = workdir("paragraph-aligns");
     let mut a = auto(&dir);
     let id = ok(&mut a, "doc_create", json!({"from":"blank","width":600,"height":400}))["doc"].as_u64().unwrap();
-    ok(&mut a, "page_add_text", json!({"doc":id,"page":1,"text":"Left line\nRight line","at":[40,50],"width":500,"size":12,"aligns":[null,"right"]}));
+    ok(
+        &mut a,
+        "page_add_text",
+        json!({"doc":id,"page":1,"text":"Left line\nRight line\nInherited line","at":[40,50],"width":500,"size":12,"aligns":[null,"right","inherit"]}),
+    );
     let rect = |a: &mut Automation, text: &str| -> Vec<f64> {
         let lines = ok(a, "text_lines", json!({"doc":id,"page":1}));
         let line = lines["lines"].as_array().unwrap().iter().find(|l| l["text"] == text).cloned().unwrap();
@@ -9796,10 +10065,13 @@ fn added_text_lines_take_their_own_alignments() {
     };
     assert!((rect(&mut a, "Left line")[0] - 40.0).abs() < 1.0);
     assert!((rect(&mut a, "Right line")[2] - 540.0).abs() < 1.0, "{:?}", rect(&mut a, "Right line"));
+    assert!((rect(&mut a, "Inherited line")[0] - 40.0).abs() < 1.0);
     // The whole box centred: the right-aligned line goes with it.
     ok(&mut a, "content_update", json!({"doc":id,"page":1,"index":1,"align":"center"}));
     let right = rect(&mut a, "Right line");
     assert!(((right[0] + right[2]) / 2.0 - 290.0).abs() < 1.0, "{right:?}");
+    let inherited = rect(&mut a, "Inherited line");
+    assert!(((inherited[0] + inherited[2]) / 2.0 - 290.0).abs() < 1.0, "{inherited:?}");
     assert!(a.call("content_update", &json!({"doc":id,"page":1,"index":1,"aligns":["sideways"]})).is_err());
     assert!(a.call("content_update", &json!({"doc":id,"page":1,"index":1,"aligns":"right"})).is_err());
 }
@@ -9944,6 +10216,31 @@ fn changing_a_lists_options_through_tools_keeps_its_saved_selection_on_the_same_
     ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "letters", "options": ["B", "C", "D"] }));
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "letters.pdf" }));
     assert_eq!(saved_selection_indices(&dir.join("letters.pdf"), "letters"), Some(vec![0, 1]), "B and C are now items 0 and 1");
+}
+
+/// Clearing a field's length limit through `form_set_props` (`"max_length": 0`) leaves it with
+/// none, even when its parent field has one it would otherwise inherit.
+#[test]
+fn clearing_a_kids_length_limit_through_tools_does_not_bring_back_its_parents() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>",
+        "<< /Fields [5 0 R] /DA (/Helv 12 Tf 0 g) /DR << /Font << /Helv 7 0 R >> >> >>",
+        "<< /T (address) /FT /Tx /MaxLen 3 /Kids [6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /T (city) /Parent 5 0 R /MaxLen 8 /Rect [10 250 150 268] /P 3 0 R >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ];
+    let dir = workdir("kid-max-len");
+    std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "address.city", "max_length": 0 }));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "address.city": "Absalom" } }));
+    let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let city = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "address.city").unwrap().clone();
+    assert!(city.get("max_length").is_none(), "no limit, not the parent's 3: {city}");
+    assert_eq!(city["value"], "Absalom", "the value is not cut to the parent's 3 characters");
 }
 
 /// Clearing a field's default through `form_set_props` (`"default": ""`) leaves it with none,
@@ -10213,4 +10510,349 @@ fn simple_rule_scan_drawn(content: &[u8]) -> Vec<u8> {
         doc.set(reference, Object::Stream(Stream::flate(image.dict.clone(), &data)));
     }
     write_full(&doc, &SaveOptions::default()).unwrap()
+}
+
+#[test]
+fn editor_crop_group_move_and_arrange_survive_added_item_deletion_through_tools() {
+    let dir = workdir("editor-crop-group-arrange");
+    let mut a = auto(&dir);
+    let source = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({"doc":source,"folder":"src","dpi":18,"pages":[1]}));
+    let doc = ok(&mut a, "doc_create", json!({"from":"images","paths":["src/a_page_1.png"]}))["doc"].as_u64().unwrap();
+    ok(&mut a, "image_edit", json!({"doc":doc,"page":1,"image":1,"action":"move","rect":[5,5,25,35]}));
+    ok(&mut a, "image_edit", json!({"doc":doc,"page":1,"image":1,"action":"crop","rect":[10,10,20,30]}));
+    ok(&mut a, "page_add_text", json!({"doc":doc,"page":1,"text":"Movable label","rect":[2,40,45,55],"size":6}));
+    let inventory = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    let objects: Vec<_> = inventory["objects"].as_array().unwrap().iter().map(|o| json!({"kind":o["kind"],"index":o["index"]})).collect();
+    assert_eq!(objects.len(), 2);
+    let moved = ok(&mut a, "object_move", json!({"doc":doc,"page":1,"objects":objects,"offset":[3,4]}));
+    assert_eq!(moved["moved"], 2);
+    let picture = ok(&mut a, "page_images", json!({"doc":doc,"page":1}))["images"][0].clone();
+    assert_eq!(picture["rect"], json!([8.0, 9.0, 28.0, 39.0]));
+    assert_eq!(picture["visible_rect"], json!([13.0, 14.0, 23.0, 34.0]));
+    assert!(page_text(&mut a, doc)[0].contains("Movable label"));
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "page_images", json!({"doc":doc,"page":1}))["images"][0]["visible_rect"], json!([10.0, 10.0, 20.0, 30.0]));
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"grouped.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"grouped.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "page_images", json!({"doc":reopened,"page":1}))["images"][0]["visible_rect"], picture["visible_rect"]);
+    ok(&mut a, "image_edit", json!({"doc":reopened,"page":1,"image":1,"action":"bring_to_front"}));
+    assert_eq!(ok(&mut a, "content_list", json!({"doc":reopened}))["count"], 1);
+    ok(&mut a, "content_delete", json!({"doc":reopened,"page":1,"index":1}));
+    ok(&mut a, "doc_save", json!({"doc":reopened,"path":"independent.pdf"}));
+    let saved = ok(&mut a, "doc_open", json!({"path":"independent.pdf"}))["doc"].as_u64().unwrap();
+    let after = ok(&mut a, "page_images", json!({"doc":saved,"page":1}));
+    assert_eq!(after["count"], 1);
+    assert_eq!(after["images"][0]["rect"], picture["rect"]);
+    assert_eq!(after["images"][0]["visible_rect"], picture["visible_rect"]);
+    let rendered = a.call("page_render", &json!({"doc":saved,"page":1,"dpi":72})).unwrap();
+    assert!(rendered.iter().any(|c| matches!(c, Content::Png {data,width,height} if !data.is_empty() && *width > 0 && *height > 0)));
+}
+
+#[test]
+fn image_flip_tools_follow_displayed_axes_on_every_page_rotation() {
+    fn corners(a: &Automation, id: u64) -> [[f64; 2]; 4] {
+        let doc = a.session().get(pdfcraft_engine::DocId(id)).unwrap();
+        let [aa, b, c, d, e, f] = doc.page_images(0)[0].matrix;
+        [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)]
+            .map(|(x, y)| doc.info.pages[0].user_to_view((aa * x + c * y + e) as f32, (b * x + d * y + f) as f32).map(f64::from))
+    }
+    fn raster(a: &mut Automation, id: u64) -> (usize, usize, Vec<u8>) {
+        let rendered = a.call("page_render", &json!({"doc":id,"page":1,"dpi":72})).unwrap();
+        let Content::Png { data, .. } = &rendered[0] else { panic!("expected PNG") };
+        let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
+        let mut bytes = vec![0; reader.output_buffer_size().unwrap()];
+        let frame = reader.next_frame(&mut bytes).unwrap();
+        bytes.truncate(frame.buffer_size());
+        if frame.color_type == png::ColorType::Rgb {
+            bytes = bytes.as_chunks::<3>().0.iter().flat_map(|&[r, g, b]| [r, g, b, 255]).collect();
+        } else {
+            assert_eq!(frame.color_type, png::ColorType::Rgba);
+        }
+        (frame.width as usize, frame.height as usize, bytes)
+    }
+    let dir = workdir("displayed-image-flip");
+    let mut png_bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, 8, 4);
+        encoder.set_color(png::ColorType::Rgb);
+        let colors = [[240, 20, 30], [20, 230, 40], [30, 40, 220], [220, 210, 20]];
+        let pixels: Vec<u8> = (0..4).flat_map(|y| (0..8).flat_map(move |x| colors[usize::from(x >= 4) + 2 * usize::from(y >= 2)])).collect();
+        encoder.write_header().unwrap().write_image_data(&pixels).unwrap();
+    }
+    std::fs::write(dir.join("quadrants.png"), png_bytes).unwrap();
+    let mut a = auto(&dir);
+    let mut failures = Vec::new();
+    for rotation in [0, 90, 180, 270] {
+        let doc = ok(&mut a, "doc_create", json!({"from":"images","paths":["quadrants.png"]}))["doc"].as_u64().unwrap();
+        if rotation != 0 {
+            ok(&mut a, "page_rotate", json!({"doc":doc,"pages":[1],"degrees":rotation}));
+        }
+        let before = corners(&a, doc);
+        let (width, height, pixels) = raster(&mut a, doc);
+        let xmin = before.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
+        let xmax = before.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
+        let ymin = before.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
+        let ymax = before.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
+        for (action, horizontal) in [("flip_horizontal", true), ("flip_vertical", false)] {
+            ok(&mut a, "image_edit", json!({"doc":doc,"page":1,"image":1,"action":action}));
+            let after = corners(&a, doc);
+            for (old, new) in before.into_iter().zip(after) {
+                let expected = if horizontal { [xmin + xmax - old[0], old[1]] } else { [old[0], ymin + ymax - old[1]] };
+                if new.into_iter().zip(expected).any(|(actual, want)| (actual - want).abs() > 0.001) {
+                    failures.push(format!("rotation {rotation} {action}: corner {old:?} became {new:?}, expected {expected:?}"));
+                    break;
+                }
+            }
+            let (new_width, new_height, actual_pixels) = raster(&mut a, doc);
+            assert_eq!((new_width, new_height), (width, height));
+            let mut expected_pixels = Vec::new();
+            for y in 0..height {
+                for x in 0..width {
+                    let source = if horizontal { (y * width + width - 1 - x) * 4 } else { ((height - 1 - y) * width + x) * 4 };
+                    expected_pixels.extend_from_slice(&pixels[source..source + 4]);
+                }
+            }
+            if actual_pixels.iter().zip(&expected_pixels).any(|(actual, want)| actual.abs_diff(*want) > 1) {
+                failures.push(format!("rotation {rotation} {action}: raster flipped the wrong displayed axis"));
+            }
+            assert_ne!(actual_pixels, pixels, "the asymmetric image makes both flip axes observable");
+            ok(&mut a, "edit_undo", json!({"doc":doc}));
+            assert_eq!(corners(&a, doc), before, "one undo restores the original placement");
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn mixed_script_tools_normalize_but_undo_restores_the_exact_mixture() {
+    let dir = workdir("mixed-script-policy");
+    let mut a = auto(&dir);
+    for (script, mixed, uniform, plain) in [("superscript", "Q²2", "Q²²", "Q22"), ("subscript", "H₂2", "H₂₂", "H22")] {
+        let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+        ok(&mut a, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"text":mixed,"size":14,"width":160}));
+        let paragraph =
+            |a: &mut Automation| ok(a, "text_paragraphs", json!({"doc":doc,"page":1}))["paragraphs"][0]["editor_text"].as_str().unwrap().to_owned();
+        assert_eq!(paragraph(&mut a), mixed);
+        let before = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes.clone();
+        let args = json!({"doc":doc,"page":1,"paragraph":1,"script":script});
+        let once = ok(&mut a, "text_script", args.clone());
+        assert_eq!(once["paragraph"]["text"], uniform);
+        assert_eq!(paragraph(&mut a), uniform);
+        ok(&mut a, "text_script", args);
+        assert_eq!(paragraph(&mut a), plain);
+        assert_ne!(plain, mixed, "normalization does not promise to recreate the original mixture");
+        ok(&mut a, "edit_undo", json!({"doc":doc}));
+        assert_eq!(paragraph(&mut a), uniform, "one Undo restores the preceding scripted text");
+        ok(&mut a, "edit_undo", json!({"doc":doc}));
+        assert_eq!(paragraph(&mut a), mixed, "Undo restores the exact initial Unicode mixture");
+        assert_eq!(
+            a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes.as_ref(),
+            before.as_ref(),
+            "Undo also restores the exact prior document bytes"
+        );
+        ok(&mut a, "edit_redo", json!({"doc":doc}));
+        assert_eq!(paragraph(&mut a), uniform);
+        ok(&mut a, "edit_redo", json!({"doc":doc}));
+        assert_eq!(paragraph(&mut a), plain);
+        let path = format!("mixed-{script}.pdf");
+        ok(&mut a, "doc_save", json!({"doc":doc,"path":path}));
+        let reopened = ok(&mut a, "doc_open", json!({"path":path}))["doc"].as_u64().unwrap();
+        assert_eq!(page_text(&mut a, reopened)[0], plain);
+    }
+}
+
+#[test]
+fn multiline_fill_sign_engine_round_trip_preserves_lines_and_appearance() {
+    let dir = workdir("fill-sign-multiline");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let text = "\nAda\n\nLovelace\n";
+    ok(&mut a, "fill_sign_add", json!({"doc":doc,"page":1,"type":"text","at":[20,20],"text":text}));
+    let id = pdfcraft_engine::DocId(doc);
+    let annot = &a.session().get(id).unwrap().info.annotations[0];
+    assert_eq!(annot.contents.as_deref(), Some(text), "typewriter contents keep outer line breaks");
+    assert!(annot.rect[3] - annot.rect[1] >= 66.0, "five text lines need their full height, including blank lines: {:?}", annot.rect);
+    let pixels = a.render_pixels(doc, 1, 1.0).unwrap();
+    // The fixture's page text is at y=150; only the typewriter draws at y=65..80.
+    assert!(
+        (65..80).any(|y| (20..80).any(|x| {
+            let i = (y * pixels.0 as usize + x) * 4;
+            pixels.2[i..i + 3].iter().all(|v| *v < 100)
+        })),
+        "the lower nonempty line appears inside its box"
+    );
+    let rendered = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap();
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"multiline.pdf"}));
+    let mut re = auto(&dir);
+    let reopened = ok(&mut re, "doc_open", json!({"path":"multiline.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(re.session().get(pdfcraft_engine::DocId(reopened)).unwrap().info.annotations[0].contents.as_deref(), Some(text));
+    assert_eq!(rendered, re.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap(), "saved appearances are identical");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Export, then import into another document and copy between open documents: the tree comes
+/// back unchanged, a page the target lacks is reported, and the import undoes in one step.
+#[test]
+fn bookmarks_export_import_and_copy_between_documents() {
+    let dir = workdir("bookmark-io");
+    let mut a = auto(&dir);
+    let src = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "bookmark_add", json!({ "doc": src, "title": "Intro", "page": 1 }));
+    ok(&mut a, "bookmark_add", json!({ "doc": src, "title": "Detail", "page": 3, "parent": [1] }));
+    ok(&mut a, "bookmark_add", json!({ "doc": src, "title": "End", "page": 2 }));
+    ok(&mut a, "bookmark_set_style", json!({ "doc": src, "path": [1], "color": [1, 0, 0], "bold": true }));
+    let exported = ok(&mut a, "bookmark_export", json!({ "doc": src, "out": "marks.json" }));
+    assert_eq!(exported["truncated"], false);
+    let tree = exported["bookmarks"].clone();
+    assert_eq!((tree[0]["title"].clone(), tree[0]["color"].clone(), tree[0]["bold"].clone()), (json!("Intro"), json!([1.0, 0.0, 0.0]), json!(true)));
+    assert_eq!((tree[0]["children"][0]["title"].clone(), tree[0]["children"][0]["page"].clone()), (json!("Detail"), json!(3)));
+    assert_eq!(tree[0]["view"]["type"], "XYZ");
+    let subtree = ok(&mut a, "bookmark_export", json!({ "doc": src, "path": [1, 1] }))["bookmarks"].clone();
+    assert_eq!(subtree, json!([tree[0]["children"][0]]));
+
+    // b.pdf has two pages: Detail goes to the third, so it arrives without a destination.
+    let dst = ok(&mut a, "doc_open", json!({ "path": "b.pdf" }))["doc"].as_u64().unwrap();
+    let imported = ok(&mut a, "bookmark_import", json!({ "doc": dst, "file": "marks.json" }));
+    assert_eq!(imported["unmapped"], json!([[1, 1]]));
+    let back = ok(&mut a, "bookmark_export", json!({ "doc": dst }))["bookmarks"].clone();
+    assert_eq!(back[0]["children"][0]["page"], json!(null));
+    assert_eq!((back[0]["title"].clone(), back[1].clone()), (tree[0]["title"].clone(), tree[1].clone()));
+    ok(&mut a, "edit_undo", json!({ "doc": dst }));
+    assert_eq!(ok(&mut a, "bookmark_list", json!({ "doc": dst }))["bookmarks"], json!([]));
+
+    // Into a document with every page, the tree is unchanged, wherever it is copied from.
+    let same = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "bookmark_add", json!({ "doc": same, "title": "Old", "page": 1 }));
+    let copied = ok(&mut a, "bookmark_copy", json!({ "doc": same, "from": src, "replace": true }));
+    assert_eq!(copied["unmapped"], json!([]));
+    assert_eq!(ok(&mut a, "bookmark_export", json!({ "doc": same }))["bookmarks"], tree);
+    ok(&mut a, "bookmark_import", json!({ "doc": same, "bookmarks": subtree, "parent": [2], "position": 1 }));
+    assert_eq!(ok(&mut a, "bookmark_list", json!({ "doc": same }))["bookmarks"][1]["children"][0]["title"], "Detail");
+}
+
+/// A one-page document whose outline has an untitled item, a /FitR destination with three of
+/// its four numbers, and a chain nested `deep` levels below them.
+fn odd_outline(deep: usize) -> Vec<u8> {
+    let first_deep = 7;
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Outlines /First 5 0 R /Last 6 0 R >>".into(),
+        "<< /Title () /Parent 4 0 R /Next 6 0 R /Dest [3 0 R /Fit] >>".into(),
+        format!(
+            "<< /Title (Short) /Parent 4 0 R /Prev 5 0 R /Dest [3 0 R /FitR 0 0 10]{} >>",
+            if deep > 0 { format!(" /First {first_deep} 0 R /Last {first_deep} 0 R") } else { String::new() }
+        ),
+    ];
+    for i in 0..deep {
+        let (me, parent) = (first_deep + i, if i == 0 { 6 } else { first_deep + i - 1 });
+        let child = if i + 1 < deep { format!(" /First {0} 0 R /Last {0} 0 R", me + 1) } else { String::new() };
+        objs.push(format!("<< /Title (Level) /Parent {parent} 0 R /Dest [3 0 R /Fit]{child} >>"));
+    }
+    pdf_of(&objs.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+/// What a real file holds and the JSON form can't say exactly still copies and round-trips: an
+/// empty title stays empty, a short /FitR keeps its page and drops the view, and bookmarks past
+/// the listing depth are reported as left out at every step.
+#[test]
+fn odd_bookmarks_round_trip_and_a_cut_tree_says_so() {
+    let dir = workdir("bookmark-io-odd");
+    std::fs::write(dir.join("odd.pdf"), odd_outline(0)).unwrap();
+    std::fs::write(dir.join("deep.pdf"), odd_outline(40)).unwrap();
+    let mut a = auto(&dir);
+    let src = ok(&mut a, "doc_open", json!({ "path": "odd.pdf" }))["doc"].as_u64().unwrap();
+    let tree = ok(&mut a, "bookmark_export", json!({ "doc": src, "out": "odd.json" }))["bookmarks"].clone();
+    assert_eq!((tree[0]["title"].clone(), tree[1]["page"].clone(), tree[1].get("view")), (json!(""), json!(1), None));
+    let dst = ok(&mut a, "doc_open", json!({ "path": "b.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "bookmark_import", json!({ "doc": dst, "file": "odd.json", "replace": true }))["truncated"], false);
+    // A destination with no view is written as XYZ with nulls: the same page, the reader's view.
+    let back = ok(&mut a, "bookmark_export", json!({ "doc": dst }))["bookmarks"].clone();
+    assert_eq!((back[0].clone(), back[1]["title"].clone(), back[1]["page"].clone()), (tree[0].clone(), json!("Short"), json!(1)));
+    assert_eq!(back[1]["view"], json!({ "type": "XYZ", "values": [null, null, null] }));
+    let copied = ok(&mut a, "bookmark_copy", json!({ "doc": dst, "from": src, "replace": true }));
+    assert_eq!((copied["unmapped"].clone(), copied["truncated"].clone()), (json!([]), json!(false)));
+    match a.call("bookmark_export", &json!({ "doc": src, "path": [3] })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("no bookmark at [3]"), "{m}"),
+        other => panic!("expected no bookmark, got {other:?}"),
+    }
+
+    let deep = ok(&mut a, "doc_open", json!({ "path": "deep.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "bookmark_export", json!({ "doc": deep, "out": "deep.json" }))["truncated"], true);
+    let saved: Value = serde_json::from_slice(&std::fs::read(dir.join("deep.json")).unwrap()).unwrap();
+    assert_eq!(saved["truncated"], true);
+    assert_eq!(ok(&mut a, "bookmark_import", json!({ "doc": dst, "file": "deep.json", "replace": true }))["truncated"], true);
+    assert_eq!(ok(&mut a, "bookmark_copy", json!({ "doc": dst, "from": deep, "replace": true }))["truncated"], true);
+    let export = tools().into_iter().find(|t| t.name == "bookmark_export").unwrap();
+    assert!(export.destructive && !export.read_only, "bookmark_export overwrites out");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_misspelt_bookmark_key_is_refused_not_dropped() {
+    let dir = workdir("bookmark-io-key");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let tree = json!([{ "title": "Parent", "children": [{ "title": "Red", "page": 1, "colour": [1, 0, 0] }] }]);
+    match a.call("bookmark_import", &json!({ "doc": doc, "bookmarks": tree })) {
+        Err(ToolError::InvalidArgs(m)) => assert!(m.contains("[1, 1]") && m.contains("\"colour\""), "{m}"),
+        other => panic!("expected InvalidArgs, got {other:?}"),
+    }
+    assert_eq!(ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"], json!([]));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_bad_bookmark_tree_is_refused_whole_and_names_the_node() {
+    let dir = workdir("bookmark-io-bad");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let refused = |a: &mut Automation, bookmarks: Value| match a.call("bookmark_import", &json!({ "doc": doc, "bookmarks": bookmarks })) {
+        Err(ToolError::InvalidArgs(m)) => m,
+        other => panic!("expected InvalidArgs, got {other:?}"),
+    };
+    let fine = json!({ "title": "Fine", "page": 1 });
+    let m = refused(&mut a, json!([fine, { "title": "Parent", "children": [{ "page": 1 }] }]));
+    assert!(m.contains("[2, 1]") && m.contains("title"), "{m}");
+    let m = refused(&mut a, json!([{ "title": 5 }]));
+    assert!(m.contains("[1]") && m.contains("title"), "{m}");
+    let m = refused(&mut a, json!([fine, { "title": "Bad", "page": 0 }]));
+    assert!(m.contains("[2]") && m.contains("page"), "{m}");
+    let m = refused(&mut a, json!([{ "title": "Bad", "color": [2, 0, 0] }]));
+    assert!(m.contains("color"), "{m}");
+    let m = refused(&mut a, json!([{ "title": "Bad", "view": { "type": "XYZ", "values": [1, 2, 3, 4, 5] } }]));
+    assert!(m.contains("view"), "{m}");
+    let mut deep = json!({ "title": "Leaf" });
+    for _ in 0..40 {
+        deep = json!({ "title": "Level", "children": [deep] });
+    }
+    assert!(refused(&mut a, json!([deep])).contains("33 levels"));
+    let m = refused(&mut a, json!([fine, { "title": "Z", "page": 1, "view": { "type": "Zoom" } }]));
+    assert!(m.contains("[2]") && m.contains("XYZ (3 values"), "{m}");
+    let m = refused(&mut a, json!([fine, { "title": "Z", "page": 1, "view": { "type": "FitH", "values": [1, 2] } }]));
+    assert!(m.contains("[2]") && m.contains("FitH view takes 1"), "{m}");
+    let m = refused(&mut a, json!([{ "title": "R", "view": { "type": "FitR", "values": [0, null, 1, 1] } }]));
+    assert!(m.contains("all four"), "{m}");
+    assert!(matches!(a.call("bookmark_import", &json!({ "doc": doc })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(a.call("bookmark_import", &json!({ "doc": doc, "bookmarks": [fine], "file": "x.json" })), Err(ToolError::InvalidArgs(_))));
+    // A real bookmark file outside the root is refused for being outside, not for being missing.
+    let outside = dir.with_extension("outside.json");
+    std::fs::write(&outside, br#"{"bookmarks": [{"title": "Outside", "page": 1}]}"#).unwrap();
+    let name = format!("../{}", outside.file_name().unwrap().to_string_lossy());
+    match a.call("bookmark_import", &json!({ "doc": doc, "file": name })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("outside the allowed directory"), "{m}"),
+        other => panic!("expected the root to refuse it, got {other:?}"),
+    }
+    let _ = std::fs::remove_file(&outside);
+    let out = dir.with_extension("out.json");
+    let name = format!("../{}", out.file_name().unwrap().to_string_lossy());
+    match a.call("bookmark_export", &json!({ "doc": doc, "out": name })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("outside the allowed directory"), "{m}"),
+        other => panic!("expected the root to refuse it, got {other:?}"),
+    }
+    assert!(!out.exists());
+    assert_eq!(ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"], json!([]));
 }
