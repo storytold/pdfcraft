@@ -149,6 +149,10 @@ impl Automation {
         }
         // Saving to a new file is a full rewrite unless asked otherwise, like Save As.
         let full = linearize || full.unwrap_or(!same_file);
+        // A signed document is never rewritten: refuse before flattening changes it.
+        if full && doc.is_signed() {
+            return Err(failed(pdfcraft_engine::EditError::Signed));
+        }
         let flatten_fill_sign = a.opt_bool("flatten_fill_sign")?.unwrap_or(false);
         if flatten_fill_sign {
             self.apply(a, Edit::FlattenFillSign)?;
