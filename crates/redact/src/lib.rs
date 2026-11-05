@@ -815,7 +815,9 @@ fn redact_page_content(
         )?;
         // A pattern this page selected but no surviving paint draws leaves its resources, so
         // its cell -- a content stream this pass does not enter -- cannot stay in the file.
-        report.patterns_removed += interp::prune_patterns(doc, &mut res, &out.patterns_seen, &out.patterns_painted, pruned_patterns);
+        // A Type 3 glyph without resources paints with patterns nobody tracked: keep them all.
+        let painted = if out.keeps_all_patterns { &out.patterns_seen } else { &out.patterns_painted };
+        report.patterns_removed += interp::prune_patterns(doc, &mut res, &out.patterns_seen, painted, pruned_patterns);
         retired_properties.extend(interp::prune_properties(doc, &mut res, &cleaned_data)?);
         type3::prune_type3_from_resources(doc, &mut res, &cleaned_data)?;
         doc.update_dict(page.obj, |d| {

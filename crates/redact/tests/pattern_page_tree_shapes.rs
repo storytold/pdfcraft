@@ -223,3 +223,53 @@ fn control_a_shorter_document_with_a_pattern_on_one_page_applies() {
     assert!(apply(&mut doc, None).is_ok());
     assert!(!saved_contains(&doc, SECRET));
 }
+fn glyph_pixel(doc: &Document, x: u32, row: u32) -> Vec<u8> {
+    let bytes = write_full(doc, &SaveOptions::default()).unwrap();
+    let mut r = pdfcraft_render::PageRenderer::new(Arc::new(bytes), pdfcraft_render::RenderConfig::default());
+    let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+    let i = ((row * out.width + x) * 4) as usize;
+    out.rgba[i..i + 3].to_vec()
+}
+const T3: &[u8] = b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 40 40] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 8 0 R >> /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [40] >>";
+const BLUE_CELL: &[u8] = b"0 0 1 rg 0 0 500 300 re f\n";
+
+/// The Type 3 font without `/Resources` is selected through an ExtGState `/Font` entry, not `Tf`.
+#[test]
+fn a_type3_font_set_by_extgstate_keeps_the_page_pattern_it_paints_with() {
+    let mut doc = open(vec![
+        catalog(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 300] /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> /ExtGState << /G 9 0 R >> /Pattern << /P0 6 0 R >> >> >>".to_vec(),
+        FONT.to_vec(),
+        stream_obj("", b"/G gs BT 300 230 Td (a) Tj ET\n/Pattern cs /P0 scn 35 110 170 35 re f\n"),
+        stream_obj(PATTERN, BLUE_CELL),
+        T3.to_vec(),
+        stream_obj("", b"40 0 d0 /Pattern cs /P0 scn 0 0 40 40 re f\n"),
+        b"<< /Type /ExtGState /Font [7 0 R 1] >>".to_vec(),
+    ]);
+    let before = glyph_pixel(&doc, 320, 50);
+    assert_eq!(before, vec![0, 0, 255], "the glyph paints with the page pattern before the redaction");
+    mark(&mut doc, 0);
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!(glyph_pixel(&doc, 320, 50), before, "the unmarked glyph lost its pattern paint ({report:?})");
+}
+/// The Type 3 font without `/Resources` is shown inside a form that has its own `/Resources`
+/// (with no `/Pattern`); the page paints `/P0` under the mark.
+#[test]
+fn a_type3_glyph_in_a_form_with_resources_renders_the_same_after_the_redaction() {
+    let mut doc = open(vec![
+        catalog(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 300] /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> /XObject << /Fm 9 0 R >> /Pattern << /P0 6 0 R >> >> >>".to_vec(),
+        FONT.to_vec(),
+        stream_obj("", b"/Fm Do\n/Pattern cs /P0 scn 35 110 170 35 re f\n"),
+        stream_obj(PATTERN, BLUE_CELL),
+        T3.to_vec(),
+        stream_obj("", b"40 0 d0 /Pattern cs /P0 scn 0 0 40 40 re f\n"),
+        stream_obj("/Type /XObject /Subtype /Form /BBox [0 0 500 300] /Resources << /Font << /T3 7 0 R >> >>", b"BT /T3 1 Tf 300 230 Td (a) Tj ET\n"),
+    ]);
+    let before = glyph_pixel(&doc, 320, 50);
+    mark(&mut doc, 0);
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!(glyph_pixel(&doc, 320, 50), before, "the unmarked glyph renders differently ({report:?}, before {before:?})");
+}

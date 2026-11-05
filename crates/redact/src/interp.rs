@@ -102,6 +102,10 @@ pub(crate) struct Output {
     /// saved file (#3647).
     pub patterns_seen: Vec<Vec<u8>>,
     pub patterns_painted: Vec<Vec<u8>>,
+    /// A Type 3 glyph without resources of its own was shown in this scope or a nested form,
+    /// through a font set by `Tf` or an ExtGState: which of the page's patterns it paints with is
+    /// not tracked, so the page keeps them all.
+    pub keeps_all_patterns: bool,
     /// Original property values retired by this scope or a nested form. Other resource holders
     /// may still name them; unlink only entries no surviving content uses.
     pub retired_properties: Vec<Object>,
@@ -536,6 +540,8 @@ impl Walk {
             _ => {
                 if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
+                    // As for `Tf`: a Type 3 font without /Resources paints through this scope's.
+                    self.gs.type3_inherits = op.name(0).is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
                 }
             }
         }
@@ -603,6 +609,7 @@ impl Walk {
         // pattern it could select, as with a form that has no /Resources.
         if self.gs.type3_inherits {
             self.out.patterns_painted.extend(self.patterns.iter().cloned());
+            self.out.keeps_all_patterns = true;
         }
         let o = op.op.as_slice();
         if o == b"\"" {
@@ -943,6 +950,10 @@ fn xobject(
             out.ambiguous |= inner.ambiguous;
             out.doomed.extend_from_slice(&inner.doomed);
             out.retired_properties.extend(inner.retired_properties);
+            // A Type 3 glyph without resources shown inside the form may paint with the page's
+            // patterns (the renderer resolves its names there), whether or not the form has
+            // /Resources of its own.
+            out.keeps_all_patterns |= inner.keeps_all_patterns;
             out.tag_changes.extend(inner.tag_changes);
             out.error = inner.error.or(out.error.take());
             // A form without /Resources of its own paints with its caller's patterns, so what it
@@ -1016,4 +1027,13 @@ fn xobject(
         }
         _ => None,
     }
+}
+
+/// Whether the ExtGState `name` sets a Type 3 font that has no `/Resources` of its own.
+fn extgstate_type3_inherits(doc: &Document, ext_gstates: &Dict, name: &[u8]) -> bool {
+    let Some(state) = ext_gstates.get(name).map(|s| doc.resolve(s)) else { return false };
+    let Some(font) = state.as_dict().and_then(|d| d.get(b"Font")).map(|f| doc.resolve(f)) else { return false };
+    let Some(reference) = font.as_array().and_then(|a| a.first()) else { return false };
+    let dict = doc.resolve(reference);
+    dict.as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type3") && !d.contains(b"Resources"))
 }
