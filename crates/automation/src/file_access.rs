@@ -400,6 +400,8 @@ mod tests {
             "read_input",
             "read_input_bytes",
             "read_model",
+            // model3d.rs: a glTF's buffer or image, after `self.resolve` confines its URI.
+            "read_at_most",
             "read_review_sidecar",
             "process",
             "linked",

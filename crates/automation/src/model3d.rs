@@ -35,12 +35,13 @@ impl Automation {
                 .map(|(act, _)| *act)
                 .ok_or_else(|| ToolError::InvalidArgs(format!("activation must be one of: {}", Activation3d::ALL.map(|(_, w)| w).join(", "))))?,
         };
+        let user = rect_to_user(&info, r);
         let path = self.resolve(a.str("path")?, false)?;
         let (model, converted, view) = match read_model(&path, MAX_3D_MODEL_BYTES)? {
             ModelFile::Native(bytes) => (bytes, None, None),
             ModelFile::Gltf(bytes) => {
                 let (prc, report, bounds) = self.gltf_to_prc(&path, &bytes)?;
-                (prc, Some(report), bounds.and_then(|b| View3d::fitted(b, w / h)))
+                (prc, Some(report), bounds.and_then(|b| View3d::fitted(b, aspect(user))))
             }
         };
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -55,7 +56,7 @@ impl Automation {
                 Some(MarkFile { name, bytes: std::sync::Arc::new(bytes), page })
             }
         };
-        let edit = Edit::AddModel3d { page, rect: rect_to_user(&info, r), model: std::sync::Arc::new(model), poster, activation, name, view };
+        let edit = Edit::AddModel3d { page, rect: user, model: std::sync::Arc::new(model), poster, activation, name, view };
         let mut out = self.apply(a, edit)?;
         if let Some(report) = converted {
             out["converted"] = report;
@@ -90,15 +91,23 @@ impl Automation {
         if report.prc.len() > MAX_3D_MODEL_BYTES {
             return Err(failed(format!("{shown}: the converted model is more than {MAX_3D_MODEL_BYTES} bytes, the largest accepted")));
         }
+        let bounds = import.scene.bounds();
         let summary = json!({
             "from": "glTF",
+            "view": bounds.is_some(),
             "triangles": report.triangles,
             "textured_primitives": report.textured,
             "notes": import.notes,
             "inferred": import.inferred,
         });
-        Ok((report.prc, summary, import.scene.bounds()))
+        Ok((report.prc, summary, bounds))
     }
+}
+
+/// Width over height of the user-space rectangle `r`: the annotation turns with its page, so on a
+/// rotated page this is not the displayed shape.
+fn aspect([x0, y0, x1, y1]: [f64; 4]) -> f64 {
+    (x1 - x0).abs() / (y1 - y0).abs()
 }
 
 /// An axis-aligned box `[min, max]` in model space.

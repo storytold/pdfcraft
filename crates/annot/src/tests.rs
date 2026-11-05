@@ -2636,9 +2636,15 @@ fn a_fitted_3d_view_is_the_streams_lit_default_view() {
     // The half-diagonal 2.69 fills the narrower, vertical half-angle atan(tan 15° / 2).
     let half = (15f64.to_radians().tan() / 2.0).atan();
     assert!((view.orbit - 7.25f64.sqrt() / half.sin()).abs() < 1e-9, "{}", view.orbit);
-    for (bounds, aspect) in
-        [([[0.0; 3], [0.0; 3]], 1.0), ([[1.0, 0.0, 0.0], [0.0, 1.0, 1.0]], 1.0), ([[0.0; 3], [f64::NAN, 1.0, 1.0]], 1.0), ([[0.0; 3], [1.0; 3]], 0.0)]
-    {
+    for (bounds, aspect) in [
+        ([[0.0; 3], [0.0; 3]], 1.0),
+        ([[1.0, 0.0, 0.0], [0.0, 1.0, 1.0]], 1.0),
+        ([[0.0; 3], [f64::NAN, 1.0, 1.0]], 1.0),
+        ([[0.0; 3], [1.0; 3]], 0.0),
+        ([[0.0; 3], [f64::INFINITY, 1.0, 1.0]], 1.0),
+        ([[0.0; 3], [1.0; 3]], -1.0),
+        ([[0.0; 3], [1.0; 3]], f64::NAN),
+    ] {
         assert_eq!(View3d::fitted(bounds, aspect), None, "{bounds:?} {aspect}");
     }
 
@@ -2674,6 +2680,13 @@ fn a_fitted_3d_view_is_the_streams_lit_default_view() {
     let annot = list(&doc, 0)[index].clone();
     let Object::Stream(stream) = doc.get(annot.reference(b"3DD").unwrap()).as_ref().clone() else { panic!("a 3D stream") };
     assert!(stream.dict.get(b"VA").is_none() && stream.dict.get(b"DV").is_none(), "no view without one");
+
+    // A lighting scheme is PDF 1.7: a U3D model with a view raises an older file that far.
+    let mut doc = fixture();
+    doc.set_version("1.4");
+    add_3d_model(&mut doc, &NewModel3d { model: b"U3D rest", ..new }, &meta("m")).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(doc.get(doc.root().unwrap()).as_dict().unwrap().name(b"Version"), Some(&b"1.7"[..]));
 }
 
 /// A 3D annotation is PDF 1.6 and a PRC model 1.7 (ISO 32000-2 §13.6): an older document's

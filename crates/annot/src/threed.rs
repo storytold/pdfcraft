@@ -109,16 +109,17 @@ pub struct NewModel3d<'a> {
 
 /// A 3D view (§13.6.4) with a perspective camera and the CAD lighting scheme, written as the
 /// model's default view (the 3D stream's `/VA` and `/DV`, §13.6.3). Without a lighting scheme a
-/// model that has no lights of its own may be drawn unlit, nearly black.
+/// model that has no lights of its own may be drawn unlit, nearly black. Built only by
+/// [`View3d::fitted`], so every number written is finite and in range.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct View3d {
     /// `/C2W`: the camera's x, y and z axes (z points where it looks) and its position, in model
     /// space.
-    pub camera_to_world: [f64; 12],
-    /// `/CO`: the distance from the camera to the point it orbits.
-    pub orbit: f64,
-    /// `/FOV`: the horizontal field of view, in degrees.
-    pub fov: f64,
+    pub(crate) camera_to_world: [f64; 12],
+    /// `/CO`: the distance from the camera to the point it orbits; positive.
+    pub(crate) orbit: f64,
+    /// `/FOV`, in degrees, across the annotation's width (`/PS /W`).
+    pub(crate) fov: f64,
 }
 
 impl View3d {
@@ -145,7 +146,8 @@ impl View3d {
             return None;
         }
         let (a, b, c) = (std::f64::consts::FRAC_1_SQRT_2, 1.0 / 6f64.sqrt(), 1.0 / 3f64.sqrt());
-        // x = up × z, y = z × x, for z = (-1, 1, -1)/√3 and up = +Z.
+        // x = up × z, y = z × x, for z = (-1, 1, -1)/√3 and up = +Z: a right-handed frame, as the
+        // views CAD tools write carry, though §13.6.4 describes the camera's x as pointing right.
         let (x, y, z) = ([-a, -a, 0.0], [-b, b, 2.0 * b], [-c, c, -c]);
         let at: [f64; 3] = std::array::from_fn(|i| centre.get(i).zip(z.get(i)).map_or(0.0, |(p, d)| p - orbit * d));
         let mut camera_to_world = [0.0; 12];
@@ -160,7 +162,7 @@ impl View3d {
         projection.set(b"Subtype".to_vec(), Object::name("P"));
         projection.set(b"FOV".to_vec(), Object::Real(self.fov));
         projection.set(b"PS".to_vec(), Object::name("W"));
-        // The near clipping plane must be positive; a thousandth of the orbit keeps the box in front of it.
+        // Required for a perspective camera; readers clip automatically under the default `/CS /ANF`.
         projection.set(b"N".to_vec(), Object::Real(self.orbit / 1000.0));
         let mut lighting = Dict::new();
         lighting.set(b"Type".to_vec(), Object::name("3DLightingScheme"));
@@ -196,8 +198,9 @@ fn check_model_size(model: &[u8], max: usize) -> Result<(), AnnotError> {
 
 /// Add a 3D annotation: the model in a Flate-compressed 3D stream referenced from `/3DD` (so the
 /// annotation has its own instance, §13.6.2), `/3DA` stating only `/A`, and the poster as `/AP /N`.
-/// The stream holds [`NewModel3d::view`] as its only and default view; without one, readers open
-/// on the model's own default view. A document
+/// The stream holds [`NewModel3d::view`] as its only and default view, and the document is then
+/// raised to PDF 1.7 (the lighting scheme's version); without one, readers open on the model's own
+/// default view. A document
 /// older than [`ModelFormat::version`] is raised to it. Returns its index in the page's `/Annots`.
 ///
 /// # Errors
@@ -230,7 +233,7 @@ pub fn add_3d_model(doc: &mut Document, new: &NewModel3d<'_>, meta: &Meta) -> Re
     let index = list.len();
     list.push(Object::Ref(r));
     set_annots(doc, page, list)?;
-    at_least_version(doc, format.version())?;
+    at_least_version(doc, if new.view.is_some() { "1.7" } else { format.version() })?;
     if format == ModelFormat::Prc && !at_least(doc, "2.0") {
         declare_prc_extension(doc)?;
     }

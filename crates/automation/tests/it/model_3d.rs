@@ -197,6 +197,30 @@ fn model_add_converts_a_glb_to_prc() {
     }
 }
 
+/// The model turns with its page, so on a page turned a quarter the view is fitted to the
+/// user-space box: a displayed box 300 wide and 100 high is 100 wide and 300 high to the camera.
+#[test]
+fn model_add_fits_the_view_to_the_box_the_model_is_drawn_in_on_a_rotated_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let (bin, json) = triangle_gltf(None);
+    std::fs::write(dir.path().join("tri.glb"), glb(&json, &bin)).unwrap();
+    let mut a = Automation::new().with_root(dir.path()).unwrap();
+    let doc = tool(&mut a, "doc_create", json!({ "from": "blank", "width": 600, "height": 800 }))["doc"].as_u64().unwrap();
+    tool(&mut a, "page_rotate", json!({ "doc": doc, "degrees": 90 }));
+    let out = tool(&mut a, "model_add", json!({ "doc": doc, "page": 1, "path": "tri.glb", "rect": [100, 100, 400, 200] }));
+    assert_eq!(out["converted"]["view"], true, "{out}");
+    tool(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
+    let (saved, found) = saved_3d(dir.path());
+    let rect: Vec<f64> = found[0].get(b"Rect").unwrap().as_array().unwrap().iter().filter_map(Object::as_f64).collect();
+    assert!((rect[2] - rect[0] - 100.0).abs() < 1e-9 && (rect[3] - rect[1] - 300.0).abs() < 1e-9, "{rect:?}");
+    let model = stream(&saved, found[0].get(b"3DD").unwrap());
+    let views = saved.resolve(model.dict.get(b"VA").unwrap()).as_array().unwrap().clone();
+    let orbit = views[0].as_dict().unwrap().get(b"CO").and_then(Object::as_f64).unwrap();
+    // The box [0 0 0]–[1 0 1] has half-diagonal √0.5; in a tall box the 30° width is the narrower angle.
+    let want = 0.5f64.sqrt() / 15f64.to_radians().sin();
+    assert!((orbit - want).abs() < 1e-9, "orbit {orbit}, want {want}");
+}
+
 #[test]
 fn model_add_reads_a_gltf_buffer_beside_it_and_nothing_outside_the_root() {
     let dir = tempfile::tempdir().unwrap();
