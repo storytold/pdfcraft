@@ -313,7 +313,10 @@ impl Session {
         }
         doc.config.hide_comments = hide;
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
+        // A new renderer: caches keyed by the edit generation must drop. What the document
+        // holds is unchanged, so the content generation stays.
         doc.generation += 1;
+        doc.view_changes += 1;
         true
     }
 
@@ -326,7 +329,10 @@ impl Session {
         }
         doc.config.reading_colors = colors;
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
+        // A new renderer: caches keyed by the edit generation must drop. What the document
+        // holds is unchanged, so the content generation stays.
         doc.generation += 1;
+        doc.view_changes += 1;
         true
     }
 

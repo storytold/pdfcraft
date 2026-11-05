@@ -674,10 +674,10 @@ fn tesseract_checking() -> String {
 pub struct OcrGuard {
     pub(crate) doc: DocId,
     pub(crate) pages: usize,
-    pub(crate) revisions: usize,
-    /// The document's working bytes when the job started; any edit rewrites them, so a shared
-    /// `Arc` pointer means "untouched".
-    pub(crate) bytes: Arc<Vec<u8>>,
+    /// The document's [`content_generation`](crate::document::Document::content_generation) when
+    /// the job started: it moves with an edit, undo, revert, reload or signing, but not with a
+    /// save, which writes the document afresh (new bytes) and changes nothing it holds.
+    pub(crate) content: u64,
 }
 
 /// Everything recognition needs from a document, detached from the session.
@@ -1042,7 +1042,7 @@ impl Session {
                     .reduce(f32::max)
             })
             .collect();
-        let guard = OcrGuard { doc: id, pages: all, revisions: doc.revision_ends().len(), bytes: doc.bytes.clone() };
+        let guard = OcrGuard { doc: id, pages: all, content: doc.content_generation() };
         Some(OcrJob { bytes: doc.bytes.clone(), password: doc.password.clone(), infos: doc.info.pages.clone(), native, pages, settings, guard })
     }
 
@@ -1085,22 +1085,19 @@ impl Session {
     }
 
     /// Why a job's result may not be applied to this session any more: the document was closed,
-    /// edited, re-saved, or its pages changed since the job started. `None` means it is safe.
+    /// edited, or its pages changed since the job started. Saving is not a change: it writes the
+    /// document afresh (new bytes, and a revision when saved on top of the old file), and what it
+    /// holds stays. Signing is one: it moves the content generation. `None` means it is safe.
     pub fn stale_reason(&self, guard: &OcrGuard) -> Option<String> {
         let Some(doc) = self.get(guard.doc) else {
             return Some("the document is no longer open".into());
         };
-        if !Arc::ptr_eq(&doc.bytes, &guard.bytes) {
+        if doc.content_generation() != guard.content {
             return Some("the document changed since recognition started".into());
         }
         let now = doc.info.pages.len();
         if now != guard.pages {
             return Some(format!("the page count changed from {} to {} since recognition started", guard.pages, now));
-        }
-        let revisions = doc.revision_ends().len();
-        if revisions != guard.revisions {
-            let had = guard.revisions;
-            return Some(format!("the document gained revisions ({had} → {revisions}) since recognition started"));
         }
         None
     }
@@ -1111,7 +1108,7 @@ impl Session {
     /// here; any other edit in between still makes the next apply stale.
     pub fn ocr_guard(&self, id: DocId) -> Option<OcrGuard> {
         let doc = self.get(id)?;
-        Some(OcrGuard { doc: id, pages: doc.info.pages.len(), revisions: doc.revision_ends().len(), bytes: doc.bytes.clone() })
+        Some(OcrGuard { doc: id, pages: doc.info.pages.len(), content: doc.content_generation() })
     }
 
     /// [`Self::apply_ocr`], but only while the document is still the one that was read; a stale
@@ -1694,29 +1691,30 @@ mod tests {
         assert_eq!(c.rgba()[8], 4, "the second row starts at y=1");
     }
 
-    /// The stale guard: edits and closing are named and the result is refused; a page-count or
-    /// revision difference is named too (any edit rewrites the working bytes, so those branches
-    /// are reached with a hand-built guard).
+    /// The stale guard: edits and closing are named and the result is refused; a page-count
+    /// difference is named too (any edit moves the content generation first, so that branch is
+    /// reached with a hand-built guard).
     #[test]
     fn stale_results_are_named_and_refused() {
         let mut s = Session::new();
         let id = s.open("t.pdf", None, Arc::new(fixture(2)), None).unwrap();
         let job = s.ocr_job(id, &[], OcrSettings::default()).unwrap();
         assert_eq!(s.stale_reason(&job.guard), None, "freshly captured");
-        // Any edit rewrites the working bytes.
+        // Any edit moves the content generation.
         s.apply(id, Edit::AddOcrText { page: 0, words: vec![] }).unwrap();
         assert_eq!(s.stale_reason(&job.guard).as_deref(), Some("the document changed since recognition started"));
         assert!(s.apply_ocr_checked(id, &[], &job.guard).is_err(), "a stale result is never applied");
         // A fresh guard passes.
         let fresh = s.ocr_job(id, &[], OcrSettings::default()).unwrap();
         assert_eq!(s.stale_reason(&fresh.guard), None);
-        // A page count and a revision count from another life are named too.
+        // A page count from another life is named too.
         let doc = s.get(id).unwrap();
-        let (bytes, revisions) = (doc.bytes.clone(), doc.revision_ends().len());
-        let guard = OcrGuard { doc: id, pages: 5, revisions, bytes };
+        let content = doc.content_generation();
+        let guard = OcrGuard { doc: id, pages: 5, content };
         assert!(s.stale_reason(&guard).is_some_and(|r| r.contains("page count changed")), "{}", s.stale_reason(&guard).unwrap());
-        let guard = OcrGuard { doc: id, pages: 2, revisions: revisions + 3, bytes: s.get(id).unwrap().bytes.clone() };
-        assert!(s.stale_reason(&guard).is_some_and(|r| r.contains("revisions")), "{}", s.stale_reason(&guard).unwrap());
+        // A guard from before an edit names the change, however many revisions saving has added.
+        let guard = OcrGuard { doc: id, pages: 2, content: content.wrapping_sub(1) };
+        assert!(s.stale_reason(&guard).is_some_and(|r| r.contains("changed since")), "{}", s.stale_reason(&guard).unwrap());
         // A guard for a different document refuses up front.
         let other = s.open("other.pdf", None, Arc::new(fixture(1)), None).unwrap();
         let cross = s.apply_ocr_checked(other, &[], &fresh.guard);
@@ -1756,7 +1754,7 @@ mod tests {
 
         // Applying the now-stale result is refused with its named reason and writes nothing.
         let after_edit = s.get(id).unwrap().bytes.clone();
-        assert!(!Arc::ptr_eq(&after_edit, &guard.bytes), "the edit rewrote the working bytes");
+        assert_ne!(s.get(id).unwrap().content_generation(), guard.content, "the edit moved the content generation");
         let revisions = s.get(id).unwrap().revision_ends().len();
         let why = s.apply_ocr_checked(id, &found, &guard).unwrap_err();
         assert_eq!(why, "the document changed since recognition started", "{why}");

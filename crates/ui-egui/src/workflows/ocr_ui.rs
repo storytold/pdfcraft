@@ -207,6 +207,7 @@ pub type WaitingFiles = (Vec<(String, Vec<u8>)>, OcrSettings);
 
 pub struct OcrRun {
     pub doc: DocId,
+
     pub progress: Arc<Mutex<OcrProgress>>,
     /// What the document looked like when the job started: a result is applied only while it
     /// still does (the dialog closes on Go, so the user can edit, or redact, while this runs).
@@ -231,8 +232,9 @@ pub struct OcrRun {
 pub struct AutoOcr {
     /// The page it reads (0-based), when it was started.
     pub page: usize,
-    /// The document's edit generation when it was started: a result is for those bytes only, and
-    /// any later change (a page deleted or moved, say) may put a different page at that index.
+    /// The document's content generation when it was started: a result is for that content only,
+    /// and any later change (a page deleted or moved, say) may put a different page at that index.
+    /// Saving is not a change.
     pub generation: u64,
 }
 
@@ -592,7 +594,7 @@ impl PdfCraftApp {
     fn start_ocr_pages(&mut self, id: DocId, pages: &[usize], settings: OcrSettings, automatic: bool) {
         // What an automatic run's result must still fit when it arrives (see `AutoOcr`).
         let auto = if automatic {
-            pages.first().map(|&page| AutoOcr { page, generation: self.session.get(id).map_or(0, |d| d.edit_generation()) })
+            pages.first().map(|&page| AutoOcr { page, generation: self.session.get(id).map_or(0, |d| d.content_generation()) })
         } else {
             None
         };
@@ -973,7 +975,7 @@ impl PdfCraftApp {
         // page deleted or moved, say) its page index may now name another page: drop it, and let
         // the page in view be judged again.
         if let Some(a) = auto
-            && self.session.get(doc).map(|d| d.edit_generation()) != Some(a.generation)
+            && self.session.get(doc).map(|d| d.content_generation()) != Some(a.generation)
         {
             if let Some(view) = self.views.iter_mut().find(|v| v.id == doc) {
                 view.auto_ocr_tried.remove(&a.page);
@@ -1287,7 +1289,7 @@ mod tests {
             source: "ocrs".into(),
         };
         let finished = |app: &PdfCraftApp, automatic: bool| {
-            let generation = app.session.get(app.active_ids().unwrap().1).unwrap().edit_generation();
+            let generation = app.session.get(app.active_ids().unwrap().1).unwrap().content_generation();
             let page = pdfcraft_engine::ocr::OcrPage { page: 0, words: vec![word()], already_on_page: 0, skipped: None, notes: Vec::new() };
             let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
             let guard = app.session.ocr_guard(app.active_ids().unwrap().1).unwrap();
@@ -1356,10 +1358,11 @@ mod tests {
         };
         let run = |app: &PdfCraftApp, settings: OcrSettings, automatic: Option<AutoOcr>| OcrRun {
             doc: id,
+
             progress: Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page.clone()])), cancel: false })),
             guard: app.session.ocr_guard(id).unwrap(),
             settings,
-            automatic: automatic.map(|a| AutoOcr { generation: app.session.get(id).unwrap().edit_generation(), ..a }),
+            automatic: automatic.map(|a| AutoOcr { generation: app.session.get(id).unwrap().content_generation(), ..a }),
             editable: false,
         };
         let width = |app: &PdfCraftApp| app.session.get(id).unwrap().page_images(0)[0].width;
@@ -1389,7 +1392,7 @@ mod tests {
     fn the_result_of_an_automatic_run_is_dropped_once_the_document_has_changed() {
         let mut app = app_with(scan());
         let id = app.active_ids().unwrap().1;
-        let generation = app.session.get(id).unwrap().edit_generation();
+        let generation = app.session.get(id).unwrap().content_generation();
         let page = pdfcraft_engine::ocr::OcrPage {
             page: 0,
             words: vec![pdfcraft_engine::ocr::PlacedWord {
@@ -1423,6 +1426,43 @@ mod tests {
         assert!(app.ocr_run.is_none(), "the run is over");
         assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Add image"), "its result was not applied");
         assert!(!app.views[0].auto_ocr_tried.contains(&0), "the page may be judged again");
+    }
+
+    /// Saving while a run is out changes nothing the result depends on: it is still applied.
+    #[test]
+    fn the_result_of_a_run_survives_a_save() {
+        let mut app = app_with(scan());
+        let id = app.active_ids().unwrap().1;
+        let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![scanned_page()])), cancel: false }));
+        let guard = app.session.ocr_guard(id).unwrap();
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings: OcrSettings::default(), automatic: None, editable: false });
+        // The document is saved while the run is out.
+        let bytes = app.session.save_bytes(id).unwrap();
+        app.session.mark_saved(id, bytes, None).unwrap();
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none(), "the run is over");
+        assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"), "its result was applied");
+    }
+
+    /// The same holds for a document that has edits to save: saving writes it afresh (new bytes,
+    /// and a new revision when it is saved on top of the old file), which is still no change to
+    /// what it holds, so a run begun on it is applied.
+    #[test]
+    fn the_result_of_a_run_on_an_edited_document_survives_a_save() {
+        let blank = Session::new().create_blank(595.0, 842.0, 1).unwrap().to_vec();
+        let mut app = app_with(blank);
+        let id = app.active_ids().unwrap().1;
+        app.session.apply(id, Edit::InsertBlankPage { at: 1, width: 595.0, height: 842.0 }).unwrap();
+        let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![scanned_page()])), cancel: false }));
+        let guard = app.session.ocr_guard(id).unwrap();
+        app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings: OcrSettings::default(), automatic: None, editable: false });
+        // The edited document is saved while the run is out.
+        let bytes = app.session.save_bytes(id).unwrap();
+        app.session.mark_saved(id, bytes, None).unwrap();
+        app.poll_ocr();
+        assert!(app.ocr_run.is_none(), "the run is over");
+        let toast = app.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"), "its result was applied; {toast}");
     }
 
     /// A run the user asked for is held to the same rule: once a page has been moved while it was
@@ -1484,6 +1524,7 @@ mod tests {
         assert!(app.session.get(id).unwrap().is_signed());
         let page = scanned_page();
         let settings = OcrSettings { output: OcrOutput::Downsampled, dpi: 300.0, ..Default::default() };
+
         let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
         let guard = app.session.ocr_guard(id).unwrap();
         app.ocr_run = Some(OcrRun { doc: id, progress, guard, settings, automatic: None, editable: false });

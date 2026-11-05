@@ -388,6 +388,11 @@ impl EditCtx {
 /// Recognize Text's Searchable Image output: the images drawn on `pages` that are finer than
 /// `ppi` are resampled down to it in place, and what that did is added to the edit's report.
 fn run_downsample_images(doc: &mut pdfcraft_cos::Document, pages: &[usize], ppi: f64, cx: &mut EditCtx) -> Result<(), EditError> {
+    // The optimizer quietly does nothing at such a resolution; as an edit it would leave an undo
+    // step and a dirty document that changed nothing.
+    if !ppi.is_finite() || ppi <= 0.0 {
+        return Err(EditError::Invalid(format!("the resolution must be a positive number of pixels per inch, not {ppi}")));
+    }
     let all = pdfcraft_annot::page_refs(doc).map_err(|e| EditError::Invalid(e.to_string()))?;
     let mut refs = Vec::with_capacity(pages.len());
     for p in pages {
