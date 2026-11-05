@@ -6,7 +6,9 @@
 //! a name written with `#xx` escapes counts its decoded bytes. A page's `/Contents` streams are read
 //! joined, as one content stream (an operator's operands may end one stream and the operator start
 //! the next, ISO 32000-1 7.8.2). Content is decoded within one allowance for the whole document.
-//! Real numbers beyond ±3.403 × 10³⁸ are reported, and so is an embedded CMap of a Type 0 font
+//! Real numbers beyond ±3.403 × 10³⁸ are reported, and so are nonzero ones nearer zero than
+//! ±1.175 × 10⁻³⁸ (ISO 32000-1 Table C.1 lets a reader round them to zero; PDF/A-2 does not allow
+//! them, PDF Association TechNote 0010 A018), and so is an embedded CMap of a Type 0 font
 //! (or one it uses through `/UseCMap`) that maps a code to a CID above 65535. An integer token too
 //! long even for a real reads as one past that range, and is reported as a real.
 
@@ -19,6 +21,8 @@ const MIN_INT: i64 = i32::MIN as i64;
 const MAX_INT: i64 = i32::MAX as i64;
 /// Table C.1: the largest real value (approximate).
 const MAX_REAL: f64 = 3.403e38;
+/// Table C.1: the nonzero real value closest to zero (approximate).
+const MIN_REAL: f64 = 1.175e-38;
 /// Table C.1: the largest character identifier.
 const MAX_CID: u64 = 65535;
 /// The decoded CMap data, across all the document's embedded CMaps, the scan reads.
@@ -65,7 +69,7 @@ impl Exceeded {
         }
         match o {
             Object::Int(i) => self.int |= !(MIN_INT..=MAX_INT).contains(i),
-            Object::Real(r) => self.real |= !r.is_finite() || r.abs() > MAX_REAL,
+            Object::Real(r) => self.real |= !r.is_finite() || r.abs() > MAX_REAL || (*r != 0.0 && r.abs() < MIN_REAL),
             Object::String(s) => self.string |= s.bytes.len() > MAX_STRING,
             Object::Name(n) => self.name(n),
             Object::Array(a) => {

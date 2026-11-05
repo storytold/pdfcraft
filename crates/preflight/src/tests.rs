@@ -569,11 +569,15 @@ endstream",
     // Corners near ±1e308 are reals past the limit too, and the width overflows to infinity.
     assert_eq!(
         limits(&page("|", "", "[-1e308 0 1e308 200]", "")),
-        ["A real number is outside ±3.403 × 10³⁸", "Page 1 has a boundary smaller than 3 or larger than 14400 units"]
+        [
+            "A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸",
+            "Page 1 has a boundary smaller than 3 or larger than 14400 units"
+        ]
     );
 }
 
-/// 6.1.13's two remaining limits of ISO 32000-1 Annex C: a real number beyond ±3.403 × 10³⁸, and
+/// 6.1.13's two remaining limits of ISO 32000-1 Annex C: a real number beyond ±3.403 × 10³⁸ (or
+/// nonzero and nearer zero than ±1.175 × 10⁻³⁸), and
 /// a CID above 65535 that an embedded CMap of a Type 0 font maps to (a `begincidrange` reaching
 /// past it, a `begincidchar` naming one, or a CMap it uses through `/UseCMap`).
 #[test]
@@ -600,8 +604,15 @@ fn implementation_limits_cover_reals_and_cids() {
     let near = format!("34{}.0", "0".repeat(37));
     let far = format!("4{}.0", "0".repeat(38));
     assert!(limits(&doc(&format!("/R {near} /S -{near}"), &range("0000", "00ff", 65280), "")).is_empty(), "both at their limits");
-    assert_eq!(limits(&doc(&format!("/R {far}"), "", "")), ["A real number is outside ±3.403 × 10³⁸"]);
-    assert_eq!(limits(&doc(&format!("/R -{far}"), "", "")), ["A real number is outside ±3.403 × 10³⁸"]);
+    assert_eq!(limits(&doc(&format!("/R {far}"), "", "")), ["A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸"]);
+    assert_eq!(limits(&doc(&format!("/R -{far}"), "", "")), ["A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸"]);
+    // A nonzero real nearer zero than ±1.175 × 10⁻³⁸ is not allowed either; zero and the
+    // smallest allowed magnitude are.
+    let tiny = format!("0.{}1", "0".repeat(39));
+    let smallest = format!("0.{}1175", "0".repeat(37));
+    assert!(limits(&doc(&format!("/Z 0.0 /M -0.0 /S {smallest} /T -{smallest}"), "", "")).is_empty(), "zero and the smallest real");
+    assert_eq!(limits(&doc(&format!("/R {tiny}"), "", "")), ["A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸"]);
+    assert_eq!(limits(&doc(&format!("/R -{tiny}"), "", "")), ["A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸"]);
     let cid = ["A CMap maps a character code to a CID above 65535"];
     assert_eq!(limits(&doc("", &range("3f00", "3fff", 65536), "")), cid);
     assert_eq!(limits(&doc("", &range("0000", "0100", 65280), "")), cid, "the range reaches 65536");
