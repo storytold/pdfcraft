@@ -597,7 +597,7 @@ fn the_style_bar_controls_recolour_and_fade_the_comment() {
     };
     let mut h = egui_kittest::Harness::new_ui_state(
         |ui, (props, edits): &mut (pdfcraft_engine::CommentProps, Vec<Edit>)| {
-            if let Some(e) = style_controls(ui, 0, 3, props) {
+            if let Some(e) = style_controls(ui, 0, 3, props, egui::Id::unique("opacity-draft")) {
                 edits.push(e);
             }
         },
@@ -624,5 +624,61 @@ fn the_style_bar_controls_recolour_and_fade_the_comment() {
             assert!((*o - 0.95).abs() < 1e-9, "{o}");
         }
         other => panic!("{other:?}"),
+    }
+}
+
+/// A pointer drag on the style bar's opacity slider is one edit, made when the drag ends: the
+/// press moves the value at once but commits nothing, nor do the frames in between.
+#[test]
+fn the_opacity_slider_commits_once_when_a_drag_ends() {
+    use egui_kittest::kittest::Queryable;
+    let props = pdfcraft_engine::CommentProps {
+        subtype: "Highlight".into(),
+        author: String::new(),
+        subject: String::new(),
+        color: Some([1.0, 0.94, 0.0]),
+        opacity: 1.0,
+        width: None,
+        icon: None,
+        modified: None,
+        restylable: true,
+        locked: false,
+        endings: None,
+        fillable: false,
+        fill: None,
+        font_size: None,
+        border_color: None,
+        border_shape: None,
+        fill_opacity: None,
+        text_opacity: None,
+    };
+    let mut h = egui_kittest::Harness::new_ui_state(
+        |ui, (props, edits): &mut (pdfcraft_engine::CommentProps, Vec<Edit>)| {
+            if let Some(e) = style_controls(ui, 0, 3, props, egui::Id::unique("opacity-draft")) {
+                edits.push(e);
+            }
+        },
+        (props, Vec::new()),
+    );
+    h.run();
+    h.get_by_label("Comment opacity").click();
+    h.run();
+    let rail = h.get_by(|n| n.role() == egui::accesskit::Role::Slider && n.label().as_deref() == Some("Opacity")).rect();
+    let (from, to) = (rail.center(), pos2(rail.center().x - rail.width() * 0.3, rail.center().y));
+    h.drag_at(from);
+    h.run();
+    for k in 1..=3 {
+        h.hover_at(from + (to - from) * (k as f32 / 3.0));
+        h.run();
+    }
+    assert!(h.state().1.is_empty(), "nothing commits while the pointer is down: {:?}", h.state().1);
+    h.drop_at(to);
+    h.run();
+    h.run();
+    match h.state().1.as_slice() {
+        [Edit::StyleAnnotation { page: 0, index: 3, color: None, opacity: Some(o), .. }] => {
+            assert!((0.1..0.6).contains(o), "left of the middle of a 10-100 % rail: {o}");
+        }
+        other => panic!("one edit, at the end of the drag: {other:?}"),
     }
 }
