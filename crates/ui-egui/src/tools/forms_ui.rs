@@ -979,7 +979,7 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, frame: TextFram
 /// its editor then takes no more than fits ([`overlay`]).
 pub(crate) fn text_box(doc: &pdfcraft_engine::Document, view: &DocView, form: &[FormField]) -> Option<form_appearance::TextBox> {
     let fx = view.forms.focus.as_ref()?;
-    let f = form.iter().find(|f| f.name == fx.name)?;
+    let f = focused_field(fx, form)?;
     let no_scroll = f.kind == FormFieldKind::Text && f.has(field_flags::DO_NOT_SCROLL);
     no_scroll.then(|| doc.field_text_box(&fx.name, fx.widget)).flatten()
 }
