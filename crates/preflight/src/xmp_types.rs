@@ -4,7 +4,10 @@
 //! The types come from ISO 16684-1:2011 (XMP Part 1) clause 8 for the Dublin Core, XMP Basic and
 //! XMP Rights Management namespaces, and from XMP Specification Part 2 (Additional Properties) for
 //! the Media Management, Basic Job Ticket, Paged-Text, Dynamic Media, Adobe PDF, Photoshop and
-//! Camera Raw namespaces, with the structures they use. A value is read as RDF/XML serializes it
+//! Camera Raw namespaces, with the structures they use. The TIFF, EXIF and Additional EXIF (`aux`)
+//! namespaces, which the current Part 2 leaves to CIPA DC-010, come from the September 2005 XMP
+//! Specification that PDF/A-2 cites: "EXIF Schemas" (pages 58–70) and "EXIF Schema Value Types"
+//! (pages 83–87). A value is read as RDF/XML serializes it
 //! (ISO 16684-1 7.9): a simple value as text or an attribute, an array as `rdf:Seq`, `rdf:Bag` or
 //! `rdf:Alt`, a structure as `rdf:parseType="Resource"`, an `rdf:Description` or attributes, and a
 //! qualified value through its `rdf:value` (element or attribute). Every metadata stream of the
@@ -12,7 +15,8 @@
 //!
 //! The simple types are checked by their lexical form (ISO 16684-1 8.2.1): Boolean is `True` or
 //! `False`; Integer an optionally signed run of digits; Real a decimal; Date one of the six forms
-//! of 8.2.1.2; Rational two integers around a `/`, as Part 2's `xmpDM:scale` example writes it.
+//! of 8.2.1.2; Rational two integers around a `/`, as Part 2's `xmpDM:scale` example writes it and
+//! the 2005 edition defines it (page 84); GPSCoordinate `DDD,MM,SSk` or `DDD,MM.mmk` (page 85).
 //! The other simple types are text. A field a structure doesn't define, and a property a
 //! namespace doesn't define, are left to the clauses about them.
 
@@ -43,6 +47,8 @@ enum Ty {
     Boolean,
     Date,
     Rational,
+    /// `DDD,MM,SSk` or `DDD,MM.mmk`, `k` one of N, S, E, W (2005 edition, page 85).
+    GpsCoordinate,
     /// An alternative array of text items, each with an `xml:lang` (ISO 16684-1 8.2.2.4).
     LangAlt,
     Seq(&'static Ty),
@@ -197,6 +203,19 @@ const TRACK: &[Field] =
 const ANCESTOR: &[Field] = &[(PHOTOSHOP, "AncestorID", Text)];
 /// Part 2 Table 32.
 const LAYER: &[Field] = &[(PHOTOSHOP, "LayerName", Text), (PHOTOSHOP, "LayerText", Text)];
+
+const EXIF: &str = "http://ns.adobe.com/exif/1.0/";
+
+/// Flash (2005 edition, page 85).
+const FLASH: &[Field] =
+    &[(EXIF, "Fired", Boolean), (EXIF, "Return", Integer), (EXIF, "Mode", Integer), (EXIF, "Function", Boolean), (EXIF, "RedEyeMode", Boolean)];
+/// OECF/SFR (2005 edition, page 86).
+const OECF_SFR: &[Field] =
+    &[(EXIF, "Columns", Integer), (EXIF, "Rows", Integer), (EXIF, "Names", Ty::Seq(&Text)), (EXIF, "Values", Ty::Seq(&Rational))];
+/// CFAPattern (2005 edition, page 87).
+const CFA_PATTERN: &[Field] = &[(EXIF, "Columns", Integer), (EXIF, "Rows", Integer), (EXIF, "Values", Ty::Seq(&Integer))];
+/// DeviceSettings (2005 edition, page 87).
+const DEVICE_SETTINGS: &[Field] = &[(EXIF, "Columns", Integer), (EXIF, "Rows", Integer), (EXIF, "Settings", Ty::Seq(&Text))];
 
 const SCHEMAS: &[Schema] = &[
     // ISO 16684-1 Table 4.
@@ -447,6 +466,126 @@ const SCHEMAS: &[Schema] = &[
             ("WhiteBalance", Text),
         ],
     },
+    // 2005 edition, "EXIF Schema for TIFF Properties", pages 58–60. A Closed Choice of Integer is an
+    // Integer.
+    Schema {
+        uri: "http://ns.adobe.com/tiff/1.0/",
+        prefix: "tiff",
+        properties: &[
+            ("ImageWidth", Integer),
+            ("ImageLength", Integer),
+            ("BitsPerSample", Ty::Seq(&Integer)),
+            ("Compression", Integer),
+            ("PhotometricInterpretation", Integer),
+            ("Orientation", Integer),
+            ("SamplesPerPixel", Integer),
+            ("PlanarConfiguration", Integer),
+            ("YCbCrSubSampling", Ty::Seq(&Integer)),
+            ("YCbCrPositioning", Integer),
+            ("XResolution", Rational),
+            ("YResolution", Rational),
+            ("ResolutionUnit", Integer),
+            ("TransferFunction", Ty::Seq(&Integer)),
+            ("WhitePoint", Ty::Seq(&Rational)),
+            ("PrimaryChromaticities", Ty::Seq(&Rational)),
+            ("YCbCrCoefficients", Ty::Seq(&Rational)),
+            ("ReferenceBlackWhite", Ty::Seq(&Rational)),
+            ("DateTime", Date),
+            ("ImageDescription", LangAlt),
+            ("Make", Text),
+            ("Model", Text),
+            ("Software", Text),
+            ("Artist", Text),
+            ("Copyright", LangAlt),
+        ],
+    },
+    // 2005 edition, "EXIF Schema for EXIF-specific Properties", pages 60–69.
+    Schema {
+        uri: EXIF,
+        prefix: "exif",
+        properties: &[
+            ("ExifVersion", Text),
+            ("FlashpixVersion", Text),
+            ("ColorSpace", Integer),
+            ("ComponentsConfiguration", Ty::Seq(&Integer)),
+            ("CompressedBitsPerPixel", Rational),
+            ("PixelXDimension", Integer),
+            ("PixelYDimension", Integer),
+            ("UserComment", LangAlt),
+            ("RelatedSoundFile", Text),
+            ("DateTimeOriginal", Date),
+            ("DateTimeDigitized", Date),
+            ("ExposureTime", Rational),
+            ("FNumber", Rational),
+            ("ExposureProgram", Integer),
+            ("SpectralSensitivity", Text),
+            ("ISOSpeedRatings", Ty::Seq(&Integer)),
+            ("OECF", Ty::Struct(OECF_SFR)),
+            ("ShutterSpeedValue", Rational),
+            ("ApertureValue", Rational),
+            ("BrightnessValue", Rational),
+            ("ExposureBiasValue", Rational),
+            ("MaxApertureValue", Rational),
+            ("SubjectDistance", Rational),
+            ("MeteringMode", Integer),
+            ("LightSource", Integer),
+            ("Flash", Ty::Struct(FLASH)),
+            ("FocalLength", Rational),
+            ("SubjectArea", Ty::Seq(&Integer)),
+            ("FlashEnergy", Rational),
+            ("SpatialFrequencyResponse", Ty::Struct(OECF_SFR)),
+            ("FocalPlaneXResolution", Rational),
+            ("FocalPlaneYResolution", Rational),
+            ("FocalPlaneResolutionUnit", Integer),
+            ("SubjectLocation", Ty::Seq(&Integer)),
+            ("ExposureIndex", Rational),
+            ("SensingMethod", Integer),
+            ("FileSource", Integer),
+            ("SceneType", Integer),
+            ("CFAPattern", Ty::Struct(CFA_PATTERN)),
+            ("CustomRendered", Integer),
+            ("ExposureMode", Integer),
+            ("WhiteBalance", Integer),
+            ("DigitalZoomRatio", Rational),
+            ("FocalLengthIn35mmFilm", Integer),
+            ("SceneCaptureType", Integer),
+            ("GainControl", Integer),
+            ("Contrast", Integer),
+            ("Saturation", Integer),
+            ("Sharpness", Integer),
+            ("DeviceSettingDescription", Ty::Struct(DEVICE_SETTINGS)),
+            ("SubjectDistanceRange", Integer),
+            ("ImageUniqueID", Text),
+            ("GPSVersionID", Text),
+            ("GPSLatitude", Ty::GpsCoordinate),
+            ("GPSLongitude", Ty::GpsCoordinate),
+            ("GPSAltitudeRef", Integer),
+            ("GPSAltitude", Rational),
+            ("GPSTimeStamp", Date),
+            ("GPSSatellites", Text),
+            ("GPSStatus", Text),
+            ("GPSMeasureMode", Text),
+            ("GPSDOP", Rational),
+            ("GPSSpeedRef", Text),
+            ("GPSSpeed", Rational),
+            ("GPSTrackRef", Text),
+            ("GPSTrack", Rational),
+            ("GPSImgDirectionRef", Text),
+            ("GPSImgDirection", Rational),
+            ("GPSMapDatum", Text),
+            ("GPSDestLatitude", Ty::GpsCoordinate),
+            ("GPSDestLongitude", Ty::GpsCoordinate),
+            ("GPSDestBearingRef", Text),
+            ("GPSDestBearing", Rational),
+            ("GPSDestDistanceRef", Text),
+            ("GPSDestDistance", Rational),
+            ("GPSProcessingMethod", Text),
+            ("GPSAreaInformation", Text),
+            ("GPSDifferential", Integer),
+        ],
+    },
+    // 2005 edition, "EXIF Schema for Additional EXIF Properties", page 69.
+    Schema { uri: "http://ns.adobe.com/exif/1.0/aux/", prefix: "aux", properties: &[("Lens", Text), ("SerialNumber", Text)] },
 ];
 
 /// The properties of predefined schemas whose values don't have their type, in every metadata
@@ -549,7 +688,7 @@ fn fits(ty: Ty, e: &Node<'_, '_>, depth: usize) -> bool {
         return simple(ty, v);
     }
     match ty {
-        Ty::Text | Ty::Guid | Ty::Integer | Ty::Real | Ty::Boolean | Ty::Date | Ty::Rational => {
+        Ty::Text | Ty::Guid | Ty::Integer | Ty::Real | Ty::Boolean | Ty::Date | Ty::Rational | Ty::GpsCoordinate => {
             // `rdf:resource` makes the value a URI, which only a text type takes.
             if e.attribute((RDF, "resource")).is_some() {
                 return matches!(ty, Ty::Text);
@@ -642,10 +781,23 @@ fn simple(ty: Ty, v: &str) -> bool {
         Ty::Boolean => matches!(v, "True" | "False"),
         Ty::Date => date(v),
         Ty::Rational => v.split_once('/').is_some_and(|(n, d)| integer(n) && integer(d)),
+        Ty::GpsCoordinate => gps_coordinate(v),
         Ty::Text | Ty::Guid => true,
         Ty::OneOf(types) => types.iter().any(|t| simple(*t, v)),
         _ => false,
     }
+}
+
+/// `DDD,MM,SSk` or `DDD,MM.mmk`: degrees, minutes and seconds or minutes with any number of
+/// fractional digits, then N, S, E or W (2005 edition, page 85).
+fn gps_coordinate(v: &str) -> bool {
+    let Some(v) = v.strip_suffix(['N', 'S', 'E', 'W']) else { return false };
+    let Some((degrees, rest)) = v.split_once(',') else { return false };
+    let minutes_ok = match rest.split_once(',') {
+        Some((minutes, seconds)) => digits(minutes) && digits(seconds),
+        None => rest.split_once('.').is_some_and(|(m, f)| digits(m) && digits(f)),
+    };
+    digits(degrees) && minutes_ok
 }
 
 fn digits(s: &str) -> bool {
