@@ -1964,6 +1964,11 @@ fn legacy_settings_move_the_default_highlight_opacity_to_half() {
     assert_eq!(opacity(r#"{"comment_styles":[{"tool":"comment.highlight","opacity":1.0}]}"#), 0.5, "a legacy file's old default");
     assert_eq!(opacity(r#"{"comment_styles":[{"tool":"comment.highlight","opacity":0.8}]}"#), 0.8, "a legacy choice stays");
     assert_eq!(
+        opacity(r#"{"comment_styles":[{"tool":"comment.highlight","opacity":0.9999999995}]}"#),
+        0.9999999995,
+        "only an exact 1.0 is the old default"
+    );
+    assert_eq!(
         opacity(r#"{"comment_styles_version":2,"comment_styles":[{"tool":"comment.highlight","opacity":1.0}]}"#),
         1.0,
         "an explicit 100 % stays"

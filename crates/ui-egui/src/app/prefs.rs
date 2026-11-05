@@ -388,7 +388,8 @@ impl PdfCraftApp {
                     self.comment_prefs.set_color(tool, c);
                 }
                 if let Some(o) = e["opacity"].as_f64() {
-                    let old_default = legacy && tool == crate::comments::CommentTool::Highlight && (o - 1.0).abs() < 1e-9;
+                    // Exactly 1.0, the value the old default wrote; a chosen 0.9999999995 is a choice.
+                    let old_default = legacy && tool == crate::comments::CommentTool::Highlight && o == 1.0;
                     self.comment_prefs.set_opacity(tool, if old_default { 0.5 } else { o });
                 }
                 // The fill's and text's own opacities, where saved (older settings have none).
