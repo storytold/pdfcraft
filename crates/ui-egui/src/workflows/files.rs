@@ -1058,12 +1058,12 @@ impl PdfCraftApp {
         }
     }
 
-    /// Write `kind` as `format`: through the save panel, named and filtered for that format, or to
-    /// the save override. A name the user changes to another offered format's extension is
+    /// Write `kind` as `format`: through the save panel, named for that format and allowing every
+    /// format offered for `kind`, or to the save override. A name the user changes to another offered format's extension is
     /// written in that format. A format not offered for `kind` (comments as CSV, say) is refused,
     /// rather than writing other data than was asked for.
     pub fn export_data_as(&mut self, kind: crate::data_export_ui::DataKind, format: pdfcraft_engine::DataFormat) {
-        use crate::data_export_ui::{DataKind, extension, formats, name};
+        use crate::data_export_ui::{DataKind, extension, formats, name, save_extensions};
         if !self.commit_form_typing() {
             return;
         }
@@ -1100,8 +1100,12 @@ impl PdfCraftApp {
                 Some(p) => write(self, p.into()),
                 None => {
                     let title = if comments { tl!("Export comments") } else { tl!("Export form data") };
-                    let d =
-                        rfd::AsyncFileDialog::new().set_title(title).set_file_name(file_name).add_filter_any_case(name(format), &[extension(format)]);
+                    // Named for `format`, which is the default, but allowing every offered format,
+                    // as a name changed to another one's extension is written in that format.
+                    let d = rfd::AsyncFileDialog::new()
+                        .set_title(title)
+                        .set_file_name(file_name)
+                        .add_filter_any_case(name(format), &save_extensions(format, offered));
                     let d = crate::editing::in_document_folder(d, folder.as_deref());
                     self.ask_one(crate::pickers::Ask::Save(d), None, write);
                 }
