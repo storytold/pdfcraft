@@ -488,3 +488,91 @@ fn an_output_intent_profile_header_is_read_within_a_size_cap() {
         assert_eq!(pdfa_intent_profile(&doc), Some(n), "a {size}-byte profile");
     }
 }
+
+/// PDF/A-2 6.6.2.3.1: the properties of the predefined XMP schemas have the value types XMP gives
+/// them (ISO 16684-1 8.2 and XMP Part 2), in every RDF/XML form a value can take.
+#[test]
+fn xmp_properties_of_predefined_schemas_have_their_value_types() {
+    const NS: &str = concat!(
+        r#"xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" "#,
+        r#"xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" "#,
+        r#"xmlns:stRef="http://ns.adobe.com/xap/1.0/sType/ResourceRef#" xmlns:xmpDM="http://ns.adobe.com/xmp/1.0/DynamicMedia/" "#,
+        r#"xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:xmpTPg="http://ns.adobe.com/xap/1.0/t/pg/" "#,
+        r#"xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#" xmlns:pdf="http://ns.adobe.com/pdf/1.3/""#
+    );
+    let mistyped = |body: &str| -> Vec<String> {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {NS}><rdf:Description rdf:about="" {body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        );
+        let parsed = xmp::parse(&xmp).expect("parses");
+        xmp_types::mistyped(&parsed).into_iter().collect()
+    };
+    let element = |p: &str, v: &str| mistyped(&format!("><{p}>{v}</{p}>"));
+    // Simple types, as elements and as attributes.
+    assert!(element("crs:Contrast", "-25").is_empty());
+    assert_eq!(element("crs:Contrast", "25.0"), ["crs:Contrast"]);
+    assert_eq!(element("crs:Contrast", "4/1"), ["crs:Contrast"]);
+    assert!(element("crs:Exposure", "+.5").is_empty() && element("crs:Exposure", "5").is_empty());
+    assert_eq!(element("crs:Exposure", "5."), ["crs:Exposure"]);
+    assert_eq!(element("crs:Exposure", "1e3"), ["crs:Exposure"]);
+    assert!(element("pdf:Trapped", "True").is_empty());
+    assert_eq!(element("pdf:Trapped", "true"), ["pdf:Trapped"]);
+    assert_eq!(mistyped(r#"crs:AutoContrast="Yes">"#), ["crs:AutoContrast"]);
+    assert!(mistyped(r#"crs:AutoContrast="False">"#).is_empty());
+    for good in
+        ["2016", "2016-02", "2016-02-01", "2016-02-01T13:19Z", "2016-02-01T13:19:21+01:00", "2016-02-01T13:19:21.5-08:00", "2016-02-01T13:19:21"]
+    {
+        assert!(element("xmp:CreateDate", good).is_empty(), "{good}");
+    }
+    for bad in ["16-02-01", "2016-13-01", "2016-02-32", "2016-02T13:19", "2016-02-01T25:00", "2016-02-01T13:19:21+1:00", "Feb 1 2016"] {
+        assert_eq!(element("xmp:CreateDate", bad), ["xmp:CreateDate"], "{bad}");
+    }
+    assert!(element("xmpDM:videoPixelAspectRatio", "1001/30000").is_empty());
+    assert_eq!(element("xmpDM:videoPixelAspectRatio", "1.5"), ["xmpDM:videoPixelAspectRatio"]);
+    // Text can't be an array or a structure; a simple value can be given as rdf:resource.
+    assert_eq!(element("crs:RawFileName", "<rdf:Seq><rdf:li>a</rdf:li></rdf:Seq>"), ["crs:RawFileName"]);
+    assert_eq!(mistyped(r#"><crs:RawFileName rdf:parseType="Resource"><crs:Exposure>1</crs:Exposure></crs:RawFileName>"#), ["crs:RawFileName"]);
+    assert!(mistyped(r#"><dc:source rdf:resource="http://example.com/a"/>"#).is_empty());
+    // Arrays: the kind and every item.
+    assert!(element("dc:creator", "<rdf:Seq><rdf:li>A</rdf:li><rdf:li>B</rdf:li></rdf:Seq>").is_empty());
+    assert_eq!(element("dc:creator", "<rdf:Bag><rdf:li>A</rdf:li></rdf:Bag>"), ["dc:creator"]);
+    assert_eq!(element("dc:creator", "A"), ["dc:creator"]);
+    assert_eq!(element("dc:date", "<rdf:Seq><rdf:li>2016-02-01</rdf:li><rdf:li>yesterday</rdf:li></rdf:Seq>"), ["dc:date"]);
+    // Language alternatives: an rdf:Alt whose items all carry xml:lang.
+    assert!(element("dc:title", r#"<rdf:Alt><rdf:li xml:lang="x-default">T</rdf:li></rdf:Alt>"#).is_empty());
+    assert_eq!(element("dc:title", "<rdf:Alt><rdf:li>T</rdf:li></rdf:Alt>"), ["dc:title"]);
+    assert_eq!(element("dc:title", "T"), ["dc:title"]);
+    // Structures in their three forms, with each known field checked.
+    assert!(mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Resource"><stRef:documentID>d</stRef:documentID><stRef:lastModifyDate>2016</stRef:lastModifyDate></xmpMM:DerivedFrom>"#).is_empty());
+    assert!(mistyped(r#"><xmpMM:DerivedFrom><rdf:Description stRef:documentID="d"/></xmpMM:DerivedFrom>"#).is_empty());
+    assert!(mistyped(r#"><xmpMM:DerivedFrom stRef:documentID="d"/>"#).is_empty());
+    assert_eq!(element("xmpMM:DerivedFrom", "uuid:1234"), ["xmpMM:DerivedFrom"]);
+    assert_eq!(
+        mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Resource"><stRef:lastModifyDate>soon</stRef:lastModifyDate></xmpMM:DerivedFrom>"#),
+        ["xmpMM:DerivedFrom"]
+    );
+    assert_eq!(mistyped(r#"><xmpMM:DerivedFrom stRef:lastModifyDate="soon"/>"#), ["xmpMM:DerivedFrom"]);
+    assert_eq!(mistyped(r#"><xmpTPg:MaxPageSize rdf:parseType="Resource"><stDim:w>8.5 in</stDim:w></xmpTPg:MaxPageSize>"#), ["xmpTPg:MaxPageSize"]);
+    // Nested: an array of structures holding a structure.
+    let marker = |start: &str| format!(r#"><xmpDM:markers><rdf:Seq><rdf:li rdf:parseType="Resource">{start}</rdf:li></rdf:Seq></xmpDM:markers>"#);
+    assert!(
+        mistyped(&marker(
+            r#"<xmpDM:startTime rdf:parseType="Resource"><xmpDM:value>50</xmpDM:value><xmpDM:scale>1/25</xmpDM:scale></xmpDM:startTime>"#
+        ))
+        .is_empty()
+    );
+    assert!(mistyped(&marker("<xmpDM:startTime>50f</xmpDM:startTime>")).is_empty());
+    assert_eq!(mistyped(&marker(r#"<xmpDM:startTime rdf:parseType="Resource"><xmpDM:value>5.5</xmpDM:value></xmpDM:startTime>"#)), ["xmpDM:markers"]);
+    // A qualified value is checked by its rdf:value.
+    assert!(mistyped(r#"><crs:Contrast rdf:parseType="Resource"><rdf:value>5</rdf:value><xmp:Label>q</xmp:Label></crs:Contrast>"#).is_empty());
+    assert_eq!(mistyped(r#"><crs:Contrast rdf:parseType="Resource"><rdf:value>five</rdf:value></crs:Contrast>"#), ["crs:Contrast"]);
+    // Through verify: reported under 6.6.2.3.1, not fixable.
+    let xmp =
+        format!(r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF {NS}><rdf:Description rdf:about="" crs:Contrast="high"/></rdf:RDF></x:xmpmeta>"#);
+    let stream = format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len());
+    let doc = build(&["<< /Type /Catalog /Pages 2 0 R /Metadata 3 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", &stream], "");
+    let issues: Vec<Issue> = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.2.3.1").collect();
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].message, "The XMP property crs:Contrast doesn't have the value type the XMP Specification gives it");
+    assert!(!issues[0].fixable);
+}

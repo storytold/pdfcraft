@@ -23,6 +23,7 @@
 
 pub mod icc;
 mod xmp;
+mod xmp_types;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
@@ -113,6 +114,7 @@ pub const WORDINGS: &[&str] = &[
     "The document has no XMP metadata",
     "The metadata doesn't identify the file as {}",
     "The title in the metadata and the document information differ",
+    "The XMP property {} doesn't have the value type the XMP Specification gives it",
     // The document as a whole.
     "The document is encrypted",
     "Device colour is used, but there is no PDF/A output intent",
@@ -446,6 +448,11 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
             let conf = xmp::identifier(&x, xmp::PDFA_ID, "conformance");
             if part.as_deref() != Some(&level.part().to_string()) || conf.as_deref().map(str::to_uppercase).as_deref() != Some("B") {
                 issue("6.6.4", "The metadata doesn't identify the file as {}", Some(level.label().to_owned()), None, true);
+            }
+            if let Some(parsed) = xmp::parse(&x) {
+                for name in xmp_types::mistyped(&parsed) {
+                    issue("6.6.2.3.1", "The XMP property {} doesn't have the value type the XMP Specification gives it", Some(name), None, false);
+                }
             }
             if let Some(title) = info(doc, "Title")
                 && xmp::value(&x, "dc:title").is_some_and(|t| t != title)
