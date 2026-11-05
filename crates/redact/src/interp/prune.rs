@@ -38,7 +38,10 @@ fn content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict, name: &[u8], de
         let Some(r) = xo.get(n).and_then(Object::as_ref) else { continue };
         let obj = doc.get(r);
         let Object::Stream(s) = &*obj else { continue };
-        if s.dict.name(b"Subtype") != Some(b"Form") || s.dict.contains(b"Resources") || !seen.insert(r) {
+        // A /Resources that isn't a dictionary (null, or a missing object) is no resources of its
+        // own, as for `resource_ops` and the interpreter.
+        if s.dict.name(b"Subtype") != Some(b"Form") || s.dict.get(b"Resources").is_some_and(|r| doc.resolve(r).as_dict().is_some()) || !seen.insert(r)
+        {
             continue;
         }
         if depth >= MAX_DEPTH {
@@ -270,7 +273,7 @@ pub(super) fn clip_out(rects: &[[f64; 4]], ctm: &Matrix, around: [f64; 4]) -> Op
 pub(crate) fn resource_ops(doc: &Document, res: &Dict, content: &[Vec<u8>]) -> Result<Vec<Op>, CosError> {
     let parsed = Pieces::join(content).parse();
     if parsed.skipped > 0 || parsed.ops.len() > 2_000_000 {
-        return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect property resources".into() });
+        return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully read the content that uses these resources".into() });
     }
     let mut ops = parsed.ops;
     let xobjects = res_dict(doc, res, b"XObject");

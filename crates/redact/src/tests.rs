@@ -1570,26 +1570,32 @@ fn an_image_a_form_drew_through_the_pages_resources_does_not_survive() {
     assert!(!bytes.windows(16).any(|w| w == b"REDIMGONECOVERED"), "the image the form drew survived the save");
 }
 
+/// How a form can have no resources of its own: no /Resources, a null one, or a reference to an
+/// object that isn't there (which is null too).
+const NO_RESOURCES: [&str; 3] = ["", "/Resources null", "/Resources 99 0 R"];
+
 /// The page draws an image under the mark and, outside it, a form without /Resources of its own
 /// that draws the same image through the page's: the page keeps the name, whether the form lies
 /// wholly outside the mark or is entered and left as it was.
 #[test]
 fn an_image_a_form_draws_again_through_the_pages_resources_is_kept() {
     for bbox in ["[0 0 100 100]", "[0 0 300 300]"] {
-        let mut doc = one_page(
-            b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do",
-            "/XObject << /FmBare 7 0 R /Im1 8 0 R >>",
-            vec![
-                stream(&format!("/Type /XObject /Subtype /Form /BBox {bbox}"), b"q 50 0 0 50 20 20 cm /Im1 Do Q"),
-                stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBIMGSHOWNAGAIN"),
-            ],
-        );
-        mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
-        let r = apply(&mut doc, None).unwrap();
-        assert_eq!((r.images_removed, r.forms_rewritten), (1, 0), "{bbox}: {r:?}");
-        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
-        assert!(content(&saved, 0).contains("/FmBare Do"), "{bbox}");
-        assert_eq!(named_image(&saved, 0, b"Im1").as_deref(), Some(&b"PUBIMGSHOWNAGAIN"[..]), "{bbox}: the form still draws it");
+        for none in NO_RESOURCES {
+            let mut doc = one_page(
+                b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do",
+                "/XObject << /FmBare 7 0 R /Im1 8 0 R >>",
+                vec![
+                    stream(&format!("/Type /XObject /Subtype /Form /BBox {bbox} {none}"), b"q 50 0 0 50 20 20 cm /Im1 Do Q"),
+                    stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBIMGSHOWNAGAIN"),
+                ],
+            );
+            mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+            let r = apply(&mut doc, None).unwrap();
+            assert_eq!((r.images_removed, r.forms_rewritten), (1, 0), "{bbox} {none}: {r:?}");
+            let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+            assert!(content(&saved, 0).contains("/FmBare Do"), "{bbox} {none}");
+            assert_eq!(named_image(&saved, 0, b"Im1").as_deref(), Some(&b"PUBIMGSHOWNAGAIN"[..]), "{bbox} {none}: the form still draws it");
+        }
     }
 }
 
@@ -1597,30 +1603,32 @@ fn an_image_a_form_draws_again_through_the_pages_resources_is_kept() {
 /// outside it, a form without any that draws it again through the first form's.
 #[test]
 fn an_image_a_nested_form_draws_again_through_its_callers_resources_is_kept() {
-    let mut doc = one_page(
-        b"/FmOwn Do",
-        "/XObject << /FmOwn 7 0 R >>",
-        vec![
-            stream(
-                "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /FmBare 8 0 R /Im1 9 0 R >> >>",
-                b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do",
-            ),
-            stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100]", b"q 50 0 0 50 20 20 cm /Im1 Do Q"),
-            stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBIMGSHOWNAGAIN"),
-        ],
-    );
-    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
-    let r = apply(&mut doc, None).unwrap();
-    assert_eq!((r.images_removed, r.forms_rewritten), (1, 1), "{r:?}");
-    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
-    assert!(content(&saved, 0).contains("/PCRedacted1 Do"));
-    let form = named_stream(&saved, 0, b"PCRedacted1").expect("the rewritten form");
-    assert!(form.decoded().unwrap().windows(10).any(|w| w == b"/FmBare Do"));
-    let res = saved.resolve(form.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
-    let xo = saved.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
-    let image = xo.get(b"Im1").and_then(Object::as_ref).expect("the rewritten form still names /Im1");
-    let Object::Stream(image) = &*saved.get(image) else { panic!("/Im1 is a stream") };
-    assert_eq!(decoded_image(&saved, image).unwrap(), b"PUBIMGSHOWNAGAIN");
+    for none in NO_RESOURCES {
+        let mut doc = one_page(
+            b"/FmOwn Do",
+            "/XObject << /FmOwn 7 0 R >>",
+            vec![
+                stream(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /FmBare 8 0 R /Im1 9 0 R >> >>",
+                    b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do",
+                ),
+                stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 100 100] {none}"), b"q 50 0 0 50 20 20 cm /Im1 Do Q"),
+                stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBIMGSHOWNAGAIN"),
+            ],
+        );
+        mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!((r.images_removed, r.forms_rewritten), (1, 1), "{none}: {r:?}");
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert!(content(&saved, 0).contains("/PCRedacted1 Do"), "{none}");
+        let form = named_stream(&saved, 0, b"PCRedacted1").expect("the rewritten form");
+        assert!(form.decoded().unwrap().windows(10).any(|w| w == b"/FmBare Do"), "{none}");
+        let res = saved.resolve(form.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = saved.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let image = xo.get(b"Im1").and_then(Object::as_ref).unwrap_or_else(|| panic!("{none}: the rewritten form still names /Im1"));
+        let Object::Stream(image) = &*saved.get(image) else { panic!("/Im1 is a stream") };
+        assert_eq!(decoded_image(&saved, image).unwrap(), b"PUBIMGSHOWNAGAIN", "{none}");
+    }
 }
 
 /// A form without /Resources that won't decode may draw the image under the mark through the
@@ -1641,6 +1649,58 @@ fn a_form_that_cannot_be_read_refuses_the_redaction_of_an_image_it_may_draw() {
     assert!(broken.decoded().is_err(), "the fixture's form must not decode");
     mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
     assert!(matches!(apply(&mut doc, None), Err(RedactError::Cos(pdfcraft_cos::CosError::Filter(_)))));
+}
+
+/// A page of two content streams, with no fonts or properties: the first draws an image at
+/// (20, 230), 50 pt square, named `image` in the page's resources; the second is `tail`, which
+/// draws nothing. `catalog` goes in the catalog, and `image_dict` in the image's dictionary.
+fn image_and_a_tail(catalog: &str, image: &str, image_dict: &str, tail: &[u8]) -> Document {
+    pdf(vec![
+        format!("<< /Type /Catalog /Pages 2 0 R {catalog} >>").into_bytes(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents [4 0 R 5 0 R] /Resources << /XObject << /{image} 6 0 R >> >> >>")
+            .into_bytes(),
+        stream("", format!("q 50 0 0 50 20 230 cm /{image} Do Q").as_bytes()),
+        stream("", tail),
+        stream(
+            &format!("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 {image_dict}"),
+            b"REDIMGONECOVERED",
+        ),
+        b"<< /Type /OCG /Name (Secret layer) >>".to_vec(),
+    ])
+}
+
+/// What the page draws can't be told when a content stream the redaction leaves as it was holds
+/// bytes the parser can't read: the redaction of an image is refused, as it was already on a page
+/// with fonts or properties to clean up.
+#[test]
+fn unreadable_bytes_in_a_stream_left_as_it_was_refuse_the_redaction_of_an_image() {
+    for (tail, refused) in [(&b"q Q )"[..], true), (b"q Q", false)] {
+        let mut doc = image_and_a_tail("", "Im1", "", tail);
+        mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+        let result = apply(&mut doc, None);
+        if refused {
+            assert!(matches!(result, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { .. }))), "{result:?}");
+        } else {
+            assert_eq!(result.map(|r| r.images_removed).ok(), Some(1));
+        }
+    }
+}
+
+/// Remove Hidden Information makes the same check: removing an off layer's image is refused on a
+/// page whose drawing can't be told.
+#[test]
+fn unreadable_bytes_in_a_stream_left_as_it_was_refuse_removing_a_hidden_image() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    for (tail, refused) in [(&b"q Q )"[..], true), (b"q Q", false)] {
+        let mut doc = image_and_a_tail("/OCProperties << /OCGs [7 0 R] /D << /OFF [7 0 R] >> >>", "ImOC", "/OC 7 0 R", tail);
+        let result = remove_hidden(&mut doc, &[Hidden::HiddenLayers]);
+        if refused {
+            assert!(matches!(result, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { .. }))), "{result:?}");
+        } else {
+            assert!(result.unwrap().iter().any(|(h, n)| *h == Hidden::HiddenLayers && *n > 0));
+        }
+    }
 }
 
 /// Remove Hidden Information has the same rewrite: an off layer's image named by an inherited
