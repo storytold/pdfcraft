@@ -254,6 +254,13 @@ struct PendingOpen {
     display_override: Option<(canvas::PageLayout, bool)>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+struct OpeningNotice {
+    token: u64,
+    lang: i18n::Lang,
+    label: String,
+}
+
 pub struct PdfCraftApp {
     /// Tools side and pane widths; which panes are open is `left_open` and `right`.
     pub side_panels: side_panels::SidePanels,
@@ -403,6 +410,8 @@ pub struct PdfCraftApp {
     open_worker: Option<open_worker::OpenWorker>,
     #[cfg(not(target_arch = "wasm32"))]
     pending_opens: Vec<PendingOpen>,
+    #[cfg(not(target_arch = "wasm32"))]
+    opening_notice: Option<OpeningNotice>,
     #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
     /// Explicit CLI layout waits for flagged launch opens, never targeting restored tabs.
