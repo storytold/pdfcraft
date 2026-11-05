@@ -638,15 +638,20 @@ impl<'a> ImageXObject<'a> {
         })
     }
 
-    /// PdfCraft patch (77): this soft mask (or `/Mask` image) for an image drawn at
-    /// `target_dimension` device pixels. A mask more than [`SOFT_MASK_SHRINK_FACTOR`] times larger
-    /// than that on a side is averaged down to it, and the result is cached at that size: drawn
+    /// PdfCraft patch (77): this soft mask (or `/Mask` image) for an image of `parent` samples
+    /// drawn at `target_dimension` device pixels. A mask larger than its image and more than
+    /// [`SOFT_MASK_SHRINK_FACTOR`] times larger than where it is drawn, on a side, is averaged down
+    /// to that size, and the result is cached at that size: drawn
     /// through a form many times (a 2 × 2 image whose mask is 34,862 × 4,332, drawn 40 times on
     /// one slide, pdf.js `issue16263.pdf`), it was decoded, copied and drawn at full size each
-    /// time, about 3.6 s apiece, and the page took minutes. Any other mask decodes as before.
-    pub(crate) fn decoded_soft_mask(&self, target_dimension: Option<(u32, u32)>) -> Option<DecodedMask> {
+    /// time, about 3.6 s apiece, and the page took minutes. Any other mask decodes as before; a mask
+    /// no larger than its image keeps its size, so the renderer still samples it onto the image's
+    /// grid.
+    pub(crate) fn decoded_soft_mask(&self, target_dimension: Option<(u32, u32)>, parent: (u32, u32)) -> Option<DecodedMask> {
+        let larger_than_image = self.width > parent.0 || self.height > parent.1;
         let shrink_to = target_dimension.filter(|&(tw, th)| {
-            tw > 0
+            larger_than_image
+                && tw > 0
                 && th > 0
                 && (u64::from(self.width) > u64::from(tw) * SOFT_MASK_SHRINK_FACTOR
                     || u64::from(self.height) > u64::from(th) * SOFT_MASK_SHRINK_FACTOR)
@@ -1190,7 +1195,7 @@ fn resolve_alpha(
         let obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
 
         // PdfCraft patch (77): averaged down when far larger than where it is drawn, and cached.
-        obj.decoded_soft_mask(target_dimension).map(|decoded| decoded.luma)
+        obj.decoded_soft_mask(target_dimension, (width, *height)).map(|decoded| decoded.luma)
     } else if let Some(color_key_mask) = dict.get::<SmallVec<[u16; 4]>>(MASK) {
         let mut mask_data = vec![];
 
