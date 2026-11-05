@@ -168,6 +168,8 @@ pub enum Dialog {
     RecognizeText,
     /// Scan & OCR ▸ Enhance scanned file.
     EnhanceScan,
+    /// Recognize text in multiple files: files and folders into an output folder.
+    OcrBatch,
     /// The JavaScript console (⌘J).
     JsConsole,
     /// Document JavaScripts.

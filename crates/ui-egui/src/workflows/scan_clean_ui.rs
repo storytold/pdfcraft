@@ -219,7 +219,13 @@ impl PdfCraftApp {
                 )
             };
             let fraction = if total == 0 { 1.0 } else { done.min(total) as f32 / total as f32 };
-            self.progress_notice = Some(crate::widgets::ProgressNotice { label, fraction, cancellable: !cancelling });
+            self.progress_notice = Some(crate::widgets::ProgressNotice {
+                label,
+                detail: None,
+                fraction,
+                cancellable: !cancelling,
+                job: crate::widgets::ProgressJob::ScanClean,
+            });
             if let Some(ctx) = &self.ctx {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
             }
