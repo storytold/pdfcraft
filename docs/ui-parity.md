@@ -44,11 +44,12 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Zoom: wheel, pinch, keys, marquee, fit page/width/height/visible | yes | yes | shipped |
 | Fixed zoom percentages match Acrobat's physical size | yes | differ (#739, documented in #736) | gap |
 | Dynamic zoom, loupe, pan-and-zoom window | yes | no | planned |
-| Hand tool, middle-button pan, autoscroll | yes | hand tool; Linux autoscroll | partial |
+| Hand tool, middle-button pan, autoscroll | yes | hand tool; Linux autoscroll; → / ← scroll a page wider than the window before turning it | partial |
 | Text selection, column select | yes, Alt-drag columns | reading-order selection; Alt/Option-drag or Edit ▸ Column select (#740) | shipped |
 | Select and move several objects at once | yes | on one page: Shift/Ctrl/⌘-click and marquee, one undo step (#844); not across pages, no group resize | partial |
 | Moved comments drawn where they go while dragged | yes | yes: the comment's own pixels follow the pointer, the page shows it where it was until release; stamps and Fill & Sign marks also hide the original | shipped |
 | Object handles: corners keep proportion, edges free | yes | yes for added images and signatures; Shift on a corner keeps the proportions of comments, stamps and form fields (#2199); no Alt resize from the centre | shipped |
+| Shift while drawing a line | holds it to 45° steps | holds it level or plumb (a CAD drawing's ortho): new lines and arrows, each side of connected lines, polygons and clouds, and a dragged end or corner | shipped |
 | Arrange, align and distribute page objects | yes | fields only | partial |
 | Rulers, grids, snap to grid, guides | yes | no | planned |
 | Cursor coordinates, line weights | yes | no | planned |
@@ -75,7 +76,8 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Print dialog with preview | yes | yes | shipped |
 | Document Properties (description, security, fonts, initial view, custom, advanced) | yes | all but Custom and XMP | partial |
 | Field Properties (General, Appearance, Position, Options, Actions, Format, Validate, Calculate, Signed) | yes | all but Signed | partial |
-| Comment properties and properties bar | yes | yes | shipped |
+| Comment properties and properties bar | yes | yes; a text box's text, border and fill and a shape's line and fill each take an opacity of their own (Acrobat: one per comment); text boxes and typed text take an oval or a circle for their border (Acrobat: a rectangle) | shipped |
+| Select several comments; copy and paste comments between documents | yes | yes: ⌘/Ctrl-click adds, Delete, a drag, Properties and Colour act on all, ⌘C/⌘V as XFDF (also across PdfCraft processes) | shipped |
 | Preferences | ≈ 20 pages | Interface language, Documents and view, Identity, Fill & Sign, JavaScript | partial (gap 19) |
 
 ## Revision history
@@ -83,6 +85,8 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-29 | minor | Full screen plays page transitions (/Trans) and display times (/Dur), hides a still pointer, and a right-click or Shift+Enter goes back a page (#379) |
+| 2026-10-24 | minor | → / ← scroll a page wider than the window sideways before turning it, by the current page's or spread's edges in continuous view; ⌘→ / ⌘← turn at once |
+| 2026-10-24 | minor | Comment Properties sets a text box's text, border and fill opacity and a shape's line and fill opacity each on its own (Acrobat: one per comment); Make Properties Default carries them into the tool |
 | 2026-10-21 | minor | Pages inspector thumbnail sizing (#3808), separate from page and Organize zoom; view setting retained on reload and exposed through UI control. Not persisted between sessions. |
 | 2026-10-15 | minor | A selected field nudges with the arrow keys in Prepare a form: a point, Shift ten points, one undo step per press (#2608) |
 | 2026-10-14 | minor | Full screen shows one fitted page (or spread) at a time on black with click and key paging, as Acrobat's Full Screen Mode (#379, #1459, #1353) |
