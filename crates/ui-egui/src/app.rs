@@ -233,6 +233,7 @@ impl PdfCraftApp {
             scan_clean_run: None,
             progress_notice: None,
             page_clipboard: None,
+            comment_clipboard: None,
             grid_drop: None,
             last_snapshot: None,
             last_copied_image: None,
