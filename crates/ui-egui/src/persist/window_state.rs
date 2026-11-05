@@ -18,8 +18,10 @@ const EGUI_FLOOR: f32 = 64.0;
 /// The size a window that opened at [`EGUI_FLOOR`] is given (apps/pdfcraft opens a first start at
 /// this size too), at most nine tenths of the monitor.
 const USABLE: egui::Vec2 = egui::vec2(1440.0, 920.0);
-/// The share of the monitor a window that does not fit is given, frame included, so a taskbar or
-/// dock along one edge does not cover its foot.
+/// The share of the monitor a window that does not fit is given, frame included. egui does not
+/// report a taskbar or dock, so this only makes room for one: the window is centred, so each edge
+/// gets half of what is left, and a 48-point taskbar on a 768-point monitor still covers the last
+/// few points of the window.
 const FIT: f32 = 0.9;
 /// How far past its monitor a window may reach before it is fitted, in points: a window snapped to
 /// the full height of a screen with a hidden taskbar reaches past by its invisible resize borders.
@@ -28,7 +30,9 @@ const SLACK: f32 = 16.0;
 /// The inner size, and where it can be told, the outer position, that fits a window whose outer
 /// rectangle is `outer` and inner `inner` on a monitor of `monitor` points; `None` when it fits.
 /// egui knows the monitor's size but not where it is on the desktop, so the window is only moved
-/// when its corner is inside the main monitor, which starts at the desktop's origin.
+/// when its corner is within that size of the desktop's origin, taken to mean the main monitor. A
+/// wider monitor beside the main one, or a taller one below it, can pass that test, and a window
+/// too big for it is then moved to the main monitor; egui's data cannot tell the two apart.
 fn fit_to_monitor(outer: egui::Rect, inner: egui::Rect, monitor: egui::Vec2) -> Option<(egui::Vec2, Option<egui::Pos2>)> {
     let finite = |v: egui::Vec2| v.x.is_finite() && v.y.is_finite();
     if !finite(monitor) || !finite(outer.size()) || !finite(inner.size()) || !finite(outer.min.to_vec2()) {
@@ -108,7 +112,12 @@ impl WindowState {
             let size = monitor.map_or(USABLE, |m| USABLE.min(m * 0.9));
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
         } else if !filling {
-            let Some(monitor) = monitor else { return };
+            // The monitor can be unknown for a while (Wayland, a surface on no output yet): a
+            // window that cannot be measured yet is checked again on the next frame.
+            let Some(monitor) = monitor else {
+                self.checked = false;
+                return;
+            };
             // Without the outer rectangle (Wayland) the size is checked and the window not moved.
             let outer = outer.unwrap_or(egui::Rect::from_min_size(egui::pos2(-1.0, -1.0), rect.size()));
             if let Some((size, place)) = fit_to_monitor(outer, rect, monitor) {
@@ -230,7 +239,8 @@ mod tests {
         assert_eq!(fit_to_monitor(snapped, snapped.shrink(8.0), LAPTOP), None);
     }
 
-    /// Where a second monitor sits is unknown, so a window on it is shrunk where it is.
+    /// Where a second monitor sits is unknown, so a window with its corner past the monitor's size
+    /// is shrunk where it is.
     #[test]
     fn a_window_off_the_main_monitor_is_only_shrunk() {
         let (outer, inner) = window(egui::pos2(1700.0, 100.0), USABLE);
@@ -290,6 +300,30 @@ mod tests {
         info.monitor_size = Some(LAPTOP);
         let out = ctx.run_logic(&input, |ctx| state.repair(ctx));
         out.viewport_commands.get(&egui::ViewportId::ROOT).cloned().unwrap_or_default()
+    }
+
+    /// A window whose monitor is not known yet cannot be fitted, and must not lose its only check.
+    #[test]
+    fn a_window_is_fitted_once_its_monitor_is_known() {
+        let (outer, inner) = window(egui::pos2(128.0, 128.0), USABLE);
+        let run = |state: &mut WindowState, monitor: Option<egui::Vec2>| {
+            let ctx = egui::Context::default();
+            let mut input = egui::RawInput::default();
+            let info = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+            info.outer_rect = Some(outer);
+            info.inner_rect = Some(inner);
+            info.minimized = Some(false);
+            info.maximized = Some(false);
+            info.monitor_size = monitor;
+            let out = ctx.run_logic(&input, |ctx| state.repair(ctx));
+            out.viewport_commands.get(&egui::ViewportId::ROOT).cloned().unwrap_or_default()
+        };
+        let mut state = WindowState::default();
+        assert!(run(&mut state, None).is_empty(), "nothing to fit it to yet");
+        let fit = fit_to_monitor(outer, inner, LAPTOP).expect("it does not fit");
+        let place = fit.1.expect("on the main monitor");
+        assert_eq!(run(&mut state, Some(LAPTOP)), [egui::ViewportCommand::InnerSize(fit.0), egui::ViewportCommand::OuterPosition(place)]);
+        assert!(run(&mut state, Some(LAPTOP)).is_empty(), "and once only");
     }
 
     /// A window that starts maximized keeps a too-big size to return to: restored down, it ran
