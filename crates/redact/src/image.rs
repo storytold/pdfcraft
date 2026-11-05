@@ -2,16 +2,17 @@
 //! whose footprint intersects a region is set to zero (no ink for image masks), and the result is
 //! written as a new image, Flate, or for a one-bit image of one component Group 4, or JBIG2 when it
 //! was JBIG2, whichever is smallest; the original object is untouched (other pages may use it).
-//! CCITT fax and JBIG2 images decode through `Document::decoded_image_within`, but for Group 3 on
+//! CCITT fax and JBIG2 images decode through `ImageBudget::decode`, but for Group 3 on
 //! bytes, which PdfCraft's renderer may draw as other rows, and a JBIG2 page of other rows than the
 //! image's. Images whose codec PdfCraft can't decode (DCT, JPX), and those, return `None`, and the
 //! caller removes the whole image instead; that is fail-closed.
 
 use pdfcraft_content::{Matrix, overlaps};
-use pdfcraft_cos::{Dict, Document, Object, Stream};
+use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
 
-/// Most pixels an image may have to be cleared in place (larger ones are removed).
-const MAX_PIXELS: u64 = 64 << 20;
+/// Most pixels an image may have to be cleared in place (larger ones are removed), or to be stored
+/// again without shared `/JBIG2Globals` (see [`without_globals`]).
+const MAX_PIXELS: u64 = pdfcraft_cos::MAX_REDACTED_IMAGE_PIXELS;
 
 fn components(doc: &Document, s: &Stream) -> Option<usize> {
     let cs = doc.resolve(s.dict.get(b"ColorSpace")?);
@@ -39,11 +40,11 @@ fn components(doc: &Document, s: &Stream) -> Option<usize> {
 /// `Ok(Some(copy))` with the covered pixels cleared, `Ok(None)` when no pixel intersects,
 /// `Err(())` when the image can't be cleared (the caller removes it).
 #[allow(clippy::result_unit_err)]
-pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]) -> Result<Option<Stream>, ()> {
-    decode_and_clear(doc, s, ctm, rects).ok_or(())
+pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], budget: &mut ImageBudget) -> Result<Option<Stream>, ()> {
+    decode_and_clear(doc, s, ctm, rects, budget).ok_or(())
 }
 
-fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]) -> Option<Option<Stream>> {
+fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], budget: &mut ImageBudget) -> Option<Option<Stream>> {
     // Separate masks can retain the original image data.
     if s.dict.contains(b"SMask") || s.dict.contains(b"Mask") {
         return None;
@@ -54,19 +55,25 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
             b"FlateDecode" | b"Fl" | b"LZWDecode" | b"LZW" | b"ASCII85Decode" | b"A85" | b"ASCIIHexDecode" | b"AHx" | b"RunLengthDecode" | b"RL"
         )
     };
-    // A CCITT fax or JBIG2 image (its last filter) decodes through `Document::decoded_image_within`,
+    // A CCITT fax or JBIG2 image (its last filter) decodes through `ImageBudget::decode`,
     // after the filters before it, so a scan stored as Group 4 or JBIG2 is cleared like any other
     // image.
     let fax = |f: &Object| f.as_name().is_some_and(|n| matches!(n, b"CCITTFaxDecode" | b"CCF"));
     let jbig2 = |f: &Object| f.as_name() == Some(b"JBIG2Decode".as_slice());
     let readable = |f: &Object| f.as_name().is_some_and(supported);
+    // `/Crypt` was undone when the object was loaded (ISO 32000-2 §7.4.10), and decoding leaves it
+    // out wherever it stands.
+    let crypt = |f: &Object| f.as_name() == Some(b"Crypt".as_slice());
     let (ok, is_fax, is_jbig2) = match s.dict.get(b"Filter") {
         None => (true, false, false),
-        Some(f @ Object::Name(_)) => (readable(f) || fax(f) || jbig2(f), fax(f), jbig2(f)),
-        Some(Object::Array(a)) => match a.split_last() {
-            Some((last, before)) if fax(last) || jbig2(last) => (before.iter().all(readable), fax(last), jbig2(last)),
-            _ => (a.iter().all(readable), false, false),
-        },
+        Some(f @ Object::Name(_)) => (readable(f) || crypt(f) || fax(f) || jbig2(f), fax(f), jbig2(f)),
+        Some(Object::Array(a)) => {
+            let chain: Vec<&Object> = a.iter().filter(|f| !crypt(f)).collect();
+            match chain.split_last() {
+                Some((last, before)) if fax(last) || jbig2(last) => (before.iter().all(|f| readable(f)), fax(last), jbig2(last)),
+                _ => (chain.iter().all(|f| readable(f)), false, false),
+            }
+        }
         _ => (false, false, false),
     };
     if !ok {
@@ -112,7 +119,7 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     // alone would skip such a predictor, and the cleared bytes would then miss the covered pixels),
     // and refuses a JBIG2 page of another size than the image: the renderer draws the whole page
     // into the image, so the rows cleared wouldn't be the ones a mark covers on screen.
-    let mut data = doc.decoded_image_within(s, allowance).ok()?;
+    let mut data = budget.decode(doc, s, allowance).ok()?;
     if data.len() < bytes {
         return None;
     }
@@ -205,12 +212,12 @@ fn stored_len(s: &Stream) -> usize {
 
 /// JBIG2 image `s` stored again without its `/JBIG2Globals`: decoded through them, as it is drawn,
 /// and written as the same samples, Flate, Group 4 or JBIG2 coded alone, whichever is smallest
-/// (`smallest`), its other entries kept. `None` when it can't
-/// be decoded for certain (too large, data that doesn't decode, a JBIG2 page of another size than
-/// the image, or not a one-bit image of one component). Redaction does this to every image that
+/// (`smallest`), its other entries kept. `None` when it can't be decoded for certain (too large,
+/// past what is left of `budget`, data that doesn't decode, a JBIG2 page of another size than the
+/// image, or not a one-bit image of one component). Redaction does this to every image that
 /// shares a redacted image's globals, since their symbol dictionary holds the shapes of marks drawn
 /// under the area too.
-pub(crate) fn without_globals(doc: &Document, s: &Stream) -> Option<Stream> {
+pub(crate) fn without_globals(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Option<Stream> {
     let (w, h) = (s.dict.int(b"Width")?, s.dict.int(b"Height")?);
     if w <= 0 || h <= 0 || (w as u64) * (h as u64) > MAX_PIXELS {
         return None;
@@ -225,7 +232,7 @@ pub(crate) fn without_globals(doc: &Document, s: &Stream) -> Option<Stream> {
     // As for `clear`: the filters before the JBIG2 decoder may give up to three bytes for each one
     // of the raster and a byte a row.
     let allowance = bytes.checked_add(h)?.checked_mul(3)?.checked_add(4096)?;
-    let mut data = doc.decoded_image_within(s, allowance).ok()?;
+    let mut data = budget.decode(doc, s, allowance).ok()?;
     if data.len() < bytes {
         return None;
     }

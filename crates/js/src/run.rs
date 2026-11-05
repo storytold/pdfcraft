@@ -115,11 +115,12 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
     let (kept, skipped) = (&kept, &skipped);
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // The script's thread writes dates as this one asked (`with_english_printd`).
+        let english = crate::format::printd_english();
         std::thread::scope(|scope| {
-            let spawned = std::thread::Builder::new()
-                .name("pdfcraft-js".into())
-                .stack_size(SCRIPT_STACK)
-                .spawn_scoped(scope, || run_here(script, event, doc, fields, (kept, skipped), limits, &|| {}));
+            let spawned = std::thread::Builder::new().name("pdfcraft-js".into()).stack_size(SCRIPT_STACK).spawn_scoped(scope, || {
+                crate::format::with_english_printd(english, || run_here(script, event, doc, fields, (kept, skipped), limits, &|| {}))
+            });
             match spawned {
                 Ok(thread) => thread.join().unwrap_or_else(|_| failed(event, "the script stopped with an internal error".into())),
                 Err(e) => failed(event, format!("the script engine could not start: {e}")),
@@ -245,6 +246,8 @@ pub(crate) fn run_on_thread_from(
     let (kept, skipped) = sort_doc_scripts(doc_scripts);
     let kept: Vec<(usize, String)> = kept.into_iter().map(|(i, d)| (i, d.to_owned())).collect();
     let (script_owned, event_owned, doc_owned) = (script.to_owned(), event.clone(), doc.clone());
+    // The script's thread writes dates as this one asked (`with_english_printd`).
+    let english = crate::format::printd_english();
     let (tx, rx) = std::sync::mpsc::channel();
     // A thread that can't start drops the closure, and the slot with it.
     let spawned = std::thread::Builder::new().name("pdfcraft-js".into()).stack_size(SCRIPT_STACK).spawn(move || {
@@ -256,8 +259,10 @@ pub(crate) fn run_on_thread_from(
         // The receiver is gone when the caller stopped waiting: nothing to report then.
         let started = tx.clone();
         let kept: Vec<(usize, &str)> = kept.iter().map(|(i, d)| (*i, d.as_str())).collect();
-        let o = run_here(&script_owned, &event_owned, &doc_owned, fields, (&kept, &skipped), limits, &move || {
-            let _ = started.send(Step::Started);
+        let o = crate::format::with_english_printd(english, || {
+            run_here(&script_owned, &event_owned, &doc_owned, fields, (&kept, &skipped), limits, &move || {
+                let _ = started.send(Step::Started);
+            })
         });
         // Before the outcome is sent, so a caller holding its outcome finds the place free.
         drop(slot);
