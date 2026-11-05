@@ -4,6 +4,7 @@ mod audit;
 mod automation_roots;
 mod batch;
 mod check;
+mod combine;
 mod edit;
 mod extract;
 mod help;

@@ -1,4 +1,4 @@
-use super::{BTreeSet, Ordering, SystemTime};
+use super::{BTreeSet, SystemTime};
 #[cfg(not(target_arch = "wasm32"))]
 use super::{MAX_FOLDER_DEPTH, MAX_FOLDER_FILES};
 
@@ -28,8 +28,14 @@ pub(super) fn combinable_in(dir: &std::path::Path, recursive: bool) -> (Vec<std:
             }
         }
     }
-    found.sort_by(|a, b| natural(&a.to_string_lossy(), &b.to_string_lossy()));
+    found.sort_by(|a, b| pdfcraft_engine::order::natural(&a.to_string_lossy(), &b.to_string_lossy()));
     (found, more)
+}
+
+/// The folder a file at `path` is really in, which sorts it and is shown for it; `None` for a path
+/// with no folder.
+pub(crate) fn real_folder(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    pdfcraft_engine::in_real_folder(path).parent().filter(|folder| !folder.as_os_str().is_empty()).map(std::path::Path::to_path_buf)
 }
 
 /// Whether a file with extension `ext` can join the list: a PDF, or an image or text file that
@@ -44,43 +50,6 @@ pub(super) fn title_of(name: &str) -> &str {
     match name.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() && combinable(ext) => stem,
         _ => name,
-    }
-}
-
-/// File names in the order people expect: case-insensitive, with numbers by value
-/// ("scan2" before "scan10").
-pub(super) fn natural(a: &str, b: &str) -> Ordering {
-    let (mut a, mut b) = (a.chars().peekable(), b.chars().peekable());
-    loop {
-        match (a.peek().copied(), b.peek().copied()) {
-            (None, None) => return Ordering::Equal,
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
-                let take = |it: &mut std::iter::Peekable<std::str::Chars>| {
-                    let mut digits = String::new();
-                    while let Some(c) = it.peek().copied().filter(char::is_ascii_digit) {
-                        digits.push(c);
-                        it.next();
-                    }
-                    digits.trim_start_matches('0').to_owned()
-                };
-                let (x, y) = (take(&mut a), take(&mut b));
-                // Without leading zeros, a longer run of digits is a larger number.
-                match x.len().cmp(&y.len()).then_with(|| x.cmp(&y)) {
-                    Ordering::Equal => {}
-                    other => return other,
-                }
-            }
-            (Some(x), Some(y)) => {
-                match x.to_lowercase().cmp(y.to_lowercase()) {
-                    Ordering::Equal => {}
-                    other => return other,
-                }
-                a.next();
-                b.next();
-            }
-        }
     }
 }
 

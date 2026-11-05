@@ -210,3 +210,23 @@ fn removing_pages_drops_emptied_parts_and_joins_what_meets() {
     // A page that isn't there: nothing changes, and it says so.
     assert_eq!(removed_pages(&two, &BTreeSet::from([(1, 9)]), &mut new_id), None);
 }
+
+#[test]
+fn the_web_offers_no_sort_on_what_a_browser_does_not_give() {
+    assert_eq!(SortBy::offered(false).collect::<Vec<_>>(), SortBy::MENU);
+    let name_pages_size = [SortKey::Name, SortKey::Pages, SortKey::Size].map(SortBy::Column);
+    assert_eq!(SortBy::offered(true).collect::<Vec<_>>(), name_pages_size);
+}
+
+#[test]
+fn the_sort_menu_leaves_warnings_to_the_column_heading() {
+    for web in [false, true] {
+        assert!(SortBy::offered(web).all(|by| by != SortBy::Column(SortKey::Warnings)));
+    }
+}
+
+#[test]
+fn the_web_does_not_invite_dropping_a_folder() {
+    assert!(view::drop_hint(false).contains("folders"));
+    assert!(!view::drop_hint(true).contains("folder"));
+}

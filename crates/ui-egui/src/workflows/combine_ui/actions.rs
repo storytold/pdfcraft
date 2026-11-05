@@ -1,4 +1,4 @@
-use super::files::{Preview, RowAction};
+use super::files::{Preview, RowAction, SortBy};
 use super::parts::{moved_pages, removed_pages, step_to};
 use super::view::expandable;
 use super::{BTreeSet, PdfCraftApp};
@@ -42,7 +42,9 @@ impl PdfCraftApp {
             | RowAction::RemoveFile(_)
             | RowAction::Drop { .. }
             | RowAction::DropAt { .. }
-            | RowAction::Sort(_) => {
+            | RowAction::Sort(_)
+            | RowAction::SortBy(..)
+            | RowAction::Reverse => {
                 self.combine_order_action(action);
             }
             // (Page edits were done above.)
@@ -254,9 +256,31 @@ impl PdfCraftApp {
                 self.combine_move_to_gap(moving, gap);
             }
             RowAction::Sort(key) => {
-                let ascending = !matches!(tab.sort, Some((k, true)) if k == key);
+                let by = SortBy::Column(key);
+                let ascending = !matches!(tab.sort, Some((b, true)) if b == by);
                 self.combine_record();
-                self.combine_sort(key, ascending);
+                self.combine_sort(by, ascending);
+            }
+            RowAction::SortBy(by, ascending) => {
+                let before = self.combine_snapshot();
+                self.combine_sort(by, ascending);
+                // Already in that order: no undo step, the redo history kept.
+                let moved = before.files.iter().map(|f| f.id).ne(self.combine_draft.iter().map(|f| f.id));
+                if moved || before.sort != self.combine_tab.sort {
+                    self.combine_push_undo(before);
+                    self.combine_tab.range_edit = None;
+                }
+            }
+            RowAction::Reverse => {
+                if ids.len() < 2 {
+                    return;
+                }
+                self.combine_record();
+                match self.combine_tab.sort {
+                    Some((by, ascending)) => self.combine_sort(by, !ascending),
+                    // Each entry keeps its own pages in their order; only the entries turn round.
+                    None => self.combine_draft.reverse(),
+                }
             }
             _ => {}
         }

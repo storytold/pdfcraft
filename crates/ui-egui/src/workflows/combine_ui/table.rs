@@ -1,4 +1,4 @@
-use super::files::{Columns, Lock, RowAction, SortKey};
+use super::files::{Columns, Lock, RowAction, SortBy, SortKey};
 use super::parts::{ago, utc_stamp};
 use super::{
     Align, Color32, Column, CornerRadius, ERROR, Layout, Modifiers, PdfCraftApp, Rect, Sense, Stroke, TableBuilder, Tokens, WARNING, icons, theme,
@@ -88,16 +88,16 @@ struct Rows<'a> {
     /// What combining would rename of this file's form fields (the field-name conflict preview).
     conflicts: &'a [Vec<(String, String)>],
     dragging: bool,
-    sort: Option<(SortKey, bool)>,
+    sort: Option<(SortBy, bool)>,
 }
 
 /// A column heading: the whole cell sorts by its column when clicked, moves the column when
 /// dragged, and offers Reset columns on a right-click.
-fn heading(ui: &mut egui::Ui, t: &Tokens, key: SortKey, sort: Option<(SortKey, bool)>) -> Option<HeadingEvent> {
+fn heading(ui: &mut egui::Ui, t: &Tokens, key: SortKey, sort: Option<(SortBy, bool)>) -> Option<HeadingEvent> {
     let text = key.label();
     let rect = ui.max_rect();
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
-    let arrow = sort.filter(|(k, _)| *k == key).map(|(_, ascending)| ascending);
+    let arrow = sort.filter(|(by, _)| *by == SortBy::Column(key)).map(|(_, ascending)| ascending);
     let state = match arrow {
         Some(true) => tl!("sorted ascending"),
         Some(false) => tl!("sorted descending"),
@@ -228,7 +228,10 @@ fn table_body(ui: &mut egui::Ui, context: TableBody<'_>) {
                             SortKey::Name => {
                                 ui.add(icons::image("file-text", 16.0, t.icon));
                                 // A file name is file/path chrome: explicitly LTR, extension last.
-                                crate::widgets::label_ltr_truncated(ui, f.name.clone(), theme::regular(13.0), t.text);
+                                let name = crate::widgets::label_ltr_truncated(ui, f.name.clone(), theme::regular(13.0), t.text);
+                                if let Some(folder) = &f.folder {
+                                    name.on_hover_text(folder.display().to_string());
+                                }
                             }
                             // The range field and how many pages it takes.
                             SortKey::Pages => {

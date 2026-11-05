@@ -196,7 +196,7 @@ Unsaved documents carry a dot on their tab, and closing or quitting asks before 
 
 ## Combine and split without losing a thing
 
-**Combine files** merges any number of PDFs into one. Each file gets a bookmark, with its own bookmarks nested underneath.
+**Combine files** merges any number of PDFs into one. Each file gets a bookmark, with its own bookmarks nested underneath. Put the files in order by dragging them, or from the Sort menu: by name, pages or size, on the desktop also by date or the folder each came from, either way, or turn the order round.
 
 **Extract** copies the pages you select into a new document. **Split** divides a document every *n* pages, or before the pages you choose.
 
@@ -210,6 +210,7 @@ Every page of a combined document renders pixel-identical to its source.
 
 ```sh
 pdfcraft-cli combine report.pdf appendix.pdf --out combined.pdf
+pdfcraft-cli combine scans/*.pdf --sort name --out scans.pdf     # scan2 before scan10
 pdfcraft-cli extract report.pdf --pages 1,3,5-8 --out highlights.pdf
 pdfcraft-cli split   report.pdf --every 10 --out-dir parts/
 ```

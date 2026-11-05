@@ -38,7 +38,7 @@ pub mod canvas;
 mod chrome;
 mod image_engine;
 pub use combine_grid::ThumbState as CombineThumb;
-pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
+pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortBy as CombineSortBy, SortKey};
 mod commands;
 pub mod control;
 mod menus;

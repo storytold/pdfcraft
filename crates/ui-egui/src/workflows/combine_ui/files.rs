@@ -1,4 +1,5 @@
-use super::{Arc, BTreeSet, Modifiers, SourceProblem, SystemTime};
+use super::{Arc, BTreeSet, Modifiers, PathBuf, SourceProblem, SystemTime};
+use pdfcraft_engine::order::FileSort;
 
 /// A column of the list: what it shows and what it sorts by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -36,6 +37,51 @@ impl SortKey {
             SortKey::Size => 60.0,
             SortKey::Modified => 80.0,
             SortKey::Warnings => 100.0,
+        }
+    }
+}
+
+/// What the list is sorted by: a column, or something no column shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortBy {
+    Column(SortKey),
+    /// The folder each file was added from, then its name; files from no folder go last.
+    Folder,
+}
+
+impl SortBy {
+    /// The sorts of the Sort menu, in its order. The Warnings column sorts from its heading only.
+    pub(super) const MENU: [SortBy; 5] = [
+        SortBy::Column(SortKey::Name),
+        SortBy::Column(SortKey::Pages),
+        SortBy::Column(SortKey::Size),
+        SortBy::Column(SortKey::Modified),
+        SortBy::Folder,
+    ];
+
+    /// What the Sort menu offers. A browser gives a file no folder or modification time, so on
+    /// the `web` every file would tie on those.
+    pub(super) fn offered(web: bool) -> impl Iterator<Item = SortBy> {
+        SortBy::MENU.into_iter().filter(move |by| !web || !matches!(by, SortBy::Folder | SortBy::Column(SortKey::Modified)))
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            SortBy::Column(key) => key.label(),
+            SortBy::Folder => tl!("Folder"),
+        }
+    }
+
+    /// The same sort, as the engine's file order names it. The Warnings column sorts on
+    /// [`CombineFile::severity`], given as the rank.
+    pub(super) fn file_sort(self) -> FileSort {
+        match self {
+            SortBy::Column(SortKey::Name) => FileSort::Name,
+            SortBy::Column(SortKey::Pages) => FileSort::Pages,
+            SortBy::Column(SortKey::Size) => FileSort::Size,
+            SortBy::Column(SortKey::Modified) => FileSort::Modified,
+            SortBy::Column(SortKey::Warnings) => FileSort::Rank,
+            SortBy::Folder => FileSort::Folder,
         }
     }
 }
@@ -260,7 +306,7 @@ pub(super) fn assess(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Result<Ass
 pub(super) struct Snapshot {
     pub(super) files: Vec<CombineFile>,
     pub(super) selected: BTreeSet<u64>,
-    pub(super) sort: Option<(SortKey, bool)>,
+    pub(super) sort: Option<(SortBy, bool)>,
 }
 
 /// A file arriving in the list (picked, dropped or already open).
@@ -268,6 +314,8 @@ pub(crate) struct Incoming {
     pub name: String,
     pub bytes: Arc<Vec<u8>>,
     pub modified: Option<SystemTime>,
+    /// The folder it was added from, when it came from one.
+    pub folder: Option<PathBuf>,
     /// Something to tell the user about where it came from.
     pub note: Option<String>,
     /// The open document it is, when it came from a tab.
@@ -305,6 +353,9 @@ pub struct CombineFile {
     pub range: String,
     /// When the file was last modified (desktop picks and drops only).
     pub modified: Option<SystemTime>,
+    /// The folder the file was added from (desktop picks, drops and folders, and an open
+    /// document's own folder); `None` for a file that came from no folder.
+    pub folder: Option<PathBuf>,
     /// Why the file can't be combined (password, security settings), if so.
     pub problem: Option<String>,
     /// The password that would let it be combined, while one is needed.
@@ -466,7 +517,13 @@ pub(crate) enum RowAction {
         revision: u64,
         gap: usize,
     },
+    /// A column heading clicked: sorted by that column, the other way when it already is.
     Sort(SortKey),
+    /// The Sort menu: sorted by a column or the folder, ascending (`true`) or descending.
+    SortBy(SortBy, bool),
+    /// The Sort menu's Reverse order: a sorted list sorted the other way, any other order turned
+    /// round.
+    Reverse,
     /// Unlock… on row `i` (and the rest of the selection, if it is selected), or on the
     /// selection (`None`); the password box opens at the position.
     Unlock(Option<usize>, egui::Pos2),

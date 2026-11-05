@@ -2,6 +2,9 @@ use super::error::{Result, ToolError, failed};
 use super::json::{Args, one_based, summary};
 use super::paths::{child, read_input, read_input_bytes, unused, write_atomic};
 use super::{Arc, Automation, CombineSource, Edit, Path, PathBuf, Value, json};
+use pdfcraft_engine::order::FileSort;
+use pdfcraft_engine::{SortedSource, combine_order, in_real_folder};
+use std::time::SystemTime;
 
 impl Automation {
     pub(crate) fn doc_create(&mut self, a: &Args) -> Result<Value> {
@@ -306,9 +309,18 @@ impl Automation {
                 return Err(ToolError::InvalidArgs(format!("field_conflicts must be \"rename\" or \"merge\", not {other:?}")));
             }
         };
+        let sort = a.opt_str("sort")?.map(|name| FileSort::from_name(name).map_err(|e| ToolError::InvalidArgs(format!("sort {e}")))).transpose()?;
+        let descending = a.opt_bool("descending")?;
+        if sort.is_none() && descending.is_some() {
+            return Err(ToolError::InvalidArgs("descending needs sort".into()));
+        }
+        if sort.is_some() && groups.is_some() {
+            return Err(ToolError::InvalidArgs("sort can't be used with groups: each part of a split file keeps its place in paths".into()));
+        }
         let mut sources: Vec<CombineSource> = Vec::new();
+        let mut files: Vec<(PathBuf, Option<SystemTime>)> = Vec::new();
         let mut firsts: Vec<(u64, PathBuf, usize)> = Vec::new();
-        for (i, (p, range)) in paths.into_iter().zip(ranges).enumerate() {
+        for (i, (p, range)) in paths.iter().copied().zip(ranges).enumerate() {
             let path = self.resolve(p, false)?;
             let group = groups.as_ref().and_then(|g| g.get(i).copied().flatten());
             let first = group.and_then(|g| firsts.iter().find(|f| f.0 == g));
@@ -331,7 +343,31 @@ impl Automation {
             };
             let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             sources.push((name, bytes, range));
+            let modified = if sort == Some(FileSort::Modified) { std::fs::metadata(&path).and_then(|m| m.modified()).ok() } else { None };
+            files.push((if sort == Some(FileSort::Folder) { in_real_folder(&path) } else { path }, modified));
         }
+        // Each file keeps its page range and password, which came in step with its path.
+        let order = sort.map(|by| {
+            let sorted: Vec<SortedSource> = sources
+                .iter()
+                .zip(&files)
+                .zip(&passwords)
+                .map(|((source, (path, modified)), password)| SortedSource {
+                    bytes: &source.1,
+                    path,
+                    modified: *modified,
+                    password: password.as_deref(),
+                })
+                .collect();
+            combine_order(&sorted, by, !descending.unwrap_or(false))
+        });
+        let (sources, passwords) = match &order {
+            Some(order) => (
+                order.iter().filter_map(|at| sources.get(*at).cloned()).collect(),
+                order.iter().filter_map(|at| passwords.get(*at).cloned()).collect(),
+            ),
+            None => (sources, passwords),
+        };
         let passwords: Vec<Option<&str>> = passwords.iter().map(Option::as_deref).collect();
         let combined = match groups {
             None => self.session.combine_unlocked_reporting(&sources, &passwords, field_conflicts),
@@ -356,6 +392,9 @@ impl Automation {
         let mut result = self.deliver(a, "Combined", combined.bytes)?;
         if !combined.renamed_fields.is_empty() {
             result["renamed_fields"] = json!(combined.renamed_fields.iter().map(|(old, new)| json!([old, new])).collect::<Vec<_>>());
+        }
+        if let Some(order) = order {
+            result["order"] = json!(order.iter().filter_map(|at| paths.get(*at).copied()).collect::<Vec<_>>());
         }
         Ok(result)
     }

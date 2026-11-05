@@ -438,12 +438,20 @@ impl PdfCraftApp {
         if files.is_empty() {
             return;
         }
-        // Combine files lists when each file was last modified.
+        // Combine files lists when each file was last modified, and sorts by its folder.
         if purpose == FilePurpose::Combine {
             let incoming = files
                 .into_iter()
                 .zip(modified)
-                .map(|((name, bytes), modified)| crate::combine_ui::Incoming { name, bytes: Arc::new(bytes), modified, note: None, open_doc: None })
+                .zip(paths)
+                .map(|(((name, bytes), modified), path)| crate::combine_ui::Incoming {
+                    name,
+                    bytes: Arc::new(bytes),
+                    modified,
+                    folder: crate::combine_ui::real_folder(path),
+                    note: None,
+                    open_doc: None,
+                })
                 .collect();
             self.stage_combine_with(incoming);
         } else {

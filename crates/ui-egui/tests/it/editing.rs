@@ -1813,6 +1813,190 @@ fn a_folder_adds_its_pdfs_images_and_text_in_order_and_optionally_its_subfolders
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn sort_by_folder_groups_files_by_their_folder_and_files_from_no_folder_go_last() {
+    use pdfcraft_ui_egui::{CombineSortBy, FilePurpose};
+    let dir = temp_path("combine-sort-folder");
+    let _ = std::fs::remove_dir_all(&dir);
+    let files = ["B/one.pdf", "a/two.pdf", "a b/three.pdf", "a/inner/four.pdf", "a/ten.pdf"];
+    for name in files {
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, fixture(1)).unwrap();
+    }
+    // A file that came from no folder (picked in a browser, say).
+    let mut h = harness(1, |app| app.use_files(FilePurpose::Combine, vec![("loose.pdf".into(), fixture(1))]));
+    h.state_mut().pick_override = Some(files.iter().map(|n| dir.join(n).to_string_lossy().into_owned()).collect());
+    h.get_by_label("Add files…").click();
+    h.run_steps(4);
+    let pick = |h: &mut Harness<'static, PdfCraftApp>, item: &str| {
+        h.get_by_label("Sort").click();
+        h.run_steps(2);
+        h.get_by_label(item).click();
+        h.run_steps(2);
+    };
+    pick(&mut h, "Folder");
+    // A folder before the folders inside it, those before its next sibling; names in natural order.
+    assert_eq!(combine_names(&h), ["ten.pdf", "two.pdf", "four.pdf", "three.pdf", "one.pdf", "loose.pdf"]);
+    pick(&mut h, "Descending");
+    assert_eq!(combine_names(&h), ["one.pdf", "three.pdf", "four.pdf", "ten.pdf", "two.pdf", "loose.pdf"], "no folder stays last");
+    assert_eq!(h.state().combine_tab.sort, Some((CombineSortBy::Folder, false)));
+    // A file added to the sorted list goes among its folder's files.
+    let more = dir.join("a b/zero.pdf");
+    std::fs::write(&more, fixture(1)).unwrap();
+    h.state_mut().pick_override = Some(vec![more.to_string_lossy().into_owned()]);
+    h.get_by_label("Add files…").click();
+    h.run_steps(4);
+    assert_eq!(combine_names(&h), ["one.pdf", "three.pdf", "zero.pdf", "four.pdf", "ten.pdf", "two.pdf", "loose.pdf"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A folder chosen with Add folder and subfolders, holding `files`: each a path inside it and how
+/// many pages it has. The list opens in Grid view with those files and no others, and the folder
+/// comes back as the system spells it.
+fn combine_folder(test: &str, files: &[(&str, usize)]) -> (Harness<'static, PdfCraftApp>, std::path::PathBuf) {
+    let dir = temp_path(test);
+    let _ = std::fs::remove_dir_all(&dir);
+    for (name, pages) in files {
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, fixture(*pages)).unwrap();
+    }
+    let mut h = harness(1, |_| {});
+    h.state_mut().execute("page.combine");
+    h.run_steps(2);
+    h.state_mut().pick_override = Some(vec![dir.to_string_lossy().into_owned()]);
+    h.get_by_label("More ways to add files").click();
+    h.run_steps(2);
+    h.get_by_label("Add folder and subfolders…").click();
+    h.run_steps(4);
+    (h, dir.canonicalize().unwrap())
+}
+
+/// An empty folder for `test` holding one-page `files`.
+fn combine_samples(test: &str, files: &[&str]) -> std::path::PathBuf {
+    let dir = temp_path(test);
+    let _ = std::fs::remove_dir_all(&dir);
+    for name in files {
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, fixture(1)).unwrap();
+    }
+    dir
+}
+
+/// Combine files with `paths` inside `dir` chosen with Add files.
+fn combine_picked(dir: &std::path::Path, paths: &[&str]) -> Harness<'static, PdfCraftApp> {
+    let mut h = harness(1, |_| {});
+    h.state_mut().execute("page.combine");
+    h.run_steps(2);
+    h.state_mut().pick_override = Some(paths.iter().map(|path| dir.join(path).to_string_lossy().into_owned()).collect());
+    h.get_all_by_label("Add files…").next().unwrap().click();
+    h.run_steps(4);
+    h
+}
+
+/// The Sort menu's `item`.
+fn sort_combine_by(h: &mut Harness<'static, PdfCraftApp>, item: &str) {
+    h.get_by_label("Sort").click();
+    h.run_steps(2);
+    h.get_by_label(item).click();
+    h.run_steps(2);
+}
+
+/// Each file in the list: its name, and its folder inside `dir` ("" for `dir` itself).
+fn combine_places(h: &Harness<'static, PdfCraftApp>, dir: &std::path::Path) -> Vec<(String, String)> {
+    let inside = |f: &std::path::Path| f.strip_prefix(dir).unwrap().to_string_lossy().into_owned();
+    h.state().combine_draft.iter().map(|f| (f.name.clone(), inside(f.folder.as_deref().unwrap()))).collect()
+}
+
+fn places(list: &[(&str, &str)]) -> Vec<(String, String)> {
+    list.iter().map(|(name, folder)| (name.to_string(), folder.to_string())).collect()
+}
+
+#[test]
+fn a_folder_with_a_file_and_its_namesake_inside_sorts_them_by_their_folders() {
+    let (mut h, dir) = combine_folder("combine-sort-namesakes", &[("a.pdf", 1), ("sub/a.pdf", 2)]);
+    assert_eq!(h.state().combine_draft.len(), 2, "two files called alike are two");
+    sort_combine_by(&mut h, "Folder");
+    assert_eq!(combine_places(&h, &dir), places(&[("a.pdf", ""), ("a.pdf", "sub")]));
+    assert_eq!(h.state().combine_draft.iter().map(|f| f.pages).collect::<Vec<_>>(), [1, 2], "each keeps its own pages");
+    sort_combine_by(&mut h, "Descending");
+    assert_eq!(combine_places(&h, &dir), places(&[("a.pdf", "sub"), ("a.pdf", "")]));
+    sort_combine_by(&mut h, "Ascending");
+    assert_eq!(combine_places(&h, &dir), places(&[("a.pdf", ""), ("a.pdf", "sub")]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_in_a_subfolder_comes_after_the_folders_own_files_whatever_its_name() {
+    let (mut h, dir) = combine_folder("combine-sort-subfolder", &[("b.pdf", 1), ("sub/a.pdf", 1)]);
+    sort_combine_by(&mut h, "Folder");
+    assert_eq!(combine_places(&h, &dir), places(&[("b.pdf", ""), ("a.pdf", "sub")]));
+    sort_combine_by(&mut h, "Descending");
+    assert_eq!(combine_places(&h, &dir), places(&[("a.pdf", "sub"), ("b.pdf", "")]));
+    sort_combine_by(&mut h, "File name");
+    assert_eq!(combine_names(&h), ["b.pdf", "a.pdf"], "still descending, now by name alone");
+    sort_combine_by(&mut h, "Ascending");
+    assert_eq!(combine_places(&h, &dir), places(&[("a.pdf", "sub"), ("b.pdf", "")]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_picked_path_sorts_by_the_folder_it_really_leads_to() {
+    let dir = combine_samples("combine-sort-picked", &["a.pdf", "z.pdf", "up/in.pdf"]);
+    let mut h = combine_picked(&dir, &["up/../z.pdf", "up/in.pdf", "a.pdf"]);
+    sort_combine_by(&mut h, "Folder");
+    assert_eq!(combine_names(&h), ["a.pdf", "z.pdf", "in.pdf"], "a folder before the folders inside it");
+    assert_eq!(h.state().combine_draft[1].folder, Some(dir.canonicalize().unwrap()), "and shown as where it is");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_open_document_sorts_by_the_folder_its_path_really_leads_to() {
+    let dir = combine_samples("combine-sort-open", &["a.pdf", "z.pdf", "up/in.pdf"]);
+    let opened: Vec<(String, String)> = [("z.pdf", "up/../z.pdf"), ("in.pdf", "up/in.pdf"), ("a.pdf", "a.pdf")]
+        .map(|(name, path)| (name.into(), dir.join(path).to_string_lossy().into_owned()))
+        .into();
+    let mut h = harness(1, move |app| {
+        for (name, path) in opened {
+            app.open_bytes(&name, Some(path), fixture(1)).unwrap();
+        }
+    });
+    h.state_mut().execute("page.combine");
+    h.run_steps(3);
+    h.get_by_label("Add open documents").click();
+    h.run_steps(2);
+    h.get_by_label("All open documents").click();
+    h.run_steps(3);
+    sort_combine_by(&mut h, "Folder");
+    assert_eq!(combine_names(&h), ["a.pdf", "z.pdf", "in.pdf", "doc.pdf"], "and a document with no file goes last");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_folder_sorts_with_the_folder_it_leads_to() {
+    let dir = combine_samples("combine-sort-link", &["mid/x.pdf", "real/b.pdf", "real/c.pdf"]);
+    std::os::unix::fs::symlink("real", dir.join("alias")).unwrap();
+    let mut h = combine_picked(&dir, &["real/c.pdf", "mid/x.pdf", "alias/b.pdf"]);
+    sort_combine_by(&mut h, "Folder");
+    assert_eq!(combine_names(&h), ["x.pdf", "b.pdf", "c.pdf"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Their cards read the same but for the folder, so a screen reader needs it to tell them apart.
+#[test]
+fn cards_of_files_called_alike_tell_a_screen_reader_their_folders() {
+    let (h, dir) = combine_folder("combine-card-folders", &[("a.pdf", 1), ("sub/a.pdf", 1)]);
+    let said: Vec<String> = h.get_all_by_label("a.pdf").map(|card| card.accesskit_node().description().unwrap_or_default().to_string()).collect();
+    let (top, inner) = (dir.display().to_string(), dir.join("sub").display().to_string());
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(said.contains(&format!("1 page. {top}")), "{said:?}");
+    assert!(said.contains(&format!("1 page. {inner}")), "{said:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #569: an image or a text file added to Combine files becomes a PDF as it joins the list, an
 /// ordinary row with its pages.
 #[test]

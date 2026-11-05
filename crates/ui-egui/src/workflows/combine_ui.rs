@@ -1,11 +1,12 @@
 //! Combine files, in its own tab: the files to combine, in order, each with the pages to take
 //! (all, or a range such as "1-3, 6"), its size, when it was modified and anything that stops it
 //! being combined. Rows are selected like files in a file manager (click, Ctrl/⌘+click,
-//! Shift+click), moved with the toolbar, the keyboard or by dragging, and sorted by clicking a
-//! column heading; PDFs dropped on the tab join the list. Every change to the list can be undone.
+//! Shift+click), moved with the toolbar, the keyboard or by dragging, and sorted from the
+//! toolbar's Sort menu or by clicking a column heading; PDFs dropped on the tab join the list.
+//! Every change to the list can be undone.
 
-use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -25,14 +26,14 @@ mod view;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use files::Incoming;
-pub use files::{Columns, CombineFile, CombineView, ConflictPreview, Lock, SortKey};
+pub use files::{Columns, CombineFile, CombineView, ConflictPreview, Lock, SortBy, SortKey};
 pub(crate) use files::{Preview, RowAction};
 use files::{Snapshot, UnlockPrompt};
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use parts::ago;
 pub(crate) use parts::range_of;
 #[cfg(test)]
 pub(crate) use parts::{Part, moved_order, moved_pages, removed_pages, step_to};
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use parts::{ago, real_folder};
 #[cfg(test)]
 use parts::{title_of, utc_stamp};
 pub(crate) use view::page;
@@ -60,8 +61,8 @@ pub struct CombineTab {
     /// Where a Shift+click or Shift+arrow range starts, and where it ends.
     anchor: Option<u64>,
     cursor: Option<u64>,
-    /// The column the list is sorted by and whether ascending; cleared when rows are moved.
-    pub sort: Option<(SortKey, bool)>,
+    /// What the list is sorted by and whether ascending; cleared when rows are moved.
+    pub sort: Option<(SortBy, bool)>,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     /// The list as it was when a Pages field took the keyboard, recorded on its first change.

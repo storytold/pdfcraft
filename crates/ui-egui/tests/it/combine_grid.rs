@@ -280,7 +280,7 @@ fn cards_select_like_the_list_and_the_selection_survives_switching_views() {
 fn dragging_a_card_moves_it_and_undo_puts_it_back() {
     let mut h = grid_of_pages(&[("a.pdf", 1), ("b.pdf", 1), ("c.pdf", 1), ("d.pdf", 1)]);
     // Sorted first: a move by hand ends the sort, as in the list.
-    h.state_mut().combine_tab.sort = Some((pdfcraft_ui_egui::SortKey::Name, true));
+    h.state_mut().combine_tab.sort = Some((pdfcraft_ui_egui::CombineSortBy::Column(pdfcraft_ui_egui::SortKey::Name), true));
     let (a, c) = (card(&h, "a.pdf"), card(&h, "c.pdf"));
     drag(&mut h, a.center(), c.center() + vec2(c.width() * 0.3, 0.0));
     assert_eq!(names(&h), ["b.pdf", "c.pdf", "a.pdf", "d.pdf"]);
@@ -299,6 +299,70 @@ fn dragging_a_card_moves_it_and_undo_puts_it_back() {
     h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
     h.run_steps(2);
     assert_eq!(names(&h), ["b.pdf", "c.pdf", "a.pdf", "d.pdf"]);
+}
+
+/// Pick `item` from the toolbar's Sort menu.
+fn pick_sort(h: &mut Harness<'static, PdfCraftApp>, item: &str) {
+    h.get_by_label("Sort").click();
+    h.run_steps(2);
+    h.get_by_label(item).click();
+    h.run_steps(2);
+}
+
+#[test]
+fn the_sort_menu_sorts_the_grid_either_way_and_undo_puts_it_back() {
+    use pdfcraft_ui_egui::CombineSortBy::Column;
+    use pdfcraft_ui_egui::SortKey;
+    let mut h = grid_of_pages(&[("scan10.pdf", 1), ("Scan2.pdf", 3), ("a.pdf", 2)]);
+    pick_sort(&mut h, "Pages");
+    assert_eq!(names(&h), ["scan10.pdf", "a.pdf", "Scan2.pdf"]);
+    assert_eq!(h.state().combine_tab.sort, Some((Column(SortKey::Pages), true)));
+    pick_sort(&mut h, "Descending");
+    assert_eq!(names(&h), ["Scan2.pdf", "a.pdf", "scan10.pdf"]);
+    // Another column keeps the direction.
+    pick_sort(&mut h, "File name");
+    assert_eq!(names(&h), ["scan10.pdf", "Scan2.pdf", "a.pdf"], "names in natural order, descending");
+    // The order the list is already in is no undo step.
+    pick_sort(&mut h, "File name");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(2);
+    assert_eq!(names(&h), ["Scan2.pdf", "a.pdf", "scan10.pdf"]);
+    assert_eq!(h.state().combine_tab.sort, Some((Column(SortKey::Pages), false)));
+}
+
+#[test]
+fn a_direction_picked_unsorted_sorts_by_name() {
+    use pdfcraft_ui_egui::CombineSortBy::Column;
+    use pdfcraft_ui_egui::SortKey;
+    let mut h = grid_of_pages(&[("b.pdf", 1), ("c.pdf", 1), ("a.pdf", 1)]);
+    pick_sort(&mut h, "Ascending");
+    assert_eq!(names(&h), ["a.pdf", "b.pdf", "c.pdf"]);
+    assert_eq!(h.state().combine_tab.sort, Some((Column(SortKey::Name), true)));
+}
+
+#[test]
+fn reverse_order_turns_a_hand_made_order_round_and_flips_a_sorted_one() {
+    use pdfcraft_ui_egui::CombineSortBy::Column;
+    use pdfcraft_ui_egui::SortKey;
+    let mut h = grid_of_pages(&[("b.pdf", 1), ("c.pdf", 2), ("a.pdf", 3)]);
+    pick_sort(&mut h, "Reverse order");
+    assert_eq!(names(&h), ["a.pdf", "c.pdf", "b.pdf"]);
+    assert_eq!(h.state().combine_tab.sort, None, "a hand-made order is still not sorted");
+    pick_sort(&mut h, "Pages");
+    assert_eq!(names(&h), ["b.pdf", "c.pdf", "a.pdf"]);
+    pick_sort(&mut h, "Reverse order");
+    assert_eq!(names(&h), ["a.pdf", "c.pdf", "b.pdf"]);
+    assert_eq!(h.state().combine_tab.sort, Some((Column(SortKey::Pages), false)), "a sorted list is sorted the other way");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(2);
+    assert_eq!(names(&h), ["b.pdf", "c.pdf", "a.pdf"]);
+    assert_eq!(h.state().combine_tab.sort, Some((Column(SortKey::Pages), true)));
+}
+
+#[test]
+fn sort_waits_for_a_second_file() {
+    let h = grid_of_pages(&[("a.pdf", 1)]);
+    assert!(h.get_by_label("Sort").accesskit_node().is_disabled());
 }
 
 #[test]
@@ -332,7 +396,7 @@ fn a_drop_that_changes_nothing_or_lands_outside_the_grid_leaves_no_undo_step() {
     h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     h.run_steps(2);
     assert_eq!(names(&h), ["a.pdf", "b.pdf", "c.pdf"]);
-    h.state_mut().combine_tab.sort = Some((pdfcraft_ui_egui::SortKey::Name, true));
+    h.state_mut().combine_tab.sort = Some((pdfcraft_ui_egui::CombineSortBy::Column(pdfcraft_ui_egui::SortKey::Name), true));
     let b = card(&h, "b.pdf");
     // Onto its own place.
     drag(&mut h, b.center(), b.center() + vec2(b.width() * 0.3, 0.0));

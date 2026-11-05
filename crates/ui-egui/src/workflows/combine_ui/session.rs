@@ -1,10 +1,11 @@
 #[cfg(not(target_arch = "wasm32"))]
 use super::MAX_FOLDER_FILES;
-use super::files::{AssessError, Assessed, CombineFile, Incoming, Secret, Snapshot, SortKey, UnlockPrompt, assess};
+use super::files::{AssessError, Assessed, CombineFile, Incoming, Secret, Snapshot, SortBy, UnlockPrompt, assess};
 #[cfg(not(target_arch = "wasm32"))]
 use super::parts::combinable_in;
-use super::parts::{Part, items_of, moved_order, natural, parts_of, range_of, title_of};
+use super::parts::{Part, items_of, moved_order, parts_of, range_of, real_folder, title_of};
 use super::{Arc, BTreeSet, CombineTab, HISTORY, Modifiers, PdfCraftApp};
+use pdfcraft_engine::order::{FileFacts, file_order};
 
 impl PdfCraftApp {
     /// Show the Combine files tab (File ▸ Combine files…), opening it if needed.
@@ -88,26 +89,25 @@ impl PdfCraftApp {
         self.combine_restore(state);
     }
 
-    pub(super) fn combine_sort(&mut self, key: SortKey, ascending: bool) {
-        let list = &mut self.combine_draft;
-        let mut keyed: Vec<(u8, CombineFile)> = list.drain(..).map(|mut f| (f.severity(), f)).collect();
-        keyed.sort_by(|(sa, a), (sb, b)| {
-            let order = match key {
-                SortKey::Name => natural(&a.name, &b.name),
-                SortKey::Pages => a.pages.cmp(&b.pages),
-                SortKey::Size => a.bytes.len().cmp(&b.bytes.len()),
-                SortKey::Modified => match (a.modified, b.modified) {
-                    (Some(x), Some(y)) => x.cmp(&y),
-                    // Unknown times last, whichever the direction.
-                    (x, y) => return x.is_none().cmp(&y.is_none()).then_with(|| natural(&a.name, &b.name)),
-                },
-                SortKey::Warnings => sa.cmp(sb),
-            };
-            let order = if ascending { order } else { order.reverse() };
-            order.then_with(|| natural(&a.name, &b.name))
-        });
-        *list = keyed.into_iter().map(|(_, f)| f).collect();
-        self.combine_tab.sort = Some((key, ascending));
+    pub(super) fn combine_sort(&mut self, by: SortBy, ascending: bool) {
+        let ranks: Vec<u8> = self.combine_draft.iter_mut().map(CombineFile::severity).collect();
+        let facts: Vec<FileFacts> = self
+            .combine_draft
+            .iter()
+            .zip(&ranks)
+            .map(|(f, rank)| FileFacts {
+                name: &f.name,
+                pages: f.pages,
+                size: f.bytes.len(),
+                modified: f.modified,
+                folder: f.folder.as_deref(),
+                rank: *rank,
+            })
+            .collect();
+        let order = file_order(&facts, by.file_sort(), ascending);
+        let files = std::mem::take(&mut self.combine_draft);
+        self.combine_draft = order.into_iter().filter_map(|at| files.get(at).cloned()).collect();
+        self.combine_tab.sort = Some((by, ascending));
     }
 
     /// The list as parts, for page edits: each entry's pages, or `None` for one that can't be
@@ -246,15 +246,17 @@ impl PdfCraftApp {
 
     /// Add picked files to the Combine files list (and show it).
     pub(crate) fn stage_combine(&mut self, files: Vec<(String, Vec<u8>)>) {
-        let incoming =
-            files.into_iter().map(|(name, bytes)| Incoming { name, bytes: Arc::new(bytes), modified: None, note: None, open_doc: None }).collect();
+        let incoming = files
+            .into_iter()
+            .map(|(name, bytes)| Incoming { name, bytes: Arc::new(bytes), modified: None, folder: None, note: None, open_doc: None })
+            .collect();
         self.stage_combine_with(incoming);
     }
 
     /// Add files to the Combine files list, with what can be known about them up front.
     pub(crate) fn stage_combine_with(&mut self, files: Vec<Incoming>) {
         let mut added = Vec::new();
-        for Incoming { name, bytes, modified, note, open_doc } in files {
+        for Incoming { name, bytes, modified, folder, note, open_doc } in files {
             // Images and text files become PDFs as they join the list (#569): from then on they
             // are ordinary files, with pages, thumbnails and page ranges.
             // A file that can't be read joins the list all the same, with why (the Warnings
@@ -299,6 +301,7 @@ impl PdfCraftApp {
                 pages: 0,
                 range: String::new(),
                 modified,
+                folder,
                 problem: None,
                 lock: None,
                 password: None,
@@ -321,8 +324,8 @@ impl PdfCraftApp {
                 self.combine_draft.push(f);
             }
             // A sorted list stays sorted; new files simply join the end otherwise.
-            if let Some((key, ascending)) = self.combine_tab.sort {
-                self.combine_sort(key, ascending);
+            if let Some((by, ascending)) = self.combine_tab.sort {
+                self.combine_sort(by, ascending);
             }
         }
         self.open_combine_tab();
@@ -420,7 +423,8 @@ impl PdfCraftApp {
             let modified = None;
             let note = doc.dirty.then(|| tl!("Includes unsaved changes").to_string());
             let name = if doc.name.to_ascii_lowercase().ends_with(".pdf") { doc.name.clone() } else { format!("{}.pdf", doc.name) };
-            incoming.push(Incoming { name, bytes: doc.bytes.clone(), modified, note, open_doc: Some(doc.id) });
+            let folder = doc.path.as_deref().and_then(|p| real_folder(std::path::Path::new(p)));
+            incoming.push(Incoming { name, bytes: doc.bytes.clone(), modified, folder, note, open_doc: Some(doc.id) });
         }
         self.stage_combine_with(incoming);
     }

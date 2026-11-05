@@ -98,11 +98,11 @@ impl Card {
         if let Some((icon, colour, _)) = &why {
             icons::paint(ui, Rect::from_center_size(paper.center(), Vec2::splat(28.0)), icon, 28.0, *colour);
         }
-        // For screen readers: the pages, and why no page is shown (otherwise only in the tooltip).
-        let description = match &why {
-            Some((_, _, reason)) => format!("{pages}. {reason}"),
-            None => pages.clone(),
-        };
+        // For screen readers: the pages, why no page is shown and the folder (otherwise only in
+        // the tooltip), which tells apart files called alike.
+        let folder = f.folder.as_ref().map(|folder| folder.display().to_string());
+        let reason = why.as_ref().map(|(_, _, reason)| reason.as_str());
+        let description = [Some(pages.as_str()), reason, folder.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(". ");
         ui.ctx().accesskit_node_builder(id, |node| {
             node.set_selected(self.selected);
             node.set_description(description);
@@ -240,6 +240,10 @@ impl Card {
             Some(page) => format!("{}\n{page}", f.name),
             None => format!("{}\n{pages} · {}", f.name, crate::panels::human_size(f.bytes.len())),
         };
+        if let Some(folder) = &f.folder {
+            tip.push('\n');
+            tip.push_str(&folder.display().to_string());
+        }
         for line in why.into_iter().chain(f.notes.iter().map(String::as_str)) {
             tip.push('\n');
             tip.push_str(line);
