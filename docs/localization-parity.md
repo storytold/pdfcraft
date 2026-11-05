@@ -8,7 +8,7 @@ add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../R
 
 ## How this was measured
 
-- **Strings translated** is measured: the catalogs in `crates/ui-egui/src/i18n/<code>.tsv`, counted
+- **Strings translated** is measured: the catalogs in `crates/ui-egui/src/i18n/<code>.tsv` (since moved to craft-i18n's `locales/<code>/`), counted
   as distinct `(context, English)` keys with a non-empty translation. The denominator is the union of
   keys across all catalogs, counting language-specific context rows such as `theme`/`Appearance`.
   **That union is a moving target**: every change that adds a string widens it, so a count is only
