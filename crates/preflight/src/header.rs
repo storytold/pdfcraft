@@ -16,6 +16,8 @@ pub(crate) struct Header {
     pub(crate) comment: bool,
 }
 
+/// What the header of `doc` breaks of 6.1.2: as stored, or, when the next save rewrites the
+/// file, as that save will write it.
 pub(crate) fn check(doc: &Document) -> Header {
     if doc.full_save_required() || doc.encryption_changed() {
         let written = doc.version().get(..3).unwrap_or_default();

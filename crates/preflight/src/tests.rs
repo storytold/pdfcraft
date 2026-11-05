@@ -535,4 +535,15 @@ fn file_header_is_checked_and_rewritten() {
     assert!(verify(&doc, Level::A2b).iter().all(|i| i.clause != "6.1.2"));
     let saved = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
     assert!(saved.starts_with(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n"));
+    // A good version with a short comment is rewritten too, keeping its version.
+    let mut doc = build_with_header(b"%PDF-1.4\n%ab\n", &objs, "");
+    assert!(!doc.full_save_required());
+    let report = convert(&mut doc, Level::A2b).unwrap();
+    assert!(report.fixed.iter().any(|f| f == "Rewrote the file header"));
+    assert!(doc.full_save_required());
+    assert_eq!(doc.version(), "1.4");
+    // A good header is left as it is.
+    let mut doc = build(&objs, "");
+    let report = convert(&mut doc, Level::A2b).unwrap();
+    assert!(!report.fixed.iter().any(|f| f == "Rewrote the file header"));
 }
