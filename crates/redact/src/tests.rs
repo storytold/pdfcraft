@@ -3467,6 +3467,7 @@ fn unused_descriptions_in_shared_or_inherited_resources_are_retired() {
 mod descriptions;
 mod inline_images;
 mod limits;
+mod page_tree;
 mod property_retirement;
 mod surviving_references;
 mod text_state;

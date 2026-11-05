@@ -519,13 +519,16 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
 /// sensitive content still present. Call this on a working clone and replace the original only
 /// on success. On any error, discard the working clone; do not save or reuse it.
 pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden, usize)>, RedactError> {
+    // Every page, its inherited values copied, or nothing. `scan` is advisory and reads a tree past
+    // a walk limit as holding nothing, which would skip the removal and report success.
+    pdfcraft_model::try_pages(doc)?;
     let counts = scan(doc);
     let count = |h: Hidden| counts.iter().find(|c| c.0 == h).map_or(0, |c| c.1);
     let (root, _) = catalog(doc).ok_or(RedactError::NothingToApply)?;
     let mut done = Vec::new();
     // Every annotation the pages list now: whatever is no longer listed at the end (flattened
     // widgets included) leaves the structure tree too.
-    let listed_before = listed_annotations(doc);
+    let listed_before = listed_annotations(doc)?;
     let has_acroform = doc.get(root).as_dict().is_some_and(|d| d.contains(b"AcroForm"));
     let fields = which.contains(&Hidden::FormFields) && (count(Hidden::FormFields) > 0 || has_acroform);
     if fields {
@@ -535,7 +538,7 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
                 pdfcraft_forms::redraw_field(doc, &f.name)?;
             }
         }
-        let n = pdfcraft_model::pages(doc).len();
+        let n = pdfcraft_model::page_refs(doc)?.len();
         pdfcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), false, true)?;
         doc.update_dict(root, |d| {
             d.remove(b"AcroForm");
@@ -560,13 +563,13 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     };
     // The annotations to remove, on every page first, so a pop-up listed on another page than
     // its parent goes with it.
-    let removed: std::collections::HashSet<ObjRef> = pdfcraft_model::pages(doc)
+    let removed: std::collections::HashSet<ObjRef> = pdfcraft_model::try_pages(doc)?
         .iter()
         .flat_map(|p| annots_of(doc, &p.dict))
         .filter_map(|a| a.as_ref())
         .filter(|&r| doc.get(r).as_dict().is_some_and(drop_annot))
         .collect();
-    for p in pdfcraft_model::pages(doc) {
+    for p in pdfcraft_model::try_pages(doc)? {
         let list = annots_of(doc, &p.dict);
         let mut kept = Vec::new();
         for a in list {
@@ -600,7 +603,7 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     // A tagged PDF's structure tree still points at the removed links, comments and flattened
     // widgets (#2447): drop those references, or the full rewrite keeps the annotations, URLs,
     // text and field values included.
-    let still = listed_annotations(doc);
+    let still = listed_annotations(doc)?;
     let gone: std::collections::HashSet<ObjRef> = listed_before.difference(&still).copied().collect();
     crate::tags::drop_object_refs(doc, &gone)?;
     let off = hidden_layers(doc);

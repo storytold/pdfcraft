@@ -190,21 +190,33 @@ pub(crate) fn annots_of(doc: &Document, page: &Dict) -> Vec<Object> {
 
 /// Every annotation the pages list. Compared before and after a removal, what is no longer listed
 /// leaves the structure tree too ([`tags::drop_object_refs`]).
-pub(crate) fn listed_annotations(doc: &Document) -> HashSet<ObjRef> {
-    pdfcraft_model::pages(doc).iter().flat_map(|p| annots_of(doc, &p.dict)).filter_map(|a| a.as_ref()).collect()
+pub(crate) fn listed_annotations(doc: &Document) -> Result<HashSet<ObjRef>, RedactError> {
+    let mut listed = HashSet::new();
+    for leaf in pdfcraft_model::PageLeaves::new(doc) {
+        listed.extend(leaf?.dict().map(|page| annots_of(doc, page)).unwrap_or_default().iter().filter_map(Object::as_ref));
+    }
+    Ok(listed)
 }
 
 /// Every redaction mark in the document, page by page.
 pub fn marks(doc: &Document) -> Vec<Mark> {
-    marks_checked(doc).0
+    marks_in(doc, pdfcraft_model::PageLeaves::new(doc).map_while(Result::ok)).0
 }
 
 /// [`marks`], and the 0-based page of each Redact annotation that has no readable area, which
-/// [`apply`] refuses rather than skipping.
-pub(crate) fn marks_checked(doc: &Document) -> (Vec<Mark>, Vec<usize>) {
+/// [`apply`] refuses rather than skipping. Every page or an error:
+/// marks on a page past a walk limit would be left unapplied.
+pub(crate) fn marks_checked(doc: &Document) -> Result<(Vec<Mark>, Vec<usize>), RedactError> {
+    let leaves = pdfcraft_model::PageLeaves::new(doc).collect::<Result<Vec<_>, _>>()?;
+    Ok(marks_in(doc, leaves.into_iter()))
+}
+
+/// The marks on `leaves` (`/Annots` isn't inherited, so each page's own dictionary is enough).
+fn marks_in(doc: &Document, leaves: impl Iterator<Item = pdfcraft_model::PageNode>) -> (Vec<Mark>, Vec<usize>) {
     let (mut out, mut unreadable) = (Vec::new(), Vec::new());
-    for (pi, p) in pdfcraft_model::pages(doc).iter().enumerate() {
-        for a in annots_of(doc, &p.dict) {
+    for (pi, leaf) in leaves.enumerate() {
+        let Some(page) = leaf.dict() else { continue };
+        for a in annots_of(doc, page) {
             let Some(r) = a.as_ref() else {
                 // A mark written in place has no object to find, apply or remove: refuse it
                 // rather than apply the others as if it were not there.
@@ -312,8 +324,9 @@ fn resource_source(doc: &Document, page: ObjRef) -> Option<Option<ObjRef>> {
 /// ancestor `/Resources` they came from once no other page still inherits it, so the parent can't
 /// keep a removed XObject reachable. Pages that aren't redacted are left untouched; an inherited
 /// dictionary that is direct becomes one shared indirect object, never a copy per page.
-fn localize_resources(doc: &mut Document, selected: &[usize]) -> Result<(), pdfcraft_cos::CosError> {
-    let pages = pdfcraft_model::pages(doc);
+fn localize_resources(doc: &mut Document, selected: &[usize]) -> Result<(), RedactError> {
+    // Every page: retiring an ancestor's resources needs to know every page that still inherits them.
+    let pages = pdfcraft_model::try_pages(doc)?;
     let inherits = |doc: &Document, p: &pdfcraft_model::Page| doc.get(p.obj).as_dict().is_some_and(|d| !d.contains(b"Resources"));
     // Ancestor → the reference its resources are shared through, and whether that reference is new.
     let mut shared: HashMap<ObjRef, (Object, bool)> = HashMap::new();
@@ -401,7 +414,10 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
 
 /// [`apply_to`], its images decoded within `images`.
 fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_cos::ImageBudget) -> Result<Report, RedactError> {
-    let (all_marks, unreadable) = marks_checked(doc);
+    // Every page, its inherited values copied, or nothing: past a walk limit some marks, and some
+    // pages inheriting resources localization would retire, would be missed.
+    pdfcraft_model::try_pages(doc)?;
+    let (all_marks, unreadable) = marks_checked(doc)?;
     // A mark with no readable area is not applied, and applying the others would look complete:
     // refuse before anything changes. Only the pages being applied count.
     let unreadable = unreadable.iter().filter(|page| pages.is_none_or(|p| p.contains(page))).count();
@@ -435,7 +451,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     localize_resources(doc, &by_page)?;
     let widget_owner: Vec<(ObjRef, ObjRef)> =
         pdfcraft_forms::fields(doc).into_iter().flat_map(|f| f.widgets.iter().map(|w| (w.obj, f.obj)).collect::<Vec<_>>()).collect();
-    let listed_before = listed_annotations(doc);
+    let listed_before = listed_annotations(doc)?;
     let mut applying = Applying {
         report,
         doomed_fields: Vec::new(),
@@ -513,7 +529,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     // 3a. A tagged PDF's structure tree still points at the removed comments and widgets
     // (`/OBJR`, #2874): drop those references, or a full rewrite keeps them reachable, the
     // comment text and the field value included. Widgets of a removed field on other pages count.
-    let gone: HashSet<ObjRef> = listed_before.difference(&listed_annotations(doc)).copied().collect();
+    let gone: HashSet<ObjRef> = listed_before.difference(&listed_annotations(doc)?).copied().collect();
     report.tags += tags::drop_object_refs(doc, &gone)?;
 
     // 3b. An XFA form mirrors its field values in the /XFA datasets packet, and a relayout
