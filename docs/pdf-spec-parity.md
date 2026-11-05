@@ -121,7 +121,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | PDF/A-1a/b (ISO 19005-1) | verify, convert | none | |
 | PDF/A-2a/b/u, PDF/A-3a/b/u | verify, convert | **partial**: 2b and 3b structural rules and conversion (sRGB intent; not CMYK) | |
 | PDF/A-4, 4e, 4f | verify, convert | none | |
-| PDF/X-1a, X-3, X-4 (ISO 15930) | verify, convert | **partial**: PDF/X declarations are carried through Combine and can be removed (`standards_remove_id`); no verifier, no converter | |
+| PDF/X-1a, X-3, X-4 (ISO 15930) | verify, convert | **partial**: PDF/X declarations are carried through Combine and can be removed (`standards_remove_id`, which matches the `pdfxid:` prefix only); no verifier, no converter | |
 | PDF/UA-1, PDF/UA-2 (ISO 14289) | verify (Preflight), checker | Accessibility Checker (32 rules, Acrobat's own), no PDF/UA verification | |
 | PDF/E, PDF/VT | verify, convert | none | |
 | Preflight (profiles, fixups, reports) | hundreds of profiles | none | |
