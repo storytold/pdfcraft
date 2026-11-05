@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use pdfcraft_cos::{Document, ObjRef, Object, SaveOptions, write_incremental};
 
+use super::modify::text_box_of;
 use super::*;
 
 /// Two pages. Page 1 has an inline Square annotation in a direct /Annots array; page 2 has an
@@ -40,7 +41,7 @@ fn new(page: usize, shape: Shape) -> NewAnnotation {
     NewAnnotation {
         page,
         shape,
-        style: Style { color: [0.0, 0.4, 1.0], opacity: 1.0, width: 2.0, fill: None },
+        style: Style { color: [0.0, 0.4, 1.0], opacity: 1.0, width: 2.0, fill: None, ..Style::default() },
         contents: "hello".into(),
         author: "Ada".into(),
     }
@@ -356,6 +357,296 @@ fn restyle_and_resize_redraw_the_appearance() {
     assert!(matches!(set_rect(&mut doc, 0, l, [0.0, 0.0, 5.0, 5.0], &meta("")), Err(AnnotError::Invalid(_))));
 }
 
+/// Typed text or a text box takes an oval or a circle for its border: the text box keeps its
+/// place and the shape goes around it (`/Rect` grows, `/RD` holds the text box, `/PCBorderShape`
+/// the shape); back to a rectangle, it is the text box it was. A resized frame takes its text box
+/// along, a thicker border leaves it where it is.
+#[test]
+fn text_boxes_take_an_oval_or_a_circle_around_their_text() {
+    let close = |a: &[f64], b: &[f64]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.01);
+    let nums = |d: &Dict, k: &[u8]| -> Vec<f64> {
+        d.get(k).and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default()
+    };
+    // Where the text starts: its first line's text matrix.
+    let text_at = |doc: &Document, d: &Dict| ap_content(doc, d).lines().find(|l| l.ends_with(" Tm") || l.contains(" Tm ")).map(str::to_owned);
+    let mut doc = fixture();
+    let mut tw = new(0, Shape::Typewriter { rect: [100.0, 100.0, 200.0, 120.0], font_size: 10.0 });
+    tw.style.width = 1.0;
+    let t = add_annotation(&mut doc, &tw, &meta("t")).unwrap();
+    // In an oval or a circle the text is centred in its text box (left-aligned in a box): one
+    // line of "hello" at 10 pt in the 100 × 20 text box centred on (150, 110), 3 pt from its top.
+    let centred = format!("1 0 0 1 {} {} Tm (hello) Tj", n(150.0 - appearance::text_width("hello", 10.0) / 2.0), n(107.0));
+    assert!(text_at(&doc, &list(&doc, 0)[t]).is_some_and(|l| l.starts_with("1 0 0 1 103 ")), "a box: left-aligned");
+    set_border_shape(&mut doc, 0, t, BorderShape::Oval, &meta("")).unwrap();
+    let doc2 = reopen(&doc);
+    let d = &list(&doc2, 0)[t];
+    // Around the 100 × 20 text box, centred: √2 its size, two points more for the 1 pt border.
+    let (ax, ay) = (50.0 * std::f64::consts::SQRT_2 + 2.0, 10.0 * std::f64::consts::SQRT_2 + 2.0);
+    assert!(close(&rect(d), &[150.0 - ax, 110.0 - ay, 150.0 + ax, 110.0 + ay]), "{:?}", rect(d));
+    assert!(close(&nums(d, b"RD"), &[ax - 50.0, ay - 10.0, ax - 50.0, ay - 10.0]), "{:?}", nums(d, b"RD"));
+    assert_eq!(d.name(b"PCBorderShape"), Some(&b"Oval"[..]));
+    let ap = ap_content(&doc2, d);
+    assert!(ap.contains(" c\n") && ap.contains("S\n") && !ap.contains("re S"), "an oval, not a box: {ap}");
+    assert_eq!(text_at(&doc2, d).as_deref(), Some(centred.as_str()), "the text keeps its place");
+    assert_eq!(props(&doc2, 0, t).unwrap().border_shape, Some(BorderShape::Oval));
+    // A circle around the text: the text box shrinks to "hello" with its padding, centred where it
+    // was, and the circle touches its sides (the text a point clear of the border inside).
+    set_border_shape(&mut doc, 0, t, BorderShape::Circle, &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    let hw = appearance::text_width("hello", 10.0) / 2.0;
+    let r = (hw + 5.0).max(hw.hypot(6.0) + 2.0);
+    assert!(close(&rect(d), &[150.0 - r, 110.0 - r, 150.0 + r, 110.0 + r]), "{:?}", rect(d));
+    assert!(close(&nums(d, b"RD"), &[r - hw - 5.0, r - 10.0, r - hw - 5.0, r - 10.0]), "{:?}", nums(d, b"RD"));
+    assert_eq!(text_at(&doc, d).as_deref(), Some(centred.as_str()));
+    // A thicker border: the typed text's box grows by the change on every side, so its text keeps
+    // its place inside the thicker line (as with a rectangle), and the circle goes around that.
+    set_style(&mut doc, 0, t, StyleChange::new(None, None, Some(3.0), None), &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    assert_eq!(text_at(&doc, d).as_deref(), Some(centred.as_str()));
+    let r3 = (hw + 7.0).max(hw.hypot(6.0) + 4.0);
+    assert!(close(&rect(d), &[150.0 - r3, 110.0 - r3, 150.0 + r3, 110.0 + r3]), "{:?}", rect(d));
+    // Its frame resized: the text box follows inside, keeping its proportions, its longer sides
+    // reaching the circle.
+    set_rect(&mut doc, 0, t, [150.0 - 2.0 * r3, 110.0 - 2.0 * r3, 150.0 + 2.0 * r3, 110.0 + 2.0 * r3], &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    let rd = nums(d, b"RD");
+    let tb = [rect(d)[0] + rd[0], rect(d)[1] + rd[1], rect(d)[2] - rd[2], rect(d)[3] - rd[3]];
+    assert!(((tb[2] - tb[0]) / (tb[3] - tb[1]) - (hw + 7.0) / 12.0).abs() < 0.01, "the text box keeps its proportions: {tb:?}");
+    assert!(close(&rect(d), &[150.0 - 2.0 * r3, 110.0 - 2.0 * r3, 150.0 + 2.0 * r3, 110.0 + 2.0 * r3]), "{:?}", rect(d));
+    // A rectangle again: the text box it has, nothing around it.
+    set_border_shape(&mut doc, 0, t, BorderShape::Rectangle, &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    assert!(close(&rect(d), &tb), "{:?} vs {tb:?}", rect(d));
+    assert!(!d.contains(b"RD") && !d.contains(b"PCBorderShape"));
+    assert!(ap_content(&doc, d).contains("re S"));
+
+    // A filled text box made with an oval: the background takes the shape too.
+    let mut tb = new(0, Shape::TextBox { rect: [300.0, 500.0, 400.0, 540.0], font_size: 12.0 });
+    (tb.style.fill, tb.style.width, tb.style.border_shape) = (Some([1.0, 1.0, 0.6]), 1.0, BorderShape::Oval);
+    let b = add_annotation(&mut doc, &tb, &meta("b")).unwrap();
+    let d = &list(&doc, 0)[b];
+    assert_eq!(d.name(b"PCBorderShape"), Some(&b"Oval"[..]));
+    let ap = ap_content(&doc, d);
+    assert!(ap.contains("1 1 0.6 rg") && ap.contains(" c\nh\nf\n") && !ap.contains(" re f"), "{ap}");
+    // A callout's border stays a rectangle.
+    let c = add_annotation(
+        &mut doc,
+        &new(
+            0,
+            Shape::Callout {
+                rect: [300.0, 300.0, 400.0, 340.0],
+                knee: [280.0, 320.0],
+                point: [250.0, 280.0],
+                ending: LineEnding::OpenArrow,
+                font_size: 10.0,
+            },
+        ),
+        &meta("c"),
+    )
+    .unwrap();
+    assert!(matches!(set_border_shape(&mut doc, 0, c, BorderShape::Oval, &meta("")), Err(AnnotError::Invalid(_))));
+    assert_eq!(props(&doc, 0, c).unwrap().border_shape, None);
+    assert_eq!(BorderShape::parse("CIRCLE"), Some(BorderShape::Circle));
+}
+
+/// A circle goes snug around short text, as a number on a drawing is circled: the text box is no
+/// wider than its text needs and the circle touches its sides, where one through the box's corners
+/// stood well clear. It follows the text and its size as they change; one made larger by hand
+/// keeps its size.
+#[test]
+fn a_circle_goes_snug_around_its_text_and_follows_it() {
+    let close = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01;
+    let mut doc = fixture();
+    // "3" at 10 pt with a 1 pt border, in the box Fill & Sign sizes to it: the digit with 2 pt of
+    // padding and 4 pt to spare across, a line and 6 pt down, the border around that.
+    let w3 = appearance::text_width("3", 10.0);
+    let mut typed = new(0, Shape::Typewriter { rect: [100.0, 680.0, 110.0 + w3, 700.0], font_size: 10.0 });
+    (typed.contents, typed.style.width, typed.style.border_shape) = ("3".into(), 1.0, BorderShape::Circle);
+    let t = add_annotation(&mut doc, &typed, &meta("t")).unwrap();
+    let frame = |doc: &Document| {
+        let r = rect(&list(doc, 0)[t]);
+        ((r[2] - r[0], r[3] - r[1]), ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0))
+    };
+    let centre = (105.0 + w3 / 2.0, 690.0);
+    // As tall as the box, 20 pt across: through the corners it was 29.
+    assert!(close(frame(&doc).0, (20.0, 20.0)) && close(frame(&doc).1, centre), "{:?}", frame(&doc));
+    // The text box Fill & Sign gives a box to type into, 40 pt wide: a circle goes snug around its
+    // text there too.
+    let mut wide = typed.clone();
+    wide.shape = Shape::Typewriter { rect: [300.0, 680.0, 342.0, 700.0], font_size: 10.0 };
+    wide.style.border_shape = BorderShape::Rectangle;
+    let b = add_annotation(&mut doc, &wide, &meta("b")).unwrap();
+    set_border_shape(&mut doc, 0, b, BorderShape::Circle, &meta("")).unwrap();
+    let r = rect(&list(&doc, 0)[b]);
+    assert!(close((r[2] - r[0], r[3] - r[1]), (20.0, 20.0)), "{r:?}");
+    // More text: the circle grows with it, about the same centre; less, and it shrinks back.
+    set_contents(&mut doc, 0, t, "123", &meta("")).unwrap();
+    let w = appearance::text_width("123", 10.0) / 2.0;
+    let d = 2.0 * (w + 5.0).max(10.0).max(w.hypot(6.0) + 2.0);
+    assert!(close(frame(&doc).0, (d, d)) && close(frame(&doc).1, centre), "{:?}", frame(&doc));
+    set_contents(&mut doc, 0, t, "3", &meta("")).unwrap();
+    assert!(close(frame(&doc).0, (20.0, 20.0)) && close(frame(&doc).1, centre), "{:?}", frame(&doc));
+    // A larger font: a larger circle, still snug.
+    set_font_size(&mut doc, 0, t, 20.0, &meta("")).unwrap();
+    let w = appearance::text_width("3", 20.0) / 2.0;
+    let d = 2.0 * (w + 5.0).max(16.0).max(w.hypot(12.0) + 2.0);
+    assert!(close(frame(&doc).0, (d, d)) && close(frame(&doc).1, centre), "{:?}", frame(&doc));
+    set_font_size(&mut doc, 0, t, 10.0, &meta("")).unwrap();
+    assert!(close(frame(&doc).0, (20.0, 20.0)), "{:?}", frame(&doc));
+    // Made larger by hand, it keeps its size as its text changes.
+    set_rect(&mut doc, 0, t, [centre.0 - 20.0, centre.1 - 20.0, centre.0 + 20.0, centre.1 + 20.0], &meta("")).unwrap();
+    assert!(close(frame(&doc).0, (40.0, 40.0)), "{:?}", frame(&doc));
+    set_contents(&mut doc, 0, t, "4", &meta("")).unwrap();
+    assert!(close(frame(&doc).0, (40.0, 40.0)) && close(frame(&doc).1, centre), "{:?}", frame(&doc));
+}
+
+/// A circle around a line wider than it is tall touches its text box's sides: `/RD` is 0 there,
+/// not a rounding error below it, and a hair below 0 still reads. (A text box that couldn't be
+/// read stopped following its text, and its text wrapped in a narrower one.) The circle keeps its
+/// centre as its text changes.
+#[test]
+fn a_circle_touching_its_text_box_keeps_following_its_text() {
+    let mut doc = fixture();
+    // Sized to its text: 2 pt of padding and half a point to spare across, a line down.
+    let (w, h) = (appearance::text_width("Testtext", 12.0) + 4.5, 12.0 * 1.11 + 4.0);
+    let mut b = new(0, Shape::TextBox { rect: [210.79, 700.0 - h, 210.79 + w, 700.0], font_size: 12.0 });
+    (b.contents, b.style.width) = ("Testtext".into(), 0.0);
+    let t = add_annotation(&mut doc, &b, &meta("t")).unwrap();
+    // Circle, then a 1 pt border, which the circle grows by.
+    set_border_shape(&mut doc, 0, t, BorderShape::Circle, &meta("")).unwrap();
+    set_style(&mut doc, 0, t, StyleChange::new(None, None, Some(1.0), None), &meta("")).unwrap();
+    let lines = |doc: &Document| ap_content(doc, &list(doc, 0)[t]).matches(" Tj").count();
+    let frame = |doc: &Document| {
+        let r = rect(&list(doc, 0)[t]);
+        ((r[2] - r[0], r[3] - r[1]), ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0))
+    };
+    let rd = |doc: &Document| -> Vec<f64> { list(doc, 0)[t].get(b"RD").unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect() };
+    assert!(rd(&doc).iter().all(|x| *x >= 0.0) && rd(&doc)[0] < 0.01, "touching the sides: {:?}", rd(&doc));
+    assert_eq!(lines(&doc), 1, "Testtext on one line");
+    let (wide, centre) = frame(&doc);
+    set_contents(&mut doc, 0, t, "KRS", &meta("")).unwrap();
+    let (small, at) = frame(&doc);
+    assert!(small.0 < wide.0 - 10.0 && (small.0 - small.1).abs() < 0.01, "a smaller circle: {small:?} from {wide:?}");
+    assert!((at.0 - centre.0).abs() < 0.01 && (at.1 - centre.1).abs() < 0.01, "about its centre: {at:?} {centre:?}");
+    assert_eq!(lines(&doc), 1);
+    // A hair below 0, as rounding left it: still read, so the circle follows its text again.
+    let (_, r) = annot_ref(&mut doc, 0, t).unwrap();
+    let mut was = rd(&doc);
+    was[0] = -2.8e-14;
+    doc.update_dict(r, |d| d.set(b"RD".to_vec(), num_array(&was))).unwrap();
+    assert!(text_box_of(&list(&doc, 0)[t]).is_some());
+    set_contents(&mut doc, 0, t, "Testtext", &meta("")).unwrap();
+    assert!((frame(&doc).0.0 - wide.0).abs() < 0.01 && lines(&doc) == 1, "{:?}", frame(&doc));
+    assert!(rd(&doc).iter().all(|x| *x >= 0.0), "{:?}", rd(&doc));
+}
+
+/// On a page turned a quarter, typed text is laid out as the page is shown (`/PCTextRotate`), and a
+/// circle made with it goes around the text as shown: as large as around the same text on an
+/// upright page. (Made before the turn was set, its text wrapped at the box's displayed height and
+/// the circle went around several lines.)
+#[test]
+fn a_circle_made_on_a_turned_page_is_sized_as_on_an_upright_one() {
+    let w = appearance::text_width("12345", 10.0);
+    let typed = |rect: [f64; 4]| {
+        let mut t = new(0, Shape::Typewriter { rect, font_size: 10.0 });
+        (t.contents, t.style.width, t.style.border_shape) = ("12345".into(), 1.0, BorderShape::Circle);
+        t
+    };
+    let size = |doc: &Document, i: usize| {
+        let r = rect(&list(doc, 0)[i]);
+        (r[2] - r[0], r[3] - r[1])
+    };
+    let mut upright = fixture();
+    let u = add_annotation(&mut upright, &typed([100.0, 680.0, 110.0 + w, 700.0]), &meta("u")).unwrap();
+    for turn in [90, 270] {
+        let mut doc = fixture();
+        let page = page_refs(&doc).unwrap()[0];
+        doc.update_dict(page, |d| d.set(b"Rotate".to_vec(), Object::Int(turn))).unwrap();
+        // The same box as shown: its sides swapped in user space.
+        let t = add_annotation(&mut doc, &typed([100.0, 680.0, 120.0, 690.0 + w]), &meta("t")).unwrap();
+        assert_eq!(list(&doc, 0)[t].get(b"PCTextRotate").and_then(Object::as_int), Some(turn));
+        let (turned, straight) = (size(&doc, t), size(&upright, u));
+        assert!((turned.0 - straight.0).abs() < 0.01 && (turned.1 - straight.1).abs() < 0.01, "{turn}°: {turned:?}, upright {straight:?}");
+    }
+}
+
+/// A rectangle's fill, and a text box's border, background and text, each drawn at an opacity of
+/// its own: the line's in `/CA`, the fill's in `/ca` (PDF 2.0), the text's in `/PCTextOpacity`, and
+/// in the appearance `/GS0` (strokes at the line's, fills at the fill's) and `/GS1` for the text.
+#[test]
+fn parts_are_drawn_at_opacities_of_their_own() {
+    let num = |d: &Dict, k: &[u8]| d.get(k).and_then(|o| o.as_f64());
+    let gstate = |doc: &Document, d: &Dict, name: &[u8]| -> Option<(f64, f64)> {
+        let n = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.reference(b"N")))?;
+        let obj = doc.get(n);
+        let Object::Stream(s) = &*obj else { return None };
+        let res = s.dict.get(b"Resources").map(|r| doc.resolve(r))?;
+        let gs = res.as_dict()?.get(b"ExtGState").map(|g| doc.resolve(g))?;
+        let gs = gs.as_dict()?.get(name).map(|g| doc.resolve(g))?;
+        let gs = gs.as_dict()?;
+        Some((gs.get(b"CA")?.as_f64()?, gs.get(b"ca")?.as_f64()?))
+    };
+    let mut doc = fixture();
+    let r = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 110.0, 60.0] }), &meta("r")).unwrap();
+    set_fill(&mut doc, 0, r, Some([1.0, 1.0, 0.0]), &meta("")).unwrap();
+    set_part_opacity(&mut doc, 0, r, Some(0.3), None, &meta("")).unwrap();
+    let doc2 = reopen(&doc);
+    let d = &list(&doc2, 0)[r];
+    assert_eq!((num(d, b"CA"), num(d, b"ca")), (None, Some(0.3)), "an opaque line, a fill of its own");
+    assert_eq!(gstate(&doc2, d, b"GS0"), Some((1.0, 0.3)));
+    let ap = ap_content(&doc2, d);
+    assert!(ap.starts_with("/GS0 gs") && ap.contains("\nB\n"), "filled and stroked in one go: {ap}");
+    let p = props(&doc2, 0, r).unwrap();
+    assert_eq!((p.opacity, p.fill_opacity, p.text_opacity), (1.0, Some(0.3), None));
+    // The whole comment's opacity (StyleAnnotation, the quick bar): the fill goes along again.
+    set_style(&mut doc, 0, r, StyleChange::new(None, Some(0.6), None, None), &meta("")).unwrap();
+    let d = &list(&doc, 0)[r];
+    assert_eq!((num(d, b"CA"), num(d, b"ca")), (Some(0.6), None));
+    assert_eq!(props(&doc, 0, r).unwrap().fill_opacity, Some(0.6));
+
+    // A text box with its border opaque, its background at 20 % and its text opaque, as made.
+    let mut tb = new(0, Shape::TextBox { rect: [200.0, 600.0, 400.0, 650.0], font_size: 12.0 });
+    tb.style.fill = Some([1.0, 1.0, 0.6]);
+    tb.style.width = 1.0;
+    (tb.style.fill_opacity, tb.style.text_opacity) = (Some(0.2), Some(1.0));
+    let t = add_annotation(&mut doc, &tb, &meta("t")).unwrap();
+    let doc2 = reopen(&doc);
+    let d = &list(&doc2, 0)[t];
+    assert_eq!((num(d, b"CA"), num(d, b"ca"), num(d, b"PCTextOpacity")), (None, Some(0.2), Some(1.0)));
+    assert_eq!((gstate(&doc2, d, b"GS0"), gstate(&doc2, d, b"GS1")), (Some((1.0, 0.2)), Some((1.0, 1.0))));
+    let ap = ap_content(&doc2, d);
+    let (gs1, text) = (ap.find("/GS1 gs\n").expect("the text's own state, an operator of its own"), ap.find("BT").expect("text"));
+    assert!(ap.find(" re f").is_some_and(|fill| fill < gs1) && gs1 < text, "background at 20 %, then the text at its own: {ap}");
+    // A new fill opacity leaves the text as it is drawn.
+    set_part_opacity(&mut doc, 0, t, Some(0.5), None, &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    assert_eq!((num(d, b"ca"), num(d, b"PCTextOpacity")), (Some(0.5), Some(1.0)));
+    let p = props(&doc, 0, t).unwrap();
+    assert_eq!((p.opacity, p.fill_opacity, p.text_opacity), (1.0, Some(0.5), Some(1.0)));
+    // All at one opacity again: only /CA stays.
+    set_part_opacity(&mut doc, 0, t, Some(1.0), Some(1.0), &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    assert_eq!((num(d, b"CA"), num(d, b"ca"), num(d, b"PCTextOpacity")), (None, None, None));
+
+    // Only the parts a comment has, and finite values; nothing changes when refused.
+    let l = add_annotation(
+        &mut doc,
+        &new(0, Shape::Line { from: [0.0, 0.0], to: [10.0, 10.0], start: LineEnding::None, end: LineEnding::None }),
+        &meta("l"),
+    )
+    .unwrap();
+    assert!(matches!(set_part_opacity(&mut doc, 0, l, Some(0.5), None, &meta("")), Err(AnnotError::Invalid(_))), "a line has no fill");
+    assert!(matches!(set_part_opacity(&mut doc, 0, r, None, Some(0.5), &meta("")), Err(AnnotError::Invalid(_))), "a rectangle has no text");
+    let before = list(&doc, 0)[r].clone();
+    assert!(matches!(set_part_opacity(&mut doc, 0, r, Some(f64::NAN), None, &meta("")), Err(AnnotError::Invalid(_))));
+    assert_eq!(list(&doc, 0)[r], before);
+    // Another app's comment with /CA alone is drawn at it throughout, as before.
+    assert_eq!(
+        appearance::part_opacity(&Dict::from_iter([(b"CA".to_vec(), Object::Real(0.4))])),
+        appearance::PartOpacity { line: 0.4, fill: 0.4, text: 0.4 }
+    );
+}
+
 #[test]
 fn shapes_can_be_filled_and_unfilled() {
     let mut doc = fixture();
@@ -589,6 +880,85 @@ fn fill_and_sign_items_are_drawn() {
     let mut doc = doc;
     set_style(&mut doc, 1, marks[0], StyleChange::new(Some([0.0, 0.0, 1.0]), None, None, None), &meta("")).unwrap();
     assert!(set_style(&mut doc, 1, 0, StyleChange::new(Some([0.0; 3]), None, None, None), &meta("")).is_err());
+}
+
+/// A border chosen for typewriter text goes around it in the text's colour. Changing it grows or
+/// shrinks the box on every side, so the text stays where it was typed; a text box keeps its box.
+#[test]
+fn a_typewriter_border_goes_around_its_text_which_stays_put() {
+    let mut doc = fixture();
+    let shape = Shape::Typewriter { rect: [100.0, 700.0, 200.0, 716.0], font_size: 11.0 };
+    let style = Style { width: 1.0, ..Style::default_for(&shape) };
+    let t = add_annotation(&mut doc, &NewAnnotation { page: 1, shape, style, contents: "Ada".into(), author: "Ada".into() }, &meta("x")).unwrap();
+    // The text starts 2 pt inside the border: 100 + 1 + 2 across, 716 - 1 - 2 - 0.9 em down.
+    let at = "1 0 0 1 103 703.1 Tm";
+    let d = &list(&doc, 1)[t];
+    let ap = ap_content(&doc, d);
+    assert!(ap.contains("1 w\n") && ap.contains(" re S"), "a 1 pt border: {ap}");
+    assert!(ap.contains(at), "{ap}");
+    for (width, expected) in [(2.0, [99.0, 699.0, 201.0, 717.0]), (0.0, [101.0, 701.0, 199.0, 715.0])] {
+        set_style(&mut doc, 1, t, StyleChange::new(None, None, Some(width), None), &meta("")).unwrap();
+        let d = &list(&doc, 1)[t];
+        assert_eq!(rect(d), expected, "{width} pt border");
+        let ap = ap_content(&doc, d);
+        assert!(ap.contains(at), "{width} pt: the text keeps its place: {ap}");
+        assert_eq!(ap.contains(" re S"), width > 0.0, "{width} pt: {ap}");
+    }
+    let shape = Shape::TextBox { rect: [100.0, 600.0, 200.0, 650.0], font_size: 11.0 };
+    let b = add_annotation(&mut doc, &new(1, shape), &meta("b")).unwrap();
+    set_style(&mut doc, 1, b, StyleChange::new(None, None, Some(3.0), None), &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 1)[b]), [100.0, 600.0, 200.0, 650.0], "a text box keeps the box it was drawn with");
+    // Another app's typed text with its width in /Border (no /BS): 4 pt, so 2 pt shrinks the box
+    // by 2 on every side, as it is drawn.
+    let shape = Shape::Typewriter { rect: [100.0, 500.0, 200.0, 530.0], font_size: 11.0 };
+    let o = add_annotation(
+        &mut doc,
+        &NewAnnotation { page: 1, style: Style::default_for(&shape), shape: shape.clone(), contents: "Bo".into(), author: "Ada".into() },
+        &meta("o"),
+    )
+    .unwrap();
+    let (_, r) = annot_ref(&mut doc, 1, o).unwrap();
+    doc.update_dict(r, |d| {
+        d.remove(b"BS");
+        d.set(b"Border".to_vec(), num_array(&[0.0, 0.0, 4.0]));
+    })
+    .unwrap();
+    set_style(&mut doc, 1, o, StyleChange::new(None, None, Some(2.0), None), &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 1)[o]), [102.0, 502.0, 198.0, 528.0], "the imported 4 pt border is read from /Border");
+    // A border colour that isn't a colour is refused before anything is written.
+    let mut bad = NewAnnotation { page: 1, style: Style::default_for(&shape), shape, contents: "x".into(), author: "Ada".into() };
+    bad.style.border_color = Some([f64::NAN, 0.0, 0.0]);
+    let before = list(&doc, 1).len();
+    assert!(matches!(add_annotation(&mut doc, &bad, &meta("n")), Err(AnnotError::Invalid(_))));
+    assert_eq!(list(&doc, 1).len(), before);
+}
+
+/// Text keeps its colour and the border gets its own: the stroking colour in `/DA`, which a new
+/// text colour or font size keeps, and which `None` gives back to the text's.
+#[test]
+fn a_text_border_can_have_its_own_colour() {
+    let mut doc = fixture();
+    let shape = Shape::Typewriter { rect: [100.0, 700.0, 200.0, 716.0], font_size: 11.0 };
+    let style = Style { color: [0.0, 0.5, 0.0], width: 1.0, border_color: Some([1.0, 0.0, 0.0]), ..Style::default_for(&shape) };
+    let t = add_annotation(&mut doc, &NewAnnotation { page: 1, shape, style, contents: "Ada".into(), author: "Ada".into() }, &meta("x")).unwrap();
+    let da = |doc: &Document| text(&list(doc, 1)[t], b"DA");
+    assert_eq!(da(&doc), "0 0.5 0 rg 1 0 0 RG /Helv 11 Tf");
+    let ap = ap_content(&doc, &list(&doc, 1)[t]);
+    assert!(ap.contains("1 0 0 RG\n1 w"), "the border in red: {ap}");
+    assert!(ap.contains("0 0.5 0 rg"), "the text in green: {ap}");
+    assert_eq!(props(&doc, 1, t).unwrap().border_color, Some([1.0, 0.0, 0.0]));
+    set_style(&mut doc, 1, t, StyleChange::new(Some([0.0, 0.0, 1.0]), None, None, None), &meta("")).unwrap();
+    assert_eq!(da(&doc), "0 0 1 rg 1 0 0 RG /Helv 11 Tf", "a new text colour keeps the border's");
+    set_font_size(&mut doc, 1, t, 14.0, &meta("")).unwrap();
+    assert_eq!(da(&doc), "0 0 1 rg 1 0 0 RG /Helv 14 Tf", "so does a new size");
+    set_border_color(&mut doc, 1, t, Some([0.5, 0.5, 0.5]), &meta("")).unwrap();
+    assert!(ap_content(&doc, &list(&doc, 1)[t]).contains("0.5 0.5 0.5 RG\n1 w"));
+    set_border_color(&mut doc, 1, t, None, &meta("")).unwrap();
+    assert_eq!(da(&doc), "0 0 1 rg /Helv 14 Tf");
+    assert!(ap_content(&doc, &list(&doc, 1)[t]).contains("0 0 1 RG\n1 w"), "the text's colour again");
+    assert_eq!(props(&doc, 1, t).unwrap().border_color, None);
+    let m = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] }), &meta("m")).unwrap();
+    assert!(set_border_color(&mut doc, 0, m, Some([1.0, 0.0, 0.0]), &meta("")).is_err(), "a rectangle's colour is its border");
 }
 
 #[test]
@@ -873,8 +1243,8 @@ fn cloud_ys(path: &str) -> Vec<f64> {
 fn replace_text_groups_a_strikeout_and_a_caret() {
     let mut doc = fixture();
     let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
-    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
-    let blue = Style { color: [0.0, 0.47, 0.84], opacity: 1.0, width: 1.0, fill: None };
+    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None, ..Style::default() };
+    let blue = Style { color: [0.0, 0.47, 0.84], opacity: 1.0, width: 1.0, fill: None, ..Style::default() };
     let i = add_text_replacement(
         &mut doc,
         TextReplacement {
@@ -2609,4 +2979,163 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
     for (a, b) in rect_from_border.iter().zip([10.0, 90.0, 130.0, 110.0]) {
         assert!((a - b).abs() < 1e-4, "expected [10, 90, 130, 110], got {rect_from_border:?}");
     }
+}
+
+/// A 3D annotation is PDF 1.6 and a PRC model 1.7 (ISO 32000-2 §13.6): an older document's
+/// catalog says so, and a newer one is left as it is.
+#[test]
+fn a_3d_model_raises_an_older_document_to_its_version() {
+    let catalog_version = |doc: &Document| {
+        let root = doc.root().unwrap();
+        doc.get(root).as_dict().unwrap().name(b"Version").map(<[u8]>::to_vec)
+    };
+    let add = |doc: &mut Document, model: &[u8]| {
+        let new = NewModel3d { page: 0, rect: [100.0, 100.0, 300.0, 300.0], model, activation: Activation3d::default(), poster: None, contents: "" };
+        add_3d_model(doc, &new, &meta("m")).unwrap();
+    };
+    let mut doc = fixture();
+    add(&mut doc, b"U3D\0rest");
+    assert_eq!(catalog_version(&reopen(&doc)), None, "a 1.7 file needs nothing for U3D");
+    for (model, version) in [(&b"U3D\0rest"[..], &b"1.6"[..]), (b"PRC rest", b"1.7")] {
+        let mut doc = fixture();
+        doc.set_version("1.4");
+        add(&mut doc, model);
+        assert_eq!(catalog_version(&reopen(&doc)).as_deref(), Some(version));
+    }
+    let mut doc = fixture();
+    doc.set_version("2.0");
+    add(&mut doc, b"PRC rest");
+    assert_eq!(catalog_version(&reopen(&doc)), None, "a 2.0 file takes PRC as it is");
+}
+
+/// Before 2.0, PRC is an Adobe extension to PDF 1.7 (§7.12): a PRC model declares it, keeping
+/// other extensions and a later ADBE level; U3D and a 2.0 file need nothing.
+#[test]
+fn a_prc_model_declares_the_adobe_extension_before_pdf_2() {
+    let adbe = |doc: &Document| {
+        let root = doc.root().unwrap();
+        let ext = doc.get(root).as_dict().unwrap().get(b"Extensions").map(|e| doc.resolve(e).as_dict().unwrap().clone());
+        ext.map(|e| {
+            let adbe = e.get(b"ADBE").map(|a| a.as_dict().unwrap().clone());
+            (e.get(b"XYZ").is_some(), adbe.map(|a| (a.name(b"BaseVersion").map(<[u8]>::to_vec), a.get(b"ExtensionLevel").and_then(Object::as_int))))
+        })
+    };
+    let add = |doc: &mut Document, model: &[u8]| {
+        let new = NewModel3d { page: 0, rect: [100.0, 100.0, 300.0, 300.0], model, activation: Activation3d::default(), poster: None, contents: "" };
+        add_3d_model(doc, &new, &meta("m")).unwrap();
+    };
+    let mut doc = fixture();
+    add(&mut doc, b"PRC rest");
+    assert_eq!(adbe(&reopen(&doc)), Some((false, Some((Some(b"1.7".to_vec()), Some(1))))));
+    let mut doc = fixture();
+    add(&mut doc, b"U3D rest");
+    assert_eq!(adbe(&reopen(&doc)), None, "U3D is in ISO 32000-1");
+    let mut doc = fixture();
+    doc.set_version("2.0");
+    add(&mut doc, b"PRC rest");
+    assert_eq!(adbe(&reopen(&doc)), None, "PRC is in ISO 32000-2");
+
+    let mut doc = fixture();
+    let root = doc.root().unwrap();
+    let mut level3 = Dict::new();
+    level3.set(b"BaseVersion".to_vec(), Object::name("1.7"));
+    level3.set(b"ExtensionLevel".to_vec(), Object::Int(3));
+    let mut ext = Dict::new();
+    ext.set(b"ADBE".to_vec(), Object::Dict(level3));
+    ext.set(b"XYZ".to_vec(), Object::Dict(Dict::new()));
+    doc.update_dict(root, |c| c.set(b"Extensions".to_vec(), Object::Dict(ext.clone()))).unwrap();
+    add(&mut doc, b"PRC rest");
+    assert_eq!(adbe(&reopen(&doc)), Some((true, Some((Some(b"1.7".to_vec()), Some(3))))), "a later level is kept");
+    ext.remove(b"ADBE");
+    let mut doc = fixture();
+    doc.update_dict(root, |c| c.set(b"Extensions".to_vec(), Object::Dict(ext))).unwrap();
+    add(&mut doc, b"PRC rest");
+    assert_eq!(adbe(&reopen(&doc)), Some((true, Some((Some(b"1.7".to_vec()), Some(1))))), "other extensions are kept");
+
+    let mut doc = fixture();
+    let mut ext = Dict::new();
+    ext.set(b"ADBE".to_vec(), Object::Array(vec![Object::Dict(Dict::new())]));
+    let ext = doc.add(Object::Dict(ext));
+    doc.update_dict(root, |c| c.set(b"Extensions".to_vec(), Object::Ref(ext))).unwrap();
+    add(&mut doc, b"PRC rest");
+    let doc = reopen(&doc);
+    let ext = doc.resolve(doc.get(doc.root().unwrap()).as_dict().unwrap().get(b"Extensions").unwrap());
+    assert!(ext.as_dict().unwrap().get(b"ADBE").unwrap().as_array().is_some(), "an array of ADBE extensions is left alone");
+}
+
+#[test]
+fn a_picture_is_placed_by_its_box_and_a_form_needs_a_positive_size() {
+    let at = [10.0, 20.0, 110.0, 70.0];
+    assert_eq!(appearance::picture_place(at, true, None).as_deref(), Some("100 0 0 50 10 20 cm"), "an image fills its unit square");
+    assert_eq!(appearance::picture_place(at, false, Some((200.0, 25.0))).as_deref(), Some("0.5 0 0 2 10 20 cm"));
+    for size in [None, Some((0.0, 25.0)), Some((200.0, -1.0))] {
+        assert_eq!(appearance::picture_place(at, false, size), None, "{size:?}");
+    }
+}
+
+/// The poster's box must lie in the rectangle, and a form poster needs a size to scale by.
+#[test]
+fn a_3d_poster_outside_its_rectangle_or_without_a_size_is_refused() {
+    let picture = |at: [f64; 4], size: (f64, f64)| PosterPicture { xobject: ObjRef { num: 6, generation: 0 }, image: false, size, at };
+    for (poster, why) in [
+        (picture([50.0, 100.0, 250.0, 300.0], (10.0, 10.0)), "starts left of the rectangle"),
+        (picture([100.0, 100.0, 300.0, 301.0], (10.0, 10.0)), "ends above it"),
+        (picture([100.0, 100.0, 300.0, 300.0], (0.0, 10.0)), "has no width"),
+        (picture([100.0 - 2e-7, 150.0, 100.0 - 1e-7, 200.0], (10.0, 10.0)), "lies outside within the rounding slack"),
+    ] {
+        let mut doc = fixture();
+        let new = NewModel3d {
+            page: 0,
+            rect: [100.0, 100.0, 300.0, 300.0],
+            model: b"PRC rest",
+            activation: Activation3d::default(),
+            poster: Some(poster),
+            contents: "",
+        };
+        assert!(matches!(add_3d_model(&mut doc, &new, &meta("m")), Err(AnnotError::Invalid(_))), "{why}");
+        assert_eq!(list(&doc, 0).len(), 1, "{why}: nothing added");
+    }
+}
+
+/// A poster box fitted to the rectangle in floating point ends an ulp outside it: a 7×3 picture
+/// centred in [0 100 3.6 110.8] spans -2.2e-16 to 3.6000000000000005. It is taken, inside the
+/// rectangle.
+#[test]
+fn a_3d_poster_fitted_to_its_rectangle_with_rounding_is_taken() {
+    let mut doc = fixture();
+    let at = [-2.220446049250313e-16, 104.62857142857143, 3.6000000000000005, 106.17142857142858];
+    let poster = PosterPicture { xobject: ObjRef { num: 6, generation: 0 }, image: false, size: (7.0, 3.0), at };
+    let new = NewModel3d {
+        page: 0,
+        rect: [0.0, 100.0, 3.6, 110.8],
+        model: b"PRC rest",
+        activation: Activation3d::default(),
+        poster: Some(poster),
+        contents: "",
+    };
+    assert_eq!(add_3d_model(&mut doc, &new, &meta("m")), Ok(1));
+}
+
+#[test]
+fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
+    let mut doc = fixture();
+    let intent = Object::Ref(doc.add(Object::name("FreeTextTypeWriter")));
+    let page = page_refs(&doc).unwrap()[0];
+    let mut entries = annots(&doc, page);
+    let Object::Dict(annotation) = &mut entries[0] else { panic!("fixture annotation is inline") };
+    annotation.set(b"Subtype".to_vec(), Object::name("FreeText"));
+    annotation.set(b"IT".to_vec(), intent);
+    let contents = " \nAda\n\nLovelace\n\n ";
+    annotation.set(b"Contents".to_vec(), PdfString::text(contents));
+    set_annots(&mut doc, page, entries).unwrap();
+    let check = |doc: &Document| {
+        let list = summaries(doc);
+        let summary = list.iter().find(|a| a.page == 0 && a.index == 0).expect("direct Subtype is listed");
+        assert_eq!(summary.contents.as_deref(), Some(contents), "indirect typewriter intent preserves outer whitespace");
+        assert_eq!(summary.subtype, "FreeText");
+        assert_eq!(summary.intent.as_deref(), Some("FreeTextTypeWriter"));
+        assert!(summary.fill_sign, "indirect intent still identifies a Fill & Sign mark");
+    };
+    check(&doc);
+    check(&reopen(&doc));
 }

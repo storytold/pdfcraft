@@ -4,6 +4,9 @@ use pdfcraft_cos::{Document, SaveOptions, write_full, write_incremental};
 
 use super::*;
 
+#[path = "mark_transaction_tests.rs"]
+mod mark_transactions;
+
 /// Three pages: an upright page with content that leaves the graphics state changed (an
 /// unbalanced `cm`), a page rotated 90° and one with inherited, shared resources.
 fn fixture() -> Document {
@@ -5575,6 +5578,41 @@ fn reading_follows_form_xobjects() {
     assert!(own[0].is_form && own[0].object == Some(pdfcraft_cos::ObjRef::new(6, 0)), "{own:?}");
 }
 
+/// A page's `/XObject` and a form's `/Resources` are read wherever they are stored, and a form with
+/// none of its own, or with something else there, uses the ones it was drawn with (PDF 1.1 files).
+/// Each of these pages shows one line of text and one picture through one form.
+#[test]
+fn reading_follows_forms_however_their_resources_are_stored() {
+    let body = "BT /F1 12 Tf 72 700 Td (In the form) Tj ET q 20 0 0 10 5 5 cm /Im Do Q";
+    let (font, direct) = ("/Font << /F1 5 0 R >>", "/XObject << /Fm 6 0 R /Im 7 0 R >>");
+    for (page, form) in [
+        (format!("<< {font} {direct} >>"), ""),
+        (format!("<< {font} /XObject 9 0 R >>"), ""),
+        (format!("<< /Font 10 0 R {direct} >>"), ""),
+        (format!("<< {font} {direct} >>"), "/Resources 99 0 R"),
+        (format!("<< {font} {direct} >>"), "/Resources 12"),
+        ("<< /XObject << /Fm 6 0 R >> >>".to_string(), "/Resources 8 0 R"),
+        ("<< /XObject 9 0 R >>".to_string(), "/Resources << /Font << /F1 5 0 R >> /XObject 9 0 R >>"),
+    ] {
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            &format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources {page} /Contents 4 0 R >>"),
+            &stream("", "/Fm Do"),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
+            &stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 600 800] {form}"), body),
+            &stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", "A"),
+            "<< /Font << /F1 5 0 R >> /XObject 9 0 R >>",
+            "<< /Fm 6 0 R /Im 7 0 R >>",
+            "<< /F1 5 0 R >>",
+        ]);
+        let blocks = text::reading_blocks(&doc, 0).unwrap();
+        let texts: Vec<(&str, &str)> = blocks.iter().map(|b| (b.text.as_str(), b.base_font.as_str())).collect();
+        assert_eq!(texts, [("In the form", "Courier")], "{page} {form}");
+        assert_eq!(images::reading_images(&doc, 0).unwrap().len(), 1, "{page} {form}");
+    }
+}
+
 /// A chain of forms, each drawing the next twenty times, twelve deep: within the depth cap but
 /// 20^11 visits without a budget. Reading stops at the page's visit budget instead of hanging.
 #[test]
@@ -6176,6 +6214,126 @@ fn group_selection_refuses_incomplete_content_and_resource_budget_overruns() {
     let broken = doc.add(Object::Stream(Stream::from_raw(filter, vec![1, 2, 3])));
     doc.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Ref(broken))).unwrap();
     assert!(editable_objects(&doc, 0).is_err(), "an undecodable stream is refused");
+}
+
+/// Invisible text moves on top only when something painted after it covers it: an XObject drawn
+/// over its box (an image, or a form holding one), or any inline image or shading. An image
+/// clipped away entirely, or drawn elsewhere, does not move it.
+#[test]
+fn revealed_text_moves_on_top_only_when_painted_over() {
+    let on_top_of = |doc: Document| {
+        let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let at = ops.iter().position(|o| o.is("BT")).unwrap();
+        revealed_under_paint(&doc, 0, block.invisible, block.rect, &ops, at)
+    };
+    let on_top = |content: &str| on_top_of(image_page_with(content));
+    let scan = "q 200 0 0 100 100 100 cm /Im0 Do Q";
+    assert!(on_top(&format!("BT /F1 12 Tf 3 Tr 110 150 Td (Under) Tj ET {scan}")), "the scan covers it");
+    assert!(!on_top(&format!("BT /F1 12 Tf 3 Tr 400 600 Td (Away) Tj ET {scan}")), "an image elsewhere");
+    assert!(!on_top(&format!("{scan} BT /F1 12 Tf 3 Tr 110 150 Td (Over) Tj ET")), "the scan is drawn first");
+    assert!(!on_top(&format!("BT /F1 12 Tf 0 Tr 110 150 Td (Shown) Tj ET {scan}")), "visible text stays where it is");
+    assert!(!on_top("BT /F1 12 Tf 3 Tr 110 150 Td (Path) Tj ET 0 0 600 800 re f"), "a filled path does not move it");
+    assert!(on_top("BT /F1 12 Tf 3 Tr 400 600 Td (Shade) Tj ET /Sh sh"), "a shading after it");
+    assert!(on_top("BT /F1 12 Tf 3 Tr 400 600 Td (Inline) Tj ET BI /W 1 /H 1 /CS /G /BPC 8 ID x EI"), "an inline image after it");
+    let under = "BT /F1 12 Tf 3 Tr 110 150 Td (Under) Tj ET";
+    let elsewhere = "q 50 0 0 50 400 600 cm /Im0 Do Q";
+    assert!(!on_top(&format!("{under} q 0 0 10 10 re W n {scan} Q")), "the scan is clipped away entirely");
+    assert!(on_top(&format!("{under} {elsewhere} {scan}")), "two images, the second over it");
+    assert!(on_top(&format!("{under} {scan} {elsewhere}")), "two images, the first over it");
+    assert!(!on_top(&format!("{under} {elsewhere} {elsewhere}")), "two images, neither over it");
+    let in_form = |content: &str| {
+        let page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Fm0 7 0 R >> >> >>";
+        let image = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", "A");
+        let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Im0 6 0 R >> >>", "/Im0 Do");
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            page.into(),
+            stream("", content),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+            image,
+            form,
+        ];
+        on_top_of(build(&objs.iter().map(String::as_str).collect::<Vec<_>>()))
+    };
+    assert!(in_form(&format!("{under} q 200 0 0 100 100 100 cm /Fm0 Do Q")), "a form holding the scan, over it");
+    assert!(!in_form(&format!("{under} q 50 0 0 50 400 600 cm /Fm0 Do Q")), "a form holding an image elsewhere");
+}
+
+/// Revealed OCR text is checked where the rewrite lands, not only where it was: an image drawn
+/// after it over just the moved or grown text still lifts the text on top, on both rewrite paths.
+#[test]
+fn an_ocr_rewrite_goes_on_top_of_paint_over_where_it_lands() {
+    let scan = "q 200 0 0 100 100 100 cm /Im0 Do Q";
+    let moved = text::BlockStyle { offset: Some([-290.0, -450.0]), ..Default::default() };
+    let sized = text::BlockStyle { size: Some(24.0), ..Default::default() };
+    let spaced = text::BlockStyle { line_spacing: Some(3.0), ..Default::default() };
+    let range = text::RangeStyle {
+        range: 0..2,
+        family: None,
+        resource: None,
+        size: Some(120.0),
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    let enlarged = text::BlockStyle { ranges: vec![range], ..Default::default() };
+    let above = "q 200 0 0 60 100 200 cm /Im0 Do Q";
+    let cases = [
+        ("BT /F1 12 Tf 3 Tr 400 600 Td (Away) Tj ET", "Moved", &moved),
+        ("BT /F1 12 Tf 3 Tr 400 600 Td (Away) Tj ET", "Moved\nTwice", &moved),
+        ("BT /F1 12 Tf 3 Tr 40 150 Td (Hi) Tj ET", "Hello there, this line now runs well past the scan's left edge", &text::BlockStyle::default()),
+        ("BT /F1 12 Tf 3 Tr 40 150 Td (Hi) Tj ET", "Hello there,\nthis line now runs well past the scan's left edge", &text::BlockStyle::default()),
+        ("BT /F1 12 Tf 3 Tr 110 230 Td (Above) Tj ET", "One\nTwo\nThree\nFour\nFive\nSix", &text::BlockStyle::default()),
+    ];
+    let low = "q 200 0 0 30 100 300 cm /Im0 Do Q";
+    let cases = cases.into_iter().map(|(c, e, s)| (c, e, s, scan)).chain([
+        ("BT /F1 12 Tf 3 Tr 110 500 Td (Above) Tj ET", "One\nTwo\nThree\nFour\nFive\nSix", &sized, low),
+        ("BT /F1 12 Tf 3 Tr 110 500 Td (Above) Tj ET", "One\nTwo\nThree\nFour\nFive\nSix", &spaced, low),
+        ("BT /F1 12 Tf 3 Tr 110 150 Td (Hi there) Tj ET", "Hi there", &enlarged, above),
+    ]);
+    for (content, edit, style, scan) in cases {
+        let mut doc = image_page_with(&format!("{content} {scan}"));
+        let before = text::text_blocks(&doc, 0).unwrap().remove(0);
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let at = ops.iter().position(|o| o.is("BT")).unwrap();
+        assert!(!revealed_under_paint(&doc, 0, true, before.rect, &ops, at), "{edit:?}: the old box alone is clear of the scan");
+        text::rewrite_block(&mut doc, 0, 0, Some(edit), style).unwrap();
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let scan_at = ops.iter().position(|o| o.is("Do")).unwrap();
+        let shows = ["Tj", "TJ", "'", "\""];
+        assert!(ops.iter().skip(scan_at).any(|o| shows.iter().any(|s| o.is(s))), "{edit:?}: the rewrite is drawn over the scan");
+    }
+}
+
+/// [`crate::Reach`] grows the old box to the move, the width either way and the lines below.
+#[test]
+fn a_rewrites_reach_covers_its_move_width_and_lines() {
+    let reach = |offset, width, rows, upright| crate::Reach { rect: [10.0, 90.0, 30.0, 100.0], offset, width, rows, pitch: 10.0, upright }.bounds();
+    assert_eq!(reach([0.0, 0.0], 20.0, 1, true), [10.0, 90.0, 30.0, 110.0]);
+    assert_eq!(reach([5.0, -50.0], 20.0, 1, true), [10.0, 40.0, 35.0, 100.0]);
+    assert_eq!(reach([0.0, 0.0], 50.0, 3, true), [-20.0, 70.0, 60.0, 110.0]);
+    assert_eq!(reach([0.0, 0.0], 30.0, 4, false), [-40.0, 40.0, 80.0, 150.0]);
+    assert_eq!(reach([f64::NAN, 0.0], 20.0, 1, true)[0], f64::NEG_INFINITY);
+    let larger = crate::Reach { rect: [10.0, 90.0, 30.0, 100.0], offset: [0.0, 0.0], width: 20.0, rows: 1, pitch: 24.0, upright: true };
+    assert_eq!(larger.bounds(), [10.0, 76.0, 30.0, 124.0], "a larger size grows the line up as well as down");
+}
+
+/// Revealed OCR text may have to go on top of the page; a page whose marked content nests too deep
+/// for that is refused before either rewrite path changes anything.
+#[test]
+fn an_ocr_rewrite_refused_on_top_leaves_the_document_as_it_was() {
+    let content = format!("{} BT /F1 20 Tf 3 Tr 42 44 Td (John) Tj ET /Im Do {}", "/X BMC ".repeat(10_001), "EMC ".repeat(10_001));
+    let mut doc = text_page(&content);
+    assert!(text::text_blocks(&doc, 0).unwrap()[0].invisible);
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    for edit in ["Jane", "Jane\nDoe"] {
+        let error = text::rewrite_block(&mut doc, 0, 0, Some(edit), &text::BlockStyle::default()).unwrap_err();
+        assert!(error.to_string().contains("nested too deeply"), "{edit:?}: {error}");
+        assert!(write_full(&doc, &SaveOptions::default()).unwrap() == before, "{edit:?}: a refused rewrite changes nothing");
+    }
 }
 
 #[test]
@@ -9776,6 +9934,133 @@ fn content_units_does_not_swallow_subsequent_units_on_standalone_gs() {
     let ops = pieces.parse().ops;
     let units = images::content_units(&ops, 0, ops.len());
     assert_eq!(units.len(), 2);
+}
+
+/// A 1 × 1 grey inline image whose one sample is `data`.
+fn inline_image(data: char) -> String {
+    format!("BI /W 1 /H 1 /CS /G /BPC 8 ID {data} EI")
+}
+
+/// What page 0 paints, in order: `BI x` for an inline image with sample `x`, `Do x,y` for an
+/// XObject placed by a `cm` translating to x,y, and `Tj` for text. A `cm` lasts until its `Q`, so an
+/// XObject moved out of its `q`/`Q` wrapper shows as a bare `Do `.
+fn painted(doc: &Document) -> Vec<String> {
+    let mut at = vec![String::new()];
+    pdfcraft_content::parse(&page_content_bytes(doc, 0))
+        .ops
+        .iter()
+        .filter_map(|op| match op.op.as_slice() {
+            b"q" => {
+                at.push(at.last().unwrap().clone());
+                None
+            }
+            b"Q" => {
+                at.pop();
+                None
+            }
+            b"cm" => {
+                let m = op.nums::<6>().unwrap();
+                *at.last_mut().unwrap() = format!("{},{}", m[4], m[5]);
+                None
+            }
+            b"Do" => Some(format!("Do {}", at.last().unwrap())),
+            b"BI" => Some(format!("BI {}", String::from_utf8_lossy(&op.inline.as_ref().unwrap().1))),
+            b"Tj" => Some("Tj".into()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The index in [`images::page_images`] of the image whose box starts at `x`,`y`.
+fn image_at(doc: &Document, x: f64, y: f64) -> usize {
+    images::page_images(doc, 0).unwrap().iter().position(|i| (i.rect[0] - x).abs() < 1e-6 && (i.rect[1] - y).abs() < 1e-6).unwrap()
+}
+
+#[test]
+fn content_units_keep_each_top_level_inline_image_to_itself() {
+    // The parser emits a whole inline image as one `BI` op; its unit must not run on to the end
+    // (#3146). Inline images at the start, side by side and at the end are one unit each.
+    let content = format!(
+        "{} q 200 0 0 100 100 100 cm /Im0 Do Q {} {} q 10 0 0 10 300 300 cm /Im0 Do Q {}",
+        inline_image('a'),
+        inline_image('b'),
+        inline_image('c'),
+        inline_image('d')
+    );
+    let ops = pdfcraft_content::parse(content.as_bytes()).ops;
+    let units = images::content_units(&ops, 0, ops.len());
+    assert_eq!(units, [0..1, 1..5, 5..6, 6..7, 7..11, 11..12]);
+}
+
+#[test]
+fn content_units_keep_a_nested_inline_image_inside_its_enclosing_unit() {
+    // A `BI` inside `q`/`Q` or a marked-content sequence stays part of that sequence's unit.
+    let content = format!("q {} Q /Span << /MCID 0 >> BDC {} EMC {}", inline_image('a'), inline_image('b'), inline_image('c'));
+    let ops = pdfcraft_content::parse(content.as_bytes()).ops;
+    let units = images::content_units(&ops, 0, ops.len());
+    assert_eq!(units, [0..3, 3..6, 6..7]);
+}
+
+#[test]
+fn send_backward_after_a_top_level_inline_image_moves_one_step() {
+    // Before #3146 the inline image's unit swallowed everything after it, so SendBackward on a later
+    // image acted like SendToBack: it must step behind the text only.
+    let content = format!(
+        "{} q 100 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Middle Text) Tj ET q 150 0 0 150 200 200 cm /Im0 Do Q",
+        inline_image('x')
+    );
+    let mut doc = image_page_with(&content);
+    let front = image_at(&doc, 200.0, 200.0);
+    arrange(&mut doc, 0, front, images::ArrangeOrder::SendBackward).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["BI x", "Do 100,100", "Do 200,200", "Tj"]);
+}
+
+#[test]
+fn arrange_steps_an_image_past_one_inline_image_at_a_time() {
+    // Before #3146 BringForward on B, inside the first inline image's unit, put it in front of
+    // everything. One step forward is past the next inline image only, and one step back again
+    // is behind that inline image only.
+    let content = format!(
+        "q 100 0 0 100 100 100 cm /Im0 Do Q {} q 150 0 0 150 200 200 cm /Im0 Do Q {} BT /F1 12 Tf 72 700 Td (Text) Tj ET q 50 0 0 50 300 300 cm /Im0 Do Q",
+        inline_image('a'),
+        inline_image('b')
+    );
+    let mut doc = image_page_with(&content);
+    let b = image_at(&doc, 200.0, 200.0);
+    arrange(&mut doc, 0, b, images::ArrangeOrder::BringForward).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["Do 100,100", "BI a", "BI b", "Do 200,200", "Tj", "Do 300,300"]);
+    let b = image_at(&doc, 200.0, 200.0);
+    arrange(&mut doc, 0, b, images::ArrangeOrder::SendBackward).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["Do 100,100", "BI a", "Do 200,200", "BI b", "Tj", "Do 300,300"]);
+}
+
+#[test]
+fn arrange_around_inline_images_at_the_ends_of_the_stream() {
+    // Before #3146 BringToFront on the last image after an inline image "succeeded" without moving
+    // it. It is already in front, so it is refused and nothing changes.
+    let content =
+        format!("{} q 100 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Text) Tj ET q 150 0 0 150 200 200 cm /Im0 Do Q", inline_image('a'));
+    let mut doc = image_page_with(&content);
+    let before = page_content_bytes(&doc, 0);
+    let front = image_at(&doc, 200.0, 200.0);
+    assert!(arrange(&mut doc, 0, front, images::ArrangeOrder::BringToFront).is_err());
+    assert!(arrange(&mut doc, 0, front, images::ArrangeOrder::BringForward).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+    // Send to back goes behind the inline image that starts the stream.
+    arrange(&mut doc, 0, front, images::ArrangeOrder::SendToBack).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["Do 200,200", "BI a", "Do 100,100", "Tj"]);
+
+    // Bring to front goes past the inline image that ends the stream.
+    let content = format!("q 100 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Text) Tj ET {}", inline_image('z'));
+    let mut doc = image_page_with(&content);
+    let back = image_at(&doc, 100.0, 100.0);
+    arrange(&mut doc, 0, back, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["Tj", "BI z", "Do 100,100"]);
 }
 
 #[test]
