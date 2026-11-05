@@ -9679,3 +9679,24 @@ fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
         }
     }
 }
+
+/// #5643 review: a dashed thin stroke takes its miters from the joins its dashes draw (vendored
+/// hayro patch (29)). Under `0.1 0 0 1 cm` a 2-unit line is widened across x, which sharpens a
+/// right angle pointing up (a miter in user space, under a limit of 4) and blunts a spike lying
+/// along x (a bevel in user space). No one limit keeps both, so with the spike drawn the right
+/// angle is bevelled; with the spike in a dash's gap it keeps its miter, whose tip reaches about
+/// 5 pixels above the corner. It was bevelled there too while the gap's join was counted.
+#[test]
+fn a_dashed_thin_stroke_keeps_the_miters_its_dashes_draw() {
+    // The right angle's corner is at device (10.8, 22); the spike's, in the gap, at (21.6, 20).
+    let path = "100 10 m 108 18 l 116 10 l 216 20 l 116 30 l S Q";
+    let tip = |content: &str| {
+        let (width, grays) = gray_page(content);
+        let ink = |x: usize, y: usize| f32::from(255 - grays[y * width + x]) / 255.0;
+        (17..=20).flat_map(|y| (8..=12).map(move |x| (x, y))).map(|(x, y)| ink(x, y)).sum::<f32>()
+    };
+    let dashed = tip(&format!("q 0.1 0 0 1 0 0 cm 2 w 4 M [120 6 500 1] 0 d {path}"));
+    assert!(dashed > 1.0, "the dashed right angle's miter tip has {dashed} px of ink");
+    let solid = tip(&format!("q 0.1 0 0 1 0 0 cm 2 w 4 M {path}"));
+    assert!(solid < 0.3, "with the spike drawn the right angle is bevelled: {solid} px of ink");
+}

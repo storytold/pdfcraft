@@ -1995,16 +1995,25 @@ impl Renderer {
             thin_stroke_pen(transform, stroke_props.line_width, thinnest_stroke(is_text))
         };
         let (user_path, user_props) = (path, stroke_props);
-        let (pen_path, solid);
+        // The pen's route dashes in user space, where the pattern is measured, and strokes the
+        // dashes solid in the pen's.
+        let dashes = match pen {
+            Some(_) => usable_dash_pattern(user_path, &user_props.dash_array),
+            None => Vec::new(),
+        };
+        let (pen_path, mut solid);
         let (path, transform, stroke_props) = match pen {
             Some((pen, to_pen)) => {
                 pen_path = to_pen * user_path.clone();
-                solid = StrokeProps {
-                    dash_array: Default::default(),
-                    // The joins of the dashes are joins of the undashed path.
-                    miter_limit: pen_miter_limit(user_path, to_pen, user_props),
-                    ..user_props.clone()
+                // Undashed, the path's own limit. Dashed, a bound on the dashes' limit for the
+                // canvas check, as only the joins inside the dashes are drawn and they aren't
+                // laid out yet.
+                let miter_limit = if dashes.is_empty() {
+                    pen_miter_limit(user_path, to_pen, user_props)
+                } else {
+                    pen_miter_bound(user_path, to_pen, user_props)
                 };
+                solid = StrokeProps { dash_array: Default::default(), miter_limit, ..user_props.clone() };
                 (&pen_path, transform * pen, &solid)
             }
             None => (user_path, transform, user_props),
@@ -2018,26 +2027,25 @@ impl Renderer {
         if !may_paint_canvas(path, transform, reach, self.ctx.width(), self.ctx.height()) {
             return;
         }
-        // The pen's route dashes in user space, where the pattern is measured, and strokes the
-        // dashes solid in the pen's.
         let dashed;
         let path = match pen {
-            Some((_, to_pen)) => {
-                let dashes = usable_dash_pattern(user_path, &user_props.dash_array);
-                if dashes.is_empty() {
-                    path
+            Some((_, to_pen)) if !dashes.is_empty() => {
+                let offset = if user_props.dash_offset.is_finite() {
+                    f64::from(user_props.dash_offset)
                 } else {
-                    let offset = if user_props.dash_offset.is_finite() {
-                        f64::from(user_props.dash_offset)
-                    } else {
-                        0.0
-                    };
-                    let laid: BezPath = kurbo::dash(user_path.iter(), offset, &dashes).collect();
-                    dashed = to_pen * laid;
-                    &dashed
-                }
+                    0.0
+                };
+                let laid: BezPath = kurbo::dash(user_path.iter(), offset, &dashes).collect();
+                solid = StrokeProps {
+                    miter_limit: pen_miter_limit(&laid, to_pen, user_props),
+                    dash_array: Default::default(),
+                    ..user_props.clone()
+                };
+                dashed = to_pen * laid;
+                self.set_stroke_properties(&solid, is_text, &dashed);
+                &dashed
             }
-            None => path,
+            _ => path,
         };
 
         // PdfCraft patch: apply the reading-colours mapping before painting.
@@ -2927,47 +2935,85 @@ fn thin_stroke_pen(transform: Affine, line_width: f32, threshold: f32) -> Option
 /// gives `path`. ISO 32000-2 §8.4.3.5 decides between a miter and a bevel from the angle between
 /// the segments in user space, but a pen that stretches one direction more than another changes
 /// the angles, so the limit unchanged could miter a join the user-space path bevels, or the
-/// reverse. The limit returned is one every join's angle in the pen's space falls on the same
-/// side of as its user-space angle falls of the user's limit, which is the user's limit itself
-/// when no join changes sides. When no limit can keep every decision, it keeps every bevel and
-/// bevels the mitered joins it must: a missing miter tip shows less than one the path never had.
+/// reverse. The limit returned is the one nearest the user's that every join's angle in the pen's
+/// space falls on the same side of as its user-space angle falls of the user's limit, which is
+/// the user's limit itself when no join changes sides. When no limit can keep every decision, it
+/// keeps every bevel and bevels the mitered joins it must: a missing miter tip shows less than
+/// one the path never had. `path` is the one stroked, dashed where it is dashed, as the joins in
+/// a dash's gaps aren't drawn.
 fn pen_miter_limit(path: &BezPath, to_pen: Affine, props: &StrokeProps) -> f32 {
-    let limit = props.miter_limit;
-    if props.line_join != kurbo::Join::Miter || !limit.is_finite() || limit <= 0.0 {
-        return limit;
-    }
-    let limit_sq = f64::from(limit) * f64::from(limit);
-    // The largest squared miter ratio (`1 / sin²(φ / 2)`) in the pen's space of a join mitered in
-    // user space, and the smallest of a join bevelled there.
-    let (mut mitered, mut bevelled) = (0.0_f64, f64::INFINITY);
-    // `to_pen` has no translation, so it maps a direction as it maps a point.
-    let in_pen = |v: Vec2| (to_pen * v.to_point()).to_vec2();
-    for_each_join(path, |incoming, outgoing| {
-        let pen_ratio = miter_ratio_sq(in_pen(incoming), in_pen(outgoing));
-        // kurbo mitres when the ratio is under the limit.
-        if miter_ratio_sq(incoming, outgoing) < limit_sq {
-            mitered = mitered.max(pen_ratio);
-        } else {
-            bevelled = bevelled.min(pen_ratio);
-        }
-    });
-    // A relative margin, so that the side a ratio falls on survives rounding in kurbo's own test.
-    const MARGIN: f64 = 1e-6;
+    let Some(joins) = PenJoins::of(path, to_pen, props) else { return props.miter_limit };
+    let (limit_sq, mitered, bevelled) = (joins.limit_sq, joins.mitered, joins.bevelled);
     if mitered < limit_sq && limit_sq <= bevelled {
-        return limit;
+        return props.miter_limit;
     }
-    let pen_sq = if mitered * (1.0 + MARGIN) >= bevelled * (1.0 - MARGIN) {
+    let pen_sq = if mitered * (1.0 + PenJoins::MARGIN) >= bevelled * (1.0 - PenJoins::MARGIN) {
         // No limit separates them: bevel every join at or past the smallest bevelled one.
-        bevelled * (1.0 - MARGIN)
-    } else if bevelled.is_finite() {
-        (mitered + bevelled) / 2.0
+        bevelled * (1.0 - PenJoins::MARGIN)
     } else {
-        mitered * (1.0 + MARGIN)
+        // The user's limit moved into the gap between them, `mitered < bevelled` (not `clamp`,
+        // which panics on bounds it can't order).
+        limit_sq.max(mitered * (1.0 + PenJoins::MARGIN)).min(bevelled * (1.0 - PenJoins::MARGIN))
     };
-    // Every ratio is at least 1 or infinite, so `pen_sq` is positive and not NaN. It is infinite
-    // only when a mitered join turns back in the pen's space and no join is bevelled; the largest
-    // f32 then mitres every join that doesn't turn back.
-    pen_sq.sqrt().min(f64::from(f32::MAX)) as f32
+    PenJoins::as_limit(pen_sq)
+}
+
+/// PdfCraft patch (29): a limit no smaller than `pen_miter_limit` gives `path` or any path made
+/// of some of its joins, such as its dashes: the user's limit or just past the largest ratio in
+/// the pen's space of a join mitered in user space, whichever is larger. A stroke's reach under
+/// it bounds the reach of its dashes, so a stroke can be found to miss the canvas before it is
+/// dashed.
+fn pen_miter_bound(path: &BezPath, to_pen: Affine, props: &StrokeProps) -> f32 {
+    let Some(joins) = PenJoins::of(path, to_pen, props) else { return props.miter_limit };
+    PenJoins::as_limit(joins.limit_sq.max(joins.mitered * (1.0 + PenJoins::MARGIN)))
+}
+
+/// PdfCraft patch (29): a path's mitered joins under a thin-stroke pen, for `pen_miter_limit`
+/// and `pen_miter_bound`.
+struct PenJoins {
+    /// The square of the user's miter limit.
+    limit_sq: f64,
+    /// The largest squared miter ratio (`1 / sin²(φ / 2)`) in the pen's space of a join mitered
+    /// in user space (0 without one), and the smallest of a join bevelled there (infinite without
+    /// one).
+    mitered: f64,
+    bevelled: f64,
+}
+
+impl PenJoins {
+    /// A relative margin, so that the side a ratio falls on survives rounding in kurbo's own test.
+    const MARGIN: f64 = 1e-6;
+
+    /// `None` when the joins aren't mitered or kurbo would refuse the limit, which then stays.
+    fn of(path: &BezPath, to_pen: Affine, props: &StrokeProps) -> Option<Self> {
+        let limit = props.miter_limit;
+        if props.line_join != kurbo::Join::Miter || !limit.is_finite() || limit <= 0.0 {
+            return None;
+        }
+        let limit_sq = f64::from(limit) * f64::from(limit);
+        let (mut mitered, mut bevelled) = (0.0_f64, f64::INFINITY);
+        // `to_pen` has no translation, so it maps a direction as it maps a point.
+        let in_pen = |v: Vec2| (to_pen * v.to_point()).to_vec2();
+        for_each_join(path, |incoming, outgoing| {
+            let pen_ratio = miter_ratio_sq(in_pen(incoming), in_pen(outgoing));
+            // kurbo mitres when the ratio is under the limit.
+            if miter_ratio_sq(incoming, outgoing) < limit_sq {
+                mitered = mitered.max(pen_ratio);
+            } else {
+                bevelled = bevelled.min(pen_ratio);
+            }
+        });
+        Some(PenJoins { limit_sq, mitered, bevelled })
+    }
+
+    /// The limit whose square is `limit_sq`. A square here is a finite user's limit squared, a
+    /// ratio (at least 1, or infinite when a join mitered in user space turns back in the pen's
+    /// space) or 0, never NaN; the largest f32 stands for an infinite one and mitres every join
+    /// that doesn't turn back. Rounding to f32 keeps the order of two squares, so the bound stays
+    /// at least the limit.
+    fn as_limit(limit_sq: f64) -> f32 {
+        limit_sq.sqrt().min(f64::from(f32::MAX)) as f32
+    }
 }
 
 /// PdfCraft patch (29): the square of the miter ratio (the miter's length over the line's width,
@@ -3438,7 +3484,7 @@ mod area_shrink_tests {
 
 #[cfg(test)]
 mod thin_stroke_pen_tests {
-    use super::{StrokeProps, pen_miter_limit, thin_stroke_pen};
+    use super::{StrokeProps, pen_miter_bound, pen_miter_limit, thin_stroke_pen};
     use kurbo::{Affine, BezPath, Join, Vec2};
 
     /// The larger and smaller singular values of `m`'s linear part, from its Frobenius norm and
@@ -3594,13 +3640,16 @@ mod thin_stroke_pen_tests {
     /// joins that aren't mitered or a limit kurbo would refuse.
     #[test]
     fn a_pen_bevels_rather_than_adds_a_miter() {
-        // Under `diag(1, 0.1)`, a spike bevelled in user space (ratio 10.05) is 1.41 in the pen's,
-        // and a right angle mitered in user space (1.41) is 10.05 there: no limit splits them.
-        let to_pen = Affine::scale_non_uniform(1.0, 0.1);
-        let path = polyline(&[(0.0, 0.0), (1.0, 10.0), (2.0, 0.0), (4.0, 2.0), (6.0, 0.0)], false);
+        // Under `diag(0.1, 1)`, a right angle pointing up, mitered in user space (ratio 1.41), is
+        // 10.05 in the pen's, and a spike along x, bevelled in user space (10.05), is 1.41 there:
+        // no limit splits them.
+        let to_pen = Affine::scale_non_uniform(0.1, 1.0);
+        let path = polyline(&[(0.0, 0.0), (1.0, 1.0), (2.0, 0.0), (12.0, 1.0), (2.0, 2.0)], false);
         let limit = pen_miter_limit(&path, to_pen, &miter(5.0));
-        let spike = decisions(Vec2::new(1.0, 10.0), Vec2::new(1.0, -10.0), to_pen, 5.0, limit);
+        let spike = decisions(Vec2::new(10.0, 1.0), Vec2::new(-10.0, 1.0), to_pen, 5.0, limit);
         assert_eq!(spike, (false, false), "the bevelled spike stays bevelled under {limit}");
+        let right_angle = decisions(Vec2::new(1.0, 1.0), Vec2::new(1.0, -1.0), to_pen, 5.0, limit);
+        assert_eq!(right_angle, (true, false), "the mitered right angle is bevelled under {limit}");
         // A path whose joins all keep their sides keeps the limit.
         let gentle = polyline(&[(0.0, 0.0), (1.0, 0.1), (2.0, 0.0)], false);
         assert_eq!(pen_miter_limit(&gentle, to_pen, &miter(5.0)), 5.0);
@@ -3613,5 +3662,24 @@ mod thin_stroke_pen_tests {
         }
         assert!(pen_miter_limit(&path, to_pen, &miter(f32::NAN)).is_nan());
         assert_eq!(pen_miter_limit(&path, to_pen, &miter(f32::INFINITY)), f32::INFINITY);
+    }
+
+    /// Patch (29), #5643 review: a dashed stroke's limit comes from the joins its dashes draw. The
+    /// spike of `a_pen_bevels_rather_than_adds_a_miter` falls in a gap here, so the right angle,
+    /// drawn, keeps its miter; with the spike counted it was bevelled. The bound the canvas check
+    /// uses before dashing is at least the limit of the dashes, and of the whole path.
+    #[test]
+    fn a_dashed_pen_keeps_the_miters_its_dashes_draw() {
+        let to_pen = Affine::scale_non_uniform(0.1, 1.0);
+        let path = polyline(&[(0.0, 0.0), (1.0, 1.0), (2.0, 0.0), (12.0, 1.0), (2.0, 2.0)], false);
+        // On for 12, off from 12 to 14 around the spike at 12.88, on from 14 past the end at 22.9.
+        let dashes: BezPath = kurbo::dash(path.iter(), 0.0, &[12.0, 2.0, 50.0, 1.0]).collect();
+        let props = miter(5.0);
+        let limit = pen_miter_limit(&dashes, to_pen, &props);
+        let right_angle = decisions(Vec2::new(1.0, 1.0), Vec2::new(1.0, -1.0), to_pen, 5.0, limit);
+        assert_eq!(right_angle, (true, true), "the drawn right angle stays mitered under {limit}");
+        let bound = pen_miter_bound(&path, to_pen, &props);
+        assert!(bound >= limit && bound >= pen_miter_limit(&path, to_pen, &props), "{bound} {limit}");
+        assert!(bound >= 5.0);
     }
 }
