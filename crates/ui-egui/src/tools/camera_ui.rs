@@ -7,6 +7,7 @@ use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Shape, Stroke, vec2};
 use crate::canvas::{DocView, PageXform, ViewAction};
 use crate::page_cursor::Layer;
 use crate::page_pointer::PagePointer;
+use crate::page_router::{Hit, Owner, PagePress};
 use crate::theme::Tokens;
 pub use pdfcraft_engine::camera_clean::Look;
 
@@ -59,8 +60,29 @@ fn screen(xf: &PageXform, c: [f32; 2]) -> Pos2 {
     xf.norm_to_screen(c[0] / xf.pw.max(1e-3), c[1] / xf.ph.max(1e-3))
 }
 
-/// Corner dragging on one page. A press on a page without the quadrilateral moves it there.
-pub(crate) fn page_input(resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, view: &mut DocView, allowed: bool) {
+/// The corner of the quadrilateral under `p` on `page`, the nearest within reach: the one hit test
+/// of the camera tool, for the cursor and the press. `None` once the page is enhanced, on a page
+/// without the quadrilateral, or off the page (a press there is no page's), even where a corner at
+/// its edge would reach past it.
+pub(crate) fn hit(xf: &PageXform, page: usize, view: &DocView, p: Pos2) -> Option<Hit> {
+    if view.camera_done.is_some() || !xf.rect.contains(p) {
+        return None;
+    }
+    let q = view.camera.filter(|q| q.page == page)?;
+    let corner = q
+        .corners
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| (i, screen(xf, c).distance(p)))
+        .filter(|(_, d)| *d <= GRAB)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i)?;
+    Some(Hit::new(Owner::CameraCorner { corner }, Layer::Handle, egui::CursorIcon::Grab))
+}
+
+/// Corner dragging on one page: a corner's own press ([`hit`]) drags it, and a press nobody holds
+/// on a page without the quadrilateral moves it there.
+pub(crate) fn page_input(resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, view: &mut DocView, allowed: bool, press: PagePress) {
     let (pointer, origin) = (ptr.pos, ptr.origin);
     if !allowed {
         if pointer.is_some_and(|p| xf.rect.contains(p)) {
@@ -76,23 +98,25 @@ pub(crate) fn page_input(resp: &egui::Response, xf: &PageXform, ptr: &PagePointe
     if view.camera.is_none() && page == view.current {
         view.camera = Some(CameraQuad::inset(page, xf.pw, xf.ph));
     }
-    if resp.drag_started() || resp.clicked() {
-        let pressed = origin.filter(|o| xf.rect.contains(*o));
-        if pressed.is_some() && view.camera.is_none_or(|q| q.page != page) {
-            view.camera = Some(CameraQuad::inset(page, xf.pw, xf.ph));
-        }
-        if resp.drag_started()
-            && let (Some(o), Some(q)) = (pressed, view.camera.as_mut())
-        {
-            q.grab = (0..4)
-                .map(|i| (i, screen(xf, q.corners[i]).distance(o)))
-                .filter(|(_, d)| *d <= GRAB)
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .map(|(i, _)| i);
-        }
+    // A press nobody holds on a page without the quadrilateral moves it there: a drag from where it
+    // began, a click where it came up (egui has cleared the press's origin by its release, and the
+    // pointer may have moved on in the same frame).
+    let at = if resp.clicked() { ptr.released } else { origin };
+    if (resp.drag_started() || resp.clicked())
+        && press == PagePress::Free
+        && at.is_some_and(|p| xf.rect.contains(p))
+        && view.camera.is_none_or(|q| q.page != page)
+    {
+        view.camera = Some(CameraQuad::inset(page, xf.pw, xf.ph));
+    }
+    if resp.drag_started()
+        && let PagePress::Mine(Owner::CameraCorner { corner }) = press
+        && let Some(q) = view.camera.as_mut().filter(|q| q.page == page)
+    {
+        q.grab = Some(corner);
     }
     let Some(q) = view.camera.as_mut().filter(|q| q.page == page) else { return };
-    let near = pointer.is_some_and(|p| q.corners.iter().any(|&c| screen(xf, c).distance(p) <= GRAB));
+    // Over a corner, its hit claims the grab cursor.
     if let Some(i) = q.grab {
         view.cursor.claim(Layer::Drag, egui::CursorIcon::Grabbing);
         if let Some(p) = pointer {
@@ -101,11 +125,9 @@ pub(crate) fn page_input(resp: &egui::Response, xf: &PageXform, ptr: &PagePointe
                 *c = [x.clamp(0.0, xf.pw), y.clamp(0.0, xf.ph)];
             }
         }
-        if resp.drag_stopped() {
+        if resp.drag_stopped() || !ptr.primary_down {
             q.grab = None;
         }
-    } else if near {
-        view.cursor.claim(Layer::Handle, egui::CursorIcon::Grab);
     }
 }
 
