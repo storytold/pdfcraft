@@ -114,3 +114,13 @@ fn revision_two_form_filling_ignores_bit_nine() {
     assert!(!p.annotate(), "bit 6 is clear");
     assert!(!p.fill_forms(), "at revision 2 form filling is bit 6 alone");
 }
+
+#[test]
+fn revision_two_ignores_the_flags_only_later_revisions_define() {
+    // Bit 4 is clear and bit 11 set: bit 11 means nothing at revision 2, so assembly stays refused.
+    let p = user_view(Algorithm::Rc4_40, 2, -44);
+    assert!(!p.assemble(), "at revision 2 assembly is bit 4 alone");
+    // Bit 3 is set and bit 12 clear: printing at revision 2 has one quality.
+    let p = user_view(Algorithm::Rc4_40, 2, -2049);
+    assert!(p.print_high_quality(), "at revision 2 high-quality print is bit 3 alone");
+}

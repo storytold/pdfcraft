@@ -121,15 +121,15 @@ impl Permissions {
         if self.is_revision_3_or_later() { self.bit(10) } else { self.bit(5) }
     }
     /// Insert, rotate or delete pages; create bookmarks and thumbnails. Revision 3 and later grant
-    /// it by bit 11 alone. Revision 2 keeps its previous rule (bit 11 or bit 4), which the standard
-    /// text does not settle.
+    /// it by bit 11 alone. Table 22 defines bit 11 for those revisions only, so at revision 2 the
+    /// modify flag (bit 4) covers it.
     pub fn assemble(&self) -> bool {
-        if self.is_revision_3_or_later() { self.bit(11) } else { self.bit(11) || self.bit(4) }
+        if self.is_revision_3_or_later() { self.bit(11) } else { self.bit(4) }
     }
-    /// Revision 3 and later need bit 3 as well as bit 12. Revision 2 keeps its previous rule (bit 12),
-    /// which the standard text does not settle.
+    /// Revision 3 and later need bit 3 as well as bit 12. Table 22 defines bit 12 for those
+    /// revisions only: at revision 2 the print flag (bit 3) is all there is.
     pub fn print_high_quality(&self) -> bool {
-        if self.is_revision_3_or_later() { self.print() && self.bit(12) } else { self.bit(12) }
+        if self.is_revision_3_or_later() { self.print() && self.bit(12) } else { self.print() }
     }
 }
 
