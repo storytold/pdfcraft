@@ -32,9 +32,10 @@ fn held_page_resources(doc: &Document, page: ObjRef) -> Option<(Dict, ObjRef)> {
 }
 
 /// The page content `contents` names, decoded against `budget` and joined. `None` when a stream
-/// doesn't decode or the budget runs out: the content is not all known.
+/// doesn't decode, is damaged partway or the budget runs out: the content is not all known.
 pub(crate) fn content_bytes(doc: &Document, contents: &Object, budget: &mut DecodeBudget) -> Option<Vec<u8>> {
-    let pieces = budget.decode_contents(doc, contents).into_iter().collect::<Result<Vec<_>, _>>().ok()?;
+    let reads = budget.decode_contents_with_damage(doc, contents);
+    let pieces = reads.into_iter().map(|read| read.ok().filter(|(_, damaged)| !damaged).map(|(data, _)| data)).collect::<Option<Vec<_>>>()?;
     Some(Pieces::join(&pieces).data().to_vec())
 }
 
@@ -214,7 +215,7 @@ impl Walk<'_> {
             self.complete = false;
             return;
         }
-        let Ok(data) = self.budget.decode(s) else {
+        let Ok((data, false)) = self.budget.decode_with_damage(s, usize::MAX) else {
             self.complete = false;
             return;
         };
@@ -245,9 +246,9 @@ fn remaps_device_spaces(doc: &Document, resources: &Dict) -> bool {
 
 /// The effective resolution (ppi) of every image drawn by `pages`: the smallest over its uses.
 ///
-/// If forms nest too deeply, are drawn too many times, or a page's content doesn't decode within
-/// its budget, every image is given `INFINITY` (never resampled), since its largest use may be
-/// among those missed.
+/// If forms nest too deeply, are drawn too many times, or a page's or form's content doesn't
+/// decode within its budget or is damaged partway, every image is given `INFINITY` (never
+/// resampled), since its largest use may be among those missed.
 pub fn effective_resolutions(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef, f64> {
     walk_pages(doc, pages).0
 }
