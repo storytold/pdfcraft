@@ -1,3 +1,4 @@
+use crate::function::ParsedFunction;
 use crate::function::{Clamper, TupleVec, Values, interpolate};
 use hayro_syntax::bit_reader::BitReader;
 use hayro_syntax::object::Array;
@@ -149,6 +150,28 @@ impl Type0 {
         self.clamper.clamp_output(&mut out);
 
         Some(out)
+    }
+
+    /// PdfCraft patch (ps-export): snapshot for re-emission (see `Function::parsed`).
+    /// The sample table is walked in stream order — the same first-dimension-fastest
+    /// odometer `build_table` filled it with.
+    pub(crate) fn parsed(&self) -> ParsedFunction {
+        ParsedFunction::Sampled {
+            domain: self.clamper.domain.iter().copied().collect(),
+            range: self.range.iter().copied().collect(),
+            sizes: self.sizes.iter().copied().collect(),
+            bits_per_sample: self.bits_per_sample,
+            encode: self.encode.iter().copied().collect(),
+            decode: self.decode.iter().copied().collect(),
+            samples: self.ordered_samples(),
+        }
+    }
+
+    /// Every sample value the stream really delivered, in stream order. A truncated tail
+    /// stays missing on purpose: the PostScript snapshot checks the count and declines the
+    /// function, instead of painting zeros for grid points the renderer omits.
+    fn ordered_samples(&self) -> Vec<u32> {
+        self.samples.clone()
     }
 }
 

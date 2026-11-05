@@ -1,6 +1,8 @@
 # File format parity
 
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-19 · **Change:** patch (`.p7b`/`.p7c` bundles read for trust import) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (PostScript/EPS export partial: Layer A with a Ghostscript-measured fidelity oracle) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (encrypted output opens in Acrobat, #774; XFDF fixes #807, #809, #819) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Every format Acrobat Pro reads or writes, and PdfCraft's support for it. Acrobat's list comes from
 its bundle's `Info.plist` `CFBundleDocumentTypes` (what it opens) and its public documentation
@@ -93,7 +95,7 @@ features total).
 | All embedded images | yes | yes | good | `create.export-all-images` |
 | XML 1.0 | yes | no | none | `create.export-xml` planned |
 | SVG | no (dropped by Adobe) | no | none | `create.export-svg` planned |
-| PostScript, EPS | yes | no | none | `create.export-ps`, `create.export-eps` planned |
+| PostScript, EPS | yes | yes (DSC-structured program; geometry, images, shadings, Type 1 text, annotations) | good for Layer A (Ghostscript oracle: mean per-channel delta ≤ 2/255 vs PdfCraft's own raster, geometry pixel-exact under matched policy); embedded TrueType vectorized, transparency unflattened (both noted) | `create.export-ps`, `create.export-eps` partial (#1561) |
 
 ## OCR (scans to searchable PDF)
 

@@ -77,6 +77,15 @@ impl Type4 {
 
         Some(out)
     }
+
+    /// PdfCraft patch (ps-export): snapshot for re-emission (see `Function::parsed`).
+    pub(crate) fn parsed(&self) -> super::ParsedFunction {
+        super::ParsedFunction::Calculator {
+            domain: self.clamper.domain.iter().copied().collect(),
+            range: self.clamper.range.clone().map(|r| r.iter().copied().collect()),
+            program: self.program.iter().map(|op| op.parsed()).collect(),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -549,6 +558,58 @@ pub(super) enum PostScriptOp {
 }
 
 impl PostScriptOp {
+    /// PdfCraft patch (ps-export): mirror one parsed operator for re-emission (see
+    /// `Function::parsed`); the mapping is one-to-one with [`super::CalcOp`].
+    fn parsed(&self) -> super::CalcOp {
+        match self {
+            Self::Number(n) => super::CalcOp::Number(n.as_f64()),
+            Self::Abs => super::CalcOp::Abs,
+            Self::Add => super::CalcOp::Add,
+            Self::Atan => super::CalcOp::Atan,
+            Self::Ceiling => super::CalcOp::Ceiling,
+            Self::Cos => super::CalcOp::Cos,
+            Self::Cvi => super::CalcOp::Cvi,
+            Self::Cvr => super::CalcOp::Cvr,
+            Self::Div => super::CalcOp::Div,
+            Self::Exp => super::CalcOp::Exp,
+            Self::Floor => super::CalcOp::Floor,
+            Self::Idiv => super::CalcOp::Idiv,
+            Self::Ln => super::CalcOp::Ln,
+            Self::Log => super::CalcOp::Log,
+            Self::Mod => super::CalcOp::Mod,
+            Self::Mul => super::CalcOp::Mul,
+            Self::Neg => super::CalcOp::Neg,
+            Self::Round => super::CalcOp::Round,
+            Self::Sin => super::CalcOp::Sin,
+            Self::Sqrt => super::CalcOp::Sqrt,
+            Self::Sub => super::CalcOp::Sub,
+            Self::Truncate => super::CalcOp::Truncate,
+            Self::And => super::CalcOp::And,
+            Self::Bitshift => super::CalcOp::Bitshift,
+            Self::Eq => super::CalcOp::Eq,
+            Self::False => super::CalcOp::False,
+            Self::Ge => super::CalcOp::Ge,
+            Self::Gt => super::CalcOp::Gt,
+            Self::Le => super::CalcOp::Le,
+            Self::Lt => super::CalcOp::Lt,
+            Self::Ne => super::CalcOp::Ne,
+            Self::Not => super::CalcOp::Not,
+            Self::Or => super::CalcOp::Or,
+            Self::True => super::CalcOp::True,
+            Self::Xor => super::CalcOp::Xor,
+            Self::If(p) => super::CalcOp::If(p.iter().map(|op| op.parsed()).collect()),
+            Self::IfElse(p1, p2) => {
+                super::CalcOp::IfElse(p1.iter().map(|op| op.parsed()).collect(), p2.iter().map(|op| op.parsed()).collect())
+            }
+            Self::Copy => super::CalcOp::Copy,
+            Self::Dup => super::CalcOp::Dup,
+            Self::Exch => super::CalcOp::Exch,
+            Self::Index => super::CalcOp::Index,
+            Self::Pop => super::CalcOp::Pop,
+            Self::Roll => super::CalcOp::Roll,
+        }
+    }
+
     fn from_reader(r: &mut Reader<'_>, stack: &mut ParseStack) -> Option<Self> {
         let op = if let Some(n) = r.read::<Number>(&ReaderContext::dummy()) {
             // TODO: Support radix numbers

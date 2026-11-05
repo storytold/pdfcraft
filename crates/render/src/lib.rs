@@ -24,7 +24,7 @@ pub use inspect::{
 pub use pixels::Pixels;
 pub use raster::{
     MAX_PIXELS, MAX_SIDE, PRINT_TAG, PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderStats, RenderWarning, RenderedPage, RequestKind,
-    Retiring, Tile, device_pixels, effective_scale,
+    Retiring, Tile, device_pixels, effective_scale, page_font_resolver,
 };
 pub use reading::{ReadingColors, ReadingParams};
 pub use text::{PageText, TextGlyph};

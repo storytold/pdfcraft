@@ -119,6 +119,17 @@ impl RenderConfig {
     }
 }
 
+/// The font resolver every PdfCraft page drive is configured with: the default resolver
+/// (the standard-14 substitutes) wrapped with the craft-fonts Japanese fallback, so
+/// non-embedded Adobe-Japan1 text draws a real Japanese face. Public because the
+/// PostScript exporter reuses it (`pdfcraft_ps_export::export`): its oracle measures
+/// parity against this crate's rasters, so both sides must substitute the same faces —
+/// glyph substitution identical to `page_render`'s by construction.
+pub fn page_font_resolver() -> hayro::hayro_interpret::FontResolverFn {
+    let standard = InterpreterSettings::default().font_resolver;
+    Arc::new(move |query| japanese_fallback(query).or_else(|| standard(query)))
+}
+
 /// A Japanese face from craft-fonts for a CID font of the Adobe-Japan1 collection that the PDF
 /// doesn't embed (`HeiseiMin-W3`, `KozGoPro-Medium`, …). hayro's own substitutes for fonts that
 /// aren't embedded are the Latin standard 14, so such text drew nothing. `None` for every other

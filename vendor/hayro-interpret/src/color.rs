@@ -297,11 +297,36 @@ impl ColorSpaceType {
     }
 }
 
+/// PdfCraft patch (ps-export): which of PDF's three device colour spaces a
+/// [`ColorSpace`] is. Exporters that must name the space in an output format can only
+/// do so faithfully for these; everything else (ICC, Cal, Lab, Indexed, Separation,
+/// DeviceN, Pattern) arrives already resolved with no re-emittable definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceSpace {
+    /// DeviceGray: one component.
+    Gray,
+    /// DeviceRGB: three components.
+    Rgb,
+    /// DeviceCMYK: four components.
+    Cmyk,
+}
+
 /// A PDF color space.
 #[derive(Debug, Clone)]
 pub struct ColorSpace(Arc<ColorSpaceType>);
 
 impl ColorSpace {
+    /// PdfCraft patch (ps-export): the device colour space, or `None` for every other
+    /// kind of space (ICC, Cal, Lab, Indexed, Separation, DeviceN, Pattern).
+    pub fn device_space(&self) -> Option<DeviceSpace> {
+        match self.0.as_ref() {
+            ColorSpaceType::DeviceGray => Some(DeviceSpace::Gray),
+            ColorSpaceType::DeviceRgb => Some(DeviceSpace::Rgb),
+            ColorSpaceType::DeviceCmyk => Some(DeviceSpace::Cmyk),
+            _ => None,
+        }
+    }
+
     /// Create a new color space from the given object.
     pub(crate) fn new(object: Object<'_>, cache: &Cache) -> Option<Self> {
         Self::within(object, cache, 0)

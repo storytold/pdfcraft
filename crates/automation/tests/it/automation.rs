@@ -7704,6 +7704,37 @@ fn exporting_to_word_html_and_rtf() {
     assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "a.xyz" })).is_err());
 }
 
+/// A one-page PDF that draws through a `/BM /Multiply` ExtGState: PostScript has no
+/// transparency, so exporting it must say so instead of staying quiet.
+fn blend_pdf() -> Vec<u8> {
+    let body = b"q /GS1 gs 1 0 0 rg 20 40 160 60 re f Q";
+    let mut stream = format!("<< /Length {} >>\nstream\n", body.len()).into_bytes();
+    stream.extend_from_slice(body);
+    stream.extend_from_slice(b"\nendstream");
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /ExtGState << /GS1 5 0 R >> >> >>".to_vec(),
+        stream,
+        b"<< /Type /ExtGState /BM /Multiply >>".to_vec(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
 /// #3120: a PDF whose pages draw "Head", then a chain of `depths[page]` nested forms whose
 /// innermost writes "TAIL".
 fn nested_forms_pdf(depths: &[usize]) -> Vec<u8> {
@@ -7741,6 +7772,59 @@ fn nested_forms_pdf(depths: &[usize]) -> Vec<u8> {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     out
+}
+#[test]
+fn exporting_to_postscript_and_eps() {
+    let dir = workdir("postscript");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+
+    // .ps: the whole document by default, one DSC page block per page.
+    let r = ok(&mut a, "doc_export_postscript", json!({ "doc": doc, "path": "a.ps" }));
+    let ps = std::fs::read_to_string(dir.join("a.ps")).unwrap();
+    assert!(ps.starts_with("%!PS-Adobe-3.0\n"), "PS header: {ps}");
+    assert!(ps.contains("%%Pages: 3\n") && ps.ends_with("%%EOF\n"), "3 pages, closed: {ps}");
+    assert!(r["path"].as_str().unwrap().ends_with("a.ps") && r["pages"] == 3, "{r}");
+
+    // A page selection exports just those pages.
+    let r = ok(&mut a, "doc_export_postscript", json!({ "doc": doc, "path": "one.ps", "pages": [2] }));
+    let one = std::fs::read_to_string(dir.join("one.ps")).unwrap();
+    assert!(one.contains("%%Pages: 1\n") && one.contains("%%Page: 1 1\n"), "{one}");
+    assert_eq!(r["pages"], 1);
+
+    // .eps: the EPSF header, a bounding box to place it by, and no showpage.
+    let r = ok(&mut a, "doc_export_postscript", json!({ "doc": doc, "path": "p2.eps", "pages": [2] }));
+    let eps = std::fs::read_to_string(dir.join("p2.eps")).unwrap();
+    assert!(eps.starts_with("%!PS-Adobe-3.0 EPSF-3.0\n"), "EPSF header: {eps}");
+    assert!(eps.contains("%%BoundingBox: 0 0 200 300\n"), "{eps}");
+    assert!(!eps.contains("showpage"), "the importer owns the page: {eps}");
+    assert_eq!(r["pages"], 1);
+
+    // .eps takes exactly one page: the error names the rule and the way out.
+    let err = a.call("doc_export_postscript", &json!({ "doc": doc, "path": "two.eps", "pages": [1, 2] })).unwrap_err().to_string();
+    assert!(err.contains("exactly one page") && err.contains(".ps"), "{err}");
+    assert!(!dir.join("two.eps").exists(), "a refused export writes nothing");
+
+    // Any other extension is refused with what is allowed.
+    let err = a.call("doc_export_postscript", &json!({ "doc": doc, "path": "a.xyz" })).unwrap_err().to_string();
+    assert!(err.contains("ps") && err.contains("eps"), "{err}");
+}
+
+#[test]
+fn postscript_warnings_surface() {
+    let dir = workdir("ps-warnings");
+    std::fs::write(dir.join("blend.pdf"), blend_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "blend.pdf" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_export_postscript", json!({ "doc": doc, "path": "blend.ps" }));
+    let warnings = r["warnings"].as_array().unwrap();
+    assert!(!warnings.is_empty(), "the transparency must be reported: {r}");
+    assert!(
+        warnings.iter().any(|w| w["page"] == 1 && w["text"].as_str().unwrap().contains("transparency")),
+        "the note names the page and the loss: {r}"
+    );
+    let ps = std::fs::read_to_string(dir.join("blend.ps")).unwrap();
+    assert!(ps.contains("%%PdfCraftNote:"), "the same note travels in the file: {ps}");
 }
 
 /// #3120: export reads forms as deeply nested as the renderer draws them (13 used to lose their
