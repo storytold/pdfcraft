@@ -1017,6 +1017,76 @@ fn named_property_lists_are_found_and_marked_decorative_like_inline_ones() {
     assert!(props.contains(b"P0") && props.contains(b"P1") && props.contains(b"Other"), "resources are left as they were");
 }
 
+#[test]
+fn mark_tag_artifact_finds_named_property_lists_and_indirect_mcrs() {
+    use pdfcraft_cos::{Dict, ObjRef, Object};
+    let mut doc = named_figures_doc();
+    let mcr = doc.add(Object::Dict([(b"Type".to_vec(), Object::name("MCR")), (b"MCID".to_vec(), Object::Int(0))].into_iter().collect::<Dict>()));
+    doc.update_dict(ObjRef::new(7, 0), |d| d.set(b"K".to_vec(), Object::Ref(mcr))).unwrap();
+    assert_eq!(figures(&doc)[0].bbox, Some([10.0, 150.0, 50.0, 170.0]), "indirect MCR is resolved for figure bounds");
+
+    for (tag, gone) in [(ObjRef::new(7, 0), "/P0"), (ObjRef::new(8, 0), "/P1")] {
+        mark_tag_artifact(&mut doc, tag).unwrap();
+        let pages = pdfcraft_model::pages(&doc);
+        let c = doc.resolve(pages[0].dict.get(b"Contents").unwrap());
+        let Object::Stream(c) = &*c else { panic!("one content stream") };
+        let text = String::from_utf8(c.decoded().unwrap()).unwrap();
+        assert!(text.contains("/Artifact BMC") && !text.contains(gone), "{text}");
+    }
+    assert_eq!(tags(&doc).into_iter().map(|t| t.object.num).collect::<Vec<_>>(), [6]);
+    let nums = doc.get(ObjRef::new(9, 0)).as_dict().and_then(|d| d.get(b"Nums").cloned());
+    assert_eq!(nums, Some(Object::Array(vec![Object::Int(0), Object::Array(vec![Object::Null, Object::Null])])));
+    let r = check(&doc, &Options { rules: [Rule::FiguresAltText, Rule::TaggedContent].into(), pages: None });
+    assert_eq!(failed(&r), Vec::<Rule>::new(), "{:?}", r.results);
+}
+
+#[test]
+fn mark_tag_artifact_validates_parent_and_all_mcids_before_mutating_document() {
+    use pdfcraft_cos::{ObjRef, Object};
+
+    // Missing /P on the tag must fail before touching /Contents or /ParentTree.
+    let mut no_parent = figures_doc();
+    let before_contents = no_parent.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned();
+    let before_pt = no_parent.get(ObjRef::new(9, 0)).as_ref().clone();
+    no_parent
+        .update_dict(ObjRef::new(7, 0), |d| {
+            d.remove(b"P");
+        })
+        .unwrap();
+    assert_eq!(mark_tag_artifact(&mut no_parent, ObjRef::new(7, 0)), Err(ArtifactError::NoParent));
+    assert_eq!(no_parent.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), before_contents);
+    assert_eq!(*no_parent.get(ObjRef::new(9, 0)), before_pt);
+
+    // Duplicate entry in parent's /K must fail with AmbiguousParent before touching /Contents or /ParentTree.
+    let mut dup_parent = figures_doc();
+    dup_parent
+        .update_dict(ObjRef::new(6, 0), |d| {
+            d.set(b"K".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0)), Object::Ref(ObjRef::new(7, 0))]));
+        })
+        .unwrap();
+    assert_eq!(mark_tag_artifact(&mut dup_parent, ObjRef::new(7, 0)), Err(ArtifactError::AmbiguousParent));
+    assert_eq!(dup_parent.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), before_contents);
+    assert_eq!(*dup_parent.get(ObjRef::new(9, 0)), before_pt);
+
+    // Partial MCID match (MCID 0 present, MCID 99 absent) must fail with ContentNotFound in
+    // mark_tag_artifact without mutating /Contents, while mark_decorative still converts MCID 0.
+    let mut partial = figures_doc();
+    partial.update_dict(ObjRef::new(7, 0), |d| d.set(b"K".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(99)]))).unwrap();
+    assert_eq!(mark_tag_artifact(&mut partial, ObjRef::new(7, 0)), Err(ArtifactError::ContentNotFound));
+    assert_eq!(partial.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), before_contents);
+    assert_eq!(*partial.get(ObjRef::new(9, 0)), before_pt);
+    mark_decorative(&mut partial, ObjRef::new(7, 0)).unwrap();
+    assert_ne!(partial.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), before_contents);
+    assert_ne!(*partial.get(ObjRef::new(9, 0)), before_pt);
+
+    // When none of a figure's MCIDs appear on the page, mark_decorative leaves /Contents and /ParentTree untouched.
+    let mut absent = figures_doc();
+    absent.update_dict(ObjRef::new(7, 0), |d| d.set(b"K".to_vec(), Object::Int(99))).unwrap();
+    mark_decorative(&mut absent, ObjRef::new(7, 0)).unwrap();
+    assert_eq!(absent.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents").cloned(), before_contents);
+    assert_eq!(*absent.get(ObjRef::new(9, 0)), before_pt);
+}
+
 fn ref_(n: u32) -> Option<pdfcraft_cos::ObjRef> {
     Some(pdfcraft_cos::ObjRef::new(n, 0))
 }
