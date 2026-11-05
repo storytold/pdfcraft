@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use work_queue::{ResultReceiver, WorkQueue};
 
+use hayro::hayro_interpret::font::{FontData, FontQuery};
 use hayro::hayro_interpret::{InterpreterSettings, InterpreterWarning};
 use hayro::hayro_syntax::Pdf;
 use hayro::vello_cpu::color::AlphaColor;
@@ -99,7 +100,7 @@ impl RenderConfig {
     }
 
     /// Build interpreter settings with layer and comment preferences and a font resolver that
-    /// tries bundled Japanese faces, then opt-in installed CJK faces, then standard substitutes.
+    /// tries bundled substitution faces, then opt-in installed CJK faces, then standard substitutes.
     /// Passwords belong to parser construction; request-specific preview overrides are applied
     /// by `render_page`, which also preserves the caller's warning and cancellation hooks.
     fn settings(&self) -> InterpreterSettings {
@@ -109,16 +110,24 @@ impl RenderConfig {
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
             hide_comments: self.hide_comments,
-            // A CID font the PDF doesn't embed is drawn with the substitution chain's stand-in
-            // (pdfcraft_fonts::fallback, the face doc_info reports): its exact family, else a Han
-            // face for an Adobe CJK collection. Every other font keeps hayro's standard
-            // substitute. Either way the characters it lacks draw in the next face that has them.
-            font_resolver: Arc::new(move |query| substitute::resolve(query).or_else(|| standard(query))),
+            // A CID font the PDF doesn't embed tries bundled faces, then the viewer's opt-in
+            // installed CJK fallback, then hayro's standard substitute. Text uses the next face
+            // that has each character.
+            font_resolver: Arc::new(move |query| {
+                substitute::resolve(query)
+                    .or_else(|| system_fonts.then(|| system_fallback(query)).flatten())
+                    .or_else(|| standard(query))
+            }),
             further_faces: Arc::new(substitute::further_faces),
             jbig2_work: self.jbig2_work.unwrap_or(defaults.jbig2_work),
             ..defaults
         }
     }
+}
+
+fn system_fallback(query: &FontQuery) -> Option<(FontData, u32)> {
+    let FontQuery::Fallback(query) = query else { return None };
+    crate::system_font::fallback(query)
 }
 
 

@@ -105,20 +105,6 @@ impl Type0Font {
                         (FontQuery::Fallback(fallback_query.clone()), false)
                     }
                 };
-                        warn!(
-                            "unable to load CID font {} ({:?}), attempting fallback",
-                            query.post_script_name.as_deref().unwrap_or("(no name)"),
-                            dict.obj_id()
-                        );
-
-<<<<<<< HEAD
-                        (FontQuery::Fallback(query), false)
-                    };
-=======
-                        (FontQuery::Fallback(fallback_query.clone()), false)
-                    }
-                };
->>>>>>> 2c8d876e (fix(render): a CJK font whose name hints at a standard family takes its stand-in (#5329))
 
                 let (data, index) = font_resolver(&query)?;
                 let blob = OpenTypeFontBlob::new(data.clone(), index)
