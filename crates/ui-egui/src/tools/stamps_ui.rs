@@ -45,9 +45,17 @@ mod b64 {
     }
 }
 
-/// The Stamp tool on one page: a click that nobody holds (`free`) places stamp `kind` centred on
-/// it, upright as the page is shown. `true` once one is placed.
-pub(crate) fn place(cx: PageToolContext<'_>, kind: pdfcraft_engine::StampKind, by_line: &str, author: &str, free: bool, view: &mut DocView) -> bool {
+/// The Stamp tool on one page: a click that nobody holds (`free`) places stamp `kind`, written in
+/// `lang`, centred on it, upright as the page is shown. `true` once one is placed.
+pub(crate) fn place(
+    cx: PageToolContext<'_>,
+    kind: pdfcraft_engine::StampKind,
+    lang: pdfcraft_engine::StampLang,
+    by_line: &str,
+    author: &str,
+    free: bool,
+    view: &mut DocView,
+) -> bool {
     let PageToolContext { resp, xf, ptr, page, info, .. } = cx;
     let (Some(p), Some(page_info)) = (ptr.within(xf.rect), info.pages.get(page)) else { return false };
     view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
@@ -55,12 +63,12 @@ pub(crate) fn place(cx: PageToolContext<'_>, kind: pdfcraft_engine::StampKind, b
         return false;
     }
     let (vx, vy) = xf.screen_to_view(p);
-    let (w, h) = kind.size();
+    let (w, h) = kind.size_in(lang);
     let a = page_info.view_to_user((f64::from(vx) - w / 2.0) as f32, (f64::from(vy) - h / 2.0) as f32);
     let b = page_info.view_to_user((f64::from(vx) + w / 2.0) as f32, (f64::from(vy) + h / 2.0) as f32);
     let rect = [f64::from(a[0].min(b[0])), f64::from(a[1].min(b[1])), f64::from(a[0].max(b[0])), f64::from(a[1].max(b[1]))];
     let by = (kind.group() == pdfcraft_engine::StampGroup::Dynamic).then(|| by_line.to_owned());
-    let shape = pdfcraft_engine::Shape::Stamp { rect, stamp: kind, by };
+    let shape = pdfcraft_engine::Shape::Stamp { rect, stamp: kind, lang, by };
     view.pending_edit = Some(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
         page,
         style: pdfcraft_engine::Style::default_for(&shape),

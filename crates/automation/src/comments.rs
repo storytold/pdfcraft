@@ -5,7 +5,9 @@
 
 use std::collections::HashMap;
 
-use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort};
+use pdfcraft_engine::{
+    Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, StampLang, Style, SummarySort,
+};
 use pdfcraft_render::{Annotation, PageInfo};
 use serde_json::{Value, json};
 
@@ -311,12 +313,24 @@ impl Automation {
                         .into_iter()
                         .find(|k| k.label().to_ascii_lowercase().replace(' ', "") == want && ((k.group() == StampGroup::Dynamic) == dynamic))
                         .ok_or_else(|| ToolError::InvalidArgs(format!("unknown stamp {want:?} (see the tool description)")))?;
-                    let (w, h) = stamp.size();
+                    // A code the list doesn't have is an error, not English: a typo would place the wrong stamp silently.
+                    let code = a.opt_str("lang")?.unwrap_or("en").trim().to_ascii_lowercase();
+                    let lang = StampLang::ALL
+                        .into_iter()
+                        .find(|l| l.code() == code)
+                        .ok_or_else(|| ToolError::InvalidArgs(format!("unknown stamp language {code:?} (see the tool description)")))?;
+                    if !lang.drawable() {
+                        return Err(ToolError::InvalidArgs(format!(
+                            "stamps in {} need craft-fonts faces for its script, which this build doesn't have (built without CRAFT_FONTS_DIR)",
+                            lang.code()
+                        )));
+                    }
+                    let (w, h) = stamp.size_in(lang);
                     let [x, y] = a.need::<2>("at", "a stamp (its centre)")?;
                     let rect = rect_to_user(&info, [x - w / 2.0, y - h / 2.0, x + w / 2.0, y + h / 2.0]);
                     let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
-                    let by = dynamic.then(|| self.session.stamp_by_line(&author));
-                    Shape::Stamp { rect, stamp, by }
+                    let by = dynamic.then(|| self.session.stamp_by_line_in(&author, lang));
+                    Shape::Stamp { rect, stamp, lang, by }
                 }
                 "rectangle" => Shape::Rectangle { rect: rect_to_user(&info, a.need::<4>("rect", "a rectangle")?) },
                 "oval" => Shape::Oval { rect: rect_to_user(&info, a.need::<4>("rect", "an oval")?) },

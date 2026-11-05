@@ -2,7 +2,8 @@ use super::draw::draw_appearance;
 use super::lookup::{annot_dict, annot_ref, annots, fill_sign_shape, page_ref, set_annots};
 use super::modify::{n, rich_text};
 use super::types::{
-    FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, Style,
+    FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, StampLang,
+    Style,
 };
 use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, appearance};
 
@@ -261,9 +262,12 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                 d.set(b"PCStampRotate".to_vec(), Object::Int(turn));
             }
         }
-        Shape::Stamp { stamp, by, .. } => {
+        Shape::Stamp { stamp, lang, by, .. } => {
             d.set(b"C".to_vec(), rgb(style.color));
             d.set(b"Name".to_vec(), Object::name(stamp.name()));
+            if *lang != StampLang::En {
+                d.set(b"PCLang".to_vec(), Object::name(lang.code()));
+            }
             // Marks the stamp as drawn by PdfCraft: other stamps with standard names keep
             // their own artwork.
             d.set(b"PCStamp".to_vec(), Object::Bool(true));
