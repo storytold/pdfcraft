@@ -4142,3 +4142,43 @@ fn an_opening_destination_with_a_stale_generation_names_no_page() {
     assert_eq!(open_at(&mut doc, third), 2);
     assert_eq!(open_at(&mut doc, ObjRef { num: third.num, generation: third.generation + 1 }), 0);
 }
+
+/// Objects 1… with the object header generations `headers` gives them, every xref row saying 0: an
+/// object whose header says otherwise is a slot cos repairs, named by both generations.
+fn repaired_build(bodies: &[(u16, &str)]) -> Document {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, (generation, body)) in bodies.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} {generation} obj\n{body}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
+    open(out)
+}
+
+/// Bookmarks name their page as cos accepts the reference: the xref generation and the repaired
+/// header generation both name page 2, a stale generation names none. Deleting page 2 takes the
+/// destination from the two that named it and leaves the stale one as it was.
+#[test]
+fn outline_and_delete_clean_up_follow_cos_acceptance() {
+    let mut doc = repaired_build(&[
+        (0, "<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R >>"),
+        (0, "<< /Type /Pages /Kids [3 0 R 4 5 R] /Count 2 /MediaBox [0 0 200 200] >>"),
+        (0, "<< /Type /Page /Parent 2 0 R >>"),
+        (5, "<< /Type /Page /Parent 2 0 R >>"),
+        (0, "<< /Type /Outlines /First 6 0 R /Last 8 0 R /Count 3 >>"),
+        (0, "<< /Title (Live) /Parent 5 0 R /Next 7 0 R /Dest [4 0 R /Fit] >>"),
+        (0, "<< /Title (Alias) /Parent 5 0 R /Prev 6 0 R /Next 8 0 R /Dest [4 5 R /Fit] >>"),
+        (0, "<< /Title (Stale) /Parent 5 0 R /Prev 7 0 R /Dest [4 2 R /Fit] >>"),
+    ]);
+    let pages_of = |doc: &Document| bookmarks(doc).into_iter().map(|b| (b.title, b.page)).collect::<Vec<_>>();
+    assert_eq!(pages_of(&doc), [("Live".into(), Some(1)), ("Alias".into(), Some(1)), ("Stale".into(), None)]);
+    delete_pages(&mut doc, &[1]).unwrap();
+    let dest = |n: u32| doc.get(ObjRef::new(n, 0)).as_dict().unwrap().contains(b"Dest");
+    assert_eq!((dest(6), dest(7), dest(8)), (false, false, true), "the live and repaired destinations go; the stale one names nothing deleted");
+}

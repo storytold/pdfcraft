@@ -102,9 +102,10 @@ mod tests {
         assert!(nodes.entries_read() <= 3 * n, "{} kids entries read", nodes.entries_read());
     }
 
-    /// `3 1 R` names object 3, as `3 0 R` does: one page, listed once.
+    /// The live `3 0 R` is the page; the stale `3 1 R` and `3 2 R` after it name nothing, as cos
+    /// resolves them: one page, listed once.
     #[test]
-    fn references_differing_only_in_generation_are_one_page() {
+    fn stale_generations_beside_the_live_one_add_no_page() {
         let doc = open(
             Pdf::new()
                 .obj("<< /Type /Catalog /Pages 2 0 R >>")

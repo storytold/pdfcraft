@@ -2422,3 +2422,41 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     check(&doc);
     check(&reopen(&doc));
 }
+
+/// Objects 1… with the object header generations given, every xref row saying 0: an object whose
+/// header says otherwise is a slot cos repairs, named by both generations.
+fn repaired_doc(bodies: &[(u16, &str)]) -> Document {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, (generation, body)) in bodies.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} {generation} obj\n{body}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+/// A link names its page as cos accepts the reference: the xref and repaired header generations of
+/// page 2 both go to it, a stale generation names no page.
+#[test]
+fn link_destinations_follow_cos_acceptance() {
+    use crate::links::{self, LinkAction};
+    let doc = repaired_doc(&[
+        (0, "<< /Type /Catalog /Pages 2 0 R >>"),
+        (0, "<< /Type /Pages /Kids [3 0 R 4 5 R] /Count 2 /MediaBox [0 0 200 200] >>"),
+        (0, "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R] >>"),
+        (5, "<< /Type /Page /Parent 2 0 R >>"),
+        (0, "<< /Type /Annot /Subtype /Link /Rect [0 0 40 20] /Dest [4 0 R /Fit] >>"),
+        (0, "<< /Type /Annot /Subtype /Link /Rect [0 30 40 50] /Dest [4 5 R /Fit] >>"),
+        (0, "<< /Type /Annot /Subtype /Link /Rect [0 60 40 80] /Dest [4 2 R /Fit] >>"),
+    ]);
+    let actions: Vec<LinkAction> = links::list(&doc).into_iter().map(|l| l.action).collect();
+    assert_eq!(actions.len(), 3);
+    assert_eq!(&actions[..2], [LinkAction::Page(1), LinkAction::Page(1)]);
+    assert_ne!(actions[2], LinkAction::Page(1), "a stale generation names no page: {:?}", actions[2]);
+}

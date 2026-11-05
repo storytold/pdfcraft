@@ -45,7 +45,7 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
         b"GoTo" => {
             let dest = doc.resolve(a.get(b"D")?);
             let target = dest.as_array()?.first()?.as_ref()?;
-            let target = pdfcraft_model::accepted_ref(doc, target)?;
+            let target = doc.canonical_ref(target)?;
             af::ButtonAction::GoTo(page_refs(doc).iter().position(|p| *p == target)?)
         }
         b"Hide" => {

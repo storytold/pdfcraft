@@ -5681,3 +5681,44 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
 }
+
+/// Objects 1… with the object header generations given, every xref row saying 0: an object whose
+/// header says otherwise is a slot cos repairs, named by both generations.
+fn repaired_doc(bodies: &[(u16, &str)]) -> Document {
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, (generation, body)) in bodies.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} {generation} obj\n{body}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+/// A GoTo action names its page as cos accepts the reference: the xref generation and the repaired
+/// header generation of page 2 both go to it; a stale generation goes nowhere.
+#[test]
+fn goto_actions_follow_cos_acceptance() {
+    let doc = |target: &str| {
+        let widget = format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (go) /Rect [10 10 50 30] /P 3 0 R /A << /S /GoTo /D [{target} /Fit] >> >>"
+        );
+        repaired_doc(&[
+            (0, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>"),
+            (0, "<< /Type /Pages /Kids [3 0 R 4 5 R] /Count 2 /MediaBox [0 0 200 200] >>"),
+            (0, "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>"),
+            (5, "<< /Type /Page /Parent 2 0 R >>"),
+            (0, widget.as_str()),
+        ])
+    };
+    let goto =
+        |target: &str| field_actions(&doc(target), "go").unwrap().into_iter().find_map(|(_, a)| matches!(a, FieldAction::GoTo(_)).then_some(a));
+    assert_eq!(goto("4 0 R"), Some(FieldAction::GoTo(1)));
+    assert_eq!(goto("4 5 R"), Some(FieldAction::GoTo(1)), "the repaired header generation");
+    assert_eq!(goto("4 2 R"), None, "a stale generation names no page");
+}

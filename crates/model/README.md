@@ -19,8 +19,8 @@ The page-tree walk is `PageNodes` (every node, in document order) and `PageLeave
 all use it; its doc comment gives the rules (leaf rule, object identity by number, a shared
 `/Kids` array read once). Each `/Kids` entry is resolved as cos resolves references (#1143): a
 stale generation is null and lists nothing, a repaired alias is the object. Each `PageNode` is
-given at the reference cos accepts as its own (`accepted_ref` maps any reference to it, for
-comparing destinations), and reads its inherited attributes without copying them (`inherited`,
+given at its canonical reference (`Document::canonical_ref`; destinations are compared the same
+way, after cos accepts them), and reads its inherited attributes without copying them (`inherited`,
 `inherited_from`).
 
 Its limits are `MAX_PAGE_TREE_NODES`, `MAX_KIDS_ENTRIES` and `MAX_INHERITED_COPIES` (the

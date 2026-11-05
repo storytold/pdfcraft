@@ -176,7 +176,7 @@ impl<'a> Visit<'a> {
 /// (read once, the first time one is needed).
 struct Targets {
     /// Page index by the reference the walk gives each page; a destination's reference is looked up
-    /// through `pdfcraft_model::accepted_ref`, as cos resolves it.
+    /// through `Document::canonical_ref`, as cos accepts it.
     pages: HashMap<ObjRef, usize>,
     names: Option<HashMap<Vec<u8>, Object>>,
 }
@@ -287,7 +287,7 @@ pub(crate) fn resolve_dest(doc: &Document, dest: &Object) -> Option<Vec<Object>>
 /// The page index an explicit destination array names.
 fn page_of_explicit(doc: &Document, targets: &Targets, dest: &[Object]) -> Option<usize> {
     match dest.first()? {
-        Object::Ref(page) => targets.pages.get(&pdfcraft_model::accepted_ref(doc, *page)?).copied(),
+        Object::Ref(page) => targets.pages.get(&doc.canonical_ref(*page)?).copied(),
         // Some producers write a page number in a remote-style destination.
         Object::Int(n) => usize::try_from(*n).ok().filter(|&p| p < targets.pages.len()),
         _ => None,

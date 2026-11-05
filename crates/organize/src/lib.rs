@@ -332,7 +332,7 @@ fn goes_to(doc: &Document, dest: &Object, gone: &[ObjRef]) -> bool {
     };
     array
         .and_then(|a| a.as_array().and_then(|a| a.first()).and_then(Object::as_ref))
-        .and_then(|r| pdfcraft_model::accepted_ref(doc, r))
+        .and_then(|r| doc.canonical_ref(r))
         .is_some_and(|r| gone.contains(&r))
 }
 

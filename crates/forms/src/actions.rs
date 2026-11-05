@@ -116,7 +116,7 @@ fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef], scripts: &mu
         b"GoTo" => {
             let dest = d.get(b"D").map(|x| doc.resolve(x))?;
             let target = dest.as_array()?.first()?.as_ref()?;
-            let target = pdfcraft_model::accepted_ref(doc, target)?;
+            let target = doc.canonical_ref(target)?;
             FieldAction::GoTo(pages.iter().position(|p| *p == target)?)
         }
         b"Hide" => FieldAction::ShowHide {

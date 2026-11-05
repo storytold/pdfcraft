@@ -92,7 +92,7 @@ fn action_of(doc: &Document, d: &Dict, pages: &[ObjRef], uri_budget: &mut usize)
         let first = a.as_array()?.first()?.clone();
         match first {
             // As cos resolves it: a stale generation names no page.
-            Object::Ref(r) => pdfcraft_model::accepted_ref(doc, r).and_then(|r| pages.iter().position(|p| *p == r)),
+            Object::Ref(r) => doc.canonical_ref(r).and_then(|r| pages.iter().position(|p| *p == r)),
             Object::Int(i) => usize::try_from(i).ok(),
             _ => None,
         }

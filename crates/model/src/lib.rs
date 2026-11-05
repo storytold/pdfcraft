@@ -106,20 +106,12 @@ pub fn page(doc: &Document, index: usize) -> Result<Option<Page>, PageTreeLimit>
     PageLeaves::new(doc).nth_page(index)?.map(|leaf| leaf.copied(&mut budget)).transpose()
 }
 
-/// `r` as the page-tree walk names objects ([`PageNode::obj`]): its number at the generation the
-/// document holds it at, when cos resolves `r` (the live generation, or a repaired alias); `None`
-/// when cos resolves it to null (a stale generation, a missing object). Compare a destination's
-/// page reference with listed pages through this, never by number alone.
-pub fn accepted_ref(doc: &Document, r: ObjRef) -> Option<ObjRef> {
-    (!matches!(*doc.get(r), Object::Null)).then(|| ObjRef { num: r.num, generation: doc.generation(r.num) })
-}
-
-/// The leaf page that is object `obj` (a reference cos accepts; see [`accepted_ref`]), with its
+/// The leaf page that is object `obj` (a reference cos accepts: [`Document::canonical_ref`]), with its
 /// inherited attributes; `Ok(None)` when no page is. As with [`page`], only that page is copied, and
 /// a limit exceeded before it is reached is an error, never "not a page".
 pub fn page_by_ref(doc: &Document, obj: ObjRef) -> Result<Option<Page>, PageTreeLimit> {
     // A reference cos resolves to null (a stale generation) names no page, whatever its number.
-    let Some(obj) = accepted_ref(doc, obj) else { return Ok(None) };
+    let Some(obj) = doc.canonical_ref(obj) else { return Ok(None) };
     let mut budget = Limits::current().inherited_copies;
     for leaf in PageLeaves::new(doc) {
         let leaf = leaf?;
@@ -266,7 +258,8 @@ impl Children {
 /// A node of the page tree, before anything is copied.
 pub struct PageNode {
     /// The reference cos accepts as the object's own (its number at the generation the document
-    /// holds it at; see [`accepted_ref`]), whichever accepted generation `/Kids` names.
+    /// holds it at: [`Document::canonical_ref`] of the reference), whichever accepted generation `/Kids`
+    /// names.
     pub obj: ObjRef,
     node: std::sync::Arc<Object>,
     inherited: Inherited,
@@ -399,9 +392,10 @@ impl Iterator for PageNodes<'_> {
             if self.seen.contains(&node.num) {
                 continue;
             }
-            // Resolved as cos resolves references: a stale generation is null and lists nothing; a
-            // repaired alias is the object. Only a node that resolves is marked seen, so a stale entry
-            // can't hide a live one listed after it.
+            // Accepted as cos accepts references (a stale generation names nothing; a repaired alias is
+            // the object), then loaded. Only a node that resolves to a dictionary is marked seen, so a
+            // stale entry can't hide a live one listed after it.
+            let Some(node) = self.doc.canonical_ref(node) else { continue };
             let obj = self.doc.get(node);
             let Some(d) = obj.as_dict() else { continue };
             // Only a node about to be visited counts, so a repeat after the last isn't a cut.
@@ -409,7 +403,6 @@ impl Iterator for PageNodes<'_> {
                 return self.cut_off(PageTreeLimit::Nodes);
             }
             self.seen.insert(node.num);
-            let node = ObjRef { num: node.num, generation: self.doc.generation(node.num) };
             let mut inherited = parent.inherited.clone();
             for (key, owner) in INHERITABLE.iter().zip(&mut inherited) {
                 if let Some(value) = d.get(key) {
@@ -764,7 +757,7 @@ mod tests {
             assert_eq!(page_by_ref(&d, asked).map(|p| p.map(|p| p.obj)), Ok(Some(page)), "{asked:?}");
         }
         assert_eq!(page_by_ref(&d, ObjRef { num: 3, generation: 2 }), Ok(None), "a generation cos doesn't accept");
-        assert_eq!(accepted_ref(&d, ObjRef { num: 3, generation: 5 }), Some(page));
+        assert_eq!(d.canonical_ref(ObjRef { num: 3, generation: 5 }), Some(page));
     }
 
     /// `/Kids` that refers to a dictionary lists no pages, whatever that dictionary holds.
@@ -855,6 +848,59 @@ mod tests {
     }
 
     /// `page_by_ref` finds a page with its inherited attributes; a stale generation of it, which cos
+    /// An indirect `/Kids` array named first through a stale generation, then live: the stale
+    /// reference reads nothing and doesn't mark the array read, so the live one lists its pages.
+    #[test]
+    fn a_stale_reference_to_a_kids_array_hides_no_live_one() {
+        let mut d = doc(0);
+        let root = ObjRef { num: 2, generation: 0 };
+        let leaf = ObjRef { num: 3, generation: 0 };
+        let array = d.add(Object::Array(vec![Object::Ref(leaf)]));
+        let node = |kids: ObjRef| {
+            let mut n = Dict::new();
+            n.set(b"Type".to_vec(), Object::name("Pages"));
+            n.set(b"Kids".to_vec(), Object::Ref(kids));
+            n
+        };
+        let stale = d.add(node(ObjRef { num: array.num, generation: 1 }));
+        let live = d.add(node(array));
+        d.update_dict(root, |r| r.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(stale), Object::Ref(live)]))).unwrap();
+        assert_eq!(page_refs(&d), Ok(vec![leaf]));
+    }
+
+    /// Edited through its alias, a repaired page keeps both generations (cos's `RepairedSet`) and is
+    /// listed once; replaced outright at a new generation (`set`), the old `/Kids` entry is stale and
+    /// lists nothing, and the new generation is the page.
+    #[test]
+    fn edits_through_an_alias_or_a_new_generation_follow_cos() {
+        let mut d = repaired("[3 5 R]");
+        d.update_dict(ObjRef { num: 3, generation: 5 }, |p| p.set(b"Rotate".to_vec(), Object::Int(180))).unwrap();
+        let listed = page_refs(&d).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(d.canonical_ref(ObjRef { num: 3, generation: 5 }), Some(listed[0]), "the listed page is the edited one");
+        assert_eq!(pages(&d)[0].dict.get(b"Rotate"), Some(&Object::Int(180)));
+        let page = (*d.get(listed[0])).clone();
+        d.set(ObjRef { num: 3, generation: 9 }, page);
+        assert_eq!(page_refs(&d), Ok(vec![]), "`3 5 R` no longer names the page");
+        d.update_dict(ObjRef { num: 2, generation: 0 }, |t| {
+            t.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(ObjRef { num: 3, generation: 9 })]))
+        })
+        .unwrap();
+        assert_eq!(page_refs(&d), Ok(vec![ObjRef { num: 3, generation: 9 }]));
+    }
+
+    /// Pages stored in an object stream have generation 0, and only that generation names them.
+    #[test]
+    fn pages_in_an_object_stream_are_named_at_generation_zero() {
+        let d = doc(0);
+        let packed = Document::open(Arc::new(pdfcraft_cos::write_full(&d, &pdfcraft_cos::SaveOptions::default()).unwrap())).unwrap();
+        let listed = page_refs(&packed).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(matches!(packed.xref_entry(listed[0].num), Some(pdfcraft_cos::XrefEntry::InStream { .. })), "packed into an object stream");
+        assert_eq!(listed[0].generation, 0);
+        assert_eq!(page_by_ref(&packed, ObjRef { num: listed[0].num, generation: 1 }), Ok(None));
+    }
+
     /// resolves to null, names no page.
     #[test]
     fn page_by_ref_finds_a_live_reference_and_not_a_stale_one() {
