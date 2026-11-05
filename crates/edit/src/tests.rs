@@ -10609,5 +10609,7 @@ fn a_paragraph_with_a_tab_edits_when_rewritten_run_by_run() {
         let after: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
         assert_eq!(after.len(), 2, "{control:?}: {after:?}");
         assert!(after.iter().all(|l| l.starts_with("ab") && l.ends_with("ba") && !l.contains(control)), "{control:?}: {after:?}");
+        // Written as a space, not dropped.
+        assert_eq!(after[1], "ab ba", "{control:?}: {after:?}");
     }
 }
