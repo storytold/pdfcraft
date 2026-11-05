@@ -527,14 +527,14 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             let index = pdfcraft_annot::add_annotation(doc, &new, &cx.meta())?;
             pdfcraft_annot::orient_image_stamp(doc, *page, index, rotation)?;
         }
-        Edit::AddModel3d { page, rect, model, poster, activation, name } => {
+        Edit::AddModel3d { page, rect, model, poster, activation, name, view } => {
             // A file that is not a model is refused before its poster is brought in.
             pdfcraft_annot::check_model(model)?;
             let poster = match poster {
                 Some(file) => Some(model_poster(doc, *rect, file)?),
                 None => None,
             };
-            let new = pdfcraft_annot::NewModel3d { page: *page, rect: *rect, model, activation: *activation, poster, contents: name };
+            let new = pdfcraft_annot::NewModel3d { page: *page, rect: *rect, model, activation: *activation, poster, contents: name, view: *view };
             pdfcraft_annot::add_3d_model(doc, &new, &cx.meta())?;
         }
         Edit::DeleteAnnotation { page, index } => pdfcraft_annot::delete_annotation(doc, *page, *index)?,

@@ -103,6 +103,78 @@ pub struct NewModel3d<'a> {
     pub poster: Option<PosterPicture>,
     /// `/Contents`: the annotation's alternate description (§12.5.2).
     pub contents: &'a str,
+    /// The model's default view; `None` leaves the camera and lighting to the reader.
+    pub view: Option<View3d>,
+}
+
+/// A 3D view (§13.6.4) with a perspective camera and the CAD lighting scheme, written as the
+/// model's default view (the 3D stream's `/VA` and `/DV`, §13.6.3). Without a lighting scheme a
+/// model that has no lights of its own may be drawn unlit, nearly black.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct View3d {
+    /// `/C2W`: the camera's x, y and z axes (z points where it looks) and its position, in model
+    /// space.
+    pub camera_to_world: [f64; 12],
+    /// `/CO`: the distance from the camera to the point it orbits.
+    pub orbit: f64,
+    /// `/FOV`: the horizontal field of view, in degrees.
+    pub fov: f64,
+}
+
+impl View3d {
+    /// Horizontal field of view of a fitted view, in degrees.
+    const FIT_FOV: f64 = 30.0;
+
+    /// A view of the box `[min, max]` (model space, +Z up) from its front, right and top, the
+    /// whole box in sight in an annotation `aspect` times as wide as it is high. `None` for a box
+    /// that is not finite, inside out, or a single point, or an aspect that is not positive.
+    #[must_use]
+    pub fn fitted(bounds: [[f64; 3]; 2], aspect: f64) -> Option<Self> {
+        let [lo, hi] = bounds;
+        let all = lo.iter().chain(&hi);
+        if !(aspect.is_finite() && aspect > 0.0) || !all.clone().all(|v| v.is_finite()) || lo.iter().zip(&hi).any(|(l, h)| l > h) {
+            return None;
+        }
+        let centre: [f64; 3] = std::array::from_fn(|i| lo.get(i).zip(hi.get(i)).map_or(0.0, |(l, h)| l / 2.0 + h / 2.0));
+        let radius = lo.iter().zip(&hi).map(|(l, h)| ((h - l) / 2.0).powi(2)).sum::<f64>().sqrt();
+        let half = (Self::FIT_FOV / 2.0).to_radians();
+        // The narrower of the two angles must hold the box's bounding sphere.
+        let narrow = half.min((half.tan() / aspect).atan());
+        let orbit = radius / narrow.sin();
+        if !(orbit.is_finite() && orbit > 0.0) {
+            return None;
+        }
+        let (a, b, c) = (std::f64::consts::FRAC_1_SQRT_2, 1.0 / 6f64.sqrt(), 1.0 / 3f64.sqrt());
+        // x = up × z, y = z × x, for z = (-1, 1, -1)/√3 and up = +Z.
+        let (x, y, z) = ([-a, -a, 0.0], [-b, b, 2.0 * b], [-c, c, -c]);
+        let at: [f64; 3] = std::array::from_fn(|i| centre.get(i).zip(z.get(i)).map_or(0.0, |(p, d)| p - orbit * d));
+        let mut camera_to_world = [0.0; 12];
+        for (slot, v) in camera_to_world.iter_mut().zip(x.iter().chain(&y).chain(&z).chain(&at)) {
+            *slot = *v;
+        }
+        Some(Self { camera_to_world, orbit, fov: Self::FIT_FOV })
+    }
+
+    fn dict(&self) -> Dict {
+        let mut projection = Dict::new();
+        projection.set(b"Subtype".to_vec(), Object::name("P"));
+        projection.set(b"FOV".to_vec(), Object::Real(self.fov));
+        projection.set(b"PS".to_vec(), Object::name("W"));
+        // The near clipping plane must be positive; a thousandth of the orbit keeps the box in front of it.
+        projection.set(b"N".to_vec(), Object::Real(self.orbit / 1000.0));
+        let mut lighting = Dict::new();
+        lighting.set(b"Type".to_vec(), Object::name("3DLightingScheme"));
+        lighting.set(b"Subtype".to_vec(), Object::name("CAD"));
+        let mut v = Dict::new();
+        v.set(b"Type".to_vec(), Object::name("3DView"));
+        v.set(b"XN".to_vec(), PdfString::text("Default"));
+        v.set(b"MS".to_vec(), Object::name("M"));
+        v.set(b"C2W".to_vec(), num_array(&self.camera_to_world));
+        v.set(b"CO".to_vec(), Object::Real(self.orbit));
+        v.set(b"P".to_vec(), Object::Dict(projection));
+        v.set(b"LS".to_vec(), Object::Dict(lighting));
+        v
+    }
 }
 
 /// Check a model before anything is added: its size and its format.
@@ -124,7 +196,8 @@ fn check_model_size(model: &[u8], max: usize) -> Result<(), AnnotError> {
 
 /// Add a 3D annotation: the model in a Flate-compressed 3D stream referenced from `/3DD` (so the
 /// annotation has its own instance, §13.6.2), `/3DA` stating only `/A`, and the poster as `/AP /N`.
-/// No view (`/3DV`, `/VA`) is written: readers open on the model's own default view. A document
+/// The stream holds [`NewModel3d::view`] as its only and default view; without one, readers open
+/// on the model's own default view. A document
 /// older than [`ModelFormat::version`] is raised to it. Returns its index in the page's `/Annots`.
 ///
 /// # Errors
@@ -145,6 +218,10 @@ pub fn add_3d_model(doc: &mut Document, new: &NewModel3d<'_>, meta: &Meta) -> Re
     let mut stream = Dict::new();
     stream.set(b"Type".to_vec(), Object::name("3D"));
     stream.set(b"Subtype".to_vec(), Object::name(format.subtype()));
+    if let Some(view) = &new.view {
+        stream.set(b"VA".to_vec(), Object::Array(vec![Object::Dict(view.dict())]));
+        stream.set(b"DV".to_vec(), Object::Int(0));
+    }
     let stream = doc.add(Object::Stream(Stream::flate(stream, new.model)));
     let poster = doc.add(Object::Stream(poster));
     let d = annotation_dict(new, rect, page, stream, poster, meta);

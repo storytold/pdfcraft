@@ -2,7 +2,7 @@
 
 use std::path::{Component, Path};
 
-use pdfcraft_engine::{Activation3d, Edit, MAX_3D_MODEL_BYTES, MarkFile, Model3dFormat};
+use pdfcraft_engine::{Activation3d, Edit, MAX_3D_MODEL_BYTES, MarkFile, Model3dFormat, View3d};
 use pdfcraft_prc::{GltfOptions, read_gltf, write_prc};
 use serde_json::{Value, json};
 
@@ -14,7 +14,9 @@ const MAX_MODEL_SIDE: f64 = 14_400.0;
 
 impl Automation {
     /// A U3D or PRC model, or a glTF scene converted to PRC, in `rect` on `page`, its poster the
-    /// picture at `poster` (a PDF page or an image) fitted inside the box, or a labelled frame.
+    /// picture at `poster` (a PDF page or an image) fitted inside the box, or a labelled frame. A
+    /// converted scene gets a lit default view fitted to it, since it carries no lights or views
+    /// of its own; a U3D or PRC file keeps its own.
     pub(crate) fn model_add(&mut self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
         let info = self.doc(a)?.info.pages.get(page).cloned().ok_or_else(|| ToolError::InvalidArgs(format!("page {} does not exist", page + 1)))?;
@@ -34,11 +36,11 @@ impl Automation {
                 .ok_or_else(|| ToolError::InvalidArgs(format!("activation must be one of: {}", Activation3d::ALL.map(|(_, w)| w).join(", "))))?,
         };
         let path = self.resolve(a.str("path")?, false)?;
-        let (model, converted) = match read_model(&path, MAX_3D_MODEL_BYTES)? {
-            ModelFile::Native(bytes) => (bytes, None),
+        let (model, converted, view) = match read_model(&path, MAX_3D_MODEL_BYTES)? {
+            ModelFile::Native(bytes) => (bytes, None, None),
             ModelFile::Gltf(bytes) => {
-                let (prc, report) = self.gltf_to_prc(&path, &bytes)?;
-                (prc, Some(report))
+                let (prc, report, bounds) = self.gltf_to_prc(&path, &bytes)?;
+                (prc, Some(report), bounds.and_then(|b| View3d::fitted(b, w / h)))
             }
         };
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -53,7 +55,7 @@ impl Automation {
                 Some(MarkFile { name, bytes: std::sync::Arc::new(bytes), page })
             }
         };
-        let edit = Edit::AddModel3d { page, rect: rect_to_user(&info, r), model: std::sync::Arc::new(model), poster, activation, name };
+        let edit = Edit::AddModel3d { page, rect: rect_to_user(&info, r), model: std::sync::Arc::new(model), poster, activation, name, view };
         let mut out = self.apply(a, edit)?;
         if let Some(report) = converted {
             out["converted"] = report;
@@ -61,10 +63,11 @@ impl Automation {
         Ok(out)
     }
 
-    /// The glTF file at `path` (its bytes `data`) written as PRC, and what the conversion reports.
+    /// The glTF file at `path` (its bytes `data`) written as PRC, what the conversion reports, and
+    /// the box the scene fills.
     /// External buffers and images are read only from relative paths below the file's folder,
     /// through the automation roots, at most [`MAX_3D_MODEL_BYTES`] in all.
-    fn gltf_to_prc(&self, path: &Path, data: &[u8]) -> Result<(Vec<u8>, Value)> {
+    fn gltf_to_prc(&self, path: &Path, data: &[u8]) -> Result<(Vec<u8>, Value, Option<Bounds>)> {
         let folder = path.parent().unwrap_or(Path::new(""));
         let mut left = MAX_3D_MODEL_BYTES;
         let mut resolve = |uri: &str| -> Option<Vec<u8>> {
@@ -94,9 +97,12 @@ impl Automation {
             "notes": import.notes,
             "inferred": import.inferred,
         });
-        Ok((report.prc, summary))
+        Ok((report.prc, summary, import.scene.bounds()))
     }
 }
+
+/// An axis-aligned box `[min, max]` in model space.
+type Bounds = [[f64; 3]; 2];
 
 /// A model file as read: embedded as it is (U3D, PRC), or a glTF scene to convert.
 #[derive(Debug)]

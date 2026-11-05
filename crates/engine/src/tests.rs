@@ -565,6 +565,7 @@ fn a_3d_model_gets_a_fitted_vector_poster_and_a_file_that_is_not_one_is_refused(
         poster: Some(MarkFile { name: "poster.pdf".into(), bytes: Arc::new(half_red_page()), page: 0 }),
         activation: Activation3d::default(),
         name: "Bracket".into(),
+        view: None,
     };
     assert!(session.apply(id, add(b"%PDF-1.7 not a model".to_vec())).is_err());
     session.apply(id, add(prc)).unwrap();
@@ -606,6 +607,7 @@ fn a_3d_poster_page_without_area_is_refused() {
         poster: Some(MarkFile { name: "flat.pdf".into(), bytes: Arc::new(flat.into_bytes()), page: 0 }),
         activation: Activation3d::default(),
         name: "Bracket".into(),
+        view: None,
     };
     assert!(matches!(session.apply(id, add), Err(EditError::Source(_))));
     assert!(session.get(id).unwrap().info.annotations.is_empty(), "nothing was added");
@@ -622,6 +624,7 @@ fn a_3d_model_needs_the_comments_permission_and_changes_the_comments() {
         poster: None,
         activation: Activation3d::default(),
         name: String::new(),
+        view: None,
     };
     let p = pdfcraft_cos::Permissions { bits: 0, owner: false };
     assert_eq!(check_permission(&edit, &p), Err(EditError::NotPermitted("comments")));

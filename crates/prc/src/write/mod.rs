@@ -9,6 +9,7 @@
 //! texture over stored (u, v) coordinates.
 
 mod bits;
+mod bounds;
 mod container;
 mod sections;
 mod tess;

@@ -62,6 +62,7 @@ fn model_add_embeds_the_model_with_a_fitted_poster() {
     assert_eq!(model.dict.name(b"Subtype"), Some(&b"PRC"[..]));
     assert_eq!(model.dict.name(b"Filter"), Some(&b"FlateDecode"[..]));
     assert_eq!(model.decoded().unwrap().to_vec(), prc, "the model is stored unchanged");
+    assert!(model.dict.get(b"VA").is_none(), "a PRC file keeps its own views");
     let activation = saved.resolve(annot.get(b"3DA").unwrap()).as_dict().unwrap().clone();
     assert_eq!(activation.name(b"A"), Some(&b"PO"[..]));
     // The 80 × 40 picture fitted in the 300 × 300 box: 300 × 150, centred top to bottom.
@@ -178,6 +179,22 @@ fn model_add_converts_a_glb_to_prc() {
     tool(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
     let prc = saved_prc(dir.path());
     assert_eq!(prc.placements().unwrap().len(), 1, "the triangle's node is placed");
+
+    // A converted scene has no lights: its default view is CAD-lit and orbits the triangle, which
+    // is turned Z-up to the box [0 0 0]–[1 0 1].
+    let (saved, found) = saved_3d(dir.path());
+    let model = stream(&saved, found[0].get(b"3DD").unwrap());
+    assert_eq!(model.dict.get(b"DV").and_then(Object::as_int), Some(0));
+    let views = saved.resolve(model.dict.get(b"VA").unwrap()).as_array().unwrap().clone();
+    let [view] = views.as_slice() else { panic!("one view: {views:?}") };
+    let view = view.as_dict().unwrap();
+    assert_eq!(view.get(b"LS").and_then(Object::as_dict).and_then(|l| l.name(b"Subtype")), Some(&b"CAD"[..]));
+    let c: Vec<f64> = view.get(b"C2W").unwrap().as_array().unwrap().iter().filter_map(Object::as_f64).collect();
+    let orbit = view.get(b"CO").and_then(Object::as_f64).unwrap();
+    let target: Vec<f64> = (0..3).map(|i| c[9 + i] + orbit * c[6 + i]).collect();
+    for (got, want) in target.iter().zip([0.5, 0.0, 0.5]) {
+        assert!((got - want).abs() < 1e-9, "{target:?}");
+    }
 }
 
 #[test]

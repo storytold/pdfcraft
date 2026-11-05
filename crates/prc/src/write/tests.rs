@@ -208,3 +208,20 @@ fn texture_coordinates_read_back() {
     assert_eq!(with_uvs.len(), 2, "the bolt's primitive at both placements");
     assert!(with_uvs.iter().all(|t| t.uvs == [[0.5, 0.1], [0.5, 0.1], [0.5, 0.9]]));
 }
+
+/// The box holds every placed triangle, a child placed through its parent's matrix too.
+#[test]
+fn bounds_follow_each_node_through_its_parents() {
+    let mut s = scene();
+    let mut lift = [0.0; 16];
+    (lift[0], lift[5], lift[10], lift[15], lift[14]) = (1.0, 1.0, 1.0, 1.0, 2.0);
+    s.nodes[0].matrix = Some(lift);
+    // bolt-2 starts at x 5 + 10 and ends at 8 + 10; everything is raised to z 2 by the frame.
+    assert_eq!(s.bounds(), Some([[0.0, 0.0, 2.0], [18.0, 1.0, 2.0]]));
+    s.roots = vec![1];
+    assert_eq!(s.bounds(), Some([[0.0, 0.0, 0.0], [1.0, 1.0, 0.0]]), "only what the roots reach");
+    s.nodes[1].children = vec![1];
+    assert_eq!(s.bounds(), Some([[0.0, 0.0, 0.0], [1.0, 1.0, 0.0]]), "a cycle ends");
+    s.roots = vec![99];
+    assert_eq!(s.bounds(), None, "nothing drawn");
+}

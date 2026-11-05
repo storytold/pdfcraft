@@ -17,7 +17,8 @@ pub(super) const FORMAT_JPEG: u32 = 1;
 /// Mapping type "stored": the coordinates come from the tessellation.
 const MAPPING_STORED: i32 = 1;
 /// `PRC_TEXTURE_MAPPING_DIFFUSE`. The specification does not give its
-/// value; the first bit is an assumption no viewer has confirmed here.
+/// value; with the first bit, Acrobat Reader draws a synthetic textured
+/// quad with its texels in place.
 const MAPPING_DIFFUSE: u32 = 0x0001;
 /// Components: red, green, blue, and alpha (WD 7.5.7 Table 100).
 const COMPONENTS_RGB: u8 = 0x07;

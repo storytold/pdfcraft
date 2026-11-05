@@ -177,6 +177,8 @@ pub enum Edit {
         poster: Option<MarkFile>,
         activation: pdfcraft_annot::Activation3d,
         name: String,
+        /// Its default view; `None` leaves the camera and lighting to the reader.
+        view: Option<pdfcraft_annot::View3d>,
     },
     /// Delete the comment at `index` in the page's `/Annots`, with its pop-up and replies.
     DeleteAnnotation {
