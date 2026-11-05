@@ -2029,4 +2029,40 @@ mod tests {
         let errors = row[want.len()];
         assert!(errors * 100 <= want.len(), "{errors} word errors in {} words:\n{read}", want.len());
     }
+
+    /// The GPU path reads a page as the CPU path does: the same lines and words, and word boxes
+    /// within a few pixels. Needs the ONNX models and a GPU; skipped otherwise.
+    #[cfg(feature = "ocr-gpu")]
+    #[test]
+    fn the_gpu_reads_a_page_as_the_cpu_does() {
+        let Some(models) = pdfcraft_ocr::Models::find() else {
+            eprintln!("skipped: OCR models not installed");
+            return;
+        };
+        let gpu = pdfcraft_ocr::Ocr::load_with_gpu(&models, true).unwrap();
+        if !gpu.backend().starts_with("GPU") {
+            eprintln!("skipped: {}", gpu.backend());
+            return;
+        }
+        let cpu = pdfcraft_ocr::Ocr::load_with_gpu(&models, false).unwrap();
+        let paragraph = "The quarterly report summarizes revenue, operating costs and the outlook for the coming year. \
+            Sales in the northern region grew by twelve percent, while the southern offices remained flat. ";
+        let s = Session::new();
+        let pdf = s.create_from_text("t", &paragraph.repeat(5)).unwrap();
+        let mut viewer = Session::new();
+        let id = viewer.open("text.pdf", None, pdf, None).unwrap();
+        let shot = PageRenderer::new(viewer.get(id).unwrap().bytes.clone(), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            scale: 300.0 / 72.0,
+            ..Default::default()
+        });
+        let (a, b) = (gpu.recognize(&shot.rgba, shot.width, shot.height).unwrap(), cpu.recognize(&shot.rgba, shot.width, shot.height).unwrap());
+        assert_eq!(a.iter().map(|l| l.text()).collect::<Vec<_>>(), b.iter().map(|l| l.text()).collect::<Vec<_>>());
+        for (la, lb) in a.iter().zip(&b) {
+            for (wa, wb) in la.words.iter().zip(&lb.words) {
+                let off = wa.rect.iter().zip(&wb.rect).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max);
+                assert!(off <= 8.0, "{} at {:?} on the GPU, {:?} on the CPU", wa.text, wa.rect, wb.rect);
+            }
+        }
+    }
 }
