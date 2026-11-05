@@ -80,6 +80,13 @@ impl DocView {
         f.focus = true;
     }
 
+    /// Open or focus Find from ⌘/Ctrl+F and select its existing query.
+    pub(super) fn open_find_from_shortcut(&mut self, ctx: &egui::Context) {
+        let id = egui::Id::unique("find-input");
+        ctx.memory_mut(|memory| memory.surrender_focus(id));
+        self.open_find();
+    }
+
     /// Re-run the search on all pages whose text is known (after the query changed).
     pub fn rerun_find(&mut self) {
         let Some(f) = self.find.as_mut() else { return };
@@ -237,6 +244,12 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
                         if find.focus {
                             r.request_focus();
                             find.focus = false;
+                        }
+                        if r.gained_focus() && !ui.input(|i| i.pointer.any_pressed()) {
+                            let mut state = egui::TextEdit::load_state(ui.ctx(), r.id).unwrap_or_default();
+                            let end = egui::text::CCursor::new(find.query.chars().count());
+                            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
+                            state.store(ui.ctx(), r.id);
                         }
                         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                             step = Some(!ui.input(|i| i.modifiers.shift));

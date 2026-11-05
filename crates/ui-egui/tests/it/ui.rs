@@ -826,6 +826,35 @@ fn find_reports_no_matches() {
 }
 
 #[test]
+fn find_shortcut_replaces_the_existing_query_but_clicking_keeps_editing() {
+    use egui::accesskit::Role;
+
+    let mut h = harness(|app| {
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app.set_option("find", "brown").unwrap();
+    });
+    crate::support::settle(&mut h);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Find text").type_text("fox");
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Find text").value().as_deref(), Some("fox"));
+
+    let mut h = harness(|app| {
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app.set_option("find", "brown").unwrap();
+    });
+    crate::support::settle(&mut h);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Find text").click();
+    h.key_press_modifiers(egui::Modifiers::NONE, egui::Key::End);
+    h.get_by_role_and_label(Role::TextInput, "Find text").type_text(" fox");
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Find text").value().as_deref(), Some("brown fox"));
+}
+
+#[test]
 fn drag_selects_text_and_copy_returns_it() {
     let mut h = harness(|app| {
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
