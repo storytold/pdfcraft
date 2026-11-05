@@ -272,6 +272,15 @@ fn merge(text: &str, within: Within, op: Op, warnings: &mut Vec<String>) -> Merg
 }
 
 /// The edits that put `wants` into the `data` element.
+/// Whether `node` is a multi-select choice list's data group: element children only, every one
+/// a `value` holding text alone.
+fn is_value_group(node: roxmltree::Node) -> bool {
+    let mut elements = node.children().filter(|c| c.is_element()).peekable();
+    elements.peek().is_some()
+        && node.children().filter(|c| c.is_text()).all(|c| c.text().is_some_and(|t| t.trim().is_empty()))
+        && elements.all(|c| c.tag_name().name() == "value" && !c.children().any(|g| g.is_element()))
+}
+
 fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Vec<Edit>, warnings: &mut Vec<String>) {
     // Element children by local name, per element visited (built once each).
     let mut index: HashMap<roxmltree::NodeId, HashMap<String, Vec<roxmltree::NodeId>>> = HashMap::new();
@@ -311,6 +320,24 @@ fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Ve
                 continue;
             }
             let current: String = node.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
+            // A multi-select choice list is bound to a data group of `value` elements, one per
+            // pick, and its value is theirs joined by newlines (XFA 3.3 p. 198); a new pick
+            // replaces them all, as in Acrobat (p. 199).
+            if is_value_group(node) {
+                let held: Vec<&str> = node.children().filter(|c| c.is_element()).map(|c| c.text().unwrap_or("")).collect();
+                if held.join("\n") == w.text {
+                    continue;
+                }
+                let inner: String = w.text.split('\n').filter(|v| !v.is_empty()).map(|v| format!("<value>{}</value>", escape(v).0)).collect();
+                match replace_edit(src, node, &inner) {
+                    Some(e) => edits.push(e),
+                    None => skipped(warnings, STRUCTURED, &w.som),
+                }
+                if dropped {
+                    skipped(warnings, CONTROL, &w.som);
+                }
+                continue;
+            }
             if node.children().any(|c| c.is_element()) {
                 let all: String = node.descendants().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
                 // Ignore existing XML indentation, but not whitespace in the accepted value.

@@ -4587,3 +4587,29 @@ fn a_template_inside_the_data_is_not_the_form() {
     let real = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"/></template></xdp:xdp>";
     assert_eq!(parse(real).unwrap().0.root.common.name.as_deref(), Some("form1"));
 }
+
+/// A multi-select choice list is bound to a data group of `value` elements, one per pick, and its
+/// value is theirs joined by newlines (XFA 3.3 p. 198). New picks replace the group's `value`
+/// elements, values off the list included, as Acrobat discards them (p. 199): the group was left
+/// as it was, so the old picks came back on reading, in the datasets and in the scripts' data.
+#[test]
+fn a_multi_select_lists_data_group_takes_its_new_picks() {
+    let shell =
+        crate::fixtures::static_shell("<form1><page1><grains><value>rye</value><value>barley</value><value>wheat</value></grains></page1></form1>");
+    let mut doc = Document::open(Arc::new(shell)).unwrap();
+    let path = som_to_path("form1[0].page1[0].grains[0]");
+    assert!(write_data_value(&mut doc, &path, "wheat\nmillet & oats").unwrap().written);
+    let data = crate::script::data_of(&doc).unwrap();
+    assert_eq!(data.value_at(&path).as_deref(), Some("wheat\nmillet & oats"));
+    assert_eq!(data.count(&path, "value"), 2, "one value element per pick");
+    assert!(!write_data_value(&mut doc, &path, "wheat\nmillet & oats").unwrap().written, "the same picks change nothing");
+    assert!(write_data_value(&mut doc, &path, "").unwrap().written);
+    assert_eq!(crate::script::data_of(&doc).unwrap().value_at(&path).as_deref(), Some(""), "nothing picked");
+    // The in-memory data, which scripts read before the packet is written, follows the same rule.
+    let mut tree = crate::script::data_of(
+        &Document::open(Arc::new(crate::fixtures::static_shell("<form1><page1><grains><value>rye</value></grains></page1></form1>"))).unwrap(),
+    )
+    .unwrap();
+    tree.apply(&DataOp::Value { path: path.clone(), text: "millet\nwheat".into() });
+    assert_eq!(tree.value_at(&path).as_deref(), Some("millet\nwheat"));
+}

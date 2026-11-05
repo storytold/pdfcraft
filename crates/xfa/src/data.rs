@@ -125,10 +125,17 @@ impl DataNode {
     pub fn apply(&mut self, op: &DataOp) {
         match op {
             DataOp::Value { path, text } => {
-                if let Some(n) = self.ensure(path)
-                    && n.children.is_empty()
-                {
-                    n.text = text.clone();
+                if let Some(n) = self.ensure(path) {
+                    if n.children.is_empty() {
+                        n.text = text.clone();
+                    } else if n.children.iter().all(|c| c.name == "value" && c.children.is_empty()) {
+                        // A multi-select list's picks, one `value` each (see `value_at`).
+                        n.children = text
+                            .split('\n')
+                            .filter(|v| !v.is_empty())
+                            .map(|v| DataNode { name: "value".into(), text: v.to_string(), children: Vec::new() })
+                            .collect();
+                    }
                 }
             }
             DataOp::Instances { parent, name, count } => {
