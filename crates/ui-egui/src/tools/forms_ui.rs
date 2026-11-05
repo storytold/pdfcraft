@@ -15,7 +15,7 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
-use crate::page_router::{Hit, Owner};
+use crate::page_router::{Hit, Owner, PagePress};
 use crate::theme::Tokens;
 
 const FOCUS_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
@@ -214,26 +214,42 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField
     Some(Hit::new(Owner::Field { field, widget }, Layer::Field, icon))
 }
 
-/// Presses and clicks on form widgets of one page, on the field the press was on ([`hit`]).
-/// `true` while a field holds the press.
-pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], allowed: bool, view: &mut DocView) -> bool {
-    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
-    // The field under the pointer, for its tooltip and its Mouse Enter and Exit actions.
-    let hovered = ptr.within(xf.rect).and_then(|p| hit(xf, info, page, form, allowed, p)).and_then(|h| match h.owner {
-        Owner::Field { field, widget } => form.get(field).map(|f| (f, widget)),
-        _ => None,
-    });
-    // Its Mouse Enter and Exit actions run where the form may be filled in, as its other
-    // actions do: elsewhere a script changing a value would only be refused, on every pass.
-    if allowed && let Some((f, wi)) = hovered {
-        view.forms.hover_seen = Some((f.name.clone(), wi));
+/// Notes the field `hover` is on (the top hit under the pointer) for its Mouse Enter and Exit
+/// actions (`PdfCraftApp::run_pointer_triggers`). They run where the form may be filled in, as its
+/// other actions do: elsewhere a script changing a value would only be refused, on every pass.
+pub(crate) fn note_hover(view: &mut DocView, form: &[FormField], hover: Option<&Hit>, allowed: bool) {
+    if allowed
+        && let Some(Owner::Field { field, widget }) = hover.map(|h| h.owner)
+        && let Some(f) = form.get(field)
+    {
+        view.forms.hover_seen = Some((f.name.clone(), widget));
     }
-    // The field's tooltip (`/TU`) under the pointer, as Acrobat shows it on hover (#3854). ISO
-    // 32000-2 Table 226 makes it the name the user interface identifies the field by.
-    if let Some(tip) = hovered.and_then(|(f, _)| f.tooltip.as_deref()).filter(|t| !t.trim().is_empty()) {
+}
+
+/// The tooltip (`/TU`) of the field under the pointer, as Acrobat shows it on hover (#3854): only
+/// where the field is what a press would take (`hover`, the top hit there). ISO 32000-2 Table 226
+/// makes it the name the user interface identifies the field by.
+pub(crate) fn tooltip(resp: &egui::Response, form: &[FormField], hover: Option<&Hit>) {
+    if let Some(Owner::Field { field, .. }) = hover.map(|h| h.owner)
+        && let Some(tip) = form.get(field).and_then(|f| f.tooltip.as_deref()).filter(|t| !t.trim().is_empty())
+    {
         resp.clone().on_hover_text_at_pointer(tip);
     }
-    let Some(Owner::Field { field, widget: wi }) = view.router.owner(page) else { return false };
+}
+
+/// Presses and clicks on form widgets of one page, on the field the press is on (`press`, from
+/// [`hit`]). `released_over`: the press's click came up over the widget it began on. `true` while a
+/// field holds the press.
+pub(crate) fn page_input(
+    cx: PageToolContext<'_>,
+    form: &[FormField],
+    allowed: bool,
+    press: PagePress,
+    released_over: bool,
+    view: &mut DocView,
+) -> bool {
+    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
+    let PagePress::Mine(Owner::Field { field, widget: wi }) = press else { return false };
     let Some((f, w)) = form.get(field).and_then(|f| f.widgets.get(wi).map(|w| (f, w))) else { return false };
     let usable = usable(f, w, allowed);
     // A press on a field that takes input runs its Mouse Down action first, before the field
@@ -254,8 +270,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], allowed: b
     }
     // A click counts released over the widget its press was on, as a button's does: one that slips
     // off it first does nothing (a check box's overlay closes on it too).
-    if !resp.clicked() || !ptr.pos.and_then(|p| hit(xf, info, page, form, allowed, p)).is_some_and(|h| h.owner == Owner::Field { field, widget: wi })
-    {
+    if !resp.clicked() || !released_over {
         return true;
     }
     if !allowed {
@@ -544,7 +559,8 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
     picked
 }
 
-/// Paint focus and hover frames on a page, the pages' `pointer` over it.
+/// Paint focus and hover frames on a page: the hover frame round the widget a press under the
+/// pointer would take (`hover`, the top hit there).
 pub(crate) fn paint_page(
     painter: &egui::Painter,
     xf: &PageXform,
@@ -552,9 +568,13 @@ pub(crate) fn paint_page(
     info: &DocInfo,
     form: &[FormField],
     view: &DocView,
-    pointer: Option<Pos2>,
+    hover: Option<&Hit>,
 ) {
-    for f in form {
+    let hovered = match hover.map(|h| h.owner) {
+        Some(Owner::Field { field, widget }) => Some((field, widget)),
+        _ => None,
+    };
+    for (fi, f) in form.iter().enumerate() {
         for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page) && !w.hidden) {
             let r = widget_rect(xf, info, page, w.rect);
             let focused = view.forms.focus.as_ref().is_some_and(|x| x.name == f.name && x.widget == wi);
@@ -563,7 +583,7 @@ pub(crate) fn paint_page(
             }
             if view.forms.unbaked.contains(&(f.name.clone(), page)) {
                 paint_unbaked_widget(painter, xf, f, w, r);
-            } else if fillable(f) && pointer.is_some_and(|p| r.contains(p)) {
+            } else if fillable(f) && hovered == Some((fi, wi)) {
                 painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, FOCUS_BLUE.gamma_multiply(0.8)), egui::StrokeKind::Outside);
             }
         }
