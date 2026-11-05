@@ -234,6 +234,100 @@ fn view(pages: usize, layout: PageLayout, continuous: bool) -> DocView {
     DocView::new(DocId(1), &info, ViewDefaults { layout, continuous, ..Default::default() })
 }
 
+/// Delivers a raw move event to the same viewport path used by native input.
+fn viewport_wheel_event(unit: egui::MouseWheelUnit, delta: Vec2) -> egui::Event {
+    egui::Event::MouseWheel { unit, delta, phase: egui::TouchPhase::Move, modifiers: egui::Modifiers::NONE, source: egui::MouseWheelSource::Unknown }
+}
+
+/// Runs actual UI passes while explicitly discarding the unused texture output.
+fn viewport_wheel_frame(ctx: &egui::Context, view: &mut DocView, time: f64, events: Vec<egui::Event>, passes: usize, animate: bool) -> Vec<Vec2> {
+    let screen = Rect::from_min_size(Pos2::ZERO, vec2(600.0, 800.0));
+    let mut events = events;
+    events.insert(0, egui::Event::PointerMoved(screen.center()));
+    let input = egui::RawInput { screen_rect: Some(screen), time: Some(time), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
+    let mut deltas = Vec::new();
+    ctx.run_ui(input, |ui| {
+        let avail = ui.max_rect();
+        assert!(ui.rect_contains_pointer(avail), "the synthetic pointer owns the viewport");
+        let wheel = read_wheel(ui, view, avail, false, false, true, animate);
+        deltas.push(wheel.precise_scroll + wheel.coarse_scroll);
+        assert_eq!(ui.input(|i| i.smooth_scroll_delta), Vec2::ZERO, "egui's wheel copy is drained on every owned pass");
+        if deltas.len() < passes {
+            ui.ctx().request_discard("exercise viewport wheel ownership across passes");
+        }
+    })
+    .drop_without_applying_deltas();
+    assert_eq!(deltas.len(), passes);
+    deltas
+}
+
+/// Fixes line distance and discard allowance independently of host preferences.
+fn viewport_wheel_context() -> egui::Context {
+    let ctx = egui::Context::default();
+    ctx.options_mut(|options| {
+        options.max_passes = std::num::NonZeroUsize::new(3).unwrap();
+        options.input_options.line_scroll_speed = 100.0;
+    });
+    ctx
+}
+
+/// A frame's admitted distance is unchanged by additional layout passes.
+#[test]
+fn viewport_wheel_discard_passes_neither_repeat_nor_advance_motion() {
+    for animate in [false, true] {
+        let (one, three) = (viewport_wheel_context(), viewport_wheel_context());
+        let (mut single_view, mut multi_view) = (view(2, PageLayout::Single, true), view(2, PageLayout::Single, true));
+        let mut total = Vec2::ZERO;
+        for frame in 0..90 {
+            let events = if frame == 0 {
+                vec![
+                    viewport_wheel_event(egui::MouseWheelUnit::Line, vec2(0.0, -1.0)),
+                    viewport_wheel_event(egui::MouseWheelUnit::Point, vec2(0.0, -7.0)),
+                ]
+            } else {
+                Vec::new()
+            };
+            let time = 1.0 + f64::from(frame) / 60.0;
+            let expected = viewport_wheel_frame(&one, &mut single_view, time, events.clone(), 1, animate);
+            let actual = viewport_wheel_frame(&three, &mut multi_view, time, events, 3, animate);
+            assert!((actual[0] - expected[0]).length() < 0.001, "frame {frame}, animations {animate}: {actual:?} versus {expected:?}");
+            assert_eq!(&actual[1..], &[Vec2::ZERO, Vec2::ZERO], "discarded passes do not spend the retained queue");
+            if frame == 0 {
+                if animate {
+                    assert!(actual[0].y < -7.0 && actual[0].y > -107.0, "fine input is direct and the whole coarse amount is eased");
+                } else {
+                    assert_eq!(actual[0], vec2(0.0, -107.0));
+                }
+            }
+            total += actual[0];
+        }
+        assert!((total.y + 107.0).abs() < 0.002, "one admitted mixed bucket preserves distance: {total:?}");
+        assert!(!multi_view.wheel_motion.has_pending());
+    }
+}
+
+/// Mixed current input survives an older same-axis queue being interrupted.
+#[test]
+fn viewport_precise_input_cancels_only_older_motion_on_its_axis() {
+    let (actual_ctx, reference_ctx) = (viewport_wheel_context(), viewport_wheel_context());
+    let (mut actual, mut reference) = (view(2, PageLayout::Single, true), view(2, PageLayout::Single, true));
+    viewport_wheel_frame(&actual_ctx, &mut actual, 1.0, vec![viewport_wheel_event(egui::MouseWheelUnit::Line, vec2(1.0, -1.0))], 1, true);
+    viewport_wheel_frame(&reference_ctx, &mut reference, 1.0, vec![viewport_wheel_event(egui::MouseWheelUnit::Line, vec2(1.0, 0.0))], 1, true);
+    let mixed =
+        vec![viewport_wheel_event(egui::MouseWheelUnit::Line, vec2(0.0, -1.0)), viewport_wheel_event(egui::MouseWheelUnit::Point, vec2(0.0, 2.0))];
+    let mut total = Vec2::ZERO;
+    for frame in 1..90 {
+        let events = if frame == 1 { mixed.clone() } else { Vec::new() };
+        let time = 1.0 + f64::from(frame) / 60.0;
+        let output = viewport_wheel_frame(&actual_ctx, &mut actual, time, events.clone(), 3, true)[0];
+        let expected = viewport_wheel_frame(&reference_ctx, &mut reference, time, events, 1, true)[0];
+        assert!((output - expected).length() < 0.001, "older y motion is canceled, x motion and new coarse input survive");
+        total += output;
+    }
+    assert!(total.x > 0.0, "the untouched x tail continues");
+    assert!((total.y + 98.0).abs() < 0.002, "only the new y bucket is admitted: {total:?}");
+}
+
 fn history_search_view() -> DocView {
     let mut v = view(5, PageLayout::Single, true);
     v.texts.insert(
@@ -314,6 +408,24 @@ fn find_test_text(s: &str) -> PageText {
         line_of: s.chars().map(|_| 0).collect(),
         space_before: s.chars().map(|_| false).collect(),
     }
+}
+
+#[test]
+fn accessibility_text_is_reused_until_the_page_text_changes() {
+    let mut v = view(1, PageLayout::Single, true);
+    v.texts.insert(0, Arc::new(find_test_text("héllo")));
+
+    let (text, lengths) = v.accessibility_text(0).unwrap();
+    assert_eq!(text, "héllo");
+    assert_eq!(lengths, &[1, 2, 1, 1, 1]);
+    let (text_ptr, lengths_ptr) = (text.as_ptr(), lengths.as_ptr());
+    let (text, lengths) = v.accessibility_text(0).unwrap();
+    assert_eq!((text.as_ptr(), lengths.as_ptr()), (text_ptr, lengths_ptr), "reuse the conversion on unchanged frames");
+
+    let result = find_text_result(0, "changed");
+    v.last_queue.push(result.request);
+    v.receive_result(&egui::Context::default(), result);
+    assert_eq!(v.accessibility_text(0).unwrap().0, "changed", "a replacement page layer refreshes the cached run");
 }
 
 /// A text-layer result for `page`, for the search tests below.
@@ -1273,6 +1385,141 @@ fn page_and_tile_admission_accounts_for_bytes_before_count_limits() {
     assert!(!v.admit_texture(RenderRequest::default(), PAGE_BYTES + 1));
 }
 
+/// The frame demand of a continuous view showing `shown`, with its prefetch, in queue order.
+fn scroll_demand(v: &DocView, shown: &[usize]) -> Vec<RenderRequest> {
+    let mut wanted: Vec<(usize, f32, u64, Option<Tile>)> = shown.iter().map(|&p| (p, 1.0, 1000, None)).collect();
+    wanted.extend(scroll_prefetch(v, shown).into_iter().map(|p| (p, 1.0, 1000, None)));
+    order_demand(v, &mut wanted, shown);
+    wanted.into_iter().map(|(page, scale, tag, tile)| RenderRequest { page, scale, tag, tile, ..Default::default() }).collect()
+}
+
+#[test]
+fn continuous_view_prefetches_the_rows_ahead_of_the_way_it_moved() {
+    let mut v = view(20, PageLayout::Single, true);
+    v.current = 10;
+    assert!(scroll_prefetch(&v, &[9, 10]).is_empty(), "nothing before the view moves");
+    v.scroll_dir = 1;
+    assert_eq!(scroll_prefetch(&v, &[9, 10]), [11, 12]);
+    v.scroll_dir = -1;
+    assert_eq!(scroll_prefetch(&v, &[9, 10]), [8, 7]);
+    assert_eq!(scroll_prefetch(&v, &[0, 1]), Vec::<usize>::new(), "nothing above the first page");
+    let mut two = view(20, PageLayout::TwoUp, true);
+    two.scroll_dir = 1;
+    assert_eq!(scroll_prefetch(&two, &[8, 9]), [10, 11, 12, 13], "two rows of two pages");
+    let mut single = view(20, PageLayout::Single, false);
+    single.scroll_dir = 1;
+    assert!(scroll_prefetch(&single, &[9]).is_empty(), "single-page view keeps its own prefetch");
+}
+
+#[test]
+fn scrolling_the_other_way_drops_the_prefetch_from_the_queue() {
+    let info = DocInfo {
+        pages: (0..20)
+            .map(|_| pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 })
+            .collect(),
+        ..Default::default()
+    };
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults { continuous: true, ..Default::default() });
+    v.current = 10;
+    v.scroll_dir = 1;
+    v.frame_visible = [9, 10].into();
+    v.frame_queue = scroll_demand(&v, &[9, 10]);
+    let down: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+    assert_eq!(down, [10, 9, 11, 12], "on-screen pages first, then the pages below");
+    v.scroll_dir = -1;
+    v.frame_queue = scroll_demand(&v, &[9, 10]);
+    let up: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+    assert_eq!(up, [10, 9, 8, 7], "the pages below leave the queue, which cancels their renders");
+}
+
+#[test]
+fn the_way_the_view_moved_does_not_reorder_the_pages_on_screen() {
+    let mut v = view(20, PageLayout::Single, true);
+    v.current = 10;
+    let shown = [8, 9, 10, 11, 12];
+    let still: Vec<usize> = scroll_demand(&v, &shown).iter().map(|r| r.page).collect();
+    v.scroll_dir = 1;
+    let down: Vec<usize> = scroll_demand(&v, &shown).iter().map(|r| r.page).collect();
+    assert_eq!(down[..5], still[..5], "on-screen pages keep their order");
+    assert_eq!(down[5..], [13, 14]);
+    // Off-screen pages ahead of the move come before nearer ones behind it.
+    let mut wanted = vec![(9, 1.0, 1000, None), (13, 1.0, 1000, None), (10, 1.0, 1000, None)];
+    order_demand(&v, &mut wanted, &[10]);
+    assert_eq!(wanted.iter().map(|w| w.0).collect::<Vec<_>>(), [10, 13, 9]);
+}
+
+#[test]
+fn the_prefetch_ahead_stays_within_the_page_allowance() {
+    let mut info = thumbnail_info(20);
+    for p in &mut info.pages {
+        p.width = 2000.0;
+        p.height = 2000.0;
+    }
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults { continuous: true, ..Default::default() });
+    v.current = 3;
+    v.scroll_dir = 1;
+    // Eight 16 MB pages on screen leave no room in the 128 MiB allowance for another.
+    let shown: Vec<usize> = (0..8).collect();
+    v.frame_visible = shown.iter().copied().collect();
+    v.frame_queue = scroll_demand(&v, &shown);
+    assert!(v.frame_queue.iter().any(|r| r.page == 8), "the prefetch asks for the next page");
+    let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+    assert_eq!(pages.iter().copied().max(), Some(7), "no prefetch past the allowance: {pages:?}");
+}
+
+#[test]
+fn an_arriving_raster_evicts_pages_nobody_asks_for_and_then_pages_behind_the_scroll() {
+    let ctx = egui::Context::default();
+    ctx.input_mut(|i| i.max_texture_side = 4096);
+    let mut v = view(20, PageLayout::Single, true);
+    let texture = |name| ctx.load_texture(name, egui::ColorImage::filled([4000, 4000], Color32::WHITE), TextureOptions::LINEAR);
+    v.current = 10;
+    v.scroll_dir = 1;
+    v.frame_visible = [10].into();
+    // A prefetch off screen: a raster arriving on screen would widen the allowance to hold it.
+    let page = RenderRequest { page: 11, scale: 1.0, tag: 1000, ..Default::default() };
+    let bytes = rgba_bytes(4000, 4000);
+    // Page 7 is behind the scroll and no longer asked for; page 14 is the prefetch ahead.
+    v.frame_demanded = [10, 11, 14].into();
+    v.pages.insert(7, PageTex { tag: 1000, tex: texture("behind") });
+    v.pages.insert(14, PageTex { tag: 1000, tex: texture("ahead") });
+    assert!(v.admit_texture(page, bytes));
+    assert!(v.pages.contains_key(&14) && !v.pages.contains_key(&7), "the page nobody asks for goes first");
+    // Both asked for: the page behind the scroll goes, though it is nearer.
+    v.frame_demanded = [7, 10, 11, 14].into();
+    v.pages.insert(7, PageTex { tag: 1000, tex: texture("behind") });
+    assert!(v.admit_texture(page, bytes));
+    assert!(v.pages.contains_key(&14) && !v.pages.contains_key(&7), "the page behind the scroll goes first");
+}
+
+#[test]
+fn a_tiled_page_ahead_keeps_its_sharper_raster() {
+    let ctx = egui::Context::default();
+    let mut v = view(20, PageLayout::Single, true);
+    let p = pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
+    let (scale, max_side) = (12.0, 16384.0);
+    let backdrop = BASE_SIDE / 400.0;
+    // At 12× the page is 4800 pixels tall: tiled, with a 2048-pixel backdrop.
+    assert_eq!(prefetch_demand(&v, &p, 3, scale, scale_tag(scale), max_side), (3, backdrop, scale_tag(backdrop), None));
+    assert_eq!(prefetch_demand(&v, &p, 3, 2.0, scale_tag(2.0), max_side), (3, 2.0, scale_tag(2.0), None), "not tiled: the page as drawn");
+    let texture = |name| ctx.load_texture(name, egui::ColorImage::filled([1, 1], Color32::WHITE), TextureOptions::LINEAR);
+    v.pages.insert(3, PageTex { tag: scale_tag(8.0), tex: texture("sharper") });
+    assert_eq!(prefetch_demand(&v, &p, 3, scale, scale_tag(scale), max_side), (3, 8.0, scale_tag(8.0), None), "the sharper raster is kept");
+    v.pages.insert(3, PageTex { tag: scale_tag(2.0), tex: texture("softer") });
+    assert_eq!(prefetch_demand(&v, &p, 3, scale, scale_tag(scale), max_side), (3, backdrop, scale_tag(backdrop), None));
+    v.pages.insert(3, PageTex { tag: STALE_TAG, tex: texture("stale") });
+    assert_eq!(prefetch_demand(&v, &p, 3, scale, scale_tag(scale), max_side), (3, backdrop, scale_tag(backdrop), None));
+}
+
+#[test]
+fn a_zoom_or_layout_change_clears_the_scroll_direction() {
+    assert_eq!(scroll_direction(0, 40.0, false), 1);
+    assert_eq!(scroll_direction(1, -40.0, false), -1);
+    assert_eq!(scroll_direction(-1, 0.2, false), -1, "a still view keeps its direction");
+    assert_eq!(scroll_direction(1, -300.0, true), 0, "a zoom out moves the offset up without a scroll");
+    assert_eq!(scroll_direction(-1, 300.0, true), 0);
+}
+
 #[test]
 fn on_screen_pages_and_tiles_are_admitted_beyond_the_prefetch_allowance() {
     let ctx = egui::Context::default();
@@ -1298,6 +1545,99 @@ fn on_screen_pages_and_tiles_are_admitted_beyond_the_prefetch_allowance() {
         .map(|x| RenderRequest { page: 0, scale: 1.0, tag: 1000, tile: Some(Tile { x: x * TILE, y: 0, w: 1024, h: 1024 }), ..Default::default() })
         .collect();
     assert_eq!(v.prepare_render_queue(&info, 1.0).len(), 40);
+}
+
+/// `count` pages that each make a 2,980 x 3,850 raster (about 43.8 MiB, a Letter page at fit
+/// width in a 3440 x 1440 window) at scale `1 / size`.
+fn fit_width_pages(count: usize, size: f32) -> DocInfo {
+    let mut info = thumbnail_info(count);
+    for p in &mut info.pages {
+        p.width = 2980.0 * size;
+        p.height = 3850.0 * size;
+    }
+    info
+}
+
+#[test]
+fn large_pages_on_screen_widen_the_allowance_for_the_pages_around_them() {
+    // A wide window at fit width, or smaller pages zoomed in: the raster's size is what counts.
+    for (size, scale) in [(1.0, 1.0), (0.5, 2.0)] {
+        let info = fit_width_pages(5, size);
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        v.frame_visible = HashSet::from([3, 4]);
+        v.frame_queue = (0..5).map(|page| RenderRequest { page, scale, tag: 1000, ..Default::default() }).collect();
+        let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+        assert_eq!(pages, (0..5).collect::<Vec<_>>(), "two pages on screen and three off screen at scale {scale}");
+    }
+}
+
+#[test]
+fn tiled_pages_on_screen_keep_the_128_mib_page_allowance() {
+    let info = fit_width_pages(8, 1.0);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.frame_visible = HashSet::from([3, 4]);
+    // Pages 3 and 4 are on screen as a backdrop and tiles, beside whole pages off screen.
+    let mut queue: Vec<RenderRequest> = [3, 4]
+        .into_iter()
+        .flat_map(|page| {
+            [
+                RenderRequest { page, scale: 0.25, tag: 2000, ..Default::default() },
+                RenderRequest { page, scale: 1.0, tag: 1000, tile: Some(Tile { x: 0, y: 0, w: 1024, h: 1024 }), ..Default::default() },
+            ]
+        })
+        .collect();
+    queue.extend([2, 5, 1, 6, 0, 7].map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }));
+    v.frame_queue = queue;
+    let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().filter(|r| r.tile.is_none()).map(|r| r.page).collect();
+    assert_eq!(pages, vec![3, 4, 2, 5], "two backdrops and two whole pages fit in 128 MiB");
+}
+
+#[test]
+fn rasters_on_screen_size_the_allowance_for_arriving_pages() {
+    let ctx = egui::Context::default();
+    ctx.begin_pass(egui::RawInput { max_texture_side: Some(4096), ..Default::default() });
+    let info = fit_width_pages(8, 1.0);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    let off_screen = RenderRequest { page: 0, scale: 1.0, tag: 1000, ..Default::default() };
+    let mib = 1024 * 1024;
+    assert!(!v.admit_texture(off_screen, 150 * mib), "with nothing on screen the allowance is 128 MiB");
+    v.frame_visible = HashSet::from([3, 4]);
+    v.last_queue = [3, 4].map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }).to_vec();
+    for req in v.last_queue.clone() {
+        assert!(v.receive_result(&ctx, solid_result(req, 2980, 3850)) > 0, "on-screen page {} uploaded", req.page);
+    }
+    assert!(v.admit_texture(off_screen, 150 * mib), "two 43.8 MiB pages on screen allow 350 MiB, or 256 MiB on the web");
+    assert!(!v.admit_texture(off_screen, 400 * mib), "past the largest allowance");
+    ctx.end_pass().textures_delta.clear();
+}
+
+#[test]
+fn a_raster_held_on_screen_without_a_request_sizes_the_allowance() {
+    let ctx = egui::Context::default();
+    ctx.begin_pass(egui::RawInput { max_texture_side: Some(4096), ..Default::default() });
+    let info = fit_width_pages(8, 1.0);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.frame_visible = HashSet::from([3]);
+    let req = RenderRequest { page: 3, scale: 1.0, tag: 1000, ..Default::default() };
+    v.last_queue = vec![req];
+    assert!(v.receive_result(&ctx, solid_result(req, 2980, 3850)) > 0);
+    // A zoom hold leaves page 3's request out while its raster stays on screen.
+    v.frame_queue = [2, 4, 1].map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }).to_vec();
+    let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+    assert_eq!(pages, vec![2, 4, 1]);
+    assert!(v.pages.contains_key(&3), "the held raster is kept beside the prefetch");
+    ctx.end_pass().textures_delta.clear();
+}
+
+#[test]
+fn the_page_allowance_is_eight_on_screen_rasters_within_its_limits() {
+    let mib = 1024 * 1024;
+    assert_eq!(cache::page_budget(0), PAGE_BYTES);
+    assert_eq!(cache::page_budget(10 * mib), PAGE_BYTES);
+    assert_eq!(cache::page_budget(20 * mib), 160 * mib);
+    let ceiling = cache::page_budget(usize::MAX);
+    assert_eq!(cache::page_budget(64 * mib), ceiling);
+    assert_eq!(ceiling, if cfg!(target_arch = "wasm32") { 256 * mib } else { 384 * mib });
 }
 
 #[test]
@@ -2036,4 +2376,62 @@ fn image_handles_account_for_document_and_view_rotation() {
             }
         }
     }
+}
+
+/// Cancelling the pages' pointer gestures (Escape, automation's cancel) lets go of a
+/// camera corner being dragged: the quadrilateral stays, and no corner follows the pointer.
+#[test]
+fn cancelling_pointer_gestures_lets_go_of_a_camera_corner() {
+    let mut v = view(1, PageLayout::Single, true);
+    v.camera = Some(crate::camera_ui::CameraQuad { grab: Some(2), ..crate::camera_ui::CameraQuad::inset(0, 300.0, 400.0) });
+    v.cancel_pointer_gestures();
+    assert_eq!(v.camera.map(|q| q.grab), Some(None));
+}
+
+/// A camera corner at the page's edge is hit on the page only: a press off the page is no page's,
+/// so its grab cursor does not show there.
+#[test]
+fn a_camera_corner_at_the_page_edge_is_hit_on_the_page_only() {
+    let mut v = view(1, PageLayout::Single, true);
+    v.camera = Some(crate::camera_ui::CameraQuad { page: 0, corners: [[0.0, 0.0], [300.0, 0.0], [300.0, 400.0], [0.0, 400.0]], grab: None });
+    let xf = PageXform { rect: Rect::from_min_size(pos2(10.0, 20.0), egui::vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 };
+    assert!(crate::camera_ui::hit(&xf, 0, &v, pos2(14.0, 24.0)).is_some(), "on the page");
+    assert!(crate::camera_ui::hit(&xf, 0, &v, pos2(6.0, 16.0)).is_none(), "just off it");
+}
+
+/// #5125: after Enhance scanned file, the page shown is re-rendered, not the raster of the
+/// scan before it was cleaned (same scale, so nothing else would replace it).
+#[test]
+fn enhancing_a_scan_re_renders_the_page_shown() {
+    let (w, h) = (64usize, 64usize);
+    let px: Vec<u8> = (0..w * h).map(|i| if i % w < 4 { 30 } else { 198 }).collect();
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n4 0 obj\n<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Length {} >>\nstream\n",
+        px.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(&px);
+    let content = format!("q {w} 0 0 {h} 0 0 cm /Im0 Do Q");
+    pdf.extend_from_slice(
+        format!(
+            "\nendstream\nendobj\n5 0 obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n",
+            content.len()
+        )
+        .as_bytes(),
+    );
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("scan.pdf", None, pdf).unwrap();
+    let (i, doc) = app.active_ids().unwrap();
+    let ctx = egui::Context::default();
+    let tex = ctx.load_texture("before", egui::ColorImage::filled([1, 1], Color32::WHITE), TextureOptions::LINEAR);
+    app.views[i].pages.insert(0, PageTex { tag: 1000, tex });
+    let job = app.session.scan_clean_job(doc, &[], pdfcraft_engine::scan_clean::ScanCleanSettings::default()).unwrap();
+    let cleaned = job.run(|_, _| true).unwrap();
+    assert_eq!(cleaned.report.pages, vec![0], "the page is a scan and gets cleaned");
+    let progress =
+        std::sync::Arc::new(std::sync::Mutex::new(crate::scan_clean_ui::ScanCleanProgress { result: Some(Ok(cleaned)), ..Default::default() }));
+    app.scan_clean_run = Some(crate::scan_clean_ui::ScanCleanRun { doc, progress });
+    app.poll_scan_clean();
+    assert!(app.scan_clean_run.is_none());
+    assert_eq!(app.views[i].pages.get(&0).unwrap().tag, STALE_TAG, "the old raster is re-rendered");
 }
