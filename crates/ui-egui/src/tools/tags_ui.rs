@@ -190,7 +190,6 @@ impl State {
     }
 }
 
-
 /// The chosen page and an edit to apply after the panel releases its document borrow.
 pub(crate) fn panel(
     ui: &mut Ui,
