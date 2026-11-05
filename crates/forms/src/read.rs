@@ -622,6 +622,7 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize, usize) {
         widgets: std::collections::HashSet::new(),
         withheld: std::collections::HashSet::new(),
         left_out: 0,
+        withheld_arrays: std::collections::HashMap::new(),
         scripts: script_budget(),
         values: Allowance::new(MAX_VALUE_BYTES),
         text: Allowance::new(MAX_TEXT_BYTES),
@@ -730,6 +731,9 @@ struct Seen {
     withheld: std::collections::HashSet<ObjRef>,
     /// Fields left out of the reading for text that didn't fit ([`Fields::left_out`]).
     left_out: usize,
+    /// The `/Kids` arrays given by reference that [`withhold_below`] has read, by each reference on
+    /// the way to them, and whether each holds a named kid.
+    withheld_arrays: std::collections::HashMap<ObjRef, bool>,
     scripts: Allowance,
     values: Allowance,
     /// A field whose text doesn't fit is left out of the reading whole: a field read without
@@ -753,37 +757,42 @@ fn on_state_of(doc: &Document, wd: &Dict, text: &mut Allowance) -> Option<String
 /// still takes it. Each is visited once, its text unread, so the walk ends however the kids loop.
 /// How many terminal fields it holds, `r` among them: those with a name and no kid that has one.
 fn withhold_below(doc: &Document, r: ObjRef, seen: &mut Seen) -> usize {
-    let named = |n: &ObjRef| doc.get(*n).as_dict().is_some_and(|d| d.contains(b"T"));
-    // A `/Kids` array several nodes share by reference is read once: its entries are withheld
-    // already, and whether one is named is kept.
-    let mut shared: std::collections::HashMap<ObjRef, bool> = std::collections::HashMap::new();
     let mut terminal = 0usize;
     let mut stack = vec![r];
     while let Some(n) = stack.pop() {
         let node = doc.get(n);
         let Some(d) = node.as_dict() else { continue };
-        let kids_entry = d.get(b"Kids");
-        let holder = kids_entry.and_then(|k| referred(doc, k));
-        let has_named = match holder.and_then(|h| shared.get(&h)) {
-            Some(&has_named) => has_named,
-            None => {
-                let kids: Vec<ObjRef> = kids_entry
-                    .map(|k| doc.resolve(k))
-                    .map(|k| k.as_array().into_iter().flatten().filter_map(Object::as_ref).collect())
-                    .unwrap_or_default();
-                #[cfg(test)]
-                WITHHELD_ENTRIES.with(|c| c.set(c.get() + kids.len()));
-                let has_named = kids.iter().any(named);
-                if let Some(h) = holder {
-                    shared.insert(h, has_named);
-                }
-                for k in kids {
-                    if seen.withheld.insert(k) {
-                        stack.push(k);
+        let has_named = match d.get(b"Kids") {
+            // A `/Kids` array given by reference is read once in a reading: each reference on the
+            // way to it is noted, with whether the array holds a named kid, before what it names
+            // is loaded, so a node naming one already reached loads nothing.
+            Some(Object::Ref(first)) => {
+                let (mut r, mut hops, mut has_named) = (*first, Vec::new(), None);
+                for _ in 0..32 {
+                    if let Some(&known) = seen.withheld_arrays.get(&r) {
+                        has_named = Some(known);
+                        break;
                     }
+                    hops.push(r);
+                    let o = doc.get(r);
+                    #[cfg(test)]
+                    WITHHELD_LOADS.with(|c| c.set(c.get() + 1));
+                    match &*o {
+                        Object::Ref(next) => r = *next,
+                        list => {
+                            has_named = Some(withhold_kids(doc, list, seen, &mut stack));
+                            break;
+                        }
+                    }
+                }
+                let has_named = has_named.unwrap_or(false);
+                for hop in hops {
+                    seen.withheld_arrays.insert(hop, has_named);
                 }
                 has_named
             }
+            Some(list) => withhold_kids(doc, list, seen, &mut stack),
+            None => false,
         };
         if d.contains(b"T") && !has_named {
             terminal = terminal.saturating_add(1);
@@ -792,10 +801,27 @@ fn withhold_below(doc: &Document, r: ObjRef, seen: &mut Seen) -> usize {
     terminal
 }
 
+/// Withholds the kids `list` holds, pushing those not withheld before onto `stack`; whether one of
+/// them has a name.
+fn withhold_kids(doc: &Document, list: &Object, seen: &mut Seen, stack: &mut Vec<ObjRef>) -> bool {
+    let kids: Vec<ObjRef> = doc.resolve(list).as_array().into_iter().flatten().filter_map(Object::as_ref).collect();
+    #[cfg(test)]
+    WITHHELD_ENTRIES.with(|c| c.set(c.get() + kids.len()));
+    let has_named = kids.iter().any(|k| doc.get(*k).as_dict().is_some_and(|d| d.contains(b"T")));
+    for k in kids {
+        if seen.withheld.insert(k) {
+            stack.push(k);
+        }
+    }
+    has_named
+}
+
 #[cfg(test)]
 thread_local! {
     /// `/Kids` entries [`withhold_below`] read on this thread.
     pub(crate) static WITHHELD_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Objects [`withhold_below`] loaded on the way to a `/Kids` array on this thread.
+    pub(crate) static WITHHELD_LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Read the field at `r` and the fields under it into `out`, with what they inherit from

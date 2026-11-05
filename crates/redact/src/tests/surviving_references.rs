@@ -132,19 +132,22 @@ fn a_widget_of_a_field_the_form_reading_lacks_refuses_the_redaction() {
     assert!(full_save_holds(&orphan, b"SSN-078-05-1120"), "the field outside the mark keeps its value");
 }
 
-/// Nodes sharing one `/Kids` array: redaction's walk of the form's tree reads the array once, not
+/// Nodes sharing one `/Kids` array, which the field reaches through a reference to a reference:
+/// redaction's walk of the form's tree loads each reference once and reads the array once, not
 /// once for each node that names it.
 #[test]
 fn a_kids_array_nodes_share_is_read_once_by_the_form_tree() {
     let k = 2000;
-    let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /AcroForm << /Fields [2 0 R] >> >>".to_vec(), b"<< /FT /Tx /T (f) /Kids 3 0 R >>".to_vec()];
-    objs.push(format!("[{}]", (0..k).map(|i| format!("{} 0 R", i + 4)).collect::<Vec<_>>().join(" ")).into_bytes());
-    objs.extend((0..k).map(|_| b"<< /Kids 3 0 R >>".to_vec()));
+    let mut objs: Vec<Vec<u8>> =
+        vec![b"<< /Type /Catalog /AcroForm << /Fields [2 0 R] >> >>".to_vec(), b"<< /FT /Tx /T (f) /Kids 3 0 R >>".to_vec(), b"4 0 R".to_vec()];
+    objs.push(format!("[{}]", (0..k).map(|i| format!("{} 0 R", i + 5)).collect::<Vec<_>>().join(" ")).into_bytes());
+    objs.extend((0..k).map(|_| b"<< /Kids 4 0 R >>".to_vec()));
     let doc = pdf(objs);
     TREE_ENTRIES.with(|c| c.set(0));
+    TREE_LOADS.with(|c| c.set(0));
     assert_eq!(form_tree(&doc).len(), k + 1);
-    let entries = TREE_ENTRIES.with(std::cell::Cell::get);
-    assert!(entries <= 2 * k, "{entries} entries read");
+    let (entries, loads) = (TREE_ENTRIES.with(std::cell::Cell::get), TREE_LOADS.with(std::cell::Cell::get));
+    assert_eq!((entries, loads), (k, 2), "the reference and the array, each once");
 }
 
 /// A surviving form shares the page's resource dictionary, which lists the image the mark

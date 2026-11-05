@@ -776,15 +776,34 @@ fn form_tree(doc: &Document) -> HashSet<ObjRef> {
     });
     let mut stack = fields.unwrap_or_default();
     let mut tree: HashSet<ObjRef> = stack.iter().copied().collect();
-    // A `/Kids` array several nodes share by reference is read once: its entries are in the tree.
-    let mut expanded = HashSet::new();
+    // A `/Kids` array given by reference is read once: each reference on the way to it is noted
+    // before what it names is loaded, so a node naming one already reached loads nothing.
+    let mut reached = HashSet::new();
     while let Some(n) = stack.pop() {
         let node = doc.get(n);
         let Some(kids) = node.as_dict().and_then(|d| d.get(b"Kids")) else { continue };
-        if referred(doc, kids).is_some_and(|holder| !expanded.insert(holder)) {
-            continue;
-        }
-        let kids = refs(kids);
+        let kids = match kids {
+            Object::Ref(first) => {
+                let (mut r, mut list) = (*first, None);
+                for _ in 0..32 {
+                    if !reached.insert(r) {
+                        break;
+                    }
+                    let o = doc.get(r);
+                    #[cfg(test)]
+                    TREE_LOADS.with(|c| c.set(c.get() + 1));
+                    match &*o {
+                        Object::Ref(next) => r = *next,
+                        _ => {
+                            list = Some(o);
+                            break;
+                        }
+                    }
+                }
+                list.map(|o| refs(&o)).unwrap_or_default()
+            }
+            direct => refs(direct),
+        };
         #[cfg(test)]
         TREE_ENTRIES.with(|c| c.set(c.get() + kids.len()));
         for k in kids {
@@ -800,19 +819,8 @@ fn form_tree(doc: &Document) -> HashSet<ObjRef> {
 thread_local! {
     /// `/Kids` entries [`form_tree`] read on this thread.
     pub(crate) static TREE_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// The object `o` refers to, through references to references as far as `Document::resolve`
-/// follows them (32); `None` when `o` is direct.
-fn referred(doc: &Document, o: &Object) -> Option<ObjRef> {
-    let mut r = o.as_ref()?;
-    for _ in 0..32 {
-        match Object::as_ref(&doc.get(r)) {
-            Some(next) => r = next,
-            None => break,
-        }
-    }
-    Some(r)
+    /// Objects [`form_tree`] loaded on the way to a `/Kids` array on this thread.
+    pub(crate) static TREE_LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Step 2 for one page: the marks, and whatever lies under them (with their pop-ups).
