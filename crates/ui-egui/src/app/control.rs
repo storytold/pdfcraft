@@ -47,6 +47,9 @@ impl PdfCraftApp {
             ("show_page_edge_shadows", _) => {
                 self.show_page_edge_shadows = value.parse::<bool>().map_err(|_| "show_page_edge_shadows must be true or false")?;
             }
+            ("update_check_at_start", _) => {
+                self.update_check_at_start = value.parse::<bool>().map_err(|_| "update_check_at_start must be true or false")?;
+            }
             ("scroll_speed", _) => {
                 self.scroll_speed = scroll_speed::ScrollSpeed::parse(value).ok_or("scroll_speed must be slow, normal, or fast")?;
             }
@@ -119,6 +122,7 @@ impl PdfCraftApp {
                     "export-all-images" => Some(Dialog::Export(export_ui::ExportKind::AllImages)),
                     "accessibility-options" => Some(Dialog::AccessibilityOptions),
                     "recognize-text" => Some(Dialog::RecognizeText),
+                    "enhance-scan" => Some(Dialog::EnhanceScan),
                     "js-console" => Some(Dialog::JsConsole),
                     "document-js" => Some(Dialog::DocumentJs),
                     "preferences" => Some(Dialog::Preferences),
@@ -389,7 +393,7 @@ impl PdfCraftApp {
                 let (p, i) = value.split_once(':').ok_or("comment: PAGE:INDEX")?;
                 let (p, i): (usize, usize) =
                     (p.trim().parse().map_err(|_| "comment: PAGE:INDEX")?, i.trim().parse().map_err(|_| "comment: PAGE:INDEX")?);
-                v.comments.selected = Some((p.saturating_sub(1), i.saturating_sub(1)));
+                v.comments.select_only((p.saturating_sub(1), i.saturating_sub(1)));
                 v.comments.reveal = true;
             }
             // `--combine-view list`: Combine files as thumbnails (grid) or as the table (list).
