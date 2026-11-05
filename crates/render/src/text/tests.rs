@@ -170,6 +170,59 @@ fn marked_text(pdf: &Pdf, page: usize) -> PageText {
     extract_page(pdf, page, &InterpreterSettings::default()).unwrap()
 }
 
+fn generated_arabic_text(logical: &str, width: f64) -> PageText {
+    use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_full};
+    let mut doc = Document::new_empty();
+    let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+    let lines = pdfcraft_fonts::appearance_text::wrap(logical, 20.0, width).unwrap();
+    let (content, fonts) = pdfcraft_fonts::appearance_text::draw(&lines, 20.0, [30.0, 30.0, 30.0 + width, 270.0], 2, [0.0; 3]).unwrap();
+    let fonts = pdfcraft_fonts::appearance_text::materialize_fonts(&mut doc, &fonts);
+    let content = doc.add(Stream::from_raw(Dict::new(), content));
+    let mut resources = Dict::new();
+    resources.set(b"Font".to_vec(), Object::Dict(fonts));
+    let mut page = Dict::new();
+    page.set(b"Type".to_vec(), Object::name("Page"));
+    page.set(b"Parent".to_vec(), Object::Ref(pages));
+    page.set(b"MediaBox".to_vec(), Object::Array([0, 0, 600, 300].map(Object::Int).to_vec()));
+    page.set(b"Resources".to_vec(), Object::Dict(resources));
+    page.set(b"Contents".to_vec(), Object::Ref(content));
+    let page = doc.add(page);
+    let mut tree = doc.get(pages).as_dict().unwrap().clone();
+    tree.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+    tree.set(b"Count".to_vec(), Object::Int(1));
+    doc.set(pages, tree);
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    marked_text(&Pdf::new(std::sync::Arc::new(bytes)).unwrap(), 0)
+}
+
+#[test]
+fn generated_arabic_actual_text_keeps_word_and_substring_selection_precise() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    for logical in ["البداية سلام النهاية", "مرحبا English 123 عالم ٤٥٦ النهاية", "باب باب بوب 123 باب 123"]
+    {
+        let page = generated_arabic_text(logical, 500.0);
+        assert_eq!(page.plain_text(), logical);
+        let line = page.line_rects(0..page.glyphs.len())[0];
+        for word in logical.split_whitespace() {
+            for range in page.find(word) {
+                assert_eq!(page.text_of(range.clone()), word, "word selection: {logical:?}, {word:?}");
+                let (a, b) = page.word_at(range.start).unwrap();
+                assert_eq!(page.text_of(a..b + 1), word, "double click: {word:?}");
+                let boxes = page.line_rects(range);
+                assert_eq!(boxes.len(), 1);
+                assert!(boxes[0][2] - boxes[0][0] < (line[2] - line[0]) * 0.6, "word highlights the whole line: {word:?}");
+            }
+        }
+        if logical.contains("English") {
+            let range = page.find("ngli").remove(0);
+            assert_eq!(page.text_of(range.clone()), "ngli");
+            assert!(page.line_rects(range)[0][2] - page.line_rects(page.find("English")[0].clone())[0][0] < 100.0);
+        }
+    }
+}
+
 #[test]
 fn redraws_of_a_long_replacement_share_a_text_budget() {
     let long = "0041".repeat(32 * 1024);
@@ -238,7 +291,7 @@ fn redraw_dedupe_work_is_bounded_on_hostile_pages() {
     const N: usize = 100_000;
     let glyph = |text: &str| {
         let quad = [[100.0, 110.0], [110.0, 110.0], [110.0, 100.0], [100.0, 100.0]];
-        (0, [1.0, 0.0], TextGlyph { text: text.into(), rect: [100.0, 100.0, 110.0, 110.0], quad, direction: [1.0, 0.0] })
+        (0, [1.0, 0.0], TextGlyph { text: text.into(), rect: [100.0, 100.0, 110.0, 110.0], quad, direction: [1.0, 0.0] }, None)
     };
     let mut dev = TextDevice::new();
     // A genuine redraw first: it is still deduplicated within the budget.

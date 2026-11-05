@@ -27,7 +27,7 @@ pub(super) fn arrange_flow(glyphs: &[Drawn], ids: Vec<usize>, rects: Vec<[f32; 4
 pub(super) fn unrolled<'g>(run: impl Iterator<Item = &'g Drawn>) -> Vec<[f32; 4]> {
     let mut pen = [0.0, 0.0];
     let mut previous: Option<([f64; 2], [f64; 4])> = None;
-    run.map(|(_, u, g)| {
+    run.map(|(_, u, g, _)| {
         let b = along_baseline(&g.quad, *u);
         if let Some((pu, pb)) = previous {
             let at = along_baseline(&g.quad, pu);
