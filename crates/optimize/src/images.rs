@@ -1385,11 +1385,14 @@ pub(crate) fn run(
     let mut done = 0;
     while let Some(rest) = refs.get(done..).filter(|rest| !rest.is_empty()) {
         let run = if threads > 1 {
-            // One object under two generations: the second must see what the first left.
+            // One object under two generations: the second must see what the first left. Under one
+            // of them it can be a picture, and under the other another's soft mask.
             let mut numbers = HashSet::new();
             rest.iter()
                 .take(PICTURES_AT_ONCE)
-                .take_while(|(r, _)| numbers.insert(r.num) && smask_of(doc, *r).is_none_or(|m| smask_uses.get(&m.num) == Some(&1)))
+                .take_while(|(r, _)| {
+                    !smask_uses.contains_key(&r.num) && numbers.insert(r.num) && smask_of(doc, *r).is_none_or(|m| smask_uses.get(&m.num) == Some(&1))
+                })
                 .count()
         } else {
             0

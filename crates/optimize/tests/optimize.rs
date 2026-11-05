@@ -4261,14 +4261,24 @@ fn one_object_under_two_generations_comes_out_the_same_with_any_number_of_thread
         [dict.as_bytes(), &samples, b"\nendstream"].concat()
     };
     let build = || {
-        // 1 the catalog, 2 the pages, 3 the mask, 4 and 5 under it, 6 the picture, then the others.
+        // 1 the catalog, 2 the pages, 3 the mask, 4 and 5 under it, 6 the picture, 7 a picture that is
+        // also 8's mask, then the others.
         let mut objects = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(), Vec::new()];
         objects.push(picture(1200, ""));
         objects.push(picture(1200, " /SMask 3 0 R"));
         objects.push(picture(1000, " /SMask 3 1 R"));
         objects.push(picture(1200, ""));
+        objects.push(picture(1200, ""));
+        objects.push(picture(1000, " /SMask 7 1 R"));
         // Small under one generation, large under the other: they want different sizes.
-        let mut draws = vec![("4 0 R".to_string(), 144), ("5 0 R".to_string(), 180), ("6 0 R".to_string(), 72), ("6 1 R".to_string(), 576)];
+        let mut draws = vec![
+            ("4 0 R".to_string(), 144),
+            ("5 0 R".to_string(), 180),
+            ("6 0 R".to_string(), 72),
+            ("6 1 R".to_string(), 576),
+            ("7 0 R".to_string(), 72),
+            ("8 0 R".to_string(), 180),
+        ];
         for i in 0..22 {
             objects.push(picture(500 + i, ""));
             draws.push((format!("{} 0 R", objects.len()), 72));
@@ -4291,8 +4301,8 @@ fn one_object_under_two_generations_comes_out_the_same_with_any_number_of_thread
         let mut table = format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1);
         for (i, object) in objects.iter().enumerate() {
             let num = i + 1;
-            // Headers say generation 0, and the table says 1 of these two.
-            let generation = u8::from(num == 3 || num == 6);
+            // Headers say generation 0, and the table says 1 of these three.
+            let generation = u8::from(num == 3 || num == 6 || num == 7);
             table.push_str(&format!("{:010} {generation:05} n \n", bytes.len()));
             bytes.extend(format!("{num} 0 obj\n").as_bytes());
             bytes.extend(object);
@@ -4302,7 +4312,7 @@ fn one_object_under_two_generations_comes_out_the_same_with_any_number_of_thread
         bytes.extend(table.as_bytes());
         bytes.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n", objects.len() + 1).as_bytes());
         let doc = Document::open(Arc::new(bytes)).unwrap();
-        for (num, generation) in [(3, 0), (3, 1), (6, 0), (6, 1)] {
+        for (num, generation) in [(3, 0), (3, 1), (6, 0), (6, 1), (7, 0), (7, 1)] {
             assert!(matches!(&*doc.get(ObjRef { num, generation }), Object::Stream(_)), "{num} {generation} finds the object");
         }
         doc
