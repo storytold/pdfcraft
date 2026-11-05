@@ -770,7 +770,7 @@ fn walk_chain(doc: &Document, a: &Dict, read: &mut usize, seen: &mut std::collec
         if *read > MAX_ACTION_CHAIN {
             return Some("too deeply chained".into());
         }
-        if let Some(s) = action_forbidden(d) {
+        if let Some(s) = action_forbidden(doc, d) {
             return Some(s);
         }
         match d.get(b"Next") {
@@ -789,13 +789,15 @@ fn walk_chain(doc: &Document, a: &Dict, read: &mut usize, seen: &mut std::collec
 }
 
 /// The forbidden kind of the action `d` itself, if it is one: a forbidden type, or a Named
-/// action for anything but the four of [`NAMED_ACTIONS`].
-fn action_forbidden(d: &Dict) -> Option<String> {
+/// action for anything but the four of [`NAMED_ACTIONS`], its name given directly or by
+/// reference.
+fn action_forbidden(doc: &Document, d: &Dict) -> Option<String> {
     let s = d.name(b"S")?;
     if FORBIDDEN_ACTIONS.contains(&s) {
         return Some(String::from_utf8_lossy(s).into_owned());
     }
-    match d.name(b"N") {
+    let n = d.get(b"N").map(|n| doc.resolve(n));
+    match n.as_deref().and_then(Object::as_name) {
         _ if s != b"Named" => None,
         Some(n) if NAMED_ACTIONS.contains(&n) => None,
         Some(n) => Some(format!("Named {}", String::from_utf8_lossy(n))),
