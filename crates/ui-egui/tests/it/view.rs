@@ -2600,16 +2600,12 @@ fn rulers_preserve_two_up_page_geometry() {
 
     let before = [rect(&h, 0).expect("page 1 before rulers"), rect(&h, 1).expect("page 2 before rulers"), rect(&h, 2).expect("page 3 before rulers")];
 
-    eprintln!("before rulers: {before:#?}");
-
     assert!((before[2].left() - before[0].left()).abs() < 1.0, "page 3 must occupy page 1's left column before rulers: {before:?}");
 
     assert!(h.state_mut().execute("view.rulers"));
     h.run_steps(4);
 
     let after = [rect(&h, 0).expect("page 1 with rulers"), rect(&h, 1).expect("page 2 with rulers"), rect(&h, 2).expect("page 3 with rulers")];
-
-    eprintln!("with rulers: {after:#?}");
 
     for page in 0..3 {
         assert_eq!(after[page], before[page], "rulers must not change page {} geometry", page + 1);

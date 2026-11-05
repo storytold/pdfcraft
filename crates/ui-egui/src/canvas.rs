@@ -1878,13 +1878,13 @@ fn draw_pages(
     // The row as it is now: in continuous view the current page may have changed above.
     let row_on_screen =
         shown_row(view, env.rects).iter().filter_map(|&i| env.rects.get(i)).map(|r| r.translate(origin.to_vec2())).reduce(Rect::union);
+    let page_context_menu_id = resp.id.with("page-context-menu");
     if ptr.blocked_press {
-        // A press owned by ruler chrome must dismiss any page popup immediately. Closing all is
-        // intentional: context_menu stores the open popup in egui memory, and its generated ID is
-        // not reliably derivable from this frame's response after the pointer moved to the ruler.
-        egui::Popup::close_all(ui.ctx());
+        // A ruler-owned press dismisses only the page menu. Other document popups keep their own
+        // state and are not collateral damage from a global popup close.
+        egui::Popup::close_id(ui.ctx(), page_context_menu_id);
     }
-    resp.context_menu(|ui| {
+    egui::Popup::context_menu(&resp).id(page_context_menu_id).show(|ui| {
         let is_crop_over_image = tool == QuickTool::EditText
             && view.image_selection.clone().is_some_and(|sel| {
                 let Some(ref crop) = sel.crop else { return false };
@@ -2051,7 +2051,7 @@ fn draw_pages(
         };
         default_page_context_menu(ui, page, at, perms, &mut page_action);
     });
-    if !resp.context_menu_opened() {
+    if !egui::Popup::is_id_open(ui.ctx(), page_context_menu_id) {
         ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
     }
     // Copy comments / Paste comments from the page's menu or a Comments panel card.
