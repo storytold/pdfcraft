@@ -454,8 +454,7 @@ impl PdfCraftApp {
             "edit.redo" => self.redo(),
             "edit.find" => {
                 if let Some(i) = active {
-                   self.views[i].open_find_from_shortcut();
-
+                    self.views[i].open_find_from_shortcut();
                 }
             }
             "comment.list" => self.choose_right_panel(Some(RightPanel::Comments)),
