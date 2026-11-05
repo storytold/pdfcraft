@@ -10,6 +10,7 @@
 use std::collections::HashSet;
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
+use pdfcraft_cos::ObjRef;
 use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, FormWidget, field_flags, form_appearance};
 use pdfcraft_render::DocInfo;
 
@@ -26,6 +27,9 @@ const FIELD_FILL: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xF4);
 #[derive(Clone, Debug, PartialEq)]
 pub struct Focus {
     pub name: String,
+    /// The field's dictionary, which tells apart fields that share `name`: they are listed apart
+    /// (#2217), and the name alone finds the first of them.
+    pub field: ObjRef,
     /// Which of the field's widgets (a field can appear on several pages).
     pub widget: usize,
     /// Text being typed (text fields).
@@ -116,6 +120,7 @@ pub(crate) fn draft_text(f: &FormField) -> String {
 fn open_focus(f: &FormField, widget: usize) -> Focus {
     Focus {
         name: f.name.clone(),
+        field: f.obj,
         widget,
         text: draft_text(f),
         picked: f.value.clone(),
@@ -127,6 +132,25 @@ fn open_focus(f: &FormField, widget: usize) -> Focus {
         calendar_text: None,
         had_focus: false,
     }
+}
+
+/// Which field of `form` `focus` is on: the one with its dictionary, else (the form no longer has
+/// that dictionary) the first of its name. Fields that share a name are listed apart (#2217), and
+/// a writer can list a copy that no page shows before the one a page does, as iOS's Quartz
+/// PDFContext saves a form filled in on it: found by name, the focus was on that copy, whose
+/// widget is on no page, so every edit to the field was dropped.
+fn focused_index(form: &[FormField], focus: &Focus) -> Option<usize> {
+    form.iter().position(|f| f.obj == focus.field && f.name == focus.name).or_else(|| form.iter().position(|f| f.name == focus.name))
+}
+
+/// The field of `form` that `focus` is on ([`focused_index`]).
+pub(crate) fn focused_field<'a>(form: &'a [FormField], focus: &Focus) -> Option<&'a FormField> {
+    form.get(focused_index(form, focus)?)
+}
+
+/// Whether `focus` is on widget `widget` of `form[field]`.
+fn focus_on(focus: Option<&Focus>, form: &[FormField], field: usize, widget: usize) -> bool {
+    focus.is_some_and(|x| x.widget == widget && focused_index(form, x) == Some(field))
 }
 
 /// Select a radio button, if it isn't selected already.
@@ -213,7 +237,7 @@ pub(crate) fn page_input(
     if f.kind == FormFieldKind::Text
         && usable
         && let Some(at) = ptr.pressed()
-        && view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi)
+        && !focus_on(view.forms.focus.as_ref(), form, field, wi)
     {
         commit(view, form);
         view.forms.focus = Some(Focus { press: Some(at), ..open_focus(f, wi) });
@@ -238,7 +262,7 @@ pub(crate) fn page_input(
         FormFieldKind::CheckBox | FormFieldKind::Radio => {
             // The box takes the focus, as in Acrobat, so Tab goes on from it (#2223). The overlay
             // toggles it, after the edit for any text this commits.
-            if view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi) {
+            if !focus_on(view.forms.focus.as_ref(), form, field, wi) {
                 commit(view, form);
                 view.forms.focus = Some(open_focus(f, wi));
             }
@@ -250,12 +274,14 @@ pub(crate) fn page_input(
         FormFieldKind::Text if ptr.pressed().is_none() => {
             // An editor opened by the press cannot be hit until a frame has laid it out: the
             // release lands on the page and would take its focus away.
-            if let Some(x) = view.forms.focus.as_mut().filter(|x| x.name == f.name && x.widget == wi) {
+            if focus_on(view.forms.focus.as_ref(), form, field, wi)
+                && let Some(x) = view.forms.focus.as_mut()
+            {
                 x.request_focus = true;
             }
         }
         FormFieldKind::Text | FormFieldKind::Combo => {
-            if view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi) {
+            if !focus_on(view.forms.focus.as_ref(), form, field, wi) {
                 commit(view, form);
                 view.forms.focus = Some(open_focus(f, wi));
             }
@@ -303,7 +329,7 @@ pub(crate) fn page_input(
 
 /// The edit the focused field's draft makes, if it differs from the field's value.
 pub(crate) fn draft_edit(focus: &Focus, form: &[FormField]) -> Option<Edit> {
-    let f = form.iter().find(|f| f.name == focus.name)?;
+    let f = focused_field(form, focus)?;
     let value = match f.kind {
         FormFieldKind::Text if f.value.first().map(String::as_str).unwrap_or("") != focus.text => FieldValue::Text(focus.text.clone()),
         // Typed into an editable combo box: a shown text picks its option, anything else is the
@@ -514,11 +540,11 @@ pub(crate) fn paint_page(
         Some(Owner::Field { field, widget }) => Some((field, widget)),
         _ => None,
     };
+    let focused = view.forms.focus.as_ref().and_then(|x| Some((focused_index(form, x)?, x.widget)));
     for (fi, f) in form.iter().enumerate() {
         for (wi, w) in f.widgets.iter().enumerate().filter(|(_, w)| w.page == Some(page) && !w.hidden) {
             let r = widget_rect(xf, info, page, w.rect);
-            let focused = view.forms.focus.as_ref().is_some_and(|x| x.name == f.name && x.widget == wi);
-            if focused {
+            if focused == Some((fi, wi)) {
                 painter.rect_stroke(r.expand(1.0), CornerRadius::same(2), Stroke::new(2.0, FOCUS_BLUE), egui::StrokeKind::Outside);
             }
             if view.forms.unbaked.contains(&(f.name.clone(), page)) {
@@ -663,7 +689,7 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
 /// its editor then takes no more than fits ([`overlay`]).
 pub(crate) fn text_box(doc: &pdfcraft_engine::Document, view: &DocView, form: &[FormField]) -> Option<form_appearance::TextBox> {
     let fx = view.forms.focus.as_ref()?;
-    let f = form.iter().find(|f| f.name == fx.name)?;
+    let f = focused_field(form, fx)?;
     let no_scroll = f.kind == FormFieldKind::Text && f.has(field_flags::DO_NOT_SCROLL);
     no_scroll.then(|| doc.field_text_box(&fx.name, fx.widget)).flatten()
 }
@@ -730,7 +756,7 @@ fn tab_to_next_field(view: &mut DocView, form: &[FormField], f: &FormField, widg
         .collect();
     order.sort_by_key(|o| o.0);
     if let Some(pos) =
-        order.iter().position(|(_, x, wi)| x.name == f.name && *wi == widget).or_else(|| order.iter().position(|(_, x, _)| x.name == f.name))
+        order.iter().position(|(_, x, wi)| x.obj == f.obj && *wi == widget).or_else(|| order.iter().position(|(_, x, _)| x.obj == f.obj))
     {
         let k = if forward { (pos + 1) % order.len() } else { (pos + order.len() - 1) % order.len() };
         let (_, target, wi) = order[k];
@@ -782,7 +808,7 @@ pub(crate) fn overlay(
     let toggle = std::mem::take(&mut view.forms.toggle);
     view.forms.keys = None;
     let focus = view.forms.focus.clone()?;
-    let Some(f) = form.iter().find(|f| f.name == focus.name) else {
+    let Some(f) = focused_field(form, &focus) else {
         view.forms.focus = None;
         return None;
     };

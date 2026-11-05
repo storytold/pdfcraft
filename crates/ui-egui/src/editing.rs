@@ -706,7 +706,7 @@ impl PdfCraftApp {
                 && let Some(focus) = view.forms.focus.as_mut()
                 && focus.request_focus
                 && committed.as_ref().is_some_and(|draft| draft.name == focus.name)
-                && let Some(field) = self.session.get(view.id).and_then(|doc| doc.form.iter().find(|field| field.name == focus.name))
+                && let Some(field) = self.session.get(view.id).and_then(|doc| crate::forms_ui::focused_field(&doc.form, focus))
             {
                 focus.text = crate::forms_ui::draft_text(field);
                 focus.picked = field.value.clone();
@@ -1112,6 +1112,8 @@ mod revert_draft_tests {
     fn focus(text: &str) -> Focus {
         Focus {
             name: "name".into(),
+            // No field's dictionary (object 0 is the free list's head): found by the name.
+            field: pdfcraft_cos::ObjRef::new(0, 0),
             widget: 0,
             text: text.into(),
             picked: Vec::new(),

@@ -293,6 +293,104 @@ fn clicking_a_check_box_while_typing_keeps_the_text_and_focuses_the_box() {
     assert_eq!(focused(&h), Some(("last".into(), 0)), "so Tab goes on from there");
 }
 
+/// The app with `bytes` open, its 300×400 pt page on screen.
+fn form_harness(bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("twice.pdf", None, bytes).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    h
+}
+
+/// The values of every field named `name`, in the form's order: fields that share a name are
+/// listed apart (#2217).
+fn values(h: &Harness<'static, PdfCraftApp>, name: &str) -> Vec<Vec<String>> {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().form.iter().filter(|f| f.name == name).map(|f| f.value.clone()).collect()
+}
+
+/// The screen rectangle of the `copy`th field named `name` (0-based, in the form's order).
+fn copy_rect(h: &Harness<'static, PdfCraftApp>, name: &str, copy: usize) -> egui::Rect {
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let f = doc.form.iter().filter(|f| f.name == name).nth(copy).unwrap();
+    pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
+}
+
+/// Where the field editor is drawn.
+fn editor_rect(h: &Harness<'static, PdfCraftApp>) -> Option<egui::Rect> {
+    let view = h.state().views[0].id.0;
+    h.ctx.memory(|m| m.area_rect(egui::Id::unique(("form-editor", view))))
+}
+
+/// Each field listed twice, as iOS's Quartz PDFContext saves a form filled in on it: first a copy
+/// no page shows (its widget is in `/Fields` only), then the copy the page shows.
+fn listed_twice_pdf() -> Vec<u8> {
+    pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 8 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 350 280 372] /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 350 280 372] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /V /Off /AS /Off /Rect [20 310 36 326] /F 4 /AP << /N << /Yes 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /V /Off /AS /Off /Rect [20 310 36 326] /P 3 0 R /F 4 /AP << /N << /Yes 9 0 R /Off 9 0 R >> >> >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 16 16] /Length 0 >>\nstream\n\nendstream",
+    ])
+}
+
+#[test]
+fn a_field_listed_after_a_copy_no_page_shows_takes_typing_and_clicks() {
+    // The focus was looked up by its name, which found the copy no page shows: the editor had no
+    // page to open on, so typing, pasting and clicks changed nothing.
+    let mut h = form_harness(listed_twice_pdf());
+    let name = copy_rect(&h, "name", 1).center();
+    click_at(&mut h, name);
+    h.event(egui::Event::Text("Ada".into()));
+    h.run_steps(1);
+    let agree = copy_rect(&h, "agree", 1).center();
+    click_at(&mut h, agree);
+    assert_eq!(values(&h, "name"), [["Ada"], ["Ada"]], "the typing fills the field in");
+    assert_eq!(values(&h, "agree"), [["Yes"], ["Yes"]], "and the click ticks the box");
+}
+
+/// `name` on the page twice, as two fields rather than one field with two widgets: first and
+/// third, with `other` between them and `last` below.
+fn shown_twice_pdf() -> Vec<u8> {
+    pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 8 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 350 280 372] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (other) /Rect [20 310 280 332] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 270 280 292] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (last) /Rect [20 230 280 252] /P 3 0 R /F 4 >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ])
+}
+
+#[test]
+fn of_two_fields_that_share_a_name_the_one_clicked_is_edited() {
+    // The focus was looked up by its name, which found the first of the two: the editor opened
+    // over that one, and Tab went on from there.
+    let mut h = form_harness(shown_twice_pdf());
+    let second = copy_rect(&h, "name", 1);
+    click_at(&mut h, second.center());
+    let editor = editor_rect(&h).expect("an editor");
+    assert!((editor.min - second.min).length() < 1.0, "the editor opens over the field clicked: {editor:?} for {second:?}");
+    h.event(egui::Event::Text("Ada".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(values(&h, "name"), [["Ada"], ["Ada"]], "both take the value (#2217)");
+    assert_eq!(focused(&h), Some(("last".into(), 0)), "and Tab goes on from the one clicked");
+}
+
 #[test]
 fn page_keys_still_work_with_a_check_box_or_radio_button_focused() {
     // The widget that takes Space for a focused box must not swallow the page keys.
