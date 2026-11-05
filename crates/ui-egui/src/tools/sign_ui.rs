@@ -597,6 +597,7 @@ impl PdfCraftApp {
             Ok(new) => {
                 // The reading-colours preference is app-wide: the newly opened revision starts with it.
                 self.session.set_reading_colors(new, self.reading_colors);
+                self.session.set_sharp_images(new, !self.smooth_images);
                 let Some(doc) = self.session.get(new) else { return };
                 let mut view = DocView::new(new, &doc.info, self.view_defaults);
                 if self.full_screen {
@@ -649,6 +650,7 @@ impl PdfCraftApp {
             Ok(new) => {
                 // The reading-colours preference is app-wide: the newly opened copy starts with it.
                 self.session.set_reading_colors(new, self.reading_colors);
+                self.session.set_sharp_images(new, !self.smooth_images);
                 let Some(doc) = self.session.get(new) else { return };
                 let mut view = DocView::new(new, &doc.info, self.view_defaults);
                 if self.full_screen {

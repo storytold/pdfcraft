@@ -684,6 +684,13 @@ fn card_appearance(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &m
     if ctx.checkbox(ui, &mut app.show_page_edge_shadows, tl!("Show Page Edge Shadows"), t).changed() {
         ui.ctx().request_repaint();
     }
+    let mut smooth = app.smooth_images;
+    let smoothing = ctx.checkbox(ui, &mut smooth, tl!("Smooth images"), t).on_hover_text(tl!(
+        "Scans and pictures drawn smaller or larger than their own resolution are smoothed. Turn off to keep barcodes, QR codes and pixel art sharp, in print and page exports too."
+    ));
+    if smoothing.changed() {
+        app.set_smooth_images(smooth);
+    }
     ui.add_space(4.0);
     crate::appearance::preferences_section_with_context(ui, app, t, ctx);
     ui.add_space(8.0);
