@@ -1572,10 +1572,8 @@ fn a_form_button_shows_and_hides_the_attachments_panel() {
     h.run_steps(2);
     let id = h.state().views[0].id;
     h.state_mut().run_button_script(id, "size", "app.execMenuItem('ShowHideFileAttachment');");
-    h.run_steps(2);
-    assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Attachments));
+    crate::support::wait_until(&mut h, "attachments panel to open", |app| app.right == Some(pdfcraft_ui_egui::RightPanel::Attachments));
     // Show/Hide, as its name says: asked again, it closes.
     h.state_mut().run_button_script(id, "size", "app.execMenuItem('ShowHideFileAttachment');");
-    h.run_steps(2);
-    assert_eq!(h.state().right, None);
+    crate::support::wait_until(&mut h, "attachments panel to close", |app| app.right.is_none());
 }
