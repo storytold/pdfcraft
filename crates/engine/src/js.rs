@@ -205,7 +205,7 @@ impl Scripts for JsRunner {
     /// asked for; a refusal carries its last message.
     fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], doc: &pdfcraft_cos::Document) -> ScriptResult {
         // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
-        self.run_logged(event, script, target, value, fields, doc, true).unwrap_or_else(|| ScriptResult {
+        self.run_logged(event, script, target, value, (fields, doc), true).unwrap_or_else(|| ScriptResult {
             rc: true,
             value: value.to_string(),
             changes: Vec::new(),
@@ -215,7 +215,7 @@ impl Scripts for JsRunner {
 
     fn rerun_with_english_dates(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> Option<ScriptResult> {
         let cos = self.cos.clone();
-        pdfcraft_js::with_english_printd(true, || self.run_logged(event, script, target, value, fields, &cos, false))
+        pdfcraft_js::with_english_printd(true, || self.run_logged(event, script, target, value, (fields, &cos), false))
     }
 }
 
@@ -228,10 +228,10 @@ impl JsRunner {
         script: &str,
         target: &Field,
         value: &str,
-        fields: &[Field],
-        doc: &pdfcraft_cos::Document,
+        form: (&[Field], &pdfcraft_cos::Document),
         log: bool,
     ) -> Option<ScriptResult> {
+        let (fields, doc) = form;
         let states: Vec<_> = fields
             .iter()
             .map(|f| {
