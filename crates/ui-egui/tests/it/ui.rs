@@ -865,6 +865,66 @@ fn persistence_round_trips_and_tolerates_garbage() {
     assert_eq!(b.theme, pdfcraft_ui_egui::theme::ThemeKind::Dark);
 }
 
+/// The pen-pressure knobs survive persist/restore as written, and every hostile value a
+/// settings file may hold goes through the same clamping constructor and coupled bounds the
+/// Preferences dialog edits through.
+#[test]
+fn pen_pressure_knobs_live_in_comment_preferences() {
+    use pdfcraft_ui_egui::Dialog;
+
+    let mut h = harness(|_| {});
+    h.state_mut().dialog = Some(Dialog::Preferences);
+    h.run_steps(3);
+    // The four knobs live in the Comment card next to the author line: off by default, the
+    // three numeric ones disabled but present (their persisted values show through).
+    h.get_by_label("Hide hover previews for highlights without comment text");
+    h.get_by_label("Minimum width");
+    h.get_by_label("Maximum width");
+    h.get_by_label("Smoothing");
+
+    // Turning the preference on takes effect at once...
+    h.get_by_label("Widen the live ink preview by pen pressure").scroll_to_me();
+    h.run_steps(3);
+    h.get_by_label("Widen the live ink preview by pen pressure").click();
+    h.run_steps(3);
+    assert!(h.state().comment_prefs.pen_pressure.on);
+    // ...and rides the OK row's save path.
+    let saved = h.state().persist();
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&saved);
+    assert!(restored.comment_prefs.pen_pressure.on);
+}
+
+#[test]
+fn pen_pressure_round_trips_and_tolerates_garbage() {
+    use pdfcraft_ui_egui::comments::PenPressure;
+    let mut a = PdfCraftApp::new();
+    a.comment_prefs.set_pen_pressure(PenPressure::clamped(true, 0.9, 1.4, 0.5));
+    let mut b = PdfCraftApp::new();
+    b.restore(&a.persist());
+    let pen = b.comment_prefs.pen_pressure;
+    assert_eq!((pen.on, pen.min, pen.max, pen.smoothing), (true, 0.9, 1.4, 0.5));
+
+    // A file's values clamp; an unreadable field falls back to its default's value.
+    b.restore("{\"pen_pressure\": {\"on\": true, \"min\": 99, \"max\": \"wide\", \"smoothing\": 0.001}}");
+    let pen = b.comment_prefs.pen_pressure;
+    assert_eq!((pen.on, pen.min, pen.max, pen.smoothing), (true, 2.0, 1.15, 0.05));
+
+    // What a file wrote stays written even when the band comes in inverted; nothing here
+    // couples, because coupling is the live dialog's editing rule, not the file's.
+    b.restore("{\"pen_pressure\": {\"on\": false, \"min\": 1.5, \"max\": 0.5, \"smoothing\": 0.3}}");
+    let pen = b.comment_prefs.pen_pressure;
+    assert_eq!((pen.on, pen.min, pen.max, pen.smoothing), (false, 1.5, 0.5, 0.3));
+
+    // An older file (no key) and garbage both leave the default, which is off: a missing key
+    // writes nothing, so a fresh app proves the defaults came through.
+    let mut c = PdfCraftApp::new();
+    c.restore("{\"comment_styles\": []}");
+    assert_eq!(c.comment_prefs.pen_pressure, PenPressure::default());
+    c.restore("garbage");
+    assert_eq!(c.comment_prefs.pen_pressure, PenPressure::default());
+}
+
 /// A tool's saved "no fill" (`"fill": null`) clears a fill it had as its default; a missing or
 /// malformed fill keeps it (#340).
 #[test]

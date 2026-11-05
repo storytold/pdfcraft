@@ -499,3 +499,48 @@ fn text_boxes_fit_their_text() {
     assert_eq!(long[2], 300.0);
     assert!(long[3] - long[1] > 50.0);
 }
+
+#[test]
+fn pen_pressure_clamps_its_knobs() {
+    // In range round-trips; out of range clamps into it.
+    let pen = PenPressure::clamped(true, 0.9, 1.4, 0.5);
+    assert_eq!(pen, PenPressure { on: true, min: 0.9, max: 1.4, smoothing: 0.5 });
+    let pen = PenPressure::clamped(true, 0.01, 5.0, 0.001);
+    assert_eq!((pen.min, pen.max, pen.smoothing), (0.1, 2.0, 0.05));
+    // Unreadable fields fall back to their defaults; `on` is taken as written.
+    let pen = PenPressure::clamped(true, f64::NAN, f64::NAN, f64::NAN);
+    assert_eq!((pen.on, pen.min, pen.max, pen.smoothing), (true, 0.75, 1.15, 0.35));
+    // An inverted band survives the clamping as it was written (light wide, full narrow).
+    let pen = PenPressure::clamped(false, 1.5, 0.5, 1.0);
+    assert_eq!((pen.min, pen.max), (1.5, 0.5));
+}
+
+#[test]
+fn pen_pressure_maps_the_band_it_names() {
+    let pen = PenPressure::clamped(true, 0.75, 1.15, 0.35);
+    assert_eq!(pen.width_scale(0.0), 0.75);
+    assert_eq!(pen.width_scale(1.0), 1.15);
+    // A hostile or impossible pressure reads as none, the band's lightest end.
+    assert_eq!(pen.width_scale(f64::NAN), 0.75);
+    assert_eq!(pen.width_scale(2.0), 1.15);
+    assert_eq!(pen.width_scale(-1.0), 0.75);
+    // Inverted bands read in their written order.
+    let pen = PenPressure::clamped(true, 1.2, 0.5, 1.0);
+    assert_eq!((pen.width_scale(0.0), pen.width_scale(1.0)), (1.2, 0.5));
+}
+
+#[test]
+fn pen_pressure_dialog_edits_couple_the_bounds() {
+    // An edited bound past its peer pulls the peer along; nothing is silently dropped.
+    let pen = PenPressure::clamped(true, 1.0, 1.4, 0.5);
+    assert_eq!(pen.with_min(1.5), PenPressure { on: true, min: 1.5, max: 1.5, smoothing: 0.5 });
+    assert_eq!(pen.with_min(0.5), PenPressure { on: true, min: 0.5, max: 1.4, smoothing: 0.5 });
+    assert_eq!(pen.with_max(0.6), PenPressure { on: true, min: 0.6, max: 0.6, smoothing: 0.5 });
+    // Yet every field still re-enters the clamps.
+    assert_eq!(pen.with_min(9.0).min, 2.0);
+    assert_eq!(pen.with_max(f64::NAN).max, 1.15);
+    assert_eq!(pen.with_smoothing(0.001).smoothing, 0.05);
+    // Smoothing has no peer, and an inverted band only re-couples once the dialog edits it.
+    let inverted = PenPressure::clamped(true, 1.5, 0.5, 0.3);
+    assert_eq!(inverted.with_smoothing(0.4), PenPressure { on: true, min: 1.5, max: 0.5, smoothing: 0.4 });
+}

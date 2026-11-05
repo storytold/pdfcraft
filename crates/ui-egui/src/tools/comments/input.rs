@@ -7,6 +7,7 @@ use super::state::{Composer, ComposerKind, Gesture, PageCx};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, vec2};
 use crate::page_cursor::{Layer, Subject};
 use crate::page_router::{CommentPart, Hit, Owner};
+use crate::stylus::PressureTrack;
 
 /// Comment input on one page, before text selection runs. Returns `true` when the pointer
 /// gesture belongs to commenting (text selection must ignore it).
@@ -334,10 +335,14 @@ impl Gestures<'_> {
             && pressed_here
             && let Some(o) = origin
         {
-            cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
+            // The stroke starts with the pressure the contact already reports (its touch-down
+            // reports fold into a fresh track); the track rides the gesture from here on.
+            let mut track = PressureTrack::default();
+            let factor = track.point_width(&cx.prefs.pen_pressure);
+            cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)], pressures: vec![factor], track });
             cv.selected = None;
         }
-        if let Some(Gesture::Draw { page, tool, points }) = cv.gesture.as_mut()
+        if let Some(Gesture::Draw { page, tool, points, pressures, track }) = cv.gesture.as_mut()
             && *page == cx.page
             && let Some(p) = pointer
         {
@@ -346,15 +351,24 @@ impl Gestures<'_> {
             if matches!(*tool, CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Eraser) {
                 let last = points.last().map(|l| cx.to_screen(*l)).unwrap_or(p);
                 if last.distance(p) >= 1.5 {
+                    // Only a captured point carries a width: the reports the point gate skipped
+                    // fold in here with the rest, so the next captured point draws with what
+                    // happened up to it, not with a needle per pointer event.
+                    let factor = track.point_width(&cx.prefs.pen_pressure);
                     points.push(u);
+                    pressures.push(factor);
                 }
             } else {
                 points.truncate(1);
+                pressures.truncate(1);
+                // Two-point shapes preview at the configured width; their captured factor
+                // stays beside the start point and nothing more is said.
+                pressures.push(1.0);
                 points.push(u);
             }
         }
         if resp.drag_stopped()
-            && let Some(Gesture::Draw { page, tool, points }) = cv.gesture.clone()
+            && let Some(Gesture::Draw { page, tool, points, .. }) = cv.gesture.clone()
             && page == cx.page
         {
             cv.gesture = None;
@@ -408,7 +422,7 @@ impl Gestures<'_> {
         {
             let u = cx.to_user(p);
             match cv.gesture.as_mut() {
-                Some(Gesture::Draw { page, tool: t, points }) if *page == cx.page && *t == tool => {
+                Some(Gesture::Draw { page, tool: t, points, pressures, .. }) if *page == cx.page && *t == tool => {
                     // Clicking the first point again closes a polygon.
                     let closes = points.len() >= 3 && tool != CommentTool::PolyLine && cx.to_screen(points[0]).distance(p) <= 6.0;
                     let repeat = points.last().is_some_and(|l| cx.to_screen(*l).distance(p) < 2.0);
@@ -420,18 +434,21 @@ impl Gestures<'_> {
                         }
                         return true;
                     }
+                    // Clicked vertices belong to polygon/cloud tools, whose shape preview and
+                    // saving are the configured fixed width: every point says factor 1.0.
                     if !repeat {
+                        pressures.push(1.0);
                         points.push(u);
                     }
                 }
                 _ => {
-                    cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![u] });
+                    cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![u], pressures: vec![1.0], track: PressureTrack::default() });
                     cv.selected = None;
                 }
             }
         }
         if finish
-            && let Some(Gesture::Draw { page, tool: t, points }) = cv.gesture.clone()
+            && let Some(Gesture::Draw { page, tool: t, points, .. }) = cv.gesture.clone()
             && page == cx.page
             && t == tool
         {
@@ -457,13 +474,23 @@ impl Gestures<'_> {
             && pressed_here
             && let Some(o) = origin
         {
-            cv.gesture = Some(Gesture::Draw { page: cx.page, tool: CommentTool::Callout, points: vec![cx.to_user(o)] });
+            cv.gesture = Some(Gesture::Draw {
+                page: cx.page,
+                tool: CommentTool::Callout,
+                points: vec![cx.to_user(o)],
+                pressures: vec![1.0],
+                track: PressureTrack::default(),
+            });
             cv.selected = None;
         }
-        if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
+        if let Some(Gesture::Draw { page, points, pressures, .. }) = cv.gesture.as_mut()
             && *page == cx.page
             && let Some(p) = pointer
         {
+            // A callout is its two endpoints at whatever width it is saved with; the
+            // factors stay a parallel formality of the gesture shape.
+            pressures.truncate(1);
+            pressures.push(1.0);
             points.truncate(1);
             points.push(cx.to_user(clamp_to(page_rect, p)));
         }
@@ -538,13 +565,16 @@ impl Gestures<'_> {
                 && pressed_here
                 && let Some(o) = origin
             {
-                cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
+                cv.gesture =
+                    Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)], pressures: vec![1.0], track: PressureTrack::default() });
                 cv.selected = None;
             }
-            if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
+            if let Some(Gesture::Draw { page, points, pressures, .. }) = cv.gesture.as_mut()
                 && *page == cx.page
                 && let Some(p) = pointer
             {
+                pressures.truncate(1);
+                pressures.push(1.0);
                 points.truncate(1);
                 points.push(cx.to_user(clamp_to(page_rect, p)));
             }

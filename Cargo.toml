@@ -135,10 +135,13 @@ hayro-jbig2 = { path = "vendor/hayro-jbig2" }
 lopdf = { path = "vendor/lopdf" }
 vello_common = { path = "vendor/vello_common" }
 vello_cpu = { path = "vendor/vello_cpu" }
-# The egui and winit crates below are pinned to immutable storytold git revisions (egui
-# 6d518fc799681571963842f95b55a6b68431b15a, winit a517b3846ee8457d84ee4975110bfda6797c44dc).
-# Only the retained `vendor/winit` and `vendor/egui-wgpu` copies are provenance for the app's
-# earlier patches and their source guards, not path patches; the other `vendor/` entries above
+# The egui crates and egui-wgpu below are pinned to immutable storytold git
+# revisions (egui 6d518fc799681571963842f95b55a6b68431b15a); the retained
+# `vendor/winit` copy is provenance for the app's earlier winit patches and
+# their source guards. winit is an interim exception: its W28 tablet delta
+# cannot be pushed to storytold/winit yet, so the pinned fork revision
+# (a517b3846ee8457d84ee4975110bfda6797c44dc) is vendored with the delta in
+# `vendor/winit-tablet` as a path patch. The other `vendor/` entries above
 # remain real path patches. See vendor/README.md and the migration plan.
 ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
@@ -154,4 +157,4 @@ egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev
 eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+winit = { path = "vendor/winit-tablet" }

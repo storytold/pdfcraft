@@ -50,6 +50,10 @@ skrifa = "0.44"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-update = { workspace = true }
+# The tablet's tool metadata (`stylus.rs`): the eraser end of a pen, which the egui event
+# pipeline cannot carry. winit has no web build and eframe's web app runs without it, so the
+# channel is native-only.
+winit = "0.30"
 # Control-channel tokens.
 getrandom = "0.4"
 # Create ▸ Clipboard (images; already in the tree through egui-winit).

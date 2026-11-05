@@ -150,7 +150,7 @@ fn edges_are_primary_finite_in_order_and_capped() {
 }
 
 /// The page modules: the per-page chain in `canvas::document_area` and what it calls.
-const PAGE_MODULES: [&str; 35] = [
+const PAGE_MODULES: [&str; 36] = [
     "canvas.rs",
     "canvas/area.rs",
     "canvas/bars.rs",
@@ -186,6 +186,7 @@ const PAGE_MODULES: [&str; 35] = [
     "canvas/image_pick.rs",
     "canvas/signature_drag.rs",
     "tools/calc_order_ui.rs",
+    "stylus.rs",
 ];
 
 /// egui's raw pointer state: where the pointer is, and which buttons are down or went down.

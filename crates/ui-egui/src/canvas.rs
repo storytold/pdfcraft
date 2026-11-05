@@ -14,6 +14,7 @@ use pdfcraft_render::{DestView, DocInfo, LayerOp, LinkTarget, PRINT_TAG, PageTex
 
 use crate::page_cursor::{Layer, Subject};
 use crate::page_pointer::PagePointer;
+use crate::stylus;
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, QuickTool, RightPanel, comments, icons, widgets};
 
@@ -1516,7 +1517,11 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     let PageSlot { i, xf, .. } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    // The stylus stages the tool a fresh press acts with: the eraser end of a tablet pen erases
+    // with whatever comment tool is selected; later frames of the same gesture pass the gesture's
+    // own tool through the stroke states.
+    let pcx =
+        comments::PageCx { page: i, xf: &xf, ptr, info, tool: stylus::press_tool(tool, ptr), prefs, allowed, hidden: comments_hidden, redact_mark };
     let (lines, images) =
         if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify { edit_inventory(view, doc, i) } else { Default::default() };
     let field_tool = match tool {

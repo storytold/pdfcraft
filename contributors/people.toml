@@ -183,3 +183,7 @@ sync_github_name = true
 
 [people.Combiler01]
 sync_github_name = true
+
+[people.MohammedNaser28]
+real_name = "Mohammed Naser"
+sync_github_name = true

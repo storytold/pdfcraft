@@ -787,6 +787,53 @@ fn card_identity(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut
         ui.add(crate::widgets::line(&mut app.comment_prefs.author).desired_width(240.0).char_limit(crate::MAX_AUTHOR_CHARS)).labelled_by(label.id);
     });
     ctx.checkbox(ui, &mut app.comment_prefs.hide_empty_highlight_hover, tl!("Hide hover previews for highlights without comment text"), t);
+    ui.add_space(8.0);
+    pen_pressure(ui, app, t, ctx);
+}
+
+/// The pen's pressure, on a tablet pen over Wayland: four global knobs, every edit going
+/// through `PenPressure`'s clamping constructor and coupled bound edits (`with_min`,
+/// `with_max`, `with_smoothing`). The feature is off until the preference turns it on;
+/// disabled knobs still read and hold the persisted values.
+fn pen_pressure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
+    ctx.checkbox(ui, &mut app.comment_prefs.pen_pressure.on, tl!("Widen the live ink preview by pen pressure"), t);
+    let pen = app.comment_prefs.pen_pressure;
+    ui.horizontal(|ui| {
+        let min_label = ctx.label(ui, tl!("Minimum width"), theme::semibold(12.5), t.text);
+        let mut min = pen.min;
+        if ui.add_enabled(pen.on, percent_drag(&mut min, 0.1..=2.0)).labelled_by(min_label.id).changed() {
+            app.comment_prefs.set_pen_pressure(pen.with_min(min));
+        }
+        ui.add_space(16.0);
+        let max_label = ctx.label(ui, tl!("Maximum width"), theme::semibold(12.5), t.text);
+        let mut max = pen.max;
+        if ui.add_enabled(pen.on, percent_drag(&mut max, 0.1..=2.0)).labelled_by(max_label.id).changed() {
+            app.comment_prefs.set_pen_pressure(pen.with_max(max));
+        }
+        ui.add_space(16.0);
+        let smoothing_label = ctx.label(ui, tl!("Smoothing"), theme::semibold(12.5), t.text);
+        let mut smoothing = pen.smoothing;
+        if ui.add_enabled(pen.on, percent_drag(&mut smoothing, 0.05..=1.0)).labelled_by(smoothing_label.id).changed() {
+            app.comment_prefs.set_pen_pressure(pen.with_smoothing(smoothing));
+        }
+    });
+    ctx.label_secondary(
+        ui,
+        tl!(
+            "Live drawing preview only: what is saved keeps the width set in the tool's properties. Smoothing blends each pen report into the drawn width; less follows each press harder."
+        ),
+        t,
+    );
+}
+
+/// A width-share (`0.75` is 75%) the dialog edits as a stretched percentage, inside the
+/// range its field clamps in the constructor anyway.
+fn percent_drag(share: &mut f64, range: std::ops::RangeInclusive<f64>) -> egui::DragValue<'_> {
+    egui::DragValue::new(share)
+        .range(range)
+        .speed(0.01)
+        .custom_formatter(|v, _| format!("{}%", (v * 100.0).round() as i32))
+        .custom_parser(|s| s.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0))
 }
 
 /// Content for Card 5: Fill & Sign

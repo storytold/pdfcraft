@@ -309,6 +309,10 @@ pub struct CommentPrefs {
     pub group_tool: [CommentTool; 3],
     /// Hide hover previews on highlight annotations when they contain no comment text beyond the author.
     pub hide_empty_highlight_hover: bool,
+    /// How a pen's pressure widens the previewed freehand ink (`stylus.rs`): conservative by
+    /// default and off until a preference turns it on, scaling into an independently
+    /// configurable band of the tool's own width.
+    pub pen_pressure: PenPressure,
 }
 
 impl Default for CommentPrefs {
@@ -319,11 +323,90 @@ impl Default for CommentPrefs {
             pinned: false,
             group_tool: [CommentTool::Note, CommentTool::Highlight, CommentTool::Ink],
             hide_empty_highlight_hover: false,
+            pen_pressure: PenPressure::default(),
         }
     }
 }
 
+/// How a pen's pressure shapes the previewed freehand ink: pressure does not change what is
+/// saved (the Ink annotation keeps its configured fixed width), only the live preview's
+/// width, scaled into a band of the tool's configured width.
+///
+/// Conservative defaults and honest bounds: the knobs are clamped here rather than trusted
+/// (a settings file is user data), and the whole feature is off until a preference turns it
+/// on. An inverted band survives the clamping as it was written — light pressure wide, full
+/// pressure narrow — and `[`width_scale`](Self::width_scale) reads it in that order.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PenPressure {
+    /// Whether the pen's pressure widens (and thins) the live preview at all.
+    pub on: bool,
+    /// The previewed width at the lightest pressure, as a share of the tool's configured width.
+    pub min: f64,
+    /// The previewed width at full pressure, as a share of the tool's configured width.
+    pub max: f64,
+    /// How much of each new pressure report the smoothed value takes (`0.05`–`1.0`; less is
+    /// smoother). 1.0 draws with each report as it comes.
+    pub smoothing: f64,
+}
+
+impl Default for PenPressure {
+    fn default() -> Self {
+        Self { on: false, min: 0.75, max: 1.15, smoothing: 0.35 }
+    }
+}
+
+impl PenPressure {
+    /// Restore a persisted choice: every field clamps, and an unreadable field falls back to
+    /// its default rather than being trusted.
+    pub fn clamped(on: bool, min: f64, max: f64, smoothing: f64) -> Self {
+        let none = Self::default();
+        let between = |v: f64, lo: f64, hi: f64, base: f64| if v.is_finite() { v.clamp(lo, hi) } else { base };
+        Self {
+            on,
+            min: between(min, 0.1, 2.0, none.min),
+            max: between(max, 0.1, 2.0, none.max),
+            smoothing: between(smoothing, 0.05, 1.0, none.smoothing),
+        }
+    }
+
+    /// The previewed width factor for a normalized pressure `p` (0–1): the band interpolates
+    /// from `min` at none to `max` at full — in whatever order the two knobs arrive, an
+    /// inverted band thins with pressure instead of widening.
+    pub(crate) fn width_scale(&self, p: f64) -> f64 {
+        let p = if p.is_finite() { p.clamp(0.0, 1.0) } else { 0.0 };
+        self.min + (self.max - self.min) * p
+    }
+
+    /// The configuration with one width bound edited in the Preferences dialog: the bounds
+    /// stay coupled — an edited bound past its peer pulls the peer along, so the band stays
+    /// well-formed while it is being edited instead of the input being dropped — and every
+    /// field re-enters [`Self::clamped`]'s clamps. Restoring a settings file does not couple
+    /// (it reads what was written, whatever band order it holds); only live edits do.
+    pub(crate) fn with_min(mut self, min: f64) -> Self {
+        self.min = min;
+        self.max = self.max.max(min);
+        Self::clamped(self.on, self.min, self.max, self.smoothing)
+    }
+
+    /// The same for the full-pressure bound.
+    pub(crate) fn with_max(mut self, max: f64) -> Self {
+        self.max = max;
+        self.min = self.min.min(max);
+        Self::clamped(self.on, self.min, self.max, self.smoothing)
+    }
+
+    /// The same for smoothing: no peer of its own, straight back through the clamps.
+    pub(crate) fn with_smoothing(self, smoothing: f64) -> Self {
+        Self::clamped(self.on, self.min, self.max, smoothing)
+    }
+}
+
 impl CommentPrefs {
+    /// Restore the persisted pressure choice through the clamping constructor above.
+    pub fn set_pen_pressure(&mut self, pen: PenPressure) {
+        self.pen_pressure = pen;
+    }
+
     pub fn style(&self, tool: CommentTool) -> Style {
         self.styles.iter().find(|(t, _)| *t == tool).map(|(_, s)| s.clone()).unwrap_or_default()
     }

@@ -20,8 +20,11 @@ pub(super) fn login_name() -> String {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Gesture {
     /// Drawing with a tool: points in user space (ink: the stroke; polygons: the vertices
-    /// clicked so far; others: start and end).
-    Draw { page: usize, tool: CommentTool, points: Vec<[f64; 2]> },
+    /// clicked so far; others: start and end). `pressures` runs parallel to `points` — the
+    /// previewed width factor each point captured with (`1.0` where pressure says nothing)
+    /// — and `track` is the stylus side the next captured point advances; saving stays
+    /// fixed-width, so neither field outlives the gesture.
+    Draw { page: usize, tool: CommentTool, points: Vec<[f64; 2]>, pressures: Vec<f64>, track: crate::stylus::PressureTrack },
     /// Moving a comment, from the press position on screen.
     Move { page: usize, index: usize, from: Pos2 },
     /// Resizing a comment by one of its handles: (dx, dy) ∈ {-1, 0, 1}² says which sides move.
@@ -192,11 +195,13 @@ impl CommentView {
     /// Takes back the last point of a polygon, cloud or connected lines being drawn; the first
     /// point's removal cancels the drawing. Returns whether there was such a drawing.
     pub fn undo_point(&mut self) -> bool {
-        let Some(Gesture::Draw { tool, points, .. }) = self.gesture.as_mut() else { return false };
+        let Some(Gesture::Draw { tool, points, pressures, .. }) = self.gesture.as_mut() else { return false };
         if !tool.clicks_points() {
             return false;
         }
         points.pop();
+        // The factors run parallel to the points, so they leave together.
+        pressures.pop();
         if points.is_empty() {
             self.gesture = None;
         }

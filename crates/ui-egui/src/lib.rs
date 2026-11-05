@@ -61,6 +61,7 @@ mod panels;
 pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
+mod stylus;
 pub mod theme;
 mod widgets;
 

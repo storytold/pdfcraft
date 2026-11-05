@@ -120,6 +120,13 @@ impl PdfCraftApp {
                     "fill": s.fill,
                 }))
                 .collect::<Vec<_>>(),
+            // The pen-pressure preview knobs (nothing here changes what Ink saves).
+            "pen_pressure": serde_json::json!({
+                "on": self.comment_prefs.pen_pressure.on,
+                "min": self.comment_prefs.pen_pressure.min,
+                "max": self.comment_prefs.pen_pressure.max,
+                "smoothing": self.comment_prefs.pen_pressure.smoothing,
+            }),
             // Drawn signatures keep their original form (older settings read the same).
             "signature": match &self.signature { Some(fill_sign::SavedSig::Drawn(s)) => Some(s), _ => None },
             "signature_text": match &self.signature { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
@@ -366,6 +373,18 @@ impl PdfCraftApp {
                     self.comment_prefs.set_style(tool, s);
                 }
             }
+        }
+        // The pen-pressure preview: every field clamps through `PenPressure::clamped`, and a
+        // missing key (an older settings file) keeps the default's field, which is off.
+        let p = &v["pen_pressure"];
+        if p.is_object() {
+            let none = crate::comments::PenPressure::default();
+            self.comment_prefs.set_pen_pressure(crate::comments::PenPressure::clamped(
+                p["on"].as_bool().unwrap_or(false),
+                p["min"].as_f64().unwrap_or(none.min),
+                p["max"].as_f64().unwrap_or(none.max),
+                p["smoothing"].as_f64().unwrap_or(none.smoothing),
+            ));
         }
     }
 

@@ -113,17 +113,24 @@ fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &An
 fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
     let now = painter.ctx().input(|i| i.time);
     for s in view.comments.settling.iter().filter(|s| s.page == cx.page && now - s.since < SETTLE_SECS) {
-        paint_draw(painter, cx, &s.tool, &s.points);
+        // What settles shows the comment as it will be saved: the configured fixed width.
+        paint_draw(painter, cx, &s.tool, &s.points, None);
     }
-    if let Some(Gesture::Draw { page, tool, points }) = &view.comments.gesture
+    if let Some(Gesture::Draw { page, tool, points, pressures, .. }) = &view.comments.gesture
         && *page == cx.page
     {
-        paint_draw(painter, cx, tool, points);
+        paint_draw(painter, cx, tool, points, Some(pressures));
     }
 }
 
 /// A drawing tool's shape from its points (a live drag, or a released one still settling).
-fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, points: &[[f64; 2]]) {
+///
+/// `pressures` are the captured width factors running parallel to `points`; the live freehand
+/// preview passes them (`Some`), the settling shape passes `None` because saving stays
+/// fixed-width. Even `Some` draws per segment only while pressure is on in the preferences
+/// and the factors run parallel to the points; otherwise the line draws at the configured
+/// width.
+fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, points: &[[f64; 2]], pressures: Option<&[f64]>) {
     {
         let style = cx.prefs.style(*tool);
         let zoom = cx.xf.zoom();
@@ -131,7 +138,20 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
         let pts: Vec<Pos2> = points.iter().map(|p| cx.to_screen(*p)).collect();
         match tool {
             CommentTool::Ink | CommentTool::FreehandHighlight => {
-                painter.add(egui::Shape::line(pts, stroke));
+                if let Some(pressures) = pressures.filter(|p| cx.prefs.pen_pressure.on && p.len() == pts.len())
+                    && pts.len() >= 2
+                {
+                    // The segment's width is its two endpoints' average factor over the
+                    // configured width; a screen floor of 1 px keeps light strokes visible,
+                    // like the fixed-width stroke.
+                    for (pair, i) in pts.windows(2).zip(0..) {
+                        let factor = (pressures[i] + pressures[i + 1]) / 2.0;
+                        let stroke = Stroke::new(((style.width * factor) as f32 * zoom).max(1.0), stroke.color);
+                        painter.line_segment([pair[0], pair[1]], stroke);
+                    }
+                } else {
+                    painter.add(egui::Shape::line(pts, stroke));
+                }
             }
             CommentTool::Eraser => {
                 // As wide as what it rubs out (see `erase`).

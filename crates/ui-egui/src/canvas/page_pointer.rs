@@ -78,6 +78,12 @@ impl PagePointer {
     pub(crate) fn pressed(&self) -> Option<Pos2> {
         first_press(&self.edges)
     }
+
+    /// Whether a primary press arrived this frame, wherever it landed and whether or not it is
+    /// the pages': the stylus bases one pointer fact on it (which tool a fresh press comes with).
+    pub(crate) fn fresh_press(&self) -> bool {
+        self.edges.iter().any(|e| matches!(e, Edge::Press(_)))
+    }
 }
 
 /// Whether egui gives the drag to a widget that is not the pages' (a panel's tab, a floating panel's
