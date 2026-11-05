@@ -6,7 +6,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream, serialize}
 
 mod extract;
 mod upright_image;
-pub use extract::{ExtractedImage, ImageExport, extract_images, image_file};
+pub use extract::{ExtractedImage, ImageExport, extract_images, image_file, image_file_within};
 use pdfcraft_fonts::{literal, win_ansi, wrap};
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -23,29 +23,48 @@ pub const LETTER: (f64, f64) = (612.0, 792.0);
 /// The largest page side PDF allows (ISO 32000-2 Annex C: 14 400 units).
 const MAX_SIDE: f64 = 14_400.0;
 
-fn add_page(doc: &mut Document, w: f64, h: f64, resources: Dict, content: Option<Vec<u8>>) -> Result<ObjRef, CreateError> {
-    // `Document::new_empty` always has a page tree.
-    let pages = doc
-        .root()
-        .and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages")))
-        .ok_or_else(|| CreateError::Invalid("the new document has no page tree".into()))?;
-    let mut page = Dict::new();
-    page.set(b"Type".to_vec(), Object::name("Page"));
-    page.set(b"Parent".to_vec(), Object::Ref(pages));
-    page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), Object::Real(w), Object::Real(h)]));
-    page.set(b"Resources".to_vec(), Object::Dict(resources));
-    if let Some(c) = content {
-        let s = doc.add(Object::Stream(Stream::flate(Dict::new(), &c)));
-        page.set(b"Contents".to_vec(), Object::Ref(s));
+/// The page tree of a document being made, with the pages added to it so far: its `/Kids` are
+/// written once, by [`Pages::finish`]. Adding each page to the tree in the document would copy every
+/// page before it, which a text of a million form feeds makes quadratic.
+struct Pages {
+    tree: ObjRef,
+    kids: Vec<Object>,
+}
+
+impl Pages {
+    /// The page tree of `doc`, with the pages it has.
+    fn of(doc: &Document) -> Result<Self, CreateError> {
+        // `Document::new_empty` always has a page tree.
+        let tree = doc
+            .root()
+            .and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages")))
+            .ok_or_else(|| CreateError::Invalid("the new document has no page tree".into()))?;
+        let kids = doc.get(tree).as_dict().and_then(|d| d.get(b"Kids")).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+        Ok(Self { tree, kids })
     }
-    let r = doc.add(page);
-    let _ = doc.update_dict(pages, |d| {
-        let mut kids = d.get(b"Kids").and_then(|k| k.as_array().cloned()).unwrap_or_default();
-        kids.push(Object::Ref(r));
-        d.set(b"Count".to_vec(), Object::Int(kids.len() as i64));
-        d.set(b"Kids".to_vec(), Object::Array(kids));
-    });
-    Ok(r)
+
+    fn add(&mut self, doc: &mut Document, w: f64, h: f64, resources: Dict, content: Option<Vec<u8>>) {
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(self.tree));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), Object::Real(w), Object::Real(h)]));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+        if let Some(c) = content {
+            let s = doc.add(Object::Stream(Stream::flate(Dict::new(), &c)));
+            page.set(b"Contents".to_vec(), Object::Ref(s));
+        }
+        self.kids.push(Object::Ref(doc.add(page)));
+    }
+
+    /// Writes the pages added into the tree.
+    fn finish(self, doc: &mut Document) -> Result<(), CreateError> {
+        let count = i64::try_from(self.kids.len()).map_err(|_| CreateError::Invalid("too many pages".into()))?;
+        doc.update_dict(self.tree, |d| {
+            d.set(b"Count".to_vec(), Object::Int(count));
+            d.set(b"Kids".to_vec(), Object::Array(self.kids));
+        })
+        .map_err(|e| CreateError::Invalid(e.to_string()))
+    }
 }
 
 fn set_title(doc: &mut Document, title: &str) {
@@ -65,9 +84,11 @@ pub fn blank(width: f64, height: f64, pages: usize) -> Result<Document, CreateEr
         return Err(CreateError::Invalid("invalid page size or count".into()));
     }
     let mut doc = Document::new_empty();
+    let mut tree = Pages::of(&doc)?;
     for _ in 0..pages {
-        add_page(&mut doc, width, height, Dict::new(), None)?;
+        tree.add(&mut doc, width, height, Dict::new(), None);
     }
+    tree.finish(&mut doc)?;
     Ok(doc)
 }
 
@@ -693,6 +714,7 @@ pub fn from_images_with_resolution(images: &[(String, Vec<u8>)], resolution: Ima
         return Err(CreateError::Invalid("no images".into()));
     }
     let mut doc = Document::new_empty();
+    let mut tree = Pages::of(&doc)?;
     let mut profiles = Vec::new();
     for img in images.iter().map(|(name, bytes)| embed(name, bytes, usize::MAX)).collect::<Result<Vec<_>, _>>()?.into_iter().flatten() {
         let dpi = match resolution {
@@ -710,8 +732,9 @@ pub fn from_images_with_resolution(images: &[(String, Vec<u8>)], resolution: Ima
         let mut res = Dict::new();
         res.set(b"XObject".to_vec(), Object::Dict(xobj));
         let content = format!("q {w:.3} 0 0 {h:.3} 0 0 cm /Im0 Do Q\n").into_bytes();
-        add_page(&mut doc, w, h, res, Some(content))?;
+        tree.add(&mut doc, w, h, res, Some(content));
     }
+    tree.finish(&mut doc)?;
     if let Some((name, _)) = images.first() {
         set_title(&mut doc, name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s));
     }
@@ -805,6 +828,7 @@ fn set_text(title: &str, text: &str, page: (f64, f64), font_size: f64) -> Result
     font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
     font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
     let fr = doc.add(font);
+    let mut tree = Pages::of(&doc)?;
     let mut page_lines: Vec<Vec<String>> = vec![Vec::new()];
     for l in lines.iter().take(lines.len().saturating_sub(1)) {
         if l == "\u{c}" || page_lines.last().is_some_and(|p| p.len() >= per_page) {
@@ -828,8 +852,9 @@ fn set_text(title: &str, text: &str, page: (f64, f64), font_size: f64) -> Result
         fonts.set(b"F1".to_vec(), Object::Ref(fr));
         let mut res = Dict::new();
         res.set(b"Font".to_vec(), Object::Dict(fonts));
-        add_page(&mut doc, w, h, res, Some(c))?;
+        tree.add(&mut doc, w, h, res, Some(c));
     }
+    tree.finish(&mut doc)?;
     set_title(&mut doc, title);
     Ok(doc)
 }
