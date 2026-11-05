@@ -332,7 +332,7 @@ impl PdfCraftApp {
         let result = if undo { self.session.undo(id) } else { self.session.redo(id) };
         match result {
             Ok(label) => {
-                if label == "Rename structure class"
+                if label.wording == "Rename structure class"
                     && let (Some(selected), Some(doc)) = (class_snapshot, self.session.get(id))
                 {
                     self.tags_state.sync_class_after_history(doc, selected);
