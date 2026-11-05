@@ -134,11 +134,8 @@ impl PdfCraftApp {
         if self.opening_notice.as_ref().is_some_and(|notice| notice.token == pending.token && notice.lang == lang) {
             return;
         }
-        self.opening_notice = Some(OpeningNotice {
-            token: pending.token,
-            lang,
-            label: i18n::fmt(tl!("Opening {name}…"), &[("name", &pending.name)]),
-        });
+        self.opening_notice =
+            Some(OpeningNotice { token: pending.token, lang, label: i18n::fmt(tl!("Opening {name}…"), &[("name", &pending.name)]) });
     }
 
     #[cfg(not(target_arch = "wasm32"))]
