@@ -732,7 +732,8 @@ struct Seen {
     /// Fields left out of the reading for text that didn't fit ([`Fields::left_out`]).
     left_out: usize,
     /// The `/Kids` arrays given by reference that [`withhold_below`] has read, by each reference on
-    /// the way to them, and whether each holds a named kid.
+    /// the way to them, and whether each holds a named kid; a chain that ends nowhere, by its first
+    /// reference, as holding none.
     withheld_arrays: std::collections::HashMap<ObjRef, bool>,
     scripts: Allowance,
     values: Allowance,

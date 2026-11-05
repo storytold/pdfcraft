@@ -4448,6 +4448,49 @@ fn a_widget_behind_references_under_a_field_left_out_is_withheld() {
     assert_eq!((read.items.len(), read.adopted_page_fields, read.left_out), (0, 0, 1));
 }
 
+/// Fields left out for their names reach a `/Kids` array behind references to references as far
+/// as `Document::resolve` follows them, and no further; and a chain too long to follow, walked
+/// first from one field, doesn't hide the array from another that names a reference within reach.
+#[test]
+fn fields_left_out_follow_references_as_far_as_resolve() {
+    // 1 catalog, 2 pages, 3 the page, then the fields naming references `entries` into a chain
+    // of `refs`, then the chain, the array and the widget it lists, with no /Parent.
+    let build = |refs: u32, entries: &[u32]| {
+        let fields = u32::try_from(entries.len()).unwrap();
+        let chain = 4 + fields;
+        let widget = chain + refs + 1;
+        let listed: Vec<String> = (0..fields).map(|i| format!("{} 0 R", 4 + i)).collect();
+        let mut objs: Vec<String> = vec![
+            format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [{}] >> >>", listed.join(" ")),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+            format!("<< /Type /Page /Parent 2 0 R /Annots [{widget} 0 R] >>"),
+        ];
+        objs.extend(entries.iter().enumerate().map(|(i, e)| format!("<< /FT /Tx /T (f{i}) /V (old) /Kids {} 0 R >>", chain + e)));
+        objs.extend((0..refs).map(|i| format!("{} 0 R", chain + i + 1)));
+        objs.push(format!("[{widget} 0 R]"));
+        objs.push("<< /Type /Annot /Subtype /Widget /FT /Tx /Rect [0 0 10 10] >>".into());
+        assert_eq!(objs.len(), usize::try_from(widget).unwrap());
+        let mut doc = document(&objs);
+        let name = doc.add(Object::String(pdfcraft_cos::PdfString::literal(vec![b'n'; crate::read::MAX_TEXT_BYTES])));
+        for f in 0..fields {
+            doc.update_dict(ObjRef::new(4 + f, 0), |d| d.set(b"T".to_vec(), Object::Ref(name))).unwrap();
+        }
+        (doc, ObjRef::new(chain, 0))
+    };
+    for refs in [31, 32, 33] {
+        let (doc, first) = build(refs, &[0]);
+        let resolved = doc.resolve(&Object::Ref(first)).as_array().is_some();
+        let read = fields_with_adopted(&doc);
+        assert_eq!(read.adopted_page_fields == 0, resolved, "{refs} references: the widget is withheld as far as resolve reaches");
+        assert_eq!(resolved, refs <= 32);
+    }
+    for entries in [[0, 11], [11, 0]] {
+        let (doc, _) = build(40, &entries);
+        let read = fields_with_adopted(&doc);
+        assert_eq!((read.items.len(), read.adopted_page_fields, read.left_out), (0, 0, 2), "fields naming {entries:?}");
+    }
+}
+
 /// A widget's `/AS` is copied within the text allowance like the rest of the field's text: one
 /// that doesn't fit leaves the field out.
 #[test]
