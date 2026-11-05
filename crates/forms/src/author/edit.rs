@@ -2,7 +2,7 @@ use super::join::{check_join, join_radio_group};
 use super::look::{BorderStyle, da_string, patch_da, patch_widget_look, redraw_widgets};
 use super::tree::{ancestor_sets, attach, check_place, child_named, clash, detach, ensure_form, inherited, name_parts, own_inherited};
 use super::{Dict, Document, Field, FieldKind, FieldProps, FormError, MIN_FIELD_SIDE, ObjRef, Object, PdfString, fields, flags, invalid};
-use crate::read::{Allowance, held};
+use crate::read::{Allowance, held, referred};
 
 /// Swap width and height, keeping the center. `None` when that is not a usable widget.
 fn swapped_around_center(r: [f64; 4]) -> Option<[f64; 4]> {
@@ -624,19 +624,6 @@ enum Place {
     Action(ObjRef),
     Aa(ObjRef),
     Owner(ObjRef),
-}
-
-/// The object `o` refers to, through references to references as far as [`Document::resolve`]
-/// follows them (32); `None` when `o` is direct.
-fn referred(doc: &Document, o: &Object) -> Option<ObjRef> {
-    let mut r = o.as_ref()?;
-    for _ in 0..32 {
-        match Object::as_ref(&doc.get(r)) {
-            Some(next) => r = next,
-            None => break,
-        }
-    }
-    Some(r)
 }
 
 /// The Calculate script of field `f`, copied against `scripts`, and where it is written back. The

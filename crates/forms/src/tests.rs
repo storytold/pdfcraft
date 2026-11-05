@@ -4396,6 +4396,26 @@ fn a_field_left_out_leaves_its_widgets_to_a_later_field() {
     assert_eq!(fields_with_adopted(&doc).left_out, 3);
 }
 
+/// Nodes sharing one `/Kids` array under a field left out for its name: the walk that withholds
+/// them reads the array once, not once for each node that names it.
+#[test]
+fn a_kids_array_nodes_share_is_read_once_under_a_field_left_out() {
+    let k = 2000;
+    let mut objs: Vec<String> = vec!["<< /Type /Catalog /AcroForm << /Fields [2 0 R] >> >>".into(), "<< /FT /Tx /T (f) /Kids 3 0 R >>".into()];
+    objs.push(format!("[{}]", (0..k).map(|i| format!("{} 0 R", i + 4)).collect::<Vec<_>>().join(" ")));
+    objs.extend((0..k).map(|_| "<< /Kids 3 0 R >>".to_string()));
+    let mut doc = document(&objs);
+    doc.update_dict(ObjRef::new(2, 0), |f| {
+        f.set(b"T".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(vec![b'n'; crate::read::MAX_TEXT_BYTES])))
+    })
+    .unwrap();
+    crate::read::WITHHELD_ENTRIES.with(|c| c.set(0));
+    let read = fields_with_adopted(&doc);
+    let entries = crate::read::WITHHELD_ENTRIES.with(std::cell::Cell::get);
+    assert_eq!((read.items.len(), read.left_out), (0, 1));
+    assert!(entries <= 2 * k, "{entries} entries read");
+}
+
 /// A widget's `/AS` is copied within the text allowance like the rest of the field's text: one
 /// that doesn't fit leaves the field out.
 #[test]

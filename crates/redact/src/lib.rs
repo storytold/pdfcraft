@@ -769,23 +769,50 @@ fn redact_page_content(
 /// the form's reading has that field (one whose `/FT` is given by reference, or nested past what
 /// the reading follows, whose only widget needn't name it).
 fn form_tree(doc: &Document) -> HashSet<ObjRef> {
-    let kids = |o: Option<&Object>| -> Vec<ObjRef> {
-        o.map(|o| doc.resolve(o)).map(|a| a.as_array().into_iter().flatten().filter_map(Object::as_ref).collect()).unwrap_or_default()
-    };
+    let refs = |o: &Object| -> Vec<ObjRef> { doc.resolve(o).as_array().into_iter().flatten().filter_map(Object::as_ref).collect() };
     let fields = doc.root().map(|root| doc.get(root)).and_then(|catalog| {
         let form = doc.resolve(catalog.as_dict()?.get(b"AcroForm")?);
-        Some(kids(form.as_dict()?.get(b"Fields")))
+        Some(refs(form.as_dict()?.get(b"Fields")?))
     });
     let mut stack = fields.unwrap_or_default();
     let mut tree: HashSet<ObjRef> = stack.iter().copied().collect();
+    // A `/Kids` array several nodes share by reference is read once: its entries are in the tree.
+    let mut expanded = HashSet::new();
     while let Some(n) = stack.pop() {
-        for k in kids(doc.get(n).as_dict().and_then(|d| d.get(b"Kids"))) {
+        let node = doc.get(n);
+        let Some(kids) = node.as_dict().and_then(|d| d.get(b"Kids")) else { continue };
+        if referred(doc, kids).is_some_and(|holder| !expanded.insert(holder)) {
+            continue;
+        }
+        let kids = refs(kids);
+        #[cfg(test)]
+        TREE_ENTRIES.with(|c| c.set(c.get() + kids.len()));
+        for k in kids {
             if tree.insert(k) {
                 stack.push(k);
             }
         }
     }
     tree
+}
+
+#[cfg(test)]
+thread_local! {
+    /// `/Kids` entries [`form_tree`] read on this thread.
+    pub(crate) static TREE_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The object `o` refers to, through references to references as far as `Document::resolve`
+/// follows them (32); `None` when `o` is direct.
+fn referred(doc: &Document, o: &Object) -> Option<ObjRef> {
+    let mut r = o.as_ref()?;
+    for _ in 0..32 {
+        match Object::as_ref(&doc.get(r)) {
+            Some(next) => r = next,
+            None => break,
+        }
+    }
+    Some(r)
 }
 
 /// Step 2 for one page: the marks, and whatever lies under them (with their pop-ups).

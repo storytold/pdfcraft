@@ -193,6 +193,19 @@ impl std::ops::Deref for Held<'_> {
     }
 }
 
+/// The object `o` refers to, through references to references as far as [`Document::resolve`]
+/// follows them (32); `None` when `o` is direct.
+pub(crate) fn referred(doc: &Document, o: &Object) -> Option<ObjRef> {
+    let mut r = o.as_ref()?;
+    for _ in 0..32 {
+        match Object::as_ref(&doc.get(r)) {
+            Some(next) => r = next,
+            None => break,
+        }
+    }
+    Some(r)
+}
+
 /// [`Held`] `o`: a reference is followed as [`Document::resolve`] follows it, through references
 /// to references.
 pub(crate) fn held<'a>(doc: &Document, o: &'a Object) -> Held<'a> {
@@ -741,25 +754,48 @@ fn on_state_of(doc: &Document, wd: &Dict, text: &mut Allowance) -> Option<String
 /// How many terminal fields it holds, `r` among them: those with a name and no kid that has one.
 fn withhold_below(doc: &Document, r: ObjRef, seen: &mut Seen) -> usize {
     let named = |n: &ObjRef| doc.get(*n).as_dict().is_some_and(|d| d.contains(b"T"));
+    // A `/Kids` array several nodes share by reference is read once: its entries are withheld
+    // already, and whether one is named is kept.
+    let mut shared: std::collections::HashMap<ObjRef, bool> = std::collections::HashMap::new();
     let mut terminal = 0usize;
     let mut stack = vec![r];
     while let Some(n) = stack.pop() {
-        let kids: Vec<ObjRef> = doc
-            .get(n)
-            .as_dict()
-            .and_then(|d| d.get(b"Kids").map(|k| doc.resolve(k)))
-            .map(|k| k.as_array().into_iter().flatten().filter_map(Object::as_ref).collect())
-            .unwrap_or_default();
-        if named(&n) && !kids.iter().any(named) {
-            terminal = terminal.saturating_add(1);
-        }
-        for k in kids {
-            if seen.withheld.insert(k) {
-                stack.push(k);
+        let node = doc.get(n);
+        let Some(d) = node.as_dict() else { continue };
+        let kids_entry = d.get(b"Kids");
+        let holder = kids_entry.and_then(|k| referred(doc, k));
+        let has_named = match holder.and_then(|h| shared.get(&h)) {
+            Some(&has_named) => has_named,
+            None => {
+                let kids: Vec<ObjRef> = kids_entry
+                    .map(|k| doc.resolve(k))
+                    .map(|k| k.as_array().into_iter().flatten().filter_map(Object::as_ref).collect())
+                    .unwrap_or_default();
+                #[cfg(test)]
+                WITHHELD_ENTRIES.with(|c| c.set(c.get() + kids.len()));
+                let has_named = kids.iter().any(named);
+                if let Some(h) = holder {
+                    shared.insert(h, has_named);
+                }
+                for k in kids {
+                    if seen.withheld.insert(k) {
+                        stack.push(k);
+                    }
+                }
+                has_named
             }
+        };
+        if d.contains(b"T") && !has_named {
+            terminal = terminal.saturating_add(1);
         }
     }
     terminal
+}
+
+#[cfg(test)]
+thread_local! {
+    /// `/Kids` entries [`withhold_below`] read on this thread.
+    pub(crate) static WITHHELD_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Read the field at `r` and the fields under it into `out`, with what they inherit from
