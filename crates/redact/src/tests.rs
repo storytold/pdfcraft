@@ -627,6 +627,25 @@ fn a_fax_image_has_its_covered_pixels_cleared_instead_of_being_removed() {
             vec![b"1".to_vec()],
             [0x00, 0xFF, 0xFF, 0xFF],
         ),
+        // Through a reference to a reference: the array, its first number, and a colour space.
+        (
+            format!("{image} /ImageMask true /Decode 8 0 R /Filter /CCITTFaxDecode /DecodeParms {parms}"),
+            g4.clone(),
+            vec![b"9 0 R".to_vec(), b"[1 0]".to_vec()],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
+        (
+            format!("{image} /ImageMask true /Decode [8 0 R 0] /Filter /CCITTFaxDecode /DecodeParms {parms}"),
+            g4.clone(),
+            vec![b"9 0 R".to_vec(), b"1".to_vec()],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
+        (
+            format!("{image} /ColorSpace 8 0 R /Filter /CCITTFaxDecode /DecodeParms {parms}"),
+            g4.clone(),
+            vec![b"9 0 R".to_vec(), b"/DeviceGray".to_vec()],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
     ] {
         let mut objs = vec![stream(&dict, data)];
         objs.extend(extra);
@@ -1310,15 +1329,942 @@ fn globals_a_redacted_jbig2_image_shares_with_another_page_leave_the_file() {
     let mut doc = build(&image.replace(&format!("/Height {h}"), &format!("/Height {}", h + 1)));
     mark(&mut doc, 0, &[[0.25, 113.75, 49.75, 120.0]], "");
     assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(1))));
-    // Storing the second page's image again decodes it, within what is left of the run's
-    // allowance: with nothing left the redaction is refused as one past the allowance, not
-    // reported as an image that can't be read.
+    // Reading the dictionary to know copies of it, and storing the second page's image again,
+    // decode within what is left of the run's allowance: past it the redaction is refused as one
+    // past the allowance, not reported as an image that can't be read. The first page's image
+    // leaves (its page no longer lists it).
     let mut doc = build(&image);
-    let first_image = [ObjRef::new(7, 0)];
-    let refused = crate::restore_shared_jbig2(&mut doc, &first_image, &mut pdfcraft_cos::ImageBudget::with_work(0));
+    let before = crate::globals::kept(&doc);
+    let first = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(first, |d| {
+        d.remove(b"Resources");
+    })
+    .unwrap();
+    let refused = crate::globals::unshare(&mut doc.clone(), &before, &mut pdfcraft_cos::ImageBudget::with_work(0));
     assert!(matches!(refused, Err(RedactError::ImagesPastAllowance)), "{refused:?}");
-    let restored = crate::restore_shared_jbig2(&mut doc, &first_image, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
+    // Enough to read the dictionary, and nothing left for the image.
+    let mut reading = pdfcraft_cos::ImageBudget::with_work(u64::MAX);
+    crate::globals::content(&mut crate::globals::Run::new(crate::globals::RUN_BUDGET), &doc, 9, &mut reading).unwrap();
+    let read = u64::MAX - reading.work_left();
+    let refused = crate::globals::unshare(&mut doc.clone(), &before, &mut pdfcraft_cos::ImageBudget::with_work(read));
+    assert!(matches!(refused, Err(RedactError::ImagesPastAllowance)), "the image: {refused:?}");
+    // Removing hidden information chose no pages, so fewer of them is no way out: it is refused as
+    // finding what shares the dictionary is.
+    let refused = crate::sanitize::unshare_unmarked(&mut doc.clone(), &before, &mut pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(matches!(refused, Err(RedactError::SharedJbig2Budget)), "{refused:?}");
+    let restored = crate::globals::unshare(&mut doc, &before, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
     assert_eq!(restored.ok(), Some(1));
+}
+
+/// A scan's parts when it keeps its symbols in `/JBIG2Globals`: the dictionary, moved out as segment
+/// data belonging to no page, and the page information and regions that are left.
+struct SharedScan {
+    bits: Vec<u8>,
+    symbols: Vec<u8>,
+    page: Vec<u8>,
+}
+
+fn shared_scan() -> SharedScan {
+    const LETTERS: [[&str; 7]; 3] = [
+        ["#####", "#....", "####.", "#....", "#....", "#....", "#####"],
+        [".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."],
+        ["#...#", "#...#", "#####", "#...#", "#...#", "#...#", "#...#"],
+    ];
+    let (w, h) = (400usize, 40usize);
+    let stride = w / 8;
+    let mut bits = vec![0xFFu8; stride * h];
+    for (line, top) in [2usize, 12, 22, 32].into_iter().enumerate() {
+        for (k, x) in (3..w - 6).step_by(7).enumerate() {
+            for (dy, row) in LETTERS[(k + line) % 3].iter().enumerate() {
+                for (dx, _) in row.bytes().enumerate().filter(|(_, c)| *c == b'#') {
+                    bits[(top + dy) * stride + (x + dx) / 8] &= !(0x80 >> ((x + dx) % 8));
+                }
+            }
+        }
+    }
+    let coded = pdfcraft_filters::encode_jbig2(&bits, w as u32, h as u32).unwrap();
+    // The end of the segment at `at`, and where its page association is (7.2.2 to 7.2.7).
+    let end = |at: usize| {
+        let page = at + 6 + usize::from(coded[at + 5] >> 5);
+        let length = u32::from_be_bytes(coded[page + 1..page + 5].try_into().unwrap());
+        (page + 5 + length as usize, page)
+    };
+    let (dictionary, _) = end(0);
+    assert_eq!(coded[dictionary + 4], 0, "the second segment is the symbol dictionary");
+    let (rest, page) = end(dictionary);
+    let mut symbols = coded[dictionary..rest].to_vec();
+    symbols[page - dictionary] = 0;
+    SharedScan { page: [&coded[..dictionary], &coded[rest..]].concat(), symbols, bits }
+}
+
+/// An image of [`SharedScan`]'s size that uses the dictionary, object 9, by `parms`.
+fn shared_image(parms: &str) -> String {
+    format!("/Type /XObject /Subtype /Image /Width 400 /Height 40 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode {parms}")
+}
+
+/// Two pages of a scan sharing object 9: its symbols, and `LEAK_GLOBALS`, for the shape of a mark found
+/// only under the area. The first page draws image 7 unless told otherwise; the second draws image 8.
+/// `extra` are objects 10 on.
+struct SharedPages {
+    /// What the first page draws, its `/Resources` entries and anything else in its dictionary.
+    content: Vec<u8>,
+    resources: String,
+    page: String,
+    /// Image 7's dictionary and data; image 8's.
+    first: String,
+    first_data: Vec<u8>,
+    other: String,
+    other_data: Vec<u8>,
+    extra: Vec<Vec<u8>>,
+}
+
+const DRAWS: &[u8] = b"q 200 0 0 20 0 100 cm /Im Do Q";
+
+impl SharedPages {
+    fn new(scan: &SharedScan) -> Self {
+        let image = shared_image(SHARED);
+        Self {
+            content: DRAWS.to_vec(),
+            resources: "/XObject << /Im 7 0 R >>".into(),
+            page: String::new(),
+            first: image.clone(),
+            first_data: scan.page.clone(),
+            other: image,
+            other_data: scan.page.clone(),
+            extra: vec![],
+        }
+    }
+
+    fn build(self, scan: &SharedScan) -> Document {
+        let Self { content, resources, page, first, first_data, other, other_data, extra } = self;
+        let mut objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Resources << {resources} >> {page} >>").into_bytes(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 6 0 R /Resources << /XObject << /Im 8 0 R >> >> >>".to_vec(),
+            stream("", content),
+            stream("", DRAWS),
+            stream(&first, first_data),
+            stream(&other, other_data),
+            stream("", [jbig2_globals(b"LEAK_GLOBALS"), scan.symbols.clone()].concat()),
+        ];
+        objs.extend(extra);
+        pdf(objs)
+    }
+}
+
+/// The samples of the image the page draws as `/Im`.
+fn drawn_samples(doc: &Document, page: usize) -> Vec<u8> {
+    let p = pdfcraft_model::pages(doc).swap_remove(page);
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    match &*doc.get(xo.get(b"Im").unwrap().as_ref().unwrap()) {
+        Object::Stream(s) => decoded_image(doc, s).unwrap(),
+        other => panic!("not an image: {other:?}"),
+    }
+}
+
+const SHARED: &str = "/DecodeParms << /JBIG2Globals 9 0 R >>";
+const CLEARS: [f64; 4] = [0.25, 113.75, 49.75, 120.0];
+const COVERS: [f64; 4] = [0.0, 100.0, 200.0, 120.0];
+
+/// The ways image 7 can leave the document while taking the dictionary's only reason to stay with it.
+fn ways_out(scan: &SharedScan) -> Vec<(&'static str, [f64; 4], SharedPages)> {
+    let base = || SharedPages::new(scan);
+    let in_form = |filter: &str, data: &[u8]| {
+        stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /Im 7 0 R >> >> {filter}"), data)
+    };
+    let plain = "/Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray";
+    let through_form = |filter: &str, data: &[u8]| SharedPages {
+        content: b"/Fm Do".to_vec(),
+        resources: "/XObject << /Fm 10 0 R >>".into(),
+        extra: vec![in_form(filter, data)],
+        ..base()
+    };
+    let annotated = |subtype: &str| SharedPages {
+        content: Vec::new(),
+        resources: String::new(),
+        page: "/Annots [10 0 R]".into(),
+        extra: vec![
+            format!("<< /Type /Annot /Subtype /{subtype} /T (Field) /FT /Tx /Rect [0 100 200 120] /AP << /N 11 0 R >> >>").into_bytes(),
+            in_form("", DRAWS),
+        ],
+        ..base()
+    };
+    let glyph = SharedPages {
+        content: b"BT /T3 200 Tf 0 100 Td (a) Tj ET".to_vec(),
+        resources: "/Font << /T3 10 0 R >>".into(),
+        extra: vec![
+            b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 11 0 R >> \
+              /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] /Resources << /XObject << /Im 7 0 R >> >> >>"
+                .to_vec(),
+            stream("", b"1000 0 d0 q 1000 0 0 100 0 0 cm /Im Do Q"),
+        ],
+        ..base()
+    };
+    vec![
+        ("cleared", CLEARS, base()),
+        ("removed", COVERS, base()),
+        ("in a form", COVERS, through_form("", DRAWS)),
+        ("in a form that can't be read", COVERS, through_form("/Filter /FlateDecode", b"not Flate")),
+        ("a stamp's appearance", COVERS, annotated("Stamp")),
+        ("a widget's appearance", COVERS, annotated("Widget")),
+        ("a Type 3 glyph", COVERS, glyph),
+        (
+            "a mask",
+            COVERS,
+            SharedPages { first: format!("{plain} /SMask 10 0 R"), extra: vec![stream(&shared_image(SHARED), scan.page.clone())], ..base() },
+        ),
+        (
+            "a stencil mask",
+            COVERS,
+            SharedPages {
+                first: format!("{plain} /Mask 10 0 R"),
+                extra: vec![stream(
+                    &shared_image(SHARED).replace("/BitsPerComponent 1 /ColorSpace /DeviceGray", "/ImageMask true"),
+                    scan.page.clone(),
+                )],
+                ..base()
+            },
+        ),
+        (
+            "parameters for data in another file",
+            COVERS,
+            SharedPages { first: shared_image("/F (scan.jb2) /FFilter /JBIG2Decode /FDecodeParms << /JBIG2Globals 9 0 R >>"), ..base() },
+        ),
+        (
+            "an alternate",
+            COVERS,
+            SharedPages {
+                first: format!("{plain} /Alternates [<< /Image 10 0 R >>]"),
+                extra: vec![stream(&shared_image(SHARED), scan.page.clone())],
+                ..base()
+            },
+        ),
+        (
+            "/Filter by reference",
+            COVERS,
+            SharedPages {
+                first: shared_image("/DecodeParms [null << /JBIG2Globals 9 0 R >>]").replace("/Filter /JBIG2Decode", "/Filter 10 0 R"),
+                extra: vec![b"[/ASCIIHexDecode /JBIG2Decode]".to_vec()],
+                ..base()
+            },
+        ),
+        (
+            "a reference to it",
+            COVERS,
+            SharedPages { first: shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>"), extra: vec![b"9 0 R".to_vec()], ..base() },
+        ),
+        (
+            "parameters through a reference to them",
+            COVERS,
+            SharedPages {
+                first: shared_image("/DecodeParms 10 0 R"),
+                extra: vec![b"11 0 R".to_vec(), b"<< /JBIG2Globals 9 0 R >>".to_vec()],
+                ..base()
+            },
+        ),
+        (
+            "an entry through a reference to it",
+            COVERS,
+            SharedPages {
+                first: shared_image("/DecodeParms [10 0 R]"),
+                extra: vec![b"11 0 R".to_vec(), b"<< /JBIG2Globals 9 0 R >>".to_vec()],
+                ..base()
+            },
+        ),
+        (
+            "an array of them through a reference to it",
+            COVERS,
+            SharedPages {
+                first: shared_image("/DecodeParms 10 0 R"),
+                extra: vec![b"11 0 R".to_vec(), b"[<< /JBIG2Globals 9 0 R >>]".to_vec()],
+                ..base()
+            },
+        ),
+        ("/DP", COVERS, SharedPages { first: shared_image("/DP << /JBIG2Globals 9 0 R >>"), ..base() }),
+        // Cleared, the copy keeps no parameters of the old data, so none names the dictionary.
+        ("/DP, cleared", CLEARS, SharedPages { first: format!("{} /DP << /JBIG2Globals 9 0 R >>", shared_image(SHARED)), ..base() }),
+        (
+            "parameters for data in another file, with none, cleared",
+            CLEARS,
+            SharedPages { first: format!("{} /FFilter /JBIG2Decode /FDecodeParms << /JBIG2Globals 9 0 R >>", shared_image(SHARED)), ..base() },
+        ),
+        ("another generation", COVERS, SharedPages { first: shared_image("/DecodeParms << /JBIG2Globals 9 1 R >>"), ..base() }),
+    ]
+}
+
+/// Scanners and `jbig2enc -s` share one symbol dictionary across a scan's pages, and it holds the
+/// shape of every distinct mark, one found only under a redaction included: a signature, a stamp.
+/// The dictionary stayed in the file while any other image used it. Now the image left on the second
+/// page is stored again without it, whichever way the first one left the document.
+#[test]
+fn a_redacted_scans_shared_jbig2_dictionary_leaves_the_file() {
+    let scan = shared_scan();
+    for (way, rect, pages) in ways_out(&scan) {
+        let mut doc = pages.build(&scan);
+        assert_eq!(drawn_samples(&doc, 1), scan.bits, "{way}: the second page reads through the dictionary");
+        mark(&mut doc, 0, &[rect], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!(report.images_restored, 1, "{way}");
+        assert_gone(&doc, b"LEAK_GLOBALS");
+        assert_gone(&doc, b"JBIG2Globals");
+        assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits, "{way}: its pixels are unchanged");
+    }
+}
+
+/// However the image that stays names the dictionary, it comes out without it: its parameters by
+/// reference, behind another filter, or a copy of the dictionary, as a file put back together from
+/// pages split apart has, each page with its own. It is also read when its size or filter is given
+/// by reference, which `decoded_image` alone refuses.
+#[test]
+fn what_stays_is_stored_without_the_dictionary_however_it_names_it() {
+    let scan = shared_scan();
+    let hex: Vec<u8> = scan.page.iter().map(|b| format!("{b:02x}")).collect::<String>().bytes().chain(*b">").collect();
+    let copy = stream("", [jbig2_globals(b"LEAK_GLOBALS"), scan.symbols.clone()].concat());
+    let image = shared_image(SHARED);
+    for (other, data, extra) in [
+        (shared_image("/DecodeParms 10 0 R"), scan.page.clone(), vec![b"<< /JBIG2Globals 9 0 R >>".to_vec()]),
+        (
+            shared_image("/DecodeParms [null << /JBIG2Globals 9 0 R >>]").replace("/Filter /JBIG2Decode", "/Filter [/ASCIIHexDecode /JBIG2Decode]"),
+            hex.clone(),
+            vec![],
+        ),
+        (shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>"), scan.page.clone(), vec![copy]),
+        (image.replace("/Width 400", "/Width 10 0 R"), scan.page.clone(), vec![b"400".to_vec()]),
+        (image.replace("/Height 40", "/Height 10 0 R"), scan.page.clone(), vec![b"40".to_vec()]),
+        (image.replace("/Filter /JBIG2Decode", "/Filter 10 0 R"), scan.page.clone(), vec![b"/JBIG2Decode".to_vec()]),
+        (
+            shared_image("/DecodeParms [null << /JBIG2Globals 9 0 R >>]").replace("/Filter /JBIG2Decode", "/Filter [/ASCIIHexDecode 10 0 R]"),
+            hex.clone(),
+            vec![b"/JBIG2Decode".to_vec()],
+        ),
+        (image.replace("/ColorSpace /DeviceGray ", ""), scan.page.clone(), vec![]),
+        (
+            image.replace("/ColorSpace /DeviceGray", "/ColorSpace [/DeviceN [/Black] /DeviceGray 10 0 R]"),
+            scan.page.clone(),
+            vec![b"<< /FunctionType 2 /Domain [0 1] /N 1 >>".to_vec()],
+        ),
+        // Parameters no filter reads, on a picture that needs no dictionary.
+        (shared_image("/DP << /JBIG2Globals 9 0 R >>"), pdfcraft_filters::encode_jbig2_generic(&scan.bits, 400, 40).unwrap(), vec![]),
+        // Those for data in another file, with none: beside the parameters it reads, and alone.
+        (format!("{image} /FFilter /JBIG2Decode /FDecodeParms << /JBIG2Globals 9 0 R >>"), scan.page.clone(), vec![]),
+        (
+            shared_image("/FFilter /JBIG2Decode /FDecodeParms << /JBIG2Globals 9 0 R >>"),
+            pdfcraft_filters::encode_jbig2_generic(&scan.bits, 400, 40).unwrap(),
+            vec![],
+        ),
+        // A `/F` that is null, directly, by reference, or as a reference to no object, is none.
+        (format!("{image} /F null"), scan.page.clone(), vec![]),
+        (format!("{image} /F 10 0 R"), scan.page.clone(), vec![b"null".to_vec()]),
+        (format!("{image} /F 99 0 R"), scan.page.clone(), vec![]),
+        // Through a reference to a reference: /F to null, the size, the filter, the colour space.
+        (format!("{image} /F 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"null".to_vec()]),
+        (shared_image("/DecodeParms 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"<< /JBIG2Globals 9 0 R >>".to_vec()]),
+        (image.replace("/Width 400", "/Width 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"400".to_vec()]),
+        (image.replace("/Height 40", "/Height 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"40".to_vec()]),
+        (image.replace("/Filter /JBIG2Decode", "/Filter 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"/JBIG2Decode".to_vec()]),
+        (
+            shared_image("/DecodeParms [null << /JBIG2Globals 9 0 R >>]").replace("/Filter /JBIG2Decode", "/Filter [/ASCIIHexDecode 10 0 R]"),
+            hex.clone(),
+            vec![b"11 0 R".to_vec(), b"/JBIG2Decode".to_vec()],
+        ),
+        (image.replace("/ColorSpace /DeviceGray", "/ColorSpace 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"/DeviceGray".to_vec()]),
+        // An ICC profile of one component is one.
+        (format!("{} /ColorSpace [/ICCBased 10 0 R]", image.replace("/ColorSpace /DeviceGray ", "")), scan.page.clone(), vec![stream("/N 1", b"")]),
+    ] {
+        let mut doc = SharedPages { other: other.clone(), other_data: data, extra, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!(report.images_restored, 1, "{other}");
+        assert_gone(&doc, b"LEAK_GLOBALS");
+        assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits, "{other}: its pixels are unchanged");
+    }
+}
+
+/// JBIG2 is drawn as one bit of one component whatever the dictionary says, so the Flate copy has to
+/// say so too: a stream with no `/BitsPerComponent`, or 8, shows the same picture stored again.
+#[test]
+fn a_stored_jbig2_image_is_one_bit_whatever_its_dictionary_said() {
+    let scan = shared_scan();
+    let hex: Vec<u8> = scan.page.iter().map(|b| format!("{b:02x}")).collect::<String>().bytes().chain(*b">").collect();
+    let chained =
+        shared_image("/DecodeParms [null << /JBIG2Globals 9 0 R >>]").replace("/Filter /JBIG2Decode", "/Filter [/ASCIIHexDecode /JBIG2Decode]");
+    let lone = shared_image(SHARED).replace("/Filter /JBIG2Decode", "/Filter [/JBIG2Decode]");
+    for (other, other_data, bits) in [
+        (shared_image(SHARED), scan.page.clone(), ""),
+        (shared_image(SHARED), scan.page.clone(), "/BitsPerComponent 8"),
+        (chained, hex, ""),
+        (lone, scan.page.clone(), ""),
+    ] {
+        let other = other.replace("/BitsPerComponent 1", bits);
+        let mut doc = SharedPages { other, other_data, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        apply(&mut doc, None).unwrap();
+        let saved = reopen(&doc);
+        assert_eq!(drawn_samples(&saved, 1), scan.bits, "{bits}");
+        let p = pdfcraft_model::pages(&saved).swap_remove(1);
+        let res = saved.resolve(p.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = saved.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let image = saved.get(xo.get(b"Im").unwrap().as_ref().unwrap());
+        let Object::Stream(s) = &*image else { panic!("not an image") };
+        assert_eq!(s.dict.int(b"BitsPerComponent"), Some(1), "{bits}");
+    }
+}
+
+/// A mark that takes nothing using the dictionary leaves it, and what uses it, alone: here it covers
+/// text in a form that also draws the scan, away from the scan. A stream nothing reaches isn't decoded
+/// for nothing either: this one can't be, and it uses the dictionary.
+#[test]
+fn a_dictionary_stays_when_nothing_using_it_left() {
+    let scan = shared_scan();
+    let text = b"BT /F1 10 Tf 10 250 Td (SECRET) Tj ET q 200 0 0 20 0 100 cm /Im Do Q";
+    let pages = SharedPages {
+        content: b"/Fm Do".to_vec(),
+        resources: "/XObject << /Fm 10 0 R >>".into(),
+        extra: vec![
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> /XObject << /Im 7 0 R >> >>",
+                text,
+            ),
+            stream(&shared_image(SHARED), b"not JBIG2"),
+        ],
+        ..SharedPages::new(&scan)
+    };
+    let mut doc = pages.build(&scan);
+    mark(&mut doc, 0, &[[0.0, 240.0, 200.0, 270.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!((report.images_removed, report.images_cleared, report.images_restored), (0, 0, 0));
+    assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits);
+}
+
+/// A dictionary of other bytes is another dictionary: the scan using it keeps it and isn't stored again.
+#[test]
+fn another_jbig2_dictionary_is_left_alone() {
+    let scan = shared_scan();
+    let own = stream("", [jbig2_globals(b"OWN_GLOBALS"), scan.symbols.clone()].concat());
+    let other = shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>");
+    let mut doc = SharedPages { other, extra: vec![own], ..SharedPages::new(&scan) }.build(&scan);
+    mark(&mut doc, 0, &[CLEARS], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_restored, 0);
+    let saved = reopen(&doc);
+    let holds = |secret: &[u8]| {
+        saved.scan_objects().any(|(_, o)| matches!(&*o, Object::Stream(s) if s.decoded().is_ok_and(|d| d.windows(secret.len()).any(|w| w == secret))))
+    };
+    assert!(!holds(b"LEAK_GLOBALS") && holds(b"OWN_GLOBALS"));
+    assert_eq!(drawn_samples(&saved, 1), scan.bits);
+}
+
+/// An image that can't be stored without the dictionary may still be drawn: the renderer draws a
+/// JBIG2 page of another size than its image, which `decoded_image` refuses, and draws three components
+/// of one bit as grey. Removing it would lose a page no mark reached, and keeping the dictionary would
+/// keep what the mark covered, so the redaction refuses and the document stays as it was. So it does
+/// for anything else that refers to the dictionary, a reference that holds a reference to it among them.
+#[test]
+fn a_shared_jbig2_dictionary_that_cant_leave_refuses_the_redaction() {
+    let scan = shared_scan();
+    let image = shared_image(SHARED);
+    let elsewhere = "/Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 1 /ColorSpace /DeviceGray /Note 9 0 R";
+    let not_jbig2 = image.replace("/Filter /JBIG2Decode", "/Filter /FlateDecode");
+    for (other, data, extra) in [
+        (image.replace("/Height 40", "/Height 41"), scan.page.clone(), vec![]),
+        (image.replace("/DeviceGray", "/DeviceRGB"), scan.page.clone(), vec![]),
+        (image.replace("/DeviceGray", "/DeviceCMYK"), scan.page.clone(), vec![]),
+        (image.replace("/ColorSpace /DeviceGray", "/ColorSpace 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"/DeviceRGB".to_vec()]),
+        (
+            format!("{image} /ColorSpace [/ICCBased 10 0 R]").replace("/ColorSpace /DeviceGray ", ""),
+            scan.page.clone(),
+            vec![b"11 0 R".to_vec(), stream("/N 3", b"")],
+        ),
+        // Through a reference to a reference, which now reads as what it names (#5548): stored again
+        // without the dictionary, or refused (see below).
+        (shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>"), scan.page.clone(), vec![b"9 0 R".to_vec()]),
+        (elsewhere.to_string(), vec![0], vec![]),
+        (not_jbig2, pdfcraft_filters::encode_flate(&scan.bits), vec![]),
+        // A copy with its filter by reference is known for a copy, and the decoder doesn't read it.
+        (
+            shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>"),
+            scan.page.clone(),
+            vec![
+                stream("/Filter 11 0 R", pdfcraft_filters::encode_flate(&[jbig2_globals(b"LEAK_GLOBALS"), scan.symbols.clone()].concat())),
+                b"/FlateDecode".to_vec(),
+            ],
+        ),
+    ] {
+        let through_reference = other.contains("/JBIG2Globals 10 0 R");
+        let mut doc = SharedPages { other: other.clone(), other_data: data, extra, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        let before = doc.clone();
+        match apply(&mut doc, None) {
+            Err(RedactError::SharedJbig2Globals(_)) => assert_eq!(drawn_samples(&doc, 0), drawn_samples(&before, 0), "{other}: nothing was redacted"),
+            Ok(_) if through_reference => {
+                assert!(!pdfcraft_cos::reachable(&doc).iter().any(|r| r.num == 9), "{other}: the dictionary stays");
+                assert_gone(&doc, b"LEAK_GLOBALS");
+            }
+            result => panic!("{other}: {result:?}"),
+        }
+    }
+}
+
+/// What is stored again is bounded as what is cleared is: an image of [`image::MAX_PIXELS`] is, and one
+/// past it, which decodes, refuses the redaction.
+#[test]
+fn an_image_past_the_size_redaction_clears_refuses_it() {
+    let scan = shared_scan();
+    let h = 8192u32;
+    for (w, stored) in [(8192u32, true), (8200, false)] {
+        let blank = vec![0xFFu8; (w as usize).div_ceil(8) * h as usize];
+        let other = shared_image(SHARED).replace("/Width 400", &format!("/Width {w}")).replace("/Height 40", &format!("/Height {h}"));
+        let data = pdfcraft_filters::encode_jbig2_generic(&blank, w, h).unwrap();
+        let mut doc = SharedPages { other, other_data: data, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        let run = apply(&mut doc, None);
+        assert_eq!(run.as_ref().is_ok_and(|r| r.images_restored == 1), stored, "{w}");
+        assert_eq!(matches!(run, Err(RedactError::SharedJbig2Globals(1))), !stored, "{w}");
+    }
+}
+
+/// An alternate of an image stored again stays with it, stored without the dictionary in turn: a page
+/// no mark reached keeps what it had.
+#[test]
+fn an_alternate_of_what_stays_stays() {
+    let scan = shared_scan();
+    let other = format!("{} /Alternates [<< /Image 10 0 R >>]", shared_image(SHARED));
+    let mut doc = SharedPages { other, extra: vec![stream(&shared_image(SHARED), scan.page.clone())], ..SharedPages::new(&scan) }.build(&scan);
+    mark(&mut doc, 0, &[CLEARS], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_restored, 2);
+    assert_gone(&doc, b"LEAK_GLOBALS");
+    let saved = reopen(&doc);
+    let kept = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if s.dict.contains(b"Alternates"))).count();
+    assert_eq!(kept, 1);
+}
+
+/// The refusal counts the images that can't be stored, and says so; when only something else refers
+/// to the dictionary, it counts none and says that instead, however many such references there are.
+#[test]
+fn a_refused_redaction_counts_what_cant_be_stored() {
+    let scan = shared_scan();
+    let wrong = shared_image(SHARED).replace("/Height 40", "/Height 41");
+    let other = format!("{wrong} /SMask 10 0 R");
+    let mut doc = SharedPages { other, extra: vec![stream(&wrong, scan.page.clone())], ..SharedPages::new(&scan) }.build(&scan);
+    mark(&mut doc, 0, &[CLEARS], "");
+    let refused = apply(&mut doc, None);
+    assert!(matches!(refused, Err(RedactError::SharedJbig2Globals(2))));
+    assert!(refused.unwrap_err().to_string().starts_with("2 item(s) share JBIG2 symbol data with something being removed and can't be stored"));
+    let note = "/Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 1 /ColorSpace /DeviceGray /Note 9 0 R";
+    for (other, extra, stuck) in [
+        (note.to_string(), vec![], 0),
+        (format!("{note} /SMask 10 0 R"), vec![stream(note, vec![0])], 0),
+        (format!("{note} /SMask 10 0 R"), vec![stream(&wrong, scan.page.clone())], 1),
+    ] {
+        let mut doc = SharedPages { other: other.clone(), other_data: vec![0], extra, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        let refused = apply(&mut doc, None);
+        assert!(matches!(refused, Err(RedactError::SharedJbig2Globals(n)) if n == stuck), "{other}");
+        let text = refused.unwrap_err().to_string();
+        assert_eq!(text.starts_with("something else in the file refers to JBIG2 symbol data"), stuck == 0, "{other}: {text}");
+        assert_eq!(text.contains("can't be stored"), stuck > 0, "{other}: {text}");
+    }
+    // An image whose data is in another file can't be stored here, though what is here decodes: readers
+    // draw the other file, with the dictionary its own parameters name.
+    let elsewhere = format!("{} /F (page2.jb2) /FFilter /JBIG2Decode /FDecodeParms << /JBIG2Globals 9 0 R >>", shared_image(SHARED));
+    let mut doc = SharedPages { other: elsewhere, ..SharedPages::new(&scan) }.build(&scan);
+    mark(&mut doc, 0, &[CLEARS], "");
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(1))));
+}
+
+/// A dictionary that names itself as its own globals (malformed) can't be stored without them, but
+/// leaves with what used it, so the run goes on; it isn't counted as stored, nor, when the run is
+/// refused, as something that uses the dictionary.
+#[test]
+fn a_dictionary_that_names_itself_isnt_counted_as_stored() {
+    let scan = shared_scan();
+    let names_itself = |pages: SharedPages| {
+        let mut doc = pages.build(&scan);
+        let dictionary = pdfcraft_cos::ObjRef::new(9, 0);
+        let Object::Stream(mut s) = (*doc.get(dictionary)).clone() else { panic!("object 9 is the dictionary") };
+        let mut parms = pdfcraft_cos::Dict::new();
+        parms.set(b"JBIG2Globals".to_vec(), Object::Ref(dictionary));
+        s.dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        doc.set(dictionary, Object::Stream(s));
+        mark(&mut doc, 0, &[CLEARS], "");
+        doc
+    };
+    let mut doc = names_itself(SharedPages::new(&scan));
+    assert_eq!(apply(&mut doc, None).unwrap().images_restored, 1);
+    assert_gone(&doc, b"LEAK_GLOBALS");
+    assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits);
+    // The second page's image has its data in another file, so it can't be stored: one item.
+    let mut doc = names_itself(SharedPages { other: format!("{} /F (p.jb2)", shared_image(SHARED)), ..SharedPages::new(&scan) });
+    assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(1))));
+}
+
+/// What a stream's size, filters and parameters are made direct to is small, however often they
+/// refer to a large object: only numbers, names and the parameters decoders read are copied.
+#[test]
+fn what_is_made_direct_is_small_however_often_a_large_object_is_named() {
+    let big = format!("[{}]", "1 ".repeat(100_000));
+    let keys: String = (0..50).map(|k| format!(" /K{k} 2 0 R")).collect();
+    // Three filters, and parameters for 2,001: the entries past the filters are dropped. Two name
+    // object 6, whose `/JBIG2Globals` is the large array given directly, which no decoder reads.
+    let (filters, entries) = (" 2 0 R".repeat(2), format!(" 6 0 R 6 0 R{}", " 2 0 R".repeat(1998)));
+    let dict =
+        format!("/Width 2 0 R /Height 2 0 R /Filter [/FlateDecode{filters}] /DecodeParms [<< /Predictor 3 0 R /Columns 2 0 R{keys} >>{entries}]");
+    let globals = format!("<< /JBIG2Globals {big} >>");
+    // A chain of more filters than any decoder takes is no filter, and its parameters aren't read:
+    // ten here, against eight and a `/Crypt`.
+    let long = format!("/Filter [{}] /DecodeParms 2 0 R", "/FlateDecode ".repeat(10));
+    let doc = pdf(vec![
+        b"<< /Type /Catalog >>".to_vec(),
+        big.into_bytes(),
+        b"4 0 R".to_vec(),
+        b"12".to_vec(),
+        stream(&dict, b""),
+        globals.into_bytes(),
+        stream(&long, b""),
+        stream(&format!("/Filter [{}]", "/FlateDecode ".repeat(9)), b""),
+        // A name no decoder knows, long or short, is no filter, and isn't copied however often.
+        format!("/{}", "A".repeat(2000)).into_bytes(),
+        format!("[{} /Foo]", " 9 0 R".repeat(8)).into_bytes(),
+        stream("/Filter 10 0 R", b""),
+    ]);
+    let Object::Stream(s) = &*doc.get(ObjRef::new(5, 0)) else { panic!("object 5 is the stream") };
+    let made = crate::globals::Run::new(crate::globals::RUN_BUDGET).readable(&doc, s).unwrap();
+    let mut bytes = Vec::new();
+    pdfcraft_cos::serialize(&Object::Dict(made.dict.clone()), &mut bytes);
+    assert!(bytes.len() < 4096, "{} bytes made direct", bytes.len());
+    let parms = made.dict.get(b"DecodeParms").and_then(Object::as_array).unwrap();
+    assert_eq!(parms.first().and_then(Object::as_dict).and_then(|d| d.get(b"Predictor")), Some(&Object::Int(12)));
+    assert_eq!(parms.len(), 3, "an entry for each filter");
+    assert!(parms[1].as_dict().is_some_and(|d| !d.contains(b"JBIG2Globals")), "{:?}", parms[1]);
+    let Object::Stream(s) = &*doc.get(ObjRef::new(7, 0)) else { panic!("object 7 is the stream") };
+    let made = crate::globals::Run::new(crate::globals::RUN_BUDGET).readable(&doc, s).unwrap();
+    assert_eq!(made.dict.get(b"Filter"), Some(&Object::Null));
+    assert_eq!(made.dict.get(b"DecodeParms").and_then(Object::as_array).map(Vec::len), Some(0));
+    // Eight filters and a `/Crypt` are as many as a decoder takes: those are read.
+    let Object::Stream(s) = &*doc.get(ObjRef::new(8, 0)) else { panic!("object 8 is the stream") };
+    let made = crate::globals::Run::new(crate::globals::RUN_BUDGET).readable(&doc, s).unwrap();
+    assert_eq!(made.dict.get(b"Filter").and_then(Object::as_array).map(Vec::len), Some(9));
+    let Object::Stream(s) = &*doc.get(ObjRef::new(11, 0)) else { panic!("object 11 is the stream") };
+    let made = crate::globals::Run::new(crate::globals::RUN_BUDGET).readable(&doc, s).unwrap();
+    assert_eq!(made.dict.get(b"Filter"), Some(&Object::Array(vec![Object::Null; 9])));
+}
+
+/// A `/JBIG2Globals` reference in parameters given directly is fetched once a run, however many
+/// entries and streams name it, and what it leads to is held once.
+#[test]
+fn a_dictionary_named_in_direct_entries_is_fetched_once() {
+    let entries = " << /JBIG2Globals 2 0 R >>".repeat(9);
+    let mut objects = vec![b"<< /Type /Catalog >>".to_vec(), stream("", b"symbols")];
+    objects.extend((0..50).map(|_| stream(&format!("/Filter /JBIG2Decode /DecodeParms [{entries}]"), b"")));
+    let doc = pdf(objects);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    for n in 3..53 {
+        let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
+        let lists = run.names_of(&doc, s).unwrap();
+        assert_eq!(lists.iter().map(|(list, _)| list.to_vec()).collect::<Vec<_>>(), [vec![2]]);
+    }
+    assert_eq!((run.fetched, run.spent), (1, 2), "one fetch, and the one number held");
+}
+
+/// A `/JBIG2Globals` reference leading through a chain names each reference on the way, up to the
+/// limit of 33, whether the chain is met first part way or from its start.
+#[test]
+fn a_chain_of_references_is_named_to_the_limit() {
+    // Objects 2 to 41 each refer to the next, and 42 is the dictionary; 43 names the chain from 20,
+    // and 44 from its start.
+    let mut objects = vec![b"<< /Type /Catalog >>".to_vec()];
+    objects.extend((3..=42).map(|n| format!("{n} 0 R").into_bytes()));
+    objects.push(stream("", b"symbols"));
+    objects.push(stream("/Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 20 0 R >>", b""));
+    objects.push(stream("/Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 2 0 R >>", b""));
+    let doc = pdf(objects);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    let named = |run: &mut crate::globals::Run, n: u32| {
+        let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
+        run.names_of(&doc, s).unwrap().iter().flat_map(|(list, _)| list.to_vec()).collect::<Vec<_>>()
+    };
+    assert_eq!(named(&mut run, 43), (20..=42).collect::<Vec<u32>>());
+    assert_eq!(named(&mut run, 44), (2..=34).collect::<Vec<u32>>());
+}
+
+/// An image is charged the decoded size of each dictionary it names, as decoding it may undo that
+/// dictionary's filters again.
+#[test]
+fn an_image_is_charged_the_dictionaries_it_names() {
+    let image = "/Type /XObject /Subtype /Image /Width 8 /Height 8 /BitsPerComponent 1 /Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 2 0 R >>";
+    let doc = pdf(vec![b"<< /Type /Catalog >>".to_vec(), stream("", vec![0u8; 40_000]), stream(image, b"not JBIG2")]);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    crate::globals::content(&mut run, &doc, 2, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)).unwrap();
+    assert_eq!(run.spent, 10, "40,000 bytes: a unit and nine whole 4 KiB");
+    let Object::Stream(s) = &*doc.get(ObjRef::new(3, 0)) else { panic!("object 3 is the image") };
+    assert!(matches!(crate::globals::without_dictionary(&mut run, &doc, s, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)), Ok(None)));
+    // The chain to 2 (a fetch and the number held), the dictionary's 10, the image's allowance 2.
+    assert_eq!(run.spent, 24);
+}
+
+/// A dictionary pays the run's image allowance for what every stage of its filters reads and makes,
+/// not for what the last one makes: two Flates inflate a MiB of zero bytes, which hex skips as white
+/// space, so it decodes to nothing. Past the allowance the run is refused, through `unshare` too.
+#[test]
+fn a_dictionary_pays_for_every_stage_of_its_filters() {
+    let hollow = pdfcraft_filters::encode_flate(&pdfcraft_filters::encode_flate(&vec![0u8; 1 << 20]));
+    let dict = || stream("/Filter [/FlateDecode /FlateDecode /ASCIIHexDecode]", hollow.clone());
+    let doc = pdf(vec![b"<< /Type /Catalog >>".to_vec(), dict()]);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    let mut images = pdfcraft_cos::ImageBudget::with_work(u64::MAX);
+    assert!(crate::globals::content(&mut run, &doc, 2, &mut images).unwrap().is_some());
+    assert_eq!(run.spent, 1, "it decodes to nothing: a unit");
+    let paid = u64::MAX - images.work_left();
+    assert!(paid > 1 << 20, "the MiB the second Flate made is paid for: {paid} steps");
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    let refused = crate::globals::content(&mut run, &doc, 2, &mut pdfcraft_cos::ImageBudget::with_work(1 << 20));
+    assert_eq!(refused, Err(RedactError::ImagesPastAllowance));
+
+    // An image naming it leaves its page: finding copies of the dictionary reads it.
+    let image = "/Type /XObject /Subtype /Image /Width 8 /Height 8 /BitsPerComponent 1 /Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 8 0 R >>";
+    let mut doc = one_page(b"q 8 0 0 8 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(image, b""), dict()]);
+    let before = crate::globals::kept(&doc);
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        d.remove(b"Resources");
+    })
+    .unwrap();
+    let refused = crate::globals::unshare(&mut doc.clone(), &before, &mut pdfcraft_cos::ImageBudget::with_work(1 << 20));
+    assert_eq!(refused, Err(RedactError::ImagesPastAllowance));
+    assert_eq!(crate::globals::unshare(&mut doc, &before, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)), Ok(0));
+}
+
+/// What can't be decoded is charged as much as it was allowed to decode, so going past a limit
+/// costs as much as reaching it: a dictionary `MAX_JBIG2_GLOBALS` (here one behind a filter that
+/// isn't decoded here), an image its allowance.
+#[test]
+fn a_decode_that_fails_is_charged_what_it_was_allowed() {
+    let image = "/Type /XObject /Subtype /Image /Width 8 /Height 8 /BitsPerComponent 1 /Filter /JBIG2Decode";
+    let doc = pdf(vec![b"<< /Type /Catalog >>".to_vec(), stream("/Filter /DCTDecode", b"not a JPEG"), stream(image, b"not JBIG2")]);
+    let units = pdfcraft_cos::MAX_JBIG2_GLOBALS / 4096 + 1;
+    let run = |budget| crate::globals::Run::new(budget);
+    let images = || pdfcraft_cos::ImageBudget::with_work(u64::MAX);
+    assert!(crate::globals::content(&mut run(units), &doc, 2, &mut images()).is_ok());
+    assert_eq!(crate::globals::content(&mut run(units - 1), &doc, 2, &mut images()), Err(RedactError::SharedJbig2Budget));
+    // The image's allowance: (one byte a row of 8, and a byte a row) × 3 a byte, and 4096: 4144
+    // bytes, two units.
+    let Object::Stream(s) = &*doc.get(ObjRef::new(3, 0)) else { panic!("object 3 is the image") };
+    assert!(matches!(crate::globals::without_dictionary(&mut run(2), &doc, s, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)), Ok(None)));
+    assert!(matches!(
+        crate::globals::without_dictionary(&mut run(1), &doc, s, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)),
+        Err(RedactError::SharedJbig2Budget)
+    ));
+}
+
+/// What streams share by reference is read once a run, however many share it and however they
+/// refer to it: a parameters array of 5,000 entries named by 100 streams, directly, each through an
+/// object of its own that refers to it, or through a chain of two, costs the array and its one
+/// entry, once.
+#[test]
+fn a_shared_parameters_array_is_read_once_however_many_streams_share_it() {
+    let entries = " 4 0 R".repeat(5000);
+    let mut objects =
+        vec![b"<< /Type /Catalog >>".to_vec(), format!("[{entries}]").into_bytes(), stream("", b"symbols"), b"<< /JBIG2Globals 3 0 R >>".to_vec()];
+    // Objects 5 to 54 refer to the array, and 55 to 5.
+    objects.extend((0..50).map(|_| b"2 0 R".to_vec()));
+    objects.push(b"5 0 R".to_vec());
+    // Streams 56 to 155: fifty name the array directly, forty-nine through objects 5 to 53, one
+    // through the chain from 55.
+    objects.extend((0..50).map(|_| stream("/Filter /JBIG2Decode /DecodeParms 2 0 R", b"")));
+    objects.extend((5..54).map(|n| stream(&format!("/Filter /JBIG2Decode /DecodeParms {n} 0 R"), b"")));
+    objects.push(stream("/Filter /JBIG2Decode /DecodeParms 55 0 R", b""));
+    let doc = pdf(objects);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    for n in 56..156 {
+        let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
+        let lists = run.names_of(&doc, s).unwrap();
+        assert_eq!(lists.iter().map(|(list, _)| list.to_vec()).collect::<Vec<_>>(), [vec![3]]);
+    }
+    assert_eq!(run.read, 2);
+    // Each object once: the array, its entry, the dictionary it names, each of the 49 objects that
+    // refer to the array, and 55.
+    assert_eq!(run.fetched, 53);
+    // A run whose budget that is past is refused.
+    let mut run = crate::globals::Run::new(20);
+    let refused = (56..156).try_for_each(|n| {
+        let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
+        run.names_of(&doc, s).map(|_| ())
+    });
+    assert_eq!(refused, Err(RedactError::SharedJbig2Budget));
+}
+
+/// A run's budget is spent to the unit: a run may spend all of it, and is refused past it. What is
+/// decoded spends a unit, and one more for each whole 4 KiB.
+#[test]
+fn a_runs_budget_is_spent_to_the_unit() {
+    let mut run = crate::globals::Run::new(10);
+    assert_eq!(run.decoded(4095), Ok(()));
+    assert_eq!(run.decoded(8 * 4096), Ok(()));
+    assert_eq!(run.decoded(0), Err(RedactError::SharedJbig2Budget));
+}
+
+/// What a stream's size, filters and parameters lead to is fetched once a run, however many streams
+/// share them by reference: fifty images naming the same objects fetch each once for each way it is
+/// read.
+#[test]
+fn what_streams_share_is_fetched_once_a_run() {
+    let mut objects =
+        vec![b"<< /Type /Catalog >>".to_vec(), b"/FlateDecode".to_vec(), b"<< /Predictor 4 0 R /Columns 4 0 R >>".to_vec(), b"1".to_vec()];
+    objects.extend(
+        (0..50).map(|_| stream("/Width 4 0 R /Height 4 0 R /Filter [2 0 R 2 0 R] /DecodeParms [3 0 R 3 0 R] /ColorSpace 2 0 R /F 4 0 R", b"")),
+    );
+    let doc = pdf(objects);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    for n in 5..55 {
+        let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
+        let made = run.readable(&doc, s).unwrap();
+        assert_eq!(made.dict.get(b"Width"), Some(&Object::Int(1)));
+        assert_eq!(made.dict.get(b"Filter").and_then(Object::as_array).map(Vec::len), Some(2));
+    }
+    // Object 4 as a size and as a parameter, 2 as a filter, 3 as an entry.
+    assert_eq!(run.fetched, 4);
+}
+
+/// A copy of the dictionary stored with a predictor is found whatever way its parameters are given,
+/// through a chain of references among them, as a reader that follows them decodes it. Through a
+/// chain the run either stores the image again with the copy's symbols, now that a reference to a
+/// reference reads as what it names (#5548), or is refused; it never goes on with the copy left in
+/// the file.
+#[test]
+fn a_copy_is_found_however_its_parameters_are_given() {
+    let scan = shared_scan();
+    let globals = [jbig2_globals(b"LEAK_GLOBALS"), scan.symbols.clone()].concat();
+    // PNG rows of one byte, each with no prediction: a byte for the row's tag, then the byte.
+    let predicted: Vec<u8> = globals.iter().flat_map(|b| [0u8, *b]).collect();
+    let flate = pdfcraft_filters::encode_flate(&predicted);
+    let parms = b"<< /Predictor 12 /Columns 1 >>".to_vec();
+    for (spelling, extra, stored) in [
+        ("/DecodeParms << /Predictor 12 /Columns 1 >>", vec![], true),
+        ("/DecodeParms 11 0 R", vec![parms.clone()], true),
+        ("/DecodeParms 11 0 R", vec![b"12 0 R".to_vec(), parms.clone()], false),
+        ("/DecodeParms [11 0 R]", vec![b"12 0 R".to_vec(), parms.clone()], false),
+        ("/DecodeParms << /Predictor 11 0 R /Columns 1 >>", vec![b"12 0 R".to_vec(), b"12".to_vec()], false),
+        // `false` above: stored again or refused, either is safe (see the doc).
+    ] {
+        let mut objects = vec![stream(&format!("/Filter /FlateDecode {spelling}"), flate.clone())];
+        objects.extend(extra.clone());
+        let other = shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>");
+        let mut doc = SharedPages { other, extra: objects, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        let at = format!("{spelling} {}", extra.len());
+        match apply(&mut doc, None) {
+            Ok(report) => {
+                assert_eq!(report.images_restored, 1, "{at}");
+                let kept: std::collections::HashSet<u32> = pdfcraft_cos::reachable(&doc).into_iter().map(|r| r.num).collect();
+                assert!(!kept.contains(&10) && !kept.contains(&9), "{at}: the copy or the dictionary stays");
+                assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits, "{at}");
+            }
+            Err(e) => assert!(!stored && matches!(e, RedactError::SharedJbig2Globals(1)), "{at}: {e:?}"),
+        }
+    }
+}
+
+/// An image that names the dictionary and another one is stored again without both, but the other
+/// was shared with nothing that left: an image that uses only it stays as it was, whichever of the
+/// two comes first in the file, and so does that dictionary.
+#[test]
+fn another_dictionary_named_beside_it_stays_whatever_the_order() {
+    let scan = shared_scan();
+    let other_dictionary = stream("", [jbig2_globals(b"OTHER_GLOBALS"), scan.symbols.clone()].concat());
+    let only_other = shared_image("/DecodeParms << /JBIG2Globals 11 0 R >>");
+    let chained = "/Type /XObject /Subtype /Image /Width 400 /Height 40 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter [/FlateDecode /JBIG2Decode] /DecodeParms [<< /JBIG2Globals 11 0 R >> << /JBIG2Globals 9 0 R >>]";
+    let both_spellings = [
+        (chained.to_string(), pdfcraft_filters::encode_flate(&scan.page)),
+        (format!("{} /DP << /JBIG2Globals 11 0 R >>", shared_image(SHARED)), scan.page.clone()),
+    ];
+    let other_stays = |doc: &Document| {
+        let saved = reopen(doc);
+        saved.scan_objects().any(|(_, o)| matches!(&*o, Object::Stream(s) if s.raw.windows(13).any(|w| w == b"OTHER_GLOBALS")))
+    };
+    for (both, data) in both_spellings {
+        // Image 8 is drawn on the second page, and image 10 is its alternate.
+        let only_other_first = SharedPages {
+            other: format!("{only_other} /Alternates [<< /Image 10 0 R >>]"),
+            extra: vec![stream(&both, data.clone()), other_dictionary.clone()],
+            ..SharedPages::new(&scan)
+        };
+        let both_first = SharedPages {
+            other: format!("{both} /Alternates [<< /Image 10 0 R >>]"),
+            other_data: data.clone(),
+            extra: vec![stream(&only_other, scan.page.clone()), other_dictionary.clone()],
+            ..SharedPages::new(&scan)
+        };
+        for (pages, only_other_at) in [(only_other_first, 8), (both_first, 10)] {
+            let mut doc = pages.build(&scan);
+            let untouched = doc.get(pdfcraft_cos::ObjRef::new(only_other_at, 0));
+            mark(&mut doc, 0, &[CLEARS], "");
+            assert_eq!(apply(&mut doc, None).unwrap().images_restored, 1, "{both}");
+            assert_gone(&doc, b"LEAK_GLOBALS");
+            assert!(other_stays(&doc), "{both}");
+            assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(only_other_at, 0)), untouched, "{both}");
+        }
+    }
+}
+
+/// Remove Hidden Information leaves the same way: comments go, with what their appearances drew.
+#[test]
+fn removing_hidden_information_takes_a_shared_jbig2_dictionary_too() {
+    let scan = shared_scan();
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /Im 7 0 R >> >>", DRAWS);
+    let annotation = b"<< /Type /Annot /Subtype /Stamp /Rect [0 100 200 120] /AP << /N 11 0 R >> >>".to_vec();
+    let mut doc = SharedPages {
+        content: Vec::new(),
+        resources: String::new(),
+        page: "/Annots [10 0 R]".into(),
+        extra: vec![annotation, form],
+        ..SharedPages::new(&scan)
+    }
+    .build(&scan);
+    crate::sanitize::remove_hidden(&mut doc, &[crate::sanitize::Hidden::Comments]).unwrap();
+    assert_gone(&doc, b"LEAK_GLOBALS");
+    assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits);
+}
+
+/// Remove Hidden Information refuses as a redaction does when the dictionary can't leave, but it has
+/// changed the document by then, so the refusal doesn't say nothing was changed.
+#[test]
+fn a_refused_removal_of_hidden_information_doesnt_say_nothing_changed() {
+    let scan = shared_scan();
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /Im 7 0 R >> >>", DRAWS);
+    let annotation = b"<< /Type /Annot /Subtype /Stamp /Rect [0 100 200 120] /AP << /N 11 0 R >> >>".to_vec();
+    let mut doc = SharedPages {
+        content: Vec::new(),
+        resources: String::new(),
+        page: "/Annots [10 0 R]".into(),
+        other: shared_image(SHARED).replace("/Filter /JBIG2Decode", "/Filter /FlateDecode"),
+        other_data: pdfcraft_filters::encode_flate(&scan.bits),
+        extra: vec![annotation, form],
+        ..SharedPages::new(&scan)
+    }
+    .build(&scan);
+    let annotations = |doc: &Document| crate::annots_of(doc, &pdfcraft_model::pages(doc)[0].dict).len();
+    assert_eq!(annotations(&doc), 1);
+    let refused = crate::sanitize::remove_hidden(&mut doc, &[crate::sanitize::Hidden::Comments]);
+    assert!(matches!(refused, Err(RedactError::SharedJbig2Globals(1))));
+    assert_eq!(annotations(&doc), 0, "the comment went before the refusal");
+    let text = refused.unwrap_err().to_string();
+    assert!(text.ends_with("this was refused") && !text.contains("nothing was changed"), "{text}");
+}
+
+/// [`assert_no_secret`] for a file that may hold JBIG2 streams, which `decoded` doesn't read: a stream
+/// stored again can be coded alone.
+fn assert_gone(doc: &Document, secret: &[u8]) {
+    for (r, object) in reopen(doc).scan_objects() {
+        let mut bytes = Vec::new();
+        pdfcraft_cos::serialize(&object, &mut bytes);
+        assert!(!bytes.windows(secret.len()).any(|w| w == secret), "secret remains in object {r:?}");
+        if let Object::Stream(s) = &*object
+            && let Ok(data) = s.decoded()
+        {
+            assert!(!data.windows(secret.len()).any(|w| w == secret), "secret remains in stream {r:?}");
+        }
+    }
 }
 
 /// Apply Redactions gives the page its own pruned /Resources, but the dictionary it drew through
@@ -3279,6 +4225,43 @@ fn untouched_replacement_descriptions_survive_redaction_and_hidden_text_cleanup(
         for key in [&b"ActualText"[..], b"Alt", b"E", b"T"] {
             assert!(dict.contains(key), "surviving description removed: {key:?}, hidden={hidden}");
         }
+    }
+}
+
+/// An image drawn through an ICC profile has as many components as the profile's `/N` says, and
+/// is cleared in place like any other, the profile given through a chain of references too.
+#[test]
+fn an_icc_based_image_is_cleared_in_place_through_any_references() {
+    for (n, chained) in [(1, false), (3, false), (1, true), (3, true)] {
+        let img = stream("/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace [/ICCBased 8 0 R] /BitsPerComponent 8", vec![255u8; 2 * n]);
+        let icc = stream(&format!("/N {n}"), b"");
+        let objects = if chained { vec![img, b"9 0 R".to_vec(), icc] } else { vec![img, icc] };
+        let mut doc = one_page(b"q 20 0 0 10 100 100 cm /Im Do Q", "/XObject << /Im 7 0 R >>", objects);
+        // The left pixel.
+        mark(&mut doc, 0, &[[95.0, 95.0, 109.0, 115.0]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!((r.images_removed, r.images_cleared), (0, 1), "/N {n}, chained {chained}: {r:?}");
+        let samples = [vec![0u8; n], vec![255u8; n]].concat();
+        assert_eq!(named_image(&doc, 0, b"PCRedacted1"), Some(samples), "/N {n}, chained {chained}");
+    }
+}
+
+/// A cleared copy keeps the parameters for data in another file only while it has one: `/FFilter`
+/// and `/FDecodeParms` mean nothing without a `/F` that isn't null, and may name a JBIG2
+/// dictionary that would then stay.
+#[test]
+fn a_cleared_copy_keeps_parameters_for_data_in_another_file_only_with_one() {
+    for (f, kept) in [("/F (scan.jb2)", true), ("/F 9 0 R", true), ("/F null", false), ("/F 8 0 R", false), ("/F 99 0 R", false), ("", false)] {
+        let dict = format!(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 {f} /FFilter /JBIG2Decode /FDecodeParms << /JBIG2Globals 10 0 R >>"
+        );
+        let objects = vec![stream(&dict, [255u8, 255]), b"null".to_vec(), b"(scan.jb2)".to_vec()];
+        let doc = one_page(b"q 20 0 0 10 100 100 cm /Im Do Q", "/XObject << /Im 7 0 R >>", objects);
+        let Object::Stream(s) = &*doc.get(ObjRef::new(7, 0)) else { panic!("object 7 is the image") };
+        let left = [[0.0, 0.0, 0.4, 1.0]];
+        let copy = crate::image::clear(&doc, s, &pdfcraft_content::Matrix::IDENTITY, &left, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
+        let Ok(Some(copy)) = copy else { panic!("{f}: cleared in a copy") };
+        assert_eq!((copy.dict.contains(b"FFilter"), copy.dict.contains(b"FDecodeParms")), (kept, kept), "{f}");
     }
 }
 

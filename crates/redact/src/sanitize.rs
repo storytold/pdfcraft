@@ -510,6 +510,20 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
         .collect()
 }
 
+/// [`crate::globals::unshare`] for what left without marks: past `images` it is refused as finding
+/// what shares the dictionaries is, since the error redaction gives (redact fewer pages at a time)
+/// means nothing when no page was chosen.
+pub(crate) fn unshare_unmarked(
+    doc: &mut Document,
+    before: &std::collections::HashSet<u32>,
+    images: &mut pdfcraft_cos::ImageBudget,
+) -> Result<usize, RedactError> {
+    crate::globals::unshare(doc, before, images).map_err(|e| match e {
+        RedactError::ImagesPastAllowance => RedactError::SharedJbig2Budget,
+        e => e,
+    })
+}
+
 /// Remove the chosen categories. Returns what was removed per category.
 ///
 /// # Errors
@@ -522,6 +536,7 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     let count = |h: Hidden| counts.iter().find(|c| c.0 == h).map_or(0, |c| c.1);
     let (root, _) = catalog(doc).ok_or(RedactError::NothingToApply)?;
     let mut done = Vec::new();
+    let kept_before = crate::globals::kept(doc);
     // Every annotation the pages list now: whatever is no longer listed at the end (flattened
     // widgets included) leaves the structure tree too.
     let listed_before = listed_annotations(doc);
@@ -674,6 +689,9 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     if done.is_empty() {
         return Err(RedactError::NothingToApply);
     }
+    // Images stored again without a dictionary, and the dictionaries read to know copies, are
+    // decoded within an allowance of their own.
+    unshare_unmarked(doc, &kept_before, &mut pdfcraft_cos::ImageBudget::new(doc))?;
     doc.require_full_save();
     Ok(done)
 }
