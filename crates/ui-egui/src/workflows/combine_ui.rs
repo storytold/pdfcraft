@@ -30,6 +30,7 @@ pub(crate) use files::{Preview, RowAction};
 use files::{Snapshot, UnlockPrompt};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use parts::ago;
+pub(crate) use parts::natural;
 pub(crate) use parts::range_of;
 #[cfg(test)]
 pub(crate) use parts::{Part, moved_order, moved_pages, removed_pages, step_to};
