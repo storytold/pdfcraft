@@ -526,7 +526,7 @@ impl<'a> ImageXObject<'a> {
                 default_space = Some(key);
                 Some(space)
             } else {
-                // PdfCraft patch (60): an Indexed space given in place whose `hival` has no
+                // PdfCraft patch (80): an Indexed space given in place whose `hival` has no
                 // reading cannot be built and falls back below, as upstream; it is reported.
                 malformed_indexed = cs_obj
                     .as_ref()
@@ -542,7 +542,7 @@ impl<'a> ImageXObject<'a> {
                     })
             }
         };
-        // PdfCraft patch (60): an Indexed space that ISO 32000-2 §8.6.6.3 rules out (a short
+        // PdfCraft patch (80): an Indexed space that ISO 32000-2 §8.6.6.3 rules out (a short
         // lookup table, a `hival` past 255 or with a fraction) is drawn recovered (see
         // `Indexed::new`), and reported. The check asks the space that was built, so it reads
         // no lookup table of its own (an inline image naming a resource builds it once, through
@@ -550,7 +550,7 @@ impl<'a> ImageXObject<'a> {
         malformed_indexed |= image_cs
             .as_ref()
             .is_some_and(ColorSpace::is_recovered_indexed);
-        // PdfCraft patch (60): an Indexed space with no lookup table at all (missing, or not a
+        // PdfCraft patch (80): an Indexed space with no lookup table at all (missing, or not a
         // string or a stream that decodes) leaves nothing to draw: the image is skipped, and
         // reported. Upstream drew it in DeviceGray.
         if image_cs

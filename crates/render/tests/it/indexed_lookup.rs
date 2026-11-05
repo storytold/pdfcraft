@@ -230,7 +230,7 @@ fn a_hival_past_255_is_clamped() {
     assert_page(&format!("[/Indexed /DeviceRGB 255 <{TABLE}{}>]", "00".repeat(3 * 248)), &[], COLOURS, false);
 }
 
-/// Case E: a real `hival` is truncated toward zero, as hayro read it before patch (60).
+/// Case E: a real `hival` is truncated toward zero, as hayro read it before patch (80).
 #[test]
 fn a_real_hival_is_truncated() {
     assert_page(&format!("[/Indexed /DeviceRGB 7.5 <{TABLE}>]"), &[], COLOURS, true);

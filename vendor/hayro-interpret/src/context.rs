@@ -154,7 +154,7 @@ impl<'a> InterpreterCache<'a> {
         self.object_cache.icc_profile_reads()
     }
 
-    /// PdfCraft patch (60): how many `/Indexed` lookup tables were read through this cache, for
+    /// PdfCraft patch (80): how many `/Indexed` lookup tables were read through this cache, for
     /// diagnostics and tests. A colour space named by a resource is built, and its table read,
     /// once however many images or colours use it.
     pub fn indexed_lookup_reads(&self) -> usize {
@@ -453,7 +453,7 @@ impl<'a> Context<'a> {
         self.get_mut().ctm *= transform;
     }
 
-    /// PdfCraft patch (60): an `/Indexed` resource with no lookup table is built, marked
+    /// PdfCraft patch (80): an `/Indexed` resource with no lookup table is built, marked
     /// tableless, for the image and colour operators to handle (see `Indexed::new`).
     pub(crate) fn get_color_space(
         &mut self,

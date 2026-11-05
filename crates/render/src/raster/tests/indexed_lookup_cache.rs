@@ -1,5 +1,5 @@
 //! An `/Indexed` colour space named by a resource is built once, and its lookup table read
-//! once, however many inline images name it (vendored hayro-interpret patch 60). An earlier
+//! once, however many inline images name it (vendored hayro-interpret patch 80). An earlier
 //! version of the patch checked the table again before every inline image, decoding a lookup
 //! stream once per image outside the colour-space cache.
 

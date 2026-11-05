@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 type CacheMap = HashMap<u128, Option<Box<dyn Any + Send + Sync>>>;
 /// The objects read from a document, by key. PdfCraft patch (48): the second field counts the
-/// ICC profiles read through it ([`Cache::icc_profile_reads`]). PdfCraft patch (60): the third
+/// ICC profiles read through it ([`Cache::icc_profile_reads`]). PdfCraft patch (80): the third
 /// counts the `/Indexed` lookup tables read ([`Cache::indexed_lookup_reads`]).
 #[derive(Clone)]
 pub(crate) struct Cache(Arc<Mutex<CacheMap>>, Arc<AtomicUsize>, Arc<AtomicUsize>);
@@ -39,13 +39,13 @@ impl Cache {
         self.1.load(Ordering::Relaxed)
     }
 
-    /// PdfCraft patch (60): count one `/Indexed` lookup table read (a stream decoded or a
+    /// PdfCraft patch (80): count one `/Indexed` lookup table read (a stream decoded or a
     /// string copied).
     pub(crate) fn count_indexed_lookup_read(&self) {
         self.2.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// PdfCraft patch (60): how many `/Indexed` lookup tables were read through this cache.
+    /// PdfCraft patch (80): how many `/Indexed` lookup tables were read through this cache.
     pub(crate) fn indexed_lookup_reads(&self) -> usize {
         self.2.load(Ordering::Relaxed)
     }

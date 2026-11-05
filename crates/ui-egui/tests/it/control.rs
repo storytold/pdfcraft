@@ -478,6 +478,9 @@ fn theme_commands_and_options_report_preference_and_effective_colours() {
 
 #[test]
 fn lithuanian_password_dialog_translates_dynamic_labels_and_validation() {
+    if crate::support::skip_without_catalogs("lithuanian_password_dialog_translates_dynamic_labels_and_validation") {
+        return;
+    }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "lt" }));
     ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "protect" }));
@@ -496,6 +499,9 @@ fn lithuanian_password_dialog_translates_dynamic_labels_and_validation() {
 
 #[test]
 fn lithuanian_inspector_title_updates_through_the_control_channel() {
+    if crate::support::skip_without_catalogs("lithuanian_inspector_title_updates_through_the_control_channel") {
+        return;
+    }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "panel", "value": "comments" }));
     h.run_steps(2);
@@ -515,6 +521,9 @@ fn lithuanian_inspector_title_updates_through_the_control_channel() {
 /// command ids agents drive stay exactly the same.
 #[test]
 fn language_switch_preserves_document_and_command_ids() {
+    if crate::support::skip_without_catalogs("language_switch_preserves_document_and_command_ids") {
+        return;
+    }
     use pdfcraft_ui_egui::i18n;
     let (mut h, c) = harness();
     let doc = h.state().views[0].id;
@@ -953,6 +962,9 @@ fn state_and_view_options() {
 
 #[test]
 fn japanese_controls_and_search_keep_command_ids() {
+    if crate::support::skip_without_catalogs("japanese_controls_and_search_keep_command_ids") {
+        return;
+    }
     if crate::support::skip_without_glyphs("japanese_controls_and_search_keep_command_ids", "ja", "") {
         return;
     }
@@ -985,6 +997,9 @@ fn japanese_controls_and_search_keep_command_ids() {
 
 #[test]
 fn german_preferences_and_search_keep_command_ids() {
+    if crate::support::skip_without_catalogs("german_preferences_and_search_keep_command_ids") {
+        return;
+    }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "de" }));
     ok(&mut h, &c, "ui.click", json!({ "label": "Konvertieren" }));
@@ -1017,6 +1032,9 @@ fn german_preferences_and_search_keep_command_ids() {
 
 #[test]
 fn ukrainian_preferences_and_search_keep_command_ids() {
+    if crate::support::skip_without_catalogs("ukrainian_preferences_and_search_keep_command_ids") {
+        return;
+    }
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "uk" }));
     ok(&mut h, &c, "ui.command", json!({ "id": "app.preferences" }));
@@ -1050,6 +1068,9 @@ fn ukrainian_preferences_and_search_keep_command_ids() {
 
 #[test]
 fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
+    if crate::support::skip_without_catalogs("preferences_menu_and_shortcut_allow_switching_interface_languages") {
+        return;
+    }
     if crate::support::skip_without_glyphs("preferences_menu_and_shortcut_allow_switching_interface_languages", "ja", "") {
         return;
     }
@@ -1094,6 +1115,9 @@ fn preferences_menu_and_shortcut_allow_switching_interface_languages() {
 
 #[test]
 fn japanese_dialogs_errors_and_custom_action_names() {
+    if crate::support::skip_without_catalogs("japanese_dialogs_errors_and_custom_action_names") {
+        return;
+    }
     if crate::support::skip_without_glyphs("japanese_dialogs_errors_and_custom_action_names", "ja", "") {
         return;
     }
@@ -1137,6 +1161,9 @@ fn japanese_dialogs_errors_and_custom_action_names() {
 
 #[test]
 fn simplified_chinese_about_tabs_and_credit_controls() {
+    if crate::support::skip_without_catalogs("simplified_chinese_about_tabs_and_credit_controls") {
+        return;
+    }
     if crate::support::skip_without_glyphs("simplified_chinese_about_tabs_and_credit_controls", "zh-hans", "") {
         return;
     }
@@ -1169,6 +1196,9 @@ fn simplified_chinese_about_tabs_and_credit_controls() {
 
 #[test]
 fn simplified_chinese_signature_prompts_and_errors_keep_document_state() {
+    if crate::support::skip_without_catalogs("simplified_chinese_signature_prompts_and_errors_keep_document_state") {
+        return;
+    }
     if crate::support::skip_without_glyphs("simplified_chinese_signature_prompts_and_errors_keep_document_state", "zh-hans", "") {
         return;
     }
@@ -1771,6 +1801,7 @@ fn control_quit_retains_inactive_fill_sign_typing_after_cancel() {
         text: "Unsaved signature note".into(),
         size: 10.0,
         color: [0.0; 3],
+        border: pdfcraft_ui_egui::fill_sign::TextBorder::NONE,
         focus: false,
     });
     h.state_mut().active = None;

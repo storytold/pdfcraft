@@ -312,7 +312,7 @@ impl ColorSpace {
         Some(Self(Arc::new(ColorSpaceType::new(object, cache, depth)?)))
     }
 
-    /// PdfCraft patch (60): as `new`, except that an `/Indexed` space with no lookup table is
+    /// PdfCraft patch (80): as `new`, except that an `/Indexed` space with no lookup table is
     /// built (marked tableless) rather than unreadable, for the image and colour operators to
     /// handle it (see `Indexed::new`). Every other space is read as by `new`.
     pub(crate) fn new_allowing_tableless(object: Object<'_>, cache: &Cache) -> Option<Self> {
@@ -370,13 +370,13 @@ impl ColorSpace {
         matches!(self.0.as_ref(), ColorSpaceType::Indexed(_))
     }
 
-    /// PdfCraft patch (60): whether this is an indexed colour space that broke ISO 32000-2
+    /// PdfCraft patch (80): whether this is an indexed colour space that broke ISO 32000-2
     /// §8.6.6.3 and was recovered (see `Indexed::new`).
     pub(crate) fn is_recovered_indexed(&self) -> bool {
         matches!(self.0.as_ref(), ColorSpaceType::Indexed(i) if i.recovered && !i.tableless)
     }
 
-    /// PdfCraft patch (60): whether this is an indexed colour space with no lookup table (see
+    /// PdfCraft patch (80): whether this is an indexed colour space with no lookup table (see
     /// `Indexed::new`), which only `ColorSpace::new_allowing_tableless` builds.
     pub(crate) fn is_tableless_indexed(&self) -> bool {
         matches!(self.0.as_ref(), ColorSpaceType::Indexed(i) if i.tableless)
@@ -1036,18 +1036,18 @@ pub(crate) struct Indexed {
     values: Vec<Vec<f32>>,
     hival: u8,
     base: Box<ColorSpace>,
-    /// PdfCraft patch (60): how many entries the lookup table holds in full (at most
+    /// PdfCraft patch (80): how many entries the lookup table holds in full (at most
     /// `hival + 1`). An index at or past it is drawn black.
     present: usize,
-    /// PdfCraft patch (60): the space broke ISO 32000-2 §8.6.6.3 and was recovered (see
+    /// PdfCraft patch (80): the space broke ISO 32000-2 §8.6.6.3 and was recovered (see
     /// `Indexed::new`).
     recovered: bool,
-    /// PdfCraft patch (60): the space has no lookup table at all (see `Indexed::new`).
+    /// PdfCraft patch (80): the space has no lookup table at all (see `Indexed::new`).
     tableless: bool,
 }
 
 impl Indexed {
-    /// PdfCraft patch (60): ISO 32000-2 §8.6.6.3 says `hival` "shall be an integer" no greater
+    /// PdfCraft patch (80): ISO 32000-2 §8.6.6.3 says `hival` "shall be an integer" no greater
     /// than 255 and the lookup table "shall be m × (hival + 1) bytes long", but not how a reader
     /// recovers when a file breaks this. Most readers draw such a space, and so does this:
     /// - a real `hival` is truncated toward zero (upstream read it so too);
@@ -1075,7 +1075,7 @@ impl Indexed {
         let num_components = usize::from(base_color_space.num_components());
         let entries = usize::from(hival) + 1;
 
-        // PdfCraft patch (60): read once and then by type, so a string lookup given by an
+        // PdfCraft patch (80): read once and then by type, so a string lookup given by an
         // indirect reference is found (a failed stream read had already consumed the
         // reference).
         let data = iter
@@ -1117,7 +1117,7 @@ impl Indexed {
     }
 }
 
-/// PdfCraft patch (60): an Indexed space's `hival` (ISO 32000-2 §8.6.6.3) as drawn, and whether
+/// PdfCraft patch (80): an Indexed space's `hival` (ISO 32000-2 §8.6.6.3) as drawn, and whether
 /// it had to be recovered: a real is truncated toward zero and a value past 255 is taken as 255.
 /// `None` for a value below zero once truncated, or one that is not finite.
 fn indexed_hival(number: object::Number) -> Option<(u8, bool)> {
@@ -1132,7 +1132,7 @@ fn indexed_hival(number: object::Number) -> Option<(u8, bool)> {
     Some((clamped as u8, clamped != value))
 }
 
-/// PdfCraft patch (60): whether `object` is an `/Indexed` colour space array whose `hival` has no
+/// PdfCraft patch (80): whether `object` is an `/Indexed` colour space array whose `hival` has no
 /// reading (below zero, or not a number), which `Indexed::new` cannot recover. Reads the array's
 /// first and third entries only; the lookup table is not touched.
 pub(crate) fn has_unusable_hival(object: &Object<'_>) -> bool {
@@ -1152,7 +1152,7 @@ pub(crate) fn has_unusable_hival(object: &Object<'_>) -> bool {
         .is_none()
 }
 
-/// PdfCraft patch (60): an Indexed space's lookup table, a byte string or a stream (ISO 32000-2
+/// PdfCraft patch (80): an Indexed space's lookup table, a byte string or a stream (ISO 32000-2
 /// §8.6.6.3), with a stream's filters applied. `None` for any other object or a stream that
 /// cannot be decoded. A stream that decodes to nothing although it holds data counts as one that
 /// cannot be decoded: the Flate decoder recovers what it can from a broken stream, and here
@@ -1184,7 +1184,7 @@ impl ToRgb for Indexed {
 
         self.base.convert_f32(&indexed, output, true)?;
 
-        // PdfCraft patch (60): an index past the entries the table holds is drawn black, in
+        // PdfCraft patch (80): an index past the entries the table holds is drawn black, in
         // whatever space the base is (see `Indexed::new`).
         if self.present <= usize::from(self.hival) {
             for (input, rgb) in input.iter().copied().zip(output.chunks_exact_mut(3)) {
