@@ -1,0 +1,19 @@
+{
+  "name": "widen example 1",
+  "content": "BT /F1 14 Tf 72 740 Td (1. Repeated step, no TL. Click Two.) Tj ET BT /F1 12 Tf 72 700 Td (One) Tj ET BT /F1 12 Tf 72 672.4 Td (Two) Tj ET BT /F1 12 Tf 72 644.8 Td (Three) Tj ET BT /F1 14 Tf 72 590 Td (2. Blank line. Edit the first paragraph.) Tj ET BT /F1 12 Tf 14.4 TL 1 0 0 1 72 550 Tm (First paragraph, first row.) Tj T* (First paragraph, second row.) Tj ET BT /F1 12 Tf 14.4 TL 1 0 0 1 72 506.8 Tm (Second paragraph, first row.) Tj T* (Second paragraph, second row.) Tj ET BT /F1 14 Tf 72 450 Td (3. Add a row under Alpha. Neighbor stays.) Tj ET BT /F1 12 Tf 14.4 TL 1 0 0 1 72 410 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET BT /F1 12 Tf 14.4 TL 1 0 0 1 72 366.8 Tm (Neighbor stays.) Tj ET",
+  "steps": [
+    {"command": {"id": "edit.edit_text"}},
+    {"click_page": {"x": 90, "y": 690}},
+    {"type": {"text": "One\nTwo\nThree\nfour"}},
+    {"key": {"key": "Enter", "modifiers": ["command"]}},
+    {"drag_edge": {"contains": "four", "dx": 280}},
+    {"expect_editor": {"contains": "four", "text": "One\nTwo\nThree\nfour"}},
+    {"expect_paragraph": {"text": "1. Repeated step, no TL. Click Two."}},
+    {"expect_together": {"parts": ["First paragraph, first row", "First paragraph, second row"]}},
+    {"expect_together": {"parts": ["Second paragraph, first row", "Second paragraph, second row"]}},
+    {"expect_apart": {"text": "Neighbor stays.", "not": "Alpha"}},
+    {"click_page": {"x": 110, "y": 370}},
+    {"expect_editor": {"contains": "Neighbor stays.", "text": "Neighbor stays."}},
+    {"shot": {"name": "widen-example-one"}}
+  ]
+}

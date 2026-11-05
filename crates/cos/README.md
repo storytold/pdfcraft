@@ -24,6 +24,9 @@ let obj  = doc.get(ObjRef { num: 12, gen: 0 });      // load (and cache): Arc<Ob
 let real = doc.resolve(&obj);                        // follow one indirect reference
 let d    = doc.dict(&obj);                           // Option<Dict>, resolving first
 let data = stream.decoded()?;                        // filters applied on demand
+let data = doc.with_direct_parms(&stream).decoded()?; // /DecodeParms given by reference too
+let px   = doc.decoded_image(&stream)?;              // an image's samples, a CCITT fax image's too
+let fax  = doc.fax_params(&stream);                  // a CCITT fax image's /DecodeParms, Table 11 defaults
 
 doc.set(r, Object::Dict(d));                         // edit: lands in the overlay
 let r = doc.add(obj);                                // append a new object
@@ -101,5 +104,11 @@ recognisable in a diff and byte-stable when re-serialized.
 - Linearized output, Fast Web View (`core.linearization`, M11).
 - Structural validation against the Arlington model (`core.arlington-validation`), which will live
   in the reserved `arlington` crate.
-- Image codecs. `pdfcraft-filters` carries the non-image filters; DCT, JPX, JBIG2 and CCITT are
-  still decoded through the bootstrap renderer (`core.image-filters`, M2.6).
+- Image codecs. `pdfcraft-filters` carries the non-image filters and CCITT fax and JBIG2 decoding
+  (`Document::decoded_image`, a JBIG2 image's `/JBIG2Globals` within `MAX_JBIG2_GLOBALS`, 32 MiB,
+  their filters undone once a document for the images that share them, up to 64 MiB kept, while
+  their segments are decoded for every image, and `ImageBudget` for an operation over many images,
+  which share one allowance of decoding, filters, decoders and pixels alike, and are refused past
+  it: `IMAGE_WORK`, 2^34 steps, or 2 to 5 minutes of JBIG2 and about 1,000 pages scanned at
+  300 dpi, plus `IMAGE_WORK_PER_BYTE`, 2^13 steps for each byte of the file);
+  DCT and JPX are still decoded through the bootstrap renderer (`core.image-filters`, M2.6).

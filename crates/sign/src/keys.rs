@@ -278,6 +278,12 @@ fn pss_params(params: Option<&Tlv<'_>>) -> Result<(DigestAlg, PssParams), SignEr
     Ok((hash, PssParams { mgf, salt_len: Some(salt_len) }))
 }
 
+/// The length in bits of the RSA modulus `n` (big-endian; leading zero bytes don't count).
+fn rsa_bits(n: &[u8]) -> usize {
+    let n = n.iter().position(|b| *b != 0).and_then(|i| n.get(i..)).unwrap_or_default();
+    n.first().map_or(0, |b| n.len() * 8 - b.leading_zeros() as usize)
+}
+
 /// A public key from a `SubjectPublicKeyInfo`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PublicKey {
@@ -380,7 +386,7 @@ impl PublicKey {
     /// "RSA 2048-bit", "ECDSA P-256"…
     pub fn describe(&self) -> String {
         match self {
-            PublicKey::Rsa { n, .. } => format!("RSA {}-bit", n.len() * 8),
+            PublicKey::Rsa { n, .. } => format!("RSA {}-bit", rsa_bits(n)),
             PublicKey::P256(_) => "ECDSA P-256".into(),
             PublicKey::P384(_) => "ECDSA P-384".into(),
             PublicKey::P521(_) => "ECDSA P-521".into(),
@@ -441,10 +447,31 @@ impl PublicKey {
         self.verify_noting(scheme, alg, digest, sig, &mut Vec::new())
     }
 
-    /// [`PublicKey::verify`], noting in `notes` each encoding irregularity it tolerated. Only
-    /// meaningful when it returns `Ok(true)`: a signature that doesn't verify may leave notes
-    /// about how far it got.
+    /// [`PublicKey::verify`], noting in `notes` each encoding irregularity it tolerated, and a key
+    /// too small to rely on ([`PublicKey::weakness`]). Only meaningful when it returns `Ok(true)`:
+    /// a signature that doesn't verify may leave notes about how far it got.
     pub fn verify_noting(&self, scheme: Scheme, alg: DigestAlg, digest: &[u8], sig: &[u8], notes: &mut Vec<&'static str>) -> Result<bool, SignError> {
+        let verified = self.verify_scheme(scheme, alg, digest, sig, notes);
+        if let Ok(true) = verified
+            && let Some(weak) = self.weakness()
+        {
+            notes.push(weak);
+        }
+        verified
+    }
+
+    /// What to tell the user when a signature that still validates was made with this key, or
+    /// `None` for one that is fine, as [`DigestAlg::weakness`] does for hashes.
+    pub fn weakness(&self) -> Option<&'static str> {
+        match self {
+            PublicKey::Rsa { n, .. } if rsa_bits(n) < 2048 => Some(
+                "This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.",
+            ),
+            _ => None,
+        }
+    }
+
+    fn verify_scheme(&self, scheme: Scheme, alg: DigestAlg, digest: &[u8], sig: &[u8], notes: &mut Vec<&'static str>) -> Result<bool, SignError> {
         match (self, scheme) {
             (PublicKey::Unsupported { what, .. }, _) => Err(SignError::Unsupported(what.clone())),
             (PublicKey::Rsa { n, e }, Scheme::RsaPkcs1) => crate::rsa_pad::pkcs1_verify(n, e, alg, digest, sig, notes),

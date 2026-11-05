@@ -175,3 +175,44 @@ fn high_curvature_geometry_hits_segment_cap() {
     let geometry = check_snap_invariants(&stress_curve);
     assert!(geometry.truncated, "high-curvature geometry did not report its extraction cap ({} segments)", geometry.segments.len());
 }
+
+fn two_piece_pdf(first: &[u8], second: &[u8]) -> Vec<u8> {
+    let mut objects = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] /Resources << >> >>".to_vec(),
+    ];
+    for content in [first, second] {
+        let mut object = format!("<< /Length {} >>\nstream\n", content.len()).into_bytes();
+        object.extend_from_slice(content);
+        object.extend_from_slice(b"\nendstream");
+        objects.push(object);
+    }
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
+        bytes.extend_from_slice(object);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
+    bytes
+}
+
+fn snap_at_box_corner(first: &[u8]) -> Option<snap::Snap> {
+    let pdf = two_piece_pdf(first, b"0 0 1 RG 15 95 150 30 re S\n");
+    let doc = Document::open(Arc::new(pdf)).unwrap();
+    snap::geometry(&doc, 0).unwrap().snap([15.0, 105.0], 4.0, SnapOptions::default()).unwrap()
+}
+
+#[test]
+fn trailing_comment_in_previous_piece_hides_next_piece_first_line() {
+    assert!(snap_at_box_corner(b"q % tail comment, no end of line").is_none(), "snapped to a rectangle the renderer comments out");
+    assert!(snap_at_box_corner(b"q % tail comment\n").is_some(), "control: the rectangle is drawn");
+}
