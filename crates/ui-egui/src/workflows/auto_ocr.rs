@@ -211,9 +211,10 @@ impl PdfCraftApp {
     /// Hand finished pages to their views, keep a recognition going, and start one for a
     /// document that needs it.
     pub(crate) fn poll_auto_ocr(&mut self) {
-        // Turned off in Preferences: runs end where they are, and start again from the pages not
-        // recognised yet when it is turned back on (`stop` would keep them from starting again).
-        if !self.auto_ocr {
+        // Turned off in Preferences, or while Recognize text runs (asked for, or Edit's on a scan),
+        // so the two never read at once: runs end where they are, and start again from the pages
+        // not recognised yet afterwards (`stop` would keep them from starting again).
+        if !self.auto_ocr || self.ocr_run.is_some() {
             for view in &mut self.views {
                 // What its worker has read already is kept.
                 if let Some(doc) = self.session.get(view.id) {
@@ -491,6 +492,28 @@ mod tests {
         app.auto_ocr = true;
         app.poll_auto_ocr();
         assert!(started(&app, 0), "turned on again, it starts again");
+    }
+
+    /// While Recognize text runs (asked for, or Edit's on a scan), background recognition pauses,
+    /// so the two never read at once, and starts again once that run is over (CodeRabbit on
+    /// #3860).
+    #[test]
+    fn recognize_text_pauses_background_recognition() {
+        let mut app = scan(1);
+        let (shared, run) = reading();
+        app.views[0].auto_ocr = AutoOcr { wanted: true, run: Some(run), ..Default::default() };
+        let doc = app.views[0].id;
+        let guard = app.session.ocr_guard(doc).unwrap();
+        app.ocr_run = Some(crate::ocr_ui::OcrRun { doc, progress: Default::default(), guard, automatic: None, editable: false });
+        app.poll_auto_ocr();
+        assert!(shared.lock().unwrap().cancel, "the background worker is asked to stop");
+        assert!(!app.views[0].auto_ocr.running(), "background recognition kept reading beside Recognize text");
+        shared.lock().unwrap().finished = true;
+        app.poll_auto_ocr();
+        assert!(!started(&app, 0), "started beside Recognize text");
+        app.ocr_run = None;
+        app.poll_auto_ocr();
+        assert!(started(&app, 0), "it starts again once Recognize text is over");
     }
 
     /// Cancel holds through a content edit: recognition doesn't start again on its own.
