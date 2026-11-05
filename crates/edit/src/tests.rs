@@ -8496,19 +8496,15 @@ fn a_word_with_invisible_extra_spacing_stays_on_its_line() {
 #[test]
 fn word_export_spacing_of_a_few_thousandths_of_an_em_stays_on_its_line() {
     let run = |spacing: &str, x: &str, text: &str| format!("q 0 0 612 792 re W* n BT {spacing} /F1 11.04 Tf 1 0 0 1 {x} 700 Tm ({text}) Tj ET Q ");
-    let page = |a: &str, b: &str| {
-        text_page(&format!(
-            "{}{}{}",
-            run(&format!("{a} Tc"), "72", "Yu"),
-            run("", "85.55", "karida esas dosya"),
-            run(&format!("{b} Tc"), "174.52", "da")
-        ))
-    };
-    let blocks = text::text_blocks(&page("0.0235", "-0.036"), 0).unwrap();
-    assert_eq!(blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Yukarida esas dosyada"]);
+    let page = |a: &str, b: &str| text_page(&format!("{}{}{}", run(a, "72", "Yu"), run("", "85.55", "karida esas dosya"), run(b, "174.52", "da")));
+    let texts = |page: &Document| text::text_blocks(page, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
+    assert_eq!(texts(&page("0.0235 Tc", "-0.036 Tc")), ["Yukarida esas dosyada"]);
+    // Word's largest nudge, in opposite directions on the line's first and last run.
+    assert_eq!(texts(&page("0.0413 Tc", "-0.0413 Tc")), ["Yukarida esas dosyada"]);
 
-    let blocks = text::text_blocks(&page("0.5", "0"), 0).unwrap();
-    assert_eq!(blocks.len(), 2, "visible tracking still keeps a run apart: {blocks:?}");
+    // Visible tracking or word spacing still keeps a run apart.
+    assert_eq!(texts(&page("0.5 Tc", "")), ["Yu", "karida esas dosyada"]);
+    assert_eq!(texts(&page("0.5 Tw", "")), ["Yu", "karida esas dosyada"]);
 }
 
 /// #3573: past the 256-level marked-content cap every `EMC` must still close its own sequence,
