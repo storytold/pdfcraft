@@ -417,6 +417,12 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
 }
 
 /// Perform an edit on a working copy (the caller discards it on error).
+/// The index of every page, for an edit made to all of them; the walk limit as an error rather than
+/// the pages before it, which the edit would take for the whole document.
+fn every_page(doc: &pdfcraft_cos::Document) -> Result<Vec<usize>, EditError> {
+    Ok((0..pdfcraft_model::page_refs(doc).map_err(pdfcraft_edit::EditError::from)?.len()).collect())
+}
+
 pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
     match edit {
         Edit::RotatePages { pages, degrees } => pdfcraft_organize::rotate_pages(doc, pages, *degrees)?,
@@ -739,8 +745,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::add_background(doc, pages, &s, *replace)?
         }
         Edit::RemoveMarks { kind } => {
-            let n = pdfcraft_model::pages(doc).len();
-            if pdfcraft_edit::remove_marks(doc, &(0..n).collect::<Vec<_>>(), *kind)? == 0 {
+            if pdfcraft_edit::remove_marks(doc, &every_page(doc)?, *kind)? == 0 {
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("there is nothing to remove".into())));
             }
         }
@@ -863,8 +868,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             // would lay the form out again from its template over the baked pages. A dynamic
             // form that was never laid out keeps its XFA: without it only placeholders remain.
             let shape = (*fields).then(|| pdfcraft_xfa::xfa_shape(doc)).flatten();
-            let n = pdfcraft_model::pages(doc).len();
-            pdfcraft_edit::flatten(doc, &(0..n).collect::<Vec<_>>(), *comments, *fields)?;
+            // Every page, or nothing is flattened and the XFA stays.
+            pdfcraft_edit::flatten(doc, &every_page(doc)?, *comments, *fields)?;
             match shape {
                 Some(shape) if shape.strippable() => strip_xfa(doc, cx)?,
                 Some(_) => cx.xfa_removed.push("The XFA was kept: this dynamic form was not laid out, so its fields were not baked in".into()),
@@ -881,8 +886,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             strip_xfa(doc, cx)?;
         }
         Edit::FlattenFillSign => {
-            let n = pdfcraft_model::pages(doc).len();
-            pdfcraft_edit::flatten_fill_sign(doc, &(0..n).collect::<Vec<_>>())?;
+            pdfcraft_edit::flatten_fill_sign(doc, &every_page(doc)?)?;
         }
         Edit::Protect(p) => {
             p.validate()?;

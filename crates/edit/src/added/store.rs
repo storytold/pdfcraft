@@ -60,8 +60,8 @@ fn with_resolved<T>(doc: &Document, object: &Object, f: impl FnOnce(&Object) -> 
     }
 }
 
-fn for_each_content_entry(doc: &Document, page: &pdfcraft_model::Page, mut visit: impl FnMut(&Object)) {
-    let Some(contents) = page.dict.get(b"Contents") else { return };
+fn for_each_content_entry(doc: &Document, page: &Dict, mut visit: impl FnMut(&Object)) {
+    let Some(contents) = page.get(b"Contents") else { return };
     with_resolved(doc, contents, |resolved| match resolved {
         Object::Array(entries) => {
             for entry in entries {
@@ -78,7 +78,7 @@ pub fn scan_markers(doc: &Document) -> MarkerScan {
     // The leaves' own dictionaries: `/Contents` and `/UserUnit` aren't inherited, so no inherited
     // copy is needed, and a page past the copy budget of a whole `pages` walk is scanned too.
     for (pi, leaf) in pdfcraft_model::PageLeaves::new(doc).map_while(Result::ok).enumerate() {
-        let page = &pdfcraft_model::Page { obj: leaf.obj, dict: leaf.dict().cloned().unwrap_or_default() };
+        let Some(page) = leaf.dict() else { continue };
         for_each_content_entry(doc, page, |entry| {
             with_resolved(doc, entry, |resolved| {
                 let Some(dict) = resolved.as_dict() else { return };
@@ -114,7 +114,7 @@ pub fn scan_markers(doc: &Document) -> MarkerScan {
                             .and_then(Object::as_f64)
                             .filter(|u| u.is_finite() && *u >= 1.0)
                             .map_or(1.0, |u| u.min(pdfcraft_model::MAX_USER_UNIT));
-                        scan.added.push(Added { page: pi, obj, content: content.scaled(page.user_unit(doc) / written) });
+                        scan.added.push(Added { page: pi, obj, content: content.scaled(pdfcraft_model::user_unit(doc, page) / written) });
                     }
                 });
             });

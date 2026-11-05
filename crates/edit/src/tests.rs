@@ -801,6 +801,66 @@ fn flattening_refuses_what_would_bake_in_question_marks() {
 
 /// Display space is in points, so on a `/UserUnit 2` page an item's box maps to half as many
 /// Text added to a page past the copy budget of a whole page walk lands on that page: the writer
+/// Two pages inheriting their media box and resources from the tree node, and one text field
+/// holding KEEP whose only widget is on the second page.
+pub(crate) fn late_field() -> Document {
+    let ap = "BT /F1 10 Tf 2 5 Td (KEEP) Tj ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 300] /Resources << /Font << /F1 5 0 R >> >> >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".to_string(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (late) /V (KEEP) /Rect [20 20 120 40] /P 4 0 R /AP << /N 7 0 R >> >>".to_string(),
+        format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 100 20] /Resources << /Font << /F1 5 0 R >> >> /Length {} >>\nstream\n{ap}\nendstream",
+            ap.len()
+        ),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+/// The AcroForm's top-level fields.
+fn form_fields(doc: &Document) -> usize {
+    let root = doc.get(doc.root().unwrap());
+    let af = root.as_dict().unwrap().get(b"AcroForm").map(|a| doc.resolve(a)).unwrap();
+    af.as_dict().and_then(|d| d.get(b"Fields")).map(|f| doc.resolve(f)).and_then(|f| f.as_array().map(Vec::len)).unwrap_or(0)
+}
+
+/// Flattening the pages of a walk cut at a limit would take the later pages' widgets for fields on
+/// no page and prune them: it refuses instead, at the copy budget and at the entry limit, and the
+/// field stays.
+#[test]
+fn flatten_refuses_a_page_list_cut_at_a_walk_limit() {
+    use pdfcraft_model::{Limits, PageTreeLimit, with_limits};
+    for (limits, limit) in [
+        (Limits { inherited_copies: 600, ..Limits::DEFAULT }, PageTreeLimit::InheritedCopies),
+        (Limits { kids_entries: 1, ..Limits::DEFAULT }, PageTreeLimit::KidsEntries),
+    ] {
+        let mut doc = late_field();
+        let prefix = with_limits(limits, || pdfcraft_model::pages(&doc).len());
+        assert_eq!(prefix, 1, "{limit:?}: the lenient walk lists the first page only");
+        let flattened = with_limits(limits, || flatten(&mut doc, &(0..prefix).collect::<Vec<_>>(), false, true));
+        assert_eq!(flattened, Err(EditError::PageTree(limit)));
+        assert_eq!(form_fields(&doc), 1, "{limit:?}: the late field stays");
+    }
+    let mut doc = late_field();
+    assert_eq!(flatten(&mut doc, &[0, 1], false, true), Ok(1), "within the default limits");
+    assert_eq!(form_fields(&doc), 0);
+}
+
 /// reads its one page, not the walk's list, which ends before it.
 #[test]
 fn content_is_added_to_a_page_past_the_whole_walk_copy_budget() {

@@ -4186,6 +4186,33 @@ fn an_image_added_to_a_missing_page_is_refused() {
     assert!(s.get(id).unwrap().added().is_empty());
 }
 
+/// Flatten form fields on a document whose page tree is cut at a walk limit: the engine's count of
+/// "every page" would be the pages before the cut, and flattening those would prune the later
+/// pages' field as if it were on no page (and could strip the XFA). It refuses, and the field stays.
+#[test]
+fn flatten_refuses_a_page_tree_cut_at_a_walk_limit() {
+    let ap = "BT /F1 10 Tf 2 5 Td (KEEP) Tj ET";
+    let bytes = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>")
+        .obj("<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 300] /Resources << /Font << /F1 5 0 R >> >> >>")
+        .obj("<< /Type /Page /Parent 2 0 R >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>")
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        .obj("<< /Type /Annot /Subtype /Widget /FT /Tx /T (late) /V (KEEP) /Rect [20 20 120 40] /P 4 0 R /AP << /N 7 0 R >> >>")
+        .stream("/Type /XObject /Subtype /Form /BBox [0 0 100 20] /Resources << /Font << /F1 5 0 R >> >>", ap.as_bytes())
+        .build();
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("late-field.pdf", None, Arc::new(bytes), None).unwrap();
+    let fields = |s: &Session| pdfcraft_forms::fields(&s.get(id).unwrap().editor.as_ref().unwrap().cos).len();
+    assert_eq!(fields(&s), 1);
+    let one_copy = pdfcraft_model::Limits { inherited_copies: 600, ..pdfcraft_model::Limits::DEFAULT };
+    let refused = pdfcraft_model::with_limits(one_copy, || s.apply(id, Edit::Flatten { comments: false, fields: true }));
+    assert_eq!(refused, Err(EditError::Edit(pdfcraft_edit::EditError::PageTree(pdfcraft_model::PageTreeLimit::InheritedCopies))));
+    assert_eq!(fields(&s), 1, "the late field stays");
+    s.apply(id, Edit::Flatten { comments: false, fields: true }).unwrap();
+    assert_eq!(fields(&s), 0, "within the default limits");
+}
+
 /// Edit ▸ Copy and Paste of added content (#2636): a text box comes back with all its style, an
 /// image with its picture and transforms, in the same document and in another.
 #[test]
