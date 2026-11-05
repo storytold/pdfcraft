@@ -289,26 +289,34 @@ pub fn fill_picker(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Option<Rgb
     picked
 }
 
+pub(crate) fn quick_bar_colour(ui: &mut egui::Ui, current: Rgb) -> Option<Rgb> {
+    let size = crate::touch::control_size(ui.ctx(), 32.0);
+    let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
+    ui.painter().circle_filled(r.center(), 9.0, color32(current));
+    ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(50)));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Colour")));
+    let resp = resp.on_hover_text(tl!("Colour"));
+    let mut picked = None;
+    egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        if let Some(c) = swatch_grid(ui, Some(current)) {
+            picked = Some(c);
+            ui.close();
+        }
+    });
+    picked
+}
+
 /// The comment tools' extra quick-bar controls: pin, colour, fill, opacity and thickness.
 pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) -> Option<Rgb> {
     let size = crate::touch::control_size(ui.ctx(), 32.0);
     let style = prefs.style(tool);
-    let mut selected_color = None;
     if icons::button(ui, "pin", size, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
         prefs.pinned = !prefs.pinned;
     }
-    let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
-    ui.painter().circle_filled(r.center(), 9.0, color32(style.color));
-    ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(50)));
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Colour")));
-    let resp = resp.on_hover_text(tl!("Colour"));
-    egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        if let Some(c) = swatch_grid(ui, Some(style.color)) {
-            prefs.set_color(tool, c);
-            selected_color = Some(c);
-            ui.close();
-        }
-    });
+    let selected_color = quick_bar_colour(ui, style.color);
+    if let Some(c) = selected_color {
+        prefs.set_color(tool, c);
+    }
     if tool.has_fill() {
         let resp = fill_button(ui, style.fill);
         egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
