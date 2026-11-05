@@ -373,7 +373,13 @@ impl<'a> PageNodes<'a> {
     /// [`PageNode::written`] with references another revision wrote down (signature change
     /// classification); everything else walks by object number.
     pub fn as_written(doc: &'a Document, top: ObjRef) -> Self {
-        Self { seen_written: Some(Default::default()), ..Self::from(doc, Some(top)) }
+        let mut walk = Self { seen_written: Some(Default::default()), ..Self::from(doc, Some(top)) };
+        // Annot's walk counted the entry it starts from against the entry cap; so does this one, so
+        // that it is cut where that walk was (here as `PageTreeLimit::KidsEntries`).
+        for start in &mut walk.pending {
+            start.counted = true;
+        }
+        walk
     }
 
     /// `/Kids` entries read so far.
@@ -419,8 +425,9 @@ impl Iterator for PageNodes<'_> {
                 continue;
             }
             // Accepted as cos accepts references (a stale generation names nothing; a repaired alias is
-            // the object), then loaded. Only a node that resolves to a dictionary is marked seen, so a
-            // stale entry can't hide a live one listed after it.
+            // the object), then loaded. In the walk by number only a node that resolves to a dictionary is
+            // marked seen, so a stale entry can't hide a live one listed after it; the written-identity
+            // walk marked the reference seen above, before resolving it, as annot's walk did.
             let Some(node) = self.doc.canonical_ref(written) else { continue };
             let obj = self.doc.get(node);
             let Some(d) = obj.as_dict() else { continue };
@@ -929,6 +936,55 @@ mod tests {
         assert!(matches!(packed.xref_entry(listed[0].num), Some(pdfcraft_cos::XrefEntry::InStream { .. })), "packed into an object stream");
         assert_eq!(listed[0].generation, 0);
         assert_eq!(page_by_ref(&packed, ObjRef { num: listed[0].num, generation: 1 }), Ok(None));
+    }
+
+    /// The leaves of the written-identity walk under the root of `doc(0)` whose `/Kids` is `kids`,
+    /// held to `limits`, or the limit it met.
+    fn written_leaves(kids: Vec<Object>, limits: Limits) -> Result<Vec<ObjRef>, PageTreeLimit> {
+        let mut d = doc(0);
+        let root = ObjRef { num: 2, generation: 0 };
+        d.update_dict(root, |r| r.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
+        with_limits(limits, || {
+            PageNodes::as_written(&d, root).filter(|n| n.as_ref().map_or(true, PageNode::is_leaf)).map(|n| n.map(|n| n.written)).collect()
+        })
+    }
+
+    fn page_three() -> Object {
+        Object::Ref(ObjRef { num: 3, generation: 0 })
+    }
+
+    /// The written-identity walk counts the entry it starts from against the entry cap, as annot's
+    /// walk did: four `/Kids` entries under a four-entry cap are past it (where that walk listed no
+    /// page), while the walk by number, which doesn't count the start, reads them whole.
+    #[test]
+    fn the_written_identity_walk_counts_its_start_entry_against_the_entry_cap() {
+        let kids = vec![Object::Null, Object::Null, Object::Null, page_three()];
+        let four = Limits { kids_entries: 4, ..Limits::DEFAULT };
+        assert_eq!(written_leaves(kids.clone(), four), Err(PageTreeLimit::KidsEntries));
+        assert_eq!(written_leaves(kids.clone(), Limits { kids_entries: 5, ..Limits::DEFAULT }), Ok(vec![ObjRef { num: 3, generation: 0 }]));
+        let mut d = doc(0);
+        let root = ObjRef { num: 2, generation: 0 };
+        d.update_dict(root, |r| r.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
+        assert_eq!(capped(100, 4, || PageLeaves::under(&d, root).page_count()), Ok(1), "the walk by number keeps its own count");
+    }
+
+    /// Where the written-identity walk's limits differ from annot's walk, the result is that walk's
+    /// list or a limit, never another list: an entry cap passed on null entries after the last page
+    /// (annot's walk checked it on references only and listed the page) is a limit; a node cap
+    /// reached with only repeats left (annot's walk stopped there, having listed every page) reads
+    /// whole; a node cap passed before a new page (annot's walk dropped it) is a limit.
+    #[test]
+    fn the_written_identity_walk_limits_give_annot_s_list_or_a_limit() {
+        let nulls_after = vec![page_three(), Object::Null, Object::Null, Object::Null];
+        assert_eq!(written_leaves(nulls_after, Limits { kids_entries: 3, ..Limits::DEFAULT }), Err(PageTreeLimit::KidsEntries));
+        let repeats = vec![page_three(), page_three(), page_three()];
+        assert_eq!(written_leaves(repeats, Limits { nodes: 2, ..Limits::DEFAULT }), Ok(vec![ObjRef { num: 3, generation: 0 }]));
+        let mut d = doc(0);
+        let second = d.add(d.get(ObjRef { num: 3, generation: 0 }).as_dict().unwrap().clone());
+        let root = ObjRef { num: 2, generation: 0 };
+        d.update_dict(root, |r| r.set(b"Kids".to_vec(), Object::Array(vec![page_three(), Object::Ref(second)]))).unwrap();
+        let walked: Vec<_> = with_limits(Limits { nodes: 2, ..Limits::DEFAULT }, || PageNodes::as_written(&d, root).collect());
+        assert!(matches!(walked.last(), Some(Err(PageTreeLimit::Nodes))), "a new page past the node cap is a limit");
     }
 
     /// The written-identity walk tells nodes apart by the reference as written: a repaired page
