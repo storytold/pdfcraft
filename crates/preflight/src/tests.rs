@@ -572,6 +572,12 @@ fn xmp_arrays_have_their_kind_and_item_types() {
     assert_eq!(element("dc:creator", "A"), ["dc:creator"]);
     assert_eq!(element("dc:date", "<rdf:Seq><rdf:li>2016-02-01</rdf:li><rdf:li>yesterday</rdf:li></rdf:Seq>"), ["dc:date"]);
     assert_eq!(element("dc:date", "<rdf:Seq><rdf:_1>yesterday</rdf:_1></rdf:Seq>"), ["dc:date"]);
+    // Only white space around an array's items.
+    assert_eq!(element("dc:creator", "stray<rdf:Seq><rdf:li>A</rdf:li></rdf:Seq>"), ["dc:creator"]);
+    assert_eq!(element("dc:creator", "<rdf:Seq>stray<rdf:li>A</rdf:li></rdf:Seq>"), ["dc:creator"]);
+    assert!(element("dc:creator", "\n  <rdf:Seq>\n    <rdf:li>A</rdf:li>\n  </rdf:Seq>\n").is_empty());
+    // An rdf:resource element is empty.
+    assert_eq!(mistyped(r#"><dc:source rdf:resource="http://example.com/a"><rdf:Seq><rdf:li>x</rdf:li></rdf:Seq></dc:source>"#), ["dc:source"]);
     // Language alternatives: an rdf:Alt whose items all carry xml:lang.
     assert!(element("dc:title", r#"<rdf:Alt><rdf:li xml:lang="x-default">T</rdf:li></rdf:Alt>"#).is_empty());
     assert_eq!(element("dc:title", "<rdf:Alt><rdf:li>T</rdf:li></rdf:Alt>"), ["dc:title"]);
@@ -587,6 +593,11 @@ fn xmp_structures_have_their_field_types() {
     assert!(mistyped(r#"><xmpMM:DerivedFrom stRef:documentID="d"/>"#).is_empty());
     assert_eq!(element("xmpMM:DerivedFrom", "uuid:1234"), ["xmpMM:DerivedFrom"]);
     assert_eq!(mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Resource">letter</xmpMM:DerivedFrom>"#), ["xmpMM:DerivedFrom"]);
+    assert_eq!(
+        mistyped(r#"><xmpMM:DerivedFrom><rdf:Description stRef:documentID="d">letter</rdf:Description></xmpMM:DerivedFrom>"#),
+        ["xmpMM:DerivedFrom"]
+    );
+    assert_eq!(mistyped(r#"><xmpMM:DerivedFrom>letter<rdf:Description stRef:documentID="d"/></xmpMM:DerivedFrom>"#), ["xmpMM:DerivedFrom"]);
     // Predefined properties inside a Pantry item keep their types.
     let pantry = |v: &str| {
         mistyped(&format!(
@@ -617,6 +628,16 @@ fn xmp_structures_have_their_field_types() {
     // rdf:value as an attribute of the description.
     assert!(mistyped(r#"><crs:Contrast><rdf:Description rdf:value="5" xmp:Label="q"/></crs:Contrast>"#).is_empty());
     assert_eq!(mistyped(r#"><crs:Contrast><rdf:Description rdf:value="five" xmp:Label="q"/></crs:Contrast>"#), ["crs:Contrast"]);
+    // rdf:value as an attribute of an empty property element.
+    assert!(mistyped(r#"><crs:Contrast rdf:value="5" xmp:Label="q"/>"#).is_empty());
+    assert_eq!(mistyped(r#"><crs:Contrast rdf:value="five" xmp:Label="q"/>"#), ["crs:Contrast"]);
+    // Qualifiers that are predefined properties keep their types.
+    assert_eq!(
+        mistyped(r#"><crs:Contrast rdf:parseType="Resource"><rdf:value>5</rdf:value><crs:Exposure>high</crs:Exposure></crs:Contrast>"#),
+        ["crs:Contrast"]
+    );
+    assert_eq!(mistyped(r#"><crs:Contrast rdf:value="5" crs:Exposure="high"/>"#), ["crs:Contrast"]);
+    assert!(mistyped(r#"><crs:Contrast rdf:value="5" crs:Exposure="1.5"/>"#).is_empty());
     // Nesting past any type's depth doesn't have the type.
     let nested = |levels: usize| {
         let open = r#"<rdf:value rdf:parseType="Resource">"#.repeat(levels);
