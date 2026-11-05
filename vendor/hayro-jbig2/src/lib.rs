@@ -313,6 +313,13 @@ fn region_work(region: &decode::RegionSegmentInfo) -> u64 {
     bitmap::decode_work(region.width, region.height)
 }
 
+/// PdfCraft patch: the page restricted to a refinement's area, its reference when it refers to no
+/// other region (7.4.7.4). Copying it a word at a time costs less than the region's own decoding,
+/// already charged, and it is held, as large as the region, only while the region decodes.
+fn page_area(page: &Bitmap, region: &decode::RegionSegmentInfo) -> Result<Bitmap> {
+    page.area(region.x_location, region.y_location, region.width, region.height)
+}
+
 fn decode_segments(
     segments: &[segment::Segment<'_>],
     height_from_stripes: Option<u32>,
@@ -356,12 +363,7 @@ fn decode_segments(
                     generic::decode_into(&header, page_bitmap, scratch_buffers)?;
                 } else {
                     let region = generic::decode(&header, scratch_buffers)?;
-                    page_bitmap.combine(
-                        &region.bitmap,
-                        region.bitmap.x_location as i32,
-                        region.bitmap.y_location as i32,
-                        region.combination_operator,
-                    );
+                    page_bitmap.combine_region(&region.bitmap, region.combination_operator);
                 }
                 page_state.page_pristine = false;
             }
@@ -460,12 +462,7 @@ fn decode_segments(
                         scratch_buffers,
                         work_left,
                     )?;
-                    page_bitmap.combine(
-                        &region.bitmap,
-                        region.bitmap.x_location as i32,
-                        region.bitmap.y_location as i32,
-                        region.combination_operator,
-                    );
+                    page_bitmap.combine_region(&region.bitmap, region.combination_operator);
                 }
                 page_state.page_pristine = false;
             }
@@ -518,12 +515,7 @@ fn decode_segments(
                     halftone::decode_into(&header, pattern_dict, page_bitmap, scratch_buffers)?;
                 } else {
                     let region = halftone::decode(&header, pattern_dict, scratch_buffers)?;
-                    page_bitmap.combine(
-                        &region.bitmap,
-                        region.bitmap.x_location as i32,
-                        region.bitmap.y_location as i32,
-                        region.combination_operator,
-                    );
+                    page_bitmap.combine_region(&region.bitmap, region.combination_operator);
                 }
                 page_state.page_pristine = false;
             }
@@ -542,15 +534,23 @@ fn decode_segments(
             }
             SegmentType::IntermediateGenericRefinementRegion => {
                 // Same logic as immediate refinement, but store result instead of combining.
-                let reference = seg
+                let referred_segment = seg
                     .header
                     .referred_to_segments
                     .first()
-                    .and_then(|&num| page_state.get_referred_segment(num))
-                    .unwrap_or(page_bitmap);
+                    .and_then(|&num| page_state.get_referred_segment(num));
 
                 let header = generic_refinement::parse(&mut reader)?;
                 charge_work(work_left, region_work(&header.region_info))?;
+                // PdfCraft patch: a refinement of the page refines its area (`Bitmap::area`).
+                let area;
+                let reference = match referred_segment {
+                    Some(region) => region,
+                    None => {
+                        area = page_area(page_bitmap, &header.region_info)?;
+                        &area
+                    }
+                };
                 let region = generic_refinement::decode(&header, reference, scratch_buffers)?;
                 page_state.store_region(seg.header.segment_number, region.bitmap)?;
             }
@@ -559,8 +559,8 @@ fn decode_segments(
                 // "3) Determine the buffer associated with the region segment that
                 // this segment refers to." (7.4.7.5)
                 //
-                // "2) If there are no referred-to segments, then use the page
-                // bitmap as the reference buffer." (7.4.7.5)
+                // With no region segment referred to, the reference is the page restricted to
+                // this segment's area (7.4.7.4).
                 let referred_segment = seg
                     .header
                     .referred_to_segments
@@ -580,14 +580,17 @@ fn decode_segments(
                         scratch_buffers,
                     )?;
                 } else {
-                    let reference = referred_segment.unwrap_or(page_bitmap);
+                    // PdfCraft patch: a refinement of the page refines its area (`Bitmap::area`).
+                    let area;
+                    let reference = match referred_segment {
+                        Some(region) => region,
+                        None => {
+                            area = page_area(page_bitmap, &header.region_info)?;
+                            &area
+                        }
+                    };
                     let region = generic_refinement::decode(&header, reference, scratch_buffers)?;
-                    page_bitmap.combine(
-                        &region.bitmap,
-                        region.bitmap.x_location as i32,
-                        region.bitmap.y_location as i32,
-                        region.combination_operator,
-                    );
+                    page_bitmap.combine_region(&region.bitmap, region.combination_operator);
                 }
                 page_state.page_pristine = false;
             }
@@ -833,6 +836,192 @@ mod tests {
         assert!(Image::new_embedded(&stream(1 << 20, 1 << 20), None).is_err());
     }
 
+    /// Segment `number` of `kind` on page 1, referring to `refers_to`.
+    fn segment(number: u8, kind: u8, refers_to: &[u8], data: &[u8]) -> Vec<u8> {
+        let mut segment = vec![0, 0, 0, number, kind, (refers_to.len() as u8) << 5];
+        segment.extend_from_slice(refers_to);
+        segment.push(1);
+        segment.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        segment.extend_from_slice(data);
+        segment
+    }
+
+    /// A blank page of 8 × 8: resolution unknown, flags, not striped.
+    fn page_of_8() -> Vec<u8> {
+        segment(0, 48, &[], &[0, 0, 0, 8, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0x42, 0, 0])
+    }
+
+    /// Region information (7.4.1) of 4 × 4 at `x`, `y`, then the region's own `header`, then
+    /// arbitrary coded data.
+    fn region_of_4(x: u32, y: u32, operator: u8, header: &[u8]) -> Vec<u8> {
+        let mut data: Vec<u8> = [4u32, 4, x, y].iter().flat_map(|v| v.to_be_bytes()).collect();
+        data.push(operator);
+        data.extend_from_slice(header);
+        data.extend_from_slice(&[0x5a; 16]);
+        data
+    }
+
+    const GENERIC: &[u8] = &[0, 3, 0xFF, 0xFD, 0xFF, 2, 0xFE, 0xFE, 0xFE]; // template 0, AT
+    const REFINEMENT: &[u8] = &[0, 0xFF, 0xFF, 0xFF, 0xFF]; // template 0, AT
+    const OR: u8 = 0;
+    const REPLACE: u8 = 4;
+
+    /// PdfCraft patch: a region's location is unsigned (5.4.4), so one past `i32::MAX` is off the
+    /// page. Taken for a signed one, a region at 0xFFFFFFFE drew back onto the page two pixels left
+    /// of it, and a refinement there was refused, and the rest of the stream with it. Each region
+    /// here is 4 × 4 on a blank page of 8 × 8, its coded data arbitrary: on the page it draws, off
+    /// it nothing.
+    #[test]
+    fn a_region_located_past_i32_max_is_off_the_page() {
+        struct Ink(u32);
+        impl Decoder for Ink {
+            fn push_pixel(&mut self, black: bool) {
+                self.0 += u32::from(black);
+            }
+            fn push_pixel_chunk(&mut self, black: bool, chunks: u32) {
+                self.0 += if black { 8 * chunks } else { 0 };
+            }
+            fn next_line(&mut self) {}
+        }
+        let ink = |x: u32, y: u32| {
+            let forms = [
+                // An immediate generic region.
+                vec![segment(1, 38, &[], &region_of_4(x, y, OR, GENERIC))],
+                // An immediate refinement of the page, which reads the page at its own location (7.4.7.4).
+                vec![segment(1, 42, &[], &region_of_4(x, y, REPLACE, REFINEMENT))],
+                // An immediate refinement of an intermediate region at the same place (7.4.7.5).
+                vec![
+                    segment(1, 36, &[], &region_of_4(x, y, OR, GENERIC)),
+                    segment(2, 42, &[1], &region_of_4(x, y, OR, REFINEMENT)),
+                ],
+            ];
+            forms.map(|form| {
+                let stream = [page_of_8(), form.concat()].concat();
+                let mut ink = Ink(0);
+                Image::new_embedded(&stream, None).and_then(|image| image.decode(&mut ink)).map(|()| ink.0)
+            })
+        };
+        for (x, y) in [(0, 0), (2, 2)] {
+            assert!(ink(x, y).iter().all(|ink| matches!(ink, Ok(n) if *n > 0)), "{x}, {y}: {:?}", ink(x, y));
+        }
+        for (x, y) in [(0xFFFF_FFFE, 0), (0, 0xFFFF_FFFE), (0x8000_0000, 0x8000_0000), (u32::MAX, u32::MAX)] {
+            assert_eq!(ink(x, y).map(|ink| ink.ok()), [Some(0); 3], "{x:#x}, {y:#x}");
+        }
+    }
+
+    /// PdfCraft patch: a refinement of a region refines it where it is, "GRREFERENCEDX 0,
+    /// GRREFERENCEDY 0" (Table 35), not the page at the refinement's location. A region and its
+    /// refinement, directly or through an intermediate refinement, decode otherwise than the same
+    /// refinements of the page, and at 2, 3 to the pixels they decode to at 0, 0, moved.
+    #[test]
+    fn a_refinement_of_a_region_decodes_the_same_wherever_they_are() {
+        #[derive(Default)]
+        struct Pixels(Vec<bool>);
+        impl Decoder for Pixels {
+            fn push_pixel(&mut self, black: bool) {
+                self.0.push(black);
+            }
+            fn push_pixel_chunk(&mut self, black: bool, chunks: u32) {
+                self.0.extend((0..8 * chunks).map(|_| black));
+            }
+            fn next_line(&mut self) {}
+        }
+        // The first refinement refers to the region before it, or `of_page`, to nothing: the page.
+        let decode = |x: u32, y: u32, through_intermediate: bool, of_page: bool| {
+            let first: &[u8] = if of_page { &[] } else { &[1] };
+            let mut form = vec![segment(1, 36, &[], &region_of_4(x, y, OR, GENERIC))];
+            if through_intermediate {
+                form.push(segment(2, 40, first, &region_of_4(x, y, OR, REFINEMENT)));
+                form.push(segment(3, 42, &[2], &region_of_4(x, y, OR, REFINEMENT)));
+            } else {
+                form.push(segment(2, 42, first, &region_of_4(x, y, OR, REFINEMENT)));
+            }
+            let stream = [page_of_8(), form.concat()].concat();
+            let mut pixels = Pixels::default();
+            Image::new_embedded(&stream, None).unwrap().decode(&mut pixels).unwrap();
+            pixels.0
+        };
+        for through_intermediate in [false, true] {
+            let at_origin = decode(0, 0, through_intermediate, false);
+            assert!(at_origin.contains(&true), "draws");
+            assert_ne!(at_origin, decode(0, 0, through_intermediate, true), "the page refined instead");
+            for (i, &black) in decode(2, 3, through_intermediate, false).iter().enumerate() {
+                let (x, y) = (i % 8, i / 8);
+                let moved = x >= 2 && y >= 3 && at_origin[(y - 3) * 8 + x - 2];
+                assert_eq!(black, moved, "{x}, {y}, through an intermediate refinement: {through_intermediate}");
+            }
+        }
+    }
+
+    /// PdfCraft patch: a refinement of the page refines the page restricted to its area (7.4.7.4),
+    /// reading 0 around it, and a reference 32 or more left of a refinement is read from where each
+    /// row starts in it. So that a context read wrong changes what decodes, the refinements are
+    /// large, and their pictures come from the hash they were coded from: a 64 × 16 refinement at
+    /// 41, 4 of a 112 × 24 page, and a 70 × 12 text instance refined from a 140 × 12 symbol 35
+    /// left of it.
+    #[test]
+    fn a_refinement_refines_the_page_in_its_area_and_any_reference_where_it_is() {
+        #[derive(Default)]
+        struct Rows(Vec<Vec<u8>>, Vec<u8>);
+        impl Decoder for Rows {
+            fn push_pixel(&mut self, black: bool) {
+                self.1.push(u8::from(black));
+            }
+            fn push_pixel_chunk(&mut self, black: bool, chunks: u32) {
+                for _ in 0..8 * chunks {
+                    self.push_pixel(black);
+                }
+            }
+            fn next_line(&mut self) {
+                self.0.push(core::mem::take(&mut self.1));
+            }
+        }
+        fn bit(seed: u32, x: u32, y: u32) -> u8 {
+            let mut h = x.wrapping_mul(0x9E37_79B1).wrapping_add(y.wrapping_mul(0x85EB_CA77)).wrapping_add(seed.wrapping_mul(0xC2B2_AE3D));
+            h ^= h >> 15;
+            h = h.wrapping_mul(0x2C1B_3C6D);
+            h ^= h >> 12;
+            h = h.wrapping_mul(0x297A_2D39);
+            h ^= h >> 15;
+            ((h >> 7) & 1) as u8
+        }
+        // About one pixel in eight: where a refinement differs from its reference.
+        let flipped = |seed: u32, x: u32, y: u32| bit(seed, x, y) & bit(seed + 1, x, y) & bit(seed + 2, x, y);
+        // A page of bit(1, ..), and over it at 41, 4 the area refined from it.
+        const PAGE: &str = "000000003000010000001300000070000000180000000000000000420000000000012600010000016f00000070000000180000000000000000040003fffdff02fefefefb5d354db053c2a984c01af66c619b02c245055be23a2a431b04c60325c88676f6ff1b0a68c873ad9011a27a89fc99abc7db2e8f529ecf198ff8c6a726ddcb746dc51f3812e365e74ee668fa02f59182cae39f0ef43b3201da1bcd43a21f449889e15ba0ba1a9344da1bdb9dcb4015279a39d944509febc622a235fa2c623acb443f0c10dabf7fba5e9d6fef2f1289dfd0a6a3801d036f21a62045074f5d3158ab0373ad2334102ef867dc3132dc8d02fe517771c419cdbad47d67d409ec89d0425d1f51a48af6ba3bee6e0701185bfa5f46b347b0ec39e744b665d1e8aac868838d3db25162d65534ff4771d9c0d657bd48d5814fa7cc184d0e961defab2d75a79a88345cdae5546a54221a22ddfe9c8a0514f32ac9de806fbc5fb4f5275c79d679f0258f77900daaa273cee50e50c958f323414670d7761418639342fdb2082eac5e7934f1a06169991452b1a042eaee7871ffac000000022a000100000091000000400000001000000029000000040400ffffffffd24567306e52f57232cefa9800db00fb60c21b30b0e53d9fac8a1f863a580a7cc49ab401934ac8be3a18e2dc0f01774b76c3e9196283cb5504742c763a867bc1aae8c48d74d194dacda03ce7e91904897ab61add273d9188fda65dc6fefb995d85f48142e43c1970bedb9c5f4be3cb00d458e9f4ee9714a61fffac";
+        let page: Vec<Vec<u8>> = (0..24)
+            .map(|y| (0..112).map(|x| bit(1, x, y) ^ if (41..105).contains(&x) && (4..20).contains(&y) { flipped(10, x - 41, y - 4) } else { 0 }).collect())
+            .collect();
+        // A symbol of bit(3, ..), and a text instance refined from it, 70 narrower with RDX 0.
+        const TEXT: &str = "0000000030000100000013000000460000000c000000000000000042000000000001000001000000ed000003fffdff02fefefe00000001000000013f4efc0ce48e6b5c00246a648400fb605a44d542ed29da2b9b55c01f4e5af9842dd70c88f4913c7f552503ba52a5d7b5d9fd08ff5794b4dbfb3df7bafcf9c43d04154c1cefa181ca1aba5da826a4e4229858bd0950442df69c098ab3b61a32f71b136974b96bcb5306f3e75af1a4ef51b8f56a355acb8b69915cfa623f5a21933be8c056a348783a116ea914e886af2c64bf3b23e5610726c981092220f05411857529861fbf4c630a15fd00b081d2351279e06602f4408b25dc1d01c223027ecb8c87c4b1d76e3882a759c1adaf749f0e20735f8bd5a7306fffac000000020620010100000085000000460000000c0000000000000000040012ffffffff00000001a967c0b129999147062a4766ce10bc3dae7f1daf43dda1427d31203a1bc9fa021e0504e0a4b01739952970b54ad11ac08c0684d2f556a1843eb01dc75b963be6237b7f02fdfe17ccf7f061de310a936fd08c5ddea47609789e55f7cbca81ae38219c4abc5f9eff47ffac";
+        let text: Vec<Vec<u8>> = (0..12).map(|y| (0..70).map(|x| bit(3, x + 35, y) ^ flipped(30, x, y)).collect()).collect();
+        for (stream, picture) in [(PAGE, page), (TEXT, text)] {
+            let stream: Vec<u8> = (0..stream.len() / 2).map(|i| u8::from_str_radix(&stream[i * 2..i * 2 + 2], 16).unwrap()).collect();
+            let mut rows = Rows::default();
+            Image::new_embedded(&stream, None).unwrap().decode(&mut rows).unwrap();
+            assert_eq!(rows.0, picture);
+        }
+    }
+
+    /// PdfCraft patch: the area a refinement of the page refines is the page inside it and 0
+    /// outside: off the page's rows and columns, past where a column can be, and past the page's
+    /// width and the area's own whatever the padding of the page's rows holds. `new_with` clears
+    /// that padding (patch 13), so the page's words are set to all 1s, padding included.
+    #[test]
+    fn a_page_area_is_the_page_inside_it_and_0_outside() {
+        let mut page = Bitmap::new_with(40, 3, 0, 0, true).unwrap();
+        page.data.fill(!0);
+        let area = |x, y, width, height| page.area(x, y, width, height).unwrap().data;
+        assert_eq!(area(30, 1, 20, 3), [0xFFC0_0000, 0xFFC0_0000, 0], "10 columns and 2 rows of the page");
+        assert_eq!(area(0, 0, 33, 1), [!0, 0x8000_0000], "the whole of a word, and none of the area's padding");
+        assert_eq!(area(36, 0, 8, 1), [0xF000_0000], "4 columns, and none of the page's padding");
+        assert_eq!(area(5, 0, 8, 1), [0xFF00_0000], "inside the page");
+        assert_eq!(area(40, 0, 8, 1), [0], "right of the page");
+        assert_eq!(area(u32::MAX - 2, 0, 40, 1), [0, 0], "past where a column can be");
+        assert_eq!(area(0, u32::MAX, 8, 2), [0, 0], "below the page");
+        assert!(area(3, 0, 0, 2).is_empty(), "no width");
+    }
+
     /// A stream and its globals are one stream of segments, so they have one count.
     #[test]
     fn the_segments_of_a_stream_and_its_globals_count_together() {
@@ -847,6 +1036,49 @@ mod tests {
         assert!(refused(&more), "one more isn't");
     }
 
+    /// PdfCraft patch: a refinement whose reference is offset right of it reads the reference from
+    /// its first column, where it read the first 32 as 0. So that a context read wrong changes what
+    /// decodes, the refinement is large, and its picture comes from the hash it was coded from: a
+    /// 104 × 12 text instance refined from a 100 × 12 symbol 2 right of it.
+    #[test]
+    fn a_refinement_reads_a_reference_right_of_it_from_its_first_column() {
+        #[derive(Default)]
+        struct Rows(Vec<Vec<u8>>, Vec<u8>);
+        impl Decoder for Rows {
+            fn push_pixel(&mut self, black: bool) {
+                self.1.push(u8::from(black));
+            }
+            fn push_pixel_chunk(&mut self, black: bool, chunks: u32) {
+                for _ in 0..8 * chunks {
+                    self.push_pixel(black);
+                }
+            }
+            fn next_line(&mut self) {
+                self.0.push(core::mem::take(&mut self.1));
+            }
+        }
+        fn bit(seed: u32, x: u32, y: u32) -> u8 {
+            let mut h = x.wrapping_mul(0x9E37_79B1).wrapping_add(y.wrapping_mul(0x85EB_CA77)).wrapping_add(seed.wrapping_mul(0xC2B2_AE3D));
+            h ^= h >> 15;
+            h = h.wrapping_mul(0x2C1B_3C6D);
+            h ^= h >> 12;
+            h = h.wrapping_mul(0x297A_2D39);
+            h ^= h >> 15;
+            ((h >> 7) & 1) as u8
+        }
+        // About one pixel in eight: where a refinement differs from its reference.
+        let flipped = |seed: u32, x: u32, y: u32| bit(seed, x, y) & bit(seed + 1, x, y) & bit(seed + 2, x, y);
+        // A symbol of bit(2, ..), and a text instance refined from it, 4 wider with RDX 0.
+        const TEXT: &str = "0000000030000100000013000000680000000c000000000000000042000000000001000001000000b1000003fffdff02fefefe00000001000000013f525ad7118f669a303f1b11efa5210e9765b834b1831c650f3a3d325dbd7317379ea4fb573b09a20c362f065d8f9301e74cbbc50c69910641c0e0eea7c2fd1e831ca1459a943be55ed8e074b426ad7ff1e8d8ff6f1aa44684de5da4b4c3483911604412e00e96a0db6ec7103feb2bc4301ae98d3f9c23078ae72dc46f76e9dfea209d39187f1194f7b9285cd6e7b2dc7abb5def43ff0abe2df554fc55ffac0000000206200101000000af000000680000000c0000000000000000040012ffffffff00000001a96b5febebec5a68693b51f5db25ddf176d4aae89904a71d1690f12888e10b038db723ac59941f76c2844b739ce524d9563f4005e1edbabf2e323e8e9ac1a3b9060587c3010e7d6bcf90c00dbf9000a2f17b1d9b598e01b9158dc16a63f4388a6f647b99dc7118aa09e08d59fba1bc24e3a0f1ebb0cae636b6bedbb65b01945228d3e5d2980a0ad6290c13d2f34f5c861415ffac";
+        let picture: Vec<Vec<u8>> = (0..12)
+            .map(|y| (0..104).map(|x| (if (2..102).contains(&x) { bit(2, x - 2, y) } else { 0 }) ^ flipped(20, x, y)).collect())
+            .collect();
+        let stream: Vec<u8> = (0..TEXT.len() / 2).map(|i| u8::from_str_radix(&TEXT[i * 2..i * 2 + 2], 16).unwrap()).collect();
+        let mut rows = Rows::default();
+        Image::new_embedded(&stream, None).unwrap().decode(&mut rows).unwrap();
+        assert_eq!(rows.0, picture);
+    }
+
     /// A dictionary being decoded has what the page may still hold, not all of it: refused only
     /// once it is stored, its copies would already have been made.
     #[test]
@@ -857,5 +1089,18 @@ mod tests {
         assert_eq!(page.retained_room(), MAX_RETAINED_WORDS - 1000 - ENTRY_WORDS);
         page.retained_words = MAX_RETAINED_WORDS;
         assert_eq!(page.retained_room(), 0);
+    }
+
+    /// Pixels past a bitmap's edge are 0 (6.3.5.2), and a refinement reads its reference a word at
+    /// a time, so a bitmap filled with 1s has none past its width: made, and a page made again for
+    /// the next image.
+    #[test]
+    fn a_bitmap_of_1s_has_nothing_past_its_width() {
+        assert_eq!(Bitmap::new_with(33, 2, 0, 0, true).unwrap().data, [!0, 1 << 31, !0, 1 << 31]);
+        let mut page = Bitmap::new_with(40, 1, 0, 0, false).unwrap();
+        page.reinitialize(7, 2, true).unwrap();
+        assert_eq!(page.data, [0xFE00_0000, 0xFE00_0000]);
+        assert_eq!(Bitmap::new_with(64, 1, 0, 0, true).unwrap().data, [!0, !0], "words filled whole");
+        assert!(Bitmap::new_with(0, 3, 0, 0, true).unwrap().data.is_empty(), "no width");
     }
 }

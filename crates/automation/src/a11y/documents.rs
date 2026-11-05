@@ -6,6 +6,13 @@ impl Automation {
         let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
         let format = pdfcraft_engine::compare::OfficeFormat::from_extension(&ext)
             .ok_or_else(|| ToolError::InvalidArgs(format!("unsupported extension {ext:?} (docx, pptx, html, rtf or md)")))?;
+        let html_mode = a.opt_str("html_mode")?.unwrap_or("rich");
+        let format = match (format, html_mode) {
+            (pdfcraft_engine::compare::OfficeFormat::Html, "rich") => pdfcraft_engine::compare::OfficeFormat::Html,
+            (pdfcraft_engine::compare::OfficeFormat::Html, "simple") => pdfcraft_engine::compare::OfficeFormat::HtmlSimple,
+            (_, "rich") => format,
+            (_, _) => return Err(ToolError::InvalidArgs("html_mode is only available for HTML exports (rich or simple)".into())),
+        };
         let export = self.doc_to_copy(a)?.export_office_checked(format);
         write_atomic(&path, &export.bytes)?;
         // Text left out to keep a hostile page bounded is said, not silent (#3120).
