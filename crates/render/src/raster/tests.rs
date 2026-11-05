@@ -8763,6 +8763,9 @@ mod png_predicted_images;
 // patch 27).
 mod isolated_cmyk_groups;
 
+// Issue #1700: a 1-bit source shrunk 1:1..2:1 averages its box instead of picking a stroke away.
+mod one_bit_minification;
+
 /// The generation-0 stand-in a rebuilt table files an object under must not make the object a
 /// second object: enumeration yielded it once per key, so a document recovered without a readable
 /// page tree reported the page twice (noted in review of #5580).

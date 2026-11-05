@@ -162,6 +162,11 @@ pub struct RgbData {
     pub height: u32,
     /// Whether the image should be interpolated.
     pub interpolate: bool,
+    /// PdfCraft patch (#1700): whether the source is 1 bit per component (a `/BitsPerComponent 1`
+    /// image, or a stencil mask). Minified, such a source is area-averaged instead of sampled:
+    /// picking samples drops one-pixel strokes (image-mask glyphs, fax-era and OCR fonts). See
+    /// `Renderer::draw_image`.
+    pub one_bit: bool,
     /// Additional scaling factors to apply to the image.
     ///
     /// In most cases, those factors will just be 1.0, and you can
@@ -188,6 +193,8 @@ pub struct LumaData {
     pub height: u32,
     /// Whether the image should be interpolated.
     pub interpolate: bool,
+    /// PdfCraft patch (#1700): whether the source is 1 bit per component, as for [`RgbData`].
+    pub one_bit: bool,
     /// Additional scaling factors to apply to the image.
     ///
     /// In most cases, those factors will just be 1.0, and you can
@@ -234,6 +241,15 @@ impl ImageData {
         match self {
             Self::Rgb(d) => d.interpolate,
             Self::Luma(d) => d.interpolate,
+        }
+    }
+
+    /// PdfCraft patch (#1700): whether the source is 1 bit per component, so a minified draw
+    /// averages its pixels instead of picking them.
+    pub fn one_bit(&self) -> bool {
+        match self {
+            Self::Rgb(d) => d.one_bit,
+            Self::Luma(d) => d.one_bit,
         }
     }
 
