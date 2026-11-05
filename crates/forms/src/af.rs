@@ -20,7 +20,10 @@ mod script;
 #[cfg(test)]
 use calc::{Notation, eval_notation, notation_name, notation_tokens, unique};
 pub use calc::{calculate, calculation_reads, notation_js, reads_built_names, rename_in_calculation};
-pub use format::{DATE_PRESETS, DateTime, TIME_PRESETS, format_date, format_value, js_number, keystroke, make_number, parse_date, validate};
+pub use format::{
+    DATE_PRESETS, DateNames, DateTime, ENGLISH_DATE_NAMES, TIME_PRESETS, date_names, format_date, format_date_in, format_value, format_value_in,
+    js_number, keystroke, make_number, parse_date, set_date_names, validate,
+};
 use script::{Arg, call};
 pub use script::{NOTATION_NOT_STORABLE, calculate_js, format_js, notation_storable, parse_calculate, parse_format, parse_validate, validate_js};
 
@@ -140,16 +143,21 @@ impl Actions {
     /// only for a value that is one, in its format already or as an ISO date (`2026-10-18` or
     /// `20261018`); anything else, which its format would read loosely, shows as typed.
     pub fn format_value(&self, value: &str) -> String {
+        self.format_value_in(value, &date_names())
+    }
+
+    /// [`Self::format_value`] with month and weekday names from `names`.
+    pub fn format_value_in(&self, value: &str, names: &DateNames) -> String {
         match &self.format {
             Format::Date(fmt) if self.xfa_date => {
                 let t = value.trim();
                 let in_format = parse_date(t, fmt).is_some_and(|dt| format_date(dt, fmt).eq_ignore_ascii_case(t));
                 match iso_date(t) {
-                    Some(dt) if !in_format => format_date(dt, fmt),
+                    Some(dt) if !in_format => format_date_in(dt, fmt, names),
                     _ => value.to_string(),
                 }
             }
-            f => format_value(f, value),
+            f => format_value_in(f, value, names),
         }
     }
 }
