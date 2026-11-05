@@ -4645,6 +4645,16 @@ wheat"
     );
     assert!(write_data_value(&mut doc, &path, "").unwrap().written, "cleared");
     assert_eq!(crate::script::data_of(&doc).unwrap().count(&path, "value"), 0);
+    // Where `xfa` names another namespace and `pcxfa` is taken too, the marker's prefix is a free
+    // one, declared on the group, so no attribute in scope changes meaning.
+    let shadowed = crate::fixtures::static_shell(
+        "<form1><page1><grains xmlns:xfa=\"urn:other\" xmlns:pcxfa=\"urn:taken\" pcxfa:note=\"x\"><value>rye</value></grains></page1></form1>",
+    );
+    let mut doc = Document::open(Arc::new(shadowed)).unwrap();
+    assert!(write_data_value(&mut doc, &path, "").unwrap().written);
+    let xdp = crate::read_packets(&doc).unwrap().unwrap().xdp;
+    assert!(xdp.contains("xmlns:pcxfa1=\"http://www.xfa.org/schema/xfa-data/1.0/\" pcxfa1:dataNode=\"dataGroup\""), "{xdp}");
+    assert!(xdp.contains("xmlns:pcxfa=\"urn:taken\" pcxfa:note=\"x\""), "the taken prefix keeps its namespace: {xdp}");
     // One `value` whose text holds a line break is one pick, not the two it would join to.
     let one = crate::fixtures::static_shell(
         "<form1><page1><grains><value>one

@@ -298,7 +298,13 @@ fn mark_data_group_edit(src: &str, node: roxmltree::Node) -> Option<Edit> {
     let at = if src.get(..tag_end)?.ends_with('/') { tag_end.checked_sub(1)? } else { tag_end };
     let text = match node.lookup_prefix(XFA_DATA_NS) {
         Some(prefix) if !prefix.is_empty() => format!(" {prefix}:dataNode=\"dataGroup\""),
-        _ => format!(" xmlns:pcxfa=\"{XFA_DATA_NS}\" pcxfa:dataNode=\"dataGroup\""),
+        _ => {
+            // A prefix no namespace in scope is bound to, so declaring it rebinds nothing.
+            let prefix = (0..16)
+                .map(|i| if i == 0 { "pcxfa".to_string() } else { format!("pcxfa{i}") })
+                .find(|p| node.lookup_namespace_uri(Some(p)).is_none())?;
+            format!(" xmlns:{prefix}=\"{XFA_DATA_NS}\" {prefix}:dataNode=\"dataGroup\"")
+        }
     };
     Some(Edit { start: at, end: at, text })
 }
