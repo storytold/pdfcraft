@@ -517,6 +517,8 @@ fn field_xml(f: &Field, page_height: f64) -> Option<String> {
     let label: String = f.name.chars().take(MAX_FIELD_NAME_CHARS).collect();
     let name = esc(&label);
     let props = format!("<w:alias w:val=\"{name}\"/><w:tag w:val=\"{name}\"/>");
+    // A read-only field's control keeps its content: Word lets it be read and copied, not changed.
+    let lock = if f.read_only { "<w:lock w:val=\"contentLocked\"/>" } else { "" };
     // En spaces (half an em each) keep an empty field as wide as its box.
     let blank = |n: usize| "\u{2002}".repeat(n.clamp(1, 200));
     let fits = |advance: f64| if advance > 0.0 { (w / advance).floor() as usize } else { 1 };
@@ -563,7 +565,7 @@ fn field_xml(f: &Field, page_height: f64) -> Option<String> {
             // placeholder: without them a typed value loses the font, size and comb spacing.
             let rpr = field_rpr(&field_family(&f.font), size, spacing);
             format!(
-                "<w:p>{}<w:sdt><w:sdtPr>{rpr}<w:alias w:val=\"{title}\"/><w:tag w:val=\"{name}\"/>{placeholder}<w:text{multi}/></w:sdtPr><w:sdtContent><w:r>{rpr}{}</w:r></w:sdtContent></w:sdt></w:p>",
+                "<w:p>{}<w:sdt><w:sdtPr>{rpr}<w:alias w:val=\"{title}\"/><w:tag w:val=\"{name}\"/>{lock}{placeholder}<w:text{multi}/></w:sdtPr><w:sdtContent><w:r>{rpr}{}</w:r></w:sdtContent></w:sdt></w:p>",
                 frame_ppr(frame, page_height, before, &indent),
                 text_xml
             )
@@ -581,13 +583,13 @@ fn field_xml(f: &Field, page_height: f64) -> Option<String> {
                 _ => props,
             };
             format!(
-                "<w:p>{}<w:sdt><w:sdtPr>{rpr}{props}<w14:checkbox><w14:checked w14:val=\"{}\"/><w14:checkedState w14:val=\"0058\" w14:font=\"Arial\"/><w14:uncheckedState w14:val=\"2002\" w14:font=\"Arial\"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
+                "<w:p>{}<w:sdt><w:sdtPr>{rpr}{props}{lock}<w14:checkbox><w14:checked w14:val=\"{}\"/><w14:checkedState w14:val=\"0058\" w14:font=\"Arial\"/><w14:uncheckedState w14:val=\"2002\" w14:font=\"Arial\"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
                 frame_ppr(r, page_height, middle(size), "<w:jc w:val=\"center\"/>"),
                 u8::from(*checked),
                 if *checked { "X" } else { "\u{2002}" }
             )
         }
-        FieldKind::Choice { value, options } => {
+        FieldKind::Choice { value, options, editable } => {
             let mut items = String::new();
             for o in options.iter().take(MAX_DOCX_LIST_ITEMS) {
                 let o = esc(o);
@@ -595,8 +597,10 @@ fn field_xml(f: &Field, page_height: f64) -> Option<String> {
             }
             let (text, placeholder) = if value.is_empty() { (blank(fits(0.5 * size)), "<w:showingPlcHdr/>") } else { (value.clone(), "") };
             let rpr = field_rpr(&field_family(&f.font), size, 0.0);
+            // A combo box that takes typed text is a Word combo box, which does too.
+            let list = if *editable { "comboBox" } else { "dropDownList" };
             format!(
-                "<w:p>{}<w:sdt><w:sdtPr>{rpr}{props}{placeholder}<w:dropDownList>{items}</w:dropDownList></w:sdtPr><w:sdtContent><w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
+                "<w:p>{}<w:sdt><w:sdtPr>{rpr}{props}{lock}{placeholder}<w:{list}>{items}</w:{list}></w:sdtPr><w:sdtContent><w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
                 frame_ppr(r, page_height, middle(size), "<w:ind w:left=\"20\"/>"),
                 esc(&text)
             )

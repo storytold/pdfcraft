@@ -291,3 +291,53 @@ fn a_fields_font_and_radio_group_reach_the_export() {
     let pay: Vec<&FieldKind> = field("Pay").iter().map(|f| &f.kind).collect();
     assert_eq!(pay, [&FieldKind::Radio { checked: true, buttons: 2 }, &FieldKind::Radio { checked: false, buttons: 2 }], "{fields:#?}");
 }
+
+/// What a field's flags and state say reaches the export: a check box is on as the page shows it,
+/// by its widget's appearance state (`/AS`), with no value or another one (`/V /Off`); a combo box
+/// that takes typed text is editable and a list isn't; a read-only field says so; and a radio
+/// group counts only the buttons the export keeps (shown, on a page).
+#[test]
+fn a_fields_state_and_flags_reach_the_export() {
+    let ap = "/AP << /N << /Yes 15 0 R /Off 15 0 R >> >>";
+    let kid = |state: &str, x: i32, extra: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent 11 0 R /Rect [{x} 50 {} 60] /P 3 0 R /AP << /N << /{state} 15 0 R /Off 15 0 R >> >>{extra} >>",
+            x + 10
+        )
+    };
+    let bytes = pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 12 0 R 13 0 R 14 0 R] >>"
+            .into(),
+        stream("", ""),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Btn /T (Shown) /AS /Yes {ap} /Rect [10 10 20 20] /P 3 0 R >>"),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Btn /T (Stale) /V /Off /AS /Yes {ap} /Rect [30 10 40 20] /P 3 0 R >>"),
+        format!("<< /Type /Annot /Subtype /Widget /FT /Btn /T (Unset) /V /Yes /AS /Off {ap} /Rect [50 10 60 20] /P 3 0 R >>"),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 393216 /T (Pick) /Opt [(a) (b)] /Rect [10 30 90 42] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (Plain) /Opt [(a) (b)] /Rect [100 30 180 42] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Ff 1 /T (Fixed) /V (kept) /Rect [10 70 90 82] /P 3 0 R >>".into(),
+        "<< /FT /Btn /Ff 49152 /T (Pay) /V /A /Kids [12 0 R 13 0 R 14 0 R] >>".into(),
+        kid("A", 10, ""),
+        kid("B", 30, ""),
+        kid("C", 50, " /F 2"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", ""),
+    ]);
+    let mut s = Session::new();
+    let id = s.open("state.pdf", None, Arc::new(bytes), None).unwrap();
+    let pages = s.get(id).unwrap().export_pages();
+    let fields = &pages[0].fields;
+    let field = |name: &str| fields.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("{name}: {fields:#?}"));
+    assert_eq!(field("Shown").kind, FieldKind::Check { checked: true }, "no value: the widget's /AS");
+    assert_eq!(field("Stale").kind, FieldKind::Check { checked: true }, "the page shows /AS, not /V");
+    assert_eq!(field("Unset").kind, FieldKind::Check { checked: false }, "/AS /Off with /V on");
+    assert!(matches!(field("Pick").kind, FieldKind::Choice { editable: true, .. }), "{:?}", field("Pick").kind);
+    assert!(matches!(field("Plain").kind, FieldKind::Choice { editable: false, .. }), "{:?}", field("Plain").kind);
+    assert!(field("Fixed").read_only && !field("Shown").read_only);
+    let pay: Vec<&FieldKind> = fields.iter().filter(|f| f.name == "Pay").map(|f| &f.kind).collect();
+    assert_eq!(
+        pay,
+        [&FieldKind::Radio { checked: true, buttons: 2 }, &FieldKind::Radio { checked: false, buttons: 2 }],
+        "the hidden button isn't counted"
+    );
+}

@@ -87,8 +87,9 @@ pub enum FieldKind {
     Check { checked: bool },
     /// One button of a radio group of `buttons` buttons.
     Radio { checked: bool, buttons: usize },
-    /// A combo or list box: the shown value and the choices' display texts.
-    Choice { value: String, options: Vec<String> },
+    /// A combo or list box: the shown value and the choices' display texts; `editable` for a
+    /// combo box that also takes typed text.
+    Choice { value: String, options: Vec<String>, editable: bool },
 }
 
 /// A fillable form field (an AcroForm widget) on the page.
@@ -103,6 +104,8 @@ pub struct Field {
     /// The base font the field's text is set in (its `/DA` font, `Helvetica` say); empty when
     /// the PDF names none.
     pub font: String,
+    /// The field can't be changed (`/Ff` ReadOnly, the field's or its widget's).
+    pub read_only: bool,
     pub kind: FieldKind,
     /// The border a PDF viewer draws around the field (its widget's `/MK /BC` and `/BS`), and
     /// the colour it fills the field with (`/MK /BG`); `None` for none. A form whose boxes only

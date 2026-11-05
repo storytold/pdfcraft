@@ -931,6 +931,7 @@ fn form_page() -> Page {
             rect: [60.0, 700.0, 300.0, 712.0],
             size: 0.0,
             font: String::new(),
+            read_only: false,
             kind: FieldKind::Text { value: String::new(), multiline: false, comb: None, max_len: None },
             border: None,
             background: None,
@@ -940,6 +941,7 @@ fn form_page() -> Page {
             rect: [60.0, 520.0, 160.0, 532.0],
             size: 10.0,
             font: String::new(),
+            read_only: false,
             kind: FieldKind::Text { value: "10115".into(), multiline: false, comb: Some(5), max_len: Some(5) },
             border: None,
             background: None,
@@ -949,6 +951,7 @@ fn form_page() -> Page {
             rect: [60.0, 200.0, 540.0, 260.0],
             size: 9.0,
             font: String::new(),
+            read_only: false,
             kind: FieldKind::Text { value: "a & b".into(), multiline: true, comb: None, max_len: None },
             border: None,
             background: None,
@@ -958,6 +961,7 @@ fn form_page() -> Page {
             rect: [60.0, 150.0, 70.0, 160.0],
             size: 0.0,
             font: String::new(),
+            read_only: false,
             kind: FieldKind::Check { checked: true },
             border: None,
             background: None,
@@ -967,6 +971,7 @@ fn form_page() -> Page {
             rect: [90.0, 150.0, 100.0, 160.0],
             size: 0.0,
             font: String::new(),
+            read_only: false,
             kind: FieldKind::Check { checked: false },
             border: None,
             background: None,
@@ -976,7 +981,8 @@ fn form_page() -> Page {
             rect: [120.0, 150.0, 300.0, 162.0],
             size: 0.0,
             font: String::new(),
-            kind: FieldKind::Choice { value: "Health".into(), options: vec!["Health".into(), "Pension".into()] },
+            read_only: false,
+            kind: FieldKind::Choice { value: "Health".into(), options: vec!["Health".into(), "Pension".into()], editable: false },
             border: None,
             background: None,
         },
@@ -1090,6 +1096,7 @@ fn word_content_controls_keep_their_fields_names() {
         rect: [60.0, 50.0, 200.0, 62.0],
         size: 0.0,
         font: String::new(),
+        read_only: false,
         kind: FieldKind::Text { value: String::new(), multiline: false, comb: None, max_len },
         border: None,
         background: None,
@@ -1150,6 +1157,7 @@ fn word_bounds_hostile_shapes_and_fields() {
         rect: [f64::NAN, 0.0, 1.0, 1.0],
         size: f64::NAN,
         font: String::new(),
+        read_only: false,
         kind: FieldKind::Check { checked: true },
         border: None,
         background: None,
@@ -1159,6 +1167,7 @@ fn word_bounds_hostile_shapes_and_fields() {
         rect: [0.0, 0.0, 1e300, 1e300],
         size: -5.0,
         font: String::new(),
+        read_only: false,
         kind: FieldKind::Text { value: "1".into(), multiline: false, comb: Some(0), max_len: Some(0) },
         border: None,
         background: None,
@@ -1407,7 +1416,7 @@ fn a_list_past_the_drop_down_limit_cuts_its_page_short() {
         p.fields.retain(|f| matches!(f.kind, FieldKind::Choice { .. }));
         let options: Vec<String> = (0..n).map(|i| format!("Option {i}")).collect();
         if let Some(f) = p.fields.first_mut() {
-            f.kind = FieldKind::Choice { value: String::new(), options };
+            f.kind = FieldKind::Choice { value: String::new(), options, editable: false };
         }
         p
     };
@@ -1429,6 +1438,7 @@ fn word_titles_a_radio_button_with_its_groups_one_choice() {
         rect: [x, 150.0, x + 10.0, 160.0],
         size: 0.0,
         font: "ZapfDingbats".into(),
+        read_only: false,
         kind: FieldKind::Radio { checked, buttons },
         border: None,
         background: None,
@@ -1471,4 +1481,30 @@ fn word_sets_field_text_in_the_fields_font() {
     assert_eq!(family("Fund"), "Times New Roman");
     assert_eq!(family("Notes"), "Arial", "a field naming no font");
     assert_eq!(family("Yes"), "Arial", "a check box's X is Arial's");
+}
+
+/// A read-only field's control is locked, so Word lets its content be read and copied, not
+/// changed; a combo box that takes typed text is a Word combo box, which does too, and a plain
+/// list stays a drop-down.
+#[test]
+fn word_locks_read_only_fields_and_lets_an_editable_combo_take_text() {
+    let mut p = form_page();
+    for f in p.fields.iter_mut() {
+        match f.name.as_str() {
+            "Name" | "Yes" => f.read_only = true,
+            "Fund" => {
+                if let FieldKind::Choice { editable, .. } = &mut f.kind {
+                    *editable = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    let xml = part(&docx(&[p], "Locks"), "word/document.xml");
+    assert_eq!(xml.matches("<w:lock w:val=\"contentLocked\"/>").count(), 2, "{xml}");
+    assert!(xml.contains("<w:tag w:val=\"Name\"/><w:lock w:val=\"contentLocked\"/>"), "{xml}");
+    assert!(xml.contains("<w:tag w:val=\"Yes\"/><w:lock w:val=\"contentLocked\"/><w14:checkbox>"), "{xml}");
+    assert!(xml.contains("<w:comboBox><w:listItem w:displayText=\"Health\"") && !xml.contains("dropDownList"), "{xml}");
+    let plain = part(&docx(&[form_page()], "Plain"), "word/document.xml");
+    assert!(!plain.contains("<w:lock ") && plain.contains("<w:dropDownList>") && !plain.contains("comboBox"), "{plain}");
 }

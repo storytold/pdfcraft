@@ -206,15 +206,18 @@ fn export_field(
             comb: f.is_comb().then_some(f.max_len).flatten(),
             max_len: f.max_len.filter(|n| *n > 0),
         },
-        // A check box, or one button of a radio group: on when the value is its on state.
-        FieldKind::CheckBox => pdfcraft_export::FieldKind::Check { checked: w.on_state.as_ref().is_some_and(|on| f.value.iter().any(|v| v == on)) },
+        FieldKind::CheckBox => pdfcraft_export::FieldKind::Check { checked: button_on(f, w) },
+        // A group's buttons are those the export keeps: shown, and on a page.
         FieldKind::Radio => pdfcraft_export::FieldKind::Radio {
-            checked: w.on_state.as_ref().is_some_and(|on| f.value.iter().any(|v| v == on)),
-            buttons: f.widgets.len(),
+            checked: button_on(f, w),
+            buttons: f.widgets.iter().filter(|b| !b.hidden && b.page.is_some()).count(),
         },
-        FieldKind::Combo | FieldKind::List => {
-            pdfcraft_export::FieldKind::Choice { value: f.display_value(), options: f.options.iter().map(|(_, shown)| shown.clone()).collect() }
-        }
+        FieldKind::Combo | FieldKind::List => pdfcraft_export::FieldKind::Choice {
+            value: f.display_value(),
+            options: f.options.iter().map(|(_, shown)| shown.clone()).collect(),
+            // A combo box that takes typed text as well as its choices.
+            editable: f.kind == FieldKind::Combo && f.has(flags::EDIT),
+        },
         FieldKind::PushButton | FieldKind::Signature => return None,
     };
     // The font size and border width are in the page's units, as its box is: `unit` scales them
@@ -227,10 +230,22 @@ fn export_field(
         rect: visible(w.rect),
         size: da.size * unit,
         font: dr_base_font(cos, &da.font),
+        read_only: f.has(flags::READ_ONLY) || w.read_only,
         kind,
         border,
         background,
     })
+}
+
+/// Whether a check box or radio button `w` of `f` is on as the page shows it: its widget's
+/// appearance state (`/AS`) is its on state, which is what a PDF viewer draws; for a widget with
+/// no `/AS`, the field's value is.
+fn button_on(f: &pdfcraft_forms::Field, w: &pdfcraft_forms::Widget) -> bool {
+    let Some(on) = w.on_state.as_ref() else { return false };
+    match w.state.as_ref() {
+        Some(state) => state == on,
+        None => f.value.iter().any(|v| v == on),
+    }
 }
 
 /// The base font of the form's default resource font `name` (a field's `/DA` font, `Helv` for
