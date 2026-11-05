@@ -379,34 +379,34 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
         forms: &mut Forms,
         out: &mut Vec<PageImage>,
     ) -> Result<(), EditError> {
-        let xo = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+        let mut held = None;
+        let xo = crate::text::resource_dict(doc, resources, b"XObject", &mut held);
         for (i, op) in ops.iter().enumerate() {
             st.apply(op)?;
             let ctm = st.placement.matrix;
             if op.is("Do") {
                 let Some(name) = op.name(0) else { continue };
+                let drawn = xo.and_then(|xo| xo.get(name));
                 if let Some(form) = crate::text::form_call(doc, resources, name, ctm, &forms.path, &mut forms.budget) {
                     if let Some(r) = form.obj {
                         forms.path.push(r);
                     }
                     let bounds =
-                        xo.get(name).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().and_then(|d| d.get(b"BBox")).map(|b| doc.resolve(b))).and_then(
-                            |b| {
-                                let a = b.as_array()?;
-                                let [x0, y0, x1, y1] = a.as_slice() else { return None };
-                                Some(form.ctm.bbox([x0.as_f64()?, y0.as_f64()?, x1.as_f64()?, y1.as_f64()?]))
-                            },
-                        );
+                        drawn.map(|o| doc.resolve(o)).and_then(|o| o.as_dict().and_then(|d| d.get(b"BBox")).map(|b| doc.resolve(b))).and_then(|b| {
+                            let a = b.as_array()?;
+                            let [x0, y0, x1, y1] = a.as_slice() else { return None };
+                            Some(form.ctm.bbox([x0.as_f64()?, y0.as_f64()?, x1.as_f64()?, y1.as_f64()?]))
+                        });
                     let clip = bounds.map_or(st.placement.clip, |b| intersection(st.placement.clip, b).unwrap_or([0.0; 4]));
                     let mut inner = ImageState::new(form.ctm, clip, st.placement.clips.clone());
                     let piece = stream(op);
-                    walk(doc, &parse(&form.data).ops, &form.resources, &mut inner, &|_| piece, forms, out)?;
+                    walk(doc, &parse(&form.data).ops, form.resources(resources), &mut inner, &|_| piece, forms, out)?;
                     if form.obj.is_some() {
                         forms.path.pop();
                     }
                     continue;
                 }
-                let Some(r) = xo.get(name).and_then(Object::as_ref) else { continue };
+                let Some(r) = drawn.and_then(Object::as_ref) else { continue };
                 let obj = doc.get(r);
                 let Object::Stream(s) = &*obj else { continue };
                 if s.dict.name(b"Subtype") != Some(b"Image") {
@@ -584,6 +584,10 @@ fn sequence_end(ops: &[Op], i: usize, end: usize, opens: &[&str], close: &str) -
     end
 }
 
+/// The stacking units of `ops[scan_start..scan_end]` that Arrange moves past one another, in
+/// paint order: a `q … Q`, `BT … ET` or marked-content sequence up to its matching close (or the
+/// end of the scan), a single `Do`, `sh` or inline image, or a run of other operators that ends
+/// at a path-painting operator or before the next unit. Units that paint nothing are left out.
 pub(crate) fn content_units(ops: &[Op], scan_start: usize, scan_end: usize) -> Vec<std::ops::Range<usize>> {
     let mut units = Vec::new();
     let mut i = scan_start;
@@ -598,9 +602,9 @@ pub(crate) fn content_units(ops: &[Op], scan_start: usize, scan_end: usize) -> V
             sequence_end(ops, i, scan_end, &["q"], "Q")
         } else if op.is("BT") {
             sequence_end(ops, i, scan_end, &[], "ET")
-        } else if op.is("BI") {
-            sequence_end(ops, i, scan_end, &[], "EI")
-        } else if op.is("Do") || op.is("sh") {
+        } else if op.is("BI") || op.is("Do") || op.is("sh") {
+            // The parser emits a whole inline image (`BI` … `ID` … `EI`) as one `BI` op, so it is a
+            // unit of its own (#3146).
             i.saturating_add(1)
         } else {
             let mut j = i;
@@ -1685,6 +1689,12 @@ pub(crate) fn selectable_images(
         .enumerate()
         .filter(|(_, image)| !all.get(image.stream).and_then(|(o, _)| o.as_ref()).is_some_and(|r| excluded.contains(&r)))
         .collect())
+}
+
+/// Whether an XObject drawn at or after operator `from` of the page's joined operators shows
+/// inside `rect` (user space).
+pub(crate) fn painted_over(doc: &Document, page: usize, rect: [f64; 4], from: usize) -> Result<bool, EditError> {
+    Ok(page_images(doc, page)?.iter().any(|i| i.op >= from && i.visible_rect.and_then(|v| intersection(v, rect)).is_some()))
 }
 
 fn transform_image(

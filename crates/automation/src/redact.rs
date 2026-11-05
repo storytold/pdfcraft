@@ -211,9 +211,8 @@ impl Automation {
         if signatures.is_some() && a.get("categories").is_some() {
             return Err(ToolError::InvalidArgs("signatures: remove or flatten goes with Sanitize (no categories)".into()));
         }
-        let edit = match a.get("categories") {
-            None if let Some(how) = signatures => Edit::SanitizeSigned(how),
-            None => Edit::Sanitize,
+        let which = match a.get("categories") {
+            None => None,
             Some(_) => {
                 let which = a
                     .strs("categories")?
@@ -223,10 +222,28 @@ impl Automation {
                 if which.is_empty() {
                     return Err(ToolError::InvalidArgs("categories is empty".into()));
                 }
+                Some(which)
+            }
+        };
+        // One scan, for this check and for what was removed. The removal refuses when it counts
+        // every listed category as 0 (an AcroForm with no fields counts 1), with an error about
+        // redaction marks; this reads the same scan, so it refuses exactly then. A document that
+        // can't be edited has no scan: `apply` says why.
+        let info = self.doc(a)?.hidden_info();
+        let edit = match which {
+            // Sanitize: with `signatures` set, the one that takes a signed document too (#4622).
+            None => match signatures {
+                Some(how) => Edit::SanitizeSigned(how),
+                None => Edit::Sanitize,
+            },
+            Some(which) => {
+                if !info.is_empty() && which.iter().all(|h| info.iter().find(|c| c.0 == *h).is_none_or(|c| c.1 == 0)) {
+                    return Err(failed("nothing to remove: the listed categories hold nothing (see doc_hidden_info)"));
+                }
                 Edit::RemoveHidden { which }
             }
         };
-        let before: usize = self.doc(a)?.hidden_info().iter().map(|c| c.1).sum();
+        let before: usize = info.iter().map(|c| c.1).sum();
         let mut out = self.apply(a, edit)?;
         let after: usize = self.doc(a)?.hidden_info().iter().map(|c| c.1).sum();
         out["removed"] = json!(before.saturating_sub(after));
