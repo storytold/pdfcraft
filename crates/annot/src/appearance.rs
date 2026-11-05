@@ -945,6 +945,48 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
     Some(form(rect, c.as_bytes(), res))
 }
 
+/// The oval or circle (`shape`) around a text box whose whole box is `full`: its background
+/// and border go into `c`; returns the text box inside it.
+#[allow(clippy::too_many_arguments)]
+fn shaped_border(
+    d: &Dict,
+    shape: crate::BorderShape,
+    full: [f64; 4],
+    turn: i64,
+    bw: f64,
+    bg: Option<Rgb>,
+    line_color: Rgb,
+    c: &mut String,
+) -> Option<[f64; 4]> {
+    // Laid out as displayed: a quarter turn swaps the sides' differences.
+    let rect = match inset(d) {
+        Some(rd) => {
+            let (dx, dy) = if matches!(turn, 90 | 270) { (rd[1], rd[0]) } else { (rd[0], rd[1]) };
+            [full[0] + dx, full[1] + dy, full[2] - dx, full[3] - dy]
+        }
+        None => shape.inside(full, bw, full),
+    };
+    if rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
+        return None;
+    }
+    let h = bw / 2.0;
+    let [x0, y0, x1, y1] = [full[0] + h, full[1] + h, full[2] - h, full[3] - h];
+    let path = match shape {
+        crate::BorderShape::Circle => {
+            let (cx, cy, r) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (x1 - x0).min(y1 - y0) / 2.0);
+            ellipse(cx - r, cy - r, cx + r, cy + r)
+        }
+        _ => ellipse(x0, y0, x1, y1),
+    };
+    if let Some(bg) = bg {
+        c.push_str(&format!("{}{path}f\n", rg(bg)));
+    }
+    if bw > 0.0 {
+        c.push_str(&format!("{}{} w\n{}{path}S\n[] 0 d\n", rg_stroke(line_color), n(bw), dash(d)));
+    }
+    Some(rect)
+}
+
 fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -> Option<Stream> {
     let d = context.dict;
     let parts = context.parts;
@@ -1008,32 +1050,7 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     // in the text box as in a rectangle.
     let shape = crate::BorderShape::of(d);
     if shape != crate::BorderShape::Rectangle {
-        // Laid out as displayed: a quarter turn swaps the sides' differences.
-        rect = match inset(d) {
-            Some(rd) => {
-                let (dx, dy) = if matches!(turn, 90 | 270) { (rd[1], rd[0]) } else { (rd[0], rd[1]) };
-                [full[0] + dx, full[1] + dy, full[2] - dx, full[3] - dy]
-            }
-            None => shape.inside(full, bw, full),
-        };
-        if rect[2] - rect[0] < 1.0 || rect[3] - rect[1] < 1.0 {
-            return None;
-        }
-        let h = bw / 2.0;
-        let [x0, y0, x1, y1] = [full[0] + h, full[1] + h, full[2] - h, full[3] - h];
-        let path = match shape {
-            crate::BorderShape::Circle => {
-                let (cx, cy, r) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (x1 - x0).min(y1 - y0) / 2.0);
-                ellipse(cx - r, cy - r, cx + r, cy + r)
-            }
-            _ => ellipse(x0, y0, x1, y1),
-        };
-        if let Some(bg) = bg {
-            c.push_str(&format!("{}{path}f\n", rg(bg)));
-        }
-        if bw > 0.0 {
-            c.push_str(&format!("{}{} w\n{}{path}S\n[] 0 d\n", rg_stroke(line_color), n(bw), dash(d)));
-        }
+        rect = shaped_border(d, shape, full, turn, bw, bg, line_color, &mut c)?;
     } else {
         if let Some(bg) = bg {
             c.push_str(&format!("{}{} {} {} {} re f\n", rg(bg), n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1])));

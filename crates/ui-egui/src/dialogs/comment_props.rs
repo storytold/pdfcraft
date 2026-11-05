@@ -280,11 +280,18 @@ fn changes(o: &CommentProps, e: &CommentProps, page: usize, index: usize, t: &Co
     if t.restylable && t.font_size.is_some() && e.border_color != o.border_color {
         out.push(Edit::BorderColorAnnotation { page, index, color: e.border_color });
     }
-    // After the width (StyleAnnotation), whose border the shape goes around.
-    if e.restylable
-        && let Some(shape) = drawn_border_shape(e).filter(|s| Some(*s) != o.border_shape)
+    // After the width (StyleAnnotation), whose border the shape goes around: each selected
+    // text keeps its own shape unless the draft's changed, and loses it with its border.
+    let mut shaped = after;
+    if e.border_shape != o.border_shape {
+        shaped.border_shape = e.border_shape;
+    }
+    if t.restylable
+        && t.border_shape.is_some()
+        && (e.border_shape != o.border_shape || width.is_some())
+        && let Some(shape) = drawn_border_shape(&shaped).filter(|s| Some(*s) != t.border_shape)
     {
-        out.push(Edit::BorderShapeAnnotation { page: d.page, index: d.index, shape });
+        out.push(Edit::BorderShapeAnnotation { page, index, shape });
     }
     let author = (e.author != o.author).then(|| e.author.clone());
     let subject = (e.subject != o.subject).then(|| e.subject.clone());
