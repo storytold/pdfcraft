@@ -672,6 +672,11 @@ fn fits(ty: Ty, e: &Node<'_, '_>, depth: usize) -> bool {
     let children: Vec<Node<'_, '_>> = e.children().filter(Node::is_element).collect();
     // A qualified value: `rdf:value` holds the value itself (ISO 16684-1 7.9.2.5).
     let resource = e.attribute((RDF, "parseType")) == Some("Resource");
+    // `parseType="Resource"` is the only parse type XMP has (ISO 16684-1 7.9.2.5); an
+    // `rdf:resource` element is empty.
+    if e.attribute((RDF, "parseType")).is_some_and(|p| p != "Resource") || e.attribute((RDF, "resource")).is_some() && !children.is_empty() {
+        return false;
+    }
     let description = match children.as_slice() {
         [d] if is(d, RDF, "Description") => Some(*d),
         _ => None,
@@ -680,10 +685,13 @@ fn fits(ty: Ty, e: &Node<'_, '_>, depth: usize) -> bool {
     // attribute of the description or of an empty property element. Its qualifiers that are
     // predefined properties keep their types too.
     let node = if resource { Some(*e) } else { description };
-    if let Some(n) = node
-        && let Some(v) = n.children().find(|c| is(c, RDF, "value"))
-    {
-        return blank(e) && blank(&n) && fits(ty, &v, deeper) && predefined_ok(&n, deeper);
+    if let Some(n) = node {
+        // A qualified value has one `rdf:value`.
+        match n.children().filter(|c| is(c, RDF, "value")).collect::<Vec<_>>().as_slice() {
+            [] => {}
+            [v] => return blank(e) && blank(&n) && fits(ty, v, deeper) && predefined_ok(&n, deeper),
+            _ => return false,
+        }
     }
     let attribute_node = description.or_else(|| (children.is_empty() && !resource).then_some(*e));
     if let Some(n) = attribute_node
