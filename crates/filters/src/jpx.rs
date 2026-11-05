@@ -29,7 +29,7 @@ pub fn decode_jpx(data: &[u8], w: usize, h: usize) -> Option<JpxSamples> {
         // Checked before decoding: a codestream may declare up to 16384 components and every one
         // is decoded, though a palette box (`pclr`) gives the output its own count, so both are
         // checked (an allocation failure aborts, past `catch_unwind`).
-        if !matches!(components, 1 | 3 | 4) || !matches!(codestream_components(data)?, 1 | 3 | 4) {
+        if !matches!(components, 1 | 3 | 4) || !components_fit(data) {
             return None;
         }
         let device = match space {
@@ -44,31 +44,42 @@ pub fn decode_jpx(data: &[u8], w: usize, h: usize) -> Option<JpxSamples> {
     .ok()?
 }
 
-/// The component count (`Csiz`) of the codestream in JPEG 2000 `data`: a raw codestream, or the
-/// first top-level `jp2c` box of a JP2 file (ISO 15444-1 Annex I). `None` when there is none.
-fn codestream_components(data: &[u8]) -> Option<u16> {
-    let mut rest = data;
-    if !rest.starts_with(&[0xFF, 0x4F]) {
-        loop {
-            let len = u32::from_be_bytes(rest.get(..4)?.try_into().ok()?);
-            let (head, len) = match len {
-                0 => (8, rest.len()),
-                1 => (16, usize::try_from(u64::from_be_bytes(rest.get(8..16)?.try_into().ok()?)).ok()?),
-                n => (8, usize::try_from(n).ok()?),
-            };
-            if rest.get(4..8)? == b"jp2c" {
-                rest = rest.get(head..len.min(rest.len()))?;
-                break;
+/// Whether every codestream the decoder may decode in JPEG 2000 `data` has one, three or four
+/// components (`Csiz`, ISO 15444-1 A.5.1): a raw codestream, or each top-level `jp2c` box of a JP2
+/// file. The boxes are read by the decoder's rules: it reads them until one it can't and decodes
+/// the last `jp2c`, so all of those are checked.
+fn components_fit(data: &[u8]) -> bool {
+    // SOC, then SIZ: its marker, Lsiz, Rsiz and eight 32-bit sizes before Csiz.
+    let fits = |c: &[u8]| c.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) && matches!(c.get(40..42), Some([0, 1 | 3 | 4]));
+    if data.starts_with(&[0xFF, 0x4F]) {
+        return fits(data);
+    }
+    let (mut rest, mut any) = (data, false);
+    while let Some((kind, body, next)) = jp2_box(rest) {
+        if kind == b"jp2c" {
+            if !fits(body) {
+                return false;
             }
-            // Each box moves on by at least its header, so the walk ends.
-            rest = rest.get(len.max(head)..)?;
+            any = true;
         }
+        rest = next;
     }
-    // SOC, then SIZ: its marker, Lsiz, Rsiz and eight 32-bit sizes before Csiz (ISO 15444-1 A.5.1).
-    if rest.get(..4)? != [0xFF, 0x4F, 0xFF, 0x51] {
-        return None;
-    }
-    Some(u16::from_be_bytes(rest.get(40..42)?.try_into().ok()?))
+    any
+}
+
+/// The first box of `data`: its type, its contents and what follows it. `None` where the decoder
+/// stops reading: too short, a length below its header's, or past the end. Each box is at least 8
+/// bytes, so a walk ends.
+fn jp2_box(data: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
+    let l_box = u32::from_be_bytes(data.get(..4)?.try_into().ok()?);
+    let kind = data.get(4..8)?;
+    let (start, len): (usize, usize) = match l_box {
+        0 => (8, data.len().checked_sub(8)?),
+        1 => (16, usize::try_from(u64::from_be_bytes(data.get(8..16)?.try_into().ok()?).checked_sub(16)?).ok()?),
+        n => (8, usize::try_from(n.checked_sub(8)?).ok()?),
+    };
+    let end = start.checked_add(len)?;
+    Some((kind, data.get(start..end)?, data.get(end..)?))
 }
 
 #[cfg(test)]
@@ -86,7 +97,23 @@ mod tests {
     #[test]
     fn a_palette_over_more_than_four_components_is_refused() {
         assert!(super::decode_jpx(include_bytes!("../tests/data/palette-five-components.jp2"), 16, 16).is_none());
-        assert_eq!(super::codestream_components(include_bytes!("../tests/data/palette-five-components.jp2")), Some(5));
-        assert_eq!(super::codestream_components(b"\0\0\0\x07jp2c"), None, "a box shorter than its header");
+    }
+
+    /// Every `jp2c` box is checked, since the decoder decodes the last: one that fits before one
+    /// that doesn't is refused. A box the decoder can't read ends the walk, as it ends the decoder's.
+    #[test]
+    fn every_codestream_the_decoder_reads_is_checked() {
+        let five = include_bytes!("../tests/data/palette-five-components.jp2");
+        let at = five.windows(4).position(|w| w == b"jp2c").and_then(|t| t.checked_sub(4)).unwrap();
+        let mut three = vec![0, 0, 0, 50, b'j', b'p', b'2', b'c', 0xFF, 0x4F, 0xFF, 0x51];
+        three.resize(48, 0);
+        three.extend([0, 3]);
+        let mut both = five[..at].to_vec();
+        both.extend(&three);
+        assert!(super::components_fit(&both), "one codestream of three components fits");
+        both.extend(&five[at..]);
+        assert!(!super::components_fit(&both), "a later one of five doesn't");
+        assert!(!super::components_fit(&[&[0, 0, 0, 5][..], b"jp2c", &three[8..]].concat()), "a length below the header's");
+        assert!(!super::components_fit(&three[..40]), "a box past the end");
     }
 }
