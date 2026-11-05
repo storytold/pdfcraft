@@ -113,7 +113,8 @@ recognisable in a diff and byte-stable when re-serialized.
 ## Errors
 
 `CosError`: `NotPdf`, `Syntax { offset, detail }`, `MissingObject`, `NotADictionary`, `Filter`,
-`NeedsPassword`, `WrongPassword`, `Security`, `Poisoned`.
+`NeedsPassword`, `WrongPassword`, `Security`, `Poisoned`, and `Io { kind, message }` when the
+sink given to `write_full_to` fails (`kind` is its `std::io::ErrorKind`).
 
 ## Not done here
 

@@ -54,7 +54,8 @@ pub enum CosError {
     Poisoned,
     #[error("this document was opened read-only with a decode limit and cannot be saved")]
     ReadOnlyLimit,
-    /// The output sink given to [`write_full_to`] failed; the text is the I/O error.
-    #[error("writing the output failed: {0}")]
-    Io(String),
+    /// The output sink given to [`write_full_to`] failed. `kind` is the sink's
+    /// [`std::io::ErrorKind`], for callers that branch on it; `message` is the error's text.
+    #[error("writing the output failed: {message}")]
+    Io { kind: std::io::ErrorKind, message: String },
 }
