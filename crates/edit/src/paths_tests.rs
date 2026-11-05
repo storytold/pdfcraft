@@ -135,6 +135,17 @@ fn colours_follow_the_graphics_state() {
     assert_eq!(found.iter().map(|p| p.pattern).collect::<Vec<_>>(), [false, false, false, true, false, false, false]);
 }
 
+/// `cs`/`CS` may name a `/ColorSpace` resource that is a device space (ISO 32000-2 §8.6.3): its
+/// paths keep their colours, as with the space's own name.
+#[test]
+fn a_device_colour_space_named_by_a_resource_keeps_its_colour() {
+    let resources = "/MediaBox [0 0 600 800] /Resources << /ColorSpace << /CS0 /DeviceRGB /CS1 /DeviceCMYK /CS2 /DeviceGray >> >>";
+    let content = "/CS0 cs 1 0 0 sc /CS1 CS 0 1 1 0 SCN 10 10 10 10 re B /CS2 cs 0.5 scn 30 30 10 10 re f";
+    let found = page_paths(&page_dict(resources, &[("", content)]), 0).unwrap();
+    let colours: Vec<_> = found.iter().map(|p| (p.fill_rgb, p.stroke_rgb)).collect();
+    assert_eq!(colours, [(Some([1.0, 0.0, 0.0]), Some([1.0, 0.0, 0.0])), (Some([0.5; 3]), None)]);
+}
+
 #[test]
 fn a_pattern_colour_space_resource_marks_its_paths() {
     let resources = "/MediaBox [0 0 600 800] /Resources << /ColorSpace << /CS0 [/Pattern /DeviceRGB] /CS1 /Pattern /CS2 [/CalGray << /WhitePoint [1 1 1] >>] >> >>";

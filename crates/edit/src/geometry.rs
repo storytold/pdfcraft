@@ -72,6 +72,18 @@ impl Colour {
         };
         Colour { components: Some(components), rgb, pattern: false }
     }
+
+    /// What `cs`/`CS` selects in colour space family `family`: its initial colour, black for
+    /// the device spaces (ISO 32000-2 §8.6.8), and whether it is a pattern space.
+    pub(crate) fn initial(family: Option<&[u8]>) -> Colour {
+        let components = match family {
+            Some(b"DeviceGray") => Some(1),
+            Some(b"DeviceRGB") => Some(3),
+            Some(b"DeviceCMYK") => Some(4),
+            _ => None,
+        };
+        Colour { components, rgb: components.map(|_| [0.0; 3]), pattern: family == Some(b"Pattern") }
+    }
 }
 
 #[derive(Clone)]
@@ -188,17 +200,8 @@ impl GState {
             b"g" | b"G" => *colour = Colour::device(1, op),
             b"rg" | b"RG" => *colour = Colour::device(3, op),
             b"k" | b"K" => *colour = Colour::device(4, op),
-            b"cs" | b"CS" => {
-                let components = match op.name(0) {
-                    Some(b"DeviceGray") => Some(1),
-                    Some(b"DeviceRGB") => Some(3),
-                    Some(b"DeviceCMYK") => Some(4),
-                    _ => None,
-                };
-                // Setting a colour space selects its initial colour: black for the device spaces.
-                // A pattern space named by a resource is the caller's to mark.
-                *colour = Colour { components, rgb: components.map(|_| [0.0; 3]), pattern: matches!(op.name(0), Some(b"Pattern")) };
-            }
+            // A space named by a `/ColorSpace` resource is the caller's to resolve.
+            b"cs" | b"CS" => *colour = Colour::initial(op.name(0)),
             // Other spaces have no RGB to update, and a pattern stays one.
             b"sc" | b"scn" | b"SC" | b"SCN" => {
                 if let Some(n) = colour.components {

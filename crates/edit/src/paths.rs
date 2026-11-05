@@ -11,7 +11,7 @@ use pdfcraft_content::{Matrix, Op, Pieces};
 use pdfcraft_cos::{Dict, Document};
 
 use crate::EditError;
-use crate::geometry::{ClipPath, GState, closed, intersection};
+use crate::geometry::{ClipPath, Colour, GState, closed, intersection};
 
 /// A page painting more paths than this is a map or a chart, not artwork to pick apart.
 const MAX_PAGE_PATHS: usize = 5_000;
@@ -110,12 +110,13 @@ fn gs_line_width(doc: &Document, ext_gstates: &Dict, op: &Op) -> Option<f64> {
     doc.resolve(gs.as_dict()?.get(b"LW")?).as_f64().filter(|w| (0.0..=MAX_COORDINATE).contains(w))
 }
 
-/// Whether a `cs`/`CS` operator names a pattern space resource (`/Pattern`, or `[/Pattern base]`
-/// for uncoloured patterns).
-fn named_pattern_space(doc: &Document, colour_spaces: &Dict, op: &Op) -> bool {
-    let Some(space) = op.name(0).and_then(|n| colour_spaces.get(n)).map(|s| doc.resolve(s)) else { return false };
+/// What a `cs`/`CS` operator selects when it names a `/ColorSpace` resource (ISO 32000-2
+/// §8.6.3): by the resource's family, its name (`/DeviceRGB`, `/Pattern`) or its array's first
+/// element (`[/Pattern base]` for uncoloured patterns, `[/ICCBased …]`).
+fn named_space(doc: &Document, colour_spaces: &Dict, op: &Op) -> Option<Colour> {
+    let space = doc.resolve(colour_spaces.get(op.name(0)?)?);
     let first = space.as_array().and_then(|a| a.first()).map(|f| doc.resolve(f));
-    matches!(first.as_deref().unwrap_or(&space).as_name(), Some(b"Pattern"))
+    Some(Colour::initial(first.as_deref().unwrap_or(&space).as_name()))
 }
 
 /// The vector paths page `page` (0-based) paints, in painting order. Refuses a page whose
@@ -153,9 +154,10 @@ pub fn page_paths(doc: &Document, page: usize) -> Result<Vec<PagePath>, EditErro
         {
             state.placement.line_width = w;
         }
-        if matches!(name, b"cs" | b"CS") && named_pattern_space(doc, &colour_spaces, op) {
-            let colour = if name == b"CS" { &mut state.placement.stroke } else { &mut state.placement.fill };
-            colour.pattern = true;
+        if matches!(name, b"cs" | b"CS")
+            && let Some(named) = named_space(doc, &colour_spaces, op)
+        {
+            *(if name == b"CS" { &mut state.placement.stroke } else { &mut state.placement.fill }) = named;
         }
         if matches!(name, b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re") {
             start.get_or_insert(index);
