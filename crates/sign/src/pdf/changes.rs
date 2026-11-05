@@ -44,6 +44,8 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
     // What each signed page draws from, by the role it held when signed (#1787).
     let signed_resources = signed_page_resources(&old, &signed_pages);
     let old_info = old.trailer().get(b"Info").and_then(Object::as_ref);
+    // The signed catalog's /AcroForm, when it is an object of its own.
+    let old_form = old.root().and_then(|c| old.get(c).as_dict().and_then(|c| c.get(b"AcroForm").and_then(Object::as_ref))).map(|r| r.num);
     let (mut allowed, mut disallowed): (Vec<&'static str>, Vec<&'static str>) = (Vec::new(), Vec::new());
     if page_tree_unbounded {
         disallowed.push(kind::PAGES);
@@ -90,6 +92,7 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         signed_annots: &signed_annots,
         page_nodes: &page_nodes,
         kids_arrays: &kids_arrays,
+        old_form,
         signed_resources: &signed_resources,
         old_info,
         dss: &dss,
@@ -159,6 +162,7 @@ struct ChangedObjectClassifier<'a> {
     signed_annots: &'a HashSet<ObjRef>,
     page_nodes: &'a HashSet<u32>,
     kids_arrays: &'a HashSet<u32>,
+    old_form: Option<u32>,
     signed_resources: &'a HashMap<ObjRef, bool>,
     old_info: Option<ObjRef>,
     dss: &'a HashSet<u32>,
@@ -227,6 +231,9 @@ impl ChangedObjectClassifier<'_> {
         } else if let Some(previous) = previous.filter(|_| self.old.root().is_some_and(|root| root.num == r.num)) {
             // The signed catalog, whatever /Type its new version carries.
             catalog_kind(self.doc, self.old, dict, previous)
+        } else if let Some(previous) = previous.filter(|_| self.old_form == Some(r.num)) {
+            // The signed form dictionary, held in an object of its own, whatever keys it carries now.
+            acroform_kind(self.doc, self.old, dict, Some(previous))
         } else if previous.is_some() && Some(r) == self.old_info {
             // Only the signed revision's own /Info dictionary is a metadata change.
             kind::METADATA
