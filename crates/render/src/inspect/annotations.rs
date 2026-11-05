@@ -179,6 +179,12 @@ impl<'a> Inspector<'a> {
                 intent: self.name(d, b"IT"),
                 fill_sign,
                 no_rotate: d.get(b"F").is_ok_and(|f| draw_flags(self.resolve(f)) & 16 != 0),
+                // As `pdfcraft_annot` reads it (`appearance::text_turn`).
+                text_turn: d
+                    .get(b"PCTextRotate")
+                    .ok()
+                    .and_then(|o| self.resolve(o).as_i64().ok())
+                    .map_or(0, |t| (t.rem_euclid(360) / 90 * 90) as u16),
                 points,
             };
             kept = kept.saturating_add(retained(&annotation));

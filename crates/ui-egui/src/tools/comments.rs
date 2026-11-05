@@ -28,7 +28,7 @@ mod menu;
 mod paint;
 mod state;
 
-pub(crate) use composer::{composer, submit_key};
+pub(crate) use composer::{composer, inline_edit, inline_text, submit_key};
 #[cfg(test)]
 use geometry::handle_pos;
 #[cfg(test)]
@@ -48,7 +48,7 @@ use paint::{changing_points, drawn_shape, edited_in_view};
 #[cfg(test)]
 use state::after_delete;
 use state::login_name;
-pub use state::{CommentView, Composer, ComposerKind, Gesture, SortBy};
+pub use state::{CommentView, Composer, ComposerKind, Gesture, InlineText, SortBy};
 pub(crate) use state::{EditorFocus, PageCx};
 
 /// Acrobat's selection blue for annotation frames and handles (11-visual-spec §5).

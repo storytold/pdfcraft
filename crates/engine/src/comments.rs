@@ -23,6 +23,7 @@ pub(crate) fn comment_list(doc: &pdfcraft_cos::Document) -> Vec<pdfcraft_render:
             intent: s.intent,
             fill_sign: s.fill_sign,
             no_rotate: s.no_rotate,
+            text_turn: s.text_turn,
             points: s.points,
         })
         .collect();
