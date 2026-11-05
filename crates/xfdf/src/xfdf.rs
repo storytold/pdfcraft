@@ -6,62 +6,196 @@ use super::*;
 
 // ── export ──────────────────────────────────────────────────────────────────────────────────
 
-/// The XFDF `name` of every annotation, which `inreplyto` refers to: its `/NM`, or, for an
-/// unnamed annotation that another one replies to or is grouped under (`/IRT`, ISO 32000-2
-/// §12.5.6.2), an export-only name, so the link survives the round trip. A Replace Text pair is
-/// such a group. Made-up names never repeat one of the document's own `/NM`s, and they are
-/// never written into the PDF.
-fn export_names(doc: &Document, pages: &[pdfcraft_model::Page]) -> HashMap<ObjRef, String> {
+/// The annotations of `which` (0-based page, position in the page's `/Annots`) as positions,
+/// with every reply to them (and to those replies), so a thread travels whole. Positions, not
+/// references: other tools write comments straight into the page's array, without an object of
+/// their own, and those copy too.
+fn annots_with_replies(doc: &Document, which: &[(usize, usize)]) -> HashSet<(usize, usize)> {
+    let pages = pdfcraft_model::pages(doc);
+    let annots = |p: &pdfcraft_model::Page| -> Vec<Object> {
+        p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default()
+    };
+    /// An annotation's position, its reference (when it has one) and its parent's (`/IRT`).
+    struct Entry {
+        pos: (usize, usize),
+        obj: Option<ObjRef>,
+        parent: Option<ObjRef>,
+    }
+    let all: Vec<Entry> = pages
+        .iter()
+        .enumerate()
+        .flat_map(|(pi, p)| {
+            annots(p).into_iter().enumerate().map(move |(ai, a)| {
+                let parent = doc.resolve(&a).as_dict().and_then(|d| d.get(b"IRT")).and_then(Object::as_ref);
+                Entry { pos: (pi, ai), obj: a.as_ref(), parent }
+            })
+        })
+        .collect();
+    let mut set: HashSet<(usize, usize)> = which.iter().copied().filter(|w| all.iter().any(|e| e.pos == *w)).collect();
+    // Replies point at their parent through /IRT: a pass per reply depth, bounded by the count.
+    for _ in 0..all.len() {
+        let before = set.len();
+        let parents: HashSet<ObjRef> = all.iter().filter(|e| set.contains(&e.pos)).filter_map(|e| e.obj).collect();
+        for e in &all {
+            if e.parent.is_some_and(|parent| parents.contains(&parent)) {
+                set.insert(e.pos);
+            }
+        }
+        if set.len() == before {
+            break;
+        }
+    }
+    set
+}
+
+/// Every comment as an XFDF element (one line per comment, replies included), or only those at
+/// the positions in `only`.
+/// The namespace of PdfCraft's own attributes in XFDF (`pdfcraft:keys`): other readers skip them.
+pub(crate) const PDFCRAFT_NS: &str = "https://github.com/storytold/pdfcraft#xfdf";
+/// At most this much text in a `pdfcraft:keys` attribute is read.
+const MAX_OWN_KEYS: usize = 64 * 1024;
+
+/// A value that means the same in another document: no reference or stream into this one.
+fn portable(o: &Object, depth: usize) -> bool {
+    match o {
+        Object::Ref(_) | Object::Stream(_) => false,
+        Object::Array(a) => depth < 4 && a.iter().all(|o| portable(o, depth + 1)),
+        Object::Dict(d) => depth < 4 && d.iter().all(|(_, o)| portable(o, depth + 1)),
+        _ => true,
+    }
+}
+
+/// The annotation's own PdfCraft keys (`/PC…`: a Fill & Sign item, a turned comment's box and
+/// angle, …) as one PDF dictionary, for a copy that is what the original was. Values that point
+/// into this document stay behind.
+fn own_keys(d: &Dict) -> Option<String> {
+    let mut keys = Dict::new();
+    // Each value must also write as text: XML can't hold raw bytes.
+    let writes_as_text = |v: &Object| {
+        let mut out = Vec::new();
+        pdfcraft_cos::serialize(v, &mut out);
+        std::str::from_utf8(&out).is_ok()
+    };
+    for (k, v) in d.iter().filter(|(k, v)| k.starts_with(b"PC") && portable(v, 0) && writes_as_text(v)) {
+        keys.set(k.clone(), v.clone());
+    }
+    if keys.is_empty() {
+        return None;
+    }
+    let mut out = Vec::new();
+    pdfcraft_cos::serialize(&Object::Dict(keys), &mut out);
+    String::from_utf8(out).ok()
+}
+
+/// The `pdfcraft:keys` of an XFDF comment back as dictionary entries: PdfCraft's keys only, with
+/// values that mean the same here. Anything malformed is skipped.
+fn read_own_keys(node: roxmltree::Node, d: &mut Dict) {
+    let Some(text) = node.attribute((PDFCRAFT_NS, "keys")).filter(|t| t.len() <= MAX_OWN_KEYS) else { return };
+    let Ok(Object::Dict(keys)) = pdfcraft_cos::Lexer::new(text.as_bytes(), 0).object() else { return };
+    for (k, v) in keys.iter().filter(|(k, v)| k.starts_with(b"PC") && portable(v, 0)) {
+        if !d.contains(k) {
+            d.set(k.clone(), v.clone());
+        }
+    }
+}
+
+/// The name of every annotation, for `inreplyto`: its /NM, or, for one without one (other tools
+/// leave /NM out) that is in `only` or that another annotation replies to or is grouped under
+/// (`/IRT`, ISO 32000-2 §12.5.6.2; a Replace Text pair is such a group), a name new to the
+/// document for this export, so the link survives the round trip. Made-up names are never written
+/// into the PDF.
+fn annotation_names(doc: &Document, pages: &[pdfcraft_model::Page], only: Option<&HashSet<(usize, usize)>>) -> HashMap<ObjRef, String> {
     let mut names: HashMap<ObjRef, String> = HashMap::new();
-    let mut listed: HashSet<ObjRef> = HashSet::new();
-    let mut targets: Vec<ObjRef> = Vec::new();
-    // Every `/NM` the export writes, inline annotations' included: a made-up name avoids them all.
+    let mut unnamed: Vec<(usize, usize, ObjRef)> = Vec::new();
+    let mut targets: HashSet<ObjRef> = HashSet::new();
+    // Every name in use, those of annotations written straight into the page array too, so a
+    // given name is new.
     let mut taken: HashSet<String> = HashSet::new();
-    for p in pages {
-        for a in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {
-            let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
-            let nm = text_of(doc, &d, b"NM").filter(|nm| !nm.is_empty());
+    for (pi, p) in pages.iter().enumerate() {
+        for (ai, a) in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default().into_iter().enumerate() {
+            let d = doc.resolve(&a).as_dict().cloned();
+            if let Some(t) = d.as_ref().and_then(|d| d.get(b"IRT")).and_then(Object::as_ref) {
+                targets.insert(t);
+            }
+            let nm = d.as_ref().and_then(|d| text_of(doc, d, b"NM")).filter(|nm| !nm.is_empty());
             if let Some(nm) = &nm {
                 taken.insert(nm.clone());
             }
             // Only an indirect annotation can be an `/IRT` target, so only it is keyed here.
-            if let Some(r) = a.as_ref() {
-                listed.insert(r);
-                if let Some(nm) = nm {
+            let Some(r) = a.as_ref() else { continue };
+            match nm {
+                Some(nm) => {
                     names.insert(r, nm);
                 }
-            }
-            if let Some(t) = d.get(b"IRT").and_then(Object::as_ref) {
-                targets.push(t);
+                None => unnamed.push((pi, ai, r)),
             }
         }
     }
-    let mut made: HashSet<String> = HashSet::new();
-    for t in targets {
-        // Only a target on a page is exported, so only it can carry the name.
-        if names.contains_key(&t) || !listed.contains(&t) {
-            continue;
+    unnamed.retain(|(pi, ai, r)| only.is_some_and(|only| only.contains(&(*pi, *ai))) || targets.contains(r));
+    for (pi, ai, r) in unnamed {
+        let mut name = format!("pdfcraft-{pi}-{ai}");
+        while taken.contains(&name) {
+            name.push('x');
         }
-        let base = format!("pdfcraft-export-{}-{}", t.num, t.generation);
-        // `taken` and `made` are finite, so a free suffix turns up within `len + 1` tries.
-        let mut nm = base.clone();
-        let mut k: usize = 0;
-        while taken.contains(&nm) || made.contains(&nm) {
-            k = k.saturating_add(1);
-            nm = format!("{base}-{k}");
-        }
-        made.insert(nm.clone());
-        names.insert(t, nm);
+        taken.insert(name.clone());
+        names.insert(r, name);
     }
     names
 }
 
-/// Every comment as an XFDF element (one line per comment, replies included).
-fn xfdf_annots(doc: &Document, out: &mut String) {
+/// The elements inside a comment's XFDF element: its text, default appearance, ink, vertices
+/// and pop-up (on page `pi`).
+fn xfdf_annot_children(doc: &Document, out: &mut String, d: &Dict, pi: usize) {
+    if let Some(c) = text_of(doc, d, b"Contents") {
+        let _ = write!(out, "<contents>{}</contents>", esc(&c));
+    }
+    if let Some(da) = text_of(doc, d, b"DA") {
+        let _ = write!(out, "<defaultappearance>{}</defaultappearance>", esc(&da));
+    }
+    let ink = d.get(b"InkList").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
+    if !ink.is_empty() {
+        out.push_str("<inklist>");
+        for g in ink {
+            let v = nums_of(doc, Some(&g));
+            let pts: Vec<String> = v.as_chunks::<2>().0.iter().map(|p| format!("{},{}", n(p[0]), n(p[1]))).collect();
+            let _ = write!(out, "<gesture>{}</gesture>", pts.join(";"));
+        }
+        out.push_str("</inklist>");
+    }
+    // Polygon and polyline points (XFDF `<vertices>`: `x,y;x,y;…`).
+    let vertices = nums_of(doc, d.get(b"Vertices"));
+    let pts: Vec<String> = vertices.as_chunks::<2>().0.iter().map(|p| format!("{},{}", n(p[0]), n(p[1]))).collect();
+    if !pts.is_empty() {
+        let _ = write!(out, "<vertices>{}</vertices>", pts.join(";"));
+    }
+    if let Some(pd) = d.get(b"Popup").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) {
+        let r = nums_of(doc, pd.get(b"Rect"));
+        if r.len() == 4 {
+            let open = matches!(pd.get(b"Open"), Some(Object::Bool(true)));
+            let _ = write!(
+                out,
+                "<popup page=\"{pi}\" rect=\"{},{},{},{}\" open=\"{}\"/>",
+                n(r[0]),
+                n(r[1]),
+                n(r[2]),
+                n(r[3]),
+                if open { "yes" } else { "no" }
+            );
+        }
+    }
+}
+
+/// `own`: write each comment's PdfCraft keys too (see [`own_keys`]), for a copy and paste.
+fn xfdf_annots(doc: &Document, out: &mut String, only: Option<&HashSet<(usize, usize)>>, own: bool) {
     let pages = pdfcraft_model::pages(doc);
-    let names = export_names(doc, &pages);
+    // NM of every annotation, for inreplyto. A selected or replied-to annotation without one
+    // (other tools leave /NM out) gets a name for this export, so its replies still find it.
+    let names = annotation_names(doc, &pages, only);
     for (pi, p) in pages.iter().enumerate() {
-        for a in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {
+        for (ai, a) in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default().into_iter().enumerate() {
+            if only.is_some_and(|only| !only.contains(&(pi, ai))) {
+                continue;
+            }
             let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
             let Some(sub) = d.name(b"Subtype") else { continue };
             let Some((_, tag)) = SUBTYPES.iter().find(|(s, _)| s.as_bytes() == sub) else { continue };
@@ -77,7 +211,7 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
                     n(rect[1].max(rect[3]))
                 );
             }
-            // Its `/NM`, or the export-only name of an unnamed reply target.
+            // Its `/NM`, or the name given above for this export.
             if let Some(nm) = a.as_ref().and_then(|r| names.get(&r)).cloned().or_else(|| text_of(doc, &d, b"NM")) {
                 let _ = write!(attrs, " name=\"{}\"", esc(&nm));
             }
@@ -87,9 +221,6 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
                 (b"M", "date"),
                 (b"CreationDate", "creationdate"),
                 (b"RT", "replyType"),
-                // The intent (`/IT`), for every markup annotation: Replace Text's caret and
-                // strikeout are told apart by it, as callouts and clouds are.
-                (b"IT", "intent"),
                 (b"State", "state"),
                 (b"StateModel", "statemodel"),
                 (b"Name", "icon"),
@@ -127,7 +258,7 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
                 let name = |o: &Object| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned()).unwrap_or_else(|| "None".into());
                 let _ = write!(attrs, " head=\"{}\" tail=\"{}\"", esc(&name(&le[0])), esc(&name(&le[1])));
             }
-            // A callout: its leader path, text-box inset, intent and (single-name) line ending.
+            // A callout: its leader path, text-box inset and (single-name) line ending.
             let cl = nums_of(doc, d.get(b"CL"));
             if cl.len() == 4 || cl.len() == 6 {
                 let _ = write!(attrs, " callout=\"{}\"", cl.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
@@ -139,47 +270,27 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
                     let _ = write!(attrs, " head=\"{}\"", esc(&le));
                 }
             }
+            // What the comment is meant as (/IT): typewriter text, a callout, a cloud, an arrow.
+            if let Some(it) = d.get(b"IT").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned())) {
+                let _ = write!(attrs, " intent=\"{}\"", esc(&it));
+            }
+            // A cloudy border (/BE /S /C) and how far its arcs bulge.
+            if let Some(be) =
+                d.get(b"BE").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).filter(|b| b.name(b"S") == Some(b"C".as_slice()))
+            {
+                attrs.push_str(" style=\"cloudy\"");
+                if let Some(i) = be.get(b"I").and_then(Object::as_f64) {
+                    let _ = write!(attrs, " intensity=\"{}\"", n(i));
+                }
+            }
             if let Some(irt) = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| names.get(&r)) {
                 let _ = write!(attrs, " inreplyto=\"{}\"", esc(irt));
             }
+            if own && let Some(keys) = own_keys(&d) {
+                let _ = write!(attrs, " pdfcraft:keys=\"{}\"", esc(&keys));
+            }
             let _ = write!(out, "<{tag}{attrs}>");
-            if let Some(c) = text_of(doc, &d, b"Contents") {
-                let _ = write!(out, "<contents>{}</contents>", esc(&c));
-            }
-            if let Some(da) = text_of(doc, &d, b"DA") {
-                let _ = write!(out, "<defaultappearance>{}</defaultappearance>", esc(&da));
-            }
-            let ink = d.get(b"InkList").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
-            if !ink.is_empty() {
-                out.push_str("<inklist>");
-                for g in ink {
-                    let v = nums_of(doc, Some(&g));
-                    let pts: Vec<String> = v.as_chunks::<2>().0.iter().map(|p| format!("{},{}", n(p[0]), n(p[1]))).collect();
-                    let _ = write!(out, "<gesture>{}</gesture>", pts.join(";"));
-                }
-                out.push_str("</inklist>");
-            }
-            // Polygon and polyline points (XFDF `<vertices>`: `x,y;x,y;…`).
-            let vertices = nums_of(doc, d.get(b"Vertices"));
-            let pts: Vec<String> = vertices.as_chunks::<2>().0.iter().map(|p| format!("{},{}", n(p[0]), n(p[1]))).collect();
-            if !pts.is_empty() {
-                let _ = write!(out, "<vertices>{}</vertices>", pts.join(";"));
-            }
-            if let Some(pd) = d.get(b"Popup").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) {
-                let r = nums_of(doc, pd.get(b"Rect"));
-                if r.len() == 4 {
-                    let open = matches!(pd.get(b"Open"), Some(Object::Bool(true)));
-                    let _ = write!(
-                        out,
-                        "<popup page=\"{pi}\" rect=\"{},{},{},{}\" open=\"{}\"/>",
-                        n(r[0]),
-                        n(r[1]),
-                        n(r[2]),
-                        n(r[3]),
-                        if open { "yes" } else { "no" }
-                    );
-                }
-            }
+            xfdf_annot_children(doc, out, &d, pi);
             let _ = writeln!(out, "</{tag}>");
         }
     }
@@ -234,12 +345,235 @@ fn xfdf_fields(doc: &Document, out: &mut String) {
     }
 }
 
+/// XFDF with these comments alone (0-based page and position in the page's `/Annots`), each
+/// with its replies: what Copy puts on the clipboard, and Export selected comments writes.
+pub fn export_xfdf_comments(doc: &Document, which: &[(usize, usize)], file: &str) -> String {
+    let only = annots_with_replies(doc, which);
+    let mut out = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<xfdf xmlns=\"http://ns.adobe.com/xfdf/\" xmlns:pdfcraft=\"{PDFCRAFT_NS}\" xml:space=\"preserve\">\n"
+    );
+    out.push_str("<annots>\n");
+    xfdf_annots(doc, &mut out, Some(&only), true);
+    out.push_str("</annots>\n");
+    let _ = writeln!(out, "<f href=\"{}\"/>", esc(file));
+    out.push_str("</xfdf>\n");
+    out
+}
+
+/// Whether `text` is XFDF with comments in it (what a paste of copied comments carries).
+pub fn is_xfdf_comments(text: &str) -> bool {
+    let head: String = text.chars().take(400).collect();
+    head.contains("<xfdf") && text.contains("<annots")
+}
+
+/// What a comment of an XFDF text looks like, for drawing a bundle of copied comments before
+/// it is placed: its geometry in user space and its colour (RGB 0–1).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Outline {
+    /// A box: notes, squares, text boxes, stamps, attachments, carets (`round` for a circle).
+    Rect { rect: [f64; 4], round: bool, color: Option<[f64; 3]> },
+    /// A line or arrow, and a callout's leader.
+    Line { points: Vec<[f64; 2]>, color: Option<[f64; 3]> },
+    /// A polygon (closed) or connected lines.
+    Poly { points: Vec<[f64; 2]>, closed: bool, color: Option<[f64; 3]> },
+    /// Freehand strokes.
+    Ink { strokes: Vec<Vec<[f64; 2]>>, color: Option<[f64; 3]> },
+    /// Text markup: each quad is x1,y1 (upper left), x2,y2 (upper right), x3,y3 (lower left), x4,y4.
+    Quads { quads: Vec<[f64; 8]>, color: Option<[f64; 3]> },
+    /// A text box's text, from the top-left of its box (`rect`, which it wraps in), at its font
+    /// `size` in points and in its text colour.
+    Text { rect: [f64; 4], text: String, size: f64, color: Option<[f64; 3]> },
+}
+
+/// Every comment element of an XFDF text, in order (none when it is no XFDF).
+fn with_comment_nodes(text: &str, mut f: impl FnMut(roxmltree::Node<'_, '_>)) {
+    if check_form_xml_depth(text).is_err() {
+        return;
+    }
+    let Ok(xml) = parse_form_xml(text) else { return };
+    let root = xml.root_element();
+    if root.tag_name().name() != "xfdf" {
+        return;
+    }
+    let Some(annots) = root.children().find(|c| c.has_tag_name("annots")) else { return };
+    for node in annots.children().filter(|c| c.is_element()) {
+        if SUBTYPES.iter().any(|(_, t)| *t == node.tag_name().name().to_ascii_lowercase()) {
+            f(node);
+        }
+    }
+}
+
+/// The comment elements of an XFDF text: tag, `inreplyto`, rect.
+fn comment_nodes(text: &str) -> Vec<(String, Option<String>, Vec<f64>)> {
+    let mut out = Vec::new();
+    with_comment_nodes(text, |node| {
+        out.push((
+            node.tag_name().name().to_owned(),
+            node.attribute("inreplyto").map(str::to_owned),
+            node.attribute("rect").map(csv).unwrap_or_default(),
+        ));
+    });
+    out
+}
+
+/// Pairs `x,y;x,y;…` (XFDF vertices and ink gestures).
+fn pairs(text: &str) -> Vec<[f64; 2]> {
+    text.split(';').filter_map(|p| if let [x, y] = csv(p).as_slice() { Some([*x, *y]) } else { None }).collect()
+}
+
+/// The outlines of the comments in an XFDF text (replies, which have no place of their own,
+/// left out): what a paste shows hanging on the pointer.
+pub fn comment_outlines(text: &str) -> Vec<Outline> {
+    let mut out = Vec::new();
+    with_comment_nodes(text, |node| {
+        if node.attribute("inreplyto").is_some() {
+            return;
+        }
+        let tag = node.tag_name().name().to_ascii_lowercase();
+        let color = node.attribute("color").and_then(parse_hex);
+        let rect = node
+            .attribute("rect")
+            .map(csv)
+            .filter(|r| r.len() == 4 && r.iter().all(|v| v.is_finite()))
+            .map(|r| [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]);
+        match tag.as_str() {
+            "line" => {
+                if let (Some(a), Some(b)) = (node.attribute("start").map(csv), node.attribute("end").map(csv))
+                    && let ([ax, ay], [bx, by]) = (a.as_slice(), b.as_slice())
+                {
+                    out.push(Outline::Line { points: vec![[*ax, *ay], [*bx, *by]], color });
+                }
+            }
+            "polygon" | "polyline" => {
+                let points = node.children().find(|c| c.has_tag_name("vertices")).and_then(|v| v.text()).map(pairs).unwrap_or_default();
+                if points.len() >= 2 {
+                    out.push(Outline::Poly { points, closed: tag == "polygon", color });
+                }
+            }
+            "ink" => {
+                let strokes: Vec<Vec<[f64; 2]>> = node
+                    .children()
+                    .find(|c| c.has_tag_name("inklist"))
+                    .map(|list| {
+                        list.children().filter(|g| g.has_tag_name("gesture")).filter_map(|g| g.text()).map(pairs).filter(|s| !s.is_empty()).collect()
+                    })
+                    .unwrap_or_default();
+                if !strokes.is_empty() {
+                    out.push(Outline::Ink { strokes, color });
+                }
+            }
+            "highlight" | "underline" | "strikeout" | "squiggly" | "redact" => {
+                let coords = node.attribute("coords").map(csv).unwrap_or_default();
+                let quads: Vec<[f64; 8]> = coords.as_chunks::<8>().0.to_vec();
+                if quads.is_empty() {
+                    if let Some(rect) = rect {
+                        out.push(Outline::Rect { rect, round: false, color });
+                    }
+                } else {
+                    out.push(Outline::Quads { quads, color });
+                }
+            }
+            // A Fill & Sign mark: its tick, cross, dot or line, as its appearance draws it.
+            "stamp"
+                if let Some(rect) = rect
+                    && let Some(mark) = node.attribute("icon").and_then(|i| pdfcraft_annot::FillMark::from_name(i.as_bytes())) =>
+            {
+                if mark == pdfcraft_annot::FillMark::Dot {
+                    let r = (rect[2] - rect[0]).min(rect[3] - rect[1]) * 0.3;
+                    let (cx, cy) = ((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0);
+                    out.push(Outline::Rect { rect: [cx - r, cy - r, cx + r, cy + r], round: true, color });
+                }
+                for points in mark.strokes(rect) {
+                    out.push(Outline::Line { points, color });
+                }
+            }
+            _ => {
+                if let Some(rect) = rect {
+                    out.push(Outline::Rect { rect, round: tag == "circle", color });
+                }
+                // A callout's leader, from the box to what it points at.
+                let callout = node.attribute("callout").map(csv).filter(|c| c.len() == 4 || c.len() == 6);
+                if tag == "freetext"
+                    && let Some(cl) = &callout
+                {
+                    out.push(Outline::Line { points: cl.as_chunks::<2>().0.to_vec(), color });
+                }
+                // A text box's text, in its own colour and size, inside the box (a callout's box
+                // is its rect inset by the fringe).
+                if tag == "freetext"
+                    && let Some(rect) = rect
+                    && let Some(text) = node.children().find(|c| c.has_tag_name("contents")).and_then(|c| c.text()).filter(|t| !t.trim().is_empty())
+                {
+                    let mut da = Dict::new();
+                    if let Some(s) = node.children().find(|c| c.has_tag_name("defaultappearance")).and_then(|c| c.text()) {
+                        da.set(b"DA".to_vec(), PdfString::literal(s.as_bytes().to_vec()));
+                    }
+                    let (text_color, size) = pdfcraft_annot::appearance::parse_da(&da);
+                    let fringe = node.attribute("fringe").map(csv).filter(|f| callout.is_some() && f.len() == 4 && f.iter().all(|v| v.is_finite()));
+                    let rect = match fringe.as_deref() {
+                        Some([l, b, r, t]) => [rect[0] + l, rect[1] + b, rect[2] - r, rect[3] - t],
+                        _ => rect,
+                    };
+                    out.push(Outline::Text { rect, text: text.replace("\r\n", "\n").replace('\r', "\n"), size, color: Some(text_color) });
+                }
+            }
+        }
+    });
+    out
+}
+
+/// How many comments (replies not counted) an XFDF text holds.
+pub fn comment_count(text: &str) -> usize {
+    comment_nodes(text).iter().filter(|(_, irt, _)| irt.is_none()).count()
+}
+
+/// The box around every comment in an XFDF text, in the pages' user space: [x0, y0, x1, y1],
+/// or `None` without a comment with a rect. What a paste shows hanging on the pointer and centres
+/// on the point: replies, which have no place of their own (some tools still give them a rect, at
+/// 0,0 or away from their parent), are left out, as [`comment_outlines`] leaves them out.
+pub fn comments_bounds(text: &str) -> Option<[f64; 4]> {
+    let mut bounds: Option<[f64; 4]> = None;
+    for (_, in_reply_to, rect) in comment_nodes(text) {
+        if in_reply_to.is_some() {
+            continue;
+        }
+        if let [x0, y0, x1, y1] = rect.as_slice()
+            && rect.iter().all(|v| v.is_finite())
+        {
+            let r = [x0.min(*x1), y0.min(*y1), x0.max(*x1), y0.max(*y1)];
+            bounds = Some(match bounds {
+                None => r,
+                Some(b) => [b[0].min(r[0]), b[1].min(r[1]), b[2].max(r[2]), b[3].max(r[3])],
+            });
+        }
+    }
+    bounds
+}
+
+/// Move an annotation's geometry by (dx, dy) in user space: its rect, quads, vertices, ink,
+/// line ends and callout leader (what a copy placed elsewhere needs).
+fn translate(d: &mut Dict, dx: f64, dy: f64) {
+    let shift = |o: &Object| -> Option<Object> {
+        let v: Vec<f64> = o.as_array()?.iter().map(|x| x.as_f64()).collect::<Option<Vec<f64>>>()?;
+        Some(arr(&v.iter().enumerate().map(|(i, x)| if i % 2 == 0 { x + dx } else { x + dy }).collect::<Vec<f64>>()))
+    };
+    for key in [&b"Rect"[..], b"QuadPoints", b"Vertices", b"L", b"CL"] {
+        if let Some(moved) = d.get(key).and_then(shift) {
+            d.set(key.to_vec(), moved);
+        }
+    }
+    if let Some(Object::Array(strokes)) = d.get(b"InkList").cloned() {
+        let moved: Vec<Object> = strokes.iter().map(|s| shift(s).unwrap_or_else(|| s.clone())).collect();
+        d.set(b"InkList".to_vec(), Object::Array(moved));
+    }
+}
+
 /// XFDF with the document's comments and/or field values.
 pub fn export_xfdf(doc: &Document, comments: bool, fields: bool, file: &str) -> String {
     let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<xfdf xmlns=\"http://ns.adobe.com/xfdf/\" xml:space=\"preserve\">\n");
     if comments {
         out.push_str("<annots>\n");
-        xfdf_annots(doc, &mut out);
+        xfdf_annots(doc, &mut out, None, false);
         out.push_str("</annots>\n");
     }
     if fields {
@@ -317,9 +651,6 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
     if let Some(v) = node.attribute("icon") {
         d.set(b"Name".to_vec(), Object::name(v));
     }
-    if let Some(v) = node.attribute("intent").filter(|v| !v.is_empty()) {
-        d.set(b"IT".to_vec(), Object::name(v));
-    }
     let flags: i64 = node
         .attribute("flags")
         .unwrap_or("print")
@@ -356,6 +687,16 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
             b"LE".to_vec(),
             Object::Array(vec![Object::name(node.attribute("head").unwrap_or("None")), Object::name(node.attribute("tail").unwrap_or("None"))]),
         );
+    }
+    if let Some(it) = node.attribute("intent").filter(|it| !it.is_empty()) {
+        d.set(b"IT".to_vec(), Object::name(it));
+    }
+    if node.attribute("style") == Some("cloudy") {
+        let mut be = Dict::new();
+        be.set(b"S".to_vec(), Object::name("C"));
+        let intensity = node.attribute("intensity").and_then(|i| i.parse::<f64>().ok()).filter(|i| i.is_finite()).unwrap_or(1.0);
+        be.set(b"I".to_vec(), Object::Real(intensity.clamp(0.0, 2.0)));
+        d.set(b"BE".to_vec(), Object::Dict(be));
     }
     if let Some(cl) = node.attribute("callout").map(csv).filter(|c| c.len() == 4 || c.len() == 6) {
         d.set(b"CL".to_vec(), arr(&cl));
@@ -398,6 +739,7 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
             _ => {}
         }
     }
+    read_own_keys(node, &mut d);
     Some(d)
 }
 
@@ -518,7 +860,32 @@ pub(crate) fn add_popup(doc: &mut Document, page: ObjRef, parent: ObjRef, rect: 
     Ok(())
 }
 
+/// Import XFDF comments as copies: every comment lands on `page` (0-based; its own page when
+/// `None`) and, with `fresh` (a prefix unique to this import), under a new name, so nothing in
+/// the document is replaced and pasting the same comments twice gives two copies. Replies keep
+/// their thread among the pasted comments; a reply to a comment that was not copied stands
+/// alone. Field values in the file are ignored.
+pub fn import_comments(
+    doc: &mut Document,
+    text: &str,
+    page: Option<usize>,
+    fresh: Option<&str>,
+    offset: Option<[f64; 2]>,
+) -> Result<Report, DataError> {
+    import_xfdf_with(doc, text, page, fresh, offset.filter(|o| o.iter().all(|v| v.is_finite())))
+}
+
 pub(crate) fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, DataError> {
+    import_xfdf_with(doc, text, None, None, None)
+}
+
+fn import_xfdf_with(
+    doc: &mut Document,
+    text: &str,
+    target_page: Option<usize>,
+    fresh: Option<&str>,
+    offset: Option<[f64; 2]>,
+) -> Result<Report, DataError> {
     check_form_xml_depth(text)?;
     let xml = parse_form_xml(text).map_err(|e| DataError::Malformed(e.to_string()))?;
     let root = xml.root_element();
@@ -527,28 +894,65 @@ pub(crate) fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, Data
     }
     let mut report = Report::default();
     let pages: Vec<ObjRef> = pdfcraft_model::pages(doc).iter().map(|p| p.obj).collect();
+    if let Some(p) = target_page
+        && p >= pages.len()
+    {
+        return Err(DataError::Malformed(format!("page {} is not in the document", p + 1)));
+    }
     // Comments: parents first, then replies (whose /IRT needs the parent's reference).
     let mut by_name: HashMap<String, ObjRef> = HashMap::new();
     let mut later: HashMap<ObjRef, String> = HashMap::new();
+    // Fresh names: every copy gets one from its own position, and `name` → the first copy's,
+    // so replies find their copied parent (a name two source comments share, as other tools
+    // write, still gives two copies).
+    let mut renamed: HashMap<String, String> = HashMap::new();
+    if let (Some(prefix), Some(annots)) = (fresh, root.children().find(|c| c.has_tag_name("annots"))) {
+        for (n, node) in annots.children().filter(|c| c.is_element()).enumerate() {
+            if let Some(nm) = node.attribute("name") {
+                renamed.entry(nm.to_string()).or_insert_with(|| format!("{prefix}-{}", n + 1));
+            }
+        }
+    }
     if let Some(annots) = root.children().find(|c| c.has_tag_name("annots")) {
-        for node in annots.children().filter(|c| c.is_element()) {
+        for (n, node) in annots.children().filter(|c| c.is_element()).enumerate() {
             let tag = node.tag_name().name().to_ascii_lowercase();
             let Some((subtype, _)) = SUBTYPES.iter().find(|(_, t)| *t == tag) else { continue };
-            let Some(page) = node.attribute("page").and_then(|p| p.parse::<usize>().ok()).and_then(|p| pages.get(p).copied()) else { continue };
-            let Some(d) = annot_from_xml(node, subtype, page) else { continue };
+            let own_page = node.attribute("page").and_then(|p| p.parse::<usize>().ok());
+            let Some(page) = target_page.or(own_page).and_then(|p| pages.get(p).copied()) else { continue };
+            let Some(mut d) = annot_from_xml(node, subtype, page) else { continue };
+            let assigned = fresh.map(|prefix| format!("{prefix}-{}", n + 1));
+            if let Some(name) = &assigned {
+                // A copy under a name of its own (one even where the original had none).
+                d.set(b"NM".to_vec(), PdfString::text(name));
+            }
+            if let Some([dx, dy]) = offset {
+                translate(&mut d, dx, dy);
+            }
             let r = place(doc, page, d)?;
             // A later same-name record replaces this comment, including its reply relation.
             later.remove(&r);
-            if let Some(nm) = node.attribute("name") {
-                by_name.insert(nm.to_string(), r);
+            if let Some(name) = assigned.clone().or_else(|| node.attribute("name").map(str::to_owned)) {
+                by_name.insert(name, r);
             }
             if let Some(irt) = node.attribute("inreplyto") {
-                later.insert(r, irt.to_string());
+                match (fresh, renamed.get(irt)) {
+                    // The parent is among the copies: the reply follows it.
+                    (Some(_), Some(parent)) => later.insert(r, parent.clone()),
+                    // A copy's parent was not copied: the reply stands alone rather than
+                    // attaching to a same-named comment the document happens to have.
+                    (Some(_), None) => None,
+                    (None, _) => later.insert(r, irt.to_string()),
+                };
             }
             // A pop-up window.
             if let Some(pop) = node.children().find(|c| c.has_tag_name("popup"))
-                && let Some(rect) = pop.attribute("rect").map(csv).filter(|r| r.len() == 4)
+                && let Some(mut rect) = pop.attribute("rect").map(csv).filter(|r| r.len() == 4)
             {
+                if let Some([dx, dy]) = offset {
+                    for (i, v) in rect.iter_mut().enumerate() {
+                        *v += if i % 2 == 0 { dx } else { dy };
+                    }
+                }
                 add_popup(doc, page, r, &rect, pop.attribute("open") == Some("yes"))?;
             }
             report.comments += 1;
@@ -558,6 +962,10 @@ pub(crate) fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, Data
         if let Some(parent) = by_name.get(&irt).copied().or_else(|| find_by_name(doc, &irt)) {
             doc.update_dict(r, |d| d.set(b"IRT".to_vec(), Object::Ref(parent)))?;
         }
+    }
+    // Comments placed as copies: the file's field values are not part of the paste.
+    if fresh.is_some() || target_page.is_some() || offset.is_some() {
+        return Ok(report);
     }
     // Fields.
     if let Some(fields) = root.children().find(|c| c.has_tag_name("fields")) {
