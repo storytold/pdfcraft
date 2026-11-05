@@ -2565,36 +2565,39 @@ fn protecting_through_tools() {
     ok(&mut c, "doc_open", json!({ "path": "open.pdf" }));
 }
 
-/// "Any except extracting pages" (#5081): a refused `doc_split` or separate-file `page_extract`
-/// leaves no output directory behind.
+/// A refused `doc_split` or separate-file `page_extract` leaves no output directory behind
+/// (#5081), whether the protection allows no page changes ("Any except extracting pages") or
+/// page changes without copying; with copying allowed as well, the user may extract.
 #[test]
 fn refused_extraction_writes_no_split_or_page_output() {
     let dir = workdir("refused-extraction-output");
-    let mut a = auto(&dir);
-    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
-    ok(
-        &mut a,
-        "doc_protect",
-        json!({
-            "doc": doc,
-            "open_password": "open",
-            "permissions_password": "boss",
-            "changes": "any-except-extract"
-        }),
-    );
-    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "restricted.pdf" }));
+    // (changes, copy, assemble, extract_pages) as the user sees them.
+    let cases = [("any-except-extract", false, false, false), ("pages", false, true, false), ("pages", true, true, true)];
+    for (i, (changes, copy, assemble, extract)) in cases.into_iter().enumerate() {
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+        let protect = json!({ "doc": doc, "open_password": "open", "permissions_password": "boss", "changes": changes, "copy": copy });
+        ok(&mut a, "doc_protect", protect);
+        let path = format!("restricted-{i}.pdf");
+        ok(&mut a, "doc_save", json!({ "doc": doc, "path": path }));
 
-    let mut b = auto(&dir);
-    let restricted = ok(&mut b, "doc_open", json!({ "path": "restricted.pdf", "password": "open" }))["doc"].as_u64().unwrap();
-    let security = ok(&mut b, "doc_info", json!({ "doc": restricted }))["security"].clone();
-    assert_eq!((security["assemble"].as_bool(), security["extract_pages"].as_bool()), (Some(true), Some(false)));
-    assert!(matches!(b.call("doc_split", &json!({ "doc": restricted, "every": 1, "out_dir": "blocked-split" })), Err(ToolError::Failed(_))));
-    assert!(!dir.join("blocked-split").exists(), "refused split creates no output directory");
-    assert!(matches!(
-        b.call("page_extract", &json!({ "doc": restricted, "pages": [1], "separate": true, "out_dir": "blocked-extract" })),
-        Err(ToolError::Failed(_))
-    ));
-    assert!(!dir.join("blocked-extract").exists(), "refused extraction creates no output directory");
+        let mut b = auto(&dir);
+        let restricted = ok(&mut b, "doc_open", json!({ "path": path, "password": "open" }))["doc"].as_u64().unwrap();
+        let security = ok(&mut b, "doc_info", json!({ "doc": restricted }))["security"].clone();
+        assert_eq!((security["assemble"].as_bool(), security["extract_pages"].as_bool()), (Some(assemble), Some(extract)), "{changes}, copy {copy}");
+        let (split_dir, extract_dir) = (format!("split-{i}"), format!("extract-{i}"));
+        let split = b.call("doc_split", &json!({ "doc": restricted, "every": 1, "out_dir": split_dir }));
+        let pages = b.call("page_extract", &json!({ "doc": restricted, "pages": [1, 2], "separate": true, "out_dir": extract_dir }));
+        if extract {
+            assert!(split.is_ok() && dir.join(&split_dir).exists(), "{changes}, copy {copy}");
+            assert_eq!(pages.map(|r| r["files"].as_array().map(Vec::len)).ok().flatten(), Some(2), "{changes}, copy {copy}");
+        } else {
+            assert!(matches!(split, Err(ToolError::Failed(_))), "{changes}, copy {copy}");
+            assert!(!dir.join(&split_dir).exists(), "refused split creates no output directory");
+            assert!(matches!(pages, Err(ToolError::Failed(_))), "{changes}, copy {copy}");
+            assert!(!dir.join(&extract_dir).exists(), "refused extraction creates no output directory");
+        }
+    }
 }
 
 /// A document that allows changes but not copying: the tools that return a page's text refuse,

@@ -1585,7 +1585,13 @@ fn protected(user: &str, owner: &str, permissions: i32) -> Arc<Vec<u8>> {
 /// Two pages protected with `algorithm` under the permissions password "boss" (no open
 /// password), restricting changes to `changes`.
 fn protected_with_changes(algorithm: pdfcraft_cos::Algorithm, changes: Changes) -> Arc<Vec<u8>> {
-    let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(2))).unwrap();
+    protected_pages(2, algorithm, changes, 8)
+}
+
+/// [`protected_with_changes`] with `pages` pages; `seed` gives the file key and salts, so two
+/// files with the same arguments but `pages` share their protection exactly.
+fn protected_pages(pages: usize, algorithm: pdfcraft_cos::Algorithm, changes: Changes, seed: u8) -> Arc<Vec<u8>> {
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(fixture(pages))).unwrap();
     let protection = Protection { permissions_password: Some("boss".into()), changes, algorithm, ..Protection::default() };
     doc.set_encryption(&pdfcraft_cos::NewEncryption {
         algorithm,
@@ -1593,27 +1599,36 @@ fn protected_with_changes(algorithm: pdfcraft_cos::Algorithm, changes: Changes) 
         owner_password: "boss",
         permissions: protection.permission_bits(),
         encrypt_metadata: true,
-        seed: [8; 32],
+        seed: [seed; 32],
     })
     .unwrap();
     Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap())
 }
 
-/// "Any except extracting pages" (#5081) on revision 3-6 handlers: page extraction, splitting
-/// and using the file as a page source are refused without the permissions password and leave
-/// nothing changed, while pages pasted back under the same protection still go through and the
-/// owner can do everything.
+/// "Any except extracting pages" (#5081): page extraction, splitting and using the file as a
+/// page source are refused without the permissions password and leave nothing changed, and the
+/// owner can do everything. At revision 3 and later the preset (bit 4 without bit 11) allows no
+/// page changes either; at revision 2, where bit 4 covers assembly, extraction is still refused
+/// because copying is withheld.
 #[test]
 fn extraction_permissions_cover_revision_three_to_six_and_leave_no_partial_output() {
-    use pdfcraft_cos::Algorithm::{Aes128, Aes256, Rc4_128};
+    use pdfcraft_cos::Algorithm::{Aes128, Aes256, Rc4_40, Rc4_128};
 
     for algorithm in [Rc4_128, Aes128, Aes256] {
         let bytes = protected_with_changes(algorithm, Changes::AnyExceptExtract);
         let doc = pdfcraft_cos::Document::open_with_password(bytes.clone(), None).unwrap();
         let permissions = doc.permissions().unwrap();
         assert!(!permissions.extract_pages(), "{algorithm:?}, /P={:#x}", permissions.bits);
-        assert!(permissions.assemble(), "the protected document permits in-place assembly");
+        assert!(!permissions.assemble(), "{algorithm:?}: bit 4 without bit 11 allows no page changes");
     }
+    let r2 = protected_with_changes(Rc4_40, Changes::AnyExceptExtract);
+    let mut session = Session::new();
+    let r2_id = session.open("r2.pdf", None, r2.clone(), None).unwrap();
+    let permissions = session.get(r2_id).unwrap().permissions().unwrap();
+    assert!(permissions.assemble() && !permissions.extract_pages(), "revision 2, /P={:#x}", permissions.bits);
+    assert_eq!(session.extract(r2_id, &[0]), Err(EditError::NotPermitted("extracting pages")));
+    assert_eq!(session.split(r2_id, &pdfcraft_organize::SplitBy::PageCount(1)), Err(EditError::NotPermitted("splitting the document")));
+    assert_eq!(crate::combine_source_check(&r2, None), Err(crate::SourceProblem::NotPermitted));
 
     let bytes = protected_with_changes(Aes256, Changes::AnyExceptExtract);
     assert_eq!(crate::combine_source_check(&bytes, None), Err(crate::SourceProblem::NotPermitted));
@@ -1651,28 +1666,8 @@ fn extraction_permissions_cover_revision_three_to_six_and_leave_no_partial_outpu
 
     let sources = vec![("restricted.pdf".into(), bytes.clone(), None)];
     assert!(matches!(restricted.combine_unlocked(&sources, &[None]), Err(EditError::Source(_))));
-    assert_eq!(restricted.combine_unlocked(&sources, &[Some("boss")]).map(|out| pdfcraft_cos::Document::open(out).is_ok()), Ok(true));
-
-    // The exception applies only when the same encryption key and dictionary protect both ends.
-    let mut same = Session::new();
-    let same_id = same.open("same.pdf", None, bytes.clone(), None).unwrap();
-    same.apply(
-        same_id,
-        Edit::InsertPagesFrom {
-            name: "same.pdf".into(),
-            bytes: bytes.clone(),
-            pages: Some(vec![0]),
-            at: 2,
-            field_conflicts: pdfcraft_organize::FieldConflicts::Rename,
-        },
-    )
-    .unwrap();
-    assert_eq!(same.get(same_id).unwrap().info.pages.len(), 3);
-    assert!(same.get(same_id).unwrap().dirty);
-    let saved = same.save_bytes(same_id).unwrap();
-    let reopened = pdfcraft_cos::Document::open_with_password(saved, None).unwrap();
-    assert_eq!(pdfcraft_organize::page_count(&reopened).unwrap(), 3);
-    assert!(!reopened.permissions().unwrap().extract_pages(), "same-protection assembly keeps the extraction restriction");
+    let combined = restricted.combine_unlocked(&sources, &[Some("boss")]).unwrap();
+    assert_eq!(pdfcraft_organize::page_count(&pdfcraft_cos::Document::open(combined).unwrap()).unwrap(), 2);
 
     let mut owner = Session::new();
     let owner_id = owner.open("restricted.pdf", None, bytes.clone(), Some("boss")).unwrap();
@@ -1680,6 +1675,57 @@ fn extraction_permissions_cover_revision_three_to_six_and_leave_no_partial_outpu
     assert!(owner.extract(owner_id, &[0]).is_ok());
     assert_eq!(owner.split(owner_id, &pdfcraft_organize::SplitBy::PageCount(1)).unwrap().len(), 2);
     assert_eq!(owner.split_by_size(owner_id, 1).unwrap().len(), 2);
+}
+
+/// A document that allows page changes but not copying, so not page extraction (#5081), takes
+/// pages back from a file under exactly its own protection (a cut and paste, or another file
+/// made with the same key and `/Encrypt` values), through Insert Pages' file check as well, and
+/// keeps the restriction; the same file is refused as a source for an unprotected or a
+/// differently protected document.
+#[test]
+fn pages_under_the_same_protection_are_inserted_without_page_extraction() {
+    use pdfcraft_cos::Algorithm::Aes256;
+
+    let bytes = protected_pages(2, Aes256, Changes::Pages, 8);
+    let mut same = Session::new();
+    let same_id = same.open("same.pdf", None, bytes.clone(), None).unwrap();
+    let permissions = same.get(same_id).unwrap().permissions().unwrap();
+    assert!(permissions.assemble() && !permissions.extract_pages(), "/P={:#x}", permissions.bits);
+    let insert = |name: &str, bytes: &Arc<Vec<u8>>, at| Edit::InsertPagesFrom {
+        name: name.into(),
+        bytes: bytes.clone(),
+        pages: None,
+        at,
+        field_conflicts: pdfcraft_organize::FieldConflicts::Rename,
+    };
+    // Its own bytes, as Paste inserts them after a cut or copy.
+    same.apply(same_id, insert("same.pdf", &bytes, 2)).unwrap();
+    assert_eq!(same.get(same_id).unwrap().info.pages.len(), 4);
+    assert!(same.get(same_id).unwrap().dirty);
+
+    // A separate file made with the same key and /Encrypt values, and other pages.
+    let other = protected_pages(3, Aes256, Changes::Pages, 8);
+    let (a, b) = (pdfcraft_cos::Document::open(bytes.clone()).unwrap(), pdfcraft_cos::Document::open(other.clone()).unwrap());
+    let (a, b) = (a.security().unwrap(), b.security().unwrap());
+    assert!(a.file_key() == b.file_key() && a.dict() == b.dict(), "the two files share their protection");
+    assert!(matches!(same.page_count_of("other.pdf", &other), Err(EditError::Source(_))), "a plain page source must allow extraction");
+    assert_eq!(same.insert_source(same_id, "other.pdf", &other).map(|(n, _)| n), Ok(3));
+    same.apply(same_id, insert("other.pdf", &other, 4)).unwrap();
+    let saved = same.save_bytes(same_id).unwrap();
+    let reopened = pdfcraft_cos::Document::open_with_password(saved, None).unwrap();
+    assert_eq!(pdfcraft_organize::page_count(&reopened).unwrap(), 7);
+    assert!(!reopened.permissions().unwrap().extract_pages(), "same-protection assembly keeps the extraction restriction");
+
+    // Neither an unprotected document nor one under other protection takes them.
+    for destination in [Arc::new(fixture(1)), protected_pages(1, Aes256, Changes::Pages, 9)] {
+        let mut session = Session::new();
+        let dest = session.open("destination.pdf", None, destination, None).unwrap();
+        let before = session.get(dest).unwrap().bytes.clone();
+        assert!(matches!(session.insert_source(dest, "same.pdf", &bytes), Err(EditError::Source(_))));
+        assert!(matches!(session.apply(dest, insert("same.pdf", &bytes, 1)), Err(EditError::Source(_))));
+        assert_eq!(session.get(dest).unwrap().bytes, before, "a refused insert leaves the destination untouched");
+        assert_eq!(session.get(dest).unwrap().info.pages.len(), 1);
+    }
 }
 
 /// Taking pages out also needs copying (bit 5, #5081): a document that withholds only copying

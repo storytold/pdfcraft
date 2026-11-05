@@ -433,8 +433,8 @@ impl Document {
         self.editable() && self.permissions().is_none_or(|p| p.assemble())
     }
 
-    /// Pages may be taken out into new files (Extract, Split): not under "Any except extracting
-    /// pages", which allows the page changes above (#5081).
+    /// Pages may be taken out into new files (Extract, Split): the page changes above and copying,
+    /// since the new files don't keep the document's protection (#5081).
     pub fn allows_page_extraction(&self) -> bool {
         self.editable() && self.permissions().is_none_or(|p| p.extract_pages())
     }

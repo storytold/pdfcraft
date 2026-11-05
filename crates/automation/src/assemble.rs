@@ -248,18 +248,7 @@ impl Automation {
         let mut out = if a.opt_bool("separate")?.unwrap_or(false) {
             // Each page as its own file.
             let dir = self.resolve(a.str("out_dir").map_err(|_| ToolError::InvalidArgs("separate files need out_dir".into()))?, true)?;
-            // Extract every page before touching the disk, so a refused or failed extraction leaves
-            // no output directory or partial set of files behind (as doc_split does).
-            let extracted =
-                pages.iter().map(|&p| self.session.extract(id, &[p]).map(|b| (p, b))).collect::<std::result::Result<Vec<_>, _>>().map_err(failed)?;
-            std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
-            let mut files = Vec::new();
-            for (p, bytes) in extracted {
-                let path = child(&dir, &format!("{stem}-page{}.pdf", p + 1));
-                write_atomic(&path, &bytes)?;
-                files.push(path.to_string_lossy().into_owned());
-            }
-            json!({ "files": files })
+            json!({ "files": self.extract_separate(id, &pages, &dir, &stem)? })
         } else {
             let bytes = self.session.extract(id, &pages).map_err(failed)?;
             self.deliver(a, &name, bytes)?
@@ -269,6 +258,43 @@ impl Automation {
             out["original"] = deleted;
         }
         Ok(out)
+    }
+
+    /// Each of `pages` as its own `<stem>-page<n>.pdf` in `dir`, extracted and written one at a
+    /// time, so only one page's PDF is held at once. The first page is extracted before `dir` is
+    /// made, so a refusal (the permissions refuse every page alike, #5081) leaves nothing behind;
+    /// if a later page fails, the files this call created, and `dir` if it made it, are removed.
+    fn extract_separate(&self, id: pdfcraft_engine::DocId, pages: &[usize], dir: &Path, stem: &str) -> Result<Vec<String>> {
+        let Some(&first) = pages.first() else { return Ok(Vec::new()) };
+        let mut first_bytes = Some(self.session.extract(id, &[first]).map_err(failed)?);
+        let made_dir = !dir.exists();
+        std::fs::create_dir_all(dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
+        let (mut files, mut created) = (Vec::new(), Vec::new());
+        let outcome = pages.iter().try_for_each(|&p| -> Result<()> {
+            let bytes = match first_bytes.take() {
+                Some(bytes) => bytes,
+                None => self.session.extract(id, &[p]).map_err(failed)?,
+            };
+            let path = child(dir, &format!("{stem}-page{}.pdf", p.saturating_add(1)));
+            let existed = path.exists();
+            write_atomic(&path, &bytes)?;
+            if !existed {
+                created.push(path.clone());
+            }
+            files.push(path.to_string_lossy().into_owned());
+            Ok(())
+        });
+        if let Err(e) = outcome {
+            // Best effort: whatever can't be removed stays, and the error reported is the extraction's.
+            for path in &created {
+                let _ = std::fs::remove_file(path);
+            }
+            if made_dir {
+                let _ = std::fs::remove_dir(dir);
+            }
+            return Err(e);
+        }
+        Ok(files)
     }
 
     pub(crate) fn doc_combine(&mut self, a: &Args) -> Result<Value> {
