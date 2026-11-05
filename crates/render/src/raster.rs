@@ -89,8 +89,9 @@ pub struct RenderConfig {
     pub jbig2_work: Option<u64>,
     /// Preferences ▸ Smooth images off: an image that doesn't ask for `/Interpolate` is drawn
     /// with its own samples, neither averaged when shrunk nor smoothed when enlarged, so
-    /// barcodes and pixel art keep hard edges (hayro patch 29). Off by default: images are
-    /// smoothed, as Acrobat's Smooth images is on by default.
+    /// barcodes and pixel art keep hard edges (hayro patch 29, which lists the two older
+    /// reductions that stay: a shrunk soft mask of another size, and a JPEG 2000 image drawn
+    /// small). Off by default: images are smoothed, as Acrobat's Smooth images is on by default.
     pub sharp_images: bool,
 }
 
