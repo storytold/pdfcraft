@@ -157,6 +157,11 @@ pub struct RenderSettings {
     /// PdfCraft patch: when set, solid text and line-art paint colours are remapped while
     /// rendering; `None` renders exactly as without the patch.
     pub color_replacement: Option<ColorReplacement>,
+    /// PdfCraft patch (29): images that don't ask for `/Interpolate` are drawn with their own
+    /// samples (nearest-neighbour), neither area-averaged when shrunk (21) nor smoothed when
+    /// enlarged (28): the viewer's Smooth images preference turned off, for barcodes and pixel
+    /// art that must keep hard edges. Images that ask for interpolation still get it.
+    pub sharp_images: bool,
 }
 
 impl Default for RenderSettings {
@@ -170,6 +175,7 @@ impl Default for RenderSettings {
             x_offset: 0.0,
             y_offset: 0.0,
             color_replacement: None,
+            sharp_images: false,
         }
     }
 }
@@ -251,6 +257,7 @@ pub fn render_into<'a>(
         vc_settings,
         cache,
         render_settings.color_replacement,
+        render_settings.sharp_images,
         interpreter_settings.preview,
     );
 
