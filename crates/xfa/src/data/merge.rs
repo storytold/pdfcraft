@@ -304,7 +304,6 @@ fn mark_data_group_edit(src: &str, node: roxmltree::Node) -> Option<Edit> {
 }
 
 /// The edits that put `wants` into the `data` element.
-
 fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Vec<Edit>, warnings: &mut Vec<String>) {
     // Element children by local name, per element visited (built once each).
     let mut index: HashMap<roxmltree::NodeId, HashMap<String, Vec<roxmltree::NodeId>>> = HashMap::new();
