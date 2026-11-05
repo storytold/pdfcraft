@@ -1,6 +1,6 @@
 use super::{
     Arc, BookmarkPage, BookmarkRow, DocId, Document, EditError, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, Session, SummarySort,
-    apply_layer_state, comment_summary, local_utc_offset, outline_rows, parse_ymd, render_threads, use_layer_choices,
+    apply_layer_state, comment_summary, display_config, local_utc_offset, outline_rows, parse_ymd, render_threads, use_layer_choices,
 };
 
 impl Session {
@@ -168,6 +168,14 @@ impl Session {
         Some(BookmarkPage { rows, next: (end < all.len()).then_some(end), truncated: doc.info.outline_more })
     }
 
+    /// The bookmark at `path` with everything under it, or the whole outline for `[]`, as a tree
+    /// another document can take ([`crate::Edit::ImportBookmarks`]). `None` when no document has
+    /// `id`, or its structure could not be read for editing.
+    pub fn outline_tree(&self, id: DocId, path: &[usize]) -> Option<Result<pdfcraft_organize::OutlineTree, pdfcraft_organize::OutlineError>> {
+        let editor = self.get(id)?.editor.as_ref()?;
+        Some(pdfcraft_organize::outline_tree(&editor.cos, path))
+    }
+
     /// Top-level bookmarks as split points: (first page of each part, its bookmark's title).
     pub fn bookmark_splits(&self, id: DocId) -> Vec<(usize, String)> {
         let Some(doc) = self.get(id) else { return Vec::new() };
@@ -246,7 +254,7 @@ impl Session {
             return false;
         }
         doc.config.hide_comments = hide;
-        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.generation += 1;
         true
     }
@@ -259,7 +267,7 @@ impl Session {
             return false;
         }
         doc.config.reading_colors = colors;
-        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.generation += 1;
         true
     }
