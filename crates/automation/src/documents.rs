@@ -379,6 +379,10 @@ impl Automation {
                 })
                 .collect::<Result<_>>()?,
         };
+        // Discarding is Remove Hidden Information on the copy: the same permission as the edit.
+        if !discard.is_empty() && !self.doc(a)?.allows_modification() {
+            return Err(failed(pdfcraft_engine::EditError::NotPermitted("changes to the document")));
+        }
         let (bytes, r) = self.session.optimized_bytes(id, &settings, &discard).map_err(failed)?;
         write_atomic(&path, &bytes)?;
         fn valid_version(v: &[u8]) -> Option<&str> {

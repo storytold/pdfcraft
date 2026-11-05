@@ -2514,6 +2514,12 @@ fn protecting_through_tools() {
     let re = ok(&mut b, "doc_open", json!({ "path": "locked.pdf", "password": "open" }))["doc"].as_u64().unwrap();
     assert!(matches!(b.call("page_delete", &json!({ "doc": re, "pages": [1] })), Err(ToolError::Failed(_))));
     assert!(matches!(b.call("doc_unprotect", &json!({ "doc": re })), Err(ToolError::Failed(_))));
+    // Discarding while optimizing removes hidden information: a change the document forbids.
+    match b.call("doc_optimize", &json!({ "doc": re, "path": "small.pdf", "discard": ["metadata"] })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("don't allow changes"), "{m}"),
+        other => panic!("doc_optimize with discard is refused: {other:?}"),
+    }
+    assert!(!dir.join("small.pdf").exists());
     ok(&mut b, "comment_add", json!({ "doc": re, "page": 1, "type": "note", "at": [10, 10], "contents": "allowed" }));
     // Copying wasn't allowed either (#568): no text or images come out, though search works.
     for (tool, args) in [
@@ -2561,6 +2567,15 @@ fn copy_restricted_text_stays_in_the_document() {
     }
     let restyled = ok(&mut a, "text_edit", json!({ "doc": re, "page": 1, "paragraph": 1, "size": 30 }));
     assert!(!restyled.to_string().contains("Page"), "{restyled}");
+    // The inventories list the objects without their words, and emptying a line doesn't echo
+    // the neighbour that takes its number.
+    let objects = ok(&mut a, "object_list", json!({ "doc": re, "page": 1 }));
+    assert!(objects["count"].as_u64().unwrap() >= 1 && !objects.to_string().contains("Page"), "{objects}");
+    ok(&mut a, "page_add_text", json!({ "doc": re, "page": 1, "at": [20, 20], "text": "Page note" }));
+    let added = ok(&mut a, "content_list", json!({ "doc": re }));
+    assert!(added["count"] == 1 && added["items"][0].get("text").is_none(), "{added}");
+    let emptied = ok(&mut a, "text_edit", json!({ "doc": re, "page": 1, "line": 1, "text": "" }));
+    assert!(!emptied.to_string().contains("Page"), "{emptied}");
     if ok(&mut a, "ocr_status", json!({}))["available"] != true {
         eprintln!("skipped the OCR part: OCR models not installed");
         return;
