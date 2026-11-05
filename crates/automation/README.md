@@ -266,6 +266,15 @@ choices and values over 4096 UTF-8 bytes return an error.
 
 Example: `form_set_props doc=1 field=agree export_value=Accepted widget=1`.
 
+## Rendering a 3D model
+
+`model_render` draws a page's 3D model (a 3D annotation's PRC stream, directly or through a 3D
+reference) to a PNG, without the viewer. `model` picks the page's Nth 3D model (default 1);
+`width` and `height` are 1 to 4096 (default 512); `direction` is the view direction from the eye
+(default `[-1, 1, -1]`, with Z up unless the view looks along Z); `perspective` defaults to true.
+The model is framed to fill the image and shaded by a headlight on white. U3D models are refused
+with an error, and the annotation's own views, lighting and render modes are not applied yet.
+
 ## Viewer navigation history
 
 A running PdfCraft instance launched with `--control FILE` exposes its per-tab history through

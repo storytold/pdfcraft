@@ -9,7 +9,7 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
-use crate::page_router::{Hit, ObjectsPart, Owner, PicturePart};
+use crate::page_router::{Hit, ObjectsPart, Owner};
 
 const BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 /// The size and reach of a resize handle (screen pixels), as for images.
@@ -19,8 +19,8 @@ const HANDLE: f32 = 8.0;
 pub(crate) struct ObjectSelection {
     generation: Option<u64>,
     cache: HashMap<usize, Result<Vec<EditableObject>, String>>,
-    /// One page's vector paths, for hit tests: each press would parse the page again.
-    paths: Option<(usize, Vec<PagePath>)>,
+    /// Pages' vector paths, for hit tests: each frame would parse the page again.
+    paths: HashMap<usize, Vec<PagePath>>,
     page: Option<usize>,
     selected: Vec<EditableObject>,
     gesture: Option<Gesture>,
@@ -106,7 +106,7 @@ impl ObjectSelection {
         let generation = doc.edit_generation();
         if self.generation != Some(generation) {
             self.cache.clear();
-            self.paths = None;
+            self.paths.clear();
             self.gesture = None;
             let expected = self.pending.take();
             let remapped = self.page.zip(expected).and_then(|(page, (expected, placed))| {
@@ -203,11 +203,24 @@ impl ObjectSelection {
         delete_edit(page, targets)
     }
 
-    fn inventory(&mut self, doc: &Document, page: usize) -> Result<Vec<EditableObject>, String> {
+    /// `page`'s objects, listed once per document generation.
+    fn objects(&mut self, doc: &Document, page: usize) -> &Result<Vec<EditableObject>, String> {
         if self.cache.len() >= 8 && !self.cache.contains_key(&page) {
             self.cache.clear();
         }
-        self.cache.entry(page).or_insert_with(|| doc.editable_objects(page)).clone()
+        self.cache.entry(page).or_insert_with(|| doc.editable_objects(page))
+    }
+
+    fn inventory(&mut self, doc: &Document, page: usize) -> Result<Vec<EditableObject>, String> {
+        self.objects(doc, page).clone()
+    }
+
+    /// Lists what the hit tests need of `page` ([`path_hit`]): its objects and, when they
+    /// include vector paths, their shapes.
+    pub(crate) fn cache_page(&mut self, doc: &Document, page: usize) {
+        if self.objects(doc, page).as_ref().is_ok_and(|o| o.iter().any(|o| o.target.kind == ObjectKind::Path)) {
+            page_paths(&mut self.paths, doc, page);
+        }
     }
 }
 
@@ -215,46 +228,48 @@ fn screen(xf: &PageXform, info: &DocInfo, page: usize, object: &EditableObject) 
     xf.user_rect(info, page, object.rect.map(|v| v as f32))
 }
 
-/// An object painting at least 90% of the crop box is the page's background.
-fn covers_page(info: &DocInfo, page: usize, object: &EditableObject) -> bool {
+/// An object painting at least 90% of the crop box (`r`, user space) is the page's background.
+pub(crate) fn covers_page(info: &DocInfo, page: usize, r: [f64; 4]) -> bool {
     let Some(crop) = info.pages.get(page).map(|p| p.crop.map(f64::from)) else {
         return false;
     };
-    let r = object.rect;
     let area = |x0: f64, y0: f64, x1: f64, y1: f64| (x1 - x0).max(0.0) * (y1 - y0).max(0.0);
     let page_area = area(crop[0], crop[1], crop[2], crop[3]);
     page_area > 0.0 && area(r[0].max(crop[0]), r[1].max(crop[1]), r[2].min(crop[2]), r[3].min(crop[3])) >= 0.9 * page_area
 }
 
 /// The topmost listed vector path painted under `p` (not just its box, which a diagonal line
-/// mostly leaves empty), within 2 screen pixels. A page background only counts once it is
-/// `selected`, so a modifier click can take it out again.
-fn path_hit<'a>(
-    xf: &PageXform,
-    page: usize,
-    doc: &Document,
-    objects: &'a [EditableObject],
-    selected: &[EditableObject],
-    paths: &mut Option<(usize, Vec<PagePath>)>,
-    p: Pos2,
-) -> Option<&'a EditableObject> {
+/// mostly leaves empty), within 2 screen pixels, by its index among the page's paths. A page
+/// background only counts once it is selected, so a modifier click can take it out again. For
+/// the hit tests, from what [`ObjectSelection::cache_page`] listed.
+fn path_under(s: &ObjectSelection, xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> Option<usize> {
+    let objects = s.cache.get(&page)?.as_ref().ok()?;
+    let selected: &[EditableObject] = if s.page == Some(page) { &s.selected } else { &[] };
     let candidate =
-        |o: &EditableObject| o.target.kind == ObjectKind::Path && (!covers_page(&doc.info, page, o) || selected.iter().any(|s| s.target == o.target));
-    // The precise test parses the whole page: skip it unless the press is on a path's box.
-    if !objects.iter().any(|o| candidate(o) && screen(xf, &doc.info, page, o).expand(2.0).contains(p)) {
+        |o: &EditableObject| o.target.kind == ObjectKind::Path && (!covers_page(info, page, o.rect) || selected.iter().any(|s| s.target == o.target));
+    // The precise test walks the page's paths: skip it unless `p` is on a path's box.
+    if !objects.iter().any(|o| candidate(o) && screen(xf, info, page, o).expand(2.0).contains(p)) {
         return None;
     }
-    let (a, b) = (user(xf, &doc.info, page, p)?, user(xf, &doc.info, page, p + egui::vec2(2.0, 0.0))?);
-    let index = page_paths(paths, doc, page).iter().rposition(|path| path.contains(a, (b[0] - a[0]).hypot(b[1] - a[1])))?;
-    objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Path, index }).filter(|o| candidate(o))
+    let (a, b) = (user(xf, info, page, p)?, user(xf, info, page, p + egui::vec2(2.0, 0.0))?);
+    let index = s.paths.get(&page)?.iter().rposition(|path| path.contains(a, (b[0] - a[0]).hypot(b[1] - a[1])))?;
+    objects.iter().any(|o| o.target == ObjectTarget { kind: ObjectKind::Path, index } && candidate(o)).then_some(index)
 }
 
-/// `page`'s vector paths from the selection's cache, parsed again only for another page.
-fn page_paths<'a>(cache: &'a mut Option<(usize, Vec<PagePath>)>, doc: &Document, page: usize) -> &'a [PagePath] {
-    if cache.as_ref().is_none_or(|(cached, _)| *cached != page) {
-        *cache = Some((page, doc.page_paths(page).unwrap_or_default()));
+/// A vector path's painted shape under `p`: a click selects it alone, a drag moves it. On the
+/// text layer, where the page view puts it over a page-sized background picture and under the
+/// other pictures and the paragraphs (text wins over paths, #2276).
+pub(crate) fn path_hit(view: &DocView, xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> Option<Hit> {
+    let index = path_under(&view.objects, xf, info, page, p)?;
+    Some(Hit::new(Owner::Objects { part: ObjectsPart::Path(index) }, Layer::Text, egui::CursorIcon::PointingHand))
+}
+
+/// `page`'s vector paths from the selection's cache.
+fn page_paths<'a>(cache: &'a mut HashMap<usize, Vec<PagePath>>, doc: &Document, page: usize) -> &'a [PagePath] {
+    if cache.len() >= 8 && !cache.contains_key(&page) {
+        cache.clear();
     }
-    cache.as_ref().map_or(&[], |(_, paths)| paths)
+    cache.entry(page).or_insert_with(|| doc.page_paths(page).unwrap_or_default())
 }
 
 /// A screen point in user space.
@@ -343,9 +358,10 @@ fn leave_single(view: &mut DocView) {
 }
 
 /// What of the objects lies under `p` on `page`: a resize handle of the one vector path selected
-/// (a drag resizes it), the objects selected together (a drag moves them), or the frame around
-/// the paragraph open for typing (`open`: its box on screen), which takes hold of the box as in
-/// Acrobat: a click selects it, a drag moves it, its text keeps the caret.
+/// (a drag resizes it), the objects selected together (a drag moves them; with the vector path
+/// painted there, which a modifier click toggles), or the frame around the paragraph open for
+/// typing (`open`: its box on screen), which takes hold of the box as in Acrobat: a click selects
+/// it, a drag moves it, its text keeps the caret.
 pub(crate) fn hit(view: &DocView, xf: &PageXform, info: &DocInfo, page: usize, open: Option<Rect>, p: Pos2) -> Option<Hit> {
     let s = &view.objects;
     // A handle sits on the box's edge, half outside it: it is looked for before the box.
@@ -354,7 +370,8 @@ pub(crate) fn hit(view: &DocView, xf: &PageXform, info: &DocInfo, page: usize, o
     }
     if s.page == Some(page) && !s.selected.is_empty() && s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o))).contains(p)
     {
-        return Some(Hit::new(Owner::Objects { part: ObjectsPart::Selection }, Layer::Placed, egui::CursorIcon::Move));
+        let part = ObjectsPart::Selection { path: path_under(s, xf, info, page, p) };
+        return Some(Hit::new(Owner::Objects { part }, Layer::Placed, egui::CursorIcon::Move));
     }
     open.filter(|r| on_frame(r.shrink(2.0), p)).map(|_| Hit::new(Owner::Objects { part: ObjectsPart::Frame }, Layer::Handle, egui::CursorIcon::Move))
 }
@@ -420,7 +437,7 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
                         .into_iter()
                         .filter(|o| {
                             area.intersects(screen(xf, info, page, o))
-                                && (whole_page || o.target.kind != ObjectKind::Path || !covers_page(info, page, o))
+                                && (whole_page || o.target.kind != ObjectKind::Path || !covers_page(info, page, o.rect))
                         })
                         .collect();
                     let mut selected = s.selected.clone();
@@ -491,18 +508,27 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         }
     };
     let additive = modified(ui);
+    // What the press was on ([`hit`], [`path_hit`]): a handle of the one path selected resizes
+    // it, the selection moves; the frame of the paragraph open for typing selects its box (for the
+    // arrow keys) and moves it; a vector path's painted shape takes the press (a plain one selects
+    // it alone), unless a paragraph or a picture other than the page's background lies over it.
+    let owner = view.router.owner(page);
+    let path = match owner {
+        Some(Owner::Objects { part: ObjectsPart::Path(index) | ObjectsPart::Selection { path: Some(index) } }) => {
+            objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Path, index })
+        }
+        _ => None,
+    };
     // A page-sized background image must not hide editable labels, added notes or the vector
     // paths drawn over it. Within each kind, prefer the last object as the ordinary single-item
-    // tools do. A press on a path's painted shape takes the path (a plain one selects it alone);
-    // a page-covering path is left to the marquee. Any other image still wins over a path
-    // without comparing paint order; the inventory doesn't carry image op indices yet.
+    // tools do. Any other image still wins over a path without comparing paint order; the
+    // inventory doesn't carry image op indices yet.
     let boxed = |kind: ObjectKind| objects.iter().rev().find(|o| o.target.kind == kind && screen(xf, info, page, o).expand(2.0).contains(p));
     let image = boxed(ObjectKind::Image);
-    let selected: &[EditableObject] = if s.page == Some(page) { &s.selected } else { &[] };
     let hit = boxed(ObjectKind::Added)
         .or_else(|| boxed(ObjectKind::Text))
-        .or_else(|| image.filter(|o| !covers_page(info, page, o)))
-        .or_else(|| path_hit(xf, page, doc, &objects, selected, &mut s.paths, p))
+        .or_else(|| image.filter(|o| !covers_page(info, page, o.rect)))
+        .or(path)
         .or(image);
     if additive {
         if s.page != Some(page) {
@@ -529,17 +555,13 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         view.current = page;
         return true;
     }
-    // What the press was on ([`hit`]): a handle of the one path selected resizes it, the
-    // selection moves; the frame of the paragraph open for typing selects its box (for the arrow
-    // keys) and moves it.
-    let owner = view.router.owner(page);
     if let Some(Owner::Objects { part: ObjectsPart::Corner(corner) }) = owner
         && s.single_path().is_some()
     {
         s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false, corner: Some(corner) });
         return true;
     }
-    if owner == Some(Owner::Objects { part: ObjectsPart::Selection }) && !resp.double_clicked() {
+    if matches!(owner, Some(Owner::Objects { part: ObjectsPart::Selection { .. } })) && !resp.double_clicked() {
         s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false, corner: None });
         return true;
     }
@@ -547,17 +569,8 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
         .then(|| view.line_editor.as_ref().filter(|e| e.page == page && !e.has_changes()).map(|e| e.block))
         .flatten()
         .and_then(|block| objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block }));
-    // A vector path is taken the same way by its painted shape, unless the press is another
-    // module's (a paragraph's edge reaching past its box, #2276: text wins over paths). Only a
-    // picture that is the page's background lies under the paths.
-    let under_paths = match owner {
-        None => true,
-        Some(Owner::Picture { index, part: PicturePart::Body }) => {
-            objects.iter().any(|o| o.target == ObjectTarget { kind: ObjectKind::Image, index } && covers_page(info, page, o))
-        }
-        Some(_) => false,
-    };
-    if let Some(object) = frame.or(hit.filter(|o| o.target.kind == ObjectKind::Path && under_paths)) {
+    let path = path.filter(|_| matches!(owner, Some(Owner::Objects { part: ObjectsPart::Path(_) })));
+    if let Some(object) = frame.or(path) {
         s.clear();
         s.page = Some(page);
         s.selected.push(object.clone());
