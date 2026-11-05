@@ -755,8 +755,9 @@ fn field(fields: &[Field], ns: &str, name: &str) -> Option<Ty> {
 fn array<'a, 'i>(e: &Node<'a, 'i>, children: &[Node<'a, 'i>], kind: &str) -> Option<Vec<Node<'a, 'i>>> {
     match children {
         // Items are `rdf:li` (ISO 16684-1 7.9.2.4); any other element, or character data around
-        // them, breaks the array.
-        [a] if is(a, RDF, kind) && field_attributes(e).next().is_none() && blank(e) && blank(a) => {
+        // them, breaks the array, and so does `rdf:parseType` or `rdf:resource` on the property,
+        // which makes its value something else.
+        [a] if is(a, RDF, kind) && field_attributes(e).next().is_none() && blank(e) && blank(a) && !other_value_form(e) => {
             let items: Vec<Node<'a, 'i>> = a.children().filter(Node::is_element).collect();
             items.iter().all(|i| is(i, RDF, "li")).then_some(items)
         }
@@ -776,6 +777,11 @@ fn structure<'a, 'i>(e: &Node<'a, 'i>, children: &[Node<'a, 'i>], resource: bool
     // Fields written as attributes of the property element, with no content.
     let empty = text(e).trim().is_empty();
     (children.is_empty() && empty && e.attribute((RDF, "resource")).is_none() && field_attributes(e).next().is_some()).then_some(*e)
+}
+
+/// Whether `e` says its value is a resource or a literal of another kind, not the element it holds.
+fn other_value_form(e: &Node<'_, '_>) -> bool {
+    e.attribute((RDF, "parseType")).is_some() || e.attribute((RDF, "resource")).is_some()
 }
 
 /// Whether `e` holds no character data but white space.
