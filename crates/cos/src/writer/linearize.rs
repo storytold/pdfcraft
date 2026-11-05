@@ -114,6 +114,10 @@ fn page_tree(reader: &mut ObjectReader) -> Result<Tree, CosError> {
     let mut seen: HashSet<u32> = reader.document.root().map(|r| r.num).into_iter().collect();
     let mut stack: Vec<(ObjRef, Inherited)> = vec![(top, Vec::new())];
     while let Some((r, mut inherited)) = stack.pop() {
+        let o = reader.get(r);
+        if matches!(*o, Object::Null) {
+            continue; // dangling, or a generation the object doesn't have: readers skip it
+        }
         // A page listed twice would need two places in the file.
         if !seen.insert(r.num) {
             return Err(refuse(format!("object {} appears twice in the page tree", r.num)));
@@ -121,7 +125,6 @@ fn page_tree(reader: &mut ObjectReader) -> Result<Tree, CosError> {
         if seen.len() > MAX_TREE_NODES {
             return Err(refuse("the page tree is too large"));
         }
-        let o = reader.get(r);
         let Some(d) = o.as_dict() else { continue }; // a broken kid, which readers skip too
         let node = d.name(b"Type") == Some(&b"Pages"[..]) || (d.contains(b"Kids") && d.name(b"Type") != Some(&b"Page"[..]));
         if !node {

@@ -242,27 +242,48 @@ fn every_encryption_algorithm_linearizes() {
 /// rewrite too, even when the walk meets the current generation first (§7.3.10).
 #[test]
 fn a_stale_generation_stays_dangling() {
-    let objects = [
+    let bytes = with_generations(&[
         (1, 0, "<< /Type /Catalog /Pages 2 0 R /Current 4 1 R /Stale 4 0 R >>"),
         (2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
         (3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>"),
         (4, 1, "42"),
-    ];
+    ]);
+    let back = open(write_full(&open(bytes), &linearized()).unwrap());
+    let catalog = back.get(back.root().unwrap());
+    let catalog = catalog.as_dict().unwrap();
+    assert_eq!(*back.resolve(catalog.get(b"Current").unwrap()), Object::Int(42));
+    assert_eq!(*back.resolve(catalog.get(b"Stale").unwrap()), Object::Null);
+}
+
+/// A kid naming a generation its page doesn't have is dangling, so it is skipped as readers skip
+/// it, not taken for the page listed a second time.
+#[test]
+fn a_kid_of_a_stale_generation_is_skipped() {
+    let bytes = with_generations(&[
+        (1, 0, "<< /Type /Catalog /Pages 2 0 R >>"),
+        (2, 0, "<< /Type /Pages /Kids [3 1 R 3 0 R] /Count 1 >>"),
+        (3, 1, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>"),
+    ]);
+    let out = write_full(&open(bytes), &linearized()).unwrap();
+    assert!(is_linearized(&out));
+    assert_eq!(hayro_pages(&out, ""), 1);
+    assert!(open(out).repair_log().is_empty());
+}
+
+/// A classic file of `objects`, each `(number, generation, body)`, numbered from 1 in order with
+/// object 1 the catalog.
+fn with_generations(objects: &[(u32, u16, &str)]) -> Vec<u8> {
     let mut bytes = b"%PDF-1.7\n".to_vec();
     let mut rows = String::new();
     for (num, generation, body) in objects {
         rows += &format!("{:010} {generation:05} n \n", bytes.len());
         bytes.extend_from_slice(format!("{num} {generation} obj\n{body}\nendobj\n").as_bytes());
     }
-    let xref = bytes.len();
+    let (xref, size) = (bytes.len(), objects.len() + 1);
     bytes.extend_from_slice(
-        format!("xref\n0 5\n0000000000 65535 f \n{rows}trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+        format!("xref\n0 {size}\n0000000000 65535 f \n{rows}trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
     );
-    let back = open(write_full(&open(bytes), &linearized()).unwrap());
-    let catalog = back.get(back.root().unwrap());
-    let catalog = catalog.as_dict().unwrap();
-    assert_eq!(*back.resolve(catalog.get(b"Current").unwrap()), Object::Int(42));
-    assert_eq!(*back.resolve(catalog.get(b"Stale").unwrap()), Object::Null);
+    bytes
 }
 
 #[test]
