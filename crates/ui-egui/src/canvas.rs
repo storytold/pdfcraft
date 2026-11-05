@@ -6,11 +6,13 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2};
 use pdfcraft_engine::{DocId, Edit};
-use pdfcraft_render::{DestView, DocInfo, LayerOp, LinkTarget, PRINT_TAG, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
+use pdfcraft_render::{
+    DestView, DocInfo, LayerOp, LinkTarget, PRINT_TAG, PageText, PreparedSearchText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels,
+};
 
 use crate::page_cursor::Layer;
 use crate::page_pointer::PagePointer;
@@ -541,6 +543,8 @@ pub struct DocView {
     tiles: HashMap<(usize, u64, u32, u32), TextureHandle>,
     /// Text layers held in memory while needed; the renderer keeps the full per-page cache on disk.
     pub(crate) texts: HashMap<usize, Arc<PageText>>,
+    /// Prepared normalized search text reused across query edits while the page text stays valid.
+    pub(crate) search_texts: Arc<Mutex<HashMap<(usize, bool), Arc<PreparedSearchText>>>>,
     /// Pages whose text has been extracted and persisted during this document session, even if
     /// their in-memory layers were evicted to keep browsing memory bounded.
     pub(crate) text_preloaded: HashSet<usize>,
@@ -953,6 +957,7 @@ impl DocView {
             grayscale: false,
             tiles: HashMap::new(),
             texts: HashMap::new(),
+            search_texts: Arc::new(Mutex::new(HashMap::new())),
             text_preloaded: HashSet::new(),
             text_failed: HashSet::new(),
             find: None,
@@ -2583,7 +2588,7 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
             });
         });
     }
-    find_bar(view, info.pages.len(), avail, ui, t);
+    find_bar(view, info.pages.len(), avail, &doc.renderer, ui, t);
     page_size_hint(view, info, units, avail, unobstructed, ui, t);
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::bar(ui.ctx(), view, avail, t, can_modify);

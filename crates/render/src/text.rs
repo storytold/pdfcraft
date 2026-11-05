@@ -37,6 +37,7 @@ impl TextFilter {
 }
 
 mod search;
+pub use search::{PreparedSearchText, SearchHit, SearchPattern};
 
 /// Whether `(x, y)` lies in or on the convex quadrilateral `quad`, whichever way it winds. A
 /// quad with a NaN corner, or no area, holds nothing.
@@ -150,6 +151,11 @@ impl PageText {
     /// Search with Acrobat's find options, returning at most `limit` glyph ranges.
     pub fn find_opts_limited(&self, needle: &str, case_sensitive: bool, whole_words: bool, limit: usize) -> Vec<std::ops::Range<usize>> {
         search::find(self, needle, case_sensitive, whole_words, limit)
+    }
+
+    /// Search using a reusable pattern when the same query spans many pages.
+    pub fn find_with_pattern(&self, pattern: &SearchPattern) -> Vec<std::ops::Range<usize>> {
+        pattern.find(self)
     }
 
     /// Glyph ranges of the matches a character matcher finds in the page text (words and lines

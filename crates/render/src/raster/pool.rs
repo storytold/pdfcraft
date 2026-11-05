@@ -6,6 +6,7 @@ use super::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use super::{AtomicBool, Receiver, sync_channel};
+use std::path::Path;
 
 /// How long one page may render before the pool gives up on it (the watchdog).
 pub const STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(20);
@@ -257,7 +258,12 @@ pub struct RenderPool {
 
 impl RenderPool {
     pub fn new(bytes: Arc<Vec<u8>>, threads: usize, config: RenderConfig) -> Self {
-        Self::with_mode(bytes, threads, config, false)
+        Self::with_mode(bytes, threads, config, false, None)
+    }
+
+    /// Construct a renderer that stores its persistent text cache beside the PDF when possible.
+    pub fn new_with_cache_path(bytes: Arc<Vec<u8>>, threads: usize, config: RenderConfig, source_path: Option<&Path>) -> Self {
+        Self::with_mode(bytes, threads, config, false, source_path)
     }
 
     /// Cached pages whose case-insensitive search text can contain `query`. `None` means the
@@ -269,12 +275,15 @@ impl RenderPool {
         self.shared.text_cache.as_ref()?.candidate_pages(query, page_count)
     }
 
-    fn with_mode(bytes: Arc<Vec<u8>>, threads: usize, config: RenderConfig, inline: bool) -> Self {
+    fn with_mode(bytes: Arc<Vec<u8>>, threads: usize, config: RenderConfig, inline: bool, cache_path: Option<&Path>) -> Self {
         let threads = if inline || cfg!(target_arch = "wasm32") { 0 } else { threads.max(1) };
+        let cache_path = cache_path.map(Path::to_path_buf);
         #[cfg(not(test))]
-        let text_cache = TextDiskCache::new(&bytes, &config);
+        let text_cache = TextDiskCache::new(&bytes, &config, cache_path.as_deref());
         #[cfg(test)]
         let text_cache = None;
+        #[cfg(test)]
+        let _ = cache_path;
         let shared = Arc::new(Shared { text_cache, ..Shared::default() });
         let results_tx = shared.queue.clone();
         let results = ResultReceiver(shared.queue.clone());
@@ -295,7 +304,7 @@ impl RenderPool {
             pool.spawn_worker();
         }
         if lock(&pool._workers).is_empty() {
-            pool.inline = Some(std::cell::RefCell::new(PageRenderer::new(bytes, config)));
+            pool.inline = Some(std::cell::RefCell::new(PageRenderer::new_with_cache_path(bytes, config, cache_path.as_deref())));
         }
         pool
     }
@@ -331,7 +340,7 @@ impl RenderPool {
 
     /// A pool without worker threads: renders inside `try_recv` (the web path; also used in tests).
     pub fn new_inline(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
-        Self::with_mode(bytes, 0, config, true)
+        Self::with_mode(bytes, 0, config, true, None)
     }
 
     /// `true` when rendering happens on the caller's thread (no worker threads available).

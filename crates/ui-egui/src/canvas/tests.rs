@@ -410,6 +410,121 @@ fn find_test_text(s: &str) -> PageText {
     }
 }
 
+#[test]
+fn indexed_search_checks_only_candidate_pages_already_loaded_in_memory() {
+    let mut v = view(12, PageLayout::Single, true);
+    for page in 0..12 {
+        v.texts.insert(page, Arc::new(find_test_text("needle")));
+    }
+    v.find = Some(Find { query: "needle".into(), ..Default::default() });
+    v.rerun_find_with_candidates(Some(vec![2, 9]));
+    assert_eq!(v.find.as_ref().unwrap().matches.iter().map(|(page, _)| *page).collect::<Vec<_>>(), vec![2, 9]);
+    assert_eq!(v.search_texts.lock().unwrap().keys().copied().collect::<HashSet<_>>(), HashSet::from([(2, false), (9, false)]));
+}
+
+#[test]
+fn rapid_find_edits_cancel_the_previous_worker_and_use_only_the_latest_query() {
+    let mut v = view(24, PageLayout::Single, true);
+    for page in 0..24 {
+        v.texts.insert(page, Arc::new(find_test_text("alpha beta İstanbul")));
+    }
+    v.find = Some(Find { query: "alpha".into(), ..Default::default() });
+    v.rerun_find();
+    let prior_cancel = v.find.as_ref().unwrap().search_task.as_ref().unwrap().cancel.clone();
+
+    // Supersede an in-flight query, then simulate typing, backspacing, and replacing the word.
+    v.find.as_mut().unwrap().query = "beta".into();
+    v.rerun_find();
+    assert!(prior_cancel.load(std::sync::atomic::Ordering::Acquire), "the prior search thread is signalled to stop");
+    let new_cancel = v.find.as_ref().unwrap().search_task.as_ref().unwrap().cancel.clone();
+    assert!(!Arc::ptr_eq(&prior_cancel, &new_cancel), "a fresh worker owns the latest query");
+    v.find_step(true);
+    v.poll_find_search();
+
+    let drain = |v: &mut DocView| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while v.find_search_running() && std::time::Instant::now() < deadline {
+            v.poll_find_search();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        v.poll_find_search();
+        assert!(!v.find_search_running(), "search worker finishes within the test deadline");
+    };
+    drain(&mut v);
+    assert_eq!(v.find.as_ref().unwrap().matches.len(), 24);
+    assert_eq!(v.find.as_ref().unwrap().current, Some(1), "Enter/Next pressed during the search advances once matches arrive");
+    assert!(v.find.as_ref().unwrap().matches.iter().all(|(_, range)| range == &(6..10)), "only the newest query's glyph ranges remain");
+    let prepared_before_backspace = v.search_texts.lock().unwrap().get(&(0, false)).unwrap().clone();
+
+    for query in ["bet", "alpha beta", "istanbul", "missing", ""] {
+        v.find.as_mut().unwrap().query = query.into();
+        v.rerun_find();
+        drain(&mut v);
+        let expected = if query == "missing" || query.is_empty() { 0 } else { 24 };
+        assert_eq!(v.find.as_ref().unwrap().matches.len(), expected, "query after edit: {query:?}");
+        if query == "bet" {
+            let prepared_after_backspace = v.search_texts.lock().unwrap().get(&(0, false)).unwrap().clone();
+            assert!(Arc::ptr_eq(&prepared_before_backspace, &prepared_after_backspace), "backspacing reuses prepared page text");
+        }
+    }
+}
+
+#[test]
+fn extending_a_query_reuses_completed_page_hits_and_rescans_unfinished_pages() {
+    let mut v = view(24, PageLayout::Single, true);
+    for page in 0..24 {
+        v.texts.insert(page, Arc::new(find_test_text("alphabeta")));
+    }
+    v.find = Some(Find { query: "alpha".into(), ..Default::default() });
+    v.rerun_find();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while v.find.as_ref().unwrap().query_page_hits.is_empty() && std::time::Instant::now() < deadline {
+        v.poll_find_search();
+        std::thread::yield_now();
+    }
+    assert!(!v.find.as_ref().unwrap().query_page_hits.is_empty(), "at least one completed page is reusable");
+    let completed_page = *v.find.as_ref().unwrap().query_page_hits.keys().next().unwrap();
+
+    v.find.as_mut().unwrap().query = "alphab".into();
+    v.rerun_find();
+    let find = v.find.as_ref().unwrap();
+    assert!(find.query_page_hits.contains_key(&completed_page), "completed-page offsets are refined immediately");
+    assert!(find.matches.contains(&(completed_page, 0..6)), "the longer match maps back to glyph coordinates");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while v.find_search_running() && std::time::Instant::now() < deadline {
+        v.poll_find_search();
+        std::thread::yield_now();
+    }
+    v.poll_find_search();
+    assert_eq!(v.find.as_ref().unwrap().matches.len(), 24, "unfinished pages are searched and merged");
+    assert!(v.find.as_ref().unwrap().matches.iter().all(|(_, range)| range == &(0..6)));
+
+    for page in 0..24 {
+        v.texts.insert(page, Arc::new(find_test_text("İstanbul")));
+    }
+    v.search_texts.lock().unwrap().clear();
+    v.find.as_mut().unwrap().query = "i".into();
+    v.rerun_find();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while v.find_search_running() && std::time::Instant::now() < deadline {
+        v.poll_find_search();
+        std::thread::yield_now();
+    }
+    v.poll_find_search();
+    v.find.as_mut().unwrap().query = "is".into();
+    v.rerun_find();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while v.find_search_running() && std::time::Instant::now() < deadline {
+        v.poll_find_search();
+        std::thread::yield_now();
+    }
+    v.poll_find_search();
+    assert_eq!(v.find.as_ref().unwrap().matches.len(), 24, "Unicode-folded prefixes can be refined safely");
+    assert!(v.find.as_ref().unwrap().matches.iter().all(|(_, range)| range == &(0..2)));
+}
+
 /// A text-layer result for `page`, for the search tests below.
 fn find_text_result(page: usize, text: &str) -> pdfcraft_render::RenderedPage {
     pdfcraft_render::RenderedPage {

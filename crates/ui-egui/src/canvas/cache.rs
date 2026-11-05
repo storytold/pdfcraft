@@ -169,6 +169,13 @@ impl DocView {
     /// was toggled). Out-of-date rasters stay on screen until their replacements arrive, so the
     /// view never flashes blank.
     pub fn invalidate_content(&mut self) {
+        if let Some(find) = self.find.as_mut() {
+            find.search_task = None;
+            find.search_generation = find.search_generation.wrapping_add(1);
+            find.search_candidate_pages = None;
+            find.matches.clear();
+            find.current = None;
+        }
         // Undo, redo and other document-wide changes: a released drawing's preview would be a ghost.
         self.comments.settling.clear();
         for p in self.pages.values_mut() {
@@ -184,6 +191,7 @@ impl DocView {
         self.stale_tiles.clear();
         self.forms.unbaked.clear();
         self.texts.clear();
+        self.search_texts.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
         self.text_preloaded.clear();
         self.text_failed.clear();
         self.errors.clear();
@@ -196,15 +204,18 @@ impl DocView {
         // re-extracted layers still follow it, and keep `follow_ended` so a reader who already
         // took over stays in control. `document_changed` clamps `current`; if the view no longer
         // sits where the automatic choice left it, `follow_page` ends it.
-        if let Some(f) = self.find.as_mut() {
-            f.matches.clear();
-            f.current = None;
-        }
     }
 
     /// Only `page` changed (a comment was added, edited or removed): re-render that page and
     /// re-read its text, keep everything else. Out-of-date tiles stay on screen until replacements arrive.
     pub fn page_changed(&mut self, page: usize) {
+        let search_was_running = self.find.as_ref().is_some_and(|find| find.search_task.is_some());
+        if let Some(find) = self.find.as_mut() {
+            find.search_task = None;
+            find.search_generation = find.search_generation.wrapping_add(1);
+            find.query_page_hits.remove(&page);
+        }
+        self.end_find_following();
         if let Some(p) = self.pages.get_mut(&page) {
             p.tag = STALE_TAG;
         }
@@ -228,12 +239,17 @@ impl DocView {
         }
         self.slow_pages.remove(&page);
         self.texts.remove(&page);
+        self.search_texts.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|(cached, _), _| *cached != page);
         self.text_preloaded.remove(&page);
         self.text_failed.remove(&page);
         self.errors.remove(&page);
         self.last_queue.clear();
         if self.selection.is_some_and(|s| s.page == page) {
             self.selection = None;
+        }
+        if search_was_running && self.find.as_ref().is_some_and(|find| !find.query.trim().is_empty()) {
+            self.rerun_find();
+            self.end_find_following();
         }
     }
 
@@ -499,10 +515,16 @@ impl DocView {
     /// frame and churn the workers. Failures are never evicted either: they cost nothing
     /// to remember, and evicting one would re-request and re-fail it every frame.
     fn retain_text_layers(&mut self) {
-        if self.texts.len() <= MAX_CACHED_TEXT_PAGES {
+        let search_cache_len = self.search_texts.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len();
+        if self.texts.len() <= MAX_CACHED_TEXT_PAGES && search_cache_len <= MAX_CACHED_TEXT_PAGES * 2 {
             return;
         }
         if self.find.as_ref().is_some_and(|f| !f.case_query.trim().is_empty()) {
+            return;
+        }
+        if self.texts.len() <= MAX_CACHED_TEXT_PAGES {
+            let keep: HashSet<_> = self.texts.keys().copied().collect();
+            self.search_texts.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|(page, _), _| keep.contains(page));
             return;
         }
         let mut keep: HashSet<usize> = self.frame_visible.clone();
@@ -516,6 +538,7 @@ impl DocView {
         rest.sort_by_key(|p| p.abs_diff(self.current));
         keep.extend(rest.into_iter().take(MAX_CACHED_TEXT_PAGES));
         self.texts.retain(|p, _| keep.contains(p));
+        self.search_texts.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|(page, _), _| keep.contains(page));
     }
 
     pub(crate) fn finish_render_frame(&mut self, ctx: &egui::Context, info: &DocInfo, pool: &RenderPool) {
@@ -562,8 +585,12 @@ impl DocView {
         if !self.hold_rasters {
             self.receive(ctx, pool);
         }
+        let search_changed = self.poll_find_search();
         if !self.last_queue.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        }
+        if search_changed || self.find_search_running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
     }
 

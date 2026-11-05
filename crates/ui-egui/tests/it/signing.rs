@@ -174,7 +174,9 @@ fn trust_signer_and_inspect_certificate(h: &mut Harness<'static, PdfCraftApp>) {
     h.get_by_label("Signature validity is UNKNOWN:");
     // Seed a find so the trust path proves it invalidates the view: trust rebuilds
     // the display copy, and the next frame must draw from it without any zoom change.
-    h.state_mut().views[0].find = Some(pdfcraft_ui_egui::canvas::Find { matches: vec![(0, 0..5)], ..Default::default() });
+    let mut find = pdfcraft_ui_egui::canvas::Find::default();
+    find.matches = vec![(0, 0..5)];
+    h.state_mut().views[0].find = Some(find);
     h.get_by_label("Add to trusted certificates").click();
     h.run_steps(3);
     h.get_by_label("Signed and all signatures are valid.");

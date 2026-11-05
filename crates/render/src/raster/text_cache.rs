@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
@@ -51,8 +51,7 @@ pub(crate) struct TextDiskCache {
 }
 
 impl TextDiskCache {
-    pub(crate) fn new(bytes: &[u8], config: &RenderConfig) -> Option<Self> {
-        let base = cache_directory()?;
+    pub(crate) fn new(bytes: &[u8], config: &RenderConfig, source_path: Option<&Path>) -> Option<Self> {
         let mut hash = Sha256::new();
         hash.update(b"pdfcraft-text-cache-v2\0");
         hash.update(env!("CARGO_PKG_VERSION").as_bytes());
@@ -70,7 +69,12 @@ impl TextDiskCache {
             hash.update(generation.to_le_bytes());
             hash.update([u8::from(*visible)]);
         }
-        let path = base.join(format!("{}.bin", hex(&hash.finalize())));
+        let digest = hex(&hash.finalize());
+        let fallback = cache_directory().map(|base| base.join(format!("{digest}.bin")));
+        let path = source_path
+            .and_then(|source| adjacent_cache_path(source, &digest))
+            .map(|adjacent| choose_cache_path(adjacent, fallback.as_deref()))
+            .or_else(|| fallback.clone())?;
         let index = read_index(&path).unwrap_or_default();
         Some(Self { path, index: Mutex::new(index) })
     }
@@ -196,6 +200,29 @@ impl TextDiskCache {
             index.page_grams.insert(page, grams);
         }
     }
+}
+
+fn adjacent_cache_path(source: &Path, digest: &str) -> Option<PathBuf> {
+    let parent = source.parent()?;
+    let filename = source.file_name()?.to_string_lossy();
+    Some(parent.join(format!("{filename}.{digest}.pdfcraft-text.bin")))
+}
+
+fn choose_cache_path(adjacent: PathBuf, fallback: Option<&Path>) -> PathBuf {
+    if adjacent.exists() {
+        return adjacent;
+    }
+    if let Some(fallback) = fallback.filter(|path| path.exists()) {
+        if std::fs::rename(fallback, &adjacent).is_ok() {
+            return adjacent;
+        }
+        if std::fs::copy(fallback, &adjacent).is_ok() || (!fallback.exists() && adjacent.exists()) {
+            return adjacent;
+        }
+        let _ = std::fs::remove_file(&adjacent);
+        return fallback.to_path_buf();
+    }
+    if OpenOptions::new().append(true).create(true).open(&adjacent).is_ok() { adjacent } else { fallback.map(Path::to_path_buf).unwrap_or(adjacent) }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -614,6 +641,39 @@ mod tests {
     }
 
     #[test]
+    fn cache_next_to_a_pdf_survives_reopening_the_renderer() {
+        let source = std::env::temp_dir().join(format!("pdfcraft-cache-source-{}.pdf", std::process::id()));
+        let cache = TextDiskCache::new(b"stable PDF bytes", &RenderConfig::default(), Some(&source)).unwrap();
+        let path = cache.path.clone();
+        assert!(path.file_name().unwrap().to_string_lossy().contains("pdfcraft-cache-source-"));
+        cache.store(0, &sample());
+        drop(cache);
+
+        let reopened = TextDiskCache::new(b"stable PDF bytes", &RenderConfig::default(), Some(&source)).unwrap();
+        assert_eq!(reopened.path, path, "the same PDF opens its adjacent binary cache");
+        assert_eq!(*reopened.load(0).unwrap(), sample(), "page text is present after reopening");
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn existing_appdata_cache_is_moved_beside_the_pdf_on_first_open() {
+        let dir = std::env::temp_dir();
+        let source = dir.join(format!("pdfcraft-cache-migrate-{}.pdf", std::process::id()));
+        let adjacent = adjacent_cache_path(&source, "test-hash").unwrap();
+        let fallback = dir.join(format!("pdfcraft-cache-old-{}.bin", std::process::id()));
+        let _ = std::fs::remove_file(&adjacent);
+        let _ = std::fs::remove_file(&fallback);
+        std::fs::write(&fallback, b"existing cache").unwrap();
+
+        let chosen = choose_cache_path(adjacent.clone(), Some(&fallback));
+        assert_eq!(chosen, adjacent);
+        assert_eq!(std::fs::read(&chosen).unwrap(), b"existing cache");
+        assert!(!fallback.exists(), "successful migration removes the app-data duplicate");
+        let _ = std::fs::remove_file(chosen);
+    }
+
+    #[test]
     fn separate_cache_writers_merge_page_sections_before_appending() {
         let path = std::env::temp_dir().join(format!("pdfcraft-text-cache-writers-{}.bin", std::process::id()));
         let _ = std::fs::remove_file(&path);
@@ -635,9 +695,9 @@ mod tests {
     #[test]
     fn cache_key_changes_with_pdf_bytes_and_text_settings() {
         let config = RenderConfig::default();
-        let Some(original) = TextDiskCache::new(b"one", &config) else { return };
-        let changed_pdf = TextDiskCache::new(b"two", &config).unwrap();
-        let changed_settings = TextDiskCache::new(b"one", &RenderConfig { hide_comments: true, ..config }).unwrap();
+        let Some(original) = TextDiskCache::new(b"one", &config, None) else { return };
+        let changed_pdf = TextDiskCache::new(b"two", &config, None).unwrap();
+        let changed_settings = TextDiskCache::new(b"one", &RenderConfig { hide_comments: true, ..config }, None).unwrap();
         assert_ne!(original.path, changed_pdf.path);
         assert_ne!(original.path, changed_settings.path);
     }

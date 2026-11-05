@@ -1,4 +1,90 @@
-use super::{Align2, Color32, CornerRadius, DocView, Range, Rect, Stroke, Tokens, icons, theme, vec2, widgets};
+use super::{Align2, Color32, CornerRadius, DocView, Range, Rect, RenderPool, Stroke, Tokens, icons, theme, vec2, widgets};
+use pdfcraft_render::{PageText, PreparedSearchText, SearchHit, SearchPattern};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+
+const ASYNC_SEARCH_PAGES: usize = 8;
+type SearchTextCache = Arc<Mutex<HashMap<(usize, bool), Arc<PreparedSearchText>>>>;
+
+fn prepared_text(cache: &SearchTextCache, page: usize, text: &PageText, case_sensitive: bool, pattern: &SearchPattern) -> Arc<PreparedSearchText> {
+    let key = (page, case_sensitive);
+    if let Some(prepared) = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key).cloned() {
+        return prepared;
+    }
+    let prepared = Arc::new(pattern.prepare_page(text));
+    cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).entry(key).or_insert_with(|| prepared.clone()).clone()
+}
+
+pub(super) struct SearchTask {
+    generation: u64,
+    pub(super) cancel: Arc<AtomicBool>,
+    results: Receiver<(u64, usize, Vec<SearchHit>)>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl SearchTask {
+    fn start(generation: u64, pattern: SearchPattern, pages: Vec<(usize, Arc<PageText>)>, cache: SearchTextCache) -> Self {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let (tx, results) = channel();
+        let worker_tx = tx.clone();
+        let worker_pattern = pattern.clone();
+        let worker_pages = pages.clone();
+        let worker_cache = cache.clone();
+        let thread = std::thread::Builder::new()
+            .name(format!("pdfcraft-find-{generation}"))
+            .spawn(move || {
+                for (page, text) in worker_pages {
+                    if worker_cancel.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let prepared = prepared_text(&worker_cache, page, &text, worker_pattern.is_case_sensitive(), &worker_pattern);
+                    let matches = worker_pattern.find_prepared_hits(&prepared);
+                    if worker_cancel.load(Ordering::Acquire) || worker_tx.send((generation, page, matches)).is_err() {
+                        break;
+                    }
+                }
+            })
+            .map_err(|error| log::error!("could not start Ctrl+F search worker: {error}"));
+        let thread = match thread {
+            Ok(thread) => Some(thread),
+            Err(()) => {
+                for (page, text) in pages {
+                    let prepared = prepared_text(&cache, page, &text, pattern.is_case_sensitive(), &pattern);
+                    if tx.send((generation, page, pattern.find_prepared_hits(&prepared))).is_err() {
+                        break;
+                    }
+                }
+                None
+            }
+        };
+        Self { generation, cancel, results, thread }
+    }
+
+    fn drain(&mut self) -> Vec<(u64, usize, Vec<SearchHit>)> {
+        self.results.try_iter().collect()
+    }
+
+    fn stop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+
+    fn is_finished(&self) -> bool {
+        self.thread.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+}
+
+impl Drop for SearchTask {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
 
 /// The find bar (⌘F): query, matches across the document, current match.
 #[derive(Default)]
@@ -26,6 +112,15 @@ pub struct Find {
     pub whole_words: bool,
     /// Shown in the Search panel (Advanced Search) instead of the find bar.
     pub in_panel: bool,
+    pub(super) search_generation: u64,
+    pub(super) search_task: Option<SearchTask>,
+    pub(super) search_candidate_pages: Option<HashSet<usize>>,
+    pub(super) pending_step: Option<bool>,
+    /// Exact normalized byte starts from pages completed for the current query. These let an
+    /// appended literal query refine completed work while incomplete pages are searched anew.
+    pub(super) query_page_hits: HashMap<usize, Vec<usize>>,
+    pub(super) result_case_sensitive: bool,
+    pub(super) result_whole_words: bool,
 }
 
 /// What a text layer arriving after a search began may do with the automatic choice.
@@ -82,9 +177,43 @@ impl DocView {
 
     /// Re-run the search on all pages whose text is known (after the query changed).
     pub fn rerun_find(&mut self) {
+        self.rerun_find_with_candidates(None);
+    }
+
+    pub(super) fn rerun_find_with_candidates(&mut self, candidate_pages: Option<Vec<usize>>) {
+        let search_cache = self.search_texts.clone();
         let Some(f) = self.find.as_mut() else { return };
+        let prior_query = f.case_query.clone();
+        let prior_case_sensitive = f.result_case_sensitive;
+        let prior_whole_words = f.result_whole_words;
+        let previous_pattern = SearchPattern::new(&prior_query, prior_case_sensitive, prior_whole_words);
+        let pattern = SearchPattern::new(&f.query, f.case_sensitive, f.whole_words);
+        let previous_needle = previous_pattern.normalized_needle();
+        let next_needle = pattern.normalized_needle();
+        let mut prior_page_hits = std::mem::take(&mut f.query_page_hits);
+        if let Some(mut task) = f.search_task.take() {
+            task.stop();
+            for (generation, page, hits) in task.drain() {
+                if generation == f.search_generation {
+                    prior_page_hits.insert(page, hits.into_iter().map(|hit| hit.byte_start).collect());
+                }
+            }
+        }
+        let can_refine = !f.whole_words
+            && !prior_whole_words
+            && f.case_sensitive == prior_case_sensitive
+            && !prior_query.trim().is_empty()
+            && next_needle.starts_with(previous_needle)
+            && next_needle.len() > previous_needle.len();
+        f.search_generation = f.search_generation.wrapping_add(1);
+        let candidates = candidate_pages.map(|pages| pages.into_iter().collect::<HashSet<_>>());
+        f.search_candidate_pages = candidates.clone();
+        f.pending_step = None;
         f.case_query = f.query.clone();
+        f.result_case_sensitive = f.case_sensitive;
+        f.result_whole_words = f.whole_words;
         f.matches.clear();
+        f.query_page_hits.clear();
         f.current = None;
         // Refining the query keeps the page the reader started searching from, even when an
         // automatic choice has already scrolled them to a match. Only a view the reader moved
@@ -99,26 +228,63 @@ impl DocView {
         if f.case_query.trim().is_empty() {
             return;
         }
-        let mut pages: Vec<usize> = self.texts.keys().copied().collect();
-        pages.sort();
-        for &p in &pages {
-            if let Some(text) = self.texts.get(&p) {
-                f.matches.extend(text.find_opts(&f.case_query, f.case_sensitive, f.whole_words).into_iter().map(|r| (p, r)));
+        let mut pages: Vec<_> = self
+            .texts
+            .iter()
+            .filter(|(page, _)| candidates.as_ref().is_none_or(|candidates| candidates.contains(*page)))
+            .map(|(&page, text)| (page, text.clone()))
+            .collect();
+        pages.sort_by_key(|(page, _)| *page);
+        let mut remaining = Vec::with_capacity(pages.len());
+        for (page, text) in pages {
+            let refined = can_refine.then(|| prior_page_hits.get(&page)).flatten();
+            if let Some(previous_starts) = refined {
+                let prepared = prepared_text(&search_cache, page, &text, f.case_sensitive, &pattern);
+                let hits = pattern.refine_prepared_hits(&prepared, previous_starts);
+                f.query_page_hits.insert(page, hits.iter().map(|hit| hit.byte_start).collect());
+                f.matches.extend(hits.into_iter().map(|hit| (page, hit.glyphs)));
+            } else {
+                remaining.push((page, text));
             }
         }
-        f.matches.sort_by_key(|(p, r)| (*p, r.start));
-        // First match at or after the page the search started from.
-        if let Some(i) = f.first_at_or_after(from)
-            && let Some(&(p, _)) = f.matches.get(i)
-        {
-            f.current = Some(i);
-            f.auto_page = Some(p);
-            self.flash_match(p);
+        if remaining.len() < ASYNC_SEARCH_PAGES {
+            for (page, text) in remaining {
+                let prepared = prepared_text(&search_cache, page, &text, f.case_sensitive, &pattern);
+                let hits = pattern.find_prepared_hits(&prepared);
+                f.query_page_hits.insert(page, hits.iter().map(|hit| hit.byte_start).collect());
+                f.matches.extend(hits.into_iter().map(|hit| (page, hit.glyphs)));
+            }
+            f.matches.sort_by_key(|(page, range)| (*page, range.start));
+            if let Some(index) = f.first_at_or_after(from)
+                && let Some(&(page, _)) = f.matches.get(index)
+            {
+                f.current = Some(index);
+                f.auto_page = Some(page);
+                self.flash_match(page);
+            }
+            return;
         }
+        f.search_task = Some(SearchTask::start(f.search_generation, pattern, remaining, search_cache));
     }
 
     pub(super) fn refresh_find_page(&mut self, page: usize) {
+        let search_cache = self.search_texts.clone();
         let (Some(f), Some(text)) = (self.find.as_mut(), self.texts.get(&page)) else { return };
+        if f.case_query.trim().is_empty() {
+            return;
+        }
+        let pattern = SearchPattern::new(&f.case_query, f.case_sensitive, f.whole_words);
+        let prepared = prepared_text(&search_cache, page, text, f.case_sensitive, &pattern);
+        let hits = pattern.find_prepared_hits(&prepared);
+        if let Some(find) = self.find.as_mut() {
+            find.query_page_hits.insert(page, hits.iter().map(|hit| hit.byte_start).collect());
+        }
+        self.refresh_find_page_matches(page, hits.into_iter().map(|hit| hit.glyphs).collect());
+        self.finish_pending_find_step();
+    }
+
+    fn refresh_find_page_matches(&mut self, page: usize, matches: Vec<Range<usize>>) {
+        let Some(f) = self.find.as_mut() else { return };
         if f.case_query.trim().is_empty() {
             return;
         }
@@ -128,7 +294,7 @@ impl DocView {
         // this arrival must not pull them back; the choice then becomes theirs to keep.
         let follow = f.follow_page(self.current);
         f.matches.retain(|(p, _)| *p != page);
-        f.matches.extend(text.find_opts(&f.case_query, f.case_sensitive, f.whole_words).into_iter().map(|r| (page, r)));
+        f.matches.extend(matches.into_iter().map(|r| (page, r)));
         f.matches.sort_by_key(|(p, r)| (*p, r.start));
         if let Follow::Active(from) = follow {
             f.current = f.first_at_or_after(from);
@@ -151,6 +317,45 @@ impl DocView {
         f.current = preserved.or_else(|| f.first_at_or_after(self.current));
     }
 
+    pub(super) fn poll_find_search(&mut self) -> bool {
+        let Some(f) = self.find.as_mut() else { return false };
+        let Some(task) = f.search_task.as_mut() else { return false };
+        let generation = task.generation;
+        let results = task.drain();
+        let finished = task.is_finished();
+        if finished {
+            f.search_task = None;
+        }
+        if generation != f.search_generation {
+            return finished;
+        }
+        let changed = !results.is_empty();
+        for (result_generation, page, matches) in results {
+            if result_generation == generation {
+                if let Some(find) = self.find.as_mut() {
+                    find.query_page_hits.insert(page, matches.iter().map(|hit| hit.byte_start).collect());
+                }
+                self.refresh_find_page_matches(page, matches.into_iter().map(|hit| hit.glyphs).collect());
+            }
+        }
+        self.finish_pending_find_step();
+        changed || finished
+    }
+
+    pub(super) fn find_search_running(&self) -> bool {
+        self.find.as_ref().and_then(|find| find.search_task.as_ref()).is_some_and(|task| !task.is_finished())
+    }
+
+    fn finish_pending_find_step(&mut self) {
+        let Some(find) = self.find.as_mut() else { return };
+        if find.matches.is_empty() || find.search_task.as_ref().is_some_and(|task| !task.is_finished()) {
+            return;
+        }
+        if let Some(forward) = find.pending_step.take() {
+            self.find_step(forward);
+        }
+    }
+
     /// Go to match `i` (the Search panel's results).
     pub fn go_to_match(&mut self, i: usize) {
         let Some(f) = self.find.as_mut() else { return };
@@ -166,6 +371,9 @@ impl DocView {
     pub fn find_step(&mut self, forward: bool) {
         let Some(f) = self.find.as_mut() else { return };
         if f.matches.is_empty() {
+            if f.search_task.is_some() {
+                f.pending_step = Some(forward);
+            }
             return;
         }
         let n = f.matches.len();
@@ -205,7 +413,7 @@ impl DocView {
 }
 
 /// Acrobat-style floating find bar at the top-right of the document area.
-pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut egui::Ui, t: &Tokens) {
+pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, pool: &RenderPool, ui: &mut egui::Ui, t: &Tokens) {
     let Some(find) = view.find.as_mut() else { return };
     // The Search panel shows this search.
     if find.in_panel {
@@ -213,7 +421,9 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
     }
     let mut close = false;
     let mut step: Option<bool> = None;
-    let searched = view.texts.len() + view.text_failed.len();
+    let (searched, search_total) = find.search_candidate_pages.as_ref().map_or((view.texts.len() + view.text_failed.len(), pages), |candidates| {
+        (candidates.iter().filter(|page| view.texts.contains_key(*page) || view.text_failed.contains(*page)).count(), candidates.len())
+    });
     egui::Area::new(egui::Id::unique("find-bar"))
         .order(egui::Order::Middle)
         .pivot(Align2::RIGHT_TOP)
@@ -248,13 +458,13 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
                         let status = if find.query.trim().is_empty() {
                             String::new()
                         } else if find.matches.is_empty() {
-                            if searched < pages {
-                                crate::i18n::fmt(tl!("Searching… {s}/{p}"), &[("s", &searched.to_string()), ("p", &pages.to_string())])
+                            if searched < search_total || find.search_task.as_ref().is_some_and(|task| !task.is_finished()) {
+                                crate::i18n::fmt(tl!("Searching… {s}/{p}"), &[("s", &searched.to_string()), ("p", &search_total.to_string())])
                             } else {
                                 tl!("No matches").to_string()
                             }
                         } else {
-                            let more = if searched < pages { "+" } else { "" };
+                            let more = if searched < search_total { "+" } else { "" };
                             crate::i18n::fmt(
                                 tl!("{c} of {n}{more}"),
                                 &[
@@ -293,7 +503,8 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
         return;
     }
     if find.query != find.case_query {
-        view.rerun_find();
+        let candidates = pool.text_candidate_pages(&find.query, pages, find.case_sensitive);
+        view.rerun_find_with_candidates(candidates);
     }
     if let Some(forward) = step {
         view.find_step(forward);

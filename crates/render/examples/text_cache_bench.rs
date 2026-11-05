@@ -1,18 +1,19 @@
 //! Benchmarks full-document text extraction, its persistent-cache reload, and Ctrl+F matching.
 //! Run this program twice against the same PDF; the second process exercises disk persistence.
-use pdfcraft_render::{PageText, RenderConfig, RenderPool, RenderRequest, RequestKind, inspect};
+use pdfcraft_render::{PageText, PreparedSearchText, RenderConfig, RenderPool, RenderRequest, RequestKind, SearchPattern, inspect};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const QUERIES: &[&str] = &["the", "anaphylaxis", "cardiac arrest", "fracture", "bleeding", "first aid"];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let path = std::env::args_os().nth(1).ok_or("usage: text_cache_bench <pdf-path>")?;
-    let bytes = Arc::new(std::fs::read(path)?);
+    let path = PathBuf::from(std::env::args_os().nth(1).ok_or("usage: text_cache_bench <pdf-path>")?);
+    let bytes = Arc::new(std::fs::read(&path)?);
     let page_count = inspect(bytes.clone(), None)?.pages.len();
     let threads = std::thread::available_parallelism().map(std::num::NonZeroUsize::get).unwrap_or(4).clamp(2, 8) - 1;
     let cache_open_started = Instant::now();
-    let pool = RenderPool::new(bytes, threads, RenderConfig::default());
+    let pool = RenderPool::new_with_cache_path(bytes, threads, RenderConfig::default(), Some(&path));
     let cache_open_ms = cache_open_started.elapsed().as_secs_f64() * 1000.0;
     pool.set_queue((0..page_count).map(|page| RenderRequest { page, kind: RequestKind::Text, ..RenderRequest::default() }).collect());
 
@@ -37,14 +38,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             worker_time_ms = worker_time_ms.saturating_add(u64::from(result.millis));
             if let Some(text) = result.text {
                 extracted += 1;
-                for (query_index, query) in QUERIES.iter().enumerate() {
-                    let match_started = Instant::now();
-                    let matches = text.find_opts(query, false, false);
-                    baseline_times[query_index] += match_started.elapsed();
-                    baseline_counts[query_index] = baseline_counts[query_index].saturating_add(matches.len());
-                    if query_index == 0 && !matches.is_empty() && first_match_ms.is_none() {
-                        first_match_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
-                    }
+                if first_match_ms.is_none() && !text.find_opts(QUERIES[0], false, false).is_empty() {
+                    first_match_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
                 }
                 if let Some(slot) = pages.get_mut(result.request.page) {
                     *slot = Some(text);
@@ -63,6 +58,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let stats = pool.stats();
+    let mut baseline_prepared = std::collections::HashMap::<usize, Arc<PreparedSearchText>>::new();
+    for (query_index, query) in QUERIES.iter().enumerate() {
+        let pattern = SearchPattern::new(query, false, false);
+        for (page_index, text) in pages.iter().enumerate().filter_map(|(index, text)| text.as_ref().map(|text| (index, text))) {
+            let match_started = Instant::now();
+            let prepared = baseline_prepared.entry(page_index).or_insert_with(|| Arc::new(pattern.prepare_page(text))).clone();
+            let matches = pattern.find_prepared(&prepared);
+            baseline_times[query_index] += match_started.elapsed();
+            baseline_counts[query_index] = baseline_counts[query_index].saturating_add(matches.len());
+        }
+    }
     println!("total: {:.1} ms; text pages: {extracted}; failed: {failed}", started.elapsed().as_secs_f64() * 1000.0);
     println!("summed worker time: {worker_time_ms} ms");
     println!("baseline SIMD matching: {:.1} ms across {} queries", baseline_times.iter().sum::<Duration>().as_secs_f64() * 1000.0, QUERIES.len());
@@ -71,13 +77,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cache open and index load: {cache_open_ms:.1} ms");
 
     let mut indexed_time = Duration::ZERO;
+    let mut indexed_prepared = std::collections::HashMap::<usize, Arc<PreparedSearchText>>::new();
     for (query_index, query) in QUERIES.iter().enumerate() {
+        let pattern = SearchPattern::new(query, false, false);
         let candidates = pool.text_candidate_pages(query, page_count, false).unwrap_or_else(|| (0..page_count).collect());
         let search_started = Instant::now();
         let indexed_matches = candidates
             .iter()
-            .filter_map(|page| pages.get(*page).and_then(Option::as_ref))
-            .map(|page| page.find_opts(query, false, false).len())
+            .filter_map(|page| pages.get(*page).and_then(Option::as_ref).map(|text| (*page, text)))
+            .map(|(page, text)| {
+                let prepared = indexed_prepared.entry(page).or_insert_with(|| Arc::new(pattern.prepare_page(text))).clone();
+                pattern.find_prepared(&prepared).len()
+            })
             .sum::<usize>();
         let search_time = search_started.elapsed();
         indexed_time += search_time;

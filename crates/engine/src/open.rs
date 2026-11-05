@@ -304,7 +304,8 @@ impl Session {
             }
         }
         let display = display_bytes(editor.as_mut(), &bytes);
-        let renderer = RenderPool::new(display.clone(), render_threads(), display_config(&config));
+        let renderer =
+            RenderPool::new_with_cache_path(display.clone(), render_threads(), display_config(&config), path.as_deref().map(std::path::Path::new));
         let (form, adopted) = editor
             .as_ref()
             .map(|e| {

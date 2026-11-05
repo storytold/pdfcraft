@@ -180,6 +180,15 @@ pub(crate) fn undrawn_notices(prev: &pdfcraft_cos::Document, next: &pdfcraft_cos
 }
 
 impl Document {
+    pub(crate) fn rebuild_renderer(&mut self) {
+        self.renderer = RenderPool::new_with_cache_path(
+            self.display.clone(),
+            crate::render_threads(),
+            crate::display_config(&self.config),
+            self.path.as_deref().map(std::path::Path::new),
+        );
+    }
+
     /// How the document opens (Document Properties ▸ Initial View).
     /// Accessibility ▸ Check for accessibility: the full check (`None` if the document can't be
     /// read for editing).

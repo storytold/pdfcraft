@@ -508,12 +508,18 @@ pub struct PageRenderer {
 
 impl PageRenderer {
     pub fn new(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
+        Self::new_with_cache_path(bytes, config, None)
+    }
+
+    pub fn new_with_cache_path(bytes: Arc<Vec<u8>>, config: RenderConfig, cache_path: Option<&std::path::Path>) -> Self {
         let pdf = parse(&bytes, config.password.as_deref());
         let settings = config.settings();
         #[cfg(not(test))]
-        let text_cache = TextDiskCache::new(&bytes, &config);
+        let text_cache = TextDiskCache::new(&bytes, &config, cache_path);
         #[cfg(test)]
         let text_cache = None;
+        #[cfg(test)]
+        let _ = cache_path;
         Self { bytes, config, pdf, settings, stats: RenderStats { parser_builds: 1, ..RenderStats::default() }, text_cache }
     }
 
