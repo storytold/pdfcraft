@@ -44,8 +44,7 @@ pub use headings::{Heading, headings};
 pub use report::{REPORT_WORDS, report_html};
 pub use tags::{
     ClassMapEntry, TagContentItem, TagError, TagInfo, TagPlacement, TagProperty, class_map, class_map_all, move_tag, rename_class, set_tag_property,
-    tag_content,
-    tags,
+    tag_content, tags,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
