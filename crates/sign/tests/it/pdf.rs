@@ -351,6 +351,278 @@ fn later_changes_are_classified_under_the_signature_permissions() {
     assert_eq!((s.certify, s.status), (Some(1), Status::Invalid), "{:?}", s.modification);
 }
 
+// ── Signature widgets: a signed one stays put, an unsigned one changes only by being signed ──
+
+/// What the validator says about a new signature "Signature1" on `base`, signed at DocMDP
+/// `certify`, once `attack` has been appended. The untouched file must be valid.
+fn verdict_after(base: &[u8], certify: Option<u8>, attack: impl Fn(&mut Document)) -> (Status, Modification) {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.field == "Signature1").expect("the signed field");
+    let signed = pdfcraft_sign::sign(&open(base), &id, &SignOptions { certify, ..opts() }).unwrap();
+    assert_eq!(check(&signed).status, Status::Valid, "{certify:?}: untouched");
+    let s = check(&edit_after(&signed, attack));
+    (s.status, s.modification)
+}
+
+/// Stretch widget `widget` over the page and give it an appearance that covers the page with other
+/// text.
+fn stretch_widget(doc: &mut Document, widget: u32) {
+    let body = b"1 1 1 rg 0 0 300 300 re f BT /F1 14 Tf 20 250 Td (Forged text) Tj ET".to_vec();
+    let mut d = pdfcraft_cos::Dict::new();
+    d.set(b"Length".to_vec(), Object::Int(body.len() as i64));
+    let cover = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(d, body)));
+    let mut ap = pdfcraft_cos::Dict::new();
+    ap.set(b"N".to_vec(), Object::Ref(cover));
+    doc.update_dict(pdfcraft_cos::ObjRef { num: widget, generation: 0 }, |w| {
+        w.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(300), Object::Int(300)]));
+        w.set(b"AP".to_vec(), Object::Dict(ap));
+    })
+    .unwrap();
+}
+
+/// `fixture()` with its unsigned signature field in two parts: a parent field (object 6) that sets
+/// `/FT /Sig` and is named "Sigs", and a kid (object 7) named "A" that is also the widget. The kid
+/// inherits the field type, so the field is "Sigs.A".
+fn fixture_with_a_kid_signature_field() -> Vec<u8> {
+    let objs: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [7 0 R] >>",
+        b"<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 250 Td (Contract text) Tj ET\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /FT /Sig /T (Sigs) /Kids [7 0 R] >>",
+        b"<< /Type /Annot /Subtype /Widget /T (A) /Parent 6 0 R /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
+    ];
+    write_pdf(&objs)
+}
+
+/// The two unsigned signature fields: (what, file, its widget and field dictionary, its name).
+fn unsigned_signature_fields() -> [(&'static str, Vec<u8>, u32, &'static str); 2] {
+    [("its own /FT", fixture(), 6, "Approval"), ("an inherited /FT", fixture_with_a_kid_signature_field(), 7, "Sigs.A")]
+}
+
+#[test]
+fn an_unsigned_signature_widget_moved_or_redrawn_is_no_signature() {
+    // Before it is signed, a signature field's widget is a form field like any other. Moving it
+    // over the page and redrawing it signs nothing, so it is not a signature change: a
+    // certification that permits no changes is broken by it.
+    let mut failures = Vec::new();
+    for (what, base, widget, _) in unsigned_signature_fields() {
+        let (status, modification) = verdict_after(&base, Some(1), |doc| stretch_widget(doc, widget));
+        if status != Status::Invalid || !matches!(modification, Modification::Disallowed(_)) {
+            failures.push(format!("{what}: {status:?}, {modification:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "an unsigned signature widget moved under P=1 was accepted:\n{}", failures.join("\n"));
+}
+
+#[test]
+fn signing_a_field_does_not_move_its_widget() {
+    // Signing writes the field's value and its appearance. A value written together with a moved
+    // widget is not that, at any level.
+    let mut failures = Vec::new();
+    for (what, base, widget, _) in unsigned_signature_fields() {
+        for certify in LEVELS {
+            let (status, modification) = verdict_after(&base, certify, |doc| {
+                let mut sig = pdfcraft_cos::Dict::new();
+                sig.set(b"Type".to_vec(), Object::name("Sig"));
+                sig.set(b"Filter".to_vec(), Object::name("Adobe.PPKLite"));
+                let sig = doc.add(Object::Dict(sig));
+                doc.update_dict(pdfcraft_cos::ObjRef { num: widget, generation: 0 }, |f| f.set(b"V".to_vec(), Object::Ref(sig))).unwrap();
+                stretch_widget(doc, widget);
+            });
+            if status != Status::Invalid || !matches!(modification, Modification::Disallowed(_)) {
+                failures.push(format!("{what}, {certify:?}: {status:?}, {modification:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "a signed value with a moved widget was accepted:\n{}", failures.join("\n"));
+}
+
+#[test]
+fn a_signed_field_that_inherits_its_type_is_not_moved_or_redrawn_after_signing() {
+    // "Sigs.A" is signed first: the kid holds the value while its parent sets /FT. A later
+    // signature covers it signed, so moving and redrawing its widget afterwards is not permitted
+    // for that later signature either.
+    let first_id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let kid_signed =
+        pdfcraft_sign::sign(&open(&fixture_with_a_kid_signature_field()), &first_id, &SignOptions { field: Some("Sigs.A".into()), ..opts() })
+            .unwrap();
+    let (status, modification) = verdict_after(&kid_signed, None, |doc| stretch_widget(doc, 7));
+    assert!(
+        status == Status::Invalid && matches!(modification, Modification::Disallowed(_)),
+        "a moved and redrawn signed kid widget was accepted by the later signature: {status:?}, {modification:?}"
+    );
+}
+
+#[test]
+fn signing_an_unsigned_field_later_is_a_permitted_signature_change() {
+    // The guard on the other side: a second signer signing a field left empty keeps the first
+    // signature valid as a signature change at every level that permits signing, whether the
+    // field sets /FT itself or inherits it.
+    let first_id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let second_id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![first_id.certificate.clone()] };
+    for (what, base, _, name) in unsigned_signature_fields() {
+        for certify in [None, Some(2), Some(3)] {
+            let first = pdfcraft_sign::sign(&open(&base), &first_id, &SignOptions { certify, ..opts() }).unwrap();
+            let second = pdfcraft_sign::sign(&open(&first), &second_id, &SignOptions { field: Some(name.to_string()), ..opts() }).unwrap();
+            let sigs = signatures(&open(&second), &second, &trust);
+            let s = sigs.iter().find(|s| s.field == "Signature1").expect("the first signature");
+            assert_eq!(s.status, Status::Valid, "{what}, {certify:?}: {:?} {:?}", s.modification, s.details);
+            assert_eq!(s.modification, Modification::Allowed(vec![kind::SIGNATURE]), "{what}, {certify:?}");
+            assert!(sigs.iter().any(|s| s.field == name && s.signed), "{what}, {certify:?}: the field is signed");
+        }
+    }
+}
+
+#[test]
+fn a_signed_field_deep_below_its_type_is_not_moved_or_redrawn_after_signing() {
+    // A signature field forty levels below the ancestor that sets /FT /Sig: object 6 is "L0",
+    // objects 7–45 are "L1"…"L39", and object 46, "L40", is the terminal field and its widget.
+    // Signed first; a later signature covers it signed, so its widget can't be moved and redrawn
+    // under that signature's form-fill permission however deep the inheritance runs.
+    const DEPTH: u32 = 40;
+    let widget = 6 + DEPTH;
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [{widget} 0 R] >>"
+        )
+        .into_bytes(),
+        b"<< /Length 44 >>\nstream\nBT /F1 14 Tf 20 250 Td (Contract text) Tj ET\nendstream".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        b"<< /FT /Sig /T (L0) /Kids [7 0 R] >>".to_vec(),
+    ];
+    for level in 1..DEPTH {
+        objs.push(format!("<< /T (L{level}) /Parent {} 0 R /Kids [{} 0 R] >>", 5 + level, 7 + level).into_bytes());
+    }
+    objs.push(
+        format!("<< /Type /Annot /Subtype /Widget /T (L{DEPTH}) /Parent {} 0 R /Rect [150 20 280 70] /P 3 0 R /F 4 >>", widget - 1).into_bytes(),
+    );
+    let base = write_pdf(&objs.iter().map(Vec::as_slice).collect::<Vec<_>>());
+    let name = (0..=DEPTH).map(|level| format!("L{level}")).collect::<Vec<_>>().join(".");
+    let first_id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let deep_signed = pdfcraft_sign::sign(&open(&base), &first_id, &SignOptions { field: Some(name), ..opts() }).unwrap();
+    let (status, modification) = verdict_after(&deep_signed, None, |doc| stretch_widget(doc, widget));
+    assert!(
+        status == Status::Invalid && matches!(modification, Modification::Disallowed(_)),
+        "a moved and redrawn deep signed widget was accepted by the later signature: {status:?}, {modification:?}"
+    );
+}
+
+#[test]
+fn a_signature_field_whose_parents_loop_is_not_moved_or_redrawn_as_a_form_fill() {
+    // "Sigs.A" with the parent's /Parent pointing back at its kid: the field tree loops, so the
+    // walk up it reaches no root and where the field sits in the form isn't defined. The widget of a
+    // well-formed unsigned field may be moved and redrawn as a form fill; this one may not change
+    // at any level that permits filling forms.
+    let looping = edit_after(&fixture_with_a_kid_signature_field(), |doc| {
+        doc.update_dict(pdfcraft_cos::ObjRef { num: 6, generation: 0 }, |f| {
+            f.set(b"Parent".to_vec(), Object::Ref(pdfcraft_cos::ObjRef { num: 7, generation: 0 }))
+        })
+        .unwrap()
+    });
+    let mut failures = Vec::new();
+    for certify in [None, Some(2), Some(3)] {
+        let (status, modification) = verdict_after(&looping, certify, |doc| stretch_widget(doc, 7));
+        if status != Status::Invalid || !matches!(modification, Modification::Disallowed(_)) {
+            failures.push(format!("{certify:?}: {status:?}, {modification:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "the widget of a looping signature field was moved and redrawn as a form fill:\n{}", failures.join("\n"));
+}
+
+/// Rewrite object `widget` as a white annotation of kind `subtype` that covers the page.
+fn white_square(doc: &mut Document, widget: u32, subtype: Object) {
+    let white = Object::Array(vec![Object::Int(1); 3]);
+    doc.set(
+        pdfcraft_cos::ObjRef { num: widget, generation: 0 },
+        Object::Dict(dict_of(vec![
+            ("Type", Object::name("Annot")),
+            ("Subtype", subtype),
+            ("Rect", Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(300), Object::Int(300)])),
+            ("C", white.clone()),
+            ("IC", white),
+            ("P", oref(3)),
+        ])),
+    );
+}
+
+#[test]
+fn an_unsigned_signature_widget_turned_into_a_comment_is_no_form_fill() {
+    // Filling a form may edit an unsigned signature field's widget, not turn it into an annotation
+    // of another kind: here a white /Square over the signed text, whether the field sets /FT itself
+    // or inherits it, and whether the widget names its kind directly or through a reference.
+    let mut cases: Vec<(&str, Vec<u8>, u32, Object)> =
+        unsigned_signature_fields().into_iter().map(|(what, base, widget, _)| (what, base, widget, Object::name("Square"))).collect();
+    // The signed widget's kind is object 7, /Widget; the edit points it at object 8, /Square, which
+    // is already in the file. The two differ only once read through the references.
+    let referenced = edit_after(&fixture(), |doc| {
+        let widget = doc.add(Object::name("Widget"));
+        doc.add(Object::name("Square"));
+        doc.update_dict(pdfcraft_cos::ObjRef { num: 6, generation: 0 }, |w| w.set(b"Subtype".to_vec(), Object::Ref(widget))).unwrap();
+    });
+    assert_eq!(*open(&referenced).get(pdfcraft_cos::ObjRef { num: 8, generation: 0 }), Object::name("Square"));
+    cases.push(("a referenced /Subtype", referenced, 6, oref(8)));
+    let mut failures = Vec::new();
+    for (what, base, widget, subtype) in cases {
+        for certify in LEVELS {
+            let (status, modification) = verdict_after(&base, certify, |doc| white_square(doc, widget, subtype.clone()));
+            if status != Status::Invalid || !matches!(modification, Modification::Disallowed(_)) {
+                failures.push(format!("{what}, {certify:?}: {status:?}, {modification:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "an unsigned signature widget turned into a comment was accepted:\n{}", failures.join("\n"));
+}
+
+#[test]
+fn a_kids_own_field_type_overrides_its_parents_even_through_a_reference() {
+    // "Sigs.A" with the kid's own /FT a reference to /Tx: the parent's /FT /Sig doesn't reach it,
+    // so it is a text field. Giving it a signature value and the page's content stream as its
+    // appearance signs nothing: it is a form fill, which a certification that permits no changes
+    // refuses.
+    let text_kid = edit_after(&fixture_with_a_kid_signature_field(), |doc| {
+        let tx = doc.add(Object::name("Tx"));
+        doc.update_dict(pdfcraft_cos::ObjRef { num: 7, generation: 0 }, |w| w.set(b"FT".to_vec(), Object::Ref(tx))).unwrap();
+    });
+    let (status, modification) = verdict_after(&text_kid, Some(1), |doc| {
+        let sig = doc.add(Object::Dict(dict_of(vec![("Type", Object::name("Sig")), ("Filter", Object::name("Adobe.PPKLite"))])));
+        doc.update_dict(pdfcraft_cos::ObjRef { num: 7, generation: 0 }, |w| {
+            w.set(b"V".to_vec(), Object::Ref(sig));
+            w.set(b"AP".to_vec(), Object::Dict(dict_of(vec![("N", oref(4))])));
+        })
+        .unwrap();
+    });
+    assert!(
+        status == Status::Invalid && matches!(modification, Modification::Disallowed(_)),
+        "a text field given a signature value passed as a signature under P=1: {status:?}, {modification:?}"
+    );
+}
+
+#[test]
+fn a_null_value_on_a_kid_does_not_hide_its_parents_signature() {
+    // "Sigs.A" with the signature value on the parent and /V null on the kid. A null entry is no
+    // entry, so the kid inherits the parent's value: the field is signed, and its widget can't be
+    // moved and redrawn as a form fill.
+    let parent_signed = edit_after(&fixture_with_a_kid_signature_field(), |doc| {
+        let sig = doc.add(Object::Dict(dict_of(vec![("Type", Object::name("Sig")), ("Filter", Object::name("Adobe.PPKLite"))])));
+        doc.update_dict(pdfcraft_cos::ObjRef { num: 6, generation: 0 }, |f| f.set(b"V".to_vec(), Object::Ref(sig))).unwrap();
+        doc.update_dict(pdfcraft_cos::ObjRef { num: 7, generation: 0 }, |w| w.set(b"V".to_vec(), Object::Null)).unwrap();
+    });
+    let mut failures = Vec::new();
+    for certify in [None, Some(2), Some(3)] {
+        let (status, modification) = verdict_after(&parent_signed, certify, |doc| stretch_widget(doc, 7));
+        if status != Status::Invalid || !matches!(modification, Modification::Disallowed(_)) {
+            failures.push(format!("{certify:?}: {status:?}, {modification:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "a widget below a signed parent was moved and redrawn as a form fill:\n{}", failures.join("\n"));
+}
+
 #[test]
 fn invisible_signatures_and_refusals() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
