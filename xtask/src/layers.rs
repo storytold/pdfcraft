@@ -45,6 +45,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("ops", Class::Layer(2)),
     // L3 core services
     ("render", Class::Layer(3)),
+    ("prc-render", Class::Layer(3)),
     ("text", Class::Layer(3)),
     ("annot", Class::Layer(3)),
     ("forms", Class::Layer(3)),

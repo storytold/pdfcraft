@@ -65,6 +65,9 @@ pub(super) fn objstm_member(num: i64, offset: i64, first: Option<usize>, len: us
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Slot {
     Set(u16, Arc<Object>),
+    /// Both generations accepted from a damaged live source slot survive a repair-aware edit.
+    /// A full rewrite is required: a new xref slot cannot encode two generations.
+    RepairedSet(u16, u16, Arc<Object>),
     Freed(u16),
 }
 
@@ -103,6 +106,7 @@ impl ReadState {
                 a == b
                     && match (x, y) {
                         (Slot::Set(g, o), Slot::Set(h, p)) => g == h && Arc::ptr_eq(o, p),
+                        (Slot::RepairedSet(g, a, o), Slot::RepairedSet(h, b, p)) => g == h && a == b && Arc::ptr_eq(o, p),
                         (Slot::Freed(g), Slot::Freed(h)) => g == h,
                         _ => false,
                     }

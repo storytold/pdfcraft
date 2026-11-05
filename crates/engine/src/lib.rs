@@ -47,6 +47,7 @@ pub mod hot_folder_sources;
 pub mod js;
 mod layers;
 pub mod links;
+pub mod model3d;
 pub mod ocr;
 mod ocr_pdf;
 mod open;
