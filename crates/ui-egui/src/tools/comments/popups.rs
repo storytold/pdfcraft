@@ -24,7 +24,7 @@ pub(super) fn paint_connectors(painter: &egui::Painter, cx: &PageCx<'_>, view: &
         }
         let rects: Vec<Rect> = cx.screen_rects(a).collect();
         let on_mark = pointer.is_some_and(|p| rects.iter().any(|r| r.expand(3.0).contains(p)));
-        if !(on_mark || cv.selected == Some((*page, *index)) || cv.popup_hovered == Some((*page, *index))) {
+        if !(on_mark || cv.is_selected((*page, *index)) || cv.popup_hovered == Some((*page, *index))) {
             continue;
         }
         let Some(mark) = rects.first() else { continue };
