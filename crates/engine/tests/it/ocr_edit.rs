@@ -114,6 +114,39 @@ fn ocr_words_group_into_phrases_that_edit_in_place() {
     assert!((blocks[1].rect[0] - john[0]).abs() < 1.0, "the new word starts where the old one did: {:?} vs {john:?}", blocks[1].rect);
 }
 
+/// The page's text as a copy reads it.
+fn copied_text(s: &Session, id: pdfcraft_engine::DocId) -> String {
+    let doc = s.get(id).unwrap();
+    let out = PageRenderer::new(doc.bytes.clone(), Default::default()).render(RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Text,
+        scale: 1.0,
+        ..Default::default()
+    });
+    out.text.expect("the page has text").plain_text()
+}
+
+/// #2306: recognised words sit closer together than the gap a copy reads as a word break, so
+/// copied OCR text ran words together ("Thequick brown foxjumps"). The layer writes the spaces:
+/// one between neighbours on a line, none across lines or between table cells far apart.
+#[test]
+fn copied_ocr_text_keeps_the_spaces_between_words() {
+    let (s, id) = scanned_with(vec![
+        scanned_word("The", 10.0, 28.0, 70.0, 11.0),
+        scanned_word("quick", 29.0, 56.0, 70.0, 11.0),
+        scanned_word("fox", 57.0, 73.0, 70.0, 11.0),
+        scanned_word("Total", 130.0, 155.0, 70.0, 11.0),
+        scanned_word("jumps", 10.0, 42.0, 55.0, 11.0),
+        scanned_word("over", 43.0, 66.0, 55.0, 11.0),
+    ]);
+    let text = copied_text(&s, id);
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    assert_eq!(lines, ["The quick fox", "jumps over", "Total"], "{text:?}");
+    // Editing still groups the phrase apart from the far cell and the next line.
+    let blocks = s.get(id).unwrap().text_blocks(0);
+    assert_eq!(blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["The quick fox", "Total", "jumps over"]);
+}
+
 /// Several words of one OCR phrase rewrite as one line, without wrapping onto the line below.
 #[test]
 fn a_longer_ocr_phrase_grows_rightwards() {
