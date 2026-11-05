@@ -853,6 +853,27 @@ fn xmp_extension_schema_descriptions_are_complete() {
         let schema = schema_without("").replace(&format!("{own}:"), "other:");
         assert_eq!(extension(&schema, prefixes), (vec![], vec![*own]), "{own}");
     }
+    // A second property list is read as well as the first.
+    let complete = schema_without("");
+    let second = complete.replacen(
+        "<pdfaSchema:property>",
+        r#"<pdfaSchema:property><rdf:Seq><rdf:li rdf:parseType="Resource"><pdfaProperty:name>p</pdfaProperty:name></rdf:li></rdf:Seq></pdfaSchema:property><pdfaSchema:property>"#,
+        1,
+    );
+    assert_eq!(extension(&second, OWN).0, ["pdfaProperty:category", "pdfaProperty:description", "pdfaProperty:valueType"]);
+    // The container is an rdf:Bag (TechNote 0009, 4.2).
+    let container = |inner: &str| {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#"><pdfaExtension:schemas>{inner}</pdfaExtension:schemas></rdf:Description></rdf:RDF></x:xmpmeta>"#
+        );
+        let mut found = xmp_extension::Findings::default();
+        found.add(&xmp::parse(&xmp).expect("parses"));
+        found.not_bag
+    };
+    let schema = r#"<rdf:li rdf:parseType="Resource"><pdfaSchema:schema>S</pdfaSchema:schema><pdfaSchema:namespaceURI>http://e/</pdfaSchema:namespaceURI><pdfaSchema:prefix>e</pdfaSchema:prefix></rdf:li>"#;
+    assert!(!container(&format!("<rdf:Bag>{schema}</rdf:Bag>")));
+    assert!(container(&format!("<rdf:Seq>{schema}</rdf:Seq>")));
+    assert!(container(r#"<rdf:Description pdfaSchema:schema="S"/>"#));
     // The container itself is written as pdfaExtension too (TechNote 0009, 4.1).
     let xmp = concat!(
         r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">"#,

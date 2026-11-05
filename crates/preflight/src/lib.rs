@@ -118,6 +118,7 @@ pub const WORDINGS: &[&str] = &[
     "The XMP property {} doesn't have the value type the XMP Specification gives it",
     "An XMP extension schema description has no {} entry",
     "An XMP extension schema description writes the {} namespace with another prefix",
+    "An XMP extension schema container isn't an rdf:Bag",
     // The document as a whole.
     "The document is encrypted",
     "Device colour is used, but there is no PDF/A output intent",
@@ -477,6 +478,9 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     for entry in extension.missing {
         issue("6.6.2.3.3", "An XMP extension schema description has no {} entry", Some(entry), None, false);
+    }
+    if extension.not_bag {
+        issue("6.6.2.3.3", "An XMP extension schema container isn't an rdf:Bag", None, None, false);
     }
     for prefix in extension.prefixes {
         issue("6.6.2.3.3", "An XMP extension schema description writes the {} namespace with another prefix", Some(prefix.to_owned()), None, false);

@@ -40,6 +40,8 @@ pub(crate) struct Findings {
     pub(crate) missing: BTreeSet<String>,
     /// Description namespaces written with another prefix, by their own prefix, in name order.
     pub(crate) prefixes: BTreeSet<&'static str>,
+    /// A `pdfaExtension:schemas` isn't one `rdf:Bag` (TechNote 0009, 4.2: "bag Schema").
+    pub(crate) not_bag: bool,
 }
 
 impl Findings {
@@ -48,14 +50,18 @@ impl Findings {
         let containers = doc.descendants().filter(|n| is(n, EXTENSION, "schemas"));
         for container in containers {
             self.prefixes_in(doc, &container);
+            let children: Vec<Node<'_, '_>> = container.children().filter(Node::is_element).collect();
+            if !matches!(children.as_slice(), [bag] if is(bag, RDF, "Bag")) {
+                self.not_bag = true;
+            }
             for schema in items(&container) {
                 self.need(&schema, SCHEMA, "pdfaSchema", &["schema", "namespaceURI", "prefix"]);
-                for property in entry(&schema, SCHEMA, "property").iter().flat_map(items) {
+                for property in entries(&schema, SCHEMA, "property").flat_map(|e| items(&e)) {
                     self.need(&property, PROPERTY, "pdfaProperty", &["name", "valueType", "category", "description"]);
                 }
-                for value_type in entry(&schema, SCHEMA, "valueType").iter().flat_map(items) {
+                for value_type in entries(&schema, SCHEMA, "valueType").flat_map(|e| items(&e)) {
                     self.need(&value_type, TYPE, "pdfaType", &["type", "namespaceURI", "prefix", "description", "field"]);
-                    for field in entry(&value_type, TYPE, "field").iter().flat_map(items) {
+                    for field in entries(&value_type, TYPE, "field").flat_map(|e| items(&e)) {
                         self.need(&field, FIELD, "pdfaField", &["name", "valueType", "description"]);
                     }
                 }
@@ -105,6 +111,11 @@ fn written_prefix(qname: &str) -> &str {
 
 fn is(n: &Node<'_, '_>, ns: &str, name: &str) -> bool {
     n.is_element() && n.tag_name().namespace() == Some(ns) && n.tag_name().name() == name
+}
+
+/// Every element entry `name` of `ns` in the description `d`: a list written twice is read twice.
+fn entries<'a, 'i>(d: &Node<'a, 'i>, ns: &'a str, name: &'a str) -> impl Iterator<Item = Node<'a, 'i>> {
+    d.children().filter(move |c| is(c, ns, name))
 }
 
 /// The element entry `name` of `ns` in the description `d`.
