@@ -532,6 +532,45 @@ fn saving_in_a_batch_closes_after_the_write_and_continues() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// A tab of the batch that the user saved themselves while another's save was pending — here,
+/// `last.pdf` is written to its own file between the batch's first question and its answer —
+/// closes with the batch, like the tabs that were clean when it started. Before the fix it
+/// stayed open: the continuation only closed the tab it was asked about and then looked for
+/// dirty ones, skipping the one that had become clean.
+#[test]
+fn a_tab_the_user_saved_while_a_batch_save_waited_still_closes() {
+    let ctx = egui::Context::default();
+    let path = tmp_pdf("save");
+    let other = tmp_pdf("other");
+    let mut app = crate::PdfCraftApp::new();
+    app.open_bytes("first.pdf", Some(path.to_string_lossy().into_owned()), PDF.to_vec()).unwrap();
+    let first = app.views[0].id;
+    app.open_bytes("anchor.pdf", None, PDF.to_vec()).unwrap();
+    let anchor = app.views[1].id;
+    app.open_bytes("last.pdf", Some(other.to_string_lossy().into_owned()), PDF.to_vec()).unwrap();
+    let last = app.views[2].id;
+    for i in [0, 2] {
+        app.active = Some(i);
+        assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    }
+    app.close_others(anchor);
+    assert_eq!(app.close_request, Some(CloseRequest::Others(anchor)), "the first dirty other asks");
+    // While first.pdf's save is pending, the user saves last.pdf themselves.
+    app.active = Some(2);
+    assert!(app.save_active(crate::editing::SaveTarget::InPlace), "the user's own save writes the file");
+    assert!(!app.has_unsaved_work(2), "last.pdf is clean now, but still open in the batch's scope");
+    // Answering the pending question continues the batch: first.pdf closes for its save, and
+    // last.pdf — clean, never asked about — closes with it. Only the anchor stays.
+    app.resolve_close(&ctx, Some(true));
+    assert!(app.views.iter().all(|v| v.id != first), "the saved tab closed after its write");
+    assert!(app.views.iter().all(|v| v.id != last), "the tab that became clean meanwhile closed too");
+    assert_eq!(app.views.len(), 1);
+    assert_eq!(app.views[0].id, anchor);
+    assert_eq!(app.close_request, None, "nothing dirty remains to ask about");
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&other);
+}
+
 #[test]
 fn a_batch_close_stops_when_its_anchor_is_gone() {
     let ctx = egui::Context::default();

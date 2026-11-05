@@ -122,6 +122,32 @@ impl PdfCraftApp {
         }
     }
 
+    /// Close every tab in `req`'s batch scope that no longer has unsaved work. Clean tabs never
+    /// ask, so at a batch's start this is all of them (`close_others`, `close_tabs_right_of`);
+    /// later, a tab may have become clean while another's save was pending — the user saved or
+    /// undid it themselves in the meantime — and the batch still closes it, as it closed the
+    /// clean ones at its start. A tab with unsaved work is never touched, and `Quit` needs no
+    /// sweep: quitting closes every tab when its last question is answered.
+    fn close_clean_in_scope(&mut self, req: &CloseRequest) {
+        let scope: Vec<usize> = match req {
+            CloseRequest::All => (0..self.views.len()).collect(),
+            CloseRequest::Others(keep) => match self.views.iter().position(|v| v.id == *keep) {
+                Some(anchor) => (0..self.views.len()).filter(|&i| i != anchor).collect(),
+                None => return,
+            },
+            CloseRequest::RightOf(after) => match self.views.iter().position(|v| v.id == *after) {
+                Some(anchor) => (anchor + 1..self.views.len()).collect(),
+                None => return,
+            },
+            CloseRequest::Tab(_) | CloseRequest::Quit => return,
+        };
+        for i in scope.into_iter().rev() {
+            if !self.has_unsaved_work(i) {
+                self.close_tab(i);
+            }
+        }
+    }
+
     /// The tab index the pending `close_request` asks about: the request's anchor decides which
     /// tabs count, so a finished batch or a gone anchor asks about nothing.
     pub(crate) fn close_request_target(&self) -> Option<usize> {
@@ -195,6 +221,10 @@ impl PdfCraftApp {
             return;
         }
         self.close_tab(index);
+        // Tabs of the batch that became clean while this save was pending — the user saved or
+        // undid one themselves in the meantime — close now, like the clean ones did when the
+        // batch started; only tabs that still have unsaved work go on asking.
+        self.close_clean_in_scope(&req);
         // A newer prompt wins: the user may have started another close while a save was pending,
         // and seen its question, which keeps counting as seen.
         let batch = matches!(req, CloseRequest::Quit | CloseRequest::All | CloseRequest::Others(_) | CloseRequest::RightOf(_));
