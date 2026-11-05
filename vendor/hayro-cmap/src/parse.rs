@@ -15,6 +15,9 @@ struct Context<F> {
     get_cmap: F,
 }
 
+/// PdfCraft patch (3): most unreadable tokens one CMap may step over before its scan stops.
+const MAX_SKIPPED: usize = 1024;
+
 pub(crate) fn parse_inner<'a>(
     data: &[u8],
     get_cmap: impl Fn(CMapName<'_>) -> Option<&'a [u8]> + Clone + 'a,
@@ -61,10 +64,20 @@ pub(crate) fn parse_inner<'a>(
     // must see failure rather than an empty map, so its encoding fallback
     // paths run exactly as they did before the tolerant-usecmap change.
     let mut usecmap_failed = false;
+    let mut skipped = 0usize;
     while !scanner.at_end() {
-        let Ok(obj) = scanner.parse_object() else {
+        // PdfCraft patch (3): a token that can't be read (a stray `>` after a CMap name, a
+        // name with spaces in it, both written into ToUnicode CMaps) is stepped over, so the
+        // mappings after it are still read; it used to end the scan before any of them.
+        // At most `MAX_SKIPPED` such tokens: a failed read may scan to the end of the data (an
+        // unclosed string), so a stream of them would cost its length squared.
+        let Ok(obj) = scanner.parse_object_or_skip() else {
             truncated = true;
-            break;
+            skipped += 1;
+            if skipped > MAX_SKIPPED {
+                break;
+            }
+            continue;
         };
 
         let Object::Name(name) = &obj else { continue };
