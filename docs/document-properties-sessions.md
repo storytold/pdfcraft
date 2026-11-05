@@ -1,7 +1,6 @@
 # Document Properties sessions and interaction replay
 
-Status: proposed integration, 2026-10-25. This document describes the consumer patch;
-it does not claim upstream adoption of either experimental library.
+Status: proposed integration, updated 2026-11-05.
 
 Document Properties binds its Description, Initial View and accepted Custom values to
 the document identity, edit generation and modification permission at opening. A
@@ -13,7 +12,7 @@ Clean inspection tabs (Fonts, Advanced, Security, Space Audit) retain live refre
 the same document; they never rebase accepted edits or pending Custom Name/Value input.
 
 [`edit-session`](https://github.com/PerchAnton/edit-session) 0.1.0-alpha.2 is a
-dependency-free `no_std` library, pinned to `033f7c3a67b825b8f222288788cc61234c0c945d`.
+dependency-free `no_std` library. The [vendor ledger](../vendor/README.md#edit-session) records the snapshot and its source revision.
 It checks freshness and consumes a draft once. PdfCraft retains its form validation,
 permission checks, PDF serialization and undo history. The UI bridge is
 `crates/ui-egui/src/properties_session.rs`; it stores small property values, not PDF bytes.
@@ -39,7 +38,7 @@ example, not a shipped executable. It runs the real egui controls through `egui_
 then reports actual draft/document/history state as JSONL protocol 1.
 
 [`interaction-check`](https://github.com/PerchAnton/interaction-check) is a standard-library
-Python runner, pinned in CI to `7722d66c0ede7855ff58d1df3d1632fd4e5e66a5`. It sends only
+Python runner for optional local replay. The commands below pin it to `7722d66c0ede7855ff58d1df3d1632fd4e5e66a5`. It sends only
 events; expected values stay in the runner. Each scenario starts a fresh adapter process
 with two synthetic, two-page PDFs. No corpus, network, proprietary fonts or committed
 PDF fixture is required.
@@ -59,7 +58,7 @@ PDFCRAFT_SYSTEM_FONTS=0 PDFCRAFT_LOCALE=en-US \
 ```
 
 On Windows, use `properties_scenarios.exe` and set environment variables with your shell.
-The CI workflow uploads JSON/JUnit reports; it does not require a GPU.
+The commands write JSON and JUnit reports under `log/properties-interactions/`. Replay runs headlessly.
 
 Events `open`, `type`, `click`, `escape`, `undo` and `redo` use actual UI commands/controls.
 `external_edit`, `external_edit_undo`, `reload`, `switch` and `close_document` simulate
@@ -82,24 +81,15 @@ in a separate reader. Existing renderer and interoperability tests remain necess
 
 ## Dependency review
 
-Both projects are contributor-maintained, experimental and `MIT OR Apache-2.0`.
-`deny.toml` proposes a source exception for `edit-session`; CI allows only its exact
-package/version/revision outside the existing storytold namespace. No other repository
-under the contributor's account is allowed. Updating either pin requires review.
-Python and the replay tool are development dependencies only.
-
-Adoption requires the supply-chain policy owner's explicit approval of both the
-runtime library and execution of the external replay runner in CI. Exact pins bound
-the reviewed source; they do not establish that approval.
-
-The shared release workflow currently rejects this external Git dependency even
-when the PR's CI passes. [craft-common-actions #84](https://github.com/storytold/craft-common-actions/pull/84)
-proposes the corresponding exception for the official `storytold/pdfcraft` caller
-and this exact package/version/revision, with regression tests. It is a draft policy
-proposal. Merge this integration only after the dependency decision and the shared
-release change; keep using the official shared release workflow.
+The app builds from the vendored Rust source. The shared Cargo source rules apply to the entire lockfile.
+The ordinary Rust suite exercises stale edits, Undo and inspection tabs. Running the extended replay is
+an explicit developer choice. It uses a separate checkout and runs outside the app and its shared CI.
+Maintainers can review the snapshot or choose to implement the small draft guard in PdfCraft itself.
+This integration can be evaluated independently of craft-common-actions #84.
 
 ## Revision history
+
+- 2026-11-05: vendor the original Rust revision with its lifecycle tests and licenses; keep the ten-scenario Python replay local.
 
 - 2026-10-25: document the pending dependency decisions and shared release prerequisite;
   add function documentation for the session bridge, adapter and regression tests,

@@ -752,7 +752,7 @@ Newest first: the date, what moved, and the new overall estimate.
 - M13: common command, batch, inspection and bounded preview tools share the existing confined automation path. MCP tools carry complete hints and reject unknown top-level keys as invalid parameters.
 - **2026-10-10 (UI docking):** Tools and Inspector can be regrouped, split beside the PDF, or floated inside the app window. Existing toggles reopen panels at their saved locations; UI commands arrange/reset panels, and preferences retain their layout. Read/full-screen modes preserve the focused document view. No milestone percentage change.
 
-- **2026-10-25 (M4, #4594 review):** Documented the session bridge and replay adapter; the stale notice now participates in translation-gap scanning, with a regression test. Adoption remains pending both external-dependency decisions and the shared release gate proposal (craft-common-actions #84); behavior and estimates unchanged.
+- **2026-10-25 (M4, #4594 review):** Documented the session bridge and replay adapter; the stale notice now participates in translation-gap scanning, with a regression test. The original proposal depended on a shared release exception. The revised proposal vendors the Rust source and keeps the Python replay local. Maintainer review is pending.
 
 - **2026-10-25 (M4):** Document Properties drafts now reject changed document identities/revisions, including reload and Undo/Redo, through pinned edit-session; real UI JSONL scenarios replay with interaction-check. Broader dialog invalidation remains separate (#3917); estimates unchanged.
 

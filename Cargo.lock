@@ -1699,7 +1699,6 @@ dependencies = [
 [[package]]
 name = "edit-session"
 version = "0.1.0-alpha.2"
-source = "git+https://github.com/PerchAnton/edit-session?rev=033f7c3a67b825b8f222288788cc61234c0c945d#033f7c3a67b825b8f222288788cc61234c0c945d"
 
 [[package]]
 name = "eframe"
