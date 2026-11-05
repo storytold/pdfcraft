@@ -295,9 +295,7 @@ impl Document {
     /// The next save must rewrite the whole file (see [`Document::require_full_save`]).
     /// Repair-aware edits retaining two accepted generations cannot use one incremental slot.
     pub fn full_save_required(&self) -> bool {
-        self.full_save
-            || self.version != self.saved_version
-            || self.overlay.values().any(|slot| matches!(slot, Slot::RepairedSet(..)))
+        self.full_save || self.version != self.saved_version || self.overlay.values().any(|slot| matches!(slot, Slot::RepairedSet(..)))
     }
 
     /// Security was set or removed since the document was opened (the next save applies it).
