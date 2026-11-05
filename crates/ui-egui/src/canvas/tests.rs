@@ -2428,3 +2428,18 @@ fn enhancing_a_scan_re_renders_the_page_shown() {
     assert!(app.scan_clean_run.is_none());
     assert_eq!(app.views[i].pages.get(&0).unwrap().tag, STALE_TAG, "the old raster is re-rendered");
 }
+
+/// Closing the page context menu must not disturb another popup held by the same egui context.
+#[test]
+fn closing_page_context_menu_keeps_an_unrelated_popup_open() {
+    let ctx = egui::Context::default();
+    let page_menu = egui::Id::unique("page-context-menu-test");
+    let unrelated = egui::Id::unique("unrelated-popup-test");
+    egui::Popup::open_id(&ctx, page_menu);
+    egui::Popup::open_id(&ctx, unrelated);
+
+    close_page_context_menu(&ctx, page_menu);
+
+    assert!(!egui::Popup::is_id_open(&ctx, page_menu), "the page menu closes");
+    assert!(egui::Popup::is_id_open(&ctx, unrelated), "an unrelated popup remains open");
+}

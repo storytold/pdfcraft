@@ -1606,6 +1606,14 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
 }
 
 #[allow(clippy::cognitive_complexity)]
+/// Close only the page context menu retained by the document response.
+///
+/// Keeping the operation in one narrow helper makes its popup-isolation contract directly
+/// testable without relying on the lifetime of an unrelated rendered popup.
+fn close_page_context_menu(ctx: &egui::Context, page_context_menu_id: egui::Id) {
+    egui::Popup::close_id(ctx, page_context_menu_id);
+}
+
 fn draw_pages(
     ui: &mut egui::Ui,
     viewport: Rect,
@@ -1882,7 +1890,7 @@ fn draw_pages(
     if ptr.blocked_press {
         // A ruler-owned press dismisses only the page menu. Other document popups keep their own
         // state and are not collateral damage from a global popup close.
-        egui::Popup::close_id(ui.ctx(), page_context_menu_id);
+        close_page_context_menu(ui.ctx(), page_context_menu_id);
     }
     egui::Popup::context_menu(&resp).id(page_context_menu_id).show(|ui| {
         let is_crop_over_image = tool == QuickTool::EditText
