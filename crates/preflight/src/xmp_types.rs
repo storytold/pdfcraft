@@ -678,20 +678,27 @@ fn fits(ty: Ty, e: &Node<'_, '_>, depth: usize) -> bool {
         [d] if is(d, RDF, "Description") => Some(*d),
         _ => None,
     };
-    let fields_of = description.unwrap_or(*e);
-    if (resource || description.is_some())
-        && let Some(v) = fields_of.children().find(|c| is(c, RDF, "value"))
+    // `rdf:value` as an element of a `parseType="Resource"` node or `rdf:Description`, or as an
+    // attribute of the description or of an empty property element. Its qualifiers that are
+    // predefined properties keep their types too.
+    let node = if resource { Some(*e) } else { description };
+    if let Some(n) = node
+        && let Some(v) = n.children().find(|c| is(c, RDF, "value"))
     {
-        return fits(ty, &v, deeper);
+        return blank(e) && blank(&n) && fits(ty, &v, deeper) && predefined_ok(&n, deeper);
     }
-    if let Some(v) = description.and_then(|d| d.attribute((RDF, "value"))) {
-        return simple(ty, v);
+    let attribute_node = description.or_else(|| (children.is_empty() && !resource).then_some(*e));
+    if let Some(n) = attribute_node
+        && let Some(v) = n.attribute((RDF, "value"))
+    {
+        return blank(e) && blank(&n) && simple(ty, v) && predefined_ok(&n, deeper);
     }
     match ty {
         Ty::Text | Ty::Guid | Ty::Integer | Ty::Real | Ty::Boolean | Ty::Date | Ty::Rational | Ty::GpsCoordinate => {
             // `rdf:resource` makes the value a URI, which only a text type takes.
+            // The element is then empty.
             if e.attribute((RDF, "resource")).is_some() {
-                return matches!(ty, Ty::Text);
+                return matches!(ty, Ty::Text) && children.is_empty() && blank(e);
             }
             children.is_empty() && !resource && field_attributes(e).next().is_none() && simple(ty, &text(e))
         }
@@ -724,18 +731,20 @@ fn fits(ty: Ty, e: &Node<'_, '_>, depth: usize) -> bool {
         }
         // A structure of any fields, such as a Pantry item: predefined properties in it still have
         // their types.
-        Ty::AnyStruct => {
-            let Some(holder) = structure(e, &children, resource, description) else { return false };
-            let attrs_ok =
-                field_attributes(&holder).all(|a| a.namespace().and_then(|ns| property(ns, a.name())).is_none_or(|(_, t)| simple(t, a.value())));
-            let elements_ok = holder.children().filter(Node::is_element).all(|f| {
-                let n = f.tag_name();
-                n.namespace().and_then(|ns| property(ns, n.name())).is_none_or(|(_, t)| fits(t, &f, deeper))
-            });
-            attrs_ok && elements_ok
-        }
+        Ty::AnyStruct => structure(e, &children, resource, description).is_some_and(|holder| predefined_ok(&holder, deeper)),
         Ty::OneOf(types) => types.iter().any(|t| fits(*t, e, depth)),
     }
+}
+
+/// Whether the fields of `holder`, as attributes and elements, that are predefined properties have
+/// their types.
+fn predefined_ok(holder: &Node<'_, '_>, depth: usize) -> bool {
+    let attrs_ok = field_attributes(holder).all(|a| a.namespace().and_then(|ns| property(ns, a.name())).is_none_or(|(_, t)| simple(t, a.value())));
+    let elements_ok = holder.children().filter(Node::is_element).all(|f| {
+        let n = f.tag_name();
+        n.namespace().and_then(|ns| property(ns, n.name())).is_none_or(|(_, t)| fits(t, &f, depth))
+    });
+    attrs_ok && elements_ok
 }
 
 fn field(fields: &[Field], ns: &str, name: &str) -> Option<Ty> {
@@ -745,8 +754,9 @@ fn field(fields: &[Field], ns: &str, name: &str) -> Option<Ty> {
 /// The items of `e`'s value when it is an `rdf:<kind>` array.
 fn array<'a, 'i>(e: &Node<'a, 'i>, children: &[Node<'a, 'i>], kind: &str) -> Option<Vec<Node<'a, 'i>>> {
     match children {
-        // Items are `rdf:li` (ISO 16684-1 7.9.2.4); any other element breaks the array.
-        [a] if is(a, RDF, kind) && field_attributes(e).next().is_none() => {
+        // Items are `rdf:li` (ISO 16684-1 7.9.2.4); any other element, or character data around
+        // them, breaks the array.
+        [a] if is(a, RDF, kind) && field_attributes(e).next().is_none() && blank(e) && blank(a) => {
             let items: Vec<Node<'a, 'i>> = a.children().filter(Node::is_element).collect();
             items.iter().all(|i| is(i, RDF, "li")).then_some(items)
         }
@@ -761,11 +771,16 @@ fn structure<'a, 'i>(e: &Node<'a, 'i>, children: &[Node<'a, 'i>], resource: bool
         return text(e).trim().is_empty().then_some(*e);
     }
     if let Some(d) = description {
-        return Some(d);
+        return (blank(e) && blank(&d)).then_some(d);
     }
     // Fields written as attributes of the property element, with no content.
     let empty = text(e).trim().is_empty();
     (children.is_empty() && empty && e.attribute((RDF, "resource")).is_none() && field_attributes(e).next().is_some()).then_some(*e)
+}
+
+/// Whether `e` holds no character data but white space.
+fn blank(e: &Node<'_, '_>) -> bool {
+    text(e).trim().is_empty()
 }
 
 /// All the character data directly in `e`, however comments or other nodes split it.
