@@ -1975,11 +1975,18 @@ fn the_measure_snap_marker_shows_before_the_first_point() {
     let r = h.state().views[0].page_screen_rect(0).unwrap();
     // About a point off each end of the line (PDF y up), within the 6 px snap distance.
     let at = |x: f32, y: f32| egui::pos2(r.left() + x * r.width() / 200.0, r.top() + (300.0 - y) * r.height() / 300.0);
-    let marked = |h: &Harness<'static, PdfCraftApp>| painted_text(h).iter().any(|(text, _, _)| text == "Endpoint");
+    let label = |h: &Harness<'static, PdfCraftApp>| painted_text(h).into_iter().find(|(text, _, _)| text == "Endpoint").map(|(_, _, rect)| rect);
+    let marked = |h: &Harness<'static, PdfCraftApp>| label(h).is_some();
     h.hover_at(at(51.0, 150.5));
     h.run_steps(2);
     assert!(h.state().views[0].measure.points.is_empty(), "nothing placed yet");
     assert!(marked(&h), "the first point's snap is shown");
+    // It is drawn at the endpoint, its label beside it, not where the pointer is.
+    let (end, pointer) = (at(50.0, 150.0), at(51.5, 150.0));
+    h.hover_at(pointer);
+    h.run_steps(2);
+    let shown = label(&h).expect("the snap is shown");
+    assert!((shown.left() - (end.x + 10.0)).abs() < (shown.left() - (pointer.x + 10.0)).abs(), "{shown:?}, endpoint {end:?}, pointer {pointer:?}");
     // Off the line, nothing to snap to: no marker.
     h.hover_at(at(100.0, 250.0));
     h.run_steps(2);
@@ -2008,6 +2015,31 @@ fn the_measure_snap_marker_shows_before_the_first_point() {
     h.hover_at(at(149.0, 149.5));
     h.run_steps(2);
     assert!(!marked(&h), "no marker without Snap to drawing");
+
+    // With a point placed on one page, the pointer over another snaps there and says so: the next
+    // click starts a measurement on that page.
+    let mut h = harness(|app| {
+        app.open_bytes("plans.pdf", None, line_pages_pdf(2)).unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app.set_option("quick", "measure-distance").unwrap();
+    });
+    h.run_steps(4);
+    let at = |h: &Harness<'static, PdfCraftApp>, page: usize, x: f32, y: f32| {
+        let r = h.state().views[0].page_screen_rect(page).expect("page on screen");
+        egui::pos2(r.left() + x * r.width() / 200.0, r.top() + (300.0 - y) * r.height() / 300.0)
+    };
+    let first = at(&h, 0, 100.0, 250.0);
+    h.hover_at(first);
+    h.run_steps(1);
+    h.drag_at(first); // press
+    h.drop_at(first); // release
+    h.run_steps(2);
+    assert_eq!((h.state().views[0].measure.page, h.state().views[0].measure.points.len()), (Some(0), 1));
+    let end = at(&h, 1, 50.0, 150.0);
+    h.hover_at(at(&h, 1, 51.0, 150.0));
+    h.run_steps(2);
+    let shown = label(&h).expect("the other page's snap is shown");
+    assert!((shown.left() - (end.x + 10.0)).abs() < 3.0 && (shown.bottom() - (end.y - 10.0)).abs() < 6.0, "{shown:?}, endpoint {end:?}");
 }
 
 /// #6116 review: Shift holds a point level or plumb with the measurement's last point, which only
