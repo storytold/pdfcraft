@@ -3354,3 +3354,201 @@ mod area_shrink_tests {
         assert_eq!(area_shrink::<3>(&data, (4, 4), (2, 2)), None, "data of another channel count");
     }
 }
+
+/// PdfCraft patch: the area-averaging shrink of non-interpolated images.
+#[cfg(test)]
+mod area_shrink_tests {
+    use super::{
+        AREA_ONE, AreaAxis, ImageData, LumaData, MAX_IMAGE_PIXELS, RgbData, area_shrink,
+        area_shrink_premultiplied, area_taps, mask_on_image_grid, premultiply_rgba,
+    };
+
+    /// Deterministic samples that vary from one to the next.
+    fn noise(len: usize, seed: u32) -> Vec<u8> {
+        let mut x = seed.wrapping_mul(2_654_435_761) | 1;
+        (0..len)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                (x >> 24) as u8
+            })
+            .collect()
+    }
+
+    /// The shrink as two whole passes, every row averaged down and then every row across, each
+    /// rounded to a byte: what `area_shrink` did before it worked a row at a time.
+    fn two_pass_shrink<const N: usize>(data: &[u8], (sw, sh): (u32, u32), (tw, th): (u32, u32)) -> Vec<u8> {
+        let round = |acc: u64| ((acc + AREA_ONE / 2) >> 16).min(255) as u8;
+        let row_len = sw as usize * N;
+        let tall: Vec<u8> = (0..th)
+            .flat_map(|t| {
+                (0..row_len).map(move |i| {
+                    round(area_taps(sh, th, t).map(|(s, w)| w * u64::from(data[s * row_len + i])).sum())
+                })
+            })
+            .collect();
+        tall.chunks_exact(row_len)
+            .flat_map(|row| {
+                (0..tw).flat_map(move |t| {
+                    (0..N).map(move |c| round(area_taps(sw, tw, t).map(|(s, w)| w * u64::from(row[s * N + c])).sum()))
+                })
+            })
+            .collect()
+    }
+
+    /// Working a row at a time gives the same bytes as two whole passes, in both directions, one
+    /// direction alone, and with source rows shared by neighbouring targets.
+    #[test]
+    fn a_row_at_a_time_shrink_equals_two_whole_passes() {
+        let sizes = [((7, 5), (3, 2)), ((10, 3), (6, 3)), ((4, 9), (4, 4)), ((13, 11), (1, 1)), ((31, 17), (12, 7))];
+        for (i, (source, target)) in sizes.into_iter().enumerate() {
+            let gray = noise((source.0 * source.1) as usize, i as u32);
+            assert_eq!(area_shrink::<1>(&gray, source, target), Some(two_pass_shrink::<1>(&gray, source, target)), "{source:?} → {target:?}");
+            let rgba = noise((source.0 * source.1 * 4) as usize, i as u32 + 99);
+            assert_eq!(area_shrink::<4>(&rgba, source, target), Some(two_pass_shrink::<4>(&rgba, source, target)), "{source:?} → {target:?}");
+        }
+    }
+
+    /// Premultiplying a row at a time as it is averaged gives the same bytes as premultiplying the
+    /// whole expanded RGBA first and shrinking that, for gray and RGB colour.
+    #[test]
+    fn premultiplying_row_by_row_equals_premultiplying_the_whole_image() {
+        let sizes = [((7, 5), (3, 2)), ((10, 3), (6, 3)), ((4, 9), (4, 4)), ((31, 17), (12, 7))];
+        for (i, (source, target)) in sizes.into_iter().enumerate() {
+            let (w, h) = source;
+            let pixels = (w * h) as usize;
+            let alpha = noise(pixels, i as u32 + 7);
+            let gray = noise(pixels, i as u32 + 11);
+            let rgb = noise(pixels * 3, i as u32 + 13);
+            let colors = [
+                ImageData::Luma(LumaData { data: gray.clone(), width: w, height: h, interpolate: false, scale_factors: (1.0, 1.0) }),
+                ImageData::Rgb(RgbData { data: rgb.clone(), width: w, height: h, interpolate: false, scale_factors: (1.0, 1.0) }),
+            ];
+            for color in &colors {
+                let mut whole: Vec<u8> = match color {
+                    ImageData::Luma(_) => gray.iter().zip(&alpha).flat_map(|(g, a)| [*g, *g, *g, *a]).collect(),
+                    ImageData::Rgb(_) => rgb.chunks_exact(3).zip(&alpha).flat_map(|(c, a)| [c[0], c[1], c[2], *a]).collect(),
+                };
+                premultiply_rgba(&mut whole);
+                assert_eq!(
+                    area_shrink_premultiplied(color, &alpha, source, target),
+                    area_shrink::<4>(&whole, source, target),
+                    "{source:?} → {target:?}"
+                );
+            }
+            let short = alpha.get(1..).unwrap_or_default();
+            assert_eq!(area_shrink_premultiplied(&colors[0], short, source, target), None, "alpha shorter than the image");
+        }
+    }
+
+    fn mask(data: &[u8], width: u32, height: u32) -> LumaData {
+        LumaData { data: data.to_vec(), width, height, interpolate: false, scale_factors: (1.0, 1.0) }
+    }
+
+    /// Each image sample takes the mask sample under its centre, at whole and fractional ratios.
+    #[test]
+    fn a_mask_is_sampled_onto_the_image_grid() {
+        assert_eq!(mask_on_image_grid(&mask(&[10, 20], 2, 1), 4, 2), Some(vec![10, 10, 20, 20, 10, 10, 20, 20]));
+        // Centres of 7 samples over 3: 0.5/7·3 = 0.21 → 0, 1.5/7·3 = 0.64 → 0, 2.5/7·3 = 1.07 → 1, …
+        assert_eq!(mask_on_image_grid(&mask(&[1, 2, 3], 3, 1), 7, 1), Some(vec![1, 1, 2, 2, 2, 3, 3]));
+    }
+
+    /// A mask that asks for `/Interpolate` is blended between the samples around each centre,
+    /// and held at its ends: the centres of 4 samples over 2 lie at -¼, ¼, ¾ and 1¼.
+    #[test]
+    fn an_interpolated_mask_is_blended_onto_the_image_grid() {
+        let smooth = |data: &[u8], width, height| LumaData { interpolate: true, ..mask(data, width, height) };
+        assert_eq!(mask_on_image_grid(&smooth(&[0, 255], 2, 1), 4, 2), Some(vec![0, 64, 191, 255, 0, 64, 191, 255]));
+        // Centres of 7 samples over 3 lie 3/7 apart, from -2/7 to 2 2/7: a ramp, flat at the ends.
+        assert_eq!(mask_on_image_grid(&smooth(&[0, 70, 140], 3, 1), 7, 1), Some(vec![0, 10, 40, 70, 100, 130, 140]));
+        assert_eq!(mask_on_image_grid(&smooth(&[0, 255], 1, 2), 1, 4), Some(vec![0, 64, 191, 255]));
+        assert_eq!(mask_on_image_grid(&smooth(&[7, 9], 2, 1), 2, 1), Some(vec![7, 9]), "same size is unchanged");
+    }
+
+    #[test]
+    fn malformed_masks_are_not_sampled() {
+        assert_eq!(mask_on_image_grid(&mask(&[], 0, 1), 4, 1), None, "an empty mask");
+        assert_eq!(mask_on_image_grid(&mask(&[1, 2], 2, 1), 0, 1), None, "an empty image");
+        assert_eq!(mask_on_image_grid(&mask(&[1], 2, 1), 4, 1), None, "mask data shorter than its size");
+        assert_eq!(mask_on_image_grid(&mask(&[1, 2, 3, 4], 1, 4), 1, 2), None, "a mask larger than the image");
+    }
+
+    /// Every target sample's weights add up to exactly one, and together the targets take every
+    /// source sample exactly once (each `dst / src` of it, in fixed point within rounding).
+    #[test]
+    fn taps_are_exact_partitions_of_unity() {
+        for src in 1..=40_u32 {
+            for dst in 1..=src {
+                let mut taken = vec![0_u64; src as usize];
+                for t in 0..dst {
+                    let taps: Vec<_> = area_taps(src, dst, t).collect();
+                    assert_eq!(taps.iter().map(|(_, w)| w).sum::<u64>(), AREA_ONE, "{src} → {dst}, target {t}");
+                    assert!(taps.iter().all(|(_, w)| *w > 0), "{src} → {dst}, target {t}: an empty tap");
+                    for (s, w) in taps {
+                        taken[s] += w;
+                    }
+                }
+                // Source s is dst/src of one target in all; scaled by src/dst, that is one.
+                for (s, w) in taken.iter().enumerate() {
+                    let share = (*w * u64::from(src)) as f64 / (AREA_ONE * u64::from(dst)) as f64;
+                    assert!((share - 1.0).abs() < 1e-3, "{src} → {dst}: source {s} weighs {share}");
+                }
+            }
+        }
+    }
+
+    /// The table the horizontal pass reads holds exactly the taps of every target, in order.
+    #[test]
+    fn the_tap_table_holds_every_targets_taps() {
+        for src in 1..=40_u32 {
+            for dst in 1..=src {
+                let axis = AreaAxis::new(src, dst).expect("table");
+                for t in 0..dst {
+                    let (first, weights) = axis.get(t as usize).expect("target");
+                    let expected: Vec<(usize, u64)> = area_taps(src, dst, t).collect();
+                    let got: Vec<(usize, u64)> = weights.iter().enumerate().map(|(k, w)| (first + k, u64::from(*w))).collect();
+                    assert_eq!(got, expected, "{src} → {dst}, target {t}");
+                }
+                assert_eq!(axis.get(dst as usize), None, "{src} → {dst}: no target past the last");
+            }
+        }
+    }
+
+    /// The largest side an image may have still computes in u64 without overflowing.
+    #[test]
+    fn taps_at_the_pixel_limit_do_not_overflow() {
+        let side = MAX_IMAGE_PIXELS as u32;
+        for (dst, t) in [(1, 0), (3, 2), (side - 1, side - 2), (side, side - 1)] {
+            assert_eq!(area_taps(side, dst, t).map(|(_, w)| w).sum::<u64>(), AREA_ONE, "{side} → {dst}, target {t}");
+        }
+    }
+
+    #[test]
+    fn flat_images_keep_their_exact_value() {
+        for (source, target) in [((7, 5), (3, 2)), ((10, 3), (6, 3)), ((4, 9), (4, 4)), ((13, 11), (1, 1))] {
+            let data = vec![77_u8; (source.0 * source.1 * 3) as usize];
+            let out = area_shrink::<3>(&data, source, target).expect("shrinks");
+            assert_eq!(out.len(), (target.0 * target.1 * 3) as usize);
+            assert!(out.iter().all(|v| *v == 77), "{source:?} → {target:?}: {out:?}");
+        }
+    }
+
+    /// A side over the resampling limit is refused before any work buffer is allocated.
+    #[test]
+    fn sides_over_the_resampling_limit_are_refused() {
+        let wide = (super::MAX_RESAMPLING_SOURCE_SIDE + 1) as usize;
+        assert_eq!(area_shrink::<1>(&vec![0_u8; wide], (wide as u32, 1), (10, 1)), None, "too wide");
+        assert_eq!(area_shrink::<1>(&vec![0_u8; wide], (1, wide as u32), (1, 10)), None, "too tall");
+    }
+
+    #[test]
+    fn malformed_shrinks_are_refused() {
+        let data = vec![0_u8; 4 * 4];
+        assert_eq!(area_shrink::<1>(&data, (4, 4), (4, 4)), None, "nothing shrinks");
+        assert_eq!(area_shrink::<1>(&data, (4, 4), (5, 2)), None, "a side grows");
+        assert_eq!(area_shrink::<1>(&data, (4, 4), (0, 2)), None, "an empty side");
+        assert_eq!(area_shrink::<1>(&data[1..], (4, 4), (2, 2)), None, "data shorter than the source");
+        assert_eq!(area_shrink::<3>(&data, (4, 4), (2, 2)), None, "data of another channel count");
+    }
+}

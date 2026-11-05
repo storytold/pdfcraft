@@ -3286,7 +3286,7 @@ fn hotbar_docked_left_does_not_override_quick_tools() {
     });
     h.run_steps(5);
     // Controls in the docked bar share one layout, so none may overlap (#5890).
-    let labels = ["Drag hotbar", "Select (V)", "Hand (H)", "Add a sticky note", "Highlight", "Draw", "Fill & Sign", "Hotbar settings"];
+    let labels = ["Drag hotbar", "Select (V)", "Hand (H)", "Add a sticky note", "Highlight", "Draw", "Fill & Sign: Add signature", "Hotbar settings"];
     let rects: Vec<_> = labels.iter().map(|&label| h.get_by_label(label).rect()).collect();
     for (i, a) in rects.iter().enumerate() {
         for (j, b) in rects.iter().enumerate().skip(i + 1) {
