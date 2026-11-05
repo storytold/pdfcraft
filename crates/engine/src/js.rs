@@ -165,6 +165,11 @@ pub struct JsRunner {
     pub doc: pdfcraft_js::DocInfo,
     pub doc_scripts: Vec<String>,
     pub output: JsOutput,
+    /// Immutable document snapshot from the start of the edit (for widget `display`).
+    cos: pdfcraft_cos::Document,
+    // Cache scalar display readings for this edit; values and flags still come from the live
+    // fields snapshot on each call.
+    displays: std::collections::HashMap<pdfcraft_cos::ObjRef, i32>,
 }
 
 impl JsRunner {
@@ -180,7 +185,7 @@ impl JsRunner {
         // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
         let xfa_active = xfa && pdfcraft_xfa::existing_layout(cos).is_some();
         let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
-        JsRunner { doc, doc_scripts, output: JsOutput::default() }
+        JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new() }
     }
 }
 
