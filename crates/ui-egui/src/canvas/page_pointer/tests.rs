@@ -65,6 +65,19 @@ fn a_press_and_release_in_one_frame_keep_the_press() {
 }
 
 #[test]
+fn a_press_held_without_its_frame_is_fresh_too() {
+    // The frame that starts a gesture may hold no press edge any more: the press held is
+    // that contact's press, and it stages the channel's tool for the stylus (the W28 eraser
+    // end drew whatever was selected otherwise).
+    let held = PagePointer { primary_down: true, any_down: true, ..PagePointer::default() };
+    assert!(held.fresh_press());
+    // The frame after a release (an edge, no held press) does not stage a tool either.
+    let released = PagePointer { edges: vec![Edge::Release(pos2(50.0, 60.0))], ..PagePointer::default() };
+    assert!(!released.fresh_press());
+    assert!(!PagePointer::default().fresh_press());
+}
+
+#[test]
 fn something_drawn_over_the_pages_hides_the_pointer() {
     let ctx = Context::default();
     // The Area and the widget rects egui hit-tests against come from the frame before.

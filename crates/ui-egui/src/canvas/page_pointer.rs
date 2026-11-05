@@ -81,8 +81,16 @@ impl PagePointer {
 
     /// Whether a primary press arrived this frame, wherever it landed and whether or not it is
     /// the pages': the stylus bases one pointer fact on it (which tool a fresh press comes with).
+    ///
+    /// A press the pages hold counts too. egui hands a press to the pages' content widget one
+    /// frame after it arrives — the drag begins the frame after the edge — so the frame that
+    /// starts a gesture can no longer hold the edge, and a tool the pages ask for beside the
+    /// press would see only the tool that was on the frame before (on the real Wayland tablet,
+    /// where that gap appeared, the eraser end drew whatever was selected). A press held is
+    /// that contact's press — a tool object's contact owns exactly one press–drag, so no other
+    /// press can be the one held — and where it came from is what `origin` already answers.
     pub(crate) fn fresh_press(&self) -> bool {
-        self.edges.iter().any(|e| matches!(e, Edge::Press(_)))
+        self.primary_down || self.edges.iter().any(|e| matches!(e, Edge::Press(_)))
     }
 }
 
