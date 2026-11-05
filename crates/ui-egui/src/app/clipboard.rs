@@ -142,10 +142,13 @@ impl PdfCraftApp {
             return;
         }
         match c.rx.try_recv() {
-            Ok(text) => {
+            Ok((text, cut)) => {
                 self.document_copy = None;
                 if !text.is_empty() {
                     ctx.copy_text(text);
+                }
+                if cut {
+                    self.notify(tl!("The text was cut at the copy size limit; the rest of the document was left out"));
                 }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(50)),

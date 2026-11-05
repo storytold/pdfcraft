@@ -273,15 +273,20 @@ fn loops(calculated: &[CalculatedField]) -> Vec<Vec<&str>> {
             }
         }
     }
-    let mut groups: Vec<(usize, Vec<&str>)> = Vec::new();
+    // Groups by their root, in first-seen order: many cycles must not mean a scan per field.
+    let mut groups: Vec<Vec<&str>> = Vec::new();
+    let mut at: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
     for (k, f) in calculated.iter().enumerate().filter(|(_, f)| f.issues.iter().any(|i| matches!(i, CalculationIssue::Cycle { .. }))) {
         let r = root(&first, k);
-        match groups.iter_mut().find(|(g, _)| *g == r) {
-            Some((_, names)) => names.push(&f.name),
-            None => groups.push((r, vec![&f.name])),
+        match at.get(&r) {
+            Some(&g) => groups[g].push(&f.name),
+            None => {
+                at.insert(r, groups.len());
+                groups.push(vec![&f.name]);
+            }
         }
     }
-    groups.into_iter().map(|(_, names)| names).collect()
+    groups
 }
 
 /// Names in a sentence: "a, b and c", cut with "…" after [`MAX_NAMES`].

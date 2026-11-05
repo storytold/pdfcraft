@@ -249,6 +249,10 @@ impl PdfCraftApp {
                 let lang = crate::i18n::current();
                 let work = move || {
                     let sink = |name: &str, bytes: Vec<u8>| {
+                        // Each output goes in the chosen folder: a name with directory parts would not.
+                        if !super::files::is_plain_file_name(name) {
+                            return Err(format!("{name}: not a plain file name"));
+                        }
                         crate::editing::write_atomically(&dir.join(name).to_string_lossy(), &bytes).map_err(|e| format!("{name}: {e}"))
                     };
                     let msg = run(ExportTask { src, kind, dpi, format, min_side, pages, stem, status: &st, lang }, sink);

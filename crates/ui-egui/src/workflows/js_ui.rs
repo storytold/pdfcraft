@@ -68,6 +68,8 @@ impl PdfCraftApp {
         for e in &out.errors {
             self.js_console.log.push(format!("Error: {e}"));
         }
+        // One Save As per batch: a script asking a thousand times opens one dialog.
+        let mut saved = false;
         for r in out.requests {
             match r {
                 Request::Print => self.open_print(),
@@ -81,7 +83,8 @@ impl PdfCraftApp {
                     "The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.",
                     &[("u", &u)],
                 ),
-                Request::SaveAs => self.run_command("file.save_as"),
+                Request::SaveAs if !std::mem::replace(&mut saved, true) => self.run_command("file.save_as"),
+                Request::SaveAs => {}
                 Request::ShowPanel(p) => {
                     let panel = match p {
                         Panel::Bookmarks => crate::RightPanel::Bookmarks,
