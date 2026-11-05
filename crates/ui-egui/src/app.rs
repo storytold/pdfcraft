@@ -110,6 +110,10 @@ impl PdfCraftApp {
             fill_text_size: fill_sign::TEXT_SIZE,
             fill_tool: fill_sign::FillTool::Signature,
             fill_text_color: [0.0; 3],
+            fill_text_border: 0.0,
+            fill_text_border_color: None,
+            fill_text_border_shape: pdfcraft_engine::BorderShape::Rectangle,
+            fill_text_default: fill_sign::TextBorder::NONE,
             dialog: None,
             updates: updates::Updates::default(),
             printer_source: None,
@@ -229,8 +233,11 @@ impl PdfCraftApp {
             stamp_draft: Default::default(),
             optimize_draft: OptimizeDraft::default(),
             optimize_run: None,
+            scan_clean_draft: scan_clean_ui::ScanCleanDraft::default(),
+            scan_clean_run: None,
             progress_notice: None,
             page_clipboard: None,
+            comment_clipboard: None,
             grid_drop: None,
             last_snapshot: None,
             last_copied_image: None,
@@ -450,6 +457,9 @@ impl eframe::App for PdfCraftApp {
         // Notices raised outside `ui` (opened files, OS events, the control channel) translate too.
         let lang = i18n::Lang::from_pref(&self.language);
         i18n::set_current(lang);
+        // Form date fields name months in the date language (Preferences ▸ Date format), which
+        // follows the interface language until one is picked (#5303).
+        pdfcraft_engine::dates::use_form_date_language(self.session.date_language().unwrap_or(lang.code()));
         #[cfg(not(target_arch = "wasm32"))]
         {
             if let Some(worker) = &self.open_worker {
@@ -612,6 +622,7 @@ impl eframe::App for PdfCraftApp {
         self.auto_ocr_scanned_page();
         self.poll_ocr();
         self.poll_optimize();
+        self.poll_scan_clean();
         self.poll_action();
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
