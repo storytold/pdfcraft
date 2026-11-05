@@ -197,3 +197,25 @@ fn a_type3_glyph_without_resources_keeps_the_page_pattern_it_paints_with() {
     assert_eq!(blue_glyph(&doc), before, "the unmarked glyph lost its pattern paint ({report:?})");
 }
 
+/// Text, inline images and XObjects record their fill pattern as they are met, before the hit
+/// test, so a pattern whose only paint was text wholly under the mark is kept, and so is its cell.
+/// That is the documented direction of error (keeping paint over losing it): a cell that carries
+/// text or images is then refused by the guard, so what can stay is vector drawing nothing shows.
+#[test]
+fn a_pattern_painted_only_by_redacted_text_keeps_its_vector_cell() {
+    const DRAWING: &[u8] = b"0.1 0.2 0.3 rg 111.11 22.22 m 133.33 44.44 l 155.55 22.22 l f\n";
+    let mut doc = open(vec![
+        catalog(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 300] /Contents 5 0 R /Resources {RES} >>").into_bytes(),
+        FONT.to_vec(),
+        stream_obj("", b"BT /F1 20 Tf 40 250 Td (PUBLIC) Tj ET\nBT /F1 20 Tf /Pattern cs /P0 scn 40 120 Td (HIDDEN) Tj ET\n"),
+        stream_obj(PATTERN, DRAWING),
+    ]);
+    mark(&mut doc, 0);
+    let report = apply(&mut doc, None).unwrap();
+    assert!(report.glyphs >= 6, "{report:?}");
+    assert_eq!(report.patterns_removed, 0, "text paint keeps its pattern");
+    assert!(!saved_contains(&doc, b"(HIDDEN)"), "the glyphs are gone");
+    assert!(saved_contains(&doc, b"133.33 44.44 l"), "the vector cell is kept, as documented");
+}

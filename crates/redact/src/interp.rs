@@ -244,9 +244,11 @@ struct Glyph {
 
 /// Record the patterns an operator paints with, so [`prune_patterns`] keeps them. Only path
 /// painting knows exactly what it draws and whether the paint survived; text, images and forms
-/// are recorded as they are met, which can keep a pattern whose paint was in fact all redacted.
-/// That costs an unused resource entry, while dropping a pattern something still draws with
-/// loses paint from the page.
+/// are recorded as they are met, which can keep a pattern whose paint was in fact all redacted,
+/// and with it the pattern's cell. A cell that carries text or images is then refused by
+/// `pattern_guard`; a vector-only cell stays in the file though nothing shows it
+/// (`a_pattern_painted_only_by_redacted_text_keeps_its_vector_cell`). Dropping a pattern something
+/// still draws with would lose paint from the page instead.
 fn uses_patterns(out: &mut Output, gs: &Gs, fills: bool, strokes: bool) {
     if fills && let Some(n) = &gs.fill_pattern {
         out.patterns_painted.push(n.clone());
