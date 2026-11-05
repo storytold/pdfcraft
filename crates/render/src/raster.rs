@@ -94,6 +94,11 @@ pub struct RenderConfig {
     /// prints its layers differently from how they are shown (the Print event's auto state, ISO
     /// 32000-2 §8.11.4.4): the preview shows the page as it prints. `None`: previews use `layers`.
     pub print_layers: Option<Arc<Vec<(i32, i32, bool)>>>,
+    /// Preferences ▸ Smooth images off: an image that doesn't ask for `/Interpolate` is drawn
+    /// with its own samples, neither averaged when shrunk nor smoothed when enlarged, so
+    /// barcodes and pixel art keep hard edges (hayro patch 29). Off by default: images are
+    /// smoothed, as Acrobat's Smooth images is on by default.
+    pub sharp_images: bool,
 }
 
 impl RenderConfig {
@@ -432,6 +437,7 @@ fn render_page<'a>(
                     y_offset: t.y as f32,
                     bg_color,
                     color_replacement,
+                    sharp_images: config.sharp_images,
                     ..Default::default()
                 }
             }
@@ -454,6 +460,7 @@ fn render_page<'a>(
                     height: Some(side(h)),
                     bg_color,
                     color_replacement,
+                    sharp_images: config.sharp_images,
                     ..Default::default()
                 }
             }

@@ -167,6 +167,11 @@ pub struct RenderSettings {
     /// past it are left out, with `InterpreterWarning::ContentTruncated`. `None` keeps as many
     /// as a strip's index reaches (2^31).
     pub max_coverage: Option<usize>,
+    /// PdfCraft patch (29): images that don't ask for `/Interpolate` are drawn with their own
+    /// samples (nearest-neighbour), neither area-averaged when shrunk (21) nor smoothed when
+    /// enlarged (28): the viewer's Smooth images preference turned off, for barcodes and pixel
+    /// art that must keep hard edges. Images that ask for interpolation still get it.
+    pub sharp_images: bool,
 }
 
 impl Default for RenderSettings {
@@ -181,6 +186,7 @@ impl Default for RenderSettings {
             y_offset: 0.0,
             color_replacement: None,
             max_coverage: None,
+            sharp_images: false,
         }
     }
 }
@@ -262,6 +268,7 @@ pub fn render_into<'a>(
         vc_settings,
         cache,
         render_settings.color_replacement,
+        render_settings.sharp_images,
         interpreter_settings.preview,
     );
 
