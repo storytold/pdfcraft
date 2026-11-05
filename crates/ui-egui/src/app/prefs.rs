@@ -89,6 +89,7 @@ impl PdfCraftApp {
             "pinned_folders": self.pinned.folders,
             "theme": self.theme_preference,
             "scroll_speed": self.scroll_speed,
+            "invert_middle_drag": self.invert_middle_drag,
             "animation_effects": self.animation_effects,
             "default_mode": self.default_mode,
             "default_layout": canvas::display_token(self.view_defaults.layout, self.view_defaults.continuous),
@@ -146,6 +147,9 @@ impl PdfCraftApp {
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
         v["show_page_edge_shadows"] = self.show_page_edge_shadows.into();
+        // Not `check_updates_at_start`: that key was an opt-in of its own, off unless chosen, and
+        // settings written then would turn this off unasked.
+        v["update_check_at_start"] = self.update_check_at_start.into();
         v["hotbar"] = serde_json::to_value(&self.hotbar).unwrap_or_default();
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
@@ -159,6 +163,9 @@ impl PdfCraftApp {
     pub fn restore(&mut self, json: &str) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
         if let Ok(mut bar) = serde_json::from_value::<crate::hotbar::Hotbar>(v["hotbar"].clone()) {
+            if v["hotbar"].get("placed").is_none() {
+                bar.adopt_legacy();
+            }
             bar.normalize();
             self.hotbar = bar;
         }
@@ -215,6 +222,9 @@ impl PdfCraftApp {
         if let Some(on) = v["reload_changed_files"].as_bool() {
             self.reload_changed_files = on;
         }
+        if let Some(on) = v["update_check_at_start"].as_bool() {
+            self.update_check_at_start = on;
+        }
         if let Some(on) = v["show_secured_notice"].as_bool() {
             self.show_secured_notice = on;
         }
@@ -236,6 +246,9 @@ impl PdfCraftApp {
         }
         if let Ok(speed) = serde_json::from_value::<scroll_speed::ScrollSpeed>(v["scroll_speed"].clone()) {
             self.scroll_speed = speed;
+        }
+        if let Some(invert) = v["invert_middle_drag"].as_bool() {
+            self.invert_middle_drag = invert;
         }
         if let Ok(effects) = serde_json::from_value::<motion::AnimationEffects>(v["animation_effects"].clone()) {
             self.animation_effects = effects;
