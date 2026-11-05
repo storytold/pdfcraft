@@ -1086,6 +1086,8 @@ fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: usiz
     Some(out)
 }
 
+/// Compute Otsu's between-class variance threshold over a 256-bin luminance histogram,
+/// returning `None` when the distribution is degenerate (single-level).
 fn compute_otsu(hist: &[u32; 256], total: usize) -> Option<u8> {
     let sum: f64 = hist.iter().enumerate().map(|(i, &c)| (i as f64) * (c as f64)).sum();
     let mut wb = 0.0;
