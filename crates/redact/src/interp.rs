@@ -929,6 +929,12 @@ fn xobject(
             out.retired_properties.extend(inner.retired_properties);
             out.tag_changes.extend(inner.tag_changes);
             out.error = inner.error.or(out.error.take());
+            // A form without /Resources of its own paints with its caller's patterns, so what it
+            // still paints keeps the caller's entry. Only the painted side is passed up: a name
+            // the form selected but no longer paints with is left for the caller to keep.
+            if own.is_none() {
+                out.patterns_painted.extend(inner.patterns_painted);
+            }
             if scope.mode == Mode::Verify {
                 return None;
             }

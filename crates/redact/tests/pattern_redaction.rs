@@ -672,3 +672,31 @@ fn a_pattern_whose_only_paint_was_redacted_leaves_the_file_with_its_cell() {
         assert!(!has_decoded_secret(saved(&doc)), "the cell's text is not in the saved file (compressed: {compressed})");
     }
 }
+
+#[test]
+fn a_form_without_resources_keeps_the_page_pattern_it_still_paints() {
+    // The page fills a box under the mark with /P0, then draws a form that has no /Resources of
+    // its own, so it paints with the page's: its /P0 fill lies outside the mark and survives.
+    // The page's own fill is removed whole, but the pattern must stay for the form's.
+    let cell = b"0.2 0.4 0.6 rg 40 120 15 15 re f\n";
+    let bytes = Pdf::new()
+        .objs(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 300] /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> /Pattern << /P0 6 0 R >> /XObject << /Fm0 7 0 R >> >> >>".to_vec(),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_vec(),
+            stream_obj("", b"/Pattern cs /P0 scn 35 110 170 35 re f\n0 g\n/Fm0 Do\n"),
+            stream_obj(PATTERN, cell),
+            stream_obj("/Type /XObject /Subtype /Form /BBox [0 0 500 300]", b"/Pattern cs /P0 scn 300 200 100 40 re f\n"),
+        ])
+        .build();
+    let mut doc = Document::open(Arc::new(bytes)).unwrap();
+    mark(&mut doc, 0);
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!((report.paths_removed, report.patterns_removed), (1, 0));
+    let reopened = Document::open(Arc::new(saved(&doc))).unwrap();
+    let page = &pdfcraft_model::pages(&reopened)[0];
+    let res = reopened.dict(page.dict.get(b"Resources").unwrap()).unwrap();
+    let patterns = reopened.dict(res.get(b"Pattern").unwrap()).unwrap();
+    assert!(patterns.get(b"P0").is_some(), "the form still paints with /P0 outside the mark");
+}
