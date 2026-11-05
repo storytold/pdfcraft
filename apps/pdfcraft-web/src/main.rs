@@ -47,12 +47,11 @@ fn main() {
                     // eframe never raises a close request on a browser reload or tab close, so `guard_quit` never
                     // prompts; ask the browser to confirm instead while a document has unsaved work (#812).
                     warn_before_unload(app.unsaved_flag.clone());
-                    // Host modes (`host` below): `?host=parent`, a same-origin page embedding
-                    // PdfCraft in an iframe (such as the Nextcloud app), or `data-host="page"`
-                    // on the canvas, a host that runs the module in its own document.
-                    if host_requested()
-                        && let Some(bridge) = host::Bridge::new()
-                    {
+                    // Host modes (`host` below, over `craft-web-host`): `?host=parent`, a
+                    // same-origin page embedding PdfCraft in an iframe (such as the Nextcloud
+                    // app), or `data-host="page"` on the canvas, a host that runs the module in
+                    // its own document.
+                    if let Some(bridge) = app_canvas().as_ref().and_then(host::Bridge::connect) {
                         // `?author=`: the host's name for the user signs their comments,
                         // unless they chose a name in PdfCraft (the web default is "Guest").
                         if let Some(author) = query_param("author").map(|a| a.trim().to_string()).filter(|a| !a.is_empty())
@@ -75,9 +74,7 @@ fn main() {
             .await;
         if let Err(e) = started {
             eframe::web_sys::console::error_1(&e);
-            if host_requested()
-                && let Some(bridge) = host::Bridge::new()
-            {
+            if let Some(bridge) = app_canvas().as_ref().and_then(host::Bridge::connect) {
                 bridge.post_failed(&e.as_string().unwrap_or_else(|| format!("{e:?}")));
             }
         }
@@ -125,263 +122,112 @@ fn app_canvas() -> Option<web_sys::HtmlCanvasElement> {
     web_sys::window()?.document()?.get_element_by_id("pdfcraft").and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
 }
 
-/// Whether a host mode was asked for: `?host=parent` (the iframe bridge) or
-/// `data-host="page"` on the canvas (the host document itself). Whether a bridge can actually
-/// be built is [`host::Bridge::new`]'s answer.
-#[cfg(target_arch = "wasm32")]
-fn host_requested() -> bool {
-    query_param("host").as_deref() == Some("parent") || page_host_enabled(app_canvas().and_then(|c| c.get_attribute("data-host")).as_deref())
-}
-
-/// Host mode on the canvas is opt-in by attribute value: only the exact `page` turns it on
-/// (`data-host="page"`). Everything else — `Page`, ` page`, `parent` (the URL opt-in), empty
-/// or missing — keeps the normal app with downloads.
-#[cfg(any(target_arch = "wasm32", test))]
-fn page_host_enabled(data_host: Option<&str>) -> bool {
-    data_host == Some("page")
-}
-
-/// Host modes: how the page embedding PdfCraft passes files in and takes saves back. Both are
-/// opt-in and carry the same messages; only the transport differs, so only how an event goes
-/// out and how `open` comes in change.
+/// Host modes: how the page embedding PdfCraft passes files in and takes saves back. The messages
+/// and the two transports are `craft-web-host`'s (storytold/craft-libs), the same contract as the
+/// other Craft apps' bridges, with the `pdfcraft:` prefix. This module is PdfCraft's part of it.
 ///
-/// `?host=parent` — the `postMessage` bridge for a same-origin page that embeds PdfCraft in an
-/// iframe (such as the Nextcloud app). Messages are plain objects with a `type`, posted to the
-/// parent window:
-///
-/// - `pdfcraft:ready` (to the parent): the app is listening; send files now.
-/// - `pdfcraft:open` (from the parent): `{ name, bytes }`, where `bytes` is an `ArrayBuffer` or
-///   `Uint8Array` holding a PDF. It opens in a tab, like a `?file=` URL.
-/// - `pdfcraft:save` (to the parent): `{ name, saveAs, bytes }` when the user saves; `bytes` is
-///   a transferred `ArrayBuffer`. The parent stores the file (and reports its own errors).
-/// - `pdfcraft:dirty` (to the parent): `{ dirty }` whenever unsaved work appears or goes away.
-/// - `pdfcraft:failed` (to the parent): `{ error }` when the app couldn't start.
-///
-/// Only the parent window on the app's own origin is heard or answered. With a parent on
-/// another origin there is no bridge: the app runs as if unframed and saves download.
-///
-/// `data-host="page"` on the app's canvas — for a host
-/// that loads the wasm-bindgen module into its own document and renders on one of its own
-/// canvases, with no iframe. The same messages travel as DOM `CustomEvent`s dispatched on that
-/// canvas: the event name carries the `type`, and `detail` holds the same fields without it
-/// (`pdfcraft:ready` carries `version`, `pdfcraft:save` carries `name`, `saveAs` and a `bytes`
-/// `ArrayBuffer`). The host opens a file by dispatching a `pdfcraft:open` `CustomEvent` on the
-/// canvas with `detail: { name, bytes }`. Events do not bubble, so nothing outside the canvas
-/// hears them, and the canvas belongs to the document that loaded the module, so there is no
-/// origin check. An unframed page that asks for `?host=parent` still gets no host mode: only
-/// the exact attribute value `page` opts in.
+/// - `?host=parent` is the `postMessage` bridge for a same-origin page that embeds PdfCraft in an
+///   iframe (such as the Nextcloud app). With a parent on another origin there is no bridge: the
+///   app runs as if unframed and saves download (#2167). `data-host="page"` on the app's canvas
+///   is for a host that loads the module into its own document, with no iframe: the same messages
+///   travel as DOM `CustomEvent`s on that canvas. `?host=parent` wins when both are present.
+/// - `pdfcraft:ready` once the app is listening; send files now. PdfCraft reads bytes, so it
+///   says `file: false` and a host sends `bytes`.
+/// - `pdfcraft:open` (from the host): `{ name, bytes }` holding a PDF. It opens in a tab, like a
+///   `?file=` URL; a file over [`host::MAX_OPEN_BYTES`] is refused before it is copied.
+/// - `pdfcraft:save` (to the host): `{ name, saveAs, bytes }` when the user saves. The host stores
+///   the file (and reports its own errors).
+/// - `pdfcraft:dirty` whenever unsaved work appears or goes away, `pdfcraft:failed` when the app
+///   couldn't start.
 #[cfg(target_arch = "wasm32")]
 mod host {
-    use eframe::wasm_bindgen::{JsCast, JsValue, closure::Closure};
+    use std::rc::Rc;
 
-    use super::page_host_enabled;
+    use craft_web_host::web::{FileData, Host, Message};
 
-    #[derive(Clone)]
-    enum Transport {
-        /// A same-origin parent frame: send by `postMessage` with the origin, listen for
-        /// `message` events on the window.
-        Parent { window: web_sys::Window, parent: web_sys::Window, origin: String },
-        /// The host document itself: send by dispatching a `CustomEvent` on the app's canvas,
-        /// and listen on it for `pdfcraft:open`.
-        Page { canvas: web_sys::HtmlCanvasElement },
-    }
+    /// The app id in the host messages (`pdfcraft:ready`).
+    const APP: &str = "pdfcraft";
 
-    #[derive(Clone)]
-    pub struct Bridge {
-        transport: Transport,
-    }
-
-    impl Bridge {
-        /// Picks the transport: `?host=parent` needs a framing page with a same-origin parent;
-        /// otherwise `data-host="page"` on the app's canvas opts the host document itself in. `None` when the parent is on another origin (or when
-        /// `?host=parent` is used unframed): messages only go to this origin, so the browser
-        /// would drop every save without an error while the document showed as saved (#2167).
-        pub fn new() -> Option<Self> {
-            let window = web_sys::window()?;
-            let canvas = super::app_canvas();
-            if super::query_param("host").as_deref() != Some("parent") {
-                if page_host_enabled(canvas.as_ref().and_then(|c| c.get_attribute("data-host")).as_deref()) {
-                    return Some(Self { transport: Transport::Page { canvas: canvas? } });
-                }
-                return None;
-            }
-            let parent = window.parent().ok().flatten()?;
-            if js_sys::Object::is(&parent, &window) {
-                return None;
-            }
-            let origin = window.location().origin().ok()?;
-            // Reading another origin's location throws, which is `None` too.
-            if parent.location().origin().ok()? != origin {
-                return None;
-            }
-            Some(Self { transport: Transport::Parent { window, parent, origin } })
-        }
-
-        /// One outbound message, whatever the transport. `fields` is the payload: the parent
-        /// transport wraps it with a `type` in the posted object, the page transport puts it in
-        /// the event's `detail` as-is (the event name carries the type). `transfer` hands an
-        /// `ArrayBuffer` to the receiver instead of copying it (parent transport).
-        fn send(&self, name: &str, fields: &[(&str, JsValue)], transfer: Option<&JsValue>) -> Result<(), String> {
-            match &self.transport {
-                Transport::Parent { parent, origin, .. } => {
-                    let mut all = Vec::with_capacity(fields.len().saturating_add(1));
-                    all.push(("type", JsValue::from_str(name)));
-                    all.extend_from_slice(fields);
-                    let Some(m) = message(&all) else { return Err("couldn't build the message".to_string()) };
-                    let sent = match transfer {
-                        Some(t) => parent.post_message_with_transfer(&m, origin, &js_sys::Array::of1(t)),
-                        None => parent.post_message(&m, origin),
-                    };
-                    sent.map_err(|e| js_error(&e))
-                }
-                Transport::Page { canvas } => {
-                    let Some(detail) = message(fields) else { return Err("couldn't build the message".to_string()) };
-                    let init = web_sys::CustomEventInit::new();
-                    // The builder methods (`bubbles(..)`, `detail(..)`) are deprecated in
-                    // web-sys 0.3.106 and fail clippy -D warnings; use the setters.
-                    init.set_bubbles(false);
-                    init.set_detail(&detail);
-                    let event = web_sys::CustomEvent::new_with_event_init_dict(name, &init).map_err(|e| js_error(&e))?;
-                    // The bool says whether a listener called `preventDefault`; not a send failure.
-                    canvas.dispatch_event(&event).map(|_| ()).map_err(|e| js_error(&e))?;
-                    Ok(())
-                }
-            }
-        }
-
-        pub fn post_ready(&self) {
-            let _ = self.send("pdfcraft:ready", &[("version", env!("CARGO_PKG_VERSION").into())], None);
-        }
-
-        /// The app couldn't start (no WebGL, for example): let the host say so.
-        pub fn post_failed(&self, error: &str) {
-            let _ = self.send("pdfcraft:failed", &[("error", error.into())], None);
-        }
-
-        /// Hear `pdfcraft:open` — from the same-origin parent (a `message` on the window) or
-        /// from the host document (a `pdfcraft:open` on the canvas) — and queue the file like a
-        /// `?file=` download.
-        pub fn listen(&self, inbox: pdfcraft_ui_egui::Inbox, ctx: egui::Context) {
-            match &self.transport {
-                Transport::Parent { window, parent, origin } => {
-                    let parent = parent.clone();
-                    let origin = origin.clone();
-                    let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
-                        if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
-                            return;
-                        }
-                        let data = event.data();
-                        if string(&data, "type").as_deref() != Some("pdfcraft:open") {
-                            return;
-                        }
-                        queue_open(&data, &inbox, &ctx);
-                    });
-                    if window.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref()).is_ok() {
-                        // The listener lives as long as the page.
-                        on_message.forget();
-                    }
-                }
-                Transport::Page { canvas } => {
-                    let on_open = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
-                        let Some(open) = event.dyn_ref::<web_sys::CustomEvent>() else { return };
-                        queue_open(&open.detail(), &inbox, &ctx);
-                    });
-                    if canvas.add_event_listener_with_callback("pdfcraft:open", on_open.as_ref().unchecked_ref()).is_ok() {
-                        // The listener lives as long as the page.
-                        on_open.forget();
-                    }
-                }
-            }
-        }
-
-        pub fn save_fn(&self) -> pdfcraft_ui_egui::HostSaveFn {
-            let bridge = self.clone();
-            Box::new(move |name: &str, bytes: &[u8], save_as: bool| {
-                let buffer = js_sys::Uint8Array::from(bytes).buffer();
-                bridge.send("pdfcraft:save", &[("name", name.into()), ("saveAs", save_as.into()), ("bytes", buffer.clone().into())], Some(&buffer))
-            })
-        }
-
-        pub fn dirty_fn(&self) -> pdfcraft_ui_egui::HostDirtyFn {
-            let bridge = self.clone();
-            let mut last = false;
-            Box::new(move |dirty: bool| {
-                if dirty != last {
-                    last = dirty;
-                    let _ = bridge.send("pdfcraft:dirty", &[("dirty", dirty.into())], None);
-                }
-            })
-        }
-    }
+    /// The name a file gets when the host sent none (the crate says `document` for a blank name).
+    const DEFAULT_NAME: &str = "document.pdf";
 
     /// The largest file the host may hand over to open, checked before it is copied (the app's own readers have their own limits).
     const MAX_OPEN_BYTES: u64 = 512 << 20;
 
-    /// The longest file name taken from the host.
-    const MAX_NAME_CHARS: usize = 255;
+    #[derive(Clone)]
+    pub struct Bridge {
+        host: Rc<Host>,
+    }
 
-    /// The `pdfcraft:open` payload, `{ name, bytes }` where `bytes` is an `ArrayBuffer` or
-    /// `Uint8Array` holding a PDF: queue it like a `?file=` download and wake the app.
-    fn queue_open(data: &JsValue, inbox: &pdfcraft_ui_egui::Inbox, ctx: &egui::Context) {
-        let name: String = string(data, "name")
-            .filter(|n| !n.trim().is_empty())
-            .unwrap_or_else(|| "document.pdf".to_string())
-            .chars()
-            .take(MAX_NAME_CHARS)
-            .collect();
-        let Ok(bytes) = js_sys::Reflect::get(data, &JsValue::from_str("bytes")) else { return };
-        let view = if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
-            array.clone()
-        } else if bytes.is_instance_of::<js_sys::ArrayBuffer>() {
-            js_sys::Uint8Array::new(&bytes)
-        } else {
+    impl Bridge {
+        /// The bridge for this page, or `None` when PdfCraft isn't hosted: no `?host=parent` and
+        /// no `data-host="page"` on the canvas, an unframed `?host=parent` page, or a parent on
+        /// another origin (messages only go to this origin, so the browser would drop every save
+        /// without an error while the document showed as saved, #2167).
+        pub fn connect(canvas: &web_sys::HtmlCanvasElement) -> Option<Self> {
+            Some(Self { host: Rc::new(Host::connect(APP, canvas)?) })
+        }
+
+        pub fn post_ready(&self) {
+            let _ = self.host.post_ready(env!("CARGO_PKG_VERSION"), false);
+        }
+
+        /// The app couldn't start (no WebGL, for example): let the host say so.
+        pub fn post_failed(&self, error: &str) {
+            let _ = self.host.post_failed(error, None);
+        }
+
+        /// Hear `pdfcraft:open` and queue the file like a `?file=` download.
+        pub fn listen(&self, inbox: pdfcraft_ui_egui::Inbox, ctx: egui::Context) {
+            self.host.listen(move |message| {
+                if let Message::Open { name, data } = message {
+                    queue_open(&name, &data, &inbox, &ctx);
+                }
+            });
+        }
+
+        pub fn save_fn(&self) -> pdfcraft_ui_egui::HostSaveFn {
+            let host = self.host.clone();
+            Box::new(move |name: &str, bytes: &[u8], save_as: bool| host.post_save(name, bytes, None, save_as))
+        }
+
+        pub fn dirty_fn(&self) -> pdfcraft_ui_egui::HostDirtyFn {
+            let host = self.host.clone();
+            // A host starts out clean: the first report is a change only when it is dirty.
+            let mut last = false;
+            Box::new(move |dirty: bool| {
+                if dirty != last {
+                    last = dirty;
+                    host.post_dirty(dirty);
+                }
+            })
+        }
+    }
+
+    /// The `pdfcraft:open` payload, `{ name, bytes }` where `bytes` holds a PDF: queue it like a
+    /// `?file=` download and wake the app. The crate has cleaned the name (and cut it to 255
+    /// characters); a blank one comes as `document` and becomes `document.pdf`.
+    fn queue_open(name: &str, data: &FileData, inbox: &pdfcraft_ui_egui::Inbox, ctx: &egui::Context) {
+        let name = if name == "document" { DEFAULT_NAME } else { name }.to_string();
+        let FileData::Bytes(view) = data else {
+            eframe::web_sys::console::warn_1(&format!("PdfCraft: host file {name} came as a File; PdfCraft reads bytes only; not opened").into());
             return;
         };
         // A file from the host is untrusted input: refuse an oversized one before copying it into the app's memory.
-        if u64::from(view.length()) > MAX_OPEN_BYTES {
+        if data.size() > MAX_OPEN_BYTES as f64 {
             eframe::web_sys::console::warn_1(
-                &format!("PdfCraft: host file is {} bytes, over the {} MiB host open limit; not opened", view.length(), MAX_OPEN_BYTES >> 20).into(),
+                &format!("PdfCraft: host file is {} bytes, over the {} MiB host open limit; not opened", data.size(), MAX_OPEN_BYTES >> 20).into(),
             );
             return;
         }
-        let bytes = view.to_vec();
         if let Ok(mut q) = inbox.lock() {
-            q.push((name, bytes));
+            q.push((name, view.to_vec()));
         }
         ctx.request_repaint();
-    }
-
-    fn message(fields: &[(&str, JsValue)]) -> Option<js_sys::Object> {
-        let m = js_sys::Object::new();
-        for (key, value) in fields {
-            js_sys::Reflect::set(&m, &JsValue::from_str(key), value).ok()?;
-        }
-        Some(m)
-    }
-
-    fn string(data: &JsValue, key: &str) -> Option<String> {
-        js_sys::Reflect::get(data, &JsValue::from_str(key)).ok()?.as_string()
-    }
-
-    fn js_error(value: &JsValue) -> String {
-        value.as_string().unwrap_or_else(|| format!("{value:?}"))
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     eprintln!("pdfcraft-web targets wasm32: run `trunk serve` or `trunk build --release` in apps/pdfcraft-web");
-}
-
-#[cfg(test)]
-mod page_host_tests {
-    use super::page_host_enabled;
-
-    #[test]
-    fn only_the_exact_value_page_enables_the_page_host_mode() {
-        assert!(page_host_enabled(Some("page")));
-        for off in [None, Some(""), Some("Page"), Some("PAGE"), Some(" page"), Some("page "), Some("parent")] {
-            assert!(!page_host_enabled(off), "{off:?} must keep host mode off");
-        }
-    }
 }

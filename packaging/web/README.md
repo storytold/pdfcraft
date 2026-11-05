@@ -128,6 +128,8 @@ await init({ module_or_path: "./pdfcraft-web-<hash>_bg.wasm" });
   present it takes precedence, so a same-origin framed page uses the parent bridge, while an
   unframed or cross-origin page gets no bridge and keeps normal downloads.
 
+The messages and both transports are the shared contract of [`craft-web-host`](https://github.com/storytold/craft-libs/tree/main/crates/web-host) (storytold/craft-libs#420), the same for every Craft app: its README lists every message, including `saved`, with the compatibility notes. In `pdfcraft:ready`, `version` is the contract's (`"1"`) and `appVersion` is this app's release. PdfCraft reads bytes, so a host sends `bytes`, not a `File`.
+
 ### Trust and limits
 
 - **Who is trusted.** In page host mode the page and PdfCraft share one document, so any script on the page can drive the app: open files in it and receive what it saves. Use this mode only for a page you control. The iframe mode (`?host=parent`) answers only the parent window, on the page's own origin.
