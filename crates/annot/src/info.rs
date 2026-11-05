@@ -47,8 +47,12 @@ pub(crate) fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String>
         Object::Name(n) => String::from_utf8_lossy(n).into_owned(),
         _ => return None,
     };
-    let s = s.trim_matches('\0').trim().to_string();
-    (!s.is_empty()).then_some(s)
+    let s = s.trim_matches('\0');
+    // Typewriter outer whitespace belongs to the text (keep in step with render's inspector).
+    let name_is = |key: &[u8], expected: &[u8]| d.get(key).is_some_and(|o| doc.resolve(o).as_name() == Some(expected));
+    let keep_breaks = key == b"Contents" && name_is(b"Subtype", b"FreeText") && name_is(b"IT", b"FreeTextTypeWriter");
+    let s = if keep_breaks { s } else { s.trim() };
+    (!s.trim().is_empty()).then(|| s.to_owned())
 }
 
 /// Whether an annotation subtype is a comment. Links, form widgets, pop-ups and the non-markup
@@ -213,6 +217,11 @@ pub struct Props {
     pub fill: Option<Rgb>,
     /// Text boxes, typewriter text and callouts: the `/DA` font size in points.
     pub font_size: Option<f64>,
+    /// How opaque the fill is drawn, for a comment with a fill control (`opacity` is then its
+    /// line's or border's).
+    pub fill_opacity: Option<f64>,
+    /// How opaque a text box's, typewriter text's or callout's text is drawn.
+    pub text_opacity: Option<f64>,
 }
 
 /// The current properties of the comment at `(page, index)`.
@@ -235,7 +244,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         author: text_value(doc, d, b"T").unwrap_or_default(),
         subject: text_value(doc, d, b"Subj").unwrap_or_default(),
         color,
-        opacity: d.get(b"CA").and_then(|o| o.as_f64()).unwrap_or(1.0),
+        opacity: appearance::part_opacity(d).line,
         width,
         icon: (subtype == "Text").then(|| d.name(b"Name").and_then(|n| NoteIcon::from_name(&String::from_utf8_lossy(n))).unwrap_or(NoteIcon::Note)),
         modified: text_value(doc, d, b"M"),
@@ -244,6 +253,8 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         fillable: fillable(&subtype),
         fill: fill_of(d),
         font_size: (subtype == "FreeText").then(|| appearance::parse_da(d).1),
+        fill_opacity: fillable(&subtype).then(|| appearance::part_opacity(d).fill),
+        text_opacity: (subtype == "FreeText").then(|| appearance::part_opacity(d).text),
         subtype,
         endings: line_endings_of(d),
     })

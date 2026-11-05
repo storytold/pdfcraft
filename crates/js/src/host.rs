@@ -8,6 +8,7 @@ use super::{
 pub(crate) struct Host {
     pub(crate) fields: Arc<Vec<FieldState>>,
     pub(crate) changed: BTreeSet<usize>,
+    pub(crate) formatted: BTreeSet<usize>,
     pub(crate) alerts: Vec<Message>,
     pub(crate) console: Vec<String>,
     pub(crate) requests: Vec<Request>,

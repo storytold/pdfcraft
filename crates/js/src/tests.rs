@@ -25,7 +25,8 @@ fn go(script: &str, event: &Event) -> Outcome {
 
 #[test]
 fn calculate_now_reports_errors_and_continues() {
-    let calculations = vec![("bad".into(), "throw new Error('broken');".into()), ("good".into(), "event.value = 'ok';".into())];
+    let calculations =
+        vec![("bad".into(), "getField('price').value = 'partial'; throw new Error('broken');".into()), ("good".into(), "event.value = 'ok';".into())];
     let state = Arc::new(vec![FieldState::new("bad", FieldType::Text, vec![]), FieldState::new("good", FieldType::Text, vec![])]);
     let outcome = run_shared_calculations(
         "calculateNow(); console.println('continued');",
@@ -40,6 +41,8 @@ fn calculate_now_reports_errors_and_continues() {
     assert!(outcome.console.iter().any(|line| line.contains("calculation script for bad failed: Error: broken")), "{outcome:?}");
     assert!(outcome.console.iter().any(|line| line == "continued"), "{outcome:?}");
     assert_eq!(outcome.changed.iter().find(|field| field.name == "good").unwrap().value, ["ok"]);
+    assert!(outcome.changed.iter().all(|field| field.name != "price"), "{outcome:?}");
+    assert_eq!(outcome.formatted, ["good"]);
 }
 
 #[test]
@@ -1073,6 +1076,20 @@ mod formcalc {
         assert_eq!(calc(r#"Format("9.9", -0.04)"#), "0.0");
         assert_eq!(calc(r#"Format("99", -0.2)"#), "00");
         assert_eq!(calc(r#"Format("9.9", -1.5)"#), "-1.5");
+    }
+
+    /// A calculated amount shows the number it is, not the binary noise past a double's 15
+    /// significant digits: 279893.88 is stored as 279893.880000000004656…, which twelve fixed
+    /// decimals printed as `279893.880000000005`. Small values keep their twelve decimals.
+    #[test]
+    fn calculated_numbers_print_at_most_fifteen_significant_digits() {
+        assert_eq!(calc("1 * 279893.88"), "279893.88");
+        assert_eq!(calc("1 * 291774.12"), "291774.12");
+        assert_eq!(calc("279893.88 + 291774.12 + 304171.06 + 317107.44 + 273970.85"), "1466917.35");
+        assert_eq!(calc("1000000 / 3"), "333333.333333333");
+        assert_eq!(calc("1000 / 3"), "333.333333333333");
+        assert_eq!(calc("1 / 3"), "0.333333333333");
+        assert_eq!(calc("0.1 + 0.2"), "0.3");
     }
 
     /// Assigning one long value to many fields at once stops at the run's byte budget and is

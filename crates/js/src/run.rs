@@ -159,11 +159,14 @@ pub fn run_shared_calculations_shared(
     let (kept, skipped) = (&kept, &skipped);
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // The script's thread writes dates as this one asked (`with_english_printd`).
+        let english = crate::format::printd_english();
         std::thread::scope(|scope| {
-            let spawned = std::thread::Builder::new()
-                .name("pdfcraft-js".into())
-                .stack_size(SCRIPT_STACK)
-                .spawn_scoped(scope, || run_here(script, event, doc, fields, ScriptSetup { doc_scripts: kept, skipped, calculations }, limits));
+            let spawned = std::thread::Builder::new().name("pdfcraft-js".into()).stack_size(SCRIPT_STACK).spawn_scoped(scope, || {
+                crate::format::with_english_printd(english, || {
+                    run_here(script, event, doc, fields, ScriptSetup { doc_scripts: kept, skipped, calculations }, limits)
+                })
+            });
             match spawned {
                 Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),
                 Err(e) => failed(format!("the script engine could not start: {e}")),
@@ -232,6 +235,7 @@ fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldSta
     ctx.insert_data(RefCell::new(Host {
         fields,
         changed: BTreeSet::new(),
+        formatted: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
         requests: Vec::new(),
@@ -276,6 +280,7 @@ fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldSta
     if let Some(h) = ctx.remove_data::<Shared>() {
         let h = h.into_inner();
         out.changed = h.changed.iter().map(|i| h.fields[*i].clone()).collect();
+        out.formatted = h.formatted.iter().filter_map(|&i| h.fields.get(i).map(|f| f.name.clone())).collect();
         out.alerts = h.alerts;
         out.console = h.console;
         out.requests = h.requests;

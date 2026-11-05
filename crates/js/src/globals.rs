@@ -183,8 +183,16 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
             let event = Event::field("Calculate", name, &field.value.first().cloned().unwrap_or_default());
             let object = event_object(ctx, &event);
             ctx.global_object().set(js_string!("event"), object.clone(), true, ctx)?;
+            let (fields_before, changed_before, formatted_before) = {
+                let h = host(ctx)?.borrow();
+                (Arc::clone(&h.fields), h.changed.clone(), h.formatted.clone())
+            };
             if let Err(cause) = ctx.eval(Source::from_bytes(script)) {
-                host(ctx)?.borrow_mut().print(format!("calculation script for {name} failed: {cause}"));
+                let mut h = host(ctx)?.borrow_mut();
+                h.fields = fields_before;
+                h.changed = changed_before;
+                h.formatted = formatted_before;
+                h.print(format!("calculation script for {name} failed: {cause}"));
                 continue;
             }
             let rc = object.get(js_string!("rc"), ctx)?;
@@ -199,6 +207,7 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
                 let target = Arc::make_mut(&mut h.fields).get_mut(index).ok_or_else(|| error("the field is no longer available"))?;
                 target.value = vec![value];
                 h.changed.insert(index);
+                h.formatted.insert(index);
             }
         }
         Ok(JsValue::undefined())

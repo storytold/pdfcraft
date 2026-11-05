@@ -127,7 +127,11 @@ fn field_state_with_display(f: &Field, display: i32) -> pdfcraft_js::FieldState 
 }
 
 /// The changes a script made, against the fields as they were.
-fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]) -> Vec<FieldChange> {
+fn changes(
+    before: &[pdfcraft_js::FieldState],
+    after: &[pdfcraft_js::FieldState],
+    formatted: &std::collections::BTreeSet<String>,
+) -> Vec<FieldChange> {
     if after.is_empty() {
         return Vec::new();
     }
@@ -144,6 +148,7 @@ fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]
             let c = FieldChange {
                 name: a.name.clone(),
                 value: (a.value != b.value).then(|| a.value.clone()),
+                formatted: a.value != b.value && formatted.contains(&a.name),
                 read_only: (a.readonly != b.readonly).then_some(a.readonly),
                 required: (a.required != b.required).then_some(a.required),
                 display: (a.display != b.display).then_some(a.display),
@@ -253,6 +258,24 @@ impl Scripts for JsRunner {
     /// Run field `target`'s script for `event` over the form's fields, keeping what it showed and
     /// asked for; a refusal carries its last message.
     fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult {
+        // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
+        self.run_logged(event, script, target, value, fields, true).unwrap_or_else(|| ScriptResult {
+            rc: true,
+            value: value.to_string(),
+            changes: Vec::new(),
+            message: None,
+        })
+    }
+
+    fn rerun_with_english_dates(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> Option<ScriptResult> {
+        pdfcraft_js::with_english_printd(true, || self.run_logged(event, script, target, value, fields, false))
+    }
+}
+
+impl JsRunner {
+    /// [`Scripts::run`], keeping what the script showed and asked for only when `log`; `None`
+    /// when the script failed.
+    fn run_logged(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], log: bool) -> Option<ScriptResult> {
         let states: Vec<_> = fields
             .iter()
             .map(|f| {
@@ -275,17 +298,18 @@ impl Scripts for JsRunner {
             &calculations,
             Limits::default(),
         );
-        self.output.absorb(&o);
-        if o.error.is_some() {
-            // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
-            return ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None };
+        if log {
+            self.output.absorb(&o);
         }
-        ScriptResult {
+        if o.error.is_some() {
+            return None;
+        }
+        Some(ScriptResult {
             rc: o.rc,
             value: o.value.clone(),
-            changes: changes(&states, &o.changed),
+            changes: changes(&states, &o.changed, &o.formatted),
             message: (!o.rc).then(|| o.alerts.last().map(|m| m.text.clone())).flatten(),
-        }
+        })
     }
 }
 
@@ -369,7 +393,7 @@ impl Session {
             &calculations,
             Limits::default(),
         );
-        let changes = changes(&states, &o.changed);
+        let changes = changes(&states, &o.changed, &o.formatted);
         let resets: Vec<Vec<String>> = o
             .requests
             .iter()
@@ -595,8 +619,9 @@ mod review_tests {
         second.value = vec!["second".into()];
         second.display = pdfcraft_js::DISPLAY_HIDDEN;
         let before = vec![first.clone(), second.clone()];
-        assert!(changes(&before, std::slice::from_ref(&first)).is_empty());
-        let actual = changes(&before, std::slice::from_ref(&second));
+        let formatted = std::collections::BTreeSet::new();
+        assert!(changes(&before, std::slice::from_ref(&first), &formatted).is_empty());
+        let actual = changes(&before, std::slice::from_ref(&second), &formatted);
         assert_eq!(
             actual,
             vec![FieldChange {
@@ -618,12 +643,12 @@ mod review_tests {
         assert_eq!(outcome.value, "first");
         assert_eq!(outcome.changed.len(), 1);
         assert_eq!(
-            changes(&before, &outcome.changed),
+            changes(&before, &outcome.changed, &outcome.formatted),
             vec![FieldChange { name: "duplicate".into(), value: Some(vec!["updated".into()]), ..Default::default() }]
         );
-        assert!(changes(&before, &[]).is_empty());
+        assert!(changes(&before, &[], &formatted).is_empty());
         let mut missing = first;
         missing.name = "missing".into();
-        assert!(changes(&before, &[missing]).is_empty());
+        assert!(changes(&before, &[missing], &formatted).is_empty());
     }
 }
