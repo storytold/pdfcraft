@@ -166,6 +166,8 @@ pub enum Dialog {
     AccessibilityOptions,
     /// Scan & OCR ▸ Recognize text.
     RecognizeText,
+    /// Scan & OCR ▸ Enhance scanned file.
+    EnhanceScan,
     /// The JavaScript console (⌘J).
     JsConsole,
     /// Document JavaScripts.
@@ -365,6 +367,11 @@ impl UnlockPrompt {
         Self { doc: doc.id, name: doc.name.clone(), input: String::new(), error: None, then }
     }
 }
+
+/// How many recent files are kept until Preferences says otherwise.
+pub const RECENT_FILES_DEFAULT: usize = 12;
+/// The most Preferences can ask to keep.
+pub const RECENT_FILES_MAX: usize = 50;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct RecentFile {

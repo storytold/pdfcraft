@@ -54,6 +54,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
         | Edit::AddCustomStamp { .. }
+        | Edit::AddModel3d { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
         | Edit::ReplyToAnnotation { .. }
@@ -77,6 +78,7 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
         | Edit::EditPageImage { .. }
+        | Edit::EnhanceScan { .. }
         | Edit::AddText { .. }
         | Edit::AddImage { .. }
         | Edit::UpdateContent { .. }
