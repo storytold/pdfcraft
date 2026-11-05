@@ -654,6 +654,9 @@ fn a_blending_space_is_device_independent_and_an_intent_has_a_profile() {
     assert!(check("", &page("/CS [/ICCBased 4 0 R]", ""), &[&icc(3, "")]).is_empty(), "an ICC profile of three components");
     for (what, cs, extra) in [
         ("Indexed", "/CS [/Indexed /DeviceRGB 1 <000000FFFFFF>]".to_owned(), vec![]),
+        ("CalRGB without its dictionary", "/CS [/CalRGB]".to_owned(), vec![]),
+        ("CalGray without a white point", "/CS [/CalGray << >>]".to_owned(), vec![]),
+        ("CalRGB with a short white point", "/CS [/CalRGB << /WhitePoint [0.9505 1] >>]".to_owned(), vec![]),
         ("Lab", "/CS [/Lab << /WhitePoint [0.9505 1 1.089] >>]".to_owned(), vec![]),
         (
             "Separation",
