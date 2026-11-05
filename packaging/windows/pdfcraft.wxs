@@ -1,16 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <?ifndef ProductCode?>
+    <?define ProductCode="*"?>
+  <?endif?>
   <?ifndef HasCraftFontLicences ?>
   <?define HasCraftFontLicences=0 ?>
   <?endif?>
-  <Package Name="PdfCraft" Manufacturer="Learning Machines LLC" Version="$(var.Version)" UpgradeCode="EA00C367-7270-4C50-9D8B-A7A5C88AD27F" Scope="perUserOrMachine" Compressed="yes" Language="1033">
-    <SummaryInformation Description="PdfCraft PDF workbench" Manufacturer="Learning Machines LLC" />
+  <Package ProductCode="$(var.ProductCode)" Name="PdfCraft" Manufacturer="Learning Machines LLC" Version="$(var.Version)" UpgradeCode="EA00C367-7270-4C50-9D8B-A7A5C88AD27F" Scope="perUserOrMachine" Compressed="yes" Language="!(loc.Language)" Codepage="!(loc.Codepage)">
+    <SummaryInformation Description="!(loc.PackageDescription)" Manufacturer="Learning Machines LLC" />
     <?include $(sys.SOURCEFILEDIR)install-policy.wxi?>
     <!-- HKLM registrations must never point into a per-user installation (#305). Allow removal
          of an existing installation even if an older MSI let it install per-user. -->
     <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
          (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
-    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of PdfCraft is already installed." />
+    <!-- Keep shared component GUIDs stable: installing over the old product preserves
+         SCM's account and protected password, including an administrator-selected gMSA. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallExecute"
+        DowngradeErrorMessage="!(loc.DowngradeError)" />
+    <!-- Preview binaries may share a numeric FileVersion. Replace packaged payload
+         even at equal versions; user tasks/secrets are not installer-owned files. -->
+    <Property Id="REINSTALLMODE" Value="amus" />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <!-- Windows Installer requires an Icon id ending in .ico or .exe, or advertised shortcuts and
@@ -63,7 +72,34 @@
     <Property Id="EXISTINGIMAGECONTEXTMENU" Secure="yes">
       </Property>
     <SetProperty Id="INSTALLIMAGECONTEXTMENU" Value="1" After="CraftLoadOption2U" Sequence="first" Condition="NOT INSTALLIMAGECONTEXTMENU AND (NOT IMAGECONTEXTMENURELEASE OR EXISTINGIMAGECONTEXTMENU)" />
+    <!-- Opt-in companion. INSTALLHOTFOLDER=1 also works for unattended deployment. It registers
+         a Windows service and protects ProgramData, so it installs only for everyone (ALLUSERS=1);
+         an installation for one account leaves it out. -->
+    <Property Id="INSTALLHOTFOLDER" Secure="yes" />
+    <Property Id="HOTFOLDERPRESENT" Secure="yes">
+      <RegistrySearch Id="ExistingHotFolder" Root="HKLM" Key="Software\PdfCraft\HotFolder" Name="TaskFile" Type="raw" />
+    </Property>
+    <SetProperty Id="INSTALLHOTFOLDER" Value="1" After="AppSearch" Sequence="both"
+        Condition="HOTFOLDERPRESENT AND NOT INSTALLHOTFOLDER" />
+    <!-- InstallServices reconfigures an existing service, including its logon.
+         Detect registration independently of retained task data. Do not read or
+         transport credentials: SCM keeps the existing account and password. -->
+    <Property Id="HOTFOLDERSERVICEACCOUNT" Secure="yes">
+      <RegistrySearch Id="ExistingHotFolderService" Root="HKLM"
+          Key="SYSTEM\CurrentControlSet\Services\PdfCraftHotFolder" Name="ObjectName" Type="raw" />
+    </Property>
     <UIRef Id="PdfcraftInstallerUI" />
+
+    <!-- Use the safe service API rather than MSI 5's unreliable ServiceConfig table.
+         The fixed installed executable runs elevated, after service registration and
+         before its first start. No account passwords enter MSI properties or logs. -->
+    <CustomAction Id="PrepareHotFolderService" FileRef="PdfcraftHotFolderExe"
+        ExeCommand="--service-action prepare-account --config &quot;[HotFolderData]tasks.json&quot;"
+        Execute="deferred" Impersonate="no" Return="check" />
+    <InstallExecuteSequence>
+      <InstallServices Condition="NOT HOTFOLDERSERVICEACCOUNT" />
+      <Custom Action="PrepareHotFolderService" Before="StartServices" Condition="$PdfcraftHotFolderApp = 3" />
+    </InstallExecuteSequence>
 
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="CraftSuiteFolder" Name="ArtCraft">
@@ -74,6 +110,13 @@
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
     <StandardDirectory Id="DesktopFolder" />
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="PdfcraftProgramData" Name="PdfCraft">
+        <Directory Id="HotFolderData" Name="HotFolder">
+          <Directory Id="HotFolderSecrets" Name="secrets" />
+        </Directory>
+      </Directory>
+    </StandardDirectory>
 
     <Feature Id="Main" Title="PdfCraft" Level="1">
       <?if $(var.HasCraftFontLicences) = 1 ?>
@@ -82,6 +125,13 @@
       <ComponentGroupRef Id="PdfcraftFiles" />
       <ComponentGroupRef Id="PdfcraftModels" />
     </Feature>
+    <Feature Id="HotFolder" Title="PdfCraft Hot Folder"
+        Description="!(loc.HotFolderFeatureDescription)" Level="2" AllowAdvertise="no">
+      <Level Value="1" Condition="INSTALLHOTFOLDER = 1 AND ALLUSERS = 1" />
+      <!-- A Windows service cannot belong to one account's installation. -->
+      <Level Value="0" Condition="ALLUSERS &lt;&gt; 1" />
+      <ComponentGroupRef Id="PdfcraftHotFolderFiles" />
+    </Feature>
   <Property Id="CRAFT_OPTION_1_M" Secure="yes"><RegistrySearch Id="CRAFT_OPTION_1_MSearch" Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit" Type="raw" />
     </Property><SetProperty Id="EXISTINGPDFCONTEXTMENU" Action="CraftLoadOption1M" Value="[CRAFT_OPTION_1_M]" After="LaunchConditions" Sequence="both" Condition="ALLUSERS = 1" /><Property Id="CRAFT_OPTION_1_U" Secure="yes"><RegistrySearch Id="CRAFT_OPTION_1_USearch" Root="HKCU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit" Type="raw" />
     </Property><SetProperty Id="EXISTINGPDFCONTEXTMENU" Action="CraftLoadOption1U" Value="[CRAFT_OPTION_1_U]" After="CraftLoadOption1M" Sequence="both" Condition="ALLUSERS &lt;&gt; 1" /><Property Id="CRAFT_OPTION_2_M" Secure="yes"><RegistrySearch Id="CRAFT_OPTION_2_MSearch" Root="HKLM" Key="Software\Classes\SystemFileAssociations\.png\shell\PdfCraft.CreatePdf" Type="raw" />
@@ -89,6 +139,46 @@
     </Property><SetProperty Id="EXISTINGIMAGECONTEXTMENU" Action="CraftLoadOption2U" Value="[CRAFT_OPTION_2_U]" After="CraftLoadOption2M" Sequence="both" Condition="ALLUSERS &lt;&gt; 1" /></Package>
 
   <Fragment>
+    <!-- Installed only for everyone (see the HotFolder feature), where HKMU is HKLM. -->
+    <ComponentGroup Id="PdfcraftHotFolderFiles" Directory="INSTALLFOLDER">
+      <Component Id="PdfcraftHotFolderApp" Guid="BB2EC64C-7ADB-4D81-A11D-7FBA0A37BB9A">
+        <File Id="PdfcraftHotFolderExe" Source="$(var.BinDir)\pdfcraft-hot-folder.exe" KeyPath="yes" />
+        <ServiceInstall Id="HotFolderService" Name="PdfCraftHotFolder" DisplayName="PdfCraft Hot Folder"
+            Description="!(loc.ServiceDescription)"
+            Type="ownProcess" Start="auto" ErrorControl="normal" Vital="yes"
+            Account="NT AUTHORITY\LocalService"
+            Arguments="--service --config &quot;[HotFolderData]tasks.json&quot;">
+          <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart"
+              ThirdFailureActionType="restart" ResetPeriodInDays="1" RestartServiceDelayInSeconds="60" />
+        </ServiceInstall>
+        <ServiceControl Id="HotFolderServiceControl" Name="PdfCraftHotFolder"
+            Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      </Component>
+      <Component Id="PdfcraftHotFolderSecrets" Directory="HotFolderSecrets" Guid="4D641968-81D3-474E-867D-C03E18E80584">
+        <CreateFolder>
+          <PermissionEx Sddl="D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-80-4013549229-3107762393-4025766903-2826249871-1347187068)" />
+        </CreateFolder>
+        <RegistryValue Root="HKMU" Key="Software\PdfCraft\HotFolder" Name="SecretsDirectory"
+            Type="string" Value="[HotFolderSecrets]" KeyPath="yes" />
+      </Component>
+      <Component Id="PdfcraftHotFolderData" Directory="HotFolderData" Guid="6A9F747C-23E8-4242-9779-157B44B4CBF0">
+        <!-- An unelevated user may inspect task state, but only administrators and the
+             restricted service account can change the configured work. Keep user tasks on uninstall. -->
+        <CreateFolder>
+          <PermissionEx Sddl="D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-80-4013549229-3107762393-4025766903-2826249871-1347187068)(A;OICI;GRGX;;;BU)" />
+        </CreateFolder>
+        <RegistryValue Root="HKMU" Key="Software\PdfCraft\HotFolder" Name="TaskFile"
+            Type="string" Value="[HotFolderData]tasks.json" KeyPath="yes" />
+      </Component>
+      <Component Id="PdfcraftHotFolderShortcut" Directory="ProgramMenuFolder" Guid="3750C6ED-93C7-430E-9DAD-873060F5CF38">
+        <Shortcut Id="HotFolderStartMenuShortcut" Name="PdfCraft Hot Folder"
+            Description="!(loc.HotFolderShortcutDescription)"
+            Target="[#PdfcraftHotFolderExe]" Arguments="--config &quot;[HotFolderData]tasks.json&quot;" WorkingDirectory="INSTALLFOLDER"
+            Icon="PdfcraftIcon.ico" IconIndex="0" />
+        <RegistryValue Root="HKMU" Key="Software\PdfCraft\Shortcuts" Name="HotFolder" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
     <?if $(var.HasCraftFontLicences) = 1 ?>
     <ComponentGroup Id="CraftFontLicences" Directory="INSTALLFOLDER">
       <Files Include="$(var.DocsDir)\**" />
@@ -98,6 +188,19 @@
       <Component Id="PdfcraftApp" Guid="E724C1C6-091F-4E21-A685-80D089FDBE21">
         <File Id="PdfcraftExe" Source="$(var.BinDir)\pdfcraft.exe" KeyPath="yes" />
 
+        <!-- Clear legacy image-menu keys before WriteRegistryValues recreates the opted-in
+             menu. Late product removal preserves shared components and the SCM account. -->
+        <RemoveRegistryKey Id="LegacyImageMenu_png" Root="HKMU" Key="Software\Classes\SystemFileAssociations\.png\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_jpg" Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpg\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_jpeg" Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpeg\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_tif" Root="HKMU" Key="Software\Classes\SystemFileAssociations\.tif\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_tiff" Root="HKMU" Key="Software\Classes\SystemFileAssociations\.tiff\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_gif" Root="HKMU" Key="Software\Classes\SystemFileAssociations\.gif\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_bmp" Root="HKMU" Key="Software\Classes\SystemFileAssociations\.bmp\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_jp2" Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jp2\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_j2k" Root="HKMU" Key="Software\Classes\SystemFileAssociations\.j2k\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+        <RemoveRegistryKey Id="LegacyImageMenu_jpx" Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpx\shell\PdfCraft.CreatePdf" Action="removeOnInstall" />
+
         <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\pdfcraft.exe" Value="[#PdfcraftExe]" Type="string" />
 
         <!-- PDF files (#107): PdfCraft is offered under "Open with" and in Settings ▸ Default
@@ -106,7 +209,7 @@
              .pdf's own default value is left alone, and the user chooses. Without this, the only
              PdfCraft entry to pick was the advertised Start Menu shortcut, which Windows can't
              run as a file handler ("This app can't run on your PC"). -->
-        <RegistryValue Root="HKMU" Key="Software\Classes\PdfCraft.Document" Value="PDF Document" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\PdfCraft.Document" Value="!(loc.DocumentDescription)" Type="string" />
         <!-- A negative index selects the stable icon resource ID, rather than its position.
              Resource 1 is the app's lion; resource 2 is the PDF document (build.rs). -->
         <RegistryValue Root="HKMU" Key="Software\Classes\PdfCraft.Document\DefaultIcon" Value="&quot;[#PdfcraftExe]&quot;,-2" Type="string" />
@@ -122,7 +225,7 @@
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\pdfcraft.exe\SupportedTypes" Name=".pdf" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\pdfcraft.exe\shell\open\command" Value="&quot;[#PdfcraftExe]&quot; &quot;%1&quot;" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\PdfCraft\Capabilities" Name="ApplicationName" Value="PdfCraft" Type="string" />
-        <RegistryValue Root="HKMU" Key="Software\PdfCraft\Capabilities" Name="ApplicationDescription" Value="Open-source PDF workbench" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\PdfCraft\Capabilities" Name="ApplicationDescription" Value="!(loc.AppDescription)" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\PdfCraft\Capabilities" Name="ApplicationIcon" Value="[#PdfcraftExe],0" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\PdfCraft\Capabilities\FileAssociations" Name=".pdf" Value="PdfCraft.Document" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\RegisteredApplications" Name="PdfCraft" Value="Software\PdfCraft\Capabilities" Type="string" />
@@ -135,12 +238,12 @@
            (#143). Each has its own component with an HKLM key path, so Windows Installer removes it
            on uninstall; in this per-machine package both folders are the all-users ones. -->
       <Component Id="PdfcraftStartMenuShortcut" Directory="ProgramMenuFolder" Guid="DC028192-C233-4F99-9A77-ED458C60DF26">
-        <Shortcut Id="StartMenuShortcut" Name="PdfCraft" Description="PdfCraft PDF workbench" Target="[#PdfcraftExe]" WorkingDirectory="INSTALLFOLDER" Icon="PdfcraftIcon.ico" IconIndex="0" />
+        <Shortcut Id="StartMenuShortcut" Name="PdfCraft" Description="!(loc.PackageDescription)" Target="[#PdfcraftExe]" WorkingDirectory="INSTALLFOLDER" Icon="PdfcraftIcon.ico" IconIndex="0" />
         <RegistryValue Root="HKMU" Key="Software\PdfCraft\Shortcuts" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
       </Component>
 
       <Component Id="PdfcraftDesktopShortcut" Directory="DesktopFolder" Guid="F6948627-32AB-4D78-8865-0FDF417CE442" Condition="INSTALLDESKTOPSHORTCUT = 1">
-        <Shortcut Id="DesktopShortcut" Name="PdfCraft" Description="PdfCraft PDF workbench" Target="[#PdfcraftExe]" WorkingDirectory="INSTALLFOLDER" Icon="PdfcraftIcon.ico" IconIndex="0" />
+        <Shortcut Id="DesktopShortcut" Name="PdfCraft" Description="!(loc.PackageDescription)" Target="[#PdfcraftExe]" WorkingDirectory="INSTALLFOLDER" Icon="PdfcraftIcon.ico" IconIndex="0" />
         <RegistryValue Root="HKMU" Key="Software\PdfCraft\Shortcuts" Name="Desktop" Type="integer" Value="1" KeyPath="yes" />
       </Component>
 
@@ -152,7 +255,7 @@
            packaged apps' (IExplorerCommand) entries. Its own component with an HKLM key path, so
            INSTALLPDFCONTEXTMENU=0 leaves it out and uninstall removes it. -->
       <Component Id="PdfcraftPdfContextMenu" Guid="439F084F-657D-4AC2-A4CC-F099C518D71F" Condition="INSTALLPDFCONTEXTMENU = 1">
-        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit" Value="Edit with PdfCraft" Type="string" KeyPath="yes" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit" Value="!(loc.EditPdfCommand)" Type="string" KeyPath="yes" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit" Name="Icon" Value="&quot;[#PdfcraftExe]&quot;,0" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit" Name="MultiSelectModel" Value="Document" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit\command" Value="&quot;[#PdfcraftExe]&quot; &quot;%1&quot;" Type="string" />
@@ -161,37 +264,37 @@
       <!-- Image context menu (#190): "Create PDF with PdfCraft…" opens the DPI chooser, without
            changing image file defaults. Its own component with an HKLM key path, so
            INSTALLIMAGECONTEXTMENU=0 leaves it out and uninstall removes it. These rows were in
-           PdfcraftApp up to 0.7.1; moving them is safe because MajorUpgrade removes the old version
-           before installing (afterInstallValidate), so no old row is left behind. -->
+           PdfcraftApp up to 0.7.1; its RemoveRegistryKey rows clear the legacy entries before
+           this component writes the selected menu, including upgrades with the menu disabled. -->
       <Component Id="PdfcraftImageContextMenu" Guid="1B783BF3-12DF-4588-AF80-E2CEA8BC1E5A" Condition="INSTALLIMAGECONTEXTMENU = 1">
-        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.png\shell\PdfCraft.CreatePdf" Value="Create PDF with PdfCraft…" Type="string" KeyPath="yes" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.png\shell\PdfCraft.CreatePdf" Value="!(loc.CreatePdfCommand)" Type="string" KeyPath="yes" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.png\shell\PdfCraft.CreatePdf" Name="MultiSelectModel" Value="Single" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.png\shell\PdfCraft.CreatePdf\command" Value="&quot;[#PdfcraftExe]&quot; --create-images &quot;%1&quot;" Type="string" />
-        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpg\shell\PdfCraft.CreatePdf" Value="Create PDF with PdfCraft…" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpg\shell\PdfCraft.CreatePdf" Value="!(loc.CreatePdfCommand)" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpg\shell\PdfCraft.CreatePdf" Name="MultiSelectModel" Value="Single" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpg\shell\PdfCraft.CreatePdf\command" Value="&quot;[#PdfcraftExe]&quot; --create-images &quot;%1&quot;" Type="string" />
-        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpeg\shell\PdfCraft.CreatePdf" Value="Create PDF with PdfCraft…" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpeg\shell\PdfCraft.CreatePdf" Value="!(loc.CreatePdfCommand)" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpeg\shell\PdfCraft.CreatePdf" Name="MultiSelectModel" Value="Single" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpeg\shell\PdfCraft.CreatePdf\command" Value="&quot;[#PdfcraftExe]&quot; --create-images &quot;%1&quot;" Type="string" />
-        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.tif\shell\PdfCraft.CreatePdf" Value="Create PDF with PdfCraft…" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.tif\shell\PdfCraft.CreatePdf" Value="!(loc.CreatePdfCommand)" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.tif\shell\PdfCraft.CreatePdf" Name="MultiSelectModel" Value="Single" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.tif\shell\PdfCraft.CreatePdf\command" Value="&quot;[#PdfcraftExe]&quot; --create-images &quot;%1&quot;" Type="string" />
-        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.tiff\shell\PdfCraft.CreatePdf" Value="Create PDF with PdfCraft…" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.tiff\shell\PdfCraft.CreatePdf" Value="!(loc.CreatePdfCommand)" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.tiff\shell\PdfCraft.CreatePdf" Name="MultiSelectModel" Value="Single" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.tiff\shell\PdfCraft.CreatePdf\command" Value="&quot;[#PdfcraftExe]&quot; --create-images &quot;%1&quot;" Type="string" />
-        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.gif\shell\PdfCraft.CreatePdf" Value="Create PDF with PdfCraft…" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.gif\shell\PdfCraft.CreatePdf" Value="!(loc.CreatePdfCommand)" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.gif\shell\PdfCraft.CreatePdf" Name="MultiSelectModel" Value="Single" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.gif\shell\PdfCraft.CreatePdf\command" Value="&quot;[#PdfcraftExe]&quot; --create-images &quot;%1&quot;" Type="string" />
-        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.bmp\shell\PdfCraft.CreatePdf" Value="Create PDF with PdfCraft…" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.bmp\shell\PdfCraft.CreatePdf" Value="!(loc.CreatePdfCommand)" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.bmp\shell\PdfCraft.CreatePdf" Name="MultiSelectModel" Value="Single" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.bmp\shell\PdfCraft.CreatePdf\command" Value="&quot;[#PdfcraftExe]&quot; --create-images &quot;%1&quot;" Type="string" />
-        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jp2\shell\PdfCraft.CreatePdf" Value="Create PDF with PdfCraft…" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jp2\shell\PdfCraft.CreatePdf" Value="!(loc.CreatePdfCommand)" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jp2\shell\PdfCraft.CreatePdf" Name="MultiSelectModel" Value="Single" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jp2\shell\PdfCraft.CreatePdf\command" Value="&quot;[#PdfcraftExe]&quot; --create-images &quot;%1&quot;" Type="string" />
-        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.j2k\shell\PdfCraft.CreatePdf" Value="Create PDF with PdfCraft…" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.j2k\shell\PdfCraft.CreatePdf" Value="!(loc.CreatePdfCommand)" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.j2k\shell\PdfCraft.CreatePdf" Name="MultiSelectModel" Value="Single" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.j2k\shell\PdfCraft.CreatePdf\command" Value="&quot;[#PdfcraftExe]&quot; --create-images &quot;%1&quot;" Type="string" />
-        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpx\shell\PdfCraft.CreatePdf" Value="Create PDF with PdfCraft…" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpx\shell\PdfCraft.CreatePdf" Value="!(loc.CreatePdfCommand)" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpx\shell\PdfCraft.CreatePdf" Name="MultiSelectModel" Value="Single" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpx\shell\PdfCraft.CreatePdf\command" Value="&quot;[#PdfcraftExe]&quot; --create-images &quot;%1&quot;" Type="string" />
       </Component>

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="id-ID" Codepage="1252" SummaryInformationCodepage="1252">
+  <String Id="Language" Value="1057" />
+  <String Id="Codepage" Value="1252" />
+  <String Id="SetupTitle" Value="Penyiapan [ProductName]" />
+  <String Id="WelcomeTitle" Value="Instal [ProductName]" />
+  <String Id="WelcomeDescription" Value="Penyiapan akan menginstal [ProductName] untuk semua pengguna dan menambahkannya ke menu Mulai. Klik Instal untuk melanjutkan." />
+  <String Id="WelcomeDescriptionUser" Value="Penyiapan akan menginstal [ProductName] hanya untuk akun Anda dan menambahkannya ke menu Mulai. Klik Instal untuk melanjutkan." />
+  <String Id="DesktopShortcut" Value="Buat pintasan desktop" />
+  <String Id="PdfContextMenu" Value="Tambahkan &quot;Edit dengan PdfCraft&quot; ke menu klik kanan file PDF" />
+  <String Id="HotFolderCheckbox" Value="Instal juga PdfCraft Hot Folder" />
+  <String Id="HotFolderDescription" Value="Menambahkan layanan latar belakang yang dimulai bersama Windows. Hanya tugas yang Anda konfigurasi dan aktifkan yang diproses." />
+  <String Id="Install" Value="Instal" />
+  <String Id="Cancel" Value="Batal" />
+  <String Id="MaintenanceTitle" Value="Pemeliharaan [ProductName]" />
+  <String Id="MaintenanceDescription" Value="[ProductName] sudah diinstal. Pilih Perbaiki untuk memulihkan berkas dan pintasan yang hilang, atau Hapus untuk menghapus instalasinya." />
+  <String Id="AddHotFolder" Value="Tambahkan layanan latar belakang Hot Folder" />
+  <String Id="RemoveHotFolder" Value="Hapus Hot Folder (simpan data tugas)" />
+  <String Id="Repair" Value="Perbaiki" />
+  <String Id="Remove" Value="Hapus" />
+  <String Id="ProgressTitle" Value="Menyiapkan [ProductName]" />
+  <String Id="ProgressDescription" Value="Tunggu hingga penyiapan selesai." />
+  <String Id="ConfirmCancelTitle" Value="Batalkan penyiapan" />
+  <String Id="ConfirmCancelDescription" Value="Batalkan penyiapan [ProductName]?" />
+  <String Id="Yes" Value="Ya" />
+  <String Id="No" Value="Tidak" />
+  <String Id="CompleteTitle" Value="Penyiapan berhasil" />
+  <String Id="CompleteDescription" Value="Penyiapan [ProductName] berhasil diselesaikan. Klik Selesai untuk menutup jendela ini." />
+  <String Id="Finish" Value="Selesai" />
+  <String Id="FailedTitle" Value="Penyiapan gagal" />
+  <String Id="FailedDescription" Value="Penyiapan [ProductName] tidak dapat diselesaikan. Atasi kesalahan yang dilaporkan, lalu jalankan penyiapan lagi." />
+  <String Id="CancelledTitle" Value="Penyiapan dibatalkan" />
+  <String Id="CancelledDescription" Value="Penyiapan [ProductName] dibatalkan. Jalankan penyiapan lagi saat Anda siap." />
+  <String Id="FilesInUseTitle" Value="Berkas sedang digunakan" />
+  <String Id="FilesInUseDescription" Value="Program ini sedang menggunakan berkas yang perlu diperbarui. Klik OK untuk menutupnya dan melanjutkan, atau Batal untuk menghentikan penyiapan." />
+  <String Id="OK" Value="OK" />
+  <String Id="DowngradeError" Value="Versi PdfCraft yang lebih baru sudah diinstal." />
+  <String Id="PackageDescription" Value="Ruang kerja PDF PdfCraft" />
+  <String Id="HotFolderFeatureDescription" Value="Memproses folder yang dikonfigurasi secara otomatis di latar belakang." />
+  <String Id="ServiceDescription" Value="Memproses tugas folder PDF dan gambar yang diaktifkan secara eksplisit saat sistem dimulai." />
+  <String Id="HotFolderShortcutDescription" Value="Konfigurasikan OCR otomatis dan pemrosesan pindai" />
+  <String Id="AppDescription" Value="Ruang kerja PDF sumber terbuka" />
+  <String Id="CreatePdfCommand" Value="Buat PDF dengan PdfCraft…" />
+  <String Id="EditPdfCommand" Value="Edit dengan PdfCraft" />
+  <String Id="DocumentDescription" Value="Dokumen PDF" />
+</WixLocalization>

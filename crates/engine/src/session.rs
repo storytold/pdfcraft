@@ -29,11 +29,13 @@ pub struct Session {
     pub(crate) next_id: u64,
     /// Seconds since the Unix epoch, injected so saves are deterministic in tests.
     clock: Option<fn() -> i64>,
+    /// Stable transaction time for replayable unattended exports.
+    fixed_timestamp: Option<i64>,
     /// Seconds to add to UTC for local time, read from whoever knows the zone (a browser, say).
     /// Separate from `clock` on purpose: `clock` alone is the test shortcut that takes the
     /// injected time AS local time and zeroes the zone, so injecting only it leaves either the
     /// local dates or the UTC ones wrong by the zone's offset.
-    utc_offset: Option<fn() -> i64>,
+    pub(crate) utc_offset: Option<fn() -> i64>,
     /// Certificates trusted for signing (Acrobat: Trusted Certificates).
     pub(crate) trust: Arc<TrustStore>,
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript, inverted (on by default).

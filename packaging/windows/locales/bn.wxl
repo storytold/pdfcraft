@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="bn-IN" Codepage="65001" SummaryInformationCodepage="1252">
+  <String Id="Language" Value="1093" />
+  <String Id="Codepage" Value="65001" />
+  <String Id="SetupTitle" Value="[ProductName] সেটআপ" />
+  <String Id="WelcomeTitle" Value="[ProductName] ইনস্টল করুন" />
+  <String Id="WelcomeDescription" Value="সেটআপ সব ব্যবহারকারীর জন্য [ProductName] ইনস্টল করবে এবং স্টার্ট মেনুতে যোগ করবে। এগিয়ে যেতে ইনস্টল করুন-এ ক্লিক করুন।" />
+  <String Id="WelcomeDescriptionUser" Value="সেটআপ শুধু আপনার অ্যাকাউন্টের জন্য [ProductName] ইনস্টল করবে এবং স্টার্ট মেনুতে যোগ করবে। এগিয়ে যেতে ইনস্টল করুন-এ ক্লিক করুন।" />
+  <String Id="DesktopShortcut" Value="ডেস্কটপ শর্টকাট তৈরি করুন" />
+  <String Id="PdfContextMenu" Value="PDF ফাইলের রাইট-ক্লিক মেনুতে &quot;PdfCraft দিয়ে সম্পাদনা করুন&quot; যোগ করুন" />
+  <String Id="HotFolderCheckbox" Value="PdfCraft Hot Folder-ও ইনস্টল করুন" />
+  <String Id="HotFolderDescription" Value="Windows-এর সঙ্গে চালু হওয়া একটি ব্যাকগ্রাউন্ড পরিষেবা যোগ করে। শুধু আপনার কনফিগার ও সক্রিয় করা কাজগুলো প্রক্রিয়া করা হয়।" />
+  <String Id="Install" Value="ইনস্টল করুন" />
+  <String Id="Cancel" Value="বাতিল" />
+  <String Id="MaintenanceTitle" Value="[ProductName] রক্ষণাবেক্ষণ" />
+  <String Id="MaintenanceDescription" Value="[ProductName] ইতিমধ্যে ইনস্টল করা আছে। হারানো ফাইল ও শর্টকাট ফিরিয়ে আনতে মেরামত, অথবা আনইনস্টল করতে সরান বেছে নিন।" />
+  <String Id="AddHotFolder" Value="Hot Folder ব্যাকগ্রাউন্ড পরিষেবা যোগ করুন" />
+  <String Id="RemoveHotFolder" Value="Hot Folder সরান (কাজের ডেটা রাখুন)" />
+  <String Id="Repair" Value="মেরামত" />
+  <String Id="Remove" Value="সরান" />
+  <String Id="ProgressTitle" Value="[ProductName] সেটআপ হচ্ছে" />
+  <String Id="ProgressDescription" Value="সেটআপ শেষ হওয়া পর্যন্ত অপেক্ষা করুন।" />
+  <String Id="ConfirmCancelTitle" Value="সেটআপ বাতিল করুন" />
+  <String Id="ConfirmCancelDescription" Value="[ProductName] সেটআপ বাতিল করবেন?" />
+  <String Id="Yes" Value="হ্যাঁ" />
+  <String Id="No" Value="না" />
+  <String Id="CompleteTitle" Value="সেটআপ সফলভাবে শেষ হয়েছে" />
+  <String Id="CompleteDescription" Value="[ProductName] সেটআপ সফলভাবে শেষ হয়েছে। এই উইন্ডো বন্ধ করতে সমাপ্ত-এ ক্লিক করুন।" />
+  <String Id="Finish" Value="সমাপ্ত" />
+  <String Id="FailedTitle" Value="সেটআপ ব্যর্থ হয়েছে" />
+  <String Id="FailedDescription" Value="[ProductName] সেটআপ শেষ করা যায়নি। দেখানো ত্রুটি সমাধান করে আবার সেটআপ চালান।" />
+  <String Id="CancelledTitle" Value="সেটআপ বাতিল হয়েছে" />
+  <String Id="CancelledDescription" Value="[ProductName] সেটআপ বাতিল হয়েছে। প্রস্তুত হলে আবার সেটআপ চালান।" />
+  <String Id="FilesInUseTitle" Value="ফাইলগুলো ব্যবহৃত হচ্ছে" />
+  <String Id="FilesInUseDescription" Value="সেটআপের আপডেট করা প্রয়োজন এমন ফাইল এই প্রোগ্রামগুলো ব্যবহার করছে। সেগুলো বন্ধ করে এগোতে ঠিক আছে, অথবা সেটআপ থামাতে বাতিল-এ ক্লিক করুন।" />
+  <String Id="OK" Value="ঠিক আছে" />
+  <String Id="DowngradeError" Value="PdfCraft-এর আরও নতুন সংস্করণ ইতিমধ্যে ইনস্টল করা আছে।" />
+  <String Id="PackageDescription" Value="PdfCraft PDF workbench" />
+  <String Id="HotFolderFeatureDescription" Value="কনফিগার করা ফোল্ডারগুলো ব্যাকগ্রাউন্ডে স্বয়ংক্রিয়ভাবে প্রক্রিয়া করুন।" />
+  <String Id="ServiceDescription" Value="সিস্টেম চালু হলে স্পষ্টভাবে সক্রিয় করা PDF ও ছবির ফোল্ডারের কাজগুলো প্রক্রিয়া করে।" />
+  <String Id="HotFolderShortcutDescription" Value="স্বয়ংক্রিয় OCR ও স্ক্যান প্রক্রিয়াকরণ কনফিগার করুন" />
+  <String Id="AppDescription" Value="ওপেন-সোর্স PDF কর্মক্ষেত্র" />
+  <String Id="CreatePdfCommand" Value="PdfCraft দিয়ে PDF তৈরি করুন…" />
+  <String Id="EditPdfCommand" Value="PdfCraft দিয়ে সম্পাদনা করুন" />
+  <String Id="DocumentDescription" Value="PDF নথি" />
+</WixLocalization>

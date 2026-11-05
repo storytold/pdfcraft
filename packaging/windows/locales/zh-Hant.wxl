@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="zh-TW" Codepage="950" SummaryInformationCodepage="950">
+  <String Id="Language" Value="1028" />
+  <String Id="Codepage" Value="950" />
+  <String Id="SetupTitle" Value="[ProductName] 安裝程式" />
+  <String Id="WelcomeTitle" Value="安裝 [ProductName]" />
+  <String Id="WelcomeDescription" Value="安裝程式將為所有使用者安裝 [ProductName]，並將其新增至開始功能表。按一下「安裝」繼續。" />
+  <String Id="WelcomeDescriptionUser" Value="安裝程式將僅為您的帳戶安裝 [ProductName]，並將其新增至開始功能表。按一下「安裝」繼續。" />
+  <String Id="DesktopShortcut" Value="建立桌面捷徑" />
+  <String Id="PdfContextMenu" Value="將「使用 PdfCraft 編輯」新增至 PDF 檔案的右鍵功能表" />
+  <String Id="HotFolderCheckbox" Value="同時安裝 PdfCraft Hot Folder" />
+  <String Id="HotFolderDescription" Value="新增隨 Windows 啟動的背景服務。僅處理您已設定並啟用的工作。" />
+  <String Id="Install" Value="安裝" />
+  <String Id="Cancel" Value="取消" />
+  <String Id="MaintenanceTitle" Value="維護 [ProductName]" />
+  <String Id="MaintenanceDescription" Value="[ProductName] 已安裝。選擇「修復」以還原遺失的檔案和捷徑，或選擇「移除」以解除安裝。" />
+  <String Id="AddHotFolder" Value="新增 Hot Folder 背景服務" />
+  <String Id="RemoveHotFolder" Value="移除 Hot Folder（保留工作資料）" />
+  <String Id="Repair" Value="修復" />
+  <String Id="Remove" Value="移除" />
+  <String Id="ProgressTitle" Value="正在安裝 [ProductName]" />
+  <String Id="ProgressDescription" Value="請稍候，正在完成安裝。" />
+  <String Id="ConfirmCancelTitle" Value="取消安裝" />
+  <String Id="ConfirmCancelDescription" Value="是否取消 [ProductName] 的安裝？" />
+  <String Id="Yes" Value="是" />
+  <String Id="No" Value="否" />
+  <String Id="CompleteTitle" Value="安裝成功" />
+  <String Id="CompleteDescription" Value="[ProductName] 已安裝成功。按一下「完成」關閉此視窗。" />
+  <String Id="Finish" Value="完成" />
+  <String Id="FailedTitle" Value="安裝失敗" />
+  <String Id="FailedDescription" Value="無法完成 [ProductName] 的安裝。請解決回報的錯誤，然後重新執行安裝程式。" />
+  <String Id="CancelledTitle" Value="安裝已取消" />
+  <String Id="CancelledDescription" Value="[ProductName] 的安裝已取消。準備好後，請重新執行安裝程式。" />
+  <String Id="FilesInUseTitle" Value="檔案使用中" />
+  <String Id="FilesInUseDescription" Value="這些程式正在使用安裝程式需要更新的檔案。按一下「確定」關閉它們並繼續，或按一下「取消」停止安裝。" />
+  <String Id="OK" Value="確定" />
+  <String Id="DowngradeError" Value="已安裝較新版本的 PdfCraft。" />
+  <String Id="PackageDescription" Value="PdfCraft PDF 工作台" />
+  <String Id="HotFolderFeatureDescription" Value="在背景自動處理已設定的資料夾。" />
+  <String Id="ServiceDescription" Value="系統啟動時處理已明確啟用的 PDF 和影像資料夾工作。" />
+  <String Id="HotFolderShortcutDescription" Value="設定自動 OCR 和掃描處理" />
+  <String Id="AppDescription" Value="開放原始碼 PDF 工作台" />
+  <String Id="CreatePdfCommand" Value="使用 PdfCraft 建立 PDF…" />
+  <String Id="EditPdfCommand" Value="使用 PdfCraft 編輯" />
+  <String Id="DocumentDescription" Value="PDF 文件" />
+</WixLocalization>

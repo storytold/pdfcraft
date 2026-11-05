@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="ur-PK" Codepage="65001" SummaryInformationCodepage="1252">
+  <String Id="Language" Value="1056" />
+  <String Id="Codepage" Value="65001" />
+  <String Id="SetupTitle" Value="[ProductName] سیٹ اپ" />
+  <String Id="WelcomeTitle" Value="[ProductName] نصب کریں" />
+  <String Id="WelcomeDescription" Value="سیٹ اپ تمام صارفین کے لیے [ProductName] نصب کرے گا اور اسے اسٹارٹ مینو میں شامل کرے گا۔ جاری رکھنے کے لیے نصب کریں پر کلک کریں۔" />
+  <String Id="WelcomeDescriptionUser" Value="سیٹ اپ صرف آپ کے اکاؤنٹ کے لیے [ProductName] نصب کرے گا اور اسے اسٹارٹ مینو میں شامل کرے گا۔ جاری رکھنے کے لیے نصب کریں پر کلک کریں۔" />
+  <String Id="DesktopShortcut" Value="ڈیسک ٹاپ شارٹ کٹ بنائیں" />
+  <String Id="PdfContextMenu" Value="PDF فائلوں کے رائٹ کلک مینو میں &quot;PdfCraft میں ترمیم کریں&quot; شامل کریں" />
+  <String Id="HotFolderCheckbox" Value="PdfCraft Hot Folder بھی نصب کریں" />
+  <String Id="HotFolderDescription" Value="Windows کے ساتھ شروع ہونے والی پس منظر سروس شامل کرتا ہے۔ صرف آپ کے ترتیب دیے اور فعال کیے گئے کاموں پر کارروائی ہوتی ہے۔" />
+  <String Id="Install" Value="نصب کریں" />
+  <String Id="Cancel" Value="منسوخ کریں" />
+  <String Id="MaintenanceTitle" Value="[ProductName] کی دیکھ بھال" />
+  <String Id="MaintenanceDescription" Value="[ProductName] پہلے سے نصب ہے۔ گم شدہ فائلیں اور شارٹ کٹس بحال کرنے کے لیے مرمت کریں، یا تنصیب ہٹانے کے لیے ہٹائیں منتخب کریں۔" />
+  <String Id="AddHotFolder" Value="Hot Folder پس منظر سروس شامل کریں" />
+  <String Id="RemoveHotFolder" Value="Hot Folder ہٹائیں (کاموں کا ڈیٹا محفوظ رکھیں)" />
+  <String Id="Repair" Value="مرمت کریں" />
+  <String Id="Remove" Value="ہٹائیں" />
+  <String Id="ProgressTitle" Value="[ProductName] نصب ہو رہا ہے" />
+  <String Id="ProgressDescription" Value="سیٹ اپ مکمل ہونے تک انتظار کریں۔" />
+  <String Id="ConfirmCancelTitle" Value="سیٹ اپ منسوخ کریں" />
+  <String Id="ConfirmCancelDescription" Value="کیا [ProductName] کا سیٹ اپ منسوخ کرنا ہے؟" />
+  <String Id="Yes" Value="ہاں" />
+  <String Id="No" Value="نہیں" />
+  <String Id="CompleteTitle" Value="سیٹ اپ کامیابی سے مکمل ہوا" />
+  <String Id="CompleteDescription" Value="[ProductName] کا سیٹ اپ کامیابی سے مکمل ہوا۔ یہ ونڈو بند کرنے کے لیے مکمل کریں پر کلک کریں۔" />
+  <String Id="Finish" Value="مکمل کریں" />
+  <String Id="FailedTitle" Value="سیٹ اپ ناکام ہوا" />
+  <String Id="FailedDescription" Value="[ProductName] کا سیٹ اپ مکمل نہیں ہو سکا۔ بتائی گئی خرابی دور کر کے سیٹ اپ دوبارہ چلائیں۔" />
+  <String Id="CancelledTitle" Value="سیٹ اپ منسوخ ہو گیا" />
+  <String Id="CancelledDescription" Value="[ProductName] کا سیٹ اپ منسوخ ہو گیا۔ تیار ہونے پر سیٹ اپ دوبارہ چلائیں۔" />
+  <String Id="FilesInUseTitle" Value="فائلیں استعمال میں ہیں" />
+  <String Id="FilesInUseDescription" Value="یہ پروگرام ان فائلوں کو استعمال کر رہے ہیں جنہیں سیٹ اپ کو اپ ڈیٹ کرنا ہے۔ انہیں بند کر کے جاری رکھنے کے لیے ٹھیک ہے، یا سیٹ اپ روکنے کے لیے منسوخ کریں پر کلک کریں۔" />
+  <String Id="OK" Value="ٹھیک ہے" />
+  <String Id="DowngradeError" Value="PdfCraft کا نیا ورژن پہلے سے نصب ہے۔" />
+  <String Id="PackageDescription" Value="PdfCraft PDF workbench" />
+  <String Id="HotFolderFeatureDescription" Value="ترتیب دیے گئے فولڈروں پر پس منظر میں خودکار کارروائی کریں۔" />
+  <String Id="ServiceDescription" Value="سسٹم شروع ہونے پر واضح طور پر فعال PDF اور تصویری فولڈروں کے کاموں پر کارروائی کرتا ہے۔" />
+  <String Id="HotFolderShortcutDescription" Value="خودکار OCR اور اسکین پراسیسنگ ترتیب دیں" />
+  <String Id="AppDescription" Value="اوپن سورس PDF ورک بینچ" />
+  <String Id="CreatePdfCommand" Value="PdfCraft سے PDF بنائیں…" />
+  <String Id="EditPdfCommand" Value="PdfCraft میں ترمیم کریں" />
+  <String Id="DocumentDescription" Value="PDF دستاویز" />
+</WixLocalization>

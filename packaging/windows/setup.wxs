@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Offline bootstrapper: one MSI, embedded language transforms, native MSI UI.
+     No downloaded payloads, custom action DLLs, artwork, or language prompt. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle Name="PdfCraft" Manufacturer="Learning Machines LLC" Version="$(var.Version)"
+      UpgradeCode="F75C31B5-DF0D-4D66-837F-ED4F2A0C5569" Compressed="yes"
+      IconSourceFile="$(var.IconPath)">
+    <BootstrapperApplication>
+      <bal:WixInternalUIBootstrapperApplication Theme="none" />
+    </BootstrapperApplication>
+    <?include $(var.LanguageProperties)?>
+    <Chain>
+      <MsiPackage Id="PdfCraft" SourceFile="$(var.MsiPath)" Compressed="yes" Visible="yes">
+        <MsiProperty Name="TRANSFORMS" Value="[LanguageTransform]" Condition="LanguageTransform" />
+      </MsiPackage>
+    </Chain>
+  </Bundle>
+</Wix>

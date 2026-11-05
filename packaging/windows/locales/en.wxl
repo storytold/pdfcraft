@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="en-US" Codepage="1252">
+  <String Id="Language" Value="1033" />
+  <String Id="Codepage" Value="1252" />
+  <String Id="SetupTitle" Value="[ProductName] Setup" />
+  <String Id="WelcomeTitle" Value="Install [ProductName]" />
+  <String Id="WelcomeDescription" Value="Setup will install [ProductName] for all users and add it to the Start menu. Click Install to continue." />
+  <String Id="WelcomeDescriptionUser" Value="Setup will install [ProductName] only for your account and add it to the Start menu. Click Install to continue." />
+  <String Id="DesktopShortcut" Value="Create a &amp;desktop shortcut" />
+  <String Id="PdfContextMenu" Value="Add &quot;&amp;Edit with PdfCraft&quot; to the right-click menu of PDF files" />
+  <String Id="HotFolderCheckbox" Value="Also install PdfCraft &amp;Hot Folder" />
+  <String Id="HotFolderDescription" Value="Adds a background service that starts with Windows. Only tasks you configure and enable are processed." />
+  <String Id="Install" Value="&amp;Install" />
+  <String Id="Cancel" Value="Cancel" />
+  <String Id="MaintenanceTitle" Value="Maintain [ProductName]" />
+  <String Id="MaintenanceDescription" Value="[ProductName] is already installed. Choose Repair to restore missing files and shortcuts, or Remove to uninstall it." />
+  <String Id="AddHotFolder" Value="Add Hot Folder background service" />
+  <String Id="RemoveHotFolder" Value="Remove Hot Folder (keep task data)" />
+  <String Id="Repair" Value="&amp;Repair" />
+  <String Id="Remove" Value="R&amp;emove" />
+  <String Id="ProgressTitle" Value="Setting up [ProductName]" />
+  <String Id="ProgressDescription" Value="Please wait while setup completes." />
+  <String Id="ConfirmCancelTitle" Value="Cancel setup" />
+  <String Id="ConfirmCancelDescription" Value="Cancel [ProductName] setup?" />
+  <String Id="Yes" Value="&amp;Yes" />
+  <String Id="No" Value="&amp;No" />
+  <String Id="CompleteTitle" Value="Setup completed successfully" />
+  <String Id="CompleteDescription" Value="[ProductName] setup has completed successfully. Click Finish to close this window." />
+  <String Id="Finish" Value="&amp;Finish" />
+  <String Id="FailedTitle" Value="Setup failed" />
+  <String Id="FailedDescription" Value="[ProductName] setup could not be completed. Resolve the reported error and run setup again." />
+  <String Id="CancelledTitle" Value="Setup cancelled" />
+  <String Id="CancelledDescription" Value="[ProductName] setup was cancelled. Run setup again when you are ready." />
+  <String Id="FilesInUseTitle" Value="Files in use" />
+  <String Id="FilesInUseDescription" Value="These programs are using files that setup needs to update. Click OK to close them and continue, or Cancel to stop setup." />
+  <String Id="OK" Value="OK" />
+  <String Id="DowngradeError" Value="A newer version of PdfCraft is already installed." />
+  <String Id="PackageDescription" Value="PdfCraft PDF workbench" />
+  <String Id="HotFolderFeatureDescription" Value="Automatically process configured folders in the background." />
+  <String Id="ServiceDescription" Value="Processes explicitly enabled PDF and image folder tasks at system startup." />
+  <String Id="HotFolderShortcutDescription" Value="Configure automatic OCR and scan processing" />
+  <String Id="AppDescription" Value="Open-source PDF workbench" />
+  <String Id="CreatePdfCommand" Value="Create PDF with PdfCraft…" />
+  <String Id="EditPdfCommand" Value="Edit with PdfCraft" />
+  <String Id="DocumentDescription" Value="PDF Document" />
+</WixLocalization>

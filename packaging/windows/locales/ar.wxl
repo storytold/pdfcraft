@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="ar-SA" Codepage="1256" SummaryInformationCodepage="1256">
+  <String Id="Language" Value="1025" />
+  <String Id="Codepage" Value="1256" />
+  <String Id="SetupTitle" Value="إعداد [ProductName]" />
+  <String Id="WelcomeTitle" Value="تثبيت [ProductName]" />
+  <String Id="WelcomeDescription" Value="سيثبت برنامج الإعداد [ProductName] لجميع المستخدمين ويضيفه إلى قائمة ابدأ. انقر فوق تثبيت للمتابعة." />
+  <String Id="WelcomeDescriptionUser" Value="سيثبت برنامج الإعداد [ProductName] لحسابك فقط ويضيفه إلى قائمة ابدأ. انقر فوق تثبيت للمتابعة." />
+  <String Id="DesktopShortcut" Value="إنشاء اختصار على سطح المكتب" />
+  <String Id="PdfContextMenu" Value="إضافة «تحرير باستخدام PdfCraft» إلى قائمة النقر بزر الماوس الأيمن لملفات PDF" />
+  <String Id="HotFolderCheckbox" Value="تثبيت PdfCraft Hot Folder أيضًا" />
+  <String Id="HotFolderDescription" Value="يضيف خدمة تعمل في الخلفية وتبدأ مع Windows. لا تُعالج إلا المهام التي تضبطها وتفعّلها." />
+  <String Id="Install" Value="تثبيت" />
+  <String Id="Cancel" Value="إلغاء" />
+  <String Id="MaintenanceTitle" Value="صيانة [ProductName]" />
+  <String Id="MaintenanceDescription" Value="[ProductName] مثبت بالفعل. اختر إصلاح لاستعادة الملفات والاختصارات المفقودة، أو إزالة لإلغاء تثبيته." />
+  <String Id="AddHotFolder" Value="إضافة خدمة Hot Folder في الخلفية" />
+  <String Id="RemoveHotFolder" Value="إزالة Hot Folder (مع الاحتفاظ ببيانات المهام)" />
+  <String Id="Repair" Value="إصلاح" />
+  <String Id="Remove" Value="إزالة" />
+  <String Id="ProgressTitle" Value="جارٍ إعداد [ProductName]" />
+  <String Id="ProgressDescription" Value="يرجى الانتظار حتى يكتمل الإعداد." />
+  <String Id="ConfirmCancelTitle" Value="إلغاء الإعداد" />
+  <String Id="ConfirmCancelDescription" Value="هل تريد إلغاء إعداد [ProductName]؟" />
+  <String Id="Yes" Value="نعم" />
+  <String Id="No" Value="لا" />
+  <String Id="CompleteTitle" Value="اكتمل الإعداد بنجاح" />
+  <String Id="CompleteDescription" Value="اكتمل إعداد [ProductName] بنجاح. انقر فوق إنهاء لإغلاق هذه النافذة." />
+  <String Id="Finish" Value="إنهاء" />
+  <String Id="FailedTitle" Value="فشل الإعداد" />
+  <String Id="FailedDescription" Value="تعذر إكمال إعداد [ProductName]. عالج الخطأ الموضح ثم شغّل الإعداد مجددًا." />
+  <String Id="CancelledTitle" Value="تم إلغاء الإعداد" />
+  <String Id="CancelledDescription" Value="تم إلغاء إعداد [ProductName]. شغّل الإعداد مجددًا عندما تكون مستعدًا." />
+  <String Id="FilesInUseTitle" Value="ملفات قيد الاستخدام" />
+  <String Id="FilesInUseDescription" Value="تستخدم هذه البرامج ملفات يحتاج الإعداد إلى تحديثها. انقر فوق موافق لإغلاقها والمتابعة، أو إلغاء لإيقاف الإعداد." />
+  <String Id="OK" Value="موافق" />
+  <String Id="DowngradeError" Value="يوجد إصدار أحدث من PdfCraft مثبت بالفعل." />
+  <String Id="PackageDescription" Value="بيئة عمل PdfCraft لملفات PDF" />
+  <String Id="HotFolderFeatureDescription" Value="معالجة المجلدات المضبوطة تلقائيًا في الخلفية." />
+  <String Id="ServiceDescription" Value="يعالج مهام مجلدات PDF والصور المفعّلة صراحةً عند بدء تشغيل النظام." />
+  <String Id="HotFolderShortcutDescription" Value="ضبط OCR التلقائي ومعالجة المسح الضوئي" />
+  <String Id="AppDescription" Value="بيئة عمل مفتوحة المصدر لملفات PDF" />
+  <String Id="CreatePdfCommand" Value="إنشاء PDF باستخدام PdfCraft…" />
+  <String Id="EditPdfCommand" Value="تحرير باستخدام PdfCraft" />
+  <String Id="DocumentDescription" Value="مستند PDF" />
+</WixLocalization>

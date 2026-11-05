@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="de-DE" Codepage="1252">
+  <String Id="Language" Value="1031" />
+  <String Id="Codepage" Value="1252" />
+  <String Id="SetupTitle" Value="[ProductName] installieren" />
+  <String Id="WelcomeTitle" Value="[ProductName] installieren" />
+  <String Id="WelcomeDescription" Value="[ProductName] wird für alle Benutzer installiert und zum Startmenü hinzugefügt. Klicken Sie auf Installieren, um fortzufahren." />
+  <String Id="WelcomeDescriptionUser" Value="[ProductName] wird nur für Ihr Konto installiert und zum Startmenü hinzugefügt. Klicken Sie auf Installieren, um fortzufahren." />
+  <String Id="DesktopShortcut" Value="&amp;Desktopverknüpfung erstellen" />
+  <String Id="PdfContextMenu" Value="„Mit PdfCraft &amp;bearbeiten“ zum Kontextmenü von PDF-Dateien hinzufügen" />
+  <String Id="HotFolderCheckbox" Value="PdfCraft &amp;Hot Folder zusätzlich installieren" />
+  <String Id="HotFolderDescription" Value="Installiert einen Hintergrunddienst, der mit Windows startet. Nur von Ihnen eingerichtete und aktivierte Aufgaben werden verarbeitet." />
+  <String Id="Install" Value="&amp;Installieren" />
+  <String Id="Cancel" Value="Abbrechen" />
+  <String Id="MaintenanceTitle" Value="[ProductName] verwalten" />
+  <String Id="MaintenanceDescription" Value="[ProductName] ist bereits installiert. Reparieren stellt fehlende Dateien und Verknüpfungen wieder her. Entfernen deinstalliert das Programm." />
+  <String Id="AddHotFolder" Value="Hot-Folder-Hintergrunddienst hinzufügen" />
+  <String Id="RemoveHotFolder" Value="Hot Folder entfernen (Aufgaben behalten)" />
+  <String Id="Repair" Value="&amp;Reparieren" />
+  <String Id="Remove" Value="&amp;Entfernen" />
+  <String Id="ProgressTitle" Value="[ProductName] wird eingerichtet" />
+  <String Id="ProgressDescription" Value="Bitte warten Sie, bis die Installation abgeschlossen ist." />
+  <String Id="ConfirmCancelTitle" Value="Installation abbrechen" />
+  <String Id="ConfirmCancelDescription" Value="Installation von [ProductName] abbrechen?" />
+  <String Id="Yes" Value="&amp;Ja" />
+  <String Id="No" Value="&amp;Nein" />
+  <String Id="CompleteTitle" Value="Installation erfolgreich abgeschlossen" />
+  <String Id="CompleteDescription" Value="[ProductName] wurde erfolgreich installiert. Klicken Sie auf Fertigstellen, um dieses Fenster zu schließen." />
+  <String Id="Finish" Value="&amp;Fertigstellen" />
+  <String Id="FailedTitle" Value="Installation fehlgeschlagen" />
+  <String Id="FailedDescription" Value="Die Installation von [ProductName] konnte nicht abgeschlossen werden. Beheben Sie den angezeigten Fehler und starten Sie die Installation erneut." />
+  <String Id="CancelledTitle" Value="Installation abgebrochen" />
+  <String Id="CancelledDescription" Value="Die Installation von [ProductName] wurde abgebrochen. Sie können sie später erneut starten." />
+  <String Id="FilesInUseTitle" Value="Dateien werden verwendet" />
+  <String Id="FilesInUseDescription" Value="Diese Programme verwenden Dateien, die aktualisiert werden müssen. OK schließt die Programme und setzt die Installation fort. Abbrechen beendet die Installation." />
+  <String Id="OK" Value="OK" />
+  <String Id="DowngradeError" Value="Eine neuere Version von PdfCraft ist bereits installiert." />
+  <String Id="PackageDescription" Value="PdfCraft PDF-Werkzeuge" />
+  <String Id="HotFolderFeatureDescription" Value="Eingerichtete Ordner automatisch im Hintergrund verarbeiten." />
+  <String Id="ServiceDescription" Value="Verarbeitet ausdrücklich aktivierte PDF- und Bildordner-Aufgaben beim Systemstart." />
+  <String Id="HotFolderShortcutDescription" Value="Automatische Texterkennung und Scanverarbeitung einrichten" />
+  <String Id="AppDescription" Value="Open-Source-PDF-Werkzeuge" />
+  <String Id="CreatePdfCommand" Value="PDF mit PdfCraft erstellen…" />
+  <String Id="EditPdfCommand" Value="Mit PdfCraft bearbeiten" />
+  <String Id="DocumentDescription" Value="PDF-Dokument" />
+</WixLocalization>

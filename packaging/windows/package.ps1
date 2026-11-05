@@ -4,6 +4,7 @@
 
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
+    pdfcraft-<version>-windows-<arch>-setup.exe      offline installer, automatic UI language
     pdfcraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
     pdfcraft-<version>-windows-<arch>-portable.zip   pdfcraft.exe + pdfcraft-cli.exe + models\ + portable.txt
 
@@ -46,6 +47,25 @@ function Invoke-Native([string] $What, [scriptblock] $Block) {
   if ($LASTEXITCODE -ne 0) { throw "$What failed with exit code $LASTEXITCODE" }
 }
 
+function Reset-PackageDirectory([string] $Path, [string] $AllowedRoot) {
+  $rootPath = [IO.Path]::GetFullPath($AllowedRoot).TrimEnd('\')
+  $targetPath = [IO.Path]::GetFullPath($Path)
+  if (-not $targetPath.StartsWith($rootPath + '\', [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Package staging directory is outside the target directory: $targetPath"
+  }
+  $current = $targetPath
+  while ($current -and $current.Length -ge $rootPath.Length) {
+    if (Test-Path -LiteralPath $current) {
+      if ((Get-Item -LiteralPath $current -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "Package staging cannot traverse a junction or symbolic link: $current"
+      }
+    }
+    $current = [IO.Path]::GetDirectoryName($current)
+  }
+  if (Test-Path -LiteralPath $targetPath) { Remove-Item -LiteralPath $targetPath -Recurse -Force }
+  New-Item -ItemType Directory -Force -Path $targetPath | Out-Null
+}
+
 # The version lives in one place: [workspace.package] version in the root Cargo.toml.
 $Version = $env:PDFCRAFT_VERSION
 if (-not $Version) {
@@ -76,7 +96,7 @@ if (-not $SkipBuild) {
   [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
   $env:PDFCRAFT_REQUIRE_WINRES = '1'
-  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p pdfcraft -p pdfcraft-cli --target $Target }
+  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p pdfcraft -p pdfcraft-cli -p pdfcraft-hot-folder --target $Target }
 }
 
 $Bin = Join-Path $TargetDir "$Target\release"
@@ -91,16 +111,15 @@ function Get-PeHeader([string] $Path) {
   return @{ Machine = [BitConverter]::ToUInt16($bytes, $pe + 4); Subsystem = [BitConverter]::ToUInt16($bytes, $pe + 0x5C) }
 }
 $Machine = switch ($Arch) { 'x64' { 0x8664 } 'x86' { 0x14C } 'arm64' { 0xAA64 } }
-foreach ($check in @(@('pdfcraft.exe', 2), @('pdfcraft-cli.exe', 3))) {
+foreach ($check in @(@('pdfcraft.exe', 2), @('pdfcraft-cli.exe', 3), @('pdfcraft-hot-folder.exe', 2))) {
   $h = Get-PeHeader (Join-Path $Bin $check[0])
   if ($h.Machine -ne $Machine) { throw "$($check[0]) is for machine 0x$('{0:X}' -f $h.Machine), expected 0x$('{0:X}' -f $Machine) ($Arch)" }
   if ($h.Subsystem -ne $check[1]) { throw "$($check[0]) has PE subsystem $($h.Subsystem), expected $($check[1])" }
   Write-Output "ok $($check[0]): $Arch, PE subsystem $($h.Subsystem)"
 }
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
-Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-Copy-Item (Join-Path $Bin 'pdfcraft.exe'), (Join-Path $Bin 'pdfcraft-cli.exe') $Stage
+Reset-PackageDirectory $Stage $TargetDir
+Copy-Item (Join-Path $Bin 'pdfcraft.exe'), (Join-Path $Bin 'pdfcraft-cli.exe'), (Join-Path $Bin 'pdfcraft-hot-folder.exe') $Stage
 # The document icon embeds Lucide artwork: carry its ISC notice and the project licences
 # beside the binaries in both distributions.
 foreach ($f in 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE') {
@@ -108,7 +127,7 @@ foreach ($f in 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE') {
 }
 Copy-Item (Join-Path $Root 'assets\app-icon\LICENSE-document.txt') $Stage
 
-& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'pdfcraft.exe') (Join-Path $Stage 'pdfcraft-cli.exe')
+& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'pdfcraft.exe') (Join-Path $Stage 'pdfcraft-cli.exe') (Join-Path $Stage 'pdfcraft-hot-folder.exe')
 
 # OCR models (#103): the app looks in models\ beside pdfcraft.exe. `cargo xtask models` fetches every
 # ATTRIBUTION.toml `kind = "model"` file (verified by SHA-256) with its licence and ATTRIBUTION.txt;
@@ -141,29 +160,17 @@ if ($env:CRAFT_FONTS_DIR) {
 
 # ---- MSI ---------------------------------------------------------------------------------------
 $Msi = Join-Path $Dist "pdfcraft-$Version-windows-$Arch.msi"
-Invoke-Native 'wix build' {
-  wix build (Join-Path $PSScriptRoot 'pdfcraft.wxs') -arch $Arch `
-    (Join-Path $PSScriptRoot 'installer-ui.wxs') `
-    -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "ModelsDir=$Models" -d "IconPath=$(Join-Path $Root 'assets\app-icon\pdfcraft.ico')" `
-    -d "DocsDir=$Docs" -d "HasCraftFontLicences=$HasCraftFontLicences" `
-    -o $Msi
-}
-# Inspect the built MSI, not just the XML, before signing/publishing it. In a child process, so
-# its Windows Installer database handle is gone before signtool opens the MSI.
-Invoke-Native 'test-msi' {
-  & (Get-Process -Id $PID).Path -NoProfile -File (Join-Path $PSScriptRoot 'test-msi.ps1') $Msi `
-    -CraftFontLicences $HasCraftFontLicences -ExpectedFontNoticesDirectory $Docs
-}
-# Check the compiled scope, path and registration contract before signing.
-& (Join-Path $PSScriptRoot 'check-install-policy.ps1') -MsiPath $Msi
-# wix writes its debug symbols (.wixpdb) next to the MSI; keep them out of the release assets.
-Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Msi, '.wixpdb'))
-& (Join-Path $PSScriptRoot 'sign.ps1') $Msi
+$Setup = Join-Path $Dist "pdfcraft-$Version-windows-$Arch-setup.exe"
+# build-localized.ps1 inspects the MSI (test-msi.ps1, check-install-policy.ps1) after embedding the
+# language transforms and before signing it, then builds and signs the offline Setup.
+& (Join-Path $PSScriptRoot 'build-localized.ps1') -Arch $Arch -Version $MsiVersion -BundleVersion $Version `
+  -BinDir $Stage -ModelsDir $Models -IconPath (Join-Path $Root 'assets/app-icon/pdfcraft.ico') `
+  -DocsDir $Docs -HasCraftFontLicences $HasCraftFontLicences `
+  -Msi $Msi -Setup $Setup -Work (Join-Path $Stage 'installer-languages')
 
 # ---- portable zip ------------------------------------------------------------------------------
 $Portable = Join-Path $TargetDir "windows-package\pdfcraft-$Version-windows-$Arch-portable"
-Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force -Path $Portable | Out-Null
+Reset-PackageDirectory $Portable $TargetDir
 Copy-Item (Join-Path $Stage '*.exe') $Portable
 foreach ($f in 'NOTICE', 'LICENSE-document.txt') {
   Copy-Item (Join-Path $Stage $f) $Portable
@@ -194,4 +201,4 @@ if ($Arch -ne 'arm64' -or $HostArch -eq 'arm64') {
 } else {
   Write-Output "skipping pdfcraft-cli --version: an $Arch build doesn't run on this $HostArch machine"
 }
-Get-Item $Msi, $Zip | Format-Table Name, Length
+Get-Item $Setup, $Msi, $Zip | Format-Table Name, Length

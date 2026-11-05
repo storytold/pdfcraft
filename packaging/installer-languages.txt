@@ -1,0 +1,194 @@
+Installer languages
+===================
+
+PdfCraft-owned installation dialogs and optional Hot Folder descriptions are
+translated into English, German, French, Spanish, Dutch, Italian, Hungarian,
+Simplified Chinese, Traditional Chinese, Hindi, Arabic, Bengali, Portuguese,
+Russian, Indonesian, Urdu, Japanese, Korean and Turkish.
+The catalogs are contributor-original, licensed MIT OR Apache-2.0 and recorded
+per file in ATTRIBUTION.toml. They contain no third-party artwork or fonts.
+Native OS prompts (for example UAC and Apple's authentication sheet) are supplied
+and localized by the operating system.
+
+Windows
+-------
+Use pdfcraft-<version>-windows-<arch>-setup.exe for interactive installation.
+This offline WiX Burn bundle embeds one MSI, including its 18 language MSTs,
+and delegates all installation choices to that MSI's existing native dialogs.
+Hot Folder remains optional and initially off. There is no extra language prompt,
+installer network download, custom bootstrapper runtime, or OCR model duplication.
+
+Burn's UserUILanguageID selects the primary display language. Do not replace this
+with UserLanguageID: that is the formatting locale and can differ from the UI.
+All six sublanguage bits are accepted, including de-AT, fr-CA, es-MX, nl-BE and
+it-CH. Chinese additionally selects the script: China/Singapore use Simplified;
+Taiwan/Hong Kong/Macao use Traditional, including neutral script LANGIDs.
+Unsupported primary languages leave the English base untouched. MSI
+maintenance uses Windows Installer's cached installation transforms.
+
+The .msi is retained for administrative deployment; launching it directly uses
+English unless the administrator supplies an embedded transform, for example:
+
+  msiexec /i pdfcraft.msi TRANSFORMS=:de.mst INSTALLHOTFOLDER=1
+
+Available transforms and ProductLanguage identifiers:
+
+  en (base, no transform)  1033     de.mst       1031
+  fr.mst                  1036     es.mst       3082
+  nl.mst                  1043     it.mst       1040
+  hu.mst                  1038     zh-Hans.mst  2052
+  zh-Hant.mst             1028     hi.mst       1081
+  ar.mst                  1025     bn.mst       1093
+  pt.mst                  1046     ru.mst       1049
+  id.mst                  1057     ur.mst       1056
+  ja.mst                  1041     ko.mst       1042
+  tr.mst                  1055
+
+ProductLanguage is package metadata, not a language-selection switch. Setting
+ProductLanguage=1031 on a command line does not replace TRANSFORMS=:de.mst.
+The metadata file installer-languages.json is the single build-time inventory.
+Arabic and Urdu dialogs have mirrored control positions and native right-to-left
+reading/alignment attributes; other dialogs retain left-to-right geometry.
+
+Traditional Windows codepages are used where they represent the whole catalog:
+1252, 1250, 1251, 1254, 1256, 932, 936, 949 and 950. Hindi, Bengali and Urdu require
+UTF-8 (65001). WiX documents limited Windows Installer support for UTF-8; these
+catalogs are verified through real MSI transforms and Unicode COM reads. A
+separate isolated Windows CI job also previews the real native dialogs and
+checks their actual Unicode control names and bounds through UI Automation.
+That does not replace visual acceptance on the deployed Windows version and
+its installed script fonts. Their separate ANSI SummaryInformation description
+remains English; authored installation dialogs retain their complete translation.
+No system codepage/locale setting is changed and no font is bundled by the installer.
+
+The MSI's Template Summary lists all 19 languages. Every localized
+build shares a ProductCode, component GUIDs and payload; language transforms do
+not change the service/account/ACL setup or optional feature state.
+
+package.ps1 invokes build-localized.ps1 and inspects all embedded transforms.
+One CAB cache is reused and localized staging MSIs are removed after creating
+their small transforms. Signing occurs after embedding the transforms. The Burn
+engine is detached, signed, reattached, and the final bundle is signed as well.
+Burn keeps the full release/SemVer version separately from the numeric MSI
+ProductVersion so successive preview installers remain distinguishable.
+Unsigned preview builds retain the existing explicit signing warning.
+
+macOS
+-----
+The PKG uses native Installer .lproj/Localizable.strings resources; the DMG has
+no installer dialogs. Distribution choice descriptions are localization keys.
+English is also the nonlocalized key text and fallback table.
+
+prepare-resources.sh obtains known ISO language codes from the build system's
+Foundation NSLocale API and generates English fallback catalogs for other
+languages. These are not additional translations: they prevent a primary
+unsupported language from falling through to a translated secondary preference
+(e.g. Polish followed by German). Chinese has translated script-specific catalogs.
+The 19 actual catalogs stay separate and are never overwritten by fallbacks.
+No installation-time scripts are added for localization.
+
+Windows administrative deployment
+---------------------------------
+Deploy the architecture-matching MSI with an elevated administrator or managed
+computer account. Use the offline Setup for interactive, automatic language
+selection; direct MSI deployment defaults to English unless given an MST.
+The following examples are cmd.exe syntax. Create the log directory beforehand.
+
+  msiexec.exe /i "C:\Packages\PdfCraft.msi" /qn /norestart ALLUSERS=1 INSTALLHOTFOLDER=0 INSTALLDESKTOPSHORTCUT=0 /L*v "C:\Logs\PdfCraft-install.log"
+  msiexec.exe /i "C:\Packages\PdfCraft.msi" /qn /norestart ALLUSERS=1 INSTALLHOTFOLDER=1 TRANSFORMS=:de.mst /L*v "C:\Logs\PdfCraft-hot-folder.log"
+  msiexec.exe /x {INSTALLED-PRODUCT-CODE} /qn /norestart /L*v "C:\Logs\PdfCraft-remove.log"
+
+/qn has no interactive dialogs; /qb shows Windows Installer's basic progress UI.
+/norestart prevents an automatic reboot, not the need for one. Record the process
+exit code: 0 means success, 3010 success with reboot required, and 1641 success
+with a reboot initiated. Treat other results as failure; 1618 means another
+installation is active and 1603 requires investigating the verbose log. Never
+interpret an existing output file or a launched msiexec process as success.
+In PowerShell wait for Start-Process -PassThru -Wait and inspect .ExitCode.
+
+For Group Policy Software Installation, assign the MSI under Computer
+Configuration, not per-user publishing. Use a stable UNC distribution path whose
+share and NTFS permissions let target computer accounts read it. Keep the source
+available for repair. This MSI is per-machine and intentionally rejects per-user
+scope. GPO's Modifications tab accepts external transforms: do not enter an
+embedded :language.mst name as if it were an external file. If using an external
+organization-owned MST, prepare it against this exact signed MSI and register it
+before assignment. Do not edit the signed MSI or copy a transform from an older
+release. To use the shipped embedded language MST directly, use a managed computer
+startup script/deployment command with the msiexec syntax above. A startup account
+has no interactive user's preferred language, so choose the deployment language
+explicitly. GPO OU assignment/redeployment itself requires a domain acceptance
+test; compile-only packaging tests do not claim to exercise an AD domain.
+
+Hot Folder is off on a fresh default install. INSTALLHOTFOLDER=1 enables the
+optional service; INSTALLHOTFOLDER=0 declines it on a new install. An upgrade
+preserves an existing companion and its configured SCM account. To deliberately
+remove only that feature from an existing installation, use maintenance or:
+
+  msiexec.exe /i "C:\Packages\PdfCraft.msi" REMOVE=HotFolder /qn /norestart /L*v "C:\Logs\PdfCraft-remove-hot-folder.log"
+
+Never use REMOVE=ALL for feature-only removal. ADDLOCAL=ALL intentionally includes
+the companion, so avoid it when the service is not wanted. Existing task/secret
+data is retained on removal. Installation alone leaves an empty task configuration;
+grant the restricted service account local/SMB permissions and explicitly enable
+tasks separately. Never place a domain/service password in MSI properties or logs.
+See docs/hot-folder-installation.md for service identities, protected configuration
+and authenticated SMB. Domain/gMSA/NAS and reboot acceptance remain separate checks.
+
+Validation
+----------
+  python packaging/test-installer-languages.py
+  pwsh packaging/windows/test-language-build.ps1 -Arch arm64 -Work NEW_SCRATCH
+  pwsh packaging/windows/test-language-build.ps1 -Arch x64 -Work NEW_SCRATCH
+  bash packaging/macos/test-localized-pkg.sh NEW_SCRATCH
+
+The Windows fixture builds real MSI/Setup containers with tiny inert payloads.
+It applies each actual embedded transform to a disposable database, checks every
+dialog/control string, language, codepage, RTL attributes/geometry, package identity, service authoring
+and feature default. It extracts the finished Setup, checks the embedded MSI
+hash and PE architecture, and exhaustively verifies all 65,536 LANGIDs against
+the compiled Burn language selectors. It never executes Setup or installs MSI.
+
+The macOS fixture invokes pkgbuild/productbuild, expands the real PKG, checks its
+catalogs and default-off Hot Folder choice, and uses Apple's Foundation locale
+resolver for regional and fallback cases. It never installs the package.
+The installer-languages.yml workflow performs these checks on Windows (x64,
+ARM64 and x86 authoring) and macOS without building the PDF/OCR application.
+Its separate windows-native-ui job runs only on a GitHub-hosted Windows 2025
+runner. It applies the embedded Hindi, Bengali and Urdu transforms to inert
+copies, then uses Database.EnableUIPreview/ViewDialog in an STA child and reads
+the actual native controls from a separate MTA UI Automation process. Welcome,
+progress, cancellation and outcome dialogs must expose exact translated text
+and nonempty visible control bounds inside the dialog. No button is activated,
+installation sequence is run or executable payload is launched. Maintenance
+and Restart Manager state-dependent dialogs retain database coverage.
+Both scripts refuse to run outside GitHub-hosted CI. An inaccessible desktop,
+missing window or mismatched text fails the job; it is never counted as a skip
+or a passed native-UI check. Only control-text JSON and process logs are retained,
+not screenshots or system-font assets. Passing this probe establishes the native
+Unicode text path, not pixel-level glyph shaping or absence of text clipping on
+every Windows version, font installation or display scale.
+These are packaging tests; they do not claim visual inspection on every OS
+display language or exercise certificate-backed signing without CI secrets.
+
+Primary technical references
+----------------------------
+https://docs.firegiant.com/wix/tools/burn/builtin-variables/
+https://docs.firegiant.com/wix/schema/bal/wixinternaluibootstrapperapplication/
+https://docs.firegiant.com/wix/schema/wxs/setvariable/
+https://docs.firegiant.com/wix/tools/wixexe/
+https://docs.firegiant.com/wix/tools/signing/
+https://learn.microsoft.com/en-us/windows/win32/msi/embedded-transforms
+https://learn.microsoft.com/en-us/windows/win32/msi/code-page-handling-of-parameter-strings
+https://docs.firegiant.com/wix/tools/codepage/
+https://learn.microsoft.com/en-us/windows/win32/msi/rtlro-control-attribute
+https://learn.microsoft.com/en-us/windows/win32/msi/database-enableuipreview
+https://learn.microsoft.com/en-us/windows/win32/msi/uipreview-viewdialog
+https://learn.microsoft.com/en-us/dotnet/framework/ui-automation/ui-automation-threading-issues
+https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/msiexec
+https://learn.microsoft.com/en-us/windows/win32/msi/transforms
+https://learn.microsoft.com/en-us/windows/win32/msi/productlanguage
+https://learn.microsoft.com/en-us/windows/win32/msi/error-codes
+https://learn.microsoft.com/en-us/troubleshoot/windows-server/group-policy/use-group-policy-to-install-software
+https://developer.apple.com/library/archive/documentation/DeveloperTools/Reference/DistributionDefinitionRef/Chapters/Distribution_XML_Ref.html
+https://developer.apple.com/documentation/foundation/nslocale/isolanguagecodes

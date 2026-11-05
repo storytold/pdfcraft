@@ -33,6 +33,7 @@ overrides:
     depends:
       - libc6 (>= 2.35)
       - libgcc-s1
+      - libdbus-1-3
       - libxkbcommon0
       - libvulkan1 | libegl1
     recommends:
@@ -51,6 +52,7 @@ overrides:
     # floor names libm because the binaries' GLIBC_2.35 symbols (hypot, hypotf) are libm's: RHEL 9's
     # glibc 2.34 provides libc.so.6(GLIBC_2.35) through backports, but not this, so it refuses.
     depends:
+      - libdbus-1.so.3()(64bit)
       - libc.so.6()(64bit)
       - libm.so.6(GLIBC_2.35)(64bit)
       - libgcc_s.so.1()(64bit)

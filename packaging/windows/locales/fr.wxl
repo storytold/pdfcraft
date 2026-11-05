@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="fr-FR" Codepage="1252">
+  <String Id="Language" Value="1036" />
+  <String Id="Codepage" Value="1252" />
+  <String Id="SetupTitle" Value="Installation de [ProductName]" />
+  <String Id="WelcomeTitle" Value="Installer [ProductName]" />
+  <String Id="WelcomeDescription" Value="[ProductName] sera installé pour tous les utilisateurs et ajouté au menu Démarrer. Cliquez sur Installer pour continuer." />
+  <String Id="WelcomeDescriptionUser" Value="[ProductName] sera installé uniquement pour votre compte et ajouté au menu Démarrer. Cliquez sur Installer pour continuer." />
+  <String Id="DesktopShortcut" Value="Créer un raccourci sur le &amp;Bureau" />
+  <String Id="PdfContextMenu" Value="Ajouter « &amp;Modifier avec PdfCraft » au menu contextuel des fichiers PDF" />
+  <String Id="HotFolderCheckbox" Value="Installer aussi PdfCraft &amp;Hot Folder" />
+  <String Id="HotFolderDescription" Value="Ajoute un service en arrière-plan qui démarre avec Windows. Seules les tâches que vous configurez et activez sont traitées." />
+  <String Id="Install" Value="&amp;Installer" />
+  <String Id="Cancel" Value="Annuler" />
+  <String Id="MaintenanceTitle" Value="Gérer [ProductName]" />
+  <String Id="MaintenanceDescription" Value="[ProductName] est déjà installé. Réparer restaure les fichiers et raccourcis manquants. Supprimer désinstalle le programme." />
+  <String Id="AddHotFolder" Value="Ajouter le service Hot Folder" />
+  <String Id="RemoveHotFolder" Value="Supprimer Hot Folder (garder les tâches)" />
+  <String Id="Repair" Value="&amp;Réparer" />
+  <String Id="Remove" Value="&amp;Supprimer" />
+  <String Id="ProgressTitle" Value="Configuration de [ProductName]" />
+  <String Id="ProgressDescription" Value="Veuillez patienter jusqu'à la fin de l'installation." />
+  <String Id="ConfirmCancelTitle" Value="Annuler l'installation" />
+  <String Id="ConfirmCancelDescription" Value="Annuler l'installation de [ProductName] ?" />
+  <String Id="Yes" Value="&amp;Oui" />
+  <String Id="No" Value="&amp;Non" />
+  <String Id="CompleteTitle" Value="Installation terminée" />
+  <String Id="CompleteDescription" Value="[ProductName] a été installé. Cliquez sur Terminer pour fermer cette fenêtre." />
+  <String Id="Finish" Value="&amp;Terminer" />
+  <String Id="FailedTitle" Value="Échec de l'installation" />
+  <String Id="FailedDescription" Value="L'installation de [ProductName] n'a pas pu être terminée. Corrigez l'erreur signalée, puis relancez l'installation." />
+  <String Id="CancelledTitle" Value="Installation annulée" />
+  <String Id="CancelledDescription" Value="L'installation de [ProductName] a été annulée. Vous pourrez la relancer plus tard." />
+  <String Id="FilesInUseTitle" Value="Fichiers en cours d'utilisation" />
+  <String Id="FilesInUseDescription" Value="Ces programmes utilisent des fichiers à mettre à jour. Cliquez sur OK pour les fermer et continuer, ou sur Annuler pour arrêter l'installation." />
+  <String Id="OK" Value="OK" />
+  <String Id="DowngradeError" Value="Une version plus récente de PdfCraft est déjà installée." />
+  <String Id="PackageDescription" Value="Outils PDF PdfCraft" />
+  <String Id="HotFolderFeatureDescription" Value="Traiter automatiquement les dossiers configurés en arrière-plan." />
+  <String Id="ServiceDescription" Value="Traite les tâches PDF et images explicitement activées au démarrage du système." />
+  <String Id="HotFolderShortcutDescription" Value="Configurer la reconnaissance de texte et le traitement des scans" />
+  <String Id="AppDescription" Value="Outils PDF open source" />
+  <String Id="CreatePdfCommand" Value="Créer un PDF avec PdfCraft…" />
+  <String Id="EditPdfCommand" Value="Modifier avec PdfCraft" />
+  <String Id="DocumentDescription" Value="Document PDF" />
+</WixLocalization>

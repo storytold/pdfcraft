@@ -7,14 +7,19 @@
     "installer-ui.wxs"
   ],
   "icon": "assets/app-icon/pdfcraft.ico",
-  "localization": [],
-  "extensions": [],
+  "localization": [
+    "locales/en.wxl"
+  ],
+  "extensions": [
+    "Util"
+  ],
   "payloads": [
     "LICENSE-APACHE",
     "LICENSE-MIT",
     "LICENSE-document.txt",
     "NOTICE",
     "pdfcraft-cli.exe",
+    "pdfcraft-hot-folder.exe",
     "pdfcraft.exe"
   ],
   "registry": [

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="tr-TR" Codepage="1254" SummaryInformationCodepage="1254">
+  <String Id="Language" Value="1055" />
+  <String Id="Codepage" Value="1254" />
+  <String Id="SetupTitle" Value="[ProductName] Kurulumu" />
+  <String Id="WelcomeTitle" Value="[ProductName] uygulamasını yükle" />
+  <String Id="WelcomeDescription" Value="Kurulum, [ProductName] uygulamasını tüm kullanıcılar için yükleyip Başlat menüsüne ekleyecek. Devam etmek için Yükle'ye tıklayın." />
+  <String Id="WelcomeDescriptionUser" Value="Kurulum, [ProductName] uygulamasını yalnızca hesabınız için yükleyip Başlat menüsüne ekleyecek. Devam etmek için Yükle'ye tıklayın." />
+  <String Id="DesktopShortcut" Value="Masaüstü kısayolu oluştur" />
+  <String Id="PdfContextMenu" Value="PDF dosyalarının sağ tıklama menüsüne &quot;PdfCraft ile düzenle&quot; ekle" />
+  <String Id="HotFolderCheckbox" Value="PdfCraft Hot Folder'ı da yükle" />
+  <String Id="HotFolderDescription" Value="Windows ile başlayan bir arka plan hizmeti ekler. Yalnızca yapılandırıp etkinleştirdiğiniz görevler işlenir." />
+  <String Id="Install" Value="Yükle" />
+  <String Id="Cancel" Value="İptal" />
+  <String Id="MaintenanceTitle" Value="[ProductName] Bakımı" />
+  <String Id="MaintenanceDescription" Value="[ProductName] zaten yüklü. Eksik dosya ve kısayolları geri getirmek için Onar'ı, uygulamayı kaldırmak için Kaldır'ı seçin." />
+  <String Id="AddHotFolder" Value="Hot Folder arka plan hizmetini ekle" />
+  <String Id="RemoveHotFolder" Value="Hot Folder'ı kaldır (görev verilerini koru)" />
+  <String Id="Repair" Value="Onar" />
+  <String Id="Remove" Value="Kaldır" />
+  <String Id="ProgressTitle" Value="[ProductName] kuruluyor" />
+  <String Id="ProgressDescription" Value="Kurulum tamamlanana kadar lütfen bekleyin." />
+  <String Id="ConfirmCancelTitle" Value="Kurulumu iptal et" />
+  <String Id="ConfirmCancelDescription" Value="[ProductName] kurulumu iptal edilsin mi?" />
+  <String Id="Yes" Value="Evet" />
+  <String Id="No" Value="Hayır" />
+  <String Id="CompleteTitle" Value="Kurulum başarıyla tamamlandı" />
+  <String Id="CompleteDescription" Value="[ProductName] kurulumu başarıyla tamamlandı. Bu pencereyi kapatmak için Bitir'e tıklayın." />
+  <String Id="Finish" Value="Bitir" />
+  <String Id="FailedTitle" Value="Kurulum başarısız" />
+  <String Id="FailedDescription" Value="[ProductName] kurulumu tamamlanamadı. Bildirilen hatayı giderip kurulumu yeniden çalıştırın." />
+  <String Id="CancelledTitle" Value="Kurulum iptal edildi" />
+  <String Id="CancelledDescription" Value="[ProductName] kurulumu iptal edildi. Hazır olduğunuzda kurulumu yeniden çalıştırın." />
+  <String Id="FilesInUseTitle" Value="Kullanımdaki dosyalar" />
+  <String Id="FilesInUseDescription" Value="Bu programlar güncellenmesi gereken dosyaları kullanıyor. Programları kapatıp devam etmek için Tamam'a, kurulumu durdurmak için İptal'e tıklayın." />
+  <String Id="OK" Value="Tamam" />
+  <String Id="DowngradeError" Value="PdfCraft'ın daha yeni bir sürümü zaten yüklü." />
+  <String Id="PackageDescription" Value="PdfCraft PDF çalışma ortamı" />
+  <String Id="HotFolderFeatureDescription" Value="Yapılandırılan klasörleri arka planda otomatik işler." />
+  <String Id="ServiceDescription" Value="Sistem başlangıcında açıkça etkinleştirilmiş PDF ve görüntü klasörü görevlerini işler." />
+  <String Id="HotFolderShortcutDescription" Value="Otomatik OCR ve tarama işlemeyi yapılandır" />
+  <String Id="AppDescription" Value="Açık kaynaklı PDF çalışma ortamı" />
+  <String Id="CreatePdfCommand" Value="PdfCraft ile PDF oluştur…" />
+  <String Id="EditPdfCommand" Value="PdfCraft ile düzenle" />
+  <String Id="DocumentDescription" Value="PDF Belgesi" />
+</WixLocalization>

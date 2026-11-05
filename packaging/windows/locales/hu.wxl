@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="hu-HU" Codepage="1250">
+  <String Id="Language" Value="1038" />
+  <String Id="Codepage" Value="1250" />
+  <String Id="SetupTitle" Value="[ProductName] telepítése" />
+  <String Id="WelcomeTitle" Value="A [ProductName] telepítése" />
+  <String Id="WelcomeDescription" Value="A [ProductName] minden felhasználó számára települ, és bekerül a Start menübe. A folytatáshoz kattintson a Telepítés gombra." />
+  <String Id="WelcomeDescriptionUser" Value="A [ProductName] csak az Ön fiókja számára települ, és bekerül a Start menübe. A folytatáshoz kattintson a Telepítés gombra." />
+  <String Id="DesktopShortcut" Value="&amp;Asztali parancsikon létrehozása" />
+  <String Id="PdfContextMenu" Value="„&amp;Szerkesztés a PdfCrafttal” hozzáadása a PDF-fájlok helyi menüjéhez" />
+  <String Id="HotFolderCheckbox" Value="A PdfCraft &amp;Hot Folder telepítése is" />
+  <String Id="HotFolderDescription" Value="A Windowszal induló háttérszolgáltatást ad hozzá. Csak a beállított és engedélyezett feladatokat dolgozza fel." />
+  <String Id="Install" Value="&amp;Telepítés" />
+  <String Id="Cancel" Value="Mégse" />
+  <String Id="MaintenanceTitle" Value="A [ProductName] karbantartása" />
+  <String Id="MaintenanceDescription" Value="A [ProductName] már telepítve van. A Javítás helyreállítja a hiányzó fájlokat és parancsikonokat. Az Eltávolítás törli a programot." />
+  <String Id="AddHotFolder" Value="Hot Folder háttérszolgáltatás hozzáadása" />
+  <String Id="RemoveHotFolder" Value="Hot Folder eltávolítása (feladatok maradnak)" />
+  <String Id="Repair" Value="&amp;Javítás" />
+  <String Id="Remove" Value="&amp;Eltávolítás" />
+  <String Id="ProgressTitle" Value="A [ProductName] beállítása" />
+  <String Id="ProgressDescription" Value="Várjon a telepítés befejezéséig." />
+  <String Id="ConfirmCancelTitle" Value="Telepítés megszakítása" />
+  <String Id="ConfirmCancelDescription" Value="Megszakítja a [ProductName] telepítését?" />
+  <String Id="Yes" Value="&amp;Igen" />
+  <String Id="No" Value="&amp;Nem" />
+  <String Id="CompleteTitle" Value="A telepítés sikeresen befejeződött" />
+  <String Id="CompleteDescription" Value="A [ProductName] telepítése befejeződött. Az ablak bezárásához kattintson a Befejezés gombra." />
+  <String Id="Finish" Value="&amp;Befejezés" />
+  <String Id="FailedTitle" Value="A telepítés sikertelen" />
+  <String Id="FailedDescription" Value="A [ProductName] telepítését nem sikerült befejezni. Javítsa ki a jelzett hibát, majd indítsa újra a telepítést." />
+  <String Id="CancelledTitle" Value="A telepítés megszakadt" />
+  <String Id="CancelledDescription" Value="A [ProductName] telepítése megszakadt. Később újra elindíthatja." />
+  <String Id="FilesInUseTitle" Value="Használatban lévő fájlok" />
+  <String Id="FilesInUseDescription" Value="Ezek a programok frissítendő fájlokat használnak. A bezárásukhoz és a folytatáshoz kattintson az OK gombra, vagy szakítsa meg a telepítést a Mégse gombbal." />
+  <String Id="OK" Value="OK" />
+  <String Id="DowngradeError" Value="A PdfCraft újabb verziója már telepítve van." />
+  <String Id="PackageDescription" Value="PdfCraft PDF-eszközök" />
+  <String Id="HotFolderFeatureDescription" Value="A beállított mappák automatikus feldolgozása a háttérben." />
+  <String Id="ServiceDescription" Value="Az engedélyezett PDF- és képmappafeladatok feldolgozása rendszerindításkor." />
+  <String Id="HotFolderShortcutDescription" Value="Automatikus szövegfelismerés és szkennelésfeldolgozás beállítása" />
+  <String Id="AppDescription" Value="Nyílt forráskódú PDF-eszközök" />
+  <String Id="CreatePdfCommand" Value="PDF létrehozása a PdfCrafttal…" />
+  <String Id="EditPdfCommand" Value="Szerkesztés a PdfCrafttal" />
+  <String Id="DocumentDescription" Value="PDF-dokumentum" />
+</WixLocalization>

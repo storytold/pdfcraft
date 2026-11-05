@@ -6,91 +6,124 @@
       <TextStyle Id="InstallerTitle" FaceName="Segoe UI" Size="12" Bold="yes" />
       <Property Id="DefaultUIFont" Value="InstallerNormal" />
 
-      <Dialog Id="InstallWelcome" Width="370" Height="180" Title="[ProductName] Setup">
-        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Install [ProductName]" />
-        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="40" Text="Setup will install [ProductName] for all users and add it to the Start menu. Click Install to continue." HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1" />
-        <Control Id="DescriptionUser" Type="Text" X="20" Y="55" Width="330" Height="40" Text="Setup will install [ProductName] only for your account and add it to the Start menu. Click Install to continue." HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1" />
-        <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="105" Width="330" Height="17" Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
-        <Control Id="PdfContextMenu" Type="CheckBox" X="20" Y="123" Width="330" Height="17" Property="INSTALLPDFCONTEXTMENU" CheckBoxValue="1" Text="Add &quot;&amp;Edit with PdfCraft&quot; to the right-click menu of PDF files" />
-        <Control Id="Install" Type="PushButton" X="195" Y="145" Width="75" Height="23" Default="yes" DefaultCondition="ALLUSERS = 1" ElevationShield="yes" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1" Text="&amp;Install">
-          <Publish Event="EndDialog" Value="Return" />
+      <Dialog Id="InstallWelcome" Width="420" Height="240" Title="!(loc.SetupTitle)">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="380" Height="25" Text="{\InstallerTitle}!(loc.WelcomeTitle)" />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="380" Height="40" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1"
+            Text="!(loc.WelcomeDescription)" />
+        <Control Id="DescriptionUser" Type="Text" X="20" Y="55" Width="380" Height="40" HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1"
+            Text="!(loc.WelcomeDescriptionUser)" />
+        <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="105" Width="380" Height="17"
+            Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1" Text="!(loc.DesktopShortcut)" />
+        <Control Id="PdfContextMenu" Type="CheckBox" X="20" Y="123" Width="380" Height="17"
+            Property="INSTALLPDFCONTEXTMENU" CheckBoxValue="1" Text="!(loc.PdfContextMenu)" />
+        <Control Id="HotFolder" Type="CheckBox" X="20" Y="145" Width="380" Height="17" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1"
+            Property="INSTALLHOTFOLDER" CheckBoxValue="1" Text="!(loc.HotFolderCheckbox)" />
+        <Control Id="HotFolderDescription" Type="Text" X="32" Y="165" Width="368" Height="30" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1"
+            Text="!(loc.HotFolderDescription)" />
+        <Control Id="Install" Type="PushButton" X="195" Y="205" Width="100" Height="23" Default="yes" DefaultCondition="ALLUSERS = 1" ElevationShield="yes" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1" Text="!(loc.Install)">
+          <!-- CostFinalize precedes the welcome dialog, so apply the user's feature choice here.
+               Only an installation for everyone can add the service; both buttons run the same events. -->
+          <Publish Event="AddLocal" Value="HotFolder" Condition="INSTALLHOTFOLDER = 1 AND ALLUSERS = 1" Order="1" />
+          <Publish Event="Remove" Value="HotFolder" Condition="INSTALLHOTFOLDER &lt;&gt; 1 OR ALLUSERS &lt;&gt; 1" Order="2" />
+          <Publish Property="INSTALLHOTFOLDER" Value="0" Condition="INSTALLHOTFOLDER &lt;&gt; 1 OR ALLUSERS &lt;&gt; 1" Order="3" />
+          <Publish Event="EndDialog" Value="Return" Order="4" />
         </Control>
-        <Control Id="InstallUser" Type="PushButton" DefaultCondition="ALLUSERS &lt;&gt; 1" HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1" X="195" Y="145" Width="75" Height="23" Text="&amp;Install">
-          <Publish Event="EndDialog" Value="Return" />
+        <Control Id="InstallUser" Type="PushButton" X="195" Y="205" Width="100" Height="23" DefaultCondition="ALLUSERS &lt;&gt; 1" HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1" Text="!(loc.Install)">
+          <!-- CostFinalize precedes the welcome dialog, so apply the user's feature choice here.
+               Only an installation for everyone can add the service; both buttons run the same events. -->
+          <Publish Event="AddLocal" Value="HotFolder" Condition="INSTALLHOTFOLDER = 1 AND ALLUSERS = 1" Order="1" />
+          <Publish Event="Remove" Value="HotFolder" Condition="INSTALLHOTFOLDER &lt;&gt; 1 OR ALLUSERS &lt;&gt; 1" Order="2" />
+          <Publish Property="INSTALLHOTFOLDER" Value="0" Condition="INSTALLHOTFOLDER &lt;&gt; 1 OR ALLUSERS &lt;&gt; 1" Order="3" />
+          <Publish Event="EndDialog" Value="Return" Order="4" />
         </Control>
-        <Control Id="Cancel" Type="PushButton" X="280" Y="145" Width="70" Height="23" Cancel="yes" Text="Cancel">
+        <Control Id="Cancel" Type="PushButton" X="300" Y="205" Width="100" Height="23" Cancel="yes" Text="!(loc.Cancel)">
           <Publish Event="EndDialog" Value="Exit" />
         </Control>
       </Dialog>
 
-      <Dialog Id="InstallMaintenance" Width="370" Height="180" Title="[ProductName] Setup">
-        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Maintain [ProductName]" />
-        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70" Text="[ProductName] is already installed. Choose Repair to restore missing files and shortcuts, or Remove to uninstall it." />
-        <Control Id="Repair" Type="PushButton" X="110" Y="145" Width="75" Height="23" Default="yes" DefaultCondition="ALLUSERS = 1" ElevationShield="yes" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1" Text="&amp;Repair">
+      <Dialog Id="InstallMaintenance" Width="420" Height="240" Title="!(loc.SetupTitle)">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="380" Height="25" Text="{\InstallerTitle}!(loc.MaintenanceTitle)" />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="380" Height="70"
+            Text="!(loc.MaintenanceDescription)" />
+        <!-- Shown only for an installation for everyone, the only one that can hold the service. -->
+        <Control Id="AddHotFolder" Type="PushButton" X="20" Y="130" Width="380" Height="23"
+            Text="!(loc.AddHotFolder)" HideCondition="ALLUSERS &lt;&gt; 1 OR !HotFolder = 3" ShowCondition="ALLUSERS = 1 AND !HotFolder &lt;&gt; 3">
+          <Publish Event="AddLocal" Value="HotFolder" Order="1" />
+          <Publish Event="EndDialog" Value="Return" Order="2" />
+        </Control>
+        <Control Id="RemoveHotFolder" Type="PushButton" X="20" Y="130" Width="380" Height="23"
+            Text="!(loc.RemoveHotFolder)" HideCondition="ALLUSERS &lt;&gt; 1 OR !HotFolder &lt;&gt; 3" ShowCondition="ALLUSERS = 1 AND !HotFolder = 3">
+          <Publish Event="Remove" Value="HotFolder" Order="1" />
+          <Publish Event="EndDialog" Value="Return" Order="2" />
+        </Control>
+        <Control Id="Repair" Type="PushButton" X="90" Y="205" Width="100" Height="23" Default="yes" DefaultCondition="ALLUSERS = 1" ElevationShield="yes" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1" Text="!(loc.Repair)">
           <Publish Property="REINSTALL" Value="ALL" Order="1" />
           <Publish Property="REINSTALLMODE" Value="amus" Order="2" />
           <Publish Event="EndDialog" Value="Return" Order="3" />
         </Control>
-        <Control Id="RepairUser" Type="PushButton" DefaultCondition="ALLUSERS &lt;&gt; 1" HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1" X="110" Y="145" Width="75" Height="23" Text="&amp;Repair">
+        <Control Id="RepairUser" Type="PushButton" X="90" Y="205" Width="100" Height="23" DefaultCondition="ALLUSERS &lt;&gt; 1" HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1" Text="!(loc.Repair)">
           <Publish Property="REINSTALL" Value="ALL" Order="1" />
           <Publish Property="REINSTALLMODE" Value="amus" Order="2" />
           <Publish Event="EndDialog" Value="Return" Order="3" />
         </Control>
-        <Control Id="Remove" Type="PushButton" X="195" Y="145" Width="75" Height="23" ElevationShield="yes" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1" Text="R&amp;emove">
+        <Control Id="Remove" Type="PushButton" X="195" Y="205" Width="100" Height="23" ElevationShield="yes" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1" Text="!(loc.Remove)">
           <Publish Property="REMOVE" Value="ALL" Order="1" />
           <Publish Event="EndDialog" Value="Return" Order="2" />
         </Control>
-        <Control Id="RemoveUser" Type="PushButton" HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1" X="195" Y="145" Width="75" Height="23" Text="R&amp;emove">
+        <Control Id="RemoveUser" Type="PushButton" X="195" Y="205" Width="100" Height="23" HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1" Text="!(loc.Remove)">
           <Publish Property="REMOVE" Value="ALL" Order="1" />
           <Publish Event="EndDialog" Value="Return" Order="2" />
         </Control>
-        <Control Id="Cancel" Type="PushButton" X="280" Y="145" Width="70" Height="23" Cancel="yes" Text="Cancel">
+        <Control Id="Cancel" Type="PushButton" X="300" Y="205" Width="100" Height="23" Cancel="yes" Text="!(loc.Cancel)">
           <Publish Event="EndDialog" Value="Exit" />
         </Control>
       </Dialog>
 
-      <Dialog Id="InstallProgress" Width="370" Height="180" Title="[ProductName] Setup" Modeless="yes">
-        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Setting up [ProductName]" />
+      <Dialog Id="InstallProgress" Width="420" Height="180" Title="!(loc.SetupTitle)" Modeless="yes">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="380" Height="25" Text="{\InstallerTitle}!(loc.ProgressTitle)" />
         <!-- No ActionText table is authored: subscribing would blank this message (#305). -->
-        <Control Id="Status" Type="Text" X="20" Y="60" Width="330" Height="40" Text="Please wait while setup completes." />
-        <Control Id="Progress" Type="ProgressBar" X="20" Y="110" Width="330" Height="15" ProgressBlocks="yes">
+        <Control Id="Status" Type="Text" X="20" Y="60" Width="380" Height="40" Text="!(loc.ProgressDescription)" />
+        <Control Id="Progress" Type="ProgressBar" X="20" Y="110" Width="380" Height="15" ProgressBlocks="yes">
           <Subscribe Event="SetProgress" Attribute="Progress" />
         </Control>
-        <Control Id="Cancel" Type="PushButton" X="280" Y="145" Width="70" Height="23" Cancel="yes" Text="Cancel">
+        <Control Id="Cancel" Type="PushButton" X="300" Y="145" Width="100" Height="23" Cancel="yes" Text="!(loc.Cancel)">
           <Publish Event="SpawnDialog" Value="ConfirmCancel" />
         </Control>
       </Dialog>
 
-      <Dialog Id="ConfirmCancel" Width="300" Height="110" Title="Cancel setup">
-        <Control Id="Description" Type="Text" X="20" Y="20" Width="260" Height="35" Text="Cancel [ProductName] setup?" />
-        <Control Id="Yes" Type="PushButton" X="130" Y="70" Width="70" Height="23" Text="&amp;Yes">
+      <Dialog Id="ConfirmCancel" Width="340" Height="110" Title="!(loc.ConfirmCancelTitle)">
+        <Control Id="Description" Type="Text" X="20" Y="20" Width="300" Height="35" Text="!(loc.ConfirmCancelDescription)" />
+        <Control Id="Yes" Type="PushButton" X="110" Y="70" Width="100" Height="23" Text="!(loc.Yes)">
           <Publish Event="EndDialog" Value="Exit" />
         </Control>
-        <Control Id="No" Type="PushButton" X="210" Y="70" Width="70" Height="23" Default="yes" Cancel="yes" Text="&amp;No">
+        <Control Id="No" Type="PushButton" X="220" Y="70" Width="100" Height="23" Default="yes" Cancel="yes" Text="!(loc.No)">
           <Publish Event="EndDialog" Value="Return" />
         </Control>
       </Dialog>
 
-      <Dialog Id="InstallComplete" Width="370" Height="180" Title="[ProductName] Setup">
-        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Setup completed successfully" />
-        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70" Text="[ProductName] setup has completed successfully. Click Finish to close this window." />
-        <Control Id="Finish" Type="PushButton" X="280" Y="145" Width="70" Height="23" Default="yes" Cancel="yes" Text="&amp;Finish">
+      <Dialog Id="InstallComplete" Width="420" Height="180" Title="!(loc.SetupTitle)">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="380" Height="25" Text="{\InstallerTitle}!(loc.CompleteTitle)" />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="380" Height="70"
+            Text="!(loc.CompleteDescription)" />
+        <Control Id="Finish" Type="PushButton" X="300" Y="145" Width="100" Height="23" Default="yes" Cancel="yes" Text="!(loc.Finish)">
           <Publish Event="EndDialog" Value="Return" />
         </Control>
       </Dialog>
 
-      <Dialog Id="InstallFailed" Width="370" Height="180" Title="[ProductName] Setup">
-        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Setup failed" />
-        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70" Text="[ProductName] setup could not be completed. Resolve the reported error and run setup again." />
-        <Control Id="Finish" Type="PushButton" X="280" Y="145" Width="70" Height="23" Default="yes" Cancel="yes" Text="&amp;Finish">
+      <Dialog Id="InstallFailed" Width="420" Height="180" Title="!(loc.SetupTitle)">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="380" Height="25" Text="{\InstallerTitle}!(loc.FailedTitle)" />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="380" Height="70"
+            Text="!(loc.FailedDescription)" />
+        <Control Id="Finish" Type="PushButton" X="300" Y="145" Width="100" Height="23" Default="yes" Cancel="yes" Text="!(loc.Finish)">
           <Publish Event="EndDialog" Value="Return" />
         </Control>
       </Dialog>
 
-      <Dialog Id="InstallCancelled" Width="370" Height="180" Title="[ProductName] Setup">
-        <Control Id="Title" Type="Text" X="20" Y="20" Width="330" Height="25" Text="{\InstallerTitle}Setup cancelled" />
-        <Control Id="Description" Type="Text" X="20" Y="55" Width="330" Height="70" Text="[ProductName] setup was cancelled. Run setup again when you are ready." />
-        <Control Id="Finish" Type="PushButton" X="280" Y="145" Width="70" Height="23" Default="yes" Cancel="yes" Text="&amp;Finish">
+      <Dialog Id="InstallCancelled" Width="420" Height="180" Title="!(loc.SetupTitle)">
+        <Control Id="Title" Type="Text" X="20" Y="20" Width="380" Height="25" Text="{\InstallerTitle}!(loc.CancelledTitle)" />
+        <Control Id="Description" Type="Text" X="20" Y="55" Width="380" Height="70"
+            Text="!(loc.CancelledDescription)" />
+        <Control Id="Finish" Type="PushButton" X="300" Y="145" Width="100" Height="23" Default="yes" Cancel="yes" Text="!(loc.Finish)">
           <Publish Event="EndDialog" Value="Return" />
         </Control>
       </Dialog>
@@ -98,15 +131,16 @@
       <!-- Shown by Windows Installer (Restart Manager) when an upgrade or repair must replace files
            that a running PdfCraft holds open. OK closes those programs (MSIRMSHUTDOWN=2) and
            continues; Cancel ends setup. -->
-      <Dialog Id="MsiRMFilesInUse" Width="370" Height="200" Title="[ProductName] Setup" KeepModeless="yes">
-        <Control Id="Title" Type="Text" X="20" Y="15" Width="330" Height="25" Text="{\InstallerTitle}Files in use" />
-        <Control Id="Description" Type="Text" X="20" Y="45" Width="330" Height="30" Text="These programs are using files that setup needs to update. Click OK to close them and continue, or Cancel to stop setup." />
-        <Control Id="List" Type="ListBox" X="20" Y="80" Width="330" Height="55" Property="FileInUseProcess" Sunken="yes" TabSkip="yes" />
-        <Control Id="OK" Type="PushButton" X="195" Y="165" Width="75" Height="23" Default="yes" Text="OK">
+      <Dialog Id="MsiRMFilesInUse" Width="420" Height="200" Title="!(loc.SetupTitle)" KeepModeless="yes">
+        <Control Id="Title" Type="Text" X="20" Y="15" Width="380" Height="25" Text="{\InstallerTitle}!(loc.FilesInUseTitle)" />
+        <Control Id="Description" Type="Text" X="20" Y="45" Width="380" Height="30"
+            Text="!(loc.FilesInUseDescription)" />
+        <Control Id="List" Type="ListBox" X="20" Y="80" Width="380" Height="55" Property="FileInUseProcess" Sunken="yes" TabSkip="yes" />
+        <Control Id="OK" Type="PushButton" X="195" Y="165" Width="100" Height="23" Default="yes" Text="!(loc.OK)">
           <Publish Property="MSIRMSHUTDOWN" Value="2" Order="1" />
           <Publish Event="EndDialog" Value="Return" Order="2" />
         </Control>
-        <Control Id="Cancel" Type="PushButton" X="280" Y="165" Width="70" Height="23" Cancel="yes" Text="Cancel">
+        <Control Id="Cancel" Type="PushButton" X="300" Y="165" Width="100" Height="23" Cancel="yes" Text="!(loc.Cancel)">
           <Publish Event="EndDialog" Value="Exit" />
         </Control>
       </Dialog>

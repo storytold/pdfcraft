@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=PdfCraft Hot Folder
+Comment=Configure automatic OCR and scan processing
+Exec=pdfcraft-hot-folder --config /var/lib/pdfcraft-hot-folder/tasks.json
+Icon=ai.storyteller.pdfcraft
+Terminal=false
+Categories=Office;Utility;

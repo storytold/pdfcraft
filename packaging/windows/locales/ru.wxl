@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="ru-RU" Codepage="1251" SummaryInformationCodepage="1251">
+  <String Id="Language" Value="1049" />
+  <String Id="Codepage" Value="1251" />
+  <String Id="SetupTitle" Value="Установка [ProductName]" />
+  <String Id="WelcomeTitle" Value="Установить [ProductName]" />
+  <String Id="WelcomeDescription" Value="Программа установит [ProductName] для всех пользователей и добавит его в меню «Пуск». Нажмите «Установить», чтобы продолжить." />
+  <String Id="WelcomeDescriptionUser" Value="Программа установит [ProductName] только для вашей учётной записи и добавит его в меню «Пуск». Нажмите «Установить», чтобы продолжить." />
+  <String Id="DesktopShortcut" Value="Создать ярлык на рабочем столе" />
+  <String Id="PdfContextMenu" Value="Добавить «Изменить в PdfCraft» в контекстное меню PDF-файлов" />
+  <String Id="HotFolderCheckbox" Value="Также установить PdfCraft Hot Folder" />
+  <String Id="HotFolderDescription" Value="Добавляет фоновую службу, запускаемую вместе с Windows. Обрабатываются только настроенные и включённые вами задания." />
+  <String Id="Install" Value="Установить" />
+  <String Id="Cancel" Value="Отмена" />
+  <String Id="MaintenanceTitle" Value="Обслуживание [ProductName]" />
+  <String Id="MaintenanceDescription" Value="[ProductName] уже установлен. Выберите «Восстановить» для восстановления отсутствующих файлов и ярлыков или «Удалить» для удаления программы." />
+  <String Id="AddHotFolder" Value="Добавить фоновую службу Hot Folder" />
+  <String Id="RemoveHotFolder" Value="Удалить Hot Folder (сохранить данные заданий)" />
+  <String Id="Repair" Value="Восстановить" />
+  <String Id="Remove" Value="Удалить" />
+  <String Id="ProgressTitle" Value="Установка [ProductName]" />
+  <String Id="ProgressDescription" Value="Дождитесь завершения установки." />
+  <String Id="ConfirmCancelTitle" Value="Отмена установки" />
+  <String Id="ConfirmCancelDescription" Value="Отменить установку [ProductName]?" />
+  <String Id="Yes" Value="Да" />
+  <String Id="No" Value="Нет" />
+  <String Id="CompleteTitle" Value="Установка успешно завершена" />
+  <String Id="CompleteDescription" Value="Установка [ProductName] успешно завершена. Нажмите «Готово», чтобы закрыть это окно." />
+  <String Id="Finish" Value="Готово" />
+  <String Id="FailedTitle" Value="Ошибка установки" />
+  <String Id="FailedDescription" Value="Не удалось завершить установку [ProductName]. Устраните указанную ошибку и запустите установку снова." />
+  <String Id="CancelledTitle" Value="Установка отменена" />
+  <String Id="CancelledDescription" Value="Установка [ProductName] отменена. Запустите установку снова, когда будете готовы." />
+  <String Id="FilesInUseTitle" Value="Файлы используются" />
+  <String Id="FilesInUseDescription" Value="Эти программы используют файлы, которые необходимо обновить. Нажмите «ОК», чтобы закрыть их и продолжить, или «Отмена», чтобы остановить установку." />
+  <String Id="OK" Value="ОК" />
+  <String Id="DowngradeError" Value="Уже установлена более новая версия PdfCraft." />
+  <String Id="PackageDescription" Value="PdfCraft — программа для работы с PDF" />
+  <String Id="HotFolderFeatureDescription" Value="Автоматическая обработка настроенных папок в фоновом режиме." />
+  <String Id="ServiceDescription" Value="Обрабатывает явно включённые задания папок PDF и изображений при запуске системы." />
+  <String Id="HotFolderShortcutDescription" Value="Настроить автоматическое OCR и обработку сканов" />
+  <String Id="AppDescription" Value="Программа для работы с PDF с открытым исходным кодом" />
+  <String Id="CreatePdfCommand" Value="Создать PDF с помощью PdfCraft…" />
+  <String Id="EditPdfCommand" Value="Изменить в PdfCraft" />
+  <String Id="DocumentDescription" Value="Документ PDF" />
+</WixLocalization>

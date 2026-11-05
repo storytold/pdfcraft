@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="hi-IN" Codepage="65001" SummaryInformationCodepage="1252">
+  <String Id="Language" Value="1081" />
+  <String Id="Codepage" Value="65001" />
+  <String Id="SetupTitle" Value="[ProductName] सेटअप" />
+  <String Id="WelcomeTitle" Value="[ProductName] स्थापित करें" />
+  <String Id="WelcomeDescription" Value="सेटअप सभी उपयोगकर्ताओं के लिए [ProductName] स्थापित करेगा और इसे स्टार्ट मेनू में जोड़ेगा। जारी रखने के लिए स्थापित करें पर क्लिक करें।" />
+  <String Id="WelcomeDescriptionUser" Value="सेटअप केवल आपके खाते के लिए [ProductName] स्थापित करेगा और इसे स्टार्ट मेनू में जोड़ेगा। जारी रखने के लिए स्थापित करें पर क्लिक करें।" />
+  <String Id="DesktopShortcut" Value="डेस्कटॉप शॉर्टकट बनाएँ" />
+  <String Id="PdfContextMenu" Value="PDF फ़ाइलों के राइट-क्लिक मेनू में &quot;PdfCraft से संपादित करें&quot; जोड़ें" />
+  <String Id="HotFolderCheckbox" Value="PdfCraft Hot Folder भी स्थापित करें" />
+  <String Id="HotFolderDescription" Value="Windows के साथ शुरू होने वाली पृष्ठभूमि सेवा जोड़ता है। केवल आपके द्वारा कॉन्फ़िगर और सक्षम किए गए कार्य चलाए जाते हैं।" />
+  <String Id="Install" Value="स्थापित करें" />
+  <String Id="Cancel" Value="रद्द करें" />
+  <String Id="MaintenanceTitle" Value="[ProductName] का रखरखाव" />
+  <String Id="MaintenanceDescription" Value="[ProductName] पहले से स्थापित है। गुम फ़ाइलें और शॉर्टकट वापस लाने के लिए सुधारें, या स्थापना हटाने के लिए हटाएँ चुनें।" />
+  <String Id="AddHotFolder" Value="Hot Folder पृष्ठभूमि सेवा जोड़ें" />
+  <String Id="RemoveHotFolder" Value="Hot Folder हटाएँ (कार्य डेटा रखें)" />
+  <String Id="Repair" Value="सुधारें" />
+  <String Id="Remove" Value="हटाएँ" />
+  <String Id="ProgressTitle" Value="[ProductName] स्थापित हो रहा है" />
+  <String Id="ProgressDescription" Value="सेटअप पूरा होने तक कृपया प्रतीक्षा करें।" />
+  <String Id="ConfirmCancelTitle" Value="सेटअप रद्द करें" />
+  <String Id="ConfirmCancelDescription" Value="[ProductName] का सेटअप रद्द करें?" />
+  <String Id="Yes" Value="हाँ" />
+  <String Id="No" Value="नहीं" />
+  <String Id="CompleteTitle" Value="सेटअप सफलतापूर्वक पूरा हुआ" />
+  <String Id="CompleteDescription" Value="[ProductName] का सेटअप सफलतापूर्वक पूरा हुआ। यह विंडो बंद करने के लिए समाप्त करें पर क्लिक करें।" />
+  <String Id="Finish" Value="समाप्त करें" />
+  <String Id="FailedTitle" Value="सेटअप विफल हुआ" />
+  <String Id="FailedDescription" Value="[ProductName] का सेटअप पूरा नहीं हो सका। दिखाई गई त्रुटि ठीक करके सेटअप फिर से चलाएँ।" />
+  <String Id="CancelledTitle" Value="सेटअप रद्द हुआ" />
+  <String Id="CancelledDescription" Value="[ProductName] का सेटअप रद्द हुआ। तैयार होने पर सेटअप फिर से चलाएँ।" />
+  <String Id="FilesInUseTitle" Value="फ़ाइलें उपयोग में हैं" />
+  <String Id="FilesInUseDescription" Value="ये प्रोग्राम उन फ़ाइलों का उपयोग कर रहे हैं जिन्हें सेटअप को अपडेट करना है। उन्हें बंद करके जारी रखने के लिए ठीक है, या सेटअप रोकने के लिए रद्द करें पर क्लिक करें।" />
+  <String Id="OK" Value="ठीक है" />
+  <String Id="DowngradeError" Value="PdfCraft का नया संस्करण पहले से स्थापित है।" />
+  <String Id="PackageDescription" Value="PdfCraft PDF workbench" />
+  <String Id="HotFolderFeatureDescription" Value="कॉन्फ़िगर किए गए फ़ोल्डरों को पृष्ठभूमि में स्वचालित रूप से संसाधित करें।" />
+  <String Id="ServiceDescription" Value="सिस्टम शुरू होने पर स्पष्ट रूप से सक्षम PDF और छवि फ़ोल्डर कार्य चलाता है।" />
+  <String Id="HotFolderShortcutDescription" Value="स्वचालित OCR और स्कैन प्रसंस्करण कॉन्फ़िगर करें" />
+  <String Id="AppDescription" Value="ओपन-सोर्स PDF कार्यक्षेत्र" />
+  <String Id="CreatePdfCommand" Value="PdfCraft से PDF बनाएँ…" />
+  <String Id="EditPdfCommand" Value="PdfCraft से संपादित करें" />
+  <String Id="DocumentDescription" Value="PDF दस्तावेज़" />
+</WixLocalization>

@@ -1,0 +1,186 @@
+{
+  "en": {
+    "culture": "en-US",
+    "language": 1033,
+    "codepage": 1252,
+    "primary": 9
+  },
+  "de": {
+    "culture": "de-DE",
+    "language": 1031,
+    "codepage": 1252,
+    "primary": 7
+  },
+  "fr": {
+    "culture": "fr-FR",
+    "language": 1036,
+    "codepage": 1252,
+    "primary": 12
+  },
+  "es": {
+    "culture": "es-ES",
+    "language": 3082,
+    "codepage": 1252,
+    "primary": 10
+  },
+  "nl": {
+    "culture": "nl-NL",
+    "language": 1043,
+    "codepage": 1252,
+    "primary": 19
+  },
+  "it": {
+    "culture": "it-IT",
+    "language": 1040,
+    "codepage": 1252,
+    "primary": 16
+  },
+  "hu": {
+    "culture": "hu-HU",
+    "language": 1038,
+    "codepage": 1250,
+    "primary": 14
+  },
+  "zh-Hans": {
+    "culture": "zh-CN",
+    "language": 2052,
+    "codepage": 936,
+    "primary": 4,
+    "sublanguages": [
+      0,
+      2,
+      4,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47,
+      48,
+      49,
+      50,
+      51,
+      52,
+      53,
+      54,
+      55,
+      56,
+      57,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63
+    ]
+  },
+  "zh-Hant": {
+    "culture": "zh-TW",
+    "language": 1028,
+    "codepage": 950,
+    "primary": 4,
+    "sublanguages": [
+      1,
+      3,
+      5,
+      31
+    ]
+  },
+  "hi": {
+    "culture": "hi-IN",
+    "language": 1081,
+    "codepage": 65001,
+    "primary": 57
+  },
+  "ar": {
+    "culture": "ar-SA",
+    "language": 1025,
+    "codepage": 1256,
+    "primary": 1,
+    "rtl": true
+  },
+  "bn": {
+    "culture": "bn-IN",
+    "language": 1093,
+    "codepage": 65001,
+    "primary": 69
+  },
+  "pt": {
+    "culture": "pt-BR",
+    "language": 1046,
+    "codepage": 1252,
+    "primary": 22
+  },
+  "ru": {
+    "culture": "ru-RU",
+    "language": 1049,
+    "codepage": 1251,
+    "primary": 25
+  },
+  "id": {
+    "culture": "id-ID",
+    "language": 1057,
+    "codepage": 1252,
+    "primary": 33
+  },
+  "ur": {
+    "culture": "ur-PK",
+    "language": 1056,
+    "codepage": 65001,
+    "primary": 32,
+    "rtl": true
+  },
+  "ja": {
+    "culture": "ja-JP",
+    "language": 1041,
+    "codepage": 932,
+    "primary": 17
+  },
+  "ko": {
+    "culture": "ko-KR",
+    "language": 1042,
+    "codepage": 949,
+    "primary": 18
+  },
+  "tr": {
+    "culture": "tr-TR",
+    "language": 1055,
+    "codepage": 1254,
+    "primary": 31
+  }
+}

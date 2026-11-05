@@ -1436,7 +1436,9 @@ fn the_live_form_of_nested_repeating_subforms_stops_at_its_node_budget() {
     assert!(live.truncated, "the walk was cut short");
     assert!(count(&live.root) <= crate::script::MAX_FORM_NODES + 1, "{} nodes", count(&live.root));
     assert!(live.events.len() <= 20_000);
-    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+    // The budget is checked by the counts above; this is only a hang guard. A 5 s deadline
+    // failed at 24.8 s in a nested-KVM FreeBSD VM while the budget held.
+    assert!(started.elapsed() < std::time::Duration::from_secs(600), "{:?}", started.elapsed());
     // A template without scripts has nothing to run.
     let plain_xml = nested_repeats_template().replace(r#"<calculate><script contentType="application/x-javascript">1</script></calculate>"#, "");
     let (plain, _) = parse(&plain_xml).unwrap();

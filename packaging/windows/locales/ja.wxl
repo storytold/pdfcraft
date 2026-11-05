@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="ja-JP" Codepage="932" SummaryInformationCodepage="932">
+  <String Id="Language" Value="1041" />
+  <String Id="Codepage" Value="932" />
+  <String Id="SetupTitle" Value="[ProductName] セットアップ" />
+  <String Id="WelcomeTitle" Value="[ProductName] のインストール" />
+  <String Id="WelcomeDescription" Value="すべてのユーザー用に [ProductName] をインストールし、スタートメニューに追加します。続行するには「インストール」をクリックしてください。" />
+  <String Id="WelcomeDescriptionUser" Value="お使いのアカウント専用に [ProductName] をインストールし、スタートメニューに追加します。続行するには「インストール」をクリックしてください。" />
+  <String Id="DesktopShortcut" Value="デスクトップにショートカットを作成する" />
+  <String Id="PdfContextMenu" Value="PDF ファイルの右クリック メニューに「PdfCraft で編集」を追加する" />
+  <String Id="HotFolderCheckbox" Value="PdfCraft Hot Folder もインストールする" />
+  <String Id="HotFolderDescription" Value="Windows と同時に起動するバックグラウンドサービスを追加します。設定して有効にしたタスクのみが処理されます。" />
+  <String Id="Install" Value="インストール" />
+  <String Id="Cancel" Value="キャンセル" />
+  <String Id="MaintenanceTitle" Value="[ProductName] のメンテナンス" />
+  <String Id="MaintenanceDescription" Value="[ProductName] は既にインストールされています。不足しているファイルやショートカットを復元するには「修復」、アンインストールするには「削除」を選択してください。" />
+  <String Id="AddHotFolder" Value="Hot Folder バックグラウンドサービスを追加" />
+  <String Id="RemoveHotFolder" Value="Hot Folder を削除（タスクデータは保持）" />
+  <String Id="Repair" Value="修復" />
+  <String Id="Remove" Value="削除" />
+  <String Id="ProgressTitle" Value="[ProductName] をセットアップしています" />
+  <String Id="ProgressDescription" Value="セットアップが完了するまでお待ちください。" />
+  <String Id="ConfirmCancelTitle" Value="セットアップのキャンセル" />
+  <String Id="ConfirmCancelDescription" Value="[ProductName] のセットアップをキャンセルしますか？" />
+  <String Id="Yes" Value="はい" />
+  <String Id="No" Value="いいえ" />
+  <String Id="CompleteTitle" Value="セットアップが正常に完了しました" />
+  <String Id="CompleteDescription" Value="[ProductName] のセットアップが正常に完了しました。「完了」をクリックして、このウィンドウを閉じてください。" />
+  <String Id="Finish" Value="完了" />
+  <String Id="FailedTitle" Value="セットアップに失敗しました" />
+  <String Id="FailedDescription" Value="[ProductName] のセットアップを完了できませんでした。表示されたエラーを解決してから、再実行してください。" />
+  <String Id="CancelledTitle" Value="セットアップはキャンセルされました" />
+  <String Id="CancelledDescription" Value="[ProductName] のセットアップはキャンセルされました。準備ができたら、再実行してください。" />
+  <String Id="FilesInUseTitle" Value="使用中のファイル" />
+  <String Id="FilesInUseDescription" Value="これらのプログラムは、更新が必要なファイルを使用しています。「OK」をクリックしてプログラムを閉じて続行するか、「キャンセル」でセットアップを中止してください。" />
+  <String Id="OK" Value="OK" />
+  <String Id="DowngradeError" Value="新しいバージョンの PdfCraft が既にインストールされています。" />
+  <String Id="PackageDescription" Value="PdfCraft PDF ワークベンチ" />
+  <String Id="HotFolderFeatureDescription" Value="設定したフォルダーをバックグラウンドで自動処理します。" />
+  <String Id="ServiceDescription" Value="システム起動時に、明示的に有効にした PDF・画像フォルダーのタスクを処理します。" />
+  <String Id="HotFolderShortcutDescription" Value="自動 OCR とスキャン処理を設定" />
+  <String Id="AppDescription" Value="オープンソースの PDF ワークベンチ" />
+  <String Id="CreatePdfCommand" Value="PdfCraft で PDF を作成…" />
+  <String Id="EditPdfCommand" Value="PdfCraft で編集" />
+  <String Id="DocumentDescription" Value="PDF ドキュメント" />
+</WixLocalization>

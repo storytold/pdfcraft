@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="nl-NL" Codepage="1252">
+  <String Id="Language" Value="1043" />
+  <String Id="Codepage" Value="1252" />
+  <String Id="SetupTitle" Value="[ProductName] installeren" />
+  <String Id="WelcomeTitle" Value="[ProductName] installeren" />
+  <String Id="WelcomeDescription" Value="[ProductName] wordt voor alle gebruikers geïnstalleerd en aan het menu Start toegevoegd. Klik op Installeren om door te gaan." />
+  <String Id="WelcomeDescriptionUser" Value="[ProductName] wordt alleen voor uw account geïnstalleerd en aan het menu Start toegevoegd. Klik op Installeren om door te gaan." />
+  <String Id="DesktopShortcut" Value="Een snelkoppeling op het &amp;bureaublad maken" />
+  <String Id="PdfContextMenu" Value="&quot;&amp;Bewerken met PdfCraft&quot; toevoegen aan het contextmenu van PDF-bestanden" />
+  <String Id="HotFolderCheckbox" Value="PdfCraft &amp;Hot Folder ook installeren" />
+  <String Id="HotFolderDescription" Value="Voegt een achtergrondservice toe die met Windows start. Alleen taken die u instelt en inschakelt worden verwerkt." />
+  <String Id="Install" Value="&amp;Installeren" />
+  <String Id="Cancel" Value="Annuleren" />
+  <String Id="MaintenanceTitle" Value="[ProductName] beheren" />
+  <String Id="MaintenanceDescription" Value="[ProductName] is al geïnstalleerd. Herstellen zet ontbrekende bestanden en snelkoppelingen terug. Verwijderen verwijdert het programma." />
+  <String Id="AddHotFolder" Value="Hot Folder-achtergrondservice toevoegen" />
+  <String Id="RemoveHotFolder" Value="Hot Folder verwijderen (taken behouden)" />
+  <String Id="Repair" Value="&amp;Herstellen" />
+  <String Id="Remove" Value="&amp;Verwijderen" />
+  <String Id="ProgressTitle" Value="[ProductName] wordt ingesteld" />
+  <String Id="ProgressDescription" Value="Wacht totdat de installatie is voltooid." />
+  <String Id="ConfirmCancelTitle" Value="Installatie annuleren" />
+  <String Id="ConfirmCancelDescription" Value="De installatie van [ProductName] annuleren?" />
+  <String Id="Yes" Value="&amp;Ja" />
+  <String Id="No" Value="&amp;Nee" />
+  <String Id="CompleteTitle" Value="Installatie voltooid" />
+  <String Id="CompleteDescription" Value="[ProductName] is geïnstalleerd. Klik op Voltooien om dit venster te sluiten." />
+  <String Id="Finish" Value="&amp;Voltooien" />
+  <String Id="FailedTitle" Value="Installatie mislukt" />
+  <String Id="FailedDescription" Value="De installatie van [ProductName] kon niet worden voltooid. Verhelp de gemelde fout en start de installatie opnieuw." />
+  <String Id="CancelledTitle" Value="Installatie geannuleerd" />
+  <String Id="CancelledDescription" Value="De installatie van [ProductName] is geannuleerd. U kunt deze later opnieuw starten." />
+  <String Id="FilesInUseTitle" Value="Bestanden in gebruik" />
+  <String Id="FilesInUseDescription" Value="Deze programma's gebruiken bestanden die moeten worden bijgewerkt. Klik op OK om ze te sluiten en door te gaan, of op Annuleren om de installatie te stoppen." />
+  <String Id="OK" Value="OK" />
+  <String Id="DowngradeError" Value="Er is al een nieuwere versie van PdfCraft geïnstalleerd." />
+  <String Id="PackageDescription" Value="PdfCraft PDF-gereedschappen" />
+  <String Id="HotFolderFeatureDescription" Value="Ingestelde mappen automatisch op de achtergrond verwerken." />
+  <String Id="ServiceDescription" Value="Verwerkt uitdrukkelijk ingeschakelde PDF- en afbeeldingstaken bij het opstarten." />
+  <String Id="HotFolderShortcutDescription" Value="Automatische tekstherkenning en scanverwerking instellen" />
+  <String Id="AppDescription" Value="Opensource PDF-gereedschappen" />
+  <String Id="CreatePdfCommand" Value="PDF maken met PdfCraft…" />
+  <String Id="EditPdfCommand" Value="Bewerken met PdfCraft" />
+  <String Id="DocumentDescription" Value="PDF-document" />
+</WixLocalization>

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="ko-KR" Codepage="949" SummaryInformationCodepage="949">
+  <String Id="Language" Value="1042" />
+  <String Id="Codepage" Value="949" />
+  <String Id="SetupTitle" Value="[ProductName] 설치" />
+  <String Id="WelcomeTitle" Value="[ProductName] 설치" />
+  <String Id="WelcomeDescription" Value="모든 사용자용으로 [ProductName]을 설치하고 시작 메뉴에 추가합니다. 계속하려면 설치를 클릭하세요." />
+  <String Id="WelcomeDescriptionUser" Value="현재 계정에만 [ProductName]을 설치하고 시작 메뉴에 추가합니다. 계속하려면 설치를 클릭하세요." />
+  <String Id="DesktopShortcut" Value="바탕 화면 바로 가기 만들기" />
+  <String Id="PdfContextMenu" Value="PDF 파일의 오른쪽 클릭 메뉴에 &quot;PdfCraft로 편집&quot; 추가" />
+  <String Id="HotFolderCheckbox" Value="PdfCraft Hot Folder도 설치" />
+  <String Id="HotFolderDescription" Value="Windows와 함께 시작되는 백그라운드 서비스를 추가합니다. 직접 구성하고 활성화한 작업만 처리됩니다." />
+  <String Id="Install" Value="설치" />
+  <String Id="Cancel" Value="취소" />
+  <String Id="MaintenanceTitle" Value="[ProductName] 유지 관리" />
+  <String Id="MaintenanceDescription" Value="[ProductName]이 이미 설치되어 있습니다. 누락된 파일과 바로 가기를 복원하려면 복구를, 설치를 제거하려면 제거를 선택하세요." />
+  <String Id="AddHotFolder" Value="Hot Folder 백그라운드 서비스 추가" />
+  <String Id="RemoveHotFolder" Value="Hot Folder 제거 (작업 데이터 유지)" />
+  <String Id="Repair" Value="복구" />
+  <String Id="Remove" Value="제거" />
+  <String Id="ProgressTitle" Value="[ProductName] 설치 중" />
+  <String Id="ProgressDescription" Value="설치가 완료될 때까지 기다려 주세요." />
+  <String Id="ConfirmCancelTitle" Value="설치 취소" />
+  <String Id="ConfirmCancelDescription" Value="[ProductName] 설치를 취소하시겠습니까?" />
+  <String Id="Yes" Value="예" />
+  <String Id="No" Value="아니요" />
+  <String Id="CompleteTitle" Value="설치 완료" />
+  <String Id="CompleteDescription" Value="[ProductName] 설치가 완료되었습니다. 이 창을 닫으려면 마침을 클릭하세요." />
+  <String Id="Finish" Value="마침" />
+  <String Id="FailedTitle" Value="설치 실패" />
+  <String Id="FailedDescription" Value="[ProductName] 설치를 완료하지 못했습니다. 표시된 오류를 해결한 후 설치를 다시 실행하세요." />
+  <String Id="CancelledTitle" Value="설치 취소됨" />
+  <String Id="CancelledDescription" Value="[ProductName] 설치가 취소되었습니다. 준비되면 설치를 다시 실행하세요." />
+  <String Id="FilesInUseTitle" Value="사용 중인 파일" />
+  <String Id="FilesInUseDescription" Value="이 프로그램들이 업데이트해야 할 파일을 사용 중입니다. 확인을 클릭하여 프로그램을 닫고 계속하거나, 취소를 클릭하여 설치를 중지하세요." />
+  <String Id="OK" Value="확인" />
+  <String Id="DowngradeError" Value="최신 버전의 PdfCraft가 이미 설치되어 있습니다." />
+  <String Id="PackageDescription" Value="PdfCraft PDF 작업 도구" />
+  <String Id="HotFolderFeatureDescription" Value="구성된 폴더를 백그라운드에서 자동으로 처리합니다." />
+  <String Id="ServiceDescription" Value="시스템 시작 시 명시적으로 활성화된 PDF 및 이미지 폴더 작업을 처리합니다." />
+  <String Id="HotFolderShortcutDescription" Value="자동 OCR 및 스캔 처리 구성" />
+  <String Id="AppDescription" Value="오픈 소스 PDF 작업 도구" />
+  <String Id="CreatePdfCommand" Value="PdfCraft로 PDF 만들기…" />
+  <String Id="EditPdfCommand" Value="PdfCraft로 편집" />
+  <String Id="DocumentDescription" Value="PDF 문서" />
+</WixLocalization>
