@@ -599,7 +599,7 @@ fn comb_dividers(doc: &Document, wd: &Dict, w: f64, h: f64, cells: usize) -> Str
     let inset = border_width(doc, wd);
     let lw = line_width(doc, wd);
     let Some(bc) = color_array(doc, mk.as_ref(), b"BC") else { return String::new() };
-    if !(inset > 0.0 && inset.is_finite() && lw > 0.0 && lw.is_finite()) || !(2..=MAX_COMB_DIVIDERS).contains(&cells) {
+    if !(inset > 0.0 && inset.is_finite() && lw > 0.0 && lw.is_finite() && (2..=MAX_COMB_DIVIDERS).contains(&cells)) {
         return String::new();
     }
     let cell = w / cells as f64;

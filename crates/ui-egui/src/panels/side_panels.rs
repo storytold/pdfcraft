@@ -17,7 +17,10 @@ use crate::{Mode, PdfCraftApp};
 pub const TOOLS_WIDTH: f32 = 272.0;
 /// Default width of the side panel.
 pub const SIDE_WIDTH: f32 = 330.0;
-const TOOLS_RANGE: RangeInclusive<f32> = 240.0..=520.0;
+/// The Tools pane's own margins, left and right (14 pt each, and a pt of border), around what a panel lays out.
+const TOOLS_GUTTERS: f32 = 30.0;
+/// No narrower than Format text's widest row, so nothing in it is cut off.
+const TOOLS_RANGE: RangeInclusive<f32> = (crate::format_text_ui::MIN_ROW + TOOLS_GUTTERS)..=520.0;
 const SIDE_RANGE: RangeInclusive<f32> = 220.0..=520.0;
 /// Version of the saved `side_panels` value.
 const VERSION: u64 = 1;
@@ -65,13 +68,14 @@ pub struct SidePanels {
     /// The one setting that places the Tools pane; [`SidePanels::tools_edge`] is its only reader
     /// in the layout.
     pub tools_side: ToolsSide,
+    pub rail_side: ToolsSide,
     pub tools_width: f32,
     pub side_width: f32,
 }
 
 impl Default for SidePanels {
     fn default() -> Self {
-        Self { tools_side: ToolsSide::Left, tools_width: TOOLS_WIDTH, side_width: SIDE_WIDTH }
+        Self { tools_side: ToolsSide::Left, rail_side: ToolsSide::Right, tools_width: TOOLS_WIDTH, side_width: SIDE_WIDTH }
     }
 }
 
@@ -103,6 +107,19 @@ impl SidePanels {
         }
     }
 
+    /// Whether the navigation rail is docked on the right side of the window.
+    pub fn rail_on_right(&self) -> bool {
+        self.rail_side == ToolsSide::Right
+    }
+
+    /// Return the layout [`Edge`] (`Start` or `End`) where the navigation rail and side panel dock.
+    pub fn rail_edge(&self) -> Edge {
+        match self.rail_side {
+            ToolsSide::Left => Edge::Start,
+            ToolsSide::Right => Edge::End,
+        }
+    }
+
     pub fn width(&self, pane: Pane) -> f32 {
         match pane {
             Pane::Tools => self.tools_width,
@@ -123,6 +140,7 @@ impl SidePanels {
         json!({
             "version": VERSION,
             "tools_side": self.tools_side,
+            "rail_side": self.rail_side,
             "tools_open": tools_open,
             "tools_width": self.tools_width,
             "side_width": self.side_width,
@@ -142,6 +160,9 @@ pub fn restore(saved: &Value) -> Restored {
         let mut panels = SidePanels::default();
         if let Some(side) = value.get("tools_side").and_then(|v| serde_json::from_value::<ToolsSide>(v.clone()).ok()) {
             panels.tools_side = side;
+        }
+        if let Some(side) = value.get("rail_side").and_then(|v| serde_json::from_value::<ToolsSide>(v.clone()).ok()) {
+            panels.rail_side = side;
         }
         if let Some(width) = value.get("tools_width").and_then(Value::as_f64).and_then(|w| clamp_width(Pane::Tools, w)) {
             panels.tools_width = width;
@@ -346,10 +367,11 @@ impl PaneContent<Pane> for Content<'_> {
     }
 }
 
+/// Return the docked [`PaneState`] (edge and width) for `pane`.
 fn state_of(panels: &SidePanels, pane: Pane) -> PaneState {
     let edge = match pane {
         Pane::Tools => panels.tools_edge(),
-        Pane::Side => Edge::End,
+        Pane::Side => panels.rail_edge(),
     };
     PaneState::docked(edge, panels.width(pane))
 }
@@ -366,6 +388,31 @@ fn open_panes(app: &PdfCraftApp) -> Vec<Pane> {
         open.push(Pane::Side);
     }
     open
+}
+
+/// Width of a pane's resize edge that takes the pointer, right of its border.
+const RESIZE_GRIP: f32 = 4.0;
+
+/// Moves each open pane's resize edge to the right of its border (#5730).
+///
+/// The host centres the edge on the border and widens it, so it reaches over whatever ends left
+/// of the border. egui puts a vertical scrollbar at the right of its area, so that is the
+/// scrollbar of the page beside a right-docked pane, or of the Inspector beside a right-docked
+/// Tools pane, and its right half became the edge. Right of a border starts the next area, never
+/// with a scrollbar: a right-docked pane's own scrollbar is at its far side, and a left-docked
+/// pane keeps a gutter left of its border.
+///
+/// The edge is the host's widget registered again with a smaller rect; egui keeps the last rect
+/// for the next frame's hit test, and the layer is the one the host used.
+fn keep_resize_edges_off_scrollbars(ui: &mut egui::Ui, host: egui::Id, open: &[Pane]) {
+    for pane in open {
+        let id = host.with(("pane", *pane)).with("resize");
+        // An inert edge (bad geometry) senses no drag: leave it so.
+        let Some(edge) = ui.ctx().read_response(id).filter(|r| r.sense.senses_drag() && r.rect.is_positive()) else { continue };
+        let border = edge.rect.center().x;
+        let grip = egui::Rect::from_x_y_ranges(border..=border + RESIZE_GRIP, edge.rect.y_range());
+        ui.new_child(egui::UiBuilder::new().layer_id(edge.layer_id)).interact(grip, id, egui::Sense::drag());
+    }
 }
 
 /// Draws the rail and the open panes. Call after the top bars and before the central panel.
@@ -389,13 +436,16 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let labels = PaneLabels { resize: crate::i18n::t("Resize panels").to_owned(), ..PaneLabels::default() };
     let panels = app.side_panels;
     // Columns: both panes may share the right edge, Tools outermost, as `open` lists them.
-    let output = PaneHost::new(egui::Id::unique("pdfcraft-side-panels"))
+    let host = egui::Id::unique("pdfcraft-side-panels");
+    let output = PaneHost::new(host)
         .policy(SidePolicy::Columns)
         .f6(false)
         .labels(labels)
         .frame(egui::Frame::NONE.fill(t.panel))
         .body_margin(egui::Margin::ZERO)
         .show(ui, &open, |pane| Some(state_of(&panels, *pane)), &mut Content { app });
+
+    keep_resize_edges_off_scrollbars(ui, host, &open);
     for request in output.requests {
         match request {
             PaneRequest::Resize(pane, width) => app.side_panels.set_width(pane, width),
@@ -434,7 +484,7 @@ mod tests {
     #[test]
     fn docked_default_keeps_widths() {
         let restored = restore(&docked(300.0, 400.0));
-        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Left, tools_width: 300.0, side_width: 400.0 });
+        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Left, rail_side: ToolsSide::Right, tools_width: 300.0, side_width: 400.0 });
         assert_eq!((restored.tools_open, restored.side_closed), (Some(true), false));
     }
 
@@ -448,6 +498,7 @@ mod tests {
         );
         let restored = restore(&old);
         assert_eq!(restored.panels.tools_side, ToolsSide::Right);
+        assert_eq!(restored.panels.rail_side, ToolsSide::Right);
         assert_eq!(restored.panels.tools_width, 290.0);
         // The Inspector's own split fixes Tools' width, not its.
         assert_eq!(restored.panels.side_width, SIDE_WIDTH);
@@ -461,7 +512,10 @@ mod tests {
             json!([]),
         );
         let restored = restore(&old);
-        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Left, tools_width: TOOLS_WIDTH, side_width: 360.0 });
+        assert_eq!(
+            restored.panels,
+            SidePanels { tools_side: ToolsSide::Left, rail_side: ToolsSide::Right, tools_width: TOOLS_WIDTH, side_width: 360.0 }
+        );
         assert_eq!((restored.tools_open, restored.side_closed), (Some(true), false));
     }
 
@@ -470,6 +524,7 @@ mod tests {
         let old = workspace(split(json!({"FixedSecond": 350.0}), tabs(&["canvas"]), tabs(&["inspector", "tools"])), json!([]), json!([]));
         let restored = restore(&old);
         assert_eq!(restored.panels.tools_side, ToolsSide::Left);
+        assert_eq!(restored.panels.rail_side, ToolsSide::Right);
         assert_eq!((restored.panels.tools_width, restored.panels.side_width), (TOOLS_WIDTH, SIDE_WIDTH));
         assert_eq!((restored.tools_open, restored.side_closed), (Some(true), false));
     }
@@ -481,11 +536,11 @@ mod tests {
             json!([]),
             json!([
                 ["inspector", {"floating": null, "anchor": "canvas", "placement": {"Split": "Right"}, "size": {"FixedSecond": 380.0}, "stack": null, "sibling": ["canvas"]}],
-                ["tools", {"floating": null, "anchor": "canvas", "placement": {"Split": "Right"}, "size": {"FixedSecond": 250.0}, "stack": null, "sibling": ["canvas"]}]
+                ["tools", {"floating": null, "anchor": "canvas", "placement": {"Split": "Right"}, "size": {"FixedSecond": 300.0}, "stack": null, "sibling": ["canvas"]}]
             ]),
         );
         let restored = restore(&old);
-        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Right, tools_width: 250.0, side_width: 380.0 });
+        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Right, rail_side: ToolsSide::Right, tools_width: 300.0, side_width: 380.0 });
         assert_eq!((restored.tools_open, restored.side_closed), (Some(false), true));
     }
 
@@ -504,7 +559,10 @@ mod tests {
         }
         // Non-finite and out-of-range widths fall back or clamp; an unknown side keeps Left.
         let restored = restore(&json!({"side_panels": {"version": 1, "tools_side": "up", "tools_width": 9000.0, "side_width": "x"}}));
-        assert_eq!(restored.panels, SidePanels { tools_side: ToolsSide::Left, tools_width: 520.0, side_width: SIDE_WIDTH });
+        assert_eq!(
+            restored.panels,
+            SidePanels { tools_side: ToolsSide::Left, rail_side: ToolsSide::Right, tools_width: 520.0, side_width: SIDE_WIDTH }
+        );
         // Deep trees are cut off rather than walked.
         let mut deep = tabs(&["tools"]);
         for _ in 0..200 {
@@ -515,8 +573,19 @@ mod tests {
 
     #[test]
     fn saved_value_round_trips() {
-        let panels = SidePanels { tools_side: ToolsSide::Right, tools_width: 300.0, side_width: 410.0 };
+        let panels = SidePanels { tools_side: ToolsSide::Right, rail_side: ToolsSide::Left, tools_width: 300.0, side_width: 410.0 };
         let restored = restore(&json!({ "side_panels": panels.to_json(false) }));
         assert_eq!(restored, Restored { panels, tools_open: Some(false), side_closed: false });
+    }
+
+    #[test]
+    fn rail_side_placement_and_restore() {
+        let mut panels = SidePanels::default();
+        assert_eq!(panels.rail_side, ToolsSide::Right);
+        assert_eq!(panels.rail_edge(), Edge::End);
+        panels.rail_side = ToolsSide::Left;
+        assert_eq!(panels.rail_edge(), Edge::Start);
+        let restored = restore(&json!({"side_panels": {"version": 1, "rail_side": "left"}}));
+        assert_eq!(restored.panels.rail_side, ToolsSide::Left);
     }
 }
