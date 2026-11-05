@@ -106,6 +106,30 @@ fn an_image_another_page_draws_through_a_form_without_resources_is_kept() {
     assert!(full_save_holds(&doc, b"IMAGESECRET"), "the second page still draws the image through its form");
 }
 
+/// A shading paints its whole clip, so clipping the marks out of it kept its samples (and what it
+/// drew under the mark) in the file. One whose clip can reach a mark goes, with its resource
+/// entry; one clipped away from every mark stays.
+#[test]
+fn a_shading_under_a_mark_leaves_the_saved_file() {
+    let mesh = "/ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 300 0 300 0 1 0 1 0 1]";
+    let mut doc = one_page(
+        b"/Sh1 sh q 200 200 50 50 re W n /Sh2 sh Q q 0 0 100 100 re W n /Sh3 sh Q",
+        "/Shading << /Sh1 7 0 R /Sh2 8 0 R /Sh3 9 0 R >>",
+        vec![stream(mesh, b"UNCLIPPED_SECRET_MESH"), stream(mesh, b"PUBLIC_MESH_FAR_AWAY"), stream(mesh, b"CLIPPED_SECRET_MESH")],
+    );
+    let rects = [[10.0, 10.0, 50.0, 50.0]];
+    assert_eq!(under(&mut doc, 0, &rects), 2, "the verifier counts the two shadings that can reach the mark");
+    mark(&mut doc, 0, &rects, "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.shadings_removed, 2, "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("/Sh1 sh") && !c.contains("/Sh3 sh"), "{c}");
+    assert!(c.contains("200 200 50 50 re\nW\nn\n/Sh2 sh"), "the shading clipped away from the mark stays: {c}");
+    assert!(!full_save_holds(&doc, b"UNCLIPPED_SECRET_MESH"), "the unclipped shading is still reachable");
+    assert!(!full_save_holds(&doc, b"CLIPPED_SECRET_MESH"), "the shading clipped over the mark is still reachable");
+    assert!(full_save_holds(&doc, b"PUBLIC_MESH_FAR_AWAY"), "the surviving shading was lost");
+}
+
 /// A Type 3 font whose displayed glyphs are redacted has its unused glyph programs unlinked from
 /// /CharProcs and exclusive graphical resources pruned, so they do not survive in a full save (F-011).
 #[test]
@@ -297,4 +321,36 @@ fn type3_font_used_in_a_form_xobject_has_its_redacted_glyph_removed() {
     let report = apply(&mut doc, None).unwrap();
     assert_eq!(report.glyphs, 1);
     assert!(!full_save_holds(&doc, b"SECRET_FORM_GLYPH_PAYLOAD"), "redacted glyph program survived");
+}
+
+/// An unclipped shading paints the whole page however far away the mark is: a clip box capped at
+/// ±1e6 let a mark past it miss the shading.
+#[test]
+fn an_unclipped_shading_reaches_a_mark_past_a_million_units() {
+    let mesh = "/ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 300 0 300 0 1 0 1 0 1]";
+    let mut doc = one_page(b"/Sh1 sh", "/Shading << /Sh1 7 0 R >>", vec![stream(mesh, b"FAR_SECRET_MESH")]);
+    let rects = [[2.0e6, 10.0, 2.0e6 + 40.0, 50.0]];
+    assert_eq!(under(&mut doc, 0, &rects), 1, "the verifier sees the shading under the far mark");
+}
+
+/// A page sharing the resources reads `/Sh1` only after an inline image the renderer reads no
+/// image for: whether it still draws the shading is a guess, so the shared entry is not unlinked
+/// on that guess; the redaction refuses instead.
+#[test]
+fn a_shared_shading_after_an_ambiguous_inline_image_is_not_unlinked() {
+    let mesh = "/ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 300 0 300 0 1 0 1 0 1]";
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Resources 7 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 6 0 R /Resources 7 0 R >>".to_vec(),
+        stream("", b"/Sh1 sh"),
+        stream("", b"BI /W 4 /H 1 /BPC 8 /CS /G ID abc /Sh1 sh"),
+        b"<< /Shading << /Sh1 8 0 R >> >>".to_vec(),
+        stream(mesh, b"SHARED_MESH"),
+    ]);
+    mark(&mut doc, 0, &[[10.0, 10.0, 50.0, 50.0]], "");
+    let before = full_save_holds(&doc, b"SHARED_MESH");
+    assert!(before);
+    assert!(apply(&mut doc, None).is_err(), "the shared shading's use on page 2 can't be read");
 }
