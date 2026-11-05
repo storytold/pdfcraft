@@ -894,7 +894,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
                 }
             }
             if changed {
-                doc.set(r, Object::Dict(nd));
+                doc.set_existing(r, Object::Dict(nd))?;
             }
             continue;
         }
@@ -910,7 +910,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
             changed |= ns.dict.remove(b"Alternates").is_some();
             changed |= ns.dict.remove(b"OPI").is_some();
             if changed {
-                doc.set(r, Object::Stream(ns));
+                doc.set_existing(r, Object::Stream(ns))?;
                 images += 1;
             }
             continue;
@@ -918,7 +918,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
         if level == Level::A3b && ty.as_deref() == Some(b"Filespec") && d.get(b"EF").is_some() && d.get(b"AFRelationship").is_none() {
             let mut nd = d.clone();
             nd.set(b"AFRelationship".to_vec(), Object::name("Unspecified"));
-            doc.set(r, Object::Dict(nd));
+            doc.set_existing(r, Object::Dict(nd))?;
             files += 1;
         }
     }
@@ -927,14 +927,14 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
     for (r, o) in objects(doc) {
         let Object::Dict(d) = &*o else { continue };
         if d.get(b"S").is_some() && is_action(d) && chain_forbidden(doc, d).is_some() {
-            doc.set(r, Object::Null);
+            doc.set_existing(r, Object::Null)?;
             actions += 1;
         } else if let Some(Object::Dict(a)) = d.get(b"A")
             && chain_forbidden(doc, a).is_some()
         {
             let mut nd = d.clone();
             nd.remove(b"A");
-            doc.set(r, Object::Dict(nd));
+            doc.set_existing(r, Object::Dict(nd))?;
             actions += 1;
         }
     }

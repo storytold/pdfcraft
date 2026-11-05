@@ -262,23 +262,51 @@ pub fn parse_da(d: &Dict) -> (Rgb, f64) {
     (col.map(|x| x.clamp(0.0, 1.0)), size.min(400.0))
 }
 
-fn ext_gstate(opacity: f64, multiply: bool) -> Option<Dict> {
-    if opacity >= 1.0 && !multiply {
+/// How opaque a comment's parts are drawn, 0–1: its line or border (`/CA`); its fill or
+/// background (`/ca`, which PDF 2.0 gives the non-stroking operations; without it, as the line);
+/// and a text box's text (`/PCTextOpacity`, PdfCraft's own; without it, as the fill, since text
+/// is filled too). A comment with only `/CA` is drawn at that opacity throughout, as before.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PartOpacity {
+    pub line: f64,
+    pub fill: f64,
+    pub text: f64,
+}
+
+/// The parts' opacities of the comment `d` (see [`PartOpacity`]).
+pub fn part_opacity(d: &Dict) -> PartOpacity {
+    let get = |key: &[u8]| d.get(key).and_then(|o| o.as_f64()).filter(|x| x.is_finite()).map(|x| x.clamp(0.0, 1.0));
+    let line = get(b"CA").unwrap_or(1.0);
+    let fill = get(b"ca").unwrap_or(line);
+    let text = get(b"PCTextOpacity").unwrap_or(fill);
+    PartOpacity { line, fill, text }
+}
+
+/// `/GS0`: the line's opacity for strokes and the fill's for everything filled; `/GS1`, where the
+/// text's differs from the fill's: the text's for its glyphs.
+fn ext_gstate(parts: PartOpacity, multiply: bool) -> Option<Dict> {
+    if parts.line >= 1.0 && parts.fill >= 1.0 && parts.text >= 1.0 && !multiply {
         return None;
     }
-    let mut gs = Dict::new();
-    gs.set(b"Type".to_vec(), Object::name("ExtGState"));
-    if multiply {
-        gs.set(b"BM".to_vec(), Object::name("Multiply"));
-    }
-    gs.set(b"CA".to_vec(), Object::Real(opacity));
-    gs.set(b"ca".to_vec(), Object::Real(opacity));
+    let gs = |stroke: f64, fill: f64| {
+        let mut gs = Dict::new();
+        gs.set(b"Type".to_vec(), Object::name("ExtGState"));
+        if multiply {
+            gs.set(b"BM".to_vec(), Object::name("Multiply"));
+        }
+        gs.set(b"CA".to_vec(), Object::Real(stroke));
+        gs.set(b"ca".to_vec(), Object::Real(fill));
+        Object::Dict(gs)
+    };
     let mut res = Dict::new();
-    res.set(b"GS0".to_vec(), Object::Dict(gs));
+    res.set(b"GS0".to_vec(), gs(parts.line, parts.fill));
+    if parts.text != parts.fill {
+        res.set(b"GS1".to_vec(), gs(parts.line, parts.text));
+    }
     Some(res)
 }
 
-fn form(bbox: [f64; 4], content: &[u8], resources: Dict) -> Stream {
+pub(crate) fn form(bbox: [f64; 4], content: &[u8], resources: Dict) -> Stream {
     let mut d = Dict::new();
     d.set(b"Type".to_vec(), Object::name("XObject"));
     d.set(b"Subtype".to_vec(), Object::name("Form"));
@@ -286,6 +314,18 @@ fn form(bbox: [f64; 4], content: &[u8], resources: Dict) -> Stream {
     d.set(b"BBox".to_vec(), Object::Array(bbox.iter().map(|x| Object::Real(*x)).collect()));
     d.set(b"Resources".to_vec(), Object::Dict(resources));
     Stream::flate(d, content)
+}
+
+/// The `cm` that draws a picture into `at`: an image (its unit square) or a form XObject whose
+/// `/Matrix` maps it to `size` points (`None`, or a side that is not positive, draws nothing).
+pub(crate) fn picture_place(at: [f64; 4], image: bool, size: Option<(f64, f64)>) -> Option<String> {
+    let [x0, y0, x1, y1] = at;
+    let (w, h) = (x1 - x0, y1 - y0);
+    if image {
+        return Some(format!("{} 0 0 {} {} {} cm", n(w), n(h), n(x0), n(y0)));
+    }
+    let (sw, sh) = size.filter(|(sw, sh)| *sw > 0.0 && *sh > 0.0)?;
+    Some(format!("{} 0 0 {} {} {} cm", n(w / sw), n(h / sh), n(x0), n(y0)))
 }
 
 /// The page `/Rotate` an image signature's picture is turned back by (`/PCPictureRotate`, written
@@ -325,7 +365,7 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
 }
 
 /// `/Font` resources naming `/Helv`: standard Helvetica with WinAnsiEncoding.
-fn helvetica_resource() -> Object {
+pub(crate) fn helvetica_resource() -> Object {
     let mut font = Dict::new();
     font.set(b"Type".to_vec(), Object::name("Font"));
     font.set(b"Subtype".to_vec(), Object::name("Type1"));
@@ -379,7 +419,9 @@ struct AppearanceContext<'a> {
     subtype: &'a [u8],
     rect: [f64; 4],
     cloudy: bool,
+    /// The line's opacity (`parts.line`).
     opacity: f64,
+    parts: PartOpacity,
     stroke: Option<Rgb>,
     width: f64,
 }
@@ -392,9 +434,13 @@ struct AppearanceDrawing {
 }
 
 impl AppearanceDrawing {
+    /// Initialize an appearance drawing buffer and configure its graphics state for opacity and blend mode.
     fn new(context: &AppearanceContext<'_>) -> Self {
         let mut drawing = Self::default();
-        if let Some(gs) = ext_gstate(context.opacity, context.subtype == b"Highlight") {
+        if let Some(gs) = ext_gstate(
+            context.parts,
+            context.subtype == b"Highlight" || (context.subtype == b"Ink" && context.dict.name(b"IT") == Some(b"FreehandHighlight")),
+        ) {
             drawing.resources.set(b"ExtGState".to_vec(), Object::Dict(gs));
             drawing.content.push_str("/GS0 gs\n");
         }
@@ -439,7 +485,8 @@ fn appearance_context(d: &Dict) -> Option<AppearanceContext<'_>> {
         subtype,
         rect,
         cloudy,
-        opacity: d.get(b"CA").and_then(|o| o.as_f64()).unwrap_or(1.0).clamp(0.0, 1.0),
+        opacity: part_opacity(d).line,
+        parts: part_opacity(d),
         stroke: color(d, b"C")?,
         width: border_width(d),
     })
@@ -782,15 +829,12 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
     // the standard counter-rotation as its form `/Matrix`: viewers fit the turned
     // bounding box to `/Rect` (ISO 32000-2 §12.5.5), so it reads upright as displayed.
     if let Some(pic) = d.get(b"PCPicture").and_then(Object::as_ref) {
-        let [x0, y0, x1, y1] = rect;
-        let (w, h) = (x1 - x0, y1 - y0);
         let image = matches!(d.get(b"PCPictureImage"), Some(Object::Bool(true)));
-        let place = if image {
-            format!("{} 0 0 {} {} {} cm", n(w), n(h), n(x0), n(y0))
-        } else {
-            let size = nums(d, b"PCPictureSize").filter(|s| s.len() == 2 && s[0] > 0.0 && s[1] > 0.0)?;
-            format!("{} 0 0 {} {} {} cm", n(w / size[0]), n(h / size[1]), n(x0), n(y0))
-        };
+        let size = nums(d, b"PCPictureSize").and_then(|s| match s.as_slice() {
+            [w, h] if *w > 0.0 && *h > 0.0 => Some((*w, *h)),
+            _ => None,
+        });
+        let place = picture_place(rect, image, size)?;
         c.push_str(&format!("q {place} /Pic Do Q\n"));
         let mut xo = Dict::new();
         xo.set(b"Pic".to_vec(), Object::Ref(pic));
@@ -891,6 +935,7 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
 
 fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -> Option<Stream> {
     let d = context.dict;
+    let parts = context.parts;
     let rect = context.rect;
     let stroke = context.stroke;
     let mut c = std::mem::take(&mut drawing.content);
@@ -964,6 +1009,10 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     let pad = 2.0 + bw;
     let width = (rect[2] - rect[0] - 2.0 * pad).max(1.0);
     let q = d.int(b"Q").unwrap_or(0);
+    // The text at its own opacity, where it has one.
+    if parts.text != parts.fill {
+        c.push_str("/GS1 gs\n");
+    }
     c.push_str(&format!(
         "{} {} {} {} re W n\nBT\n/Helv {} Tf\n{}",
         n(rect[0]),

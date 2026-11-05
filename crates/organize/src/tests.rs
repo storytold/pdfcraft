@@ -3875,3 +3875,175 @@ fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
     ctrl_names.sort();
     assert_eq!(ctrl_names, [b"ImHidden".to_vec(), b"ImShown".to_vec()]);
 }
+
+/// Intro (closed, red bold, at a point) > [Part (italic, FitH), Figure (FitR)], then Results.
+fn outline_source() -> Document {
+    let mut d = doc_a();
+    crate::add_bookmark_at(&mut d, &[], 0, "Intro", 0, Some(20.0), Some(380.0)).unwrap();
+    crate::add_bookmark(&mut d, &[0], 0, "Part", 1).unwrap();
+    crate::add_bookmark(&mut d, &[0], 1, "Figure", 2).unwrap();
+    crate::add_bookmark(&mut d, &[], 1, "Results", 2).unwrap();
+    crate::set_bookmark_color(&mut d, &[0], Some([1.0, 0.0, 0.0])).unwrap();
+    crate::set_bookmark_style(&mut d, &[0], Some(true), None).unwrap();
+    crate::set_bookmark_style(&mut d, &[0, 0], None, Some(true)).unwrap();
+    let pages = crate::walk(&d).unwrap();
+    let (part, figure) = (crate::bookmarks(&d)[1].obj, crate::bookmarks(&d)[2].obj);
+    let dest = |p: usize, rest: Vec<Object>| Object::Array([vec![Object::Ref(pages[p].0)], rest].concat());
+    d.update_dict(part, |x| x.set(b"Dest".to_vec(), dest(1, vec![Object::name("FitH"), Object::Real(300.0)]))).unwrap();
+    let fit_r = vec![Object::name("FitR"), Object::Int(10), Object::Int(20), Object::Int(110), Object::Int(220)];
+    d.update_dict(figure, |x| x.set(b"Dest".to_vec(), dest(2, fit_r))).unwrap();
+    crate::set_bookmark_open(&mut d, &[0], false).unwrap();
+    d
+}
+
+fn node(title: &str, page: Option<usize>, children: Vec<crate::OutlineNode>) -> crate::OutlineNode {
+    crate::OutlineNode { title: title.into(), page, view: None, color: None, italic: false, bold: false, open: true, children }
+}
+
+/// The `/Prev`, `/Last` and `/Parent` links agree with `/First`–`/Next` at every level.
+fn assert_back_links(doc: &Document) {
+    let root = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Outlines").unwrap();
+    let mut stack = vec![root];
+    while let Some(parent) = stack.pop() {
+        let kids = crate::outline::children(doc, parent);
+        let d = doc.get(parent).as_dict().cloned().unwrap();
+        assert_eq!(d.reference(b"Last"), kids.last().copied());
+        for (i, k) in kids.iter().enumerate() {
+            let kd = doc.get(*k).as_dict().cloned().unwrap();
+            assert_eq!(kd.reference(b"Prev"), i.checked_sub(1).map(|p| kids[p]));
+            assert_eq!(kd.reference(b"Parent"), Some(parent));
+        }
+        stack.extend(kids);
+    }
+}
+
+#[test]
+fn an_exported_outline_imports_into_another_document_unchanged() {
+    let source = outline_source();
+    let tree = crate::outline_tree(&source, &[]).unwrap();
+    assert!(!tree.truncated);
+    let intro = &tree.nodes[0];
+    assert_eq!((intro.title.as_str(), intro.page, intro.open, intro.bold, intro.color), ("Intro", Some(0), false, true, Some([1.0, 0.0, 0.0])));
+    assert_eq!(intro.view, Some((b"XYZ".to_vec(), vec![Some(20.0), Some(380.0), None])));
+    assert_eq!(intro.children[0].view, Some((b"FitH".to_vec(), vec![Some(300.0)])));
+    assert!(intro.children[0].italic);
+    assert_eq!(intro.children[1].view, Some((b"FitR".to_vec(), vec![Some(10.0), Some(20.0), Some(110.0), Some(220.0)])));
+
+    let mut target = doc_a();
+    assert_eq!(crate::import_outline(&mut target, &[], 0, &tree.nodes, false).unwrap(), vec![0]);
+    assert_back_links(&target);
+    let back = full_roundtrip(&target);
+    assert_eq!(crate::outline_tree(&back, &[]).unwrap(), tree);
+    // The closed parent stays closed: its count is negative and the root counts only what shows.
+    let first = crate::bookmarks(&back)[0].obj;
+    let root = back.get(back.root().unwrap()).as_dict().unwrap().reference(b"Outlines").unwrap();
+    assert_eq!((count_of(&back, first), count_of(&back, root)), (Some(-2), Some(2)));
+}
+
+#[test]
+fn a_subtree_exports_alone_and_a_missing_path_is_refused() {
+    let source = outline_source();
+    let tree = crate::outline_tree(&source, &[0]).unwrap();
+    assert_eq!(tree.nodes.len(), 1);
+    assert_eq!(tree.nodes[0].title, "Intro");
+    assert_eq!(tree.nodes[0].children.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), ["Part", "Figure"]);
+    let leaf = crate::outline_tree(&source, &[0, 1]).unwrap();
+    assert_eq!((leaf.nodes.len(), leaf.nodes[0].title.as_str()), (1, "Figure"));
+    assert_eq!(crate::outline_tree(&source, &[5]), Err(crate::OutlineError::NoSuchBookmark(vec![5])));
+    assert_eq!(crate::outline_tree(&doc_a(), &[]).unwrap().nodes, []);
+}
+
+#[test]
+fn a_page_the_target_lacks_keeps_its_bookmark_without_a_destination() {
+    let tree = crate::outline_tree(&outline_source(), &[]).unwrap();
+    // doc_b has two pages: Figure and Results go to the third.
+    assert_eq!(crate::unmapped(&tree.nodes, 2), [vec![0, 1], vec![1]]);
+    let mut target = doc_b();
+    crate::import_outline(&mut target, &[], 0, &tree.nodes, false).unwrap();
+    let listed = crate::bookmarks(&target);
+    assert_eq!(titles(&listed), ["Intro[Part,Figure]", "Results"]);
+    assert_eq!(listed.iter().map(|b| b.page).collect::<Vec<_>>(), [Some(0), Some(1), None, None]);
+    assert!(target.get(listed[2].obj).as_dict().unwrap().get(b"Dest").is_none());
+}
+
+#[test]
+fn a_fit_r_missing_a_value_copies_with_its_page_and_no_view() {
+    let mut src = outline_source();
+    let pages = crate::walk(&src).unwrap();
+    let figure = crate::bookmarks(&src)[2].obj;
+    let short = vec![Object::Ref(pages[2].0), Object::name("FitR"), Object::Int(10), Object::Int(20), Object::Int(110)];
+    src.update_dict(figure, |x| x.set(b"Dest".to_vec(), Object::Array(short))).unwrap();
+    let tree = crate::outline_tree(&src, &[]).unwrap();
+    let copied = &tree.nodes[0].children[1];
+    assert_eq!((copied.page, copied.view.clone()), (Some(2), None));
+    let mut target = doc_a();
+    crate::import_outline(&mut target, &[], 0, &tree.nodes, false).unwrap();
+    assert_eq!(titles(&crate::bookmarks(&target)), ["Intro[Part,Figure]", "Results"]);
+}
+
+#[test]
+fn an_import_appends_inserts_or_replaces() {
+    let mut d = doc_a();
+    crate::add_bookmark(&mut d, &[], 0, "Old A", 0).unwrap();
+    crate::add_bookmark(&mut d, &[], 1, "Old B", 1).unwrap();
+    let new = [node("New", Some(2), vec![node("Child", Some(1), vec![])])];
+    assert_eq!(crate::import_outline(&mut d, &[], 1, &new, false).unwrap(), vec![1]);
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Old A", "New[Child]", "Old B"]);
+    assert_eq!(crate::import_outline(&mut d, &[2], 9, &new, false).unwrap(), vec![2, 0]);
+    assert_eq!(titles(&crate::bookmarks(&d)), ["Old A", "New[Child]", "Old B[New[Child]]"]);
+    assert_back_links(&d);
+    assert_eq!(crate::import_outline(&mut d, &[], 5, &new, true).unwrap(), vec![0]);
+    assert_eq!(titles(&crate::bookmarks(&d)), ["New[Child]"]);
+    assert_back_links(&d);
+    let refused = crate::import_outline(&mut d, &[0], 0, &new, true);
+    assert!(matches!(refused, Err(crate::OutlineError::Organize(crate::OrganizeError::Invalid(_)))));
+    assert_eq!(crate::import_outline(&mut d, &[], 0, &[], false), Err(crate::OutlineError::NothingToImport));
+    assert_eq!(crate::import_outline(&mut d, &[7], 0, &new, false), Err(crate::OutlineError::NoSuchBookmark(vec![7])));
+}
+
+#[test]
+fn a_bad_node_anywhere_refuses_the_whole_import() {
+    let mut d = doc_a();
+    crate::add_bookmark(&mut d, &[], 0, "Kept", 0).unwrap();
+    let before = crate::bookmarks(&d);
+    let with = |f: &dyn Fn(&mut crate::OutlineNode)| {
+        let mut child = node("Child", Some(0), vec![]);
+        f(&mut child);
+        vec![node("Fine", Some(0), vec![]), node("Parent", Some(0), vec![child])]
+    };
+    let bad_views: [(&[u8], Vec<Option<f64>>); 4] =
+        [(b"XYZ", vec![Some(1.0)]), (b"Zoom", vec![]), (b"FitH", vec![Some(f64::NAN)]), (b"FitR", vec![Some(0.0), None, Some(1.0), Some(1.0)])];
+    for (kind, values) in bad_views {
+        let nodes = with(&|n| n.view = Some((kind.to_vec(), values.clone())));
+        assert_eq!(crate::import_outline(&mut d, &[], 0, &nodes, false), Err(crate::OutlineError::BadView(vec![1, 0])), "{kind:?}");
+    }
+    let nodes = with(&|n| n.color = Some([0.5, 1.5, 0.0]));
+    assert_eq!(crate::import_outline(&mut d, &[], 0, &nodes, false), Err(crate::OutlineError::BadColor));
+    let nodes = with(&|n| n.color = Some([f32::NAN, 0.0, 0.0]));
+    assert_eq!(crate::import_outline(&mut d, &[], 0, &nodes, false), Err(crate::OutlineError::BadColor));
+    let mut deep = node("Leaf", None, vec![]);
+    for _ in 0..33 {
+        deep = node("Level", None, vec![deep]);
+    }
+    assert_eq!(crate::import_outline(&mut d, &[], 0, &[deep], false), Err(crate::OutlineError::TooDeep(33)));
+    // 33 levels fit at the top, but not under a bookmark: the deepest would be past the listing.
+    let mut chain = node("Leaf", None, vec![]);
+    for _ in 0..32 {
+        chain = node("Level", None, vec![chain]);
+    }
+    assert_eq!(crate::import_outline(&mut d, &[0], 0, std::slice::from_ref(&chain), false), Err(crate::OutlineError::TooDeep(33)));
+    let many = vec![node("Item", None, vec![]); crate::MAX_IMPORT_BOOKMARKS + 1];
+    assert_eq!(crate::import_outline(&mut d, &[], 0, &many, false), Err(crate::OutlineError::TooManyBookmarks(crate::MAX_IMPORT_BOOKMARKS)));
+    assert_eq!(crate::bookmarks(&d), before);
+}
+
+#[test]
+fn an_outline_deeper_than_the_listing_is_exported_as_truncated() {
+    let tree = crate::outline_tree(&open(deep_outline(40)), &[]).unwrap();
+    assert!(tree.truncated);
+    assert!(!crate::outline_tree(&open(deep_outline(33)), &[]).unwrap().truncated);
+    // What was exported imports back: 33 levels is the deepest an import takes.
+    let mut target = doc_a();
+    crate::import_outline(&mut target, &[], 0, &tree.nodes, false).unwrap();
+    assert_eq!(crate::bookmarks(&target).len(), 33);
+}
