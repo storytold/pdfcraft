@@ -34,11 +34,13 @@ use hayro::{RenderCache, RenderSettings, render_into, render_size};
 use crate::{Pixels, ReadingColors};
 
 mod pool;
+mod text_cache;
 
 use pool::lock;
 #[cfg(test)]
 use pool::{BusyPublishGate, ParseGate, ParserState, PoolParser, RenderGate, Shared, same_request, worker, worker_settings};
 pub use pool::{RenderPool, Retiring};
+use text_cache::TextDiskCache;
 
 /// Monotonic-ish timer that is safe on wasm32 (where `std::time::Instant` panics).
 #[derive(Clone, Copy)]
@@ -322,6 +324,10 @@ impl AtomicRenderStats {
             rasterizations: self.rasterizations.load(Ordering::Relaxed),
         }
     }
+
+    fn record_cached_text(&self) {
+        self.render_requests.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// Clamp a requested scale so the output respects `MAX_SIDE` and `MAX_PIXELS`.
@@ -354,6 +360,7 @@ fn render_page<'a>(
     settings: &InterpreterSettings,
     config: &RenderConfig,
     req: RenderRequest,
+    text_cache: Option<&TextDiskCache>,
 ) -> Result<Output, (String, bool)> {
     // Print previews share the viewer pool, but must use the output font policy. Keep the
     // caller's cancellation/warning hooks, layers and annotation settings. A fresh cache is
@@ -375,7 +382,12 @@ fn render_page<'a>(
     let reading = request_reading(config, &req);
     if req.kind == RequestKind::Text {
         return match catch_unwind(AssertUnwindSafe(|| crate::text::extract_page(pdf, req.page, settings))) {
-            Ok(Some(t)) => Ok((0, 0, Pixels::default(), Some(Arc::new(t)))),
+            Ok(Some(t)) => {
+                if let Some(cache) = text_cache {
+                    cache.store(req.page, &t);
+                }
+                Ok((0, 0, Pixels::default(), Some(Arc::new(t))))
+            }
             Ok(None) => Err((format!("page {} does not exist", req.page + 1), false)),
             Err(panic) => Err((format!("text extraction crashed on page {}: {}", req.page + 1, panic_message(&panic)), true)),
         };
@@ -491,13 +503,18 @@ pub struct PageRenderer {
     pdf: Option<Pdf>,
     settings: InterpreterSettings,
     stats: RenderStats,
+    text_cache: Option<TextDiskCache>,
 }
 
 impl PageRenderer {
     pub fn new(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
         let pdf = parse(&bytes, config.password.as_deref());
         let settings = config.settings();
-        Self { bytes, config, pdf, settings, stats: RenderStats { parser_builds: 1, ..RenderStats::default() } }
+        #[cfg(not(test))]
+        let text_cache = TextDiskCache::new(&bytes, &config);
+        #[cfg(test)]
+        let text_cache = None;
+        Self { bytes, config, pdf, settings, stats: RenderStats { parser_builds: 1, ..RenderStats::default() }, text_cache }
     }
 
     pub fn page_count(&self) -> usize {
@@ -520,6 +537,7 @@ impl PageRenderer {
     /// Render one page. Never panics.
     pub fn render(&mut self, req: RenderRequest) -> RenderedPage {
         let start = Stopwatch::start();
+        let cached_text = (req.kind == RequestKind::Text).then(|| self.text_cache.as_ref().and_then(|cache| cache.load(req.page))).flatten();
         if self.pdf.is_some() {
             self.stats.render_requests += 1;
             if req.tile.is_some() {
@@ -530,8 +548,12 @@ impl PageRenderer {
                     self.stats.page_interpretations += 1;
                     self.stats.rasterizations += 1;
                 }
-                RequestKind::Text => self.stats.text_interpretations += 1,
+                RequestKind::Text if cached_text.is_none() => self.stats.text_interpretations += 1,
+                RequestKind::Text => {}
             }
+        }
+        if let Some(text) = cached_text {
+            return finish(req, start, Ok((0, 0, Pixels::default(), Some(text))), Vec::new());
         }
         let Some(pdf) = self.pdf.as_ref() else {
             return finish(req, start, Err(("the document could not be parsed".into(), false)), Vec::new());
@@ -539,7 +561,7 @@ impl PageRenderer {
         let cache = RenderCache::new();
         let warnings = Arc::new(Mutex::new(Vec::new()));
         let settings = warning_settings(&self.settings, warnings.clone());
-        let r = render_page(pdf, &cache, &settings, &self.config, req);
+        let r = render_page(pdf, &cache, &settings, &self.config, req, self.text_cache.as_ref());
         let warnings = take_warnings(&warnings);
         if matches!(r, Err((_, true))) {
             self.pdf = parse(&self.bytes, self.config.password.as_deref());

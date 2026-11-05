@@ -1,3 +1,4 @@
+use super::text_cache::TextDiskCache;
 use super::{
     Arc, AssertUnwindSafe, AtomicRenderStats, InterpreterSettings, JoinHandle, Mutex, Ordering, PageRenderer, Pdf, Pixels, RenderCache, RenderConfig,
     RenderRequest, RenderStats, RenderedPage, RequestFailureKey, RequestKind, ResultReceiver, Stopwatch, SyncSender, WorkQueue, catch_unwind, finish,
@@ -61,6 +62,8 @@ pub(super) struct ParseGate {
 pub(super) struct Shared {
     /// Desired requests, active jobs and bounded completed results share one deduplication key.
     pub(super) queue: Arc<WorkQueue>,
+    /// Reusable page text, scoped to these exact bytes and text-affecting settings.
+    pub(super) text_cache: Option<TextDiskCache>,
     /// Per worker id: the request it is rendering and since when.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) busy: Mutex<Vec<Option<Busy>>>,
@@ -257,9 +260,22 @@ impl RenderPool {
         Self::with_mode(bytes, threads, config, false)
     }
 
+    /// Cached pages whose case-insensitive search text can contain `query`. `None` means the
+    /// persistent index is incomplete or the query is too short to filter safely.
+    pub fn text_candidate_pages(&self, query: &str, page_count: usize, case_sensitive: bool) -> Option<Vec<usize>> {
+        if case_sensitive {
+            return None;
+        }
+        self.shared.text_cache.as_ref()?.candidate_pages(query, page_count)
+    }
+
     fn with_mode(bytes: Arc<Vec<u8>>, threads: usize, config: RenderConfig, inline: bool) -> Self {
         let threads = if inline || cfg!(target_arch = "wasm32") { 0 } else { threads.max(1) };
-        let shared = Arc::new(Shared::default());
+        #[cfg(not(test))]
+        let text_cache = TextDiskCache::new(&bytes, &config);
+        #[cfg(test)]
+        let text_cache = None;
+        let shared = Arc::new(Shared { text_cache, ..Shared::default() });
         let results_tx = shared.queue.clone();
         let results = ResultReceiver(shared.queue.clone());
         let mut pool = Self {
@@ -560,6 +576,17 @@ pub(super) fn worker(
                 if shared.queue.cancel_obsolete(req) {
                     continue;
                 }
+                let start = Stopwatch::start();
+                if req.kind == RequestKind::Text
+                    && let Some(text) = shared.text_cache.as_ref().and_then(|cache| cache.load(req.page))
+                {
+                    shared.stats.record_cached_text();
+                    let page = finish(req, start, Ok((0, 0, Pixels::default(), Some(text))), Vec::new());
+                    if out.send_valid(page, None).is_err() {
+                        return;
+                    }
+                    continue;
+                }
                 #[cfg(all(test, not(target_arch = "wasm32")))]
                 if let Some(gate) = lock(&shared.busy_publish_gate).clone().filter(|gate| same_request(gate.request, req)) {
                     let _ = gate.entered.send(());
@@ -584,7 +611,6 @@ pub(super) fn worker(
                     }
                     continue;
                 }
-                let start = Stopwatch::start();
                 shared.stats.record_request(req);
                 let stage = parsed.get().map_or(
                     BusyStage::Parsing,
@@ -731,7 +757,7 @@ pub(super) fn worker(
                         panic!("injected page panic");
                     }
                     match pdf {
-                        Some(pdf) => render_page(pdf, cache, &settings, &config, req),
+                        Some(pdf) => render_page(pdf, cache, &settings, &config, req, shared.text_cache.as_ref()),
                         None => Err(("the document could not be parsed".into(), false)),
                     }
                 }))

@@ -8092,9 +8092,9 @@ fn decoded_images_with_identical_dictionaries_keep_their_own_pixels() {
     let pdf = parse(&Arc::new(pdf), None).expect("parses");
     let cache = RenderCache::new();
     let settings = InterpreterSettings::default();
-    let preview = render_page(&pdf, &cache, &settings, &RenderConfig::default(), req(true)).expect("preview renders");
-    let fin = render_page(&pdf, &cache, &settings, &RenderConfig::default(), req(false)).expect("final renders");
-    let fresh = render_page(&pdf, &RenderCache::new(), &settings, &RenderConfig::default(), req(false)).expect("final renders");
+    let preview = render_page(&pdf, &cache, &settings, &RenderConfig::default(), req(true), None).expect("preview renders");
+    let fin = render_page(&pdf, &cache, &settings, &RenderConfig::default(), req(false), None).expect("final renders");
+    let fresh = render_page(&pdf, &RenderCache::new(), &settings, &RenderConfig::default(), req(false), None).expect("final renders");
     assert_eq!(rgb_at(&preview.2, w, 35, 35), [0, 0, 255]);
     assert_eq!(&fin.2[..], &fresh.2[..], "a final render after a preview matches one with a fresh cache");
 }

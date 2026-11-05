@@ -80,13 +80,22 @@ pub struct TextGlyph {
 pub fn fold_case(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
-        match c {
-            'I' | 'i' | '\u{130}' | '\u{131}' => out.push('i'),
-            'Σ' | 'σ' | 'ς' => out.push('σ'),
-            _ => out.extend(c.to_lowercase()),
-        }
+        push_folded(c, &mut out);
     }
     out
+}
+
+pub(crate) fn normalized_search_text(page: &PageText) -> String {
+    let text = fold_case(&page.plain_text());
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub(super) fn push_folded(c: char, out: &mut String) {
+    match c {
+        'I' | 'i' | '\u{130}' | '\u{131}' => out.push('i'),
+        'Σ' | 'σ' | 'ς' => out.push('σ'),
+        _ => out.extend(c.to_lowercase()),
+    }
 }
 
 /// The text of one page, in content order, with line structure.

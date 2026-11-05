@@ -1690,6 +1690,32 @@ fn visible_pages_render_before_thumbnails_and_text() {
 }
 
 #[test]
+fn open_document_preloads_all_pages_then_reloads_warmed_text_on_demand() {
+    let info = thumbnail_info(5);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    assert_eq!(text_pages_for_frame(&v, &[2], 2, 5), vec![2, 3, 4, 0, 1]);
+
+    v.text_preloaded.extend(0..5);
+    assert_eq!(text_pages_for_frame(&v, &[2], 2, 5), vec![2], "visible pages rehydrate from disk after memory eviction");
+    v.texts.insert(2, Arc::new(PageText::default()));
+    assert!(text_pages_for_frame(&v, &[2], 2, 5).is_empty(), "completed background pages are not repeatedly queued");
+
+    v.find = Some(Find { case_query: "needle".into(), ..Find::default() });
+    assert_eq!(text_pages_for_frame(&v, &[], 2, 5), vec![3, 4, 0, 1], "active Find rehydrates all missing layers from its anchor");
+}
+
+#[test]
+fn cached_search_index_skips_irrelevant_pages_but_keeps_visible_and_selected_text() {
+    let text = |page| RenderRequest { page, kind: RequestKind::Text, ..RenderRequest::default() };
+    let pixels = RenderRequest { page: 3, kind: RequestKind::Pixels, ..RenderRequest::default() };
+    let mut queue = vec![text(0), text(1), text(2), text(3), pixels];
+    filter_search_text_requests(&mut queue, &HashSet::from([1]), &HashSet::from([0]), Some(2));
+    let text_pages: Vec<_> = queue.iter().filter(|request| request.kind == RequestKind::Text).map(|request| request.page).collect();
+    assert_eq!(text_pages, vec![0, 1, 2]);
+    assert!(queue.contains(&pixels), "search candidate filtering leaves raster work untouched");
+}
+
+#[test]
 fn thumbnail_tags_do_not_change_as_a_row_scrolls_in_or_out() {
     let info = thumbnail_info(10_000);
     let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());

@@ -21,6 +21,9 @@ thiserror = { workspace = true }
 log = { workspace = true }
 # The reading-colours setting is persisted with the app state and echoed by the automation tool.
 serde = { workspace = true }
+sha2 = "0.11"
+flate2.workspace = true
+memchr = "2"
 # Reads rendered pixel words as bytes; already in the tree through hayro.
 bytemuck = { version = "1" }
 

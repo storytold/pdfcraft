@@ -184,6 +184,7 @@ impl DocView {
         self.stale_tiles.clear();
         self.forms.unbaked.clear();
         self.texts.clear();
+        self.text_preloaded.clear();
         self.text_failed.clear();
         self.errors.clear();
         self.slow_pages.clear();
@@ -227,6 +228,7 @@ impl DocView {
         }
         self.slow_pages.remove(&page);
         self.texts.remove(&page);
+        self.text_preloaded.remove(&page);
         self.text_failed.remove(&page);
         self.errors.remove(&page);
         self.last_queue.clear();
@@ -479,14 +481,19 @@ impl DocView {
         self.thumbs.retain(|p, _| admitted.contains(p));
         self.stale_thumbs.retain(|p| admitted.contains(p));
         self.retain_text_layers();
-        // Visible main pages and thumbnails take precedence over background search work.
-        queue.extend(requests.into_iter().filter(|r| r.kind == RequestKind::Text));
+        // Page text warms the persistent cache ahead of thumbnails; visible main rasters above
+        // still take priority, so opening remains responsive while the document is preloaded.
+        let text: Vec<_> = requests.into_iter().filter(|r| r.kind == RequestKind::Text).collect();
+        let thumbs: Vec<_> = queue.iter().copied().filter(|r| r.tag & THUMB_TAG != 0).collect();
+        queue.retain(|r| r.tag & THUMB_TAG == 0);
+        queue.extend(text);
+        queue.extend(thumbs);
         queue
     }
 
-    /// Drop text layers nothing can still need. Every visited page's text used to stay
-    /// cached for the session. Keep visible, selected and matched pages plus the nearest
-    /// prefetch window; evicted pages re-extract on revisit. (Count window only: unlike
+    /// Drop text layers nothing can still need. Keep visible, selected and matched pages plus
+    /// the nearest prefetch window; evicted pages reload from the persistent renderer cache on
+    /// revisit. (Count window only: unlike
     /// rasters there is no byte budget here.) While a search is active keep everything:
     /// demand still wants every page, so evicting would re-request evicted pages each
     /// frame and churn the workers. Failures are never evicted either: they cost nothing
@@ -521,7 +528,14 @@ impl DocView {
             ctx.request_repaint();
             return;
         }
-        let queue = self.prepare_render_queue(info, ctx.pixels_per_point());
+        let mut queue = self.prepare_render_queue(info, ctx.pixels_per_point());
+        if !self.all_text
+            && let Some(find) = self.find.as_ref().filter(|find| !find.case_query.trim().is_empty())
+            && let Some(candidates) = pool.text_candidate_pages(&find.case_query, info.pages.len(), find.case_sensitive)
+        {
+            let candidates: HashSet<_> = candidates.into_iter().collect();
+            super::filter_search_text_requests(&mut queue, &candidates, &self.frame_visible, self.selection.map(|selection| selection.page));
+        }
         let text_priority = self
             .find
             .as_ref()
@@ -529,15 +543,17 @@ impl DocView {
             .map(|find| (find.auto_from.unwrap_or(self.current), info.pages.len()));
         if queue != self.last_queue || text_priority.is_some() {
             if let Some((from, page_count)) = text_priority {
-                let offset = page_count.saturating_add(self.last_queue.len());
                 let from = from.min(page_count.saturating_sub(1));
-                let mut ranked: Vec<_> = queue.iter().copied().filter(|request| request.kind != RequestKind::Text).collect();
+                let mut foreground: Vec<_> =
+                    queue.iter().copied().filter(|request| request.kind != RequestKind::Text && request.tag & THUMB_TAG == 0).collect();
                 let mut text: Vec<_> = queue.iter().copied().filter(|request| request.kind == RequestKind::Text).collect();
+                let thumbs: Vec<_> = queue.iter().copied().filter(|request| request.tag & THUMB_TAG != 0).collect();
                 text.sort_by_key(|request| {
                     if request.page >= from { request.page - from } else { page_count.saturating_sub(from).saturating_add(request.page) }
                 });
-                ranked.extend(text);
-                pool.set_queue_with_text_priority(ranked, offset);
+                foreground.extend(text);
+                foreground.extend(thumbs);
+                pool.set_queue_with_text_priority(foreground, 0);
             } else {
                 pool.set_queue(queue.clone());
             }
@@ -580,6 +596,7 @@ impl DocView {
         if r.request.kind == RequestKind::Text {
             match r.text {
                 Some(t) => {
+                    self.text_preloaded.insert(r.request.page);
                     self.texts.insert(r.request.page, t);
                     self.refresh_find_page(r.request.page);
                 }

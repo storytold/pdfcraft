@@ -4623,9 +4623,11 @@ dependencies = [
  "kurbo 0.13.1",
  "log",
  "lopdf",
+ "memchr",
  "pdfcraft-cos",
  "pdfcraft-fonts",
  "serde",
+ "sha2 0.11.1",
  "skrifa 0.44.0",
  "thiserror 2.0.21",
 ]

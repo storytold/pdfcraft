@@ -539,8 +539,11 @@ pub struct DocView {
     /// Sharp tiles of large pages: (page, scale tag, tile x, tile y) → texture. Tiles of an
     /// earlier zoom stay, drawn stretched, until those of the current one cover the page.
     tiles: HashMap<(usize, u64, u32, u32), TextureHandle>,
-    /// Text layers, extracted in the background on demand (selection, find, copy).
+    /// Text layers held in memory while needed; the renderer keeps the full per-page cache on disk.
     pub(crate) texts: HashMap<usize, Arc<PageText>>,
+    /// Pages whose text has been extracted and persisted during this document session, even if
+    /// their in-memory layers were evicted to keep browsing memory bounded.
+    pub(crate) text_preloaded: HashSet<usize>,
     pub(crate) text_failed: HashSet<usize>,
     pub find: Option<Find>,
     selection: Option<Selection>,
@@ -950,6 +953,7 @@ impl DocView {
             grayscale: false,
             tiles: HashMap::new(),
             texts: HashMap::new(),
+            text_preloaded: HashSet::new(),
             text_failed: HashSet::new(),
             find: None,
             selection: None,
@@ -2186,6 +2190,39 @@ fn scroll_prefetch(view: &DocView, visible_now: &[usize]) -> Vec<usize> {
     }
 }
 
+fn filter_search_text_requests(
+    requests: &mut Vec<RenderRequest>,
+    candidates: &HashSet<usize>,
+    visible: &HashSet<usize>,
+    selection_page: Option<usize>,
+) {
+    requests.retain(|request| {
+        request.kind != RequestKind::Text
+            || candidates.contains(&request.page)
+            || visible.contains(&request.page)
+            || selection_page == Some(request.page)
+    });
+}
+
+/// Text work starts with the visible pages, then preloads the remaining document from the
+/// current anchor. Completed background pages stay out of the queue after memory eviction;
+/// Find and visible-page demand can still reload them from the disk cache.
+fn text_pages_for_frame(view: &DocView, visible_now: &[usize], current: usize, page_count: usize) -> Vec<usize> {
+    let need_text = |page: &usize| !view.texts.contains_key(page) && !view.text_failed.contains(page);
+    let mut pages: Vec<usize> = visible_now.iter().copied().filter(need_text).collect();
+    let search_active = view.find.as_ref().is_some_and(|find| !find.case_query.trim().is_empty());
+    if page_count > 0 {
+        let rest: Vec<usize> = (0..page_count)
+            .map(|offset| (current + offset) % page_count)
+            .filter(need_text)
+            .filter(|page| search_active || !view.text_preloaded.contains(page))
+            .filter(|page| !pages.contains(page))
+            .collect();
+        pages.extend(rest);
+    }
+    pages
+}
+
 /// The whole-page raster a prefetch asks for: the page at this scale, or the backdrop of a page
 /// that is tiled at this scale. A cached raster sharper than the backdrop stays demanded as it
 /// is, as `paint_page_surface` demands it under tiles.
@@ -2225,7 +2262,6 @@ struct RenderPlan<'a> {
     scale: f32,
     sharp_held: bool,
     pan_held: bool,
-    hand: bool,
 }
 
 /// Queues the renders for the pages and tiles `renders` wants (nearest the view first), prefetches the
@@ -2233,7 +2269,7 @@ struct RenderPlan<'a> {
 /// pages and old zooms, and asks for the text layers.
 fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: PageRenders, plan: &RenderPlan<'_>) {
     let (mut wanted, visible_now) = renders;
-    let RenderPlan { visible_pages, tag, scale, sharp_held, pan_held, hand } = *plan;
+    let RenderPlan { visible_pages, tag, scale, sharp_held, pan_held } = *plan;
     // Single-page and two-page views draw only the current row, so the next one was first asked
     // for on the turn and showed blank paper until it rendered. Prefetch the rows either side,
     // as continuous scrolling does for the pages just off screen.
@@ -2335,16 +2371,10 @@ fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: Page
             }
         });
     }
-    // Text layers: visible pages for selection, every page while a search is active. (Select All
-    // of the document needs no more: shown pages highlight as their text comes, and Copy reads
-    // the rest, as text far away is let go to bound memory.)
-    let need_text = |p: &usize| !view.texts.contains_key(p) && !view.text_failed.contains(p);
-    let mut text_pages: Vec<usize> = if hand { Vec::new() } else { visible_now.iter().copied().filter(need_text).collect() };
-    if view.find.as_ref().is_some_and(|f| !f.case_query.trim().is_empty()) {
-        let n = info.pages.len();
-        let rest: Vec<usize> = (0..n).map(|k| (cur + k) % n).filter(need_text).filter(|p| !text_pages.contains(p)).collect();
-        text_pages.extend(rest);
-    }
+    // Text layers: prewarm the whole document in page order from the current anchor. This work
+    // stays behind visible rasters and persists one page at a time. Find can then search every
+    // page immediately; Select All reads the rest while text far away remains memory-bounded.
+    let text_pages = text_pages_for_frame(view, &visible_now, cur, info.pages.len());
     queue.extend(text_pages.into_iter().map(|page| RenderRequest {
         page,
         kind: RequestKind::Text,
@@ -3112,7 +3142,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // the workers cannot cancel mid-operator. Fresh tiles go out once the pan settles;
     // pages with nothing on screen yet still queue.
     let pan_held = track_scroll(ui, view, &out, glide);
-    plan_renders(ui, view, info, out.inner, &RenderPlan { visible_pages: &visible_pages, tag, scale, sharp_held, pan_held, hand });
+    plan_renders(ui, view, info, out.inner, &RenderPlan { visible_pages: &visible_pages, tag, scale, sharp_held, pan_held });
 
     let text_done = frame_overlays(ui, view, &env, primary_down, hover_text);
     if let Some(why) = view.objects.notice.take() {
