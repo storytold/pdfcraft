@@ -199,8 +199,8 @@ fn mac_subset_cmap_uses_pdf_unicode_without_changing_source_program() {
 }
 
 /// The metrics read that adapts a program's cmap is paid for from the editor's allowance too: a
-/// step short of the program, its ToUnicode and the program again for its widths, no copy is
-/// adapted from guessed meanings.
+/// step short of the program, its ToUnicode and the program again for its widths, the metrics are
+/// read past the allowance and no copy is adapted.
 #[test]
 fn adapting_a_programs_cmap_is_paid_for() {
     use skrifa::MetadataProvider as _;
@@ -282,8 +282,8 @@ fn a_fonts_streams_are_paid_for_from_its_allowance() {
     assert_eq!(cost - budget.remaining(), sizes[0] + sizes[3]);
 }
 
-/// A stream past its own limit is left unread as it always was, paying for the limit, and is no
-/// reason to call the font read past the allowance.
+/// A stream behind one filter past its own limit, with more left than its limit, is left unread as
+/// it always was, paying for the limit, and is no reason to call the font read past the allowance.
 #[test]
 fn a_cmap_past_its_own_limit_is_not_past_the_allowance() {
     let mut doc = Document::new_empty();
@@ -297,11 +297,11 @@ fn a_cmap_past_its_own_limit_is_not_past_the_allowance() {
     assert_eq!(usize::MAX / 2 - budget.remaining(), sizes[..3].iter().sum::<usize>() + MAX_CMAP_BYTES);
 }
 
-/// A `/CIDToGIDMap` as long as a map can be reads the same behind no filter, one or two: each
-/// stage may make as much as the map's limit, so the hex stage's output on top of it doesn't
-/// leave it unread. A map past the limit is unread behind any of them.
+/// A `/CIDToGIDMap` as long as a map can be, which compresses well, reads the same behind no
+/// filter, Flate, or ASCIIHex and Flate: each stage may make as much as the map's limit, so the hex
+/// stage's output on top of it doesn't leave it unread. A map past the limit is unread behind each.
 #[test]
-fn a_full_cid_map_reads_behind_any_number_of_filters() {
+fn a_full_cid_map_reads_behind_one_or_two_filters() {
     let read = |entries: usize, filters: usize| {
         let mut doc = Document::new_empty();
         let (mut f, _) = subset_type0(&mut doc, b"");
@@ -334,10 +334,17 @@ fn a_full_cid_map_reads_behind_any_number_of_filters() {
     }
 }
 
-/// `data` in rows of `columns` bytes behind Flate and a PNG predictor, each row tagged None, with
-/// its `/DecodeParms` given by reference or direct.
+/// `data` in rows of `columns` bytes behind Flate and a PNG predictor, each row tagged Up (the
+/// difference from the row above), so read without the predictor it is garbled; with its
+/// `/DecodeParms` given by reference or direct.
 fn predicted(doc: &mut Document, data: &[u8], columns: usize, by_reference: bool) -> Object {
-    let rows: Vec<u8> = data.chunks(columns).flat_map(|row| std::iter::once(0).chain(row.iter().copied())).collect();
+    let mut above = vec![0u8; columns];
+    let mut rows = Vec::new();
+    for row in data.chunks(columns) {
+        rows.push(2);
+        rows.extend(row.iter().zip(&above).map(|(b, a)| b.wrapping_sub(*a)));
+        above[..row.len()].copy_from_slice(row);
+    }
     let mut s = Stream::flate(Dict::new(), &rows);
     let parms: Dict =
         [(b"Predictor".to_vec(), Object::Int(12)), (b"Columns".to_vec(), Object::Int(i64::try_from(columns).unwrap()))].into_iter().collect();

@@ -128,7 +128,8 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
         // only this in-memory copy gets a new cmap, never the working PDF or a font asset.
         let Ok(cmap) = face.cmap() else { continue };
         // A composite font's codes aren't these, so its metrics aren't read (Metrics::composite
-        // is this test). Meanings read past the allowance would be guesses: no copy is adapted.
+        // is this test). Metrics read past the allowance, its widths' read of the program again
+        // included, adapt no copy.
         if font.name(b"Subtype") == Some(b"Type0") {
             continue;
         }
@@ -297,7 +298,7 @@ const MAX_CMAP_ENTRIES: usize = 1 << 20;
 /// thousand.
 const MAX_CMAP_RANGES: usize = 1 << 16;
 /// Largest decoded Encoding or ToUnicode CMap stream read; real CMaps stay well under it, and a larger
-/// one is not decoded at all.
+/// one is left unread (behind one filter not decoded past it; behind several, see `Reads::decode`).
 const MAX_CMAP_BYTES: usize = 16 << 20;
 /// Largest decoded `/CIDToGIDMap` stream read: two bytes for each CID below 65,536.
 const MAX_CID_TO_GID: usize = 1 << 17;
@@ -321,8 +322,8 @@ impl<'a> Reads<'a> {
     ///
     /// `max` bounds what the stream decodes to, and its filter stages together may make up to `max`
     /// for each of them, as much as a decode without an allowance lets them: a map of 65,536 CIDs
-    /// behind ASCIIHex and Flate makes all of `MAX_CID_TO_GID` in its last stage, with the hex
-    /// stage's output on top. One stage may so make more than `max`, which a decode without an
+    /// behind ASCIIHex and Flate, its Flate data smaller than the map, makes all of `MAX_CID_TO_GID`
+    /// in its last stage, with the hex stage's output on top. One stage may so make more than `max`, which a decode without an
     /// allowance stops, so a stream that one leaves unread can read here, never the other way
     /// round. A stream past `max` is unread, not refused, when what is left can pay for its stages;
     /// when it can't, the stream spends it and counts as refused.
