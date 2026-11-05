@@ -133,7 +133,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Dialog::Print => 820.0,
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::Preferences => 610.0,
-            Dialog::About => 780.0,
+            Dialog::About => 820.0,
             Dialog::PinTool => 540.0,
             _ => 520.0,
         });
@@ -1353,6 +1353,7 @@ fn dialog_signature(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending)
             app.signature = d.saved();
             crate::fill_sign::FillTool::Signature
         };
+        app.fill_tool = tool;
         app.quick_tool = crate::QuickTool::Fill(tool);
         app.toast = None;
     }
