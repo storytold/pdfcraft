@@ -639,6 +639,11 @@ pub struct PdfCraftApp {
     /// The saved Fill & Sign signature and initials (drawn or typed).
     pub signature: Option<fill_sign::SavedSig>,
     pub initials: Option<fill_sign::SavedSig>,
+    /// Further saved signatures beside the current one in `signature` (the one that gets placed).
+    /// Never non-empty while `signature` is `None`; at most `fill_sign::MAX_OTHER_SIGNATURES`.
+    pub other_signatures: Vec<fill_sign::SavedSig>,
+    /// Preview textures for `other_signatures`, one per entry.
+    pub(crate) other_signature_previews: Vec<Option<(fill_sign::SavedSig, egui::TextureHandle)>>,
     /// The Create signature / initials dialog, and its typed preview.
     pub signature_draft: fill_sign::SigDraft,
     pub(crate) signature_preview: Option<(fill_sign::SavedSig, egui::TextureHandle)>,
