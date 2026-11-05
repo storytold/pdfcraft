@@ -1002,6 +1002,8 @@ fn norwegian_bokmal_is_registered_and_persists() {
     assert_eq!(restored.language, "nb");
 }
 
+/// Swedish is registered, normalizes case-insensitively, detects locale tags, and round-trips
+/// through preferences.
 #[test]
 fn swedish_is_registered_and_persists() {
     needs_catalogs!();
