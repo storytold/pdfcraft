@@ -337,11 +337,11 @@ impl PdfCraftApp {
                         self.notify_fmt("Couldn't write {path}: {e}", &[("path", &path), ("e", &e.to_string())]);
                         // The copy can have taken minutes: a place that has gone bad since doesn't lose it.
                         if chose_first {
-                            self.ask_where_to_save_optimized(&name, folder.as_deref(), bytes, saved);
+                            self.ask_where_to_save_optimized(name, folder, bytes, saved);
                         }
                     }
                 },
-                None => self.ask_where_to_save_optimized(&name, folder.as_deref(), bytes, saved),
+                None => self.ask_where_to_save_optimized(name, folder, bytes, saved),
             }
         }
         #[cfg(target_arch = "wasm32")]
@@ -354,22 +354,26 @@ impl PdfCraftApp {
         }
     }
 
-    /// Ask where an optimized copy goes and write it there.
+    /// Ask where an optimized copy goes and write it there, asking again until it is written or
+    /// the question is cancelled.
     #[cfg(not(target_arch = "wasm32"))]
     fn ask_where_to_save_optimized(
         &mut self,
-        name: &str,
-        folder: Option<&str>,
+        name: String,
+        folder: Option<String>,
         bytes: Arc<Vec<u8>>,
         saved: impl FnOnce(&mut Self, String) + Send + 'static,
     ) {
-        let dialog = rfd::AsyncFileDialog::new().add_filter_any_case("PDF", &["pdf"]).set_file_name(name);
-        let dialog = crate::editing::in_document_folder(dialog, folder);
+        let dialog = rfd::AsyncFileDialog::new().add_filter_any_case("PDF", &["pdf"]).set_file_name(&name);
+        let dialog = crate::editing::in_document_folder(dialog, folder.as_deref());
         self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, p| {
             let path = p.to_string_lossy().into_owned();
             match crate::editing::write_atomically(&path, &bytes) {
                 Ok(()) => saved(app, path),
-                Err(e) => app.notify_fmt("Couldn't write {path}: {e}", &[("path", &path), ("e", &e.to_string())]),
+                Err(e) => {
+                    app.notify_fmt("Couldn't write {path}: {e}", &[("path", &path), ("e", &e.to_string())]);
+                    app.ask_where_to_save_optimized(name, folder, bytes, saved);
+                }
             }
         });
     }

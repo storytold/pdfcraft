@@ -564,6 +564,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// However many places turn out bad, the copy waits for one that works.
+    #[test]
+    fn a_reduced_copy_asks_until_it_can_be_written() {
+        let (mut app, dir) = reducing("until");
+        let bad = |n: &str| dir.join(n).join("notes (reduced).pdf").to_string_lossy().into_owned();
+        let good = dir.join("notes (reduced).pdf");
+        app.pick_override = Some(vec![bad("gone")]);
+        app.run_inline = true;
+        app.reduce_file_size();
+        app.pick_override = Some(vec![bad("gone too")]);
+        app.process_picked();
+        assert!(app.pickers.pending(), "it asks after the first");
+        app.pick_override = Some(vec![good.to_string_lossy().into_owned()]);
+        app.process_picked();
+        assert!(app.pickers.pending(), "and after the second");
+        app.process_picked();
+        assert!(good.exists(), "the copy is saved at the third place");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A file that's chosen and then has nothing to replace it stays as it was.
     #[test]
     fn a_reduced_copy_that_isnt_smaller_leaves_the_chosen_file_alone() {
