@@ -103,10 +103,12 @@ pub fn from_contents(pages: &[(f64, f64, Dict, Vec<u8>)]) -> Result<Document, Cr
         return Err(CreateError::Invalid("invalid page size".into()));
     }
     let mut doc = Document::new_empty();
+    let mut tree = Pages::of(&doc)?;
     for (w, h, resources, content) in pages {
         let content = if content.is_empty() { None } else { Some(content.clone()) };
-        add_page(&mut doc, *w, *h, resources.clone(), content)?;
+        tree.add(&mut doc, *w, *h, resources.clone(), content);
     }
+    tree.finish(&mut doc)?;
     Ok(doc)
 }
 
