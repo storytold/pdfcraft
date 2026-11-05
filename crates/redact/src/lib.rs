@@ -820,7 +820,12 @@ fn redact_page_content(
             // longer draws so the removed image or form bytes cannot survive in the saved file.
             let page_content: Vec<Vec<u8>> = new_list
                 .iter()
-                .map(|o| match &*doc.resolve(o) {
+                .zip(&list)
+                .zip(&data)
+                .map(|((now, was), read)| match &*doc.resolve(now) {
+                    // Left as it was: what was read above, with its parameters by reference.
+                    _ if now == was => read.clone(),
+                    // Written above by `Stream::flate`, which leaves no `/DecodeParms`.
                     Object::Stream(s) => s.decoded().unwrap_or_default(),
                     _ => Vec::new(),
                 })
