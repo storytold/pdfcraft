@@ -545,9 +545,11 @@ fn extended_graphics_states_are_checked() {
     let in_halftone = "A halftone has a transfer function, which only a non-primary colorant's halftone may have";
     assert_eq!(gs("/A << /HT << /HalftoneType 1 /TransferFunction 4 0 R >> >>"), [in_halftone]);
     assert_eq!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Cyan << /HalftoneType 1 /TransferFunction /Identity >> >> >>"), [in_halftone]);
+    // The primary components are those of DeviceGray, DeviceRGB and DeviceCMYK (ISO 32000-1 10.5.5.6).
+    assert_eq!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Gray << /HalftoneType 1 /TransferFunction /Identity >> >> >>"), [in_halftone]);
     assert_eq!(
-        gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Spot 5 0 R /Red 5 0 R >> >>"),
-        ["The halftone for the colorant Red has no transfer function", "The halftone for the colorant Spot has no transfer function"]
+        gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Spot 5 0 R /Red 5 0 R /Gray 5 0 R >> >>"),
+        ["The halftone for the colorant Spot has no transfer function"]
     );
     assert!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Black 5 0 R /Spot << /HalftoneType 1 /TransferFunction 4 0 R >> >> >>").is_empty());
     // Private application data isn't graphics resources.

@@ -6,8 +6,10 @@
 //! - halftones of type 1 or 5 only, without a `/HalftoneName` (ISO 32000-1 10.5.5); the halftones
 //!   a type 5 halftone holds for its colorants are checked the same way;
 //! - a halftone's `/TransferFunction` only where one is needed: a type 5 halftone's component for
-//!   a non-primary colorant has one, and no other halftone does. The primary colorants are those
-//!   of DeviceCMYK; the `Default` component is left as it is (ISO 32000-1 10.5.5.6, Table 130);
+//!   a non-primary colorant has one, and no other halftone does. The primary colour components
+//!   are those of the standard device spaces: Gray; Red, Green and Blue; Cyan, Magenta, Yellow
+//!   and Black (ISO 32000-1 10.5.5.6; ISO 32000-2 10.6.5.6). The `Default` component is left as
+//!   it is (ISO 32000-1 Table 130);
 //! - a rendering intent (`/RI`) that is one of the four of ISO 32000-1 8.6.5.8, Table 70.
 //!
 //! Graphics state dictionaries are found as the `/ExtGState` entries of resource dictionaries
@@ -27,8 +29,9 @@ const MAX_DEPTH: u8 = 128;
 const INTENTS: [&[u8]; 4] = [b"AbsoluteColorimetric", b"RelativeColorimetric", b"Saturation", b"Perceptual"];
 /// The entries of a type 5 halftone that aren't colorant halftones.
 const HALFTONE_KEYS: [&[u8]; 3] = [b"Type", b"HalftoneType", b"HalftoneName"];
-/// The primary colorants, whose halftones take the graphics state's transfer function.
-const PRIMARY: [&[u8]; 4] = [b"Cyan", b"Magenta", b"Yellow", b"Black"];
+/// The primary colour components of DeviceGray, DeviceRGB and DeviceCMYK, whose halftones take
+/// the graphics state's transfer function.
+const PRIMARY: [&[u8]; 8] = [b"Gray", b"Red", b"Green", b"Blue", b"Cyan", b"Magenta", b"Yellow", b"Black"];
 /// The entries that hold resource dictionaries.
 const RESOURCES: [&[u8]; 2] = [b"Resources", b"DR"];
 
