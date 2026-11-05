@@ -61,6 +61,10 @@ struct Gs {
     /// `/WMode` is 1). Glyph layout here is horizontal, so such text cannot be placed under a
     /// region; apply fails closed when it meets any (see `show`).
     vertical: bool,
+    /// The current font is a Type 3. Its glyphs add nothing to the clipping path in modes 4 to 7
+    /// (ISO 32000-2 §9.3.6), which the renderer follows since #4430, so such a glyph must not be
+    /// counted as clipping text here either.
+    type3: bool,
     size: f64,
     char_spacing: f64,
     word_spacing: f64,
@@ -231,6 +235,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         ctm,
         font: Rc::new(Metrics::fallback()),
         vertical: false,
+        type3: false,
         size: 0.0,
         char_spacing: 0.0,
         word_spacing: 0.0,
@@ -343,6 +348,9 @@ struct Walk {
     path: Vec<Op>,
     path_box: Option<[f64; 4]>,
     clip: bool,
+    /// `Some(false)` while a text object's clipping glyphs are all being removed: `None` until a
+    /// glyph is shown in a clipping mode, then whether any of them is still there.
+    clip_text: Option<bool>,
     out: Output,
 }
 
@@ -360,6 +368,7 @@ impl Walk {
             path: Vec::new(),
             path_box: None,
             clip: false,
+            clip_text: None,
             out: Output::default(),
         }
     }
@@ -386,7 +395,30 @@ impl Walk {
                 self.graphics_state(doc, scope, &op);
                 Some(op)
             }
-            b"BT" | b"Tc" | b"Tw" | b"Tz" | b"TL" | b"Ts" | b"Tr" | b"Td" | b"TD" | b"Tm" | b"T*" => {
+            b"BT" => {
+                self.clip_text = None;
+                self.text_state(&op);
+                Some(op)
+            }
+            // A text object whose glyphs were the clipping path, and which has none left: the clip
+            // it set is empty, and readers disagree about an empty text clip (#3451: CoreGraphics
+            // admits nothing, pdf.js admits everything). Saying it with a path leaves no room for
+            // that -- every reader then clips everything away, which is what the glyphs now say,
+            // rather than flooding what they used to mask (#3644).
+            b"ET" if self.clip_text == Some(false) && scope.mode == Mode::Apply => {
+                piece.changed = true;
+                piece.ops.push(op);
+                piece.ops.push(Op::new("re", vec![num(0.0), num(0.0), num(0.0), num(0.0)]));
+                piece.ops.push(Op::new("W", vec![]));
+                piece.ops.push(Op::new("n", vec![]));
+                self.clip_text = None;
+                None
+            }
+            b"ET" => {
+                self.clip_text = None;
+                Some(op)
+            }
+            b"Tc" | b"Tw" | b"Tz" | b"TL" | b"Ts" | b"Tr" | b"Td" | b"TD" | b"Tm" | b"T*" => {
                 self.text_state(&op);
                 Some(op)
             }
@@ -468,6 +500,7 @@ impl Walk {
         let Some(name) = op.name(0) else { return };
         let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
         self.gs.vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
+        self.gs.type3 = font_dict.as_ref().is_some_and(|d| d.get(b"Subtype").is_some_and(|v| doc.resolve(v).as_name() == Some(b"Type3")));
         self.gs.font = match scope.fonts.get(name) {
             Some(f) => f.clone(),
             None => {
@@ -544,7 +577,38 @@ impl Walk {
         {
             self.out.vertical = true;
         }
+        // Whether this text object still has a glyph that clips. A clipping mode (Tr 4-7) paints
+        // nothing itself, so such text is hidden from the eye while staying extractable -- which
+        // is what this pass removes -- and taking its glyphs leaves the clip it set empty.
+        //
+        // A glyph that contributes no outline does not clip, so it must not be counted on either
+        // side of this. A mode-7 space has a non-empty source string, so it read as clipping
+        // text; `show` removes it like any other hidden glyph, nothing was left, and `ET` then
+        // wrote an explicit empty clip for a glyph that never clipped anything -- so painting
+        // after it was masked where the original PDF left it alone. The same count made a
+        // *retained* space answer for a removed outlined glyph (both noted in review).
+        //
+        // `is_space` stands in for "has an outline". `Metrics` tells presence and width apart but
+        // exposes no outline predicate, so this is a proxy: whitespace is the glyph that carries
+        // no outline in practice, and a `.notdef` or an unmapped code is not caught. Exactness
+        // would need an outline predicate in `pdfcraft-fonts` over the embedded sfnt.
+        let font = Rc::clone(&self.gs.font);
+        let outlined = move |o: &Object| matches!(o, Object::String(t) if font.codes(&t.bytes).iter().any(|(code, len)| !font.is_space(*code, *len)));
+        // A Type 3 glyph adds nothing to the clipping path in modes 4 to 7 (ISO 32000-2 §9.3.6),
+        // which the renderer follows since #4430 -- so text shown only in a Type 3 font leaves no
+        // clip at `ET`, and removing it cannot leave one to replace. Counting it installed an
+        // empty clip that masked what the original left alone (noted in review).
+        //
+        // Its *removal* is right and stays: in modes 3 and 7 Type 3 text "shall not be rendered"
+        // (the same clause), so it is invisible and extractable -- hidden text, which is what
+        // this pass takes. Review asked for mode-7 Type 3 text to be kept as well; that would
+        // leave invisible text in the file, so only the clip tracking changes here.
+        let clipping = (4..=7).contains(&self.gs.render_mode) && !self.gs.type3 && items.iter().any(&outlined);
         let (new_items, removed) = show(scope, &self.gs, &mut self.tm, &items);
+        if clipping {
+            let kept = new_items.iter().any(&outlined);
+            self.clip_text = Some(self.clip_text.unwrap_or(false) || kept);
+        }
         if removed == 0 {
             return Some(op);
         }
