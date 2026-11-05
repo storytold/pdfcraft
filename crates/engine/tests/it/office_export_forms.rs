@@ -354,3 +354,28 @@ fn a_fields_state_and_flags_reach_the_export() {
         "the hidden button isn't counted"
     );
 }
+
+/// A Word page holds at most `MAX_DOCX_PAGE_SHAPES` fields: a page with more has only those
+/// prepared (their appearances read), not every widget before Word drops the rest, and it is
+/// listed as cut short.
+#[test]
+fn a_page_of_more_fields_than_word_holds_prepares_only_those() {
+    let limit = pdfcraft_export::MAX_DOCX_PAGE_SHAPES;
+    let n = limit + 1;
+    let first = 4;
+    let refs: Vec<String> = (0..n).map(|k| format!("{} 0 R", first + k)).collect();
+    let mut objects = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [{}] >> >>", refs.join(" ")),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Annots [{}] >>", refs.join(" ")),
+    ];
+    objects.extend((0..n).map(|k| {
+        let (x, y) = ((k % 50) * 12, (k / 50) * 7);
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (F{k}) /Rect [{x} {y} {} {}] /P 3 0 R >>", x + 10, y + 5)
+    }));
+    let mut s = Session::new();
+    let id = s.open("many.pdf", None, Arc::new(pdf(&objects)), None).unwrap();
+    let d = s.get(id).unwrap();
+    assert_eq!(d.export_pages()[0].fields.len(), limit);
+    assert_eq!(d.export_office_checked(OfficeFormat::Docx).truncated_pages, [0]);
+}

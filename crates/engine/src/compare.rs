@@ -197,6 +197,7 @@ fn export_field(
     w: &pdfcraft_forms::Widget,
     visible: &dyn Fn([f64; 4]) -> [f64; 4],
     unit: f64,
+    looks: &mut Looks,
 ) -> Option<pdfcraft_export::Field> {
     use pdfcraft_forms::{FieldKind, flags};
     let kind = match f.kind {
@@ -222,7 +223,7 @@ fn export_field(
     };
     // The font size and border width are in the page's units, as its box is: `unit` scales them
     // as it scales the page's text and strokes (a page with `/UserUnit` 2 draws them twice as big).
-    let (border, background) = widget_look(cos, w);
+    let (border, background) = widget_look(cos, w, looks);
     let border = border.map(|b| pdfcraft_export::Stroke { width: b.width * unit, ..b });
     let da = pdfcraft_forms::appearance::parse_da(&f.da);
     Some(pdfcraft_export::Field {
@@ -284,33 +285,78 @@ fn mk_colour(cos: &pdfcraft_cos::Document, o: Option<&pdfcraft_cos::Object>) -> 
 /// Most bytes of a widget's appearance read to tell whether it is drawn round.
 const MAX_LOOK_BYTES: usize = 64 * 1024;
 
+/// Most bytes of appearances one export reads to tell widgets' shapes, all widgets together.
+const MAX_LOOKS_BYTES: usize = 16 << 20;
+
+/// What the appearances an export has read say about their widgets' shapes, by appearance stream
+/// (thousands of check boxes share two), and how many more bytes it may read: past
+/// [`MAX_LOOKS_BYTES`] a widget's shape is the form reader's.
+struct Looks {
+    /// Per stream: drawn round or not, or `None` for one that draws nothing (or wasn't read).
+    shapes: HashMap<ObjRef, Option<bool>>,
+    bytes: usize,
+}
+
+impl Looks {
+    fn new() -> Self {
+        Self::within(MAX_LOOKS_BYTES)
+    }
+
+    /// Looks that read at most `bytes` bytes of appearances.
+    fn within(bytes: usize) -> Self {
+        Looks { shapes: HashMap::new(), bytes }
+    }
+
+    /// Whether appearance stream `r` draws a round shape, `None` when it draws nothing, can't be
+    /// read, or is past what the export may read; each stream is read once.
+    fn shape(&mut self, cos: &pdfcraft_cos::Document, r: ObjRef) -> Option<bool> {
+        if let Some(shape) = self.shapes.get(&r) {
+            return *shape;
+        }
+        let shape = if self.bytes == 0 {
+            None
+        } else {
+            let limit = MAX_LOOK_BYTES.min(self.bytes);
+            let data = match &*cos.resolve(&pdfcraft_cos::Object::Ref(r)) {
+                pdfcraft_cos::Object::Stream(s) => s.decoded_within(limit).ok(),
+                _ => None,
+            };
+            // A stream that couldn't be read within the limit cost the limit.
+            self.bytes = self.bytes.saturating_sub(data.as_ref().map_or(limit, Vec::len));
+            // A stream draws when it paints a path, shows text, or draws an XObject, shading or
+            // image.
+            let draws = |op: &[u8]| {
+                matches!(op, b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"Tj" | b"TJ" | b"'" | b"\"" | b"Do" | b"sh" | b"EI")
+            };
+            data.map(|d| pdfcraft_content::parse(&d).ops)
+                .filter(|ops| ops.iter().any(|op| draws(&op.op)))
+                .map(|ops| ops.iter().any(|op| matches!(op.op.as_slice(), b"c" | b"v" | b"y")))
+        };
+        self.shapes.insert(r, shape);
+        shape
+    }
+}
+
 /// The border and background a PDF viewer draws for a widget: `/MK /BC` in `/BS /W` points
 /// (1 by default; dashed for `/S /D`) and `/MK /BG`. None for a widget drawn round (its
 /// appearance curves, as a radio button's circle does; without an appearance, a radio button),
 /// which a square Word frame can't draw, nor for a border of no width.
-fn widget_look(cos: &pdfcraft_cos::Document, w: &pdfcraft_forms::Widget) -> (Option<pdfcraft_export::Stroke>, Option<[f64; 3]>) {
+fn widget_look(cos: &pdfcraft_cos::Document, w: &pdfcraft_forms::Widget, looks: &mut Looks) -> (Option<pdfcraft_export::Stroke>, Option<[f64; 3]>) {
     let Some(d) = cos.dict(&pdfcraft_cos::Object::Ref(w.obj)) else { return (None, None) };
     let Some(mk) = d.get(b"MK").and_then(|o| cos.dict(o)) else { return (None, None) };
     // The shape is the one the widget shows: the normal appearance of its appearance state
-    // (`/AS`), or its only one. A state that draws nothing (a radio button's empty off state), or
-    // none at all, leaves it to the form reader, which takes every radio button as round.
-    let decoded = |o: &pdfcraft_cos::Object| match o {
-        pdfcraft_cos::Object::Stream(s) => s.decoded_within(MAX_LOOK_BYTES).ok(),
+    // (`/AS`), or its only one (a stream is always an indirect object). A state that draws nothing
+    // (a radio button's empty off state), or none at all, leaves it to the form reader, which
+    // takes every radio button as round.
+    let stream_ref = |o: &pdfcraft_cos::Object| match o {
+        pdfcraft_cos::Object::Ref(r) => Some(*r),
         _ => None,
     };
-    let shown = d.get(b"AP").and_then(|o| cos.dict(o)).and_then(|ap| ap.get(b"N").map(|n| cos.resolve(n))).and_then(|n| match &*n {
-        pdfcraft_cos::Object::Dict(states) => w.state.as_ref().and_then(|state| states.get(state.as_bytes())).and_then(|v| decoded(&cos.resolve(v))),
-        other => decoded(other),
+    let shown = d.get(b"AP").and_then(|o| cos.dict(o)).and_then(|ap| ap.get(b"N").cloned()).and_then(|n| match &*cos.resolve(&n) {
+        pdfcraft_cos::Object::Dict(states) => w.state.as_ref().and_then(|state| states.get(state.as_bytes())).and_then(stream_ref),
+        _ => stream_ref(&n),
     });
-    // A stream draws when it paints a path, shows text, or draws an XObject, shading or image.
-    let draws = |op: &[u8]| {
-        matches!(op, b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"Tj" | b"TJ" | b"'" | b"\"" | b"Do" | b"sh" | b"EI")
-    };
-    let ops = shown.map(|data| pdfcraft_content::parse(&data).ops).filter(|ops| ops.iter().any(|op| draws(&op.op)));
-    let round = match ops {
-        Some(ops) => ops.iter().any(|op| matches!(op.op.as_slice(), b"c" | b"v" | b"y")),
-        None => w.round,
-    };
+    let round = shown.and_then(|r| looks.shape(cos, r)).unwrap_or(w.round);
     if round {
         return (None, None);
     }
@@ -361,6 +407,8 @@ impl crate::Document {
         // Each image object is encoded once and shared by every place that draws it.
         let mut encoded: HashMap<ObjRef, PreparedImage> = HashMap::new();
         let mut image_bytes = image_budget;
+        // What widgets' appearances say about their shapes, read once per stream for the export.
+        let mut looks = Looks::new();
         // Form fields by page (0-based), read once: Word keeps them as content controls.
         let mut fields_by_page: HashMap<usize, Vec<(&pdfcraft_forms::Field, &pdfcraft_forms::Widget)>> = HashMap::new();
         let fields = if art { pdfcraft_forms::fields(cos) } else { Vec::new() };
@@ -473,9 +521,18 @@ impl crate::Document {
                         fill: s.fill,
                     })
                     .collect();
-                let fields = fields_by_page
-                    .get(&i)
-                    .map_or_else(Vec::new, |on_page| on_page.iter().filter_map(|(f, w)| export_field(cos, f, w, &visible_rect, unit)).collect());
+                // A Word page holds at most MAX_DOCX_PAGE_SHAPES fields: the rest aren't prepared
+                // (nor their appearances read), and the page is listed as cut short.
+                let fields = fields_by_page.get(&i).map_or_else(Vec::new, |on_page| {
+                    if on_page.len() > pdfcraft_export::MAX_DOCX_PAGE_SHAPES {
+                        truncated.push(i);
+                    }
+                    on_page
+                        .iter()
+                        .take(pdfcraft_export::MAX_DOCX_PAGE_SHAPES)
+                        .filter_map(|(f, w)| export_field(cos, f, w, &visible_rect, unit, &mut looks))
+                        .collect()
+                });
                 pdfcraft_export::Page {
                     width: info.width as f64,
                     height: info.height as f64,
@@ -529,3 +586,7 @@ impl crate::Document {
         OfficeExport { bytes, truncated_pages }
     }
 }
+
+#[cfg(test)]
+#[path = "compare_tests.rs"]
+mod tests;
