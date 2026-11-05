@@ -408,16 +408,18 @@ impl<'a> Page<'a> {
         // none in common with the media box, as a missing one (the media box, ISO 32000-2
         // §14.11.2, Table 33). Kept, the page's visible region had no area: nothing was drawn
         // and no text was extracted, where other readers show the page.
+        // A page's own box without area gives way to one it inherits that has some.
         let media_box = dict
             .get::<Rect>(MEDIA_BOX)
-            .or(ctx.media_box)
             .filter(has_area)
+            .or(ctx.media_box.filter(has_area))
             .unwrap_or(A4);
 
+        let shows = |c: &Rect| has_area(&c.intersect(media_box));
         let crop_box = dict
             .get::<Rect>(CROP_BOX)
-            .or(ctx.crop_box)
-            .filter(|c| has_area(&c.intersect(media_box)))
+            .filter(shows)
+            .or(ctx.crop_box.filter(shows))
             .unwrap_or(media_box);
 
         let rotation = match dict

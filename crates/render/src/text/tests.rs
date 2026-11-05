@@ -2007,4 +2007,22 @@ fn text_on_a_page_whose_box_has_no_area_is_extracted() {
         let text = extract_page(&pdf, page, &InterpreterSettings::default()).unwrap().plain_text();
         assert_eq!(text.trim(), "Boxed", "page {}", page + 1);
     }
+
+    // A page's own `/MediaBox [0 0 0 0]` gives way to the one it inherits: text past A4 but
+    // inside the inherited box is kept.
+    let mut doc = Document::with_version("1.7");
+    let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+    let pages = doc.new_object_id();
+    let content = doc.add_object(Stream::new(dictionary! {}, b"BT /F1 30 Tf 700 900 Td (Inherited) Tj ET".to_vec()));
+    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => rect([0, 0, 0, 0]), "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+    doc.objects.insert(
+        pages,
+        dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1, "MediaBox" => rect([0, 0, 1200, 1200])}.into(),
+    );
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    assert_eq!(extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text().trim(), "Inherited");
 }
