@@ -40,6 +40,15 @@ pub(crate) fn extension(format: DataFormat) -> &'static str {
     }
 }
 
+/// The extensions the save panel allows when saving as `format`: `format`'s first, then every
+/// other format in `offered`. On Windows the first one is the panel's default extension, and a
+/// name ending in one the filter doesn't list gets the default added (`data.csv.xfdf`), so every
+/// offered extension is listed, letting a name changed to another format's extension keep it;
+/// the macOS panel would warn about one it doesn't list.
+pub(crate) fn save_extensions(format: DataFormat, offered: &[DataFormat]) -> Vec<&'static str> {
+    std::iter::once(format).chain(offered.iter().copied().filter(|f| *f != format)).map(extension).collect()
+}
+
 /// `format`'s name as the save panel's filter and the Format list show it.
 pub(crate) fn name(format: DataFormat) -> String {
     match format {
@@ -123,5 +132,24 @@ mod tests {
         assert_eq!(formats(DataKind::FormData, true).first(), Some(&DataFormat::Xml), "an XFA form's data is XML first");
         assert_eq!(formats(DataKind::FormData, false).first(), Some(&DataFormat::Xfdf));
         assert!(!formats(DataKind::Comments, false).contains(&DataFormat::Csv), "comments are XFDF or FDF only");
+    }
+
+    /// #5301 review: the save panel allows every offered format's extension, the chosen one
+    /// first, so a name changed to another one (`data.csv` with XFDF chosen) keeps it and is
+    /// written in that format, and the chosen one stays the default. Nothing else is allowed.
+    #[test]
+    fn the_save_panel_allows_every_offered_extension_the_chosen_one_first() {
+        for (kind, xfa) in [(DataKind::Comments, false), (DataKind::FormData, false), (DataKind::FormData, true)] {
+            let offered = formats(kind, xfa);
+            for format in offered {
+                let allowed = save_extensions(*format, offered);
+                assert_eq!(allowed.first(), Some(&extension(*format)), "{kind:?} {format:?}");
+                assert_eq!(allowed.len(), offered.len(), "{kind:?} {format:?}: each once: {allowed:?}");
+                for f in offered {
+                    assert!(allowed.contains(&extension(*f)), "{kind:?} {format:?} allows {f:?}");
+                }
+            }
+        }
+        assert_eq!(save_extensions(DataFormat::Fdf, formats(DataKind::Comments, false)), ["fdf", "xfdf"]);
     }
 }
