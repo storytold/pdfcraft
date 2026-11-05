@@ -169,8 +169,7 @@ impl Document {
     ///   loads is [`Self::get`]'s question.
     /// - The result is canonical within this snapshot only: another revision of the file, or this
     ///   document after an edit through the other accepted generation, can hold the same object at
-    ///   another generation. Compare objects across snapshots by object number after each snapshot
-    ///   has accepted its own reference, never by canonical references chosen separately.
+    ///   another generation. Never compare canonical references two snapshots chose separately.
     pub fn canonical_ref(&self, r: ObjRef) -> Option<ObjRef> {
         self.reference_matches(r).then(|| ObjRef::new(r.num, self.generation(r.num)))
     }

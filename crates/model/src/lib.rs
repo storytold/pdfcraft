@@ -847,7 +847,6 @@ mod tests {
         (d, tree, a, b)
     }
 
-    /// `page_by_ref` finds a page with its inherited attributes; a stale generation of it, which cos
     /// An indirect `/Kids` array named first through a stale generation, then live: the stale
     /// reference reads nothing and doesn't mark the array read, so the live one lists its pages.
     #[test]
@@ -901,6 +900,7 @@ mod tests {
         assert_eq!(page_by_ref(&packed, ObjRef { num: listed[0].num, generation: 1 }), Ok(None));
     }
 
+    /// `page_by_ref` finds a page with its inherited attributes; a stale generation of it, which cos
     /// resolves to null, names no page.
     #[test]
     fn page_by_ref_finds_a_live_reference_and_not_a_stale_one() {

@@ -5721,4 +5721,9 @@ fn goto_actions_follow_cos_acceptance() {
     assert_eq!(goto("4 0 R"), Some(FieldAction::GoTo(1)));
     assert_eq!(goto("4 5 R"), Some(FieldAction::GoTo(1)), "the repaired header generation");
     assert_eq!(goto("4 2 R"), None, "a stale generation names no page");
+    // The push button's own action, read with the field.
+    let button = |target: &str| fields(&doc(target)).into_iter().find(|f| f.name == "go").and_then(|f| f.button);
+    assert_eq!(button("4 0 R"), Some(af::ButtonAction::GoTo(1)));
+    assert_eq!(button("4 5 R"), Some(af::ButtonAction::GoTo(1)), "the repaired header generation");
+    assert_eq!(button("4 2 R"), None, "a stale generation names no page");
 }

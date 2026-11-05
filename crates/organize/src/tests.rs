@@ -4176,9 +4176,10 @@ fn outline_and_delete_clean_up_follow_cos_acceptance() {
         (0, "<< /Title (Alias) /Parent 5 0 R /Prev 6 0 R /Next 8 0 R /Dest [4 5 R /Fit] >>"),
         (0, "<< /Title (Stale) /Parent 5 0 R /Prev 7 0 R /Dest [4 2 R /Fit] >>"),
     ]);
-    let pages_of = |doc: &Document| bookmarks(doc).into_iter().map(|b| (b.title, b.page)).collect::<Vec<_>>();
-    assert_eq!(pages_of(&doc), [("Live".into(), Some(1)), ("Alias".into(), Some(1)), ("Stale".into(), None)]);
+    // Delete first, then list: each check stands on its own.
+    let listed: Vec<(String, Option<usize>)> = bookmarks(&doc).into_iter().map(|b| (b.title, b.page)).collect();
     delete_pages(&mut doc, &[1]).unwrap();
     let dest = |n: u32| doc.get(ObjRef::new(n, 0)).as_dict().unwrap().contains(b"Dest");
     assert_eq!((dest(6), dest(7), dest(8)), (false, false, true), "the live and repaired destinations go; the stale one names nothing deleted");
+    assert_eq!(listed, [("Live".into(), Some(1)), ("Alias".into(), Some(1)), ("Stale".into(), None)]);
 }
