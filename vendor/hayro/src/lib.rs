@@ -167,10 +167,13 @@ pub struct RenderSettings {
     /// past it are left out, with `InterpreterWarning::ContentTruncated`. `None` keeps as many
     /// as a strip's index reaches (2^31).
     pub max_coverage: Option<usize>,
-    /// PdfCraft patch (29): images that don't ask for `/Interpolate` are drawn with their own
-    /// samples (nearest-neighbour), neither area-averaged when shrunk (21) nor smoothed when
-    /// enlarged (28): the viewer's Smooth images preference turned off, for barcodes and pixel
-    /// art that must keep hard edges. Images that ask for interpolation still get it.
+    /// PdfCraft patch (29): images that don't ask for `/Interpolate` are drawn as before #3858,
+    /// with their own samples (nearest-neighbour), neither area-averaged when shrunk (21) nor
+    /// smoothed when enlarged (28): the viewer's Smooth images preference turned off, for
+    /// barcodes and pixel art that must keep hard edges. Images that ask for interpolation still
+    /// get it. Two reductions older than #3858 stay: a soft mask of another size than its image
+    /// is still filtered when shrunk (#1649: shrunk nearest-neighbour, a text mask lost its thin
+    /// strokes), and a JPEG 2000 image drawn small is still decoded at a reduced resolution.
     pub sharp_images: bool,
 }
 
