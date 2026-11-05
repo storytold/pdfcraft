@@ -34,6 +34,28 @@ pub enum BmAction {
     FromTextStyles,
 }
 
+/// The bookmark of the page on screen (`page`, 0-based): the last bookmark, in the panel's order,
+/// that goes to the nearest page at or before it, so a page without one of its own marks the
+/// section it is in, and of a bookmark and its child on the same page the child. `None` before the
+/// first bookmark's page.
+pub(super) fn current_bookmark(items: &[OutlineItem], page: usize) -> Option<Vec<usize>> {
+    let mut best: Option<(usize, Vec<usize>)> = None;
+    let mut pending: Vec<(Vec<usize>, &OutlineItem)> = items.iter().enumerate().rev().map(|(i, item)| (vec![i], item)).collect();
+    while let Some((path, item)) = pending.pop() {
+        if let Some(p) = item.page.filter(|&p| p <= page)
+            && best.as_ref().is_none_or(|(b, _)| p >= *b)
+        {
+            best = Some((p, path.clone()));
+        }
+        for (i, child) in item.children.iter().enumerate().rev() {
+            let mut child_path = path.clone();
+            child_path.push(i);
+            pending.push((child_path, child));
+        }
+    }
+    best.map(|(_, path)| path)
+}
+
 /// Matching titles plus their ancestors, keeping document paths rather than filtered indexes.
 /// `query` is folded with [`pdfcraft_render::text::fold_case`], as titles are here.
 pub(super) fn outline_matches(items: &[OutlineItem], query: &str) -> std::collections::HashSet<Vec<usize>> {
@@ -71,6 +93,13 @@ pub(super) struct OutlineCtx<'a> {
     pub(super) expand: Option<usize>,
     pub(super) matches: &'a std::collections::HashSet<Vec<usize>>,
     pub(super) searching: bool,
+    /// The bookmark of the page on screen ([`current_bookmark`]), marked as selected; under a
+    /// closed bookmark, that one is marked.
+    pub(super) marked: Option<&'a [usize]>,
+    /// The marked bookmark changed: its row scrolls into view when it is drawn.
+    pub(super) reveal: bool,
+    /// Set when the marked row was drawn and scrolled to ([`Self::reveal`]).
+    pub(super) revealed: bool,
 }
 
 /// The destination page label gets its own right-aligned column in a bookmark row; drawing
@@ -187,16 +216,26 @@ pub(super) fn outline_item(
         let galley = ui.fonts_mut(|f| f.layout_job(job));
         let h = (galley.size().y + 12.0).max(28.0);
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &item.title));
-        theme::Press::track(ui, &resp).wash(ui, rect, 6, false);
         let x0 = rect.left() + indent;
+        let tri = Rect::from_min_size(pos2(x0, rect.top() + 6.0), vec2(16.0, 16.0));
+        // The chevron's click first, so the row is marked by the state its children are drawn in.
+        if !item.children.is_empty() && !cx.searching && ui.interact(tri, id.with("tri"), Sense::click()).clicked() {
+            open = !open;
+            ui.data_mut(|d| d.insert_temp(id, open));
+        }
+        let marked = cx.marked.is_some_and(|m| m == path || (!open && m.starts_with(path)));
+        // The marked row says so (as egui's selected rows do); the others are plain buttons.
+        resp.widget_info(|| egui::WidgetInfo {
+            selected: marked.then_some(true),
+            ..egui::WidgetInfo::labeled(egui::Role::Button, true, &item.title)
+        });
+        theme::Press::track(ui, &resp).wash(ui, rect, 6, marked);
+        if marked && cx.reveal {
+            resp.scroll_to_me(None);
+            cx.revealed = true;
+        }
         if !item.children.is_empty() {
-            let tri = Rect::from_min_size(pos2(x0, rect.top() + 6.0), vec2(16.0, 16.0));
             icons::paint(ui, tri, if open { "chevron-down" } else { "chevron-right" }, 14.0, t.text_muted);
-            if !cx.searching && ui.interact(tri, id.with("tri"), Sense::click()).clicked() {
-                open = !open;
-                ui.data_mut(|d| d.insert_temp(id, open));
-            }
         }
         ui.painter().galley(pos2(x0 + 20.0, rect.top() + 6.0), galley, t.text);
         if let Some(g) = label_galley {
@@ -329,7 +368,7 @@ mod label_column {
 
 #[cfg(test)]
 mod bookmark_filter {
-    use super::{outline_matches, title_format};
+    use super::{current_bookmark, outline_matches, title_format};
     use crate::theme::{self, Tokens};
     use pdfcraft_render::OutlineItem;
 
@@ -362,6 +401,22 @@ mod bookmark_filter {
             italic: false,
             bold: false,
         }
+    }
+
+    /// The page on screen marks its own bookmark, else the one of the nearest page before it; of
+    /// a bookmark and its child on the same page, the child.
+    #[test]
+    fn the_current_bookmark_is_the_one_of_the_nearest_page_at_or_before() {
+        let at = |title: &str, page: usize, children| OutlineItem { page: Some(page), ..item(title, children) };
+        let outline = [at("Cover", 1, vec![]), at("Schemata", 3, vec![at("AHU 1", 3, vec![]), at("AHU 2", 5, vec![])]), at("Legend", 9, vec![])];
+        assert_eq!(current_bookmark(&outline, 0), None, "before the first bookmark's page");
+        assert_eq!(current_bookmark(&outline, 1), Some(vec![0]));
+        assert_eq!(current_bookmark(&outline, 2), Some(vec![0]), "a page without one marks the section it is in");
+        assert_eq!(current_bookmark(&outline, 3), Some(vec![1, 0]), "the child on the same page");
+        assert_eq!(current_bookmark(&outline, 6), Some(vec![1, 1]));
+        assert_eq!(current_bookmark(&outline, 20), Some(vec![2]));
+        let unordered = [at("Late", 7, vec![]), at("Early", 2, vec![])];
+        assert_eq!(current_bookmark(&unordered, 4), Some(vec![1]), "by page, not by place in the list");
     }
 
     /// Turkish dotted and dotless i match in any case, as in Find (#892).

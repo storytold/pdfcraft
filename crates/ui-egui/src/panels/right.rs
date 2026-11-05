@@ -1,4 +1,4 @@
-use super::bookmarks::{BmAction, OutlineCtx, outline_item, outline_matches};
+use super::bookmarks::{BmAction, OutlineCtx, current_bookmark, outline_item, outline_matches};
 use super::pages::{page_tools, pages, thumbnail_size};
 use super::{
     Align, Align2, Color32, DocInfo, FieldKind, Layout, Nav, PdfCraftApp, Rect, RightPanel, Sense, Stroke, Tokens, human_size, icons, theme, vec2,
@@ -195,6 +195,13 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                         if info.outline.is_empty() {
                             empty(ui, &t, "bookmark", "This document has no bookmarks.");
                         }
+                        // The bookmark of the page on screen is marked, and scrolled to when it
+                        // changes (only then: the reader may have scrolled the list away). It counts
+                        // as shown once its row has been scrolled to: a search can hide the row
+                        // when the page changes, and the scroll then waits until the row is back.
+                        let marked = current_bookmark(&info.outline, view.current);
+                        let shown_id = ui.scope_id().with(("marked-bookmark", view.id.0));
+                        let reveal = marked.is_some() && ui.data(|d| d.get_temp::<Option<Vec<usize>>>(shown_id)) != Some(marked.clone());
                         let mut ctx = OutlineCtx {
                             nav: &mut nav,
                             action: &mut bm_action,
@@ -205,12 +212,19 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             expand: bm_expand,
                             matches: &bookmark_matches,
                             searching: !bookmark_query.is_empty(),
+                            marked: marked.as_deref(),
+                            reveal,
+                            revealed: false,
                         };
                         if ctx.searching && bookmark_matches.is_empty() && !info.outline.is_empty() {
                             ui.label(tl!("No matches."));
                         }
                         for (i, item) in info.outline.iter().enumerate() {
                             outline_item(ui, &t, info, item, &[i], info.outline.len(), &mut ctx);
+                        }
+                        // None as soon as no bookmark is marked, so coming back to one reveals it.
+                        if marked.is_none() || ctx.revealed {
+                            ui.data_mut(|d| d.insert_temp(shown_id, marked.clone()));
                         }
                         if info.outline_more {
                             ui.label(tl!("Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth."));

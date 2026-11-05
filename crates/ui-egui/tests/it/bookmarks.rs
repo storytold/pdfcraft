@@ -2,7 +2,7 @@
 
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
 
 const PAGES: &[u8] = b"%PDF-1.7
@@ -58,7 +58,13 @@ fn add(h: &mut Harness<'static, PdfCraftApp>, title: &str) {
     h.run_steps(3);
 }
 
+/// Right-click a bookmark's row and pick a menu item. The row is scrolled into view first, as a
+/// reader would: the panel scrolls to the bookmark of the page on screen, which can take the row
+/// out of view (in a deep outline whose bookmarks all go to page 1, to the deepest one).
 fn menu(h: &mut Harness<'static, PdfCraftApp>, bookmark: &str, item: &str) {
+    h.get_by_label(bookmark).scroll_to_me();
+    // The scroll is animated (at most 0.3 s, so two steps) and starts on the step after the request.
+    h.run_steps(4);
     h.get_by_label(bookmark).click_secondary();
     h.run_steps(2);
     h.get_by_label(item).click();
@@ -97,6 +103,131 @@ fn new_rename_reorder_indent_delete_and_undo() {
     h.run_steps(3);
     assert_eq!(outline(&h).len(), 2, "delete is undoable");
     assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty);
+}
+
+/// The bookmark of the page on screen is marked (and says so to a screen reader); a page
+/// without one marks the bookmark before it, and a bookmark clicked is marked with its page.
+#[test]
+fn the_bookmark_of_the_page_on_screen_is_marked() {
+    let mut h = harness();
+    add(&mut h, "Intro");
+    h.state_mut().set_option("page", "3").unwrap();
+    h.run_steps(3);
+    add(&mut h, "Results");
+    let marked =
+        |h: &Harness<'static, PdfCraftApp>, title: &str| h.get_by_label(title).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True);
+    assert!(marked(&h, "Results") && !marked(&h, "Intro"));
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(3);
+    assert!(marked(&h, "Intro") && !marked(&h, "Results"), "page 2 has none: the one before it");
+    h.get_by_label("Results").click();
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 2);
+    assert!(marked(&h, "Results") && !marked(&h, "Intro"));
+}
+
+/// A page before the first bookmark's page has no section it is in: no bookmark is marked.
+#[test]
+fn no_bookmark_is_marked_before_the_first_ones_page() {
+    let mut h = harness();
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(3);
+    add(&mut h, "Middle");
+    let marked =
+        |h: &Harness<'static, PdfCraftApp>, title: &str| h.get_by_label(title).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True);
+    assert!(marked(&h, "Middle"));
+    h.state_mut().set_option("page", "1").unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 0);
+    assert!(!marked(&h, "Middle"), "page 1 comes before every bookmark");
+}
+
+/// The page changed while a search hides the bookmark it marks: the row is scrolled to once the
+/// search is cleared and the row is shown, not spent on a frame it wasn't drawn in.
+#[test]
+fn a_bookmark_hidden_by_a_search_is_scrolled_to_once_it_shows() {
+    // 60 sheets with a bookmark each: the last ones lie well below the panel's fold.
+    let n = 60;
+    let mut pdf = String::from("%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 3 0 R >> endobj\n");
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 10 + i)).collect();
+    pdf += &format!("2 0 obj << /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 300 400] >> endobj\n", kids.join(" "));
+    pdf += &format!("3 0 obj << /Type /Outlines /First 100 0 R /Last {} 0 R /Count {n} >> endobj\n", 100 + n - 1);
+    for i in 0..n {
+        pdf += &format!("{} 0 obj << /Type /Page /Parent 2 0 R >> endobj\n", 10 + i);
+    }
+    for i in 0..n {
+        let prev = if i > 0 { format!("/Prev {} 0 R ", 100 + i - 1) } else { String::new() };
+        let next = if i + 1 < n { format!("/Next {} 0 R ", 100 + i + 1) } else { String::new() };
+        pdf += &format!("{} 0 obj << /Title (Sheet {:02}) /Parent 3 0 R {prev}{next}/Dest [{} 0 R /Fit] >> endobj\n", 100 + i, i + 1, 10 + i);
+    }
+    pdf += "trailer << /Root 1 0 R >>\n%%EOF";
+    let mut h = harness();
+    h.state_mut().open_bytes("sheets.pdf", None, pdf.into_bytes()).unwrap();
+    h.run_steps(4);
+    let window = h.ctx.content_rect();
+    // Within the list's viewport: below the search row above it, and above the panel's bottom
+    // margin (8 px), where the list clips its rows.
+    let in_view = |h: &Harness<'static, PdfCraftApp>, title: &str| {
+        let (r, search) = (h.get_by_label(title).rect(), h.get_by_label("Search").rect());
+        r.top() >= search.bottom() && r.bottom() <= window.bottom() - 8.0
+    };
+    assert!(in_view(&h, "Sheet 01") && !in_view(&h, "Sheet 55"), "the last sheets start below the fold");
+    // A search shows only the first sheet; meanwhile the reader goes to sheet 55.
+    h.get_by_label("Search").click();
+    h.run_steps(1);
+    h.get_by_label("Search").type_text("Sheet 01");
+    h.run_steps(3);
+    assert!(h.query_by_label("Sheet 55").is_none());
+    h.state_mut().set_option("page", "55").unwrap();
+    h.run_steps(3);
+    // Cleared, the list shows every sheet again and the marked one is scrolled to.
+    h.get_by_label("Clear").click();
+    h.run_steps(6);
+    assert!(in_view(&h, "Sheet 55"), "{:?} in {window:?}", h.get_by_label("Sheet 55").rect());
+}
+
+/// Under a closed bookmark, the marked one is out of sight: the closed bookmark is marked in its
+/// place, and once opened, the child itself.
+#[test]
+fn a_closed_bookmark_is_marked_for_the_child_on_screen() {
+    const NESTED: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 10 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R >> endobj
+10 0 obj << /Type /Outlines /First 11 0 R /Last 12 0 R /Count 2 >> endobj
+11 0 obj << /Title (Cover) /Parent 10 0 R /Next 12 0 R /Dest [3 0 R /Fit] >> endobj
+12 0 obj << /Title (Section) /Parent 10 0 R /Prev 11 0 R /First 21 0 R /Last 21 0 R /Count -1 /Dest [4 0 R /Fit] >> endobj
+21 0 obj << /Title (Detail) /Parent 12 0 R /Dest [5 0 R /Fit] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut h = harness();
+    h.state_mut().open_bytes("nested.pdf", None, NESTED.to_vec()).unwrap();
+    h.run_steps(4);
+    let marked = |h: &Harness<'static, PdfCraftApp>, title: &str| {
+        h.query_by_label(title).is_some_and(|n| n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True))
+    };
+    h.state_mut().set_option("page", "3").unwrap();
+    h.run_steps(3);
+    assert!(h.query_by_label("Detail").is_none(), "the child is hidden under its closed bookmark");
+    assert!(marked(&h, "Section") && !marked(&h, "Cover"), "the closed bookmark stands for its child on screen");
+    // Opened, the child is marked itself.
+    let row = h.get_by_label("Section").rect();
+    let at = egui::pos2(row.left() + 8.0, row.top() + 14.0);
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    // Already on the click's own frame: the row is marked by the state its children are drawn in.
+    h.run_steps(1);
+    assert!(marked(&h, "Detail") && !marked(&h, "Section"), "on the click's frame");
+    h.run_steps(2);
+    assert!(marked(&h, "Detail") && !marked(&h, "Section"), "open: the child itself");
+    // On the section's own page, the section.
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(3);
+    assert!(marked(&h, "Section") && !marked(&h, "Detail"));
 }
 
 /// The side panel's width as egui keeps it from one frame to the next.
