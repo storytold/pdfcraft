@@ -3310,11 +3310,15 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let zoom_delta = crate::motion::zoom_delta(ui.ctx());
     // Exclude the previous frame's scrollbar tracks from gesture activation.
     let navigation_rect = if view.viewport_screen.is_positive() { avail.intersect(view.viewport_screen) } else { avail };
-    // Wheel zoom works in a visible window without focus, as wheel scrolling does; the other gestures need focus.
-    let zoom_enabled = unobstructed && ui.is_enabled();
-    let navigation_enabled = zoom_enabled && ui.input(|i| i.focused);
+    // No dialog, prompt or palette over the page, and the page area enabled. Keyboard focus is
+    // deliberately absent: macOS, Windows ("Scroll inactive windows") and Wayland hand the wheel
+    // to the window under the pointer, focused or not, and it scrolls (#6326, #7120, #6775) and
+    // zooms (#3736) that window there.
+    let hover_input = unobstructed && ui.is_enabled();
+    // The other gestures need focus: an unfocused window must not act on a click-through.
+    let navigation_enabled = hover_input && ui.input(|i| i.focused);
     let present = presentation_click_state(ui, view, navigation_rect, navigation_enabled && app.quick_tool == QuickTool::Select);
-    pinch_zoom(ui, view, zoom_delta, navigation_rect, zoom_enabled);
+    pinch_zoom(ui, view, zoom_delta, navigation_rect, hover_input);
     view.viewport_screen = avail;
     let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed, invert_middle);
 
@@ -3334,7 +3338,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let (single_paging, edge_turned) = single_page_paging(ui, view, &PagingCx { row: &row, rects: &rects, avail, middle_gesture, unobstructed });
     let now = ui.input(|i| i.time);
     let animates = app.animation_effects.animates(app.motion.reduced);
-    let wheel_enabled = navigation_enabled && unobstructed && !middle_gesture;
+    // The wheel scrolls the window under the pointer, keyboard focus or not (`hover_input` above);
+    // the middle-button scroller still holds it off.
+    let wheel_enabled = hover_input && !middle_gesture;
     let Wheel { precise_scroll, line_base, coarse_scroll, has_page, paging_owns_vertical } =
         read_wheel(ui, view, avail, single_paging, edge_turned, wheel_enabled, animates);
     let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates;
