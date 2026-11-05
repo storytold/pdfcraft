@@ -58,6 +58,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         editing_content,
         form,
         info,
+        placing,
         prefs,
         preparing,
         redact_mark,
@@ -169,14 +170,14 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let over_mark = matches!(tool, QuickTool::Fill(_))
         && (matches!(press, PagePress::Mine(_)) || comments::moving_on(view, i) || !ptr.any_down && hovered.is_some());
     tool_input(ui, view, frame, slot, &pcx, press, over_mark);
-    let on_field = if preparing {
+    let on_field = if preparing && !placing {
         let o = crate::prepare::page_input(cx, form, field_tool, prepare_allowed, press, view);
         frame.out.field_props |= o.properties;
         frame.out.field_placed |= o.placed;
         frame.out.open_table = frame.out.open_table.or(o.table);
         o.consumed || field_tool.is_some()
     } else {
-        tool == QuickTool::Select && crate::forms_ui::page_input(cx, form, can_fill, press, released_over, view)
+        tool == QuickTool::Select && !placing && crate::forms_ui::page_input(cx, form, can_fill, press, released_over, view)
     };
     // Redact draws boxes off text; so does Highlight (an area highlight, as in Acrobat).
     let area_tool = tool == QuickTool::Redact && can_modify || tool == QuickTool::Comment(comments::CommentTool::Highlight) && allowed;
@@ -206,7 +207,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         edit_on_click: matches!(tool, QuickTool::AddText | QuickTool::EditText),
         style: text_style,
     };
-    let on_content = editing_content && can_modify && crate::content_ui::page_input(cx, ccx, view);
+    let on_content = !placing && editing_content && can_modify && crate::content_ui::page_input(cx, ccx, view);
     // Add text acts on the page's own paragraphs: the one its press was on, until the button is up,
     // and the one under the pointer. Edit text boxes every paragraph and picture.
     let paragraph = |o: Option<Owner>| matches!(o, Some(Owner::Paragraph { .. }));

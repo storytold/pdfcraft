@@ -776,6 +776,8 @@ pub(crate) enum PageMenuAction {
     MarqueeZoom,
     Copy,
     Paste(usize, [f64; 2]),
+    /// Paste the copied comments, centred at this point of the page.
+    PasteComments(usize, [f64; 2]),
     AddComment(usize, [f64; 2]),
     AddBookmark,
     TakeSnapshot,
@@ -797,6 +799,8 @@ pub(crate) struct PageMenuPerms {
     pub can_copy: bool,
     pub can_copy_items: bool,
     pub can_paste: bool,
+    /// Copied comments wait to be pasted, and comments may be added.
+    pub can_paste_comments: bool,
     pub has_annotations: bool,
 }
 
@@ -838,6 +842,9 @@ pub(crate) fn default_page_context_menu(ui: &mut egui::Ui, page: usize, at: [f64
         ui,
         A::Paste(page, at),
     );
+    if perms.can_paste_comments {
+        pick(ui.button(tl!("Paste comments")), ui, A::PasteComments(page, at));
+    }
 
     ui.separator();
 
@@ -1153,6 +1160,10 @@ struct PageEnv<'a> {
     by_line: &'a String,
     calc_order: bool,
     can_copy: bool,
+    /// Copied comments wait to be pasted.
+    can_paste_comments: bool,
+    /// Copied comments hang on the pointer (`Gesture::Place`): the click is theirs.
+    placing: bool,
     can_crop: bool,
     can_fill: bool,
     can_modify: bool,
@@ -1209,6 +1220,8 @@ struct PageEnv<'a> {
 struct PageOut {
     canvas_action: Option<comments::CanvasAction>,
     clicked_link: Option<LinkTarget>,
+    comment_notice: Option<&'static str>,
+    copy_comments: bool,
     copy_selected: bool,
     field_menu: Option<FieldMenu>,
     field_placed: bool,
@@ -1220,6 +1233,7 @@ struct PageOut {
     open_signature: bool,
     open_table: Option<(usize, [f64; 4])>,
     page_action: Option<PageMenuAction>,
+    paste_comments_at: Option<(usize, [f64; 2])>,
     primary_down: bool,
     refused: Option<String>,
     /// The current page or spread where it is drawn, every page of it: one off screen (the second
@@ -1606,6 +1620,7 @@ fn draw_pages(
         coarse_scroll,
         calc_order,
         can_copy,
+        can_paste_comments,
         can_modify,
         content_h,
         content_w,
@@ -1760,6 +1775,7 @@ fn draw_pages(
         refused,
         row_on_screen: _,
         stamp_placed,
+        ..
     } = page_out;
     let mut page_action: Option<PageMenuAction> = None;
     let painter = ui.painter();
@@ -1920,10 +1936,20 @@ fn draw_pages(
             crate::edit_text_ui::image_context_menu(ui, view, &images, sel.page, sel.index, can_paste_image, &mut image_action, at, rotation);
             return;
         }
-        if let Some((page, Owner::Comment { index, .. })) = view.menu_for
-            && view.comments.selected == Some((page, index))
-        {
-            canvas_action = comments::context_menu(ui, view, info, &|page, index| doc.annotation_deletable(page, index), prefs, allowed, can_modify);
+        // The comment the right-click went to, when it is the one selected, or connected lines being
+        // drawn (Complete, Undo last point): the comment menu.
+        let on_selected_comment =
+            matches!(view.menu_for, Some((page, Owner::Comment { index, .. })) if view.comments.selected == Some((page, index)));
+        let drawing_points = matches!(&view.comments.gesture, Some(comments::Gesture::Draw { tool, .. }) if tool.clicks_points());
+        if on_selected_comment || drawing_points {
+            canvas_action = comments::context_menu(
+                ui,
+                view,
+                info,
+                &|page, index| doc.annotation_deletable(page, index),
+                prefs,
+                comments::MenuRights { allowed, can_paste: can_paste_comments, can_modify },
+            );
             return;
         }
         // Over a picture (and no comment): Copy Image, as in Acrobat's page menu.
@@ -1967,13 +1993,20 @@ fn draw_pages(
             can_copy,
             can_copy_items,
             can_paste,
+            can_paste_comments: allowed && can_paste_comments,
             has_annotations: !info.annotations.is_empty(),
         };
         default_page_context_menu(ui, page, at, perms, &mut page_action);
     });
+    // Copy comments / Paste comments from the page's menu or a Comments panel card.
+    let copy_comments = std::mem::take(&mut view.comments.copy_request);
+    let paste_comments_at = view.comments.paste_request.take();
+    let comment_notice = view.comments.notice.take();
     *out = PageOut {
         canvas_action,
         clicked_link,
+        comment_notice,
+        copy_comments,
         copy_selected,
         field_menu,
         field_placed,
@@ -1985,6 +2018,7 @@ fn draw_pages(
         open_signature,
         open_table,
         page_action,
+        paste_comments_at,
         primary_down: ptr.primary_down,
         refused,
         row_on_screen,
@@ -2767,6 +2801,15 @@ fn step_glide(ui: &egui::Ui, view: &mut DocView, avail: Rect, cx: &GlideCx) -> V
     glide
 }
 
+/// The tool the page sees this frame, and whether copied comments hang on the pointer. Those
+/// take the next click whatever tool is on: the page sees the Select tool until the bundle is
+/// placed or let go, and no form field, added content or field being prepared takes the click
+/// either.
+fn page_tool(view: &DocView, chosen: QuickTool) -> (QuickTool, bool) {
+    let placing = matches!(view.comments.gesture, Some(comments::Gesture::Place { .. }));
+    (if placing { QuickTool::Select } else { chosen }, placing)
+}
+
 /// Text selection runs for the Select tool and for the markup tools (highlight…).
 fn tool_selects_text(tool: QuickTool, preparing: bool) -> bool {
     match tool {
@@ -2969,7 +3012,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let sharp_held = hold_sharp_renders(ui, view, scale);
     view.current_scale_tag = tag;
     let hand = app.quick_tool == QuickTool::Hand;
-    let tool = app.quick_tool;
+    let (tool, placing) = page_tool(view, app.quick_tool);
     // Text selection runs for the Select tool and for the markup tools (highlight…).
     let selects_text = tool_selects_text(tool, preparing);
     let prefs = &app.comment_prefs;
@@ -2977,6 +3020,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let units = app.units;
     let allowed = doc.allows_annotation();
     let can_copy = doc.allows_copying();
+    let can_paste_comments = app.comment_clipboard.is_some();
     let comments_hidden = doc.comments_hidden();
     let form = doc.form.clone();
     let generation = doc.edit_generation();
@@ -2989,11 +3033,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // In Preferences ▸ Date format, or why it can't be stamped into the PDF.
     let date_text = crate::date_text_for_pdf(&app.session);
     let by_line = app.session.stamp_by_line(&author);
-    let custom_stamp = match app.quick_tool {
+    let custom_stamp = match tool {
         QuickTool::CustomStamp(i) => app.custom_stamps.get(i).cloned(),
         _ => None,
     };
     let mut open_props: Option<(usize, usize)> = None;
+    let mut recolour: Option<pdfcraft_engine::Rgb> = None;
     // The table being set up in its window, shown on its own document's page.
     let table_preview = app.field_table_draft.as_mut().filter(|d| d.doc == view.id).and_then(|d| Some(d.preview(info.pages.get(d.page)?, &form)));
     let can_modify = doc.allows_modification();
@@ -3025,6 +3070,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         by_line: &by_line,
         calc_order,
         can_copy,
+        can_paste_comments,
+        placing,
         can_crop,
         can_fill,
         can_modify,
@@ -3082,6 +3129,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let PageOut {
         canvas_action,
         clicked_link,
+        comment_notice,
+        copy_comments,
         mut copy_selected,
         field_menu,
         field_placed,
@@ -3093,6 +3142,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         open_signature,
         open_table,
         page_action,
+        paste_comments_at,
         primary_down,
         mut refused,
         row_on_screen,
@@ -3177,6 +3227,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             app.comments_panel_closed = false;
         }
         Some(comments::CanvasAction::Properties(p, i)) => open_props = Some((p, i)),
+        Some(comments::CanvasAction::Colour(c)) => recolour = Some(c),
         Some(comments::CanvasAction::CopyImage(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::Copy(p, i)),
         Some(comments::CanvasAction::CopyImageFile(p, i)) => image_action = Some(crate::edit_text_ui::ImageAction::CopyFile(p, i)),
         None => {}
@@ -3201,6 +3252,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         open_table,
         form_notice,
         copy_selected,
+        copy_comments,
+        paste_comments_at,
+        comment_notice,
+        recolour,
         remote_open,
         form,
         generation,
@@ -3223,6 +3278,13 @@ struct FrameRequests {
     open_table: Option<(usize, [f64; 4])>,
     form_notice: Option<crate::forms_ui::FormNotice>,
     copy_selected: bool,
+    /// Copy comments / Paste comments from the page's menu or a Comments panel card, and what
+    /// the comment tools have to say.
+    copy_comments: bool,
+    paste_comments_at: Option<(usize, [f64; 2])>,
+    comment_notice: Option<&'static str>,
+    /// A colour picked for every selected comment (Colour in the page's menu).
+    recolour: Option<pdfcraft_engine::Rgb>,
     remote_open: Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)>,
     form: Arc<Vec<pdfcraft_engine::FormField>>,
     generation: u64,
@@ -3245,6 +3307,10 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         open_table,
         form_notice,
         copy_selected,
+        copy_comments,
+        paste_comments_at,
+        comment_notice,
+        recolour,
         remote_open,
         form,
         generation,
@@ -3255,6 +3321,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     }
     if let Some((p, i)) = open_props {
         app.open_comment_props(p, i);
+    }
+    if let Some(c) = recolour {
+        app.colour_selected_comments(c);
     }
     if let Some((p, i)) = app.views[index].comments.default_request.take() {
         app.make_comment_default(p, i);
@@ -3351,6 +3420,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         Some(PageMenuAction::Paste(page, at)) => {
             app.paste_image_at(page, at);
         }
+        Some(PageMenuAction::PasteComments(page, at)) => {
+            app.paste_comments(index, None, Some((page, at)));
+        }
         Some(PageMenuAction::RotateCCW) => {
             app.views[index].rotate_view(false);
         }
@@ -3438,6 +3510,15 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     }
     if copy_selected {
         app.execute("edit.copy");
+    }
+    if copy_comments {
+        app.execute("comment.copy");
+    }
+    if let Some(at) = paste_comments_at {
+        app.paste_comments(index, None, Some(at));
+    }
+    if let Some(notice) = comment_notice {
+        app.notify_tr(notice);
     }
     // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
     // the quick tools come back with the window.

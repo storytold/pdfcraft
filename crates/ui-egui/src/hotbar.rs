@@ -368,19 +368,12 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
     }
     if let QuickTool::Comment(tool) = app.quick_tool {
         controls_divider(ui, t, vertical);
+        // The selected comments this tool made take the colour too (locked ones keep theirs).
         if let Some(color) = comments::quick_bar_controls(ui, tool, &mut app.comment_prefs)
-            && let Some((index, id)) = app.active_ids()
-            && let Some((page, annotation)) = app.views.get(index).and_then(|view| view.comments.selected)
-            && app.session.get(id).is_some_and(|doc| {
-                doc.allows_annotation()
-                    && doc
-                        .info
-                        .annotations
-                        .iter()
-                        .any(|a| a.page == page && a.index == annotation && !a.is_reply() && !a.locked && comments::made_by(a, tool))
-            })
+            && let Some((_, id)) = app.active_ids()
+            && app.session.get(id).is_some_and(|doc| doc.allows_annotation())
         {
-            app.apply_edit(Edit::StyleAnnotation { page, index: annotation, color: Some(color), opacity: None, width: None, endings: None });
+            app.colour_selection(color, |a| comments::made_by(a, tool));
         }
     }
 }
