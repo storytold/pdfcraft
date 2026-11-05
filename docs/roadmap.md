@@ -7,6 +7,7 @@
 > **2026-11-03, M7 / #5835 review:** active image crops retain secondary clicks over overlapping images; crop controls share measured layout with hit detection. Rotation, handle and page-edge regressions added; focused tests, scoped Clippy, formatting, layering and asset checks passed locally. Estimates unchanged.
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged)
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-01 · **Change:** minor (M7, #3215 partial: consolidated scope and regression evidence for exact Tc/Tz/TJ preservation; unsupported edits refuse atomically; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 
@@ -63,7 +64,6 @@
 > **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (M8, gap 6 #2662: the redaction audit counts a cover over one word of a long line; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (M10: dotted-leader contents entries export as complete paragraphs; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** minor (M6: calculation scripts read their notation only from a comment, and a regular expression after a condition as one; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
-> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-01 · **Change:** minor (M7, #3215 partial: consolidated scope and regression evidence for exact Tc/Tz/TJ preservation; unsupported edits refuse atomically; estimates unchanged)
 > **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** minor (M5, PR #1971: bounded nested FDF export excludes source page/page-tree dictionaries; refreshed against upstream 4db6ac4a; estimates unchanged)
 > **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-18 · **Change:** patch (M2 #3086: dotted TOC leaders no longer hide word spaces; estimates unchanged)
 >

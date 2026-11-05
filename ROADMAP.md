@@ -766,6 +766,7 @@ Newest first: the date, what moved, and the new overall estimate.
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
+| 2026-11-01 | minor | M7 #3215 partial: consolidated exact Tc/Tz/TJ preservation, save/reopen and atomic-refusal regression evidence. Prior implementation history remains in git; scope and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |
@@ -779,7 +780,6 @@ Newest first: the date, what moved, and the new overall estimate.
 | 2026-10-20 | minor | M6, #3502: form detection preserves comments across content streams; estimates unchanged. |
 | 2026-10-20 | minor | M10, #3532 partial: vector printing retains existing appearances with absent Subtype; estimates unchanged. |
 | 2026-10-20 | minor | M11 #3507: image merging preserves comments and state across content streams. Estimates unchanged. |
-| 2026-11-01 | minor | M7 #3215 partial: consolidated exact Tc/Tz/TJ preservation, save/reopen and atomic-refusal regression evidence. Prior implementation history remains in git; scope and estimates unchanged. |
 | 2026-10-18 | minor | M5, PR #1971: nested source `/Page` and `/Pages` dictionaries export as null without traversing page content or the page tree. Synthetic saved/reopened three-page regression retains unrelated metadata and aliases. FDF import semantics, copied-graph limits and estimates unchanged. |
 | 2026-10-15 | minor | M5: budget retained FDF entries before cloning; discovery keeps lazy array owners and annotation positions, with alias/cache-eviction stress fixtures. Limits cover the copied graph; source parsing/page discovery retain existing COS/parser limits, with no total source-memory bound. FDF import semantics and estimates unchanged. |
 | 2026-10-15 | minor | M7: the Edit text caret is as tall as the row it is on in a region with several sizes; estimates unchanged. |
