@@ -718,6 +718,11 @@ fn xmp_value_forms_are_those_xmp_allows() {
         mistyped(r#"><crs:Contrast rdf:parseType="Resource"><rdf:value>5</rdf:value><rdf:value>five</rdf:value></crs:Contrast>"#),
         ["crs:Contrast"]
     );
+    assert_eq!(
+        mistyped(r#"><crs:Contrast><rdf:Description rdf:value="five"><rdf:value>5</rdf:value></rdf:Description></crs:Contrast>"#),
+        ["crs:Contrast"]
+    );
+    assert!(mistyped(r#"><crs:Contrast><rdf:Description><rdf:value>5</rdf:value></rdf:Description></crs:Contrast>"#).is_empty());
     // Only parseType="Resource" has a place in XMP; an rdf:resource element holds no element.
     assert_eq!(mistyped(r#"><crs:Contrast rdf:parseType="Literal">5</crs:Contrast>"#), ["crs:Contrast"]);
     assert_eq!(mistyped(r#"><xmpMM:DerivedFrom rdf:parseType="Literal" stRef:documentID="d"/>"#), ["xmpMM:DerivedFrom"]);

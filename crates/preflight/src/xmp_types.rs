@@ -549,10 +549,10 @@ fn fits(ty: Ty, e: &Node<'_, '_>, depth: usize) -> bool {
     // predefined properties keep their types too.
     let node = if resource { Some(*e) } else { description };
     if let Some(n) = node {
-        // A qualified value has one `rdf:value`.
+        // A qualified value has one `rdf:value`: an element, or an attribute in its place.
         match n.children().filter(|c| is(c, RDF, "value")).collect::<Vec<_>>().as_slice() {
             [] => {}
-            [v] => return blank(e) && blank(&n) && fits(ty, v, deeper) && predefined_ok(&n, deeper),
+            [v] => return n.attribute((RDF, "value")).is_none() && blank(e) && blank(&n) && fits(ty, v, deeper) && predefined_ok(&n, deeper),
             _ => return false,
         }
     }
