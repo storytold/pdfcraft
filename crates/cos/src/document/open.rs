@@ -1,5 +1,5 @@
 use super::reader::find;
-use super::state::Credentials;
+use super::state::{Credentials, Slot};
 use super::xref::XrefIndex;
 use super::{Arc, BTreeMap, CosError, Dict, Document, HashSet, ObjRef, Object};
 
@@ -156,6 +156,9 @@ impl Document {
             }
             doc.reconstruct(&mut log)?;
         }
+        // Header generations are plaintext, including in encrypted files. Inspect only the
+        // bounded headers, not object bodies, and retain the compact xref representation.
+        doc.note_xref_generation_repairs(&mut log);
         doc.repair_log = Arc::new(log);
         // Reconstruction may have found a different trailer: (re)authenticate against it.
         if (!ok || !authenticated)
@@ -283,8 +286,9 @@ impl Document {
     }
 
     /// The next save must rewrite the whole file (see [`Document::require_full_save`]).
+    /// Repair-aware edits retaining two accepted generations cannot use one incremental slot.
     pub fn full_save_required(&self) -> bool {
-        self.full_save
+        self.full_save || self.overlay.values().any(|slot| matches!(slot, Slot::RepairedSet(..)))
     }
 
     /// Security was set or removed since the document was opened (the next save applies it).

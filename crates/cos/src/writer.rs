@@ -308,8 +308,17 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         if matches!(*o, Object::Null) {
             continue; // dangling reference: written as null by renumbering below
         }
-        map.insert(r, output_number(order.len())?);
-        order.push((r, matches!(*o, Object::Stream(_))));
+        // Accepted xref/header aliases denote one slot, including page-tree cycles.
+        // Check for null first: an unrelated or freed generation must remain dangling.
+        let canonical = ObjRef::new(r.num, reader.document.generation(r.num));
+        if let Some(&num) = map.get(&canonical) {
+            map.insert(r, num);
+            continue;
+        }
+        let num = output_number(order.len())?;
+        map.insert(r, num);
+        map.insert(canonical, num);
+        order.push((canonical, matches!(*o, Object::Stream(_))));
         visit_refs(&o, &mut queue);
     }
     let version = reader.document.version().chars().take(3).collect::<String>();
@@ -320,13 +329,15 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     out.extend_from_slice(&[b'%', 0xE2, 0xE3, 0xCF, 0xD3, b'\n']);
     // The /Encrypt dictionary and everything it references (e.g. indirect /CF crypt-filter
     // dictionaries) are needed before anything can be decrypted: never inside object streams.
-    let mut encryption_objects: std::collections::HashSet<ObjRef> = std::collections::HashSet::new();
+    let mut encryption_objects: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut pending: Vec<ObjRef> = Vec::new();
     if let Some(encrypt) = trailer_in.get(b"Encrypt") {
         collect_refs(encrypt, &mut |r| pending.push(r));
     }
     while let Some(r) = pending.pop() {
-        if encryption_objects.insert(r) {
+        if let Some(&num) = map.get(&r)
+            && encryption_objects.insert(num)
+        {
             collect_refs(&reader.get(r), &mut |x| pending.push(x));
         }
     }
@@ -334,7 +345,8 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     // damaged and could not be repaired", before it even asks for the password), while other
     // readers accept it. qpdf keeps the catalog out of object streams too. Verified with
     // Acrobat DC on macOS (#774).
-    let root_outside = if reader.document.output_security().0.is_some() { trailer_in.reference(b"Root") } else { None };
+    let root_outside =
+        if reader.document.output_security().0.is_some() { trailer_in.reference(b"Root").and_then(|r| map.get(&r)).copied() } else { None };
     let attachments = crate::security::embedded_file_targets(&reader.document);
     let mut rows: BTreeMap<u32, Row> = BTreeMap::new();
     // Keep only references, not renamed copies of the entire object graph. Standalone
@@ -342,7 +354,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     let mut packed: Vec<(u32, ObjRef)> = Vec::new();
     for (i, (r, is_stream)) in order.iter().enumerate() {
         let num = output_number(i)?;
-        let in_stream = opts.object_streams && !is_stream && !encryption_objects.contains(r) && root_outside != Some(*r);
+        let in_stream = opts.object_streams && !is_stream && !encryption_objects.contains(&num) && root_outside != Some(num);
         if in_stream {
             packed.push((num, *r));
         } else {
