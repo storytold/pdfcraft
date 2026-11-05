@@ -22,6 +22,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod icc;
+mod trailer;
 mod xmp;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
@@ -114,6 +115,8 @@ pub const WORDINGS: &[&str] = &[
     "The metadata doesn't identify the file as {}",
     "The title in the metadata and the document information differ",
     // The document as a whole.
+    "The trailer has no file identifier (ID)",
+    "The file identifier (ID) in the trailer isn't two non-empty strings",
     "The document is encrypted",
     "Device colour is used, but there is no PDF/A output intent",
     "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)",
@@ -454,7 +457,14 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
             }
         }
     }
-    // 6.1.3: encryption.
+    // 6.1.3: the file identifier and encryption.
+    match trailer::check(doc) {
+        Some(trailer::IdProblem::Missing) => issue("6.1.3", "The trailer has no file identifier (ID)", None, None, true),
+        Some(trailer::IdProblem::Malformed) => {
+            issue("6.1.3", "The file identifier (ID) in the trailer isn't two non-empty strings", None, None, true)
+        }
+        None => {}
+    }
     if doc.trailer().get(b"Encrypt").is_some() {
         issue("6.1.3", "The document is encrypted", None, None, true);
     }
@@ -798,6 +808,7 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
         doc.remove_encryption();
         fixed.push("Removed encryption".into());
     }
+    fixed.extend(trailer::fix(doc));
     let root = doc.root().ok_or(pdfcraft_cos::CosError::Syntax { offset: 0, detail: "no catalog".into() })?;
     // Catalog: actions, JavaScript, NeedAppearances, output intent, metadata.
     let mut cat = catalog(doc);

@@ -488,3 +488,46 @@ fn an_output_intent_profile_header_is_read_within_a_size_cap() {
         assert_eq!(pdfa_intent_profile(&doc), Some(n), "a {size}-byte profile");
     }
 }
+
+/// PDF/A-2 6.1.3: the trailer `startxref` points to has a file identifier, two non-empty
+/// strings; Save as PDF/A gives a file one.
+#[test]
+fn trailer_file_identifier_is_checked_and_added() {
+    let objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"];
+    let id = |extra: &str| -> Vec<String> {
+        let doc = build(&objs, extra);
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.3").map(|i| i.message).collect()
+    };
+    let missing = ["The trailer has no file identifier (ID)"];
+    let malformed = ["The file identifier (ID) in the trailer isn't two non-empty strings"];
+    assert!(id("/ID [<0011> (ab)]").is_empty());
+    assert_eq!(id(""), missing);
+    assert_eq!(id("/ID null"), missing);
+    for wrong in ["/ID [<><>]", "/ID [<0011>]", "/ID [<0011> <0011> <0011>]", "/ID [1 2]", "/ID (ab)"] {
+        assert_eq!(id(wrong), malformed, "{wrong}");
+    }
+    // An update without an /ID has none, whatever the trailer it replaces had.
+    let base = build(&objs, "/ID [<0011> <0011>]");
+    let mut bytes = base.bytes().to_vec();
+    let prev = bytes.windows(9).rposition(|w| w == b"startxref").unwrap();
+    let prev: usize = String::from_utf8_lossy(&bytes[prev + 10..]).lines().next().unwrap().trim().parse().unwrap();
+    let at = bytes.len();
+    bytes.extend_from_slice(
+        format!("xref\n0 1\n0000000000 65535 f \ntrailer\n<< /Size 3 /Root 1 0 R /Prev {prev} >>\nstartxref\n{at}\n%%EOF\n").as_bytes(),
+    );
+    let updated = Document::open(std::sync::Arc::new(bytes)).unwrap();
+    assert!(verify(&updated, Level::A2b).iter().any(|i| i.message == missing[0]));
+    // Save as PDF/A adds one, which a save keeps.
+    for extra in ["", "/ID [<><>]"] {
+        let mut doc = build(&objs, extra);
+        let report = convert(&mut doc, Level::A2b).unwrap();
+        assert!(report.fixed.iter().any(|f| f == "Added a file identifier (ID)"), "{extra}");
+        assert!(verify(&doc, Level::A2b).iter().all(|i| i.clause != "6.1.3"), "{extra}");
+        let saved = pdfcraft_cos::write_incremental(&doc, &Default::default()).unwrap();
+        let saved = Document::open(std::sync::Arc::new(saved)).unwrap();
+        assert!(verify(&saved, Level::A2b).iter().all(|i| i.clause != "6.1.3"), "{extra}");
+    }
+    // A good one is kept.
+    let mut doc = build(&objs, "/ID [<0011> <0022>]");
+    assert!(!convert(&mut doc, Level::A2b).unwrap().fixed.iter().any(|f| f.contains("identifier")));
+}
