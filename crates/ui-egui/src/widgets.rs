@@ -85,6 +85,8 @@ pub(crate) fn dialog_buttons_keeping_height(ui: &mut egui::Ui, add: impl FnOnce(
     let card: Option<Rect> = ui.ctx().data(|d| d.get_temp(layer.with("card")));
     let layout = egui::Layout::right_to_left(egui::Align::Center);
     if card.is_some_and(|c| c.height() > window_room(ui)) {
+        // Down to what the window has, and no further: shrunk to what this tab holds, the tabs would move.
+        ui.add_space((window_room(ui) - held).max(0.0));
         ui.horizontal(|ui| {
             ui.with_layout(layout, add);
         });

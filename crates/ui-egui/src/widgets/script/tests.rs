@@ -210,10 +210,11 @@ fn set_value(id: egui::Id, value: &str) -> egui::Event {
     })
 }
 
-/// Whether the box last refused an edit. A box this long pushes the line that says so off the screen,
-/// where it isn't drawn, so the other tests read the line and these read this.
+/// What the line under the box says when it refuses an edit.
 const REFUSED: &str = "Not added";
 
+/// Whether the box last refused an edit. A box this long pushes the line that says so off the screen,
+/// where it isn't drawn, so most tests read the line and those read this.
 fn refused(ctx: &egui::Context) -> bool {
     let mut id = egui::Id::NULL;
     ctx.run_ui(egui::RawInput::default(), |ui| id = ui.make_persistent_id("probe")).drop_without_applying_deltas();
@@ -221,7 +222,7 @@ fn refused(ctx: &egui::Context) -> bool {
 }
 
 #[test]
-fn every_way_of_adding_text_past_the_limit_is_refused_and_the_line_says_why() {
+fn every_way_of_adding_text_past_the_limit_is_refused() {
     let ctx = egui::Context::default();
     let mut box_id = egui::Id::NULL;
     ctx.run_ui(egui::RawInput::default(), |ui| box_id = ui.make_persistent_id("probe")).drop_without_applying_deltas();
@@ -258,7 +259,7 @@ fn every_way_of_adding_text_past_the_limit_is_refused_and_the_line_says_why() {
     let said = focused(&ctx, &mut text, time, vec![set_value(box_id, &"y".repeat(MAX_EDITED_BYTES + 1))]);
     is_refused("assistive technology", &text, &said);
 
-    // What fits goes in, up to the last byte, and the line goes back to the check.
+    // What fits goes in, up to the last byte, and the line goes away.
     time += 1.0;
     focused(&ctx, &mut text, time, vec![egui::Event::Paste("y".into())]);
     assert_eq!(text.len(), MAX_EDITED_BYTES, "a paste that fits exactly");
@@ -630,8 +631,8 @@ fn copy_takes_no_half_of_a_windows_line_end() {
     assert_eq!(t.caret(), Some(0..2));
 }
 
-/// The box this branch bounds and scrolls keeps both things under it working: the note in place of
-/// a script past the limit, with its Clear button for one under it.
+/// A script past the limit gets the note with its Clear button and no box; one at the limit gets the
+/// box, as tall as ever.
 #[test]
 fn a_full_box_keeps_its_height_and_a_long_script_gets_only_the_note() {
     let ctx = egui::Context::default();
@@ -687,8 +688,8 @@ fn undo_and_redo_go_all_the_way_on_a_windows_script() {
     assert_eq!(t.text, "a;xy\r\nb;");
 }
 
-/// Beside typing in one frame, the caret would be moved off the line end for the typing before Undo
-/// looked at it. Undo would then put it back where the typing goes in.
+/// Undo goes alone in its frame. Beside typing, the caret would be moved off the line end for the
+/// typing before Undo looked at it, and Undo would go by a caret that isn't where it left it.
 #[test]
 fn undo_and_typing_in_one_frame_leave_a_windows_line_end_whole() {
     let mut t = Typing::new("a;\r\nb;");
@@ -834,7 +835,7 @@ fn keys_waiting_for_the_next_frame_ask_for_it() {
     t.frame(Vec::new());
     t.frame(Vec::new());
     assert_eq!(t.text, "a\n\n\n");
-    // At once: other things ask for a frame later (the check, the caret's blink), which would do too.
+    // At once: other things ask for a frame later (the caret's blink), which would do too.
     let soonest = Arc::new(std::sync::Mutex::new(std::time::Duration::MAX));
     let asked = soonest.clone();
     t.ctx.set_request_repaint_callback(move |info| {
@@ -975,6 +976,7 @@ fn nothing_the_box_does_splits_a_windows_line_end() {
     let mut t = Typing::new("a;\r\nb;");
     t.select(0..0);
     t.frame(vec![press(egui::Key::End, none), egui::Event::Text("x".into())]);
+    t.settle();
     assert_eq!(t.text, "a;x\r\nb;");
     assert_eq!(t.caret(), Some(3..3), "after what was typed");
     // Typing with the caret left inside by End, in the frame the caret is moved off.
@@ -1041,4 +1043,64 @@ fn a_very_long_script_is_coloured_only_so_far() {
     let last = job.sections.last().expect("a section");
     assert_eq!(last.format.color, palette().text, "the rest is plain");
     assert_eq!(last.byte_range.end.0, source.len());
+}
+
+/// The keys that move the caret go alone in their frame, so whatever comes next finds it moved off the
+/// line end. In one frame, End left it inside for the edit behind it.
+#[test]
+fn an_edit_behind_a_key_that_moves_the_caret_keeps_a_windows_line_end_whole() {
+    let none = egui::Modifiers::NONE;
+    let end = press(egui::Key::End, none);
+    assert_eq!(after_one_frame("a;\r\nb;", 0, vec![end.clone(), press(egui::Key::Delete, none)]), "a;b;");
+    assert_eq!(after_one_frame("a;\r\nb;", 0, vec![end.clone(), press(egui::Key::Backspace, none)]), "a\r\nb;");
+    assert_eq!(after_one_frame("a;\r\nb;", 0, vec![end.clone(), egui::Event::Text("x".into())]), "a;x\r\nb;");
+    let right = press(egui::Key::ArrowRight, egui::Modifiers::SHIFT);
+    assert_eq!(after_one_frame("a;\r\nb;", 0, vec![end, right.clone(), right, egui::Event::Text("Q".into())]), "a;Q;");
+}
+
+/// Replacing what sits between a `\r` and a `\n` leaves two line ends: the text goes where the selection
+/// was. Moved before the `\r` as if the caret had strayed into one line end, it joined the two.
+#[test]
+fn replacing_what_is_between_two_line_ends_keeps_them_both() {
+    let mut t = Typing::new("a\rX\nb");
+    t.select(2..3);
+    t.typed("Y");
+    assert_eq!(t.text, "a\rY\nb");
+    let mut t = Typing::new("a\rX\nb");
+    t.select(2..3);
+    t.frame(vec![egui::Event::Ime(egui::ImeEvent::Preedit { text: "か".into(), active_range_chars: None })]);
+    t.frame(vec![egui::Event::Ime(egui::ImeEvent::Commit("か".into()))]);
+    t.settle();
+    assert_eq!(t.text, "a\rか\nb", "an input method once doubled it");
+}
+
+/// A delete to the end of a line, at its end, takes the line end, as it does at a `\n`.
+#[test]
+fn delete_to_the_end_of_a_line_at_its_end_joins_the_next() {
+    for (script, joined) in [("ab\r\ncd", "abcd"), ("ab\ncd", "abcd")] {
+        let mut t = Typing::new(script);
+        t.select(2..2);
+        t.key(egui::Key::K, egui::Modifiers::CTRL);
+        assert_eq!(t.text, joined, "{script:?}");
+    }
+}
+
+/// Cut with nothing selected, or a shortcut that doesn't edit, must not move a caret Undo put back.
+#[test]
+fn what_does_not_edit_leaves_the_redo() {
+    for quiet in [egui::Event::Cut, press(egui::Key::B, egui::Modifiers::COMMAND)] {
+        let mut t = Typing::new("a;\r\nb;");
+        t.select(0..0);
+        t.key(egui::Key::End, egui::Modifiers::NONE);
+        t.idle();
+        t.typed("x");
+        t.idle();
+        t.key(egui::Key::Z, egui::Modifiers::COMMAND);
+        t.settle();
+        assert_eq!(t.caret(), Some(3..3), "Undo put the caret back inside the line end");
+        t.frame(vec![quiet.clone()]);
+        t.key(egui::Key::Z, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
+        t.settle();
+        assert_eq!(t.text, "a;x\r\nb;", "{quiet:?}: Redo still works");
+    }
 }

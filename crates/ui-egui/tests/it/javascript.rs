@@ -436,6 +436,11 @@ fn the_action_box_is_sized_by_the_room_the_dialog_really_has() {
     let corner = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().right_bottom();
     drag_the_corner(&mut h, corner + egui::vec2(-3.0, 80.0));
     assert!(height(&h) > shorter + 40.0, "{shorter} then {}", height(&h));
+    // Dragged as short as it goes, the text area is no taller than the box: its own four rows would
+    // scroll a box this short for nothing.
+    let corner = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().right_bottom();
+    drag_the_corner(&mut h, egui::pos2(corner.x - 3.0, 100.0));
+    assert!(height(&h) < 70.0, "as short as the box: {}", height(&h));
 }
 
 /// Field Properties keeps its height as tabs are picked, so a shorter one doesn't move the tabs out
@@ -455,6 +460,15 @@ fn the_tabs_of_field_properties_stay_put() {
     for tab in [T::General, T::Position, T::Format, T::Validate, T::Calculate] {
         let y = tabs_at(&mut h, tab);
         assert!((y - tallest).abs() < 1.0, "{tab:?}: the tabs moved from {tallest} to {y}");
+    }
+    // In a window too short for the tallest tab they move no more than its room for the box does.
+    let mut h = sized(egui::vec2(1200.0, 600.0));
+    h.state_mut().open_field_props("greeting", 0);
+    h.run_steps(6);
+    let tallest = tabs_at(&mut h, T::Actions);
+    for tab in [T::General, T::Position, T::Format] {
+        let y = tabs_at(&mut h, tab);
+        assert!((y - tallest).abs() < 25.0, "{tab:?}: in a short window the tabs moved from {tallest} to {y}");
     }
 }
 

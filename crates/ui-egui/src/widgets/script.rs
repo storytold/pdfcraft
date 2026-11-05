@@ -22,10 +22,11 @@ const INDENT_KEY: &str = "script-indent";
 /// The tallest the box can be dragged, in points.
 const MAX_HEIGHT: f32 = 900.0;
 
-/// Most tokens coloured, about 150 KiB of ordinary code; the rest of a longer script is plain. Each
-/// is a section the layout shapes on its own: at the limit's 262,144 tokens, the first layout took
-/// 1.6 s and every keystroke most of a second, on a script of `1,1,1,…`. This bounds that to about
-/// a quarter of a second.
+/// Most tokens coloured; the rest of a longer script is plain. Ordinary code doesn't get there: a
+/// form script at the 256 KiB limit is some 13,000 tokens, and minified some 30,000. A script of
+/// `1,1,1,…` is 131,072, with as many plain pieces between them, and each is a section the layout
+/// shapes on its own: its first layout took 1.6 s, and every keystroke most of a second. This bounds
+/// that to about a quarter of a second.
 const MAX_COLOURED_TOKENS: usize = 40_000;
 
 /// Longest script the box shows or can make: the engine's own limit, past which it won't run anyway.
@@ -57,9 +58,9 @@ struct Colours {
 /// for its length, and the note ([`too_long`]) is only ever for text the box did not type: a script a
 /// document held, or a value typed for another kind of action before switching to a script.
 ///
-/// It also keeps a `\r\n` whole, wherever egui puts its caret or ends a delete: a lone `\r` would
-/// be a line end of its own. [`snap_off_crlf`] moves the caret before an edit, but not one the same
-/// frame moved there first, or a paste that brings its own place, or a delete to the end of a line.
+/// It also keeps a `\r\n` whole where [`snap_off_crlf`] can't: a lone `\r` would be a line end of its
+/// own. That moves the caret before an edit, but a paste can bring its own place, a click and typing
+/// can share a frame, and a delete to the end of a line ends between the two.
 struct Bounded<'a> {
     text: &'a mut String,
     refused: &'a mut bool,
@@ -79,7 +80,10 @@ impl egui::TextBuffer for Bounded<'_> {
     fn insert_text(&mut self, text: &str, char_index: CharIndex) -> usize {
         let selection = self.selection.take();
         if self.text.len().saturating_add(text.len()) <= MAX_EDITED_BYTES {
-            if edit::inside_crlf(self.text, char_index.0) {
+            // Over a selection the two can have just come together (`\r«x»\n`), and the text goes
+            // where the selection was, between them, as two line ends they were.
+            let replacing = selection.as_ref().is_some_and(|(at, deleted)| *at == char_index && !deleted.is_empty());
+            if !replacing && edit::inside_crlf(self.text, char_index.0) {
                 // Before the `\r`, and the caret, which egui moves on by what was added, after the text.
                 return self.text.insert_text(text, CharIndex(char_index.0.saturating_sub(1))).saturating_sub(1);
             }
@@ -91,24 +95,24 @@ impl egui::TextBuffer for Bounded<'_> {
     }
 
     fn delete_char_range(&mut self, char_range: Range<CharIndex>) {
-        let inside = edit::inside_crlf(self.text, char_range.end.0);
-        let end = if inside { CharIndex(char_range.end.0.saturating_sub(1)) } else { char_range.end };
-        self.text.delete_char_range(char_range.start..end.max(char_range.start));
+        let Range { start, end } = char_range;
+        if start >= end {
+            return;
+        }
+        let end = match edit::inside_crlf(self.text, end.0) {
+            false => end,
+            // All there is to delete to the end of this line is its line end: the lines join, as they do
+            // at a `\n`.
+            true if end.0.saturating_sub(1) == start.0 => CharIndex(end.0.saturating_add(1)),
+            true => CharIndex(end.0.saturating_sub(1)),
+        };
+        self.text.delete_char_range(start..end);
     }
 
     fn delete_selected(&mut self, cursor_range: &CCursorRange) -> CCursor {
         let [min, max] = cursor_range.sorted_cursors();
         self.selection = Some((min.index, self.char_range(min.index..max.index).to_owned()));
         self.delete_selected_ccursor_range([min, max])
-    }
-
-    /// Undo and Redo: all or nothing, unlike the default, which clears before it adds.
-    fn replace_with(&mut self, text: &str) {
-        if text.len() <= MAX_EDITED_BYTES {
-            self.text.replace_with(text);
-        } else {
-            *self.refused = true;
-        }
     }
 
     fn type_id(&self) -> std::any::TypeId {
@@ -303,29 +307,29 @@ fn editor_keys(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> Keys {
     if ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(pasted) if edit::has_indented_line(pasted)))) {
         ui.data_mut(|d| d.remove_temp::<String>(indent_id));
     }
-    // On anything that edits or copies there (typing, Backspace or Delete would split the line
-    // end, and Copy take half of it), but not on the keys that only move: moved back every frame,
-    // Right could never cross a line end. Nor on Undo and Redo, which go by whether the caret is
-    // still where the undo point has it: moved, Undo would go back to that same point every time.
+    // On what edits or copies there (typing, Backspace or Delete would split the line end, and Copy
+    // take half of it), and on nothing else. Not on the keys that only move: moved back every frame,
+    // Right could never cross a line end. Not on Undo and Redo, which go by whether the caret is
+    // still where the undo point has it: moved, Undo would go back to that same point every time. And
+    // not on a Cut or Copy with nothing selected, or a shortcut that isn't for editing: moving the
+    // caret for those would lose the Redo that Undo left.
     let selected = selection(ui.ctx(), id).is_some_and(|s| !s.is_empty());
     let editing = ui.input(|i| {
         i.events.iter().any(|e| match e {
-            egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut | egui::Event::Ime(_) => true,
-            // A caret copies nothing, and moving it would lose the Redo that Undo left.
-            egui::Event::Copy => selected,
-            egui::Event::Key { key, pressed: true, modifiers, .. } => {
-                !undo_or_redo(*key, *modifiers)
-                    && !matches!(
-                        key,
-                        egui::Key::ArrowLeft
-                            | egui::Key::ArrowRight
-                            | egui::Key::ArrowUp
-                            | egui::Key::ArrowDown
-                            | egui::Key::Home
-                            | egui::Key::End
-                            | egui::Key::PageUp
-                            | egui::Key::PageDown
-                    )
+            egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Ime(_) => true,
+            egui::Event::Cut | egui::Event::Copy => selected,
+            egui::Event::Key { key, pressed: true, .. } => {
+                matches!(
+                    key,
+                    egui::Key::Enter
+                        | egui::Key::Tab
+                        | egui::Key::Backspace
+                        | egui::Key::Delete
+                        | egui::Key::H
+                        | egui::Key::K
+                        | egui::Key::U
+                        | egui::Key::W
+                )
             }
             _ => false,
         })
@@ -410,7 +414,7 @@ fn acts_on_text(event: &egui::Event) -> bool {
 }
 
 /// Whether the editor takes `event` out before the box sees the frame's events, or it needs to be
-/// alone in its frame: Undo and Redo, for what [`snap_off_crlf`] does on the others.
+/// alone in its frame: Undo and Redo, which [`snap_off_crlf`] must not come near.
 fn taken_out_of_turn(event: &egui::Event) -> bool {
     match event {
         egui::Event::Key { key, pressed: true, modifiers, .. } => matches!(key, egui::Key::Enter | egui::Key::Tab) || undo_or_redo(*key, *modifiers),
@@ -418,11 +422,31 @@ fn taken_out_of_turn(event: &egui::Event) -> bool {
     }
 }
 
+/// Whether `event` moves the caret and does nothing else, which can leave it inside a line end.
+fn moves_caret(event: &egui::Event) -> bool {
+    matches!(
+        event,
+        egui::Event::Key {
+            key: egui::Key::ArrowLeft
+                | egui::Key::ArrowRight
+                | egui::Key::ArrowUp
+                | egui::Key::ArrowDown
+                | egui::Key::Home
+                | egui::Key::End
+                | egui::Key::PageUp
+                | egui::Key::PageDown,
+            pressed: true,
+            ..
+        }
+    )
+}
+
 /// Keeps the order of a frame's keys when frames are slow and several come at once. The editor takes
 /// its keys before the box sees the frame's events, so one that comes after an edit would act first,
 /// and two of them would count as one. This leaves in `events` what can go in this frame, after
 /// `held` from the last one, and returns the rest for the next: a key the editor takes goes alone,
-/// with only what doesn't touch the text. Everything else, a typed word above all, stays together
+/// with only what doesn't touch the text, and an edit waits behind keys that move the caret, so that
+/// [`snap_off_crlf`] sees where they left it. Everything else, a typed word above all, stays together
 /// in its order.
 ///
 /// A key held down that repeats is dropped rather than held: frames too slow for it would have it
@@ -430,11 +454,14 @@ fn taken_out_of_turn(event: &egui::Event) -> bool {
 fn hold_until_their_turn(events: &mut Vec<egui::Event>, mut held: Vec<egui::Event>) -> Vec<egui::Event> {
     held.append(events);
     let wait_from = {
-        let mut acting = held.iter().enumerate().filter(|(_, e)| acts_on_text(e));
-        match acting.next() {
-            Some((_, first)) if taken_out_of_turn(first) => acting.next().map(|(at, _)| at),
-            _ => acting.find(|(_, e)| taken_out_of_turn(e)).map(|(at, _)| at),
-        }
+        let (mut first, mut last_took, mut moved) = (true, false, false);
+        held.iter().enumerate().filter(|(_, e)| acts_on_text(e)).find_map(|(at, e)| {
+            let waits = last_took || (!first && taken_out_of_turn(e)) || (moved && !moves_caret(e));
+            last_took = first && taken_out_of_turn(e);
+            moved |= moves_caret(e);
+            first = false;
+            waits.then_some(at)
+        })
     };
     let mut later = Vec::new();
     for (at, event) in held.into_iter().enumerate() {
