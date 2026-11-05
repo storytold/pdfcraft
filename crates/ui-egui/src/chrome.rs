@@ -485,16 +485,23 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                // The menus, unless the native macOS menu bar has them.
+                // The menus, unless the native macOS menu bar has them: collapsed into a single
+                // "Menu" button that opens them as a popup.
                 if app.native_menu.is_none() {
-                    app.menu_bar_ui(ui);
-                    ui.add_space(6.0);
+                    let btn = widgets::ghost_button_sized(ui, "panel-left", tl!("Menu"), 48.0);
+                    ui.ctx().accesskit_node_builder(btn.id, |n| {
+                        n.set_role(egui::accesskit::Role::Button);
+                        n.set_label(tl!("Menu"));
+                        n.set_has_popup(egui::accesskit::HasPopup::Menu);
+                    });
+                    egui::Popup::menu(&btn).show(|ui| app.menu_popup_ui(ui));
+                    ui.add_space(4.0);
                     ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
-                    ui.add_space(10.0);
+                    ui.add_space(8.0);
                 }
-                // Acrobat's mode bar has no Read tab: reading is what the viewer does with no tool
-                // in use. Read mode (the panes hidden) stays a View command and a default workspace.
-                for (mode, label) in [(Mode::AllTools, "All tools"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")] {
+                for (mode, label) in
+                    [(Mode::AllTools, "All tools"), (Mode::Read, "Read"), (Mode::Edit, "Edit"), (Mode::Convert, "Convert"), (Mode::Sign, "E-Sign")]
+                {
                     if widgets::mode_tab(ui, tl!(label), app.mode == mode).clicked() {
                         app.switch_mode(mode, true);
                     }

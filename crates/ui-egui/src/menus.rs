@@ -1,5 +1,5 @@
 //! The menus: one definition ([`PdfCraftApp::menu_bar`]) for the native macOS menu bar and the
-//! in-window bar on Windows, Linux and the web, laid out for each platform by craft-menu.
+//! `Menu` button popup on Windows, Linux and the web, laid out for each platform by craft-menu.
 //!
 //! Items run registry commands (`pdfcraft_engine::commands`) by id, with the registry's label and
 //! shortcut, so a menu click and its shortcut run the same command. A few items have menu-only
@@ -7,10 +7,8 @@
 //! keys, the recent files and the open documents. [`PdfCraftApp::run_menu_command`] runs every
 //! one of them, once per click, whichever bar it came from.
 
-use craft_keymap::{Key, Mods};
-use craft_menu::{
-    Builtin, Chord, CommandRef, Document, Gate, Item, ItemRole, ItemState, Labeled, LayoutOptions, Menu, MenuBar, MenuRole, Node, Target,
-};
+use craft_keymap::{Key, Mods, Platform};
+use craft_menu::{Builtin, Chord, CommandRef, Document, Gate, Item, ItemRole, ItemState, LayoutOptions, Menu, MenuBar, MenuRole, Node, Target};
 use pdfcraft_engine::catalog::{Availability, TOOL_GROUPS};
 use pdfcraft_engine::commands::{self, Shortcut};
 
@@ -22,11 +20,6 @@ pub(super) mod tab_context;
 
 /// The app's name in the menus the layouts write (About, Hide, Quit).
 pub(crate) const APP_NAME: &str = "PdfCraft";
-
-/// The top bar's width after the menus: the mode tabs, the search box and the buttons.
-const ROW_AFTER_MENUS: f32 = 720.0;
-/// The narrowest the menu bar gets: one "Menu" title.
-const MIN_MENUS_WIDTH: f32 = 80.0;
 
 /// Menu-only commands. The registry's commands keep their own ids.
 pub(crate) const CUT: &str = "edit.cut";
@@ -77,30 +70,6 @@ const PANELS: &[(RightPanel, &str, &str)] = &[
     (RightPanel::Tags, "tags", "Tags"),
     (RightPanel::Search, "search", "Search"),
     (RightPanel::Compare, "compare", "Compare"),
-];
-
-/// The English titles of the menus and submenus, for the bar's mnemonics in languages whose
-/// labels have no ASCII letter.
-const TITLES: &[&str] = &[
-    "File",
-    "Edit",
-    "View",
-    "Pages",
-    "Sign",
-    "Window",
-    "Help",
-    "Open Recent",
-    "Create",
-    "Export",
-    "Protect",
-    "Zoom",
-    "Rotate view",
-    "Page navigation",
-    "Page display",
-    "Side panels",
-    "Display theme",
-    "Tools",
-    "Fill & Sign",
 ];
 
 /// Separator.
@@ -235,24 +204,6 @@ pub(crate) fn chord(s: Shortcut) -> Option<Chord> {
 
 fn extra(id: &str) -> Option<&'static (&'static str, &'static str, Option<Shortcut>)> {
     EXTRA.iter().find(|(e, ..)| *e == id)
-}
-
-/// The English label of an item's command, for the bar's mnemonics.
-fn english_label(command: &CommandRef) -> Option<String> {
-    if let Some(spec) = commands::command(&command.id) {
-        return Some(spec.label.to_owned());
-    }
-    if let Some((_, label, _)) = extra(&command.id) {
-        return Some((*label).to_owned());
-    }
-    FILL.iter().find(|(id, _)| *id == command.id).map(|(_, label)| (*label).to_owned())
-}
-
-fn english(labeled: Labeled<'_>) -> Option<String> {
-    match labeled {
-        Labeled::Command(command) => english_label(command),
-        Labeled::Title(shown) => TITLES.iter().find(|t| tl!(t) == shown).map(|t| (*t).to_owned()),
-    }
 }
 
 fn translate(english: &'static str) -> String {
@@ -569,22 +520,28 @@ impl PdfCraftApp {
         ctx.request_repaint();
     }
 
-    /// The menu bar drawn in the window (Windows, Linux, the web, and macOS when the native one
-    /// couldn't be installed), where the top bar starts. Runs the commands chosen.
-    pub(crate) fn menu_bar_ui(&mut self, ui: &mut egui::Ui) {
+    /// The menus as a vertical popup: each top-level menu is a submenu button, with its items and
+    /// submenus rendered recursively. Used by the "Menu" button in the mode bar.
+    pub(crate) fn menu_popup_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let bar = craft_menu::layout(&self.menu_bar(&ctx), Target::current(), &layout_options()).bar;
         let gate = self.menu_gate(&ctx);
-        // The mode tabs, search and buttons follow the bar in the same row: it takes its titles'
-        // width, less when the row is short, where the menus that don't fit move into its "⋯".
-        let fit = (ui.available_width() - ROW_AFTER_MENUS).max(MIN_MENUS_WIDTH);
-        let chosen = craft_menu::MenuBarUi::new(&bar)
-            .gate(gate)
-            .label(&translate)
-            .english(&english)
-            .id(egui::Id::unique("pdfcraft-menu-bar"))
-            .shrink_to_fit(fit)
-            .show(ui);
+        let mut chosen = Vec::new();
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+        for menu in &bar.menus {
+            let resp = ui.menu_button(&menu.title, |ui| {
+                ui.set_min_width(220.0);
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                    render_nodes(ui, &menu.children, &gate, &mut chosen);
+                });
+            });
+            ctx.accesskit_node_builder(resp.response.id, |n| {
+                n.set_role(egui::accesskit::Role::MenuItem);
+                n.set_label(&menu.title);
+                n.set_has_popup(egui::accesskit::HasPopup::Menu);
+            });
+        }
         for command in chosen {
             self.run_menu_command(&ctx, &command);
         }
@@ -623,6 +580,90 @@ impl PdfCraftApp {
             for clash in native.sync(layout) {
                 log::info!("menu shortcut {:?} kept by {} over {} ({})", clash.shortcut, clash.command.id, clash.system, clash.resolution);
             }
+        }
+    }
+}
+
+fn any_enabled(nodes: &[craft_menu::Node], gate: &craft_menu::Gate) -> bool {
+    nodes.iter().any(|node| match node {
+        craft_menu::Node::Item(item) => item.enabled && gate.allows(item),
+        craft_menu::Node::Submenu { children, .. } => any_enabled(children, gate),
+        _ => false,
+    })
+}
+
+/// Render a slice of menu `Node`s into `ui` for the "Menu" button popup, collecting clicked
+/// commands. `Standard` items (AppKit-only) are skipped.
+fn render_nodes(ui: &mut egui::Ui, nodes: &[craft_menu::Node], gate: &craft_menu::Gate, chosen: &mut Vec<CommandRef>) {
+    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+    let ctx = ui.ctx().clone();
+    for node in nodes {
+        match node {
+            craft_menu::Node::Separator => {
+                ui.separator();
+            }
+            craft_menu::Node::Item(item) => {
+                let enabled = item.enabled && gate.allows(item);
+                let role = match item.kind {
+                    craft_menu::ItemKind::Plain => egui::accesskit::Role::MenuItem,
+                    craft_menu::ItemKind::Check(_) => egui::accesskit::Role::MenuItemCheckBox,
+                    craft_menu::ItemKind::Radio(_) => egui::accesskit::Role::MenuItemRadio,
+                };
+                let mark = match item.kind {
+                    craft_menu::ItemKind::Check(true) | craft_menu::ItemKind::Radio(true) => "\u{2713} ",
+                    craft_menu::ItemKind::Check(false) | craft_menu::ItemKind::Radio(false) => "  ",
+                    craft_menu::ItemKind::Plain => "",
+                };
+                let mut button = egui::Button::new(format!("{mark}{}", item.label));
+                let shortcut_str = item.shortcut.as_ref().map(|c| c.display(Platform::current()));
+                if let Some(ref s) = shortcut_str {
+                    button = button.shortcut_text(s.clone());
+                }
+                let resp = ui.add_enabled(enabled, button);
+                ctx.accesskit_node_builder(resp.id, |n| {
+                    n.set_role(role);
+                    n.set_label(&item.label);
+                    if !enabled {
+                        n.set_disabled();
+                    }
+                    if let Some(ref s) = shortcut_str {
+                        n.set_value(s.as_str());
+                    }
+                    match item.kind {
+                        craft_menu::ItemKind::Check(on) | craft_menu::ItemKind::Radio(on) => {
+                            n.set_toggled(if on { egui::accesskit::Toggled::True } else { egui::accesskit::Toggled::False });
+                        }
+                        _ => {}
+                    }
+                });
+                if resp.clicked() {
+                    chosen.push(item.command.clone());
+                    ui.close();
+                }
+            }
+            craft_menu::Node::Submenu { label, children, .. } => {
+                let enabled = any_enabled(children, gate);
+                let resp = ui
+                    .add_enabled_ui(enabled, |ui| {
+                        ui.menu_button(label, |ui| {
+                            ui.set_min_width(220.0);
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                            egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                                render_nodes(ui, children, gate, chosen);
+                            });
+                        })
+                    })
+                    .inner;
+                ctx.accesskit_node_builder(resp.response.id, |n| {
+                    n.set_role(egui::accesskit::Role::MenuItem);
+                    n.set_label(label);
+                    n.set_has_popup(egui::accesskit::HasPopup::Menu);
+                    if !enabled {
+                        n.set_disabled();
+                    }
+                });
+            }
+            craft_menu::Node::Standard { .. } => {}
         }
     }
 }

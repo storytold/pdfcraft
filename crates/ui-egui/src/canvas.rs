@@ -3480,9 +3480,8 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     if copy_selected {
         app.execute("edit.copy");
     }
-    // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
-    // the quick tools come back with the window.
-    if app.mode != crate::Mode::Read && !app.full_screen {
+    // Full screen is the page and nothing else (#1459). The unified toolbar stays visible in Read mode.
+    if !app.full_screen {
         // The page nearest the left edge, whose margin the bar sits in.
         let page_left = app.views[index].screen_rects.iter().map(|(_, r)| r.left()).reduce(f32::min);
         quick_bar(app, avail, page_left, ui);
