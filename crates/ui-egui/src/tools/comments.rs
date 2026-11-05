@@ -39,7 +39,7 @@ pub use geometry::{drawn_text_box_rect, text_box_rect};
 use input::hover_tip;
 pub(crate) use input::{anchor, context, context_hit, describe, hit, keys, moving_on, nudge_keys, page_after_text, page_input};
 pub use menu::{CanvasAction, fill_picker, recent_custom_colours, remember_custom_colour, status_badge, swatch_grid};
-pub(crate) use menu::{MenuRights, attachment_items, context_menu, quick_bar_colour, quick_bar_controls};
+pub(crate) use menu::{MenuRights, attachment_items, border_colour_button, context_menu, quick_bar_colour, quick_bar_controls};
 #[cfg(test)]
 use menu::{RECENT_CUSTOM, same_colour};
 pub(crate) use paint::paint_page;
@@ -247,6 +247,12 @@ impl CommentTool {
         if matches!(self, Self::TextBox | Self::Callout) { 0.0 } else { 0.5 }
     }
 
+    /// Whether the border-colour control applies to this tool: text boxes and callouts, whose
+    /// border takes the text colour unless it has its own.
+    pub fn has_border_color(self) -> bool {
+        matches!(self, Self::TextBox | Self::Callout)
+    }
+
     /// Whether the fill-colour control applies to this tool.
     pub fn has_fill(self) -> bool {
         matches!(self, Self::Rectangle | Self::Oval | Self::Polygon | Self::Cloud | Self::TextBox | Self::Callout)
@@ -369,6 +375,14 @@ impl CommentPrefs {
         }
     }
 
+    /// The border's own colour for new text boxes and callouts (`None`: the text colour).
+    pub fn set_border_color(&mut self, tool: CommentTool, color: Option<Rgb>) {
+        if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
+            s.border_color =
+                if tool.has_border_color() { color.filter(|c| c.iter().all(|x| x.is_finite())).map(|c| c.map(|x| x.clamp(0.0, 1.0))) } else { None };
+        }
+    }
+
     pub fn set_style(&mut self, tool: CommentTool, style: Style) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
             *s = style;
@@ -398,6 +412,17 @@ pub(crate) fn tool_for_default(a: &Annotation, endings: Option<&[LineEnding]>) -
 
 fn arrow_ending(ending: LineEnding) -> bool {
     matches!(ending, LineEnding::OpenArrow | LineEnding::ClosedArrow | LineEnding::ROpenArrow | LineEnding::RClosedArrow)
+}
+
+/// Typed text (Fill & Sign's, or a typewriter's): no comment tool makes it, so Make Current
+/// Properties Default sets what Fill & Sign gives new text.
+pub(crate) fn typed_text(a: &Annotation) -> bool {
+    a.subtype == "FreeText" && a.intent.as_deref() == Some("FreeTextTypeWriter")
+}
+
+/// Whether Make Current Properties Default has defaults to set from `a`.
+pub(crate) fn defaultable(a: &Annotation) -> bool {
+    tool_for(a).is_some() || typed_text(a)
 }
 
 /// The tool that makes comments like `a` (for Make Current Properties Default).
