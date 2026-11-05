@@ -4,7 +4,8 @@
 //! was JBIG2, whichever is smallest; the original object is untouched (other pages may use it).
 //! CCITT fax and JBIG2 images decode through `ImageBudget::decode`, but for Group 3 on
 //! bytes, which PdfCraft's renderer may draw as other rows, and a JBIG2 page of other rows than the
-//! image's. Images whose codec PdfCraft can't decode (DCT, JPX), and those, return `None`, and the
+//! image's. DCT (JPEG) images in 8-bit gray and RGB layouts are decoded so unmarked samples
+//! remain; other codecs PdfCraft can't decode (JPX, and the other DCT layouts) return `None`, and the
 //! caller removes the whole image instead; that is fail-closed.
 
 use pdfcraft_content::{Matrix, overlaps};
@@ -13,6 +14,84 @@ use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
 /// Most pixels an image may have to be cleared in place (larger ones are removed), or to be stored
 /// again without shared `/JBIG2Globals` (see [`without_globals`]).
 const MAX_PIXELS: u64 = pdfcraft_cos::MAX_REDACTED_IMAGE_PIXELS;
+
+/// Decode a DCT (JPEG) image's samples for clearing. `None` when the JPEG does not decode to the
+/// size and component count its dictionary declares (the caller then removes the image, as for
+/// any other undecodable codec).
+fn jpeg_samples(raw: &[u8], ncomp: usize, w: usize, h: usize) -> Option<Vec<u8>> {
+    if jpeg_source_components(raw)? != ncomp {
+        return None;
+    }
+    let mut reader = ::image::ImageReader::with_format(std::io::Cursor::new(raw), ::image::ImageFormat::Jpeg);
+    let mut limits = ::image::Limits::default();
+    // Match the PDF's checked raster dimensions before decoding, so a mismatched JPEG header
+    // cannot make the decoder allocate for a larger image than this redaction path permits.
+    limits.max_image_width = Some(u32::try_from(w).ok()?);
+    limits.max_image_height = Some(u32::try_from(h).ok()?);
+    reader.limits(limits);
+    let img = reader.decode().ok()?;
+    if (img.width() as usize, img.height() as usize) != (w, h) {
+        return None;
+    }
+    Some(match (ncomp, img.color()) {
+        (1, ::image::ColorType::L8) => img.into_luma8().into_raw(),
+        (3, ::image::ColorType::Rgb8) => img.into_rgb8().into_raw(),
+        _ => return None,
+    })
+}
+
+/// Read the JPEG frame's encoded component count before the image decoder can convert its output.
+fn jpeg_source_components(raw: &[u8]) -> Option<usize> {
+    if raw.get(..2)? != b"\xff\xd8" {
+        return None;
+    }
+    let mut pos = 2;
+    while pos < raw.len() {
+        if raw.get(pos).copied()? != 0xff {
+            return None;
+        }
+        while raw.get(pos).copied() == Some(0xff) {
+            pos += 1;
+        }
+        let marker = raw.get(pos).copied()?;
+        pos += 1;
+        match marker {
+            // Standalone markers have no length field.
+            0x01 | 0xd0..=0xd7 => continue,
+            // The frame header must precede scan data and the end marker.
+            0x00 | 0xda | 0xd9 => return None,
+            _ => {}
+        }
+        let len = usize::from(u16::from_be_bytes([*raw.get(pos)?, *raw.get(pos + 1)?]));
+        if len < 2 {
+            return None;
+        }
+        let end = pos.checked_add(len)?;
+        if end > raw.len() {
+            return None;
+        }
+        if matches!(marker, 0xc0..=0xcf) && !matches!(marker, 0xc4 | 0xc8 | 0xcc) {
+            let ncomp = usize::from(*raw.get(pos + 7)?);
+            if ncomp == 0 || len != 8usize.checked_add(ncomp.checked_mul(3)?)? {
+                return None;
+            }
+            return Some(ncomp);
+        }
+        pos = end;
+    }
+    None
+}
+
+/// The component count a DCT image can be decoded with: its own colour space, and only the two
+/// raw device spaces. An Indexed or ICCBased JPEG is removed whole like any other layout the
+/// redaction path does not decode (#2246).
+fn dct_components(doc: &Document, s: &Stream) -> Option<usize> {
+    match &*doc.resolve(s.dict.get(b"ColorSpace")?) {
+        Object::Name(name) if matches!(name.as_slice(), b"DeviceGray" | b"G") => Some(1),
+        Object::Name(name) if matches!(name.as_slice(), b"DeviceRGB" | b"RGB") => Some(3),
+        _ => None,
+    }
+}
 
 fn components(doc: &Document, s: &Stream) -> Option<usize> {
     let cs = doc.resolve(s.dict.get(b"ColorSpace")?);
@@ -44,11 +123,11 @@ pub(crate) fn clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     decode_and_clear(doc, s, ctm, rects, budget).ok_or(())
 }
 
-fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], budget: &mut ImageBudget) -> Option<Option<Stream>> {
-    // Separate masks can retain the original image data.
-    if s.dict.contains(b"SMask") || s.dict.contains(b"Mask") {
-        return None;
-    }
+/// What the stream's filter chain says about the codecs this path can clear. `None` when the
+/// image cannot be decoded at all, which the caller answers by removing it whole. A fax or JBIG2
+/// codec must be the last filter; a DCT codec must be the only one, since its decoder reads the
+/// encoded bytes itself.
+fn filters(s: &Stream) -> Option<(bool, bool, bool)> {
     let supported = |n: &[u8]| {
         matches!(
             n,
@@ -64,21 +143,28 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     // `/Crypt` was undone when the object was loaded (ISO 32000-2 §7.4.10), and decoding leaves it
     // out wherever it stands.
     let crypt = |f: &Object| f.as_name() == Some(b"Crypt".as_slice());
-    let (ok, is_fax, is_jbig2) = match s.dict.get(b"Filter") {
-        None => (true, false, false),
-        Some(f @ Object::Name(_)) => (readable(f) || crypt(f) || fax(f) || jbig2(f), fax(f), jbig2(f)),
+    let dct = |f: &Object| f.as_name().is_some_and(|n| matches!(n, b"DCTDecode" | b"DCT"));
+    match s.dict.get(b"Filter") {
+        None => Some((false, false, false)),
+        Some(f @ Object::Name(_)) => (readable(f) || crypt(f) || fax(f) || jbig2(f) || dct(f)).then_some((fax(f), jbig2(f), dct(f))),
         Some(Object::Array(a)) => {
             let chain: Vec<&Object> = a.iter().filter(|f| !crypt(f)).collect();
             match chain.split_last() {
-                Some((last, before)) if fax(last) || jbig2(last) => (before.iter().all(|f| readable(f)), fax(last), jbig2(last)),
-                _ => (chain.iter().all(|f| readable(f)), false, false),
+                Some((last, before)) if fax(last) || jbig2(last) => before.iter().all(|f| readable(f)).then_some((fax(last), jbig2(last), false)),
+                Some((last, _)) if dct(last) => (chain.len() == 1).then_some((false, false, true)),
+                _ => chain.iter().all(|f| readable(f)).then_some((false, false, false)),
             }
         }
-        _ => (false, false, false),
-    };
-    if !ok {
+        _ => None,
+    }
+}
+
+fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]], budget: &mut ImageBudget) -> Option<Option<Stream>> {
+    // Separate masks can retain the original image data.
+    if s.dict.contains(b"SMask") || s.dict.contains(b"Mask") {
         return None;
     }
+    let (is_fax, is_jbig2, is_dct) = filters(s)?;
     // Group 3 on bytes is removed whole for now. The decoder reads it by its end-of-line codes
     // when the data starts with one, but PdfCraft's renderer draws such rows (the fill ending
     // each code on a byte) as other rows, so the pixels a mark covers on screen needn't be the
@@ -93,6 +179,9 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     let (w, h) = (w as usize, h as usize);
     let mask = matches!(s.dict.get(b"ImageMask"), Some(Object::Bool(true)));
     let (ncomp, bpc) = if mask { (1, 1) } else { (components(doc, s)?, s.dict.int(b"BitsPerComponent")? as usize) };
+    // A JPEG is decoded only where the colour space names the device space the decoder produces;
+    // an Indexed or ICCBased JPEG keeps its bytes in another layout, so it is removed whole.
+    let ncomp = if is_dct { dct_components(doc, s)? } else { ncomp };
     // JBIG2 codes one-bit images of one component (ISO 32000-2 §7.4.7).
     if !matches!(bpc, 1 | 2 | 4 | 8 | 16) || (is_jbig2 && (ncomp, bpc) != (1, 1)) {
         return None;
@@ -119,7 +208,16 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     // alone would skip such a predictor, and the cleared bytes would then miss the covered pixels),
     // and refuses a JBIG2 page of another size than the image: the renderer draws the whole page
     // into the image, so the rows cleared wouldn't be the ones a mark covers on screen.
-    let mut data = budget.decode(doc, s, allowance).ok()?;
+    let mut data = if is_dct {
+        // The JPEG decoder reads the encoded bytes itself, so the PDF filter chain above it must
+        // be empty and only 8-bit gray and RGB layouts are decoded (#2246).
+        if bpc != 8 {
+            return None;
+        }
+        jpeg_samples(&s.raw, ncomp, w, h)?
+    } else {
+        budget.decode(doc, s, allowance).ok()?
+    };
     if data.len() < bytes {
         return None;
     }
