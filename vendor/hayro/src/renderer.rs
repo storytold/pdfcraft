@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::mem::size_of;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use vello_cpu::color::DynamicColor;
 use vello_cpu::color::palette::css::BLACK;
 use vello_cpu::color::{AlphaColor, PremulRgba8, Srgb};
@@ -779,6 +780,24 @@ enum PaintSetup {
 /// pass canvases, its tints, their RGB and the result); a larger group is drawn as before.
 const MAX_CMYK_GROUP_PIXELS: u64 = 1 << 24;
 
+#[derive(Clone)]
+struct BarcodeOverlay {
+    x: usize,
+    y: usize,
+    pixmap: Arc<Pixmap>,
+}
+struct BarcodeEntry {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+    overlays: Vec<BarcodeOverlay>,
+}
+#[derive(Default)]
+pub(crate) struct BarcodeCache {
+    entries: std::collections::VecDeque<BarcodeEntry>,
+    pixels: usize,
+}
+
 pub(crate) struct Renderer {
     pub(crate) ctx: RenderContext,
     /// PdfCraft patch: when set, solid text and line-art paint colours are remapped
@@ -803,6 +822,9 @@ pub(crate) struct Renderer {
     /// drawn for a preview, which may leave out tiny images, never reaches a final render.
     pub(crate) soft_mask_cache: HashMap<u128, Mask>,
     pub(crate) outline_cache: Rc<std::cell::RefCell<HashMap<u128, Rc<BezPath>>>>,
+    barcode_cache: Rc<std::cell::RefCell<BarcodeCache>>,
+    pub(crate) barcode_enabled: bool,
+    pub(crate) barcode_cancel: Option<Arc<AtomicBool>>,
     pub(crate) cur_mask: Option<Mask>,
     pub(crate) in_type3_glyph: bool,
     pub(crate) scaler: Scaler,
@@ -914,6 +936,9 @@ impl Renderer {
             inside_pattern: false,
             soft_mask_cache: HashMap::default(),
             outline_cache: cache.outline_cache.clone(),
+            barcode_cache: cache.barcode_cache.clone(),
+            barcode_enabled: true,
+            barcode_cancel: None,
             cur_mask: None,
             in_type3_glyph: false,
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
@@ -1020,6 +1045,9 @@ impl Renderer {
                 inside_pattern: false,
                 soft_mask_cache: HashMap::default(),
                 outline_cache: self.outline_cache.clone(),
+                barcode_cache: self.barcode_cache.clone(),
+                barcode_enabled: false,
+                barcode_cancel: self.barcode_cancel.clone(),
                 cur_mask: None,
                 in_type3_glyph: false,
                 scaler: self.scaler,
@@ -1216,6 +1244,256 @@ impl Renderer {
         Some((target_width, target_height))
     }
 
+    fn barcode_overlays(
+        &mut self,
+        image: &ImageData,
+        alpha: Option<&LumaData>,
+    ) -> Vec<BarcodeOverlay> {
+        let not_cancelled = AtomicBool::new(false);
+        let cancel = self.barcode_cancel.as_deref().unwrap_or(&not_cancelled);
+        if cancel.load(Ordering::Relaxed)
+            || self.inside_pattern
+            || self.in_annotations
+            || !self.barcode_enabled
+            || self.force_images_may_have_transparency()
+        {
+            return Vec::new();
+        }
+        let (width, height) = (image.width(), image.height());
+        let Some(pixels) = (width as usize).checked_mul(height as usize) else {
+            return Vec::new();
+        };
+        if width == 0 || height == 0 || width > 4096 || height > 4096 || pixels > 4_194_304 {
+            return Vec::new();
+        }
+        if let Some(a) = alpha
+            && (a.width != width
+                || a.height != height
+                || a.data.len() != pixels
+                || a.data.iter().any(|v| *v != 255))
+        {
+            return Vec::new();
+        }
+        let Some(bytes) = pixels.checked_mul(4) else {
+            return Vec::new();
+        };
+        let mut rgba = Vec::new();
+        if rgba.try_reserve_exact(bytes).is_err() {
+            return Vec::new();
+        }
+        match image {
+            ImageData::Luma(a) => rgba.extend(a.data.iter().flat_map(|v| [*v, *v, *v, 255])),
+            ImageData::Rgb(a) => rgba.extend(a.data.as_chunks::<3>().0.iter().flat_map(|[r,g,b]| [*r,*g,*b,255])),
+        }
+        if rgba.len() != bytes || cancel.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
+        let Ok(mut cache) = self.barcode_cache.try_borrow_mut() else {
+            return Vec::new();
+        };
+        if let Some(entry) = cache
+            .entries
+            .iter()
+            .find(|e| e.width == width && e.height == height && e.rgba == rgba)
+        {
+            return if cancel.load(Ordering::Relaxed) { Vec::new() } else { entry.overlays.clone() };
+        }
+        let detected = std::panic::catch_unwind(|| {
+            crate::barcode::detect(
+                width as usize,
+                height as usize,
+                &rgba,
+                None,
+                cancel,
+            )
+        });
+        // An interrupted scan is not a negative result for these source bytes. A later
+        // uncancelled render must be able to decode them, even when this scan returned an error.
+        if cancel.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
+        let regions = match detected {
+            Ok(Ok(regions)) => regions,
+            // A declined or panicked scan is a negative result for these exact source bytes.
+            // Keep it until FIFO eviction (at most sixteen entries / eight million source pixels),
+            // including deadline/work-limit failures. Resource admission never enters this cache.
+            _ => Vec::new(),
+        };
+        let mut overlays = Vec::new();
+        let mut crop_pixels = 0usize;
+        for region in regions {
+            if !region.pitch.is_finite() || region.pitch < 1.0 { return Vec::new(); }
+            let r = region.quiet;
+            let Some(total) = crop_pixels.checked_add(r.area()) else {
+                return Vec::new();
+            };
+            if total > pixels {
+                return Vec::new();
+            }
+            crop_pixels = total;
+            let (w, h) = (r.x1 - r.x0, r.y1 - r.y0);
+            let mut crop = Vec::new();
+            if crop.try_reserve_exact(w * h * 4).is_err() {
+                return Vec::new();
+            }
+            for y in r.y0..r.y1 {
+                let start = (y * width as usize + r.x0) * 4;
+                let Some(row) = rgba.get(start..start + w * 4) else {
+                    return Vec::new();
+                };
+                crop.extend_from_slice(row);
+            }
+            let pixmap = Pixmap::from_parts_with_opacity(
+                bytemuck::cast_vec(crop),
+                w as u16,
+                h as u16,
+                false,
+            );
+            overlays.push(BarcodeOverlay {
+                x: r.x0,
+                y: r.y0,
+                pixmap: Arc::new(pixmap),
+            });
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
+        // Document/worker-local and byte-exact keys: a hash collision can never reuse a region.
+        while cache.pixels + pixels > 8 * 1024 * 1024 || cache.entries.len() >= 16 {
+            let Some(old) = cache.entries.pop_front() else {
+                break;
+            };
+            cache.pixels = cache.pixels.saturating_sub(old.rgba.len() / 4);
+        }
+        cache.pixels += pixels;
+        cache.entries.push_back(BarcodeEntry {
+            width,
+            height,
+            rgba,
+            overlays: overlays.clone(),
+        });
+        overlays
+    }
+
+    /// Rasterize protected samples on the device grid using f64 source coordinates. This avoids
+    /// fractional nearest-sampler phase changing when the same image is drawn through a tile.
+    fn draw_barcode_overlay(
+        &mut self,
+        overlay: BarcodeOverlay,
+        transform: Affine,
+        used: &mut usize,
+    ) {
+        let local = transform * Affine::translate((overlay.x as f64, overlay.y as f64));
+        let inverse = local.inverse();
+        if !inverse.as_coeffs().iter().all(|v| v.is_finite()) {
+            return;
+        }
+        let (w, h) = (
+            usize::from(overlay.pixmap.width()),
+            usize::from(overlay.pixmap.height()),
+        );
+        let corners = [
+            local * Point::new(0.0, 0.0),
+            local * Point::new(w as f64, 0.0),
+            local * Point::new(0.0, h as f64),
+            local * Point::new(w as f64, h as f64),
+        ];
+        if corners.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) {
+            return;
+        }
+        // Admission uses the complete transformed region, including off-viewport pixels.
+        // Charging only its visible intersection made a tile protect a region that the full
+        // render declined. Charge before clipping, even when this region is wholly offscreen.
+        let full_width =
+            corners.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max).ceil() - corners.iter().map(|p| p.x).fold(f64::INFINITY, f64::min).floor();
+        let full_height =
+            corners.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max).ceil() - corners.iter().map(|p| p.y).fold(f64::INFINITY, f64::min).floor();
+        if !(0.0..=4_194_304.0).contains(&full_width) || !(0.0..=4_194_304.0).contains(&full_height) {
+            return;
+        }
+        let Some(total) = (full_width as usize).checked_mul(full_height as usize).and_then(|pixels| used.checked_add(pixels)).filter(|n| *n <= 4_194_304)
+        else {
+            return;
+        };
+        *used = total;
+        let x0 = corners
+            .iter()
+            .map(|p| p.x)
+            .fold(f64::INFINITY, f64::min)
+            .floor()
+            .max(0.0)
+            .min(f64::from(self.ctx.width())) as usize;
+        let y0 = corners
+            .iter()
+            .map(|p| p.y)
+            .fold(f64::INFINITY, f64::min)
+            .floor()
+            .max(0.0)
+            .min(f64::from(self.ctx.height())) as usize;
+        let x1 = corners
+            .iter()
+            .map(|p| p.x)
+            .fold(f64::NEG_INFINITY, f64::max)
+            .ceil()
+            .max(0.0)
+            .min(f64::from(self.ctx.width())) as usize;
+        let y1 = corners
+            .iter()
+            .map(|p| p.y)
+            .fold(f64::NEG_INFINITY, f64::max)
+            .ceil()
+            .max(0.0)
+            .min(f64::from(self.ctx.height())) as usize;
+        let (dw, dh) = (x1.saturating_sub(x0), y1.saturating_sub(y0));
+        let Some(pixels) = dw.checked_mul(dh) else {
+            return;
+        };
+        if pixels == 0 {
+            return;
+        }
+        let Some(bytes) = pixels.checked_mul(4) else {
+            return;
+        };
+        let mut rgba = Vec::new();
+        if rgba.try_reserve_exact(bytes).is_err() {
+            return;
+        }
+        rgba.resize(bytes, 0);
+        let source = overlay.pixmap.data_as_u8_slice();
+        for y in 0..dh {
+            for x in 0..dw {
+                let p = inverse * Point::new((x0 + x) as f64 + 0.5, (y0 + y) as f64 + 0.5);
+                let snap = |v: f64| {
+                    if (v - v.round()).abs() < 1e-9 {
+                        v.round()
+                    } else {
+                        v
+                    }
+                };
+                let (sx, sy) = (snap(p.x), snap(p.y));
+                if sx < 0.0 || sy < 0.0 || sx >= w as f64 || sy >= h as f64 {
+                    continue;
+                }
+                let at = (sy.floor() as usize * w + sx.floor() as usize) * 4;
+                let Some(pixel) = source.get(at..at + 4) else {
+                    return;
+                };
+                let to = (y * dw + x) * 4;
+                let Some(target) = rgba.get_mut(to..to + 4) else {
+                    return;
+                };
+                target.copy_from_slice(pixel);
+            }
+        }
+        let pixmap =
+            Pixmap::from_parts_with_opacity(bytemuck::cast_vec(rgba), dw as u16, dh as u16, true);
+        self.draw_pixmap(
+            Arc::new(pixmap),
+            ImageQuality::Low,
+            Affine::translate((x0 as f64, y0 as f64)),
+        );
+    }
+
     fn draw_image(&mut self, image_data: ImageData, alpha_data: Option<LumaData>) {
         let cur_transform = *self.ctx.transform();
         let (x_scale, y_scale) = {
@@ -1379,6 +1657,16 @@ impl Renderer {
         // full-resolution RGBA copy below and the premultiply pass after it. PdfCraft patch: an
         // area-averaged one (a stencil's ink, or an image under its mask) skips them too, and is
         // premultiplied a source row at a time as it is averaged (`area_shrink_premultiplied`).
+        // The base image follows the existing scan-smoothing path. Only validated source-local
+        // symbol/quiet rectangles are drawn again from their own samples, with the same transform.
+        let barcode_overlays = if !interpolate
+            && !self.in_type3_glyph
+            && (area || matches!(quality, ImageQuality::Medium))
+        {
+            self.barcode_overlays(&image_data, alpha_data.as_ref())
+        } else {
+            Vec::new()
+        };
         let direct = match &alpha_data {
             Some(alpha) if needs_resize && !interpolate && !area => nearest_premultiplied_rgba(
                 &image_data,
@@ -1538,6 +1826,12 @@ impl Renderer {
             _ => cur_transform * additional_transform,
         };
         self.draw_pixmap(Arc::new(pixmap), quality, draw_transform);
+        let after_image = *self.ctx.transform();
+        let mut overlay_pixels = 0;
+        for overlay in barcode_overlays {
+            self.draw_barcode_overlay(overlay, cur_transform, &mut overlay_pixels);
+        }
+        self.ctx.set_transform(after_image);
     }
 
     fn push_clip_path_inner(&mut self, clip_path: &BezPath, fill: FillRule) {
@@ -1586,6 +1880,9 @@ impl Renderer {
             inside_pattern: self.inside_pattern,
             soft_mask_cache: HashMap::default(),
             outline_cache: self.outline_cache.clone(),
+            barcode_cache: self.barcode_cache.clone(),
+            barcode_enabled: false,
+            barcode_cancel: self.barcode_cancel.clone(),
             cur_mask: None,
             in_type3_glyph: false,
             scaler: Scaler::new(ResamplingFunction::CatmullRom),
@@ -1864,6 +2161,9 @@ impl Renderer {
                                 inside_pattern: true,
                                 soft_mask_cache: HashMap::default(),
                                 outline_cache: self.outline_cache.clone(),
+                                barcode_cache: self.barcode_cache.clone(),
+                                barcode_enabled: false,
+                                barcode_cancel: self.barcode_cancel.clone(),
                                 in_type3_glyph: false,
                                 scaler: self.scaler,
                                 preview: self.preview,
@@ -1928,6 +2228,9 @@ impl Renderer {
                             inside_pattern: true,
                             soft_mask_cache: HashMap::default(),
                             outline_cache: self.outline_cache.clone(),
+                            barcode_cache: self.barcode_cache.clone(),
+                            barcode_enabled: false,
+                            barcode_cancel: self.barcode_cancel.clone(),
                             in_type3_glyph: false,
                             scaler: self.scaler,
                             preview: self.preview,
@@ -2233,6 +2536,9 @@ impl<'a> Device<'a> for Renderer {
                                         inside_pattern: false,
                                         soft_mask_cache: HashMap::default(),
                                         outline_cache: self.outline_cache.clone(),
+                                        barcode_cache: self.barcode_cache.clone(),
+                                        barcode_enabled: false,
+                                        barcode_cancel: self.barcode_cancel.clone(),
                                         cur_mask: None,
                                         in_type3_glyph: false,
                                         scaler: self.scaler,
@@ -2751,6 +3057,9 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         cur_mask: None,
         soft_mask_cache: HashMap::default(),
         outline_cache: Rc::new(std::cell::RefCell::new(HashMap::new())),
+        barcode_cache: Rc::new(std::cell::RefCell::new(BarcodeCache::default())),
+        barcode_enabled: false,
+        barcode_cancel: None,
         in_type3_glyph: false,
         scaler: Scaler::new(ResamplingFunction::CatmullRom),
         preview,
@@ -3214,4 +3523,139 @@ mod area_shrink_tests {
         assert_eq!(area_shrink::<1>(&data[1..], (4, 4), (2, 2)), None, "data shorter than the source");
         assert_eq!(area_shrink::<3>(&data, (4, 4), (2, 2)), None, "data of another channel count");
     }
+}
+
+#[cfg(test)]
+mod barcode_cache_tests {
+    use super::*;
+
+    #[test]
+    fn a_large_protected_region_is_declined_in_every_viewport() {
+        let cache = RenderCache::new();
+        let settings =
+            RenderSettings { level: vello_cpu::Level::new(), num_threads: 0, render_mode: vello_cpu::RenderMode::OptimizeSpeed };
+        for size in [128, 5000] {
+            let mut renderer = Renderer::new(size, size, settings, &cache, None, false);
+            let overlay = BarcodeOverlay { x: 0, y: 0, pixmap: Arc::new(Pixmap::new(210, 88)) };
+            let mut used = 0;
+            renderer.draw_barcode_overlay(overlay, Affine::scale(16.0), &mut used);
+            assert_eq!(used, 0, "a tile must not admit the oversized region");
+        }
+    }
+
+    #[test]
+    fn declined_scan_is_cached_and_negative_entries_are_bounded() {
+        let cache = RenderCache::new();
+        let settings =
+            RenderSettings { level: vello_cpu::Level::new(), num_threads: 0, render_mode: vello_cpu::RenderMode::OptimizeSpeed };
+        let mut renderer = Renderer::new(64, 64, settings, &cache, None, false);
+        for value in 120..138 {
+            let image =
+                ImageData::Luma(LumaData { width: 64, height: 64, data: vec![value; 64 * 64], interpolate: false, scale_factors: (1.0, 1.0) });
+            assert!(renderer.barcode_overlays(&image, None).is_empty());
+            let entries = cache.barcode_cache.borrow().entries.len();
+            assert_eq!(entries, ((value - 119) as usize).min(16));
+            assert!(renderer.barcode_overlays(&image, None).is_empty());
+            assert_eq!(cache.barcode_cache.borrow().entries.len(), entries);
+        }
+        assert_eq!(cache.barcode_cache.borrow().pixels, 16 * 64 * 64);
+    }
+}
+
+/// Count image occurrences without decoding, independently of viewport and cache residency.
+/// Over-budget pages retain ordinary smoothing throughout, including every requested tile.
+pub(crate) fn barcode_page_admitted<'a>(
+    page: &'a hayro_interpret::hayro_syntax::page::Page<'a>,
+    cache: &RenderCache<'a>,
+    settings: &hayro_interpret::InterpreterSettings,
+) -> bool {
+    use hayro_interpret::util::{RectExt, TransformExt};
+    // Only visibility changes this metadata-only device's image count. It never paints
+    // glyphs or decodes images, so font/CMap resolvers, warning sinks and decode budgets
+    // do not belong to this key. Preview is included conservatively. Cancellation is a
+    // one-way token (InterpreterSettings' contract); never retain an interrupted pass.
+    let cancelled = || settings.cancelled.as_ref().is_some_and(|stop| stop.load(Ordering::Relaxed));
+    if cancelled() {
+        return false;
+    }
+    let cacheable = settings.ocg_overrides.len() <= 256;
+    if cacheable
+        && let Ok(entries) = cache.barcode_admission.try_borrow()
+        && let Some(entry) = entries.iter().find(|entry| {
+            std::ptr::eq(entry.page, page)
+                && entry.annotations == settings.render_annotations
+                && entry.hide_comments == settings.hide_comments
+                && entry.preview == settings.preview
+                && entry.ocg == *settings.ocg_overrides
+        })
+    {
+        return entry.admitted;
+    }
+    #[cfg(test)]
+    cache.barcode_admission_passes.set(cache.barcode_admission_passes.get() + 1);
+    let mut device = BarcodeAdmission::default();
+    let mut state = hayro_interpret::Context::new(
+        page.initial_transform(true).to_kurbo(),
+        page.intersected_crop_box().to_kurbo(),
+        &cache.interpreter_cache,
+        page.xref(),
+        settings.clone(),
+    );
+    hayro_interpret::interpret_page(page, &mut state, &mut device);
+    if cancelled() {
+        return false;
+    }
+    let admitted = device.images <= 16 && device.pixels <= 8 * 1024 * 1024;
+    let mut ocg = Vec::new();
+    if cacheable
+        && !cancelled()
+        && ocg.try_reserve_exact(settings.ocg_overrides.len()).is_ok()
+        && let Ok(mut entries) = cache.barcode_admission.try_borrow_mut()
+        && entries.try_reserve(1).is_ok()
+    {
+        ocg.extend_from_slice(&settings.ocg_overrides);
+        if entries.len() >= 16 {
+            entries.pop_front();
+        }
+        entries.push_back(BarcodeAdmissionEntry {
+            page,
+            annotations: settings.render_annotations,
+            hide_comments: settings.hide_comments,
+            preview: settings.preview,
+            ocg,
+            admitted,
+        });
+    }
+    admitted
+}
+
+// The borrowed page keeps its identity alive; an address reused by a later PDF cannot hit.
+// Sixteen FIFO entries with at most 256 copied OCG tuples each bound retained key memory.
+pub(crate) struct BarcodeAdmissionEntry<'a> {
+    page: &'a hayro_interpret::hayro_syntax::page::Page<'a>,
+    annotations: bool,
+    hide_comments: bool,
+    preview: bool,
+    ocg: Vec<(i32, i32, bool)>,
+    admitted: bool,
+}
+#[derive(Default)]
+struct BarcodeAdmission {
+    images: u32,
+    pixels: u64,
+}
+
+impl<'a> Device<'a> for BarcodeAdmission {
+    fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
+    fn set_blend_mode(&mut self, _: BlendMode) {}
+    fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'a>, _: &PathDrawMode) {}
+    fn push_clip_path(&mut self, _: &ClipPath) {}
+    fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
+    fn draw_glyph(&mut self, _: &Glyph<'a>, _: Affine, _: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {}
+    fn draw_image(&mut self, image: hayro_interpret::Image<'a, '_>, _: Affine) {
+        self.images = self.images.saturating_add(1);
+        self.pixels = self.pixels.saturating_add(u64::from(image.width()).saturating_mul(u64::from(image.height())));
+    }
+    fn pop_clip_path(&mut self) {}
+    fn pop_transparency_group(&mut self) {}
 }
