@@ -247,13 +247,7 @@ pub fn recognize_file(
     javascript: bool,
     progress: impl FnMut(usize, usize) -> bool,
 ) -> Result<FileResult, String> {
-    let mut s = Session::new();
-    // Before the open: open-time (XFA) scripts read it there.
-    s.set_javascript(javascript);
-    let id = s.open(name, None, bytes.clone(), password).map_err(|e| e.to_string())?;
-    if let Some(why) = s.get(id).and_then(|d| d.read_only_reason.clone()) {
-        return Err(why);
-    }
+    let (mut s, id) = open_file(name, bytes.clone(), password, javascript)?;
     let job = s.ocr_job(id, &[], settings).ok_or("the document could not be read")?;
     let pages = job.run(ocr, progress);
     if s.apply_ocr(id, &pages).map_err(|e| e.to_string())? == 0 {
@@ -265,10 +259,37 @@ pub fn recognize_file(
     Ok(FileResult { bytes, pages })
 }
 
+/// Open one of [`recognize_file`]'s files in a session of its own that keeps the caller's
+/// JavaScript preference; a file that cannot be changed is refused with the reason.
+fn open_file(name: &str, bytes: Arc<Vec<u8>>, password: Option<&str>, javascript: bool) -> Result<(Session, DocId), String> {
+    let mut s = Session::new();
+    // Before the open: open-time (XFA) scripts read it there.
+    s.set_javascript(javascript);
+    let id = s.open(name, None, bytes, password).map_err(|e| e.to_string())?;
+    if let Some(why) = s.get(id).and_then(|d| d.read_only_reason.clone()) {
+        return Err(why);
+    }
+    Ok((s, id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::export;
+
+    /// #5080: [`recognize_file`] opens each file with the caller's JavaScript preference, so an
+    /// XFA initialize script (it sets an empty `qty` to 2) runs only when that is on. This checks
+    /// the open path without the recognition models, which the end-to-end test needs.
+    #[test]
+    fn files_open_for_recognition_with_the_callers_javascript_preference() {
+        let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template()));
+        let qty = |javascript| {
+            let (s, id) = open_file("scripted.pdf", bytes.clone(), None, javascript).unwrap();
+            s.get(id).unwrap().form.iter().find(|f| f.name == "qty").unwrap().value.clone()
+        };
+        assert!(qty(false).is_empty(), "the initialize script ran with JavaScript off");
+        assert_eq!(qty(true), ["2"], "the initialize script did not run with JavaScript on");
+    }
 
     /// #1028: a recognised word over the page's own text is that text again; one in an empty
     /// part of the page (a picture) is new.

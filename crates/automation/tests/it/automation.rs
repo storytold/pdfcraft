@@ -7938,7 +7938,9 @@ fn file_processing_keeps_javascript_off_for_xfa_open_scripts() {
     }
 
     // OCR needs its language models. When present, it uses the same per-file open path and must
-    // also keep the script from changing the saved field value.
+    // also keep the script from changing the saved field value. Without them, the engine's
+    // `ocr::tests::files_open_for_recognition_with_the_callers_javascript_preference` still
+    // checks the preference `recognize_file` opens each file with.
     if ok(&mut a, "ocr_status", json!({}))["available"] == true {
         ok(&mut a, "ocr_recognize_files", json!({ "paths": ["scripted.pdf"], "folder": "ocr", "skip_text_pages": false }));
         let doc = ok(&mut a, "doc_open", json!({ "path": "ocr/scripted.pdf" }))["doc"].as_u64().unwrap();
