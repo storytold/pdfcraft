@@ -6571,6 +6571,7 @@ version = "0.22.0"
 dependencies = [
  "aho-corasick",
  "craft-xml",
+ "image",
  "pdfcraft-annot",
  "pdfcraft-content",
  "pdfcraft-cos",
