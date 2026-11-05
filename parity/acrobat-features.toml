@@ -3783,7 +3783,7 @@ status = "shipped"
 commands = ["comment.eraser"]
 tools = []
 evidence = ["crates/annot/src/tests.rs::the_eraser_cuts_strokes_and_removes_empty_drawings", "crates/ui-egui/tests/it/comments.rs::erasing_part_of_a_drawing", "crates/ui-egui/tests/it/comments.rs::the_eraser_rubs_as_wide_as_its_thickness_setting"]
-notes = "cuts strokes where the eraser passes; an emptied drawing is deleted; one undo step. Its thickness setting sizes it on screen (3 to 72 pixels across; the default 2 pt is 12), preview included (#3747). The eraser end of a Wayland tablet pen invokes it too (W28): each fresh pen-down erases even when another comment tool is selected; simulation-tested only, a live XP-Pen confirmation is still pending (docs/hardware-parity.md)"
+notes = "cuts strokes where the eraser passes; an emptied drawing is deleted; one undo step. Its thickness setting sizes it on screen (3 to 72 pixels across; the default 2 pt is 12), preview included (#3747). The eraser end of a Wayland tablet pen invokes it too (W28): each fresh press erases even when another comment tool is selected — live-confirmed on XP-Pen + niri, mouse fallback untouched. The app stages the tool from the compositor's report: pen feeding only through XP-Pen's PenTablet driver reported every contact eraser-typed in some sittings (docs/hardware-parity.md)"
 
 [[feature]]
 id = "comment.line"
