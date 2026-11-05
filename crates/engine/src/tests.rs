@@ -549,6 +549,85 @@ fn pdf_page_stamps_fit_inside_an_explicit_box() {
     assert!(content.contains("/Pic Do") && !content.contains("BI"), "{content}");
 }
 
+/// #1297: a 3D model on a page keeps the whole box as its rectangle and draws a PDF poster as a
+/// form XObject fitted inside it, keeping its shape and centred.
+#[test]
+fn a_3d_model_gets_a_fitted_vector_poster_and_a_file_that_is_not_one_is_refused() {
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let blank = session.create_blank(595.0, 842.0, 1).unwrap();
+    let id = session.open_new("model.pdf", blank).unwrap();
+    let mut prc = b"PRC".to_vec();
+    prc.extend_from_slice(&[1; 64]);
+    let add = |model: Vec<u8>| Edit::AddModel3d {
+        page: 0,
+        rect: [56.0, 400.0, 539.0, 700.0],
+        model: Arc::new(model),
+        poster: Some(MarkFile { name: "poster.pdf".into(), bytes: Arc::new(half_red_page()), page: 0 }),
+        activation: Activation3d::default(),
+        name: "Bracket".into(),
+    };
+    assert!(session.apply(id, add(b"%PDF-1.7 not a model".to_vec())).is_err());
+    session.apply(id, add(prc)).unwrap();
+
+    let doc = pdfcraft_cos::Document::open(session.save_bytes(id).unwrap()).unwrap();
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let annots = doc.resolve(page.dict.get(b"Annots").unwrap());
+    let [only] = annots.as_array().unwrap().as_slice() else { panic!("the refused model added nothing: {annots:?}") };
+    let annot = doc.get(only.as_ref().unwrap());
+    let annot = annot.as_dict().unwrap();
+    assert_eq!(annot.name(b"Subtype"), Some(&b"3D"[..]));
+    let rect: Vec<f64> = annot.get(b"Rect").unwrap().as_array().unwrap().iter().filter_map(pdfcraft_cos::Object::as_f64).collect();
+    assert_eq!(rect, [56.0, 400.0, 539.0, 700.0], "the whole box, not the fitted picture");
+    assert_eq!(doc.resolve(annot.get(b"3DA").unwrap()).as_dict().unwrap().name(b"A"), Some(&b"XA"[..]));
+    let ap = doc.resolve(annot.get(b"AP").unwrap());
+    let pdfcraft_cos::Object::Stream(normal) = doc.get(ap.as_dict().unwrap().reference(b"N").unwrap()).as_ref().clone() else {
+        panic!("an appearance stream")
+    };
+    let pic = doc.resolve(normal.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+    let pic = doc.resolve(pic.get(b"XObject").unwrap()).as_dict().unwrap().reference(b"Pic").unwrap();
+    let pdfcraft_cos::Object::Stream(picture) = doc.get(pic).as_ref().clone() else { panic!("the picture is a stream") };
+    assert_eq!(picture.dict.name(b"Subtype"), Some(&b"Form"[..]), "the page is kept as a form XObject");
+    // The 80 × 40 page in the 483 × 300 box: 483 × 241.5 from y 429.25.
+    let content = String::from_utf8(normal.decoded().unwrap().to_vec()).unwrap();
+    assert!(content.contains(" 56 429.25 cm /Pic Do"), "{content}");
+}
+
+/// A PDF poster whose page has no area is refused rather than drawn as nothing.
+#[test]
+fn a_3d_poster_page_without_area_is_refused() {
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let blank = session.create_blank(595.0, 842.0, 1).unwrap();
+    let id = session.open_new("model.pdf", blank).unwrap();
+    let flat = String::from_utf8(half_red_page()).unwrap().replace("[0 0 80 40]", "[0 0 80 0 ]");
+    let add = Edit::AddModel3d {
+        page: 0,
+        rect: [56.0, 400.0, 539.0, 700.0],
+        model: Arc::new(b"PRC rest".to_vec()),
+        poster: Some(MarkFile { name: "flat.pdf".into(), bytes: Arc::new(flat.into_bytes()), page: 0 }),
+        activation: Activation3d::default(),
+        name: "Bracket".into(),
+    };
+    assert!(matches!(session.apply(id, add), Err(EditError::Source(_))));
+    assert!(session.get(id).unwrap().info.annotations.is_empty(), "nothing was added");
+}
+
+/// Adding a 3D model is a comment change: refused without the comments permission, and only the
+/// comments are rebuilt after it.
+#[test]
+fn a_3d_model_needs_the_comments_permission_and_changes_the_comments() {
+    let edit = Edit::AddModel3d {
+        page: 0,
+        rect: [0.0, 0.0, 100.0, 100.0],
+        model: Arc::new(b"PRC rest".to_vec()),
+        poster: None,
+        activation: Activation3d::default(),
+        name: String::new(),
+    };
+    let p = pdfcraft_cos::Permissions { bits: 0, owner: false };
+    assert_eq!(check_permission(&edit, &p), Err(EditError::NotPermitted("comments")));
+    assert_eq!(crate::history::scope_of(&edit), crate::history::Scope::Comments);
+}
+
 fn page_texts(s: &Session, id: DocId) -> Vec<String> {
     let doc = s.get(id).unwrap();
     let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
@@ -2132,7 +2211,7 @@ fn rect_comment(page: usize, rect: [f64; 4]) -> Edit {
     Edit::AddAnnotation(NewAnnotation {
         page,
         shape: Shape::Rectangle { rect },
-        style: Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: Some([1.0, 0.0, 0.0]) },
+        style: Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: Some([1.0, 0.0, 0.0]), ..Style::default() },
         contents: "Look here".into(),
         author: "Reviewer".into(),
     })
@@ -3603,11 +3682,71 @@ fn create_and_reduce() {
     )
     .unwrap();
     let full = s2.save_full_bytes(id2).unwrap();
-    let (reduced, _) = s2.reduced_bytes(id2).unwrap();
+    let (reduced, ..) = s2.reduced_bytes(id2).unwrap();
     assert!(reduced.len() <= full.len(), "{} > {}", reduced.len(), full.len());
     let mut s3 = Session::new();
     let r = s3.open("r.pdf", None, reduced, None).unwrap();
     assert_eq!(page_texts(&s3, r), ["Page 1", "Page 1"]);
+}
+
+/// Discarding a category that holds nothing discards nothing; it used to end the whole
+/// optimization with an error about redaction marks.
+#[test]
+fn optimize_discarding_an_empty_category_still_runs() {
+    let (s, id) = session_with(2);
+    let (bytes, report) = s.optimized_bytes(id, &optimize::Settings::default(), &[crate::Hidden::Bookmarks, crate::Hidden::Comments]).unwrap();
+    assert!(bytes.starts_with(b"%PDF-"));
+    assert!(report.discarded.is_empty(), "{:?}", report.discarded);
+    // An outline root with no entries is no bookmarks: it stays, as Remove Hidden Information,
+    // which refuses then, leaves it.
+    let outline = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R /PageMode /UseOutlines >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj("<< /Type /Page /Parent 2 0 R >>")
+        .obj("<< /Type /Outlines /Count 0 >>")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("outline.pdf", None, Arc::new(outline), None).unwrap();
+    let (bytes, report) = s.optimized_bytes(id, &optimize::Settings::default(), &[crate::Hidden::Bookmarks]).unwrap();
+    assert!(report.discarded.is_empty(), "{:?}", report.discarded);
+    let saved = pdfcraft_cos::Document::open(bytes).unwrap();
+    let catalog = saved.get(saved.root().unwrap()).as_dict().cloned().unwrap();
+    assert!(catalog.contains(b"Outlines") && catalog.contains(b"PageMode"), "{catalog:?}");
+    // Beside an empty tick, one that holds something is discarded, and only that one.
+    let noted = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>")
+        .obj("<< /Type /Annot /Subtype /Text /Rect [20 20 40 40] /Contents (internal note) >>")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("noted.pdf", None, Arc::new(noted), None).unwrap();
+    let (_, report) = s.optimized_bytes(id, &optimize::Settings::default(), &[crate::Hidden::Bookmarks, crate::Hidden::Comments]).unwrap();
+    assert_eq!(report.discarded, vec![(crate::Hidden::Comments, 1)]);
+    // A field whose appearance draws text invisibly: flattening it brings that text onto the page,
+    // which no scan before counts as hidden, and discarding hidden text takes it too.
+    let form = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/F1 0 Tf 0 g) >> >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Annots [4 0 R] /Resources << /Font << /F1 6 0 R >> >> /Contents 7 0 R >>")
+        .obj("<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (shown) /Rect [100 100 300 130] /P 3 0 R /F 4 /AP << /N 5 0 R >> >>")
+        .stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 200 30] /Resources << /Font << /F1 6 0 R >> >>",
+            "/Tx BMC BT /F1 12 Tf 2 10 Td (shown) Tj ET BT /F1 12 Tf 3 Tr 2 20 Td (HIDDENSECRET) Tj ET EMC",
+        )
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        .stream("", "BT /F1 12 Tf 72 700 Td (Page text) Tj ET")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, Arc::new(form), None).unwrap();
+    let (bytes, _) = s.optimized_bytes(id, &optimize::Settings::default(), &[crate::Hidden::FormFields, crate::Hidden::HiddenText]).unwrap();
+    let saved = pdfcraft_cos::Document::open(bytes).unwrap();
+    for (r, object) in saved.scan_objects() {
+        if let pdfcraft_cos::Object::Stream(st) = &*object {
+            let data = st.decoded().unwrap_or_default();
+            assert!(!data.windows(12).any(|w| w == b"HIDDENSECRET"), "the hidden text stays in {r:?}");
+        }
+    }
 }
 
 #[test]
@@ -6192,24 +6331,27 @@ fn a_static_xfa_form_takes_many_data_values_as_one_by_one() {
 /// Opening a static XFA form whose datasets fill thousands of fields took minutes: each value
 /// read the whole form again (twice), so the time grew with the square of the fields. Eight
 /// times the fields now takes at most about eight times as long (it took about fifty).
+///
+/// Each round opens the small form and then the large one, so a busy spell on a shared machine
+/// slows both, and the best round's ratio is checked. Timing every small opening before the
+/// large ones let such a spell fall on the large ones alone.
 #[test]
 fn opening_a_static_xfa_form_grows_linearly_with_its_data_values() {
-    let time = |n: usize| {
-        let bytes = Arc::new(pdfcraft_xfa::fixtures::static_shell_many(n));
-        (0..3)
-            .map(|_| {
-                let mut s = Session::new();
-                let start = std::time::Instant::now();
-                s.open("many.pdf", None, bytes.clone(), None).expect("opens");
-                start.elapsed()
-            })
-            .min()
-            .unwrap_or_default()
+    let small = Arc::new(pdfcraft_xfa::fixtures::static_shell_many(100));
+    let large = Arc::new(pdfcraft_xfa::fixtures::static_shell_many(800));
+    let time = |bytes: &Arc<Vec<u8>>| {
+        let mut s = Session::new();
+        let start = std::time::Instant::now();
+        s.open("many.pdf", None, bytes.clone(), None).expect("opens");
+        start.elapsed()
     };
-    let small = time(100);
-    let large = time(800);
-    let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-6);
-    assert!(ratio < 16.0, "100 fields: {small:?}, 800 fields: {large:?} ({ratio:.1}x)");
+    // The first openings also pay for what the process sets up once.
+    time(&small);
+    time(&large);
+    let rounds: Vec<_> = (0..5).map(|_| (time(&small), time(&large))).collect();
+    let ratio = |(s, l): &(std::time::Duration, std::time::Duration)| l.as_secs_f64() / s.as_secs_f64().max(1e-6);
+    let best = rounds.iter().map(ratio).fold(f64::INFINITY, f64::min);
+    assert!(best < 16.0, "100 and 800 fields, by round: {rounds:?} (best {best:.1}x)");
 }
 
 /// A date goes into the XFA data in the field's data picture (`<bind><picture>`), as other
@@ -8245,6 +8387,130 @@ fn copy_image_finds_a_picture_inside_form_artwork_under_text() {
     assert!(d.page_image_copy_file(0, 1).is_err());
 }
 
+/// Copy Image reads a JBIG2 image's `/JBIG2Globals`: here they hold the page information, and the
+/// image's own stream only an extension segment decoders skip, so it has a picture only through
+/// them. Its default pixel is black.
+#[test]
+fn copy_image_reads_the_globals_of_a_jbig2_picture() {
+    let mut globals = vec![0, 0, 0, 0, 48, 0, 1, 0, 0, 0, 19];
+    globals.extend_from_slice(&16u32.to_be_bytes());
+    globals.extend_from_slice(&2u32.to_be_bytes());
+    globals.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0]); // resolution, flags, striping
+    let image = [0, 0, 0, 1, 62, 0, 1, 0, 0, 0, 0];
+    let stream = |dict: &str, data: &[u8]| {
+        let mut o = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
+        o.extend_from_slice(data);
+        o.extend_from_slice(b"\nendstream");
+        o
+    };
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >>".to_vec(),
+        stream("", b"q 160 0 0 20 20 100 cm /Im1 Do Q"),
+        stream(
+            "/Type /XObject /Subtype /Image /Width 16 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 6 0 R >>",
+            &image,
+        ),
+        stream("", &globals),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new();
+    let id = s.open("scan.pdf", None, Arc::new(out), None).unwrap();
+    let d = s.get(id).unwrap();
+    let (w, h, rgba) = d.page_image_rgba(0, 0).unwrap();
+    assert_eq!((w, h), (16, 2));
+    assert!(rgba.chunks(4).all(|p| p == [0, 0, 0, 255]), "the page's default pixel, from the globals");
+    // An Office export shares one allowance across its pictures. One past it is left out, and the
+    // export says the page is missing something, as for a picture past its bytes.
+    let (pages, truncated) = d.export_pages_within(true, 1 << 20, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
+    assert_eq!((pages[0].images.len(), truncated.len()), (1, 0));
+    let (pages, truncated) = d.export_pages_within(true, 1 << 20, &mut pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(pages[0].images.is_empty());
+    assert_eq!(truncated, [0]);
+}
+
+/// An Office export leaves out a picture it can't encode, as it did. That isn't a page cut short:
+/// only a picture past what the export may do is reported as one.
+#[test]
+fn an_office_export_doesnt_call_an_unreadable_picture_truncated() {
+    let pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+        2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >> endobj\n\
+        3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
+        4 0 obj << /Length 31 >> stream\nq 160 0 0 20 20 100 cm /Im1 Do Q\nendstream endobj\n\
+        5 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode /Length 4 >> stream\nnone\nendstream endobj\n\
+        trailer << /Root 1 0 R >>\n%%EOF"
+        .to_vec();
+    let mut s = Session::new();
+    let id = s.open("picture.pdf", None, Arc::new(pdf), None).unwrap();
+    let (pages, truncated) = s.get(id).unwrap().export_pages_within(true, 1 << 20, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
+    assert!(pages[0].images.is_empty());
+    assert_eq!(truncated, Vec::<usize>::new());
+}
+
+/// Copy Image takes a JBIG2 picture as its pixels and as a PNG file, behind another filter
+/// (ASCIIHexDecode) too: Export's decoding, through `ImageBudget::decode`.
+#[test]
+fn copy_image_copies_a_jbig2_picture_behind_another_filter() {
+    // 16 × 2: the left half of the top row black, the rest white.
+    let bits = [0x00, 0xFF, 0xFF, 0xFF];
+    let coded = pdfcraft_filters::encode_jbig2_generic(&bits, 16, 2).unwrap();
+    let hex: Vec<u8> = coded.iter().flat_map(|b| format!("{b:02x}").into_bytes()).chain(*b">").collect();
+    let stream = |dict: &str, data: &[u8]| {
+        let mut o = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
+        o.extend_from_slice(data);
+        o.extend_from_slice(b"\nendstream");
+        o
+    };
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >>".to_vec(),
+        stream("", b"q 160 0 0 20 20 100 cm /Im1 Do Q"),
+        stream(
+            "/Type /XObject /Subtype /Image /Width 16 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter [/ASCIIHexDecode /JBIG2Decode]",
+            &hex,
+        ),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut s = Session::new();
+    let id = s.open("scan.pdf", None, Arc::new(out), None).unwrap();
+    let d = s.get(id).unwrap();
+    assert_eq!(d.page_image_at(0, [30.0, 115.0]), Some(0));
+    assert_eq!(d.page_image_copy_file(0, 0).unwrap().0, "png");
+    let (w, h, rgba) = d.page_image_rgba(0, 0).unwrap();
+    assert_eq!((w, h), (16, 2));
+    let grey: Vec<u8> = rgba.chunks(4).map(|px| px[0]).collect();
+    let expected: Vec<u8> = (0..32).map(|i| if i < 8 { 0 } else { 255 }).collect();
+    assert_eq!(grey, expected, "the picture, black as 0");
+}
+
 /// `fixture(2)` with the catalog pointing at a page tree object the file does not have (#1656).
 fn fixture_without_page_tree() -> Vec<u8> {
     let bytes = fixture(2);
@@ -9396,6 +9662,61 @@ fn a_fields_own_script_may_not_save_as_or_show_a_panel() {
     assert_eq!(o.requests, [js::Request::SaveAs]);
 }
 
+/// A page of `count` pictures of one flat grey, `side` pixels square, each an object of its own.
+fn page_of_pictures(count: usize, side: usize) -> Vec<u8> {
+    let data = pdfcraft_filters::encode_flate(&vec![0x80; side * side]);
+    let names: String = (0..count).map(|i| format!("/Im{i} {} 0 R ", 5 + i)).collect();
+    let content: String = (0..count).map(|i| format!("q 10 0 0 10 0 0 cm /Im{i} Do Q\n")).collect();
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << {names}>> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n",
+        content.len()
+    )
+    .into_bytes();
+    for i in 0..count {
+        let dict = format!(
+            "{} 0 obj << /Type /XObject /Subtype /Image /Width {side} /Height {side} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length {} >> stream\n",
+            5 + i,
+            data.len()
+        );
+        pdf.extend_from_slice(dict.as_bytes());
+        pdf.extend_from_slice(&data);
+        pdf.extend_from_slice(b"\nendstream endobj\n");
+    }
+    pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF");
+    pdf
+}
+
+/// The allowance is the export's, not each picture's: a page of many small pictures stops where it
+/// runs out, the rest are left out and counted, and the page is listed, which is what the export's
+/// warning goes by. A few large pictures are well within it, and all come through.
+#[test]
+fn a_page_of_many_pictures_stops_at_the_exports_allowance() {
+    let export = |pdf: Vec<u8>, work: &mut pdfcraft_cos::ImageBudget| {
+        let mut s = Session::new();
+        let id = s.open("pictures.pdf", None, Arc::new(pdf), None).unwrap();
+        s.get(id).unwrap().export_pages_within(true, 1 << 30, work)
+    };
+    let mut one = pdfcraft_cos::ImageBudget::with_work(u64::MAX);
+    export(page_of_pictures(1, 2), &mut one);
+    let cost = u64::MAX - one.work_left();
+    assert!(cost > 0);
+
+    let mut work = pdfcraft_cos::ImageBudget::with_work(100 * cost);
+    let (pages, truncated) = export(page_of_pictures(10_000, 2), &mut work);
+    assert_eq!(pages[0].images.len(), 100);
+    assert_eq!(truncated, vec![0]);
+    assert_eq!(work.refused(), 9_900);
+
+    let mut s = Session::new();
+    let id = s.open("large.pdf", None, Arc::new(page_of_pictures(3, 1_000)), None).unwrap();
+    let (pages, truncated) = s.get(id).unwrap().export_pages_checked(true, 1 << 30);
+    assert_eq!(pages[0].images.len(), 3);
+    assert_eq!(truncated, Vec::<usize>::new());
+}
+
 /// A page whose forms go past the reading limit and whose picture goes past the image budget is
 /// listed once among the truncated pages.
 #[test]
@@ -10291,4 +10612,154 @@ fn image_transform_engine_refuses_singular_matrices_without_mutation() {
         assert!(s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform(matrix) }).is_err());
         assert_eq!(s.get(id).unwrap().bytes, before);
     }
+}
+
+/// Optimize has JBIG2 images share a symbol dictionary only where redaction can store each again
+/// without it. Of four pages of the same scan, the two in DeviceGray and the image mask share one;
+/// the one in a DeviceN of one colourant, which redaction doesn't store again, is coded alone.
+/// Redacting the first page then stores the second and the mask again without the dictionary,
+/// which leaves the file.
+#[test]
+fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
+    use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
+    let (w, h) = (600usize, 480usize);
+    // Lines of 26 letters, each 32 rows of a run from a stem down its left side, of 2 to 24 pixels,
+    // the same to the pixel wherever it is, picked and spaced at random.
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed as usize
+    };
+    let letters: Vec<Vec<usize>> = (0..26).map(|_| (0..16).map(|_| 1 + next() % 12).collect()).collect();
+    let stride = w.div_ceil(8);
+    let mut bits = vec![0xFFu8; stride * h];
+    for top in (8..h - 40).step_by(44) {
+        let mut x = 8 + next() % 8;
+        while x + 32 < w {
+            let letter = &letters[next() % 26];
+            for (row, run) in letter.iter().enumerate() {
+                for (px, py) in (x..x + 2 * run).flat_map(|px| [(px, top + 2 * row), (px, top + 2 * row + 1)]) {
+                    bits[py * stride + px / 8] &= !(0x80 >> (px % 8));
+                }
+            }
+            x += 2 * letter.iter().max().unwrap_or(&1) + 4 + next() % 5;
+        }
+    }
+    let mut doc = Document::new_empty();
+    let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
+    let device_n = Object::Array(vec![Object::name("DeviceN"), Object::Array(vec![Object::name("Black")]), Object::name("DeviceGray"), {
+        let mut tint = Dict::new();
+        tint.set(b"FunctionType".to_vec(), Object::Int(2));
+        tint.set(b"Domain".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(1)]));
+        tint.set(b"N".to_vec(), Object::Int(1));
+        Object::Dict(tint)
+    }]);
+    let mut images: Vec<ObjRef> = Vec::new();
+    let grey = || ("ColorSpace", Object::name("DeviceGray"));
+    for (k, (key, value)) in [grey(), grey(), ("ColorSpace", device_n), ("ImageMask", Object::Bool(true))].into_iter().enumerate() {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w as i64));
+        d.set(b"Height".to_vec(), Object::Int(h as i64));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+        d.set(key.as_bytes().to_vec(), value);
+        let image = doc.add(Object::Stream(Stream::flate(d, &bits)));
+        images.push(image);
+        let content = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"q 144 0 0 115.2 36 600 cm /Im Do Q".to_vec())));
+        let mut xobjects = Dict::new();
+        xobjects.set(b"Im".to_vec(), Object::Ref(image));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(pages));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+        page.set(b"Contents".to_vec(), Object::Ref(content));
+        if k == 0 {
+            let mut mark = Dict::new();
+            mark.set(b"Type".to_vec(), Object::name("Annot"));
+            mark.set(b"Subtype".to_vec(), Object::name("Redact"));
+            mark.set(b"Rect".to_vec(), Object::Array(vec![40.into(), 610.into(), 100.into(), 650.into()]));
+            let mark = doc.add(Object::Dict(mark));
+            page.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(mark)]));
+        }
+        let page = doc.add(Object::Dict(page));
+        doc.update_dict(pages, |d| {
+            let mut kids = d.get(b"Kids").and_then(|k| k.as_array().cloned()).unwrap_or_default();
+            kids.push(Object::Ref(page));
+            d.set(b"Count".to_vec(), Object::Int(kids.len() as i64));
+            d.set(b"Kids".to_vec(), Object::Array(kids));
+        })
+        .unwrap();
+    }
+    let mono = pdfcraft_optimize::MonoSettings {
+        compression: pdfcraft_optimize::MonoCompression::Jbig2,
+        downsample: false,
+        ..pdfcraft_optimize::MonoSettings::REDUCE
+    };
+    pdfcraft_optimize::optimize(&mut doc, &pdfcraft_optimize::Settings { mono, ..Default::default() }).unwrap();
+    let globals = |doc: &Document, image: ObjRef| match &*doc.get(image) {
+        Object::Stream(s) => s.dict.get(b"DecodeParms").and_then(Object::as_dict).and_then(|d| d.reference(b"JBIG2Globals")),
+        _ => None,
+    };
+    let shared = globals(&doc, images[0]);
+    assert!(shared.is_some() && globals(&doc, images[1]) == shared && globals(&doc, images[3]) == shared, "DeviceGray and the mask share");
+    assert_eq!(globals(&doc, images[2]), None, "the DeviceN page is coded alone");
+    pdfcraft_redact::apply(&mut doc, None).unwrap();
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let named = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if saved.jbig2_globals_ref(s).is_some())).count();
+    assert_eq!(named, 0, "no image names the dictionary, which left with them");
+}
+
+#[test]
+fn fill_sign_multiline_text_survives_engine_save_reopen_and_render() {
+    let (mut session, id) = rotated_blank(0);
+    let text = "\nAda\n\nLovelace\n";
+    let shape = Shape::Typewriter { rect: text_box_at(0, [20.0, 250.0], 120.0, 66.0).unwrap(), font_size: 10.0 };
+    let style = Style::default_for(&shape);
+    session.apply(id, Edit::AddAnnotation(NewAnnotation { page: 0, shape, style, contents: text.into(), author: "Test".into() })).unwrap();
+    assert_eq!(session.get(id).unwrap().info.annotations[0].contents.as_deref(), Some(text), "engine keeps outer typewriter line breaks");
+    let before = render_page(&session, id);
+    assert!(before.rgba.as_chunks::<4>().0.iter().any(|p| p[..3] == [0, 0, 0]), "the appearance contains ink");
+    let bytes = session.save_bytes(id).unwrap();
+    let mut reopened = Session::new();
+    let again = reopened.open("multiline.pdf", None, bytes, None).unwrap();
+    assert_eq!(reopened.get(again).unwrap().info.annotations[0].contents.as_deref(), Some(text), "reopening preserves all blank lines");
+    assert_eq!(before.rgba, render_page(&reopened, again).rgba, "the saved appearance is identical");
+}
+
+/// A whole tree goes in as one undoable step, and a refused tree changes nothing.
+#[test]
+fn imported_bookmarks_undo_in_one_step() {
+    let (mut s, id) = session_with(2);
+    let node = |title: &str, page, children| pdfcraft_organize::OutlineNode {
+        title: title.into(),
+        page,
+        view: None,
+        color: None,
+        italic: false,
+        bold: false,
+        open: true,
+        children,
+    };
+    let bookmarks = vec![node("Intro", Some(0), vec![node("Detail", Some(5), vec![])]), node("End", Some(1), vec![])];
+    s.apply(id, Edit::ImportBookmarks { parent: vec![], index: 0, bookmarks: bookmarks.clone(), replace: false }).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Intro→1[Detail→0]", "End→2"]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Import bookmarks"));
+    assert_eq!(s.outline_tree(id, &[]).unwrap().unwrap().nodes[0].title, "Intro");
+    s.undo(id).unwrap();
+    assert!(s.get(id).unwrap().info.outline.is_empty());
+    s.apply(id, Edit::ImportBookmarks { parent: vec![], index: 0, bookmarks: bookmarks.clone(), replace: false }).unwrap();
+    s.apply(id, Edit::ImportBookmarks { parent: vec![], index: 0, bookmarks: vec![node("New", Some(1), vec![])], replace: true }).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["New→2"]);
+    s.undo(id).unwrap();
+    assert_eq!(outline_titles(&s.get(id).unwrap().info.outline), ["Intro→1[Detail→0]", "End→2"]);
+    s.undo(id).unwrap();
+    let err = s.apply(id, Edit::ImportBookmarks { parent: vec![4], index: 0, bookmarks, replace: false }).unwrap_err();
+    assert!(err.to_string().contains("no bookmark"), "{err}");
+    assert!(s.get(id).unwrap().info.outline.is_empty());
 }
