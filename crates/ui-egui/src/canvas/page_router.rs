@@ -175,6 +175,9 @@ impl PagePress {
 struct Capture {
     pub owner: Owner,
     pub declines_drag: bool,
+    /// What lay on top at the press with the objects selected together aside: a double-click on
+    /// them reaches it.
+    under_objects: Option<Owner>,
 }
 
 /// The press the pages hold, from its frame until the button is up.
@@ -202,7 +205,9 @@ impl PageRouter {
         if self.began != Some(None) {
             return;
         }
-        self.capture = top(hits, tool).map(|h| Capture { owner: h.owner, declines_drag: h.declines_drag });
+        let hits: Vec<Hit> = hits.into_iter().collect();
+        let under_objects = top(hits.iter().filter(|h| !matches!(h.owner, Owner::Objects { .. })).cloned(), tool).map(|h| h.owner);
+        self.capture = top(hits, tool).map(|h| Capture { owner: h.owner, declines_drag: h.declines_drag, under_objects });
         self.began = Some(Some(page));
     }
 
@@ -214,6 +219,11 @@ impl PageRouter {
             (Some(Some(p)), None) if p == page => PagePress::Free,
             _ => PagePress::Elsewhere,
         }
+    }
+
+    /// What lay on top at the press with the objects selected together aside.
+    pub(in crate::canvas) fn under_objects(&self) -> Option<Owner> {
+        self.capture.as_ref().and_then(|c| c.under_objects)
     }
 
     /// Whether the press is held by someone who keeps its drag: then the page's text is not

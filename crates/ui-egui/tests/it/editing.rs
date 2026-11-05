@@ -7485,6 +7485,7 @@ fn add_text_moves_no_paragraph_while_it_holds_a_draft_it_cant_draw() {
     h.event(egui::Event::Text("Hello 世界".into()));
     h.run_steps(2);
     assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("Hello 世界"), "the draft holds the text");
+    let rect = h.state().views[0].content.draft.as_ref().map(|d| d.rect).unwrap();
     let on_text = point_on(&h, (block.rect[0] + block.rect[2]) / 2.0, (block.rect[1] + block.rect[3]) / 2.0);
     h.hover_at(on_text);
     h.run_steps(1);
@@ -7497,6 +7498,8 @@ fn add_text_moves_no_paragraph_while_it_holds_a_draft_it_cant_draw() {
     h.drop_at(on_text + egui::vec2(40.0, 0.0));
     h.run_steps(3);
     assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].rect, block.rect, "the paragraph stays");
+    let draft = h.state().views[0].content.draft.as_ref().map(|d| (d.text.clone(), d.rect));
+    assert_eq!(draft, Some(("Hello 世界".to_string(), rect)), "and the draft stays where it is typed");
 }
 
 /// With Edit text, a right-click on a comment over a picture opens the comment's menu, and the
@@ -7554,6 +7557,48 @@ fn a_crop_grip_takes_a_press_within_its_reach() {
     assert_ne!(keep(&h), before, "the grip takes the drag");
 }
 
+/// With Add text, a click on another paragraph keeps both what was typed in the open paragraph and
+/// the text being added: neither edit takes the other's place.
+#[test]
+fn add_text_keeps_a_changed_paragraph_and_a_draft_when_it_moves_on() {
+    let mut h = picture_pages(false);
+    h.state_mut().views[0].image_selection = None;
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let blocks = h.state().session.get(id).unwrap().text_blocks(0);
+    assert!(blocks.len() >= 2, "two paragraphs: {blocks:?}");
+    let centre = |r: [f64; 4]| ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let (ax, ay) = centre(blocks[0].rect);
+    let (bx, by) = centre(blocks[1].rect);
+    let a = page_at(&h, 0, ax as f32, ay as f32);
+    let b = page_at(&h, 0, bx as f32, by as f32);
+    slipping_click(&mut h, a, a);
+    assert!(h.state().views[0].line_editor.is_some(), "the first paragraph is open");
+    h.event(egui::Event::Text("X".into()));
+    h.run_steps(3);
+    // A click on the page's empty part, below the picture, starts a box.
+    let blank = page_at(&h, 0, 180.0, 20.0);
+    slipping_click(&mut h, blank, blank);
+    assert!(h.state().views[0].line_editor.is_none(), "that click applied the paragraph");
+    h.event(egui::Event::Text("Added words".into()));
+    h.run_steps(3);
+    slipping_click(&mut h, b, b);
+    h.run_steps(4);
+    let doc = h.state().session.get(id).unwrap();
+    let texts: Vec<String> = doc.text_blocks(0).iter().map(|b| b.text.clone()).collect();
+    let added: Vec<String> = doc
+        .added()
+        .iter()
+        .filter_map(|a| match &a.content {
+            pdfcraft_engine::AddedContent::Text(t) => Some(t.text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(added.iter().any(|t| t == "Added words"), "the added text is kept: {added:?}");
+    assert!(texts.iter().any(|t| t.contains('X')), "the paragraph's typing is kept: {texts:?}");
+}
+
 /// In the page grid, Delete deletes the page chosen there. The picture selected before the grid
 /// opened is not on screen, and stays.
 #[test]
@@ -7598,6 +7643,91 @@ fn a_selected_pictures_keys_wait_for_its_page_to_be_on_screen() {
         assert_eq!(after.len(), before.len(), "the picture stays");
         assert_eq!(after[0].visible_rect, before[0].visible_rect, "and is not cropped");
     }
+    // A page just off the screen, in a continuous view: it is still run for what lies near it.
+    let mut h = picture_pages(false);
+    let id = h.state().views[0].id;
+    let pictures = h.state().session.get(id).unwrap().page_images(0).len();
+    h.set_size(egui::vec2(1400.0, 400.0));
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(6);
+    // Going to a page leaves a margin above it: a little further, past page 1's foot.
+    let centre = h.state().views[0].viewport_rect().center();
+    h.hover_at(centre);
+    h.run_steps(1);
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -60.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Trackpad,
+    });
+    h.run_steps(6);
+    assert!(h.state().views[0].continuous, "a continuous view");
+    assert!(h.state().views[0].page_screen_rect(0).is_none(), "page 1 is off the screen");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert_eq!(h.state().session.get(id).unwrap().page_images(0).len(), pictures, "the picture stays");
+}
+
+/// Delete waits for the button to come up: the press held would then name another item, whose drag or
+/// click would follow.
+#[test]
+fn delete_waits_for_the_button_to_come_up() {
+    let hold_and_delete = |h: &mut Harness<'static, PdfCraftApp>, on: egui::Pos2| {
+        h.hover_at(on);
+        h.run_steps(1);
+        h.drag_at(on);
+        h.run_steps(1);
+        h.key_press(egui::Key::Delete);
+        h.run_steps(2);
+        h.drop_at(on);
+        h.run_steps(3);
+    };
+    let mut h = picture_pages(false);
+    let id = h.state().views[0].id;
+    let pictures = h.state().session.get(id).unwrap().page_images(0).len();
+    let on_picture = page_at(&h, 0, 100.0, 180.0);
+    hold_and_delete(&mut h, on_picture);
+    assert_eq!(h.state().session.get(id).unwrap().page_images(0).len(), pictures, "the picture stays");
+
+    let mut h = edit_page(pdfcraft_ui_egui::QuickTool::Select);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
+        page: 0,
+        text: pdfcraft_engine::AddedText { rect: [40.0, 250.0, 140.0, 265.0], text: "Added".into(), ..Default::default() },
+    }));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Select;
+    h.run_steps(3);
+    let on_added = point_on(&h, 90.0, 258.0);
+    slipping_click(&mut h, on_added, on_added);
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)), "the added text is selected");
+    hold_and_delete(&mut h, on_added);
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().added().len(), 1, "the added text stays");
+}
+
+/// A drag the page it is over first sees lets the picked picture go, whichever page it began on.
+#[test]
+fn a_drag_first_seen_on_the_next_page_lets_the_picked_picture_go() {
+    let mut h = picture_pages(false);
+    h.state_mut().views[0].image_selection = None;
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Select;
+    h.run_steps(3);
+    let on_picture = page_at(&h, 0, 100.0, 180.0);
+    slipping_click(&mut h, on_picture, on_picture);
+    assert!(h.state().views[0].picked_image.is_some(), "the picture is picked");
+    let press = page_at(&h, 0, 180.0, 20.0);
+    let release = page_at(&h, 1, 180.0, 280.0);
+    h.hover_at(press);
+    h.run_steps(1);
+    h.drag_at(press);
+    h.run_steps(1);
+    h.hover_at(release);
+    h.run_steps(1);
+    h.drop_at(release);
+    h.run_steps(4);
+    assert!(h.state().views[0].picked_image.is_none(), "the drag lets it go");
 }
 
 /// With the pointer on the Pages panel, Delete is the panel's: a page goes, though a picture is
@@ -7880,29 +8010,31 @@ fn an_add_text_click_pressed_beside_a_paragraph_starts_a_box_there() {
 /// waited, and moved the paragraph to wherever the pointer then was.
 #[test]
 fn a_paragraph_drag_ends_when_the_window_loses_focus() {
-    let mut h = edit_page(pdfcraft_ui_egui::QuickTool::EditText);
-    let id = h.state().views[0].id;
-    let before = h.state().session.get(id).unwrap().text_blocks(0)[0].rect;
-    let from = point_on(&h, (before[0] + before[2]) / 2.0, (before[1] + before[3]) / 2.0);
-    h.hover_at(from);
-    h.run_steps(1);
-    h.drag_at(from);
-    h.run_steps(1);
-    for k in 1..=4 {
-        h.hover_at(from + egui::vec2(0.0, 10.0 * k as f32));
+    for tool in [pdfcraft_ui_egui::QuickTool::EditText, pdfcraft_ui_egui::QuickTool::AddText] {
+        let mut h = edit_page(tool);
+        let id = h.state().views[0].id;
+        let before = h.state().session.get(id).unwrap().text_blocks(0)[0].rect;
+        let from = point_on(&h, (before[0] + before[2]) / 2.0, (before[1] + before[3]) / 2.0);
+        h.hover_at(from);
         h.run_steps(1);
+        h.drag_at(from);
+        h.run_steps(1);
+        for k in 1..=4 {
+            h.hover_at(from + egui::vec2(0.0, 10.0 * k as f32));
+            h.run_steps(1);
+        }
+        assert!(h.state().views[0].block_drag.is_some(), "the paragraph is being moved");
+        h.input_mut().focused = false;
+        h.run_steps(2);
+        h.drop_at(from + egui::vec2(0.0, 40.0));
+        h.run_steps(2);
+        h.input_mut().focused = true;
+        h.hover_at(from + egui::vec2(0.0, 80.0));
+        h.run_steps(4);
+        assert!(h.state().views[0].block_drag.is_none(), "the drag is over");
+        assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].rect, before, "nothing moved");
+        assert!(!dirty(&h));
     }
-    assert!(h.state().views[0].block_drag.is_some(), "the paragraph is being moved");
-    h.input_mut().focused = false;
-    h.run_steps(2);
-    h.drop_at(from + egui::vec2(0.0, 40.0));
-    h.run_steps(2);
-    h.input_mut().focused = true;
-    h.hover_at(from + egui::vec2(0.0, 80.0));
-    h.run_steps(4);
-    assert!(h.state().views[0].block_drag.is_none(), "the drag is over");
-    assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].rect, before, "nothing moved");
-    assert!(!dirty(&h));
 }
 
 /// The rotate knob of a picture that fills its page lies past the page's edge, and a drag there

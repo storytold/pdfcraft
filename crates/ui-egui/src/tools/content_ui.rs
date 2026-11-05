@@ -110,6 +110,8 @@ pub struct ContentView {
     grab: Option<(usize, Grab, Pos2)>,
     /// Where the press nobody holds began, on which page: Add text's click starts its new box there.
     pressed_at: Option<(usize, Pos2)>,
+    /// A button is down on the pages this frame (for [`keys`], which runs after them).
+    held: bool,
     undrawable: UndrawableMemo,
     layout: Option<(AddedText, f32, f64, [f64; 4])>,
 }
@@ -404,6 +406,7 @@ pub(crate) struct ContentCx<'a> {
 pub(crate) fn page_input(cx: PageToolContext<'_>, ccx: ContentCx<'_>, view: &mut DocView) -> bool {
     let PageToolContext { resp, xf, ptr, page, info, .. } = cx;
     let ContentCx { added, press, gate, picks_up, adding_text, edit_on_click, style } = ccx;
+    view.content.held = ptr.any_down;
     if !gate {
         return false;
     }
@@ -634,7 +637,11 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, image_controller_act
         return;
     }
     let (del, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace), i.key_pressed(egui::Key::Escape)));
-    if del && let Some((page, index)) = view.content.selected.take() {
+    // Not while a button is down: the press held would then name another item.
+    if del
+        && !view.content.held
+        && let Some((page, index)) = view.content.selected.take()
+    {
         view.pending_edit = Some(Edit::DeleteContent { page, index });
     } else if esc {
         view.content.selected = None;

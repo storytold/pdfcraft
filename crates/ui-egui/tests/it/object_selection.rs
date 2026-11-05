@@ -452,6 +452,47 @@ fn a_double_click_on_a_grouped_object_reaches_it() {
     assert!(h.state().views[0].content.draft.as_ref().is_some_and(|d| d.index == Some(0)), "the added note opens for typing");
 }
 
+/// A double-click on a paragraph selected with others opens the one its press was on, though the
+/// button came up just off it.
+#[test]
+fn a_double_click_on_a_grouped_paragraph_released_just_off_it_opens_it() {
+    let mut h = harness();
+    marquee(&mut h);
+    let (inside, outside) = {
+        let app = h.state();
+        let view = &app.views[0];
+        let xf = view.page_xform(0).unwrap();
+        let doc = app.session.get(view.id).unwrap();
+        let block = doc.text_blocks(0).into_iter().find(|b| b.text.contains("Group headline")).expect("the headline");
+        let frame = xf.user_rect(&doc.info, 0, block.rect.map(|v| v as f32));
+        (egui::pos2(frame.center().x, frame.top() + 1.0), egui::pos2(frame.center().x, frame.top() - 4.0))
+    };
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    h.hover_at(inside);
+    h.run_steps(1);
+    crate::support::input::one_frame(&mut h, [button(inside, true), button(inside, false)]);
+    crate::support::input::one_frame(&mut h, [button(inside, true), egui::Event::PointerMoved(outside), button(outside, false)]);
+    h.run_steps(2);
+    assert!(h.state().views[0].line_editor.is_some(), "the paragraph pressed is open for typing");
+}
+
+/// A press counts its own modifiers, whatever the frame's are: Shift in the press event adds to the
+/// selection, though the frame's modifiers show none.
+#[test]
+fn a_press_counts_the_modifiers_of_its_own_event() {
+    let mut h = harness();
+    let p = at(&h, 55.0, 70.0);
+    click(&mut h, p, Modifiers::NONE);
+    assert!(h.state().views[0].line_editor.is_some());
+    let p = at(&h, 60.0, 145.0);
+    let button = |pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::SHIFT };
+    h.hover_at(p);
+    h.run_steps(2);
+    crate::support::input::one_frame(&mut h, [button(true), button(false)]);
+    h.run_steps(4);
+    h.get_by_label("2 objects selected");
+}
+
 /// A double-click on a paragraph selected with others opens it for typing (the user's ruling).
 #[test]
 fn a_double_click_on_a_grouped_paragraph_opens_it() {

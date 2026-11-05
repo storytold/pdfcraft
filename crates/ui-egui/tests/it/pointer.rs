@@ -1934,6 +1934,33 @@ fn a_right_click_with_the_button_held_opens_the_selected_comments_menu() {
     h.run_steps(2);
 }
 
+/// With the page gaps hidden, a Shift-click on the row two pages share is the first page's: what it
+/// selects there stays selected, and the second page leaves it alone.
+#[test]
+fn a_shift_click_where_two_pages_touch_keeps_what_it_selected() {
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    h.state_mut().views[0].show_page_gaps = false;
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(4);
+    let (one, two) = {
+        let v = &h.state().views[0];
+        (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
+    };
+    // "Bottom line" runs from x 40, a few points above page 1's foot.
+    let seam = egui::pos2(one.min.x + 70.0, one.max.y);
+    assert!(one.contains(seam) && two.contains(seam), "the pages touch: {one:?} {two:?}");
+    h.hover_at(seam);
+    h.run_steps(2);
+    for pressed in [true, false] {
+        h.event_modifiers(
+            egui::Event::PointerButton { pos: seam, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::SHIFT },
+            egui::Modifiers::SHIFT,
+        );
+    }
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("1 object").is_some(), "the line is selected");
+}
+
 /// With Prepare open on a document that can't be changed, a right-click on a field selects nothing
 /// and opens the page's menu, whose field entries would only be refused.
 #[test]

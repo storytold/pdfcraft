@@ -595,9 +595,9 @@ impl eframe::App for PdfCraftApp {
             view.objects.set_input_blocked(shut);
             if shut {
                 view.auto_scroll.cancel();
-                // Edit text ignores input while it is blocked: its drags end rather than wait, to
+                // Edit text and Add text's drags end while their input is blocked rather than wait, to
                 // land wherever the pointer is once it opens again.
-                if self.quick_tool == QuickTool::EditText {
+                if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
                     view.cancel_edit_text_gestures();
                 }
             }

@@ -129,13 +129,12 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let wants_under = editing || resp.clicked() || resp.secondary_clicked() || matches!(tool, QuickTool::Fill(_)) && !ptr.any_down;
     let under = pointer.filter(|p| wants_under && xf.rect.contains(*p)).map(|p| hits.at(view, p, None)).unwrap_or_default();
     let hovered = top(under.iter().cloned(), tool);
-    // A double-click on the objects selected together is the object's under it: the double-click
-    // leaves the group (`object_ui`), and added text opens for typing, a picture or a paragraph is
-    // the one taken (the user's ruling).
+    // A double-click on the objects selected together is the object's its press was on: the
+    // double-click leaves the group (`object_ui`), and added text opens for typing, a picture or a
+    // paragraph is the one taken (the user's ruling).
     let press = match press {
         PagePress::Mine(Owner::Objects { part: crate::page_router::ObjectsPart::Selection }) if resp.double_clicked() => {
-            top(under.iter().filter(|h| !matches!(h.owner, Owner::Objects { .. })).cloned(), tool)
-                .map_or(PagePress::Free, |h| PagePress::Mine(h.owner))
+            view.router.under_objects().map_or(PagePress::Free, PagePress::Mine)
         }
         press => press,
     };
@@ -825,8 +824,11 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     let tool_cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
     // A press nobody holds picks the picture under it: a link's click follows the link only (ruling
-    // 5), though its drag or double-click still lets the picked picture go.
-    if tool == QuickTool::Select && matches!(input.press, PagePress::Free | PagePress::Mine(Owner::Link { .. })) && !input.consumed {
+    // 5), though its drag or double-click still lets the picked picture go, as does a drag the page
+    // it is over first sees, whichever page it began on.
+    let pick_sees =
+        matches!(input.press, PagePress::Free | PagePress::Mine(Owner::Link { .. })) || input.press == PagePress::Elsewhere && ptr.drag_started;
+    if tool == QuickTool::Select && pick_sees && !input.consumed {
         crate::image_pick::page_input(resp, &xf, i, info, doc, ptr, input.press == PagePress::Free, view);
     }
     crate::image_pick::drop_stale(doc, view);
