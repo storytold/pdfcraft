@@ -93,6 +93,10 @@ impl PdfCraftApp {
                     // Show/Hide: a panel already showing closes.
                     self.right = (self.right != Some(panel)).then_some(panel);
                 }
+                Request::PopUpMenu(items) => {
+                    let anchor = self.ctx.as_ref().and_then(|ctx| ctx.input(|i| i.pointer.interact_pos())).unwrap_or_default();
+                    self.popup_menu = Some(widgets::ComponentPopup { document: id, anchor, items });
+                }
                 Request::Focus(_) | Request::Beep | Request::Reset(_) => {}
             }
         }
@@ -135,6 +139,30 @@ impl PdfCraftApp {
         self.toast = Some((m.text.clone(), 0.0));
         self.toast_script = Some(m);
         true
+    }
+
+    /// Run a link annotation's JavaScript action.
+    pub fn run_link_script(&mut self, id: DocId, script: &str) {
+        let generation = self.session.get(id).map(|d| d.edit_generation());
+        match self.session.run_javascript(id, script, None) {
+            Ok(o) => {
+                if self.session.get(id).map(|d| d.edit_generation()) != generation
+                    && let Some(i) = self.views.iter().position(|v| v.id == id)
+                    && let Some(info) = self.session.get(id).map(|d| d.info.clone())
+                {
+                    self.views[i].document_changed(&info);
+                }
+                let out = JsOutput {
+                    alerts: o.alerts,
+                    console: o.console,
+                    requests: o.requests,
+                    errors: o.error.into_iter().collect(),
+                    doc_errors: Vec::new(),
+                };
+                self.handle_js(id, out);
+            }
+            Err(e) => self.notify_fmt("JavaScript link action failed: {e}", &[("e", &e.to_string())]),
+        }
     }
 
     /// Run a push button's JavaScript (its Mouse Up action).

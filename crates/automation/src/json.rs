@@ -354,6 +354,7 @@ pub(crate) fn info(d: &Document) -> Value {
                     "new_window": new_window,
                 }),
                 pdfcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
+                pdfcraft_render::LinkTarget::JavaScript(script) => json!({ "javascript": script }),
             },
         })).collect::<Vec<_>>(),
         "layers": i.layers.iter().map(|l| json!({ "name": l.name, "visible": l.visible, "initial": l.initial })).collect::<Vec<_>>(),

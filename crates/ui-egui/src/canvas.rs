@@ -882,6 +882,10 @@ pub(crate) fn default_page_context_menu(ui: &mut egui::Ui, page: usize, at: [f64
 }
 
 impl DocView {
+    /// The visible document area, excluding the side panels and window chrome.
+    pub(crate) fn document_viewport(&self) -> Rect {
+        self.viewport_screen
+    }
     /// Whether a middle-button scrolling gesture is active (tests and automation).
     pub fn auto_scrolling(&self) -> bool {
         self.auto_scroll.active()
@@ -2702,6 +2706,10 @@ fn follow_link(
         LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),
         LinkTarget::SetLayers { changes, preserve_rb } => set_layers(app, index, &changes, preserve_rb),
         LinkTarget::RemoteGoTo { file, destination, .. } => return Some((view_id, file, destination)),
+        LinkTarget::JavaScript(script) => {
+            let id = app.views[index].id;
+            app.run_link_script(id, &script);
+        }
         LinkTarget::Other(s) => app.notify_fmt("This PDF uses the unsupported {s} action.", &[("s", &s)]),
     }
     None
@@ -3227,7 +3235,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let pan_held = track_scroll(ui, view, &out, glide);
     plan_renders(ui, view, info, out.inner, &RenderPlan { visible_pages: &visible_pages, tag, scale, sharp_held, pan_held, hand });
 
-    let text_done = frame_overlays(ui, view, &env, primary_down, hover_text);
+    let text_done = frame_overlays(ui, view, &env, primary_down, hover_text.filter(|_| app.popup_menu.is_none()));
     if let Some(why) = view.objects.notice.take() {
         refused = Some(why);
     }

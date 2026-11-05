@@ -448,6 +448,76 @@ fn wrapped_lines(ui: &egui::Ui, text: &str, font: &egui::FontId, width: f32, tru
     lines
 }
 
+/// A script menu and the location where it was requested.
+#[derive(Clone, Debug)]
+pub struct ComponentPopup {
+    pub document: pdfcraft_engine::DocId,
+    pub anchor: egui::Pos2,
+    pub items: Vec<String>,
+}
+
+/// Component properties beside the click, constrained to the document viewport.
+pub fn popup_menu(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    let Some(popup) = app.popup_menu.as_ref() else { return };
+    let Some(view) = app.active.and_then(|i| app.views.get(i)).filter(|v| v.id == popup.document) else {
+        app.popup_menu = None;
+        return;
+    };
+    let t = Tokens::get(ctx);
+    let bounds = view.document_viewport().intersect(ctx.content_rect()).shrink(8.0);
+    if !bounds.is_positive() {
+        return;
+    }
+    let mut open = !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+    egui::Area::new(egui::Id::unique("popup-menu"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(popup.anchor + vec2(12.0, 12.0))
+        .constrain_to(bounds)
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(t.panel)
+                .stroke(egui::Stroke::new(1.0, t.divider))
+                .corner_radius(egui::CornerRadius::same(8))
+                .inner_margin(egui::Margin::same(12))
+                .shadow(egui::Shadow { offset: [0, 2], blur: 8, spread: 0, color: egui::Color32::from_black_alpha(40) })
+                .show(ui, |ui| {
+                    ui.set_width(360.0_f32.min((bounds.width() - 24.0).max(0.0)));
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(tl!("Component Properties")).strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if icons::button(ui, "x", 24.0, false, tl!("Close (Esc)")).clicked() {
+                                open = false;
+                            }
+                        });
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical().max_height((bounds.height() - 80.0).max(0.0).min(bounds.height() * 0.6)).show(ui, |ui| {
+                        for item in &popup.items {
+                            if item == "-" {
+                                ui.separator();
+                            } else {
+                                // Split "Key: Value" so the key is bold.
+                                match item.split_once(": ") {
+                                    Some((key, value)) => {
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.label(egui::RichText::new(key).strong());
+                                            ui.label(value);
+                                        });
+                                    }
+                                    None => {
+                                        ui.label(item.as_str());
+                                    }
+                                }
+                            }
+                        }
+                    });
+                });
+        });
+    if !open {
+        app.popup_menu = None;
+    }
+}
+
 /// Transient message at the bottom centre.
 pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // A form script message waiting its turn takes the toast once it is free.

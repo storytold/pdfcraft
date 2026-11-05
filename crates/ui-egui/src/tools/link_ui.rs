@@ -89,6 +89,7 @@ fn target_label(info: &DocInfo, target: &LinkTarget) -> String {
         LinkTarget::Uri(u) => u.clone(),
         LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
         LinkTarget::RemoteGoTo { file, .. } => file.clone(),
+        LinkTarget::JavaScript(_) => tl!("JavaScript action").to_string(),
         LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
     }
 }

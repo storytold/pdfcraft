@@ -422,6 +422,9 @@ pub struct PdfCraftApp {
     /// The form script message the toast shows now, if it shows one: drawn with its title and
     /// icon (#4293).
     pub toast_script: Option<pdfcraft_engine::js::Message>,
+    /// Component-property popup from `app.popUpMenu` / `app.popUpMenuEx` in a link script:
+    /// the items to display, one per line, until the user dismisses it.
+    pub popup_menu: Option<widgets::ComponentPopup>,
     /// Form script messages waiting for the toast, in the order the scripts showed them: each
     /// takes the toast when the one before it is gone, so every one is seen (#4294).
     pub script_messages: std::collections::VecDeque<pdfcraft_engine::js::Message>,

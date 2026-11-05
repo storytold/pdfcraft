@@ -24,6 +24,37 @@ fn go(script: &str, event: &Event) -> Outcome {
 }
 
 #[test]
+fn schematic_popup_labels_and_separators_are_preserved() {
+    for script in [
+        "event.value = String(app.popUpMenu('Designator: R1', '-', 'Value: 10k'));",
+        "event.value = String(app.popUpMenuEx({cName:'Designator: R1'}, {cName:'-'}, {cName:'Value: 10k'}));",
+    ] {
+        let out = go(script, &Event::doc("Mouse Up"));
+        assert_eq!(out.error, None);
+        assert_eq!(out.value, "null");
+        assert_eq!(out.requests, [Request::PopUpMenu(vec!["Designator: R1".into(), "-".into(), "Value: 10k".into()])]);
+    }
+}
+
+#[test]
+fn popup_requests_obey_the_script_output_budget() {
+    use crate::host::Host;
+    let mut host = Host {
+        fields: Arc::new(Vec::new()),
+        changed: BTreeSet::new(),
+        alerts: Vec::new(),
+        console: Vec::new(),
+        requests: Vec::new(),
+        doc: doc(),
+        kept: crate::xfa::MAX_PAYLOAD - 1,
+        dropped: 0,
+    };
+    host.request(Request::PopUpMenu(vec!["Value: 10k".into()]));
+    assert!(host.requests.is_empty());
+    assert_eq!(host.dropped, 1);
+}
+
+#[test]
 fn calculate_scripts_read_fields_and_set_the_value() {
     let o = go("event.value = this.getField('price').value * getField('qty').value;", &Event::field("Calculate", "total", ""));
     assert_eq!(o.error, None);

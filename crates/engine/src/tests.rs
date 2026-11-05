@@ -8287,7 +8287,7 @@ fn copy_image_finds_the_image_under_a_point_and_decodes_it_at_full_size() {
 }
 
 /// Copy Image: a JPEG drawn through grouped Form artwork (as Word, InDesign and scanners write
-/// them), with a caption over it and an empty full-page Form on top.
+/// them), with a caption over it and a full-page Form containing only a small logo on top.
 #[test]
 fn copy_image_finds_a_picture_inside_form_artwork_under_text() {
     let jpeg = jpeg_bytes();
@@ -8308,7 +8308,7 @@ fn copy_image_finds_a_picture_inside_form_artwork_under_text() {
         stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Im1 7 0 R /Tiny 8 0 R >> >>", &form),
         stream("/Type /XObject /Subtype /Image /Width 3 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode", &jpeg),
         stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", &[255, 0, 0]),
-        stream("/Type /XObject /Subtype /Form /BBox [0 0 200 300]", b""),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 200 300] /Resources << /XObject << /Im1 7 0 R >> >>", b"q 10 0 0 10 180 280 cm /Im1 Do Q"),
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
@@ -8328,12 +8328,13 @@ fn copy_image_finds_a_picture_inside_form_artwork_under_text() {
     let id = s.open("form.pdf", None, Arc::new(out), None).unwrap();
     let d = s.get(id).unwrap();
     assert_eq!(d.page_images(0).len(), 2, "{:?}", d.page_images(0));
-    // Under the caption, inside the picture: the Form holding it, not the empty Form on top.
+    // Under the caption, inside the picture: the Form holding it, not the logo's page-sized group.
     assert_eq!(d.page_image_at(0, [100.0, 100.0]), Some(0));
-    assert_eq!(d.page_image_at(0, [10.0, 10.0]), None, "the empty full-page Form holds no picture");
+    assert_eq!(d.page_image_at(0, [10.0, 10.0]), None, "the full-page Form has no picture here");
+    assert_eq!(d.page_image_at(0, [185.0, 285.0]), Some(1), "the logo itself is still a picture");
     // The largest picture in the group, as the JPEG stored in the PDF.
-    assert_eq!(d.page_image_copy_file(0, 0).unwrap(), ("jpg", jpeg));
-    assert!(d.page_image_copy_file(0, 1).is_err());
+    assert_eq!(d.page_image_copy_file(0, 0).unwrap(), ("jpg", jpeg.clone()));
+    assert_eq!(d.page_image_copy_file(0, 1).unwrap(), ("jpg", jpeg));
 }
 
 /// Copy Image reads a JBIG2 image's `/JBIG2Globals`: here they hold the page information, and the
