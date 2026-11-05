@@ -480,6 +480,15 @@ impl Automation {
                     self.apply(&a, Edit::EditPageImage { page, index, change })?
                 }
             }
+            "text_prepare" => {
+                let page = self.page(&a)?;
+                let preparation = self.doc(&a)?.text_preparation(page).map_err(ToolError::Failed)?;
+                let mut result = self.apply(&a, Edit::PrepareText { page })?;
+                result["prepared_groups"] = json!(preparation.expanded);
+                result["repaired_fonts"] = json!(preparation.repaired_fonts);
+                result["refused_groups"] = json!(preparation.refused);
+                result
+            }
             "text_paragraphs" => {
                 let page = self.page(&a)?;
                 let doc = self.doc_to_copy(&a)?;

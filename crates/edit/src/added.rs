@@ -23,6 +23,7 @@ mod layout;
 mod store;
 mod types;
 
+pub(crate) use draw::thai_glyph_resources;
 #[cfg(test)]
 use draw::{GLYPHS_PER_FONT, LaidLine, draw_laid_shaped};
 #[cfg(test)]

@@ -204,6 +204,11 @@ undoable and survive saving/reopening. `image_hit` shares the UI's curve and hol
 The bounds, limits and font requirements are in [existing-text editing](../../docs/editing-existing-text.md)
 and [image editing](../../docs/editing-images.md).
 
+`text_prepare` makes supported grouped Form text editable on one page, as entering Edit text
+in the GUI does. It keeps the group's original glyph operators and shared source objects,
+records preparation/map repairs and is undoable. List `text_paragraphs` afterwards; its indices
+belong to the prepared page. Unsafe compositing and malformed/tagged groups stay intact.
+
 ### Superscript and subscript normalization
 
 `text_script` changes characters to their Unicode superscript or subscript forms; it does not

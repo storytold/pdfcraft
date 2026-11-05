@@ -10696,3 +10696,231 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
         }
     }
 }
+
+#[test]
+fn explicit_builtin_thai_replaces_an_unavailable_source_without_installing_a_font() {
+    let mut doc = text_page("BT /F1 16 Tf 50 700 Td (A) Tj ET BT /F2 12 Tf 50 600 Td (ab) Tj ET");
+    let cmap =
+        doc.add(Object::Stream(Stream::flate(Dict::new(), b"1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0E19> endbfchar")));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |f| {
+        f.set(b"BaseFont".to_vec(), Object::name("ABCDEF+UnavailableThai"));
+        f.set(b"ToUnicode".to_vec(), Object::Ref(cmap));
+        f.set(b"FirstChar".to_vec(), Object::Int(65));
+        f.set(b"LastChar".to_vec(), Object::Int(65));
+        f.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(600)]));
+    })
+    .unwrap();
+    let before = text::text_lines(&doc, 0).unwrap();
+    let choice = text::text_editor_fonts(&doc, 0).unwrap().into_iter().find(|f| f.resource == "builtin:thai");
+    let style = text::BlockStyle { resource: Some("builtin:thai".into()), ..Default::default() };
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        assert!(choice.is_none());
+        assert!(text::rewrite_block(&mut doc, 0, 0, Some("น้ำ"), &style).is_err());
+        assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, before[0].text);
+        return;
+    }
+    assert!(choice.is_some(), "the document-font menu must offer a bundled Thai replacement");
+    let error = text::rewrite_block(&mut doc, 0, 0, Some("นน"), &text::BlockStyle::default()).unwrap_err().to_string();
+    assert!(error.contains("UnavailableThai") && error.contains("Noto Sans Thai"), "{error}");
+    let draft = "น้ำ กิ่ กี้ ผู้ใช้";
+    text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, draft);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().last().unwrap().text, before[1].text);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().last().unwrap().baseline(), before[1].baseline());
+    text::rewrite_block(&mut doc, 0, 0, Some("น้ำ ปู่"), &text::BlockStyle::default()).unwrap();
+    assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, "น้ำ ปู่");
+    // A selected range uses the same explicit choice; neighbouring source runs keep their face.
+    let mut selected = text_page("BT /F1 16 Tf 50 700 Td (Ab) Tj ET");
+    let style = text::BlockStyle {
+        ranges: vec![text::RangeStyle {
+            range: 0..1,
+            resource: Some("builtin:thai".into()),
+            family: None,
+            size: None,
+            color: None,
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    text::rewrite_block(&mut selected, 0, 0, Some("Ab"), &style).unwrap();
+    let lines = text::text_lines(&reopen(&selected), 0).unwrap();
+    assert!(lines.iter().any(|l| l.text == "A" && l.base_font.contains("NotoSansThai")));
+    assert!(lines.iter().any(|l| l.text == "b" && l.base_font == "Helvetica"));
+}
+
+#[test]
+fn existing_thai_subset_uses_shaped_matching_face_without_embedding_variable_font() {
+    let Some(_) = pdfcraft_fonts::document_thai_font() else { return };
+    // Synthetic source subset: only one Thai letter is encoded. No binary fixture or font
+    // is committed; the complete, openly licensed matching face is the optional build input.
+    let mut doc = text_page("BT /F1 16 Tf 50 700 Td (A) Tj ET BT /F2 12 Tf 50 600 Td (ab) Tj ET");
+    let cmap =
+        doc.add(Object::Stream(Stream::flate(Dict::new(), b"1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0E19> endbfchar")));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |f| {
+        f.set(b"BaseFont".to_vec(), Object::name("ABCDEF+NotoSansThai-Regular"));
+        f.set(b"ToUnicode".to_vec(), Object::Ref(cmap));
+    })
+    .unwrap();
+    let neighbour = text::text_lines(&doc, 0).unwrap()[1].clone();
+    // More than 240 distinct logical clusters requires several single-byte Type 3 resources.
+    let long: String =
+        "กขคงจฉชซญดตถทนบปผฝพฟมยรลวศษสหฬอฮ".chars().flat_map(|c| ["ิ่", "ิ้", "ี่", "ี้", "ึ่", "ึ้", "ื่", "ื้"].map(move |marks| format!("{c}{marks}"))).collect();
+    let draft = format!("{long} ผู้ใช้ ปู่ ๑๒๓");
+    let style = text::BlockStyle { width: Some(14_400.0), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some(&draft), &style).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, draft);
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].baseline(), [50.0, 700.0]);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().last().unwrap().text, neighbour.text);
+    assert_eq!(text::text_lines(&doc, 0).unwrap().last().unwrap().baseline(), neighbour.baseline());
+    let next = "Hello ผู้ใช้ น้ำ ๔๕๖";
+    text::rewrite_block(&mut doc, 0, 0, Some(next), &text::BlockStyle::default()).unwrap();
+    assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, next);
+}
+
+#[test]
+fn grouped_source_text_preparation_edits_original_operators_without_changing_shared_forms() {
+    let mut doc = page_with_forms("q 1 0 0 1 12 20 cm /Body Do Q", &[("Body".into(), "BT /F1 14 Tf 40 500 Td (Original body) Tj ET".into())]);
+    let original_form = doc.get(pdfcraft_cos::ObjRef::new(7, 0)).clone();
+    let first = pdfcraft_model::pages(&doc)[0].clone();
+    let second = doc.add(Object::Dict(first.dict.clone()));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |d| {
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(first.obj), Object::Ref(second)]));
+        d.set(b"Count".to_vec(), Object::Int(2));
+    })
+    .unwrap();
+    assert!(!text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text.contains("Original body")));
+    let prepared = text::forms::prepare(&mut doc, 0).unwrap();
+    assert_eq!(prepared.expanded, 1);
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    let (index, block) = blocks.iter().enumerate().find(|(_, b)| b.text == "Original body").unwrap();
+    assert!((block.rect[0] - 52.0).abs() < 0.01, "placement must survive preparation: {block:?}");
+    rewrite_block(&mut doc, 0, index, Some("Changed body"), &BlockStyle::default()).unwrap();
+    assert!(
+        !text::glyph_text_lines(&doc, &pdfcraft_model::pages(&doc)[0]).unwrap().iter().any(|l| l.text.contains("Original body")),
+        "old glyphs must be removed, not covered"
+    );
+    assert!(text::text_blocks(&doc, 0).unwrap().iter().any(|b| b.text == "Changed body"));
+    assert!(text::reading_blocks(&doc, 1).unwrap().iter().any(|b| b.text == "Original body"));
+    assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(7, 0)), original_form);
+    assert_eq!(text::forms::prepare(&mut doc, 0).unwrap().expanded, 0);
+}
+
+#[test]
+fn grouped_text_preparation_keeps_unsafe_compositing_paths_and_malformed_forms_intact() {
+    for (page_ops, form_ops, extra) in [
+        ("/Body Do", "BT /F1 14 Tf (body) Tj ET", "/Group << /S /Transparency /K true >>"),
+        ("/Body Do", "Q BT /F1 14 Tf (body) Tj ET", ""),
+        ("/Body Do", "BT /F1 14 Tf (body) Tj", ""),
+        ("10 10 m 20 20 l /Body Do S", "BT /F1 14 Tf (body) Tj ET", ""),
+        ("BT /F1 14 Tf /Body Do ET", "BT /F1 14 Tf (body) Tj ET", ""),
+        ("/Body Do", "/Body Do", "/Group << /S /Transparency >>"),
+    ] {
+        let mut doc = page_with_forms(page_ops, &[("Body".into(), form_ops.into())]);
+        if !extra.is_empty() {
+            let additions = build(&[&format!("<< {extra} >>")]);
+            let fields = additions.get(pdfcraft_cos::ObjRef::new(1, 0)).as_dict().unwrap().clone();
+            let form = doc.get(pdfcraft_cos::ObjRef::new(7, 0));
+            let Object::Stream(mut s) = form.as_ref().clone() else { panic!("fixture") };
+            for (k, v) in fields.iter() {
+                s.dict.set(k.clone(), v.clone());
+            }
+            doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(s));
+        }
+        let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+        let result = text::forms::prepare(&mut doc, 0).unwrap();
+        assert_eq!(result.expanded, 0, "unsafe input {page_ops}, {form_ops}, {extra}");
+        assert!(!result.refused.is_empty());
+        assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before);
+    }
+}
+
+#[test]
+fn editing_legacy_thai_keeps_the_embedded_face_weight_size_spacing_and_paint_after_reopen() {
+    // Remap existing OFL Inter outlines to synthetic Thai glyph slots; no proprietary font
+    // fixture is needed. Removing layout/cmap tables reproduces legacy PDF font subsetting.
+    let mut program = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    let count = u16::from_be_bytes(program[4..6].try_into().unwrap()) as usize;
+    let records: Vec<_> = program[12..12 + count * 16]
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .filter(|r| !matches!(&r[..4], b"cmap" | b"GSUB" | b"GPOS"))
+        .map(|r| r.to_vec())
+        .collect();
+    program[4..6].copy_from_slice(&(records.len() as u16).to_be_bytes());
+    for (index, record) in records.iter().enumerate() {
+        program[12 + index * 16..28 + index * 16].copy_from_slice(record);
+    }
+    for bold in [false, true] {
+        let mut doc = text_page("BT /F1 17.5 Tf 0.42 Tc 1.1 Tw 86 Tz 1.5 Ts 2 Tr 0.6 w 0.2 0.3 0.4 rg 50 650 Td <00d601090119> Tj ET");
+        let raw = doc.add(Object::Stream(Stream::flate(Dict::new(), &program)));
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), Object::Ref(raw));
+        let mut descendant = Dict::new();
+        descendant.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+        descendant.set(b"CIDToGIDMap".to_vec(), Object::name("Identity"));
+        descendant.set(b"W".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(65535), Object::Int(500)]));
+        let unicode = doc.add(Object::Stream(Stream::flate(
+            Dict::new(),
+            b"2 beginbfrange <00d6> <010f> <0e01> <0110> <012a> <0e3f> endbfrange 2 beginbfchar <0160> <0e48> <0161> <0e49> endbfchar",
+        )));
+        let mut font = Dict::new();
+        font.set(b"Type".to_vec(), Object::name("Font"));
+        font.set(b"Subtype".to_vec(), Object::name("Type0"));
+        font.set(b"BaseFont".to_vec(), Object::name(if bold { "ABCDEF+THSarabunPSK-Bold" } else { "ABCDEF+THSarabunPSK" }));
+        font.set(b"Encoding".to_vec(), Object::name("Identity-H"));
+        font.set(b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(descendant)]));
+        font.set(b"ToUnicode".to_vec(), Object::Ref(unicode));
+        doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font.clone()));
+        let before = text::text_lines(&doc, 0).unwrap()[0].clone();
+        let fonts = page_font_programs(&doc);
+        let style = BlockStyle { width: Some(400.0), ..Default::default() };
+        let edited = text::rewrite_block(&mut doc, 0, 0, Some("กิ่ กี้ น้ำ"), &style).expect("existing source glyphs must remain editable");
+        assert_eq!(edited.substituted, None, "keeping the source must never silently select Noto or another face");
+        let doc = reopen(&doc);
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(lines[0].text, "กิ่ กี้ น้ำ");
+        for after in &lines {
+            assert_eq!(after.font, before.font);
+            assert_eq!(after.base_font, before.base_font);
+            assert_eq!(after.bold, bold);
+            assert_eq!(after.size, before.size);
+            assert_eq!(after.color, before.color);
+            assert_eq!(after.baseline(), before.baseline());
+        }
+        let mut settings = std::collections::BTreeMap::new();
+        for op in pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops {
+            if matches!(op.op.as_slice(), b"Tc" | b"Tw" | b"Tz" | b"Ts" | b"Tr" | b"w") {
+                settings.insert(op.op.clone(), op.num(0).unwrap());
+            }
+            let shows = if op.is("Tj") {
+                op.operands.first().and_then(Object::as_string).is_some_and(|s| !s.bytes.is_empty())
+            } else if op.is("TJ") {
+                op.operands
+                    .first()
+                    .and_then(Object::as_array)
+                    .is_some_and(|a| a.iter().any(|o| matches!(o, Object::String(s) if !s.bytes.is_empty())))
+            } else {
+                false
+            };
+            if shows {
+                break;
+            }
+        }
+        for (op, expected) in [("Tc", 0.42), ("Tw", 1.1), ("Tz", 86.0), ("Ts", 1.5), ("Tr", 2.0), ("w", 0.6)] {
+            assert_eq!(settings.get(op.as_bytes()), Some(&expected), "{op} must survive in the saved PDF");
+        }
+        let mut explicit = doc.clone();
+        let chosen = BlockStyle { resource: Some("F1".into()), width: Some(400.0), ..Default::default() };
+        text::rewrite_block(&mut explicit, 0, 0, Some("กี้ น้ำ"), &chosen).expect("selecting the existing source font from the menu must work too");
+        assert_eq!(text::text_lines(&reopen(&explicit), 0).unwrap()[0].base_font, before.base_font);
+        assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(5, 0)).as_dict(), Some(&font));
+        let Object::Stream(saved) = doc.get(raw).as_ref().clone() else { panic!("fixture font") };
+        assert_eq!(saved.decoded().unwrap(), program);
+        assert_eq!(page_font_programs(&doc), fonts, "no replacement font program may be added");
+    }
+}

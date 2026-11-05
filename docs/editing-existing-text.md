@@ -1,5 +1,16 @@
 # Editing existing text and source subsets
 
+Entering **Edit text and images** prepares supported grouped Form XObjects on the visible
+page in an undoable **Prepare grouped text** step. The group's original operators, clip,
+placement and resources become page content; shared forms on other pages stay unchanged.
+Headless callers use `text_prepare`, then list `text_paragraphs` and call `text_edit`.
+This edits existing glyph operators; it adds neither a cover rectangle nor an Add Text box.
+Preparation refuses knockout/blended groups, incompatible colour spaces, tagged forms,
+recursive forms, unfinished paths and unreadable content. Decoding is capped at 16 MiB,
+64 placements and eight expansion levels per page. Unsupported groups remain intact.
+A narrowly fingerprinted legacy THSarabunPSK exporter map can also be repaired in copied page
+fonts; the repair log records both preparation and character-map recovery.
+
 Click a text region in **Edit a PDF → Edit text and images**. One editor contains its
 source rows and mixed styles. Embedded TrueType and OpenType/CFF faces are used in memory;
 source font programs, colour, size and baseline anchors stay intact. A textless preview
@@ -43,6 +54,30 @@ preserved. Optional matching faces from `CRAFT_FONTS_DIR` can also complete sour
 this works only when that build input actually contains the full face. This change does not
 add a font binary or change the release font pin. Fonts shared by releases belong in
 `storytold/craft-fonts` under the repository's asset rules.
+
+**Keep source fonts** retains the existing Thai family, weight and point size. For legacy
+THSarabunPSK subsets, PdfCraft reconstructs an editor-only Unicode cmap from the PDF's
+Unicode and CID-to-glyph maps. HarfRust uses the retained Thai positional glyphs, and the
+saved text refers to the original PDF font resources. Several subsets of the same exact
+face can supply Thai and punctuation glyphs; Regular and Bold stay separate. Source font
+programs are never modified or replaced. Text settings, including character/word spacing,
+horizontal scale, rise, color and paint mode, remain in the PDF text state.
+
+A source subset that lacks a needed contextual glyph produces an error asking for the
+complete original face or an explicit replacement. Cross-family replacement requires an
+explicit choice. The document-font menu offers **Noto Sans Thai**: pass its `text_fonts`
+resource (normally `builtin:thai`) as `text_edit.font_resource` or a range's `font_resource`. This replacement
+requires the optional craft-fonts Thai input and currently uses Regular. A matching Noto
+subset can still be completed by that same bundled family.
+
+The bundled variable Thai face is written as bounded Type 3 glyph outlines, with shaped
+vowel/tone positions and logical Unicode text, rather than embedded as a static font.
+Saved paragraphs can be reopened and edited again without installing a font. Modern Thai
+shaping uses the source's GPOS mark positioning; GSUB substitution is optional, as specified by
+[the OpenType Thai model](https://learn.microsoft.com/en-us/typography/script-development/thai).
+Verified legacy Thai PUA fonts use positional substitutions instead of requiring GPOS.
+Mixed contextual style runs and dictionary word segmentation remain limited. No font binary
+or release pin changes are needed.
 
 When mixed-style text needs outline fallback, characters using the same actual fallback face
 share Type 3 fonts, with at most 240 distinct glyphs per font. Adjacent characters with the same
