@@ -62,22 +62,48 @@ pub(crate) fn page_painting(doc: &Document, page: &Dict) -> Painting {
 }
 
 /// Whether `page` names a blending colour space PDF/A accepts without an output intent: its
-/// `/Group` has a `/CS` that is not null and not a device colour space, unless the page's
-/// resources give that device space a default (`DefaultGray`, `DefaultRGB`, `DefaultCMYK`), as
-/// PDF/A-2 6.2.4.3 asks of any device colour.
+/// `/Group` has a `/CS` that is a blending colour space (ISO 32000-1 and 32000-2 11.3.4:
+/// `CalGray`, `CalRGB`, or an `ICCBased` space of 1, 3 or 4 components whose profile describes
+/// gray, RGB or CMYK; not Lab, Indexed, Pattern, Separation or DeviceN), and not a device colour
+/// space unless the page's resources give that device space a default (`DefaultGray`,
+/// `DefaultRGB`, `DefaultCMYK`), as PDF/A-2 6.2.4.3 asks of any device colour.
 pub(crate) fn page_names_blending_space(doc: &Document, page: &Dict) -> bool {
     let group = page.get(b"Group").map(|g| doc.resolve(g));
     let Some(cs) = group.as_deref().and_then(Object::as_dict).and_then(|g| g.get(b"CS")).map(|c| doc.resolve(c)) else { return false };
     let default: &[u8] = match &*cs {
-        Object::Null => return false,
         Object::Name(n) if n == b"DeviceGray" => b"DefaultGray",
         Object::Name(n) if n == b"DeviceRGB" => b"DefaultRGB",
         Object::Name(n) if n == b"DeviceCMYK" => b"DefaultCMYK",
-        _ => return true,
+        Object::Array(a) => return independent_blending_space(doc, a),
+        _ => return false,
     };
     let resources = page.get(b"Resources").map(|r| doc.resolve(r));
     let spaces = resources.as_deref().and_then(Object::as_dict).and_then(|r| r.get(b"ColorSpace")).map(|c| doc.resolve(c));
     spaces.as_deref().and_then(Object::as_dict).is_some_and(|s| s.get(default).is_some())
+}
+
+/// Whether the colour space array `a` is a device-independent blending colour space: `CalGray`,
+/// `CalRGB`, or `ICCBased` with 1, 3 or 4 components and, where the profile header can be read
+/// (within the output intent's profile cap), a gray, RGB or CMYK data colour space.
+fn independent_blending_space(doc: &Document, a: &[Object]) -> bool {
+    let family = a.first().map(|f| doc.resolve(f));
+    match family.as_deref().and_then(Object::as_name) {
+        Some(b"CalGray" | b"CalRGB") => true,
+        Some(b"ICCBased") => {
+            let profile = a.get(1).map(|p| doc.resolve(p));
+            let Some(Object::Stream(s)) = profile.as_deref() else { return false };
+            let components = s.dict.get(b"N").and_then(|n| doc.resolve(n).as_int());
+            if !matches!(components, Some(1 | 3 | 4)) {
+                return false;
+            }
+            // ICC.1 header: the data colour space is bytes 16–19.
+            match s.decoded_within(crate::MAX_ICC_PROFILE).ok().and_then(|data| data.get(16..20).map(<[u8]>::to_vec)) {
+                Some(space) => matches!(space.as_slice(), b"GRAY" | b"RGB " | b"CMYK"),
+                None => true,
+            }
+        }
+        _ => false,
+    }
 }
 
 struct Walk<'a> {
@@ -146,7 +172,8 @@ impl Walk<'_> {
         let below_one = |key: &[u8]| g.get(key).and_then(|v| doc.resolve(v).as_f64()).is_some_and(|a| a < 1.0);
         let bm = g.get(b"BM").map(|b| doc.resolve(b));
         let blend = bm.as_deref().is_some_and(|b| blends(doc, b));
-        let mask = g.get(b"SMask").map(|m| doc.resolve(m)).is_some_and(|m| !matches!(&*m, Object::Name(n) if n == b"None"));
+        // A soft mask is a dictionary; `/None`, null or anything else is none (ISO 32000-1 Table 58).
+        let mask = g.get(b"SMask").map(|m| doc.resolve(m)).is_some_and(|m| matches!(&*m, Object::Dict(_)));
         self.found.transparency |= below_one(b"CA") || below_one(b"ca") || blend || mask;
         for name in bm.as_deref().map(|b| unknown_blend_modes(doc, b)).unwrap_or_default() {
             if !self.found.unknown_blend_modes.contains(&name) {

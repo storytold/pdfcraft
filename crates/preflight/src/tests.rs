@@ -637,6 +637,27 @@ fn a_blending_space_is_device_independent_and_an_intent_has_a_profile() {
         let defaults = format!("/ColorSpace << /{default} [/CalRGB << /WhitePoint [0.9505 1 1.089] >>] >>");
         assert!(check("", &page(&format!("/CS /{device}"), &defaults), &[]).is_empty(), "{device} with {default}");
     }
+    // Only CalGray, CalRGB and gray, RGB or CMYK ICCBased spaces blend (ISO 32000-1 11.3.4).
+    assert!(check("", &page("/CS [/CalGray << /WhitePoint [0.9505 1 1.089] >>]", ""), &[]).is_empty(), "CalGray");
+    let icc = |n: u8, data: &str| format!("<< /N {n} /Length {} >>\nstream\n{data}\nendstream", data.len());
+    assert!(check("", &page("/CS [/ICCBased 4 0 R]", ""), &[&icc(3, "")]).is_empty(), "an ICC profile of three components");
+    for (what, cs, extra) in [
+        ("Indexed", "/CS [/Indexed /DeviceRGB 1 <000000FFFFFF>]".to_owned(), vec![]),
+        ("Lab", "/CS [/Lab << /WhitePoint [0.9505 1 1.089] >>]".to_owned(), vec![]),
+        (
+            "Separation",
+            "/CS [/Separation /Spot /DeviceCMYK 4 0 R]".to_owned(),
+            vec!["<< /FunctionType 2 /Domain [0 1] /C1 [0 0 0 1] /N 1 >>".to_owned()],
+        ),
+        ("an ICC profile of two components", "/CS [/ICCBased 4 0 R]".to_owned(), vec![icc(2, "")]),
+        ("a Lab ICC profile", "/CS [/ICCBased 4 0 R]".to_owned(), vec![icc(3, &format!("{}Lab ", "\0".repeat(16)))]),
+        ("a pattern space", "/CS /Pattern".to_owned(), vec![]),
+    ] {
+        let extra: Vec<&str> = extra.iter().map(String::as_str).collect();
+        assert_eq!(check("", &page(&cs, ""), &extra), page_said, "{what}");
+    }
+    // A null soft mask is none: an otherwise opaque graphics state is not transparency.
+    assert!(check("", "/Resources << /ExtGState << /G << /SMask null >> >> >>", &[]).is_empty(), "/SMask null");
     let intent = |profile: &str| format!("/OutputIntents [<< /Type /OutputIntent /S /GTS_PDFA1 /OutputConditionIdentifier (sRGB) {profile} >>]");
     let opaque_group = format!("/Resources << {alpha} >>");
     assert_eq!(check(&intent("/DestOutputProfile null"), &opaque_group, &[]), page_said, "a null profile");
