@@ -1,10 +1,12 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod action_failures;
 mod attachment_key;
 mod automation;
 mod automation_roots;
 mod backdrop;
 mod batch;
+mod batch_failures;
 mod button_caption;
 mod form_bulk;
 mod hostile_args;
