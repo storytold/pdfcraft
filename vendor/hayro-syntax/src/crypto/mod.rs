@@ -116,7 +116,7 @@ pub(crate) fn get(
     password: &[u8],
 ) -> Result<Decryptor, DecryptionError> {
     match decryptor(dict, id, password) {
-        // PdfCraft patch (36): a document that encrypts only its embedded files, authorised when
+        // PdfCraft patch (37): a document that encrypts only its embedded files, authorised when
         // one is opened (`/AuthEvent /EFOpen`, ISO 32000-2 §7.6.6, Table 25), opens without a
         // password: its strings and streams are in the clear, and nothing drawn reads an embedded
         // file.
@@ -127,7 +127,7 @@ pub(crate) fn get(
     }
 }
 
-/// PdfCraft patch (36): whether `dict` has crypt filters (V4 or later) that encrypt, each
+/// PdfCraft patch (37): whether `dict` has crypt filters (V4 or later) that encrypt, each
 /// authorised only when an embedded file is opened (`/AuthEvent /EFOpen`), and neither `/StmF` nor
 /// `/StrF` names one. The embedded files use them through `/EFF` or a `/Crypt` filter of their
 /// own; earlier handlers (V1, V2) encrypt everything with RC4.
