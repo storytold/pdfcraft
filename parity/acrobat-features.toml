@@ -7955,7 +7955,7 @@ milestone = "M11"
 status = "partial"
 commands = ["standards.pdfa"]
 tools = ["pdfa_convert"]
-evidence = ["crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::file_header_is_checked_and_rewritten", "crates/preflight/src/tests.rs::convert_does_not_give_cmyk_documents_an_srgb_output_intent", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts", "crates/engine/src/tests.rs::convert_to_pdfa_needs_the_owners_rights_on_an_encrypted_document"]
+evidence = ["crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::file_header_is_checked_and_rewritten", "crates/engine/src/tests.rs::save_as_pdfa_saves_a_compliant_file_header", "crates/preflight/src/tests.rs::convert_does_not_give_cmyk_documents_an_srgb_output_intent", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts", "crates/engine/src/tests.rs::convert_to_pdfa_needs_the_owners_rights_on_an_encrypted_document"]
 notes = "Fixes XMP, output intent (generated sRGB ICC profile, only for documents without DeviceCMYK; CMYK documents need a user-chosen CMYK output intent, not yet offered), forbidden actions, annotation flags, interpolation, encryption, AFRelationship, the file header (a full save at version 1.7 at most). Not yet: embedding fonts, converting device CMYK, flattening transparency for PDF/A-1. On an encrypted document it needs the owner password, as Protect and Remove security do, since it removes the encryption (#3921)."
 
 [[feature]]
