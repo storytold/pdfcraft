@@ -480,7 +480,9 @@ pub(crate) fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, Data
         return Err(DataError::UnknownFormat);
     }
     let mut report = Report::default();
-    let pages: Vec<ObjRef> = pdfcraft_model::pages(doc).iter().map(|p| p.obj).collect();
+    // Every page or none: a record for a page past a walk limit (a redaction mark among them)
+    // would be skipped, and the import would report success without it.
+    let pages: Vec<ObjRef> = pdfcraft_model::page_refs(doc)?;
     // Comments: parents first, then replies (whose /IRT needs the parent's reference).
     let mut by_name: HashMap<String, ObjRef> = HashMap::new();
     let mut later: HashMap<ObjRef, String> = HashMap::new();
@@ -523,8 +525,8 @@ pub(crate) fn import_xfdf(doc: &mut Document, text: &str) -> Result<Report, Data
 }
 
 pub(crate) fn find_by_name(doc: &Document, nm: &str) -> Option<ObjRef> {
-    for p in pdfcraft_model::pages(doc) {
-        for a in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {
+    for (_, annots) in pdfcraft_annot::page_annots(doc).map_while(Result::ok) {
+        for a in annots {
             if let Some(r) = a.as_ref()
                 && doc.get(r).as_dict().and_then(|d| text_of(doc, d, b"NM")).as_deref() == Some(nm)
             {

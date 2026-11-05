@@ -466,7 +466,9 @@ pub(crate) fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, Dat
         walk_fdf(&fdf, &list, "", &mut values, 0, &mut Vec::new(), &mut budget)?;
     }
     // Comments: parents first, then replies (whose /IRT needs the parent's new reference).
-    let pages: Vec<ObjRef> = pdfcraft_model::pages(doc).iter().map(|p| p.obj).collect();
+    // Every page or none: a record for a page past a walk limit (a redaction mark among them)
+    // would be skipped, and the import would report success without it.
+    let pages: Vec<ObjRef> = pdfcraft_model::page_refs(doc)?;
     let mut placed: HashMap<ObjRef, ObjRef> = HashMap::new();
     let mut later: HashMap<ObjRef, (Option<ObjRef>, Option<String>)> = HashMap::new();
     for a in body.get(b"Annots").map(|a| fdf.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {

@@ -47,6 +47,10 @@ pub enum DataError {
     NothingImported,
     #[error("FDF export exceeds the {0} limit; no data was exported")]
     ExportLimit(&'static str),
+    /// The document's page tree is too large to read whole, so records can't all be placed on their
+    /// pages; nothing was imported.
+    #[error("{0}; nothing was imported")]
+    PageTree(#[from] pdfcraft_model::PageTreeLimit),
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
 }

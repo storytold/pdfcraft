@@ -2099,3 +2099,36 @@ fn an_fdf_comment_popup_without_a_rect_is_dropped() {
     let popups = page.iter().filter(|a| dst.resolve(a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Popup".as_slice()))).count();
     assert_eq!(popups, 0);
 }
+
+/// The Redact annotations on each page.
+fn redact_pages(doc: &Document) -> Vec<usize> {
+    let mut out = Vec::new();
+    for (i, page) in pdfcraft_annot::page_annots(doc).enumerate() {
+        for a in page.unwrap().1 {
+            if doc.resolve(&a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Redact")) {
+                out.push(i);
+            }
+        }
+    }
+    out
+}
+
+/// Redaction marks for both pages, imported where the page tree is past a walk limit after the
+/// first page: the import refuses as a whole rather than place the first and report success without
+/// the second. XFDF and FDF alike.
+#[test]
+fn an_import_refuses_a_page_tree_past_a_walk_limit() {
+    use pdfcraft_model::{Limits, PageTreeLimit, with_limits};
+    let xfdf: &[u8] =
+        br#"<xfdf><annots><redact page="0" name="early" rect="0,0,50,50"/><redact page="1" name="late" rect="0,0,50,50"/></annots></xfdf>"#;
+    let fdf: &[u8] = b"%FDF-1.2\n1 0 obj\n<< /FDF << /Annots [<< /Subtype /Redact /NM (early) /Page 0 /Rect [0 0 50 50] >> << /Subtype /Redact /NM (late) /Page 1 /Rect [0 0 50 50] >>] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    let one_page = Limits { kids_entries: 1, ..Limits::DEFAULT };
+    for data in [xfdf, fdf] {
+        let mut doc = blank();
+        let refused = with_limits(one_page, || import(&mut doc, data));
+        assert!(matches!(refused, Err(DataError::PageTree(PageTreeLimit::KidsEntries))), "{refused:?}");
+        assert!(redact_pages(&doc).is_empty(), "nothing imported");
+        import(&mut doc, data).unwrap();
+        assert_eq!(redact_pages(&doc), [0, 1], "within the default limits");
+    }
+}
