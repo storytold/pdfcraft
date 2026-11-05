@@ -238,6 +238,33 @@ fn every_encryption_algorithm_linearizes() {
     }
 }
 
+/// A reference naming a generation its object doesn't have stays dangling in a linearized
+/// rewrite too, even when the walk meets the current generation first (§7.3.10).
+#[test]
+fn a_stale_generation_stays_dangling() {
+    let objects = [
+        (1, 0, "<< /Type /Catalog /Pages 2 0 R /Current 4 1 R /Stale 4 0 R >>"),
+        (2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+        (3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>"),
+        (4, 1, "42"),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut rows = String::new();
+    for (num, generation, body) in objects {
+        rows += &format!("{:010} {generation:05} n \n", bytes.len());
+        bytes.extend_from_slice(format!("{num} {generation} obj\n{body}\nendobj\n").as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(
+        format!("xref\n0 5\n0000000000 65535 f \n{rows}trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+    );
+    let back = open(write_full(&open(bytes), &linearized()).unwrap());
+    let catalog = back.get(back.root().unwrap());
+    let catalog = catalog.as_dict().unwrap();
+    assert_eq!(*back.resolve(catalog.get(b"Current").unwrap()), Object::Int(42));
+    assert_eq!(*back.resolve(catalog.get(b"Stale").unwrap()), Object::Null);
+}
+
 #[test]
 fn an_update_on_top_opens_but_is_no_longer_linearized() {
     let qpdf = pdfcraft_oracle::or_skip!(pdfcraft_oracle::qpdf());

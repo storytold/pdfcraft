@@ -41,7 +41,7 @@ pub(super) struct XrefRevisionSection {
 #[derive(Clone, Debug)]
 pub(super) enum XrefIndex {
     Compact { revisions: Vec<XrefRevisionSection>, max_num: u32, has_entries: bool },
-    Materialized(Arc<BTreeMap<u32, XrefEntry>>),
+    Materialized(Arc<BTreeMap<u32, XrefEntry>>, Arc<Vec<String>>),
 }
 
 pub(super) const MAX_COMPACT_XREF_ROWS: usize = 2_000_000;
@@ -149,8 +149,8 @@ impl XrefSection {
         }
     }
 
-    pub(super) fn extend_numbers(&self, numbers: &mut Vec<u32>) {
-        for range in &self.ranges {
+    pub(super) fn numbers(&self) -> impl Iterator<Item = u32> + '_ {
+        self.ranges.iter().flat_map(|range| {
             let available = match &self.data {
                 XrefSectionData::Table => range.count as usize,
                 XrefSectionData::Stream { bytes, widths } => {
@@ -158,14 +158,12 @@ impl XrefSection {
                     bytes.len().saturating_sub(range.offset).checked_div(row_width).unwrap_or(0)
                 }
             };
-            for i in 0..available.min(range.count as usize) {
-                if let Ok(i) = u32::try_from(i)
-                    && let Some(num) = range.start.checked_add(i)
-                {
-                    numbers.push(num);
-                }
-            }
-        }
+            (0..available.min(range.count as usize)).filter_map(move |i| u32::try_from(i).ok().and_then(|i| range.start.checked_add(i)))
+        })
+    }
+
+    pub(super) fn extend_numbers(&self, numbers: &mut Vec<u32>) {
+        numbers.extend(self.numbers());
     }
 }
 
@@ -189,20 +187,20 @@ impl XrefRevisionSection {
 
 impl XrefIndex {
     pub(super) fn empty() -> Self {
-        Self::Materialized(Arc::new(BTreeMap::new()))
+        Self::Materialized(Arc::new(BTreeMap::new()), Arc::default())
     }
 
     pub(super) fn lookup(&self, num: u32, file: &[u8]) -> Option<XrefEntry> {
         match self {
             Self::Compact { revisions, .. } => revisions.iter().find_map(|revision| revision.lookup(num, file)),
-            Self::Materialized(entries) => entries.get(&num).copied(),
+            Self::Materialized(entries, _) => entries.get(&num).copied(),
         }
     }
 
     pub(super) fn is_empty(&self) -> bool {
         match self {
             Self::Compact { has_entries, .. } => !has_entries,
-            Self::Materialized(entries) => entries.is_empty(),
+            Self::Materialized(entries, _) => entries.is_empty(),
         }
     }
 
@@ -211,14 +209,14 @@ impl XrefIndex {
     pub(super) fn remove_exhausted(&mut self) -> bool {
         match self {
             Self::Compact { .. } => false,
-            Self::Materialized(entries) => Arc::make_mut(entries).remove(&u32::MAX).is_some(),
+            Self::Materialized(entries, _) => Arc::make_mut(entries).remove(&u32::MAX).is_some(),
         }
     }
 
     /// Every entry, newest section first, as the materialized reader keeps them.
     pub(super) fn to_map(&self, file: &[u8]) -> BTreeMap<u32, XrefEntry> {
         match self {
-            Self::Materialized(entries) => entries.as_ref().clone(),
+            Self::Materialized(entries, _) => entries.as_ref().clone(),
             Self::Compact { revisions, .. } => {
                 let mut numbers = Vec::new();
                 for revision in revisions {
@@ -232,13 +230,13 @@ impl XrefIndex {
     pub(super) fn max_num(&self) -> u32 {
         match self {
             Self::Compact { max_num, .. } => *max_num,
-            Self::Materialized(entries) => entries.keys().next_back().copied().unwrap_or(0),
+            Self::Materialized(entries, _) => entries.keys().next_back().copied().unwrap_or(0),
         }
     }
 
     pub(super) fn object_numbers(&self, file: &[u8]) -> Vec<u32> {
         match self {
-            Self::Materialized(entries) => {
+            Self::Materialized(entries, _) => {
                 entries.iter().filter_map(|(&num, entry)| (!matches!(entry, XrefEntry::Free { .. })).then_some(num)).collect()
             }
             Self::Compact { revisions, .. } => {

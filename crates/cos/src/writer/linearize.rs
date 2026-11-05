@@ -173,7 +173,8 @@ fn page_tree(reader: &mut ObjectReader) -> Result<Tree, CosError> {
 }
 
 /// Every object a full rewrite writes, breadth-first from the trailer, with the objects each
-/// one references. Objects are keyed by number: `5 1 R` and `5 0 R` name the same object.
+/// one references. Objects are keyed by number: a generation the reader accepts for an object
+/// (a repaired header's) names it too, while one it doesn't stays dangling, as in `write_full`.
 struct Graph {
     order: Vec<(ObjRef, bool)>,
     index: HashMap<u32, usize>,
@@ -186,35 +187,38 @@ impl Graph {
     fn walk(reader: &mut ObjectReader, trailer: &Dict) -> Self {
         let mut order = Vec::new();
         let mut index = HashMap::new();
-        let mut targets: Vec<Vec<u32>> = Vec::new();
+        let mut targets: Vec<Vec<ObjRef>> = Vec::new();
         let mut refs = HashSet::new();
         let mut queue = VecDeque::new();
         trailer_roots(trailer, &mut |r| queue.push_back(r));
         while let Some(r) = queue.pop_front() {
-            if index.contains_key(&r.num) {
-                refs.insert(r);
+            if refs.contains(&r) {
                 continue;
             }
             let o = reader.get(r);
             if matches!(*o, Object::Null) {
-                continue; // dangling: written as null
+                continue; // dangling, or a generation the object doesn't have: written as null
             }
             refs.insert(r);
+            if index.contains_key(&r.num) {
+                continue; // another accepted generation of an object already placed
+            }
             index.insert(r.num, order.len());
-            order.push((r, matches!(*o, Object::Stream(_))));
+            order.push((ObjRef::new(r.num, reader.document.generation(r.num)), matches!(*o, Object::Stream(_))));
             let mut out = Vec::new();
             collect_refs(&o, &mut |x| {
                 queue.push_back(x);
-                out.push(x.num);
+                out.push(x);
             });
             targets.push(out);
         }
-        let edges = targets.iter().map(|t| t.iter().filter_map(|n| index.get(n).copied()).collect()).collect();
-        Self { order, index, edges, refs }
+        let mut graph = Self { order, index, edges: Vec::new(), refs };
+        graph.edges = targets.iter().map(|t| t.iter().filter_map(|r| graph.at(*r)).collect()).collect();
+        graph
     }
 
     fn at(&self, r: ObjRef) -> Option<usize> {
-        self.index.get(&r.num).copied()
+        self.refs.contains(&r).then(|| self.index.get(&r.num).copied()).flatten()
     }
 
     /// Breadth-first from `start` through the objects `enter` accepts, each once, `start` first.
@@ -293,7 +297,10 @@ impl Plan {
         part[catalog] = Part::Document;
         let mut document = vec![catalog];
         let catalog_dict = reader.get(root).as_dict().cloned().unwrap_or_default();
-        let mut starts: Vec<(usize, bool)> = trailer.reference(b"Encrypt").and_then(|r| graph.at(r)).map(|e| (e, true)).into_iter().collect();
+        let mut starts: Vec<(usize, bool)> = Vec::new();
+        if let Some(encrypt) = trailer.get(b"Encrypt") {
+            collect_refs(encrypt, &mut |r| starts.extend(graph.at(r).map(|i| (i, true))));
+        }
         for key in DOCUMENT_LEVEL {
             if let Some(v) = catalog_dict.get(key) {
                 collect_refs(v, &mut |r| starts.extend(graph.at(r).map(|i| (i, false))));
@@ -588,12 +595,14 @@ pub(super) fn write(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosEr
     let size = next;
     let map: HashMap<ObjRef, u32> = graph.refs.iter().filter_map(|r| graph.at(*r).map(|i| (*r, number[i]))).collect();
 
-    // Every object written once, encrypted with its new number.
+    // Every object written once, encrypted with its new number (before renumbering: encryption
+    // reads what a stream dictionary refers to from the document).
     let mut body = |i: usize| -> Result<Vec<u8>, CosError> {
         let (r, is_stream) = graph.order[i];
-        let o = renumber(&*reread(&mut reader, r, is_stream)?, &map);
+        let o = reread(&mut reader, r, is_stream)?;
+        let o = renumber(&prepared(&reader.document, r.num, number[i], 0, &o), &map);
         let mut out = Vec::new();
-        write_indirect(number[i], 0, &prepared(&reader.document, r.num, number[i], 0, &o), &mut out);
+        write_indirect(number[i], 0, &o, &mut out);
         Ok(out)
     };
     let document: Vec<Vec<u8>> = plan.document.iter().map(|&i| body(i)).collect::<Result<_, _>>()?;
