@@ -8200,7 +8200,8 @@ fn decoded_images_serve_every_size_they_are_drawn_at() {
 /// there (vendored hayro-interpret patch 77): a 2 × 2 image whose mask is 34,862 × 4,332, drawn 40
 /// times on one slide (pdf.js `issue16263.pdf`), was decoded and drawn at full size each time and
 /// the page took minutes. Drawn ten times at one size, the mask is now decoded once and handed
-/// over at that size; a mask no larger than twice its drawn size keeps its own.
+/// over at that size rounded up to a power of two; a mask no larger than twice its drawn size
+/// keeps its own.
 #[test]
 fn a_soft_mask_far_larger_than_where_it_is_drawn_is_shrunk_once() {
     use hayro::hayro_interpret::font::Glyph;
@@ -8262,9 +8263,12 @@ fn a_soft_mask_far_larger_than_where_it_is_drawn_is_shrunk_once() {
         (device.0, cache.decoded_image_decodes())
     };
     let (alphas, decodes) = draws(1000);
-    assert_eq!(alphas, vec![(20, 20); 10], "averaged down to the size it is drawn at");
-    // One decode for the image and one for its averaged-down mask, shared by all ten draws.
-    assert_eq!(decodes, 2, "decoded once");
+    // Drawn 20 pixels square, averaged down to that rounded up to a power of two.
+    assert_eq!(alphas, vec![(32, 32); 10], "averaged down to the size it is drawn at");
+    // One decode for the image and one for its mask (here no larger than the intermediate the
+    // averaged-down sizes are made from, so that is the mask itself), plus the averaged-down mask,
+    // all shared by the ten draws.
+    assert_eq!(decodes, 3, "decoded once");
     let (alphas, _) = draws(40);
     assert_eq!(alphas, vec![(40, 40); 10], "no more than twice the drawn size: kept as it is");
 }
@@ -8273,7 +8277,7 @@ fn a_soft_mask_far_larger_than_where_it_is_drawn_is_shrunk_once() {
 /// dpi): its `mask` (`width`, `height`, 8-bit samples) is larger than the 2 × 1 image, so it may
 /// be averaged down (vendored hayro-interpret patch 77). Each mask is given as its size and
 /// samples.
-fn soft_masks_handed(width: u32, height: u32, mask: &[u8], sizes: &[(u32, u32)]) -> Vec<(u32, u32, Vec<u8>)> {
+fn soft_masks_handed(width: u32, height: u32, mask: &[u8], sizes: &[(u32, u32)]) -> (Vec<(u32, u32, Vec<u8>)>, usize) {
     use hayro::hayro_interpret::font::Glyph;
     use hayro::hayro_interpret::hayro_syntax::Pdf;
     use hayro::hayro_interpret::{
@@ -8325,24 +8329,42 @@ fn soft_masks_handed(width: u32, height: u32, mask: &[u8], sizes: &[(u32, u32)])
     let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, 400.0, 400.0), &cache, page.xref(), InterpreterSettings::default());
     let mut device = Draws::default();
     interpret_page(page, &mut ctx, &mut device);
-    device.0
+    (device.0, cache.decoded_image_decodes())
 }
 
 /// An averaged-down soft mask (vendored hayro-interpret patch 77):
 /// - takes each source sample into the target sample its centre falls in: seven columns
-///   `0 0 255 255 255 255 255` drawn three wide give `0 255 255` (by left edges, `85 255 255`);
+///   `0 0 0 255 0 0 0`, drawn three wide and so averaged to four, give `0 0 127 0` (by left edges,
+///   `0 127 0 0`);
 /// - is never sized past the samples a truncated stream decodes: a mask that says it is 100 rows
 ///   but holds 10, drawn 20 high, is handed no rows that no sample covers;
-/// - is cached per drawn size: the same image drawn 20 and then 200 points wide is handed its
-///   mask at 20 and then at its own 100, not the first draw's 20 again.
+/// - is cached per drawn size, rounded up to a power of two: the same image drawn 20 and then 200
+///   points wide is handed its mask at 32 and then at its own 100, not the first draw's 32 again,
+///   and drawn 20 and 21 wide it is handed one mask of 32 both times;
+/// - is made, at every size, from one intermediate mask at most 4096 on a side, so a mask wider
+///   than that, drawn at four sizes, is decoded in full once and not four times.
 #[test]
 fn an_averaged_down_soft_mask_follows_its_samples_and_its_drawn_size() {
-    let handed = soft_masks_handed(7, 1, &[0, 0, 255, 255, 255, 255, 255], &[(3, 1)]);
-    assert_eq!(handed, vec![(3, 1, vec![0, 255, 255])], "centres, not left edges");
-    let handed = soft_masks_handed(100, 100, &[255; 100 * 10], &[(20, 20)]);
+    let (handed, _) = soft_masks_handed(7, 1, &[0, 0, 0, 255, 0, 0, 0], &[(3, 1)]);
+    assert_eq!(handed, vec![(4, 1, vec![0, 0, 127, 0])], "centres, not left edges");
+    let (handed, _) = soft_masks_handed(100, 100, &[255; 100 * 10], &[(20, 20)]);
     assert!(!handed.is_empty() && handed.iter().all(|(_, _, data)| data.iter().all(|&a| a == 255)), "no uncovered rows: {handed:?}");
-    let sizes: Vec<(u32, u32)> = soft_masks_handed(100, 100, &[255; 100 * 100], &[(20, 20), (200, 200)]).iter().map(|(w, h, _)| (*w, *h)).collect();
-    assert_eq!(sizes, vec![(20, 20), (100, 100)], "each draw at its own size");
+    let sizes = |draws: &[(u32, u32)]| -> Vec<(u32, u32)> {
+        soft_masks_handed(100, 100, &[255; 100 * 100], draws).0.iter().map(|(w, h, _)| (*w, *h)).collect()
+    };
+    assert_eq!(sizes(&[(20, 20), (200, 200)]), vec![(32, 32), (100, 100)], "each draw at its own size");
+    assert_eq!(sizes(&[(20, 20), (21, 21)]), vec![(32, 32), (32, 32)], "draws a pixel apart share one");
+    // Columns alternating 0 and 255, so every averaged-down sample is about half: within 8, as a
+    // sample covering 19 or 20 columns, say, holds 9 or 10 opaque ones.
+    let wide: Vec<u8> = (0..5000 * 2).map(|i| if i % 2 == 0 { 0 } else { 255 }).collect();
+    let (handed, decodes) = soft_masks_handed(5000, 2, &wide, &[(20, 1), (40, 1), (80, 1), (160, 1)]);
+    let sizes: Vec<(u32, u32)> = handed.iter().map(|(w, h, _)| (*w, *h)).collect();
+    assert_eq!(sizes, vec![(32, 1), (64, 1), (128, 1), (256, 1)]);
+    assert!(handed.iter().all(|(_, _, data)| data.iter().all(|&a| a.abs_diff(127) <= 8)), "{handed:?}");
+    // The image at each of the four sizes, the 4096-wide intermediate once, and the mask at each
+    // of the four sizes made from it. Without the intermediate there are 8, each mask size a full
+    // decode.
+    assert_eq!(decodes, 9, "the full mask decoded once");
 }
 
 // ICC profiles whose stream dictionaries are the same (vendored hayro-interpret patch 48).

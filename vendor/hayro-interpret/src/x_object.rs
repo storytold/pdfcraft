@@ -627,9 +627,11 @@ impl<'a> ImageXObject<'a> {
             interpolate: self.interpolate,
             // PdfCraft patch (38): the same image drawn in a default colour space or without one.
             default_space: self.default_space,
-            // PdfCraft patch (32): see `decode_reads_target`.
+            // PdfCraft patch (32): see `decode_reads_target`; patch (77): see `has_larger_mask`.
             target: if self.decode_reads_target() {
                 target_dimension
+            } else if self.has_larger_mask() {
+                target_dimension.map(size_bucket)
             } else {
                 None
             },
@@ -659,20 +661,33 @@ impl<'a> ImageXObject<'a> {
         let Some((tw, th)) = shrink_to else {
             return self.decoded_mask(target_dimension);
         };
-        // Averaged down only on the sides that are larger than where they are drawn.
-        let to = (tw.min(self.width).max(1), th.min(self.height).max(1));
-        let shrink = || {
+        // Averaged down to the drawn size rounded up to a power of two (`size_bucket`), so draws a
+        // pixel apart share one mask and the renderer filters the rest, and only on the sides that
+        // are larger than that.
+        let (bw, bh) = size_bucket((tw, th));
+        let to = (bw.min(self.width).max(1), bh.min(self.height).max(1));
+        // Decoded in full and averaged down to `to`. A truncated stream decodes fewer rows than
+        // the dictionary says: never more target samples than decoded ones on a side.
+        let from_full = |to: (u32, u32)| {
             let full = decode_mask(self, target_dimension)?;
-            // A truncated stream decodes fewer rows than the dictionary says: never more target
-            // samples than decoded ones on a side.
-            let to = (to.0.min(full.luma.width).max(1), to.1.min(full.luma.height).max(1));
-            Some(DecodedMask { luma: shrink_luma(full.luma, to)? })
+            Some(DecodedMask { luma: shrink_luma_within(full.luma, to)? })
         };
         let Some(cache) = &self.decoded_cache else {
-            return shrink();
+            return from_full(to);
         };
-        let key = self.decode_key(cache, true, target_dimension).map(|key| DecodedImageKey { shrunk_to: Some(to), ..key });
-        cache.get_or_insert_with(key, MAX_DECODED_IMAGE_BYTES, decoded_mask_size, shrink)
+        let key = |to| self.decode_key(cache, true, target_dimension).map(|key| DecodedImageKey { shrunk_to: Some(to), ..key });
+        // One image drawn at several sizes (rotated and scaled copies on one slide) needs the
+        // mask at several sizes. Each comes from one intermediate averaged-down mask, cached at
+        // most `SOFT_MASK_INTERMEDIATE` on a side, so the full mask is decoded once, not once per
+        // size; a size larger than the intermediate comes from the full mask.
+        let between = (self.width.min(SOFT_MASK_INTERMEDIATE), self.height.min(SOFT_MASK_INTERMEDIATE));
+        if to == between || to.0 > between.0 || to.1 > between.1 {
+            return cache.get_or_insert_with(key(to), MAX_DECODED_IMAGE_BYTES, decoded_mask_size, || from_full(to));
+        }
+        cache.get_or_insert_with(key(to), MAX_DECODED_IMAGE_BYTES, decoded_mask_size, || {
+            let mid = cache.get_or_insert_with(key(between), MAX_DECODED_IMAGE_BYTES, decoded_mask_size, || from_full(between))?;
+            Some(DecodedMask { luma: shrink_luma_within(mid.luma, to)? })
+        })
     }
 
     /// PdfCraft patch (32): whether decoding this image depends on the size it is drawn at.
@@ -682,16 +697,22 @@ impl<'a> ImageXObject<'a> {
     /// step and kept once per zoom level; without it, one decode serves them all.
     fn decode_reads_target(&self) -> bool {
         let dict = self.stream.dict();
-        // PdfCraft patch (77): a soft mask (or `/Mask` image) larger than the image may be
-        // averaged down to the size the image is drawn at (`decoded_soft_mask`), so the decoded
-        // raster, which holds it as its alpha, depends on that size too.
+        uses_jpx(&self.stream)
+            || dict.get::<Stream<'_>>(SMASK).is_some_and(|s| uses_jpx(&s))
+            || dict.get::<Stream<'_>>(MASK).is_some_and(|s| uses_jpx(&s))
+    }
+
+    /// PdfCraft patch (77): whether this image has a soft mask (or `/Mask` image) larger than
+    /// itself, which may be averaged down to the size the image is drawn at
+    /// (`decoded_soft_mask`): the decoded raster holds it as its alpha, so it depends on that size,
+    /// to the [`size_bucket`] it is averaged down to.
+    fn has_larger_mask(&self) -> bool {
+        let dict = self.stream.dict();
         let larger = |s: &Stream<'_>| {
             let d = s.dict();
             d.get::<u32>(WIDTH).is_some_and(|w| w > self.width) || d.get::<u32>(HEIGHT).is_some_and(|h| h > self.height)
         };
-        uses_jpx(&self.stream)
-            || dict.get::<Stream<'_>>(SMASK).is_some_and(|s| uses_jpx(&s) || larger(&s))
-            || dict.get::<Stream<'_>>(MASK).is_some_and(|s| uses_jpx(&s) || larger(&s))
+        dict.get::<Stream<'_>>(SMASK).is_some_and(|s| larger(&s)) || dict.get::<Stream<'_>>(MASK).is_some_and(|s| larger(&s))
     }
 
     pub(crate) fn width(&self) -> u32 {
@@ -721,6 +742,19 @@ const MAX_DECODED_IMAGE_BYTES: usize = 64 << 20;
 /// before it is averaged down to that size (`ImageXObject::decoded_soft_mask`). Below it the mask
 /// keeps its own resolution, which the renderer filters as it draws.
 const SOFT_MASK_SHRINK_FACTOR: u64 = 2;
+
+/// PdfCraft patch (77): the largest side of the intermediate mask that every smaller averaged-down
+/// size of one soft mask is made from (`ImageXObject::decoded_soft_mask`): 4096 × 4096 one-byte
+/// samples are 16 MiB, a quarter of the decoded-image budget, so it stays cached between draws.
+const SOFT_MASK_INTERMEDIATE: u32 = 4096;
+
+/// PdfCraft patch (77): the size a large soft mask is averaged down to for an image drawn at
+/// `(w, h)` device pixels: each side rounded up to a power of two. Draws of one image a pixel or so
+/// apart (scaled by 0.36 and 0.36167, say) share one averaged mask and one cache entry, and a mask
+/// is never averaged below where it is drawn, so the renderer shrinks the rest at most twofold.
+fn size_bucket((w, h): (u32, u32)) -> (u32, u32) {
+    (w.checked_next_power_of_two().unwrap_or(u32::MAX), h.checked_next_power_of_two().unwrap_or(u32::MAX))
+}
 
 /// PdfCraft patch (77): `luma` averaged down to `to` (no larger than it on either side): each
 /// target sample is the mean of the source samples whose centres fall in it. Source sample `x`
@@ -756,6 +790,17 @@ fn shrink_luma(luma: LumaData, to: (u32, u32)) -> Option<LumaData> {
     }
     let data = sums.iter().zip(&counts).map(|(&sum, &count)| if count == 0 { 0 } else { (sum / u64::from(count)) as u8 }).collect();
     Some(LumaData { data, width: to.0, height: to.1, ..luma })
+}
+
+/// PdfCraft patch (77): `luma` averaged down to `to`, but never to more samples than it has on a
+/// side (a truncated stream decodes fewer rows than its dictionary says), and returned as it is
+/// when that is its own size.
+fn shrink_luma_within(luma: LumaData, to: (u32, u32)) -> Option<LumaData> {
+    let to = (to.0.min(luma.width).max(1), to.1.min(luma.height).max(1));
+    if to == (luma.width, luma.height) {
+        return Some(luma);
+    }
+    shrink_luma(luma, to)
 }
 
 /// PdfCraft patch: pixel bytes held by a decoded mask.
