@@ -1088,7 +1088,14 @@ fn delete_to_the_end_of_a_line_at_its_end_joins_the_next() {
 /// Cut with nothing selected, or a shortcut that doesn't edit, must not move a caret Undo put back.
 #[test]
 fn what_does_not_edit_leaves_the_redo() {
-    for quiet in [egui::Event::Cut, press(egui::Key::B, egui::Modifiers::COMMAND)] {
+    let cmd = egui::Modifiers::COMMAND;
+    for quiet in [
+        egui::Event::Cut,
+        press(egui::Key::B, cmd),
+        press(egui::Key::K, cmd),
+        press(egui::Key::Enter, cmd),
+        press(egui::Key::Tab, egui::Modifiers::CTRL),
+    ] {
         let mut t = Typing::new("a;\r\nb;");
         t.select(0..0);
         t.key(egui::Key::End, egui::Modifiers::NONE);
@@ -1102,5 +1109,85 @@ fn what_does_not_edit_leaves_the_redo() {
         t.key(egui::Key::Z, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
         t.settle();
         assert_eq!(t.text, "a;x\r\nb;", "{quiet:?}: Redo still works");
+    }
+}
+
+/// A selection of only the `\r` (Shift+Right at the end of the line) is of the line end. Snapped to a
+/// caret, the edit acted on what is before it: Backspace took the `;`.
+#[test]
+fn a_selection_of_half_a_line_end_is_of_all_of_it() {
+    let edit = |event: egui::Event, range: Range<usize>| {
+        let mut t = Typing::new("a;\r\nb;");
+        t.select(range);
+        t.frame(vec![event]);
+        t.settle();
+        t.text
+    };
+    let backspace = press(egui::Key::Backspace, egui::Modifiers::NONE);
+    assert_eq!(edit(backspace.clone(), 2..3), "a;b;");
+    assert_eq!(edit(egui::Event::Text("Q".into()), 2..3), "a;Qb;");
+    // A selection of only the `\n` is the same; one with more than half a line end keeps the rest.
+    assert_eq!(edit(backspace.clone(), 3..4), "a;b;");
+    assert_eq!(edit(backspace, 0..3), "\r\nb;");
+    // Made backward, it stays so.
+    let mut t = Typing::new("a;\r\nb;");
+    set_selection_facing(&t.ctx, t.id, 2..3, true);
+    t.frame(vec![egui::Event::Copy]);
+    assert_eq!(t.caret(), Some(2..4));
+    assert!(selected_backward(&t.ctx, t.id), "backward still");
+    let mut t = Typing::new("a;\r\nb;");
+    t.select(2..3);
+    t.frame(vec![egui::Event::Copy]);
+    assert_eq!(t.caret(), Some(2..4));
+    assert!(!selected_backward(&t.ctx, t.id), "forward still");
+}
+
+/// The Emacs-like keys that move the caret on a Mac are keys that move it: an edit waits behind them.
+#[test]
+fn an_edit_behind_ctrl_e_keeps_a_windows_line_end_whole() {
+    let (ctrl, none) = (egui::Modifiers::CTRL, egui::Modifiers::NONE);
+    let ctrl_e = press(egui::Key::E, ctrl);
+    assert_eq!(after_one_frame("a;\r\nb;", 0, vec![ctrl_e.clone(), press(egui::Key::Delete, none)]), "a;b;");
+    assert_eq!(after_one_frame("a;\r\nb;", 0, vec![ctrl_e.clone(), press(egui::Key::K, ctrl)]), "a;b;");
+    assert_eq!(after_one_frame("a;\r\nb;", 0, vec![ctrl_e, press(egui::Key::Backspace, none)]), "a\r\nb;");
+    assert_eq!(after_one_frame("a;\r\nb;", 0, vec![press(egui::Key::N, ctrl), press(egui::Key::Delete, none)]), "a;\r\n;");
+}
+
+/// In a string or template, white space is what it holds: Enter adds a bare line end, and a typed `}`
+/// is only that. Elsewhere they keep the indentation, in a comment too.
+#[test]
+fn enter_and_a_brace_leave_a_string_or_template_as_typed() {
+    let typed = |script: &str, event: egui::Event| {
+        let caret = script.chars().count();
+        let mut t = Typing::new(script);
+        t.select(caret..caret);
+        t.frame(vec![event]);
+        t.settle();
+        t.text
+    };
+    let enter = press(egui::Key::Enter, egui::Modifiers::NONE);
+    let brace = egui::Event::Text("}".into());
+    assert_eq!(typed("var s = `a\n    ", brace.clone()), "var s = `a\n    }");
+    assert_eq!(typed("s = 'abc\\\n    ", brace.clone()), "s = 'abc\\\n    }");
+    assert_eq!(typed("  var s = `abc", enter.clone()), "  var s = `abc\n");
+    assert_eq!(typed("s = `{", enter.clone()), "s = `{\n", "no block in a template");
+    assert_eq!(typed("s = \"(", enter.clone()), "s = \"(\n");
+    // Outside one, as ever.
+    assert_eq!(typed("if (a) {\n    ", brace), "if (a) {\n  }");
+    assert_eq!(typed("  x = 'a';", enter.clone()), "  x = 'a';\n  ");
+    assert_eq!(typed("  x = `a${b", enter), "  x = `a${b\n  ");
+}
+
+/// A `}` lines up however it arrives: behind AltGr, reported as Ctrl and Alt, or from an input method.
+#[test]
+fn a_brace_by_alt_gr_or_an_input_method_lines_up() {
+    let alt_gr = egui::Modifiers { alt: true, ctrl: true, shift: false, mac_cmd: false, command: true };
+    for events in [vec![press(egui::Key::Num0, alt_gr), egui::Event::Text("}".into())], vec![egui::Event::Ime(egui::ImeEvent::Commit("}".into()))]] {
+        let script = "if (a) {\n    ";
+        let mut t = Typing::new(script);
+        t.select(script.chars().count()..script.chars().count());
+        t.frame(events);
+        t.settle();
+        assert_eq!(t.text, "if (a) {\n  }");
     }
 }

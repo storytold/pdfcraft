@@ -22,11 +22,11 @@ const INDENT_KEY: &str = "script-indent";
 /// The tallest the box can be dragged, in points.
 const MAX_HEIGHT: f32 = 900.0;
 
-/// Most tokens coloured; the rest of a longer script is plain. Ordinary code doesn't get there: a
-/// form script at the 256 KiB limit is some 13,000 tokens, and minified some 30,000. A script of
-/// `1,1,1,…` is 131,072, with as many plain pieces between them, and each is a section the layout
-/// shapes on its own: its first layout took 1.6 s, and every keystroke most of a second. This bounds
-/// that to about a quarter of a second.
+/// Most tokens coloured; the rest of a longer script is plain. Code doesn't get there: a form script
+/// at the 256 KiB limit is some 13,000 tokens, and minified some 30,000. A long table of values can
+/// (`"abc",` at the limit is some 44,000). A script of `1,1,1,…` is 131,072, with as many plain
+/// pieces between them, and each is a section the layout shapes on its own: its first layout took
+/// 1.6 s, and every keystroke most of a second. This bounds that to about a quarter of a second.
 const MAX_COLOURED_TOKENS: usize = 40_000;
 
 /// Longest script the box shows or can make: the engine's own limit, past which it won't run anyway.
@@ -318,19 +318,13 @@ fn editor_keys(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> Keys {
         i.events.iter().any(|e| match e {
             egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Ime(_) => true,
             egui::Event::Cut | egui::Event::Copy => selected,
-            egui::Event::Key { key, pressed: true, .. } => {
-                matches!(
-                    key,
-                    egui::Key::Enter
-                        | egui::Key::Tab
-                        | egui::Key::Backspace
-                        | egui::Key::Delete
-                        | egui::Key::H
-                        | egui::Key::K
-                        | egui::Key::U
-                        | egui::Key::W
-                )
-            }
+            egui::Event::Key { key, pressed: true, modifiers, .. } => match key {
+                egui::Key::Backspace | egui::Key::Delete => true,
+                egui::Key::Enter | egui::Key::Tab => !modifiers.ctrl && !modifiers.command,
+                // egui's Emacs-like deletes.
+                egui::Key::H | egui::Key::K | egui::Key::U | egui::Key::W => modifiers.ctrl,
+                _ => false,
+            },
             _ => false,
         })
     });
@@ -348,10 +342,13 @@ fn editor_keys(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> Keys {
         let shift_tab = i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab);
         (i.consume_key(none, egui::Key::Tab), shift_tab, i.consume_key(none, egui::Key::Enter))
     });
-    // Only a `}` typed on its own: one among other edits this frame goes in with them, in order.
+    // Only a `}` typed on its own: one among other edits this frame goes in with them, in order. By
+    // AltGr, as it is on many layouts, it can follow a key reported as Ctrl and Alt, and from an input
+    // method it is a commit.
+    let is_brace = |e: &egui::Event| matches!(e, egui::Event::Text(t) | egui::Event::Ime(egui::ImeEvent::Commit(t)) if t == "}");
     let brace = ui.input(|i| {
-        let mut acting = i.events.iter().filter(|e| acts_on_text(e));
-        matches!(acting.next(), Some(egui::Event::Text(t)) if t == "}") && acting.next().is_none()
+        let mut acting = i.events.iter().filter(|e| acts_on_text(e) && !is_alt_gr(e));
+        acting.next().is_some_and(is_brace) && acting.next().is_none()
     });
     if !(tab || shift_tab || enter || brace) {
         return keys;
@@ -362,14 +359,21 @@ fn editor_keys(ui: &mut egui::Ui, text: &mut String, id: egui::Id) -> Keys {
     } else if tab {
         Some(edit::tab(text, selection.clone(), &unit))
     } else if enter {
-        Some(edit::newline(text, selection.clone(), &unit))
+        // White space in a string or template is what it holds, so nothing is added.
+        Some(if edit::in_literal(text, selection.start) {
+            edit::line_break(text, selection.clone(), "")
+        } else {
+            edit::newline(text, selection.clone(), &unit)
+        })
+    } else if edit::in_literal(text, selection.start) {
+        None
     } else {
         edit::close_brace(text, selection, &unit)
     };
     let Some(done) = done else { return keys };
     ui.data_mut(|d| d.insert_temp(indent_id, unit));
     if brace {
-        ui.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(t) if t == "}")));
+        ui.input_mut(|i| i.events.retain(|e| !is_brace(e)));
     }
     if done.text.len() > MAX_EDITED_BYTES {
         keys.refused = true;
@@ -422,23 +426,29 @@ fn taken_out_of_turn(event: &egui::Event) -> bool {
     }
 }
 
-/// Whether `event` moves the caret and does nothing else, which can leave it inside a line end.
+/// Whether `event` moves the caret and does nothing else, which can leave it inside a line end: the
+/// keys for it, and on a Mac, where Ctrl isn't Command, the Emacs-like ones.
 fn moves_caret(event: &egui::Event) -> bool {
-    matches!(
-        event,
-        egui::Event::Key {
-            key: egui::Key::ArrowLeft
-                | egui::Key::ArrowRight
-                | egui::Key::ArrowUp
-                | egui::Key::ArrowDown
-                | egui::Key::Home
-                | egui::Key::End
-                | egui::Key::PageUp
-                | egui::Key::PageDown,
-            pressed: true,
-            ..
+    let egui::Event::Key { key, pressed: true, modifiers, .. } = event else { return false };
+    match key {
+        egui::Key::ArrowLeft
+        | egui::Key::ArrowRight
+        | egui::Key::ArrowUp
+        | egui::Key::ArrowDown
+        | egui::Key::Home
+        | egui::Key::End
+        | egui::Key::PageUp
+        | egui::Key::PageDown => true,
+        egui::Key::A | egui::Key::B | egui::Key::E | egui::Key::F | egui::Key::N | egui::Key::P => {
+            modifiers.ctrl && !modifiers.command && !modifiers.shift
         }
-    )
+        _ => false,
+    }
+}
+
+/// Whether `event` is a key reported with both Ctrl and Alt, as AltGr can be: it types, or does nothing.
+fn is_alt_gr(event: &egui::Event) -> bool {
+    matches!(event, egui::Event::Key { modifiers, .. } if modifiers.ctrl && modifiers.alt)
 }
 
 /// Keeps the order of a frame's keys when frames are slow and several come at once. The editor takes
@@ -488,7 +498,17 @@ fn snap_off_crlf(ctx: &egui::Context, id: egui::Id, text: &str) {
     let Some(mut state) = egui::text_edit::TextEditState::load(ctx, id) else { return };
     let Some(range) = state.cursor.char_range() else { return };
     let snap = |c: CCursor| if edit::inside_crlf(text, c.index.0) { CCursor::new(c.index.0.saturating_sub(1)) } else { c };
-    let (primary, secondary) = (snap(range.primary), snap(range.secondary));
+    let (mut primary, mut secondary) = (snap(range.primary), snap(range.secondary));
+    // A selection of only the `\r` would snap to a caret, and the edit act on what is before it. The
+    // line end is what was selected.
+    if primary == secondary && range.primary != range.secondary {
+        let end = CCursor::new(primary.index.0.saturating_add(2));
+        if range.primary.index > range.secondary.index {
+            primary = end;
+        } else {
+            secondary = end;
+        }
+    }
     if (primary, secondary) != (range.primary, range.secondary) {
         state.cursor.set_char_range(Some(CCursorRange::two(secondary, primary)));
         state.store(ctx, id);

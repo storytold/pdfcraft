@@ -8,6 +8,8 @@
 
 use std::ops::Range;
 
+use pdfcraft_engine::js::{TokenKind, highlight};
+
 /// Most lines looked at to find the script's indentation.
 const MAX_LINES_FOR_UNIT: usize = 2000;
 
@@ -145,14 +147,42 @@ pub(super) fn newline(text: &str, selection: Range<usize>, unit: &str) -> Edit {
         }
         return replace(text, selection, &inner);
     }
+    line_break(text, selection, &indent)
+}
+
+/// A line end over `selection`, then `indent`. It ends as the script's lines do, except next to a line
+/// end it would join into one, which would add no line: then it takes that line end's form.
+pub(super) fn line_break(text: &str, selection: Range<usize>, indent: &str) -> Edit {
+    let at = byte_of(text, selection.start);
+    let after = text.get(byte_of(text, selection.end.max(selection.start))..).unwrap_or_default();
     let after_cr = text.get(..at).is_some_and(|b| b.ends_with('\r'));
     let before_lf = indent.is_empty() && after.starts_with('\n');
-    let end = match end {
+    let end = match line_end(text) {
         "\r" if before_lf => "\n",
         "\n" if after_cr && !before_lf => "\r",
         end => end,
     };
     replace(text, selection, &format!("{end}{indent}"))
+}
+
+/// Whether character `index` of `text` is inside a string or template, where white space is what it
+/// holds. After its closing quote, or between `${` and `}`, it isn't; at the end of one never closed, it is.
+pub(super) fn in_literal(text: &str, index: usize) -> bool {
+    let at = byte_of(text, index);
+    highlight(text).iter().filter(|t| matches!(t.kind, TokenKind::String | TokenKind::Template)).any(|t| {
+        let token = text.get(t.bytes.clone()).unwrap_or_default();
+        let open_at_its_end = match t.kind {
+            // A piece of a template starts with `` ` `` or `}`, and ends with `` ` `` or `${`.
+            TokenKind::Template => !(closed_by(token, "${") || closed_by(token, "`")),
+            _ => !token.get(..1).is_some_and(|quote| closed_by(token, quote)),
+        };
+        t.bytes.start < at && (at < t.bytes.end || (at == t.bytes.end && open_at_its_end))
+    })
+}
+
+/// Whether `token` ends with `end`, when that is neither all it holds nor escaped.
+fn closed_by(token: &str, end: &str) -> bool {
+    token.strip_suffix(end).is_some_and(|rest| !rest.is_empty() && rest.chars().rev().take_while(|c| *c == '\\').count().is_multiple_of(2))
 }
 
 /// The character range of the lines `selection` covers. A selection that ends at the start of
@@ -348,6 +378,47 @@ mod tests {
         assert_eq!(close_brace(&t, s, "  "), None, "not after other text");
         let (t, s) = at("\t\t|");
         assert_eq!(close_brace(&t, s, "\t").map(|e| show(&e)).as_deref(), Some("\t}|"));
+    }
+
+    #[test]
+    fn inside_a_string_or_template_is_inside_a_literal() {
+        let inside = |marked: &str| {
+            let (t, s) = at(marked);
+            in_literal(&t, s.start)
+        };
+        for yes in [
+            "x = \"a|b\";",
+            "x = 'a|",
+            "x = `a|b`;",
+            "x = `a\n  |",
+            "x = `a${b}c|d`;",
+            "x = `a\n  |}`",
+            "s = 'a\\\n  |",
+            "x = `a\\`|",
+            "x = 'a\\'|",
+            "x = `a\\${|",
+            "x = `|",
+            "x = '|",
+        ] {
+            assert!(inside(yes), "{yes}");
+        }
+        for no in [
+            "x|",
+            "x = \"ab\"|;",
+            "x = \"ab\";|",
+            "|x = 'a'",
+            "x = `ab`|;",
+            "x = `a${|b}c`;",
+            "x = `a${b|}c`;",
+            "// don't|",
+            "/* ` | */",
+            "x = {|}",
+            "x = 'a\\\\'|",
+            "x = `a\\\\`|",
+            "x = 'a\n  |",
+        ] {
+            assert!(!inside(no), "{no}");
+        }
     }
 
     #[test]
