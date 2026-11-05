@@ -142,6 +142,22 @@ impl Automation {
         Ok(out)
     }
 
+    /// Automatically crop pages to their visible non-white content bounding box, removing excess margins.
+    pub(crate) fn page_remove_white_margins(&mut self, a: &Args) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let n = doc.info.pages.len();
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..n).collect(),
+        };
+        let id = doc.id;
+        self.session.remove_white_margins(id, &pages).map_err(failed)?;
+        let doc = self.doc(a)?;
+        let mut out = summary(doc);
+        out["page_sizes"] = json!(doc.info.pages.iter().map(|p| [p.width, p.height]).collect::<Vec<_>>());
+        Ok(out)
+    }
+
     pub(crate) fn insert_blank(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let at = self.position(a, "at")?;

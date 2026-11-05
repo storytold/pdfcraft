@@ -429,6 +429,22 @@ impl PdfCraftApp {
                 self.boxes_draft.seeded = None;
                 self.dialog = Some(Dialog::PageBoxes);
             }
+            "page.remove_white_margins" => {
+                if let Some(i) = active {
+                    let id = self.views[i].id;
+                    match self.session.remove_white_margins(id, &targets) {
+                        Ok(()) => {
+                            if let Some(doc) = self.session.get(id) {
+                                self.views[i].document_changed(&doc.info);
+                            }
+                            if let Some(ctx) = &self.ctx {
+                                ctx.request_repaint();
+                            }
+                        }
+                        Err(e) => self.notify(e.to_string()),
+                    }
+                }
+            }
             "page.extract" => self.open_extract_dialog(),
             "page.rotate_dialog" => {
                 if let Some(i) = active {
