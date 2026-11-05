@@ -1,10 +1,47 @@
 use super::*;
 
 impl PdfCraftApp {
+    /// Show a job's progress card and remember whose it is, so Cancel reaches that job. A card another job still
+    /// owns stays: two jobs that run together do not take the one card from each other every frame (and Stop keeps
+    /// reaching the job whose card it is). The later job's card appears once the earlier one's is gone.
+    pub(crate) fn show_job_progress(&mut self, owner: widgets::ProgressOwner, notice: widgets::ProgressNotice) {
+        if self.progress_notice.is_some() && self.progress_owner != owner && self.job_is_running(self.progress_owner) {
+            return;
+        }
+        self.progress_notice = Some(notice);
+        self.progress_owner = owner;
+    }
+
+    /// Whether the job `owner` names is still running, so its progress card is not to be replaced.
+    fn job_is_running(&self, owner: widgets::ProgressOwner) -> bool {
+        match owner {
+            widgets::ProgressOwner::Optimize => self.optimize_run.is_some(),
+            widgets::ProgressOwner::Scan => self.scan.job.is_some(),
+            widgets::ProgressOwner::Other => false,
+        }
+    }
+
+    /// Remove the progress card if it is `owner`'s. A job that ends must not take away the card of another job
+    /// that is still running.
+    pub(crate) fn clear_job_progress(&mut self, owner: widgets::ProgressOwner) {
+        if self.progress_owner == owner {
+            self.progress_notice = None;
+            self.progress_owner = widgets::ProgressOwner::Other;
+        }
+    }
+
     /// Draw the running job's progress card and pass a Cancel click on to the job.
     pub(super) fn show_progress(&mut self, ctx: &egui::Context) {
         if widgets::progress_notice(self, ctx) {
-            self.cancel_optimize();
+            match self.progress_owner {
+                widgets::ProgressOwner::Optimize => self.cancel_optimize(),
+                widgets::ProgressOwner::Scan => {
+                    if let Some(job) = &self.scan.job {
+                        job.cancel.request();
+                    }
+                }
+                widgets::ProgressOwner::Other => {}
+            }
         }
     }
 

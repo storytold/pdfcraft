@@ -167,6 +167,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                 item("Separate PDFs", "files", "create.multiple_separate", Ready),
                 item("Images", "image", "create.images", Ready),
                 item("Clipboard", "copy-plus", "create.clipboard", Ready),
+                item("Scanner", "scan", "scan.acquire", Ready),
                 item("Blank page", "file-plus-2", "create.blank", Ready),
             ],
         }],
@@ -196,6 +197,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                     item("Delete", "trash-2", "page.delete", Ready),
                     item("Extract", "file-output", "page.extract", Ready),
                     item("Insert", "file-plus-2", "page.insert", Ready),
+                    item("From scanner…", "scan", "scan.acquire", Ready),
                     item("Replace", "replace", "page.replace", Ready),
                     item("Split", "scissors", "page.split", Ready),
                 ],
@@ -260,16 +262,19 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
         hue: GREEN,
         badge: None,
         availability: Ready,
-        sections: &[ToolSection {
-            title: "Recognize text",
-            items: &[
-                item("In this file", "scan-text", "ocr.recognize", Ready),
-                item("In multiple files", "files", "ocr.recognize_batch", Ready),
-                item("Enhance scanned file", "sparkles", "ocr.enhance", Planned("M10")),
-                item("Enhance camera image", "camera", "ocr.enhance_camera", Ready),
-                item("Correct recognized text", "text-select", "ocr.correct", Planned("M10")),
-            ],
-        }],
+        sections: &[
+            ToolSection { title: "Scanner", items: &[item("From scanner…", "scan", "scan.acquire", Ready)] },
+            ToolSection {
+                title: "Recognize text",
+                items: &[
+                    item("In this file", "scan-text", "ocr.recognize", Ready),
+                    item("In multiple files", "files", "ocr.recognize_batch", Ready),
+                    item("Enhance scanned file", "sparkles", "ocr.enhance", Planned("M10")),
+                    item("Enhance camera image", "camera", "ocr.enhance_camera", Ready),
+                    item("Correct recognized text", "text-select", "ocr.correct", Planned("M10")),
+                ],
+            },
+        ],
     },
     ToolGroup {
         id: "protect",
