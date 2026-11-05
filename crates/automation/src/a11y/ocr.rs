@@ -266,7 +266,11 @@ impl Automation {
                 let job = self.session.ocr_job(id, &pages, settings).ok_or_else(|| failed("the document could not be read"))?;
                 let found = job.run(&recognizers, |_, _| true);
                 let bytes = self.session.editable_ocr_bytes(id, &found).map_err(failed)?;
-                write_atomic(&out, &bytes)?;
+                // recognition can take minutes: a file created meanwhile is refused, not replaced
+                if let Some(folder) = out.parent() {
+                    std::fs::create_dir_all(folder).map_err(failed)?;
+                }
+                crate::bates::publish_new(&out, &bytes)?;
                 Ok(json!({
                     "out": out.to_string_lossy(),
                     "words": found.iter().map(|p| p.words.len()).sum::<usize>(),

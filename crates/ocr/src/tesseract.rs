@@ -859,7 +859,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("tesseract-err-flood");
-        std::fs::write(&script, "#!/bin/sh\nhead -c 20000000 /dev/zero | tr '\\0' 'e' >&2\necho flooded away\n").unwrap();
+        // (below MAX_STDERR, past which the child is stopped: `an_stderr_flood_is_killed_while_the_child_runs`)
+        std::fs::write(&script, "#!/bin/sh\nhead -c 200000 /dev/zero | tr '\\0' 'e' >&2\necho flooded away\n").unwrap();
         make_executable(&script);
         let mut t = TesseractCli::new(script);
         t.timeout = Duration::from_secs(10);

@@ -1482,7 +1482,7 @@ mod tests {
             let dir = std::env::temp_dir().join(format!("pdfcraft-ocr-probe-{}-{name}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
             let program = dir.join("fake-tesseract");
-            std::fs::write(&program, format!("#!/bin/sh\ntouch \"$0.probed\"\nexit 1\n")).unwrap();
+            std::fs::write(&program, "#!/bin/sh\ntouch \"$0.probed\"\nexit 1\n").unwrap();
             let mut perms = std::fs::metadata(&program).unwrap().permissions();
             perms.set_mode(0o755);
             std::fs::set_permissions(&program, perms).unwrap();
@@ -1493,7 +1493,7 @@ mod tests {
         let ocrs_only = OcrSettings { engine: EngineChoice::Ocrs, tesseract_path: Some(program), ..Default::default() };
         let _ = recognizers(&ocrs_only);
         assert!(!marker.exists(), "an ocrs-only job must not start the tesseract probe");
-        std::fs::remove_file(&marker.parent().unwrap().join("fake-tesseract")).ok();
+        std::fs::remove_file(marker.parent().unwrap().join("fake-tesseract")).ok();
 
         // A Tesseract job does validate its program (that is how it is found usable).
         let (marker, program) = probe("tesseract");

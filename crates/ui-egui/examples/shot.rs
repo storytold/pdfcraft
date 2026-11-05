@@ -83,6 +83,8 @@ fn main() -> Result<(), String> {
         if ocr_verify {
             if let Err(e) = load_ocr_verify(&mut app) {
                 eprintln!("shot: --ocr-verify: {e}");
+                // an empty Verify screen must not pass for the documentation's screenshot
+                std::process::exit(1);
             }
         } else if let Some(f) = &file {
             let bytes = std::fs::read(f).unwrap_or_default();

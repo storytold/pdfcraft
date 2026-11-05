@@ -1418,6 +1418,8 @@ pub fn tools() -> Vec<ToolDef> {
                     "deskew": { "type": "boolean" },
                     "denoise": { "type": "boolean" },
                     "binarize": { "type": "boolean" },
+                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true)." },
+                    "force_ocr": { "type": "boolean", "description": "Read pages even when the skip options would leave them alone (default false)." },
                 }),
                 &["doc"],
             )),
