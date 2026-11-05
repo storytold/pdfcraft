@@ -2779,3 +2779,108 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     check(&doc);
     check(&reopen(&doc));
 }
+
+/// The box a viewer fits to `/Rect` (ISO 32000-2 §12.5.5) for the annotation `d`: its normal
+/// appearance's `/BBox` corners through `/Matrix`, their hull. With that matrix and the content.
+fn turned_appearance(doc: &Document, d: &Dict) -> ([f64; 4], Vec<f64>, String) {
+    let ap = doc.resolve(d.get(b"AP").expect("an appearance"));
+    let normal = doc.get(ap.as_dict().and_then(|ap| ap.reference(b"N")).expect("a normal appearance"));
+    let Object::Stream(normal) = normal.as_ref() else { panic!("the normal appearance is a stream") };
+    let nums = |key: &[u8]| -> Vec<f64> {
+        normal.dict.get(key).map(|o| doc.resolve(o).as_array().unwrap().iter().filter_map(Object::as_f64).collect()).unwrap_or_default()
+    };
+    let b = nums(b"BBox");
+    let m = Some(nums(b"Matrix")).filter(|m| !m.is_empty()).unwrap_or_else(|| vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let corners = [(b[0], b[1]), (b[2], b[1]), (b[0], b[3]), (b[2], b[3])].map(|(x, y)| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]));
+    let hull = corners.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |h, &(x, y)| [h[0].min(x), h[1].min(y), h[2].max(x), h[3].max(y)]);
+    (hull, m, String::from_utf8(normal.decoded().unwrap().to_vec()).unwrap())
+}
+
+fn rect_of(d: &Dict) -> [f64; 4] {
+    let r: Vec<f64> = d.get(b"Rect").unwrap().as_array().unwrap().iter().filter_map(Object::as_f64).collect();
+    [r[0], r[1], r[2], r[3]]
+}
+
+fn near(a: [f64; 4], b: [f64; 4]) -> bool {
+    a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-6)
+}
+
+/// #5428: a picture stamp (an image signature, an image or a PDF page) draws its picture upright
+/// and turns it by `/Matrix` onto exactly its `/Rect`, so a viewer has no scaling left to do.
+/// macOS Preview and Quick Look don't scale it: on a turned page, whose box used to come out of
+/// the turn with its sides swapped, they drew it small and squashed, and after a resize, which
+/// used to keep the old appearance, at its old size. Still so after a restyle redraws it, and a
+/// move only shifts it.
+#[test]
+fn picture_stamps_on_turned_pages_turn_onto_their_rectangle_exactly() {
+    for turn in [0, 90, 180, 270] {
+        for (name, image) in [("Signature", true), ("Logo", true), ("Diagram", false)] {
+            let mut doc = fixture();
+            let page = page_refs(&doc).unwrap()[0];
+            doc.update_dict(page, |d| d.set(b"Rotate".to_vec(), Object::Int(turn))).unwrap();
+            // The appearance only refers to the picture.
+            let picture = doc.add(Object::Dict(Dict::new()));
+            // 120 × 32 as displayed: in user space a quarter turn swaps its sides.
+            let rect = if turn % 180 == 0 { [100.0, 200.0, 220.0, 232.0] } else { [100.0, 200.0, 132.0, 320.0] };
+            let shape = Shape::CustomStamp { rect, name: name.into(), picture, image, size: (120.0, 32.0) };
+            let index = add_annotation(&mut doc, &new(0, shape), &meta("p")).unwrap();
+            let what = format!("{name} on a page turned {turn}");
+            let check = |doc: &Document, rect: [f64; 4], step: &str| {
+                let d = list(doc, 0).remove(index);
+                assert!(near(rect_of(&d), rect), "{what}, {step}: /Rect {:?}", rect_of(&d));
+                let (hull, m, content) = turned_appearance(doc, &d);
+                assert!(near(hull, rect), "{what}, {step}: the turned /BBox {hull:?} is not /Rect {rect:?}");
+                // The turn back alone: no scale and no offset, so the box stays right after a move.
+                let back = pdfcraft_model::view_matrix_for(turn, [0.0; 4]);
+                assert!(m.iter().zip(back).all(|(a, b)| (a - b).abs() < 1e-9), "{what}, {step}: /Matrix {m:?}");
+                // Drawn upright at its displayed size (a 120 × 32 PDF page scaled to it).
+                let (w, h) = if turn % 180 == 0 { (rect[2] - rect[0], rect[3] - rect[1]) } else { (rect[3] - rect[1], rect[2] - rect[0]) };
+                let scale = if image { format!("{} 0 0 {}", n(w), n(h)) } else { format!("{} 0 0 {}", n(w / 120.0), n(h / 32.0)) };
+                assert!(content.contains(&format!("q {scale} ")), "{what}, {step}: {content}");
+            };
+            check(&doc, rect, "placed");
+            check(&reopen(&doc), rect, "reopened");
+            set_style(&mut doc, 0, index, StyleChange { opacity: Some(0.5), ..StyleChange::default() }, &meta("p")).unwrap();
+            check(&doc, rect, "restyled");
+            move_annotation(&mut doc, 0, index, 15.0, -10.0, &meta("p")).unwrap();
+            let d = list(&doc, 0).remove(index);
+            let moved = [rect[0] + 15.0, rect[1] - 10.0, rect[2] + 15.0, rect[3] - 10.0];
+            assert!(near(rect_of(&d), moved), "{what}: moved /Rect {:?}", rect_of(&d));
+            // A move keeps the appearance: the viewer only shifts it, at the same size.
+            let (hull, ..) = turned_appearance(&doc, &d);
+            assert!(near([0.0, 0.0, hull[2] - hull[0], hull[3] - hull[1]], [0.0, 0.0, moved[2] - moved[0], moved[3] - moved[1]]), "{what}: moved");
+            set_style(&mut doc, 0, index, StyleChange { opacity: Some(1.0), ..StyleChange::default() }, &meta("p")).unwrap();
+            check(&doc, moved, "moved and restyled");
+            // Half as big again, and wider than its shape: drawn again into the new rectangle.
+            let resized = [moved[0], moved[1], moved[0] + (moved[2] - moved[0]) * 1.5, moved[1] + (moved[3] - moved[1]) * 2.0];
+            set_rect(&mut doc, 0, index, resized, &meta("p")).unwrap();
+            check(&doc, resized, "resized");
+            check(&reopen(&doc), resized, "resized and reopened");
+        }
+    }
+}
+
+/// #5428: a typed signature that is resized is drawn again into its new rectangle, which macOS
+/// Preview and Quick Look need: they showed one that kept its appearance at its old size. Other
+/// stamps keep their appearance.
+#[test]
+fn resized_typed_signatures_are_drawn_into_their_new_rectangle() {
+    let mut doc = fixture();
+    let contours = vec![vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]];
+    let shape = Shape::TypedSignature { rect: [100.0, 200.0, 220.0, 232.0], contours };
+    let index = add_annotation(&mut doc, &new(0, shape), &meta("t")).unwrap();
+    let resized = [90.0, 190.0, 330.0, 254.0];
+    set_rect(&mut doc, 0, index, resized, &meta("t")).unwrap();
+    let d = list(&doc, 0).remove(index);
+    assert!(near(rect_of(&d), resized));
+    let (hull, _, content) = turned_appearance(&doc, &d);
+    assert!(near(hull, resized), "the appearance's box {hull:?} is not /Rect {resized:?}");
+    assert!(content.contains("330 254 l"), "the outline fills the new rectangle: {content}");
+    // A rubber stamp keeps the appearance it has; viewers scale it into the new rectangle.
+    let stamp =
+        add_annotation(&mut doc, &new(0, Shape::Stamp { rect: [300.0, 300.0, 400.0, 330.0], stamp: StampKind::Approved, by: None }), &meta("s"))
+            .unwrap();
+    let before = list(&doc, 0).remove(stamp).get(b"AP").cloned();
+    set_rect(&mut doc, 0, stamp, [300.0, 300.0, 500.0, 360.0], &meta("s")).unwrap();
+    assert_eq!(list(&doc, 0).remove(stamp).get(b"AP").cloned(), before);
+}

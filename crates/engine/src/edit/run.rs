@@ -523,9 +523,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             };
             let shape = Shape::CustomStamp { rect, name: name.clone(), picture: src.xobject, image: src.image, size: (sw, sh) };
             let style = pdfcraft_annot::Style::default_for(&shape);
+            // On a turned page the picture is drawn turned back into `rect` (`/PCPictureRotate`).
             let new = NewAnnotation { page: *page, shape, style, contents: name.clone(), author: author.clone() };
-            let index = pdfcraft_annot::add_annotation(doc, &new, &cx.meta())?;
-            pdfcraft_annot::orient_image_stamp(doc, *page, index, rotation)?;
+            pdfcraft_annot::add_annotation(doc, &new, &cx.meta())?;
         }
         Edit::AddModel3d { page, rect, model, poster, activation, name } => {
             // A file that is not a model is refused before its poster is brought in.

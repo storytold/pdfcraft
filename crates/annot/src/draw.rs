@@ -41,7 +41,9 @@ pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), Annot
 /// Pure from the dictionary and the objects it points at, so [`AppearanceCache`] can reuse it.
 fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
     let mut stream = appearance::build(d)?;
-    // Picture-stamp restyling must retain the placement's page-axis correction.
+    // Picture-stamp restyling must retain the placement's page-axis correction: the same turn
+    // `appearance::build` gives one with `/PCPictureRotate`, and the only record of it in a custom
+    // stamp placed before that key was written for every picture stamp.
     if d.get(b"PCPicture").is_some() {
         let matrix = d.get(b"AP").and_then(|ap| {
             let ap = doc.resolve(ap);

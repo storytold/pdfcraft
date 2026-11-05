@@ -353,10 +353,31 @@ pub(crate) fn picture_place(at: [f64; 4], image: bool, size: Option<(f64, f64)>)
     Some(format!("{} 0 0 {} {} {} cm", n(w / sw), n(h / sh), n(x0), n(y0)))
 }
 
-/// The page `/Rotate` an image signature's picture is turned back by (`/PCPictureRotate`, written
-/// when the signature is added to a turned page): 0, 90, 180 or 270.
+/// The page `/Rotate` a picture stamp's picture is turned back by (`/PCPictureRotate`, written
+/// when the stamp is added to a turned page): 0, 90, 180 or 270.
 pub(crate) fn picture_turn(d: &Dict) -> i64 {
     d.get(b"PCPictureRotate").and_then(Object::as_int).unwrap_or(0).rem_euclid(360) / 90 * 90
+}
+
+/// Where a picture stamp on a page turned `turn` degrees draws its picture upright, and the form
+/// `/Matrix` that turns it into `rect`: the turn back alone (no offset, so it still holds after a
+/// move), with the box being `rect` turned back by its inverse. The turned box is then `rect`
+/// itself, so the viewer's fit of the turned `/BBox` to `/Rect` (ISO 32000-2 §12.5.5) has nothing
+/// left to scale. A box of `rect`'s own shape would come out of the turn with its sides swapped
+/// and need scaling back by different amounts across and down, which macOS Preview and Quick Look
+/// don't do: they drew such a signature small and squashed (#5428). An unturned page has no
+/// `/Matrix` and draws in `rect`.
+fn picture_box(turn: i64, rect: [f64; 4]) -> ([f64; 4], Option<[f64; 6]>) {
+    if !matches!(turn, 90 | 180 | 270) {
+        return (rect, None);
+    }
+    // The page's view matrix without its offset: display axes in user space.
+    let m = pdfcraft_model::view_matrix_for(turn, [0.0; 4]);
+    // A quarter turn's inverse is its transpose. `+ 0.0` keeps a negated zero out of `/BBox`.
+    let back = |x: f64, y: f64| (m[0] * x + m[1] * y + 0.0, m[2] * x + m[3] * y + 0.0);
+    let [x0, y0, x1, y1] = rect;
+    let ((ax, ay), (bx, by)) = (back(x0, y0), back(x1, y1));
+    ([ax.min(bx), ay.min(by), ax.max(bx), ay.max(by)], Some(m))
 }
 
 /// The page `/Rotate` a rubber stamp's label is turned back by (`/PCStampRotate`).
@@ -858,27 +879,24 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
         return Some(form(rect, c.as_bytes(), res));
     }
     // A custom stamp: its picture (an image, or a form mapped to /PCPictureSize) fills
-    // the rectangle. An image signature added to a turned page (`/PCPictureRotate`) gets
-    // the standard counter-rotation as its form `/Matrix`: viewers fit the turned
-    // bounding box to `/Rect` (ISO 32000-2 §12.5.5), so it reads upright as displayed.
+    // the rectangle. One added to a turned page (`/PCPictureRotate`) is drawn upright and
+    // turned into `/Rect` by its form `/Matrix` (`picture_box`), so it reads upright as
+    // displayed.
     if let Some(pic) = d.get(b"PCPicture").and_then(Object::as_ref) {
         let image = matches!(d.get(b"PCPictureImage"), Some(Object::Bool(true)));
         let size = nums(d, b"PCPictureSize").and_then(|s| match s.as_slice() {
             [w, h] if *w > 0.0 && *h > 0.0 => Some((*w, *h)),
             _ => None,
         });
-        let place = picture_place(rect, image, size)?;
+        let (bbox, matrix) = picture_box(picture_turn(d), rect);
+        let place = picture_place(bbox, image, size)?;
         c.push_str(&format!("q {place} /Pic Do Q\n"));
         let mut xo = Dict::new();
         xo.set(b"Pic".to_vec(), Object::Ref(pic));
         res.set(b"XObject".to_vec(), Object::Dict(xo));
-        let mut stream = form(rect, c.as_bytes(), res);
-        let turn = picture_turn(d);
-        if image && turn != 0 {
-            // The page's view matrix without its offset: display axes in user space.
-            let m = pdfcraft_model::view_matrix_for(turn, [0.0; 4]);
-            let matrix = [m[0], m[1], m[2], m[3], 0.0, 0.0];
-            stream.dict.set(b"Matrix".to_vec(), Object::Array(matrix.iter().map(|x| Object::Real(*x)).collect()));
+        let mut stream = form(bbox, c.as_bytes(), res);
+        if let Some(m) = matrix {
+            stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().map(|x| Object::Real(*x)).collect()));
         }
         return Some(stream);
     }
