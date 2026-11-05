@@ -7,7 +7,8 @@
 //!   the document information dictionary;
 //! - no encryption; no LZW; no external streams;
 //! - an output intent (`GTS_PDFA1`) with an ICC profile when device colour is used;
-//! - every font embedded;
+//! - every font used for rendering embedded (a font only drawn in text rendering mode 3, such as
+//!   an OCR layer's, needs no program; ISO 19005-2 §6.2.11.4.1);
 //! - annotations: allowed types, printable, not hidden, with appearance streams;
 //! - actions: none of the forbidden kinds (JavaScript, Launch, Sound, Movie, ResetForm,
 //!   ImportData, Hide, SetOCGState, Rendition, Trans, GoTo3DView); no additional actions on the
@@ -21,6 +22,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod fonts;
 pub mod icc;
 mod xmp;
 
@@ -514,7 +516,17 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
             issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true);
         }
     }
-    check_objects(doc, level, &objs, &page_of, &mut issue);
+    // 6.2.11.4.1: fonts used for rendering are embedded. Text in rendering mode 3 renders
+    // nothing, so a font only drawn that way (an OCR text layer) needs no program; fonts written
+    // straight into a resource dictionary are found by walking what the pages draw.
+    let fonts = fonts::font_use(doc);
+    for (name, page) in &fonts.direct_unembedded {
+        match name {
+            Some(n) => issue("6.2.11.4", "The font {} isn't embedded", Some(n.clone()), *page, false),
+            None => issue("6.2.11.4", "A font isn't embedded", None, *page, false),
+        }
+    }
+    check_objects(doc, level, &objs, &page_of, &fonts, &mut issue);
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
     let mut seen = std::collections::HashSet::new();
     out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));
@@ -526,27 +538,30 @@ fn check_objects(
     level: Level,
     objects: &[(ObjRef, std::sync::Arc<Object>)],
     page_of: &impl Fn(ObjRef) -> Option<usize>,
+    fonts: &fonts::FontUse,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
     for (r, o) in objects {
         let Some(d) = dict_of(o) else { continue };
-        check_one_object(doc, level, *r, d, o, page_of, issue);
+        check_one_object(doc, level, d, o, page_of(*r), fonts.invisible_only(*r), issue);
     }
 }
 
+/// `page`: the page that lists the object, when it is an annotation. `invisible_font`: the object
+/// is a font only ever drawn invisibly (see [`fonts`]).
 fn check_one_object(
     doc: &Document,
     level: Level,
-    reference: ObjRef,
     dict: &Dict,
     object: &Object,
-    page_of: &impl Fn(ObjRef) -> Option<usize>,
+    page: Option<usize>,
+    invisible_font: bool,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
     let ty = dict.name(b"Type");
     let subtype = dict.name(b"Subtype");
     check_actions(doc, dict, issue);
-    if is_annotation(dict, ty, subtype) && check_annotation(doc, dict, subtype, page_of(reference), issue) {
+    if is_annotation(dict, ty, subtype) && check_annotation(doc, dict, subtype, page, issue) {
         // A forbidden annotation stops every later check for its object, as the scan did before
         // it was split into helpers: the rest of its own checks and the form field, font, stream
         // and embedded file below all came after that `continue`.
@@ -555,7 +570,7 @@ fn check_one_object(
     if dict.get(b"FT").is_some() && dict.get(b"AA").is_some() && ty != Some(b"Annot") {
         issue("6.5.2", "A form field has additional actions", None, None, true);
     }
-    if ty == Some(b"Font") || dict.get(b"BaseFont").is_some() && subtype.is_some() {
+    if (ty == Some(b"Font") || dict.get(b"BaseFont").is_some() && subtype.is_some()) && !invisible_font {
         check_font(doc, dict, issue);
     }
     if let Object::Stream(stream) = object {
@@ -672,25 +687,8 @@ fn check_embedded_file(level: Level, dict: &Dict, issue: &mut impl FnMut(&'stati
 }
 
 fn check_font(doc: &Document, d: &Dict, issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool)) {
-    let sub = d.name(b"Subtype");
-    if sub == Some(b"Type3") {
-        return;
-    }
     let name = d.name(b"BaseFont").map(|n| String::from_utf8_lossy(n).into_owned());
-    let descriptor = if sub == Some(b"Type0") {
-        d.get(b"DescendantFonts")
-            .map(|x| doc.resolve(x))
-            .and_then(|a| a.as_array().and_then(|a| a.first().cloned()))
-            .map(|f| doc.resolve(&f))
-            .and_then(|f| f.as_dict().and_then(|fd| fd.get(b"FontDescriptor").cloned()))
-    } else {
-        d.get(b"FontDescriptor").cloned()
-    };
-    let embedded = descriptor
-        .map(|fd| doc.resolve(&fd))
-        .and_then(|fd| fd.as_dict().cloned())
-        .is_some_and(|fd| fd.get(b"FontFile").is_some() || fd.get(b"FontFile2").is_some() || fd.get(b"FontFile3").is_some());
-    if !embedded {
+    if fonts::embedded(doc, d) == Some(false) {
         // A font the document doesn't name gets a sentence of its own, rather than the word for
         // "a font" put where a name goes, which read badly even in English.
         match name {

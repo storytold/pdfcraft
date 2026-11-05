@@ -11,6 +11,7 @@ use crate::{Args, Automation, Result, ToolError, child, failed, unused, write_at
 mod documents;
 mod form_tools;
 mod ocr;
+pub(crate) use ocr::pdfa_json;
 
 fn status_id(s: Status) -> &'static str {
     match s {

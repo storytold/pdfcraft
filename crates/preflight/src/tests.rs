@@ -488,3 +488,103 @@ fn an_output_intent_profile_header_is_read_within_a_size_cap() {
         assert_eq!(pdfa_intent_profile(&doc), Some(n), "a {size}-byte profile");
     }
 }
+
+fn font_messages(doc: &Document) -> Vec<(String, Option<usize>)> {
+    verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| (i.message, i.page)).collect()
+}
+
+/// ISO 19005-2 §6.2.11.4.1: only fonts used for rendering need their programs. A font drawn only
+/// in text rendering mode 3 (an OCR layer over a scan) renders nothing and passes; drawn visibly
+/// anywhere (here, after `Q` restores mode 0, or in a form) it doesn't.
+#[test]
+fn a_font_only_drawn_invisibly_needs_no_program() {
+    let helvetica = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+    let ocr = drawing("/OCR BMC q BT 3 Tr /F1 1 Tf 10 0 0 12 20 20 Tm (Hello) Tj ET Q EMC", "/Font << /F1 5 0 R >>", &[helvetica]);
+    assert_eq!(font_messages(&ocr), []);
+    // The same font drawn visibly once, after `Q` brings back mode 0.
+    let both = drawing("q BT 3 Tr /F1 1 Tf (a) Tj ET Q BT /F1 12 Tf (b) Tj ET", "/Font << /F1 5 0 R >>", &[helvetica]);
+    assert_eq!(font_messages(&both), [("The font Helvetica isn't embedded".to_string(), None)]);
+    // `ET` doesn't reset the mode: still invisible in the next text object.
+    let still = drawing("BT 3 Tr /F1 1 Tf (a) Tj ET BT (b) Tj ET", "/Font << /F1 5 0 R >>", &[helvetica]);
+    assert_eq!(font_messages(&still), []);
+    // A form inherits its caller's mode; one drawn in mode 0 shows its text.
+    let form = |mode: &str| {
+        drawing(
+            &format!("BT {mode} Tr ET /Fm Do"),
+            "/XObject << /Fm 5 0 R >>",
+            &[
+                "<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /Font << /F1 6 0 R >> >> /Length 22 >>\nstream\nBT /F1 9 Tf (x) Tj ET\nendstream",
+                helvetica,
+            ],
+        )
+    };
+    assert_eq!(font_messages(&form("3")), []);
+    assert_eq!(font_messages(&form("0")).len(), 1);
+    // Other modes are rendering, 7 (clip) included.
+    for mode in ["0", "1", "2", "4", "7", "3.5"] {
+        let doc = drawing(&format!("BT {mode} Tr /F1 1 Tf (a) Tj ET"), "/Font << /F1 5 0 R >>", &[helvetica]);
+        assert_eq!(font_messages(&doc).len(), 1, "mode {mode}");
+    }
+    // A font no content draws is still reported, as before.
+    let unused = drawing("", "/Font << /F1 5 0 R >>", &[helvetica]);
+    assert_eq!(font_messages(&unused).len(), 1);
+}
+
+/// Fonts written straight into a page's resources (as PdfCraft's own Add text writes /PCHelv)
+/// are no objects of their own, so the object scan never saw them: drawn visibly they are now
+/// reported, with their page; drawn only invisibly they pass.
+#[test]
+fn a_direct_font_drawn_visibly_is_reported_with_its_page() {
+    let res = "/Font << /PCHelv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >>";
+    let visible = drawing("BT /PCHelv 12 Tf 10 10 Td (Added) Tj ET", res, &[]);
+    assert_eq!(font_messages(&visible), [("The font Helvetica isn't embedded".to_string(), Some(0))]);
+    let invisible = drawing("q BT 3 Tr /PCHelv 1 Tf (OCR) Tj ET Q", res, &[]);
+    assert_eq!(font_messages(&invisible), []);
+}
+
+/// The exemption errs towards reporting: a font also listed by a tiling pattern (drawn by
+/// content the walk doesn't follow), or content that can't be read, keeps the report; cyclic
+/// and self-drawing forms end.
+#[test]
+fn a_font_is_excused_only_on_complete_evidence() {
+    let helvetica = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+    let pattern = drawing(
+        "BT 3 Tr /F1 1 Tf (a) Tj ET",
+        "/Font << /F1 5 0 R >> /Pattern << /P 6 0 R >>",
+        &[
+            helvetica,
+            "<< /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 9 9] /XStep 9 /YStep 9 /Resources << /Font << /F 5 0 R >> >> /Length 0 >>\nstream\n\nendstream",
+        ],
+    );
+    assert_eq!(font_messages(&pattern).len(), 1, "a pattern may draw it visibly");
+    let broken = build(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+            "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 6 0 R] /Resources << /Font << /F1 5 0 R >> >> >>",
+            "<< /Length 26 >>\nstream\nBT 3 Tr /F1 1 Tf (a) Tj ET\nendstream",
+            helvetica,
+            // A filter content can't be decoded with: what it draws is unknown.
+            "<< /Filter /JBIG2Decode /Length 8 >>\nstream\nunknown!\nendstream",
+        ],
+        "",
+    );
+    assert_eq!(font_messages(&broken).len(), 1, "unreadable content may draw it visibly");
+    // Content that decodes but doesn't parse cleanly: a stray byte, or an inline image whose
+    // end is a guess. The operators after them are uncertain.
+    for content in ["BT 3 Tr /F1 1 Tf (a) Tj ET ]", "BT 3 Tr /F1 1 Tf (a) Tj ET BI /W 4 /H 1 /BPC 8 /CS /G ID abc"] {
+        let doc = drawing(content, "/Font << /F1 5 0 R >>", &[helvetica]);
+        assert_eq!(font_messages(&doc).len(), 1, "{content}");
+    }
+    // A form that draws itself, and two that draw each other.
+    let cycle = drawing(
+        "BT 3 Tr ET /A Do",
+        "/XObject << /A 5 0 R >>",
+        &[
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /A 5 0 R /B 6 0 R >> /Font << /F1 7 0 R >> >> /Length 33 >>\nstream\n/A Do /B Do BT /F1 1 Tf (a) Tj ET\nendstream",
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /A 5 0 R >> >> /Length 5 >>\nstream\n/A Do\nendstream",
+            helvetica,
+        ],
+    );
+    assert_eq!(font_messages(&cycle), []);
+}
