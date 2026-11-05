@@ -671,6 +671,9 @@ pub struct DocView {
     pub marquee_done: Option<crate::zoom_snap::Marquee>,
     /// Dynamic Zoom: the drag in progress.
     pub(crate) zoom_drag: Option<crate::zoom_snap::ZoomDrag>,
+    /// The last press went down with Dynamic Zoom, which has been the tool ever since, and the
+    /// document has not changed: no other press starts a zoom or clicks a zoom step.
+    pub(crate) zoom_press: bool,
     /// Fill & Sign text being typed.
     pub fill_text: Option<crate::fill_sign::TypeBox>,
     /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
@@ -901,6 +904,7 @@ impl DocView {
         self.marquee = None;
         self.marquee_done = None;
         self.zoom_drag = None;
+        self.zoom_press = false;
         self.comments.gesture = None;
         self.links.drag = None;
         self.sign.drag = None;
@@ -1059,6 +1063,7 @@ impl DocView {
             marquee: None,
             marquee_done: None,
             zoom_drag: None,
+            zoom_press: false,
             fill_text: None,
             fill_signature_page: None,
             signature_drag: Default::default(),
@@ -1093,10 +1098,10 @@ impl DocView {
         self.panel_drag = None;
         self.org_drag = None;
         // A Dynamic Zoom drag anchors to page rectangles from before the change, and the next
-        // frame's would be too (laid out before this): the held press zooms no more until it is up.
-        if self.zoom_drag.take().is_some() {
-            self.press_cancelled = true;
-        }
+        // frame's would be too (laid out before this): the held press, a drag yet or not, zooms no
+        // more until it is up. Other tools' presses carry on.
+        self.zoom_drag = None;
+        self.zoom_press = false;
         self.reset_coarse_state();
     }
 
@@ -1135,8 +1140,8 @@ impl DocView {
         fresh.viewport_w = self.viewport_w;
         fresh.viewport_h = self.viewport_h;
         fresh.viewport_screen = self.viewport_screen;
-        // For `document_changed` to end it with its press.
-        fresh.zoom_drag = self.zoom_drag;
+        // A press Escape cancelled stays cancelled on the new version, until the button is up.
+        fresh.press_cancelled = self.press_cancelled;
         *self = fresh;
         // Marks the kept images out of date and clamps the page to the new page count.
         self.document_changed(info);
@@ -1699,6 +1704,7 @@ fn draw_pages(
         crate::zoom_snap::dynamic_input(ui, &resp, &ptr, view);
     } else {
         view.zoom_drag = None;
+        view.zoom_press = false;
     }
     let origin = resp_rect.min - vec2(0.0, y_shift);
     let visible = viewport.translate(resp_rect.min.to_vec2());
