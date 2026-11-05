@@ -20,6 +20,13 @@ fn main() {
                     if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string("printcraft"))) {
                         app.restore(&json);
                     }
+                    // `?mode=`: the workspace documents open in on this page (`read`, `sign`, …), for a
+                    // host that opens a file to read or to sign. Never saved over the user's default.
+                    if let Some(mode) = query_param("mode")
+                        && let Err(e) = app.open_in_mode(&mode)
+                    {
+                        eframe::web_sys::console::warn_1(&format!("PdfCraft: ?mode= ignored: {e}").into());
+                    }
                     // `?file=<url>` opens a PDF from a URL (same-origin or CORS-enabled).
                     if let Some(url) = query_param("file") {
                         let inbox = app.startup_inbox.clone();

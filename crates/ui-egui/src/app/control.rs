@@ -10,6 +10,17 @@ impl PdfCraftApp {
         client
     }
 
+    /// The workspace documents open in for this session (`all`, `read`, `edit`, `convert` or
+    /// `sign`), as `--mode` sets it, for a host that opens a file to read or to sign: the web
+    /// build's `?mode=`. It is never saved, so the user's own default (Preferences) stays theirs.
+    /// Anything else is refused and changes nothing, where `--mode` falls back to All tools.
+    pub fn open_in_mode(&mut self, value: &str) -> Result<(), String> {
+        if Mode::parse(value).is_none() {
+            return Err(format!("mode must be all, read, edit, convert or sign, not {value:?}"));
+        }
+        self.set_option("mode", value)
+    }
+
     /// Apply a named view option (`--page 3`, `--panel bookmarks`, `--theme dark`, …).
     ///
     /// This is the seed of the UI control channel (M3.9): the same verbs become `ui.set` calls.
