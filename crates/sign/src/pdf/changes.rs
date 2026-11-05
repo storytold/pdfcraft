@@ -1,5 +1,11 @@
 use super::types::{Modification, kind};
 use super::{Arc, Dict, Document, HashMap, HashSet, ObjRef, Object};
+use std::cell::{Cell, OnceCell};
+
+/// The most annotation-list entries one classification expands. Pages sharing one long /Annots
+/// array, or many pages rewritten to list one, would otherwise cost pages × entries; past this
+/// the lists are not compared, and the change is refused.
+const MAX_ANNOT_ENTRIES: usize = 1 << 22;
 
 /// What later revisions changed, classified as Acrobat reports it, under DocMDP `p` (or none:
 /// an approval signature permits form fill, comments and further signatures).
@@ -47,13 +53,31 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         .collect();
     // The annotations the signed pages listed. One of them listed again elsewhere was moved or
     // copied there, not added.
-    let placed_annots: HashSet<u32> =
-        signed_page_refs.iter().flat_map(|pg| refs(&old, old.get(*pg).as_dict().and_then(|d| d.get(b"Annots")))).map(|r| r.num).collect();
+    let annot_budget = Cell::new(MAX_ANNOT_ENTRIES);
+    let (mut placed_annots, mut expanded, mut annots_unbounded) = (HashSet::new(), HashSet::new(), false);
+    for pg in &signed_page_refs {
+        let page = old.get(*pg);
+        let Some(list) = page.as_dict().and_then(|d| d.get(b"Annots")) else { continue };
+        // Pages sharing one array object list the same annotations.
+        if list.as_ref().is_some_and(|r| !expanded.insert(r.num)) {
+            continue;
+        }
+        let Some(found) = annot_refs(&old, Some(list), &annot_budget) else {
+            annots_unbounded = true;
+            break;
+        };
+        placed_annots.extend(found.into_iter().map(|r| r.num));
+    }
     // What each signed page draws from, by the role it held when signed (#1787).
     let signed_resources = signed_page_resources(&old, &signed_page_refs);
     let old_info = old.trailer().get(b"Info").and_then(Object::as_ref).map(|r| r.num);
     let signed_role = |num: u32| old_content.contains(&num) || signed_pages.contains(&num) || signed_resources.contains_key(&num);
     let (mut allowed, mut disallowed): (Vec<&'static str>, Vec<&'static str>) = (Vec::new(), Vec::new());
+    if annots_unbounded {
+        disallowed.push(kind::OTHER);
+    }
+    // Every reference the signed revision makes, read only when a slot's generations narrowed.
+    let signed_references = OnceCell::new();
     let dss = dss_parts(doc, &old);
     // Stored at the same place in both (and not edited since): the same bytes, unchanged.
     let same_place = |num: u32| -> bool {
@@ -94,6 +118,7 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         signed_pages: &signed_pages,
         signed_annots: &signed_annots,
         placed_annots: &placed_annots,
+        annot_budget: &annot_budget,
         signed_resources: &signed_resources,
         old_info,
         dss: &dss,
@@ -106,9 +131,19 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         // it accepts others now, those references may reach nothing here while another reader
         // follows them back through /Prev to an intermediate revision, or to another alias, and
         // shows what that holds: the object compared below is not provably what is displayed.
-        // No writer changes a signed object's generation.
+        // No writer changes a signed object's generation. A damaged slot rewritten cleanly
+        // accepts fewer: that is the same slot when nothing signed refers to it by a generation
+        // it gave up.
         let signed_generations = old.accepted_generations(num);
-        if !signed_generations.is_empty() && signed_generations != doc.accepted_generations(num) {
+        let generations = doc.accepted_generations(num);
+        let narrowed_unreferenced = || {
+            !generations.is_empty()
+                && generations.iter().all(|g| signed_generations.contains(g))
+                && signed_references.get_or_init(|| references(&old)).as_ref().is_some_and(|found: &HashSet<ObjRef>| {
+                    signed_generations.iter().filter(|g| !generations.contains(g)).all(|g| !found.contains(&ObjRef { num, generation: *g }))
+                })
+        };
+        if !signed_generations.is_empty() && signed_generations != generations && !narrowed_unreferenced() {
             let what = if signed_role(num) { kind::PAGE_CONTENT } else { kind::OTHER };
             if !disallowed.contains(&what) {
                 disallowed.push(what);
@@ -174,6 +209,7 @@ struct ChangedObjectClassifier<'a> {
     signed_pages: &'a HashSet<u32>,
     signed_annots: &'a HashSet<u32>,
     placed_annots: &'a HashSet<u32>,
+    annot_budget: &'a Cell<usize>,
     signed_resources: &'a HashMap<u32, bool>,
     old_info: Option<u32>,
     dss: &'a HashSet<u32>,
@@ -188,8 +224,8 @@ impl ChangedObjectClassifier<'_> {
             return Some(kind::SECURITY_STORE);
         }
         match new {
-            Object::Array(now) if self.is_signed_annotation_array(r, before) => Some(self.annotation_array_change(now, before)),
-            Object::Dict(dict) => Some(self.dictionary_change(r, dict, before)),
+            Object::Array(_) if self.is_signed_annotation_array(r, before) => self.annotation_array_change(new, before),
+            Object::Dict(dict) => self.dictionary_change(r, dict, before),
             Object::Stream(stream) => self.stream_change(r, stream, before),
             _ if before.is_none() => None,
             _ => Some(kind::OTHER),
@@ -213,13 +249,21 @@ impl ChangedObjectClassifier<'_> {
         self.signed_annots.contains(&r.num) && before.is_some_and(|object| object.as_array().is_some())
     }
 
-    fn annotation_array_change(&self, now: &[Object], before: Option<&Object>) -> &'static str {
-        let was: Vec<ObjRef> = before.and_then(Object::as_array).map(|items| items.iter().filter_map(Object::as_ref).collect()).unwrap_or_default();
-        self.annots_change(&was, &now.iter().filter_map(Object::as_ref).collect::<Vec<_>>())
+    fn annotation_array_change(&self, now: &Object, before: Option<&Object>) -> Option<&'static str> {
+        match (annot_refs(self.old, before, self.annot_budget), annot_refs(self.doc, Some(now), self.annot_budget)) {
+            (Some(was), Some(now)) => self.annots_change(&was, &now),
+            _ => Some(kind::OTHER),
+        }
     }
 
-    /// A signed page's annotations going from `was` to `now`, compared by object number.
-    fn annots_change(&self, was: &[ObjRef], now: &[ObjRef]) -> &'static str {
+    /// A signed page's annotations going from `was` to `now`, compared by object number. Only an
+    /// entry that resolves is on the page: one rewritten to a generation its slot does not accept
+    /// draws nothing, whatever its number. `None` when the page shows the same annotations in
+    /// the same order.
+    fn annots_change(&self, was: &[ObjRef], now: &[ObjRef]) -> Option<&'static str> {
+        let live =
+            |doc: &Document, list: &[ObjRef]| -> Vec<ObjRef> { list.iter().filter(|r| !matches!(*doc.get(**r), Object::Null)).copied().collect() };
+        let (was, now) = (live(self.old, was), live(self.doc, now));
         let had: HashSet<u32> = was.iter().map(|r| r.num).collect();
         let kept: HashSet<u32> = now.iter().map(|r| r.num).collect();
         let removed: Vec<u32> = had.iter().filter(|num| !kept.contains(num)).copied().collect();
@@ -227,27 +271,31 @@ impl ChangedObjectClassifier<'_> {
         let was_widget = |num: u32| self.old.try_get(num).ok().is_some_and(|o| o.as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget")));
         // A signed annotation listed on another page was moved or copied there.
         let moved: Vec<u32> = added.iter().map(|r| r.num).filter(|num| self.placed_annots.contains(num)).collect();
+        // The annotations kept, in their new order: another order draws another one on top.
+        let reordered = !now.iter().map(|r| r.num).filter(|num| had.contains(num)).eq(was.iter().map(|r| r.num));
         if removed.iter().chain(&moved).any(|num| was_widget(*num)) {
             // A form field or signature widget taken off its page, or onto another: no permission covers it.
-            kind::OTHER
-        } else if !removed.is_empty() || !moved.is_empty() {
-            // Deleting or moving comments is a comment change (permitted at P 3 only).
-            kind::COMMENTS
+            Some(kind::OTHER)
+        } else if !removed.is_empty() || !moved.is_empty() || reordered {
+            // Deleting, moving or restacking comments is a comment change (permitted at P 3 only).
+            Some(kind::COMMENTS)
+        } else if added.is_empty() {
+            None
         } else {
-            added_annots(self.doc, &added)
+            Some(added_annots(self.doc, &added))
         }
     }
 
-    fn dictionary_change(&self, r: ObjRef, dict: &Dict, before: Option<&Object>) -> &'static str {
+    fn dictionary_change(&self, r: ObjRef, dict: &Dict, before: Option<&Object>) -> Option<&'static str> {
         let previous = before.and_then(Object::as_dict);
         if self.signed_pages.contains(&r.num) {
             // A signed page is judged by what the page shows, whatever its new labels say.
             self.page_change_kind(dict, previous)
         } else if previous.is_some() && Some(r.num) == self.old_info {
             // Only the signed revision's own /Info dictionary is a metadata change.
-            kind::METADATA
+            Some(kind::METADATA)
         } else {
-            change_kind(self.doc, self.old, dict, previous)
+            Some(change_kind(self.doc, self.old, dict, previous))
         }
     }
 
@@ -255,11 +303,14 @@ impl ChangedObjectClassifier<'_> {
     /// rather than by any `/Type` its new version carries. Only its annotations may change (see
     /// [`Self::annots_change`]); any other difference (content, resources, a relabelled or dropped
     /// `/Type`) is a page content change.
-    fn page_change_kind(&self, d: &Dict, before: Option<&Dict>) -> &'static str {
+    fn page_change_kind(&self, d: &Dict, before: Option<&Dict>) -> Option<&'static str> {
         match before {
-            Some(b) if without(d, &[b"Annots"]) != without(b, &[b"Annots"]) => kind::PAGE_CONTENT,
-            Some(b) => self.annots_change(&refs(self.old, b.get(b"Annots")), &refs(self.doc, d.get(b"Annots"))),
-            None => kind::PAGE_CONTENT,
+            Some(b) if without(d, &[b"Annots"]) != without(b, &[b"Annots"]) => Some(kind::PAGE_CONTENT),
+            Some(b) => match (annot_refs(self.old, b.get(b"Annots"), self.annot_budget), annot_refs(self.doc, d.get(b"Annots"), self.annot_budget)) {
+                (Some(was), Some(now)) => self.annots_change(&was, &now),
+                _ => Some(kind::OTHER),
+            },
+            None => Some(kind::PAGE_CONTENT),
         }
     }
 
@@ -437,6 +488,51 @@ fn added_annots(doc: &Document, added: &[ObjRef]) -> &'static str {
     } else {
         kind::COMMENTS
     }
+}
+
+/// The references in the annotation list `o` (inline or indirect), its length spent from
+/// `budget`. `None` past the budget.
+fn annot_refs(doc: &Document, o: Option<&Object>, budget: &Cell<usize>) -> Option<Vec<ObjRef>> {
+    let held;
+    let items = match o {
+        Some(Object::Ref(_)) => {
+            held = o.map(|o| doc.resolve(o));
+            held.as_deref().and_then(Object::as_array)
+        }
+        other => other.and_then(Object::as_array),
+    };
+    let Some(items) = items else { return Some(Vec::new()) };
+    budget.set(budget.get().checked_sub(items.len())?);
+    Some(items.iter().filter_map(Object::as_ref).collect())
+}
+
+/// Every indirect reference in `doc`'s objects and trailer. `None` (nothing can be shown
+/// unreferenced) when an object can't be read, or past a bound on references or nesting.
+fn references(doc: &Document) -> Option<HashSet<ObjRef>> {
+    const MAX_REFERENCES: usize = 1 << 22;
+    const MAX_DEPTH: u8 = 64;
+    fn walk(o: &Object, depth: u8, found: &mut HashSet<ObjRef>) -> bool {
+        if depth > MAX_DEPTH {
+            return false;
+        }
+        match o {
+            Object::Ref(r) => {
+                found.insert(*r);
+                found.len() <= MAX_REFERENCES
+            }
+            Object::Dict(d) => d.iter().all(|(_, v)| walk(v, depth + 1, found)),
+            Object::Stream(s) => s.dict.iter().all(|(_, v)| walk(v, depth + 1, found)),
+            Object::Array(a) => a.iter().all(|v| walk(v, depth + 1, found)),
+            _ => true,
+        }
+    }
+    let mut found = HashSet::new();
+    for num in doc.object_numbers() {
+        if !walk(&*doc.try_get(num).ok()?, 0, &mut found) {
+            return None;
+        }
+    }
+    doc.trailer().iter().all(|(_, v)| walk(v, 0, &mut found)).then_some(found)
 }
 
 fn refs(doc: &Document, o: Option<&Object>) -> Vec<ObjRef> {

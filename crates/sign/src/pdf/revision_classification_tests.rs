@@ -205,3 +205,80 @@ fn hidden_shared_alias_form_fill() {
         assert_refused(&doc, signed.open(), p);
     }
 }
+
+fn verdict(doc: &Document, old: Document, p: Option<u8>) -> Modification {
+    classify_changes(doc, Some(old), p)
+}
+
+/// A widget whose /Annots entry is rewritten to a generation its slot never had no longer
+/// resolves: it is taken off the page, inline or through an indirect array.
+#[test]
+fn widget_dropped_through_a_dead_generation() {
+    for (page3, num) in [("/Annots 6 0 R", 6), ("/Annots [5 0 R]", 3)] {
+        let signed = form(page3);
+        let body = if num == 6 { "[5 3 R]".to_owned() } else { page("/Annots [5 3 R]") };
+        let now = signed.clone().revision(&[(num, Row::Obj(0, 0, &body))]);
+        for p in [Some(2), Some(3), None] {
+            let v = verdict(&now.open(), signed.open(), p);
+            assert!(matches!(v, Modification::Disallowed(_)), "{page3} P={p:?}: {v:?}");
+        }
+    }
+}
+
+/// The same annotations, listed in a new array object, change nothing on the page; listed in
+/// another order they change which is drawn on top.
+#[test]
+fn an_unchanged_annotation_list_is_no_change_and_a_reordered_one_is_a_comment_change() {
+    let signed = File::new().revision(&[
+        (1, Row::Obj(0, 0, "<< /Type /Catalog /Pages 2 0 R >>")),
+        (2, Row::Obj(0, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")),
+        (3, Row::Obj(0, 0, &page("/Annots [4 0 R 5 0 R]"))),
+        (4, Row::Obj(0, 0, COMMENT)),
+        (5, Row::Obj(0, 0, COMMENT)),
+    ]);
+    let moved = signed.clone().revision(&[(3, Row::Obj(0, 0, &page("/Annots 6 0 R"))), (6, Row::Obj(0, 0, "[4 0 R 5 0 R]"))]);
+    assert_eq!(verdict(&moved.open(), signed.open(), Some(2)), Modification::Allowed(Vec::new()));
+    let reordered = signed.clone().revision(&[(3, Row::Obj(0, 0, &page("/Annots [5 0 R 4 0 R]")))]);
+    assert_eq!(verdict(&reordered.open(), signed.open(), Some(2)), Modification::Disallowed(vec![super::kind::COMMENTS]));
+}
+
+/// Many signed pages sharing one long /Annots array, all rewritten to list it through a new
+/// object, are judged in bounded time.
+#[test]
+fn shared_annotation_arrays_are_judged_in_bounded_time() {
+    const PAGES: u32 = 30_000;
+    let first_page = 10;
+    let kids: String = (0..PAGES).map(|i| format!("{} 0 R ", first_page + i)).collect();
+    let annots: String = (0..PAGES).map(|i| format!("{} 0 R ", first_page + i)).collect();
+    let mut rows = vec![
+        (1, "<< /Type /Catalog /Pages 2 0 R >>".to_owned()),
+        (2, format!("<< /Type /Pages /Kids [{kids}] /Count {PAGES} >>")),
+        (3, format!("[{annots}]")),
+    ];
+    rows.extend((0..PAGES).map(|i| (first_page + i, page("/Annots 3 0 R"))));
+    let rows: Vec<(u32, Row<'_>)> = rows.iter().map(|(n, b)| (*n, Row::Obj(0, 0, b))).collect();
+    let signed = File::new().revision(&rows);
+    let repointed: Vec<String> = (0..PAGES).map(|_| page("/Annots 4 0 R")).collect();
+    let mut later: Vec<(u32, Row<'_>)> = repointed.iter().enumerate().map(|(i, b)| (first_page + i as u32, Row::Obj(0, 0, b))).collect();
+    let copy = format!("[{annots}]");
+    later.push((4, Row::Obj(0, 0, &copy)));
+    let now = signed.clone().revision(&later);
+    let (doc, old) = (now.open(), signed.open());
+    let started = std::time::Instant::now();
+    let _ = verdict(&doc, old, Some(3));
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "took {:?}", started.elapsed());
+}
+
+/// A damaged signed slot (header 5, row 0) rewritten cleanly as `4 0 obj` keeps the generation
+/// every signed reference uses: a form fill. Had anything signed referred to it as `4 5 R`, that
+/// reference would no longer resolve, and the change is refused.
+#[test]
+fn a_repaired_slot_rewritten_cleanly_is_judged_by_its_references() {
+    let filled = TEXT_FIELD.replace("(Ann)", "(Bob)");
+    let signed = aliased_field("4 0 R", "4 0 R");
+    let now = signed.clone().revision(&[(4, Row::Obj(0, 0, &filled))]);
+    assert_eq!(verdict(&now.open(), signed.open(), Some(2)), Modification::Allowed(vec![super::kind::FORM_FILL]));
+    let signed = aliased_field("4 5 R", "4 0 R");
+    let now = signed.clone().revision(&[(4, Row::Obj(0, 0, &filled))]);
+    assert!(matches!(verdict(&now.open(), signed.open(), Some(2)), Modification::Disallowed(_)));
+}
