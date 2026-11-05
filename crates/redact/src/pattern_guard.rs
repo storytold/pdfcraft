@@ -439,3 +439,24 @@ pub(crate) fn check(doc: &Document, selected: &[usize], tree: bool) -> Result<()
     }
     Ok(())
 }
+
+/// The backstop after every other check: a full save writes whatever the trailer reaches, by any
+/// reference at all -- a stray resource category, a key on a page, a direct /Parent, `/AcroForm
+/// /DR`, `/PieceInfo` -- and the walks above follow only the references they know. A pattern
+/// pruned from a page that a full save would still write must therefore be proven safe like any
+/// retained cell (vector-only), or the redaction is refused. Costs one walk of the reachable
+/// objects, and only when a pattern was pruned.
+pub(crate) fn check_pruned_unreachable(doc: &Document, pruned: &[ObjRef], page: usize) -> Result<(), RedactError> {
+    if pruned.is_empty() {
+        return Ok(());
+    }
+    let reachable = pdfcraft_cos::reachable_objects(doc)?;
+    let mut guard = Guard::new();
+    let mut checked = HashSet::new();
+    for &pattern in pruned {
+        if reachable.contains(&pattern.num) && checked.insert(pattern.num) {
+            guard.walk(doc, &Object::Ref(pattern), true, 0).map_err(|reason| RedactError::Pattern { page, reason })?;
+        }
+    }
+    Ok(())
+}

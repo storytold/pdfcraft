@@ -632,11 +632,15 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
                         })
                     })
             });
+    let first_page = by_page.first().map_or(1, |p| p + 1);
     let check_pages =
         if shared_pattern_possible || shared_appearance_possible { (0..pdfcraft_model::pages(doc).len()).collect::<Vec<_>>() } else { by_page };
     // A pruned pattern may also stay named by a /Pages node no page inherits from, or by one a
     // page with a broken /Parent link still reaches: then every page-tree node is inspected too.
     pattern_guard::check(doc, &check_pages, shared_pattern_possible || !pruned_patterns.is_empty())?;
+    // Whatever reference keeps a pruned pattern in the file -- one no walk above follows -- the
+    // full save would write it: prove it safe or refuse.
+    pattern_guard::check_pruned_unreachable(doc, &pruned_patterns, first_page)?;
     // The previous revision still holds the removed content: the next save must rewrite.
     doc.require_full_save();
     Ok(report)

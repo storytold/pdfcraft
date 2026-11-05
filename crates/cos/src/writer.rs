@@ -267,16 +267,12 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     Ok(file)
 }
 
-/// Write only reachable objects, renumbered from 1, with a table or cross-reference stream.
-pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
-    if doc.stream_limited() {
-        return Err(CosError::ReadOnlyLimit);
-    }
-    // A full traversal must not fill the editor's shared caches (which undo snapshots also
-    // own). Parsed objects and decoded object streams are temporary working data here.
-    let mut reader = doc.object_reader();
-    stamp_mod_date(&mut reader.document, opts);
-    let trailer_in = reader.document.trailer().clone();
+/// The objects [`write_full`] writes: everything reachable from the trailer's /Root, /Info and
+/// /Encrypt and from its unknown entries, breadth-first, with the new number each gets
+/// (aliases of one slot included) and, in visit order, whether it is a stream.
+type SaveOrder = (HashMap<ObjRef, u32>, Vec<(ObjRef, bool)>);
+
+fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict) -> Result<SaveOrder, CosError> {
     // Breadth-first walk from the trailer, assigning new numbers in visit order.
     let mut map: HashMap<ObjRef, u32> = HashMap::new();
     // Record the type while traversing so classifying packed objects needs no second parse.
@@ -320,6 +316,30 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         order.push((canonical, matches!(*o, Object::Stream(_))));
         visit_refs(&o, &mut queue);
     }
+    Ok((map, order))
+}
+
+/// The object numbers a full save of `doc` would write: exactly the objects [`write_full`]
+/// reaches from the trailer, object streams included. For a check that something removed from a
+/// document cannot reach the saved file through a reference nobody looked for.
+pub fn reachable_objects(doc: &Document) -> Result<HashSet<u32>, CosError> {
+    let mut reader = doc.object_reader();
+    let trailer_in = reader.document.trailer().clone();
+    let (_, order) = full_save_order(&mut reader, &trailer_in)?;
+    Ok(order.into_iter().map(|(r, _)| r.num).collect())
+}
+
+/// Write only reachable objects, renumbered from 1, with a table or cross-reference stream.
+pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
+    if doc.stream_limited() {
+        return Err(CosError::ReadOnlyLimit);
+    }
+    // A full traversal must not fill the editor's shared caches (which undo snapshots also
+    // own). Parsed objects and decoded object streams are temporary working data here.
+    let mut reader = doc.object_reader();
+    stamp_mod_date(&mut reader.document, opts);
+    let trailer_in = reader.document.trailer().clone();
+    let (map, order) = full_save_order(&mut reader, &trailer_in)?;
     let version = reader.document.version().chars().take(3).collect::<String>();
     let version = if opts.object_streams && version.as_str() < "1.5" { "1.5".to_string() } else { version };
     let mut out = Vec::new();
