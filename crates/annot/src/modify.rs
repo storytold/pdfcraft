@@ -738,7 +738,8 @@ fn ink_rect_for_width(d: &Dict, old_w: f64, w: f64) -> Option<[f64; 4]> {
     Some([inner[0] - base[0] - new_half, inner[1] - base[1] - new_half, inner[2] + base[2] + new_half, inner[3] + base[3] + new_half])
 }
 
-/// Change a comment's colour, opacity, line width and/or line endings, and redraw it.
+/// Change a comment's colour, opacity (of the whole comment), line width and/or line endings, and
+/// redraw it.
 pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
     let StyleChange { color, opacity, width, endings } = change;
     let (_, r) = annot_ref(doc, page, index)?;
@@ -773,13 +774,10 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
                 d.set(b"C".to_vec(), rgb(c));
             }
         }
+        // The whole comment: its fill and text drop opacities of their own.
         if let Some(o) = opacity {
             let o = o.clamp(0.0, 1.0);
-            if o < 1.0 {
-                d.set(b"CA".to_vec(), Object::Real(o));
-            } else {
-                d.remove(b"CA");
-            }
+            set_part_keys(d, appearance::PartOpacity { line: o, fill: o, text: o });
         }
         if let Some(w) = width {
             let old_w = border_width_of(d);
@@ -885,6 +883,63 @@ pub fn set_fill(doc: &mut Document, page: usize, index: usize, fill: Option<Rgb>
         touch(d, meta);
     })?;
     redraw_or_restore(doc, r, before)
+}
+
+/// Draw a rectangle's, oval's, polygon's or text box's fill, or a text box's text, at an
+/// opacity of its own (0–1), its line or border keeping the comment's (`/CA`), and redraw it.
+/// `None` leaves that part as it is drawn now. The fill goes in `/ca` (PDF 2.0's opacity for
+/// what is filled), the text in `/PCTextOpacity`, each only where it differs from the one it
+/// would otherwise follow.
+pub fn set_part_opacity(doc: &mut Document, page: usize, index: usize, fill: Option<f64>, text: Option<f64>, meta: &Meta) -> Result<(), AnnotError> {
+    let (_, r) = annot_ref(doc, page, index)?;
+    unlocked(doc, r)?;
+    let d = annot_dict(doc, r);
+    let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+    if fill.is_some() && !fillable(&subtype) {
+        return Err(AnnotError::Invalid("only rectangles, ovals, polygons and text boxes have a fill of their own".into()));
+    }
+    if text.is_some() && subtype != "FreeText" {
+        return Err(AnnotError::Invalid("only text boxes, typewriter text and callouts have text of their own".into()));
+    }
+    if fill.into_iter().chain(text).any(|o| !o.is_finite()) {
+        return Err(AnnotError::Invalid("invalid opacity".into()));
+    }
+    // Check before changing anything: a stale appearance would contradict the new opacity.
+    if appearance::build(&d).is_none() {
+        return Err(AnnotError::Unsupported(subtype));
+    }
+    refuse_foreign_text(doc, &d)?;
+    let before = d;
+    doc.update_dict(r, |d| {
+        let mut parts = appearance::part_opacity(d);
+        if let Some(f) = fill {
+            parts.fill = f.clamp(0.0, 1.0);
+        }
+        if let Some(t) = text {
+            parts.text = t.clamp(0.0, 1.0);
+        }
+        set_part_keys(d, parts);
+        touch(d, meta);
+    })?;
+    redraw_or_restore(doc, r, before)
+}
+
+/// Write a comment's parts' opacities (see [`appearance::PartOpacity`]): the line's as `/CA`, the
+/// fill's as `/ca` and the text's as `/PCTextOpacity`, each only where it differs from the one
+/// it would otherwise follow (the fill the line, the text the fill), so a comment drawn at one
+/// opacity keeps just `/CA`.
+pub(crate) fn set_part_keys(d: &mut Dict, parts: appearance::PartOpacity) {
+    let appearance::PartOpacity { line, fill, text } = parts;
+    let mut put = |key: &[u8], value: f64, unless: f64| {
+        if value == unless {
+            d.remove(key);
+        } else {
+            d.set(key.to_vec(), Object::Real(value));
+        }
+    };
+    put(b"CA", line, 1.0);
+    put(b"ca", fill, line);
+    put(b"PCTextOpacity", text, fill);
 }
 
 /// Grow a line or polyline's rectangle so a non-`None` ending is not clipped. Idempotent.

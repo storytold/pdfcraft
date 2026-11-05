@@ -40,7 +40,7 @@ fn new(page: usize, shape: Shape) -> NewAnnotation {
     NewAnnotation {
         page,
         shape,
-        style: Style { color: [0.0, 0.4, 1.0], opacity: 1.0, width: 2.0, fill: None },
+        style: Style { color: [0.0, 0.4, 1.0], opacity: 1.0, width: 2.0, fill: None, ..Style::default() },
         contents: "hello".into(),
         author: "Ada".into(),
     }
@@ -581,6 +581,83 @@ fn restyle_and_resize_redraw_the_appearance() {
     assert!(matches!(set_rect(&mut doc, 0, l, [0.0, 0.0, 5.0, 5.0], &meta("")), Err(AnnotError::Invalid(_))));
 }
 
+/// A rectangle's fill, and a text box's border, background and text, each drawn at an opacity of
+/// its own: the line's in `/CA`, the fill's in `/ca` (PDF 2.0), the text's in `/PCTextOpacity`, and
+/// in the appearance `/GS0` (strokes at the line's, fills at the fill's) and `/GS1` for the text.
+#[test]
+fn parts_are_drawn_at_opacities_of_their_own() {
+    let num = |d: &Dict, k: &[u8]| d.get(k).and_then(|o| o.as_f64());
+    let gstate = |doc: &Document, d: &Dict, name: &[u8]| -> Option<(f64, f64)> {
+        let n = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.reference(b"N")))?;
+        let obj = doc.get(n);
+        let Object::Stream(s) = &*obj else { return None };
+        let res = s.dict.get(b"Resources").map(|r| doc.resolve(r))?;
+        let gs = res.as_dict()?.get(b"ExtGState").map(|g| doc.resolve(g))?;
+        let gs = gs.as_dict()?.get(name).map(|g| doc.resolve(g))?;
+        let gs = gs.as_dict()?;
+        Some((gs.get(b"CA")?.as_f64()?, gs.get(b"ca")?.as_f64()?))
+    };
+    let mut doc = fixture();
+    let r = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 110.0, 60.0] }), &meta("r")).unwrap();
+    set_fill(&mut doc, 0, r, Some([1.0, 1.0, 0.0]), &meta("")).unwrap();
+    set_part_opacity(&mut doc, 0, r, Some(0.3), None, &meta("")).unwrap();
+    let doc2 = reopen(&doc);
+    let d = &list(&doc2, 0)[r];
+    assert_eq!((num(d, b"CA"), num(d, b"ca")), (None, Some(0.3)), "an opaque line, a fill of its own");
+    assert_eq!(gstate(&doc2, d, b"GS0"), Some((1.0, 0.3)));
+    let ap = ap_content(&doc2, d);
+    assert!(ap.starts_with("/GS0 gs") && ap.contains("\nB\n"), "filled and stroked in one go: {ap}");
+    let p = props(&doc2, 0, r).unwrap();
+    assert_eq!((p.opacity, p.fill_opacity, p.text_opacity), (1.0, Some(0.3), None));
+    // The whole comment's opacity (StyleAnnotation, the quick bar): the fill goes along again.
+    set_style(&mut doc, 0, r, StyleChange::new(None, Some(0.6), None, None), &meta("")).unwrap();
+    let d = &list(&doc, 0)[r];
+    assert_eq!((num(d, b"CA"), num(d, b"ca")), (Some(0.6), None));
+    assert_eq!(props(&doc, 0, r).unwrap().fill_opacity, Some(0.6));
+
+    // A text box with its border opaque, its background at 20 % and its text opaque, as made.
+    let mut tb = new(0, Shape::TextBox { rect: [200.0, 600.0, 400.0, 650.0], font_size: 12.0 });
+    tb.style.fill = Some([1.0, 1.0, 0.6]);
+    tb.style.width = 1.0;
+    (tb.style.fill_opacity, tb.style.text_opacity) = (Some(0.2), Some(1.0));
+    let t = add_annotation(&mut doc, &tb, &meta("t")).unwrap();
+    let doc2 = reopen(&doc);
+    let d = &list(&doc2, 0)[t];
+    assert_eq!((num(d, b"CA"), num(d, b"ca"), num(d, b"PCTextOpacity")), (None, Some(0.2), Some(1.0)));
+    assert_eq!((gstate(&doc2, d, b"GS0"), gstate(&doc2, d, b"GS1")), (Some((1.0, 0.2)), Some((1.0, 1.0))));
+    let ap = ap_content(&doc2, d);
+    let (gs1, text) = (ap.find("/GS1 gs\n").expect("the text's own state, an operator of its own"), ap.find("BT").expect("text"));
+    assert!(ap.find(" re f").is_some_and(|fill| fill < gs1) && gs1 < text, "background at 20 %, then the text at its own: {ap}");
+    // A new fill opacity leaves the text as it is drawn.
+    set_part_opacity(&mut doc, 0, t, Some(0.5), None, &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    assert_eq!((num(d, b"ca"), num(d, b"PCTextOpacity")), (Some(0.5), Some(1.0)));
+    let p = props(&doc, 0, t).unwrap();
+    assert_eq!((p.opacity, p.fill_opacity, p.text_opacity), (1.0, Some(0.5), Some(1.0)));
+    // All at one opacity again: only /CA stays.
+    set_part_opacity(&mut doc, 0, t, Some(1.0), Some(1.0), &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    assert_eq!((num(d, b"CA"), num(d, b"ca"), num(d, b"PCTextOpacity")), (None, None, None));
+
+    // Only the parts a comment has, and finite values; nothing changes when refused.
+    let l = add_annotation(
+        &mut doc,
+        &new(0, Shape::Line { from: [0.0, 0.0], to: [10.0, 10.0], start: LineEnding::None, end: LineEnding::None }),
+        &meta("l"),
+    )
+    .unwrap();
+    assert!(matches!(set_part_opacity(&mut doc, 0, l, Some(0.5), None, &meta("")), Err(AnnotError::Invalid(_))), "a line has no fill");
+    assert!(matches!(set_part_opacity(&mut doc, 0, r, None, Some(0.5), &meta("")), Err(AnnotError::Invalid(_))), "a rectangle has no text");
+    let before = list(&doc, 0)[r].clone();
+    assert!(matches!(set_part_opacity(&mut doc, 0, r, Some(f64::NAN), None, &meta("")), Err(AnnotError::Invalid(_))));
+    assert_eq!(list(&doc, 0)[r], before);
+    // Another app's comment with /CA alone is drawn at it throughout, as before.
+    assert_eq!(
+        appearance::part_opacity(&Dict::from_iter([(b"CA".to_vec(), Object::Real(0.4))])),
+        appearance::PartOpacity { line: 0.4, fill: 0.4, text: 0.4 }
+    );
+}
+
 #[test]
 fn shapes_can_be_filled_and_unfilled() {
     let mut doc = fixture();
@@ -1098,8 +1175,8 @@ fn cloud_ys(path: &str) -> Vec<f64> {
 fn replace_text_groups_a_strikeout_and_a_caret() {
     let mut doc = fixture();
     let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
-    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
-    let blue = Style { color: [0.0, 0.47, 0.84], opacity: 1.0, width: 1.0, fill: None };
+    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None, ..Style::default() };
+    let blue = Style { color: [0.0, 0.47, 0.84], opacity: 1.0, width: 1.0, fill: None, ..Style::default() };
     let i = add_text_replacement(
         &mut doc,
         TextReplacement {
@@ -2474,4 +2551,163 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
     for (a, b) in rect_from_border.iter().zip([10.0, 90.0, 130.0, 110.0]) {
         assert!((a - b).abs() < 1e-4, "expected [10, 90, 130, 110], got {rect_from_border:?}");
     }
+}
+
+/// A 3D annotation is PDF 1.6 and a PRC model 1.7 (ISO 32000-2 §13.6): an older document's
+/// catalog says so, and a newer one is left as it is.
+#[test]
+fn a_3d_model_raises_an_older_document_to_its_version() {
+    let catalog_version = |doc: &Document| {
+        let root = doc.root().unwrap();
+        doc.get(root).as_dict().unwrap().name(b"Version").map(<[u8]>::to_vec)
+    };
+    let add = |doc: &mut Document, model: &[u8]| {
+        let new = NewModel3d { page: 0, rect: [100.0, 100.0, 300.0, 300.0], model, activation: Activation3d::default(), poster: None, contents: "" };
+        add_3d_model(doc, &new, &meta("m")).unwrap();
+    };
+    let mut doc = fixture();
+    add(&mut doc, b"U3D\0rest");
+    assert_eq!(catalog_version(&reopen(&doc)), None, "a 1.7 file needs nothing for U3D");
+    for (model, version) in [(&b"U3D\0rest"[..], &b"1.6"[..]), (b"PRC rest", b"1.7")] {
+        let mut doc = fixture();
+        doc.set_version("1.4");
+        add(&mut doc, model);
+        assert_eq!(catalog_version(&reopen(&doc)).as_deref(), Some(version));
+    }
+    let mut doc = fixture();
+    doc.set_version("2.0");
+    add(&mut doc, b"PRC rest");
+    assert_eq!(catalog_version(&reopen(&doc)), None, "a 2.0 file takes PRC as it is");
+}
+
+/// Before 2.0, PRC is an Adobe extension to PDF 1.7 (§7.12): a PRC model declares it, keeping
+/// other extensions and a later ADBE level; U3D and a 2.0 file need nothing.
+#[test]
+fn a_prc_model_declares_the_adobe_extension_before_pdf_2() {
+    let adbe = |doc: &Document| {
+        let root = doc.root().unwrap();
+        let ext = doc.get(root).as_dict().unwrap().get(b"Extensions").map(|e| doc.resolve(e).as_dict().unwrap().clone());
+        ext.map(|e| {
+            let adbe = e.get(b"ADBE").map(|a| a.as_dict().unwrap().clone());
+            (e.get(b"XYZ").is_some(), adbe.map(|a| (a.name(b"BaseVersion").map(<[u8]>::to_vec), a.get(b"ExtensionLevel").and_then(Object::as_int))))
+        })
+    };
+    let add = |doc: &mut Document, model: &[u8]| {
+        let new = NewModel3d { page: 0, rect: [100.0, 100.0, 300.0, 300.0], model, activation: Activation3d::default(), poster: None, contents: "" };
+        add_3d_model(doc, &new, &meta("m")).unwrap();
+    };
+    let mut doc = fixture();
+    add(&mut doc, b"PRC rest");
+    assert_eq!(adbe(&reopen(&doc)), Some((false, Some((Some(b"1.7".to_vec()), Some(1))))));
+    let mut doc = fixture();
+    add(&mut doc, b"U3D rest");
+    assert_eq!(adbe(&reopen(&doc)), None, "U3D is in ISO 32000-1");
+    let mut doc = fixture();
+    doc.set_version("2.0");
+    add(&mut doc, b"PRC rest");
+    assert_eq!(adbe(&reopen(&doc)), None, "PRC is in ISO 32000-2");
+
+    let mut doc = fixture();
+    let root = doc.root().unwrap();
+    let mut level3 = Dict::new();
+    level3.set(b"BaseVersion".to_vec(), Object::name("1.7"));
+    level3.set(b"ExtensionLevel".to_vec(), Object::Int(3));
+    let mut ext = Dict::new();
+    ext.set(b"ADBE".to_vec(), Object::Dict(level3));
+    ext.set(b"XYZ".to_vec(), Object::Dict(Dict::new()));
+    doc.update_dict(root, |c| c.set(b"Extensions".to_vec(), Object::Dict(ext.clone()))).unwrap();
+    add(&mut doc, b"PRC rest");
+    assert_eq!(adbe(&reopen(&doc)), Some((true, Some((Some(b"1.7".to_vec()), Some(3))))), "a later level is kept");
+    ext.remove(b"ADBE");
+    let mut doc = fixture();
+    doc.update_dict(root, |c| c.set(b"Extensions".to_vec(), Object::Dict(ext))).unwrap();
+    add(&mut doc, b"PRC rest");
+    assert_eq!(adbe(&reopen(&doc)), Some((true, Some((Some(b"1.7".to_vec()), Some(1))))), "other extensions are kept");
+
+    let mut doc = fixture();
+    let mut ext = Dict::new();
+    ext.set(b"ADBE".to_vec(), Object::Array(vec![Object::Dict(Dict::new())]));
+    let ext = doc.add(Object::Dict(ext));
+    doc.update_dict(root, |c| c.set(b"Extensions".to_vec(), Object::Ref(ext))).unwrap();
+    add(&mut doc, b"PRC rest");
+    let doc = reopen(&doc);
+    let ext = doc.resolve(doc.get(doc.root().unwrap()).as_dict().unwrap().get(b"Extensions").unwrap());
+    assert!(ext.as_dict().unwrap().get(b"ADBE").unwrap().as_array().is_some(), "an array of ADBE extensions is left alone");
+}
+
+#[test]
+fn a_picture_is_placed_by_its_box_and_a_form_needs_a_positive_size() {
+    let at = [10.0, 20.0, 110.0, 70.0];
+    assert_eq!(appearance::picture_place(at, true, None).as_deref(), Some("100 0 0 50 10 20 cm"), "an image fills its unit square");
+    assert_eq!(appearance::picture_place(at, false, Some((200.0, 25.0))).as_deref(), Some("0.5 0 0 2 10 20 cm"));
+    for size in [None, Some((0.0, 25.0)), Some((200.0, -1.0))] {
+        assert_eq!(appearance::picture_place(at, false, size), None, "{size:?}");
+    }
+}
+
+/// The poster's box must lie in the rectangle, and a form poster needs a size to scale by.
+#[test]
+fn a_3d_poster_outside_its_rectangle_or_without_a_size_is_refused() {
+    let picture = |at: [f64; 4], size: (f64, f64)| PosterPicture { xobject: ObjRef { num: 6, generation: 0 }, image: false, size, at };
+    for (poster, why) in [
+        (picture([50.0, 100.0, 250.0, 300.0], (10.0, 10.0)), "starts left of the rectangle"),
+        (picture([100.0, 100.0, 300.0, 301.0], (10.0, 10.0)), "ends above it"),
+        (picture([100.0, 100.0, 300.0, 300.0], (0.0, 10.0)), "has no width"),
+        (picture([100.0 - 2e-7, 150.0, 100.0 - 1e-7, 200.0], (10.0, 10.0)), "lies outside within the rounding slack"),
+    ] {
+        let mut doc = fixture();
+        let new = NewModel3d {
+            page: 0,
+            rect: [100.0, 100.0, 300.0, 300.0],
+            model: b"PRC rest",
+            activation: Activation3d::default(),
+            poster: Some(poster),
+            contents: "",
+        };
+        assert!(matches!(add_3d_model(&mut doc, &new, &meta("m")), Err(AnnotError::Invalid(_))), "{why}");
+        assert_eq!(list(&doc, 0).len(), 1, "{why}: nothing added");
+    }
+}
+
+/// A poster box fitted to the rectangle in floating point ends an ulp outside it: a 7×3 picture
+/// centred in [0 100 3.6 110.8] spans -2.2e-16 to 3.6000000000000005. It is taken, inside the
+/// rectangle.
+#[test]
+fn a_3d_poster_fitted_to_its_rectangle_with_rounding_is_taken() {
+    let mut doc = fixture();
+    let at = [-2.220446049250313e-16, 104.62857142857143, 3.6000000000000005, 106.17142857142858];
+    let poster = PosterPicture { xobject: ObjRef { num: 6, generation: 0 }, image: false, size: (7.0, 3.0), at };
+    let new = NewModel3d {
+        page: 0,
+        rect: [0.0, 100.0, 3.6, 110.8],
+        model: b"PRC rest",
+        activation: Activation3d::default(),
+        poster: Some(poster),
+        contents: "",
+    };
+    assert_eq!(add_3d_model(&mut doc, &new, &meta("m")), Ok(1));
+}
+
+#[test]
+fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
+    let mut doc = fixture();
+    let intent = Object::Ref(doc.add(Object::name("FreeTextTypeWriter")));
+    let page = page_refs(&doc).unwrap()[0];
+    let mut entries = annots(&doc, page);
+    let Object::Dict(annotation) = &mut entries[0] else { panic!("fixture annotation is inline") };
+    annotation.set(b"Subtype".to_vec(), Object::name("FreeText"));
+    annotation.set(b"IT".to_vec(), intent);
+    let contents = " \nAda\n\nLovelace\n\n ";
+    annotation.set(b"Contents".to_vec(), PdfString::text(contents));
+    set_annots(&mut doc, page, entries).unwrap();
+    let check = |doc: &Document| {
+        let list = summaries(doc);
+        let summary = list.iter().find(|a| a.page == 0 && a.index == 0).expect("direct Subtype is listed");
+        assert_eq!(summary.contents.as_deref(), Some(contents), "indirect typewriter intent preserves outer whitespace");
+        assert_eq!(summary.subtype, "FreeText");
+        assert_eq!(summary.intent.as_deref(), Some("FreeTextTypeWriter"));
+        assert!(summary.fill_sign, "indirect intent still identifies a Fill & Sign mark");
+    };
+    check(&doc);
+    check(&reopen(&doc));
 }
