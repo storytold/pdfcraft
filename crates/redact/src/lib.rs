@@ -19,6 +19,7 @@ use std::collections::{HashMap, HashSet};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 pub mod codes;
+mod holders;
 mod image;
 mod interp;
 mod overlay;
@@ -80,6 +81,10 @@ pub enum RedactError {
         "{0} JBIG2 image(s) share their symbol data with a redacted image and can't be decoded to be stored without it, so that data, which can show what is under the marks, would stay in the file; nothing was redacted"
     )]
     SharedJbig2Globals(usize),
+    /// The page tree is too large to read whole, so what its pages draw, and what a redaction must
+    /// remove or may unlink, can't be known.
+    #[error("the page tree is too large to read whole ({0}), so redaction can't show it removed everything; the operation was refused")]
+    PageTree(#[from] pdfcraft_model::PageTreeLimit),
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),
     #[error(transparent)]

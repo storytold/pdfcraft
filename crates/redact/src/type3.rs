@@ -404,32 +404,11 @@ pub(crate) fn prune_type3_from_resources(doc: &Document, res: &mut Dict, content
 /// font's `/Resources`, and remove completely unused Type 3 fonts across all reachable resource
 /// holders in the document. Fails closed if safe cleanup cannot be established.
 pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
-    let Some(top) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))) else {
+    if doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))).is_none() {
         return Ok(());
-    };
-
-    // Find all page-tree nodes with /Resources of their own, and the pages that draw through them.
-    let mut holders: Vec<(ObjRef, Vec<ObjRef>)> = Vec::new();
-    let mut seen = HashSet::new();
-    let mut stack: Vec<(ObjRef, Option<usize>)> = vec![(top, None)];
-    while let Some((node, mut holder)) = stack.pop() {
-        if !seen.insert(node) || seen.len() > MAX_HOLDERS {
-            continue;
-        }
-        let obj = doc.get(node);
-        let Some(d) = obj.as_dict() else { continue };
-        if d.contains(b"Resources") {
-            holders.push((node, Vec::new()));
-            holder = Some(holders.len() - 1);
-        }
-        let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
-        if is_pages {
-            let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-            stack.extend(kids.iter().filter_map(Object::as_ref).map(|k| (k, holder)));
-        } else if let Some(h) = holder.and_then(|i| holders.get_mut(i)) {
-            h.1.push(node);
-        }
     }
+
+    let holders = crate::holders::resource_holders(doc)?;
 
     let form_holders = reachable_form_holders(doc, &holders)?;
 
@@ -456,7 +435,8 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
     }
 
     // Scan all page contents and reachable forms to discover surviving glyph usage.
-    let page_list = pdfcraft_model::pages(doc);
+    // Every page, or none: a page past a limit could draw a glyph that would look unused.
+    let page_list = pdfcraft_model::try_pages(doc)?;
     let mut used_glyphs: HashMap<FontKey, HashSet<Vec<u8>>> = HashMap::new();
     let mut seen_drawn_forms = HashSet::new();
 
