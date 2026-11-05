@@ -196,7 +196,7 @@ fn an_unnamed_group_primary_gets_an_export_only_name() {
     for caret_primary in [true, false] {
         let mut src = blank();
         let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
-        let style = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
+        let style = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None, ..Style::default() };
         let unnamed = Meta { date: None, id: String::new() };
         add_text_replacement(
             &mut src,
@@ -273,7 +273,7 @@ fn an_unnamed_group_primary_gets_an_export_only_name() {
 fn an_export_only_name_never_repeats_an_inline_annotations_nm() {
     let mut src = blank();
     let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
-    let style = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
+    let style = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None, ..Style::default() };
     let unnamed = Meta { date: None, id: String::new() };
     add_text_replacement(
         &mut src,

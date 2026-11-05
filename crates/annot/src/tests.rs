@@ -1320,7 +1320,7 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
 fn restyling_a_replace_text_pair_restyles_both_members() {
     let mut doc = fixture();
     let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
-    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
+    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None, ..Style::default() };
     let tr = TextReplacement {
         page: 0,
         quads: &quads,
