@@ -289,6 +289,12 @@ impl Document {
         measure::snap::geometry(&e.cos, page).map_err(|e| e.to_string())
     }
 
+    /// [`Self::measurement_paths`] within `limits`.
+    pub fn measurement_paths_within(&self, page: usize, limits: measure::snap::Limits) -> Result<measure::snap::Geometry, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        measure::snap::geometry_with_limits(&e.cos, page, limits).map_err(|e| e.to_string())
+    }
+
     /// [`Self::measurement_paths`] as work to run away from the UI: a heavy drawing takes
     /// seconds to read (millions of segments). It works on a copy of the document as it is now.
     pub fn measurement_paths_job(&self, page: usize) -> impl FnOnce() -> Result<measure::snap::Geometry, String> + Send + 'static {

@@ -19,8 +19,16 @@ pub struct Limits {
 }
 impl Limits {
     /// Enough for heavy CAD sheets (several million segments), and
-    /// the renderer's own content limit. At about 40 bytes a segment, the cap holds ~320 MB.
+    /// the renderer's own content limit. At about 40 bytes a segment, the cap holds ~320 MB, plus
+    /// up to [`MAX_INDEX_ENTRIES`] in the index.
     pub const DEFAULT: Self = Self { segments: 8_000_000, targets: 24_000_000, bytes: 512 << 20 };
+    /// What a window can read without missing frames that matter.
+    pub const WITHIN_A_FRAME: Self = Self { segments: 20_000, targets: 40_000, bytes: 16 << 20 };
+    /// Within what the index can number.
+    fn indexable(self) -> Self {
+        let most = u32::MAX as usize / 2;
+        Self { segments: self.segments.min(most), targets: self.targets.min(most), ..self }
+    }
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -139,6 +147,9 @@ impl Geometry {
     }
     /// Dense intersection searches are capped independently from path extraction.
     pub fn intersection_limited(&self, at: Point, tolerance: f64) -> bool {
+        if tolerance.is_nan() || tolerance < 0.0 {
+            return false;
+        }
         let (segs, _) = self.grid.near(self, at, tolerance);
         segs.iter()
             .filter_map(|&i| self.segs.get(i as usize))
@@ -214,7 +225,7 @@ impl Geometry {
     }
     /// Snap targets are recorded only for accepted geometry, and are capped.
     fn target(&mut self, ends: [Point; 2], mid: Point) {
-        if self.targets() >= self.limits.targets {
+        if self.targets().saturating_add(3) > self.limits.targets {
             self.truncated = true;
             return;
         }
@@ -507,6 +518,7 @@ pub fn geometry(doc: &Document, page_index: usize) -> Result<Geometry> {
 
 /// The page's geometry for snapping, within `limits`.
 pub fn geometry_with_limits(doc: &Document, page_index: usize, limits: Limits) -> Result<Geometry> {
+    let limits = limits.indexable();
     let p = crate::page(doc, page_index)?;
     let resources = p.dict.get(b"Resources").map(|o| doc.resolve(o));
     let empty = Dict::new();
@@ -519,7 +531,7 @@ pub fn geometry_with_limits(doc: &Document, page_index: usize, limits: Limits) -
     let mut geometry = walker.geometry;
     geometry.segs.shrink_to_fit();
     geometry.tgts.shrink_to_fit();
-    geometry.grid = Grid::build(&geometry);
+    geometry.grid = Grid::build(&geometry, MAX_INDEX_ENTRIES);
     Ok(geometry)
 }
 
@@ -530,6 +542,9 @@ const GRID_SIDE: usize = 1024;
 const WIDE_CELLS: usize = 64;
 /// The most cells one snap reads; a larger search area (a huge tolerance) scans everything.
 const MAX_QUERY_CELLS: usize = 4096;
+/// The most entries the segment lists of the cells hold (4 bytes each). Past it, shorter segments
+/// go in the list checked at every snap: snaps get slower, and find the same.
+const MAX_INDEX_ENTRIES: u64 = 64_000_000;
 
 /// A uniform grid over the geometry's box: per cell, the segments and targets touching it.
 #[derive(Clone, Debug, Default)]
@@ -549,7 +564,7 @@ struct Grid {
 }
 
 impl Grid {
-    fn build(g: &Geometry) -> Self {
+    fn build(g: &Geometry, max_entries: u64) -> Self {
         let mut bounds: Option<[f32; 4]> = None;
         let mut grow = |x: f32, y: f32| {
             let b = bounds.get_or_insert([x, y, x, y]);
@@ -576,11 +591,20 @@ impl Grid {
         let cells = cols * rows;
         // Segments: count, then fill (compressed rows).
         let seg_cells = |s: &[f32; 4]| grid.range(s[0].min(s[2]), s[1].min(s[3]), s[0].max(s[2]), s[1].max(s[3]));
+        let covered = |s: &[f32; 4]| {
+            let (c0, r0, c1, r1) = seg_cells(s);
+            (c1 - c0 + 1) * (r1 - r0 + 1)
+        };
+        // A segment of one cell adds one entry, so the last step fits whatever the sheet.
+        let most_cells = [WIDE_CELLS, 16, 4]
+            .into_iter()
+            .find(|&most| g.segs.iter().map(covered).filter(|&n| n <= most).map(|n| n as u64).sum::<u64>() <= max_entries)
+            .unwrap_or(1);
         let mut counts = vec![0u32; cells];
         let mut wide = Vec::new();
         for (i, s) in g.segs.iter().enumerate() {
             let (c0, r0, c1, r1) = seg_cells(s);
-            if (c1 - c0 + 1) * (r1 - r0 + 1) > WIDE_CELLS {
+            if (c1 - c0 + 1) * (r1 - r0 + 1) > most_cells {
                 wide.push(i as u32);
                 continue;
             }
@@ -594,7 +618,7 @@ impl Grid {
         let mut seg_items = vec![0u32; seg_start.last().copied().unwrap_or(0) as usize];
         for (i, s) in g.segs.iter().enumerate() {
             let (c0, r0, c1, r1) = seg_cells(s);
-            if (c1 - c0 + 1) * (r1 - r0 + 1) > WIDE_CELLS {
+            if (c1 - c0 + 1) * (r1 - r0 + 1) > most_cells {
                 continue;
             }
             for r in r0..=r1 {
@@ -673,7 +697,8 @@ impl Grid {
         if self.cols == 0 || self.rows == 0 {
             return if g.segs.is_empty() && g.tgts.is_empty() { (Vec::new(), Vec::new()) } else { all() };
         }
-        let t = tolerance as f32;
+        // Rounding to `f32` can stop the box short of a candidate's cell: this much wider can't.
+        let t = (tolerance + (at[0].abs().max(at[1].abs()) + tolerance) * 2.0 * f64::from(f32::EPSILON)) as f32;
         let (x, y) = (at[0] as f32, at[1] as f32);
         if !(x.is_finite() && y.is_finite() && t.is_finite()) {
             return all();
@@ -702,5 +727,73 @@ impl Grid {
         tgts.sort_unstable();
         tgts.dedup();
         (segs, tgts)
+    }
+}
+
+#[cfg(test)]
+mod grid_tests {
+    use super::*;
+
+    fn geometry(segs: Vec<[f32; 4]>, tgts: Vec<[f32; 6]>, max_entries: u64) -> Geometry {
+        let mut g = Geometry { segs, tgts, ..Geometry::default() };
+        g.grid = Grid::build(&g, max_entries);
+        g
+    }
+
+    /// Past the allowance the index holds fewer entries and finds the same.
+    #[test]
+    fn a_bounded_index_finds_what_a_full_one_does() {
+        let mut segs = Vec::new();
+        for i in 0..4000u16 {
+            let (x, y) = (f32::from(i % 64) * 15.0, f32::from(i / 64) * 15.0);
+            segs.push([x, y, x + 37.0, y + 41.0]);
+        }
+        let tgts = Vec::new();
+        let full = geometry(segs.clone(), tgts.clone(), u64::MAX);
+        let budget = segs.len() as u64;
+        let bounded = geometry(segs, tgts, budget);
+        assert!(full.grid.seg_items.len() as u64 > budget, "the sheet needs more than the allowance");
+        assert!(bounded.grid.seg_items.len() as u64 <= budget, "{} entries", bounded.grid.seg_items.len());
+        let options = SnapOptions { endpoints: false, midpoints: false, intersections: true, paths: true };
+        for i in 0..400u16 {
+            let at = [f64::from(i) * 2.37, f64::from(i) * 1.13];
+            assert_eq!(bounded.snap(at, 6.0, options).unwrap(), full.snap(at, 6.0, options).unwrap(), "at {at:?}");
+        }
+    }
+
+    #[test]
+    fn limits_stay_within_what_the_index_can_number() {
+        let limits = Limits { segments: usize::MAX, targets: usize::MAX, bytes: 1 }.indexable();
+        assert!(limits.segments <= u32::MAX as usize && limits.targets <= u32::MAX as usize);
+        assert_eq!(Limits::DEFAULT.indexable(), Limits::DEFAULT);
+    }
+
+    /// A tolerance below zero finds nothing; it must not reverse the cells searched.
+    #[test]
+    fn a_negative_tolerance_finds_nothing() {
+        let segs = (0..4000u16)
+            .map(|i| [f32::from(i % 64) * 15.0, f32::from(i / 64) * 15.0, f32::from(i % 64) * 15.0 + 5.0, f32::from(i / 64) * 15.0])
+            .collect();
+        let g = geometry(segs, Vec::new(), u64::MAX);
+        assert!(g.grid.cols > 1 && g.grid.rows > 1);
+        assert!(!g.intersection_limited([400.0, 400.0], -200.0));
+    }
+
+    /// Near 1e8 one `f32` step is 8 units, which must not hide an end just within tolerance.
+    #[test]
+    fn rounding_doesnt_hide_a_target_at_the_edge_of_the_grid() {
+        let g = geometry(Vec::new(), vec![[100_000_008.0, 0.0, 100_000_016.0, 0.0, 100_000_012.0, 0.0]], u64::MAX);
+        let options = SnapOptions { endpoints: true, midpoints: false, intersections: false, paths: false };
+        let hit = g.snap([100_000_003.999_999_9, 0.0], 4.000_000_11, options).unwrap();
+        assert_eq!(hit.map(|h| h.point), Some([100_000_008.0, 0.0]));
+    }
+
+    /// A target is three points, and all three must fit.
+    #[test]
+    fn a_target_is_kept_only_if_all_its_points_fit() {
+        let mut g = Geometry::with_limits(Limits { segments: 10, targets: 2, bytes: 1 });
+        g.target([[0.0, 0.0], [1.0, 0.0]], [0.5, 0.0]);
+        assert_eq!(g.targets(), 0);
+        assert!(g.truncated);
     }
 }
