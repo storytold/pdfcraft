@@ -324,7 +324,13 @@ fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Ve
             // pick, and its value is theirs joined by newlines (XFA 3.3 p. 198); a new pick
             // replaces them all, as in Acrobat (p. 199).
             if is_value_group(node) {
-                let held: Vec<&str> = node.children().filter(|c| c.is_element()).map(|c| c.text().unwrap_or("")).collect();
+                // Every text segment of each `value`, as `current` reads a leaf (a comment may
+                // split or lead it).
+                let held: Vec<String> = node
+                    .children()
+                    .filter(|c| c.is_element())
+                    .map(|c| c.children().filter(|t| t.is_text()).filter_map(|t| t.text()).collect())
+                    .collect();
                 if held.join("\n") == w.text {
                     continue;
                 }

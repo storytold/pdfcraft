@@ -4605,6 +4605,24 @@ fn a_multi_select_lists_data_group_takes_its_new_picks() {
     assert!(!write_data_value(&mut doc, &path, "wheat\nmillet & oats").unwrap().written, "the same picks change nothing");
     assert!(write_data_value(&mut doc, &path, "").unwrap().written);
     assert_eq!(crate::script::data_of(&doc).unwrap().value_at(&path).as_deref(), Some(""), "nothing picked");
+    // A pick split or led by a comment is read whole: the same pick is no change, and clearing
+    // a pick that reads as empty through its first segment alone still clears it.
+    let commented =
+        crate::fixtures::static_shell("<form1><page1><grains><value><!-- a -->rye</value><value>whe<!-- b -->at</value></grains></page1></form1>");
+    let mut doc = Document::open(Arc::new(commented)).unwrap();
+    assert!(
+        !write_data_value(
+            &mut doc,
+            &path,
+            "rye
+wheat"
+        )
+        .unwrap()
+        .written,
+        "the same picks, read past the comments"
+    );
+    assert!(write_data_value(&mut doc, &path, "").unwrap().written, "cleared");
+    assert_eq!(crate::script::data_of(&doc).unwrap().count(&path, "value"), 0);
     // The in-memory data, which scripts read before the packet is written, follows the same rule.
     let mut tree = crate::script::data_of(
         &Document::open(Arc::new(crate::fixtures::static_shell("<form1><page1><grains><value>rye</value></grains></page1></form1>"))).unwrap(),
