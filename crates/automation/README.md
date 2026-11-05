@@ -5,6 +5,8 @@ Agent control for PdfCraft: a headless tool table over the engine, and an opt-in
 - **Layer:** L7 (architecture §13), but headless. It depends on `engine`, `render` and `organize`, never on a UI toolkit.
 - **Status:** over a hundred tools; `pdfcraft-cli tools` lists the current set with their schemas (the count isn't repeated here, so it can't go stale). They cover inspection, rendering, text, page edits and organizing, page labels, bookmarks, comments and their review, form filling and authoring (fields, properties, scripts, data exchange, detection), redaction and sanitizing, password protection and signatures, calibrated 2D measurements and CSV export, adding text, images, links and stamps, optimizing, OCR, printing, export, metadata, undo/redo, save, combine, extract and split. Comment tools take geometry in the same top-left-origin points as everything else, and `comment_add` can mark text by searching for it (`find`). The MCP server also serves the open documents as resources, page images included. The running app's UI is driven separately, through the `ui.*` control channel in `pdfcraft-ui-egui`.
 
+`fill_sign_add` text accepts line breaks, including blank lines. Its typewriter box grows to hold all wrapped rows, and saving/reopening preserves the contents and appearance.
+
 ## API
 
 ```rust
@@ -20,6 +22,9 @@ mcp::McpServer::new(a).serve(stdin, stdout)?             // newline-delimited JS
 them with the image's current orientation. Full turns retain its appearance, rectangle, crop
 and flips. Angles that are not multiples of 90 are refused without changing the document or
 its undo/redo history.
+
+`page_add_text`, `content_update` and `text_edit` take per-line `aligns`. An `"inherit"` entry
+follows the box-level `align`; legacy `null` entries remain accepted with the same meaning.
 
 `Content` is `Json(Value)` or `Png { data, width, height }`. Errors are `UnknownTool`, `InvalidArgs` (the call didn't match the schema) or `Failed` (a readable message for the agent).
 
@@ -244,6 +249,15 @@ supported for this widget-specific property. Empty values, `Off`, conflicting
 choices and values over 4096 UTF-8 bytes return an error.
 
 Example: `form_set_props doc=1 field=agree export_value=Accepted widget=1`.
+
+## Rendering a 3D model
+
+`model_render` draws a page's 3D model (a 3D annotation's PRC stream, directly or through a 3D
+reference) to a PNG, without the viewer. `model` picks the page's Nth 3D model (default 1);
+`width` and `height` are 1 to 4096 (default 512); `direction` is the view direction from the eye
+(default `[-1, 1, -1]`, with Z up unless the view looks along Z); `perspective` defaults to true.
+The model is framed to fill the image and shaded by a headlight on white. U3D models are refused
+with an error, and the annotation's own views, lighting and render modes are not applied yet.
 
 ## Viewer navigation history
 
