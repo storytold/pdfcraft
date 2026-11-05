@@ -46,7 +46,9 @@ Headless `doc_print` defaults are unchanged.
 `spool` delegates discovery, driver options, preferences and submission to
 [`craft-print`](https://github.com/storytold/craft-libs/tree/main/crates/print).
 PdfCraft retains page selection, imposition, annotations and print-permission checks.
-CUPS jobs stream through stdin with `fit-to-page=false`. Windows renders sheets through
+CUPS jobs stream through stdin with `fit-to-page=false`; on macOS they also carry the job
+name and owner (`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`) as the system print dialog
+sends them, which some vendors' filters need (#5743). Windows renders sheets through
 `Windows.Data.Pdf` and spools them at their physical PDF size with per-page paper and
 orientation, zero added margins and hardware-edge clipping. Long-edge and short-edge duplex
 use the corresponding Windows binding edges. Random, exclusively created Windows job files

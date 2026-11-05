@@ -5,6 +5,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
 use pdfcraft_render::{RenderConfig, RenderRequest, RequestKind, Tile};
 
 use crate::canvas::{DocView, PageXform};
+use crate::page_cursor::Layer;
 use crate::page_pointer::PagePointer;
 use crate::{PdfCraftApp, QuickTool};
 
@@ -12,31 +13,35 @@ use crate::{PdfCraftApp, QuickTool};
 /// [x0, y0, x1, y1]); a plain click has an empty rectangle.
 pub type Marquee = (usize, Rect, [f32; 4]);
 
-/// Drag a rectangle on page `page` (Marquee Zoom, Snapshot).
-pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, view: &mut DocView) {
+/// Drag a rectangle on page `page` (Marquee Zoom, Snapshot), with a press nobody holds (`free`).
+pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, xf: &PageXform, ptr: &PagePointer, page: usize, free: bool, view: &mut DocView) {
     let (pointer, origin) = (ptr.pos, ptr.origin);
     if pointer.is_some_and(|p| xf.rect.contains(p)) {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
     }
-    if resp.drag_started()
+    // The tool's own press, of the primary button: one nobody holds.
+    if resp.drag_started_by(egui::PointerButton::Primary)
+        && free
         && let Some(o) = origin.filter(|o| xf.rect.contains(*o))
     {
         view.marquee = Some((page, o));
     }
     if let Some((p, start)) = view.marquee
         && p == page
-        && let Some(end) = pointer
     {
+        // Where the pointer is, or where it went down when it is off the window.
+        let end = pointer.unwrap_or(start);
         let end = Pos2::new(end.x.clamp(xf.rect.left(), xf.rect.right()), end.y.clamp(xf.rect.top(), xf.rect.bottom()));
         let r = Rect::from_two_pos(start, end);
         ui.painter().rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, Color32::from_rgb(0x14, 0x73, 0xE6)), egui::StrokeKind::Middle);
-        if resp.drag_stopped() {
+        if resp.drag_stopped() || !ptr.primary_down {
             view.marquee = None;
             let (a, b) = (xf.screen_to_view(r.left_top()), xf.screen_to_view(r.right_bottom()));
             view.marquee_done = Some((page, r, [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)]));
         }
     }
-    if resp.clicked()
+    if free
+        && resp.clicked()
         && let Some(p) = pointer.filter(|p| xf.rect.contains(*p))
     {
         let v = xf.screen_to_view(p);
@@ -141,7 +146,7 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         if self.system_clipboard {
             let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&out.rgba) };
-            arboard::Clipboard::new().and_then(|mut c| c.set_image(img)).map_err(|e| e.to_string())?;
+            crate::os_clipboard::with(|c| c.set_image(img)).map_err(|e| e.to_string())?;
         }
         self.last_snapshot = Some((w, h, out.rgba));
         Ok((w, h))

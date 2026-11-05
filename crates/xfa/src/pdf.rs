@@ -8,7 +8,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use pdfcraft_fonts::{literal, win_ansi_extra};
 
 use crate::XfaError;
-use crate::layout::{Action, BorderShape, Form, Item, Page, Rounded, Widget, WidgetKind};
+use crate::layout::{Action, BorderShape, Form, Item, Page, Rounded, Turned, Widget, WidgetKind};
 use crate::model::Rect;
 use crate::text::{Face, Family, Span};
 
@@ -18,8 +18,8 @@ mod strip;
 pub use common::jpeg_size;
 pub(crate) use common::rounded;
 use common::{
-    all_faces, content_hash, empty_form, hex32, is_plain_standard_font, jpeg_info, js_action, n, parse_hex32, rgb, rgb_array, standard_font,
-    state_name,
+    all_faces, content_hash, empty_form, hex32, is_plain_standard_font, jpeg_info, js_action, js_string, n, parse_hex32, rgb, rgb_array,
+    standard_font, state_name,
 };
 pub(crate) use strip::USAGE_RIGHTS_REMOVED;
 use strip::drop_usage_rights;
@@ -166,38 +166,8 @@ impl Emitter<'_> {
         format!("/{} {} Tf {} rg", face.resource_name(), n(face.size), rgb(face.color)).into_bytes()
     }
 
-    /// Write laid-out widget `w` on `page` as an AcroForm widget annotation (and its field), with
-    /// its border, background and kind, and return the annotation's object.
-    fn widget(&mut self, w: &Widget, page: &Page, page_ref: ObjRef) -> Result<Option<ObjRef>, XfaError> {
+    fn populate_widget_kind(&mut self, w: &Widget, d: &mut Dict, mk: &mut Dict) -> (i64, bool, Option<String>) {
         let r = w.rect;
-        let (x0, y0, x1, y1) = (r.x, page.height - r.bottom(), r.right(), page.height - r.y);
-        let mut d = Dict::new();
-        d.set(b"Type".to_vec(), Object::name("Annot"));
-        d.set(b"Subtype".to_vec(), Object::name("Widget"));
-        d.set(b"F".to_vec(), Object::Int(4));
-        d.set(b"P".to_vec(), Object::Ref(page_ref));
-        d.set(b"Rect".to_vec(), Object::Array([x0, y0, x1, y1].iter().map(|v| Object::Real(*v)).collect()));
-        d.set(b"DA".to_vec(), Object::String(PdfString::literal(Self::da(&w.face))));
-        if let Some(t) = &w.tooltip {
-            d.set(b"TU".to_vec(), Object::String(PdfString::text(t)));
-        }
-        d.set(SOM_KEY.to_vec(), Object::String(PdfString::text(&w.som)));
-        let mut mk = Dict::new();
-        if let Some(c) = w.border.color
-            && w.border.shape != BorderShape::None
-        {
-            mk.set(b"BC".to_vec(), rgb_array(c));
-        }
-        if let Some(c) = w.border.fill {
-            mk.set(b"BG".to_vec(), rgb_array(c));
-        }
-        let mut bs = Dict::new();
-        bs.set(b"W".to_vec(), Object::Real(if w.border.shape == BorderShape::None { 0.0 } else { w.border.width.clamp(0.1, 12.0) }));
-        bs.set(b"S".to_vec(), Object::name(if w.border.shape == BorderShape::Underline { "U" } else { "S" }));
-        d.set(b"BS".to_vec(), Object::Dict(bs));
-        if matches!(w.kind, WidgetKind::CheckBox { round: true, .. } | WidgetKind::Radio { round: true, .. }) {
-            d.set(ROUND_KEY.to_vec(), Object::Bool(true));
-        }
         let mut ff: i64 = 0;
         if w.read_only {
             ff |= 1;
@@ -238,8 +208,9 @@ impl Emitter<'_> {
                 }
                 if let WidgetKind::Date(pattern) = &w.kind {
                     let mut aa = Dict::new();
-                    aa.set(b"F".to_vec(), js_action(&format!("AFDate_FormatEx(\"{pattern}\");")));
-                    aa.set(b"K".to_vec(), js_action(&format!("AFDate_KeystrokeEx(\"{pattern}\");")));
+                    let pattern = js_string(pattern);
+                    aa.set(b"F".to_vec(), js_action(&format!("AFDate_FormatEx({pattern});")));
+                    aa.set(b"K".to_vec(), js_action(&format!("AFDate_KeystrokeEx({pattern});")));
                     d.set(b"AA".to_vec(), Object::Dict(aa));
                 }
             }
@@ -386,34 +357,45 @@ impl Emitter<'_> {
                 d.set(b"FT".to_vec(), Object::name("Btn"));
                 ff |= 1 << 16;
                 mk.set(b"CA".to_vec(), Object::String(PdfString::text(caption)));
-                if let Some(Action::Script(_)) = &w.action {
-                    // An XFA click script is no Acrobat JavaScript: no PDF action, which other
-                    // viewers would run; PdfCraft finds the script by the field's SOM path.
-                    d.set(CLICK_KEY.to_vec(), Object::Bool(true));
-                } else if let Some(a) = &w.action {
-                    let mut ad = Dict::new();
-                    match a {
-                        Action::Reset => {
-                            ad.set(b"S".to_vec(), Object::name("ResetForm"));
-                        }
-                        Action::Print => {
-                            ad.set(b"S".to_vec(), Object::name("Named"));
-                            ad.set(b"N".to_vec(), Object::name("Print"));
-                        }
-                        Action::SaveAs => {
-                            ad.set(b"S".to_vec(), Object::name("Named"));
-                            ad.set(b"N".to_vec(), Object::name("SaveAs"));
-                        }
-                        Action::Url(u) => {
-                            ad.set(b"S".to_vec(), Object::name("URI"));
-                            ad.set(b"URI".to_vec(), Object::String(PdfString::literal(u.as_bytes().to_vec())));
-                        }
-                        Action::Script(_) => {}
-                    }
-                    d.set(b"A".to_vec(), Object::Dict(ad));
-                }
+                write_button_action(w.action.as_ref(), d);
             }
         }
+        (ff, top_level, under)
+    }
+
+    /// Write laid-out widget `w` on `page` as an AcroForm widget annotation (and its field), with
+    /// its border, background and kind, and return the annotation's object.
+    fn widget(&mut self, w: &Widget, page: &Page, page_ref: ObjRef) -> Result<Option<ObjRef>, XfaError> {
+        let r = w.rect;
+        let (x0, y0, x1, y1) = (r.x, page.height - r.bottom(), r.right(), page.height - r.y);
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Widget"));
+        d.set(b"F".to_vec(), Object::Int(4));
+        d.set(b"P".to_vec(), Object::Ref(page_ref));
+        d.set(b"Rect".to_vec(), Object::Array([x0, y0, x1, y1].iter().map(|v| Object::Real(*v)).collect()));
+        d.set(b"DA".to_vec(), Object::String(PdfString::literal(Self::da(&w.face))));
+        if let Some(t) = &w.tooltip {
+            d.set(b"TU".to_vec(), Object::String(PdfString::text(t)));
+        }
+        d.set(SOM_KEY.to_vec(), Object::String(PdfString::text(&w.som)));
+        let mut mk = Dict::new();
+        if let Some(c) = w.border.color
+            && w.border.shape != BorderShape::None
+        {
+            mk.set(b"BC".to_vec(), rgb_array(c));
+        }
+        if let Some(c) = w.border.fill {
+            mk.set(b"BG".to_vec(), rgb_array(c));
+        }
+        let mut bs = Dict::new();
+        bs.set(b"W".to_vec(), Object::Real(if w.border.shape == BorderShape::None { 0.0 } else { w.border.width.clamp(0.1, 12.0) }));
+        bs.set(b"S".to_vec(), Object::name(if w.border.shape == BorderShape::Underline { "U" } else { "S" }));
+        d.set(b"BS".to_vec(), Object::Dict(bs));
+        if matches!(w.kind, WidgetKind::CheckBox { round: true, .. } | WidgetKind::Radio { round: true, .. }) {
+            d.set(ROUND_KEY.to_vec(), Object::Bool(true));
+        }
+        let (ff, top_level, under) = self.populate_widget_kind(w, &mut d, &mut mk);
         if !mk.is_empty() {
             d.set(b"MK".to_vec(), Object::Dict(mk));
         }
@@ -589,12 +571,30 @@ impl Emitter<'_> {
         let h = page.height;
         // The link the text before ended in, which a next piece of it on the line widens.
         let mut last_link: Option<LinkPiece> = None;
-        for (i, item) in page.items.iter().enumerate() {
+        let steps = steps(&page.items);
+        let mut turn = None;
+        for (i, step) in steps.iter().enumerate() {
+            let item = match step {
+                Step::Item(item) => *item,
+                Step::Turn(t) => {
+                    let matrix = turn_matrix(t, h);
+                    turn = Some(matrix);
+                    last_link = None;
+                    content.extend(format!("q {} cm\n", matrix.map(n).join(" ")).bytes());
+                    continue;
+                }
+                Step::EndTurn => {
+                    turn = None;
+                    last_link = None;
+                    content.extend_from_slice(b"Q\n");
+                    continue;
+                }
+            };
             // A link's pieces join only across text and the underline drawn just before it: a fill,
             // picture, field or any other line (a rule) between them ends the link there.
             let keeps_link = match item {
                 Item::Text(_) => true,
-                Item::Line { from, to, .. } => matches!(page.items.get(i + 1), Some(Item::Text(s))
+                Item::Line { from, to, .. } => matches!(steps.get(i + 1), Some(Step::Item(Item::Text(s)))
                     if (from.1 - to.1).abs() < 0.01
                         && (from.0 - s.x).abs() < 0.01
                         && (from.1 - (s.baseline + s.face.size * crate::layout::UNDERLINE_DROP)).abs() < 0.01),
@@ -649,7 +649,7 @@ impl Emitter<'_> {
                     );
                     content.extend(literal(&win_ansi_extra(&s.text)));
                     content.extend_from_slice(format!(" Tj{close}\n").as_bytes());
-                    if let Some(r) = self.text_link(s, h, page_ref, &mut last_link)? {
+                    if let Some(r) = self.text_link(s, h, page_ref, &mut last_link, turn)? {
                         annots.push(Object::Ref(r));
                     }
                 }
@@ -659,6 +659,8 @@ impl Emitter<'_> {
                     xobjects.set(name.clone().into_bytes(), Object::Ref(r));
                     content.extend(format!("q {} 0 0 {} {} {} cm /{name} Do Q\n", n(rect.w), n(rect.h), n(rect.x), n(h - rect.bottom())).bytes());
                 }
+                // Opened out by `steps`.
+                Item::Turned(_) => {}
                 Item::Widget(w) => {
                     if let Some(r) = self.widget(w, page, page_ref)? {
                         annots.push(Object::Ref(r));
@@ -697,12 +699,25 @@ impl Emitter<'_> {
     /// A span that goes on the link `last` ended in, on the same line, widens that annotation
     /// instead (a link whose text changes style partway is one link). An address PdfCraft
     /// wouldn't open from a document leaves the text as plain text, with one warning for the form.
-    fn text_link(&mut self, s: &Span, page_height: f64, page_ref: ObjRef, last: &mut Option<LinkPiece>) -> Result<Option<ObjRef>, XfaError> {
+    fn text_link(
+        &mut self,
+        s: &Span,
+        page_height: f64,
+        page_ref: ObjRef,
+        last: &mut Option<LinkPiece>,
+        turn: Option<[f64; 6]>,
+    ) -> Result<Option<ObjRef>, XfaError> {
         let piece = self.link_piece(s, page_height);
-        let Some((target, rect)) = piece else {
+        let Some((target, mut rect)) = piece else {
             *last = None;
             return Ok(None);
         };
+        // Turned text is drawn by a matrix, and clicked where that puts it. Its pieces don't join:
+        // that goes by the line they stand on before turning.
+        if let Some(m) = turn {
+            rect = turned_rect(rect, m);
+            *last = None;
+        }
         if let Some(prev) = last.as_mut()
             && prev.uri == target
             && (prev.baseline - s.baseline).abs() < 0.01
@@ -752,6 +767,78 @@ impl Emitter<'_> {
         let rect = pdf_rect(Rect::new(x, s.baseline - s.face.size * 0.8, w, s.face.size), page_height);
         (rect.iter().all(|v| v.is_finite()) && w > 0.0).then(|| (target.to_string(), rect))
     }
+}
+
+fn write_button_action(action: Option<&Action>, d: &mut Dict) {
+    match action {
+        Some(Action::Script(_)) => {
+            // An XFA click script is no Acrobat JavaScript: no PDF action, which other
+            // viewers would run; PdfCraft finds the script by the field's SOM path.
+            d.set(CLICK_KEY.to_vec(), Object::Bool(true));
+        }
+        Some(action) => {
+            let mut ad = Dict::new();
+            match action {
+                Action::Reset => {
+                    ad.set(b"S".to_vec(), Object::name("ResetForm"));
+                }
+                Action::Print => {
+                    ad.set(b"S".to_vec(), Object::name("Named"));
+                    ad.set(b"N".to_vec(), Object::name("Print"));
+                }
+                Action::SaveAs => {
+                    ad.set(b"S".to_vec(), Object::name("Named"));
+                    ad.set(b"N".to_vec(), Object::name("SaveAs"));
+                }
+                Action::Url(url) => {
+                    ad.set(b"S".to_vec(), Object::name("URI"));
+                    ad.set(b"URI".to_vec(), Object::String(PdfString::literal(url.as_bytes().to_vec())));
+                }
+                Action::Script(_) => {}
+            }
+            d.set(b"A".to_vec(), Object::Dict(ad));
+        }
+        None => {}
+    }
+}
+
+/// What a page's content is written from: its items, with a turned draw opened out.
+enum Step<'a> {
+    Item(&'a Item),
+    Turn(&'a Turned),
+    EndTurn,
+}
+
+fn steps(items: &[Item]) -> Vec<Step<'_>> {
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        if let Item::Turned(t) = item {
+            out.push(Step::Turn(t));
+            out.extend(t.items.iter().map(Step::Item));
+            out.push(Step::EndTurn);
+        } else {
+            out.push(Step::Item(item));
+        }
+    }
+    out
+}
+
+/// The matrix that turns `t` about its point, on a page `page_height` tall.
+fn turn_matrix(t: &Turned, page_height: f64) -> [f64; 6] {
+    let (cos, sin) = match t.quarters {
+        1 => (0.0, 1.0),
+        2 => (-1.0, 0.0),
+        _ => (0.0, -1.0),
+    };
+    let (x, y) = (t.about.0, page_height - t.about.1);
+    [cos, sin, -sin, cos, x - cos * x + sin * y, y - sin * x - cos * y]
+}
+
+/// Rectangle `r`, `[left, bottom, right, top]`, under quarter-turn matrix `m`.
+fn turned_rect(r: [f64; 4], m: [f64; 6]) -> [f64; 4] {
+    let at = |x: f64, y: f64| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+    let (a, b) = (at(r[0], r[1]), at(r[2], r[3]));
+    [a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)]
 }
 
 /// The link annotation a page's text last ended in: the next piece of the same link on the same

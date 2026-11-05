@@ -4,14 +4,17 @@
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
 use pdfcraft_engine::{Edit, LinkAction, LinkHighlight, LinkItem, LinkStyle};
-use pdfcraft_render::DocInfo;
+use pdfcraft_render::{DocInfo, LinkTarget};
 
-use crate::canvas::{DocView, PageXform};
-use crate::page_pointer::PagePointer;
+use crate::canvas::{DocView, PageToolContext, PageXform};
+use crate::page_cursor::Layer;
+use crate::page_router::{Hit, Owner};
 use crate::theme::{self, Tokens};
-use crate::{PdfCraftApp, widgets};
+use crate::{PdfCraftApp, QuickTool, widgets};
 
 const LINK_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
+/// How far around a link (screen points) the Link tool finds it, so a thin one can be picked.
+const LINK_TOOL_MARGIN: f32 = 2.0;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LinkView {
@@ -46,7 +49,7 @@ pub struct LinkDraft {
     pub style: LinkStyle,
 }
 
-pub(crate) fn screen_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
+fn screen_rect(xf: &PageXform, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
     xf.user_rect(info, page, [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32])
 }
 
@@ -56,18 +59,45 @@ fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
     [u[0] as f64, u[1] as f64]
 }
 
-/// Link tool input on one page. Returns `true` when the gesture belongs to the tool.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn page_input(
-    ui: &egui::Ui,
-    resp: &egui::Response,
-    xf: &PageXform,
-    ptr: &PagePointer,
-    page: usize,
-    info: &DocInfo,
-    links: &[LinkItem],
-    view: &mut DocView,
-) -> bool {
+/// The link under `p` on `page`: the one hit test of links, for the hand, the tip and the press.
+/// Of stacked links, the topmost (the last in `/Annots`, drawn on top). Only the Select tool
+/// follows links and the Link tool edits them (`Layer::reached_by`). The Link tool finds every link
+/// the document has (`links`, the engine's), with a margin around each so a thin one can be
+/// picked, and a drag from one draws a new link. The other tools find the links the renderer can
+/// follow, which have a target (`info.links`). The tip is the link's target.
+pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, links: &[LinkItem], tool: QuickTool, p: Pos2) -> Option<Hit> {
+    // A press off the page is no page's, so nothing there is a link's, the margin included.
+    if !xf.rect.contains(p) {
+        return None;
+    }
+    let (index, link) = if tool == QuickTool::Link {
+        let index = links.iter().rfind(|l| l.page == page && screen_rect(xf, info, page, l.rect).expand(LINK_TOOL_MARGIN).contains(p))?.index;
+        (index, info.links.iter().find(|l| l.page == page && l.index == index))
+    } else {
+        let link = info.links.iter().rfind(|l| l.page == page && xf.user_rect(info, page, l.rect).contains(p))?;
+        (link.index, Some(link))
+    };
+    let tip = link.map(|l| target_label(info, &l.target));
+    let declines_drag = tool == QuickTool::Link;
+    Some(Hit { tip, declines_drag, ..Hit::new(Owner::Link { index }, Layer::Link, egui::CursorIcon::PointingHand) })
+}
+
+/// What a link's tip says it goes to.
+fn target_label(info: &DocInfo, target: &LinkTarget) -> String {
+    match target {
+        LinkTarget::Page(n, _) => crate::i18n::fmt(tl!("Go to page {p}"), &[("p", info.pages.get(*n).map(|p| p.label.as_str()).unwrap_or("?"))]),
+        LinkTarget::Uri(u) => u.clone(),
+        LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
+        LinkTarget::RemoteGoTo { file, .. } => file.clone(),
+        LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
+    }
+}
+
+/// Link tool input on one page: `free` when nobody holds the press and it began on this page,
+/// `owner` the link that holds it (by its `/Annots` index), and `context` the link a right-click is
+/// on. A drag from either draws a new link. Returns `true` when the gesture belongs to the tool.
+pub(crate) fn page_input(cx: PageToolContext<'_>, free: bool, owner: Option<usize>, context: Option<usize>, view: &mut DocView) -> bool {
+    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
     let pointer = ptr.pos;
     let lv = &mut view.links;
     if let Some((dp, start)) = lv.drag
@@ -84,31 +114,37 @@ pub(crate) fn page_input(
         }
         return true;
     }
-    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return false };
-    let hit = links.iter().filter(|l| l.page == page).find(|l| screen_rect(xf, info, page, l.rect).expand(2.0).contains(p));
-    ui.ctx().set_cursor_icon(if hit.is_some() { egui::CursorIcon::PointingHand } else { egui::CursorIcon::Crosshair });
-    if resp.secondary_clicked()
-        && let Some(l) = hit
+    // A drag that nobody holds, or from a link (whose hit lets the drag go), draws a new link from
+    // where its press began on this page. egui may see the drag only once the pointer is past the
+    // page's edge.
+    if resp.drag_started()
+        && (free || owner.is_some())
+        && let Some(origin) = ptr.origin.filter(|o| xf.rect.contains(*o))
     {
-        lv.selected = Some((page, l.index));
-        lv.context = Some((page, l.index));
+        lv.drag = Some((page, origin));
         return true;
     }
-    if resp.clicked() || resp.double_clicked() {
+    if !pointer.is_some_and(|p| xf.rect.contains(p)) {
+        return false;
+    }
+    // Over a link, its hit claims the hand.
+    view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+    if let Some(index) = context {
+        lv.selected = Some((page, index));
+        lv.context = Some((page, index));
+        return true;
+    }
+    // The tool's own click: on a link, or one nobody holds.
+    if (resp.clicked() || resp.double_clicked()) && (free || owner.is_some()) {
         let now = ui.input(|i| i.time);
         // A second click on the same link soon after the first is a double-click.
-        let double = resp.double_clicked() || hit.is_some_and(|l| lv.last_click.is_some_and(|(t, p, k)| p == page && k == l.index && now - t < 0.5));
-        lv.last_click = hit.map(|l| (now, page, l.index));
-        lv.selected = hit.map(|l| (page, l.index));
-        if double && let Some(l) = hit {
-            lv.open_existing = Some((page, l.index));
+        let double = resp.double_clicked() || owner.is_some_and(|k| lv.last_click.is_some_and(|(t, p, l)| p == page && l == k && now - t < 0.5));
+        lv.last_click = owner.map(|k| (now, page, k));
+        lv.selected = owner.map(|k| (page, k));
+        if double && let Some(k) = owner {
+            lv.open_existing = Some((page, k));
             lv.last_click = None;
         }
-        return true;
-    }
-    if resp.drag_started() {
-        let origin = ptr.origin.unwrap_or(p);
-        lv.drag = Some((page, origin));
         return true;
     }
     resp.is_pointer_button_down_on()
@@ -229,7 +265,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize, t: &Token
     widgets::section_title(ui, tl!("Link Appearance"));
     egui::Grid::new("link-appearance").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
         ui.label(tl!("Link Type:"));
-        egui::ComboBox::from_id_salt("link-type")
+        craft_ui::ComboBox::from_id_salt("link-type")
             .selected_text(if d.style.visible { tl!("Visible Rectangle") } else { tl!("Invisible Rectangle") })
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut d.style.visible, true, tl!("Visible Rectangle"));
@@ -237,7 +273,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize, t: &Token
             });
         ui.end_row();
         ui.label(tl!("Highlight Style:"));
-        egui::ComboBox::from_id_salt("link-hl").selected_text(tl!(d.style.highlight.label())).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("link-hl").selected_text(tl!(d.style.highlight.label())).show_ui(ui, |ui| {
             for h in LinkHighlight::ALL {
                 ui.selectable_value(&mut d.style.highlight, h, tl!(h.label()));
             }
@@ -245,7 +281,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize, t: &Token
         ui.end_row();
         if d.style.visible {
             ui.label(tl!("Line Thickness:"));
-            egui::ComboBox::from_id_salt("link-w")
+            craft_ui::ComboBox::from_id_salt("link-w")
                 .selected_text(if d.style.width <= 1.0 {
                     tl!("Thin")
                 } else if d.style.width <= 2.0 {
@@ -267,7 +303,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut LinkDraft, pages: usize, t: &Token
             } else {
                 0
             };
-            egui::ComboBox::from_id_salt("link-s").selected_text(tl!(["Solid", "Dashed", "Underline"][style])).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("link-s").selected_text(tl!(["Solid", "Dashed", "Underline"][style])).show_ui(ui, |ui| {
                 for (k, l) in ["Solid", "Dashed", "Underline"].iter().enumerate() {
                     ui.selectable_value(&mut style, k, tl!(l));
                 }

@@ -7,14 +7,15 @@
 //! off, scripts don't run and AF calls keep working natively.
 
 use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, FieldProps, ScriptResult, Scripts};
-pub use pdfcraft_js::{Limits, Outcome, Panel, Request};
+pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Panel, Request};
 
 use crate::{DocId, Edit, EditError, Session};
 
 /// What scripts produced for the viewer since it last looked.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct JsOutput {
-    pub alerts: Vec<String>,
+    /// The messages scripts showed, in order, with their titles, icons and buttons.
+    pub alerts: Vec<Message>,
     pub console: Vec<String>,
     pub requests: Vec<Request>,
     /// Script errors (as Acrobat's console shows them).
@@ -195,7 +196,27 @@ fn info(cos: &pdfcraft_cos::Document) -> Vec<(String, String)> {
 }
 
 impl Scripts for JsRunner {
+    /// Run field `target`'s script for `event` over the form's fields, keeping what it showed and
+    /// asked for; a refusal carries its last message.
     fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult {
+        // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
+        self.run_logged(event, script, target, value, fields, true).unwrap_or_else(|| ScriptResult {
+            rc: true,
+            value: value.to_string(),
+            changes: Vec::new(),
+            message: None,
+        })
+    }
+
+    fn rerun_with_english_dates(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> Option<ScriptResult> {
+        pdfcraft_js::with_english_printd(true, || self.run_logged(event, script, target, value, fields, false))
+    }
+}
+
+impl JsRunner {
+    /// [`Scripts::run`], keeping what the script showed and asked for only when `log`; `None`
+    /// when the script failed.
+    fn run_logged(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], log: bool) -> Option<ScriptResult> {
         let states: Vec<_> = fields
             .iter()
             .map(|f| {
@@ -209,17 +230,18 @@ impl Scripts for JsRunner {
         let states = std::sync::Arc::new(states);
         let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
         let o = pdfcraft_js::run_shared(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default());
-        self.output.absorb(&o);
-        if o.error.is_some() {
-            // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
-            return ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None };
+        if log {
+            self.output.absorb(&o);
         }
-        ScriptResult {
+        if o.error.is_some() {
+            return None;
+        }
+        Some(ScriptResult {
             rc: o.rc,
             value: o.value.clone(),
             changes: changes(&states, &o.changed),
-            message: (!o.rc).then(|| o.alerts.last().cloned()).flatten(),
-        }
+            message: (!o.rc).then(|| o.alerts.last().map(|m| m.text.clone())).flatten(),
+        })
     }
 }
 
