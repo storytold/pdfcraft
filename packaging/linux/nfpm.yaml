@@ -25,9 +25,11 @@ description: |-
 
 # The binaries link only glibc and libgcc_s directly. Windowing (X11/Wayland, xkbcommon) and the
 # GPU (Vulkan, EGL/GL) are loaded at runtime, so they are dependencies/recommendations here
-# rather than ELF NEEDED entries. Printing likewise shells out to CUPS's lpstat/lp (cups-client);
-# without it the Print dialog still offers Save as PDF, so it is a recommendation, not a hard
-# dependency.
+# rather than ELF NEEDED entries. So is libdbus-1: rfd loads it to ask the desktop portal for the
+# Open/Save panels, and without it every file dialog silently does nothing (rfd's other route,
+# zenity, isn't a dependency either). Printing likewise shells out to CUPS's lpstat/lp
+# (cups-client); without it the Print dialog still offers Save as PDF, so it is a recommendation,
+# not a hard dependency.
 overrides:
   deb:
     depends:
@@ -35,6 +37,7 @@ overrides:
       - libgcc-s1
       - libxkbcommon0
       - libvulkan1 | libegl1
+      - libdbus-1-3
     recommends:
       - cups-client
       - libwayland-client0
@@ -56,6 +59,7 @@ overrides:
       - libgcc_s.so.1()(64bit)
       - libxkbcommon.so.0()(64bit)
       - (libvulkan.so.1()(64bit) or libEGL.so.1()(64bit))
+      - libdbus-1.so.3()(64bit)
     recommends:
       - cups-client
       - libwayland-client
