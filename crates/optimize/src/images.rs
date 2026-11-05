@@ -1358,7 +1358,7 @@ pub(crate) fn run(
         })
         .collect();
     let mut refs: Vec<(ObjRef, f64)> = ppi.into_iter().filter(|(r, _)| !masks.contains(r)).collect();
-    refs.sort_by_key(|(r, _)| r.num);
+    refs.sort_by_key(|(r, _)| (r.num, r.generation));
     let total = refs.len();
     let mut jbig2 = false;
     let mut group: Vec<Held> = Vec::new();
@@ -1368,7 +1368,7 @@ pub(crate) fn run(
         Object::Stream(s) => s.dict.reference(b"SMask"),
         _ => None,
     };
-    // By number, as `Document::get` finds objects.
+    // By number: a repaired object answers to two generations.
     let mut smask_uses: HashMap<u32, usize> = HashMap::new();
     for (r, _) in &refs {
         if let Some(m) = smask_of(doc, *r) {
@@ -1385,7 +1385,12 @@ pub(crate) fn run(
     let mut done = 0;
     while let Some(rest) = refs.get(done..).filter(|rest| !rest.is_empty()) {
         let run = if threads > 1 {
-            rest.iter().take(PICTURES_AT_ONCE).take_while(|(r, _)| smask_of(doc, *r).is_none_or(|m| smask_uses.get(&m.num) == Some(&1))).count()
+            // One object under two generations: the second must see what the first left.
+            let mut numbers = HashSet::new();
+            rest.iter()
+                .take(PICTURES_AT_ONCE)
+                .take_while(|(r, _)| numbers.insert(r.num) && smask_of(doc, *r).is_none_or(|m| smask_uses.get(&m.num) == Some(&1)))
+                .count()
         } else {
             0
         };
