@@ -1703,6 +1703,104 @@ fn unreadable_bytes_in_a_stream_left_as_it_was_refuse_removing_a_hidden_image() 
     }
 }
 
+/// Remove Hidden Information keeps a name that a form without resources still draws, too. Hidden
+/// text includes text wholly off the page, so what it removes from a form depends on where it is
+/// drawn: the page's /Fm, drawn off the page, is rewritten, while /G draws /Fm again on the page,
+/// where its text shows, and stays as it was. The page still names /Fm, with its text.
+#[test]
+fn removing_hidden_text_keeps_a_form_a_form_without_resources_still_draws() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    for none in NO_RESOURCES {
+        let mut doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /XObject << /Fm 5 0 R /G 6 0 R >> >> >>".to_vec(),
+            stream("", b"q 1 0 0 1 1000 0 cm /Fm Do Q /G Do"),
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 7 0 R >> >>",
+                b"BT /F1 10 Tf 20 20 Td (KEEPTEXT) Tj ET",
+            ),
+            stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 300 300] {none}"), b"/Fm Do"),
+            FONT.replace("95 0 R", "8 0 R").into_bytes(),
+            widths(),
+        ]);
+        let removed = remove_hidden(&mut doc, &[Hidden::HiddenText]).unwrap();
+        assert!(removed.iter().any(|(h, n)| *h == Hidden::HiddenText && *n > 0), "{none:?}: nothing was removed");
+        let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        assert!(content(&saved, 0).contains("/G Do"), "{none:?}: /G was rewritten");
+        let fm = named_stream(&saved, 0, b"Fm").and_then(|s| s.decoded().ok());
+        assert!(fm.is_some_and(|d| d.windows(8).any(|w| w == b"KEEPTEXT")), "{none:?}: the page lost /Fm, which /G still draws");
+    }
+}
+
+/// The page's own check follows only forms without resources of their own: a form that names a
+/// different image /Im1 in resources of its own doesn't keep the page's redacted /Im1.
+#[test]
+fn the_pages_check_does_not_follow_a_form_with_resources_of_its_own() {
+    let image = "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8";
+    let doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Im1 4 0 R >> >>", b"/Im1 Do"),
+        stream(image, b"o"),
+        stream(image, b"p"),
+    ]);
+    let mut xo = Dict::from_iter([(b"FmOwn".to_vec(), Object::Ref(ObjRef::new(3, 0))), (b"Im1".to_vec(), Object::Ref(ObjRef::new(5, 0)))]);
+    crate::interp::prune(&doc, &mut xo, &[b"Im1".to_vec()], &[b"/FmOwn Do".to_vec()]).unwrap();
+    assert!(!xo.contains(b"Im1") && xo.contains(b"FmOwn"), "{xo:?}");
+}
+
+/// What content draws through its resources is read up to 2,000,000 operators, those of the forms
+/// it draws without resources of their own included; past that it is refused.
+#[test]
+fn what_content_draws_through_its_resources_is_read_up_to_two_million_operators() {
+    let doc = Document::new_empty();
+    for (ops, read) in [(2_000_000, true), (2_000_001, false)] {
+        let content = b"n ".repeat(ops);
+        assert_eq!(crate::interp::resource_ops(&doc, &Dict::new(), &[content]).is_ok(), read, "{ops} operators");
+    }
+    // The content's own `/Fm Do` is one of them.
+    for (ops, read) in [(1_999_999, true), (2_000_000, false)] {
+        let doc = pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b"n ".repeat(ops)),
+        ]);
+        let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Fm".to_vec(), Object::Ref(ObjRef::new(3, 0)))])))]);
+        assert_eq!(crate::interp::resource_ops(&doc, &res, &[b"/Fm Do".to_vec()]).is_ok(), read, "a form of {ops} operators");
+    }
+}
+
+/// A form with resources of its own draws through those, not its caller's: one on another page
+/// that names a different image /Im1 doesn't keep the redacted /Im1 in the dictionary both pages
+/// inherit.
+#[test]
+fn a_form_with_resources_of_its_own_does_not_keep_its_callers_image() {
+    let image = "/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8";
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 /Resources << /XObject << /Im1 7 0 R /FmOwn 8 0 R >> >> >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+        stream("", b"q 50 0 0 50 20 230 cm /Im1 Do Q"),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 6 0 R >>".to_vec(),
+        stream("", b"/FmOwn Do"),
+        stream(image, b"REDIMGONECOVERED"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /Im1 9 0 R >> >>", b"q 50 0 0 50 20 20 cm /Im1 Do Q"),
+        stream(image, b"PUBIMGSHOWNAGAIN"),
+    ]);
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.images_removed, 1, "{r:?}");
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(16).any(|w| w == b"REDIMGONECOVERED"), "the redacted image survived the save");
+    let saved = Document::open(Arc::new(bytes)).unwrap();
+    let form = named_stream(&saved, 1, b"FmOwn").expect("page 2 still draws its form");
+    let res = saved.resolve(form.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = saved.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    let Object::Stream(own) = &*saved.get(xo.get(b"Im1").and_then(Object::as_ref).unwrap()) else { panic!("/Im1 is a stream") };
+    assert_eq!(decoded_image(&saved, own).unwrap(), b"PUBIMGSHOWNAGAIN", "the form's own image stays");
+}
+
 /// Remove Hidden Information has the same rewrite: an off layer's image named by an inherited
 /// /Resources must leave the saved file too.
 #[test]

@@ -7,8 +7,10 @@ use super::{
 /// longer draws, so a full-rewrite save stops reaching the original image or form it named. A
 /// name still drawn is kept: by a surviving `Do` (the same image shown again outside a mark), or
 /// by a form without /Resources of its own, which draws through `xo` too. Fails, as the cleanup of
-/// the fonts and properties these forms draw with does, when that can't be told: such a form
-/// won't decode, or the parser can't read all of it or of `content`.
+/// the fonts and properties these forms draw with does, when that can't be told: `Stream::decoded`
+/// refuses such a form (an image codec or a /Filter it can't run, say, or more than 1 GiB), the
+/// walk passes 2,000,000 operators, or the parser can't read all of such a form or of `content`.
+/// Corrupt data in such a form is read, tolerantly, up to the damage, which may be nothing.
 pub(crate) fn prune(doc: &Document, xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) -> Result<(), CosError> {
     if replaced.is_empty() {
         return Ok(());
