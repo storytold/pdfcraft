@@ -1,6 +1,6 @@
 //! Bounded path extraction and snapping in PDF user space, including nested Form XObjects.
 use crate::{Point, Result, check_points, distance, invalid};
-use pdfcraft_content::{Matrix, parse};
+use pdfcraft_content::Matrix;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use serde::Serialize;
 use std::collections::HashSet;
@@ -336,7 +336,8 @@ impl Walker<'_> {
             let (x, y) = m.apply(x, y);
             [x, y]
         };
-        for op in parse(data).ops {
+        // One at a time: a heavy page holds gigabytes as a list of operators.
+        for op in pdfcraft_content::ops(data) {
             if self.geometry.segs.len().saturating_add(path.segs.len()) >= self.limits.segments
                 || self.geometry.targets().saturating_add(path.targets()) >= self.limits.targets
             {
