@@ -1250,6 +1250,7 @@ fn the_custom_tab_refuses_names_a_custom_property_cannot_have() {
     assert!(h.get_by_role_and_label(Role::Button, "Delete").accesskit_node().is_disabled(), "Client is not listed");
 }
 
+/// A custom property whose name the tools refuse is still listed and left untouched.
 #[test]
 fn a_custom_property_whose_name_the_tools_refuse_is_listed_and_left_alone() {
     // `/Client#20name` and `/Project#20` are valid PDF names with a space in them, which a new custom

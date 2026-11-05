@@ -4695,6 +4695,7 @@ fn smooth_images_applies_to_open_and_future_documents() {
     assert!(s.get(later).unwrap().config.smooth_images);
 }
 
+/// A document prepared before a toggle is registered with the setting as it is at commit time.
 #[test]
 fn committing_an_open_applies_the_current_smoothing_setting() {
     let mut s = Session::new();

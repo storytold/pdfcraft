@@ -365,10 +365,11 @@ pub fn device_pixels(pt: f32, scale: f32) -> u32 {
     if px.is_finite() { px.ceil().max(1.0) as u32 } else { 1 }
 }
 
-/// Render one page with a caller-owned parser and cache. Panics inside the renderer are caught
-/// and reported as `Err((message, panicked))`.
+/// Width, height, pixels and optional text of a rendered page.
 type Output = (u32, u32, Pixels, Option<Arc<crate::text::PageText>>);
 
+/// Render one page with a caller-owned parser and cache. Panics inside the renderer are caught
+/// and reported as `Err((message, panicked))`.
 fn render_page<'a>(
     pdf: &'a Pdf,
     cache: &RenderCache<'a>,

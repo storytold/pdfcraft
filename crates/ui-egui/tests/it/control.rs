@@ -159,6 +159,7 @@ fn page_shadows_are_an_observable_app_wide_preference() {
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], false);
 }
 
+/// The Smooth images preference is readable and settable through the UI control channel.
 #[test]
 fn smooth_images_is_an_observable_app_wide_preference() {
     let (mut h, c) = harness();

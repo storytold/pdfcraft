@@ -2,6 +2,7 @@
 
 use pdfcraft_ui_egui::PdfCraftApp;
 
+/// The preference round-trips across restarts and malformed values leave it unchanged.
 #[test]
 fn smooth_images_preference_round_trips_and_ignores_invalid_settings() {
     let mut app = PdfCraftApp::new();

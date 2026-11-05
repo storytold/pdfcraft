@@ -9407,6 +9407,8 @@ fn smooth_images_fixture() -> Vec<u8> {
     out
 }
 
+/// Smooth images off keeps both an open and a later document's checker hard, and the tool
+/// reports the setting.
 #[test]
 fn smooth_images_through_tools() {
     let dir = workdir("smooth-images");

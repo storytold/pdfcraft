@@ -339,6 +339,7 @@ struct AreaAxis {
 }
 
 impl AreaAxis {
+    /// Build the per-target tap table for one axis, or `None` when an allocation fails.
     fn new(src: u32, dst: u32) -> Option<Self> {
         let n = dst as usize;
         let (mut first, mut offsets, mut weights) = (Vec::new(), Vec::new(), Vec::new());
@@ -1016,6 +1017,8 @@ impl Renderer {
         reach
     }
 
+    /// Draw an image whose soft mask does not share its grid by staging a dummy image and
+    /// pushing the mask as its own layer.
     fn draw_image_with_alpha_mask(&mut self, image_data: ImageData, mut alpha_data: LumaData) {
         // PdfCraft patch: mismatched masks need a dummy RGB staging image. Validate and
         // reserve it before creating/pushing any mask, so failure skips the whole image.
@@ -1261,6 +1264,8 @@ impl Renderer {
         Some((target_width, target_height))
     }
 
+    /// Draw one image, area-averaging minified images and smoothing page-scan-sized enlarged
+    /// ones unless the Smooth images preference is off.
     fn draw_image(&mut self, image_data: ImageData, alpha_data: Option<LumaData>) {
         let cur_transform = *self.ctx.transform();
         let (x_scale, y_scale) = {
@@ -2123,6 +2128,8 @@ impl Renderer {
         }
     }
 
+    /// Paint one glyph: an outline directly, or a Type 3 glyph's procedure while keeping the
+    /// Type 3 sampling exemption for nested glyphs and pattern-painted stencils.
     fn fill_glyph<'a>(
         &mut self,
         glyph: &Glyph<'a>,
@@ -2211,6 +2218,7 @@ impl Renderer {
 }
 
 impl<'a> Device<'a> for Renderer {
+    /// Convert the interpreter's image to RGBA and hand it to the renderer's `draw_image`.
     fn draw_image(&mut self, image: hayro_interpret::Image<'a, '_>, mut transform: Affine) {
         // PdfCraft patch (27): an image's pixels are converted to RGB before they reach the
         // device, so an ink pass has no tints for them; the group is drawn as before.
@@ -2483,6 +2491,7 @@ impl<'a> Device<'a> for Renderer {
         true
     }
 
+    /// Push a transparency group layer; a knockout erase pass records instead of painting.
     fn push_transparency_group(
         &mut self,
         opacity: f32,
@@ -2643,6 +2652,7 @@ impl<'a> Device<'a> for Renderer {
         self.ctx.set_transform(old_transform);
     }
 
+    /// Draw and cache the soft mask, then apply it to (or clear it from) the context.
     fn set_soft_mask(&mut self, mask: Option<SoftMask<'_>>) {
         let settings = *self.ctx.render_settings();
         self.cur_mask = mask.map(|m| {
@@ -2836,6 +2846,7 @@ fn render_shading_texture(
     )
 }
 
+/// Render a soft mask to a mask image, keeping its original luminance values.
 fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, height: u16, preview: bool, smooth_images: bool) -> Mask {
     let mut renderer = Renderer {
         ctx: RenderContext::new_with(width, height, derive_settings(&settings)),

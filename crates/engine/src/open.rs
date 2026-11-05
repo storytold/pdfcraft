@@ -99,6 +99,8 @@ impl Session {
         Ok(self.commit_open(prepared))
     }
 
+    /// Open a document from a context snapshot: inspect it, lay out a dynamic XFA form or sync
+    /// a static one, and build the engine document. Called under the open panic guard.
     fn prepare_open_unguarded(
         context: &OpenContext,
         name: String,
