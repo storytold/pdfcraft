@@ -114,6 +114,19 @@ impl Session {
         .map_err(EditError::Write)
     }
 
+    /// XFDF with these comments (0-based page, position in the page's `/Annots`) and their
+    /// replies: what Copy puts on the clipboard; [`Edit::PasteComments`] takes it back in.
+    pub fn export_comments(&self, id: DocId, which: &[(usize, usize)]) -> Result<String, EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let cos = match doc.editor.as_ref() {
+            Some(e) => e.cos.clone(),
+            None => {
+                pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
+            }
+        };
+        guard(|| pdfcraft_xfdf::export_xfdf_comments(&cos, which, &doc.name)).map_err(EditError::Write)
+    }
+
     /// The print-ready PDF for `settings` (sheets laid out for the paper; see `pdfcraft-print`).
     pub fn print_pdf(&self, id: DocId, settings: &print::Settings) -> Result<Vec<u8>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;

@@ -537,7 +537,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, free: bo
             // sees its lost focus, so replacing the box first would drop what was typed. A new box
             // deselects, as a comment tool's note or text box does: Escape then closes the box and
             // leaves the tool in two presses.
-            view.comments.selected = None;
+            view.comments.clear_selection();
             let open = view.fill_text.replace(TypeBox {
                 page,
                 at: top,

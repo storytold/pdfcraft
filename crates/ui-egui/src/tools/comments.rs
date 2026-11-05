@@ -39,9 +39,9 @@ pub use geometry::{drawn_text_box_rect, snug_text_box_rect, text_box_rect};
 use input::hover_tip;
 pub(crate) use input::{anchor, context, context_hit, describe, hit, keys, moving_on, nudge_keys, page_after_text, page_input};
 pub use menu::{CanvasAction, fill_picker, recent_custom_colours, remember_custom_colour, status_badge, swatch_grid};
+pub(crate) use menu::{MenuRights, attachment_items, border_colour_button, context_menu, quick_bar_colour, quick_bar_controls};
 #[cfg(test)]
 use menu::{RECENT_CUSTOM, same_colour};
-pub(crate) use menu::{attachment_items, border_colour_button, context_menu, quick_bar_colour, quick_bar_controls};
 pub(crate) use paint::paint_page;
 #[cfg(test)]
 use paint::{changing_points, drawn_shape, edited_in_view};

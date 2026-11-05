@@ -71,6 +71,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Add stamp",
     "Add 3D model",
     "Delete comment",
+    "Paste comments",
     "Edit comment",
     "Reply",
     "Set status None",
@@ -211,6 +212,7 @@ impl Edit {
             Edit::AddCustomStamp { .. } => Label::of("Add stamp"),
             Edit::AddModel3d { .. } => Label::of("Add 3D model"),
             Edit::DeleteAnnotation { .. } => Label::of("Delete comment"),
+            Edit::PasteComments { .. } => Label::of("Paste comments"),
             Edit::SetAnnotationContents { .. } => Label::of("Edit comment"),
             Edit::ReplyToAnnotation { .. } => Label::of("Reply"),
             // The state's name is part of the wording: a language may need to agree it with the rest.

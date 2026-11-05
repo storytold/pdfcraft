@@ -310,6 +310,9 @@ fn dragging_the_font_size_resizes_the_selected_text_to_where_the_drag_ends() {
     };
     h.state_mut().views[0].comments.selected = Some(annotation);
     h.run_steps(2);
+    // The size is set in the Font size button's popup.
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Font size").click();
+    h.run_steps(2);
     let from = h
         .query_all_by_role(egui::accesskit::Role::SpinButton)
         .find(|n| n.value().is_some_and(|v| v.ends_with(" pt")))
