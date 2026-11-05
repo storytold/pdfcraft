@@ -704,7 +704,7 @@ fn xmp_exif_schemas_have_their_value_types() {
     for good in ["51,30,26N", "0,5.25W", "120,5,0E", "8,0.000001S"] {
         assert!(element("exif:GPSLatitude", good).is_empty(), "{good}");
     }
-    for bad in ["51.5N", "51,30,26", "51,30.N", "51,30,26X", "N", "51,30,2.6N", "a,30,26N"] {
+    for bad in ["51.5N", "51,30,26", "51,30.N", "51,30,26X", "N", "51,30,2.6N", "a,30,26N", "51,30N", "51.5,30,26N"] {
         assert_eq!(element("exif:GPSLatitude", bad), ["exif:GPSLatitude"], "{bad}");
     }
     assert!(element("exif:GPSTimeStamp", "2016-02-01T13:19:21").is_empty());
