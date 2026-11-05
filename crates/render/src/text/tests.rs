@@ -1972,6 +1972,16 @@ fn text_outside_the_crop_box_is_clipped() {
 /// Read as a bfchar map only, such text extracted nothing (pdf.js `issue9367`).
 #[test]
 fn a_tounicode_written_as_cid_ranges_gives_text() {
+    let two = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Words def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 3 begincidchar <0001> 84 <0002> 101 <0004> 116 endcidchar 1 begincidrange <0003> <0003> 120 endcidrange endcmap CMapName currentdict /CMap defineresource pop end end";
+    assert_eq!(cid_range_to_unicode_text(two), "Text", "two-byte entries");
+    // Entries written with four-byte codes are found too (review on #6359).
+    let four = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Words def /CMapType 2 def 1 begincodespacerange <00000000> <FFFFFFFF> endcodespacerange 2 begincidchar <00000001> 84 <00000002> 101 endcidchar 1 begincidrange <00000003> <00000004> 120 endcidrange endcmap CMapName currentdict /CMap defineresource pop end end";
+    assert_eq!(cid_range_to_unicode_text(four), "Texy", "four-byte entries");
+}
+
+/// The page [`a_tounicode_written_as_cid_ranges_gives_text`] reads: four codes in a Type 0 font
+/// (Inter, Identity-H) whose `/ToUnicode` is `cmap`.
+fn cid_range_to_unicode_text(cmap: &[u8]) -> String {
     use lopdf::{Document, Object, Stream, dictionary};
     let mut doc = Document::with_version("1.7");
     let program = doc.add_object(Stream::new(dictionary! {}, include_bytes!("../../../../assets/fonts/Inter-Regular.ttf").to_vec()));
@@ -1984,7 +1994,6 @@ fn a_tounicode_written_as_cid_ranges_gives_text() {
         "FontDescriptor" => descriptor,
         "CIDToGIDMap" => "Identity",
     });
-    let cmap = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Words def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 3 begincidchar <0001> 84 <0002> 101 <0004> 116 endcidchar 1 begincidrange <0003> <0003> 120 endcidrange endcmap CMapName currentdict /CMap defineresource pop end end";
     let to_unicode = doc.add_object(Stream::new(dictionary! {}, cmap.to_vec()));
     let font = doc.add_object(dictionary! {
         "Type" => "Font",
@@ -2003,5 +2012,5 @@ fn a_tounicode_written_as_cid_ranges_gives_text() {
     let mut bytes = Vec::new();
     doc.save_to(&mut bytes).unwrap();
     let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
-    assert_eq!(extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text().trim(), "Text");
+    extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text().trim().to_string()
 }

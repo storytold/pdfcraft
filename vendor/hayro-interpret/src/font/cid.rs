@@ -472,7 +472,7 @@ impl Type0Font {
             // and PDFium extract it. ISO 32000-2 §9.10.3 has `beginbfrange` / `beginbfchar` here;
             // Word writes CID ranges, and such text extracted nothing.
             return to_unicode.lookup_bf_string(key).or_else(|| {
-                (0..4).find_map(|len| to_unicode.lookup_cid_code(key, len).and_then(|cid| char::from_u32(cid.to_u32()))).map(BfString::Char)
+                (1..=4).find_map(|len| to_unicode.lookup_cid_code(key, len).and_then(|cid| char::from_u32(cid.to_u32()))).map(BfString::Char)
             });
         }
 
