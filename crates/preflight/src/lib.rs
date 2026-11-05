@@ -789,10 +789,11 @@ fn walk_chain(doc: &Document, a: &Dict, read: &mut usize, seen: &mut std::collec
 }
 
 /// The forbidden kind of the action `d` itself, if it is one: a forbidden type, or a Named
-/// action for anything but the four of [`NAMED_ACTIONS`], its name given directly or by
-/// reference.
+/// action for anything but the four of [`NAMED_ACTIONS`]. The type and the name may each be given
+/// directly or by reference.
 fn action_forbidden(doc: &Document, d: &Dict) -> Option<String> {
-    let s = d.name(b"S")?;
+    let s = doc.resolve(d.get(b"S")?);
+    let s = s.as_name()?;
     if FORBIDDEN_ACTIONS.contains(&s) {
         return Some(String::from_utf8_lossy(s).into_owned());
     }

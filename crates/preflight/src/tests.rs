@@ -502,6 +502,8 @@ fn set_state_no_op_and_named_actions_are_checked() {
                 &outline,
                 "<< /Type /Outlines /First 3 0 R /Last 3 0 R /Count 1 >>",
                 "/NextPage",
+                "/Named",
+                "/NOP",
             ],
             "",
         )
@@ -520,6 +522,10 @@ fn set_state_no_op_and_named_actions_are_checked() {
     }
     // The name given by reference (object 5 is /NextPage).
     assert!(actions("<< /S /Named /N 5 0 R >>").is_empty());
+    // The type given by reference (object 6 is /Named, 7 is /NOP).
+    assert_eq!(actions("<< /S 6 0 R /N /Print >>"), ["A Named Print action isn't allowed"]);
+    assert_eq!(actions("<< /S 7 0 R >>"), ["A NOP action isn't allowed"]);
+    assert!(actions("<< /S 6 0 R /N 5 0 R >>").is_empty());
     // Save as PDF/A removes them.
     for action in ["<< /S /SetState /T [] >>", "<< /S /NOP >>", "<< /S /Named /N /Print >>"] {
         let mut doc = doc_with(action);
