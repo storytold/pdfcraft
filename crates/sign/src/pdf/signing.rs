@@ -607,34 +607,30 @@ fn signature_lines(text: &str, size: f64, width: f64) -> Result<Vec<SignatureLin
         let base = bidi.paragraph_level;
         let measure =
             |s: &str| -> Result<f64, SignError> { Ok(signature_atoms(s, Some(base))?.iter().map(SignatureAtom::advance).sum::<f64>() * size) };
-        let space = measure(" ")?;
-        let (mut line, mut used) = (String::new(), 0.0);
+        let mut line = String::new();
         for word in para.split(' ') {
-            let word_w = measure(word)?;
-            let gap = if line.is_empty() { 0.0 } else { space };
-            if !line.is_empty() && used + gap + word_w > width {
-                lines.push(SignatureLine { atoms: signature_atoms(&line, Some(base))?, rtl: base.is_rtl() });
-                line.clear();
-                used = 0.0;
+            // Font selection for spaces depends on the complete bidi run, and joining can
+            // change Arabic advances. Measure exactly the candidate that would be drawn.
+            let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            if measure(&candidate)? <= width {
+                line = candidate;
+                continue;
             }
             if !line.is_empty() {
-                line.push(' ');
-                used += space;
+                lines.push(SignatureLine { atoms: signature_atoms(&line, Some(base))?, rtl: base.is_rtl() });
+                line.clear();
             }
-            if word_w <= width {
+            if measure(word)? <= width {
                 line.push_str(word);
-                used += word_w;
             } else {
                 // Never detach vowel marks from a letter when breaking a long word.
                 for grapheme in word.graphemes(true) {
-                    let advance = measure(grapheme)?;
-                    if !line.is_empty() && used + advance > width {
+                    let candidate = format!("{line}{grapheme}");
+                    if !line.is_empty() && measure(&candidate)? > width {
                         lines.push(SignatureLine { atoms: signature_atoms(&line, Some(base))?, rtl: base.is_rtl() });
                         line.clear();
-                        used = 0.0;
                     }
                     line.push_str(grapheme);
-                    used += advance;
                 }
             }
         }
@@ -1077,6 +1073,36 @@ mod arabic_tests {
         assert!(lines.iter().all(|l| l.rtl && visual_text(l) == visual_text(&first[0])));
         let lines = signature_lines("موافق دمشق", 12.0, width).unwrap();
         assert_eq!(visual_text(&lines[0]), visual_text(&first[0]));
+    }
+
+    #[test]
+    fn wrapping_measures_complete_bidi_candidates() {
+        if pdfcraft_fonts::document_arabic_font().is_none() {
+            return;
+        }
+        let text = "موافق Smith Smith";
+        let full = signature_lines(text, 12.0, 1000.0).unwrap();
+        let exact_width = full[0].atoms.iter().map(SignatureAtom::advance).sum::<f64>() * 12.0;
+        assert_eq!(signature_lines(text, 12.0, exact_width + 0.001).unwrap().len(), 1);
+        let width = exact_width - 0.001;
+        let wrapped = signature_lines(text, 12.0, width).unwrap();
+        assert!(wrapped.len() > 1, "the complete candidate does not fit");
+        for line in wrapped {
+            let drawn_width = line.atoms.iter().map(SignatureAtom::advance).sum::<f64>() * 12.0;
+            assert!(drawn_width <= width, "{drawn_width} > {width}");
+        }
+    }
+
+    #[test]
+    fn oversized_arabic_words_measure_joined_grapheme_candidates() {
+        if pdfcraft_fonts::document_arabic_font().is_none() {
+            return;
+        }
+        let pair = signature_lines("بَبَ", 12.0, 1000.0).unwrap();
+        let width = pair[0].atoms.iter().map(SignatureAtom::advance).sum::<f64>() * 12.0 + 0.001;
+        let lines = signature_lines("بَبَبَبَ", 12.0, width).unwrap();
+        assert_eq!(lines.len(), 2, "joined letters should fit in pairs");
+        assert!(lines.iter().all(|line| visual_text(line) == visual_text(&pair[0])));
     }
 
     #[test]
