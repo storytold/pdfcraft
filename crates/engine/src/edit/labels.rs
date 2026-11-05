@@ -6,6 +6,7 @@ use super::{Edit, FillMark, ImageEdit, Label, LineEnding, MarkKind, Markup, Page
 pub const EDIT_LABELS: &[&str] = &[
     "Rotate page",
     "Change tag properties",
+    "Rename structure class",
     "Rotate pages",
     "Delete page",
     "Delete pages",

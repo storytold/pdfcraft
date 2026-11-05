@@ -398,6 +398,29 @@ fn class_map_rename_keeps_attributes_and_updates_shared_array_assignments() {
 }
 
 #[test]
+fn class_map_all_returns_entries_beyond_the_page_limit() {
+    let mut doc = structure_doc(&["<< /S /Document /K 4 0 R >>".into(), "<< /S /P /C /Class1000 >>".into()]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(
+            b"ClassMap".to_vec(),
+            Object::Dict({
+                let mut map = pdfcraft_cos::Dict::new();
+                for index in 0..1001 {
+                    map.set(format!("Class{index}").into_bytes(), Object::Dict(pdfcraft_cos::Dict::new()));
+                }
+                map
+            }),
+        );
+    })
+    .unwrap();
+
+    let (count, entries) = class_map_all(&doc);
+    assert_eq!(count, 1001);
+    assert_eq!(entries.len(), 1001);
+    assert_eq!(entries.iter().find(|entry| entry.name == "Class1000").map(|entry| entry.assignments), Some(1));
+}
+
+#[test]
 fn class_rename_accepts_existing_names_outside_the_new_name_policy() {
     let mut doc = structure_doc(&["<< /S /Document /K 4 0 R >>".into(), "<< /S /P /C /Old#20Name >>".into()]);
     doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
@@ -448,6 +471,7 @@ fn class_assignment_accepts_exact_comma_and_legacy_names() {
                 let mut map = pdfcraft_cos::Dict::new();
                 map.set(b"Name,Comma".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
                 map.set(b"Legacy Name".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                map.set(b" ".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
                 map
             }),
         );
@@ -458,6 +482,8 @@ fn class_assignment_accepts_exact_comma_and_legacy_names() {
     assert_eq!(doc.get(tag).as_dict().unwrap().get(b"C").and_then(Object::as_name), Some(b"Name,Comma".as_slice()));
     set_tag_property(&mut doc, tag, TagProperty::Class, Some("Legacy Name")).unwrap();
     assert_eq!(tags(&doc)[1].classes, ["Legacy Name"]);
+    set_tag_property(&mut doc, tag, TagProperty::Class, Some(" ")).unwrap();
+    assert_eq!(doc.get(tag).as_dict().unwrap().get(b"C").and_then(Object::as_name), Some(b" ".as_slice()));
 }
 
 #[test]
@@ -612,7 +638,7 @@ fn class_map_edits_bound_cyclic_tags_and_leave_malformed_assignments_intact() {
     assert_eq!(tags(&doc).len(), 1);
     assert_eq!(tags(&doc)[0].classes, ["New", "New"]);
     assert_eq!(
-        doc.get(pdfcraft_cos::ObjRef::new(4, 0)).as_dict().unwrap().get(b"C"),
+        doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().unwrap().get(b"C"),
         Some(&Object::Array(vec![Object::name("New"), Object::Int(7), Object::name("New")])),
     );
     assert_eq!(class_map(&doc, 0, 10).1[0].assignments, 1);
@@ -1155,6 +1181,22 @@ fn sibling_tags_move_in_reading_order_without_changing_content() {
 }
 
 #[test]
+fn sibling_tags_move_inside_an_indirect_parent_k_array() {
+    use pdfcraft_cos::{ObjRef, Object};
+    let mut doc = figures_doc();
+    let children = doc.add(Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))]));
+    doc.update_dict(ObjRef::new(6, 0), |parent| parent.set(b"K".to_vec(), Object::Ref(children))).unwrap();
+
+    move_tag(&mut doc, ObjRef::new(8, 0), ObjRef::new(7, 0), TagPlacement::Before).unwrap();
+
+    assert_eq!(tags(&doc).into_iter().map(|tag| tag.object.num).collect::<Vec<_>>(), [6, 8, 7]);
+    assert_eq!(
+        doc.get(children).as_array().map(|items| items.iter().filter_map(Object::as_ref).map(|r| r.num).collect::<Vec<_>>()),
+        Some(vec![8, 7]),
+    );
+}
+
+#[test]
 fn setting_alt_text_and_marking_decorative() {
     let mut doc = figures_doc();
     let f = figures(&doc);
@@ -1289,6 +1331,53 @@ fn mark_tag_artifact_finds_named_property_lists_and_indirect_mcrs() {
     assert_eq!(nums, Some(Object::Array(vec![Object::Int(0), Object::Array(vec![Object::Null, Object::Null])])));
     let r = check(&doc, &Options { rules: [Rule::FiguresAltText, Rule::TaggedContent].into(), pages: None });
     assert_eq!(failed(&r), Vec::<Rule>::new(), "{:?}", r.results);
+}
+
+#[test]
+fn artifact_edits_update_indirect_parent_k_arrays() {
+    use pdfcraft_cos::{ObjRef, Object};
+
+    let mut artifact = figures_doc();
+    let artifact_kids = artifact.add(Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))]));
+    artifact.update_dict(ObjRef::new(6, 0), |parent| parent.set(b"K".to_vec(), Object::Ref(artifact_kids))).unwrap();
+    mark_tag_artifact(&mut artifact, ObjRef::new(7, 0)).unwrap();
+    assert_eq!(
+        artifact.get(artifact_kids).as_array().map(|items| items.iter().filter_map(Object::as_ref).map(|r| r.num).collect::<Vec<_>>()),
+        Some(vec![8]),
+    );
+    assert_eq!(tags(&artifact).iter().map(|tag| tag.object.num).collect::<Vec<_>>(), [6, 8]);
+    assert_eq!(
+        artifact
+            .get(ObjRef::new(9, 0))
+            .as_dict()
+            .and_then(|dict| dict.get(b"Nums"))
+            .and_then(Object::as_array)
+            .and_then(|nums| nums.get(1))
+            .and_then(Object::as_array)
+            .map(Vec::as_slice),
+        Some([Object::Null, Object::Ref(ObjRef::new(8, 0))].as_slice()),
+    );
+
+    let mut decorative = figures_doc();
+    let decorative_kids = decorative.add(Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))]));
+    decorative.update_dict(ObjRef::new(6, 0), |parent| parent.set(b"K".to_vec(), Object::Ref(decorative_kids))).unwrap();
+    mark_decorative(&mut decorative, ObjRef::new(7, 0)).unwrap();
+    assert_eq!(
+        decorative.get(decorative_kids).as_array().map(|items| items.iter().filter_map(Object::as_ref).map(|r| r.num).collect::<Vec<_>>()),
+        Some(vec![8]),
+    );
+    assert_eq!(figures(&decorative).iter().map(|figure| figure.obj.num).collect::<Vec<_>>(), [8]);
+    assert_eq!(
+        decorative
+            .get(ObjRef::new(9, 0))
+            .as_dict()
+            .and_then(|dict| dict.get(b"Nums"))
+            .and_then(Object::as_array)
+            .and_then(|nums| nums.get(1))
+            .and_then(Object::as_array)
+            .map(Vec::as_slice),
+        Some([Object::Null, Object::Ref(ObjRef::new(8, 0))].as_slice()),
+    );
 }
 
 #[test]

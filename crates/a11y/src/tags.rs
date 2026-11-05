@@ -150,16 +150,13 @@ pub fn move_tag(doc: &mut Document, object: ObjRef, anchor: ObjRef, placement: T
     if parent_of(anchor) != Some(parent) {
         return Err(TagError::NotSiblings);
     }
-    let owner = doc.get(parent);
-    let Some(children) = owner.as_dict().and_then(|d| d.get(b"K").and_then(Object::as_array)) else {
-        return Err(TagError::AmbiguousChildren);
-    };
+    let (children, array_ref) = parent_kids(doc, parent).ok_or(TagError::AmbiguousChildren)?;
     let one_position = |child| {
         let mut matches = children.iter().enumerate().filter(|(_, item)| item.as_ref() == Some(child));
         matches.next().and_then(|(index, _)| matches.next().is_none().then_some(index))
     };
     let (Some(from), Some(to)) = (one_position(object), one_position(anchor)) else { return Err(TagError::AmbiguousChildren) };
-    let mut reordered = children.clone();
+    let mut reordered = children;
     let moved = reordered.remove(from);
     let target = if from < to { to - 1 } else { to };
     let destination = target + usize::from(placement == TagPlacement::After);
@@ -167,8 +164,25 @@ pub fn move_tag(doc: &mut Document, object: ObjRef, anchor: ObjRef, placement: T
         return Err(TagError::AlreadyThere);
     }
     reordered.insert(destination, moved);
-    doc.update_dict(parent, |d| d.set(b"K".to_vec(), Object::Array(reordered)))?;
-    Ok(())
+    write_parent_kids(doc, parent, array_ref, reordered).map_err(Into::into)
+}
+
+fn parent_kids(doc: &Document, parent: ObjRef) -> Option<(Vec<Object>, Option<ObjRef>)> {
+    let kids = doc.get(parent).as_dict()?.get(b"K")?.clone();
+    match kids {
+        Object::Array(items) => Some((items, None)),
+        Object::Ref(array) => doc.get(array).as_array().cloned().map(|items| (items, Some(array))),
+        _ => None,
+    }
+}
+
+fn write_parent_kids(doc: &mut Document, parent: ObjRef, array: Option<ObjRef>, kids: Vec<Object>) -> Result<(), CosError> {
+    if let Some(array) = array {
+        doc.set(array, Object::Array(kids));
+        Ok(())
+    } else {
+        doc.update_dict(parent, |d| d.set(b"K".to_vec(), Object::Array(kids)))
+    }
 }
 
 fn text(doc: &Document, d: &pdfcraft_cos::Dict, key: &[u8]) -> Option<String> {
@@ -202,6 +216,15 @@ pub fn tags(doc: &Document) -> Vec<TagInfo> {
 
 /// List a page of `/ClassMap` entries without resolving or flattening their values.
 pub fn class_map(doc: &Document, offset: usize, limit: usize) -> (usize, Vec<ClassMapEntry>) {
+    class_map_page(doc, offset, Some(limit.min(1000)))
+}
+
+/// List every `/ClassMap` entry and its assignment count in one structure-tree walk.
+pub fn class_map_all(doc: &Document) -> (usize, Vec<ClassMapEntry>) {
+    class_map_page(doc, 0, None)
+}
+
+fn class_map_page(doc: &Document, offset: usize, limit: Option<usize>) -> (usize, Vec<ClassMapEntry>) {
     let Some(map) = class_map_dict(doc) else { return (0, Vec::new()) };
     let assignments = tags(doc).into_iter().fold(HashMap::<String, usize>::new(), |mut counts, tag| {
         for name in tag.classes.into_iter().collect::<BTreeSet<_>>() {
@@ -222,7 +245,7 @@ pub fn class_map(doc: &Document, offset: usize, limit: usize) -> (usize, Vec<Cla
         .iter()
         .filter_map(|(key, _)| std::str::from_utf8(key).ok().map(|name| (name, key)))
         .skip(offset)
-        .take(limit.min(1000))
+        .take(limit.unwrap_or(usize::MAX))
         .map(|(name, _)| ClassMapEntry { assignments: assignments.get(name).copied().unwrap_or_default(), name: name.to_owned() })
         .collect();
     (count, entries)
@@ -296,6 +319,9 @@ fn valid_class_name(value: &str) -> bool {
 }
 
 fn parse_class_assignments(value: &str, map: &Dict) -> Vec<String> {
+    if map.contains(value.as_bytes()) {
+        return vec![value.to_owned()];
+    }
     let trimmed = value.trim();
     if map.contains(trimmed.as_bytes()) {
         return vec![trimmed.to_owned()];
@@ -493,8 +519,15 @@ pub fn set_tag_property(doc: &mut Document, object: ObjRef, property: TagPropert
     if property == TagProperty::Class {
         let map = class_map_dict(doc);
         let classes = value
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| map.as_ref().map_or_else(|| s.split(',').map(str::trim).map(str::to_owned).collect(), |map| parse_class_assignments(s, map)))
+            .map(|s| {
+                if map.as_ref().is_some_and(|map| map.contains(s.as_bytes())) {
+                    vec![s.to_owned()]
+                } else if !s.trim().is_empty() {
+                    map.as_ref().map_or_else(|| s.split(',').map(str::trim).map(str::to_owned).collect(), |map| parse_class_assignments(s, map))
+                } else {
+                    Vec::new()
+                }
+            })
             .unwrap_or_default();
         for class in &classes {
             let exists = map.as_ref().is_some_and(|map| map.contains(class.as_bytes()));

@@ -10,23 +10,6 @@ use pdfcraft_engine::{DocId, Edit};
 
 use crate::{icons, theme::Tokens, widgets};
 
-fn load_class_pages(mut page: impl FnMut(usize, usize) -> (usize, Vec<ClassMapEntry>)) -> Vec<ClassMapEntry> {
-    let mut classes = Vec::new();
-    let mut offset = 0usize;
-    loop {
-        let (total, next) = page(offset, 100);
-        if next.is_empty() {
-            break;
-        }
-        offset = offset.saturating_add(next.len());
-        classes.extend(next);
-        if offset >= total {
-            break;
-        }
-    }
-    classes
-}
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct State {
     doc: Option<DocId>,
@@ -127,8 +110,7 @@ impl State {
         {
             return classes.clone();
         }
-        let classes = load_class_pages(|offset, limit| doc.class_map(offset, limit));
-        let classes = Arc::new(classes);
+        let classes = Arc::new(doc.class_map_all().1);
         self.class_cache = Some((doc.id, generation, classes.clone()));
         classes
     }
@@ -416,26 +398,6 @@ mod tests {
             classes: classes.iter().map(|name| (*name).to_owned()).collect(),
             page: None,
         }
-    }
-
-    #[test]
-    fn classes_load_across_pages_until_total_or_an_empty_page() {
-        let loaded = load_class_pages(|offset, limit| {
-            let total = 201;
-            let end = offset.saturating_add(limit).min(total);
-            let page = (offset..end).map(|index| ClassMapEntry { name: format!("Class{index}"), assignments: 0 }).collect();
-            (total, page)
-        });
-        assert_eq!(loaded.len(), 201);
-        assert_eq!(loaded.last().map(|entry| entry.name.as_str()), Some("Class200"));
-
-        let mut calls = 0;
-        let stopped = load_class_pages(|offset, _| {
-            calls += 1;
-            if offset == 0 { (201, vec![ClassMapEntry { name: "First".to_owned(), assignments: 0 }]) } else { (201, Vec::new()) }
-        });
-        assert_eq!(stopped.len(), 1);
-        assert_eq!(calls, 2);
     }
 
     #[test]

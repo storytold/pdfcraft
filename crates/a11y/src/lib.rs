@@ -43,7 +43,8 @@ pub use autotag_fields::tag_form_fields;
 pub use headings::{Heading, headings};
 pub use report::{REPORT_WORDS, report_html};
 pub use tags::{
-    ClassMapEntry, TagContentItem, TagError, TagInfo, TagPlacement, TagProperty, class_map, move_tag, rename_class, set_tag_property, tag_content,
+    ClassMapEntry, TagContentItem, TagError, TagInfo, TagPlacement, TagProperty, class_map, class_map_all, move_tag, rename_class, set_tag_property,
+    tag_content,
     tags,
 };
 
