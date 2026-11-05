@@ -856,8 +856,8 @@ fn xmp_extension_schema_descriptions_are_complete() {
     // A second property list is read as well as the first.
     let complete = schema_without("");
     let second = complete.replacen(
-        "<pdfaSchema:property>",
-        r#"<pdfaSchema:property><rdf:Seq><rdf:li rdf:parseType="Resource"><pdfaProperty:name>p</pdfaProperty:name></rdf:li></rdf:Seq></pdfaSchema:property><pdfaSchema:property>"#,
+        "</pdfaSchema:property>",
+        r#"</pdfaSchema:property><pdfaSchema:property><rdf:Seq><rdf:li rdf:parseType="Resource"><pdfaProperty:name>p</pdfaProperty:name></rdf:li></rdf:Seq></pdfaSchema:property>"#,
         1,
     );
     assert_eq!(extension(&second, OWN).0, ["pdfaProperty:category", "pdfaProperty:description", "pdfaProperty:valueType"]);
