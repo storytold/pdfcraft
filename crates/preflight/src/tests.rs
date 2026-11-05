@@ -562,3 +562,15 @@ fn extended_graphics_states_are_checked() {
     assert_eq!(gs(&pattern("<< /TR 4 0 R >>")), [tr]);
     assert!(gs(&pattern("<< /HT << /HalftoneType 1 >> >>")).is_empty());
 }
+
+/// From the review of the 6.2.5 check: references that differ only in generation reach the same
+/// object, which is read once.
+#[test]
+fn graphics_state_scan_reads_each_object_once_whatever_the_generation() {
+    let gens: String = (0..10).map(|g| format!("4 {g} R ")).collect();
+    let page = format!("<< /Type /Page /Parent 2 0 R /Same [{gens}] >>");
+    let doc =
+        build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page, "[1 2 3]"], "");
+    // The catalog, the page tree, the page and object 4.
+    assert_eq!(gstate::reached(&doc), 4);
+}

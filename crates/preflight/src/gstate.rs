@@ -59,6 +59,16 @@ pub(crate) struct Findings {
 
 /// The 6.2.5 findings over what `doc` reaches from its trailer.
 pub(crate) fn check(doc: &Document) -> Findings {
+    scan(doc).findings
+}
+
+/// How many objects [`check`] reads.
+#[cfg(test)]
+pub(crate) fn reached(doc: &Document) -> usize {
+    scan(doc).reached.len()
+}
+
+fn scan(doc: &Document) -> Scan<'_> {
     let mut scan = Scan { doc, read: HashSet::new(), reached: HashSet::new(), queue: VecDeque::new(), findings: Findings::default() };
     scan.walk(&Object::Dict(doc.trailer().clone()), 0);
     // References are followed from a queue, not by recursion: a chain of them can be as long as
@@ -67,15 +77,16 @@ pub(crate) fn check(doc: &Document) -> Findings {
         let o = doc.get(r);
         scan.walk(&o, 0);
     }
-    scan.findings
+    scan
 }
 
 struct Scan<'a> {
     doc: &'a Document,
-    /// Resource dictionaries, `/ExtGState` maps and graphics states read so far, by reference.
-    read: HashSet<ObjRef>,
-    /// Objects reached so far, queued or walked.
-    reached: HashSet<ObjRef>,
+    /// Resource dictionaries, `/ExtGState` maps and graphics states read so far, by object number.
+    read: HashSet<u32>,
+    /// Object numbers reached so far, queued or walked. Both sets go by number, as
+    /// [`Document::get`] does: references differing only in generation reach the same object.
+    reached: HashSet<u32>,
     queue: VecDeque<ObjRef>,
     findings: Findings,
 }
@@ -87,7 +98,7 @@ impl Scan<'_> {
         }
         let d = match o {
             Object::Ref(r) => {
-                if self.reached.insert(*r) {
+                if self.reached.insert(r.num) {
                     self.queue.push_back(*r);
                 }
                 return;
@@ -112,7 +123,7 @@ impl Scan<'_> {
 
     /// Whether `o` is a reference read before; marks it read.
     fn read_before(&mut self, o: &Object) -> bool {
-        matches!(o, Object::Ref(r) if !self.read.insert(*r))
+        matches!(o, Object::Ref(r) if !self.read.insert(r.num))
     }
 
     /// A dictionary that holds graphics states: through its resources, or as a shading pattern.
