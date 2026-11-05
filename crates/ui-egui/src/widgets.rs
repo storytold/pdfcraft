@@ -479,7 +479,8 @@ pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
     // Above the progress notice while a job runs.
     let card = if app.progress_notice.is_some() { ctx.data(|d| d.get_temp::<f32>(egui::Id::unique(PROGRESS_HEIGHT))).unwrap_or(0.0) } else { 0.0 };
     #[cfg(not(target_arch = "wasm32"))]
-    let opening = if app.opening_notice.is_some() { ctx.data(|d| d.get_temp::<f32>(egui::Id::new(OPENING_HEIGHT))).unwrap_or(0.0) + 10.0 } else { 0.0 };
+    let opening =
+        if app.opening_notice.is_some() { ctx.data(|d| d.get_temp::<f32>(egui::Id::new(OPENING_HEIGHT))).unwrap_or(0.0) + 10.0 } else { 0.0 };
     #[cfg(target_arch = "wasm32")]
     let opening = 0.0;
     let lift = if card > 0.0 { 28.0 + card + 10.0 + opening } else { 28.0 + opening };
@@ -622,7 +623,8 @@ pub fn opening_notice(label: Option<&str>, progress_visible: bool, ctx: &egui::C
     } else {
         (Color32::from_rgb(0x2A, 0x2A, 0x2F), Color32::WHITE)
     };
-    let progress_height = if progress_visible { ctx.data(|d| d.get_temp::<f32>(egui::Id::unique(PROGRESS_HEIGHT))).unwrap_or(0.0) + 10.0 } else { 0.0 };
+    let progress_height =
+        if progress_visible { ctx.data(|d| d.get_temp::<f32>(egui::Id::unique(PROGRESS_HEIGHT))).unwrap_or(0.0) + 10.0 } else { 0.0 };
     let animated = crate::motion::animated(ctx);
     let area = egui::Area::new(egui::Id::new("opening-notice"))
         .order(egui::Order::Tooltip)
