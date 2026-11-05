@@ -309,6 +309,17 @@ fn export_to_postscript() {
         let expected = pdfcraft_engine::export::postscript(&src, &pages, format).unwrap();
         assert_eq!(std::fs::read(&out).unwrap(), expected.bytes, "{ext} matches the engine");
     }
+
+    // A hand-typed name the picker did not offer (.xyz, and none at all) is refused, as
+    // the automation tool refuses it — PostScript must never land under a `.pdf` name.
+    for name in ["e.xyz", "e"] {
+        let out = dir.join(name);
+        app.save_override = Some(out.to_string_lossy().into_owned());
+        assert!(app.execute("export.ps"), "{name}: the command ran");
+        assert!(!out.exists(), "{name}: nothing written");
+        let toast = app.toast.as_ref().map(|t| t.0.as_str()).unwrap_or_default();
+        assert!(toast.contains("the extension must be .ps or .eps"), "{name}: the refusal names what is allowed: {toast}");
+    }
 }
 
 /// A `.eps` export from the UI takes the page being viewed, so a multi-page document

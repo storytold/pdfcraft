@@ -1023,18 +1023,19 @@ impl PdfCraftApp {
             return;
         }
         let Some(doc) = self.session.get(id) else { return };
-        let src = doc.export_source();
-        let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
             match self.save_override.clone() {
-                Some(p) => self.write_postscript(src, current, p.into()),
+                Some(p) => self.write_postscript(id, current, p.into()),
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
                         .set_title(tl!("Export").to_string())
-                        .add_filter(tl!("PostScript / EPS").to_string(), &["ps", "eps"])
+                        .add_filter_any_case(tl!("PostScript / EPS").to_string(), &["ps", "eps"])
                         .set_file_name(format!("{stem}.ps"));
-                    self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, path| app.write_postscript(src, current, path));
+                    // The document is the picker's target: closed while it is up, the
+                    // callback never runs, and the export snapshots only after it returns.
+                    self.ask_one(crate::pickers::Ask::Save(dialog), Some(id), move |app, path| app.write_postscript(id, current, path));
                 }
             }
         }
@@ -1042,6 +1043,8 @@ impl PdfCraftApp {
         #[cfg(target_arch = "wasm32")]
         {
             use pdfcraft_engine::export::PsFormat;
+            let src = doc.export_source();
+            let stem = doc.name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
             let pages: Vec<usize> = (0..src.pages).collect();
             match pdfcraft_engine::export::postscript(&src, &pages, PsFormat::Ps) {
                 Ok(out) => {
@@ -1054,16 +1057,32 @@ impl PdfCraftApp {
         }
     }
 
-    /// Write the PostScript/EPS export of `src` to `path` (the save picker's answer, or
+    /// Write document `id`'s PostScript/EPS export to `path` (the save picker's answer, or
     /// `save_override`), saying where it went and, like Export all images, every degradation
     /// once (the count and the first). `current` is the page the export started on: an EPS
-    /// file takes exactly that one page, a `.ps` every page.
+    /// file takes exactly that one page, a `.ps` every page. The source is snapshotted here,
+    /// after the picker: what was typed while it was open is part of the export (#166), as
+    /// the export-data path does.
     #[cfg(not(target_arch = "wasm32"))]
-    fn write_postscript(&mut self, src: pdfcraft_engine::export::ExportSource, current: usize, path: std::path::PathBuf) {
+    fn write_postscript(&mut self, id: pdfcraft_engine::DocId, current: usize, path: std::path::PathBuf) {
         use pdfcraft_engine::export::{PsFormat, postscript};
+        // Include what was typed while the save panel was open.
+        if !self.commit_typing_in(id) {
+            return;
+        }
+        let Some(doc) = self.session.get(id) else { return };
+        let src = doc.export_source();
+        // The picker offers .ps and .eps, but the name is typed by hand: anything else is
+        // refused, as the automation tool refuses it, instead of quietly writing
+        // PostScript under, say, a `.pdf` name.
         let format = match path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()) {
             Some(ref e) if e == "eps" => PsFormat::Eps,
-            _ => PsFormat::Ps,
+            Some(ref e) if e == "ps" => PsFormat::Ps,
+            _ => {
+                let shown = path.display().to_string();
+                self.notify_fmt("Couldn't write {name}: the extension must be .ps or .eps", &[("name", &shown)]);
+                return;
+            }
         };
         // An EPS file holds one page: the one the user was looking at.
         let pages: Vec<usize> = match format {

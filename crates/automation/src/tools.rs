@@ -1272,6 +1272,7 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "html_mode": { "type": "string", "enum": ["rich", "simple"], "default": "rich" } }), &["doc", "path"])),
         t("doc_export_postscript", "Export to PostScript or EPS", "Export a PDF ▸ PostScript (.ps, every page or the ones in pages) or EPS (.eps, exactly one page), chosen by path's extension: each page redrawn as a DSC-structured PostScript program, text as vector outlines, images, shadings and annotations where they fall. warnings lists what PostScript cannot reproduce (transparency, blend modes); the same notes appear in the file as %%PdfCraftNote comments.")
             .cmd("export.ps")
+            .destructive()
             .with(schema(
                 json!({ "doc": doc(), "path": { "type": "string" }, "pages": pages("to export (default: all)") }),
                 &["doc", "path"],

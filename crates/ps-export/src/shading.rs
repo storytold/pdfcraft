@@ -502,6 +502,21 @@ fn concat_unless_identity(emit: &mut Emitter, matrix: Affine) {
 fn function_dict(f: &ParsedFunction, out: &mut String) -> Result<(), &'static str> {
     match f {
         ParsedFunction::Sampled { domain, range, sizes, bits_per_sample, encode, decode, samples } => {
+            // PLRM requires every `/Size` to be a positive integer: a zero is a rangecheck
+            // that can end the job and lose the rest of the page. Decline it — the shading
+            // takes its existing flat-colour fallback with its note.
+            if sizes.contains(&0) {
+                return Err("sampled function has a zero /Size");
+            }
+            // A stream that ended early leaves grid points the renderer omits; emitting
+            // zeros for them would paint colours the PDF never shows, with no word. The
+            // snapshot keeps the delivered samples only, so a short count declines the
+            // same way.
+            let expected =
+                sizes.iter().try_fold(1usize, |acc, &s| acc.checked_mul(s as usize)).unwrap_or(usize::MAX).saturating_mul(range.len().max(1));
+            if samples.len() < expected {
+                return Err("sampled function data is truncated");
+            }
             let bytes = pack_samples(samples, *bits_per_sample);
             // A sampled function's data rides in one `/DataSource` string; beyond the
             // PostScript string limit there is no way to carry the samples.
@@ -1105,6 +1120,27 @@ mod tests {
         let out = String::from_utf8_lossy(&out);
         assert!(out.contains("/BitsPerSample 4"), "bit depth: {out}");
         assert!(out.contains("/DataSource <05af>"), "4-bit packing: {out}");
+    }
+
+    /// A zero in `/Size` is a rangecheck in PostScript (and means "no grid points" in PDF):
+    /// the dictionary is declined — the shading's flat fallback and its note cover it —
+    /// instead of ending the job at `shfill` and losing the page.
+    #[test]
+    fn zero_size_sampled_function_is_declined() {
+        let bytes = stream_obj("/FunctionType 0 /Domain [0 1] /Range [0 1 0 1 0 1] /Size [0] /BitsPerSample 8", &[0x00, 0x33]);
+        let err = ps_function(&function_of(&bytes)).expect_err("a zero /Size is not emittable");
+        assert_eq!(err, "sampled function has a zero /Size");
+    }
+
+    /// A stream that ends early leaves grid points the raster omits; the snapshot keeps only
+    /// the delivered samples, so the short count declines the function (flat fallback with a
+    /// note) instead of painting zeros the PDF never shows.
+    #[test]
+    fn truncated_sampled_function_is_declined() {
+        // /Size [2] with three outputs wants six samples; deliver two.
+        let bytes = stream_obj("/FunctionType 0 /Domain [0 1] /Range [0 1 0 1 0 1] /Size [2] /BitsPerSample 8", &[0x00, 0x33]);
+        let err = ps_function(&function_of(&bytes)).expect_err("a truncated sample stream is not emittable");
+        assert_eq!(err, "sampled function data is truncated");
     }
 
     /// A type 3 stitching function re-emits as a Level 3 function dictionary with its

@@ -167,17 +167,11 @@ impl Type0 {
         }
     }
 
-    /// Every sample value in stream order; entries missing from a truncated stream
-    /// read as 0. Sizes of 0 yield no samples at all.
+    /// Every sample value the stream really delivered, in stream order. A truncated tail
+    /// stays missing on purpose: the PostScript snapshot checks the count and declines the
+    /// function, instead of painting zeros for grid points the renderer omits.
     fn ordered_samples(&self) -> Vec<u32> {
-        let total = self
-            .sizes
-            .iter()
-            .try_fold(1usize, |acc, &s| acc.checked_mul(s as usize))
-            .unwrap_or(0);
-        let mut samples = self.samples.clone();
-        samples.resize(total.saturating_mul(self.range.len()), 0);
-        samples
+        self.samples.clone()
     }
 }
 

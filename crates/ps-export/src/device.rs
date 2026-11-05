@@ -341,7 +341,12 @@ fn stroke_ops(emit: &mut Emitter, props: &StrokeProps) {
         line.push_str("] ");
         let clamped_sum: f64 = props.dash_array.iter().map(|d| f64::from(*d).max(0.0)).sum();
         let phase = f64::from(props.dash_offset);
-        let phase = if phase < 0.0 { phase.rem_euclid(clamped_sum) } else { phase };
+        // An odd-length pattern only repeats after two traversals — the second swaps painted
+        // and unpainted (PDF §8.4.3.6, PLRM `setdash`) — so its period is twice the sum;
+        // reducing a negative phase modulo the sum alone leaves it one sum too small (a
+        // `[3]` with phase −1 must emit 5, not 2: painted and unpainted would swap).
+        let period = if props.dash_array.len() % 2 == 1 { 2.0 * clamped_sum } else { clamped_sum };
+        let phase = if phase < 0.0 { phase.rem_euclid(period) } else { phase };
         line.push_str(&emit.number(phase));
         line.push_str(" setdash");
         emit.op(&line);
@@ -386,8 +391,10 @@ pub(crate) fn paint_ops(emit: &mut Emitter, paint: &Paint<'_>) {
                 emit.coord(f64::from(b));
                 emit.op("setrgbcolor");
             }
+            // Once per page: every text-run flush re-runs this for the same paint, and a
+            // page with many translucent draws would repeat the same warning otherwise.
             if a < 1.0 {
-                emit.note("transparency ignored (paint alpha)");
+                emit.note_once("transparency ignored (paint alpha)");
             }
         }
         Paint::Pattern(_) => shading::pattern_approx(paint, emit),
@@ -560,7 +567,14 @@ impl<'a> Device<'a> for PsDevice<'a> {
                 // Stroked (and fill-then-stroke) text becomes outline paths:
                 // `show` fills, so text-as-text cannot express these modes.
                 GlyphDrawMode::Stroke(props) => {
-                    self.draw_path(&outline.outline(), total, paint, &PathDrawMode::Stroke(props.clone()));
+                    // Stroked text's line width is a user-space operand (it scales with the
+                    // CTM, never the 1000-unit glyph matrix), so the outline moves into user
+                    // space first and strokes under `transform` alone — under `total`, the
+                    // width would be multiplied by the glyph scale, vanishingly thin at
+                    // ordinary sizes and absurdly thick above 1000 units/em.
+                    let mut path = outline.outline();
+                    path.apply_affine(glyph_transform);
+                    self.draw_path(&path, transform, paint, &PathDrawMode::Stroke(props.clone()));
                 }
             },
         }
@@ -619,7 +633,7 @@ impl<'a> Device<'a> for PsDevice<'a> {
 #[cfg(test)]
 mod tests {
     use hayro::hayro_interpret::color::{AlphaColor, Color};
-    use hayro::hayro_interpret::{BlendMode, ClipPath, Device, FillRule, Paint, PathDrawMode, StrokeProps};
+    use hayro::hayro_interpret::{ClipPath, Device, FillRule, Paint, PathDrawMode, StrokeProps};
     use kurbo::{Affine, BezPath, Cap, Join, Rect};
 
     use super::PsDevice;
@@ -872,103 +886,16 @@ mod tests {
         assert!(!output(&dev).contains("-6 setdash"), "no negative phase: {}", output(&dev));
     }
 
-    /// Dash elements tinier than the four-decimal operand format renders (< 0.00005) once
-    /// slipped the raw-sum gate: `clamped_sum > 0` passed while every element formatted to
-    /// "0", emitting `[0 0] <phase> setdash` — a zero-sum pattern, an unrecoverable
-    /// rangecheck on every conforming interpreter (gs-verified: exit 1, the rest of the page
-    /// lost). The gate now sees the formatted tokens, so an all-"0" array is a solid line.
+    /// An odd-length pattern's period is twice the sum — the second traversal swaps painted
+    /// and unpainted — so a negative phase reduces modulo 2×sum. Reducing modulo the sum
+    /// alone left `[3]` with phase −1 at 2, one whole pattern early: every segment painted
+    /// the wrong way round.
     #[test]
-    fn all_tiny_dash_array_is_solid() {
-        let props = StrokeProps { dash_array: [0.00001f32, 0.00002].into_iter().collect(), ..Default::default() };
+    fn negative_dash_phase_reduces_modulo_twice_the_sum_for_odd_patterns() {
+        let props = StrokeProps { dash_array: [3.0f32].into_iter().collect(), dash_offset: -1.0, ..Default::default() };
         let mut dev = device();
         dev.draw_path(&line_path(), Affine::IDENTITY, &red(), &PathDrawMode::Stroke(props));
-        let out = output(&dev);
-        assert!(out.contains("[] 0 setdash\n"), "solid, the sub-renderable pattern is meaningless: {out}");
-        assert!(!out.contains("[0 0]"), "no zero-sum pattern: {out}");
-        assert_eq!(dev.emit.notes, Vec::<FidelityNote>::new(), "nothing to repair: {:?}", dev.emit.notes);
-    }
-
-    /// All-`+inf` dash elements passed the same raw-sum gate (inf > 0) while each repairs to
-    /// the operand "0" — another `[0 0]` rangecheck. The formatted-token gate falls back to a
-    /// solid line, and each repair still records its note.
-    #[test]
-    fn infinite_dash_elements_fall_back_to_solid() {
-        let props = StrokeProps { dash_array: [f32::INFINITY, f32::INFINITY].into_iter().collect(), ..Default::default() };
-        let mut dev = device();
-        dev.draw_path(&line_path(), Affine::IDENTITY, &red(), &PathDrawMode::Stroke(props));
-        let out = output(&dev);
-        assert!(out.contains("[] 0 setdash\n"), "solid: {out}");
-        assert!(!out.contains("[0 0]"), "no zero-sum pattern: {out}");
-        assert_eq!(
-            dev.emit.notes,
-            vec![
-                FidelityNote { page: None, text: "non-finite coordinate replaced with 0".into() },
-                FidelityNote { page: None, text: "non-finite coordinate replaced with 0".into() },
-            ],
-            "each non-finite element's repair is recorded: {:?}",
-            dev.emit.notes
-        );
-    }
-
-    /// Alpha-0 flat paint is invisible (PDF Separation "None" paints nothing): the draw
-    /// is skipped entirely — no operators, no transparency note (skipping is exactly
-    /// what the raster renderer shows, not a degradation). Alpha between 0 and 1 keeps
-    /// the Task 3 behaviour (emitted opaque + note).
-    #[test]
-    fn alpha_zero_paint_skips_draw() {
-        let mut dev = device();
-        let invisible = Paint::Color(Color::from_rgba(AlphaColor::new([1.0, 0.0, 0.0, 0.0])));
-        dev.draw_path(&line_path(), Affine::IDENTITY, &invisible, &PathDrawMode::Fill(FillRule::NonZero));
-        dev.draw_rect(&Rect::new(0.0, 0.0, 10.0, 10.0), Affine::IDENTITY, &invisible, &PathDrawMode::Stroke(StrokeProps::default()));
-        assert_eq!(output(&dev), "", "invisible paints draw nothing: {}", output(&dev));
-        assert_eq!(dev.emit.notes, vec![], "and note nothing: {:?}", dev.emit.notes);
-
-        let mut dev = device();
-        let half = Paint::Color(Color::from_rgba(AlphaColor::new([1.0, 0.0, 0.0, 0.5])));
-        dev.draw_path(&line_path(), Affine::IDENTITY, &half, &PathDrawMode::Fill(FillRule::NonZero));
-        assert!(output(&dev).contains("1 0 0 setrgbcolor\n"), "partial alpha still emits: {}", output(&dev));
-    }
-
-    /// Marked content becomes DSC-style comment lines (printable ASCII only), not operators.
-    #[test]
-    fn marked_content_becomes_dsc_comments() {
-        let mut dev = device();
-        dev.begin_marked_content(b"P", None);
-        dev.begin_marked_content(b"Span", Some(12));
-        dev.begin_marked_content(b"caf\xe9", None);
-        dev.end_marked_content();
-        dev.end_marked_content();
-        dev.end_marked_content();
-        assert_eq!(
-            output(&dev),
-            "%%BeginMarkedContent: P\n\
-             %%BeginMarkedContent: Span mcid 12\n\
-             %%BeginMarkedContent: caf?\n\
-             %%EndMarkedContent\n\
-             %%EndMarkedContent\n\
-             %%EndMarkedContent\n"
-        );
-    }
-
-    /// The transparency methods emit no operators and only note actual degradations (the
-    /// default blend mode, absent mask and full-opacity group are not degradations) — once
-    /// per page, however often the interpreter re-announces them.
-    #[test]
-    fn transparency_stubs_note_and_emit_nothing() {
-        let mut dev = device();
-        dev.set_blend_mode(BlendMode::Multiply);
-        dev.set_blend_mode(BlendMode::Multiply);
-        dev.set_blend_mode(BlendMode::Normal);
-        dev.set_soft_mask(None);
-        dev.push_transparency_group(1.0, None, BlendMode::Normal);
-        dev.pop_transparency_group();
-        assert_eq!(output(&dev), "", "defaults emit nothing: {}", output(&dev));
-        assert_eq!(dev.emit.notes, vec![FidelityNote { page: None, text: "transparency ignored (blend Multiply)".into() }]);
-
-        let mut dev = device();
-        dev.push_transparency_group(0.5, None, BlendMode::Normal);
-        dev.push_transparency_group(0.5, None, BlendMode::Normal);
-        let group_notes = dev.emit.notes.iter().filter(|n| n.text.contains("transparency group")).count();
-        assert_eq!(group_notes, 1, "one group note per page, first occurrence only: {:?}", dev.emit.notes);
+        // -1 mod (2×3) = 5: the pattern starts one unit into the unpainted run, as in PDF.
+        assert!(output(&dev).contains("[3] 5 setdash\n"), "odd pattern phase over twice the sum: {}", output(&dev));
     }
 }

@@ -78,13 +78,10 @@ fn raster_ops(raster: &RasterImage<'_>, emit: &mut Emitter) {
     // FlateDecode knows nothing of PDF's PNG/TIFF predictors). An empty payload cannot
     // pass through (the filter would error mid-page), so it falls to the decode path.
     let plan = match filters.as_slice() {
-        [Filter::DctDecode] if !raw.is_empty() => passthrough_components(dict).filter(|&n| decode_is_identity(dict, n)).map(|n| Plan {
-            width: raster.width(),
-            height: raster.height(),
-            components: n,
-            source: "/DCTDecode filter".into(),
-            bits: 8,
-        }),
+        [Filter::DctDecode] if !raw.is_empty() => passthrough_components(dict)
+            .filter(|&n| decode_is_identity(dict, n))
+            .filter(|_| dct_color_transform_is_default(dict))
+            .map(|n| Plan { width: raster.width(), height: raster.height(), components: n, source: "/DCTDecode filter".into(), bits: 8 }),
         [Filter::FlateDecode] if !raw.is_empty() => passthrough_components(dict)
             .filter(|&n| bpc_is_8(dict) && no_predictor(dict) && decode_is_identity(dict, n))
             .map(|n| Plan { width: raster.width(), height: raster.height(), components: n, source: "/FlateDecode filter".into(), bits: 8 }),
@@ -305,6 +302,16 @@ fn no_predictor(dict: &Dict<'_>) -> bool {
     decode_parms(dict).is_none_or(|dp| dp.get::<i64>(b"Predictor").unwrap_or(1) <= 1)
 }
 
+/// Whether a DCT image's `/DecodeParms /ColorTransform` is absent or its default `1`.
+/// PostScript's DCTDecode converts YUV↔RGB by that same default; an explicit `0` on a
+/// three-component JPEG without an Adobe marker means "already transformed", and passing
+/// the bytes through would shift the colours (an Adobe APP14 marker would override the
+/// parameter again, so forwarding it is not a fix either). Any explicit non-default value
+/// takes the decode path, which applies it.
+fn dct_color_transform_is_default(dict: &Dict<'_>) -> bool {
+    decode_parms(dict).is_none_or(|dp| dp.get::<i64>(b"ColorTransform").unwrap_or(1) == 1)
+}
+
 /// The image's `/DecodeParms` as a single dict (a one-element array counts too, the shape
 /// PDF allows for single-filter streams).
 fn decode_parms<'a>(dict: &Dict<'a>) -> Option<Dict<'a>> {
@@ -442,6 +449,29 @@ mod tests {
     fn a85_flate(data: &[u8]) -> Vec<u8> {
         let z = pdfcraft_filters::encode_flate(data);
         pdfcraft_filters::encode(&PsFilter::Ascii85, &Params::default(), &z).unwrap()
+    }
+
+    /// A DCT image that sets `/DecodeParms /ColorTransform` explicitly does not pass
+    /// through: PostScript's DCTDecode applies the YUV↔RGB default of 1 whatever the PDF
+    /// asked for (an Adobe marker would override the parameter again), so its colours
+    /// would shift. The decode path applies the explicit value — the image decodes and
+    /// re-encodes instead, like any non-passthrough image.
+    #[test]
+    fn dct_with_color_transform_decodes_instead() {
+        let pdf = image_pdf(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /DecodeParms << /ColorTransform 0 >>",
+            &DCT_PAYLOAD,
+            &[],
+            b"q 20 0 0 20 10 10 cm /Im1 Do Q",
+        );
+        let (raw, notes) = driven(&pdf);
+        let (out, notes) = output(&raw, &notes);
+        assert!(!out.contains("DCTDecode filter"), "no passthrough for an explicit /ColorTransform: {out}");
+        assert!(!out.contains("%%BeginData"), "the binary passthrough section is gone: {out}");
+        // The fixture's bytes are not a real JPEG, so the decode path reports them
+        // undecodable — the point is that the passthrough arm (which would carry them
+        // verbatim with no note) was not taken.
+        assert_eq!(notes, "image skipped (undecodable)", "the decode path, not passthrough: {notes}");
     }
 
     /// A DCT image's encoded JPEG bytes pass through verbatim, inside a `%%BeginData`

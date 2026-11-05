@@ -571,6 +571,31 @@ mod tests {
         assert!(s.ends_with("%%EOF\n"), "the program is still complete: {s}");
     }
 
+    /// Stroked text's line width is a user-space operand (it scales with the CTM, never the
+    /// glyph matrix). Stroking under the glyph-space product multiplied the width by the font
+    /// size over 1000 — the emitted width doubled at 2000 units and thinned to slivers at
+    /// ordinary sizes.
+    #[test]
+    fn stroked_text_width_stays_in_user_space() {
+        let pdf = assemble(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [5 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+            stream_obj("", b"3 w BT /F1 2000 Tf 1 Tr 10 100 Td (A) Tj ET"),
+            b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
+        ]);
+        let out = export(std::sync::Arc::new(pdf), None, &[0], PsFormat::Ps).expect("stroked text exports");
+        let s = text(&out);
+        // The glyph path is emitted in user space (outline × glyph matrix, coords ~38..954
+        // for the 1000-unit 'A' at ×2) under the identity CTM, and `3 setlinewidth` rides
+        // inside that CTM: the width is user-space, exactly what the raster strokes. The old
+        // code drew the glyph-space path under the total map `[2 0 0 2 10 100] concat`, whose
+        // CTM multiplied the width by the glyph scale — 6 device units instead of 3.
+        assert!(s.contains("[1 0 0 1 0 0] concat\n3 setlinewidth\n"), "the width in user space, under the CTM alone: {s}");
+        assert!(s.contains("\n38 100 moveto\n"), "the outline in user-space coordinates: {s}");
+        assert!(!s.contains("[2 0 0 2 10 100] concat"), "the old total-map concat: {s}");
+    }
+
     /// A self-referencing form XObject exports to completion (the interpreter's nesting
     /// depth bound holds) with a balanced graphics-state stack.
     #[test]
