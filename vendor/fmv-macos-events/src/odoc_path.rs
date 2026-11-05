@@ -66,7 +66,14 @@ pub(crate) fn file_url_path(data: &[u8]) -> Option<PathBuf> {
     let after_prefix = bytes.strip_prefix(b"file://")?;
     // Skip the authority (empty for local files); the path starts at its first '/'.
     let slash = after_prefix.iter().position(|&byte| byte == b'/')?;
-    let decoded = percent_decode(&after_prefix[slash..]);
+    let path_bytes = &after_prefix[slash..];
+    // Cut at an unescaped '?' or '#': as NSURL.path does, deliver the URL's path
+    // alone, without its query or fragment. The cut happens on the raw bytes,
+    // before percent-decoding, so an escaped %3F or %23 still decodes to a literal
+    // character — only the sender's own, unescaped delimiters end the path.
+    let delimiter =
+        path_bytes.iter().position(|&byte| byte == b'?' || byte == b'#').unwrap_or(path_bytes.len());
+    let decoded = percent_decode(&path_bytes[..delimiter]);
     let path = String::from_utf8_lossy(&decoded).into_owned();
     if path.starts_with('/') { Some(PathBuf::from(path)) } else { None }
 }
@@ -309,6 +316,15 @@ mod tests {
         assert_eq!(decode(b"file:///tmp/\xff.pdf"), Some("/tmp/\u{fffd}.pdf".to_owned()));
         // The authority is skipped; the path starts at its first '/'.
         assert_eq!(decode(b"file://localhost/tmp/x"), Some("/tmp/x".to_owned()));
+        // An unescaped '?' or '#' ends the path, as NSURL.path excludes the query
+        // and the fragment; whichever comes first wins.
+        assert_eq!(decode(b"file:///tmp/scan.pdf?print=1"), Some("/tmp/scan.pdf".to_owned()));
+        assert_eq!(decode(b"file:///tmp/scan.pdf#page=3"), Some("/tmp/scan.pdf".to_owned()));
+        assert_eq!(decode(b"file:///tmp/x?a#b"), Some("/tmp/x".to_owned()));
+        assert_eq!(decode(b"file:///tmp/x#a?b"), Some("/tmp/x".to_owned()));
+        // An escaped %3F or %23 is a literal character of the name, not a delimiter.
+        assert_eq!(decode(b"file:///tmp/what%3F.pdf"), Some("/tmp/what?.pdf".to_owned()));
+        assert_eq!(decode(b"file:///tmp/c%23.pdf"), Some("/tmp/c#.pdf".to_owned()));
         // Not a file URL, no path, nothing at all.
         assert_eq!(decode(b"http://tmp/x"), None);
         assert_eq!(decode(b"file://host"), None);
