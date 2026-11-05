@@ -32,7 +32,7 @@ let layer = visible_text_layer(&placed, &plan);          // visible text: the ed
   (`tesseract::language_code`, 12 codes) before anything reaches a process; the page image
   goes to a private temp file (a fresh 0700 directory holding a 0600 file on Unix) that is
   deleted afterwards; the run has a 120 s timeout, a 64 MiB output cap and a 50 000-word
-  reading cap; every failure comes back through `OcrError` with its cause named. A configured
+  reading cap (an incomplete reading is rejected rather than applied); every failure comes back through `OcrError` with its cause named. A configured
   location that is invalid fails closed (it is never replaced by the PATH search). Availability
   is probed with `--list-langs` (its list is read from stdout, or from stderr where older
   versions print it); a failed probe is remembered for 30 s, so an install that appears later

@@ -186,16 +186,21 @@ fn tsv_row(row: &str) -> Option<TsvRow<'_>> {
 /// into 0–100. Known limit: past [`MAX_WORDS`] the rest of the reading is dropped (truncated,
 /// not an error — the words before the cap are still placed).
 pub fn parse_tsv(tsv: &str) -> Vec<Line> {
+    parse_tsv_bounded(tsv).0
+}
+
+/// The parser utility keeps its bounded-prefix API; recognition also checks completeness.
+fn parse_tsv_bounded(tsv: &str) -> (Vec<Line>, bool) {
     let mut lines: Vec<Line> = Vec::new();
     let mut key: Option<(u32, u32, u32)> = None;
     let mut words = 0usize;
     for row in tsv.lines() {
-        if words >= MAX_WORDS {
-            break; // the reading is longer than the cap: the rest is dropped
-        }
         let Some(r) = tsv_row(row) else { continue };
         if r.level != "5" || r.conf < 0.0 || r.text.trim().is_empty() {
-            continue; // headers (conf −1), non-word levels, and blank output are not words
+            continue;
+        }
+        if words >= MAX_WORDS {
+            return (lines, true);
         }
         let this = (r.block, r.par, r.line);
         if key != Some(this) {
@@ -208,7 +213,7 @@ pub fn parse_tsv(tsv: &str) -> Vec<Line> {
             words += 1;
         }
     }
-    lines
+    (lines, false)
 }
 
 /// Parse `tesseract --list-langs` output: the header line ("List of available languages…"),
@@ -468,7 +473,11 @@ impl Recognizer for TesseractCli {
         }
         // Fixed argv, no shell: tesseract <png> stdout -l <lang> tsv.
         let tsv = self.run(&[&png_path.to_string_lossy(), "stdout", "-l", lang, "tsv"], self.timeout, self.max_output)?;
-        Ok(parse_tsv(&tsv))
+        let (lines, truncated) = parse_tsv_bounded(&tsv);
+        if truncated {
+            return Err(OcrError::Recognize(format!("the {MAX_WORDS}-word limit was exceeded; the incomplete reading was rejected")));
+        }
+        Ok(lines)
     }
 }
 
@@ -770,6 +779,32 @@ mod tests {
         let langs = t.languages();
         assert!(!langs.is_empty());
         assert!(langs.iter().all(|(c, n)| !c.is_empty() && !n.is_empty()), "{langs:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recognize_refuses_a_truncated_reading() {
+        let dir = TempDir::create().unwrap();
+        let script = dir.path.join("synthetic-recognizer");
+        let mut tsv = String::new();
+        for i in 0..=MAX_WORDS {
+            use std::fmt::Write as _;
+            writeln!(tsv, "5\t1\t1\t1\t1\t{i}\t0\t0\t1\t1\t95\tword{i}").unwrap();
+        }
+        let exact = tsv.lines().take(MAX_WORDS).collect::<Vec<_>>().join("\n");
+        std::fs::write(dir.path.join("reading.tsv"), tsv).unwrap();
+        std::fs::write(&script, "#!/bin/sh\ncat \"$(dirname \"$0\")/reading.tsv\"\n").unwrap();
+        make_executable(&script);
+        let recognizer = TesseractCli::new(script);
+        let result = recognizer.recognize(&blot(8, 8, 0, 0, 4, 4), &RecognizeOptions::default());
+        let status = result.as_ref().map(|lines| lines.iter().map(|line| line.words.len()).sum::<usize>()).map_err(ToString::to_string);
+        assert!(
+            matches!(result, Err(OcrError::Recognize(ref reason)) if reason.contains("word limit")),
+            "a capped reading must be reported, never accepted as complete: {status:?}"
+        );
+        std::fs::write(dir.path.join("reading.tsv"), exact).unwrap();
+        let complete = recognizer.recognize(&blot(8, 8, 0, 0, 4, 4), &RecognizeOptions::default()).unwrap();
+        assert_eq!(complete.iter().map(|line| line.words.len()).sum::<usize>(), MAX_WORDS);
     }
 
     /// A hung binary is killed at the timeout and reported (Unix: a fake `tesseract` script;
