@@ -350,6 +350,19 @@ impl RenderPool {
         self.wake_workers();
     }
 
+    /// Replace demand and defer background text extraction by the specified request slots.
+    /// Visible rasters keep their original priority; Find uses this to make pages near the
+    /// reader's current position the first pages interpreted.
+    pub fn set_queue_with_text_priority(&self, requests: Vec<RenderRequest>, background_offset: usize) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let obsolete = self.shared.queue.replace_with_background_priority(requests, background_offset);
+        #[cfg(target_arch = "wasm32")]
+        let _ = self.shared.queue.replace_with_background_priority(requests, background_offset);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.shared.cancel_in_flight(&obsolete);
+        self.wake_workers();
+    }
+
     fn wake_workers(&self) {
         for w in lock(&self.wake).iter() {
             // One pending wakeup is sufficient; UI polling must not grow wake channels.

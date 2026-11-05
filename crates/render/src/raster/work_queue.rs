@@ -131,7 +131,18 @@ impl Default for WorkQueue {
 }
 
 impl WorkQueue {
+    /// Replace visible and background demand while retaining a demand-order offset for
+    /// background requests. Used by Find so each worker advances a nearby-page wave instead
+    /// of extracting the entire document in page order before a match can be found.
+    pub(super) fn replace_with_background_priority(&self, requests: Vec<RenderRequest>, background_offset: usize) -> Vec<RenderRequest> {
+        self.replace_with_priority(requests, Some(background_offset))
+    }
+
     pub(super) fn replace(&self, requests: Vec<RenderRequest>) -> Vec<RenderRequest> {
+        self.replace_with_priority(requests, None)
+    }
+
+    fn replace_with_priority(&self, requests: Vec<RenderRequest>, background_offset: Option<usize>) -> Vec<RenderRequest> {
         let mut state = lock(&self.state);
         if state.closed {
             return Vec::new();
@@ -142,9 +153,19 @@ impl WorkQueue {
         state.bytes = state.results.iter().fold(0usize, |n, r| n.saturating_add(r.bytes));
         let completed: HashSet<_> = state.results.iter().map(|r| Key::from(r.page.request)).collect();
         let obsolete = state.active.iter().filter(|key| !desired.contains(key)).copied().map(Key::request).collect();
-        state.desired = requests.iter().enumerate().map(|(priority, req)| (Key::from(*req), priority)).collect();
-        state.pending =
-            requests.into_iter().rev().filter(|r| !state.active.contains(&Key::from(*r)) && !completed.contains(&Key::from(*r))).collect();
+        state.desired = requests
+            .iter()
+            .enumerate()
+            .map(|(priority, req)| {
+                let priority = background_offset
+                    .map_or(priority, |offset| if req.kind == RequestKind::Text { offset.saturating_add(priority) } else { priority });
+                (Key::from(*req), priority)
+            })
+            .collect();
+        let mut pending: Vec<_> =
+            requests.into_iter().filter(|r| !state.active.contains(&Key::from(*r)) && !completed.contains(&Key::from(*r))).collect();
+        pending.sort_by_key(|request| std::cmp::Reverse(state.desired.get(&Key::from(*request)).copied().unwrap_or(usize::MAX)));
+        state.pending = pending;
         drop(state);
         self.changed.notify_all();
         obsolete
@@ -420,6 +441,20 @@ mod tests {
         assert!(recv.try_recv().is_err());
         assert_eq!(lock(&q.state).bytes, 0);
         assert!(q.pop().is_none(), "priority changes must not duplicate completed work");
+    }
+
+    #[test]
+    fn find_text_priority_keeps_visible_work_ahead_and_orders_nearby_pages_first() {
+        let q = WorkQueue::default();
+        let visible = req(7);
+        let text_far = RenderRequest { page: 90, kind: RequestKind::Text, ..req(0) };
+        let text_near = RenderRequest { page: 8, kind: RequestKind::Text, ..req(0) };
+        let text_from = RenderRequest { page: 7, kind: RequestKind::Text, ..req(0) };
+        q.replace_with_background_priority(vec![visible, text_from, text_near, text_far], 100);
+        assert_eq!(q.pop(), Some(visible));
+        assert_eq!(q.pop(), Some(text_from));
+        assert_eq!(q.pop(), Some(text_near));
+        assert_eq!(q.pop(), Some(text_far));
     }
 
     #[test]

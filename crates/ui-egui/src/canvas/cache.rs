@@ -522,8 +522,25 @@ impl DocView {
             return;
         }
         let queue = self.prepare_render_queue(info, ctx.pixels_per_point());
-        if queue != self.last_queue {
-            pool.set_queue(queue.clone());
+        let text_priority = self
+            .find
+            .as_ref()
+            .filter(|find| !find.case_query.trim().is_empty())
+            .map(|find| (find.auto_from.unwrap_or(self.current), info.pages.len()));
+        if queue != self.last_queue || text_priority.is_some() {
+            if let Some((from, page_count)) = text_priority {
+                let offset = page_count.saturating_add(self.last_queue.len());
+                let from = from.min(page_count.saturating_sub(1));
+                let mut ranked: Vec<_> = queue.iter().copied().filter(|request| request.kind != RequestKind::Text).collect();
+                let mut text: Vec<_> = queue.iter().copied().filter(|request| request.kind == RequestKind::Text).collect();
+                text.sort_by_key(|request| {
+                    if request.page >= from { request.page - from } else { page_count.saturating_sub(from).saturating_add(request.page) }
+                });
+                ranked.extend(text);
+                pool.set_queue_with_text_priority(ranked, offset);
+            } else {
+                pool.set_queue(queue.clone());
+            }
             self.last_queue = queue;
         }
         if !self.hold_rasters {
