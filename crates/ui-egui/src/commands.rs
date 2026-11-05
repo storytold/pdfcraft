@@ -523,11 +523,12 @@ impl PdfCraftApp {
             "export.text" => self.dialog = Some(Dialog::Export(crate::export_ui::ExportKind::Text)),
             "ocr.recognize" => {
                 self.ocr_draft.recognize = true;
-                // Plain recognition never crops; only Enhance scanned file turns it on.
+                // Plain recognition never crops; only Correct scanned pages turns it on.
                 self.ocr_draft.auto_crop = false;
                 self.dialog = Some(Dialog::RecognizeText);
             }
-            "ocr.enhance" => {
+            "ocr.enhance" => self.dialog = Some(Dialog::EnhanceScan),
+            "ocr.correct_scan" => {
                 self.ocr_draft.recognize = false;
                 self.ocr_draft.auto_crop = true;
                 self.dialog = Some(Dialog::RecognizeText);

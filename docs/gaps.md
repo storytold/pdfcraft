@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
@@ -176,9 +177,13 @@ update the numbers.
   Swedish, Finnish, Portuguese and horizontal Japanese, Unicode search/copy,
   automatic quarter-turn correction and deskew up to 12 degrees, including correction without OCR.
   Clear paper edges can now define an automatic crop with safety padding; ambiguous white borders
-  stay unchanged, and original image pixels remain in the PDF.
+  stay unchanged, and original image pixels remain in the PDF. Enhance scanned file removes the
+  background and edge shadows on grey and RGB scans and despeckles those and 1-bit ones; it reports
+  CMYK, indexed, JPEG 2000, JBIG2 and CCITT scans and scans drawn inside Form XObjects and leaves
+  them as they are.
 - **Missing:** additional language choices, vertical Japanese, editable-text output, deskew on pages
-  with annotations, despeckle, background/camera cleanup, MRC compression, browser OCR and scanner input.
+  with annotations, cleanup of the scan types Enhance scanned file skips, MRC compression, pluggable
+  engines, browser OCR and scanner input.
 - **Evidence:** `crates/engine/tests/it/scan_ocr.rs` and the OCR automation/UI tests; model tests require
   `cargo xtask models`, Japanese fixture generation requires the release `CRAFT_FONTS_DIR` input.
 - **Impact:** scanned documents remain a core Pro workflow with wider language and layout demands.
