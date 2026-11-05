@@ -550,3 +550,131 @@ fn tool_file_reads_refuse_inputs_exceeding_512_mib() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A rejected public import preserves saved bytes, field values, clean state and undo/redo history.
+#[test]
+fn doc_import_data_rejects_invalid_utf8_without_changing_form_values() {
+    use std::fs;
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("malformed.csv");
+    let saved_path = directory.path().join("original.pdf");
+    fs::write(&path, b"Name\nCaf\xC3\n").unwrap();
+    let mut automation = Automation::new();
+    automation.session = pdfcraft_engine::Session::new().with_clock(|| 1_700_000_000);
+    let doc = automation.session.open("synthetic.pdf", None, Arc::new(numbered_pages(1)), None).unwrap();
+    json(&mut automation, "form_add_field", json!({ "doc": doc.0, "page": 1, "type": "text", "name": "Name", "rect": [20.0, 20.0, 180.0, 40.0] }));
+    json(&mut automation, "form_fill", json!({ "doc": doc.0, "values": { "Name": "keep this value" } }));
+    json(&mut automation, "form_fill", json!({ "doc": doc.0, "values": { "Name": "redo this value" } }));
+    json(&mut automation, "edit_undo", json!({ "doc": doc.0 }));
+    json(&mut automation, "doc_save", json!({ "doc": doc.0, "path": saved_path }));
+    let before = json(&mut automation, "form_fields", json!({ "doc": doc.0 }));
+    let state = |a: &Automation| {
+        let d = a.session.get(doc).unwrap();
+        (d.dirty, d.edit_generation(), d.can_undo().map(str::to_owned), d.can_redo().map(str::to_owned))
+    };
+    let before_state = state(&automation);
+    assert!(!before_state.0, "the rejected import must start from a clean saved document");
+    assert!(before_state.3.is_some(), "the fixture must have a redo branch");
+    let before_bytes = automation.session.save_bytes(doc).unwrap();
+    let disk_bytes = fs::read(&saved_path).unwrap();
+
+    let error = automation.call("doc_import_data", &json!({ "doc": doc.0, "path": path })).expect_err("invalid UTF-8 must be rejected");
+    assert!(error.to_string().contains("UTF-8"), "the error must identify the encoding problem: {error}");
+    assert_eq!(json(&mut automation, "form_fields", json!({ "doc": doc.0 })), before);
+    assert_eq!(state(&automation), before_state, "a failed import must preserve dirty state, generation and history");
+    assert_eq!(automation.session.save_bytes(doc).unwrap(), before_bytes);
+    assert_eq!(fs::read(&saved_path).unwrap(), disk_bytes);
+    json(&mut automation, "edit_redo", json!({ "doc": doc.0 }));
+    let redone = json(&mut automation, "form_fields", json!({ "doc": doc.0 }));
+    assert_eq!(redone["fields"][0]["value"], "redo this value", "the original redo operation must survive");
+}
+
+/// A later malformed merge input preserves existing CSV output and never creates partial output.
+#[test]
+fn form_merge_data_keeps_existing_output_when_a_later_input_has_invalid_utf8() {
+    use std::fs;
+
+    let directory = tempfile::tempdir().unwrap();
+    let valid_path = directory.path().join("valid.xfdf");
+    let invalid_path = directory.path().join("invalid.xfdf");
+    let output_path = directory.path().join("merged.csv");
+    fs::write(
+        &valid_path,
+        b"<?xml version=\"1.0\"?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><fields><field name=\"Name\"><value>Ada</value></field></fields></xfdf>",
+    )
+    .unwrap();
+    fs::write(
+        &invalid_path,
+        b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><fields><field name=\"Name\"><value>caf\xC3</value></field></fields></xfdf>",
+    )
+    .unwrap();
+    fs::write(&output_path, b"pre-existing destination\n").unwrap();
+
+    let mut automation = Automation::new().with_root(directory.path()).unwrap();
+    let control = directory.path().join("control.csv");
+    let merged = json(&mut automation, "form_merge_data", json!({ "paths": [valid_path], "path": control }));
+    assert_eq!(merged["rows"], 1);
+    assert_eq!(fs::read(&control).unwrap(), b"Name\nAda\n");
+    let result = automation.call(
+        "form_merge_data",
+        &json!({
+            "paths": [valid_path.to_string_lossy(), invalid_path.to_string_lossy()],
+            "path": output_path.to_string_lossy(),
+        }),
+    );
+    let error = result.expect_err("the later malformed XFDF must fail the entire merge");
+    assert!(error.to_string().contains("UTF-8"), "the error must identify the encoding problem: {error}");
+    assert!(error.to_string().contains("invalid.xfdf"), "the error must identify the offending file: {error}");
+    assert_eq!(fs::read(&output_path).unwrap(), b"pre-existing destination\n", "a failed merge must not replace an existing CSV");
+    let absent_output = directory.path().join("absent.csv");
+    let error = automation
+        .call("form_merge_data", &json!({ "paths": [valid_path, invalid_path], "path": absent_output }))
+        .expect_err("malformed input must not create partial CSV");
+    assert!(error.to_string().contains("UTF-8"));
+    assert!(!absent_output.exists());
+}
+
+/// Marker-like text in XFDF comments must not break merge classification or replace CSV output on a later error.
+#[test]
+fn form_merge_data_pdf_marker_classifies_xfdf_before_writing() {
+    use std::fs;
+
+    let directory = tempfile::tempdir().unwrap();
+    let valid_path = directory.path().join("marker.xfdf");
+    let invalid_path = directory.path().join("invalid-marker.xfdf");
+    let output_path = directory.path().join("merged.csv");
+    fs::write(
+        &valid_path,
+        b"<?xml version=\"1.0\"?><!-- exporter note: %PDF- is text here --><xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><fields><field name=\"Name\"><value>Ada</value></field></fields></xfdf>",
+    )
+    .unwrap();
+    fs::write(
+        &invalid_path,
+        b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><!-- %PDF- comment --><xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><fields><field name=\"Name\"><value>caf\xC3</value></field></fields></xfdf>",
+    )
+    .unwrap();
+
+    let mut automation = Automation::new().with_root(directory.path()).unwrap();
+    let valid_output = directory.path().join("valid.csv");
+    let merged = json(&mut automation, "form_merge_data", json!({ "paths": [valid_path.to_string_lossy()], "path": valid_output.to_string_lossy() }));
+    assert_eq!(merged["rows"], 1);
+    assert_eq!(fs::read(&valid_output).unwrap(), b"Name\nAda\n");
+
+    fs::write(&output_path, b"pre-existing destination\n").unwrap();
+    let error = automation
+        .call(
+            "form_merge_data",
+            &json!({ "paths": [valid_path.to_string_lossy(), invalid_path.to_string_lossy()], "path": output_path.to_string_lossy() }),
+        )
+        .expect_err("the marked malformed XFDF must be rejected");
+    assert!(error.to_string().contains("UTF-8"), "the merge error must identify the encoding problem: {error}");
+    assert_eq!(fs::read(&output_path).unwrap(), b"pre-existing destination\n");
+
+    let absent_output = directory.path().join("absent.csv");
+    let error = automation
+        .call("form_merge_data", &json!({ "paths": [valid_path, invalid_path], "path": absent_output.to_string_lossy() }))
+        .expect_err("a rejected marked XFDF must not create a partial CSV");
+    assert!(error.to_string().contains("UTF-8"));
+    assert!(!absent_output.exists());
+}
