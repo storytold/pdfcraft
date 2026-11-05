@@ -574,8 +574,8 @@ fn has_af(doc: &Document, holder: &Object) -> bool {
     let relationship = spec.get(b"AFRelationship").map(|o| doc.resolve(o));
     let file = spec.get(b"EF").map(|o| doc.resolve(o)).and_then(|ef| ef.as_dict().and_then(|d| d.get(b"F")).map(|o| doc.resolve(o)));
     matches!(relationship.as_deref().and_then(Object::as_name), Some(b"Data"))
-        && matches!(file.as_deref(), Some(Object::Stream(s)) if s.dict.get(b"Subtype").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(<[u8]>::to_vec)).as_deref() == Some(b"text/xml".as_slice())
-            && s.decoded().ok().map(|d| d.to_vec()).as_deref() == Some(&b"<a/>"[..]))
+        && matches!(file.as_deref(), Some(Object::Stream(s)) if s.decoded().is_ok_and(|data| data == b"<a/>")
+            && s.dict.get(b"Subtype").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(<[u8]>::to_vec)).as_deref() == Some(b"text/xml".as_slice()))
 }
 
 fn af_survives(bytes: Vec<u8>) -> bool {
