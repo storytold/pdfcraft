@@ -495,7 +495,7 @@ impl<W: Write> Sink<W> {
 
     /// Writes every staged byte to `inner` and empties the buffer.
     fn drain(&mut self) -> Result<(), CosError> {
-        self.inner.write_all(&self.buf).map_err(|e| CosError::Io(e.to_string()))?;
+        self.inner.write_all(&self.buf).map_err(|e| sink_error(&e))?;
         self.written += self.buf.len() as u64;
         self.buf.clear();
         // One large object (an image, a full object stream) must not leave a buffer of its
@@ -509,9 +509,15 @@ impl<W: Write> Sink<W> {
     /// Writes what is left, flushes `inner` and returns the file's length.
     fn finish(mut self) -> Result<u64, CosError> {
         self.drain()?;
-        self.inner.flush().map_err(|e| CosError::Io(e.to_string()))?;
+        self.inner.flush().map_err(|e| sink_error(&e))?;
         Ok(self.written)
     }
+}
+
+/// A sink failure as [`CosError::Io`], keeping its kind (`CosError` is `Clone` and `PartialEq`,
+/// which `std::io::Error` is not, so the error itself cannot be stored).
+fn sink_error(e: &std::io::Error) -> CosError {
+    CosError::Io { kind: e.kind(), message: e.to_string() }
 }
 
 /// Assemble the full rewrite's trailer and apply its identifier policy.
@@ -1103,7 +1109,7 @@ mod tests {
     impl Write for Failing {
         fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
             if self.taken + data.len() > self.limit {
-                return Err(std::io::Error::other("disk full"));
+                return Err(std::io::Error::new(std::io::ErrorKind::StorageFull, "disk full"));
             }
             self.taken += data.len();
             Ok(data.len())
@@ -1160,7 +1166,10 @@ mod tests {
     fn a_failing_sink_fails_the_save() {
         let doc = sized_document(4, SINK_CHUNK * 2, 10);
         let result = write_full_to(&doc, &SaveOptions::default(), Failing { taken: 0, limit: SINK_CHUNK * 3 });
-        assert!(matches!(result, Err(CosError::Io(ref text)) if text.contains("disk full")), "{result:?}");
+        assert!(
+            matches!(result, Err(CosError::Io { kind: std::io::ErrorKind::StorageFull, ref message }) if message.contains("disk full")),
+            "{result:?}"
+        );
     }
 
     #[test]
