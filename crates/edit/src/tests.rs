@@ -5497,6 +5497,37 @@ fn fill_sign_flatten_bakes_marks_keeps_other_comments_and_does_not_reuse_pcfl0()
     assert_eq!(summaries(&doc).iter().filter(|s| s.intent.as_deref() == Some("FreeTextTypeWriter")).count(), 1);
 }
 
+/// TeX draws "different" as `di`, the `ff` ligature and `erent`, often with the ligature in a
+/// subset of its own whose `/Differences` names it `ff` (no `/ToUnicode`). The name was unknown,
+/// so the paragraph read "dierent", and any edit of it wrote "dierent" back: the ligature was
+/// lost from the page. `ffi` and `ffl` are named the same way.
+#[test]
+fn an_ff_ligature_named_in_the_differences_reads_and_survives_an_edit() {
+    for (name, ligature) in [("ff", "\u{fb00}"), ("ffi", "\u{fb03}"), ("ffl", "\u{fb04}")] {
+        let content = "BT /F1 12 Tf 40 400 Td (The standard permits di) Tj /F2 12 Tf (!) Tj /F1 12 Tf (erent behavior.) Tj ET";
+        let ligature_font = format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+CMR10 /FirstChar 33 /LastChar 33 /Widths [583] /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [33 /{name}] >> >>"
+        );
+        let page = stream("", content);
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
+            &page,
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >>",
+            &ligature_font,
+        ]);
+        let read = format!("The standard permits di{ligature}erent behavior.");
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), [read.as_str()], "/{name}");
+        text::replace_block(&mut doc, 0, 0, &read.replace("behavior", "behaviour")).unwrap();
+        let after = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(after.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), [read.replace("behavior", "behaviour").as_str()], "/{name} kept");
+        let written = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        assert!(written.contains("/F2"), "the ligature is drawn from its own font: {written}");
+    }
+}
+
 /// A one-page document from its objects (object 1 is the catalog).
 fn build(objs: &[&str]) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();
