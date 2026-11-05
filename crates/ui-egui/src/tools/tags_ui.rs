@@ -411,7 +411,7 @@ mod tests {
 
         state.draft.classes = "An unfinished edit".to_owned();
         assert!(!state.class_draft_matches_tag(&tag(object, &["New"])));
-        state.sync_classes_from_tag(&tag(object, &["Old"]));
+        state.sync_classes_from_tag(&tag(object, &["New"]));
         assert_eq!(state.draft.classes, "An unfinished edit");
     }
 }
