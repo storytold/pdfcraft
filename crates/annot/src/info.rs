@@ -217,6 +217,8 @@ pub struct Props {
     pub fill: Option<Rgb>,
     /// Text boxes, typewriter text and callouts: the `/DA` font size in points.
     pub font_size: Option<f64>,
+    /// Text boxes, typewriter text and callouts: the border's own colour (`None`: the text's).
+    pub border_color: Option<Rgb>,
     /// How opaque the fill is drawn, for a comment with a fill control (`opacity` is then its
     /// line's or border's).
     pub fill_opacity: Option<f64>,
@@ -253,6 +255,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         fillable: fillable(&subtype),
         fill: fill_of(d),
         font_size: (subtype == "FreeText").then(|| appearance::parse_da(d).1),
+        border_color: (subtype == "FreeText").then(|| appearance::da_border(d)).flatten(),
         fill_opacity: fillable(&subtype).then(|| appearance::part_opacity(d).fill),
         text_opacity: (subtype == "FreeText").then(|| appearance::part_opacity(d).text),
         subtype,

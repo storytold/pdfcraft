@@ -2382,6 +2382,36 @@ fn a_text_only_text_box_made_default_gives_the_tool_its_texts_opacity() {
     assert!((opacity(&h) - 0.5).abs() < 1e-6, "the text's 50 %: {}", opacity(&h));
 }
 
+/// Make Properties Default on a text box with a border colour of its own gives the Text box tool
+/// that colour.
+#[test]
+fn a_text_box_made_default_gives_the_tool_its_border_colour() {
+    use pdfcraft_engine::{Edit, NewAnnotation, Shape, Style};
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut h = harness(|_| {});
+    let shape = Shape::TextBox { rect: [100.0, 600.0, 220.0, 630.0], font_size: 12.0 };
+    let style = Style { width: 1.0, ..Style::default_for(&shape) };
+    assert!(h.state_mut().apply_edit(Edit::AddAnnotation(NewAnnotation {
+        page: 0,
+        shape,
+        style,
+        contents: "Framed".into(),
+        author: "Tester".into()
+    })));
+    h.run_steps(2);
+    let index = comments(&h).iter().find(|a| a.contents.as_deref() == Some("Framed")).map(|a| a.index).expect("the text box");
+    let red = Some([0.89, 0.13, 0.13]);
+    assert!(h.state_mut().apply_edit(Edit::BorderColorAnnotation { page: 0, index, color: red }));
+    assert_ne!(h.state().comment_prefs.style(CommentTool::TextBox).border_color, red);
+    h.state_mut().open_comment_props(0, index);
+    h.run_steps(2);
+    h.get_by_label("Make Properties Default").click();
+    h.run_steps(1);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state().comment_prefs.style(CommentTool::TextBox).border_color, red);
+}
+
 /// #1302: making an arrow's properties the default updates the Arrow tool, not later plain lines.
 #[test]
 fn an_arrows_default_does_not_restyle_lines() {
@@ -3130,6 +3160,7 @@ fn a_moved_comment_is_drawn_where_it_goes_before_release() {
             fill: Some([1.0, 0.0, 0.0]),
             fill_opacity: None,
             text_opacity: None,
+            border_color: None,
         };
         assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
             page: 0,

@@ -1214,6 +1214,7 @@ struct PageEnv<'a> {
     y_shift: f32,
     fill_text_size: f64,
     fill_text_color: [f64; 3],
+    fill_text_border: crate::fill_sign::TextBorder,
     today: (i64, u32, u32),
     can_paste_image: bool,
 }
@@ -3160,6 +3161,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         y_shift,
         fill_text_size: app.fill_text_size,
         fill_text_color: app.fill_text_color,
+        fill_text_border: crate::fill_sign::TextBorder { width: app.fill_text_border, color: app.fill_text_border_color },
         today,
         can_paste_image,
     };
