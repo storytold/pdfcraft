@@ -7,4 +7,6 @@ mod cms;
 mod crypto;
 mod encrypted_signing;
 mod pdf;
+#[cfg(target_os = "linux")]
+mod pkcs11;
 mod store_keys;
