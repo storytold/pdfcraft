@@ -84,10 +84,20 @@ fn without_and_with_unicode(font: Font<'_>) -> (Vec<u8>, Vec<u8>) {
 
 #[test]
 fn an_arial_the_pdf_does_not_embed_draws_the_glyphs_its_codes_name() {
-    // Each face as Windows exporters name it, and as Word names a face it doesn't embed.
-    for base_font in
-        ["ArialMT", "Arial-BoldMT", "Arial-ItalicMT", "Arial-BoldItalicMT", "Arial", "Arial,Bold", "Arial,BoldItalic", "ABCDEF+Arial-BoldMT"]
-    {
+    // Each face as Windows exporters name it, and as Word names a face it doesn't embed. The name
+    // is read without regard to case, `MT` included.
+    for base_font in [
+        "ArialMT",
+        "Arial-BoldMT",
+        "Arial-ItalicMT",
+        "Arial-BoldItalicMT",
+        "Arial",
+        "Arial,Bold",
+        "Arial,BoldItalic",
+        "ABCDEF+Arial-BoldMT",
+        "arialmt",
+        "Arial-Boldmt",
+    ] {
         for mapped in [false, true] {
             let (without, with) = without_and_with_unicode(Font { base_font, subtype: "CIDFontType2", mapped, to_unicode: false });
             assert!(without == with, "{base_font} (CIDToGIDMap {}): the codes draw \"Low É\"", if mapped { "stream" } else { "/Identity" });

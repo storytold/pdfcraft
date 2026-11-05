@@ -634,19 +634,27 @@ fn is_variation_selector(c: char) -> bool {
 /// Arial faces as exporters name them: `ArialMT`, `Arial-BoldMT`, `Arial-ItalicMT`,
 /// `Arial-BoldItalicMT`, or `Arial` followed by `,Bold`, `,Italic` or `,BoldItalic`. Arial
 /// Narrow, Arial Black, Arial Unicode MS and Arial Rounded are other fonts, numbered their own
-/// way.
+/// way. Letter case doesn't matter, `MT` included.
 fn is_arial(name: &str) -> bool {
     let (family, style) = name.split_once([',', '-', ' ']).unwrap_or((name, ""));
-    let family = family.strip_suffix("MT").unwrap_or(family);
     let style: String = style
         .chars()
         .filter(|c| !matches!(c, ',' | '-' | ' '))
         .collect();
-    let style = style.strip_suffix("MT").unwrap_or(&style);
-    family.eq_ignore_ascii_case("Arial")
+    without_mt(family).eq_ignore_ascii_case("Arial")
         && ["", "Regular", "Bold", "Italic", "BoldItalic"]
             .iter()
-            .any(|s| style.eq_ignore_ascii_case(s))
+            .any(|s| without_mt(&style).eq_ignore_ascii_case(s))
+}
+
+/// PdfCraft patch: `name` without a trailing `MT` in any letter case (Monotype's mark in
+/// PostScript names such as `ArialMT`).
+fn without_mt(name: &str) -> &str {
+    name.len()
+        .checked_sub(2)
+        .and_then(|stem| Some((name.get(..stem)?, name.get(stem..)?)))
+        .filter(|(_, suffix)| suffix.eq_ignore_ascii_case("MT"))
+        .map_or(name, |(stem, _)| stem)
 }
 
 /// PdfCraft patch: the largest CID (ISO 32000-2 §9.7.2; CIDs are at most two bytes).
