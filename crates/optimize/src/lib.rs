@@ -33,7 +33,7 @@ pub mod fragments;
 mod images;
 mod links;
 mod pool;
-pub use pool::give_way_to_other_programs;
+mod samples;
 mod unused;
 
 pub use audit::{SpaceCategory, SpaceUse, audit_space};
@@ -42,6 +42,8 @@ use pdfcraft_cos::{Dict, Document, ImageBudget, MAX_PAGE_DECODED, ObjRef, Object
 use pdfcraft_filters::{Filter, Params};
 
 pub use images::effective_resolutions;
+pub use pool::give_way_to_other_programs;
+pub use samples::{NotDecoded, Samples, decode_samples, encode_samples};
 
 #[derive(Debug, thiserror::Error)]
 pub enum OptimizeError {
