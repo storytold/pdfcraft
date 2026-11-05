@@ -72,7 +72,7 @@ fn editing_the_second_custom_stamp_keeps_both_library_entries() {
     h.get_by_label("Second").scroll_to_me();
     h.run_steps(2);
     h.get_by_label("Second").click_secondary();
-    h.run_steps(2);
+    h.run_steps(4);
     h.get_by_role(Role::Menu).get_by_label("Rename / change category…").click();
     h.run_steps(2);
     let category = h.get_by_role_and_label(Role::TextInput, "Category:");
