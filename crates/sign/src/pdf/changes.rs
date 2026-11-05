@@ -624,3 +624,30 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
     }
     kind::OTHER
 }
+
+#[cfg(test)]
+mod tests {
+    use pdfcraft_cos::{Dict, Document, Object};
+    use pdfcraft_model::{Limits, with_limits};
+
+    use super::{Modification, classify_changes, kind};
+
+    /// A signed revision whose page tree can't be read whole leaves its signed pages unknown, so
+    /// no change can be judged against them: it reads as unreadable, never as a revision with
+    /// fewer pages.
+    #[test]
+    fn a_signed_revision_whose_page_tree_is_past_a_walk_limit_is_unreadable() {
+        let mut doc = Document::new_empty();
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        let page = doc.add(page);
+        let tree = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
+        let mut kids = vec![Object::Null; 5];
+        kids.push(Object::Ref(page));
+        doc.update_dict(tree, |d| d.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
+        let unreadable = Modification::Disallowed(vec![kind::UNREADABLE]);
+        assert_ne!(classify_changes(&doc, Some(doc.clone()), None), unreadable, "within the default limits");
+        let capped = with_limits(Limits { kids_entries: 4, ..Limits::DEFAULT }, || classify_changes(&doc, Some(doc.clone()), None));
+        assert_eq!(capped, unreadable);
+    }
+}
