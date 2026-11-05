@@ -1708,6 +1708,54 @@ fn ui_panel_opens_closes_and_sizes_panes_and_survives_restore() {
 }
 
 #[test]
+fn narrow_side_panels_hide_thumbnail_controls_and_preserve_the_size() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({"key":"panel", "value":"pages"}));
+    ok(&mut h, &c, "ui.set", json!({"key":"thumbnail-zoom", "value":"75"}));
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::Slider, "Thumbnail size");
+
+    let state = ok(&mut h, &c, "ui.panel", json!({"panel":"side", "width":1}));
+    assert_eq!(state["side_panels"]["side_width"], 240.0);
+    h.run_steps(4);
+    assert_eq!(h.state().side_panels.side_width, 240.0);
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Slider, "Thumbnail size").is_none());
+    assert!(h.query_by_label("Smaller thumbnails").is_none());
+    assert!(h.query_by_label("Larger thumbnails").is_none());
+    h.get_by_label("Page 1");
+    h.get_by_label("Page tools");
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["thumbnail_zoom"], 0.75);
+
+    let saved = h.state().persist();
+    h.state_mut().restore(&saved);
+    h.run_steps(3);
+    assert_eq!(h.state().side_panels.side_width, 240.0);
+    ok(&mut h, &c, "ui.panel", json!({"panel":"side", "width":330}));
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::Slider, "Thumbnail size");
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["thumbnail_zoom"], 0.75);
+    h.get_by_label("Larger thumbnails").click();
+    h.run_steps(3);
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["thumbnail_zoom"], 1.0);
+}
+
+/// At the narrowest width the selection count sits under the title, clear of the Page tools
+/// and Close buttons on its right.
+#[test]
+fn narrow_pages_panel_keeps_the_selection_count_clear_of_its_buttons() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({"key":"panel", "value":"pages"}));
+    ok(&mut h, &c, "ui.panel", json!({"panel":"side", "width":1}));
+    ok(&mut h, &c, "ui.set", json!({"key":"select", "value":"1-3"}));
+    h.run_steps(4);
+    let picked = h.get_by_label("3 pages selected").rect();
+    let title = h.get_by_role_and_label(egui::accesskit::Role::Label, "Pages").rect();
+    let tools = h.get_by_label("Page tools").rect();
+    assert!(picked.top() >= title.bottom() - 1.0, "{picked:?} sits under the title at {title:?}");
+    assert!(picked.right() <= tools.left(), "{picked:?} ends before Page tools (and Close after it) at {tools:?}");
+}
+
+#[test]
 fn invalid_panel_requests_change_nothing() {
     let (mut h, c) = harness();
     let before = ok(&mut h, &c, "ui.state", json!({}))["side_panels"].clone();

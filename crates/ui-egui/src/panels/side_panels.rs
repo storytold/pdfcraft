@@ -21,7 +21,7 @@ pub const SIDE_WIDTH: f32 = 330.0;
 const TOOLS_GUTTERS: f32 = 30.0;
 /// No narrower than Format text's widest row, so nothing in it is cut off.
 const TOOLS_RANGE: RangeInclusive<f32> = (crate::format_text_ui::MIN_ROW + TOOLS_GUTTERS)..=520.0;
-const SIDE_RANGE: RangeInclusive<f32> = 260.0..=520.0;
+const SIDE_RANGE: RangeInclusive<f32> = 240.0..=520.0;
 /// Version of the saved `side_panels` value.
 const VERSION: u64 = 1;
 /// Deepest split tree the old layout migration walks; the old renderer allowed far fewer.

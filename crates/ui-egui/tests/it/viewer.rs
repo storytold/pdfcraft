@@ -1744,6 +1744,42 @@ fn pages_panel_thumbnail_zoom_keeps_a_far_current_page_visible() {
     }
 }
 
+/// Resizing the side panel reflows every thumbnail under the same scroll offset. The current
+/// page's thumbnail, in sight before, stays in sight; after the reader scrolls away from it, a
+/// resize leaves the panel where the reader put it.
+#[test]
+fn resizing_the_pages_panel_keeps_the_current_thumbnail_in_sight() {
+    let mut h = pages_panel_harness(&[(200, 300); 30]);
+    h.state_mut().set_option("thumbnail-zoom", "150").unwrap();
+    h.state_mut().views[0].go_to_page(24);
+    h.run_steps(4);
+    assert!(in_panel_view(&h, thumbnail_rect(&h, 25)), "page 25 starts in sight");
+    for width in [240.0, 400.0, 330.0] {
+        h.state_mut().side_panels.side_width = width;
+        h.run_steps(4);
+        assert!(in_panel_view(&h, thumbnail_rect(&h, 25)), "page 25 stays in sight at {width} points");
+        assert_eq!(h.state().views[0].current, 24);
+    }
+
+    let clip = h.state().views[0].pages_panel.expect("the Pages panel is shown");
+    h.event(egui::Event::PointerMoved(clip.center()));
+    h.run_steps(1);
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, 100_000.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(12);
+    assert!(in_panel_view(&h, thumbnail_rect(&h, 1)), "the wheel went back to page 1");
+    h.state_mut().side_panels.side_width = 240.0;
+    h.run_steps(4);
+    assert!(in_panel_view(&h, thumbnail_rect(&h, 1)), "page 1 stays in sight");
+    assert!(!in_panel_view(&h, thumbnail_rect(&h, 25)), "page 25 is not brought back");
+    assert_eq!(h.state().views[0].current, 24);
+}
+
 /// #2781: as in Acrobat, going to a page whose thumbnail is out of sight scrolls the Pages
 /// panel to show it.
 #[test]

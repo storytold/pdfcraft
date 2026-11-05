@@ -60,6 +60,8 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 // Comments count like Acrobat (no replies); the replies go in small text below.
                 let replies = if panel == RightPanel::Comments { crate::comments_panel::reply_count(info) } else { 0 };
                 ui.horizontal(|ui| {
+                    // What Pages keeps right-anchored on this row: Close and Page tools, 26 points each.
+                    let pages_buttons = 2.0 * (26.0 + ui.spacing().item_spacing.x);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
                         ui.horizontal(|ui| {
@@ -72,12 +74,15 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             let text = crate::i18n::trn(crate::i18n::current(), replies as u64, "{n} reply", "{n} replies");
                             ui.label(egui::RichText::new(text).font(theme::regular(11.0)).color(t.text_faint));
                         }
+                        // Under the title, not beside it: a narrow panel has no room there. A
+                        // longer translation truncates short of the buttons; hover shows it whole.
+                        if panel == RightPanel::Pages && view.selected.len() > 1 {
+                            let n = view.selected.len().to_string();
+                            let picked = crate::i18n::fmt(tl!("{n} pages selected"), &[("n", &n)]);
+                            ui.set_max_width((ui.available_width() - pages_buttons).max(0.0));
+                            ui.add(egui::Label::new(egui::RichText::new(picked).font(theme::medium(12.0)).color(t.accent_text)).truncate());
+                        }
                     });
-                    if panel == RightPanel::Pages && view.selected.len() > 1 {
-                        let n = view.selected.len().to_string();
-                        let picked = crate::i18n::fmt(tl!("{n} pages selected"), &[("n", &n)]);
-                        ui.label(egui::RichText::new(picked).font(theme::medium(12.0)).color(t.accent_text));
-                    }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if icons::button(ui, "x", 26.0, false, tl!("Close")).clicked() {
                             close = true;
