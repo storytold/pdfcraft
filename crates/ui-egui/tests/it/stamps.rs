@@ -1,6 +1,6 @@
 //! Add a stamp: the palette and placing stamps on the page.
 
-use egui::{Key, Modifiers, PointerButton};
+use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
@@ -69,11 +69,7 @@ fn editing_the_second_custom_stamp_keeps_both_library_entries() {
     }
     let first_id = h.state().custom_stamps[0].id;
     let second_id = h.state().custom_stamps[1].id;
-    let at = h.get_by_label("Second").rect().center();
-    h.hover_at(at);
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::default() });
-    h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::default() });
+    h.get_by_label("Second").click_secondary();
     h.run_steps(2);
     h.get_by_label("Rename / change category…").click();
     h.run_steps(2);
