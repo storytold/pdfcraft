@@ -90,12 +90,13 @@ pub(crate) fn page_names_blending_space(doc: &Document, page: &Dict) -> bool {
 /// gray, RGB or CMYK to match.
 fn independent_blending_space(doc: &Document, a: &[Object]) -> Option<i64> {
     let family = a.first().map(|f| doc.resolve(f));
-    // A CalGray or CalRGB space needs its dictionary, with the required `/WhitePoint` of three
-    // numbers (ISO 32000-1 Tables 63 and 64).
+    // A CalGray or CalRGB space needs its dictionary, with the required `/WhitePoint` [X Y Z]: X
+    // and Z positive, Y 1 (ISO 32000-1 Tables 63 and 64).
     let calibrated = || {
         let params = a.get(1).map(|p| doc.resolve(p));
         let white = params.as_deref().and_then(Object::as_dict).and_then(|d| d.get(b"WhitePoint")).map(|w| doc.resolve(w));
-        white.as_deref().and_then(Object::as_array).is_some_and(|w| w.len() == 3 && w.iter().all(|v| doc.resolve(v).as_f64().is_some()))
+        let values: Option<Vec<f64>> = white.as_deref().and_then(Object::as_array).and_then(|w| w.iter().map(|v| doc.resolve(v).as_f64()).collect());
+        matches!(values.as_deref(), Some(&[x, y, z]) if x > 0.0 && y == 1.0 && z > 0.0)
     };
     match family.as_deref().and_then(Object::as_name)? {
         b"CalGray" => calibrated().then_some(1),

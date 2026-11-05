@@ -657,6 +657,9 @@ fn a_blending_space_is_device_independent_and_an_intent_has_a_profile() {
         ("CalRGB without its dictionary", "/CS [/CalRGB]".to_owned(), vec![]),
         ("CalGray without a white point", "/CS [/CalGray << >>]".to_owned(), vec![]),
         ("CalRGB with a short white point", "/CS [/CalRGB << /WhitePoint [0.9505 1] >>]".to_owned(), vec![]),
+        ("CalRGB with a zero white point", "/CS [/CalRGB << /WhitePoint [0 0 0] >>]".to_owned(), vec![]),
+        ("CalGray with a white point whose Y isn't 1", "/CS [/CalGray << /WhitePoint [0.9505 0.5 1.089] >>]".to_owned(), vec![]),
+        ("CalRGB with a non-number in its white point", "/CS [/CalRGB << /WhitePoint [0.9505 1 /Z 1.089] >>]".to_owned(), vec![]),
         ("Lab", "/CS [/Lab << /WhitePoint [0.9505 1 1.089] >>]".to_owned(), vec![]),
         (
             "Separation",
