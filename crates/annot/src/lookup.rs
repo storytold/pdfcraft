@@ -15,8 +15,8 @@ pub fn page_refs(doc: &Document) -> Result<Vec<ObjRef>, AnnotError> {
 
 /// Each leaf page of the whole tree, in order, with its `/Annots` entries (references or inline
 /// dictionaries); an `Err` where the walk exceeds one of its limits. `/Annots` isn't inherited, so
-/// nothing is copied. A change to annotations across the document collects this before it changes
-/// anything; a reader may stop at the first `Err`.
+/// no inherited attributes are copied. A change to annotations across the document collects this
+/// before it changes anything; a reader may stop at the first `Err`.
 pub fn page_annots(doc: &Document) -> impl Iterator<Item = Result<(ObjRef, Vec<Object>), pdfcraft_model::PageTreeLimit>> + '_ {
     pdfcraft_model::PageLeaves::new(doc).map(|leaf| leaf.map(|leaf| (leaf.obj, annots(doc, leaf.obj))))
 }

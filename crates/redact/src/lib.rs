@@ -479,8 +479,9 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     // parent: their `/IRT` or `/Parent` would keep the removed comment reachable.
     loop {
         let mut grew = false;
-        for p in pdfcraft_model::pages(doc) {
-            let annots = annots_of(doc, &p.dict);
+        // Every page's `/Annots`, collected before this pass changes any of them.
+        let inventory: Vec<(ObjRef, Vec<Object>)> = pdfcraft_annot::page_annots(doc).collect::<Result<_, _>>()?;
+        for (page, annots) in inventory {
             let mut kept = Vec::with_capacity(annots.len());
             for a in &annots {
                 let Some(r) = a.as_ref() else {
@@ -507,7 +508,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
                 }
             }
             if kept.len() != annots.len() {
-                doc.update_dict(p.obj, |d| {
+                doc.update_dict(page, |d| {
                     if kept.is_empty() {
                         d.remove(b"Annots");
                     } else {
