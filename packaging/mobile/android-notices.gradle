@@ -1,0 +1,80 @@
+// Declarative Gradle adapter; all archive/license processing lives in Rust xtask.
+import groovy.json.JsonOutput
+import javax.inject.Inject
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.result.ResolvedArtifactResult
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.provider.ListProperty
+import org.gradle.maven.MavenModule
+import org.gradle.maven.MavenPomArtifact
+import org.gradle.process.ExecOperations
+
+abstract class PdfCraftAndroidNotices extends DefaultTask {
+    @Input abstract ListProperty<Map<String, String>> getRecords()
+    @InputFiles @PathSensitive(PathSensitivity.NONE) abstract ConfigurableFileCollection getArtifacts()
+    @InputFiles @PathSensitive(PathSensitivity.RELATIVE) abstract ConfigurableFileCollection getCollectorSources()
+    @InputFile @PathSensitive(PathSensitivity.NONE) abstract RegularFileProperty getApacheLicense()
+    @InputFile @PathSensitive(PathSensitivity.NONE) abstract RegularFileProperty getMaterialNotice()
+    @Internal abstract DirectoryProperty getRepositoryDirectory()
+    @OutputDirectory abstract DirectoryProperty getOutputDirectory()
+    @Inject abstract ExecOperations getExecOperations()
+
+    @TaskAction void collectNotices() {
+        File manifest = new File(temporaryDir, 'runtime-artifacts.json')
+        manifest.setText(JsonOutput.toJson([
+            schema: 1,
+            apache_license: apacheLicense.get().asFile.absolutePath,
+            material_notice: materialNotice.get().asFile.absolutePath,
+            artifacts: records.get()
+        ]), 'UTF-8')
+        // Cargo is already required by the generated native project. Reuse the
+        // host xtask, including custom CARGO_TARGET_DIR, instead of guessing its path.
+        execOperations.exec {
+            workingDir(repositoryDirectory.get().asFile)
+            commandLine('cargo', 'run', '--locked', '-p', 'xtask', '--', 'mobile',
+                'android-notices', manifest.absolutePath, outputDirectory.get().asFile.absolutePath)
+        }
+    }
+}
+
+plugins.withId('com.android.application') {
+    androidComponents.onVariants(androidComponents.selector().all()) { variant ->
+        def runtimeArtifacts = variant.runtimeConfiguration.incoming.artifactView {
+            componentFilter { it instanceof ModuleComponentIdentifier }
+        }.artifacts
+        // Query exact selected POMs via the configured Gradle repositories. No
+        // arbitrary license URLs are fetched. Inputs realize before task execution.
+        def resolved = providers.provider {
+            def selected = runtimeArtifacts.artifacts.toList()
+            def ids = selected.collect { it.id.componentIdentifier }.unique()
+            def query = dependencies.createArtifactResolutionQuery().forComponents(ids).withArtifacts(MavenModule, MavenPomArtifact).execute()
+            if (query.components.size() != query.resolvedComponents.size()) throw new GradleException('Cannot resolve Android runtime license metadata')
+            def poms = [:]
+            query.resolvedComponents.each { component ->
+                def pom = component.getArtifacts(MavenPomArtifact).find { it instanceof ResolvedArtifactResult }
+                if (pom == null) throw new GradleException("Missing Android runtime POM: ${component.id}")
+                poms[component.id.displayName] = pom.file.absolutePath
+            }
+            selected.collect { artifact ->
+                String coordinate = artifact.id.componentIdentifier.displayName
+                String pom = poms[coordinate]
+                if (pom == null) throw new GradleException("Missing Android runtime POM: ${coordinate}")
+                [coordinate: coordinate, file: artifact.file.absolutePath, pom: pom]
+            }
+        }
+        def task = tasks.register("collect${variant.name.capitalize()}PdfCraftNotices", PdfCraftAndroidNotices) {
+            records.set(resolved)
+            artifacts.from(resolved.map { items -> items.collectMany { [it.file, it.pom] } })
+            repositoryDirectory.set(file('../../../../../..'))
+            collectorSources.from(['xtask/src/mobile_android_notices.rs', 'xtask/src/mobile.rs',
+                'xtask/src/main.rs', 'xtask/Cargo.toml', 'Cargo.toml', 'Cargo.lock'].collect { file('../../../../../../' + it) })
+            apacheLicense.set(file('../../../../../../LICENSE-APACHE'))
+            materialNotice.set(file('../../../../android-runtime-NOTICE.txt'))
+            outputDirectory.set(layout.buildDirectory.dir("generated/pdfcraft-notices/${variant.name}"))
+        }
+        // AGP wires MergeAssets -> this task for each built debug/release variant,
+        // including direct assemble/bundle commands outside the xtask wrapper.
+        if (variant.sources.assets == null) throw new GradleException('Android variant has no asset source set')
+        variant.sources.assets.addGeneratedSourceDirectory(task) { it.outputDirectory }
+    }
+}

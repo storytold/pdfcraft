@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+Mobile preview: Android/iPad/iPhone host, shared translated editor, system PDF open/save and asynchronous save confirmation; see [mobile packaging](packaging/mobile/README.md). Device/signing validation and desktop-only capabilities remain outside this preview.
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
@@ -242,6 +244,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-11-02 (M12, #1297):** `model_add` embeds a U3D or PRC file, recognised by its header, as a 3D annotation with a chosen activation and a poster (an image or PDF page fitted in the box, or a labelled frame); an older file's catalog `/Version` is raised to what the model needs. Views, a rendered poster and a UI command are later steps. Estimates unchanged.
 
 - **2026-11-02 (M10, #5743):** macOS print jobs name their title and owner (`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`), as the system print dialog does, because a Kyocera filter crashes on a job without them. Checked by a test and through `doc_print` against a stand-in `lp`; not yet on a physical printer.
+- 2026-11-02 (M5, PR #1119): Merged current main `168a3cb9` (and on 2026-11-03 `14ae839a`, on 2026-11-04 `8bb0528b` with the catalogs now from craft-i18n) into the separate mobile host contribution, keeping its native PDF open/save and recovery acknowledgements alongside main's split i18n and update modules. The mobile CI workflow was removed from this PR and is proposed separately. Estimates unchanged.
 
 - **2026-11-02 (M14, #5737, #5460):** Preferences can turn off the update check at start. It stays on by default, and Help ▸ Check for updates still asks.
 

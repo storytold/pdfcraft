@@ -212,6 +212,7 @@ impl PdfCraftApp {
                         error: password_error,
                         activate: pending.activate,
                         recovered: pending.recovered,
+                        host_origin: None,
                         then: pending.then,
                         after_open: pending.after_open,
                         display_override: pending.display_override,
@@ -247,6 +248,7 @@ impl PdfCraftApp {
                     error,
                     activate,
                     recovered: None,
+                    host_origin: None,
                     then: None,
                     after_open: None,
                     display_override: None,
@@ -486,6 +488,9 @@ impl PdfCraftApp {
                         self.launch_display_target = Some(view.id);
                     }
                 }
+                if let Some(origin) = p.host_origin {
+                    self.bind_host_origin(origin);
+                }
                 if let Some(meta) = &p.recovered {
                     self.finish_recovery(meta);
                 }
@@ -498,6 +503,7 @@ impl PdfCraftApp {
             Ok(()) => {
                 if let Some(prompt) = self.password_prompt.as_mut() {
                     prompt.recovered = p.recovered;
+                    prompt.host_origin = p.host_origin;
                     prompt.then = p.then;
                     prompt.after_open = after_open;
                     prompt.display_override = p.display_override;
@@ -713,6 +719,10 @@ impl PdfCraftApp {
 
     pub fn open_dialog(&mut self) {
         self.startup_superseded = true;
+        if self.host_files.is_some() {
+            self.open_from_host();
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         self.pick(
             pickers::PickFor::Open,

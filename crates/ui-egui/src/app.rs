@@ -174,6 +174,7 @@ impl PdfCraftApp {
             unsaved_flag: Default::default(),
             os_events: None,
             host_save: None,
+            host_files: None,
             host_dirty: None,
             close_request: None,
             save_prompt_button: Default::default(),
@@ -619,6 +620,7 @@ impl eframe::App for PdfCraftApp {
             }
         }
         self.poll_export();
+        self.poll_host_files();
         self.auto_ocr_scanned_page();
         self.poll_ocr();
         self.poll_optimize();

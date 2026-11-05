@@ -3,6 +3,9 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(all(target_arch = "wasm32", feature = "mobile-host"))]
+mod mobile;
+
 #[cfg(target_arch = "wasm32")]
 fn main() {
     use pdfcraft_ui_egui::PdfCraftApp;
@@ -47,6 +50,8 @@ fn main() {
                     // eframe never raises a close request on a browser reload or tab close, so `guard_quit` never
                     // prompts; ask the browser to confirm instead while a document has unsaved work (#812).
                     warn_before_unload(app.unsaved_flag.clone());
+                    #[cfg(feature = "mobile-host")]
+                    mobile::attach(&mut app, &cc.egui_ctx);
                     // Host modes (`host` below, over `craft-web-host`): `?host=parent`, a
                     // same-origin page embedding PdfCraft in an iframe (such as the Nextcloud
                     // app), or `data-host="page"` on the canvas, a host that runs the module in

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile",
+  "description": "The bundled PdfCraft interface may use its document host. Filesystem access stays behind user-selected native dialogs.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

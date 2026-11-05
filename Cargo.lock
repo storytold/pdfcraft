@@ -8404,6 +8404,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "flate2",
  "lopdf",
  "pdfcraft-cos",
  "pdfcraft-oracle",
@@ -8412,6 +8413,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "toml",
+ "zip",
 ]
 
 [[package]]

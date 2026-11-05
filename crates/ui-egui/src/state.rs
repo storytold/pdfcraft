@@ -336,6 +336,8 @@ pub struct PasswordPrompt {
     /// The bytes are a recovery snapshot: once the document is open it takes the snapshot's
     /// path and recovery entry. Cancelling the prompt drops the association with it (#813).
     pub(crate) recovered: Option<RecoveryMeta>,
+    /// Native-host recovery identity, retained across password retries.
+    pub(crate) host_origin: Option<String>,
     /// The tool that asked for this file (a tool chosen with no document open): it runs once
     /// the document is unlocked.
     pub(crate) then: Option<&'static str>,

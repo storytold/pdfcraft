@@ -48,6 +48,9 @@ impl PdfCraftApp {
             return false;
         }
         let Some(id) = self.views.get(index).map(|v| v.id) else { return false };
+        if self.host_files.is_some() {
+            return self.save_to_host(index, target, after);
+        }
         let Some(doc) = self.session.get(id) else { return false };
         let (name, path) = (doc.name.clone(), doc.path.clone());
         #[cfg(not(target_arch = "wasm32"))]
@@ -290,6 +293,16 @@ fn short_name(path: &str) -> String {
 pub(crate) fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
     use wasm_bindgen::JsCast;
     let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
+    // Native mobile providers require asynchronous confirmation. A browser
+    // download cannot confirm it and must not trigger delete-after-export.
+    if web_sys::window()
+        .is_some_and(|window| js_sys::Reflect::get(&window, &"__TAURI__".into()).is_ok_and(|value| !value.is_null() && !value.is_undefined()))
+    {
+        return Err(
+            "This export needs a browser download. On mobile, use Save for PDF documents; other export formats require the desktop or browser app."
+                .into(),
+        );
+    }
     let array = js_sys::Uint8Array::from(bytes);
     let parts = js_sys::Array::of1(&array);
     let opts = web_sys::BlobPropertyBag::new();

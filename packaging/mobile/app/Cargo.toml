@@ -1,0 +1,38 @@
+[package]
+name = "pdfcraft-mobile"
+version = "0.6.0"
+description = "Native Android and iOS document host for the shared PdfCraft WebAssembly UI"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# The platform host is built independently: desktop/workspace builds need neither
+# Android/iOS SDKs nor a second webview stack. The UI remains in the root workspace.
+[workspace]
+
+[lib]
+name = "pdfcraft_mobile"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = []
+custom-protocol = ["tauri/custom-protocol"]
+
+[dependencies]
+tauri = { version = "=2.12.3", features = [] }
+tauri-plugin-dialog = "=2.8.2"
+tauri-plugin-fs = "=2.7.0"
+serde = { version = "1", features = ["derive"] }
+tempfile = "3"
+percent-encoding = "2"
+
+[build-dependencies]
+tauri-build = { version = "=2.7.2", features = [] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

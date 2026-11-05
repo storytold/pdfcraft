@@ -10,6 +10,7 @@ mod gates;
 mod layers;
 mod license_check;
 mod macos_integration;
+mod mobile;
 mod parity;
 mod screenshots;
 mod version;
@@ -18,6 +19,7 @@ type Command = fn(&[String]) -> anyhow::Result<()>;
 
 /// Every subcommand: name, one-line summary, entry point.
 const COMMANDS: &[(&str, &str, Command)] = &[
+    ("mobile", "Build the mobile frontend and Android/iOS hosts", mobile::run),
     ("version", "Print the workspace version, or `version set X.Y.Z[-pre]` to change it and refresh Cargo.lock", version_cmd),
     ("layers", "Enforce the crate dependency layering (plan/architecture.md §3)", gates::layers),
     ("wasm", "cargo check --target wasm32-unknown-unknown for every crate below L8, in one call", gates::wasm),

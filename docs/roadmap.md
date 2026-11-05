@@ -1,5 +1,7 @@
 # PdfCraft roadmap: milestones and what's next
 
+Mobile preview: Android/iPad/iPhone host, shared translated editor, system PDF open/save and asynchronous save confirmation; see [mobile packaging](../packaging/mobile/README.md). Device/signing validation and desktop-only capabilities remain outside this preview.
+
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 

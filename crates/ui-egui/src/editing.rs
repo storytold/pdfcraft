@@ -824,7 +824,7 @@ impl PdfCraftApp {
 
     /// When the preference is on, bake Fill & Sign marks before the bytes are written.
     /// Returns false when the document is not allowed to change (nothing is written).
-    fn flatten_fill_sign_for_save(&mut self, id: pdfcraft_engine::DocId) -> bool {
+    pub(crate) fn flatten_fill_sign_for_save(&mut self, id: pdfcraft_engine::DocId) -> bool {
         if !self.flatten_fill_sign_on_save {
             return true;
         }

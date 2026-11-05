@@ -56,6 +56,7 @@ mod dialogs;
 pub use edit_text_ui::{CropMode, DragTarget, ImageDrag, ImageHandle, ImageSelection};
 mod editing;
 mod home;
+pub mod host_files;
 mod hotbar;
 mod panels;
 pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
@@ -459,6 +460,8 @@ pub struct PdfCraftApp {
     pub os_events: Option<OsEventsFn>,
     /// Save delivers to the embedding page instead of downloading (web, see [`HostSaveFn`]).
     pub host_save: Option<HostSaveFn>,
+    /// Native mobile file dialogs, with asynchronous completion before marking a save.
+    pub host_files: Option<host_files::HostFiles>,
     /// Reports unsaved work to the embedding page (web, see [`HostDirtyFn`]).
     pub host_dirty: Option<HostDirtyFn>,
     /// A pending "save changes?" question (closing a dirty tab or quitting).

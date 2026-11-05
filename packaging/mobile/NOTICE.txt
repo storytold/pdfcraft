@@ -1,0 +1,41 @@
+PdfCraft mobile host: additional third-party notices
+
+The Android/iOS host includes the following unmodified components licensed
+under the Mozilla Public License, version 2.0. The complete license accompanies
+this notice as LICENSE-MPL-2.0.txt, and is also available at
+https://www.mozilla.org/MPL/2.0/ .
+
+Source Code Form is available without charge at the official registry URLs
+below. Cargo.lock pins these exact archives by SHA-256. Their source files and
+notices remain under MPL-2.0. You may obtain, modify and redistribute that source
+under the license. PdfCraft's separate original files remain MIT OR Apache-2.0.
+
+cssparser 0.37.0 — Simon Sapin and Servo contributors
+https://static.crates.io/crates/cssparser/cssparser-0.37.0.crate
+SHA-256 8c9cdaae01d5ed7882b04d795e7f752f46ff52d2fa3b50a20d28c464510bba98
+https://github.com/servo/rust-cssparser/tree/4c49486494fb24dc01390e3baca9698ef1744c71
+
+cssparser-macros 0.7.1 — Simon Sapin and Servo contributors
+https://static.crates.io/crates/cssparser-macros/cssparser-macros-0.7.1.crate
+SHA-256 d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a
+https://github.com/servo/rust-cssparser/tree/d128a90e1203fc4afb959420d6dc5e24f77a3191/macros
+
+dtoa-short 0.3.5 — Xidorn Quan and contributors
+https://static.crates.io/crates/dtoa-short/dtoa-short-0.3.5.crate
+SHA-256 cd1511a7b6a56299bd043a9c167a6d2bfb37bf84a6dfceaba651168adfb43c87
+https://github.com/upsuper/dtoa-short/tree/2d905cdb8b2e08163dc0d015f529877fe657b4ef
+
+selectors 0.38.0 — The Servo Project Developers
+https://static.crates.io/crates/selectors/selectors-0.38.0.crate
+SHA-256 8adfa1c298912827b8a28b223b3b874357397ae706e6190acd9bf28cee99114d
+https://github.com/servo/stylo/tree/572ecba2d1600e7c3d490586692a209faf703baa/selectors
+
+option-ext 0.2.0 — Simon Ochsenreither and contributors
+https://static.crates.io/crates/option-ext/option-ext-0.2.0.crate
+SHA-256 04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d
+https://github.com/soc/option-ext/tree/272f22fc9ea1ac6b08f01704af52c4ac338df4e2
+
+The cssparser-macros procedural macro is a build dependency. The CSS parser,
+selectors and number-formatting code are part of Android runtime HTML handling
+and both platforms' build-time code generation; option-ext is used by runtime
+directory helpers on both platforms.

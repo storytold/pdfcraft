@@ -1,0 +1,17 @@
+PdfCraft Android runtime: Material Components
+
+com.google.android.material:material:1.13.0
+Copyright (C) 2017 The Android Open Source Project
+Licensed under the Apache License, Version 2.0.
+The complete license is included as LICENSE-APACHE-2.0.txt in this directory.
+
+Original sources and license:
+https://github.com/material-components/material-components-android/tree/1.13.0
+https://github.com/material-components/material-components-android/blob/1.13.0/LICENSE
+
+The selected Material 1.13.0 AAR has no separate LICENSE or NOTICE entry.
+Its exact Maven POM and the version and SHA-256 of every resolved Android
+runtime artifact accompany ANDROID-THIRD-PARTY-NOTICES.txt. Existing license,
+copyright and NOTICE entries in those AARs and their nested JARs are retained
+unchanged. The separately bundled THIRD-PARTY-NOTICES.txt covers the Rust
+host, frontend, fonts, icons, CMaps and colour profiles.

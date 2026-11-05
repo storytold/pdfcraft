@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <title>PdfCraft</title>
+    <link data-trunk rel="rust" href="Cargo.toml" data-cargo-features="mobile-host" data-wasm-opt="z" />
+    <style>
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #f1f1f3; overscroll-behavior: none; }
+      #safe-area { position: fixed; top: env(safe-area-inset-top); right: env(safe-area-inset-right); bottom: env(safe-area-inset-bottom); left: env(safe-area-inset-left); }
+      canvas { width: 100%; height: 100%; display: block; outline: none; touch-action: none; }
+      @media (prefers-color-scheme: dark) { html, body { background: #19191c; } }
+    </style>
+  </head>
+  <body><div id="safe-area"><canvas id="pdfcraft"></canvas></div></body>
+</html>
