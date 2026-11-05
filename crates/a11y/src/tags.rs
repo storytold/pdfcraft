@@ -490,7 +490,10 @@ pub fn set_tag_property(doc: &mut Document, object: ObjRef, property: TagPropert
     }
     if property == TagProperty::Class {
         let map = class_map_dict(doc);
-        let classes = value.filter(|s| !s.trim().is_empty()).map(|s| map.as_ref().map_or_else(|| s.split(',').map(str::trim).map(str::to_owned).collect(), |map| parse_class_assignments(s, map))).unwrap_or_default();
+        let classes = value
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| map.as_ref().map_or_else(|| s.split(',').map(str::trim).map(str::to_owned).collect(), |map| parse_class_assignments(s, map)))
+            .unwrap_or_default();
         for class in &classes {
             let exists = map.as_ref().is_some_and(|map| map.contains(class.as_bytes()));
             if !valid_class_name(class) && !exists {

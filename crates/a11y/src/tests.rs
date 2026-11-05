@@ -531,7 +531,10 @@ fn class_rename_follows_indirect_k_arrays_and_renames_inline_classes() {
     .unwrap();
     assert!(tags(&doc).iter().any(|tag| tag.object == pdfcraft_cos::ObjRef::new(7, 0)));
     rename_class(&mut doc, "Old", "New").unwrap();
-    assert_eq!(tags(&doc).iter().find(|tag| tag.object == pdfcraft_cos::ObjRef::new(7, 0)).map(|tag| tag.classes.clone()), Some(vec!["New".to_owned()]));
+    assert_eq!(
+        tags(&doc).iter().find(|tag| tag.object == pdfcraft_cos::ObjRef::new(7, 0)).map(|tag| tag.classes.clone()),
+        Some(vec!["New".to_owned()])
+    );
     let inline = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
     assert_eq!(
         inline.as_array().and_then(|items| items.first()).and_then(Object::as_dict).and_then(|dict| dict.get(b"C")).and_then(Object::as_name),
