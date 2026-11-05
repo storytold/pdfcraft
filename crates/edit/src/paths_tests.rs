@@ -146,6 +146,17 @@ fn a_device_colour_space_named_by_a_resource_keeps_its_colour() {
     assert_eq!(colours, [(Some([1.0, 0.0, 0.0]), Some([1.0, 0.0, 0.0])), (Some([0.5; 3]), None)]);
 }
 
+/// ISO 32000-2 Table 73: `cs`/`CS` take `DeviceGray`, `DeviceRGB`, `DeviceCMYK` and `Pattern`
+/// as the family itself; only other names come from the `/ColorSpace` subdictionary.
+#[test]
+fn a_family_name_is_not_looked_up_in_the_colour_space_resources() {
+    let resources = "/MediaBox [0 0 600 800] /Resources << /ColorSpace << /DeviceRGB [/ICCBased << /N 3 >>] /Pattern /DeviceRGB >> >>";
+    let content = "/DeviceRGB cs 1 0 0 sc 10 10 10 10 re f /Pattern cs /P0 scn 30 30 10 10 re f";
+    let found = page_paths(&page_dict(resources, &[("", content)]), 0).unwrap();
+    let seen: Vec<_> = found.iter().map(|p| (p.fill_rgb, p.pattern)).collect();
+    assert_eq!(seen, [(Some([1.0, 0.0, 0.0]), false), (None, true)]);
+}
+
 #[test]
 fn a_pattern_colour_space_resource_marks_its_paths() {
     let resources = "/MediaBox [0 0 600 800] /Resources << /ColorSpace << /CS0 [/Pattern /DeviceRGB] /CS1 /Pattern /CS2 [/CalGray << /WhitePoint [1 1 1] >>] >> >>";

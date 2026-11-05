@@ -112,9 +112,11 @@ fn gs_line_width(doc: &Document, ext_gstates: &Dict, op: &Op) -> Option<f64> {
 
 /// What a `cs`/`CS` operator selects when it names a `/ColorSpace` resource (ISO 32000-2
 /// §8.6.3): by the resource's family, its name (`/DeviceRGB`, `/Pattern`) or its array's first
-/// element (`[/Pattern base]` for uncoloured patterns, `[/ICCBased …]`).
+/// element (`[/Pattern base]` for uncoloured patterns, `[/ICCBased …]`). The family names are
+/// used directly and never looked up (Table 73), so they get `None`.
 fn named_space(doc: &Document, colour_spaces: &Dict, op: &Op) -> Option<Colour> {
-    let space = doc.resolve(colour_spaces.get(op.name(0)?)?);
+    let name = op.name(0).filter(|n| !matches!(*n, b"DeviceGray" | b"DeviceRGB" | b"DeviceCMYK" | b"Pattern"))?;
+    let space = doc.resolve(colour_spaces.get(name)?);
     let first = space.as_array().and_then(|a| a.first()).map(|f| doc.resolve(f));
     Some(Colour::initial(first.as_deref().unwrap_or(&space).as_name()))
 }
