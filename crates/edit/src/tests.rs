@@ -10588,3 +10588,36 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
         }
     }
 }
+
+/// A page that names one font under 300 resource names builds its metrics once: each alias
+/// used to build (and keep) a set of its own.
+#[test]
+fn font_aliases_share_one_set_of_metrics() {
+    let fonts: String = (0..300).map(|i| format!(" /A{i} 5 0 R")).collect();
+    let content: String = format!("BT 72 700 Td {} ET", (0..300).map(|i| format!("/A{i} 12 Tf (x) Tj ")).collect::<String>());
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font <<{fonts} >> >> >>"),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let doc = Document::open(Arc::new(out)).unwrap();
+    text::METRICS_BUILT.with(|n| n.set(0));
+    let lines = text::text_lines(&doc, 0).unwrap();
+    assert!(lines.iter().map(|l| l.text.matches('x').count()).sum::<usize>() >= 300, "{lines:?}");
+    let built = text::METRICS_BUILT.with(std::cell::Cell::get);
+    assert!(built < 10, "metrics built {built} times for one font");
+}
