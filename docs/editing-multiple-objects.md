@@ -54,10 +54,10 @@ its other objects can still be selected.
 
 - **Move.** A drag wraps the path in `q cm … Q`. A path alone in its own saved state with its
   private clip moves with that clip; otherwise it moves under the clip in effect. A move that would
-  take it wholly off the page or out of its clip is refused (partly is allowed: the page edge or
-  clip hides the rest, as for an image), and so is moving or resizing a path painted
-  with a pattern (the pattern would not move with it), alone, in a group or by Align and
-  Distribute, and moving or resizing a path drawn flat by its transform.
+  take its box (the stroke included) wholly off the page or out of its clip's box is refused
+  (partly is allowed: the page edge or clip hides the rest, as for an image), and so is moving or
+  resizing a path painted with a pattern (the pattern would not move with it), alone, in a group
+  or by Align and Distribute, and moving or resizing a path drawn flat by its transform.
 - **Resize.** With one path selected, drag a corner handle; the opposite corner stays where it is
   and proportions are not kept. The line width and dash scale with the path, so a stroked path's box
   lands close to, not exactly on, where you let go. On a thin rule the handles only stretch it along
