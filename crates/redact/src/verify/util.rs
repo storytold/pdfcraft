@@ -151,17 +151,6 @@ pub(super) fn find_from(hay: &[u8], pat: &[u8], from: usize) -> Option<usize> {
     None
 }
 
-/// Push the span of every non-overlapping occurrence of `pat` in `hay` (at most `cap` in all).
-pub(super) fn find_all(hay: &[u8], pat: &[u8], cap: usize, spans: &mut Vec<(usize, usize)>) {
-    let mut at = 0;
-    while spans.len() < cap {
-        let Some(start) = find_from(hay, pat, at) else { return };
-        let end = start + pat.len();
-        spans.push((start, end));
-        at = end;
-    }
-}
-
 pub(super) fn escape_literal(b: &[u8], octal: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(b.len() * 2);
     for &c in b {
