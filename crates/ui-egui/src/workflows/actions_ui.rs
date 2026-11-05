@@ -1,6 +1,8 @@
 //! Action Wizard: the actions (PdfCraft's and your own), running one over files in the
 //! background, and creating or editing an action's steps. Your actions are remembered.
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::file_filter::AddFilterAnyCase as _;
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
@@ -186,7 +188,7 @@ impl PdfCraftApp {
             match self.action_files_override.clone() {
                 Some(p) => run(self, p.into_iter().map(std::path::PathBuf::from).collect()),
                 None => {
-                    let dialog = rfd::AsyncFileDialog::new().set_title(title).add_filter("PDF", &["pdf"]);
+                    let dialog = rfd::AsyncFileDialog::new().set_title(title).add_filter_any_case("PDF", &["pdf"]);
                     self.ask(crate::pickers::Ask::Files(dialog), None, run);
                 }
             }

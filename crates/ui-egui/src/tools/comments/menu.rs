@@ -1,6 +1,9 @@
 use super::paint::edit_anchor;
 use super::state::{Composer, ComposerKind};
-use super::*;
+use super::{
+    Annotation, Color32, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Rect, ReviewState, Rgb, SELECT_BLUE, SWATCHES, Sense, Stroke, color32,
+    icons, theme, tool_for, vec2,
+};
 
 /// Save attachment… and, for a PDF, Open in a new tab, first in a file attachment comment's
 /// menus as in the Attachments panel: the comment is where the reader finds its file. Reading
@@ -21,10 +24,13 @@ pub(crate) fn attachment_items(ui: &mut egui::Ui, view: &mut DocView, info: &Doc
 
 /// Items of the canvas context menu for the selected comment (or the page).
 /// `can_modify`: the document's pages may change (Flatten comments draws into them).
+/// `deletable`: whether Delete would delete the comment at (page, index) (the engine's
+/// `Document::annotation_deletable`: unlocked, and no locked reply to it).
 pub(crate) fn context_menu(
     ui: &mut egui::Ui,
     view: &mut DocView,
     info: &DocInfo,
+    deletable: &dyn Fn(usize, usize) -> bool,
     prefs: &CommentPrefs,
     allowed: bool,
     can_modify: bool,
@@ -86,7 +92,8 @@ pub(crate) fn context_menu(
                 ui.close();
             }
             ui.separator();
-            if ui.add_enabled(allowed && !a.locked, egui::Button::new(tl!("Delete"))).clicked() {
+            // The engine's own check: a locked comment, or one with a locked reply, stays.
+            if ui.add_enabled(allowed && deletable(page, index), egui::Button::new(tl!("Delete"))).clicked() {
                 view.comments.selected = None;
                 action = Some(CanvasAction::Edit(Box::new(Edit::DeleteAnnotation { page, index })));
                 ui.close();
@@ -279,25 +286,32 @@ pub fn fill_picker(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Option<Rgb
     picked
 }
 
-/// The comment tools' extra quick-bar controls: pin, colour, fill, opacity and thickness.
-pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) -> Option<Rgb> {
-    let style = prefs.style(tool);
-    let mut selected_color = None;
-    if icons::button(ui, "pin", 32.0, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
-        prefs.pinned = !prefs.pinned;
-    }
+pub(crate) fn quick_bar_colour(ui: &mut egui::Ui, current: Rgb) -> Option<Rgb> {
     let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
-    ui.painter().circle_filled(r.center(), 9.0, color32(style.color));
+    ui.painter().circle_filled(r.center(), 9.0, color32(current));
     ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(50)));
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Colour")));
     let resp = resp.on_hover_text(tl!("Colour"));
+    let mut picked = None;
     egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        if let Some(c) = swatch_grid(ui, Some(style.color)) {
-            prefs.set_color(tool, c);
-            selected_color = Some(c);
+        if let Some(c) = swatch_grid(ui, Some(current)) {
+            picked = Some(c);
             ui.close();
         }
     });
+    picked
+}
+
+/// The comment tools' extra quick-bar controls: pin, colour, fill, opacity and thickness.
+pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) -> Option<Rgb> {
+    let style = prefs.style(tool);
+    if icons::button(ui, "pin", 32.0, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
+        prefs.pinned = !prefs.pinned;
+    }
+    let selected_color = quick_bar_colour(ui, style.color);
+    if let Some(c) = selected_color {
+        prefs.set_color(tool, c);
+    }
     if tool.has_fill() {
         let resp = fill_button(ui, style.fill);
         egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
@@ -313,8 +327,10 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
         ui.set_min_width(180.0);
         let mut percent = (style.opacity * 100.0).round();
         ui.label(egui::RichText::new(tl!("Opacity")).font(theme::semibold(12.0)));
+        // The whole comment's: its fill and text take it too.
         if ui.add(egui::Slider::new(&mut percent, 10.0..=100.0).step_by(5.0).suffix(" %")).changed() {
             prefs.set_opacity(tool, percent / 100.0);
+            prefs.set_part_opacity(tool, None, None);
         }
     });
     if tool.has_width() {
@@ -323,7 +339,7 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
             ui.set_min_width(180.0);
             let mut w = style.width;
             ui.label(egui::RichText::new(tl!("Line thickness")).font(theme::semibold(12.0)));
-            if ui.add(egui::Slider::new(&mut w, tool.min_width()..=12.0).step_by(0.5).suffix(" pt")).changed() {
+            if ui.add(egui::Slider::new(&mut w, tool.min_width()..=super::MAX_LINE_WIDTH).step_by(0.5).suffix(" pt")).changed() {
                 prefs.set_width(tool, w);
             }
         });

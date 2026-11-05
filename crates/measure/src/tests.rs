@@ -80,7 +80,7 @@ fn standard_annotations_captions_restyle_move_and_unknown_keys() {
     let (r, dict) = annot(&d, 0, 0).unwrap();
     assert_eq!(dict.name(b"IT"), Some(&b"LineDimension"[..]));
     d.update_dict(r, |d| d.set(b"VendorKey".to_vec(), Object::Int(42))).unwrap();
-    pdfcraft_annot::set_style(&mut d, 0, 0, Some([1.0, 0.0, 0.0]), None, Some(2.0), None, &meta).unwrap();
+    pdfcraft_annot::set_style(&mut d, 0, 0, pdfcraft_annot::StyleChange::new(Some([1.0, 0.0, 0.0]), None, Some(2.0), None), &meta).unwrap();
     let (_, dict) = annot(&d, 0, 0).unwrap();
     assert_eq!(dict.int(b"VendorKey"), Some(42));
     let ap = d.resolve(dict.get(b"AP").unwrap());
@@ -447,6 +447,16 @@ fn listing_skips_repeated_refs_and_caps_what_it_keeps() {
     assert!(listing.truncated);
     assert!(listing.measurements.iter().map(retained).sum::<usize>() <= MAX_LISTED_BYTES);
     assert!(!listing.measurements.is_empty());
+}
+#[test]
+fn ortho_holds_a_vertex_level_or_plumb_with_the_last() {
+    let last = [10.0, 20.0];
+    assert_eq!(snap::ortho(last, [50.0, 27.0]), [50.0, 20.0], "mostly across: level");
+    assert_eq!(snap::ortho(last, [-30.0, 13.0]), [-30.0, 20.0], "to the left too");
+    assert_eq!(snap::ortho(last, [14.0, 80.0]), [10.0, 80.0], "mostly up: plumb");
+    assert_eq!(snap::ortho(last, [8.0, -40.0]), [10.0, -40.0], "and down");
+    assert_eq!(snap::ortho(last, [30.0, 40.0]), [30.0, 20.0], "a tie stays level");
+    assert_eq!(snap::ortho(last, last), last);
 }
 #[test]
 fn a_stream_over_the_byte_budget_uses_it_up_once() {

@@ -125,8 +125,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: E
 }
 
 /// Write the files (`name`, bytes) produced for `pages`, reporting progress.
-#[allow(clippy::too_many_arguments)]
-fn run(
+struct ExportTask<'a> {
     src: ExportSource,
     kind: ExportKind,
     dpi: f64,
@@ -134,10 +133,12 @@ fn run(
     min_side: u32,
     pages: Vec<usize>,
     stem: String,
-    mut sink: impl FnMut(&str, Vec<u8>) -> Result<(), String>,
-    status: &ExportStatus,
+    status: &'a ExportStatus,
     lang: crate::i18n::Lang,
-) -> String {
+}
+
+fn run(task: ExportTask<'_>, mut sink: impl FnMut(&str, Vec<u8>) -> Result<(), String>) -> String {
+    let ExportTask { src, kind, dpi, format, min_side, pages, stem, status, lang } = task;
     // May run on a worker thread: messages are drawn in the UI's language.
     crate::i18n::set_current(lang);
     let total = pages.len();
@@ -250,7 +251,7 @@ impl PdfCraftApp {
                     let sink = |name: &str, bytes: Vec<u8>| {
                         crate::editing::write_atomically(&dir.join(name).to_string_lossy(), &bytes).map_err(|e| format!("{name}: {e}"))
                     };
-                    let msg = run(src, kind, dpi, format, min_side, pages, stem, sink, &st, lang);
+                    let msg = run(ExportTask { src, kind, dpi, format, min_side, pages, stem, status: &st, lang }, sink);
                     if let Ok(mut s) = st.lock() {
                         let (done, total) = s.as_ref().map_or((0, 0), |(d, t, _)| (*d, *t));
                         let done_msg = crate::i18n::fmt(tl!("{msg} to {dir}"), &[("msg", &msg), ("dir", &shown)]);
@@ -274,18 +275,10 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let msg = run(
-                src,
-                kind,
-                dpi,
-                format,
-                min_side,
-                pages,
-                stem,
-                |name, bytes| crate::editing::download(name, &bytes),
-                &status,
-                crate::i18n::current(),
-            );
+            let msg =
+                run(ExportTask { src, kind, dpi, format, min_side, pages, stem, status: &status, lang: crate::i18n::current() }, |name, bytes| {
+                    crate::editing::download(name, &bytes)
+                });
             if let Ok(mut s) = status.lock() {
                 *s = Some((0, 0, Some(msg)));
             }
