@@ -41,7 +41,7 @@ pub(super) fn option_extents(f: &Field, family: SyriacFamily) -> Result<(f64, f6
     }
     let (mut top, mut bottom) = (0.718f64, -0.207f64);
     for (_, label) in &f.options {
-        let row = text::line_for_family(label, unicode_bidi_rtl(label, family), family)?;
+        let row = text::line_for_family(label, unicode_bidi_rtl(label), family)?;
         let (a, d) = row.vertical_extents()?;
         top = top.max(a);
         bottom = bottom.min(d);
@@ -55,14 +55,14 @@ fn layout(value: &str, size: f64, width: f64, multiline: bool, family: SyriacFam
         text::wrap_for_family(value, size, width, family)
     } else {
         let shown = value.replace(['\n', '\r'], " ");
-        Ok(vec![text::line_for_family(&shown, unicode_bidi_rtl(&shown, family), family)?])
+        Ok(vec![text::line_for_family(&shown, unicode_bidi_rtl(&shown), family)?])
     }
 }
 
-/// Ask the shared paragraph layout for base direction, defaulting to LTR if layout fails.
-fn unicode_bidi_rtl(value: &str, family: SyriacFamily) -> bool {
-    // The layout helper owns UAX #9; an unwrapped paragraph gets the same base direction.
-    text::wrap_for_family(value, 1.0, f64::MAX, family).ok().and_then(|lines| lines.first().map(|line| line.rtl)).unwrap_or(false)
+/// The UAX #9 base direction `wrap_for_family` gives the value's first paragraph, without
+/// shaping it; a neutral paragraph is LTR.
+fn unicode_bidi_rtl(value: &str) -> bool {
+    pdfcraft_fonts::appearance_text::paragraph_rtl(value.split(['\r', '\n']).next().unwrap_or_default())
 }
 
 /// Use an explicit size or compute an automatic size from shaped bounds, with a 4-point minimum.
@@ -196,7 +196,7 @@ pub(super) fn list_overflow(doc: &Document, f: &Field, w: &Widget) -> Result<Opt
         if label.len() > text::MAX_TEXT_BYTES {
             return Err("the Syriac choice list exceeds its drawing budget".into());
         }
-        let line = text::line_for_family(label, unicode_bidi_rtl(label, box_.syriac_family), box_.syriac_family)?;
+        let line = text::line_for_family(label, unicode_bidi_rtl(label), box_.syriac_family)?;
         width = width.max(line.width * rows.size);
         y -= rows.row;
     }
@@ -293,7 +293,7 @@ pub(super) fn field(doc: &mut Document, f: &Field, w: &Widget, values: &[String]
                     .extend(format!("0.6 0.75 0.86 rg {} {} {} {} re f\n", n(border), n(y - rows.row), n(width - 2.0 * border), n(rows.row)).bytes());
             }
             content.extend(format!("{}\n", da.color).bytes());
-            let line = text::line_for_family(label, unicode_bidi_rtl(label, family), family)?;
+            let line = text::line_for_family(label, unicode_bidi_rtl(label), family)?;
             let baseline = y - (rows.row - (top - bottom) * rows.size) / 2.0 - top * rows.size;
             content.extend(line.write(doc, &mut fonts, [x_for(&line, rows.size), baseline], rows.size)?);
             y -= rows.row;
@@ -301,7 +301,7 @@ pub(super) fn field(doc: &mut Document, f: &Field, w: &Widget, values: &[String]
     } else if let Some((cells, laid)) = comb {
         let cell = width / cells as f64;
         content.extend(comb_dividers(doc, &wd, width, height, cells).bytes());
-        let start = if unicode_bidi_rtl(&value, family) { cells.saturating_sub(laid.len().min(cells)) } else { 0 };
+        let start = if unicode_bidi_rtl(&value) { cells.saturating_sub(laid.len().min(cells)) } else { 0 };
         for (index, line) in laid.into_iter().take(cells).enumerate() {
             let (top, bottom) = line.vertical_extents()?;
             let y = (height - (top - bottom) * size) / 2.0 - bottom * size;
@@ -330,6 +330,18 @@ pub(super) fn field(doc: &mut Document, f: &Field, w: &Widget, values: &[String]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The base direction comes from UAX #9 alone: a value the face can't shape, or one
+    /// past the layout budget, still keeps its RTL first paragraph.
+    #[test]
+    fn base_direction_does_not_depend_on_shaping() {
+        assert!(unicode_bidi_rtl("\u{0710}\u{0712} \u{E000}"));
+        assert!(unicode_bidi_rtl(&format!("\u{0710}{}", "a".repeat(text::MAX_TEXT_BYTES))));
+        assert!(unicode_bidi_rtl("\u{0710}\r\nabc"));
+        assert!(!unicode_bidi_rtl("abc\n\u{0710}"));
+        assert!(!unicode_bidi_rtl("123 ."));
+        assert!(!unicode_bidi_rtl(""));
+    }
 
     /// Sparse comb values still use MaxLen cell widths, actual mark height and bounded geometry.
     #[test]
