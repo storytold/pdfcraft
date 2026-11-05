@@ -3,7 +3,7 @@
 //! space: its `/Group` dictionary has a `/CS` entry.
 //!
 //! A page contains transparency when something its resources reach can paint transparently (ISO
-//! 32000-1 11.6.4.4 and 11.7.4): a graphics state with a constant alpha (`/CA`, `/ca`) below 1,
+//! 32000-1 11.6.4.4 to 11.6.6): a graphics state with a constant alpha (`/CA`, `/ca`) below 1,
 //! a blend mode other than `Normal` or `Compatible`, or a soft mask; an image with a soft mask
 //! (`/SMask`, or `/SMaskInData` above 0); or a transparency group XObject. The resources looked
 //! through are the page's own, those of the form XObjects, tiling patterns and Type 3 fonts they
