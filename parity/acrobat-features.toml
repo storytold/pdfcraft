@@ -1778,8 +1778,8 @@ milestone = "M3"
 status = "partial"
 commands = ["help.check_updates"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/updates.rs::a_newer_release_is_offered_for_download", "crates/ui-egui/tests/it/updates.rs::an_up_to_date_or_failed_check_says_so", "crates/ui-egui/tests/it/updates.rs::the_check_at_start_offers_the_prompt_and_later_dismisses_it", "crates/ui-egui/tests/it/updates.rs::nothing_is_asked_until_the_user_checks"]
-notes = "asks GitHub Releases through craft-update at start (desktop app only) and on request, offers the release page, and updates and restarts in place where the install type allows it; an install waits while documents are unsaved"
+evidence = ["crates/ui-egui/tests/it/updates.rs::a_newer_release_is_offered_for_download", "crates/ui-egui/tests/it/updates.rs::an_up_to_date_or_failed_check_says_so", "crates/ui-egui/tests/it/updates.rs::the_check_at_start_offers_the_prompt_and_later_dismisses_it", "crates/ui-egui/tests/it/updates.rs::nothing_is_asked_until_the_user_checks", "crates/ui-egui/tests/it/updates.rs::turning_the_check_at_start_on_waits_for_the_next_start", "crates/ui-egui/tests/it/updates.rs::the_preference_keeps_the_check_at_start_from_reaching_the_network", "crates/ui-egui/tests/it/updates.rs::settings_from_the_old_opt_in_leave_the_check_at_start_on"]
+notes = "asks GitHub Releases through craft-update at start (desktop app only) and on request, offers the release page, and updates and restarts in place where the install type allows it; an install waits while documents are unsaved; Preferences ▸ Check for updates when PdfCraft starts (update_check_at_start, on by default) turns the check at start off, leaving only the request from the Help menu; turning it on takes effect at the next start"
 
 [[feature]]
 id = "view.single-key-accelerators"
@@ -6695,8 +6695,8 @@ milestone = "M10"
 status = "partial"
 commands = ["edit.edit_text"]
 tools = ["text_edit"]
-evidence = ["crates/engine/tests/it/ocr_edit.rs::editing_an_ocr_word_covers_the_scan_and_shows_the_new_text", "crates/engine/tests/it/ocr_edit.rs::an_explicit_colour_is_kept_for_the_new_text", "crates/engine/tests/it/ocr_edit.rs::ocr_words_group_into_phrases_that_edit_in_place", "crates/engine/tests/it/ocr_edit.rs::a_longer_ocr_phrase_grows_rightwards", "crates/engine/tests/it/ocr_edit.rs::a_rewritten_ocr_phrase_keeps_its_word_widths", "crates/ui-egui/tests/it/ocr.rs::an_ocr_word_opens_for_editing_and_stays_open", "crates/ui-egui/tests/it/ocr.rs::editing_a_scanned_page_recognizes_its_text_first_and_only_once"]
-notes = "On demand, per edit: in Edit text & images, recognised text (the invisible OCR layer over a scan) is grouped into phrases (words across a word space; a wider gap such as a table cell, and each scanned line, stay separate) and opens for editing on a click. Applying draws the new text visibly in the scan's sampled ink colour (or the chosen one) and first covers the old words with the paper colour sampled around them, so the scanned word no longer shows; the phrase keeps each word's position and width and grows rightwards instead of wrapping. Turning Edit text & images on for a scanned page (an image covering at least half of a page that has no text of its own, once per page per window; comments and text boxes over it do not count as text, a page with real text and a background picture is left alone; one undoable \"Recognize text\" step) now recognizes its words first, as Acrobat's \"Converting scanned page to Editable Text and Images\" does (English only until more OCR languages exist, gap 7). Still missing: separating the photographs on the page from the lettering, matching the scanned typeface (the layer's Helvetica is used), and covering on a textured or patterned background (one flat colour is used)."
+evidence = ["crates/engine/tests/it/ocr_edit.rs::editing_an_ocr_word_covers_the_scan_and_shows_the_new_text", "crates/engine/tests/it/ocr_edit.rs::an_explicit_colour_is_kept_for_the_new_text", "crates/engine/tests/it/ocr_edit.rs::ocr_words_group_into_phrases_that_edit_in_place", "crates/engine/tests/it/ocr_edit.rs::a_longer_ocr_phrase_grows_rightwards", "crates/engine/tests/it/ocr_edit.rs::a_rewritten_ocr_phrase_keeps_its_word_widths", "crates/engine/tests/it/ocr_edit.rs::an_ocr_layer_under_the_scan_image_shows_its_edit", "crates/engine/tests/it/ocr_edit.rs::an_ocr_phrase_split_from_visible_text_under_the_scan_shows_its_edit", "crates/ui-egui/tests/it/ocr.rs::an_ocr_word_opens_for_editing_and_stays_open", "crates/ui-egui/tests/it/ocr.rs::editing_a_scanned_page_recognizes_its_text_first_and_only_once"]
+notes = "On demand, per edit: in Edit text & images, recognised text (the invisible OCR layer over a scan) is grouped into phrases (words across a word space; a wider gap such as a table cell, and each scanned line, stay separate) and opens for editing on a click. Applying draws the new text visibly in the scan's sampled ink colour (or the chosen one) and first covers the old words with the paper colour sampled around them, so the scanned word no longer shows; when an image or form is drawn after the OCR layer over where the edit lands (its old box, moved, rewrapped or grown to more lines), or an inline image or shading after it (a layer written under its scan, #3973), the cover and new text are drawn on top of the page instead, so they show; the phrase keeps each word's position and width and grows rightwards instead of wrapping. Turning Edit text & images on for a scanned page (an image covering at least half of a page that has no text of its own, once per page per window; comments and text boxes over it do not count as text, a page with real text and a background picture is left alone; one undoable \"Recognize text\" step) now recognizes its words first, as Acrobat's \"Converting scanned page to Editable Text and Images\" does (English only until more OCR languages exist, gap 7). Still missing: separating the photographs on the page from the lettering, matching the scanned typeface (the layer's Helvetica is used), covering on a textured or patterned background (one flat colour is used), a scan painted by a pattern fill or a filled rectangle over a layer written under it, and, for text drawn on top, the clip, optional content and marked content (tags) that enclosed the OCR layer."
 
 [[feature]]
 id = "ocr.ocr-downsample"
@@ -9920,11 +9920,11 @@ title = "View 3D (U3D/PRC) content"
 area = "N"
 tier = "P3"
 milestone = "M12"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["model_render"]
+evidence = ["crates/automation/tests/it/model_render.rs::a_prc_model_is_drawn_over_the_background", "crates/annot/src/model3d/tests.rs::a_3dref_leads_to_the_stream_it_names", "crates/prc-render/tests/model.rs::a_synthetic_prc_renders_its_nearer_triangle_over_the_farther"]
+notes = "headless only: model_render draws a page's PRC model (through a /3DRef too) to a PNG, framed from a chosen direction, with headlight shading. Missing: the 3D view in the app (no activation, no navigation), U3D (an error), the annotation's /3DV views, lighting schemes and /RM render modes, materials and textures, compressed tessellation, picking, cross sections, the model tree, and measurements"
 
 [[feature]]
 id = "misc.3d-add"
