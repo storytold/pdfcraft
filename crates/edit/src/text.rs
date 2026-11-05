@@ -165,6 +165,13 @@ mod tests {
         // Squares apart share nothing, so nothing shows, not even a box across both.
         let none = intersect(&square(0.0, 0.0), &square(20.0, 0.0));
         assert!(!shows([-100.0, -100.0, 100.0, 100.0], &none), "{none:?}");
+        // Squares that meet only along an edge share no area either: a box across that edge
+        // does not show (#5075 review).
+        let edge = intersect(&square(0.0, 0.0), &square(10.0, 0.0));
+        assert!(!shows([8.0, 2.0, 12.0, 4.0], &edge), "{edge:?}");
+        // Nothing intersected with anything is nothing, whichever side it is on.
+        assert!(!shows([1.0, 1.0, 2.0, 2.0], &intersect(&square(0.0, 0.0), &Vec::new())));
+        assert!(!shows([1.0, 1.0, 2.0, 2.0], &intersect(&Vec::new(), &square(0.0, 0.0))));
         // A box touching an edge shares no area; one a hair inside does.
         assert!(!shows([10.0, 0.0, 12.0, 5.0], &square(0.0, 0.0)));
         assert!(shows([9.99, 0.0, 12.0, 5.0], &square(0.0, 0.0)));
@@ -176,9 +183,16 @@ mod tests {
         // A corner repeated (an edge of no length) does not hide what the region covers.
         let doubled = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
         assert!(shows([4.0, 4.0, 6.0, 6.0], &doubled));
-        // No area, or a corner that isn't finite: no region to clip with.
-        assert!(region(&Matrix::IDENTITY, [0.0, 0.0, 10.0, 0.0]).is_none());
+        // A rectangle of no area is a region that covers nothing; a corner that isn't finite
+        // gives no region to clip with at all.
+        let flat = region(&Matrix::IDENTITY, [0.0, 0.0, 10.0, 0.0]).unwrap();
+        assert!(!shows([-100.0, -100.0, 100.0, 100.0], &flat), "{flat:?}");
         assert!(region(&Matrix::IDENTITY, [0.0, 0.0, f64::INFINITY, 10.0]).is_none());
+        // However thin, a rectangle with area keeps it, and so does one far from the origin.
+        let thin = region(&Matrix::IDENTITY, [0.0, 0.0, 1.0, 1e-10]).unwrap();
+        assert!(shows([0.25, 0.0, 0.75, 1.0], &thin) && !shows([0.25, 1.0, 0.75, 2.0], &thin));
+        let far = region(&Matrix([1.0, 0.0, 0.0, 1.0, 1e12, 1e12]), [0.0, 0.0, 100.0, 100.0]).unwrap();
+        assert!(shows([1e12 + 10.0, 1e12 + 10.0, 1e12 + 20.0, 1e12 + 20.0], &far) && !shows([1e12 + 200.0, 1e12, 1e12 + 300.0, 1e12 + 10.0], &far));
     }
 
     /// A stream that sets clip after clip, each turned a little more, keeps its region bounded:

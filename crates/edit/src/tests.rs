@@ -5709,12 +5709,38 @@ fn a_malformed_form_bbox_clips_nothing() {
 }
 
 /// #5075 review: a clipping path of several rectangles clips to all of them, not to the last one
-/// drawn. Text seen through the first rectangle was hidden.
+/// drawn (text seen through the first rectangle was hidden), and not to the box around them
+/// either (text in the gap between them was read, though nothing of it shows).
 #[test]
 fn a_clip_of_several_rectangles_keeps_text_in_each() {
     let content = "q 0 0 50 50 re 100 100 50 50 re W n BT /F1 12 Tf 5 5 Td (FIRST) Tj ET BT /F1 12 Tf 105 105 Td (SECOND) Tj ET \
-                   BT /F1 12 Tf 300 300 Td (OUTSIDE) Tj ET Q";
+                   BT /F1 12 Tf 60 60 Td (GAP) Tj ET BT /F1 12 Tf 300 300 Td (OUTSIDE) Tj ET Q";
     assert_eq!(read_clipped(content, [("", ""), ("", "")]), ["FIRST", "SECOND"]);
+}
+
+/// #5075 review: a form's `/BBox` clips however thin it is and wherever its matrix puts it. A box
+/// one point by 1e-10 was taken for no box (its area fell under a fixed threshold), and one moved
+/// 1e12 points away lost its area to rounding; either way the text outside it was read.
+#[test]
+fn a_thin_or_far_off_form_bbox_still_clips() {
+    let after = "BT /F1 12 Tf 5 300 Td (AFTER) Tj ET";
+    let body = "BT /F1 12 Tf 5 5 Td (INSIDE) Tj ET BT /F1 12 Tf 300 300 Td (OUTSIDE) Tj ET";
+    let sorted = |mut v: Vec<String>| {
+        v.sort();
+        v
+    };
+    let thin = read_clipped(&format!("/Fa Do {after}"), [("/BBox [0 0 1 1e-10]", body), ("", "")]);
+    assert_eq!(thin, ["AFTER"], "a thin /BBox");
+    let far = read_clipped(&format!("/Fa Do {after}"), [("/Matrix [1 0 0 1 1e12 1e12] /BBox [0 0 100 100]", body), ("", "")]);
+    assert_eq!(sorted(far), ["AFTER", "INSIDE"], "a /BBox 1e12 points away");
+}
+
+/// #5075 review: a clip of no area has no inside, so nothing drawn under it shows (ISO 32000-2
+/// §8.5.4). It was taken for no clip at all, and everything under it was read.
+#[test]
+fn a_clip_of_no_area_shows_nothing() {
+    let content = "q 0 0 100 0 re W n BT /F1 12 Tf 5 5 Td (HIDDEN) Tj ET Q BT /F1 12 Tf 5 300 Td (AFTER) Tj ET";
+    assert_eq!(read_clipped(content, [("", ""), ("", "")]), ["AFTER"]);
 }
 
 /// #5075 review: what shows is the intersection of every clip in force. A long run that crosses a

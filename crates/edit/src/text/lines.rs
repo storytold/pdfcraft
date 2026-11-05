@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::fallback::{same_font, same_paint};
-use super::interp::{Carry, Origin, Pen, Region, Shown, TextState, Ts, direction, interpret, intersect, region, shows, to_frame, union};
+use super::interp::{Carry, Clip, Origin, Pen, Shown, TextState, Ts, clip_shows, clip_within, direction, interpret, region, to_frame, union};
 use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
 
 impl TextLine {
@@ -450,8 +450,8 @@ impl FormBudget {
 }
 
 /// A form XObject a page draws: its object, content, resources, its matrix composed with the
-/// CTM at the `Do`, and the region its `/BBox` leaves visible (page space, under that same matrix,
-/// so a turned form keeps its turned box) if it has a valid one.
+/// CTM at the `Do`, and the clip its `/BBox` makes (page space, under that same matrix, so a
+/// turned form keeps its turned box; a box of no area hides everything) if it has a valid one.
 pub(crate) struct FormCall {
     pub(crate) obj: Option<pdfcraft_cos::ObjRef>,
     pub(crate) data: Vec<u8>,
@@ -460,7 +460,7 @@ pub(crate) struct FormCall {
     form: Arc<Object>,
     own: Option<Arc<Object>>,
     pub(crate) ctm: Matrix,
-    bbox: Option<Region>,
+    bbox: Option<Clip>,
 }
 
 impl FormCall {
@@ -546,7 +546,7 @@ pub(crate) fn form_call(
     };
     budget.visits = budget.visits.saturating_add(1);
     let ctm = m.map_or(ctm, |m| Matrix(m).then(&ctm));
-    Some(FormCall { obj, data, form, own, ctm, bbox: bbox.and_then(|b| region(&ctm, b)) })
+    Some(FormCall { obj, data, form, own, ctm, bbox: bbox.and_then(|b| region(&ctm, b)).map(|r| if r.is_empty() { Vec::new() } else { vec![r] }) })
 }
 
 /// The lines a page shows as it reads, including text drawn by form XObjects (which
@@ -579,7 +579,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             }
             // A run that the clips in force (forms' `/BBox`es and content-stream `re`/`W`/`n`
             // clips, intersected) hide is not drawn, so it is not read either (#3503).
-            if s.state.clip.as_ref().is_some_and(|clip| !shows(s.rect, clip)) {
+            if s.state.clip.as_ref().is_some_and(|clip| !clip_shows(s.rect, clip)) {
                 last = None;
                 continue;
             }
@@ -603,7 +603,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         // Its content is clipped to its `/BBox` within whatever clips the page had in force at the
         // `Do`. It starts with a stack of its own, so no `Q` of its own can lift that clip.
         let clip = match (&ts.clip, &form.bbox) {
-            (Some(outer), Some(own)) => Some(intersect(outer, own)),
+            (Some(outer), Some(own)) => Some(clip_within(outer, own)),
             (outer, own) => outer.clone().or_else(|| own.clone()),
         };
         let mut carry =
