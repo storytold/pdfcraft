@@ -4621,8 +4621,32 @@ wheat"
         .written,
         "the same picks, read past the comments"
     );
+    assert_eq!(
+        crate::script::data_of(&doc).unwrap().value_at(&path).as_deref(),
+        Some(
+            "rye
+wheat"
+        ),
+        "and read back without them"
+    );
     assert!(write_data_value(&mut doc, &path, "").unwrap().written, "cleared");
     assert_eq!(crate::script::data_of(&doc).unwrap().count(&path, "value"), 0);
+    // One `value` whose text holds a line break is one pick, not the two it would join to.
+    let one = crate::fixtures::static_shell(
+        "<form1><page1><grains><value>one
+two</value></grains></page1></form1>",
+    );
+    let mut doc = Document::open(Arc::new(one)).unwrap();
+    assert!(
+        write_data_value(
+            &mut doc, &path, "one
+two"
+        )
+        .unwrap()
+        .written,
+        "two picks replace the one"
+    );
+    assert_eq!(crate::script::data_of(&doc).unwrap().count(&path, "value"), 2);
     // The in-memory data, which scripts read before the packet is written, follows the same rule.
     let mut tree = crate::script::data_of(
         &Document::open(Arc::new(crate::fixtures::static_shell("<form1><page1><grains><value>rye</value></grains></page1></form1>"))).unwrap(),

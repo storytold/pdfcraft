@@ -331,10 +331,12 @@ fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Ve
                     .filter(|c| c.is_element())
                     .map(|c| c.children().filter(|t| t.is_text()).filter_map(|t| t.text()).collect())
                     .collect();
-                if held.join("\n") == w.text {
+                // Pick by pick: one `value` holding a line break is not two picks.
+                let wanted: Vec<&str> = w.text.split('\n').filter(|v| !v.is_empty()).collect();
+                if held.iter().map(String::as_str).eq(wanted.iter().copied()) {
                     continue;
                 }
-                let inner: String = w.text.split('\n').filter(|v| !v.is_empty()).map(|v| format!("<value>{}</value>", escape(v).0)).collect();
+                let inner: String = wanted.iter().map(|v| format!("<value>{}</value>", escape(v).0)).collect();
                 match replace_edit(src, node, &inner) {
                     Some(e) => edits.push(e),
                     None => skipped(warnings, STRUCTURED, &w.som),
