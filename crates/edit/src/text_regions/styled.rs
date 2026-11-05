@@ -3,7 +3,7 @@ use super::grouping::{across, is_centred, row_rect};
 use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
     RangeStyle, TextBlock, TextLine, Type3Glyph, builtin_thai_choice, coincident_ops, content_streams, fallback_face, japanese_glyph_from,
-    needs_type3, no_fallback_font, no_glyph_for, page_dict, reveal_ops, rewritten_contents, source_encodes, source_family, source_program,
+    needs_type3, no_fallback_font, no_glyph_for, page_dict, reveal_ops, rewritten_contents, row_break, source_encodes, source_family, source_program,
     source_show, source_space, source_width, splice, type3_faces, type3_glyph, write_type3_glyphs,
 };
 
@@ -251,12 +251,13 @@ impl CharacterPreparation<'_> {
             };
             let start = range.start;
             for (offset, ch) in draft.get(range).unwrap_or_default().char_indices() {
-                if ch == '\n' {
-                    chars.push((ch, index, source.font.clone()));
-                    continue;
-                }
-                if ch == '\r' {
-                    let crlf = start.checked_add(offset).and_then(|at| draft.get(at.saturating_add(1)..)).is_some_and(|rest| rest.starts_with('\n'));
+                // A row break moves to the next row instead of asking a font for a glyph. The CR
+                // of a CRLF stays a `\r` the rows skip, so the pair is one break; every other break
+                // is written as `\n`. Either way it keeps its place among the draft's characters,
+                // which rows are counted in.
+                if row_break(ch) {
+                    let crlf = ch == '\r'
+                        && start.checked_add(offset).and_then(|at| draft.get(at.saturating_add(1)..)).is_some_and(|rest| rest.starts_with('\n'));
                     chars.push((if crlf { '\r' } else { '\n' }, index, source.font.clone()));
                     continue;
                 }
