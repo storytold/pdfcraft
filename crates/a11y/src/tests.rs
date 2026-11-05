@@ -478,7 +478,8 @@ fn class_assignment_matches_comma_names_before_splitting_multiple_classes() {
     .unwrap();
     let tag = pdfcraft_cos::ObjRef::new(4, 0);
     set_tag_property(&mut doc, tag, TagProperty::Class, Some("North,East, West")).unwrap();
-    let classes = doc.get(tag).as_dict().unwrap().get(b"C").and_then(Object::as_array).unwrap();
+    let tag = doc.get(tag);
+    let classes = tag.as_dict().unwrap().get(b"C").and_then(Object::as_array).unwrap();
     assert_eq!(classes.iter().filter_map(Object::as_name).collect::<Vec<_>>(), [b"North,East".as_slice(), b"West".as_slice()]);
 }
 
