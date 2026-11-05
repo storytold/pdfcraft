@@ -240,7 +240,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                     let min_width = if e.font_size.is_some() { 0.0 } else { 0.5 };
                     if let Some(w) = e.width.as_mut() {
                         ui.label(tl!("Thickness"));
-                        ui.add(egui::Slider::new(w, min_width..=12.0).step_by(0.5).suffix(" pt"));
+                        ui.add(egui::Slider::new(w, min_width..=crate::comments::MAX_LINE_WIDTH).step_by(0.5).suffix(" pt"));
                         ui.end_row();
                     }
                     if let Some(ends) = e.endings.as_mut() {

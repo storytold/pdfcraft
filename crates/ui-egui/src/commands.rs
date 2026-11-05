@@ -259,6 +259,8 @@ impl PdfCraftApp {
                     self.notify(error);
                 }
             }
+            "view.select_tool" => self.quick_tool = crate::QuickTool::Select,
+            "view.hand_tool" => self.quick_tool = crate::QuickTool::Hand,
             "view.side_panel" => self.toggle_side_panel(),
             "view.tools_pane" => self.left_open = !self.left_open,
             "view.focus_page_input" => {
@@ -876,6 +878,9 @@ mod tests {
 
     #[test]
     fn localized_shortcut_labels_follow_language_and_platform() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let previous = crate::i18n::current();
         let ctx = egui::Context::default();
         for os in [OperatingSystem::Windows, OperatingSystem::Nix] {

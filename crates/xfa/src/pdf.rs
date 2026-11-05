@@ -17,7 +17,9 @@ mod strip;
 
 pub use common::jpeg_size;
 pub(crate) use common::rounded;
-use common::{all_faces, content_hash, empty_form, hex32, jpeg_info, js_action, n, parse_hex32, rgb, rgb_array, standard_font, state_name};
+use common::{
+    all_faces, content_hash, empty_form, hex32, jpeg_info, js_action, js_string, n, parse_hex32, rgb, rgb_array, standard_font, state_name,
+};
 pub(crate) use strip::USAGE_RIGHTS_REMOVED;
 use strip::drop_usage_rights;
 pub use strip::{Stripped, XfaShape, existing_layout, strip, xfa_shape};
@@ -210,9 +212,10 @@ impl Emitter<'_> {
                     d.set(DATE_KEY.to_vec(), Object::Bool(true));
                     let mut aa = Dict::new();
                     // Shown through the display picture, typed in the edit picture's pattern.
-                    let shown = w.display_date.as_deref().unwrap_or(pattern);
-                    aa.set(b"F".to_vec(), js_action(&format!("AFDate_FormatEx(\"{shown}\");")));
-                    aa.set(b"K".to_vec(), js_action(&format!("AFDate_KeystrokeEx(\"{pattern}\");")));
+                    let shown = js_string(w.display_date.as_deref().unwrap_or(pattern));
+                    let pattern = js_string(pattern);
+                    aa.set(b"F".to_vec(), js_action(&format!("AFDate_FormatEx({shown});")));
+                    aa.set(b"K".to_vec(), js_action(&format!("AFDate_KeystrokeEx({pattern});")));
                     d.set(b"AA".to_vec(), Object::Dict(aa));
                 }
             }

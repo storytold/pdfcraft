@@ -1,7 +1,11 @@
 use super::reader::find;
 use super::state::Credentials;
 use super::xref::XrefIndex;
-use super::{Arc, BTreeMap, CosError, Dict, Document, ObjRef, Object};
+use super::{Arc, BTreeMap, CosError, Dict, Document, HashSet, ObjRef, Object};
+
+/// More objects than `/Encrypt` and `/ID` refer to in any file, so that one which refers to the page
+/// tree, say, doesn't have a whole document read to open it.
+const MAX_ENCRYPT_MEMBERS: usize = 64;
 
 impl Document {
     /// A new document with an empty page tree (for split / extract / combine). It has no
@@ -19,6 +23,7 @@ impl Document {
             repair_log: Arc::new(Vec::new()),
             cache: Arc::default(),
             objstms: Arc::default(),
+            jbig2_globals: Arc::default(),
             stream_limit: crate::object::MAX_DECODED,
             overlay: BTreeMap::new(),
             next_num: 1,
@@ -26,6 +31,8 @@ impl Document {
             version: "1.7".into(),
             security: None,
             encrypt_num: None,
+            encrypt_members: Arc::default(),
+            unfound: Arc::default(),
             encryption_changed: false,
             full_save: false,
             out_security: None,
@@ -102,6 +109,7 @@ impl Document {
             repair_log: Arc::new(Vec::new()),
             cache: Arc::default(),
             objstms: Arc::default(),
+            jbig2_globals: Arc::default(),
             stream_limit: stream_limit.min(crate::object::MAX_DECODED),
             overlay: BTreeMap::new(),
             next_num: 1,
@@ -109,6 +117,8 @@ impl Document {
             version,
             security: None,
             encrypt_num: None,
+            encrypt_members: Arc::default(),
+            unfound: Arc::default(),
             encryption_changed: false,
             full_save: false,
             out_security: None,
@@ -183,6 +193,8 @@ impl Document {
         };
         let params = crate::security::encrypt_dict(self, &dict);
         let id0 = self.first_id();
+        // Read here, while nothing is decrypted yet.
+        let members = self.encryption_members(enc);
         let handler = match credentials {
             Credentials::Password(password) => Arc::new(pdfcraft_crypt::SecurityHandler::open(params, &id0, *password).map_err(|e| match e {
                 pdfcraft_crypt::CryptError::WrongPassword if password.is_none() => CosError::NeedsPassword,
@@ -195,6 +207,7 @@ impl Document {
         };
         self.security = Some(handler);
         self.encrypt_num = num;
+        self.encrypt_members = Arc::new(members);
         // Objects read while locating the catalog were read before decryption was possible.
         self.cache = Arc::default();
         self.objstms = Arc::default();
@@ -203,10 +216,42 @@ impl Document {
 
     /// The first file identifier, part of the encryption key (empty when there is none).
     fn first_id(&self) -> Vec<u8> {
-        match self.trailer.get(b"ID") {
-            Some(Object::Array(a)) => a.first().and_then(|s| s.as_string()).map(|s| s.bytes.clone()).unwrap_or_default(),
-            _ => Vec::new(),
+        let id = self.trailer.get(b"ID").map(|id| self.resolve(id));
+        let first = id.as_deref().and_then(Object::as_array).and_then(|a| a.first()).map(|s| self.resolve(s));
+        first.as_deref().and_then(Object::as_string).map(|s| s.bytes.clone()).unwrap_or_default()
+    }
+
+    /// The objects `/Encrypt`, given as `enc`, and `/ID` refer to, the ones they refer to, and so
+    /// on, up to [`MAX_ENCRYPT_MEMBERS`]. Their strings aren't encrypted (ISO 32000-2 §7.6.2): the
+    /// key is made from them, so they have to read as stored, and stay so. A number with no object
+    /// behind it, and a stream, which those dictionaries never hold, isn't one: an object added
+    /// under that number later, or a page's content a hostile `/Encrypt` names, is encrypted.
+    fn encryption_members(&self, enc: &Object) -> HashSet<u32> {
+        let mut pending = Vec::new();
+        crate::writer::collect_refs(enc, &mut |r| pending.push(r));
+        if let Some(id) = self.trailer.get(b"ID") {
+            crate::writer::collect_refs(id, &mut |r| pending.push(r));
         }
+        let mut members = HashSet::new();
+        while let Some(r) = pending.pop() {
+            if members.len() >= MAX_ENCRYPT_MEMBERS || members.contains(&r.num) {
+                continue;
+            }
+            let held = self.get(r);
+            if matches!(&*held, Object::Null | Object::Stream(_)) {
+                continue;
+            }
+            members.insert(r.num);
+            crate::writer::collect_refs(&held, &mut |x| pending.push(x));
+        }
+        members
+    }
+
+    /// Whether object `num` is written as it is held, being one of [`Document::encryption_members`],
+    /// unedited, and the save writing the same `/Encrypt`. What was edited or added is encrypted
+    /// whatever its number.
+    pub(crate) fn stored_as_is(&self, num: u32) -> bool {
+        !self.encryption_changed && !self.is_edited(num) && self.encrypt_members.contains(&num)
     }
 
     /// Lift the restrictions of a document opened with its user password by entering the
@@ -268,8 +313,9 @@ impl Document {
     /// always a full rewrite. Returns the handler (authenticated as owner).
     pub fn set_encryption(&mut self, params: &pdfcraft_crypt::NewEncryption) -> Result<(), CosError> {
         // The file identifier is part of the key; make sure it exists and keep it.
-        let id0 = match self.trailer.get(b"ID") {
-            Some(Object::Array(a)) if a.len() == 2 => a[0].as_string().map(|s| s.bytes.clone()).unwrap_or_default(),
+        let id = self.trailer.get(b"ID").map(|id| self.resolve(id));
+        let id0 = match id.as_deref() {
+            Some(Object::Array(a)) if a.len() == 2 => self.first_id(),
             _ => {
                 let id = pdfcraft_crypt::file_id(&params.seed);
                 let s = Object::String(crate::PdfString { bytes: id.clone(), hex: true });
@@ -336,7 +382,9 @@ impl Document {
     /// Decrypt a freshly parsed indirect object if the document is encrypted.
     pub(super) fn decrypted(&self, id: ObjRef, o: Object) -> Object {
         match &self.security {
-            Some(h) if Some(id.num) != self.encrypt_num => crate::security::transform(h, &o, id.num, id.generation, crate::security::Pass::Decrypt),
+            Some(h) if Some(id.num) != self.encrypt_num && !self.encrypt_members.contains(&id.num) => {
+                crate::security::transform(self, h, &o, id.num, id.generation, crate::security::Pass::Decrypt)
+            }
             _ => o,
         }
     }
