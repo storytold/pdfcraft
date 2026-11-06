@@ -63,25 +63,8 @@ pub(crate) const MAX_IMAGE_SIDE: usize = 16384;
 pub(crate) const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn read_clipboard() -> Option<Clip> {
-    crate::os_clipboard::with(|cb| {
-        if let Ok(img) = cb.get_image() {
-            let expected_len = img.width.checked_mul(img.height).and_then(|px| px.checked_mul(4));
-            if img.width > 0
-                && img.height > 0
-                && img.width <= MAX_IMAGE_SIDE
-                && img.height <= MAX_IMAGE_SIDE
-                && expected_len == Some(img.bytes.len())
-                && img.bytes.len() <= MAX_IMAGE_BYTES
-            {
-                return Ok(Some(Clip::Image { width: img.width, height: img.height, rgba: img.bytes.into_owned() }));
-            }
-            return Ok(None);
-        }
-        Ok(cb.get_text().ok().filter(|t| !t.trim().is_empty()).map(Clip::Text))
-    })
-    .ok()
-    .flatten()
+pub(crate) fn read_clipboard() -> Result<Option<Clip>, crate::os_clipboard::NotResponding> {
+    crate::os_clipboard::read(crate::os_clipboard::ReadMode::Create)
 }
 
 pub(crate) fn png_from_rgba(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<u8>, String> {
@@ -135,7 +118,13 @@ impl PdfCraftApp {
     /// the clipboard, as Acrobat does.
     pub(crate) fn create_from_clipboard(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        let clip = read_clipboard();
+        let clip = match read_clipboard() {
+            Ok(clip) => clip,
+            Err(_) => {
+                self.notify_tr("The clipboard isn't responding");
+                return;
+            }
+        };
         #[cfg(target_arch = "wasm32")]
         let clip: Option<Clip> = None;
         match clip {

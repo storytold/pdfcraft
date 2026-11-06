@@ -1,5 +1,11 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-06 | **Last updated:** 2026-11-06 | **Change:** patch (M7 #6169 Windows review: allow five seconds for native clipboard reads on Windows/macOS, retain one second on Linux/BSD; platform-budget and blocked-caller regressions; estimates unchanged)
+
+> **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M7 #6169 adjacent follow-up: Create from Clipboard falls back to readable text when an image is oversized or malformed; pure format-priority regressions; estimates unchanged)
+
+> **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M7 #6169: native clipboard reads run on a worker with a one-second wait; context menus do not read it and Copy never waits on a stuck reader; estimates unchanged)
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
@@ -229,6 +235,12 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-06 (M7, #6169 Windows review):** Native clipboard reads allow five seconds on Windows/macOS, giving margin above the reviewer's 1.07-second image read; Linux/BSD retain the one-second selection-owner bound. Menus still perform no read and a stuck worker cannot block Copy on the lock. Platform-budget and bounded real-caller tests cover both policies. The pinned egui-winit Ctrl+V path remains synchronous on non-Wayland platforms, outside this app-worker change; no Windows host was available to reproduce the reported intermittent stall. Estimates unchanged.
+
+- **2026-11-05 (M7, #6169 adjacent follow-up):** Create from Clipboard uses readable text when an available image has zero/overflowing dimensions, exceeds the side/byte limits, or has a mismatched pixel byte count. This corrects the early-return behavior moved from the old Create reader. Pure result-selection tests preserve image-before-text in Create and nonempty-text-before-image in ImagePaste, with a literal-revert red for the fallback. Worker timeout and nonblocking-lock behavior stay unchanged. Estimates unchanged.
+
+- **2026-11-05 (M7, #6169):** Page and image context menus no longer synchronously probe the native clipboard, avoiding the Copy/right-click selection-owner deadlock path on Wayland. Paste is offered optimistically; explicit Paste, Ctrl+V fallback and Create from Clipboard read on a worker with a one-second wait and a non-fatal timeout notice. Clipboard access uses try_lock, so a stuck reader cannot freeze a later image/file Copy. Unavailable contents cannot insert a stale cached image or modify the PDF. A real selection/floating Copy/context Paste kittest records clipboard access without using a desktop clipboard. The native Wayland hang was not exercised on this compositor-free host. Estimates unchanged.
 
 - **2026-10-28 (M10, #4119 partial):** Scan & OCR ▸ Enhance scanned file cleans scanned pages in place: background removal (level 0–100, as the camera clean-up), edge shadow removal (book gutters, copier borders) and despeckle. Each scan image is decoded, cleaned and written back into its own object at the same size and colour space (JPEG stays JPEG, others lossless, 1-bit stays 1-bit), so the OCR text layer, comments and links stay; one undo step, shared images once, unsupported images (CMYK, indexed, JPEG 2000, JBIG2, CCITT, broken data) reported. `page_enhance_scan` drives it headlessly. Not yet an option of Recognize text. Estimates unchanged.
 - **2026-11-03 (M11, shared JBIG2 dictionary):** With Monochrome Images set to JBIG2, Optimize has up to 16 JBIG2 images share one symbol dictionary (`/JBIG2Globals`), the letters found on more than one page stored once, when that is smaller (`pdfcraft_filters::encode_jbig2_shared`). Eight pages of 10 pt text rendered at 300 dpi take 41% less in Helvetica and 42% in Times than coded alone, 10% in Courier; groups of 16 save 45%, of 32 only 47%. Only images redaction can store again without the dictionary share one (image masks and DeviceGray named directly, at most 64 Mi pixels), and redacting one stores the rest of its group so, which the group bounds to 15.
