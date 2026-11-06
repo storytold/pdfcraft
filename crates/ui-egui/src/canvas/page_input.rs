@@ -54,6 +54,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         editing_content,
         form,
         info,
+        placing,
         prefs,
         preparing,
         redact_mark,
@@ -119,14 +120,14 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let over_mark = matches!(tool, QuickTool::Fill(_))
         && (matches!(press, PagePress::Mine(_)) || comments::moving_on(view, i) || !ptr.any_down && top(under.iter().cloned(), tool).is_some());
     tool_input(ui, view, frame, slot, &pcx, press, over_mark);
-    let on_field = if preparing {
+    let on_field = if preparing && !placing {
         let o = crate::prepare::page_input(cx, form, field_tool, prepare_allowed, press, view);
         frame.out.field_props |= o.properties;
         frame.out.field_placed |= o.placed;
         frame.out.open_table = frame.out.open_table.or(o.table);
         o.consumed || field_tool.is_some()
     } else {
-        tool == QuickTool::Select && crate::forms_ui::page_input(cx, form, can_fill, press, released_over, view)
+        tool == QuickTool::Select && !placing && crate::forms_ui::page_input(cx, form, can_fill, press, released_over, view)
     };
     // Redact draws boxes off text; so does Highlight (an area highlight, as in Acrobat).
     let area_tool = tool == QuickTool::Redact && can_modify || tool == QuickTool::Comment(comments::CommentTool::Highlight) && allowed;
@@ -153,7 +154,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         }
         view.content.selected = None;
     }
-    let on_content = !on_objects && editing_content && can_modify && {
+    let on_content = !on_objects && !placing && editing_content && can_modify && {
         source_blocked
             || crate::content_ui::page_input(
                 cx,
@@ -268,6 +269,7 @@ fn tool_input(
         units,
         fill_text_size,
         fill_text_color,
+        fill_text_border,
         ..
     } = frame.env;
     let PageSlot { i, xf, .. } = *slot;
@@ -297,6 +299,7 @@ fn tool_input(
             tool: ft,
             text_size: fill_text_size,
             text_color: fill_text_color,
+            text_border: fill_text_border,
             signature: signature.as_ref(),
             initials: initials.as_ref(),
             preview: frame.signature_preview,

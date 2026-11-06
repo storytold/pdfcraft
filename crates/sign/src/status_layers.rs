@@ -1259,7 +1259,9 @@ mod tests {
     }
 
     #[test]
-    fn a_widget_two_fields_claim_under_different_generations_is_still_shared() {
+    fn a_kid_named_under_another_generation_is_no_claim_on_the_widget() {
+        // A reference names its object's generation too (#1143): `4 1 R` is not object 4, which
+        // is `4 0 obj`, so Signature2 reaches no widget and the widget is Signature1's alone.
         let fixture = Fixture::layered().with(|f| {
             f.split = true;
             f.extra =
@@ -1267,9 +1269,9 @@ mod tests {
         });
         let mut doc = fixture.open();
         let mut sigs = vec![sig("Signature1", Status::Valid), sig("Signature2", Status::Invalid)];
-        show_status_layers(&mut doc, &mut sigs, &StatusCaptions::default());
-        assert_eq!(widget_n(&doc, 4), ObjRef::new(10, 0));
-        assert!(sigs.iter().all(|s| !s.verdict_shown));
+        assert!(show_status_layers(&mut doc, &mut sigs, &StatusCaptions::default()));
+        assert!(drawn(&doc, 4, b"n1").contains(CIRCLE_CHECK), "the widget shows Signature1's state");
+        assert!(sigs[0].verdict_shown && !sigs[1].verdict_shown);
     }
 
     #[test]

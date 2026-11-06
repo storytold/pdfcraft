@@ -51,6 +51,9 @@ mod discovery_tests;
 #[cfg(test)]
 #[path = "pdf_fields_tests.rs"]
 mod fields_tests;
+#[cfg(test)]
+#[path = "pdf/revision_classification_tests.rs"]
+mod revision_classification_tests;
 
 /// One signature field.
 #[derive(Clone, Debug)]
