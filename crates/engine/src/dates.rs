@@ -299,7 +299,6 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         days: ["یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنج‌شنبه", "جمعه", "شنبه"],
         days_short: ["یک", "دو", "سه", "چه", "پن", "جم", "شن"],
     },
-
     DateLanguage {
         code: "he",
         name: "עברית",
@@ -630,6 +629,18 @@ pub fn date_language(code: &str) -> Option<&'static DateLanguage> {
     DATE_LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(code.trim()))
 }
 
+/// Form date fields (`AFDate_FormatEx`, `util.printd`, `util.scand`) write month and weekday
+/// names in date language `code` from now on, as a localized Acrobat writes its own language's:
+/// `dd-mmm-yy` is `18-ott-26` in Italian (#5303). An unknown code is English.
+pub fn use_form_date_language(code: &str) {
+    let l = date_language(code).unwrap_or(&DATE_LANGUAGES[0]);
+    let names = pdfcraft_forms::af::DateNames { months: l.months, months_short: l.months_short, days: l.days, days_short: l.days_short };
+    if pdfcraft_forms::af::date_names() != names {
+        pdfcraft_forms::af::set_date_names(names);
+        pdfcraft_js::set_date_names(l.months, l.months_short, l.days, l.days_short);
+    }
+}
+
 /// The characters of `text` that Fill & Sign can't write into a PDF yet, each once. Its text is
 /// drawn in Helvetica with WinAnsi encoding (Western European letters), so anything else (`ř`,
 /// Japanese, Chinese) would become `?` in the file.
@@ -950,7 +961,7 @@ mod tests {
         assert_eq!(date_language("PT-BR").map(|l| l.code), Some("pt-br"));
         assert!(date_language("xx").is_none());
         for l in &DATE_LANGUAGES {
-            assert!(l.months.iter().chain(l.months_with_day.iter().flatten()).chain(&l.months_short).chain(l.months_short_with_day.iter().flatten()).chain(&l.days).chain(&l.days_short).all(|n| !n.is_empty()), "{}", l.code);
+            assert!(l.months.iter().chain(&l.months_short).chain(l.months_short_with_day.iter().flatten()).chain(&l.days).chain(&l.days_short).all(|n| !n.is_empty()), "{}", l.code);
         }
     }
 
