@@ -9,7 +9,7 @@
 //! how many of the copy's operators come before the `n`, the operator it stands in for, a hash of
 //! those operators (their values, not their spacing: redaction writes a stream out again with
 //! other whitespace), and the number of the stream it was copied from. The stream itself is left
-//! alone (other pages may share it). [`restore`] turns the fill back on when the background is
+//! alone (other pages may share it). `restore` turns the fill back on when the background is
 //! removed, even after the page was edited or redacted, as long as the operators before the fill
 //! are unchanged and the fill would again be the first thing painted, covering the page.
 //! Otherwise the fill stays off, and [`backdrops_left_off`] names those pages. A picture can't be
@@ -126,7 +126,7 @@ pub fn page_backdrops(doc: &Document, pages: &[usize]) -> Vec<Option<Backdrop>> 
     pages.iter().map(|&p| all.get(p).and_then(|page| scan(doc, page, None)).map(|(b, _)| b)).collect()
 }
 
-/// Pages (0-based, ascending) whose own white backdrop [`replace`] turned off and [`restore`]
+/// Pages (0-based, ascending) whose own white backdrop `replace` turned off and `restore`
 /// couldn't turn back on: a tagged copy is still in their content, with no background over it.
 /// They look the same on white paper.
 pub fn backdrops_left_off(doc: &Document) -> Vec<usize> {
@@ -188,7 +188,7 @@ pub(crate) fn replace(doc: &mut Document, page: &pdfcraft_model::Page) -> Result
     Ok(replaced)
 }
 
-/// Turn the fills [`replace`] turned off on `page` back on, where [`restored_copy`] finds that
+/// Turn the fills `replace` turned off on `page` back on, where [`restored_copy`] finds that
 /// safe; a copy listed in several slots is restored in each. Returns how many slots it restored.
 /// A copy it can't restore stays as it is, tag and all, so [`backdrops_left_off`] names its page.
 pub(crate) fn restore(doc: &mut Document, page: &pdfcraft_model::Page) -> Result<usize, EditError> {
@@ -232,7 +232,7 @@ pub(crate) fn restore(doc: &mut Document, page: &pdfcraft_model::Page) -> Result
     Ok(restored)
 }
 
-/// `copy` (a stream [`replace`] wrote for `page`) with its fill turned back on: the bytes, its
+/// `copy` (a stream `replace` wrote for `page`) with its fill turned back on: the bytes, its
 /// dictionary without the tag, and the stream it was copied from. `None` when it isn't such a
 /// copy, or when turning the fill on could paint over something: the operators before the fill
 /// changed since (their hash no longer matches), or the page would no longer paint the fill

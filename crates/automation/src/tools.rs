@@ -130,7 +130,9 @@ impl T {
     }
 }
 
-/// Every tool, in a stable order.
+/// Discovery names, argument schemas and hints shared by automation and MCP, in a stable
+/// order. Optional flags such as signature retention remain explicit so existing callers keep
+/// the documented defaults when they omit them.
 pub fn tools() -> Vec<ToolDef> {
     let save_out = json!({ "type": "string", "description": "File to write. Omit to open the result as a new unsaved document instead." });
     let open = json!({ "type": "boolean", "description": "Also open the result as a new document (default: only when out is omitted)." });

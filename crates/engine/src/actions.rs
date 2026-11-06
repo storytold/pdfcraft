@@ -151,6 +151,8 @@ fn images_refused_note(images: usize) -> Option<String> {
     (images > 0).then(|| format!("Reduce file size: {images} image(s) stayed as they were, past what one run may decode"))
 }
 
+/// Execute one Action Wizard step and record its progress. Return a replacement document id
+/// when the step reopens transformed bytes; flatten steps keep their historical defaults.
 fn apply_step(s: &mut Session, id: DocId, step: &Step, log: &mut Vec<String>) -> Result<Option<DocId>, EditError> {
     let pages = s.get(id).map_or(0, |d| d.info.pages.len());
     let all: Vec<usize> = (0..pages).collect();

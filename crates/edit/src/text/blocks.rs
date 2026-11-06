@@ -39,7 +39,7 @@ pub struct TextBlock {
 impl TextBlock {
     /// Preserve styles outside the changed ranges; inserted characters inherit the surrounding
     /// source run. The texts are aligned word by word, so words left untouched between two edits
-    /// keep their own runs (#2198); past [`MAX_CHANGED_WORDS`] the draft counts as one change.
+    /// keep their own runs (#2198); past `MAX_CHANGED_WORDS` the draft counts as one change.
     /// Byte ranges are always UTF-8 boundaries. Linear time, including large edits.
     pub fn edited_spans(&self, draft: &str) -> Vec<(std::ops::Range<usize>, usize)> {
         if self.editor_text.len() > 4_000_000 || draft.len() > 4_000_000 {
@@ -315,8 +315,8 @@ pub fn reading_blocks(doc: &Document, page: usize) -> Result<Vec<TextBlock>, Edi
 pub struct ReadingBlocks {
     /// The paragraphs, as [`reading_blocks`] returns them.
     pub blocks: Vec<TextBlock>,
-    /// The page draws forms nested deeper than [`MAX_FORM_DEPTH`], more of them than
-    /// [`MAX_FORM_VISITS`], or forms that run past what the page's content left of its decode
+    /// The page draws forms nested deeper than [`crate::MAX_FORM_DEPTH`], more of them than
+    /// [`crate::MAX_FORM_VISITS`], or forms that run past what the page's content left of its decode
     /// budget. Reading leaves those forms out to stay bounded on hostile files, so their text
     /// is missing from `blocks`; [`crate::reading_images`] walks the same forms and misses
     /// their images too.

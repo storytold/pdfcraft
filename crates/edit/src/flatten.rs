@@ -105,7 +105,9 @@ pub struct FlattenOptions {
     /// Every form field.
     pub fields: bool,
     /// With `fields`: leave signature fields (signed or not) as they are, so a form can be filled,
-    /// flattened, and then signed in the signature field it was prepared with.
+    /// flattened, and then signed in the signature field it was prepared with. This preserves
+    /// field structure; it does not validate a cryptographic signature or authorize rewriting
+    /// a signed document.
     pub keep_signature_fields: bool,
 }
 
@@ -117,6 +119,8 @@ enum Which {
     FillSign,
 }
 
+/// Choose annotation kinds before drawing their appearances. Signature retention filters
+/// widgets by their inherited field type, independently of whether they have an appearance.
 fn selected(doc: &Document, d: &Dict, which: Which) -> bool {
     let subtype = d.name(b"Subtype").unwrap_or_default();
     match which {
@@ -168,8 +172,10 @@ pub fn flatten(doc: &mut Document, pages: &[usize], comments: bool, fields: bool
     flatten_with(doc, pages, FlattenOptions { comments, fields, keep_signature_fields: false })
 }
 
-/// [`flatten`] with the choices of [`FlattenOptions`]. Returns how many annotations were merged
-/// into page content.
+/// Flatten selected annotation categories on zero-based `pages`, with explicit signature
+/// retention through [`FlattenOptions::keep_signature_fields`]. Returns the number of merged
+/// appearances, excluding retained signature widgets. Signature validation and signed-file
+/// rewrite restrictions remain the caller's responsibility.
 pub fn flatten_with(doc: &mut Document, pages: &[usize], options: FlattenOptions) -> Result<usize, EditError> {
     flatten_which(doc, pages, Which::Comments(options))
 }
@@ -215,6 +221,8 @@ fn flatten_which(doc: &mut Document, pages: &[usize], which: Which) -> Result<us
     Ok(drawn)
 }
 
+/// Draw selected appearances into page content and remove only the annotations successfully
+/// handled. The caller supplies the working copy so any error can discard all partial changes.
 fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize, EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
@@ -391,17 +399,19 @@ thread_local! {
 }
 
 /// Remove flattened widgets from the AcroForm field tree, and fields left without widgets. With
-/// `on_page`, also the widgets (fields without kids) that are on no page.
+/// `on_page`, also the widgets (fields without kids) that are on no page. Signature retention
+/// preserves original terminal fields and surviving descendants, never an emptied parent that
+/// would become a phantom terminal signature after its last child was removed.
 fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&HashSet<ObjRef>>, keep_signatures: bool) -> Result<(), EditError> {
     let Some(root) = doc.root() else { return Ok(()) };
     let Some(af) = doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned()) else { return Ok(()) };
     let af_ref = af.as_ref();
     let mut af_dict = doc.resolve(&af).as_dict().cloned().unwrap_or_default();
     let fields = af_dict.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
-    // Returns whether the node survives, and whether that answer depends on the depth cutoff.
-    // `known` holds each node's answer once it is visited, so a node listed twice is pruned once,
-    // and one still being visited (a cycle) survives. An answer the cutoff decided records the depth
-    // it was reached at, and a shallower path visits the node again: at most once per depth.
+    /// Return node survival and whether that answer depends on the depth cutoff. Memoized
+    /// nodes are pruned once; cycles survive conservatively. Cutoff-dependent answers remember
+    /// their depth so a shallower path can revisit them instead of reusing an incomplete result.
+    /// A signature node kept only for its type must have been terminal before pruning.
     fn keep(
         doc: &mut Document,
         r: ObjRef,

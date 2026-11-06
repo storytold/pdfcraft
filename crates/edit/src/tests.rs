@@ -9976,6 +9976,8 @@ fn flattening_fields_can_keep_signature_fields() {
     assert_eq!(form(false), (vec![], vec![]), "by default every field is flattened");
 }
 
+/// Opt-in retention keeps orphan and inherited signature fields during ordinary orphan
+/// cleanup, while unrelated visible and hidden text widgets retain their existing behavior.
 #[test]
 fn flattening_orphans_can_keep_signature_fields() {
     let page = stream("", " ");

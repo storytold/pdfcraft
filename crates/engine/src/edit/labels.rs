@@ -166,7 +166,9 @@ pub const BATCH_LABELS: &[&str] =
     &["Set document title", "Mark differences", "Detect form fields", "Run JavaScript", "Recognize text", field_table::LABEL, "Style"];
 
 impl Edit {
-    /// Label for the Edit menu and history ("Undo Rotate pages").
+    /// Label for the Edit menu and history ("Undo Rotate pages"). Preservation flags select
+    /// which objects an operation retains; they do not create a different history action, so
+    /// both signature-retaining and ordinary field flattening share the same label.
     pub fn label(&self) -> Label {
         match self {
             Edit::RotatePages { pages, .. } => plural("Rotate page", "Rotate pages", pages.len()),

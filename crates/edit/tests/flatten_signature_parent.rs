@@ -31,6 +31,8 @@ fn fixture() -> Document {
     Document::open(Arc::new(bytes)).unwrap()
 }
 
+/// Removing the last text child must not manufacture a terminal signature from its parent;
+/// an original terminal signature survives the full write/reopen separately.
 #[test]
 fn flattening_does_not_turn_an_empty_signature_parent_into_a_terminal_field() {
     let mut doc = fixture();
@@ -48,6 +50,8 @@ fn flattening_does_not_turn_an_empty_signature_parent_into_a_terminal_field() {
     assert_eq!(names, ["terminal"], "keep the original terminal signature, not a pruned parent");
 }
 
+/// Full write/reopen retains the synthetic signature value and painted appearance when
+/// requested, or flattens/removes them by default. This checks structure, not cryptographic validity.
 #[test]
 fn a_filled_signature_and_appearance_follow_the_keep_option_after_save() {
     for keep in [false, true] {

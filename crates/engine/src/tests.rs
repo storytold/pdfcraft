@@ -3782,6 +3782,8 @@ fn an_optimize_job_reports_its_stages_and_can_be_cancelled() {
     assert_eq!(s.get(id).unwrap().bytes, before);
 }
 
+/// Ordinary flattening preserves rendered comments and field text, removes their editable
+/// objects, and leaves one undo step that restores the form.
 #[test]
 fn flattening_keeps_the_look_and_drops_the_objects() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
@@ -7046,6 +7048,8 @@ fn a_value_a_script_sets_reaches_every_field_bound_to_the_same_data_node() {
     );
 }
 
+/// Flattening XFA fields bakes their visible values into pages and removes the live XFA
+/// template/data so reopening does not lay the form out a second time.
 #[test]
 fn flattening_an_xfa_form_bakes_its_pages_and_takes_the_xfa_out() {
     let data = "<form><page1><country>JP</country><langs>English\nSpanish</langs></page1></form>";
@@ -7081,6 +7085,8 @@ fn flattening_an_xfa_form_bakes_its_pages_and_takes_the_xfa_out() {
     assert_eq!(s.get(id).unwrap().info.xfa, Some(pdfcraft_render::Xfa::Dynamic));
 }
 
+/// An unrendered dynamic XFA form must keep its source packets and report that it could not
+/// be flattened, rather than silently discarding the only representation of its fields.
 #[test]
 fn a_dynamic_xfa_form_that_was_never_laid_out_keeps_its_xfa_and_the_user_is_told_what_went() {
     // A template that can't be read: the form keeps its placeholder page and its XFA.
@@ -8485,6 +8491,9 @@ fn a_recovered_page_tree_opens_unmodified_and_edits_the_pages_shown() {
     assert_eq!(s.get(id).unwrap().info.pages.iter().map(|p| p.rotation).collect::<Vec<_>>(), [0, 90]);
 }
 
+/// A repaired signed PDF requiring a full rewrite refuses edits, including both signature
+/// retention choices, without changing its bytes or undo state. This covers the recovery
+/// rewrite guard, not a universal prohibition on incremental edits to signed documents.
 #[test]
 fn a_signed_document_rebuilt_from_object_headers_refuses_edits() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
