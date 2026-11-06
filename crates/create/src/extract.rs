@@ -5,6 +5,7 @@
 //! reported, never silently left out.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use pdfcraft_cos::{Dict, Document, ImageBudget, MAX_DECODED, ObjRef, Object, Stream};
 use pdfcraft_filters::FilterError;
@@ -32,6 +33,29 @@ pub struct ImageExport {
 /// Images larger than this many pixels are skipped (memory).
 const MAX_PIXELS: u64 = 100_000_000;
 
+/// Follows a chain of indirect references to its terminal object with cycle protection.
+fn resolve_indirect_chain(doc: &Document, object: &Object) -> Arc<Object> {
+    let mut value = doc.resolve(object);
+    let mut seen = HashSet::new();
+    while let Object::Ref(reference) = &*value {
+        if !seen.insert(*reference) {
+            break;
+        }
+        value = doc.resolve(&value);
+    }
+    value
+}
+
+/// Resolves an integer entry from `d`, following indirect references.
+fn dict_int(doc: &Document, d: &Dict, key: &[u8]) -> Option<i64> {
+    d.get(key).and_then(|v| resolve_indirect_chain(doc, v).as_int())
+}
+
+/// Resolves a name entry from `d`, following indirect references.
+fn dict_name(doc: &Document, d: &Dict, key: &[u8]) -> Option<Vec<u8>> {
+    d.get(key).and_then(|v| resolve_indirect_chain(doc, v).as_name().map(<[u8]>::to_vec))
+}
+
 /// What one export may hold of the files it makes: they are all in memory until it ends, and a file
 /// of a few KB can make gigabytes of PNG. Images past it are left out, with the reason.
 const MAX_EXPORT_BYTES: usize = 2 << 30;
@@ -58,7 +82,7 @@ pub(crate) fn extract_images_within(doc: &Document, pages: &[usize], min_side: u
     for &p in pages {
         let Some(page) = all.get(p) else { continue };
         let mut refs = Vec::new();
-        if let Some(res) = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()) {
+        if let Some(res) = page.dict.get(b"Resources").map(|r| resolve_indirect_chain(doc, r)).and_then(|r| r.as_dict().cloned()) {
             collect(doc, &res, 0, &mut HashSet::new(), &mut refs);
         }
         for r in refs {
@@ -67,7 +91,7 @@ pub(crate) fn extract_images_within(doc: &Document, pages: &[usize], min_side: u
             }
             let obj = doc.get(r);
             let Object::Stream(s) = &*obj else { continue };
-            let (w, h) = (s.dict.int(b"Width").unwrap_or(0), s.dict.int(b"Height").unwrap_or(0));
+            let (w, h) = (dict_int(doc, &s.dict, b"Width").unwrap_or(0), dict_int(doc, &s.dict, b"Height").unwrap_or(0));
             if w <= 0 || h <= 0 || (w.min(h) as u64) < min_side as u64 {
                 continue;
             }
@@ -95,7 +119,7 @@ pub fn image_file(doc: &Document, image: ObjRef) -> Result<(&'static str, Vec<u8
 /// [`image_file`] within `budget`, for a caller making a file of many images.
 pub fn image_file_within(doc: &Document, image: ObjRef, budget: &mut ImageBudget) -> Result<(&'static str, Vec<u8>), String> {
     match &*doc.get(image) {
-        Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => self::image(doc, s, budget),
+        Object::Stream(s) if dict_name(doc, &s.dict, b"Subtype").as_deref() == Some(b"Image") => self::image(doc, s, budget),
         _ => Err("not an image".into()),
     }
 }
@@ -105,15 +129,15 @@ fn collect(doc: &Document, res: &Dict, depth: usize, forms: &mut HashSet<ObjRef>
     if depth > 12 {
         return;
     }
-    let Some(xobjects) = res.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()) else { return };
+    let Some(xobjects) = res.get(b"XObject").map(|x| resolve_indirect_chain(doc, x)).and_then(|x| x.as_dict().cloned()) else { return };
     for (_, v) in xobjects.iter() {
         let Some(r) = v.as_ref() else { continue };
         let obj = doc.get(r);
         let Object::Stream(s) = &*obj else { continue };
-        match s.dict.name(b"Subtype") {
+        match dict_name(doc, &s.dict, b"Subtype").as_deref() {
             Some(b"Image") => out.push(r),
             Some(b"Form") if forms.insert(r) => {
-                if let Some(inner) = s.dict.get(b"Resources").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()) {
+                if let Some(inner) = s.dict.get(b"Resources").map(|x| resolve_indirect_chain(doc, x)).and_then(|x| x.as_dict().cloned()) {
                     collect(doc, &inner, depth + 1, forms, out);
                 }
             }
@@ -122,11 +146,16 @@ fn collect(doc: &Document, res: &Dict, depth: usize, forms: &mut HashSet<ObjRef>
     }
 }
 
-fn filters(s: &Stream) -> Vec<Vec<u8>> {
-    match s.dict.get(b"Filter") {
-        Some(Object::Name(n)) => vec![n.to_vec()],
-        Some(Object::Array(a)) => a.iter().filter_map(|f| f.as_name().map(<[u8]>::to_vec)).collect(),
-        _ => Vec::new(),
+/// Resolves the stream's `/Filter` entry into a list of filter names.
+fn filters(doc: &Document, s: &Stream) -> Result<Vec<Vec<u8>>, String> {
+    let invalid = || "/Filter is not a name or an array of names".to_string();
+    match s.dict.get(b"Filter").map(|f| resolve_indirect_chain(doc, f)).as_deref() {
+        None | Some(Object::Null) => Ok(Vec::new()),
+        Some(Object::Name(n)) => Ok(vec![n.to_vec()]),
+        Some(Object::Array(a)) => {
+            a.iter().map(|f| resolve_indirect_chain(doc, f).as_name().map(<[u8]>::to_vec)).collect::<Option<Vec<_>>>().ok_or_else(invalid)
+        }
+        Some(_) => Err(invalid()),
     }
 }
 
@@ -136,15 +165,51 @@ fn filters(s: &Stream) -> Vec<Vec<u8>> {
 /// through its decoder too, behind other filters as well, a JBIG2 image with its `/JBIG2Globals`.
 /// A JBIG2 page has to be the image's size, which the caller checked against the export's limit,
 /// before the page is decoded.
-fn decoded(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<Vec<u8>, String> {
-    budget.decode(doc, s, MAX_DECODED).map_err(|e| e.to_string())
+fn decoded(doc: &Document, s: &Stream, f: &[Vec<u8>], budget: &mut ImageBudget) -> Result<Vec<u8>, String> {
+    let mut dict = s.dict.clone();
+    dict.set(b"Filter".to_vec(), Object::Array(f.iter().cloned().map(Object::Name).collect()));
+    for k in [b"Width".as_slice(), b"Height", b"BitsPerComponent"] {
+        if let Some(v) = dict_int(doc, &s.dict, k) {
+            dict.set(k.to_vec(), Object::Int(v));
+        }
+    }
+    if let Some(dp) = dict.get(b"DecodeParms").map(|p| resolve_indirect_chain(doc, p)) {
+        let resolve_parm = |d: &Dict| {
+            let mut out = d.clone();
+            for k in [b"Predictor".as_slice(), b"Colors", b"BitsPerComponent", b"Columns", b"EarlyChange", b"K", b"Rows"] {
+                if let Some(v) = dict_int(doc, d, k) {
+                    out.set(k.to_vec(), Object::Int(v));
+                }
+            }
+            Object::Dict(out)
+        };
+        match &*dp {
+            Object::Dict(d) => dict.set(b"DecodeParms".to_vec(), resolve_parm(d)),
+            Object::Array(a) => {
+                if a.len() > f.len() {
+                    return Err("/DecodeParms has more entries than /Filter".into());
+                }
+                let resolved = a
+                    .iter()
+                    .map(|e| match &*resolve_indirect_chain(doc, e) {
+                        Object::Dict(d) => resolve_parm(d),
+                        other => other.clone(),
+                    })
+                    .collect();
+                dict.set(b"DecodeParms".to_vec(), Object::Array(resolved));
+            }
+            _ => {}
+        }
+    }
+    let normalized = Stream { dict, raw: s.raw.clone() };
+    budget.decode(doc, &normalized, MAX_DECODED).map_err(|e| e.to_string())
 }
 
 /// The file for one image: its JPEG data as is, or a PNG. An image with transparency (a soft
 /// mask, a stencil `/Mask` or a colour-key `/Mask`) is always a PNG with that transparency as
 /// alpha, JPEG images included, so cut-out images keep their transparent background.
 fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'static str, Vec<u8>), String> {
-    let f = filters(s);
+    let f = filters(doc, s)?;
     let jpeg = matches!(f.last().map(Vec::as_slice), Some(b"DCTDecode" | b"DCT")) && f.len() == 1;
     match f.last().map(Vec::as_slice) {
         Some(b"JPXDecode") => return Err("JPEG 2000 images can't be exported yet".into()),
@@ -152,7 +217,7 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
         _ => {}
     }
     let as_is = || Ok(("jpg", s.raw.to_vec()));
-    let (w, h) = (s.dict.int(b"Width").unwrap_or(0), s.dict.int(b"Height").unwrap_or(0));
+    let (w, h) = (dict_int(doc, &s.dict, b"Width").unwrap_or(0), dict_int(doc, &s.dict, b"Height").unwrap_or(0));
     let Some((w, h)) = size(w, h) else {
         return match () {
             _ if jpeg => as_is(),
@@ -160,7 +225,7 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
             _ => Err(format!("{w} × {h} is too large to export")),
         };
     };
-    let mask = s.dict.get(b"ImageMask").is_some_and(|m| matches!(&*doc.resolve(m), Object::Bool(true)));
+    let mask = s.dict.get(b"ImageMask").is_some_and(|m| matches!(&*resolve_indirect_chain(doc, m), Object::Bool(true)));
     // A stencil mask (`ImageMask true`) has no /SMask or /Mask of its own (8.9.6.2).
     let refused = budget.refused();
     let mut alpha = if mask { None } else { soft_mask(doc, s, w, h, budget).or_else(|| stencil_mask(doc, s, w, h, budget)) };
@@ -170,11 +235,11 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
     }
     let key = if mask { None } else { colour_key(doc, s) };
     // Keep the existing JPEG and stencil-mask Decode handling separate from lossless colour images.
-    let endpoint = |value: Option<&Object>| value.map(|v| doc.resolve(v)).and_then(|v| v.as_f64()).filter(|v| v.is_finite());
+    let endpoint = |value: Option<&Object>| value.map(|v| resolve_indirect_chain(doc, v)).and_then(|v| v.as_f64()).filter(|v| v.is_finite());
     let inverted = (jpeg || mask)
         && s.dict
             .get(b"Decode")
-            .map(|d| doc.resolve(d))
+            .map(|d| resolve_indirect_chain(doc, d))
             // Both ends have to be finite numbers, as for lossless images, or the default mapping stands.
             .and_then(|d| {
                 let a = d.as_array()?;
@@ -199,8 +264,8 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
         space = decoded;
         (samples, 8)
     } else {
-        let data = decoded(doc, s, budget)?;
-        let bpc = if mask { 1 } else { s.dict.int(b"BitsPerComponent").unwrap_or(8) };
+        let data = decoded(doc, s, &f, budget)?;
+        let bpc = if mask { 1 } else { dict_int(doc, &s.dict, b"BitsPerComponent").unwrap_or(8) };
         let bpc = match bpc {
             1 => 1,
             2 => 2,
@@ -270,12 +335,12 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
 /// A malformed array (not an array, the wrong length, a non-number or non-finite entry) gives
 /// the default mapping, so the image still exports.
 fn decode(doc: &Document, s: &Stream, n: usize) -> Option<Vec<[f64; 2]>> {
-    let value = doc.resolve(s.dict.get(b"Decode")?);
+    let value = resolve_indirect_chain(doc, s.dict.get(b"Decode")?);
     let values = value.as_array()?;
     if Some(values.len()) != n.checked_mul(2) {
         return None;
     }
-    let endpoint = |value: &Object| doc.resolve(value).as_f64().filter(|v| v.is_finite());
+    let endpoint = |value: &Object| resolve_indirect_chain(doc, value).as_f64().filter(|v| v.is_finite());
     let mut pairs = Vec::with_capacity(n);
     for [lo, hi] in values.as_chunks::<2>().0 {
         pairs.push([endpoint(lo)?, endpoint(hi)?]);
@@ -361,9 +426,9 @@ fn cmyk_jpeg_samples(data: &[u8], w: usize, h: usize) -> Option<Vec<u8>> {
 
 /// The colour-key `/Mask` (8.9.6.4): a [min max] pair per colour component, in sample values.
 fn colour_key(doc: &Document, s: &Stream) -> Option<Vec<(u32, u32)>> {
-    let m = doc.resolve(s.dict.get(b"Mask")?);
+    let m = resolve_indirect_chain(doc, s.dict.get(b"Mask")?);
     let a = m.as_array()?;
-    let v: Vec<u32> = a.iter().map(|o| doc.resolve(o).as_f64().map(|f| f.clamp(0.0, 65_535.0) as u32)).collect::<Option<_>>()?;
+    let v: Vec<u32> = a.iter().map(|o| resolve_indirect_chain(doc, o).as_f64().map(|f| f.clamp(0.0, 65_535.0) as u32)).collect::<Option<_>>()?;
     (!v.is_empty() && v.len().is_multiple_of(2)).then(|| v.as_chunks::<2>().0.iter().map(|&[lo, hi]| (lo, hi)).collect())
 }
 
@@ -388,12 +453,14 @@ fn keyed_alpha(samples: &[u8], n: usize, bpc: usize, key: &[(u32, u32)]) -> Opti
 /// The `/Matte` colour of the image's soft mask (11.6.5.3), for grey and RGB images: the colour
 /// the image samples were pre-blended with.
 fn matte(doc: &Document, s: &Stream, space: &Space) -> Option<Vec<u8>> {
-    let r = s.dict.get(b"SMask")?.as_ref()?;
-    let obj = doc.get(r);
+    let obj = resolve_indirect_chain(doc, s.dict.get(b"SMask")?);
     let Object::Stream(m) = &*obj else { return None };
-    let a = doc.resolve(m.dict.get(b"Matte")?);
-    let v: Vec<u8> =
-        a.as_array()?.iter().map(|o| doc.resolve(o).as_f64().map(|f| (f.clamp(0.0, 1.0) * 255.0).round() as u8)).collect::<Option<_>>()?;
+    let a = resolve_indirect_chain(doc, m.dict.get(b"Matte")?);
+    let v: Vec<u8> = a
+        .as_array()?
+        .iter()
+        .map(|o| resolve_indirect_chain(doc, o).as_f64().map(|f| (f.clamp(0.0, 1.0) * 255.0).round() as u8))
+        .collect::<Option<_>>()?;
     match (space, v.len()) {
         (Space::Gray, 1) => Some(vec![v[0]; 3]),
         (Space::Rgb, 3) => Some(v),
@@ -436,9 +503,10 @@ impl Space {
 /// A lookup table holds at most 256 entries of 4 bytes; decoding stops well past that.
 const MAX_LOOKUP: usize = 64 << 10;
 
+/// Parses and resolves an image's `/ColorSpace` entry into a [`Space`].
 fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
     let Some(cs) = cs else { return Err("the image has no colour space".into()) };
-    let cs = doc.resolve(cs);
+    let cs = resolve_indirect_chain(doc, cs);
     let unsupported = |n: &[u8]| Err(format!("{} images can't be exported yet", String::from_utf8_lossy(n)));
     match &*cs {
         Object::Name(n) => match n.as_slice() {
@@ -447,9 +515,9 @@ fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
             b"DeviceCMYK" | b"CMYK" => Ok(Space::Cmyk),
             other => unsupported(other),
         },
-        Object::Array(a) => match a.first().and_then(Object::as_name) {
-            Some(b"ICCBased") => match a.get(1).map(|s| doc.resolve(s)).as_deref() {
-                Some(Object::Stream(icc)) => match icc.dict.int(b"N") {
+        Object::Array(a) => match a.first().and_then(|o| resolve_indirect_chain(doc, o).as_name().map(<[u8]>::to_vec)).as_deref() {
+            Some(b"ICCBased") => match a.get(1).map(|s| resolve_indirect_chain(doc, s)).as_deref() {
+                Some(Object::Stream(icc)) => match dict_int(doc, &icc.dict, b"N") {
                     Some(1) => Ok(Space::Gray),
                     Some(3) => Ok(Space::Rgb),
                     Some(4) => Ok(Space::Cmyk),
@@ -462,8 +530,13 @@ fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
             Some(b"Indexed" | b"I") => {
                 // Checked before recursing: Indexed is the only space that recurses, so refusing
                 // an Indexed base here also ends a cyclic base reference.
-                let nested = match a.get(1).map(|b| doc.resolve(b)).as_deref() {
-                    Some(Object::Array(b)) => matches!(b.first().and_then(Object::as_name), Some(b"Indexed" | b"I")),
+                let nested = match a.get(1).map(|b| resolve_indirect_chain(doc, b)).as_deref() {
+                    Some(Object::Array(b)) => {
+                        matches!(
+                            b.first().and_then(|o| resolve_indirect_chain(doc, o).as_name().map(<[u8]>::to_vec)).as_deref(),
+                            Some(b"Indexed" | b"I")
+                        )
+                    }
                     Some(Object::Name(n)) => matches!(n.as_slice(), b"Indexed" | b"I"),
                     _ => false,
                 };
@@ -471,11 +544,11 @@ fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
                     return Err("nested indexed colour spaces aren't valid".into());
                 }
                 let base = space(doc, a.get(1))?;
-                let hival = match a.get(2).map(|value| doc.resolve(value)).as_deref() {
+                let hival = match a.get(2).map(|value| resolve_indirect_chain(doc, value)).as_deref() {
                     Some(Object::Int(value)) if (0..=255).contains(value) => *value as u8,
                     _ => return Err("an indexed colour space with an invalid hival".into()),
                 };
-                let table = match a.get(3).map(|t| doc.resolve(t)).as_deref() {
+                let table = match a.get(3).map(|t| resolve_indirect_chain(doc, t)).as_deref() {
                     Some(Object::String(s)) => s.bytes.clone(),
                     // Through its parameters given by reference too, as the image's samples.
                     Some(Object::Stream(t)) => doc
@@ -526,8 +599,7 @@ fn cmyk(c: u8, m: u8, y: u8, k: u8) -> [u8; 3] {
 
 /// The soft mask (`/SMask`) as 8-bit alpha, scaled to the image's size when it has another.
 fn soft_mask(doc: &Document, s: &Stream, w: usize, h: usize, budget: &mut ImageBudget) -> Option<Vec<u8>> {
-    let r = s.dict.get(b"SMask")?.as_ref()?;
-    let obj = doc.get(r);
+    let obj = resolve_indirect_chain(doc, s.dict.get(b"SMask")?);
     let Object::Stream(m) = &*obj else { return None };
     gray_plane(doc, m, w, h, budget)
 }
@@ -535,8 +607,7 @@ fn soft_mask(doc: &Document, s: &Stream, w: usize, h: usize, budget: &mut ImageB
 /// A stencil `/Mask` (an image mask stream, 8.9.6.3) as 8-bit alpha: its 1 samples (0 with
 /// `/Decode [1 0]`) hide the image.
 fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize, budget: &mut ImageBudget) -> Option<Vec<u8>> {
-    let r = s.dict.get(b"Mask")?.as_ref()?;
-    let obj = doc.get(r);
+    let obj = resolve_indirect_chain(doc, s.dict.get(b"Mask")?);
     let Object::Stream(m) = &*obj else { return None };
     Some(gray_plane(doc, m, w, h, budget)?.into_iter().map(|v| 255 - v).collect())
 }
@@ -544,9 +615,9 @@ fn stencil_mask(doc: &Document, s: &Stream, w: usize, h: usize, budget: &mut Ima
 /// A one-component mask image as 8-bit values (its `/Decode` interval applied), scaled to
 /// `w` × `h`. `None` when it can't be decoded (JPEG 2000 masks).
 fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut ImageBudget) -> Option<Vec<u8>> {
-    let (mw, mh) = size(m.dict.int(b"Width")?, m.dict.int(b"Height")?)?;
-    let stencil = m.dict.get(b"ImageMask").is_some_and(|v| matches!(&*doc.resolve(v), Object::Bool(true)));
-    let f = filters(m);
+    let (mw, mh) = size(dict_int(doc, &m.dict, b"Width")?, dict_int(doc, &m.dict, b"Height")?)?;
+    let stencil = m.dict.get(b"ImageMask").is_some_and(|v| matches!(&*resolve_indirect_chain(doc, v), Object::Bool(true)));
+    let f = filters(doc, m).ok()?;
     let mut px = match f.last().map(Vec::as_slice) {
         Some(b"DCTDecode" | b"DCT") if f.len() == 1 => {
             // Past the allowance the image goes too: `image` sees this one refused.
@@ -557,7 +628,7 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut Image
         }
         Some(b"DCTDecode" | b"DCT" | b"JPXDecode") => return None,
         _ => {
-            let bpc = if stencil { 1 } else { m.dict.int(b"BitsPerComponent").unwrap_or(8) };
+            let bpc = if stencil { 1 } else { dict_int(doc, &m.dict, b"BitsPerComponent").unwrap_or(8) };
             let bpc = match bpc {
                 1 => 1,
                 2 => 2,
@@ -567,7 +638,7 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut Image
                 _ => return None,
             };
             let max = (1u32 << bpc.min(8)) - 1;
-            unpack(&decoded(doc, m, budget).ok()?, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
+            unpack(&decoded(doc, m, &f, budget).ok()?, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
         }
     };
     if let Some([lo, hi]) = decode(doc, m, 1).and_then(|pairs| pairs.first().copied()) {
