@@ -7,7 +7,7 @@
 //! off, scripts don't run and AF calls keep working natively.
 
 use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, FieldProps, ScriptResult, Scripts};
-pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Panel, Request};
+pub use pdfcraft_js::{Keys, Limits, Message, MessageButtons, MessageIcon, Outcome, Panel, Request};
 
 use crate::{DocId, Edit, EditError, Session};
 
@@ -286,6 +286,12 @@ impl Session {
     /// the console (no target). Field changes and `resetForm` are applied as one undoable step;
     /// everything else the script asked for is returned.
     pub fn run_javascript(&mut self, id: DocId, script: &str, target: Option<&str>) -> Result<Outcome, EditError> {
+        self.run_javascript_with_keys(id, script, target, pdfcraft_js::Keys::default())
+    }
+
+    /// [`Self::run_javascript`] for a button clicked with modifier keys held: the script reads
+    /// them as `event.shift` and `event.modifier` (`xfa.event.shift` in an XFA form, #6159).
+    pub fn run_javascript_with_keys(&mut self, id: DocId, script: &str, target: Option<&str>, keys: pdfcraft_js::Keys) -> Result<Outcome, EditError> {
         if self.js_off {
             return Err(EditError::Invalid("JavaScript is turned off (Preferences ▸ JavaScript)".into()));
         }
@@ -297,7 +303,7 @@ impl Session {
             && let Some(field) = doc.form.iter().find(|f| f.name == t)
             && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, field)
         {
-            self.apply(id, Edit::XfaEvent { som, activity: "click".into() })?;
+            self.apply(id, Edit::XfaEvent { som, activity: "click".into(), keys })?;
             let out = self.take_js_output(id);
             return Ok(Outcome {
                 rc: true,
@@ -312,7 +318,7 @@ impl Session {
         let fields = pdfcraft_forms::fields(&cos);
         let states: Vec<_> = fields.iter().map(|f| field_state(&cos, f)).collect();
         let event = match target {
-            Some(t) => pdfcraft_js::Event { will_commit: false, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
+            Some(t) => pdfcraft_js::Event { will_commit: false, keys, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
             None => pdfcraft_js::Event::doc("Console"),
         };
         let mut o = pdfcraft_js::run(script, &event, &runner.doc, &states, &runner.doc_scripts, Limits::default());

@@ -275,6 +275,9 @@ struct Runner<'a, 'b> {
     /// rebuilt when the structure changed).
     session: Option<XfaSession>,
     changes: Changes,
+    /// The modifier keys the user held for the event being run (a Shift-click); none for the
+    /// calculations that follow it.
+    keys: pdfcraft_js::Keys,
 }
 
 impl<'a, 'b> Runner<'a, 'b> {
@@ -304,6 +307,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             cached: None,
             session: None,
             changes: Changes::default(),
+            keys: pdfcraft_js::Keys::default(),
         }
     }
 
@@ -661,7 +665,13 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.runs += 1;
         #[cfg(test)]
         self.check_live();
-        let event = XfaEvent { activity: ev.activity.clone(), target: ev.som.clone(), new_text: new_text.to_string(), prev_text: String::new() };
+        let event = XfaEvent {
+            activity: ev.activity.clone(),
+            target: ev.som.clone(),
+            new_text: new_text.to_string(),
+            prev_text: String::new(),
+            keys: self.keys,
+        };
         let root = to_js(&self.live().root);
         let script = Script {
             source: ev.script.clone(),
@@ -890,17 +900,28 @@ pub(crate) fn typed_date(
     pdfcraft_xfa::typed_date(tpl, &som, text).map(pdfcraft_forms::FieldValue::Text)
 }
 
-/// A button's click script (or any event, by SOM path and activity), then calculations.
-pub(crate) fn on_event(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &str, activity: &str, run: &mut XfaRun) -> Result<(), String> {
+/// A button's click script (or any event, by SOM path and activity), then calculations. `keys`
+/// are the modifier keys the user held (`xfa.event.shift` in the event's scripts, #6159).
+pub(crate) fn on_event(
+    doc: &mut pdfcraft_cos::Document,
+    tpl: &Template,
+    som: &str,
+    activity: &str,
+    keys: pdfcraft_js::Keys,
+    run: &mut XfaRun,
+) -> Result<(), String> {
     let mut r = Runner::new(doc, tpl, run, EVENT_BUDGET_MS);
     let events = r.events_of(som, activity);
     if events.is_empty() {
         return Err(format!("{som} has no {activity} script"));
     }
+    r.keys = keys;
     for ev in events {
         r.run(&ev, "")?;
     }
-    // The calculations that follow get a budget of their own.
+    // The calculations that follow get a budget of their own, and no keys: the user didn't make
+    // them happen.
+    r.keys = pdfcraft_js::Keys::default();
     r.clock = Clock::start(OPEN_BUDGET_MS.saturating_mul(u64::from(r.run.time_scale)));
     r.calculates()?;
     r.finish().map(|_| ())

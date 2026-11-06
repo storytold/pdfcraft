@@ -76,6 +76,16 @@ impl FieldState {
     }
 }
 
+/// The modifier keys held when the user made an event happen (a button clicked with Shift, say):
+/// what `event.shift` and `event.modifier` report. None for an event the user didn't make.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Keys {
+    /// Shift.
+    pub shift: bool,
+    /// Control, or Command on macOS.
+    pub modifier: bool,
+}
+
 /// The event a script runs for.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Event {
@@ -88,17 +98,35 @@ pub struct Event {
     pub value: String,
     pub change: String,
     pub will_commit: bool,
+    /// The modifier keys held (`event.shift`, `event.modifier`).
+    pub keys: Keys,
 }
 
 impl Event {
     /// A field event (`event.type` = "Field").
     pub fn field(name: &str, target: &str, value: &str) -> Event {
-        Event { name: name.into(), kind: "Field".into(), target: Some(target.into()), value: value.into(), change: String::new(), will_commit: true }
+        Event {
+            name: name.into(),
+            kind: "Field".into(),
+            target: Some(target.into()),
+            value: value.into(),
+            change: String::new(),
+            will_commit: true,
+            keys: Keys::default(),
+        }
     }
 
     /// A document event (`event.type` = "Doc"), e.g. Open or WillSave.
     pub fn doc(name: &str) -> Event {
-        Event { name: name.into(), kind: "Doc".into(), target: None, value: String::new(), change: String::new(), will_commit: false }
+        Event {
+            name: name.into(),
+            kind: "Doc".into(),
+            target: None,
+            value: String::new(),
+            change: String::new(),
+            will_commit: false,
+            keys: Keys::default(),
+        }
     }
 }
 

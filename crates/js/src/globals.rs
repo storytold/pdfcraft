@@ -291,7 +291,7 @@ pub(crate) fn event_object(ctx: &mut Context, e: &Event) -> JsObject {
         .property(js_string!("selStart"), 0, Attribute::all())
         .property(js_string!("selEnd"), 0, Attribute::all())
         .property(js_string!("commitKey"), 0, Attribute::all())
-        .property(js_string!("modifier"), false, Attribute::all())
-        .property(js_string!("shift"), false, Attribute::all())
+        .property(js_string!("modifier"), e.keys.modifier, Attribute::all())
+        .property(js_string!("shift"), e.keys.shift, Attribute::all())
         .build()
 }
