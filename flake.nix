@@ -18,8 +18,22 @@
         overlays = [ rust-overlay.overlays.default ];
       };
       rust = pkgs.rust-bin.stable.latest.default.override {
-        extensions = [ "rust-src" "rust-analyzer" ];
+        extensions = [
+          "rust-src"
+          "rust-analyzer"
+        ];
       };
+      pdfcraftFor =
+        p:
+        let
+          toolchain = p.rust-bin.stable.latest.minimal;
+        in
+        p.callPackage ./nix/package.nix {
+          rustPlatform = p.makeRustPlatform {
+            cargo = toolchain;
+            rustc = toolchain;
+          };
+        };
       runtimeLibs = with pkgs; [
         wayland
         libxkbcommon
@@ -42,13 +56,13 @@
     in
     {
       packages.${system} = rec {
-        pdfcraft = pkgs.callPackage ./nix/package.nix { };
+        pdfcraft = pdfcraftFor pkgs;
         default = pdfcraft;
       };
 
-      overlays.default = final: _prev: {
-        pdfcraft = final.callPackage ./nix/package.nix { };
-      };
+      overlays.default = nixpkgs.lib.composeExtensions rust-overlay.overlays.default (
+        final: _prev: { pdfcraft = pdfcraftFor final; }
+      );
 
       devShells.${system}.default = pkgs.mkShell {
         nativeBuildInputs = with pkgs; [
