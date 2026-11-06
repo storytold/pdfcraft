@@ -761,11 +761,13 @@ fn block_ops(plan: &BlockPlan<'_>, writer: &LineWriter<'_>, wrapped: &[(String, 
     let mut ops = vec![Op::new("q", vec![])];
     ops.extend(reveal_ops(plan.block, plan.lines, plan.style, plan.emit.ctm)?);
     // Moved: a translation inside that state.
+    let mut ctm = Matrix(plan.emit.ctm);
     if let Some((ax, ay)) = plan.movement {
         ops.push(Op::new("cm", vec![n(1.0), n(0.0), n(0.0), n(1.0), n(ax), n(ay)]));
+        ctm = Matrix([1.0, 0.0, 0.0, 1.0, ax, ay]).then(&ctm);
     }
     // Painted as the paragraph was, including what its text object set before the first show.
-    ops.extend(plan.state.paint_ops(plan.after));
+    ops.extend(plan.state.paint_ops(plan.after, ctm.0));
     ops.push(Op::new("BT", vec![]));
     let mut state = plan.state.clone();
     state.word_spacing = 0.0;
@@ -873,6 +875,11 @@ pub(crate) fn rewrite_block_from(
     let first = members.first().copied().ok_or_else(|| EditError::Invalid("the paragraph has no source runs".into()))?;
     members.iter().try_for_each(|line| line.ensure_editable())?;
     let p = page_dict(doc, page)?;
+    // Revealed OCR text may go on top of the page (see `revealed_under_paint`): a page that can't
+    // take that is refused here, before either rewrite path changes anything.
+    if b.invisible {
+        crate::check_on_top(doc, &p)?;
+    }
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let dispatch = choose_rewrite_path(doc, &fonts_res, &b, &members, first, text, style)?;
@@ -988,9 +995,28 @@ pub(crate) fn rewrite_block_from(
         char_spacing: o_state.char_spacing,
         lead,
     };
-    let plan =
-        BlockPlan { block: &b, lines: &lines, style, emit, after, movement, state: o_state, tm, size, underline: style.underline == Some(true) };
+    let at = if split { start } else { emit.bt_op };
+    // Revealed OCR text that something is painted over goes on top of the page, where it starts
+    // from the initial state.
+    let widest = wrapped.iter().map(|(l, _, _)| advance.of(l)).fold(width, f64::max);
+    let reach = crate::Reach { rect: b.rect, offset: [dx, dy], width: widest, rows: wrapped.len(), pitch: lead * k, upright };
+    let over = crate::revealed_under_paint(doc, page, b.invisible, reach.bounds(), &ops, at);
+    let initial = TextState::initial();
+    let drawn_from = if over { &initial } else { after };
+    let plan = BlockPlan {
+        block: &b,
+        lines: &lines,
+        style,
+        emit,
+        after: drawn_from,
+        movement,
+        state: o_state,
+        tm,
+        size,
+        underline: style.underline == Some(true),
+    };
     let mut block_ops = block_ops(&plan, &writer, &wrapped, font.show_font.clone())?;
+    let on_top = crate::lift_on_top(over, &mut block_ops);
     let n = pdfcraft_content::num;
     block_ops.extend(after.ops().into_iter().filter(|op| !op.is("Tf") || after.font.is_some()));
     if split {
@@ -998,7 +1024,6 @@ pub(crate) fn rewrite_block_from(
         block_ops.push(Op::new("BT", vec![]));
         block_ops.push(Op::new("Tm", emit.tlm.iter().map(|v| n(*v)).collect()));
     }
-    let at = if split { start } else { emit.bt_op };
     let new_data = splice_rewrite(&pieces, &ops, &dropped, partial_patches, at, split, block_ops);
     let contents = rewritten_contents(doc, &streams, new_data);
     let new_font = !reuse;
@@ -1012,12 +1037,14 @@ pub(crate) fn rewrite_block_from(
             d.set(b"Resources".to_vec(), Object::Dict(res));
         }
     })?;
+    crate::draw_on_top(doc, &p, emit.ctm, &on_top)?;
     Ok(LineEdit { substituted: font.substituted })
 }
 
 /// The cover (when [`BlockStyle::cover`] asks for one) and visible rendering that start a
 /// rewritten invisible paragraph, drawn in the space whose CTM is `ctm`. Nothing for visible text.
-/// The paragraph's `q`/`Q` restores the rendering mode for the invisible text after it.
+/// The paragraph's `q`/`Q` restores the rendering mode for the invisible text after it; one
+/// painted over where it was is drawn on top of the page instead ([`crate::draw_on_top`]).
 pub(crate) fn reveal_ops(block: &TextBlock, lines: &[TextLine], style: &BlockStyle, ctm: [f64; 6]) -> Result<Vec<Op>, EditError> {
     if !block.invisible {
         return Ok(Vec::new());

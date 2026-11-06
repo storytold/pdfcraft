@@ -52,6 +52,7 @@ use fallback::{
 };
 #[cfg(test)]
 use fallback::{add_type3_font, is_type3_fallback};
+pub(crate) use fallback::{glyph_path, type3_font_dict, unique_font_name};
 #[cfg(test)]
 use interp::tj_operands;
 use interp::{Origin, Paint, union};
