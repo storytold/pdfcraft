@@ -152,13 +152,10 @@ impl Automation {
                     let target = if target.exists() {
                         let stem =
                             std::path::Path::new(&name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
-                        unused(&folder, &stem)
+                        unused(&folder, &stem)?
                     } else {
                         target
                     };
-                    if target.exists() {
-                        return Err(failed(format!("{}: no unused output name available", target.display())));
-                    }
                     write_atomic(&target, &r.bytes)?;
                     json!({ "path": p, "output": target.to_string_lossy(), "log": r.log })
                 }
