@@ -1,7 +1,7 @@
 //! Export a PDF ▸ Image and Text (execution plan M10.3, the first formats).
 //!
-//! [`Exporter`] renders pages to PNG, JPEG or TIFF at a resolution and extracts reading-order
-//! text, from a
+//! [`Exporter`] renders pages to PNG, JPEG or TIFF at a resolution, or draws them as SVG, and
+//! extracts reading-order text, from a
 //! document's working file (so unsaved edits and hidden layers are respected, as on screen).
 
 use std::collections::BTreeMap;
@@ -15,13 +15,18 @@ use crate::Document;
 
 /// At most this many pages are drawn at once by [`Exporter::images`].
 const MAX_IMAGE_WORKERS: usize = 8;
-/// Bytes of rasters [`Exporter::images`] may hold at once: 1 GiB, about 16 Letter pages at 300 dpi.
+/// Bytes of rasters (or SVG text) [`Exporter::images`] may hold at once: 1 GiB, about 16 Letter
+/// pages at 300 dpi.
 /// Each worker holds one page (the raster, its RGB copy and the encoded file), so large pages run
 /// on fewer workers; a page over the cap still exports, on one worker, as it did before.
 const IMAGE_MEMORY: f64 = 1024.0 * 1024.0 * 1024.0;
 
-/// Page `page` drawn at `dpi` and encoded as `format`, saying it was drawn at `used` dpi.
+/// Page `page` drawn at `dpi` and encoded as `format`, saying it was drawn at `used` dpi. SVG is
+/// drawn from the page as vector, so `dpi` and `used` don't apply.
 fn draw_image(renderer: &mut PageRenderer, page: usize, dpi: f64, format: ImageFormat, used: f64) -> Result<Vec<u8>, String> {
+    if format == ImageFormat::Svg {
+        return renderer.svg(page).map(String::into_bytes).map_err(|e| format!("page {}: {e}", page + 1));
+    }
     let r = renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });
     if let Some(e) = r.error {
         return Err(format!("page {}: {e}", page + 1));
@@ -138,7 +143,8 @@ impl Exporter {
         encode_png(r.width, r.height, &r.rgba)
     }
 
-    /// Page `page` as an image file of `format`, which says the resolution it was drawn at.
+    /// Page `page` as an image file of `format`. A JPEG or TIFF says the resolution it was drawn
+    /// at (see [`encode_image`]); SVG is vector, so it ignores `dpi`.
     pub fn image(&mut self, page: usize, dpi: f64, format: ImageFormat) -> Result<Vec<u8>, String> {
         self.check(page)?;
         let used = self.dpi_used(page, dpi);
@@ -159,7 +165,7 @@ impl Exporter {
         format: ImageFormat,
         sink: impl FnMut(usize, Vec<u8>) -> Result<(), String>,
     ) -> Result<(), String> {
-        let workers = self.image_workers(pages, dpi);
+        let workers = self.image_workers(pages, dpi, format);
         self.images_on(workers, pages, dpi, format, sink)
     }
 
@@ -261,23 +267,29 @@ impl Exporter {
     }
 
     /// How many pages [`Exporter::images`] draws at once: one per core but one, up to
-    /// [`MAX_IMAGE_WORKERS`], as many as [`IMAGE_MEMORY`] holds of the largest page, and one
-    /// when there is nothing to share or no threads (wasm).
-    fn image_workers(&self, pages: &[usize], dpi: f64) -> usize {
+    /// [`MAX_IMAGE_WORKERS`], as many as [`IMAGE_MEMORY`] holds of the largest page (an SVG page
+    /// as much as the renderer lets one become), and one when there is nothing to share or no
+    /// threads (wasm).
+    pub(crate) fn image_workers(&self, pages: &[usize], dpi: f64, format: ImageFormat) -> usize {
         if cfg!(target_arch = "wasm32") || pages.len() < 2 {
             return 1;
         }
         // One core is left for the interface, which keeps drawing while an export runs.
         let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get).saturating_sub(1).min(MAX_IMAGE_WORKERS);
-        // The raster (RGBA), the RGB copy the encoders take, and room for the encoded file.
-        let largest = pages
-            .iter()
-            .filter_map(|p| {
-                let (w, h) = *self.sizes.get(*p)?;
-                let k = self.dpi_used(*p, dpi) / 72.0;
-                Some((f64::from(w) * k).ceil() * (f64::from(h) * k).ceil() * 8.0)
-            })
-            .fold(0.0, f64::max);
+        // The raster (RGBA), the RGB copy the encoders take, and room for the encoded file. SVG
+        // text grows with what a page draws, not its size.
+        let largest = if format == ImageFormat::Svg {
+            pdfcraft_render::MAX_SVG_BYTES as f64
+        } else {
+            pages
+                .iter()
+                .filter_map(|p| {
+                    let (w, h) = *self.sizes.get(*p)?;
+                    let k = self.dpi_used(*p, dpi) / 72.0;
+                    Some((f64::from(w) * k).ceil() * (f64::from(h) * k).ceil() * 8.0)
+                })
+                .fold(0.0, f64::max)
+        };
         // A float-to-integer cast saturates (and NaN is 0).
         let by_memory = if largest > 0.0 { (IMAGE_MEMORY / largest) as usize } else { cores };
         cores.min(by_memory).min(pages.len()).max(1)
@@ -315,6 +327,7 @@ pub fn encode_image(width: u32, height: u32, premultiplied: &[u8], format: Image
         ImageFormat::Png => encode_png(width, height, premultiplied),
         ImageFormat::Jpeg { quality } => encode_jpeg(width, height, premultiplied, quality, dpi),
         ImageFormat::Tiff => encode_tiff(width, height, premultiplied, dpi),
+        ImageFormat::Svg => Err("SVG is drawn from the page, not encoded from pixels".into()),
     }
 }
 
@@ -365,6 +378,8 @@ pub enum ImageFormat {
         quality: u8,
     },
     Tiff,
+    /// Vector, one file per page; resolution and quality do not apply.
+    Svg,
 }
 
 impl ImageFormat {
@@ -373,6 +388,7 @@ impl ImageFormat {
             ImageFormat::Png => "png",
             ImageFormat::Jpeg { .. } => "jpg",
             ImageFormat::Tiff => "tif",
+            ImageFormat::Svg => "svg",
         }
     }
 
@@ -381,6 +397,7 @@ impl ImageFormat {
             ImageFormat::Png => "PNG",
             ImageFormat::Jpeg { .. } => "JPEG",
             ImageFormat::Tiff => "TIFF",
+            ImageFormat::Svg => "SVG",
         }
     }
 }

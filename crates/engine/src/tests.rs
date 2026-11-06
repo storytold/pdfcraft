@@ -3659,6 +3659,23 @@ fn export_images_and_text_follow_the_working_file() {
 }
 
 #[test]
+fn svg_export_follows_the_working_file_at_any_resolution() {
+    use crate::export::ImageFormat::Svg;
+    let (mut s, id) = session_with(2);
+    s.apply(id, Edit::RotatePages { pages: vec![1], degrees: 90 }).unwrap();
+    let mut ex = export::Exporter::new(s.get(id).unwrap());
+    let svg = |b: Vec<u8>| String::from_utf8(b).unwrap();
+    let first = svg(ex.image(0, 72.0, Svg).unwrap());
+    assert!(first.starts_with("<svg viewBox=\"0 0 200 300\" width=\"200\" height=\"300\" "), "{first}");
+    // The unsaved rotation: 200×300 pt on its side.
+    let rotated = svg(ex.image(1, 72.0, Svg).unwrap());
+    assert!(rotated.starts_with("<svg viewBox=\"0 0 300 200\" width=\"300\" height=\"200\" "), "{rotated}");
+    assert_eq!(svg(ex.image(0, 1200.0, Svg).unwrap()), first, "vector: the resolution doesn't apply");
+    assert!(ex.image(5, 72.0, Svg).is_err());
+    assert!(export::encode_image(1, 1, &[0; 4], Svg, 72.0).is_err(), "SVG isn't encoded from pixels");
+}
+
+#[test]
 fn create_and_reduce() {
     let mut s = Session::new();
     let blank = s.create_blank(612.0, 792.0, 2).unwrap();
@@ -4046,7 +4063,7 @@ fn pages_exported_at_once_are_the_files_each_page_exports_alone_in_order() {
     use crate::export::{Exporter, ImageFormat};
     let (s, id) = session_with(12);
     let pages = [3, 0, 11, 5, 5, 7, 1, 2, 10, 9, 8, 6, 4];
-    for format in [ImageFormat::Png, ImageFormat::Jpeg { quality: 85 }, ImageFormat::Tiff] {
+    for format in [ImageFormat::Png, ImageFormat::Jpeg { quality: 85 }, ImageFormat::Tiff, ImageFormat::Svg] {
         let alone: Vec<(usize, Vec<u8>)> = pages.iter().map(|&p| (p, Exporter::new(s.get(id).unwrap()).image(p, 96.0, format).unwrap())).collect();
         for workers in [1, 2, 4, 8] {
             let mut got = Vec::new();
@@ -4067,6 +4084,18 @@ fn pages_exported_at_once_are_the_files_each_page_exports_alone_in_order() {
             .unwrap();
         assert!(got == alone, "{}", format.label());
     }
+}
+
+/// An SVG page can become as much text as the renderer allows whatever its size, so no more are
+/// drawn at once than that many fit in the export's memory budget (1 GiB).
+#[test]
+fn svg_pages_drawn_at_once_fit_the_export_memory_budget() {
+    use crate::export::{Exporter, ImageFormat};
+    let (s, id) = session_with(12);
+    let ex = Exporter::new(s.get(id).unwrap());
+    let pages: Vec<usize> = (0..12).collect();
+    let svg = ex.image_workers(&pages, 96.0, ImageFormat::Svg);
+    assert!((1..=((1u64 << 30) / pdfcraft_render::MAX_SVG_BYTES) as usize).contains(&svg), "{svg}");
 }
 
 /// A page that can't be exported, or a file that can't be written, stops the export there with
