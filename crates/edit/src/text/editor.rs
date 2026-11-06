@@ -90,23 +90,23 @@ pub(crate) fn layout_draft(
         return Ok(TextEditLayout { source_rect: source.rect, draft_rect: Some(source.rect), overflow: false });
     }
     // Subtract the untouched runs by value, rather than by operator offsets: a rewrite may
-    // split BT/ET or add font resources. A multiset also handles coincident repeated text.
-    let key =
-        |line: &TextLine| (line.text.clone(), line.font.clone(), line.rect.map(f64::to_bits), line.size.to_bits(), line.color.map(f64::to_bits));
-    let mut untouched = std::collections::BTreeMap::new();
+    // split BT/ET or add font resources. A multiset also handles coincident repeated text;
+    // a small box tolerance absorbs the `num` rounding when a shared TJ array is patched.
+    let key = |line: &TextLine| (line.text.clone(), line.font.clone(), line.size.to_bits(), line.color.map(f64::to_bits));
+    let mut untouched: std::collections::BTreeMap<_, Vec<[f64; 4]>> = std::collections::BTreeMap::new();
     for (index, line) in lines.iter().enumerate() {
         if !source.lines.contains(&index) {
-            *untouched.entry(key(line)).or_insert(0_usize) += 1;
+            untouched.entry(key(line)).or_default().push(line.rect);
         }
     }
     let mut draft = doc.clone();
     rewrite_block_from(&mut draft, page, lines.to_vec(), block, Some(text), style, MAX_TYPE3_GLYPHS)?;
     let mut rect: Option<[f64; 4]> = None;
     for line in text_lines(&draft, page)? {
-        if let Some(count) = untouched.get_mut(&key(&line))
-            && *count > 0
+        if let Some(rects) = untouched.get_mut(&key(&line))
+            && let Some(pos) = rects.iter().position(|r| r.iter().zip(line.rect).all(|(a, b)| (a - b).abs() < 1e-2))
         {
-            *count -= 1;
+            rects.swap_remove(pos);
             continue;
         }
         // Spaces typed after a row's last word are drawn but show nothing, so an upright row is
