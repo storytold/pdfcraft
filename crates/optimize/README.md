@@ -128,6 +128,16 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   `EarlyChange`, filters applied before the LZW one go with it and those after it keep their
   bytes. A stream whose LZW data doesn't decode cleanly is left as it is. Not yet: inline images.
 
+Apart from optimizing, `tile_large_images` redraws large pictures for Windows printing (#5131).
+Windows' PDF renderer draws an image of more than 2²² pixels from a copy shrunk to that size, so
+in the copy of a print that goes to the spooler (`pdfcraft_engine::spooler::spooler_copy`) each
+such image becomes a form XObject of the same object number drawing tiles, one every 2000 pixels.
+Each overlaps the next by a pixel, against seams on drivers that soften image edges, so a tile has
+at most 2001 pixels a side; except for an image with a soft mask, whose see-through pixels would
+be blended twice there. A soft or stencil
+mask of the image's size is cut the same way. JPEG 2000, JPEGs that aren't grey or RGB, masks of
+another size and images over 80 million pixels are left whole.
+
 The engine runs Remove Hidden Information (`pdfcraft-redact`) for the user-data categories,
 then this, then merges identical objects and writes a full, compressed save
 (`pdfcraft_engine::optimizer::OptimizeJob`, which the UI runs on a worker thread with a
