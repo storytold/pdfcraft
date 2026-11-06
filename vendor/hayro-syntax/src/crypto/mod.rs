@@ -115,6 +115,52 @@ pub(crate) fn get(
     id: &[u8],
     password: &[u8],
 ) -> Result<Decryptor, DecryptionError> {
+    match decryptor(dict, id, password) {
+        // PdfCraft patch (37): a document that encrypts only its embedded files, authorised when
+        // one is opened (`/AuthEvent /EFOpen`, ISO 32000-2 §7.6.6, Table 25), opens without a
+        // password: its strings and streams are in the clear, and nothing drawn reads an embedded
+        // file.
+        Err(DecryptionError::PasswordProtected) if password.is_empty() && efopen_only(dict) => {
+            Ok(Decryptor::None)
+        }
+        other => other,
+    }
+}
+
+/// PdfCraft patch (37): whether `dict` has crypt filters (V4 or later) that encrypt, each
+/// authorised only when an embedded file is opened (`/AuthEvent /EFOpen`), and neither `/StmF` nor
+/// `/StrF` names one. The embedded files use them through `/EFF` or a `/Crypt` filter of their
+/// own; earlier handlers (V1, V2) encrypt everything with RC4.
+fn efopen_only(dict: &Dict<'_>) -> bool {
+    if dict.get::<u8>(V).is_none_or(|v| v < 4) {
+        return false;
+    }
+    let Some(cf) = dict.get::<Dict<'_>>(CF) else {
+        return false;
+    };
+    let mut encrypting = Vec::new();
+    for key in cf.keys() {
+        let Some(filter) = cf.get::<Dict<'_>>(key.as_ref()) else {
+            continue;
+        };
+        let method = filter.get::<Name<'_>>(CFM).and_then(|n| DecryptorTag::from_name(&n));
+        if matches!(method, None | Some(DecryptorTag::None)) {
+            continue;
+        }
+        if filter.get::<Name<'_>>(b"AuthEvent").is_none_or(|e| e.as_str() != "EFOpen") {
+            return false;
+        }
+        encrypting.push(key.as_str().to_string());
+    }
+    let names = |key: &[u8]| dict.get::<Name<'_>>(key).is_some_and(|n| encrypting.iter().any(|e| e == n.as_str()));
+    !encrypting.is_empty() && !names(STM_F) && !names(STR_F)
+}
+
+fn decryptor(
+    dict: &Dict<'_>,
+    id: &[u8],
+    password: &[u8],
+) -> Result<Decryptor, DecryptionError> {
     let filter = dict.get::<Name<'_>>(FILTER).ok_or(InvalidEncryption)?;
 
     if filter.deref() != b"Standard" {
