@@ -435,7 +435,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                     } else if marked {
                         ui.add(icons::image("circle-check", 14.0, t.accent)).on_hover_text(tl!("Marked"));
                     }
-                    if a.locked {
+                    if a.locked || a.locked_contents {
                         ui.add(icons::image("lock", 13.0, t.text_faint)).on_hover_text(tl!("Locked"));
                     }
                     buttons_left = ui.min_rect().left();
@@ -576,7 +576,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
     // On the selected card a double-click on the text edits it too (dragging over it selects
     // words of it, for copying).
     let body = (selected && !editing).then(|| ui.interact(body, ui.scope_id().with(("card-body", key)), Sense::click()));
-    if (click.double_clicked() || body.is_some_and(|b| b.double_clicked())) && allowed {
+    if (click.double_clicked() || body.is_some_and(|b| b.double_clicked())) && allowed && !a.locked_contents {
         view.comments.open_editor(a.page, a.index, a.contents.clone().unwrap_or_default());
     }
     let menu_id = ui.scope_id().with(("card-menu", key));
@@ -592,7 +592,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
         .show(|ui| {
             ui.set_min_width(160.0);
             crate::comments::attachment_items(ui, view, info, a);
-            if ui.button(tl_ctx!("comment menu", "Edit")).clicked() {
+            if ui.add_enabled(allowed && !a.locked_contents, egui::Button::new(tl_ctx!("comment menu", "Edit"))).clicked() {
                 view.comments.open_editor(a.page, a.index, a.contents.clone().unwrap_or_default());
                 ui.close();
             }

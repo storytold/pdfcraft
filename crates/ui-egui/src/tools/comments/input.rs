@@ -305,6 +305,7 @@ fn select_input(
         && on_page
         && cx.allowed
         && let Some((a, _)) = owner
+        && !a.locked_contents
     {
         cv.select_only((cx.page, a.index));
         cv.composer = Some(Composer {

@@ -176,6 +176,7 @@ impl<'a> Inspector<'a> {
                 state: self.text(d, b"State"),
                 quads,
                 locked: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 128 != 0,
+                locked_contents: d.get(b"F").ok().and_then(|f| self.resolve(f).as_i64().ok()).unwrap_or(0) & 512 != 0,
                 intent: self.name(d, b"IT"),
                 fill_sign,
                 no_rotate: d.get(b"F").is_ok_and(|f| draw_flags(self.resolve(f)) & 16 != 0),
