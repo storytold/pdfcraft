@@ -269,6 +269,9 @@ pub struct PdfCraftApp {
     /// Documents and view). Continuous scrolling at fit width by default, which never snaps
     /// between pages.
     pub view_defaults: canvas::ViewDefaults,
+    /// Show the ordinary AcroForm field reminder; dismissing it persists across sessions.
+    /// Security, repair, signature and XFA notices are independent of this preference.
+    pub show_form_field_reminder: bool,
     /// The unit page sizes and margins are shown in (Preferences ▸ Documents and view).
     pub units: units::Unit,
     /// The paper Create ▸ Blank page makes (#5644): the system region's.

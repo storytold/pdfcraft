@@ -55,6 +55,7 @@ impl Host for crate::PdfCraftApp {
         self.request_quit(ctx)
     }
 
+    /// Report UI and preference state through the authenticated control channel.
     fn state(&self) -> Value {
         let active = self.active.and_then(|i| self.views.get(i));
         let docs: Vec<Value> = self
@@ -135,6 +136,7 @@ impl Host for crate::PdfCraftApp {
             "home": self.active.is_none(),
             "mode": format!("{:?}", self.mode),
             "default_mode": self.default_mode,
+            "show_form_field_reminder": self.show_form_field_reminder,
             "hotbar": self.hotbar,
             "comment_tool_pinned": self.comment_prefs.pinned,
             "left_panel": if self.left_open { json!(format!("{:?}", self.left)) } else { Value::Null },
