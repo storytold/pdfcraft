@@ -26,7 +26,7 @@ pub enum Hidden {
     /// Optional content (layers) that is off: its content, then the layers themselves.
     HiddenLayers,
     Bookmarks,
-    /// Links, actions (open action, additional actions) and document JavaScript.
+    /// Links, actions (open action, additional actions, what bookmarks run) and document JavaScript.
     LinksActionsScripts,
     /// Private data of other applications (`/PieceInfo`).
     PrivateData,
@@ -170,6 +170,81 @@ fn outline_len_seen(
         n += 1 + outline_len_seen(doc, d.get(b"First"), depth + 1, seen, counted);
         cur = d.get(b"Next").cloned();
     }
+    n
+}
+
+/// Takes out the action of outline item `d` when it does more than go to a place in this document
+/// (a script, a launch, a web or remote link, a form submission); a jump with an action chained
+/// after it (`/Next`) keeps only the jump. Items written in place below it (`/First`, `/Next`) are
+/// cleaned the same way, and items that are objects of their own go on `next`. Returns how many
+/// actions went, or `None` past the depth limit.
+fn clean_outline_item(doc: &Document, d: &mut Dict, next: &mut Vec<ObjRef>, depth: usize) -> Option<usize> {
+    if depth > MAX_DIRECT_DEPTH {
+        return None;
+    }
+    let mut n = 0;
+    if let Some(action) = d.get(b"A").and_then(|a| doc.resolve(a).as_dict().cloned()) {
+        match (action.name(b"S"), action.get(b"D")) {
+            (Some(b"GoTo"), _) if !action.contains(b"Next") => {}
+            (Some(b"GoTo"), Some(place)) => {
+                let mut jump = Dict::new();
+                jump.set(b"S".to_vec(), Object::name("GoTo"));
+                jump.set(b"D".to_vec(), place.clone());
+                d.set(b"A".to_vec(), Object::Dict(jump));
+                n += 1;
+            }
+            _ => {
+                d.remove(b"A");
+                n += 1;
+            }
+        }
+    }
+    for key in [&b"First"[..], b"Next"] {
+        match d.get_mut(key) {
+            Some(Object::Ref(r)) => next.push(*r),
+            Some(Object::Dict(kid)) => n += clean_outline_item(doc, kid, next, depth + 1)?,
+            _ => {}
+        }
+    }
+    Some(n)
+}
+
+/// [`clean_outline_item`] over the outline from the objects in `next`: the outline objects to
+/// write back, and how many actions went. Each object is read once; `None` when the outline is
+/// larger than [`OUTLINE_ITEM_BUDGET`] objects or nests in place past the depth limit, so the
+/// removal can't be shown complete.
+fn outline_without_actions(doc: &Document, mut next: Vec<ObjRef>) -> Option<(Vec<(ObjRef, Dict)>, usize)> {
+    let (mut out, mut n, mut seen) = (Vec::new(), 0, std::collections::HashSet::new());
+    while let Some(r) = next.pop() {
+        if !seen.insert(r) {
+            continue;
+        }
+        if seen.len() > OUTLINE_ITEM_BUDGET {
+            return None;
+        }
+        let Some(mut d) = doc.get(r).as_dict().cloned() else { continue };
+        let went = clean_outline_item(doc, &mut d, &mut next, 0)?;
+        if went > 0 {
+            out.push((r, d));
+            n += went;
+        }
+    }
+    Some((out, n))
+}
+
+/// How many outline actions Links, actions and JavaScripts would take out ([`clean_outline_item`]).
+/// An outline too large or too deep to follow counts as one, so the removal runs and refuses it.
+fn outline_action_count(doc: &Document, cat: &Dict) -> usize {
+    let mut next = Vec::new();
+    let mut n = match cat.get(b"Outlines") {
+        Some(Object::Ref(r)) => {
+            next.push(*r);
+            0
+        }
+        Some(Object::Dict(o)) => clean_outline_item(doc, &mut o.clone(), &mut next, 0).unwrap_or(1),
+        _ => return 0,
+    };
+    n += outline_without_actions(doc, next).map_or(1, |(_, went)| went);
     n
 }
 
@@ -502,12 +577,30 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
                         + owned(Hidden::LinksActionsScripts)
                         + annots.iter().filter(|a| !a.contains(b"AA") && a.name(b"Subtype") == Some(b"Widget") && a.contains(b"A")).count()
                         + sub(doc, &names, b"JavaScript").map_or(0, |t| name_tree_len(doc, &t))
+                        + outline_action_count(doc, &cat)
                 }
                 Hidden::PrivateData => owned(Hidden::PrivateData),
             };
             (h, n)
         })
         .collect()
+}
+
+/// Take from the outline of catalog `cat` every action that does more than go to a place in this
+/// document (see [`outline_without_actions`]): bookmarks that stay keep where they go, not what
+/// they run. An outline too large or nested too deep to follow is refused, not left half cleaned.
+fn strip_outline_actions(doc: &mut Document, cat: &mut Dict) -> Result<(), RedactError> {
+    let mut next = Vec::new();
+    if let Some(Object::Dict(o)) = cat.get_mut(b"Outlines") {
+        clean_outline_item(doc, o, &mut next, 0).ok_or(RedactError::TooDeep)?;
+    } else if let Some(r) = cat.get(b"Outlines").and_then(Object::as_ref) {
+        next.push(r);
+    }
+    let (items, _) = outline_without_actions(doc, next).ok_or(RedactError::TooDeep)?;
+    for (r, d) in items {
+        doc.set(r, Object::Dict(d));
+    }
+    Ok(())
 }
 
 /// Remove the chosen categories. Returns what was removed per category.
@@ -627,6 +720,10 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
                 }
                 if let Some(n) = names.as_mut() {
                     n.remove(b"JavaScript");
+                }
+                // Bookmarks that stay keep where they go, not what they run.
+                if !which.contains(&Hidden::Bookmarks) {
+                    strip_outline_actions(doc, &mut cat)?;
                 }
             }
             Hidden::HiddenLayers if !off.is_empty() => {
