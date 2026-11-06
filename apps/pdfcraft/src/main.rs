@@ -31,6 +31,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::renderer::RendererPreference;
 
 #[cfg(target_os = "macos")]
 mod apple_events;
@@ -260,7 +261,7 @@ fn main() -> eframe::Result {
         single_instance::Claim::Primary(server) => Some(server),
         single_instance::Claim::Alone => None,
     };
-    let choice = renderer_choice(std::env::var("PDFCRAFT_RENDERER").ok().as_deref());
+    let choice = renderer_choice(std::env::var("PDFCRAFT_RENDERER").ok().as_deref(), saved_renderer());
     let launch = Launch { files, options, control_file, create_images, integrated, window_controls, two_paged };
     // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
     // that launched us as well as later ones. Lives until the event loop returns.
@@ -303,23 +304,42 @@ fn main() -> eframe::Result {
     }
 }
 
-/// Which renderer to start with, from `PDFCRAFT_RENDERER`.
+/// Which renderer to start with, from `PDFCRAFT_RENDERER` or Preferences ▸ Graphics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RendererChoice {
     /// wgpu, then OpenGL if wgpu can't start (unset, or anything unrecognised).
     Auto,
     /// wgpu only (`wgpu`): a failure is reported, not worked around.
     Wgpu,
-    /// OpenGL only (`gl`, `opengl` or `glow`): for drivers where wgpu starts but misbehaves.
+    /// OpenGL only (`gl`, `opengl` or `glow`, or the OpenGL preference): for drivers where wgpu
+    /// starts but misbehaves, and for displays with a variable refresh rate, where a window drawn
+    /// through Direct3D 12 flickers (`pdfcraft_ui_egui::renderer`).
     Gl,
 }
 
-fn renderer_choice(value: Option<&str>) -> RendererChoice {
+/// `PDFCRAFT_RENDERER` when it names a renderer, else the saved preference.
+fn renderer_choice(value: Option<&str>, saved: Option<RendererPreference>) -> RendererChoice {
     match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
         Some("wgpu") => RendererChoice::Wgpu,
         Some("gl" | "opengl" | "glow") => RendererChoice::Gl,
+        _ if saved == Some(RendererPreference::Gl) => RendererChoice::Gl,
         _ => RendererChoice::Auto,
     }
+}
+
+/// Preferences ▸ Graphics as last saved. The renderer is chosen before eframe opens the settings,
+/// so this reads them itself; `None` when there are none or they can't be read (eframe logs that
+/// when it opens them).
+fn saved_renderer() -> Option<RendererPreference> {
+    let settings = std::fs::read_to_string(settings_dir()?.join("app.ron")).ok()?;
+    renderer_in_settings(&settings)
+}
+
+/// The preference in the text of `app.ron`: eframe's RON map from key to string, where the app's
+/// settings are the JSON under its storage key ([`PdfCraftApp::persist`]).
+fn renderer_in_settings(app_ron: &str) -> Option<RendererPreference> {
+    let entries: std::collections::HashMap<String, String> = ron::from_str(app_ron).ok()?;
+    RendererPreference::saved(entries.get("pdfcraft").or_else(|| entries.get(LEGACY_STORAGE_KEY))?)
 }
 
 /// Whether a failed run should be retried with OpenGL: only when wgpu was tried first by choice of

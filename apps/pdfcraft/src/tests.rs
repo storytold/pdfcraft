@@ -113,12 +113,12 @@ fn path_from_arg_leaves_plain_paths_and_other_schemes_alone() {
 #[test]
 fn opengl_is_the_fallback_unless_a_renderer_was_chosen() {
     use super::{RendererChoice, native_options, renderer_choice, retry_with_gl};
-    assert_eq!(renderer_choice(None), RendererChoice::Auto);
-    assert_eq!(renderer_choice(Some("")), RendererChoice::Auto);
-    assert_eq!(renderer_choice(Some("vulkan")), RendererChoice::Auto);
-    assert_eq!(renderer_choice(Some(" WGPU ")), RendererChoice::Wgpu);
+    assert_eq!(renderer_choice(None, None), RendererChoice::Auto);
+    assert_eq!(renderer_choice(Some(""), None), RendererChoice::Auto);
+    assert_eq!(renderer_choice(Some("vulkan"), None), RendererChoice::Auto);
+    assert_eq!(renderer_choice(Some(" WGPU "), None), RendererChoice::Wgpu);
     for gl in ["gl", "OpenGL", "glow"] {
-        assert_eq!(renderer_choice(Some(gl)), RendererChoice::Gl);
+        assert_eq!(renderer_choice(Some(gl), None), RendererChoice::Gl);
     }
     // Retried with OpenGL only when wgpu failed to start by default, never after the app ran.
     assert!(retry_with_gl(RendererChoice::Auto, false));
@@ -128,6 +128,41 @@ fn opengl_is_the_fallback_unless_a_renderer_was_chosen() {
     // Each run states its renderer rather than relying on eframe's default.
     assert_eq!(native_options(false, false, eframe::Renderer::Wgpu).renderer, eframe::Renderer::Wgpu);
     assert_eq!(native_options(false, false, eframe::Renderer::Glow).renderer, eframe::Renderer::Glow);
+}
+
+#[test]
+fn the_saved_renderer_applies_unless_the_environment_names_one() {
+    use super::{RendererChoice, RendererPreference, renderer_choice};
+    let gl = Some(RendererPreference::Gl);
+    assert_eq!(renderer_choice(None, gl), RendererChoice::Gl);
+    // A value that names no renderer leaves the preference in charge.
+    assert_eq!(renderer_choice(Some("vulkan"), gl), RendererChoice::Gl);
+    assert_eq!(renderer_choice(Some("wgpu"), gl), RendererChoice::Wgpu);
+    assert_eq!(renderer_choice(None, Some(RendererPreference::Auto)), RendererChoice::Auto);
+    assert_eq!(renderer_choice(Some("gl"), Some(RendererPreference::Auto)), RendererChoice::Gl);
+}
+
+#[test]
+fn the_renderer_is_read_from_settings_as_eframe_writes_them() {
+    use super::{LEGACY_STORAGE_KEY, RendererPreference, renderer_in_settings};
+    // eframe's own format: a pretty RON map from key to string (`FileStorage`).
+    let app_ron = |key: &str, json: &str| {
+        let entries = std::collections::HashMap::from([(key.to_string(), json.to_string()), ("egui".to_string(), "(zoom: 1.0)".to_string())]);
+        ron::ser::to_string_pretty(&entries, ron::ser::PrettyConfig::default()).unwrap_or_default()
+    };
+    assert_eq!(renderer_in_settings(&app_ron("pdfcraft", r#"{"theme":"dark","renderer":"gl"}"#)), Some(RendererPreference::Gl));
+    assert_eq!(renderer_in_settings(&app_ron(LEGACY_STORAGE_KEY, r#"{"renderer":"gl"}"#)), Some(RendererPreference::Gl));
+    assert_eq!(renderer_in_settings(&app_ron("pdfcraft", r#"{"renderer":"auto"}"#)), Some(RendererPreference::Auto));
+    // Settings from before the preference, other apps' keys, broken JSON or RON: no preference.
+    for settings in [
+        app_ron("pdfcraft", r#"{"theme":"dark"}"#),
+        app_ron("other", r#"{"renderer":"gl"}"#),
+        app_ron("pdfcraft", "{"),
+        "{".to_string(),
+        String::new(),
+    ] {
+        assert_eq!(renderer_in_settings(&settings), None, "{settings}");
+    }
 }
 
 #[test]

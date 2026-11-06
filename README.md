@@ -469,6 +469,10 @@ The summary is in **[ROADMAP.md](ROADMAP.md)**; the full assessment by dimension
 
 Installers and executables are code-signed.
 
+If the window flickers when you move the pointer, on a display with G-SYNC, FreeSync or another
+variable refresh rate, choose **Preferences ▸ Graphics ▸ OpenGL** and restart PdfCraft (see
+[docs/development.md](docs/development.md#flicker-on-displays-with-a-variable-refresh-rate)).
+
 The portable zip runs from any folder, a USB stick included. Its `portable.txt` keeps the settings,
 logs and crash recovery in a `PdfCraftData` folder next to `pdfcraft.exe`, so nothing is written to
 `%APPDATA%`; delete that file to use the normal per-user folders.

@@ -164,6 +164,8 @@ impl PdfCraftApp {
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
+        // Read before the window exists, by the desktop app (`renderer::RendererPreference::saved`).
+        v[renderer::KEY] = serde_json::Value::from(self.renderer.name());
         v.to_string()
     }
 
@@ -260,6 +262,9 @@ impl PdfCraftApp {
         }
         if let Ok(effects) = serde_json::from_value::<motion::AnimationEffects>(v["animation_effects"].clone()) {
             self.animation_effects = effects;
+        }
+        if let Some(choice) = renderer::RendererPreference::in_settings(&v) {
+            self.renderer = choice;
         }
         if let Ok(mode) = serde_json::from_value::<Mode>(v["default_mode"].clone()) {
             self.default_mode = mode;
