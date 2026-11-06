@@ -235,7 +235,7 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
                             .frame(egui::Frame::NONE);
                         let r = ui.add(edit).accessible_name(tl!("Find text"));
                         if find.focus {
-                            r.request_focus();
+                            crate::widgets::select_all_on_focus(&r, &find.query, ui.ctx());
                             find.focus = false;
                         }
                         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {

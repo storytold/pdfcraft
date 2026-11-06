@@ -75,6 +75,16 @@ pub fn block(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::multiline(text).margin(egui::Margin::symmetric(10, 6))
 }
 
+/// Request focus for a text edit and select its entire contents, so typing replaces the previous query.
+pub fn select_all_on_focus(response: &Response, text: &str, ctx: &egui::Context) {
+    response.request_focus();
+    let id = response.id;
+    let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
+    let end = egui::text::CCursor::new(text.chars().count());
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
+    state.store(ctx, id);
+}
+
 /// One line that stays within `max_width`, cut on a character boundary with an ellipsis.
 /// Only the first 160 characters are measured, so a huge name cannot lay out thousands of candidates.
 pub(crate) fn fit_line(text: &str, max_width: f32, mut width_of: impl FnMut(&str) -> f32) -> String {
