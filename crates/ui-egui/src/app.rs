@@ -270,6 +270,7 @@ impl PdfCraftApp {
             fonts_ready: false,
             fonts_cjk: theme::CjkPreference::Default,
             control: None,
+            tool_runner: None,
             bookmark_rename: None,
             bookmark_clipboard: None,
             last_opened_url: None,
