@@ -589,10 +589,10 @@ const SCHEMAS: &[Schema] = &[
 ];
 
 /// Calls `f` with every metadata stream among the indirect objects `objs` (ISO 32000-1 14.3.2) that
-/// parses as XML, each decoded once within one allowance.
-pub(crate) fn for_each_packet(objs: &[(ObjRef, std::sync::Arc<Object>)], mut f: impl FnMut(&roxmltree::Document<'_>)) {
+/// parses as XML, and the stream's object, each decoded once within one allowance.
+pub(crate) fn for_each_packet(objs: &[(ObjRef, std::sync::Arc<Object>)], mut f: impl FnMut(ObjRef, &roxmltree::Document<'_>)) {
     let mut budget = DecodeBudget::new(MAX_METADATA_BYTES, 0);
-    for (_, o) in objs {
+    for (r, o) in objs {
         let Object::Stream(s) = &**o else { continue };
         if s.dict.name(b"Type") != Some(b"Metadata") {
             continue;
@@ -603,7 +603,7 @@ pub(crate) fn for_each_packet(objs: &[(ObjRef, std::sync::Arc<Object>)], mut f: 
         let Ok(bytes) = budget.decode_within(s, crate::xmp::MAX_XMP_BYTES) else { continue };
         let text = unicode(&bytes);
         if let Some(parsed) = crate::xmp::parse(&text) {
-            f(&parsed);
+            f(*r, &parsed);
         }
     }
 }

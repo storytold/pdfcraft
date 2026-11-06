@@ -78,12 +78,14 @@ fn wordings_are_complete() {
     let source = include_str!("lib.rs");
     let mut said = Vec::new();
     let mut rest = source;
-    while let Some(at) = rest.find("issue(\"") {
-        rest = &rest[at + 7..];
+    // `issue(` and `located_issue(`, written on one line or, when rustfmt breaks it, on several.
+    while let Some(at) = rest.find("issue(") {
+        rest = &rest[at + 6..];
+        let Some(clause) = rest.trim_start().strip_prefix('"') else { continue };
         // Step over the clause, then take the wording that follows it.
-        let Some(end) = rest.find('"') else { break };
-        rest = &rest[end + 1..];
-        let Some(text) = rest.strip_prefix(", \"") else { continue };
+        let Some(end) = clause.find('"') else { break };
+        rest = &clause[end + 1..];
+        let Some(text) = rest.strip_prefix(',').map(str::trim_start).and_then(|r| r.strip_prefix('"')) else { continue };
         let Some(end) = text.find('"') else { break };
         said.push(&text[..end]);
         rest = text;
@@ -660,7 +662,7 @@ fn xmp_value_types_are_reported_by_verify() {
         format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{xmp}\nendstream", xmp.len())
     };
     let issues = |doc: &Document| -> Vec<Issue> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.6.2.3.1").collect() };
-    // Every mistyped property, each once, in name order; not fixable.
+    // Every mistyped property, once per metadata stream, by stream and then by name; not fixable.
     let catalog = metadata(r#"crs:Contrast="high" crs:Exposure="bright""#);
     let page = metadata(r#"crs:Contrast="higher""#);
     let doc = build(
@@ -678,11 +680,19 @@ fn xmp_value_types_are_reported_by_verify() {
     assert_eq!(
         messages,
         [
-            "The XMP property crs:Contrast doesn't have the value type the XMP Specification gives it",
-            "The XMP property crs:Exposure doesn't have the value type the XMP Specification gives it"
+            "The XMP property crs:Contrast in metadata stream 3 0 R doesn't have the value type the XMP Specification gives it",
+            "The XMP property crs:Exposure in metadata stream 3 0 R doesn't have the value type the XMP Specification gives it",
+            "The XMP property crs:Contrast in metadata stream 5 0 R doesn't have the value type the XMP Specification gives it"
         ]
     );
-    assert!(found.iter().all(|i| !i.fixable));
+    let objects: Vec<Option<ObjRef>> = found.iter().map(|i| i.object).collect();
+    assert_eq!(objects, [Some(ObjRef::new(3, 0)), Some(ObjRef::new(3, 0)), Some(ObjRef::new(5, 0))]);
+    assert!(found.iter().all(|i| !i.fixable && i.page.is_none()));
+    // Said in another language, the property and the stream go where that language puts them, and
+    // what the document wrote goes in as it stands.
+    let reordered = |w: &str| w.replace("The XMP property {property} in metadata stream {object}", "In {object}, {property}");
+    assert_eq!(found[0].said(&in_english), found[0].message);
+    assert!(found[0].said(&reordered).starts_with("In 3 0 R, crs:Contrast doesn't"), "{}", found[0].said(&reordered));
     // A UTF-16 packet, either byte order, is read.
     for big in [true, false] {
         let xmp = format!(
@@ -707,7 +717,8 @@ fn xmp_value_types_are_reported_by_verify() {
         ],
         "",
     );
-    assert_eq!(issues(&doc).len(), 1);
+    let found = issues(&doc);
+    assert_eq!(found.iter().map(|i| i.object).collect::<Vec<_>>(), [Some(ObjRef::new(5, 0))]);
 }
 
 /// PDF/A-2 6.6.2.3.1 for the TIFF, EXIF and Additional EXIF schemas of the September 2005 XMP
@@ -900,6 +911,38 @@ fn xmp_extension_schema_descriptions_are_complete() {
     assert_eq!(issues.len(), 1);
     assert_eq!(issues[0].message, "An XMP extension schema description has no pdfaSchema:namespaceURI entry");
     assert!(!issues[0].fixable);
+}
+
+/// PDF/A-2 6.6.2.3.1 for the TIFF, EXIF and Additional EXIF schemas: a property is known by its
+/// namespace URI, whatever prefix the packet binds to it, and is named by the namespace's
+/// preferred prefix.
+#[test]
+fn xmp_exif_properties_are_known_by_namespace_uri() {
+    let tiff = r#"xmlns:foo="http://ns.adobe.com/tiff/1.0/""#;
+    assert_eq!(mistyped(&format!(r#"><foo:ImageWidth {tiff}>256 mm</foo:ImageWidth>"#)), ["tiff:ImageWidth"]);
+    assert!(mistyped(&format!(r#"><foo:ImageWidth {tiff}>256</foo:ImageWidth>"#)).is_empty());
+    assert_eq!(mistyped(r#"xmlns:bar="http://ns.adobe.com/exif/1.0/" bar:GPSLatitude="51.5N">"#), ["exif:GPSLatitude"]);
+    assert_eq!(
+        mistyped(r#"><baz:Lens xmlns:baz="http://ns.adobe.com/exif/1.0/aux/"><rdf:Seq><rdf:li>50mm</rdf:li></rdf:Seq></baz:Lens>"#),
+        ["aux:Lens"]
+    );
+    // The same local names in another namespace, even under the preferred prefixes, are not these
+    // properties.
+    let other = r#"xmlns:tiff="http://example.com/not-tiff/""#;
+    assert!(mistyped(&format!(r#"><tiff:ImageWidth {other}>256 mm</tiff:ImageWidth>"#)).is_empty());
+    assert!(mistyped(r#"xmlns:exif="http://example.com/not-exif/" exif:GPSLatitude="51.5N">"#).is_empty());
+    assert!(mistyped(r#"><aux:Lens xmlns:aux="http://example.com/not-aux/"><rdf:Seq><rdf:li>50mm</rdf:li></rdf:Seq></aux:Lens>"#).is_empty());
+}
+
+/// Holes are filled in one pass: the first `{}` from `value`, named holes from `values`, and what
+/// has nothing for it, a value's own braces and a brace left open stay as they are.
+#[test]
+fn wordings_fill_their_holes_once() {
+    let values = [("{a}", "{b}".to_owned()), ("{b}", "B".to_owned())];
+    assert_eq!(fill("x {a} {b} {c} {} {}", Some("{a}"), &values), "x {b} B {c} {a} {}");
+    assert_eq!(fill("{}", None, &[]), "{}");
+    assert_eq!(fill("open { and é {a", Some("v"), &values), "open { and é {a");
+    assert_eq!(fill("é{}ü", Some("v"), &[]), "évü");
 }
 
 /// PDF/A-2 6.6.2.3.1, the RDF/XML value forms XMP allows (ISO 16684-1 7.9.2.5): one `rdf:value`
