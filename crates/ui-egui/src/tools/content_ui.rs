@@ -1167,7 +1167,8 @@ impl crate::PdfCraftApp {
                 }
                 crate::create_ui::png_from_rgba(width, height, &rgba).ok().map(|b| ("pasted_image.png".to_string(), b))
             }
-            Some(crate::create_ui::Clip::Text(_)) => None,
+            // Copied files are not a picture here (#1289).
+            Some(crate::create_ui::Clip::Text(_) | crate::create_ui::Clip::Files(_)) => None,
             None => {
                 if matches!(system, Some(crate::create_ui::Clip::Text(_))) || (system_authoritative && system.is_none()) {
                     self.last_copied_image = None;

@@ -470,6 +470,53 @@ impl PdfCraftApp {
         }
     }
 
+    /// ⌘V / Ctrl+V with files copied in Explorer, Finder or a file manager (#1289) does what
+    /// dropping them does: on Home each opens in a tab, and on the Combine files tab they join
+    /// its list. A document showing keeps ⌘V for its own pastes.
+    ///
+    /// The paste is the one the window delivers ([`egui::Event::Paste`] or
+    /// [`egui::Event::PasteImage`]: Finder puts a copied file's name and icon on the clipboard
+    /// next to it), or ⌘V itself when it reaches the app as a key (the control channel, a
+    /// browser). Windows Explorer puts neither text nor a picture next to its file list, so
+    /// there the window delivers nothing to react to yet.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn paste_files_key(&mut self, ctx: &egui::Context) {
+        if self.active.is_some() || self.palette_open || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let delivered = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_) | egui::Event::PasteImage(_))));
+        let shortcut = ctx.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::V)));
+        if !delivered && !shortcut {
+            return;
+        }
+        // Read on the UI thread, once per paste: the file list is a short read of the
+        // clipboard's own data, not of the files.
+        let paths = match &self.clipboard_override {
+            Some(crate::create_ui::Clip::Files(paths)) => paths.clone(),
+            Some(_) => return,
+            None if self.system_clipboard => crate::create_ui::read_clipboard_files(),
+            None => return,
+        };
+        // Read once: the first file opened leaves Home.
+        let combine = self.combine_showing();
+        // A file list always holds full paths; anything else isn't a file to open.
+        for path in paths.into_iter().filter(|p| p.is_absolute()) {
+            if combine {
+                if path.is_dir() {
+                    self.add_folder_to_combine(&path, true);
+                } else {
+                    self.use_paths(FilePurpose::Combine, &[path]);
+                }
+            } else if path.is_dir() {
+                // Home opens files; a folder's PDFs are combined from the Combine files tab.
+                let name = path.file_name().map_or_else(|| path.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
+                self.notify_fmt("{name} is a folder; only files open from Home", &[("name", &name)]);
+            } else {
+                self.open_path(&path.to_string_lossy());
+            }
+        }
+    }
+
     /// Browsers read dropped files asynchronously; they join the Combine files list next frame.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn drop_into_combine(&mut self, f: egui::DroppedFileHandle, ctx: &egui::Context) {
