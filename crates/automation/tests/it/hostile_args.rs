@@ -25,6 +25,41 @@ use std::path::{Path, PathBuf};
 use pdfcraft_automation::{Automation, ToolError, tools};
 use serde_json::{Value, json};
 
+// Hostile-argument coverage exercises every registered tool, including explicit playback.
+// Keep its audio side effects deterministic and silent without excluding any tool or call.
+struct SilentSpeech;
+impl pdfcraft_platform::speech::Backend for SilentSpeech {
+    /// Return no installed voices so hostile-input checks cannot select a real synthesizer.
+    fn voices(&mut self) -> Result<Vec<pdfcraft_platform::speech::Voice>, String> {
+        Ok(Vec::new())
+    }
+    /// Accept test text without producing sound or invoking a native speech engine.
+    fn start(&mut self, _: &str, _: &pdfcraft_platform::speech::Options) -> Result<(), String> {
+        Ok(())
+    }
+    /// Accept pause requests without touching an audio device.
+    fn pause(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+    /// Accept resume requests without touching an audio device.
+    fn resume(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+    /// Accept cancellation without external side effects.
+    fn stop(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+    /// Report immediate completion for the silent hostile-input backend.
+    fn finished(&mut self) -> Result<bool, String> {
+        Ok(true)
+    }
+}
+
+/// Create an automation session whose injected speech backend cannot produce sound.
+fn silent_automation() -> Automation {
+    Automation::new().with_speech_player(pdfcraft_platform::speech::Player::with_backend(Box::new(SilentSpeech)))
+}
+
 /// A fresh empty directory for one test.
 fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("pdfcraft-hostile-{}-{name}", std::process::id()));
@@ -241,7 +276,7 @@ fn fixture(a: &mut Automation, root: &Path, tool: &str) -> serde_json::Map<Strin
 #[test]
 fn no_tool_panics_on_hostile_arguments() {
     let root = tmp("args");
-    let mut a = Automation::new().with_root(&root).expect("root");
+    let mut a = silent_automation().with_root(&root).expect("root");
     let values = zoo();
     let mut failures = Vec::new();
     let mut calls = 0usize;
@@ -287,6 +322,7 @@ fn no_tool_panics_on_hostile_arguments() {
     assert!(failures.is_empty(), "{} tool call(s) panicked; the first is: {}", failures.len(), failures.first().map_or("", String::as_str));
 }
 
+/// Reject tool paths that traverse outside the configured root, including symlink escapes.
 #[test]
 fn no_tool_escapes_the_root() {
     let base = tmp("escape");
@@ -313,7 +349,7 @@ fn no_tool_escapes_the_root() {
         }
     };
 
-    let mut a = Automation::new().with_root(&root).expect("root");
+    let mut a = silent_automation().with_root(&root).expect("root");
 
     // A real document, so tools reach their path arguments instead of failing on `doc` first.
     let doc = blank_doc(&mut a);

@@ -33,6 +33,7 @@ mod printing;
 mod reading;
 mod redact;
 mod signing;
+mod speech;
 mod text_cache;
 mod tools;
 
@@ -92,6 +93,8 @@ pub struct Automation {
     renderers: HashMap<DocId, (Arc<Vec<u8>>, PageRenderer)>,
     /// Extracted page text, under one memory budget across all open documents.
     texts: TextCache,
+    speech: pdfcraft_platform::speech::Player,
+    speech_source: Option<(DocId, Arc<Vec<u8>>)>,
     /// The paragraphs of the last `text_paragraphs` listing of each page, so a paragraph number
     /// keeps naming that paragraph after edits regroup the page (#2516).
     listed: HashMap<(DocId, usize), Vec<BlockKey>>,
@@ -110,6 +113,7 @@ impl Default for Automation {
 }
 
 impl Automation {
+    /// Create an empty automation session without starting speech or opening files.
     pub fn new() -> Self {
         Self {
             session: Session::new(),
@@ -117,6 +121,8 @@ impl Automation {
             roots: None,
             renderers: HashMap::new(),
             texts: TextCache::default(),
+            speech: Default::default(),
+            speech_source: None,
             listed: HashMap::new(),
             evicted: HashSet::new(),
             ocr_reviews: HashMap::new(),

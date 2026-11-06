@@ -752,6 +752,9 @@ impl PdfCraftApp {
         }
         self.remember_view(index);
         let id = self.views.remove(index).id;
+        if self.read_aloud.source.as_ref().is_some_and(|s| s.0 == id) {
+            self.stop_read_aloud();
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
             if self.closed_tabs.len() == 10 {
