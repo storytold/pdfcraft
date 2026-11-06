@@ -2490,6 +2490,9 @@ fn fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels() {
     let shots = std::env::var_os("PDFCRAFT_FILL_SIGN_SHOTS").is_some();
     let _gpu = shots.then(gpu);
     let mut h = harness();
+    // Both saves must stamp the same ModDate: a wall-clock second changing is not an edit.
+    let session = &mut h.state_mut().session;
+    *session = std::mem::take(session).with_clock(|| 1_700_000_000);
     assert!(h.state_mut().execute("sign.fill.text"));
     click(&mut h, 50.0, 300.0);
     let initial_height = type_box_rect(&h).height();
@@ -2521,6 +2524,7 @@ fn fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels() {
     assert!(h.state().views[0].fill_text.is_none());
     assert_eq!(items(&h), [("FreeText".to_owned(), Some(text.to_owned()))]);
     let id = h.state().views[0].id;
+    let generation = h.state().session.get(id).unwrap().edit_generation();
     let saved = h.state().session.save_bytes(id).unwrap();
     let mut session = pdfcraft_engine::Session::new();
     let reopened = session.open("again.pdf", None, saved.clone(), None).unwrap();
@@ -2532,5 +2536,6 @@ fn fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels() {
     fill_key(&mut h, egui::Key::Enter);
     fill_key(&mut h, egui::Key::Escape);
     assert!(h.state().views[0].fill_text.is_none());
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), generation, "Escape adds no edit");
     assert_eq!(h.state().session.save_bytes(id).unwrap(), saved, "Escape cancels without writing");
 }
