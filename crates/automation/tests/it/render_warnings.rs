@@ -4,7 +4,9 @@
 use std::path::PathBuf;
 
 use pdfcraft_automation::{Automation, Content};
-use serde_json::{Value, json};
+#[cfg(feature = "mcp")]
+use serde_json::Value;
+use serde_json::json;
 
 /// The warning a colour that falls back gives, worded as `pdfcraft-cli render` prints it.
 const FALLBACK: &str = "a colour that could not be computed was painted in a fallback colour";

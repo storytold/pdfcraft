@@ -87,6 +87,7 @@ struct OcrReview {
 
 /// Conversation state owned by one authenticated window connection, separate from render
 /// caches. It is lent with the session and restored even when a tool fails.
+#[cfg(feature = "mcp")]
 #[derive(Default)]
 pub struct ConnectedState {
     listed: HashMap<(DocId, usize), Vec<BlockKey>>,
@@ -96,6 +97,7 @@ pub struct ConnectedState {
     versions: HashMap<DocId, u64>,
 }
 
+#[cfg(feature = "mcp")]
 impl ConnectedState {
     fn discard_stale(&mut self, session: &Session) {
         self.ocr_reviews.retain(|_, review| session.stale_reason(&review.guard).is_none());
@@ -220,12 +222,14 @@ impl Automation {
     /// a failure). `root`, when given, confines paths as [`Self::with_root`] does. Caches
     /// (renderers, page text) last for the call only, since the owner may change the documents
     /// between calls.
+    #[cfg(feature = "mcp")]
     pub fn run_on(session: &mut Session, root: Option<&Path>, name: &str, args: &Value) -> Result<Vec<Content>> {
         Self::run_on_with_state(session, &mut ConnectedState::default(), root, name, args)
     }
 
     /// Run a connected call with the same connection's listing/review state. Render caches
     /// remain per-call; retained state is invalidated after another editor changes a document.
+    #[cfg(feature = "mcp")]
     pub fn run_on_with_state(
         session: &mut Session,
         state: &mut ConnectedState,
@@ -236,6 +240,7 @@ impl Automation {
         Self::run_lent(session, state, root, |lent| lent.call(name, args))
     }
 
+    #[cfg(feature = "mcp")]
     fn run_lent(
         session: &mut Session,
         state: &mut ConnectedState,
@@ -277,6 +282,7 @@ impl Automation {
         out
     }
 
+    #[cfg(feature = "mcp")]
     fn with_root_in_place(&mut self, root: &Path) -> Result<()> {
         let canonical = root.canonicalize().map_err(|e| failed(format!("--root {}: {e}", root.display())))?;
         if !canonical.is_dir() {
