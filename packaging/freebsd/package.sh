@@ -23,11 +23,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 release_arch() {
-  case "$1" in
-    amd64 | x86_64) echo x86_64 ;;
-    arm64 | aarch64) echo aarch64 ;;
-    *) echo "unsupported architecture $1" >&2; return 2 ;;
-  esac
+    local arch="$1"
+
+    case "$arch" in
+        amd64 | x86_64) echo x86_64 ;;
+        arm64 | aarch64) echo aarch64 ;;
+        *) echo "unsupported architecture $arch" >&2; return 2 ;;
+    esac
 }
 # The release workflow cross-compiles aarch64 in an x86_64 VM with CARGO_BUILD_TARGET set to
 # aarch64-unknown-freebsd (craft-common-actions#39): name the archive after the target.
@@ -74,12 +76,13 @@ copy_docs "$STAGE/share/doc/pdfcraft"
 # which has to run here: build it for this machine, not for CARGO_BUILD_TARGET.
 (unset CARGO_BUILD_TARGET; stage_models "$STAGE/share/pdfcraft/models")
 
-if [ -z "${CARGO_BUILD_TARGET:-}" ] && [ "$ARCH" = "$HOST_ARCH" ]; then
+if [[ -z "${CARGO_BUILD_TARGET:-}" && "$ARCH" == "$HOST_ARCH" ]]; then
   "$STAGE/bin/pdfcraft" --version
 else
   # They cannot run here, so check what they are instead: executables, not libraries or objects.
   # An older file(1) calls a PIE a shared object; its interpreter still marks it as a program.
-  want="$ARCH"; [ "$ARCH" != x86_64 ] || want=x86-64
+  want="$ARCH"
+[[ "$ARCH" != x86_64 ]] || want=x86-64
   for b in "$STAGE"/bin/*; do
     case "$(file -b "$b")" in
       ELF*" executable, "*"$want"*FreeBSD* | ELF*"$want"*FreeBSD*interpreter*) ;;
