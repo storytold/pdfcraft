@@ -132,7 +132,13 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
             return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Handle(x, y) }, Layer::Handle, icon));
         }
     }
-    let a = cx.comment_at(p).filter(|a| bodies && pick(a))?;
+    // A group subordinate (`/RT /Group`) stands for its primary (ISO 32000-2 §12.5.6.2): a click
+    // there selects the group. Only a click: a drag still moves what is under the pointer.
+    let (a, member) = match cx.comment_at(p) {
+        Some(a) => (a, false),
+        None => (cx.click_target(p)?, true),
+    };
+    let a = Some(a).filter(|a| bodies && pick(a))?;
     // A click on a highlight over a link follows the link, so the link's hand and tip show there.
     if cx.tool == QuickTool::Select && a.subtype == "Highlight" && on_link {
         return None;
@@ -140,7 +146,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
     let markup = is_markup(&a.subtype);
     let icon = if cx.allowed && !markup { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
     // Text markup does not move: a click selects it, a drag across it selects the text.
-    Some(Hit { declines_drag: markup, ..Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer(a), icon) })
+    Some(Hit { declines_drag: markup || member, ..Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer(a), icon) })
 }
 
 /// The layer a comment's body lies on: what a drag moves whole (a note, a shape, a signature, a
@@ -151,13 +157,14 @@ fn layer(a: &Annotation) -> Layer {
 }
 
 /// The comment a right-click at `p` is on: the topmost, with every tool, as a comment's menu shows
-/// whatever tool is active. A highlight over a link is the highlight's here (a left click on it
-/// follows the link, [`hit`]). `None` off the page or with comments hidden.
+/// whatever tool is active; on a group subordinate (`/RT /Group`), its group's primary, so the menu
+/// offers the comment's actions (ISO 32000-2 §12.5.6.2). A highlight over a link is the highlight's
+/// here (a left click on it follows the link, [`hit`]). `None` off the page or with comments hidden.
 pub(crate) fn context_hit(cx: &PageCx<'_>, p: Pos2) -> Option<Hit> {
     if cx.hidden || !cx.xf.rect.contains(p) {
         return None;
     }
-    let a = cx.comment_at(p)?;
+    let a = cx.click_target(p)?;
     Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer(a), egui::CursorIcon::Default))
 }
 
@@ -167,10 +174,18 @@ pub(crate) fn anchor(cx: &PageCx<'_>, p: Pos2, view: &mut DocView) {
     view.comments.context_at = Some((cx.page, cx.to_user(p)));
 }
 
-/// A right-click on comment `index` of this page ([`context_hit`], when it wins there) selects it,
-/// and one on anything else selects none.
-pub(crate) fn context(cx: &PageCx<'_>, index: Option<usize>, view: &mut DocView) {
-    view.comments.selected = index.map(|i| (cx.page, i));
+/// A right-click at `p` on comment `index` of this page ([`context_hit`], when it wins there)
+/// selects it, remembering the group subordinate under `p` when it is that group's primary; one on
+/// anything else selects none.
+pub(crate) fn context(cx: &PageCx<'_>, p: Pos2, index: Option<usize>, view: &mut DocView) {
+    match index {
+        // `index` is what the right-click is on ([`context_hit`]): no second look at the point.
+        Some(i) => match cx.get(i) {
+            Some(a) => view.comments.pick(cx, p, a),
+            None => view.comments.select(Some((cx.page, i))),
+        },
+        None => view.comments.select(None),
+    }
 }
 
 /// The tip for the comment under the pointer, with any tool, beside that tool's own cursor: Acrobat
@@ -253,7 +268,8 @@ fn select_input(
                 // a selection of its own.
                 let grabbed = (cx.page, a.index);
                 if !cv.is_selected(grabbed) {
-                    cv.select_only(grabbed);
+                    // A press on a group picks its member under the pointer (`CommentView::pick`).
+                    cv.pick(cx, o, a);
                 } else {
                     // The grabbed one takes the handles; the one that had them stays selected.
                     if let Some(previous) = cv.selected.replace(grabbed)
@@ -292,7 +308,10 @@ fn select_input(
                 if ui.input(|i| i.modifiers.command || i.modifiers.shift) {
                     cv.toggle((cx.page, a.index));
                 } else {
-                    cv.select_only((cx.page, a.index));
+                    match pointer {
+                        Some(p) => cv.pick(cx, p, a),
+                        None => cv.select_only((cx.page, a.index)),
+                    }
                 }
                 cv.reveal = true;
                 consumed = true;
@@ -434,7 +453,7 @@ impl Gestures<'_> {
             && let Some(o) = origin
         {
             cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
-            cv.selected = None;
+            cv.select(None);
         }
         if let Some(Gesture::Draw { page, tool, points }) = cv.gesture.as_mut()
             && *page == cx.page
@@ -475,7 +494,7 @@ impl Gestures<'_> {
             && let Some(p) = pointer
             && let Some(shape) = drawn_shape(tool, &[cx.to_user(p)])
         {
-            cv.selected = None;
+            cv.select(None);
             let now = ui.input(|i| i.time);
             cv.settle(now, cx.page, tool, &[cx.to_user(p)]);
             view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
@@ -540,7 +559,7 @@ impl Gestures<'_> {
                 }
                 _ => {
                     cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![u] });
-                    cv.selected = None;
+                    cv.select(None);
                 }
             }
         }
@@ -572,7 +591,7 @@ impl Gestures<'_> {
             && let Some(o) = origin
         {
             cv.gesture = Some(Gesture::Draw { page: cx.page, tool: CommentTool::Callout, points: vec![cx.to_user(o)] });
-            cv.selected = None;
+            cv.select(None);
         }
         if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
             && *page == cx.page
@@ -609,7 +628,7 @@ impl Gestures<'_> {
             && let Some(p) = pointer
         {
             cv.attach_at = Some((cx.page, cx.to_user(p)));
-            cv.selected = None;
+            cv.select(None);
         }
         true
     }
@@ -631,7 +650,7 @@ impl Gestures<'_> {
             let snapped = cx.info.pages.get(cx.page).zip(caret_text).and_then(|(page, t)| snapped_caret(page, t, vx, vy));
             let (at, size) = snapped.unwrap_or_else(|| (cx.to_user(p), CARET_SIZE));
             cv.composer = Some(Composer { page: cx.page, at, kind: ComposerKind::Caret { size }, text: String::new(), focus: true });
-            cv.selected = None;
+            cv.select(None);
         }
         true
     }
@@ -653,7 +672,7 @@ impl Gestures<'_> {
                 && let Some(o) = origin
             {
                 cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
-                cv.selected = None;
+                cv.select(None);
             }
             if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
                 && *page == cx.page
@@ -683,7 +702,7 @@ impl Gestures<'_> {
         {
             let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox { size: None } };
             cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind, text: String::new(), focus: true });
-            cv.selected = None;
+            cv.select(None);
         }
         true
     }
@@ -718,7 +737,9 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool
 /// The edit that deletes every selected comment (one undo step for several), and clears the
 /// selection. Later positions go first, so each deletion leaves the earlier ones where they are.
 pub(crate) fn delete_selected(cv: &mut CommentView) -> Option<Edit> {
-    let mut keys = cv.selection();
+    // A group's member picked on the page, with its group the selection alone, goes by itself, as
+    // Acrobat deletes the member clicked ([`CommentView::target`]).
+    let mut keys = if cv.also.is_empty() { cv.target().into_iter().collect() } else { cv.selection() };
     cv.clear_selection();
     keys.sort_unstable_by(|a, b| b.cmp(a));
     keys.dedup();

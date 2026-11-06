@@ -3493,7 +3493,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
                 Some(crate::comments::Composer { page, at, kind: crate::comments::ComposerKind::Note, text: String::new(), focus: true });
         }
         Some(PageMenuAction::FlattenComments) => {
-            app.views[index].comments.selected = None;
+            app.views[index].comments.select(None);
             app.views[index].pending_edit = Some(pdfcraft_engine::Edit::Flatten { comments: true, fields: false });
         }
         Some(PageMenuAction::AddBookmark) => {
