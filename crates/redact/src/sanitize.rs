@@ -28,7 +28,8 @@ pub enum Hidden {
     Bookmarks,
     /// Links, actions (open action, additional actions) and document JavaScript.
     LinksActionsScripts,
-    /// Private data of other applications (`/PieceInfo`).
+    /// Private data of other applications (`/PieceInfo`), and prepress data on images and Forms
+    /// (`/OPI`, `/Alternates`).
     PrivateData,
 }
 
@@ -175,9 +176,16 @@ fn outline_len_seen(
 
 /// Entries that hold a category's data wherever they appear, not only on the catalog and pages:
 /// XMP on images, fonts and Forms, private data on Forms, associated files on pages and
-/// annotations, additional actions on fields.
-const OWNED: [(Hidden, &[u8]); 4] =
-    [(Hidden::Metadata, b"Metadata"), (Hidden::PrivateData, b"PieceInfo"), (Hidden::Attachments, b"AF"), (Hidden::LinksActionsScripts, b"AA")];
+/// annotations, additional actions on fields. Images and Forms also carry prepress data: an OPI
+/// proxy's link to the original file, and alternate images, which can be the unedited original.
+const OWNED: [(Hidden, &[u8]); 6] = [
+    (Hidden::Metadata, b"Metadata"),
+    (Hidden::PrivateData, b"PieceInfo"),
+    (Hidden::PrivateData, b"OPI"),
+    (Hidden::PrivateData, b"Alternates"),
+    (Hidden::Attachments, b"AF"),
+    (Hidden::LinksActionsScripts, b"AA"),
+];
 
 /// Keys whose dictionary values map names a producer chooses to objects (resources, glyph
 /// procedures, named destinations, role and class maps, private data by application). A name
@@ -464,7 +472,7 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
     // A graph nested too deeply to walk counts as holding everything, so the removal runs and
     // refuses it.
     let held = owners(doc, &owned_keys).map_or_else(|_| vec![1; OWNED.len()], |o| o.0);
-    let owned = |h: Hidden| OWNED.iter().position(|o| o.0 == h).and_then(|i| held.get(i)).copied().unwrap_or(0);
+    let owned = |h: Hidden| OWNED.iter().zip(&held).filter(|(o, _)| o.0 == h).map(|(_, n)| n).sum::<usize>();
     let mut doc2 = doc.clone();
     HIDDEN
         .into_iter()
