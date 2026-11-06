@@ -184,6 +184,10 @@ install), a **.deb** and an **.rpm** (built with [nfpm](https://nfpm.goreleaser.
 **`pdfcraft-cli-<v>-linux-<arch>.tar.gz`** (the stripped `pdfcraft-cli` plus the licences and
 README, for servers, CI and agent sandboxes). `--formats` picks a subset (`appimage deb rpm tar cli`).
 
+The tree also carries a KDE service menu (`kio-servicemenus/`, installed to `usr/share/kio/servicemenus/`)
+that adds "Combine files in PdfCraft" to Dolphin's menu for PDFs and pictures (#585). The `.desktop` file's
+`Combine` action is only a launcher quicklist entry. The .deb and .rpm install it, so Dolphin shows the action. The AppImage and the .tar.gz carry the file but do not install it (copy it to `~/.local/share/kio/servicemenus/` by hand), and the Flatpak does not export one.
+
 The binaries are built on Ubuntu 22.04, the oldest GitHub-hosted image, so they need only
 **glibc ≥ 2.35**: Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 10. Windowing (X11, Wayland,
 xkbcommon) and the GPU (Vulkan, EGL) are loaded at runtime from the system; the .deb and .rpm declare
