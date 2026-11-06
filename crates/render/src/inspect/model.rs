@@ -199,10 +199,20 @@ pub struct Link {
     pub target: LinkTarget,
 }
 
+/// A target of a Hide action (ISO 32000-2 §12.6.4.11, Table 214): a field by name, or an annotation by object identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HideTarget {
+    /// A form field identified by its fully qualified name.
+    Field(String),
+    /// An annotation identified by its object number and generation.
+    Annotation((u32, u16)),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum LinkTarget {
     /// A destination in this document: the 0-based page and where on it the view goes.
     Page(usize, DestView),
+    /// A web address (`URI`, ISO 32000-2 §12.6.4.8).
     Uri(String),
     /// A set-layer-visibility action (`SetOCGState`, ISO 32000-2 §12.6.4.13): each change in
     /// order, naming the layer by its optional content group. With `preserve_rb`, a layer turned
@@ -220,6 +230,14 @@ pub enum LinkTarget {
         destination: RemoteDestination,
         new_window: Option<bool>,
     },
+    /// A named action (ISO 32000-2 §12.6.4.12, Table 215): NextPage, PrevPage, FirstPage, LastPage.
+    Named(String),
+    /// A hide action (ISO 32000-2 §12.6.4.11, Table 214): show or hide the target fields or annotations.
+    Hide { targets: Vec<HideTarget>, hide: bool },
+    /// A reset-form action (ISO 32000-2 §12.7.6.3, Tables 241-242): reset the listed fields, or all except them.
+    ResetForm { fields: Vec<String>, exclude: bool },
+    /// A sequence of actions chained via `/Next` (ISO 32000-2 §12.6.2, Table 196).
+    Sequence(Vec<LinkTarget>),
     Other(String),
 }
 
