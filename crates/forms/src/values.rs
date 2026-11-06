@@ -114,11 +114,11 @@ fn share_value(doc: &mut Document, source: ObjRef, twin: &Field, value: &[String
     match twin.kind {
         FieldKind::CheckBox => {
             let state = twin.widgets.iter().find_map(|w| w.on_state.clone()).unwrap_or_else(|| "Yes".into());
-            set_states(doc, twin, (!value.is_empty()).then_some(state.as_str()))
+            set_states(doc, twin, (!value.is_empty()).then_some(state.as_str()), None)
         }
         FieldKind::Radio => {
             let choice = value.first().filter(|c| twin.widgets.iter().any(|w| w.on_state.as_deref() == Some(c.as_str())));
-            set_states(doc, twin, choice.map(String::as_str))
+            set_states(doc, twin, choice.map(String::as_str), None)
         }
         FieldKind::Text | FieldKind::Combo | FieldKind::List => {
             let src = doc.get(source).as_dict().cloned().unwrap_or_default();
@@ -221,6 +221,16 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             })?;
             redraw(doc, f, std::slice::from_ref(t), scripts)
         }
+        (FieldKind::CheckBox | FieldKind::Radio, FieldValue::Widget(i)) => {
+            // A button can be read-only on its own (its own `/Ff`), though the field isn't.
+            if f.widgets.get(*i).is_some_and(|w| w.read_only) {
+                return Err(FormError::ReadOnly(f.name.clone()));
+            }
+            let Some(state) = f.widgets.get(*i).and_then(|w| w.on_state.clone()) else {
+                return invalid(format!("{:?} has no button {} with an on state", f.name, i.saturating_add(1)));
+            };
+            set_states(doc, f, Some(&state), Some(*i))
+        }
         (FieldKind::CheckBox, v) => {
             let state = f.widgets.iter().find_map(|w| w.on_state.clone()).unwrap_or_else(|| "Yes".into());
             let on = match v {
@@ -237,9 +247,9 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
                     }
                 }
                 FieldValue::Radio(None) => false,
-                FieldValue::Choice(_) => return invalid(format!("{:?} is a check box: use true or false", f.name)),
+                FieldValue::Choice(_) | FieldValue::Widget(_) => return invalid(format!("{:?} is a check box: use true or false", f.name)),
             };
-            set_states(doc, f, on.then_some(state.as_str()))
+            set_states(doc, f, on.then_some(state.as_str()), None)
         }
         (FieldKind::Radio, v) => {
             let choice = match v {
@@ -260,7 +270,7 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             if choice.is_none() && f.has(flags::NO_TOGGLE_TO_OFF) && !f.value.is_empty() {
                 return invalid(format!("{:?} must keep one option selected", f.name));
             }
-            set_states(doc, f, choice.as_deref())
+            set_states(doc, f, choice.as_deref(), None)
         }
         (FieldKind::Combo | FieldKind::List, FieldValue::Choice(_) | FieldValue::Text(_)) => {
             let vals: Vec<String> = match value {
@@ -354,13 +364,24 @@ pub(crate) fn scroll_widgets(doc: &mut Document, f: &Field, picked: &[usize], co
     Ok(())
 }
 
-/// Check boxes and radio buttons: `/V` on the field, `/AS` on each widget.
-fn set_states(doc: &mut Document, f: &Field, on: Option<&str>) -> Result<(), FormError> {
+/// Check boxes and radio buttons: `/V` on the field, `/AS` on each widget. The widgets whose on
+/// state is `on` turn on together in a check box (ISO 32000-2 §12.7.5.2.3, EXAMPLE 2) and in a
+/// radio group with RadiosInUnison. Without it, at most one radio button is on (Table 229,
+/// §12.7.5.2.3): widget `pick` when it has that state, else the one already on, else the first.
+fn set_states(doc: &mut Document, f: &Field, on: Option<&str>, pick: Option<usize>) -> Result<(), FormError> {
+    let exclusive = f.kind == FieldKind::Radio && !f.has(flags::RADIOS_IN_UNISON);
+    let chosen = on.filter(|_| exclusive).and_then(|c| {
+        let has = |i: &usize| f.widgets.get(*i).is_some_and(|w| w.on_state.as_deref() == Some(c));
+        let n = f.widgets.len();
+        pick.filter(has).or_else(|| (0..n).filter(has).find(|&i| f.widget_on(i))).or_else(|| (0..n).find(has))
+    });
+    // `/V` names the on state, the same for every widget that has it: which of them is on is
+    // their `/AS` alone (§12.7.5.2.4).
     let v = on.unwrap_or("Off");
     doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), name_obj(v)))?;
-    for w in &f.widgets {
+    for (i, w) in f.widgets.iter().enumerate() {
         let state = match (on, w.on_state.as_deref()) {
-            (Some(c), Some(s)) if c == s => s,
+            (Some(c), Some(s)) if c == s && chosen.is_none_or(|k| k == i) => s,
             _ => "Off",
         };
         // A widget without appearances for its states gets PdfCraft's own.
