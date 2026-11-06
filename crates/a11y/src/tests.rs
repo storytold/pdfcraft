@@ -1504,3 +1504,20 @@ fn marking_a_tag_artifact_refuses_content_past_the_decode_budget() {
     assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::TooLarge));
     assert_eq!(doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents"), Some(&contents), "the page keeps its content");
 }
+
+#[test]
+fn autotag_text_refuses_pages_that_share_content_past_the_total_operator_allowance() {
+    // Each page is just under the per-page limit; sharing one stream makes the total 21 times it.
+    let content = format!("BT (a) Tj ET {}", "q Q ".repeat(49_990));
+    let pages = 21;
+    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", 4 + i)).collect();
+    let mut bodies = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        format!("<< /Type /Pages /Kids [{}] /Count {pages} /MediaBox [0 0 200 200] >>", kids.join(" ")),
+        stream(&content),
+    ];
+    bodies.extend((0..pages).map(|_| "<< /Type /Page /Parent 2 0 R /Contents 3 0 R >>".to_string()));
+    let mut doc = pdf(&bodies, "");
+    let Err(AutoTagError::Unsupported { reason, .. }) = autotag_text(&mut doc) else { panic!("expected a refusal") };
+    assert!(reason.contains("too much content"), "{reason}");
+}
