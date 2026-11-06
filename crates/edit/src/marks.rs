@@ -1,3 +1,5 @@
+use pdfcraft_cos::{Dict, PdfString};
+
 use super::{Document, EditError, Object, Rgb, added};
 
 /// The kinds of page marks.
@@ -83,6 +85,69 @@ impl HeaderFooter {
         let top = lines(header).map_or(0.0, |n| self.margins[0] + size + (n - 1) as f64 * line_h + size / 2.0);
         let bottom = lines(footer).map_or(0.0, |n| self.margins[1] + size * 0.8 + (n - 1) as f64 * line_h + size / 2.0);
         (top, bottom)
+    }
+
+    /// The settings as a dictionary, kept in each page's header mark (`/PCSettings`) so Update
+    /// can offer the header on a page again (#5785).
+    pub(crate) fn to_dict(&self) -> Dict {
+        let reals = |v: &[f64]| Object::Array(v.iter().map(|x| Object::Real(*x)).collect());
+        let mut d = Dict::new();
+        d.set(b"Text".to_vec(), Object::Array(self.text.iter().map(|t| Object::String(PdfString::text(t))).collect()));
+        d.set(b"Font".to_vec(), Object::name(self.font.base_font(false, false)));
+        d.set(b"Size".to_vec(), Object::Real(self.font_size));
+        d.set(b"Color".to_vec(), reals(&self.color));
+        d.set(b"Underline".to_vec(), Object::Bool(self.underline));
+        d.set(b"Margins".to_vec(), reals(&self.margins));
+        d.set(b"Start".to_vec(), Object::Int(i64::from(self.start_number)));
+        d.set(b"Shrink".to_vec(), Object::Bool(self.shrink));
+        d
+    }
+
+    /// Settings read back from [`Self::to_dict`]. A value missing or out of range keeps its
+    /// default, so a damaged or hand-edited dictionary still gives settings that can be applied.
+    pub(crate) fn from_dict(doc: &Document, d: &Dict) -> Self {
+        let mut hf = Self::default();
+        let get = |key: &[u8]| d.get(key).map(|o| doc.resolve(o));
+        let reals = |key: &[u8]| -> Vec<f64> {
+            get(key).and_then(|a| a.as_array().map(|a| a.iter().map(|o| o.as_f64().unwrap_or(f64::NAN)).collect())).unwrap_or_default()
+        };
+        if let Some(texts) = get(b"Text").and_then(|a| a.as_array().cloned()) {
+            for (slot, t) in hf.text.iter_mut().zip(texts.iter()) {
+                *slot = doc.resolve(t).as_string().map(|s| s.to_text()).unwrap_or_default();
+            }
+        }
+        if let Some(font) = get(b"Font").and_then(|f| f.as_name().map(<[u8]>::to_vec)) {
+            hf.font = if font.starts_with(b"Times") {
+                added::Family::Times
+            } else if font.starts_with(b"Courier") {
+                added::Family::Courier
+            } else {
+                added::Family::Helvetica
+            };
+        }
+        if let Some(size) = get(b"Size").and_then(|s| s.as_f64()).filter(|s| s.is_finite() && *s > 0.0 && *s <= 200.0) {
+            hf.font_size = size;
+        }
+        if let Ok(color) = <[f64; 3]>::try_from(reals(b"Color"))
+            && color.iter().all(|c| c.is_finite())
+        {
+            hf.color = color.map(|c| c.clamp(0.0, 1.0));
+        }
+        if let Some(Object::Bool(b)) = get(b"Underline").as_deref() {
+            hf.underline = *b;
+        }
+        if let Ok(margins) = <[f64; 4]>::try_from(reals(b"Margins"))
+            && margins.iter().all(|m| m.is_finite() && *m >= 0.0)
+        {
+            hf.margins = margins;
+        }
+        if let Some(start) = get(b"Start").and_then(|s| s.as_int()).and_then(|s| u32::try_from(s).ok()) {
+            hf.start_number = start;
+        }
+        if let Some(Object::Bool(b)) = get(b"Shrink").as_deref() {
+            hf.shrink = *b;
+        }
+        hf
     }
 }
 

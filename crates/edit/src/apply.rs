@@ -127,7 +127,9 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
             add_page_resources(doc, page, None, &[(resource.into_bytes(), base)])?;
         }
         let page = &page_list(doc)[i];
-        place(doc, page, MarkKind::HeaderFooter, content, false)?;
+        let mark = place(doc, page, MarkKind::HeaderFooter, content, false)?;
+        // The settings go with the mark, so Update can offer this header again (#5785).
+        doc.update_dict(mark, |d| d.set(b"PCSettings".to_vec(), Object::Dict(hf.to_dict())))?;
         if let Some(Some(m)) = shrinks.get(k) {
             let cm = format!("{} cm\n", m.map(matrix_number).join(" "));
             let page = &page_list(doc)[i];
@@ -319,6 +321,36 @@ pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Resu
         }
     }
     Ok(removed)
+}
+
+/// The header and footer on `page` (0-based) as it was added, and the pages (0-based, ascending)
+/// that carry the same one, for Update (#5785). `None` when the page has no header, or only one
+/// written before headers kept their settings.
+pub fn header_footer_on(doc: &Document, page: usize) -> Option<(HeaderFooter, Vec<usize>)> {
+    let all = page_list(doc);
+    let settings = |p: &pdfcraft_model::Page| -> Vec<HeaderFooter> {
+        let obj = doc.get(p.obj);
+        let list = match obj.as_dict().and_then(|d| d.get(b"Contents")) {
+            Some(Object::Ref(r)) => doc.get(*r).as_array().cloned().unwrap_or_else(|| vec![Object::Ref(*r)]),
+            Some(Object::Array(a)) => a.clone(),
+            _ => Vec::new(),
+        };
+        list.iter()
+            .filter_map(|o| {
+                let stream = doc.resolve(o);
+                let d = stream.as_dict()?;
+                if d.name(b"PCMark") != Some(MarkKind::HeaderFooter.tag().as_bytes()) {
+                    return None;
+                }
+                let settings = doc.resolve(d.get(b"PCSettings")?);
+                Some(HeaderFooter::from_dict(doc, settings.as_dict()?))
+            })
+            .collect()
+    };
+    // The one on top, if a page carries more than one.
+    let hf = settings(all.get(page)?).pop()?;
+    let pages = all.iter().enumerate().filter(|(_, p)| settings(p).contains(&hf)).map(|(i, _)| i).collect();
+    Some((hf, pages))
 }
 
 /// Which kinds of marks the document has (for enabling Update/Remove).
