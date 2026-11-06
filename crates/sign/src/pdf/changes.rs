@@ -68,13 +68,25 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         };
         placed_annots.extend(found.into_iter().map(|r| r.num));
     }
+    // The signed page tree's nodes: a change to one changes the pages, whatever it is labelled
+    // now. Every node, and every /Kids array object of its own, is read once; past the bound the
+    // tree is not known in full, and no change is judged against it.
+    let page_tree = page_tree_nodes(&old);
+    let page_tree_unbounded = page_tree.is_none();
+    let (page_nodes, kids_arrays) = page_tree.unwrap_or_default();
     // What each signed page draws from, by the role it held when signed (#1787).
     let signed_resources = signed_page_resources(&old, &signed_page_refs);
     let old_info = old.trailer().get(b"Info").and_then(Object::as_ref).map(|r| r.num);
+    // The signed catalog's /AcroForm, when it is an object of its own.
+    let old_form = old.root().and_then(|c| old.get(c).as_dict().and_then(|c| c.get(b"AcroForm").and_then(Object::as_ref))).map(|r| r.num);
     let signed_role = |num: u32| old_content.contains(&num) || signed_pages.contains(&num) || signed_resources.contains_key(&num);
     let (mut allowed, mut disallowed): (Vec<&'static str>, Vec<&'static str>) = (Vec::new(), Vec::new());
     if annots_unbounded {
         disallowed.push(kind::OTHER);
+    }
+    if page_tree_unbounded {
+        // Past the bound the tree is not known in full: no change is judged against it.
+        disallowed.push(kind::PAGES);
     }
     // Every reference the signed revision makes, read only when a slot's generations narrowed.
     let signed_references = OnceCell::new();
@@ -117,6 +129,9 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
         old_xfa_data: &old_xfa_data,
         signed_pages: &signed_pages,
         signed_annots: &signed_annots,
+        page_nodes: &page_nodes,
+        kids_arrays: &kids_arrays,
+        old_form,
         placed_annots: &placed_annots,
         annot_budget: &annot_budget,
         signed_resources: &signed_resources,
@@ -259,10 +274,13 @@ struct ChangedObjectClassifier<'a> {
     old_xfa_data: &'a HashSet<u32>,
     signed_pages: &'a HashSet<u32>,
     signed_annots: &'a HashSet<u32>,
+    page_nodes: &'a HashSet<u32>,
+    kids_arrays: &'a HashSet<u32>,
     placed_annots: &'a HashSet<u32>,
     annot_budget: &'a Cell<usize>,
     signed_resources: &'a HashMap<u32, bool>,
     old_info: Option<u32>,
+    old_form: Option<u32>,
     dss: &'a HashSet<u32>,
 }
 
@@ -275,6 +293,8 @@ impl ChangedObjectClassifier<'_> {
             return Some(kind::SECURITY_STORE);
         }
         match new {
+            // A signed page-tree node's /Kids array of its own lists the pages.
+            Object::Array(_) if before.is_some() && self.kids_arrays.contains(&r.num) => Some(kind::PAGES),
             Object::Array(_) if self.is_signed_annotation_array(r, before) => self.annotation_array_change(new, before),
             Object::Dict(dict) => self.dictionary_change(r, dict, before),
             Object::Stream(stream) => self.stream_change(r, stream, before),
@@ -342,6 +362,15 @@ impl ChangedObjectClassifier<'_> {
         if self.signed_pages.contains(&r.num) {
             // A signed page is judged by what the page shows, whatever its new labels say.
             self.page_change_kind(dict, previous)
+        } else if previous.is_some() && self.page_nodes.contains(&r.num) {
+            // A signed page-tree node is a page-tree change, whatever its new version is labelled.
+            Some(kind::PAGES)
+        } else if let Some(previous) = previous.filter(|_| self.old.root().is_some_and(|root| root.num == r.num)) {
+            // The signed catalog, whatever /Type its new version carries.
+            Some(catalog_kind(self.doc, self.old, dict, previous))
+        } else if let Some(previous) = previous.filter(|_| self.old_form == Some(r.num)) {
+            // The signed form dictionary, held in an object of its own, whatever keys it carries now.
+            Some(acroform_kind(self.doc, self.old, dict, Some(previous)))
         } else if previous.is_some() && Some(r.num) == self.old_info {
             // Only the signed revision's own /Info dictionary is a metadata change.
             Some(kind::METADATA)
@@ -601,6 +630,10 @@ fn acroform(doc: &Document) -> Option<Dict> {
 fn acroform_kind(doc: &Document, old: &Document, now: &Dict, before: Option<&Dict>) -> &'static str {
     let fallback = acroform(old).unwrap_or_default();
     let before = before.unwrap_or(&fallback);
+    // A field taken out of the form: no DocMDP permission covers dropping a signed field.
+    if lost_entries(doc, old, before.get(b"Fields"), now.get(b"Fields")) {
+        return kind::OTHER;
+    }
     let strip = |d: &Dict| -> Vec<(Vec<u8>, Object)> {
         let mut v: Vec<(Vec<u8>, Object)> =
             d.iter().filter(|(k, _)| !matches!(k.as_slice(), b"Fields" | b"SigFlags")).map(|(k, o)| (k.to_vec(), o.clone())).collect();
@@ -724,6 +757,62 @@ fn extensions_kept(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> bool {
     }
 }
 
+/// A change to the signed catalog `b`, now `d`.
+fn catalog_kind(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> &'static str {
+    let keys: &[&[u8]] = &[b"AcroForm", b"DSS", b"Perms", b"Metadata", b"NeedsRendering", b"Extensions"];
+    if without(d, keys) != without(b, keys) {
+        kind::STRUCTURE
+    } else if !extensions_kept(doc, old, d, b) {
+        // Developer extensions (ISO 32000-2 §7.12) only declare what the file uses. A writer
+        // adding a /DSS also declares the ESIC extension it belongs to, so a declaration may be
+        // added, but none that was signed may change or go.
+        kind::STRUCTURE
+    } else if d.get(b"AcroForm") != b.get(b"AcroForm") {
+        // Compare the forms themselves, inline or not.
+        let now = acroform(doc).unwrap_or_default();
+        acroform_kind(doc, old, &now, None)
+    } else if b.get(b"Perms") != d.get(b"Perms") {
+        kind::SIGNATURE
+    } else {
+        kind::METADATA
+    }
+}
+
+/// The nodes of `doc`'s page tree and the /Kids arrays that are objects of their own, by number:
+/// every dictionary with /Kids from the catalog's /Pages down. Each node, and each /Kids array
+/// object, is read once. `None` past a million nodes.
+fn page_tree_nodes(doc: &Document) -> Option<(HashSet<u32>, HashSet<u32>)> {
+    const MAX_NODES: usize = 1_000_000;
+    let (mut nodes, mut arrays) = (HashSet::new(), HashSet::new());
+    let top = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|c| c.get(b"Pages").and_then(Object::as_ref)));
+    let mut stack: Vec<ObjRef> = top.into_iter().collect();
+    while let Some(r) = stack.pop() {
+        if nodes.len() >= MAX_NODES {
+            return None;
+        }
+        let node = doc.get(r);
+        // A leaf (a page) has no /Kids.
+        let Some(kids) = node.as_dict().and_then(|d| d.get(b"Kids")) else { continue };
+        if !nodes.insert(r.num) || kids.as_ref().is_some_and(|a| !arrays.insert(a.num)) {
+            continue;
+        }
+        if let Some(kids) = doc.resolve(kids).as_array() {
+            stack.extend(kids.iter().filter_map(Object::as_ref));
+        }
+    }
+    Some((nodes, arrays))
+}
+
+/// Whether a list of references (`/Fields`) no longer holds an entry it held when signed. An
+/// entry is still held only by a reference that resolves now and that the signed revision
+/// resolved too, so to the same slot (a repaired alias counts): one rewritten to a generation
+/// the slot does not accept names nothing, and one to a newer generation names another object.
+fn lost_entries(doc: &Document, old: &Document, was: Option<&Object>, now: Option<&Object>) -> bool {
+    let live = |d: &Document, r: &ObjRef| !matches!(*d.get(*r), Object::Null);
+    let now: HashSet<u32> = refs(doc, now).into_iter().filter(|r| live(doc, r) && live(old, r)).map(|r| r.num).collect();
+    refs(old, was).iter().filter(|r| live(old, r)).any(|r| !now.contains(&r.num))
+}
+
 fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) -> &'static str {
     let ty = d.name(b"Type");
     // A later revision cannot make an existing object a signature by relabelling it: a signature
@@ -746,31 +835,15 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
     }) {
         return kind::OTHER;
     }
+    // Where a signed widget sits and whether it shows are what the page shows: filling the form
+    // changes its value and appearance, never its rectangle or its flags.
+    if before.is_some_and(|b| b.name(b"Subtype") == Some(b"Widget") && (d.get(b"Rect") != b.get(b"Rect") || d.get(b"F") != b.get(b"F"))) {
+        return kind::PAGE_CONTENT;
+    }
     match ty {
         // Only a new signature value or policy: rewriting a signed one is not a signature (#1788).
         Some(b"Sig" | b"DocTimeStamp" | b"SigRef" | b"TransformParams") if before.is_none() => return kind::SIGNATURE,
-        Some(b"Catalog") => {
-            let keys: &[&[u8]] = &[b"AcroForm", b"DSS", b"Perms", b"Metadata", b"NeedsRendering", b"Extensions"];
-            return match before {
-                Some(b) if without(d, keys) != without(b, keys) => kind::STRUCTURE,
-                // Developer extensions (ISO 32000-2 §7.12) only declare what the file uses. A
-                // writer adding a /DSS also declares the ESIC extension it belongs to, so a
-                // declaration may be added, but none that was signed may change or go.
-                Some(b) if !extensions_kept(doc, old, d, b) => kind::STRUCTURE,
-                Some(b) => {
-                    if d.get(b"AcroForm") != b.get(b"AcroForm") {
-                        // Compare the forms themselves, inline or not.
-                        let now = acroform(doc).unwrap_or_default();
-                        acroform_kind(doc, old, &now, None)
-                    } else if b.get(b"Perms") != d.get(b"Perms") {
-                        kind::SIGNATURE
-                    } else {
-                        kind::METADATA
-                    }
-                }
-                None => kind::FORM_FILL,
-            };
-        }
+        Some(b"Catalog") => return before.map_or(kind::FORM_FILL, |b| catalog_kind(doc, old, d, b)),
         Some(b"Page") => {
             return match before {
                 Some(b) if without(d, &[b"Annots"]) != without(b, &[b"Annots"]) => kind::PAGE_CONTENT,
