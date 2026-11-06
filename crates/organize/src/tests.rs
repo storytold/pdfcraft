@@ -3985,3 +3985,71 @@ fn an_outline_deeper_than_the_listing_is_exported_as_truncated() {
     crate::import_outline(&mut target, &[], 0, &tree.nodes, false).unwrap();
     assert_eq!(crate::bookmarks(&target).len(), 33);
 }
+
+/// A part whose pages draw no image keeps none of the shared ones.
+#[test]
+fn a_part_that_draws_no_image_keeps_none_of_them() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] /Resources 7 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>".into(),
+        raw("0 0 10 10 re f"),
+        raw("/ImA Do /ImB Do"),
+        "<< /XObject << /ImA 8 0 R /ImB 9 0 R >> >>".into(),
+        image(1, 1, 1),
+        image(1, 1, 2000),
+    ];
+    let part = full_roundtrip(&extract_pages(&open(build(&b, "/Root 1 0 R")), &[0]).unwrap());
+    assert_eq!(xobject_names(&part, 0), Vec::<Vec<u8>>::new());
+}
+
+/// A part that draws no image through its content, but has an annotation appearance or a
+/// tiling pattern that may draw one through the page's resources, keeps them all.
+#[test]
+fn a_part_whose_appearance_or_pattern_may_draw_an_image_keeps_them() {
+    let part_of = |page: &str, resources: &str, extra: Vec<String>| {
+        let mut b: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            format!("<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] /Resources {resources} >>"),
+            page.into(),
+            "<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>".into(),
+            raw("0 0 10 10 re f"),
+            raw("/ImA Do /ImB Do"),
+            image(1, 1, 1),
+            image(1, 1, 2000),
+        ];
+        b.extend(extra);
+        full_roundtrip(&extract_pages(&open(build(&b, "/Root 1 0 R")), &[0]).unwrap())
+    };
+    let xobjects = "/XObject << /ImA 7 0 R /ImB 8 0 R >>";
+    let appearance = part_of(
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Annots [<< /Type /Annot /Subtype /Square /Rect [0 0 50 50] /AP << /N 9 0 R >> >>] >>",
+        &format!("<< {xobjects} >>"),
+        vec!["<< /Type /XObject /Subtype /Form /BBox [0 0 50 50] /Length 7 >>\nstream\n/ImA Do\nendstream".into()],
+    );
+    assert!(xobject_names(&appearance, 0).iter().any(|n| n.as_slice() == b"ImA"), "the appearance's image must stay");
+    let pattern = part_of(
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R >>",
+        &format!("<< {xobjects} /Pattern << /P 9 0 R >> >>"),
+        vec!["<< /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Length 7 >>\nstream\n/ImA Do\nendstream".into()],
+    );
+    assert!(xobject_names(&pattern, 0).iter().any(|n| n.as_slice() == b"ImA"), "the pattern's image must stay");
+}
+
+/// A page without `/Contents` draws nothing either.
+#[test]
+fn a_part_of_a_page_without_contents_keeps_no_image() {
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] /Resources 6 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R >>".into(),
+        raw("/ImA Do /ImB Do"),
+        "<< /XObject << /ImA 7 0 R /ImB 8 0 R >> >>".into(),
+        image(1, 1, 1),
+        image(1, 1, 2000),
+    ];
+    let part = full_roundtrip(&extract_pages(&open(build(&b, "/Root 1 0 R")), &[0]).unwrap());
+    assert_eq!(xobject_names(&part, 0), Vec::<Vec<u8>>::new());
+}
