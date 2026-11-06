@@ -67,6 +67,9 @@ pub struct Metrics {
     /// Subset CIDFontType2 only: one bit per CID (below 65 536) whose glyph has an outline in the
     /// embedded program. See [`cids_with_outlines`].
     outlined_cids: Vec<u64>,
+    /// Subset simple font with an sfnt program only: one bit per code (0–255) whose glyph the
+    /// program has. See [`codes_with_glyphs`].
+    glyph_codes: Option<[u64; 4]>,
 }
 
 fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
@@ -197,11 +200,9 @@ fn embedded_widths(doc: &Document, font: &Dict, m: &mut Metrics) {
         }
         let advances = face.glyph_metrics(Size::unscaled(), LocationRef::default());
         let (charmap, cmap) = (face.charmap(), face.cmap().ok());
-        let found = |g: Option<GlyphId>| g.filter(|g| *g != GlyphId::NOTDEF);
         m.widths = (0..=255u32)
             .map(|code| {
-                let glyph = found(m.unicode.encoding.get(&code).and_then(|t| only_char(t)).and_then(|c| charmap.map(c)))
-                    .or_else(|| [0, 0xF000, 0xF100, 0xF200].into_iter().find_map(|o| found(cmap.as_ref()?.map_codepoint(code + o))));
+                let glyph = simple_glyph(&charmap, cmap.as_ref(), &m.unicode.encoding, code);
                 // A subset holds only the glyphs it draws: 0 keeps `has_glyph` false for the rest.
                 match glyph {
                     None if m.subset => 0.0,
@@ -212,6 +213,52 @@ fn embedded_widths(doc: &Document, font: &Dict, m: &mut Metrics) {
         m.first = 0;
         return;
     }
+}
+
+/// The glyph a simple font's embedded sfnt program draws for `code`, looked up the way the
+/// renderer does: the encoding's character in the Unicode cmap, else the code itself (as in a
+/// symbolic cmap). `None` for `.notdef`.
+fn simple_glyph(
+    charmap: &skrifa::charmap::Charmap,
+    cmap: Option<&skrifa::raw::tables::cmap::Cmap>,
+    encoding: &HashMap<u32, String>,
+    code: u32,
+) -> Option<skrifa::GlyphId> {
+    let found = |g: Option<skrifa::GlyphId>| g.filter(|g| *g != skrifa::GlyphId::NOTDEF);
+    found(encoding.get(&code).and_then(|t| only_char(t)).and_then(|c| charmap.map(c)))
+        .or_else(|| [0, 0xF000, 0xF100, 0xF200].into_iter().find_map(|o| found(cmap?.map_codepoint(code + o))))
+}
+
+/// The codes (0–255) of a subset simple font whose glyph its embedded sfnt program has: found
+/// by [`simple_glyph`] and, in a TrueType program, with an outline, unless the code shows white
+/// space. A subsetter drops the other glyphs, or leaves them empty, while the font's `/Widths`
+/// may still give every code a width. `None` without a readable sfnt program.
+fn codes_with_glyphs(doc: &Document, font: &Dict, encoding: &HashMap<u32, String>) -> Option<[u64; 4]> {
+    use skrifa::{MetadataProvider as _, raw::TableProvider as _};
+    let descriptor = dict(doc, font.get(b"FontDescriptor"))?;
+    for key in [b"FontFile2".as_slice(), b"FontFile3".as_slice()] {
+        let Some(object) = descriptor.get(key) else { continue };
+        let object = doc.resolve(object);
+        let Object::Stream(stream) = object.as_ref() else { continue };
+        let Ok(bytes) = stream.decoded_within(16 << 20) else { continue };
+        let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { continue };
+        let (charmap, cmap, loca) = (face.charmap(), face.cmap().ok(), face.loca(None).ok());
+        let outlined = |gid: skrifa::GlyphId| {
+            let gid = gid.to_u32() as usize;
+            loca.as_ref().is_none_or(|loca| loca.get_raw(gid).zip(loca.get_raw(gid + 1)).is_some_and(|(start, end)| end > start))
+        };
+        let mut bits = [0u64; 4];
+        for code in 0..=255u32 {
+            let blank = encoding.get(&code).and_then(|t| only_char(t)).is_some_and(char::is_whitespace);
+            if simple_glyph(&charmap, cmap.as_ref(), encoding, code).is_some_and(|gid| blank || outlined(gid))
+                && let Some(word) = bits.get_mut(code as usize / 64)
+            {
+                *word |= 1u64 << (code % 64);
+            }
+        }
+        return Some(bits);
+    }
+    None
 }
 
 /// Replace an existing cmap directory entry with a bounded Unicode format-12 table.
@@ -628,6 +675,7 @@ impl Metrics {
             code_len: 1,
             explicit_reverse: (32..127u8).map(|c| (char::from(c), u32::from(c))).collect(),
             outlined_cids: Vec::new(),
+            glyph_codes: None,
         }
     }
 
@@ -659,6 +707,9 @@ impl Metrics {
         m.unicode = unicode_map(doc, font, m.composite);
         if m.std14.is_some() {
             embedded_widths(doc, font, &mut m);
+        }
+        if !m.composite && m.subset {
+            m.glyph_codes = codes_with_glyphs(doc, font, &m.unicode.encoding);
         }
         let mut reverse = HashMap::new();
         for (&code, text) in m.unicode.explicit.iter().map(|(c, (_, t))| (c, t)).chain(m.unicode.encoding.iter()) {
@@ -881,8 +932,11 @@ impl Metrics {
                 // still says /W may leave out glyphs of that width (#1443).
                 || (self.outlined_cids.is_empty() && self.explicit_default);
         }
+        // A subset's `/Widths` can give every code a width, the dropped glyphs' too: only its
+        // program says which glyphs it kept (#4038).
+        let kept = |code: u32| self.glyph_codes.is_none_or(|bits| bits.get(code as usize / 64).is_some_and(|w| (w >> (code % 64)) & 1 == 1));
         match code.checked_sub(self.first).and_then(|i| self.widths.get(i as usize)) {
-            Some(w) => *w > 0.0 || code == 32,
+            Some(w) => code == 32 || (*w > 0.0 && kept(code)),
             None => self.widths.is_empty() && !self.subset,
         }
     }
