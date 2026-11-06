@@ -205,6 +205,12 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, view: &mut DocView) -> bool {
     if resp.context_menu_opened() || egui::Popup::is_any_open(ui.ctx()) {
         return false;
     }
+    // A picture being cropped owns every press on its page (`edit_text_ui::crop_hit`): a
+    // modified click away applies its crop, as any click away does, rather than taking the
+    // picture into a group and dropping the crop being set (#6422).
+    if view.image_selection.as_ref().is_some_and(|s| s.page == page && s.crop.is_some()) {
+        return false;
+    }
     if view.content.draft.is_some() || view.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
         let blocked = view.objects.blocked_page == Some(page);
         let modifier_press = ptr.pressed().is_some() && modified(ui) && ptr.pos.is_some_and(|p| xf.rect.contains(p) && ui.clip_rect().contains(p));

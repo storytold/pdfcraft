@@ -10017,3 +10017,42 @@ fn affine_review_cropped_rotation_preview_matches_saved_corners() {
         );
     }
 }
+
+#[test]
+fn a_modified_click_away_from_a_cropped_picture_applies_its_crop() {
+    // Shift-, Ctrl- or Command-clicking away is still a click away: it applies the crop and lets
+    // the picture go, rather than taking the picture into a group and dropping its crop (#6422
+    // review).
+    for mods in [egui::Modifiers::SHIFT, egui::Modifiers::COMMAND] {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("room.pdf", None, picture_with_room_around()).unwrap();
+            app
+        });
+        h.run_steps(4);
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Page;
+        h.run_steps(3);
+        let r = h.state().views[0].page_screen_rect(0).unwrap();
+        let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
+        let doc_id = h.state().views[0].id;
+        let full = h.state().session.get(doc_id).unwrap().page_images(0)[0].rect;
+        click_at(&mut h, at(100.0, 190.0));
+        h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new(full));
+        h.run_steps(2);
+        let keep = [full[0], full[1], full[0] + 60.0, full[3]];
+        h.state_mut().views[0].image_selection.as_mut().unwrap().crop.as_mut().unwrap().keep = keep;
+        h.run_steps(2);
+        let p = at(100.0, 60.0);
+        h.hover_at(p);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: mods });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: mods });
+        h.run_steps(4);
+        assert!(h.state().views[0].image_selection.is_none(), "{mods:?}: the picture is let go");
+        let visible = h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect.unwrap();
+        assert!(keep.iter().zip(visible).all(|(a, b)| (a - b).abs() < 0.5), "{mods:?}: the crop is applied: {visible:?}");
+    }
+}
