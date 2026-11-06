@@ -137,6 +137,8 @@ impl Host for crate::PdfCraftApp {
             "default_mode": self.default_mode,
             "hotbar": self.hotbar,
             "comment_tool_pinned": self.comment_prefs.pinned,
+            // Home's pinned folders, in order, and whether each is folded down to its heading.
+            "pinned_folders": self.pinned.folders.iter().map(|f| json!({ "folder": f, "collapsed": self.pinned.collapsed.contains(f) })).collect::<Vec<_>>(),
             "left_panel": if self.left_open { json!(format!("{:?}", self.left)) } else { Value::Null },
             "tools_side": if self.side_panels.tools_on_right() { "right" } else { "left" },
             "rail_side": if self.side_panels.rail_on_right() { "right" } else { "left" },
