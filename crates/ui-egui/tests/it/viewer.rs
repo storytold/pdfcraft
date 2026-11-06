@@ -1822,8 +1822,15 @@ fn the_pages_panel_copies_and_pastes_pages_between_documents_by_keyboard() {
     let at = thumbnail(&h, "Page 2");
     press(&mut h, at, egui::PointerButton::Primary);
     h.run_steps(4);
-    h.key_press_modifiers(Modifiers::COMMAND, Key::C);
-    h.run_steps(2);
+    // As the desktop sends ⌘C: one Copy event. The system clipboard then says what was copied:
+    // with nothing on it, the desktop's ⌘V never reaches the app.
+    h.event(egui::Event::Copy);
+    let mut said = false;
+    for _ in 0..2 {
+        h.step();
+        said |= h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t == "1 page from b.pdf"));
+    }
+    assert!(said, "the clipboard names the copied pages");
     assert_eq!(h.state().page_clipboard.as_ref().map(|c| c.pages.clone()), Some(vec![1]));
     // Pasted in a.pdf after its page 1.
     tab(&mut h, 0);
