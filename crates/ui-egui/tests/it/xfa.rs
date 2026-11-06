@@ -113,11 +113,17 @@ fn ordinary_forms_and_documents_have_no_xfa_notice() {
 
 /// Click the centre of a field's widget.
 fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
+    click_widget(h, name, 0);
+}
+
+/// Click widget `widget` (0-based: a radio button of the group, or a copy of the field) of the
+/// field named `name`.
+fn click_widget(h: &mut Harness<'static, PdfCraftApp>, name: &str, widget: usize) {
     let p = {
         let s = h.state();
         let doc = s.session.get(s.views[0].id).unwrap();
         let f = doc.form.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("no field {name}"));
-        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center()
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, widget).expect("on screen").center()
     };
     h.hover_at(p);
     h.run_steps(1);
@@ -127,6 +133,61 @@ fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
     h.run_steps(4);
 }
 
+/// Clicking an XFA check box or radio button in the app runs its click script after its change
+/// script; the script's message shows. The radio group keeps the focus, so its exits wait until
+/// the focus leaves it.
+#[test]
+fn xfa_check_box_and_radio_clicks_run_their_click_scripts_in_the_app() {
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::toggle_template()));
+    crate::support::settle(&mut h);
+    // What the scripts have written to the form's log field so far.
+    let log = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "log").and_then(|f| f.value.first().cloned()).unwrap_or_default()
+    };
+    click_field(&mut h, "agree");
+    assert_eq!(log(&h), "change 1;click 1;", "console: {:?}", h.state().js_console.log);
+    assert!(h.query_by_label_contains("Agreed").is_some(), "the click script's message shows");
+    // The second radio button of the group.
+    click_widget(&mut h, "answer", 1);
+    assert!(log(&h).ends_with("group click;no click;"), "{}", log(&h));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(4);
+    assert!(log(&h).ends_with("group click;no click;no exit;group exit;"), "the exits once the focus leaves: {}", log(&h));
+}
+
+/// Clicking a check box or radio button in the app moves the focus to it before changing it, and
+/// its exit waits until the focus leaves, in the order another viewer runs on a synthetic form:
+/// a check box clicked twice runs its exit once, as the focus leaves; a radio group runs a
+/// button's exit as the focus moves to the other button, and its own only as the focus leaves
+/// the group.
+#[test]
+fn xfa_check_box_and_radio_exits_wait_for_the_focus_to_leave_in_the_app() {
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::toggle_focus_template()));
+    crate::support::settle(&mut h);
+    let log = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "log").and_then(|f| f.value.first().cloned()).unwrap_or_default()
+    };
+    let group = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        doc.form.iter().find(|f| f.kind == pdfcraft_engine::FormFieldKind::Radio).map(|f| f.name.clone()).expect("the radio group")
+    };
+    click_field(&mut h, "cb");
+    click_field(&mut h, "cb");
+    assert_eq!(log(&h), "cb enter 0|cb change 1|cb click 1|cb change 0|cb click 0", "console: {:?}", h.state().js_console.log);
+    click_widget(&mut h, &group, 0);
+    click_widget(&mut h, &group, 1);
+    click_field(&mut h, "after");
+    assert_eq!(
+        log(&h),
+        "cb enter 0|cb change 1|cb click 1|cb change 0|cb click 0|cb exit 0|grp enter|r1 enter|grp change 1|r1 change|grp click 1|r1 click|r1 exit|r2 enter|grp change 2|r2 change|grp click 2|r2 click|r2 exit|grp exit"
+    );
+}
+
+/// Clicking an XFA button in the app runs its click script: one adds a row, another shows its
+/// message as a notice.
 #[test]
 fn xfa_buttons_run_their_scripts_in_the_app() {
     let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template()));
@@ -143,6 +204,87 @@ fn xfa_buttons_run_their_scripts_in_the_app() {
     assert!(h.query_by_label_contains("Hello 2").is_some(), "script console: {:?}", h.state().js_console.log);
 }
 
+/// Every way the focus moves (a click, Tab, Shift+Tab, Escape) runs the field it left's exit
+/// script and the field it reached's enter script, changed or not; typing a change and tabbing
+/// out runs the exit once, not twice. A script's message shows as a notice.
+#[test]
+fn xfa_enter_and_exit_scripts_run_whenever_the_focus_moves() {
+    use egui::{Key, Modifiers};
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::focus_template()));
+    crate::support::settle(&mut h);
+    let counts = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let v = |n: &str| doc.form.iter().find(|f| f.name == n).and_then(|f| f.value.first().cloned()).unwrap_or_default();
+        (v("enters"), v("exits"))
+    };
+    let focus = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].forms.focus.as_ref().map(|f| f.name.clone());
+    let press = |h: &mut Harness<'static, PdfCraftApp>, modifiers, key| {
+        h.key_press_modifiers(modifiers, key);
+        h.run_steps(4);
+    };
+    click_field(&mut h, "probe");
+    assert_eq!(counts(&h), ("1".into(), "0".into()), "a click in runs the enter");
+    for _ in 0..2 {
+        press(&mut h, Modifiers::NONE, Key::Tab);
+        assert_eq!(focus(&h).as_deref(), Some("quiet"));
+        press(&mut h, Modifiers::SHIFT, Key::Tab);
+        assert_eq!(focus(&h).as_deref(), Some("probe"));
+    }
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert_eq!(focus(&h), None);
+    assert_eq!(counts(&h), ("3".into(), "3".into()), "three unchanged visits, three exits; console: {:?}", h.state().js_console.log);
+    // A change typed in: tabbing out runs the exit once.
+    click_field(&mut h, "probe");
+    h.event(egui::Event::Text("typed".into()));
+    h.run_steps(2);
+    press(&mut h, Modifiers::NONE, Key::Tab);
+    assert_eq!(counts(&h), ("4".into(), "4".into()));
+    // Leaving `quiet` shows its message.
+    assert_eq!(focus(&h).as_deref(), Some("quiet"));
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert!(h.query_by_label_contains("left quiet").is_some(), "console: {:?}", h.state().js_console.log);
+}
+
+/// An enter script that changes the field it enters (clearing a "Type here") shows in the editor,
+/// so leaving the field keeps the script's value rather than writing the old one back; typing
+/// after it is kept as usual. When the exit of the field left changed it first (`relay` puts the
+/// "Type here" back), the editor follows both scripts and ends on the enter script's value.
+#[test]
+fn an_enter_script_that_changes_its_field_shows_in_the_editor() {
+    use egui::{Key, Modifiers};
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::focus_template()));
+    crate::support::settle(&mut h);
+    let value = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "hint").and_then(|f| f.value.first().cloned()).unwrap_or_default()
+    };
+    assert_eq!(value(&h), "Type here");
+    click_field(&mut h, "hint");
+    assert_eq!(value(&h), "", "the enter script cleared it");
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.text.clone()).as_deref(), Some(""), "and the editor shows that");
+    h.key_press_modifiers(Modifiers::NONE, Key::Tab);
+    h.run_steps(4);
+    assert_eq!(value(&h), "", "leaving it doesn't write \"Type here\" back");
+    click_field(&mut h, "hint");
+    h.event(egui::Event::Text("Ann".into()));
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::NONE, Key::Tab);
+    h.run_steps(4);
+    assert_eq!(value(&h), "Ann");
+    // From `relay` back to `hint`: relay's exit puts "Type here" back over "Ann", then hint's enter
+    // clears it. The editor follows both, so it holds the last value, and Tab keeps it.
+    click_field(&mut h, "relay");
+    click_field(&mut h, "hint");
+    assert_eq!(value(&h), "", "relay's exit, then hint's enter");
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.text.clone()).as_deref(), Some(""), "the editor holds the enter script's value");
+    h.key_press_modifiers(Modifiers::NONE, Key::Tab);
+    h.run_steps(4);
+    assert_eq!(value(&h), "");
+}
+
+/// A message an initialize script shows on opening appears at once, and a print request from it
+/// is refused (only a click may print).
 #[test]
 fn messages_from_scripts_run_on_open_show_right_away() {
     let tpl = pdfcraft_xfa::fixtures::scripted_template()
