@@ -207,7 +207,7 @@ const IDENTITY: [f64; 16] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1
 /// scale) as a column-major `GeneralTransformation` [WD 7.4.9].
 fn transformation(w: &mut BitWriter, m: &[f64; 16]) {
     let mut cols = [[0.0; 3]; 4];
-    for (dst, src) in cols.iter_mut().zip(m.chunks_exact(4)) {
+    for (dst, src) in cols.iter_mut().zip(m.as_chunks::<4>().0) {
         for (d, s) in dst.iter_mut().zip(src) {
             *d = *s;
         }

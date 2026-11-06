@@ -168,12 +168,10 @@ pub(super) fn coordinates(doc: &Json, buffers: &accessor::Buffers, attrs: &Json,
     }
     let [m0, m1] = using.matrix;
     Ok(flat
-        .chunks_exact(2)
-        .filter_map(|c| match *c {
-            [u, v] => Some((u, v)),
-            _ => None,
-        })
-        .map(|(u, v)| {
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[u, v]| {
             let tu = m0[0] * u + m0[1] * v + m0[2];
             let tv = m1[0] * u + m1[1] * v + m1[2];
             [tu, 1.0 - tv]

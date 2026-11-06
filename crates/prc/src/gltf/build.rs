@@ -138,7 +138,7 @@ fn texture_coordinates(
 }
 
 fn vec3s(flat: &[f64]) -> Vec<[f64; 3]> {
-    flat.chunks_exact(3).filter_map(|c| c.try_into().ok()).collect()
+    flat.as_chunks::<3>().0.to_vec()
 }
 
 /// One primitive as triangles; strips and fans are unrolled [§3.7.2.1].
@@ -184,7 +184,7 @@ fn triangles(c: &[u32], mode: u32) -> Vec<[u32; 3]> {
             })
             .collect(),
         6 => (1..c.len().saturating_sub(1)).map(|i| [get(0), get(i), get(i + 1)]).collect(),
-        _ => c.chunks_exact(3).filter_map(|t| t.try_into().ok()).collect(),
+        _ => c.as_chunks::<3>().0.to_vec(),
     }
 }
 
@@ -199,7 +199,7 @@ fn trs(t: [f64; 3], q: [f64; 4], s: [f64; 3]) -> [f64; 16] {
         [2.0 * (x * z + y * w), 2.0 * (y * z - x * w), 1.0 - 2.0 * (x * x + y * y)],
     ];
     let mut m = IDENTITY;
-    for ((col, axis), k) in m.chunks_exact_mut(4).zip(r).zip(s) {
+    for ((col, axis), k) in m.as_chunks_mut::<4>().0.iter_mut().zip(r).zip(s) {
         for (d, v) in col.iter_mut().zip(axis) {
             *d = v * k;
         }
@@ -273,10 +273,8 @@ const IDENTITY: [f64; 16] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1
 
 /// `C × m` where `C` turns glTF's +Y up into +Z up: (x, y, z) → (x, −z, y).
 fn z_up(mut m: [f64; 16]) -> [f64; 16] {
-    for col in m.chunks_exact_mut(4) {
-        if let [_, y, z, _] = col {
-            (*y, *z) = (-*z, *y);
-        }
+    for [_, y, z, _] in m.as_chunks_mut::<4>().0.iter_mut() {
+        (*y, *z) = (-*z, *y);
     }
     m
 }
