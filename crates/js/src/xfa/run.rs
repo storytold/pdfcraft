@@ -145,6 +145,12 @@ pub(crate) fn run_here(script: &str, event: &XfaEvent, doc: &XfaDoc, root: XfaNo
         // Direct eval inside a function called on the node: `this` is the node and the
         // completion value is the script's last expression (what a calculate script yields).
         let r = ctx.eval(Source::from_bytes(b"(function () { return eval(__xfa_src); }).call(__xfa_this)"))?;
+        if event.activity == "change" {
+            // What the keystroke enters now: the script may have rewritten `xfa.event.change`.
+            let xfa_event = ctx.eval(Source::from_bytes(b"(typeof xfa === 'object' && xfa !== null) ? xfa.event : undefined"))?;
+            let change = xfa_event.as_object().map(|e| e.get(js_string!("change"), &mut ctx)).transpose()?;
+            out.change = change.map(|c| text(&c, &mut ctx).unwrap_or_default());
+        }
         if !r.is_undefined() {
             // Best effort: a value that can't be made text (a symbol, say) is no failure.
             out.result = Some(text(&r, &mut ctx).unwrap_or_default());

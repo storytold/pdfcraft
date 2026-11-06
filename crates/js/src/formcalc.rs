@@ -164,6 +164,9 @@ pub(crate) fn run_formcalc_at(
         }
         Err(e) => out.error = Some(e),
     }
+    if event.activity == "change" {
+        out.change = Some(interp.event.change.clone());
+    }
     out.notes = host.notes();
     out.effects = host.effects;
     out.console = host.console;

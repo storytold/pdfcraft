@@ -53,6 +53,10 @@ pub struct Document {
     pub(crate) xfa_template: Option<Arc<pdfcraft_xfa::model::Template>>,
     /// A script of the XFA form ran away, so its scripts are off (see [`Document::xfa_scripts_off`]).
     pub(crate) xfa_scripts_off: bool,
+    /// SOM paths of the XFA fields whose exit scripts ran with a value change ([`xfa::on_changes`])
+    /// since they last gained focus: their exit on losing focus has run already
+    /// ([`Session::field_focus`]).
+    pub(crate) xfa_exited: std::collections::HashSet<String>,
     /// A content-only refresh keeps `info` from before the edit; an edit may have added or
     /// embedded fonts, so the font list is read again on demand ([`Session::refresh_fonts`]).
     pub(crate) fonts_stale: bool,

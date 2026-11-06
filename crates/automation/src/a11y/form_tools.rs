@@ -39,6 +39,8 @@ impl Automation {
         Ok(json!({ "scripts": list }))
     }
 
+    /// `js_set_document_script`: set the document-level script `name` to `script`, or remove it
+    /// when `script` is left out, as one undoable edit; returns the document's scripts.
     pub(crate) fn js_set_document_script(&mut self, a: &Args) -> Result<Value> {
         let edit = pdfcraft_engine::Edit::SetDocumentScript { name: a.str("name")?.into(), script: a.opt_str("script")?.map(str::to_string) };
         let id = self.doc(a)?.id;
@@ -46,6 +48,8 @@ impl Automation {
         self.js_document_scripts(a)
     }
 
+    /// `form_set_script`: set field `field`'s JavaScript for `event` to `script`, or remove it when
+    /// `script` is left out, as one undoable edit; returns the console output and errors.
     pub(crate) fn form_set_script(&mut self, a: &Args) -> Result<Value> {
         let edit = pdfcraft_engine::Edit::SetFieldScript {
             name: a.str("field")?.into(),
@@ -58,6 +62,80 @@ impl Automation {
         Ok(json!({ "field": a.str("field")?, "event": a.str("event")?, "console": out.console, "errors": out.errors }))
     }
 
+    /// `form_focus`: field `field` (its 1-based `widget`) gains (`enter`) or loses (`exit`)
+    /// focus, running its XFA scripts for that event; returns whether the form changed and what
+    /// the scripts showed or asked for.
+    pub(crate) fn form_focus(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::js::FieldFocus;
+        let focus = match a.str("event")? {
+            "enter" => FieldFocus::Enter,
+            "exit" => FieldFocus::Exit,
+            other => return Err(ToolError::InvalidArgs(format!("event must be enter or exit, not {other:?}"))),
+        };
+        let name = a.str("field")?;
+        let doc = self.doc(a)?;
+        let field = doc.form.iter().find(|f| f.name == name).ok_or_else(|| failed(format!("there is no field named {name:?} (see form_fields)")))?;
+        let widget = a.opt_int("widget")?.unwrap_or(1);
+        let widget = usize::try_from(widget)
+            .ok()
+            .and_then(|w| w.checked_sub(1))
+            .filter(|w| *w < field.widgets.len().max(1))
+            .ok_or_else(|| ToolError::InvalidArgs(format!("widget must be 1 to {} for {name:?}", field.widgets.len().max(1))))?;
+        let id = doc.id;
+        let changed = self.session.field_focus(id, name, widget, focus).map_err(failed)?;
+        let out = self.session.take_js_output(id);
+        let reqs: Vec<Value> = out.requests.iter().map(request_json).collect();
+        Ok(
+            json!({ "changed": changed, "alerts": out.alerts.iter().map(alert_json).collect::<Vec<_>>(), "console": out.console, "requests": reqs, "errors": out.errors }),
+        )
+    }
+
+    /// `form_keystroke`: one keystroke in text field `field` (its 1-based `widget`): `change`
+    /// typed or pasted (empty for a deletion) in place of the characters `sel_start..sel_end` of
+    /// `prev`, the field's text before it (by default the keystroke goes at the end). On a dynamic
+    /// XFA form the field's change scripts run for it and may rewrite what it enters. Returns
+    /// `entered` (null when the field has no change scripts: the keystroke stands), `text` (`prev`
+    /// with what was entered) and what the scripts showed or asked for. Nothing in the document
+    /// changes; `form_fill` commits a value.
+    pub(crate) fn form_keystroke(&mut self, a: &Args) -> Result<Value> {
+        let name = a.str("field")?;
+        let doc = self.doc(a)?;
+        let field = doc.form.iter().find(|f| f.name == name).ok_or_else(|| failed(format!("there is no field named {name:?} (see form_fields)")))?;
+        let widget = a.opt_int("widget")?.unwrap_or(1);
+        let widget = usize::try_from(widget)
+            .ok()
+            .and_then(|w| w.checked_sub(1))
+            .filter(|w| *w < field.widgets.len().max(1))
+            .ok_or_else(|| ToolError::InvalidArgs(format!("widget must be 1 to {} for {name:?}", field.widgets.len().max(1))))?;
+        let prev = a.opt_str("prev")?.unwrap_or_default().to_string();
+        let len = prev.chars().count();
+        let position = |key: &str, default: usize| -> Result<usize> {
+            match a.opt_int(key)? {
+                None => Ok(default),
+                Some(n) => usize::try_from(n)
+                    .ok()
+                    .filter(|n| *n <= len)
+                    .ok_or_else(|| ToolError::InvalidArgs(format!("{key} must be 0 to {len}, a character position in prev"))),
+            }
+        };
+        let sel_start = position("sel_start", len)?;
+        let sel_end = position("sel_end", sel_start)?;
+        if sel_end < sel_start {
+            return Err(ToolError::InvalidArgs("sel_end must not come before sel_start".into()));
+        }
+        let ks = pdfcraft_engine::xfa::Keystroke { prev, change: a.str("change")?.to_string(), sel_start, sel_end };
+        let id = doc.id;
+        let entered = self.session.field_keystroke(id, name, widget, &ks).map_err(failed)?;
+        let text = ks.applied(entered.as_deref().unwrap_or(&ks.change));
+        let out = self.session.take_js_output(id);
+        let reqs: Vec<Value> = out.requests.iter().map(request_json).collect();
+        Ok(
+            json!({ "entered": entered, "text": text, "alerts": out.alerts.iter().map(alert_json).collect::<Vec<_>>(), "console": out.console, "requests": reqs, "errors": out.errors }),
+        )
+    }
+
+    /// `form_merge_data`: merge the form data files at `paths` into one CSV at `path`, a row per
+    /// file; returns the path and the row and column counts.
     pub(crate) fn form_merge_data(&mut self, a: &Args) -> Result<Value> {
         let mut files = Vec::new();
         for p in a.strs("paths")? {
