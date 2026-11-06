@@ -4,7 +4,7 @@
 //! which can then be retagged with the existing tag-property tool after human review.
 
 use pdfcraft_content::{Op, parse, serialize_ops};
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
 const MAX_PAGES: usize = 1_000;
 const MAX_PAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -59,16 +59,15 @@ fn content_bytes(doc: &Document, page: &pdfcraft_model::Page, index: usize) -> R
         if remaining == 0 {
             return Err(unsupported(index, "decoded content exceeds 16 MiB"));
         }
-        let chain = stream.filters();
-        let decoded = if chain.is_empty() {
-            if stream.raw.len() > remaining {
-                return Err(unsupported(index, "decoded content exceeds 16 MiB"));
+        // Strictly, and with `/DecodeParms` given by reference: the content is written back from it.
+        let mut budget = DecodeBudget::new(remaining, 0);
+        let decoded = budget.decode_strict(doc, stream).map_err(|e| {
+            if budget.remaining() == 0 {
+                unsupported(index, "decoded content exceeds 16 MiB")
+            } else {
+                unsupported(index, format!("content cannot be decoded strictly: {e}"))
             }
-            stream.raw.to_vec()
-        } else {
-            pdfcraft_filters::decode(&chain, &stream.raw, remaining)
-                .map_err(|e| unsupported(index, format!("content cannot be decoded strictly: {e}")))?
-        };
+        })?;
         all.extend_from_slice(&decoded);
         all.push(b' ');
     }

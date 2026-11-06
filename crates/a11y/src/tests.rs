@@ -79,6 +79,39 @@ fn autotag_text_writes_marked_content_and_parent_tree_across_pages() {
     assert_eq!(status(&check(&reopened, &Options::default()), Rule::TaggedContent), Status::Passed);
 }
 
+/// Page content behind a predictor whose `/DecodeParms` are given by reference is read through
+/// them: autotagging writes the text back as it was, marked, not with the predictor's tag bytes in
+/// it (a `\0` every eight bytes, which split `24` into `2 4`).
+#[test]
+fn autotag_text_reads_content_with_parameters_given_by_reference() {
+    use pdfcraft_cos::{Dict, ObjRef};
+    let mut content = b"BT /F1 24 Tf 72 700 Td (Hello World) Tj ET".to_vec();
+    content.resize(content.len().div_ceil(8) * 8, b' ');
+    // PNG rows of eight bytes, each tagged 0 (no prediction).
+    let rows: Vec<u8> = content.chunks(8).flat_map(|row| std::iter::once(0).chain(row.iter().copied())).collect();
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+            stream(""),
+            FONT.into(),
+        ],
+        "",
+    );
+    let parms: Dict = [(b"Predictor".to_vec(), Object::Int(12)), (b"Columns".to_vec(), Object::Int(8))].into_iter().collect();
+    let parms = doc.add(Object::Dict(parms));
+    let mut predicted = pdfcraft_cos::Stream::flate(Dict::new(), &rows);
+    predicted.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+    doc.set(ObjRef::new(4, 0), predicted);
+    assert_eq!(autotag_text(&mut doc).unwrap(), AutoTagResult { pages: 1, paragraphs: 1 });
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let written = doc.resolve(page.dict.get(b"Contents").unwrap());
+    let Object::Stream(written) = &*written else { panic!("page content") };
+    let text = String::from_utf8_lossy(&written.decoded_strict().unwrap()).into_owned();
+    assert!(text.contains("/F1 24 Tf") && text.contains("(Hello World) Tj"), "{text}");
+}
+
 #[test]
 fn autotag_text_refuses_paint_and_does_not_modify_the_document() {
     let mut doc = pdf(
