@@ -93,3 +93,12 @@ family (`sign`, `sign_with_timestamp`, `timestamp_document`, `embed_ltv`).
 `doc.text_edit_preview(page, block)` prepares a read-only page background with the selected
 paragraph’s glyphs removed, preserving text positioning, images and colours. It shares the
 working document’s render configuration and never enters the undo history.
+
+Remote signing uses `prepare_external_signature` and `complete_external_signature`:
+the first captures a document generation and immutable prepared PDF, and the second
+checks a returned detached CMS against those bytes. The engine has no browser or
+provider dependency. `CompletedSignature` retains checked bytes for a save retry;
+`check_completed_signature` rechecks the original document immediately before an
+output write. Editing, reloading or closing the document invalidates the operation,
+independently of the active tab. Frontends mark the document signed only after an
+atomic output write succeeds.

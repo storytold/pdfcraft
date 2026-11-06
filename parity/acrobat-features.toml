@@ -6670,6 +6670,18 @@ tools = []
 evidence = []
 notes = "Adobe cloud; a pluggable remote-signing KeyProvider may follow"
 
+[[feature]]
+id = "sign.id-austria"
+title = "ID Austria remote PDF signing"
+area = "H"
+tier = "P1"
+milestone = "M9"
+status = "partial"
+commands = ["sign.digital"]
+tools = ["sign_providers", "sign_begin", "sign_status", "sign_finish", "sign_cancel"]
+evidence = ["crates/automation/tests/it/automation/remote_signing.rs::remote_signing_saves_verified_copy_and_retries_without_another_authorization", "crates/ui-egui/tests/it/signing.rs::id_austria_gui_reuses_a_checked_signature_after_an_atomic_save_collision"]
+notes = "Desktop preview using the documented Security Layer endpoint and a private installed Chromium-family browser. Shared PDF placement and external CMS completion, explicit document-upload consent, bounded strict verification, stale-document rejection, cancellation and atomic new-copy saving with retry. Synthetic automation and anonymous browser transport are tested separately from personal approval. Production ID Austria authorization and native platform qualification remain pending; no QES or PAdES Baseline claim. Web/WASM later. See docs/id-austria-signing.md."
+
 # ==================================================================================================
 # I. Scan and OCR
 # ==================================================================================================

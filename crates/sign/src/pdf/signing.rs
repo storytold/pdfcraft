@@ -146,6 +146,153 @@ fn sign_inner(
     opts: &SignOptions,
     tsa: Option<&dyn crate::timestamp::TimestampAuthority>,
 ) -> Result<Vec<u8>, SignError> {
+    let reserve = id
+        .chain
+        .iter()
+        .try_fold(8192usize.checked_add(id.certificate.raw.len()).ok_or_else(|| SignError::Pdf("certificate chain too large".into()))?, |n, c| {
+            n.checked_add(c.raw.len()).ok_or_else(|| SignError::Pdf("certificate chain too large".into()))
+        })?
+        .checked_add(if tsa.is_some() { TOKEN_RESERVE } else { 0 })
+        .ok_or_else(|| SignError::Pdf("certificate chain too large".into()))?;
+    let prepared = prepare_inner(doc, Some(&id.certificate), opts, SignatureProfile::PadesBaseline, reserve)?;
+    let alg = id.key.preferred_digest();
+    let digest = prepared.content_digest(alg)?;
+    let base = crate::cms::sign_detached(&id.key, &id.certificate, &id.chain, alg, &digest)?;
+    let cms = match tsa {
+        None => base,
+        Some(t) => {
+            // The imprint covers the signature value, which attaching an unsigned attribute
+            // does not change (PAdES B-T).
+            let sd = SignedData::parse(&base)?;
+            let q = crate::timestamp::TimestampQuery::new(DigestAlg::Sha256, DigestAlg::Sha256.digest(&[&sd.signer.signature]))?;
+            let resp = t.timestamp(&q.encode()?)?;
+            let token = crate::timestamp::parse_response(&resp, &q)?;
+            crate::cms::attach_timestamp_token(&base, &token.raw)?
+        }
+    };
+    prepared.embed(&cms)
+}
+
+/// Encoding requested before any remote authorization. A generic Security Layer CMS is not
+/// automatically a PAdES baseline signature (ETSI EN 319 142-1, table 1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignatureProfile {
+    /// PAdES baseline signed attributes and ETSI.CAdES.detached.
+    PadesBaseline,
+    /// Generic detached CMS; no PAdES baseline conformance claim.
+    CmsDetached,
+}
+
+impl SignatureProfile {
+    fn sub_filter(self) -> &'static str {
+        match self {
+            Self::PadesBaseline => "ETSI.CAdES.detached",
+            Self::CmsDetached => "adbe.pkcs7.detached",
+        }
+    }
+}
+
+/// An immutable PDF snapshot with its final ByteRange and an empty Contents placeholder.
+/// No private key, network transport or authorization token is retained here.
+/// The caller must bind this snapshot to its document generation before saving the result.
+pub struct PreparedSignature {
+    bytes: Vec<u8>,
+    start: usize,
+    end: usize,
+    reserve: usize,
+    profile: SignatureProfile,
+    certificate: Option<Vec<u8>>,
+    has_reason: bool,
+    time: Option<crate::Time>,
+}
+
+impl std::fmt::Debug for PreparedSignature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedSignature").field("bytes", &self.bytes.len()).field("profile", &self.profile).finish_non_exhaustive()
+    }
+}
+
+impl PreparedSignature {
+    /// PDF bytes to send as a Security Layer data object. Do not modify these bytes.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The excluded half-open byte interval, including the hexadecimal string delimiters.
+    pub fn excluded_range(&self) -> std::ops::Range<usize> {
+        self.start..self.end
+    }
+
+    /// Digest of the exact PDF byte ranges, not of the CMS signed attributes.
+    pub fn content_digest(&self, alg: DigestAlg) -> Result<Vec<u8>, SignError> {
+        let before = self.bytes.get(..self.start).ok_or_else(|| SignError::Pdf("invalid signature byte range".into()))?;
+        let after = self.bytes.get(self.end..).ok_or_else(|| SignError::Pdf("invalid signature byte range".into()))?;
+        Ok(alg.digest(&[before, after]))
+    }
+
+    /// Validate the returned detached CMS before filling only the reserved Contents bytes.
+    /// Certificate trust and qualified status require separate validation by the caller.
+    pub fn complete(self, cms: &[u8]) -> Result<Vec<u8>, SignError> {
+        if cms.len() > self.reserve {
+            return Err(SignError::Pdf("the signature does not fit its placeholder".into()));
+        }
+        let sd = crate::cms::checked_detached(cms, self.profile == SignatureProfile::PadesBaseline, self.has_reason)?;
+        let cert = sd.signer_certificate().ok_or_else(|| SignError::Crypto("the signature has no matching certificate".into()))?;
+        if let Some(expected) = &self.certificate
+            && &cert.raw != expected
+        {
+            return Err(SignError::Crypto("the signature uses a different certificate".into()));
+        }
+        if self.time.is_some_and(|t| t < cert.not_before || t > cert.not_after) {
+            return Err(SignError::Crypto("the returned signing certificate is not valid at the prepared signing time".into()));
+        }
+        let digest = self.content_digest(sd.signer.digest)?;
+        if sd.signer.message_digest.as_deref() != Some(digest.as_slice()) || !sd.verify_signature(cert, &digest)? {
+            return Err(SignError::Crypto("the returned signature does not match the prepared document".into()));
+        }
+        self.embed(cms)
+    }
+
+    fn embed(mut self, cms: &[u8]) -> Result<Vec<u8>, SignError> {
+        if cms.len() > self.reserve {
+            return Err(SignError::Pdf("the signature does not fit its placeholder".into()));
+        }
+        let hex: Vec<u8> = cms.iter().flat_map(|b| format!("{b:02X}").into_bytes()).collect();
+        let first = self.start.checked_add(1).ok_or_else(|| SignError::Pdf("signature offset overflow".into()))?;
+        let last = first.checked_add(hex.len()).ok_or_else(|| SignError::Pdf("signature offset overflow".into()))?;
+        self.bytes.get_mut(first..last).ok_or_else(|| SignError::Pdf("invalid signature placeholder".into()))?.copy_from_slice(&hex);
+        Ok(self.bytes)
+    }
+}
+
+/// Prepare an existing or new signature field without signing or changing the input document.
+/// Unknown signers use a neutral appearance; the certificate identity comes from the CMS.
+/// Contents reserves 64 KiB. A larger response requires a new explicit signing operation.
+pub fn prepare_signature(
+    doc: &Document,
+    cert: Option<&Certificate>,
+    opts: &SignOptions,
+    profile: SignatureProfile,
+) -> Result<PreparedSignature, SignError> {
+    if cert.is_none() && opts.appearance.distinguished_name {
+        return Err(SignError::Unsupported("a distinguished-name appearance needs a certificate before signing".into()));
+    }
+    prepare_inner(doc, cert, opts, profile, 64 * 1024)
+}
+
+fn prepare_inner(
+    doc: &Document,
+    cert: Option<&Certificate>,
+    opts: &SignOptions,
+    profile: SignatureProfile,
+    reserve: usize,
+) -> Result<PreparedSignature, SignError> {
+    if reserve > 1024 * 1024 {
+        return Err(SignError::Pdf("the signature placeholder exceeds 1 MiB".into()));
+    }
+    if opts.rect.is_some_and(|[x0, y0, x1, y1]| ![x0, y0, x1, y1].iter().all(|v| v.is_finite()) || x1 <= x0 || y1 <= y0) {
+        return Err(SignError::Pdf("the signature rectangle must be finite and have positive width and height".into()));
+    }
     // A pending security change would make the incremental save a full rewrite that applies
     // or removes protection as it signs (and breaks existing signatures): save it first.
     if doc.encryption_changed() {
@@ -154,19 +301,18 @@ fn sign_inner(
     check_signing_permissions(doc, opts)?;
     let mut doc = doc.clone();
     let root = doc.root().ok_or_else(|| SignError::Pdf("the document has no catalog".into()))?;
-    let alg = id.key.preferred_digest();
-    let reserve =
-        8192 + id.certificate.raw.len() + id.chain.iter().map(|c| c.raw.len()).sum::<usize>() + if tsa.is_some() { TOKEN_RESERVE } else { 0 };
-    let name = id.certificate.display_name();
+    let name = cert.map(Certificate::display_name).unwrap_or_else(|| "Digital signature".into());
     // The signature dictionary.
     let mut v = Dict::new();
     v.set(b"Type".to_vec(), Object::name("Sig"));
     v.set(b"Filter".to_vec(), Object::name("Adobe.PPKLite"));
-    v.set(b"SubFilter".to_vec(), Object::name("ETSI.CAdES.detached"));
+    v.set(b"SubFilter".to_vec(), Object::name(profile.sub_filter()));
     v.set(b"ByteRange".to_vec(), Object::Array([0].iter().chain(BR_MARK.iter()).map(|n| Object::Int(*n)).collect()));
     v.set(b"Contents".to_vec(), Object::String(PdfString { bytes: vec![0; reserve], hex: true }));
     v.set(b"M".to_vec(), PdfString::literal(opts.date.as_bytes().to_vec()));
-    v.set(b"Name".to_vec(), PdfString::text(&name));
+    if cert.is_some() {
+        v.set(b"Name".to_vec(), PdfString::text(&name));
+    }
     for (k, val) in [(&b"Reason"[..], &opts.reason), (b"Location", &opts.location), (b"ContactInfo", &opts.contact)] {
         if let Some(s) = val.as_deref().filter(|s| !s.trim().is_empty()) {
             v.set(k.to_vec(), PdfString::text(s));
@@ -220,7 +366,7 @@ fn sign_inner(
             (wr.unwrap_or(fr), rect.unwrap_or([0.0; 4]), mk_rotation(&doc, &wd))
         }
         None => {
-            let page = *pages.get(opts.page).ok_or_else(|| SignError::Pdf(format!("page {} does not exist", opts.page + 1)))?;
+            let page = *pages.get(opts.page).ok_or_else(|| SignError::Pdf(format!("page {} does not exist", opts.page.saturating_add(1))))?;
             let taken: HashSet<String> = sig_fields(&doc).into_iter().map(|f| f.name).collect();
             let fname = opts
                 .new_field_name
@@ -294,7 +440,7 @@ fn sign_inner(
         }
     }
     // The appearance.
-    let ap = appearance(&mut doc, rect, turn, &name, &id.certificate, opts)?;
+    let ap = appearance(&mut doc, rect, turn, &name, cert, opts)?;
     let ap_ref = doc.add(Object::Stream(ap));
     let mut apd = Dict::new();
     apd.set(b"N".to_vec(), Object::Ref(ap_ref));
@@ -307,34 +453,26 @@ fn sign_inner(
     let mut out = pdfcraft_cos::write_incremental(&doc, &save)?;
     let (br_at, gap) = locate(&out, reserve)?;
     let (start, end) = gap;
-    let ranges = [0usize, start, end, out.len() - end];
+    let remaining = out.len().checked_sub(end).ok_or_else(|| SignError::Pdf("invalid signature byte range".into()))?;
+    let ranges = [0usize, start, end, remaining];
     let mut br_text = format!("0 {} {} {}", ranges[1], ranges[2], ranges[3]).into_bytes();
     let width = format!("0 {} {} {}", BR_MARK[0], BR_MARK[1], BR_MARK[2]).len();
     if br_text.len() > width {
         return Err(SignError::Pdf("the document is too large to sign".into()));
     }
     br_text.resize(width, b' ');
-    out[br_at..br_at + width].copy_from_slice(&br_text);
-    let digest = alg.digest(&[&out[..start], &out[end..]]);
-    let base = crate::cms::sign_detached(&id.key, &id.certificate, &id.chain, alg, &digest)?;
-    let cms = match tsa {
-        None => base,
-        Some(t) => {
-            // The imprint covers the signature value, which attaching an unsigned attribute
-            // does not change (PAdES B-T).
-            let sd = SignedData::parse(&base)?;
-            let q = crate::timestamp::TimestampQuery::new(DigestAlg::Sha256, DigestAlg::Sha256.digest(&[&sd.signer.signature]))?;
-            let resp = t.timestamp(&q.encode()?)?;
-            let token = crate::timestamp::parse_response(&resp, &q)?;
-            crate::cms::attach_timestamp_token(&base, &token.raw)?
-        }
-    };
-    if cms.len() > reserve {
-        return Err(SignError::Pdf("the signature does not fit its placeholder".into()));
-    }
-    let hex: Vec<u8> = cms.iter().flat_map(|b| format!("{b:02X}").into_bytes()).collect();
-    out[start + 1..start + 1 + hex.len()].copy_from_slice(&hex);
-    Ok(out)
+    let br_end = br_at.checked_add(width).ok_or_else(|| SignError::Pdf("signature offset overflow".into()))?;
+    out.get_mut(br_at..br_end).ok_or_else(|| SignError::Pdf("invalid signature placeholder".into()))?.copy_from_slice(&br_text);
+    Ok(PreparedSignature {
+        bytes: out,
+        start,
+        end,
+        reserve,
+        profile,
+        certificate: cert.map(|c| c.raw.clone()),
+        has_reason: opts.reason.as_ref().is_some_and(|s| !s.trim().is_empty()),
+        time: crate::Time::from_pdf(&opts.date),
+    })
 }
 
 /// Append a document timestamp (ISO 32000-2 §12.8.2.2): a standalone signature dictionary
@@ -432,14 +570,21 @@ pub fn display_date(pdf: &str) -> String {
 ///
 /// `turn` is the widget's `/MK /R` (0, 90, 180 or 270; anything else counts as 0): the layout is
 /// drawn upright in the box as turned by it, and a `/Matrix` maps that box onto `rect`.
-fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &Certificate, opts: &SignOptions) -> Result<Stream, SignError> {
+fn appearance(
+    doc: &mut Document,
+    rect: [f64; 4],
+    turn: i64,
+    name: &str,
+    cert: Option<&Certificate>,
+    opts: &SignOptions,
+) -> Result<Stream, SignError> {
     use pdfcraft_fonts::{first_undrawable, helvetica_width, inter_width, literal, undrawable_message, win_ansi, wrap, wrap_with};
     let turn = if matches!(turn, 90 | 180 | 270) { turn } else { 0 };
     let (rw, rh) = ((rect[2] - rect[0]).max(0.0), (rect[3] - rect[1]).max(0.0));
     // The upright layout box: a quarter turn swaps its sides.
     let (w, h) = if turn % 180 == 0 { (rw, rh) } else { (rh, rw) };
     let a = &opts.appearance;
-    let dn = cert.subject.display();
+    let dn = cert.map(|c| c.subject.display()).unwrap_or_default();
     let mut needs_unicode = false;
     if w > 1.0 && h > 1.0 {
         let shown = [

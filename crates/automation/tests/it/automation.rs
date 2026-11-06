@@ -11428,3 +11428,5 @@ fn comments_copy_and_paste_between_documents_through_tools() {
     assert!(matches!(a.call("comments_copy", &json!({ "doc": src, "comments": [[2]] })), Err(ToolError::InvalidArgs(_))));
     assert_eq!(ok(&mut a, "comment_list", json!({ "doc": src }))["comments"].as_array().unwrap().len(), 2, "the source is untouched");
 }
+
+mod remote_signing;

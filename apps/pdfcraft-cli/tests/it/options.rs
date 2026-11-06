@@ -113,3 +113,21 @@ fn an_argument_that_is_not_utf8_is_an_error_not_a_panic() {
         assert!(!stderr.contains("panicked"), "{stderr}");
     }
 }
+
+#[test]
+fn remote_signing_is_opt_in_and_listing_a_provider_never_requires_a_browser() {
+    for enabled in [false, true] {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_pdfcraft-cli"));
+        cmd.args(["run", "sign_providers"]);
+        if enabled {
+            cmd.arg("--remote-signing");
+        }
+        // Invalid on purpose: merely constructing the enabled host must not launch it.
+        cmd.env("PDFCRAFT_SIGNING_BROWSER", "/nonexistent/synthetic/browser");
+        let output = cmd.output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["providers"][0]["enabled"], enabled);
+        assert_eq!(json["providers"][0]["document_upload"], true);
+    }
+}

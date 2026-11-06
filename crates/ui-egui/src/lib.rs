@@ -502,6 +502,12 @@ pub struct PdfCraftApp {
     pub summary_sort: pdfcraft_engine::SummarySort,
     /// The signing dialogs' state.
     pub sign_draft: Option<SignDraft>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) remote_signature: Option<tools::sign_ui::remote::RemoteSignature>,
+    /// A trusted host/test transport override, never persisted or taken from a document.
+    /// None starts the installed provider browser only after this operation's explicit consent.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub remote_signing_transport: Option<pdfcraft_platform::signing_browser::SigningTransport>,
     /// Digital ID files the user has created or added.
     pub digital_ids: Vec<DigitalIdEntry>,
     /// Signatures panel: expanded entries (field names).

@@ -18,6 +18,8 @@ use crate::{PdfCraftApp, icons, widgets};
 
 mod dialog;
 mod panel;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod remote;
 
 #[cfg(test)]
 use dialog::detail_lines;
@@ -107,6 +109,8 @@ pub enum SignGraphic {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SignDraft {
     pub page: usize,
+    /// Document whose page/box this draft belongs to, independent of the active tab.
+    pub doc: Option<pdfcraft_engine::DocId>,
     /// The signature rectangle (user space); `None`: invisible.
     pub rect: Option<[f64; 4]>,
     /// Sign this empty signature field instead.
@@ -116,6 +120,8 @@ pub struct SignDraft {
     pub step: SignStep,
     pub selected: Option<usize>,
     pub password: String,
+    pub id_austria: bool,
+    pub allow_document_upload: bool,
     pub reason: String,
     pub location: String,
     pub appearance: Appearance,
@@ -134,12 +140,15 @@ impl SignDraft {
     fn new(page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>, ids: &[DigitalIdEntry]) -> Self {
         Self {
             page,
+            doc: None,
             rect,
             field,
             certify,
             step: if ids.is_empty() { SignStep::Configure } else { SignStep::Choose },
             selected: ids.iter().position(|e| e.unusable.is_none()),
             password: String::new(),
+            id_austria: false,
+            allow_document_upload: false,
             reason: String::new(),
             location: String::new(),
             appearance: Appearance::default(),
@@ -293,6 +302,7 @@ impl PdfCraftApp {
     pub fn start_signing(&mut self, page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>) {
         self.refresh_os_key_store_ids();
         let mut draft = SignDraft::new(page, rect, field, certify, &self.digital_ids);
+        draft.doc = self.active_ids().map(|(_, doc)| doc);
         draft.graphic = match &self.sign_graphic {
             SignGraphic::FillSign if self.signature.is_none() => SignGraphic::Name,
             g => g.clone(),
@@ -425,24 +435,33 @@ impl PdfCraftApp {
 
     /// Sign as …: open the ID, sign, save the signed file (Save As), and show it.
     fn finish_signing(&mut self) -> Result<(), String> {
-        // What's typed in a form field is signed with the document (#166). A rejected value keeps
-        // the dialog open; the notice says why.
+        let d = self.sign_draft.clone().ok_or("nothing to sign")?;
+        let Some((_, doc_id)) = self.active_ids() else { return Err("no document".into()) };
+        if d.doc.is_some_and(|expected| expected != doc_id) {
+            return Err("Return to the document where this signature box was placed, or cancel and start again.".into());
+        }
+        // Commit the original document's typed form values before preparing its snapshot.
         if !self.commit_form_typing() {
             return Err(String::new());
         }
-        let Some((_, doc_id)) = self.active_ids() else { return Err("no document".into()) };
-        let d = self.sign_draft.clone().ok_or("nothing to sign")?;
-        let entry = d.selected.and_then(|i| self.digital_ids.get(i)).filter(|e| e.unusable.is_none()).cloned().ok_or("Choose a digital ID.")?;
-        let id = if entry.path.starts_with("keychain:") {
-            keychain_id(&entry.path)?
-        } else if entry.path.starts_with("windows:") {
-            windows_id(&entry.path)?
+        if d.id_austria && !d.allow_document_upload {
+            return Err("Accept sending the prepared PDF to A-Trust before signing.".into());
+        }
+        let id = if d.id_austria {
+            None
         } else {
-            let bytes = std::fs::read(&entry.path).map_err(|e| format!("{}: {e}", entry.path))?;
-            sign::pkcs12::open(&bytes, &d.password).map_err(|e| match e {
-                sign::SignError::WrongPassword => "The password is incorrect.".to_string(),
-                e => e.to_string(),
-            })?
+            let entry = d.selected.and_then(|i| self.digital_ids.get(i)).filter(|e| e.unusable.is_none()).cloned().ok_or("Choose a digital ID.")?;
+            Some(if entry.path.starts_with("keychain:") {
+                keychain_id(&entry.path)?
+            } else if entry.path.starts_with("windows:") {
+                windows_id(&entry.path)?
+            } else {
+                let bytes = std::fs::read(&entry.path).map_err(|e| format!("{}: {e}", entry.path))?;
+                sign::pkcs12::open(&bytes, &d.password).map_err(|e| match e {
+                    sign::SignError::WrongPassword => "The password is incorrect.".to_string(),
+                    e => e.to_string(),
+                })?
+            })
         };
         let some = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
         // Only a visible signature shows its graphic.
@@ -476,7 +495,12 @@ impl PdfCraftApp {
             if !app.commit_typing_in(doc_id) {
                 return Err(String::new());
             }
-            let signed = app.session.sign(doc_id, &id, opts).map_err(|e| e.to_string())?;
+            #[cfg(not(target_arch = "wasm32"))]
+            if d.id_austria {
+                return app.begin_id_austria(doc_id, opts, choice, path);
+            }
+            let id = id.as_ref().ok_or("ID Austria requires the desktop application")?;
+            let signed = app.session.sign(doc_id, id, opts).map_err(|e| e.to_string())?;
             crate::editing::write_atomically(&path.to_string_lossy(), signed.as_slice()).map_err(|e| format!("Could not save: {e}"))?;
             // Our own write is not a change on disk to reload (#431).
             #[cfg(not(target_arch = "wasm32"))]

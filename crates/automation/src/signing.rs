@@ -198,16 +198,37 @@ impl Automation {
 
     pub(crate) fn sign_document(&mut self, a: &Args) -> Result<Value> {
         let id = self.open_id(a)?;
+        let (doc_id, opts) = self.signing_options(a)?;
+        let out = self.resolve(a.str("out")?, true)?;
+        let signed = self.session.sign(doc_id, &id, opts).map_err(|e| match e {
+            // A graphic the signer refuses is the caller's to fix.
+            pdfcraft_engine::EditError::Sign(m) if m.starts_with("the signature graphic") => bad(m),
+            e => failed(e),
+        })?;
+        write_atomic(&out, &signed)?;
+        let path = out.to_string_lossy().into_owned();
+        self.session.mark_signed(doc_id, signed.clone(), Some(path.clone())).map_err(failed)?;
+        let doc = self.doc(a)?;
+        let newest = doc.signatures.iter().filter(|s| s.signed).max_by_key(|s| s.revision).cloned();
+        Ok(json!({ "path": path, "bytes": signed.len(), "signature": newest.map(|s| self.sig_json(a, &s)).transpose()? }))
+    }
+
+    pub(crate) fn signing_options(&self, a: &Args) -> Result<(pdfcraft_engine::DocId, SignOptions)> {
         let doc = self.doc(a)?;
         let doc_id = doc.id;
         let field = a.opt_str("field")?.map(str::to_string);
         let page = match a.opt_int("page")? {
-            Some(p) if p >= 1 && (p as usize) <= doc.info.pages.len() => p as usize - 1,
+            Some(p) if usize::try_from(p).is_ok_and(|p| p >= 1 && p <= doc.info.pages.len()) => {
+                usize::try_from(p).map_err(|_| bad("page is out of range"))? - 1
+            }
             Some(p) => return Err(bad(format!("page {p} does not exist"))),
             None => 0,
         };
         let rect = match a.nums::<4>("rect")? {
             Some(r) => {
+                if r.iter().any(|v| !v.is_finite() || v.abs() > f64::from(f32::MAX)) {
+                    return Err(bad("signature rectangle coordinates must be finite and fit the page coordinate range"));
+                }
                 let p = doc.info.pages.get(page).ok_or_else(|| bad("the document has no page to put the signature on"))?;
                 let (u0, u1) = (p.view_to_user(r[0] as f32, r[1] as f32), p.view_to_user(r[2] as f32, r[3] as f32));
                 let u = [u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64];
@@ -244,7 +265,6 @@ impl Automation {
             Some(_) if !visible => return Err(bad("labels needs a visible signature: pass rect or field")),
             Some(v) => labels_arg(v)?,
         };
-        let out = self.resolve(a.str("out")?, true)?;
         let opts = SignOptions {
             field,
             page,
@@ -258,17 +278,7 @@ impl Automation {
             graphic,
             ..SignOptions::default()
         };
-        let signed = self.session.sign(doc_id, &id, opts).map_err(|e| match e {
-            // A graphic the signer refuses is the caller's to fix.
-            pdfcraft_engine::EditError::Sign(m) if m.starts_with("the signature graphic") => bad(m),
-            e => failed(e),
-        })?;
-        write_atomic(&out, &signed)?;
-        let path = out.to_string_lossy().into_owned();
-        self.session.mark_signed(doc_id, signed.clone(), Some(path.clone())).map_err(failed)?;
-        let doc = self.doc(a)?;
-        let newest = doc.signatures.iter().filter(|s| s.signed).max_by_key(|s| s.revision).cloned();
-        Ok(json!({ "path": path, "bytes": signed.len(), "signature": newest.map(|s| self.sig_json(a, &s)).transpose()? }))
+        Ok((doc_id, opts))
     }
 
     /// `{"image": path}` (PNG or JPEG), `{"text": name}` (typed in the script font) or

@@ -196,6 +196,10 @@ impl PdfCraftApp {
             rotate_draft: RotateDraft::default(),
             summary_sort: Default::default(),
             sign_draft: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            remote_signature: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            remote_signing_transport: None,
             digital_ids: Vec::new(),
             sig_expanded: Vec::new(),
             a11y_options: a11y_ui::A11yOptions::default(),
@@ -591,6 +595,8 @@ impl eframe::App for PdfCraftApp {
         }
         self.poll_updates();
         self.poll_print();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_id_austria(ctx);
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
         self.native_menu_clicks(ctx);

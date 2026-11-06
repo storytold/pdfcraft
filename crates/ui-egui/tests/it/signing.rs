@@ -769,3 +769,154 @@ fn signing_preserves_destination_opening_attributes() {
     assert_eq!(xattr::get(&dest, "com.apple.quarantine").unwrap(), Some(b"0082;1234;Preview;".to_vec()));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn id_austria_choice_uses_existing_box_and_requires_document_transfer_consent() {
+    let dir = dir();
+    let mut h = harness(dir.clone());
+    let rect = [20.0, 20.0, 280.0, 90.0];
+    h.state_mut().start_signing(0, Some(rect), None, None);
+    h.run_steps(2);
+    h.get_by_label("Sign with ID Austria…").click();
+    h.run_steps(3);
+    let d = h.state().sign_draft.as_ref().unwrap();
+    assert_eq!(d.rect, Some(rect));
+    assert!(d.id_austria);
+    assert!(!d.allow_document_upload);
+    assert!(!d.appearance.distinguished_name);
+    assert_eq!(d.step, SignStep::SignAs);
+    assert!(h.query_by_label("Digital ID password").is_none());
+    h.get_by_label("Placement").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Signature width").is_some());
+    assert!(h.query_by_label("Signature page").is_some());
+    h.get_by_label("Placement").click();
+    h.run_steps(2);
+    if let Some(path) = std::env::var_os("PDFCRAFT_SIGNING_SHOT") {
+        h.render().unwrap().save(path).unwrap();
+    }
+    // Clicking disabled Sign cannot launch a browser, even with the test save override.
+    assert!(support::outside_menus(&h, "Sign").accesskit_node().is_disabled());
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::Sign));
+    assert!(!dir.join("contract_signed.pdf").exists());
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
+    assert!(h.state().session.docs().iter().all(|d| d.signatures.iter().all(|s| !s.signed)));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_signing_draft_never_uses_the_active_tab_of_another_document() {
+    use pdfcraft_ui_egui::DigitalIdEntry;
+    let dir = dir();
+    let mut h = harness(dir.clone());
+    h.state_mut().open_bytes("other.pdf", None, FIXTURE.to_vec()).unwrap();
+    h.state_mut().active = Some(0);
+    h.state_mut().digital_ids.push(DigitalIdEntry {
+        path: dir.join("missing.p12").to_string_lossy().into_owned(),
+        name: "Synthetic ID".into(),
+        issuer: String::new(),
+        email: String::new(),
+        expires: String::new(),
+        unusable: None,
+    });
+    h.state_mut().start_signing(0, Some([20.0, 20.0, 200.0, 70.0]), None, None);
+    let d = h.state_mut().sign_draft.as_mut().unwrap();
+    d.selected = Some(0);
+    d.step = SignStep::SignAs;
+    h.state_mut().active = Some(1);
+    h.run_steps(3);
+    support::outside_menus(&h, "Sign").click();
+    h.run_steps(2);
+    let error = h.state().sign_draft.as_ref().unwrap().error.as_ref().unwrap();
+    assert!(error.contains("Return to the document"), "{error}");
+    assert!(!dir.join("contract_signed.pdf").exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn id_austria_gui_reuses_a_checked_signature_after_an_atomic_save_collision() {
+    use base64::{Engine as _, prelude::BASE64_STANDARD};
+    use pdfcraft_engine::sign::{self, Certificate, DigestAlg, Name, PrivateKey, Time};
+    use pdfcraft_platform::signing_browser::SigningExchange;
+    use pdfcraft_ui_egui::{SignGraphic, fill_sign::SavedSig};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+
+    struct Exchange {
+        ready: Arc<AtomicBool>,
+        response: Mutex<Option<Vec<u8>>>,
+    }
+    impl SigningExchange for Exchange {
+        fn poll(&self) -> Option<Result<Vec<u8>, String>> {
+            self.ready.load(Ordering::Acquire).then(|| self.response.lock().unwrap().take()).flatten().map(Ok)
+        }
+        fn cancel(&self) {}
+    }
+    let dir = dir();
+    let mut h = harness(dir.clone());
+    let ready = Arc::new(AtomicBool::new(false));
+    let releases = ready.clone();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let key = PrivateKey::generate_p256().unwrap();
+    let cert =
+        Certificate::self_signed(&Name::build("Synthetic Provider", "", "", "", "AT"), &key, Time::from_unix(1_700_000_000), 10, &[1]).unwrap();
+    h.state_mut().remote_signing_transport = Some(Arc::new(move |xml| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        let text = std::str::from_utf8(&xml).unwrap();
+        let value = |name: &str| text.split_once(&format!("<sl:{name}>")).unwrap().1.split_once(&format!("</sl:{name}>")).unwrap().0;
+        let bytes = BASE64_STANDARD.decode(value("Base64Content")).unwrap();
+        let from = value("From").parse::<usize>().unwrap();
+        let end = value("To").parse::<usize>().unwrap() + 1;
+        let digest = DigestAlg::Sha256.digest(&[&bytes[..from], &bytes[end..]]);
+        let cms = sign::cms::sign_detached(&key, &cert, &[], DigestAlg::Sha256, &digest).unwrap();
+        let response = format!(
+            "<CreateCMSSignatureResponse xmlns=\"{}\"><CMSSignature>{}</CMSSignature></CreateCMSSignatureResponse>",
+            sign::security_layer::NAMESPACE,
+            BASE64_STANDARD.encode(cms)
+        )
+        .into_bytes();
+        Ok(Box::new(Exchange { ready: releases.clone(), response: Mutex::new(Some(response)) }))
+    }));
+    h.state_mut().signature = Some(SavedSig::Typed("Approved".into()));
+    let rect = [20.0, 20.0, 280.0, 90.0];
+    h.state_mut().start_signing(0, Some(rect), None, None);
+    h.run_steps(2);
+    h.get_by_label("Sign with ID Austria…").click();
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign signature").click();
+    h.get_by_label("Allow sending this PDF to A-Trust").click();
+    h.run_steps(2);
+    support::outside_menus(&h, "Sign").click();
+    h.run_steps(3);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(!dir.join("contract_signed.pdf").exists());
+    // The destination becomes occupied after the authorization has already started.
+    std::fs::write(dir.join("contract_signed.pdf"), b"existing file must survive").unwrap();
+    ready.store(true, Ordering::Release);
+    h.run_steps(3);
+    assert_eq!(std::fs::read(dir.join("contract_signed.pdf")).unwrap(), b"existing file must survive");
+    h.get_by_label("Retry saving").click();
+    h.run_steps(2);
+    assert_eq!(std::fs::read(dir.join("contract_signed.pdf")).unwrap(), b"existing file must survive");
+    h.state_mut().pick_override = Some(vec![dir.join("retry.pdf").to_string_lossy().into_owned()]);
+    h.get_by_label("Choose another output file…").click();
+    h.run_steps(5);
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "saving retries never ask the provider again");
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    let signature = doc.signatures.iter().find(|s| s.signed).unwrap();
+    assert_eq!(signature.signer.as_deref(), Some("Synthetic Provider"));
+    assert_ne!(signature.status, SignatureStatus::Invalid);
+    assert_eq!(signature.rect, Some(rect));
+    assert_eq!(h.state().sign_graphic, SignGraphic::FillSign);
+    assert!(dir.join("retry.pdf").is_file());
+    assert_eq!(std::fs::read(dir.join("contract_signed.pdf")).unwrap(), b"existing file must survive");
+    assert_eq!(h.state().right, Some(RightPanel::Signatures));
+    assert!(h.query_by_label("Retry saving").is_none());
+    std::fs::remove_dir_all(dir).unwrap();
+}

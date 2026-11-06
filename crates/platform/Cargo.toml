@@ -9,6 +9,21 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+serde_json.workspace = true
+url = "2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tempfile = "3"
+base64 = "0.23"
+
+[target.'cfg(unix)'.dependencies]
+os_pipe = "1"
+command-fds = "=0.3.3"
+rustix = { version = "1", features = ["process"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Safe exact-handle inheritance and kill-on-close process jobs for the browser's private pipes.
+win-custody = "=0.1.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # `write_atomically`: a volume that refuses F_FULLFSYNC gets a plain fsync.

@@ -100,6 +100,7 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             ui.label(egui::RichText::new(tl!("No digital IDs yet.")).color(t.text_muted));
         }
     });
+    austria_button(ui, d);
     ui.add_space(10.0);
     // Remove takes a digital ID file off the list after asking (#1396); OS key store IDs stay.
     let mut remove = None;
@@ -143,6 +144,7 @@ fn choose(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
 fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     title(ui, "Configure a Digital ID for Signing");
     let Some(d) = app.sign_draft.as_mut() else { return true };
+    austria_button(ui, d);
     let mut close = false;
     let mut go = false;
     // Browse… is desktop-only.
@@ -207,6 +209,7 @@ fn configure(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.horizontal(|ui| {
         if !app.digital_ids.is_empty() && widgets::pill_button(ui, tl!("Back"), false).clicked() {
             d.step = SignStep::Choose;
+            d.id_austria = false;
             d.error = None;
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -345,20 +348,37 @@ fn preview(
 
 fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let ids = app.digital_ids.clone();
+    let pages = app.sign_draft.as_ref().and_then(|d| d.doc).and_then(|id| app.session.get(id)).map(|doc| doc.info.pages.clone()).unwrap_or_default();
     // The time as the signature will show it (signing takes the session clock then).
     let date = sign::pdf::display_date(&app.session.signing_date());
     let Some(d) = app.sign_draft.as_mut() else { return true };
-    let Some(entry) = d.selected.and_then(|i| ids.get(i)).cloned() else {
+    let entry = if d.id_austria {
+        super::DigitalIdEntry {
+            path: String::new(),
+            name: "Digital signature".into(),
+            issuer: String::new(),
+            email: String::new(),
+            expires: String::new(),
+            unusable: None,
+        }
+    } else if let Some(entry) = d.selected.and_then(|i| ids.get(i)).cloned() {
+        entry
+    } else {
         d.step = SignStep::Choose;
         return false;
     };
-    title(
-        ui,
-        &crate::i18n::fmt(
-            tl!("{verb} as \"{name}\""),
-            &[("verb", if d.certify.is_some() { tl!("Certify") } else { tl!("Sign") }), ("name", &entry.name)],
-        ),
-    );
+    if d.id_austria {
+        title(ui, if d.certify.is_some() { "Certify with ID Austria" } else { "Sign with ID Austria" });
+    } else {
+        title(
+            ui,
+            &crate::i18n::fmt(
+                tl!("{verb} as \"{name}\""),
+                &[("verb", if d.certify.is_some() { tl!("Certify") } else { tl!("Sign") }), ("name", &entry.name)],
+            ),
+        );
+    }
+    placement(ui, d, &pages);
     let in_os_key_store = entry.path.starts_with("keychain:") || entry.path.starts_with("windows:");
     let mut close = false;
     let mut go = false;
@@ -383,7 +403,7 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
             ui.add(widgets::checkbox(&mut a.date, tl!("Date")));
             ui.add(widgets::checkbox(&mut a.reason, tl!("Reason")));
             ui.add(widgets::checkbox(&mut a.location, tl!("Location")));
-            ui.add(widgets::checkbox(&mut a.distinguished_name, tl!("Distinguished name")));
+            ui.add_enabled(!d.id_austria, widgets::checkbox(&mut a.distinguished_name, tl!("Distinguished name")));
             ui.add(widgets::checkbox(&mut a.labels, tl!("Labels")));
         });
         // Acrobat: Configure Signature Appearance, Text, Draw or Image.
@@ -434,7 +454,10 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         let l = ui.label(tl!("Location"));
         ui.add(crate::widgets::line(&mut d.location).hint_text(tl!("Optional")).desired_width(260.0)).labelled_by(l.id);
         ui.end_row();
-        if in_os_key_store {
+        if d.id_austria {
+            ui.label(tl!("Authorization"));
+            ui.label(tl!("Approve on the original ID Austria / A-Trust browser pages."));
+        } else if in_os_key_store {
             ui.label("");
             ui.label(
                 egui::RichText::new(if entry.path.starts_with("windows:") {
@@ -454,15 +477,23 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         }
         ui.end_row();
     });
+    if d.id_austria {
+        ui.label(tl!(
+            "The complete prepared PDF is sent to A-Trust. An activated ID Austria and an installed Chromium, Chrome or Edge browser are required."
+        ));
+        ui.label(tl!("The visible text stays neutral because the signing certificate arrives after authorization. The signature panel shows the certificate identity."));
+        ui.add(widgets::checkbox(&mut d.allow_document_upload, tl!("Allow sending this PDF to A-Trust")));
+    }
     ui.add_space(6.0);
     error(ui, &d.error);
     ui.horizontal(|ui| {
         if widgets::pill_button(ui, tl!("Back"), false).clicked() {
             d.step = SignStep::Choose;
+            d.id_austria = false;
             d.error = None;
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::pill_button(ui, tl!("Sign"), true).clicked() {
+            if ui.add_enabled_ui(!d.id_austria || d.allow_document_upload, |ui| widgets::pill_button(ui, tl!("Sign"), true)).inner.clicked() {
                 go = true;
             }
             if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
@@ -488,4 +519,97 @@ fn sign_as(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
         }
     }
     close
+}
+
+/// A provider is a per-operation choice, never a persisted fake certificate identity.
+fn austria_button(ui: &mut egui::Ui, d: &mut super::SignDraft) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if widgets::pill_button(ui, tl!("Sign with ID Austria…"), false).clicked() {
+        d.id_austria = true;
+        d.allow_document_upload = false;
+        d.appearance.distinguished_name = false;
+        d.password.clear();
+        d.step = SignStep::SignAs;
+        d.error = None;
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = (ui, d);
+}
+
+/// Keyboard-editable displayed-page coordinates; the same transform as drawing the box.
+fn placement(ui: &mut egui::Ui, d: &mut super::SignDraft, pages: &[pdfcraft_render::PageInfo]) {
+    if d.field.is_none() {
+        let mut visible = d.rect.is_some();
+        if ui.add(widgets::checkbox(&mut visible, tl!("Visible signature"))).changed() {
+            d.rect = if visible { pages.get(d.page).and_then(|p| placed_rect(p, [20.0, 20.0, 180.0, 60.0])) } else { None };
+        }
+    }
+    let (Some(rect), Some(old)) = (d.rect, pages.get(d.page)) else { return };
+    if d.field.is_some() {
+        return;
+    }
+    let a = old.user_to_view(rect[0] as f32, rect[1] as f32);
+    let b = old.user_to_view(rect[2] as f32, rect[3] as f32);
+    let mut values = [a[0].min(b[0]), a[1].min(b[1]), (a[0] - b[0]).abs(), (a[1] - b[1]).abs()];
+    let mut page = d.page.saturating_add(1);
+    let mut changed = false;
+    egui::CollapsingHeader::new(tl!("Placement")).show(ui, |ui| {
+        ui.label(tl!("Points from the displayed page's upper-left corner."));
+        egui::Grid::new("signature-placement").num_columns(2).show(ui, |ui| {
+            let label = ui.label(tl!("Signature page"));
+            changed |= ui.add(egui::DragValue::new(&mut page).range(1..=pages.len())).labelled_by(label.id).changed();
+            ui.end_row();
+            for (name, value) in ["Signature left", "Signature top", "Signature width", "Signature height"].into_iter().zip(values.iter_mut()) {
+                let label = ui.label(tl!(name));
+                changed |= ui.add(egui::DragValue::new(value).range(0.0..=1e6).speed(0.5).suffix(" pt")).labelled_by(label.id).changed();
+                ui.end_row();
+            }
+        });
+    });
+    if changed && let Some(info) = pages.get(page.saturating_sub(1)) {
+        if let Some(rect) = placed_rect(info, values) {
+            d.page = page.saturating_sub(1);
+            d.rect = Some(rect);
+        } else {
+            d.error = Some("The selected page cannot contain a finite signature box.".into());
+        }
+    }
+}
+
+fn placed_rect(info: &pdfcraft_render::PageInfo, [x, y, width, height]: [f32; 4]) -> Option<[f64; 4]> {
+    if ![x, y, width, height, info.width, info.height].iter().all(|v| v.is_finite()) || info.width < 4.0 || info.height < 4.0 {
+        return None;
+    }
+    let width = width.clamp(4.0, info.width);
+    let height = height.clamp(4.0, info.height);
+    let x = x.clamp(0.0, info.width - width);
+    let y = y.clamp(0.0, info.height - height);
+    let [x0, y0] = info.view_to_user(x, y);
+    let [x1, y1] = info.view_to_user(x + width, y + height);
+    [x0, y0, x1, y1].iter().all(|v| v.is_finite()).then_some([
+        f64::from(x0.min(x1)),
+        f64::from(y0.min(y1)),
+        f64::from(x0.max(x1)),
+        f64::from(y0.max(y1)),
+    ])
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+    #[test]
+    fn numeric_placement_tracks_rotation_crop_and_page_edges() {
+        for rotation in [0, 90, 180, 270] {
+            let (width, height) = if rotation % 180 == 0 { (300.0, 400.0) } else { (400.0, 300.0) };
+            let page = pdfcraft_render::PageInfo { width, height, crop: [20.0, 30.0, 320.0, 430.0], rotation, label: "1".into() };
+            let rect = placed_rect(&page, [10.0, 15.0, 120.0, 50.0]).unwrap();
+            let a = page.user_to_view(rect[0] as f32, rect[1] as f32);
+            let b = page.user_to_view(rect[2] as f32, rect[3] as f32);
+            assert!((a[0].min(b[0]) - 10.0).abs() < 0.001);
+            assert!((a[1].min(b[1]) - 15.0).abs() < 0.001);
+            assert!(((a[0] - b[0]).abs() - 120.0).abs() < 0.001);
+            assert!(((a[1] - b[1]).abs() - 50.0).abs() < 0.001);
+            assert!(placed_rect(&page, [f32::NAN, 0.0, 10.0, 10.0]).is_none());
+        }
+    }
 }

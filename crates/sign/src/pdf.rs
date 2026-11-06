@@ -35,7 +35,10 @@ use changes::only_grew;
 use listing::{DISCOVERY_CACHE_LIMIT, is_document_timestamp};
 pub use listing::{DigestCache, list, list_cached};
 pub(crate) use signing::fmt;
-pub use signing::{Appearance, AppearanceLabels, SignOptions, display_date, sign, sign_with_timestamp, timestamp_document};
+pub use signing::{
+    Appearance, AppearanceLabels, PreparedSignature, SignOptions, SignatureProfile, display_date, prepare_signature, sign, sign_with_timestamp,
+    timestamp_document,
+};
 pub use types::{Detail, Fill, Modification, Status, TrustStore, WORDINGS, Words, in_english, kind};
 pub(crate) use validate::signature_contents;
 pub use validate::validate;

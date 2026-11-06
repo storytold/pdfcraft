@@ -448,3 +448,28 @@ fn a_replaced_link_keeps_its_own_attributes_not_its_targets() {
     assert_ne!(std::fs::metadata(&referent).unwrap().file_attributes() & HIDDEN, 0, "and still hidden");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn new_signed_copy_never_replaces_an_existing_destination_and_leaves_no_staging_file() {
+    let dir = test_dir("signed-copy");
+    let path = dir.join("signed.pdf");
+    write_new_atomically(&path, b"checked signature").unwrap();
+    assert!(write_new_atomically(&path, b"replacement").is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"checked signature");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn new_signed_copy_refuses_dangling_links_without_writing_the_link_target() {
+    let dir = test_dir("signed-link");
+    let path = dir.join("signed.pdf");
+    let target = dir.join("missing.pdf");
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+    assert!(write_new_atomically(&path, b"checked signature").is_err());
+    assert!(!target.exists());
+    assert!(path.symlink_metadata().unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -304,3 +304,14 @@ updates the same one-word-per-UTF-8-line format OCR Verify uses. Omit add/remove
 The explicit path honors `--root`, including symlink confinement; choose the appropriate
 per-language file used by the UI. Entries are case-insensitive and duplicate-free. Invalid
 or oversized inputs fail before writing (65,536 words, 4 MiB, at most 1,024 bytes per word).
+
+## ID Austria remote signing (desktop preview)
+
+`sign_providers`, `sign_begin`, `sign_status`, `sign_finish` and `sign_cancel` expose
+the same prepared-document signing flow as the desktop app. CLI/MCP hosts must opt
+in with `--remote-signing`, and `sign_begin` additionally requires explicit
+`allow_document_upload: true`: the complete prepared PDF is sent to A-Trust.
+The human approves in an isolated provider browser. Output is a new, atomically
+published copy; an existing file is refused. A failed write can be retried with
+`sign_finish {job, out}` without a second authorization. See the
+[protocol, limitations and usage guide](../../docs/id-austria-signing.md).

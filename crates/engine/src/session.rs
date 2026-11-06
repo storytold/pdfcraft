@@ -19,6 +19,8 @@ use crate::{
 };
 
 mod editing;
+mod external_signing;
+pub use external_signing::{CompletedSignature, PendingSignature};
 mod files;
 mod save;
 mod view;

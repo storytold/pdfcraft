@@ -2,9 +2,12 @@
 //! `ETSI.CAdES.detached`) or with the digest encapsulated (`adbe.pkcs7.sha1`).
 
 use crate::SignError;
+
+mod completion;
 use crate::der::{self, Time, Tlv, tag};
 use crate::keys::{DigestAlg, PrivateKey, Scheme, signature_algorithm};
 use crate::x509::Certificate;
+pub(crate) use completion::checked_detached;
 
 pub const SIGNED_DATA: &str = "1.2.840.113549.1.7.2";
 pub const DATA: &str = "1.2.840.113549.1.7.1";

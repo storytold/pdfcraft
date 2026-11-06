@@ -1,5 +1,7 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-11-06 | **Last updated:** 2026-11-06 | **Change:** minor (M9: ID Austria preview recorded without closing the institutional-signing gap; estimates unchanged)
+
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -214,6 +216,13 @@ update the numbers.
 - **Estimate:** 65–115 h. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
 
 ### 10. Signatures: no PKCS #11, timestamp servers or online revocation
+
+**2026-11-06 preview:** ID Austria has a Security Layer browser adapter over an
+immutable external-CMS signing pipeline, with shared box placement, explicit PDF
+upload consent and safe save retries. Personal production authorization and native
+platform qualification are pending, so this does not close the institutional-signing
+gap or establish QES, universal EU eID support, online revocation or PAdES Baseline.
+See [the integration guide](id-austria-signing.md). Estimates unchanged.
 
 - **Missing:** PKCS #11 tokens and smart cards on macOS and Linux; timestamp-server preferences;
   fetching OCSP/CRL online for LTV; FieldMDP and locking fields on signing; the OS trust store; EU

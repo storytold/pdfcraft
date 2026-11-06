@@ -27,7 +27,7 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   widget gets `/MK /R` and its appearance is laid out in the displayed box and turned back by a
   `/Matrix`; an existing field follows its own `/MK /R`. The document is written incrementally
   with a zero-filled `/Contents` and fixed-width `/ByteRange`, which are then patched in
-  place. Encrypted documents are refused for now.
+  place. Encrypted documents retain their security and are signed under their permissions.
 - **Timestamps (PAdES B-T):** the `timestamp` module builds and parses RFC 3161 requests,
   responses and TSTInfo tokens (size-capped, imprint- and signature-checked). `sign_with_timestamp`
   attaches the TSA's token as an unsigned attribute over the signature value; the transport is
@@ -120,3 +120,14 @@ needs a prompt to open is listed and asks at signing (issue #179).
 
 Oracles: poppler's `pdfsig` reports our signatures valid; OpenSSL reads our `.p12` files and
 verifies our CMS; `tests/data/openssl-signed.pdf` is a signature OpenSSL made, which we validate.
+
+
+`prepare_signature` also produces an immutable `PreparedSignature` for an external
+CMS signer, reserving a bounded Contents field before authorization. `complete`
+checks the returned digest, signature, signer certificate and ESS binding before
+inserting it without changing any signed byte. `SignatureProfile` distinguishes
+PAdES Baseline from generic detached CMS; an unknown signer gets a neutral visible
+appearance. `security_layer` encodes the documented request and strictly decodes
+the XML response, with no browser, network or login dependencies. The engine binds
+these prepared bytes to the document generation; the platform/frontend owns the
+explicitly started provider browser. See [the integration guide](../../docs/id-austria-signing.md).

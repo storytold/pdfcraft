@@ -9,3 +9,17 @@ Synthetic tests pin both name forms, the 128-byte cut, the attempt limit and ref
 On macOS, `write_atomically_with` copies the existing regular destination's accessible extended attributes to the open staging file after writing the data and before flushing and renaming. Finder tags, comments, binary values and empty attributes therefore survive both incremental and full saves (#2658). Save As retains attributes of an existing destination; a new destination does not inherit metadata from the source PDF. Missing files and filesystems without xattr support keep working. The metadata read does not follow the destination's symlink or block on a FIFO. macOS manages the new file's `com.apple.provenance`; it is not copied. Kernel-hidden compression attributes are not requested.
 
 Attribute copying is bounded: 64 KiB of names, 1024 attributes, 16 MiB per value and 64 MiB total. Each value must fill the initially queried size and retain that size in a second query after reading: a resource fork may return a partial prefix on growth rather than an error. A read/copy error or exceeded bound returns an error suggesting Save As; the original bytes and metadata stay intact and the staging file is removed. Flush errors retain the same guarantee. Tests cover exact metadata before flush and after repeated saves, empty/binary values, oversized resource forks, a simulated partial read of a growing fork and symlink isolation. Automation covers incremental/full saves, Save As and retaining an unsaved edit after metadata refusal. The staging writer also retains Unix permissions, the Windows hidden and system attributes (the staging file is created with them, so a hidden file is never published visible and a plain one never hidden, #4593) and, where supported, Windows/macOS creation dates; attribute copying runs before the creation date is restored. ACLs and hard-link identity are not preserved.
+
+`signing_browser` is the explicitly started desktop Security Layer transport. It
+uses an installed Chromium-family browser with an isolated private profile and
+inherited CDP pipes, never a debugging port. The Unix backend maps descriptors
+through `command-fds`; the Windows backend uses `win-custody` for explicit handle
+inheritance and a kill-on-close job. Neither frontend reads login pages or sends
+credentials. The protocol consumes only the final XML resource from fixed provider
+origins. `SigningTransport` allows synthetic exchanges in automation tests. The
+real provider round trip is an ignored, explicitly invoked test; normal tests open
+no browser or network connection. See [ID Austria signing](../../docs/id-austria-signing.md).
+
+`staging::write_new_atomically` publishes a completed signed copy without replacing
+an existing destination, including a link or a name created while authorization
+was pending. It writes and flushes an adjacent temporary file before publication.

@@ -3025,3 +3025,174 @@ fn signing_a_field_with_a_null_value_after_another_signature_keeps_the_first_val
         all.iter().map(|s| (&s.status, &s.modification)).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn external_cms_completes_the_exact_prepared_pdf_without_changing_signed_bytes() {
+    use pdfcraft_sign::{SignatureProfile, prepare_signature};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let doc = open(&fixture());
+    let prepared = prepare_signature(&doc, Some(&id.certificate), &opts(), SignatureProfile::PadesBaseline).unwrap();
+    let excluded = prepared.excluded_range();
+    let before = prepared.bytes().to_vec();
+    let digest = prepared.content_digest(pdfcraft_sign::DigestAlg::Sha256).unwrap();
+    let cms = pdfcraft_sign::cms::sign_detached(&id.key, &id.certificate, &id.chain, pdfcraft_sign::DigestAlg::Sha256, &digest).unwrap();
+    let result = prepared.complete(&cms).unwrap();
+    assert_eq!(&result[..excluded.start], &before[..excluded.start]);
+    assert_eq!(&result[excluded.end..], &before[excluded.end..]);
+    assert!(result.starts_with(&fixture()));
+    let sigs = signatures(&open(&result), &result, &TrustStore { certs: vec![id.certificate] });
+    let signed = sigs.iter().find(|s| s.signed).unwrap();
+    assert_eq!(signed.status, Status::Valid, "{:?}", signed.details);
+}
+
+#[test]
+fn external_cms_refuses_foreign_digest_and_foreign_certificate() {
+    use pdfcraft_sign::{DigestAlg, SignatureProfile, prepare_signature};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let other = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let prepare = || prepare_signature(&open(&fixture()), Some(&id.certificate), &opts(), SignatureProfile::PadesBaseline).unwrap();
+    let cms = pdfcraft_sign::cms::sign_detached(&id.key, &id.certificate, &id.chain, DigestAlg::Sha256, &[0; 32]).unwrap();
+    assert!(prepare().complete(&cms).unwrap_err().to_string().contains("prepared document"));
+    let prepared = prepare();
+    let digest = prepared.content_digest(DigestAlg::Sha256).unwrap();
+    let cms = pdfcraft_sign::cms::sign_detached(&other.key, &other.certificate, &other.chain, DigestAlg::Sha256, &digest).unwrap();
+    assert!(prepared.complete(&cms).unwrap_err().to_string().contains("different certificate"));
+}
+
+/// Re-sign edited attributes so rejection tests exercise the profile checks rather than a
+/// broken signature value. All input is our synthetic CMS and our own test identity.
+fn external_cms_with_attributes(cms: &[u8], id: &DigitalId, change: impl FnOnce(&mut Vec<Vec<u8>>)) -> Vec<u8> {
+    use pdfcraft_sign::{
+        DigestAlg,
+        der::{Tlv, tag},
+    };
+    let ci = Tlv::parse_all(cms).unwrap().children().unwrap();
+    let sd = ci[1].inner().unwrap().children().unwrap();
+    let mut fields: Vec<Vec<u8>> = sd.iter().map(|v| v.raw.to_vec()).collect();
+    let signer = sd.last().unwrap().children().unwrap()[0].children().unwrap();
+    let mut parts: Vec<Vec<u8>> = signer.iter().map(|v| v.raw.to_vec()).collect();
+    let mut attrs: Vec<Vec<u8>> = signer[3].children().unwrap().iter().map(|v| v.raw.to_vec()).collect();
+    change(&mut attrs);
+    let set = der::set_of(&attrs.iter().map(Vec::as_slice).collect::<Vec<_>>());
+    let signature = id.key.sign(DigestAlg::Sha256, &set).unwrap();
+    parts[3] = der::tlv(tag::ctx(0), Tlv::parse_all(&set).unwrap().value);
+    parts[5] = der::octets(&signature);
+    *fields.last_mut().unwrap() = der::set_of(&[&der::seq(&parts.iter().map(Vec::as_slice).collect::<Vec<_>>())]);
+    der::seq(&[ci[0].raw, &der::explicit(0, &der::seq(&fields.iter().map(Vec::as_slice).collect::<Vec<_>>()))])
+}
+
+#[test]
+fn external_cms_checks_ess_and_refuses_trailing_bytes() {
+    use pdfcraft_sign::{DigestAlg, SignatureProfile, prepare_signature};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let prepare = || prepare_signature(&open(&fixture()), Some(&id.certificate), &opts(), SignatureProfile::PadesBaseline).unwrap();
+    let digest = prepare().content_digest(DigestAlg::Sha256).unwrap();
+    let cms = pdfcraft_sign::cms::sign_detached(&id.key, &id.certificate, &id.chain, DigestAlg::Sha256, &digest).unwrap();
+    let cert_hash = DigestAlg::Sha256.digest(&[&id.certificate.raw]);
+    let wrong_ess = external_cms_with_attributes(&cms, &id, |attrs| {
+        let attr = attrs.iter_mut().find(|a| a.windows(cert_hash.len()).any(|w| w == cert_hash)).unwrap();
+        let at = attr.windows(cert_hash.len()).position(|w| w == cert_hash).unwrap();
+        attr[at] ^= 1;
+    });
+    // This is a cryptographically valid signature with a dishonest ESS reference.
+    let parsed = pdfcraft_sign::cms::SignedData::parse(&wrong_ess).unwrap();
+    assert!(parsed.verify_signature(&id.certificate, &digest).unwrap());
+    assert!(prepare().complete(&wrong_ess).unwrap_err().to_string().contains("ESS"));
+    let mut padded = cms;
+    padded.push(0);
+    assert!(prepare().complete(&padded).is_err());
+}
+
+#[test]
+fn external_cms_without_prior_identity_uses_neutral_visible_appearance() {
+    use pdfcraft_sign::{DigestAlg, SignatureProfile, prepare_signature};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let prepared = prepare_signature(&open(&fixture()), None, &opts(), SignatureProfile::CmsDetached).unwrap();
+    let digest = prepared.content_digest(DigestAlg::Sha256).unwrap();
+    let cms = pdfcraft_sign::cms::sign_detached(&id.key, &id.certificate, &id.chain, DigestAlg::Sha256, &digest).unwrap();
+    let bytes = prepared.complete(&cms).unwrap();
+    let sigs = signatures(&open(&bytes), &bytes, &TrustStore { certs: vec![id.certificate.clone()] });
+    let signed = sigs.iter().find(|s| s.signed).unwrap();
+    assert_eq!(signed.status, Status::Valid, "{:?}", signed.details);
+    assert_eq!(signed.signer.as_deref(), id.certificate.subject.common_name());
+    assert_eq!(signed.sub_filter.as_deref(), Some("adbe.pkcs7.detached"));
+}
+
+#[test]
+fn external_preparation_rejects_non_finite_boxes_and_huge_page_numbers() {
+    use pdfcraft_sign::{SignatureProfile, prepare_signature};
+    for rect in [[f64::NAN, 0.0, 1.0, 2.0], [0.0, 0.0, f64::INFINITY, 2.0], [2.0, 0.0, 1.0, 2.0]] {
+        let opts = SignOptions { rect: Some(rect), ..opts() };
+        assert!(prepare_signature(&open(&fixture()), None, &opts, SignatureProfile::CmsDetached).is_err());
+    }
+    let opts = SignOptions { page: usize::MAX, ..opts() };
+    assert!(prepare_signature(&open(&fixture()), None, &opts, SignatureProfile::CmsDetached).is_err());
+}
+
+#[test]
+fn external_cms_profile_rejects_duplicate_attributes_and_keeps_generic_cms_distinct() {
+    use pdfcraft_sign::{DigestAlg, SignatureProfile, prepare_signature};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let prepare = |profile| prepare_signature(&open(&fixture()), None, &opts(), profile).unwrap();
+    let original = prepare(SignatureProfile::PadesBaseline);
+    let digest = original.content_digest(DigestAlg::Sha256).unwrap();
+    let cms = pdfcraft_sign::cms::sign_detached(&id.key, &id.certificate, &id.chain, DigestAlg::Sha256, &digest).unwrap();
+    let duplicate = external_cms_with_attributes(&cms, &id, |attrs| {
+        let ess = attrs
+            .iter()
+            .find(|a| der::Tlv::parse_all(a).unwrap().children().unwrap()[0].oid().unwrap() == "1.2.840.113549.1.9.16.2.47")
+            .unwrap()
+            .clone();
+        attrs.push(ess);
+    });
+    assert!(original.complete(&duplicate).unwrap_err().to_string().contains("duplicate"));
+    let timed = |prepared: pdfcraft_sign::PreparedSignature| {
+        let digest = prepared.content_digest(DigestAlg::Sha256).unwrap();
+        let cms = pdfcraft_sign::cms::sign_detached(&id.key, &id.certificate, &id.chain, DigestAlg::Sha256, &digest).unwrap();
+        let cms = external_cms_with_attributes(&cms, &id, |attrs| {
+            attrs.push(der::seq(&[&der::oid("1.2.840.113549.1.9.5"), &der::set_of(&[&der::tlv(0x17, b"261002110000Z")])]));
+        });
+        prepared.complete(&cms)
+    };
+    assert!(timed(prepare(SignatureProfile::PadesBaseline)).unwrap_err().to_string().contains("baseline"));
+    assert!(timed(prepare(SignatureProfile::CmsDetached)).is_ok());
+}
+
+#[test]
+fn external_cms_preserves_encryption_and_existing_signatures() {
+    use pdfcraft_sign::{DigestAlg, SignatureProfile, prepare_signature};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    for algorithm in ALL_ALGORITHMS {
+        let base = protected(algorithm, -1);
+        let first = pdfcraft_sign::sign(&open_pw(&base, None), &id, &opts()).unwrap();
+        let doc = open_pw(&first, None);
+        let opts = SignOptions { field: Some("Approval".into()), ..opts() };
+        let prepared = prepare_signature(&doc, None, &opts, SignatureProfile::CmsDetached).unwrap();
+        let digest = prepared.content_digest(DigestAlg::Sha256).unwrap();
+        let cms = pdfcraft_sign::cms::sign_detached(&id.key, &id.certificate, &id.chain, DigestAlg::Sha256, &digest).unwrap();
+        let signed = prepared.complete(&cms).unwrap();
+        assert!(signed.starts_with(&first));
+        let reopened = open_pw(&signed, None);
+        assert!(reopened.security().is_some());
+        let sigs = signatures(&reopened, &signed, &trust);
+        assert_eq!(sigs.iter().filter(|s| s.signed).count(), 2);
+        assert!(sigs.iter().filter(|s| s.signed).all(|s| s.status == Status::Valid), "{algorithm:?}: {sigs:?}");
+    }
+}
+
+#[test]
+fn external_cms_refuses_a_substituted_outer_digest_algorithm() {
+    use pdfcraft_sign::{DigestAlg, SignatureProfile, der::Tlv, prepare_signature};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let prepared = prepare_signature(&open(&fixture()), None, &opts(), SignatureProfile::CmsDetached).unwrap();
+    let digest = prepared.content_digest(DigestAlg::Sha256).unwrap();
+    let cms = pdfcraft_sign::cms::sign_detached(&id.key, &id.certificate, &id.chain, DigestAlg::Sha256, &digest).unwrap();
+    let ci = Tlv::parse_all(&cms).unwrap().children().unwrap();
+    let sd = ci[1].inner().unwrap().children().unwrap();
+    let mut fields: Vec<Vec<u8>> = sd.iter().map(|v| v.raw.to_vec()).collect();
+    fields[1] = der::set_of(&[&DigestAlg::Sha384.algorithm()]);
+    let wrong = der::seq(&[ci[0].raw, &der::explicit(0, &der::seq(&fields.iter().map(Vec::as_slice).collect::<Vec<_>>()))]);
+    assert!(pdfcraft_sign::cms::SignedData::parse(&wrong).unwrap().verify_signature(&id.certificate, &digest).unwrap());
+    assert!(prepared.complete(&wrong).unwrap_err().to_string().contains("digestAlgorithms"));
+}

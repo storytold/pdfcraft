@@ -19,6 +19,7 @@ pub mod pdf;
 pub mod pkcs12;
 pub mod revocation;
 mod rsa_pad;
+pub mod security_layer;
 pub mod timestamp;
 #[cfg(target_os = "windows")]
 pub mod windows;
@@ -28,8 +29,8 @@ pub use der::Time;
 pub use graphic::Graphic;
 pub use keys::{DigestAlg, PrivateKey, PublicKey};
 pub use pdf::{
-    Appearance, AppearanceLabels, Detail, DigestCache, Fill, Modification, SignOptions, SignatureInfo, Status, TrustStore, WORDINGS, Words,
-    in_english, kind, list as signatures, sign, sign_with_timestamp, timestamp_document, validate,
+    Appearance, AppearanceLabels, Detail, DigestCache, Fill, Modification, PreparedSignature, SignOptions, SignatureInfo, SignatureProfile, Status,
+    TrustStore, WORDINGS, Words, in_english, kind, list as signatures, prepare_signature, sign, sign_with_timestamp, timestamp_document, validate,
 };
 pub use pkcs12::DigitalId;
 pub use timestamp::{TimestampAuthority, TimestampQuery, TimestampToken};

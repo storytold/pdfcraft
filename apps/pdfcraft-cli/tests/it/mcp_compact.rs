@@ -86,3 +86,15 @@ fn compact_flag_keeps_the_root() {
     assert!(!text(&reply).contains("is outside the allowed directory"), "{}", text(&reply));
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn remote_signing_opt_in_also_reaches_compact_mcp_dispatch() {
+    for (flags, enabled) in [(vec!["--compact"], false), (vec!["--compact", "--remote-signing"], true)] {
+        let reply =
+            session(&flags, &[request(1, "tools/call", json!({"name":"tool_call","arguments":{"name":"sign_providers","arguments":{}}}))]).remove(0);
+        assert_ne!(reply["result"]["isError"], true, "{reply}");
+        let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+        let result: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(result["providers"][0]["enabled"], enabled);
+    }
+}

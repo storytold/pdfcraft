@@ -134,7 +134,7 @@ impl T {
 pub fn tools() -> Vec<ToolDef> {
     let save_out = json!({ "type": "string", "description": "File to write. Omit to open the result as a new unsaved document instead." });
     let open = json!({ "type": "boolean", "description": "Also open the result as a new document (default: only when out is omitted)." });
-    vec![
+    let mut definitions = vec![
         t("doc_bates_multi", "Add Bates numbering across files", "Apply one consecutive Bates sequence to an ordered list of PDFs. Each file entry has input and output paths and an optional open or permissions password. The operation first validates every input/output and computes inclusive numeric intervals; dry_run returns that allocation without writing. Existing output files are never replaced. On application, files that cannot be edited or saved are reported individually and later files continue.")
             .destructive()
             .with(schema(json!({
@@ -1676,7 +1676,37 @@ pub fn tools() -> Vec<ToolDef> {
             .ro().with(schema(json!({"doc":doc()}), &[])),
         t("render_preview", "Render a preview", "Render a PNG bounded by max_side (default 1024), without changing or saving the document. Page defaults to 1; doc may be omitted when exactly one document is open. Render warnings follow the image as page_render gives them.")
             .ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"max_side":{"type":"integer","minimum":1,"maximum":4096}}), &[])),
-    ]
+    ];
+    // Reuse local signing's appearance and geometry schema, without credentials for a local ID.
+    let mut properties = definitions
+        .iter()
+        .find(|d| d.name == "sign_document")
+        .and_then(|d| d.input_schema.get("properties"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    properties.remove("id");
+    properties.remove("password");
+    properties.insert("wait".into(), json!({"type":"boolean","description":"Wait for personal authorization and save within this call (up to ten minutes). Useful for CLI scripts; default false returns a process-local job for polling."}));
+    properties.insert("provider".into(), json!({"type":"string","enum":["id-austria"]}));
+    properties.insert(
+        "allow_document_upload".into(),
+        json!({"type":"boolean","description":"Must be true only after the user accepts uploading this prepared document to A-Trust."}),
+    );
+    definitions.push(
+        t(
+            "sign_providers",
+            "List signing providers",
+            "List remote signing capabilities and their data transfer requirements without opening a browser or network connection.",
+        )
+        .ro()
+        .with(schema(json!({}), &[])),
+    );
+    definitions.push(t("sign_begin", "Begin ID Austria signing", "Prepare an immutable PDF and open an isolated installed Chromium/Chrome/Edge browser for personal authorization. Uploads the document directly to A-Trust. Requires the host's --remote-signing opt-in and allow_document_upload: true. No developer account, application server or credentials in tool arguments. An unknown signer's visible name is neutral; the verified identity appears in the signature panel. Output must be a new file. Use sign_status, sign_finish and sign_cancel; source and unsaved work remain unchanged until a successful finish.").cmd("sign.digital").with(schema(Value::Object(properties), &["doc","provider","out","allow_document_upload"])));
+    definitions.push(t("sign_status", "Check signing status", "Receive the result of an existing signing operation and verify it against the prepared document; never starts another authorization. No credentials or provider sessions in the result.").ro().with(schema(json!({"job":{"type":"string"}}), &["job"])));
+    definitions.push(t("sign_finish", "Save an authorized signature", "After sign_status reports ready_to_save, check the document generation again and save a new signed copy atomically. Optional out chooses another confined new output path after a write failure, reusing the same authorization. A consumed operation cannot be finished twice.").with(schema(json!({"job":{"type":"string"},"out":{"type":"string"}}), &["job"])));
+    definitions.push(t("sign_cancel", "Cancel signing", "Cancel an operation and close only its isolated provider browser. Repeated cancellation is harmless; unsaved work and the source file remain intact.").with(schema(json!({"job":{"type":"string"}}), &["job"])));
+    definitions
 }
 
 static TOOLS: std::sync::LazyLock<Vec<ToolDef>> = std::sync::LazyLock::new(tools);

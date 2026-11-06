@@ -1069,6 +1069,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "command-fds"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b60b5124979fccd9addd89d8b97a1d6eebb4950694520c75ddd722535ea443f"
+dependencies = [
+ "nix",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4279,6 +4289,7 @@ version = "0.18.1"
 dependencies = [
  "base64 0.23.1",
  "flate2",
+ "getrandom 0.4.3",
  "image",
  "pdfcraft-cos",
  "pdfcraft-engine",
@@ -4560,8 +4571,15 @@ name = "pdfcraft-platform"
 version = "0.18.1"
 dependencies = [
  "async-channel",
+ "base64 0.23.1",
+ "command-fds",
  "futures-lite",
+ "os_pipe",
  "rustix 1.1.5",
+ "serde_json",
+ "tempfile",
+ "url",
+ "win-custody",
  "zbus",
 ]
 
@@ -4669,6 +4687,7 @@ dependencies = [
  "pdfcraft-model",
  "rc2",
  "ripemd",
+ "roxmltree 0.21.2",
  "rsa",
  "rustls-cng",
  "security-framework",
@@ -4728,6 +4747,7 @@ dependencies = [
  "serde_json",
  "skrifa 0.44.0",
  "sys-locale",
+ "tempfile",
  "toml",
  "unicode-bidi",
  "wasm-bindgen",
@@ -7912,6 +7932,15 @@ dependencies = [
  "raw-window-handle",
  "static_assertions",
  "web-sys",
+]
+
+[[package]]
+name = "win-custody"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "399f5ddc7e473b74abf5633e31c84917491aa6cf0418ab310dd936645024dbfc"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

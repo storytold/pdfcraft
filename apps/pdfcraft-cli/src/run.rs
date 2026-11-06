@@ -8,7 +8,10 @@ use super::{CliError, stdout_line};
 // ---- automation --------------------------------------------------------------------------------
 
 pub(crate) fn automation(args: &[String]) -> Result<pdfcraft_automation::Automation, String> {
-    let a = pdfcraft_automation::Automation::new();
+    let mut a = pdfcraft_automation::Automation::new();
+    if args.iter().any(|arg| arg == "--remote-signing") {
+        a = a.with_signing_transport(pdfcraft_platform::signing_browser::installed_browser_transport());
+    }
     match flag(args, "--root") {
         Some(root) => a.with_root(root).map_err(|e| format!("--root {root}: {e}")),
         None => Ok(a),

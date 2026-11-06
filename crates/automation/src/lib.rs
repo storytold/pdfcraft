@@ -32,6 +32,7 @@ mod model_render;
 mod printing;
 mod reading;
 mod redact;
+mod remote_signing;
 mod signing;
 mod text_cache;
 mod tools;
@@ -101,6 +102,8 @@ pub struct Automation {
     /// Review sessions held for `ocr_words` (a guard and the pages read), by document.
     ocr_reviews: HashMap<DocId, OcrReview>,
     next_ocr_review: u64,
+    signing_transport: Option<pdfcraft_platform::signing_browser::SigningTransport>,
+    signing_jobs: HashMap<String, remote_signing::RemoteJob>,
 }
 
 impl Default for Automation {
@@ -121,6 +124,8 @@ impl Automation {
             evicted: HashSet::new(),
             ocr_reviews: HashMap::new(),
             next_ocr_review: 0,
+            signing_transport: None,
+            signing_jobs: HashMap::new(),
         }
     }
 

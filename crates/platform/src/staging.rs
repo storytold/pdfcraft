@@ -3,6 +3,26 @@
 
 use std::path::{Path, PathBuf};
 
+/// Publish a new signed copy atomically, refusing an existing destination even if it appeared
+/// during authorization. A failed write, sync or publication leaves the destination intact.
+/// This never replaces the source PDF or spends a second authorization on a save retry.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn write_new_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+    let mut staged = tempfile::Builder::new().prefix(".pdfcraft-sign-").tempfile_in(dir)?;
+    staged.write_all(bytes)?;
+    sync_staged(staged.as_file(), std::fs::File::sync_all)?;
+    staged.persist_noclobber(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
+/// Browser signing output is a desktop feature; the web build never opens a local file.
+#[cfg(target_arch = "wasm32")]
+pub fn write_new_atomically(_path: &Path, _bytes: &[u8]) -> std::io::Result<()> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "browser signing requires the desktop application"))
+}
+
 /// How many staging names [`create_staging`] tries. A random 64-bit name is only taken if someone
 /// put a file there on purpose, so running out means refusing, not trying harder.
 pub const STAGING_ATTEMPTS: usize = 16;
