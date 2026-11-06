@@ -166,11 +166,18 @@ fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint
                 continue;
             };
             static NEXT_CONNECTION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-            let Ok(connection) =
-                NEXT_CONNECTION.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |id| id.checked_add(1))
-            else {
-                continue;
+            use std::sync::atomic::Ordering::Relaxed;
+            let mut connection = NEXT_CONNECTION.load(Relaxed);
+            let allocated = loop {
+                let Some(next) = connection.checked_add(1) else { break false };
+                match NEXT_CONNECTION.compare_exchange_weak(connection, next, Relaxed, Relaxed) {
+                    Ok(_) => break true,
+                    Err(current) => connection = current,
+                }
             };
+            if !allocated {
+                continue;
+            }
             let client = client.clone();
             let expected = expected.clone();
             let lingering = lingering.clone();

@@ -1,6 +1,7 @@
 use super::*;
 use pdfcraft_platform::staging::STAGING_ATTEMPTS;
 
+#[cfg(feature = "mcp")]
 #[test]
 fn window_lending_restores_the_session_and_invalidates_context_after_a_panic() {
     let mut session = Session::new();
@@ -18,6 +19,7 @@ fn window_lending_restores_the_session_and_invalidates_context_after_a_panic() {
     assert!(error.to_string().contains("text_paragraphs"));
 }
 
+#[cfg(feature = "mcp")]
 #[test]
 fn window_lending_restores_listing_state_when_root_validation_fails() {
     let mut session = Session::new();
