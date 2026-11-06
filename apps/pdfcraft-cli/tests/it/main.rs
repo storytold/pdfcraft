@@ -12,6 +12,8 @@ mod info_standards;
 mod mcp_compact;
 mod options;
 mod owner_password;
+mod print;
+mod print_off;
 mod render;
 mod root_arguments;
 mod run_report;
