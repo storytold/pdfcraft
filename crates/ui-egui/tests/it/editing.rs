@@ -8196,6 +8196,19 @@ fn a_click_away_from_the_picture_applies_its_crop() {
     assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_some()), "a click on a handle keeps crop mode");
     assert_eq!(h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect, Some(full), "nothing is applied yet");
 
+    // A click pressed on the picture and let go just past its frame: still cropping.
+    let edge = at(150.0, 190.0);
+    h.hover_at(edge - egui::vec2(2.0, 0.0));
+    h.run_steps(1);
+    h.drag_at(edge - egui::vec2(2.0, 0.0));
+    h.run_steps(1);
+    h.hover_at(edge + egui::vec2(2.0, 0.0));
+    h.run_steps(1);
+    h.drop_at(edge + egui::vec2(2.0, 0.0));
+    h.run_steps(4);
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_some()), "a press on the picture keeps crop mode");
+    assert_eq!(h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect, Some(full), "nothing is applied yet");
+
     // On the empty page: applied, and the picture is let go.
     click_at(&mut h, at(100.0, 60.0));
     assert!(h.state().views[0].image_selection.is_none(), "a click away lets the picture go");
