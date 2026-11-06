@@ -1995,7 +1995,7 @@ fn draw_pages(
         let mut copy_image = None;
         if let Some((page, at)) = view.comments.context_at {
             // The page's content is parsed once per right-click, not on every frame the menu is open.
-            let key = egui::Id::unique("copy-image-under-menu");
+            let key = egui::Id::unique(("copy-image-under-menu", view.id.0, doc.edit_generation()));
             let cached = ui.data(|d| d.get_temp::<(usize, [f64; 2], Option<usize>)>(key)).filter(|c| c.0 == page && c.1 == at);
             let hit = match cached {
                 Some(c) => c.2,
@@ -2006,11 +2006,11 @@ fn draw_pages(
                 }
             };
             if let Some(image) = hit {
-                if ui.button(tl!("Copy Image")).clicked() {
+                if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy Image"))).clicked() {
                     copy_image = Some(comments::CanvasAction::CopyImage(page, image));
                     ui.close();
                 }
-                if ui.button(tl!("Copy Image in Original Format")).clicked() {
+                if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy Image in Original Format"))).clicked() {
                     copy_image = Some(comments::CanvasAction::CopyImageFile(page, image));
                     ui.close();
                 }
