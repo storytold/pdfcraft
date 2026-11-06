@@ -669,6 +669,8 @@ pub struct DocView {
     /// Marquee Zoom / Snapshot: the rectangle being dragged (page, start), and a finished one.
     pub marquee: Option<(usize, Pos2)>,
     pub marquee_done: Option<crate::zoom_snap::Marquee>,
+    /// Dynamic Zoom: (page under initial press, press origin on screen, initial zoom level when drag started).
+    pub dynamic_zoom: Option<(usize, Pos2, f32)>,
     /// Fill & Sign text being typed.
     pub fill_text: Option<crate::fill_sign::TypeBox>,
     /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
@@ -1055,6 +1057,7 @@ impl DocView {
             pages_focus_id: None,
             marquee: None,
             marquee_done: None,
+            dynamic_zoom: None,
             fill_text: None,
             fill_signature_page: None,
             signature_drag: Default::default(),
@@ -2871,6 +2874,7 @@ fn tool_selects_text(tool: QuickTool, preparing: bool) -> bool {
         | QuickTool::Link
         | QuickTool::SignArea { .. }
         | QuickTool::MarqueeZoom
+        | QuickTool::DynamicZoom
         | QuickTool::Snapshot => false,
     }
 }

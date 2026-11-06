@@ -321,6 +321,9 @@ fn tool_input(
     if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
         crate::zoom_snap::page_input(ui, resp, &xf, ptr, i, free, view);
     }
+    if tool == QuickTool::DynamicZoom {
+        crate::zoom_snap::dynamic_zoom_input(ui, resp, &xf, ptr, i, free, view);
+    }
     if tool == QuickTool::EnhanceCamera {
         crate::camera_ui::page_input(resp, &xf, ptr, i, view, can_modify, press);
     }
