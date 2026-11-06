@@ -22,14 +22,12 @@ pub(crate) const PREFERENCES_MIN_SCROLL: f32 = 60.0;
 ///
 /// Draws a rounded container with options inside. The active option is highlighted
 /// with the accent colour. Emits AccessKit RadioButton widget info with the option's label.
-#[expect(dead_code, reason = "convenience helpers for non-searched segmented pill controls")]
 pub fn segmented_pill_choice<T: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, current: &mut T, options: &[(T, &str)]) -> bool {
     let with_a11y: Vec<(T, &str, &str)> = options.iter().map(|&(v, l)| (v, l, l)).collect();
     segmented_pill_choice_a11y(ui, t, current, &with_a11y)
 }
 
 /// A segmented pill selection bar with separate accessibility labels.
-#[expect(dead_code, reason = "convenience helpers for non-searched segmented pill controls")]
 pub fn segmented_pill_choice_a11y<T: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, current: &mut T, options: &[(T, &str, &str)]) -> bool {
     segmented_pill_choice_a11y_query(ui, t, current, options, "").0
 }
@@ -661,6 +659,8 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
     ctx.checkbox(ui, &mut app.restore_last_view, tl!("Restore the last view (page, zoom and page display) when a document is opened again"), t);
     #[cfg(not(target_arch = "wasm32"))]
     ctx.checkbox(ui, &mut app.reload_changed_files, tl!("Reload documents when their files change on disk"), t);
+    #[cfg(not(target_arch = "wasm32"))]
+    ctx.checkbox(ui, &mut app.update_check_at_start, tl!("Check for updates when PdfCraft starts"), t);
     ctx.checkbox(ui, &mut app.show_secured_notice, tl!("Show a notice when a document is secured"), t);
 
     #[cfg(not(target_arch = "wasm32"))]
