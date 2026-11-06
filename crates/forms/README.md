@@ -50,7 +50,10 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   keeps it: `/V` is stored as typed, the appearance draws `?` for those characters, the widget is
   marked with the first one (`pdfcraft_fonts::UNDRAWN_MARK`, cleared once all of it can be drawn)
   and the form sets `/NeedAppearances`, so other viewers draw the field from its value with fonts
-  that have them. Not in a document that declares PDF/A, which forbids that flag (`declares_pdfa`).
+  that have them. Not in a document that declares PDF/A, which forbids that flag (`declares_pdfa`:
+  the bytes `pdfaid:part` in XMP metadata each filter stage of which decodes within 8 MiB, the cap
+  preflight's Standards panel reads it with; preflight reads the identifier by its namespace, so a
+  packet that gives that namespace another prefix declares PDF/A there and not here).
   `undrawn_fields` lists the marked fields; the engine reports each edit that draws one, and
   flattening refuses to make that `?` permanent.
 - Displaying a form that leaves its appearances to the viewer (`/NeedAppearances`, or a text or
@@ -87,10 +90,15 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   left alone. `calculations_changed` compares two readings of a form to say which formulas an
   edit rewrote.
 - The calculation order (`/CO`, §12.7.3): `calculation_order` lists the calculated fields in the
-  order `recalculate` runs them, with the fields each formula reads (`Calculate::reads`,
+  order `recalculate` runs them, each with its field object (two can share a name in a malformed
+  form), with the fields each formula reads (`Calculate::reads`,
   `af::calculation_reads`; names built at run time aren't known) and what is wrong with the
   order: a field reading one that calculates later, a loop, a field `/CO` leaves out, and `/CO`
-  entries that calculate nothing. `CalculationOrder::fixed` is Fix order: a stable topological
+  entries that calculate nothing. Two issues are about the formula itself: it reads a field the
+  form doesn't have (`MissingField`; the field of that name and a field under it count as there,
+  as recalculation and `getField` find them, but not an Acrobat widget name such as `price.0`,
+  which neither resolves), or its script builds names at run time (`BuiltNames`,
+  `af::reads_built_names`), so its reads are incomplete. `CalculationOrder::fixed` is Fix order: a stable topological
   sort that keeps the current order wherever it can and leaves loops as they are.
   `set_calculation_order` writes `/CO` afresh. A field that gets a calculation joins the end of
   the order; one whose calculation changes keeps its place.
@@ -108,3 +116,7 @@ Rich-text values and exact appearance metrics/layout remain incomplete. JavaScri
 execution and FDF/XFDF exchange are integrated through the engine; this crate provides
 field actions and native AF rules. `/MK /R` rotation (0, 90, 180, 270) is drawn into the
 appearance.
+
+## Button export values
+
+`FieldProps::export_value` edits a zero-based widget's `/Opt` value while preserving appearance names, `/AP`, `/AS`, `/V` and `/DV`. Widgets sharing an on-state remain consistent. Export-only changes do not regenerate appearances. Invalid indices, empty/Off values and ambiguous/conflicting mappings are rejected. `Field::export_values` resolves selected states for data export.
