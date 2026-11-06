@@ -8,6 +8,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod comment_hide;
 mod inspect;
 mod pixels;
 mod raster;
@@ -17,6 +18,7 @@ mod system_font;
 pub mod text;
 pub mod transition;
 
+pub use comment_hide::normalize_hidden_comment_types;
 pub use inspect::{
     Annotation, Attachment, AttachmentSource, DestView, DocInfo, Field, FieldKind, FontInfo, Layer, LayerOp, Link, LinkTarget, OutlineItem, PageInfo,
     PageTransition, RemoteDestination, TransitionStyle, Xfa, attachment_data, check_pages, inspect, link_replies, pretty_date, thread_tops,
