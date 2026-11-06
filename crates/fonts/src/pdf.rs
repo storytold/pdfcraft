@@ -145,7 +145,8 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
 }
 
 /// The CIDs (below 65 536) of a Type 0 font over an embedded TrueType program whose glyph has
-/// outline data, through `/CIDToGIDMap`; empty when the program or the map can't be read.
+/// outline data, through `/CIDToGIDMap`; empty when the program or the map can't be read, and one
+/// zeroed word when it can be but no glyph has an outline (so it still counts as read).
 /// Subsetters keep glyph ids and empty the glyphs they drop, so an empty glyph is a missing one.
 fn cids_with_outlines(doc: &Document, font: &Dict) -> Vec<u64> {
     use skrifa::raw::TableProvider as _;
@@ -160,17 +161,19 @@ fn cids_with_outlines(doc: &Document, font: &Dict) -> Vec<u64> {
     let Some(loca) = skrifa::FontRef::from_index(&bytes, 0).ok().and_then(|face| face.loca(None).ok()) else { return Vec::new() };
     let outlined = |gid: u32| loca.get_raw(gid as usize).zip(loca.get_raw(gid as usize + 1)).is_some_and(|(start, end)| end > start);
     match descendant.get(b"CIDToGIDMap").map(|o| doc.resolve(o)).as_deref() {
-        None | Some(Object::Name(_)) => bit_set_below_64k((0..loca.len().min(0x1_0000) as u32).filter(|&gid| outlined(gid))),
+        None | Some(Object::Name(_)) => read_bits(bit_set_below_64k((0..loca.len().min(0x1_0000) as u32).filter(|&gid| outlined(gid)))),
         Some(Object::Stream(map)) => {
             let Ok(map) = map.decoded_within(1 << 17) else { return Vec::new() };
-            bit_set_below_64k(
+            read_bits(bit_set_below_64k(
                 map.as_chunks::<2>()
                     .0
                     .iter()
                     .enumerate()
-                    .filter(|(_, gid)| outlined(u32::from(u16::from_be_bytes(**gid))))
+                    // Glyph 0 is `.notdef`, which has an outline of its own: a CID the subset doesn't have maps to it,
+                    // and typing with it would draw that box, not the letter.
+                    .filter(|(_, gid)| u16::from_be_bytes(**gid) != 0 && outlined(u32::from(u16::from_be_bytes(**gid))))
                     .map(|(cid, _)| cid as u32),
-            )
+            ))
         }
         Some(_) => Vec::new(),
     }
@@ -871,15 +874,22 @@ impl Metrics {
             if cid == 0 {
                 return false;
             }
-            // A CID /W leaves out takes /DW, and Skia (Chrome) leaves out every CID of that width: for
-            // those, only the subset's program says whether the glyph is there.
-            return self.cid_widths.contains_key(&cid)
-                || self.cid_ranges.find(cid).is_some()
+            let listed = self.cid_widths.contains_key(&cid) || self.cid_ranges.find(cid).is_some();
+            let outlined = self.outlined_cids.get(cid as usize / 64).is_some_and(|w| (*w >> (cid % 64)) & 1 == 1);
+            if self.subset && !self.outlined_cids.is_empty() {
+                // The subset's own program says which glyphs it kept. `/W` can't: a CID it leaves out takes
+                // /DW, and Skia (Chrome) leaves out every CID of that width, while PyMuPDF and other
+                // producers that keep glyph ids list a width for every glyph of the full font, the
+                // ones they emptied too, so an edit that typed one drew nothing (#6149). A glyph with
+                // no outline is there only when it is blank by nature (a space) and `/W` lists it.
+                return outlined || (listed && self.text_of(code).is_some_and(|t| is_blank(&t)));
+            }
+            // A CID /W leaves out takes /DW: for those, only the subset's program says whether the glyph is there.
+            return listed
                 || !self.subset
-                || self.outlined_cids.get(cid as usize / 64).is_some_and(|w| (*w >> (cid % 64)) & 1 == 1)
                 // No readable TrueType program to ask (e.g. CFF or missing): an explicit /DW
                 // still says /W may leave out glyphs of that width (#1443).
-                || (self.outlined_cids.is_empty() && self.explicit_default);
+                || self.explicit_default;
         }
         match code.checked_sub(self.first).and_then(|i| self.widths.get(i as usize)) {
             Some(w) => *w > 0.0 || code == 32,
@@ -1065,6 +1075,18 @@ fn stretches(spans: &[(u32, u32)], later_wins: bool) -> Vec<(u64, Option<usize>)
         }
     }
     cover
+}
+
+/// The outlined-CID bits of a program that was read: a program whose glyphs all lack outlines gives
+/// no bits at all, which would read as "no program"; one zeroed word says it was read and holds none.
+fn read_bits(bits: Vec<u64>) -> Vec<u64> {
+    if bits.is_empty() { vec![0] } else { bits }
+}
+
+/// Whether `text` is all blank (white space, a soft hyphen, zero-width marks): the glyphs that
+/// have no outline in a font that does have them.
+fn is_blank(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|c| c.is_whitespace() || matches!(c, '\u{ad}' | '\u{200b}'..='\u{200f}' | '\u{2060}' | '\u{feff}'))
 }
 
 /// One bit for each code below 65 536 in `codes`; empty when there is none.
