@@ -63,6 +63,8 @@ pub struct Document {
     /// [`EditNotice`]): text its fonts can't draw, pages whose own backdrop stays off. The
     /// interface shows it; tools return it.
     pub edit_notices: Vec<EditNotice>,
+    /// Which parts of pictures with transparency show, for picking them ([`Document::image_shows_at`]).
+    pub(crate) alpha: crate::image_alpha::AlphaCache,
 }
 
 /// Something the last successful edit did that the user should hear about, never left silent

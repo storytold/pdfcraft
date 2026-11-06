@@ -13,6 +13,8 @@ pub(crate) struct ImageCx<'a> {
     pub ptr: &'a PagePointer,
     pub page: usize,
     pub info: &'a DocInfo,
+    /// Says where a picture with transparency shows, so it is picked only there.
+    pub doc: &'a pdfcraft_engine::Document,
     pub allow_interaction: bool,
 }
 
@@ -273,7 +275,7 @@ pub(crate) fn crop_controls_contain(
 /// (the pointer and keys are the crop's while it lasts).
 #[allow(clippy::cognitive_complexity)]
 fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_engine::PageImage) -> bool {
-    let ImageCx { ui, resp, xf, ptr, page, info, allow_interaction } = *cx;
+    let ImageCx { ui, resp, xf, ptr, page, info, allow_interaction, .. } = *cx;
     let painter = ui.painter();
     let Some(mode) = view.image_selection.as_mut().and_then(|s| s.crop.as_mut()) else { return false };
     let hover_pos = ptr.pos;
@@ -549,18 +551,28 @@ pub(crate) fn crop_hit(view: &DocView, page: usize) -> Option<Hit> {
     Some(Hit::new(Owner::Picture { index: selection.index, part: PicturePart::Body }, Layer::Handle, egui::CursorIcon::Default))
 }
 
-/// The picture under `p` (its shape, not only its box): a click selects it, a drag moves the
-/// selected one. On the text layer, asked before the paragraphs: editable text on top of a
-/// picture takes the press.
-pub(crate) fn body_hit(xf: &PageXform, page: usize, info: &DocInfo, images: &[pdfcraft_engine::PageImage], view: &DocView, p: Pos2) -> Option<Hit> {
+/// The picture under `p` (its shape and where it shows, not only its box): a click selects it, a
+/// drag moves the selected one. On the text layer, asked before the paragraphs: editable text on
+/// top of a picture takes the press.
+pub(crate) fn body_hit(
+    xf: &PageXform,
+    page: usize,
+    info: &DocInfo,
+    doc: &pdfcraft_engine::Document,
+    images: &[pdfcraft_engine::PageImage],
+    view: &DocView,
+    p: Pos2,
+) -> Option<Hit> {
     if !xf.rect.contains(p) {
         return None;
     }
     let (x, y) = xf.screen_to_view(p);
     let user = info.pages.get(page)?.view_to_user(x, y).map(f64::from);
-    let index = images
-        .iter()
-        .rposition(|im| im.visible_rect.is_some_and(|r| xf.user_rect(info, page, r.map(|v| v as f32)).contains(p)) && im.contains(user))?;
+    let index = images.iter().rposition(|im| {
+        im.visible_rect.is_some_and(|r| xf.user_rect(info, page, r.map(|v| v as f32)).contains(p))
+            && im.contains(user)
+            && doc.image_shows_at(im, user)
+    })?;
     let selected = view.image_selection.as_ref().is_some_and(|s| s.page == page && s.index == index);
     let icon = if selected { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
     Some(Hit::new(Owner::Picture { index, part: PicturePart::Body }, Layer::Text, icon))
@@ -628,15 +640,16 @@ pub fn image_menu_id() -> egui::Id {
 /// Images on a page: select, move, resize, right-click. Returns `true` when the pointer was used.
 #[allow(clippy::cognitive_complexity)]
 pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage], view: &mut DocView) -> bool {
-    let ImageCx { ui, resp, xf, ptr, page, info, allow_interaction } = *cx;
+    let ImageCx { ui, resp, xf, ptr, page, info, doc, allow_interaction } = *cx;
     let boxes: Vec<Rect> = images.iter().map(|im| crate::canvas::image_screen_rect(im, xf, info, page)).collect();
     let painter = ui.painter();
     let hover_pos = ptr.pos;
     let image_contains = |index: usize, point: Pos2| {
         let (x, y) = xf.screen_to_view(point);
         let Some(p) = info.pages.get(page) else { return false };
-        let user = p.view_to_user(x, y);
-        images.get(index).is_some_and(|im| im.contains(user.map(f64::from)))
+        let user = p.view_to_user(x, y).map(f64::from);
+        // A picture is picked where it shows: through its transparent parts, the one below is.
+        images.get(index).is_some_and(|im| im.contains(user) && doc.image_shows_at(im, user))
     };
     let selected = view.image_selection.as_ref().filter(|s| s.page == page).map(|s| s.index).filter(|i| *i < boxes.len());
     let dragging = view.image_selection.as_ref().is_some_and(|s| s.drag.is_some());

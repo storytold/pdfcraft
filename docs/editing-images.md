@@ -42,7 +42,14 @@ with the selected image, also when the picture sits inside a clip it shares with
 (a report drawing each picture as `q re W n cm Do Q` within a table's clip): the picture's own
 clip scales with it, and shared clips stay fixed without moving neighbouring text or artwork.
 
-`image_hit` applies the same path and hole checks headlessly. `page_images` retains `rect` as
+A picture with transparency (a soft mask, a stencil or colour-key `/Mask`, or a stencil
+image) is picked only where it shows: a click through the transparent margin of a PNG
+signature or a cut-out photo goes to what is below it. Opacity is read on a grid of at most
+256 cells a side, a cell counting as showing if any of its pixels does (alpha ≥ 16 of 255).
+Form artwork, pictures without transparency, and pictures that can't be decoded (JPEG 2000,
+JBIG2, CCITT) keep their whole box.
+
+`image_hit` applies the same path, hole and transparency checks headlessly. `page_images` retains `rect` as
 the full placement rectangle used by `image_edit` and adds `visible_rect` for selection (null
 when fully clipped). `object_list` reports visible artwork bounds while keeping the original
 source indexes. A selection frame does not create, remove or enlarge the PDF's clipping path.

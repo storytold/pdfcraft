@@ -21,7 +21,7 @@ impl Document {
         self.page_images(page).iter().rposition(|i| {
             i.contains(at)
                 && match (i.is_form, i.object) {
-                    (false, Some(_)) => true,
+                    (false, Some(_)) => self.image_shows_at(i, at),
                     (true, Some(form)) => picture_in_form(&editor.cos, form).is_some(),
                     _ => false,
                 }
