@@ -159,6 +159,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
                 tool == QuickTool::AddText && !over_source,
                 matches!(tool, QuickTool::AddText | QuickTool::EditText),
                 text_style,
+                &frame.page_frames,
                 view,
             )
             || tool == QuickTool::AddText && !over_source
