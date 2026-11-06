@@ -53,3 +53,16 @@ fn a_click_cycles_the_theme_and_a_right_click_opens_the_menu() {
     h.run_steps(10);
     assert!(h.query_by_label("Light theme").is_some(), "Preferences opens on Appearance");
 }
+
+#[test]
+fn the_gear_stays_inside_a_narrow_window_beside_the_other_controls() {
+    let mut h = Harness::builder().with_size(egui::vec2(420.0, 600.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app
+    });
+    h.run_steps(6);
+    let gear = h.get_by_label("Preferences").rect();
+    let theme = h.get_by_label_contains("Display theme:").rect();
+    assert!(gear.right() <= 420.0 && theme.right() <= gear.left() + 0.5, "gear {gear:?}, theme {theme:?}");
+}
