@@ -739,3 +739,47 @@ if (this.rawValue == "1") {
 "##
     .to_string()
 }
+
+/// A form whose two draws link their pictures instead of embedding them: `.\logo.png`, which the
+/// PDF keeps in its `XFAImages` name tree (a [`tiny_png`], under a `Kids` node, as producers
+/// split the tree), and `.\missing.png`, which it doesn't (XFA 3.3 pp. 257–258).
+pub fn linked_image_shell() -> Vec<u8> {
+    linked_image_shell_with(b"<< /Kids [7 0 R] >>", br"<< /Limits [(.\\logo.png) (.\\logo.png)] /Names [(.\\logo.png) 8 0 R] >>")
+}
+
+/// [`linked_image_shell`] with its own name tree: `root` is object 6 (the tree the catalog names),
+/// `kid` object 7, and object 8 the PNG.
+pub fn linked_image_shell_with(root: &[u8], kid: &[u8]) -> Vec<u8> {
+    linked_image_shell_holding(root, kid, TINY_PNG)
+}
+
+/// [`linked_image_shell_with`], object 8 a stream holding `picture` (a [`tiny_png`] there).
+pub fn linked_image_shell_holding(root: &[u8], kid: &[u8], picture: &[u8]) -> Vec<u8> {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page1" layout="tb">
+  <draw name="logo" w="1in" h="1in"><value><image contentType="image/png" href=".\logo.png"/></value></draw>
+  <draw name="gone" w="1in" h="1in"><value><image contentType="image/png" href=".\missing.png"/></value></draw>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut png = format!("<< /Length {} >>\nstream\n", picture.len()).into_bytes();
+    png.extend_from_slice(picture);
+    png.extend_from_slice(b"\nendstream");
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /NeedsRendering true /AcroForm << /XFA 5 0 R /Fields [] >> /Names << /XFAImages 6 0 R >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>".to_vec(),
+        b"<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 700 Td (Please wait...) Tj ET\nendstream".to_vec(),
+        format!("<< /Length {} >>\nstream\n{xdp}\nendstream", xdp.len()).into_bytes(),
+        root.to_vec(),
+        kid.to_vec(),
+        png,
+    ];
+    assemble(objs)
+}

@@ -656,7 +656,9 @@ pub fn template_of(doc: &Document) -> Result<Template, XfaError> {
     if packets.xdp.trim().is_empty() {
         return Err(XfaError::Malformed("the XFA packets hold no template".into()));
     }
-    crate::parse(&packets.xdp).map(|(t, _)| t)
+    let (mut tpl, _) = crate::parse(&packets.xdp)?;
+    crate::linked_images::resolve(&mut tpl, doc);
+    Ok(tpl)
 }
 
 /// Whether the template field at `som` is multiline text without a fixed height.
