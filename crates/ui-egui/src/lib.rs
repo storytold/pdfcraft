@@ -640,6 +640,8 @@ pub struct PdfCraftApp {
     /// Runs an automation tool on this window's documents, for the control channel's
     /// `tool.call` (the desktop app sets it; this crate doesn't depend on the tool table).
     pub tool_runner: Option<control::ToolRunner>,
+    /// App-owned mutation resolver, sharing the runner's connection context.
+    pub tool_resolver: Option<control::ToolResolver>,
     /// A bookmark being renamed in the Bookmarks panel: (path, text so far).
     pub bookmark_rename: Option<(Vec<usize>, String)>,
     /// Bookmarks copied or cut in the Bookmarks panel, with their subtrees, ready to paste into

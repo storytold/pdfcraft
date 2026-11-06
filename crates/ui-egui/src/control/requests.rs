@@ -5,6 +5,15 @@ impl Control {
     /// Validate and dispatch one control method, rejecting unknown methods and malformed parameters with
     /// actionable errors.
     pub(super) fn handle(&mut self, ctx: &egui::Context, host: &mut impl Host, method: &str, p: &Value, since: web_time::Instant) -> Handled {
+        if self.ask
+            && (self.claim.is_some() || host.agent_holds(self.connection))
+            && !matches!(method, "tool.call" | "agent.reply" | "ui.state" | "ui.commands" | "ui.inspect" | "tool.inspect" | "ui.screenshot")
+            && !(method == "ui.askAgent" && p["close"] == true)
+        {
+            return Handled::Now(Err(
+                "ASK_AGENT_TOOLS_REQUIRED: use scoped document tools for this request; native review and input remain with the person".into(),
+            ));
+        }
         let str_param = |k: &str| p.get(k).and_then(Value::as_str).ok_or_else(|| format!("{method}: missing string parameter {k}"));
         if (host.private_dialog() || self.passes() < self.private_until_pass) && matches!(method, "tool.inspect" | "ui.screenshot") {
             return Handled::Now(Err(format!(
@@ -12,6 +21,7 @@ impl Control {
             )));
         }
         let r: Result<Handled, String> = (|| match method {
+            "agent.reply" => Ok(Handled::Now(host.agent_reply(self.connection, p))),
             "ui.askAgent" => Ok(Handled::Now(host.ask_agent(p))),
             "ui.state" => {
                 let mut state = host.state();
@@ -35,7 +45,7 @@ impl Control {
             }
             "ui.open" => Ok(Handled::Now(host.open(str_param("path")?))),
             "tool.call" => {
-                only_params(p, method, &["name", "arguments", "root", "requestId", "__agentOwner", "__askConnection"])?;
+                only_params(p, method, &["name", "arguments", "root", "requestId"])?;
                 let root = match p.get("root") {
                     None | Some(Value::Null) => None,
                     Some(Value::String(r)) => Some(r.as_str()),
@@ -43,14 +53,8 @@ impl Control {
                 };
                 let name = str_param("name")?;
                 let args = p.get("arguments").unwrap_or(&Value::Null);
-                if p["__askConnection"] == true {
-                    Ok(Handled::Now(host.agent_tool(
-                        p["__agentOwner"].as_u64().ok_or("NOT_OWNER: missing socket context")?,
-                        p["requestId"].as_u64(),
-                        name,
-                        args,
-                        root,
-                    )))
+                if self.ask {
+                    Ok(Handled::Now(host.agent_tool(self.connection, self.claim, name, args, root)))
                 } else {
                     Ok(Handled::Now(host.connected_tool(self.connection, name, args, root)))
                 }

@@ -212,7 +212,56 @@ sent extra keys before get an error now.
   requests can wait until it is drawn again.
 
 Ask Agent exposes `wait_for_request` and `reply_to_request` through this bridge.
-Requests are session-only and connection-owned. A claimed request can call the connected
-window's native tools, including document-mutating tools. Ownership checks still apply,
-signing remains person-only, and agent edits can be kept or undone. Requests never silently
-run in a separate headless document.
+Requests are session-only, connection-owned, and capture the original document identity,
+revision and selection. A response or progress note is accepted on the document owner's
+thread against its current revision. Changing tabs never retargets Send; return to the
+original tab before sending. An empty listen clears the connection's previous request tag.
+
+A claimed request uses scoped document tools. Paragraph replacements require that the same
+connection listed the page and that every source word matches rendered glyphs entirely inside the
+captured text quads. Selecting a few words does not authorize replacing their entire
+paragraph. After a replacement, the held selection follows the edited paragraph's actual
+new ink and narrows to that paragraph. `text_edit` accepts only document, page, paragraph
+and text in this mode; layout/style changes, line-index edits and unprovable mutations are
+refused with `UNPROVEN_TARGET`. Target proofs have a bounded glyph-matching budget and refuse ambiguous/missing glyphs.
+Page rotation and ordinary Save (`doc`, optional `path`) require the complete affected pages
+in the captured selection. Rectangular comments use normalized PDF coordinates, including
+rotated pages and offset crop boxes. Multi-step region edits are refused; page-scoped
+batches are checked before execution. Other connected tool calls retain their ordinary
+capabilities when there is no claimed request. Signing remains person-only.
+
+A connection carrying a request cannot use synthetic UI input or `ui.command` to bypass
+these tool checks. The general UI control channel is still privileged: its token grants
+control of the desktop session and is not a sandbox separating clients who share that
+token. Requests never silently run in a separate headless document.
+
+`text`, `proposal`, `format` and `comment` responses are bounded plain text. A proposal-only
+response is retained, displayed as “Proposal (not applied)”, and copied into the native
+agent-authored review note. `format` is descriptive metadata and never selects a parser or
+executor. Keep retains already executed tool edits and notes; it never applies a proposal.
+The note is attached to the original document, with its PDF coordinates converted to the
+tool's view coordinates. The obsolete local translation catalogs were dropped after their
+migration to craft-i18n #141, retaining that migration's translator credit; new labels here
+are English source strings.
+
+Keep and Undo remain the person's actions. They count the actual undo steps a tool added,
+including steps before a failed call; a Save adding no history contributes zero. Keep groups
+only a contiguous run whose revision and undo depth still match. If another edit intervened,
+its history is left alone and the person uses the ordinary Edit menu. Connected Undo/Redo
+remain refused until typed history provenance can distinguish human and agent work.
+
+If a connection is lost after a tool edit but before its request advances, the app keeps the
+actual review checkpoint and invalidates the old request. Keep/Undo remain available with
+the same revision/history guards; the old selection is never silently reused for a new Send.
+If the new selection cannot be proved, keep or close the request and select again. The last
+validated editor's identity is retained for an interrupted request's plain-text failure note.
+Native listeners may omit their display name on later polls without losing their registered
+identity; an explicit valid name replaces it, and an invalid name changes nothing.
+
+Field detection is a read only with explicit `add:false`: the ordinary default creates fields,
+so a claimed request must not treat it as inspection. Automatic additions without a provable
+scope are refused; unclaimed ordinary detection retains its existing behavior. Request tags
+are checked for an exact unsigned-integer match on the authenticated connection before action.
+Remote `ui.askAgent {close:true}` cannot close an active request, even after failure or an empty
+listen, because closing would retain tool edits. The person closes/reviews it in the window;
+a draft bubble that has not sent a request can still be closed through that method.

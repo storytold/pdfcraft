@@ -220,49 +220,26 @@ impl Host for crate::PdfCraftApp {
     }
 
     fn tool(&mut self, name: &str, args: &Value, root: Option<&str>) -> Reply {
-        if super::tool::agent_signing_call(name, args, 0) {
-            return Err("HUMAN_SIGNATURE_REQUIRED: signing is refused; only the person may sign in the native UI".into());
-        }
-        if !super::tool::agent_read_only_tool(name) {
-            self.ask_agent.hub.may_edit(0, None).map_err(|e| format!("{}: {}", e.code, e.message))?;
-        }
-        self.run_tool(name, args, root)
+        self.ask_agent_tool(0, None, name, args, root)
     }
 
     fn connected_tool(&mut self, connection: u64, name: &str, args: &Value, root: Option<&str>) -> Reply {
-        self.agent_tool(connection, None, name, args, root)
+        self.ask_agent_tool(connection, None, name, args, root)
     }
 
     fn agent_tool(&mut self, owner: u64, request: Option<u64>, name: &str, args: &Value, root: Option<&str>) -> Reply {
-        if super::tool::agent_signing_call(name, args, 0) {
-            return Err("HUMAN_SIGNATURE_REQUIRED: signing is person-only".into());
-        }
-        let read = super::tool::agent_read_only_tool(name);
-        if !read {
-            self.ask_agent.hub.may_edit(owner, request).map_err(|e| format!("{}: {}", e.code, e.message))?;
-        }
-        // The agent's comments carry its name, like its other edits.
-        let mut args = args.clone();
-        if let (Some(id), Some(o)) = (request, args.as_object_mut())
-            && name.starts_with("comment_")
-            && !o.contains_key("author")
-            && let Some(author) = self.ask_agent.author(id)
-        {
-            o.insert("author".into(), json!(author));
-        }
-        // A batch applies one edit per step, so count the Undo steps the call really adds: Keep
-        // groups them all, and Undo knows how many to take back.
-        let doc = request.and_then(|id| self.ask_agent.open_doc(id));
-        let before = doc.and_then(|d| self.session.get(d)).map(|d| d.undo_depth());
-        let r = self.run_connected_tool(owner, name, &args, root);
-        if let (Some(id), false, Ok(_)) = (request, read, &r) {
-            let after = doc.and_then(|d| self.session.get(d)).map(|d| d.undo_depth());
-            let created = match (before, after) {
-                (Some(before), Some(after)) if after > before => after - before,
-                _ => 1,
-            };
-            self.ask_agent.record_edits(id, created);
-        }
-        r
+        self.ask_agent_tool(owner, request, name, args, root)
+    }
+
+    fn agent_holds(&self, connection: u64) -> bool {
+        self.ask_agent
+            .open
+            .as_ref()
+            .and_then(|open| self.ask_agent.hub.snapshot(open.id))
+            .is_some_and(|snapshot| snapshot.status == crate::ask_agent::Status::Working { conn: connection })
+    }
+
+    fn agent_reply(&mut self, connection: u64, params: &Value) -> Reply {
+        self.ask_agent_reply(connection, params)
     }
 }

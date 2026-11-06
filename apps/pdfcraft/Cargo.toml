@@ -44,6 +44,7 @@ wayland-protocols = { version = "0.32", features = ["client"] }
 raw-window-handle = "0.6"
 
 [dev-dependencies]
+pdfcraft-render = { workspace = true }
 # End-to-end connected automation through the UI, without a native window.
 egui_kittest = { workspace = true, features = ["eframe"] }
 # Waits for wgpu's adapter, device and error-scope futures in tests (already in the tree through wgpu).

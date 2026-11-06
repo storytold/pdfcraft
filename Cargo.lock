@@ -4228,6 +4228,7 @@ dependencies = [
  "log",
  "pdfcraft-automation",
  "pdfcraft-engine",
+ "pdfcraft-render",
  "pdfcraft-ui-egui",
  "pollster 1.0.1",
  "raw-window-handle",

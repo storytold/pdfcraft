@@ -143,9 +143,22 @@ pub fn bubble(ctx: &egui::Context, anchor: Rect, view: &View, draft: &mut String
                     Some(Status::Failed) => {
                         let error = view.snapshot.and_then(|s| s.error.as_deref()).unwrap_or_default();
                         ui.label(RichText::new(error).color(ui.visuals().error_fg_color));
+                        row(ui, Layout::right_to_left(Align::Center), |ui| {
+                            if ui.add(primary(ui, tr(ctx, "Keep"))).clicked() {
+                                action = Some(Action::Keep);
+                            }
+                            if ui.button(tr(ctx, "Undo")).on_hover_text(tr(ctx, "Undo all of the agent's edits")).clicked() {
+                                action = Some(Action::Undo);
+                            }
+                        });
                     }
                     Some(Status::Answered) => {
-                        ui.label(view.snapshot.and_then(|s| s.answer.as_deref()).unwrap_or_default());
+                        if let Some(snapshot) = view.snapshot {
+                            ui.label(snapshot.review_text());
+                            if snapshot.proposal.is_some() {
+                                ui.label(tr(ctx, "Keep tool edits and notes. Proposals are not applied."));
+                            }
+                        }
                         // The decision on the right, primary last, like Send below.
                         row(ui, Layout::right_to_left(Align::Center), |ui| {
                             if ui.add(primary(ui, tr(ctx, "Keep"))).clicked() {

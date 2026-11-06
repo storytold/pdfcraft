@@ -2121,6 +2121,20 @@ fn control_does_not_expose_private_dialogs() {
     }
 }
 
+/// Review choices use the native input path, never a remote request that can keep edits.
+fn person_closes_ask_agent(h: &mut Harness<'static, PdfCraftApp>) {
+    for pressed in [true, false] {
+        h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE });
+        h.step();
+    }
+    h.run_steps(2);
+}
+
+fn current_window_target(h: &Harness<'static, PdfCraftApp>) -> pdfcraft_ui_egui::ask_agent::Target {
+    let doc = &h.state().session.docs()[0];
+    pdfcraft_ui_egui::ask_agent::Target { document: format!("pdf:{}", doc.id.0), revision: doc.edit_generation() }
+}
+
 #[test]
 fn ask_agent_owner_edits_and_escape_closes_the_request() {
     let (mut h, c) = harness();
@@ -2130,19 +2144,23 @@ fn ask_agent_owner_edits_and_escape_closes_the_request() {
     ok(&mut h, &c, "ui.askAgent", json!({}));
     let sent = ok(&mut h, &c, "ui.askAgent", json!({"instruction":"Explain this page"}));
     let id = sent["id"].as_u64().unwrap();
-    let request = hub.listen(100, None, std::time::Duration::ZERO, || true).unwrap();
+    let request = hub.listen(100, None, std::time::Duration::ZERO, || true).unwrap().unwrap();
     assert_eq!(request.id, id);
     assert_eq!(request.instruction, "Explain this page");
     assert_eq!(request.selection["pages"], json!([1]));
 
     // The agent that took the request may edit the document for it; others may not.
-    assert!(hub.may_edit(100, Some(id)).is_ok());
-    assert_eq!(hub.may_edit(101, Some(id)).unwrap_err().code, "NOT_OWNER");
-    assert_eq!(hub.may_edit(100, None).unwrap_err().code, "HELD");
+    assert!(hub.may_edit(100, Some(id), &request.target, |selection| selection == &request.selection).is_ok());
+    assert_eq!(hub.may_edit(101, Some(id), &request.target, |selection| selection == &request.selection).unwrap_err().code, "NOT_OWNER");
+    assert_eq!(hub.may_edit(100, None, &request.target, |selection| selection == &request.selection).unwrap_err().code, "HELD");
 
-    h.state_mut().tool_runner = Some(Box::new(|_, name, _, _| Ok(json!({ "content": [{ "type": "json", "value": { "ran": name } }] }))));
+    h.state_mut().tool_runner = Some(Box::new(|_, _, name, _, _| Ok(json!({ "content": [{ "type": "json", "value": { "ran": name } }] }))));
     let note = json!({"doc":1,"page":1,"type":"note","at":[20,20],"contents":"From the agent"});
-    ok(&mut h, &c, "tool.call", json!({"name":"comment_add","arguments":note,"requestId":id,"__askConnection":true,"__agentOwner":100}));
+    assert!(
+        call(&mut h, &c, "tool.call", json!({"name":"comment_add","arguments":note,"requestId":id,"__askConnection":true,"__agentOwner":100}))
+            .is_err(),
+        "JSON cannot supply native ownership"
+    );
     assert!(
         call(&mut h, &c, "tool.call", json!({"name":"comment_add","arguments":note,"requestId":id,"__askConnection":true,"__agentOwner":101}))
             .is_err()
@@ -2154,7 +2172,17 @@ fn ask_agent_owner_edits_and_escape_closes_the_request() {
 
     // Escape closes the request, as Close does: a late answer is refused.
     assert!(hub.snapshot(id).is_none());
-    assert_eq!(hub.reply(100, id, "Page one response", true, None).unwrap_err().code, "NO_REQUEST");
+    assert_eq!(
+        hub.reply(
+            100,
+            id,
+            pdfcraft_ui_egui::ask_agent::hub::Reply { text: "Page one response", done: true, ..Default::default() },
+            Some(&current_window_target(&h))
+        )
+        .unwrap_err()
+        .code,
+        "NO_REQUEST"
+    );
 }
 
 #[test]
@@ -2168,8 +2196,15 @@ fn ask_agent_chip_click_and_network_review_are_person_only() {
     h.run_steps(3);
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["askAgent"]["bubbleOpen"], true);
     let sent = ok(&mut h, &c, "ui.askAgent", json!({"instruction":"Explain synthetic PDF"}));
-    let claim = c.agent_hub().listen(7, None, std::time::Duration::ZERO, || true).unwrap();
-    c.agent_hub().reply(7, claim.id, "Reviewing the captured synthetic page", false, None).unwrap();
+    let claim = c.agent_hub().listen(7, None, std::time::Duration::ZERO, || true).unwrap().unwrap();
+    c.agent_hub()
+        .reply(
+            7,
+            claim.id,
+            pdfcraft_ui_egui::ask_agent::hub::Reply { text: "Reviewing the captured synthetic page", done: false, ..Default::default() },
+            Some(&current_window_target(&h)),
+        )
+        .unwrap();
     h.run_steps(2);
 
     let endpoint = pdfcraft_ui_egui::control::serve(c.clone()).unwrap();
@@ -2212,31 +2247,45 @@ fn ask_agent_bubble_flow_keep_undo_followup() {
     assert_eq!(open_repeat["open"], true);
     let sent = ok(&mut h, &c, "ui.askAgent", json!({"instruction":"First turn"}));
     let id1 = sent["id"].as_u64().unwrap();
-    let req1 = hub.listen(50, None, std::time::Duration::ZERO, || true).unwrap();
+    let req1 = hub.listen(50, None, std::time::Duration::ZERO, || true).unwrap().unwrap();
     assert_eq!(req1.id, id1);
 
     // 2. Reply to first turn
-    hub.reply(50, id1, "First turn answered", true, None).unwrap();
+    hub.reply(
+        50,
+        id1,
+        pdfcraft_ui_egui::ask_agent::hub::Reply { text: "First turn answered", done: true, ..Default::default() },
+        Some(&current_window_target(&h)),
+    )
+    .unwrap();
     let s = hub.snapshot(id1).unwrap();
     assert_eq!(s.answer.as_deref(), Some("First turn answered"));
 
     // 3. Keep and Undo are the person's: refused over the control channel; closing ends the request.
     let refused = call(&mut h, &c, "ui.askAgent", json!({"accept":id1}));
     assert!(refused.unwrap_err().starts_with("HUMAN_REVIEW_REQUIRED"));
-    ok(&mut h, &c, "ui.askAgent", json!({"close":true}));
+    assert!(call(&mut h, &c, "ui.askAgent", json!({"close":true})).unwrap_err().contains("HUMAN_REVIEW_REQUIRED"));
+    person_closes_ask_agent(&mut h);
     assert!(hub.snapshot(id1).is_none());
 
     // 4. A second request goes through the same way.
     let sent2 = ok(&mut h, &c, "ui.askAgent", json!({"instruction":"Second turn"}));
     let id2 = sent2["id"].as_u64().unwrap();
-    assert_eq!(hub.listen(50, None, std::time::Duration::ZERO, || true).unwrap().id, id2);
-    hub.reply(50, id2, "Second turn answered", true, None).unwrap();
-    ok(&mut h, &c, "ui.askAgent", json!({"close":true}));
+    assert_eq!(hub.listen(50, None, std::time::Duration::ZERO, || true).unwrap().unwrap().id, id2);
+    hub.reply(
+        50,
+        id2,
+        pdfcraft_ui_egui::ask_agent::hub::Reply { text: "Second turn answered", done: true, ..Default::default() },
+        Some(&current_window_target(&h)),
+    )
+    .unwrap();
+    assert!(call(&mut h, &c, "ui.askAgent", json!({"close":true})).unwrap_err().contains("HUMAN_REVIEW_REQUIRED"));
+    person_closes_ask_agent(&mut h);
     assert!(hub.snapshot(id2).is_none());
 }
 
 #[test]
-fn ask_agent_counts_every_step_of_a_batch() {
+fn ask_agent_rejects_forged_batch_context() {
     let (mut h, c) = harness();
     let hub = c.agent_hub();
     let _ = hub.listen(60, Some("worker"), std::time::Duration::ZERO, || true);
@@ -2244,19 +2293,27 @@ fn ask_agent_counts_every_step_of_a_batch() {
     ok(&mut h, &c, "ui.askAgent", json!({}));
     let sent = ok(&mut h, &c, "ui.askAgent", json!({"instruction":"Add two pages"}));
     let id = sent["id"].as_u64().unwrap();
-    hub.listen(60, None, std::time::Duration::ZERO, || true).unwrap();
+    hub.listen(60, None, std::time::Duration::ZERO, || true).unwrap().unwrap();
 
     // A batch applies one edit per step: each one is counted, so Keep groups them all and Undo
     // takes them all back, instead of the single tool call counting as one edit.
-    h.state_mut().tool_runner = Some(Box::new(|session, _name, _args, _root| {
+    h.state_mut().tool_runner = Some(Box::new(|session, _connection, _name, _args, _root| {
         let doc = session.docs()[0].id;
         for page in [0, 1] {
             session.apply(doc, pdfcraft_engine::Edit::RotatePages { pages: vec![page], degrees: 90 }).map_err(|e| e.to_string())?;
         }
         Ok(json!({"steps": 2}))
     }));
-    ok(&mut h, &c, "tool.call", json!({"name":"command_batch","arguments":{"steps":[]},"requestId":id,"__askConnection":true,"__agentOwner":60}));
-    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["askAgent"]["edits"], 2);
+    assert!(
+        call(
+            &mut h,
+            &c,
+            "tool.call",
+            json!({"name":"command_batch","arguments":{"steps":[]},"requestId":id,"__askConnection":true,"__agentOwner":60})
+        )
+        .is_err()
+    );
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["askAgent"]["edits"], 0);
 }
 
 #[test]

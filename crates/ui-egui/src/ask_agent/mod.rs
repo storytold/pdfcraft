@@ -2,9 +2,13 @@
 //! control channel) to work on the PDF. `hub.rs` and `ui.rs` are shared with the other apps; this
 //! file is PdfCraft's part: the target as JSON, the agent's edits as one undo step, its closing note.
 pub mod hub;
+pub(crate) mod target;
+#[cfg(test)]
+mod tests;
+mod transactions;
 pub mod ui;
 
-pub use hub::{AgentHub, HubError, Request, Snapshot, Status, Turn};
+pub use hub::{AgentHub, HubError, Request, Snapshot, Status, Target, Turn};
 pub use ui::Action;
 
 use crate::PdfCraftApp;
@@ -59,10 +63,14 @@ pub(crate) struct Open {
     pub(crate) anchor: Rect,
     pub(crate) turns: Vec<Turn>,
     pub(crate) doc_id: pdfcraft_engine::DocId,
-    pub(crate) initial_generation: u64,
+    pub(crate) expected_generation: u64,
+    pub(crate) initial_depth: usize,
+    pub(crate) undo_safe: bool,
+    pub(crate) last_agent: Option<String>,
+    pub(crate) scope_valid: bool,
     pub(crate) edits_count: usize,
     asked: String,
-    target: serde_json::Value,
+    pub(crate) target: serde_json::Value,
     commented: bool,
 }
 
@@ -79,7 +87,12 @@ impl AskAgent {
 
     /// The name an edit for `request` is authored with: "Agent (<name>)".
     pub fn author(&self, request: u64) -> Option<String> {
-        self.hub.snapshot(request).and_then(|s| s.agent).map(|name| format!("Agent ({name})"))
+        let open = self.open.as_ref().filter(|open| open.id == request);
+        let interrupted = open.filter(|open| !open.scope_valid).and_then(|open| open.last_agent.clone());
+        interrupted
+            .or_else(|| self.hub.snapshot(request).and_then(|snapshot| snapshot.agent))
+            .or_else(|| open.and_then(|open| open.last_agent.clone()))
+            .map(|name| format!("Agent ({name})"))
     }
 
     /// Record an edit made on behalf of request_id.
@@ -93,7 +106,7 @@ impl AskAgent {
         if let Some(open) = &mut self.open
             && open.id == request_id
         {
-            open.edits_count += count;
+            open.edits_count = open.edits_count.saturating_add(count);
         }
     }
 
@@ -115,6 +128,11 @@ impl AskAgent {
 
 /// Show the Ask Agent chip or bubble and process resulting actions.
 pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    for doc in app.session.docs() {
+        if let Some(current) = target::for_doc(&app.session, doc.id) {
+            app.ask_agent.hub.invalidate(&current);
+        }
+    }
     if app.modal_open() || app.palette_open {
         return;
     }
@@ -132,7 +150,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         return;
     };
     let (anchor, snapshot) = (open.anchor, app.ask_agent.hub.snapshot(open.id));
-    if let Some(s) = snapshot.as_ref().filter(|s| s.status == Status::Answered) {
+    if let Some(s) = snapshot.as_ref().filter(|s| matches!(s.status, Status::Answered | Status::Failed)) {
         note_once(app, s);
     }
     let agents = app.ask_agent.hub.agents();
@@ -147,47 +165,121 @@ fn open_at(app: &mut PdfCraftApp, anchor: Rect) {
     let Some((_, doc_id)) = app.active_ids() else { return };
     let initial_generation = app.session.get(doc_id).map(|d| d.edit_generation()).unwrap_or(0);
     let target = serde_json::Value::Null;
-    app.ask_agent.open =
-        Some(Open { id: 0, anchor, turns: vec![], doc_id, initial_generation, edits_count: 0, asked: String::new(), target, commented: false });
+    app.ask_agent.open = Some(Open {
+        id: 0,
+        anchor,
+        turns: vec![],
+        doc_id,
+        expected_generation: initial_generation,
+        initial_depth: app.session.get(doc_id).map_or(0, |d| d.undo_depth()),
+        undo_safe: true,
+        last_agent: None,
+        scope_valid: true,
+        edits_count: 0,
+        asked: String::new(),
+        target,
+        commented: false,
+    });
 }
 
 /// The agent's answer, once, as a note on the page it worked on, authored like its edits.
 fn note_once(app: &mut PdfCraftApp, s: &Snapshot) {
-    let Some(open) = app.ask_agent.open.as_mut().filter(|o| !o.commented) else { return };
-    open.commented = true;
-    let (Some(answer), Some(author)) = (s.answer.clone(), app.ask_agent.author(s.id)) else { return };
-    let Some(open) = &app.ask_agent.open else { return };
-    let page = open.target["pages"][0].as_u64().unwrap_or(1);
-    let at = open.target["rects"][0]["rect"].as_array().map(|r| [r[2].clone(), r[1].clone()]).map_or(json!([36, 36]), |p| json!(p));
-    let contents = format!("Instruction: {}\n\nAgent response: {}", open.asked, answer);
-    let args = json!({"doc": open.doc_id.0, "page": page, "type": "note", "at": at, "contents": contents, "author": author});
-    if app.run_tool("comment_add", &args, None).is_ok() {
-        app.ask_agent.record_edit(s.id);
+    let Some(open) = app.ask_agent.open.as_ref().filter(|o| !o.commented && o.id == s.id) else { return };
+    if !transactions::undo_matches(&app.session, open) {
+        return;
     }
+    let answer = s.review_text();
+    if answer.is_empty() {
+        return;
+    }
+    let Some(author) = app.ask_agent.author(s.id) else { return };
+    let page = open.target["pages"][0].as_u64().unwrap_or(1);
+    let at = open.target["rects"][0]["rect"]
+        .as_array()
+        .and_then(|r| {
+            let doc = app.session.get(open.doc_id)?;
+            let info = doc.info.pages.get(usize::try_from(page).ok()?.checked_sub(1)?)?;
+            Some(info.user_to_view(r.get(2)?.as_f64()? as f32, r.get(1)?.as_f64()? as f32))
+        })
+        .unwrap_or([36.0, 36.0]);
+    let doc_id = open.doc_id;
+    let depth = app.session.get(doc_id).map_or(0, |d| d.undo_depth());
+    let contents = format!("Instruction: {}\n\nAgent response: {}", open.asked, answer);
+    let args = json!({"doc":doc_id.0,"page":page,"type":"note","at":at,"contents":contents,"author":author});
+    if app.run_tool("comment_add", &args, None).is_ok() {
+        let after = app.session.get(doc_id);
+        if let Some(open) = app.ask_agent.open.as_mut() {
+            open.commented = true;
+            open.edits_count = open.edits_count.saturating_add(after.map_or(0, |d| d.undo_depth()).saturating_sub(depth));
+            if let Some(after) = after {
+                open.expected_generation = after.edit_generation();
+            }
+        }
+    }
+}
+
+fn send(app: &mut PdfCraftApp, text: String) -> Result<(), String> {
+    let (captured, document, doc_id, generation) = capture_target(app).ok_or("STALE_TARGET: no document open")?;
+    let open = app.ask_agent.open.as_ref().ok_or("STALE_TARGET: no open Ask Agent request")?;
+    if doc_id != open.doc_id {
+        return Err("STALE_TARGET: switch back to the document where Ask Agent was opened before sending".into());
+    }
+    let hub = app.ask_agent.hub.clone();
+    let previous = hub.snapshot(open.id);
+    if previous.as_ref().is_some_and(|s| matches!(s.status, Status::Queued | Status::Working { .. })) {
+        return Err("HELD: the current request is still waiting or working".into());
+    }
+    if open.id != 0 && !open.scope_valid {
+        return Err("STALE_TARGET: the edited selection cannot be followed; keep or close this request and select it again".into());
+    }
+    if open.id != 0 && !transactions::undo_matches(&app.session, open) {
+        return Err("STALE_TARGET: the document changed outside this request; keep or close it before asking again".into());
+    }
+    let mut history = open.turns.clone();
+    if let Some(previous) = previous.as_ref().filter(|s| matches!(s.status, Status::Answered | Status::Failed)) {
+        history.push(Turn { instruction: open.asked.clone(), answer: previous.review_text() });
+    }
+    let selection = if open.target.is_null() { captured } else { open.target.clone() };
+    let id = hub
+        .ask(Request {
+            id: 0,
+            instruction: text.clone(),
+            history: history.clone(),
+            selection: selection.clone(),
+            document,
+            agent: app.ask_agent.picked.clone(),
+            target: Target { document: format!("pdf:{}", doc_id.0), revision: generation },
+        })
+        .map_err(|e| format!("{}: {}", e.code, e.message))?;
+    let depth = app.session.get(doc_id).map_or(0, |d| d.undo_depth());
+    if let Some(open) = app.ask_agent.open.as_mut() {
+        if open.id == 0 {
+            open.initial_depth = depth;
+            open.expected_generation = generation;
+            open.undo_safe = true;
+        } else {
+            hub.close(open.id);
+        }
+        open.id = id;
+        open.target = selection;
+        open.turns = history;
+        open.asked = text;
+        open.commented = false;
+    }
+    Ok(())
 }
 
 fn handle_action(app: &mut PdfCraftApp, act: Action) {
     match act {
         Action::Send(text) => {
-            let Some((sel, doc, _, _)) = capture_target(app) else { return };
-            let agent = app.ask_agent.picked.clone();
-            let hub = app.ask_agent.hub.clone();
-            let Some(open) = &mut app.ask_agent.open else { return };
-            // After an answer, this is a follow-up: the thread so far goes with it.
-            if let Some(answer) = hub.snapshot(open.id).and_then(|s| s.answer) {
-                open.turns.push(Turn { instruction: std::mem::take(&mut open.asked), answer });
-                hub.close(open.id);
+            if let Err(error) = send(app, text.clone()) {
+                app.ask_agent.draft = text;
+                app.notify_error(&error);
             }
-            if open.target.is_null() {
-                open.target = sel.clone();
-            }
-            open.asked = text.clone();
-            open.commented = false;
-            open.id = hub.ask(Request { id: 0, instruction: text, history: open.turns.clone(), selection: sel, document: doc, agent });
         }
         Action::Keep | Action::Close => {
             if let Some(open) = app.ask_agent.open.take() {
-                if open.edits_count > 1 {
+                if open.edits_count > 1 && transactions::undo_matches(&app.session, &open) {
                     let _ = app.session.group_undo(open.doc_id, open.edits_count, pdfcraft_engine::Label::of("Ask Agent"));
                 }
                 app.ask_agent.hub.close(open.id);
@@ -196,8 +288,7 @@ fn handle_action(app: &mut PdfCraftApp, act: Action) {
         Action::Undo => {
             let Some(open) = app.ask_agent.open.take() else { return };
             app.ask_agent.hub.close(open.id);
-            let current = app.session.get(open.doc_id).map(|d| d.edit_generation()).unwrap_or(0);
-            if current != open.initial_generation + open.edits_count as u64 {
+            if !transactions::undo_matches(&app.session, &open) {
                 app.notify_error("The document changed since the agent's edits; use Undo in the Edit menu");
                 return;
             }
@@ -238,7 +329,9 @@ fn capture_target(app: &PdfCraftApp) -> Option<(serde_json::Value, serde_json::V
         })
         .unwrap_or_default();
     let text = v.selected_text().unwrap_or_default();
-    let selection = json!({ "doc": d.id.0, "pages": pages, "rects": rects, "text": text });
+    let quads =
+        v.selection_quads(&d.info).map(|(p, qs)| qs.into_iter().map(|q| json!({"page":p+1,"quad":q})).collect::<Vec<_>>()).unwrap_or_default();
+    let selection = json!({ "doc": d.id.0, "pages": pages, "rects": rects, "quads":quads,"text": text });
     let document =
         json!({ "id": format!("pdf:{}", d.id.0), "title": d.name, "saved": d.path.is_some(), "revision": d.edit_generation().to_string() });
     Some((selection, document, d.id, d.edit_generation()))
@@ -266,6 +359,9 @@ impl PdfCraftApp {
             return Err("HUMAN_REVIEW_REQUIRED: Keep and Undo are the person's, in the window".into());
         }
         if p.get("close").and_then(serde_json::Value::as_bool) == Some(true) {
+            if self.ask_agent.open.as_ref().is_some_and(|open| open.id != 0) {
+                return Err("HUMAN_REVIEW_REQUIRED: closing this review keeps its edits; use Keep, Undo or Close in the window yourself".into());
+            }
             handle_action(self, Action::Close);
             return Ok(json!({ "open": false }));
         }
@@ -277,7 +373,7 @@ impl PdfCraftApp {
             return Err("STALE_TARGET: no document open".into());
         }
         if let Some(text) = p.get("instruction").and_then(serde_json::Value::as_str) {
-            handle_action(self, Action::Send(text.to_string()));
+            send(self, text.to_string())?;
         }
         Ok(json!({ "open": true, "id": self.ask_agent.open.as_ref().map(|o| o.id) }))
     }

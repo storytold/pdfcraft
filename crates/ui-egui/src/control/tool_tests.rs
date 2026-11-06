@@ -91,9 +91,25 @@ mod agent_transport_tests {
     #[test]
     fn ask_agent_tcp_auth_owner_late_reply_and_longpoll() {
         let ctx = egui::Context::default();
-        let (_control, client) = attach(&ctx);
+        let (mut control, client) = attach(&ctx);
         let hub = client.agent_hub();
         let endpoint = serve(client).unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done = stop.clone();
+        let owner_hub = hub.clone();
+        let owner = std::thread::spawn(move || {
+            let mut app = crate::PdfCraftApp::new();
+            let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+            app.open_bytes("synthetic.pdf", None, bytes.as_ref().clone()).unwrap();
+            app.ask_agent.hub = owner_hub;
+            // This queue-only fixture is ready without painting; production keeps its real
+            // font-installation startup gate (the full app tests exercise that path).
+            app.fonts_ready = true;
+            while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                control.tick(&ctx, &mut app);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        });
         let connect = || {
             let w = std::net::TcpStream::connect(("127.0.0.1", endpoint.port)).unwrap();
             w.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
@@ -109,25 +125,30 @@ mod agent_transport_tests {
             exchange(&mut w, &mut r, json!({"id":2,"method":"agent.listen","params":{"timeoutMs":0,"agent":"editor"}}))["result"],
             json!({"none":true})
         );
-        let id = hub.ask(crate::ask_agent::Request {
-            id: 0,
-            instruction: "Explain synthetic page".into(),
-            history: Vec::new(),
-            selection: json!({"pages":[1]}),
-            document: json!({"id":"pdf:1"}),
-            agent: None,
-        });
+        let id = hub
+            .ask(crate::ask_agent::Request {
+                id: 0,
+                instruction: "Explain synthetic page".into(),
+                history: Vec::new(),
+                selection: json!({"pages":[1]}),
+                document: json!({"id":"pdf:1"}),
+                agent: None,
+                target: crate::ask_agent::Target { document: "pdf:1".into(), revision: 0 },
+            })
+            .unwrap();
         let claim = exchange(&mut w, &mut r, json!({"id":3,"method":"agent.listen","params":{"timeoutMs":0}}));
         assert_eq!(claim["result"]["id"], id);
         let (mut other, mut or) = connect();
         exchange(&mut other, &mut or, json!({"id":1,"method":"auth","params":{"token":endpoint.token}}));
         let denied = exchange(&mut other, &mut or, json!({"id":2,"method":"agent.reply","params":{"id":id,"text":"stolen"}}));
         assert_eq!(denied["errorCode"], "NOT_OWNER");
-        assert!(denied["error"].is_string());
+        assert!(denied["error"].is_object());
         let reply = exchange(&mut w, &mut r, json!({"id":4,"method":"agent.reply","params":{"id":id,"text":"answer"}}));
         assert_eq!(reply["result"], json!({"id": id, "done": true}));
         let before = std::time::Instant::now();
         assert_eq!(exchange(&mut w, &mut r, json!({"id":5,"method":"agent.listen","params":{"timeoutMs":120}}))["result"], json!({"none":true}));
         assert!(before.elapsed() >= std::time::Duration::from_millis(100));
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        owner.join().unwrap();
     }
 }

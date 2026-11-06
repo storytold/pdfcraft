@@ -271,6 +271,7 @@ impl PdfCraftApp {
             control: None,
             ask_agent: ask_agent::AskAgent::default(),
             tool_runner: None,
+            tool_resolver: None,
             bookmark_rename: None,
             bookmark_clipboard: None,
             last_opened_url: None,

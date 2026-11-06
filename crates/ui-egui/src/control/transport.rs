@@ -240,9 +240,11 @@ fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint
                             } else {
                                 // Ask Agent's two methods are answered here; anything else goes to the window.
                                 let alive = || agent_peer_alive(&write).unwrap_or(false);
-                                if let Some(mut r) = client.agent_hub.handle(owner, method, &params, alive) {
-                                    if let Some(taken) = r["result"]["id"].as_u64().filter(|_| method == "agent.listen") {
-                                        (ask_connection, claimed_request) = (true, Some(taken));
+                                if method == "agent.listen" {
+                                    let Some(mut r) = client.agent_hub.handle(owner, method, &params, alive, |_| None) else { break };
+                                    // A timeout/empty listen releases the socket's old tag too.
+                                    if r.get("result").is_some() {
+                                        (ask_connection, claimed_request) = (true, r["result"]["id"].as_u64());
                                     }
                                     client.ctx.request_repaint();
                                     r["jsonrpc"] = json!("2.0");
@@ -348,14 +350,9 @@ fn relay_for_connection(client: &ControlClient, owner: u64, claim: Option<u64>, 
         {
             return Err("NOT_OWNER: native request tag does not match this socket's claim".into());
         }
-        if let Some(id) = claim {
-            p.insert("requestId".into(), json!(id));
-        }
-        p.insert("__agentOwner".into(), json!(owner));
-        p.insert("__askConnection".into(), json!(ask));
     }
     client
-        .send_from_connection(owner, method, params)
+        .send_with_context(owner, claim, ask, method, params)
         .recv_timeout(std::time::Duration::from_secs(30))
         .unwrap_or_else(|_| Err("NO_UI: the app did not answer within 30 s; open the connected window".into()))
 }

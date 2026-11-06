@@ -20,6 +20,8 @@ use serde_json::{Value, json};
 
 use crate::{Automation, ConnectedState, Content};
 
+mod targets;
+
 const MAX_CONNECTION_STATES: usize = 32;
 
 /// Stateful window dispatcher. The connection id is assigned by the authenticated transport,
@@ -158,12 +160,12 @@ pub(crate) fn agent_tools() -> Vec<Value> {
         }),
         json!({
             "name":"reply_to_request", "title":"Reply to an Ask Agent request",
-            "description":"Update a claimed request. Proposals remain unapplied until the person reviews them.",
+            "description":"Update a claimed request with plain text. Proposals are retained as notes and are never applied, including by Keep.",
             "inputSchema":{"type":"object","properties":{
                 "id":{"type":"integer","minimum":0,"maximum":9007199254740991u64},
                 "text":{"type":"string","maxLength":4000},"proposal":{"type":"string"},
                 "format":{"type":"string","enum":["text","markdown"],"default":"text"},
-                "comment":{"type":"string","maxLength":2000},"error":{"type":"string","minLength":1},
+                "comment":{"type":"string","maxLength":2000},"error":{"type":"string","minLength":1,"maxLength":4000},
                 "done":{"type":"boolean","default":true}
             },"required":["id"],"anyOf":[{"required":["text"]},{"required":["proposal"]},{"required":["error"]}],"additionalProperties":false},
             "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}
@@ -201,7 +203,7 @@ pub(crate) fn agent_params(name: &str, args: &Value, client_name: Option<&str>) 
         .and_then(Value::as_u64)
         .filter(|id| *id <= 9_007_199_254_740_991)
         .ok_or_else(|| invalid("id must be a safe nonnegative integer"))?;
-    for (key, limit) in [("text", 4000), ("proposal", usize::MAX), ("comment", 2000), ("error", usize::MAX), ("format", usize::MAX)] {
+    for (key, limit) in [("text", 4000), ("proposal", usize::MAX), ("comment", 2000), ("error", 4000), ("format", 64)] {
         if let Some(value) = obj.get(key) {
             let text = value.as_str().ok_or_else(|| invalid("text, proposal, format, comment and error must be strings"))?;
             if text.chars().count() > limit {
@@ -211,6 +213,9 @@ pub(crate) fn agent_params(name: &str, args: &Value, client_name: Option<&str>) 
                 return Err(invalid("proposal exceeds 200000 UTF-8 bytes"));
             }
         }
+    }
+    if serde_json::to_vec(args).map_err(|_| invalid("invalid response envelope"))?.len() > 256 << 10 {
+        return Err(invalid("response exceeds 256 KiB"));
     }
     if !["text", "proposal", "error"].iter().any(|key| obj.contains_key(*key)) {
         return Err(invalid("text, proposal or error is required"));
@@ -380,6 +385,20 @@ mod tests {
         let mut s = Session::new();
         let id = s.open("form.pdf", None, std::sync::Arc::new(pdf()), None).unwrap();
         (s, id.0)
+    }
+
+    #[test]
+    fn common_reply_fields_are_bounded_before_forwarding_and_allow_proposal_only() {
+        for (field, length) in [("text", 4001), ("error", 4001), ("comment", 2001), ("proposal", 200001), ("format", 65)] {
+            let mut args = json!({"id":1,"text":"answer"});
+            args[field] = json!("x".repeat(length));
+            assert!(agent_params("reply_to_request", &args, None).is_err(), "{field}");
+        }
+        let (_, params) = agent_params("reply_to_request", &json!({"id":1,"proposal":"unapplied text","format":"text"}), None).unwrap();
+        assert_eq!(params["proposal"], "unapplied text");
+        assert_eq!(params["done"], true);
+        let escaped = json!({"id":1,"proposal":"\0".repeat(50000)});
+        assert!(agent_params("reply_to_request", &escaped, None).unwrap_err().contains("256 KiB"));
     }
 
     #[test]

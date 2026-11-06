@@ -3,7 +3,7 @@
 use super::{Reply, Value};
 
 /// Whether `name` with `args` is, or wraps, a signing call. Signing is the person's act.
-pub(super) fn agent_signing_call(name: &str, args: &Value, depth: usize) -> bool {
+pub(crate) fn agent_signing_call(name: &str, args: &Value, depth: usize) -> bool {
     if depth > 16 || name.starts_with("sign_") || (name.starts_with("sign.") && name != "sign.fill.text") {
         return true;
     }
@@ -19,7 +19,10 @@ pub(super) fn agent_signing_call(name: &str, args: &Value, depth: usize) -> bool
 }
 
 /// The tools that only read, so an Ask Agent run may call them without holding the edit turn.
-pub(super) fn agent_read_only_tool(name: &str) -> bool {
+pub(crate) fn agent_read_only_tool(name: &str, args: &Value) -> bool {
+    if name == "form_detect_fields" {
+        return args.get("add").and_then(Value::as_bool) == Some(false);
+    }
     matches!(
         name,
         "doc_list"
@@ -29,11 +32,12 @@ pub(super) fn agent_read_only_tool(name: &str) -> bool {
             | "command_list"
             | "text_extract"
             | "text_find"
+            | "text_paragraphs"
+            | "text_lines"
             | "page_render"
             | "form_fields"
             | "comment_list"
             | "bookmark_list"
-            | "form_detect_fields"
     )
 }
 

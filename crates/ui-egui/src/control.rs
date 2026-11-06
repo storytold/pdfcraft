@@ -72,7 +72,7 @@ mod pending;
 mod plugin;
 mod requests;
 mod screenshot;
-mod tool;
+pub(crate) mod tool;
 #[cfg(not(target_arch = "wasm32"))]
 mod transport;
 
@@ -89,6 +89,10 @@ pub type Reply = Result<Value, String>;
 
 /// Runs automation tool `name` with `args` on the window's session (`tool.call`), with an
 /// optional root folder; the result in the control channel's form. The desktop app provides it.
+/// Resolves an actual mutation footprint without executing it, using the same connection's
+/// current paragraph identities as the runner. Both callbacks run on the document owner.
+pub type ToolResolver = Box<dyn FnMut(&pdfcraft_engine::Session, u64, &str, &Value) -> Reply>;
+
 pub type ToolRunner = Box<dyn FnMut(&mut pdfcraft_engine::Session, u64, &str, &Value, Option<&std::path::Path>) -> Reply>;
 
 /// Seconds to wait for frames (input to be handled, a screenshot to be taken) before reporting
@@ -127,6 +131,9 @@ pub struct ControlRequest {
     pub since: web_time::Instant,
     /// Transport-owned connection identity; it is never read from request parameters.
     pub connection: u64,
+    /// Trusted Ask Agent claim carried outside agent JSON.
+    pub claim: Option<u64>,
+    pub ask: bool,
     pub method: String,
     pub params: Value,
     pub reply: Sender<Reply>,
@@ -147,8 +154,12 @@ impl ControlClient {
     }
 
     pub(crate) fn send_from_connection(&self, connection: u64, method: &str, params: Value) -> Receiver<Reply> {
+        self.send_with_context(connection, None, false, method, params)
+    }
+
+    pub(crate) fn send_with_context(&self, connection: u64, claim: Option<u64>, ask: bool, method: &str, params: Value) -> Receiver<Reply> {
         let (reply, rx) = channel();
-        let req = ControlRequest { since: web_time::Instant::now(), connection, method: method.into(), params, reply };
+        let req = ControlRequest { since: web_time::Instant::now(), connection, claim, ask, method: method.into(), params, reply };
         if let Err(e) = self.tx.send(req) {
             let _ = e.0.reply.send(Err("the app has closed".into()));
         }
@@ -246,6 +257,8 @@ pub struct Control {
     /// Keep private snapshots inaccessible until fresh non-private UI passes replaced them.
     private_until_pass: u64,
     connection: u64,
+    claim: Option<u64>,
+    ask: bool,
 }
 
 /// Install the control channel on `ctx`: returns the app half and a client.
@@ -255,7 +268,7 @@ pub fn attach(ctx: &egui::Context) -> (Control, ControlClient) {
     ctx.enable_accesskit();
     let (tx, rx) = channel();
     (
-        Control { rx, shared, pending: Vec::new(), deferred: VecDeque::new(), private_until_pass: 0, connection: 0 },
+        Control { rx, shared, pending: Vec::new(), deferred: VecDeque::new(), private_until_pass: 0, connection: 0, claim: None, ask: false },
         ControlClient { tx, ctx: ctx.clone(), agent_hub: crate::ask_agent::AgentHub::default() },
     )
 }
@@ -267,6 +280,14 @@ pub(crate) trait Host {
     /// Handle an `ui.askAgent` request.
     fn ask_agent(&mut self, _p: &Value) -> Reply {
         Err("ui.askAgent: not available in this host".into())
+    }
+    /// Validate and accept an agent response on the document owner's thread.
+    fn agent_reply(&mut self, _connection: u64, _p: &Value) -> Reply {
+        Err("agent.reply: not available in this host".into())
+    }
+    /// A live request can remain owned after a listen timeout cleared its transport tag.
+    fn agent_holds(&self, _connection: u64) -> bool {
+        false
     }
     /// Run one registered command by id and return its reply.
     fn command(&mut self, id: &str) -> Reply;
@@ -477,6 +498,8 @@ impl Control {
     /// `since` is the request's arrival time: the one admission deadline it was admitted under.
     fn dispatch(&mut self, ctx: &egui::Context, host: &mut impl Host, req: ControlRequest, since: web_time::Instant) {
         self.connection = req.connection;
+        self.claim = req.claim;
+        self.ask = req.ask;
         match self.handle(ctx, host, &req.method, &req.params, since) {
             Handled::Now(r) => {
                 let _ = req.reply.send(r);
