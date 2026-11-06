@@ -3,8 +3,8 @@
 //! In a real book all pages share one `/Resources` dictionary, so every split part carried all
 //! ~2,900 image XObjects while its 1,500 pages drew ~300 of them, and the part saved out at the
 //! source's size. This pass follows each part's content streams (`Do`, form XObjects included)
-//! and drops the `/XObject` entries no page names; the garbage-collecting rewrite on save then
-//! drops the objects themselves.
+//! and drops the `/XObject` entries no page names, all of them when the part's pages draw no
+//! XObject at all; the garbage-collecting rewrite on save then drops the objects themselves.
 
 use std::collections::{HashMap, HashSet};
 
@@ -53,6 +53,11 @@ struct Pruner<'a> {
     /// Forms already analysed, with the owner of the resources they drew against: drawing one
     /// again records nothing new, and re-reading it on every `Do` is exponential in the nesting.
     forms_seen: HashSet<(ObjRef, Owner)>,
+    /// Dictionaries something this walk doesn't read may draw from: a tiling pattern, a soft
+    /// mask's group or an annotation's appearance can name an XObject its own /Resources don't
+    /// list, and the viewer then finds it in the page's. One the content draws nothing from is
+    /// left as it is, not emptied.
+    lent: HashSet<XKey>,
 }
 
 impl Pruner<'_> {
@@ -184,6 +189,12 @@ impl Pruner<'_> {
         let Some((xobjects, key)) = self.xobjects(resources, owner) else {
             return;
         };
+        // Seen, whether or not anything is drawn from it: a dictionary nothing draws from loses
+        // every entry, unless something unread may draw from it.
+        self.used.entry(key).or_default();
+        if lends(self.doc, resources) {
+            self.lent.insert(key);
+        }
         if depth > MAX_FORM_DEPTH {
             self.unsure.insert(key);
             return;
@@ -229,6 +240,25 @@ impl Pruner<'_> {
             }
         }
     }
+}
+
+/// Whether `resources` lists a tiling pattern or a soft mask with a group: content this walk
+/// doesn't read, which draws through these resources when its own lack a name.
+fn lends(doc: &Document, resources: &Dict) -> bool {
+    let entries = |key: &[u8]| resources.get(key).map(|d| doc.resolve(d)).and_then(|d| d.as_dict().cloned()).unwrap_or_default();
+    let tiling = entries(b"Pattern").iter().any(|(_, p)| matches!(&*doc.resolve(p), Object::Stream(s) if s.dict.int(b"PatternType") == Some(1)));
+    tiling
+        || entries(b"ExtGState").iter().any(|(_, g)| {
+            let gs = doc.resolve(g);
+            let mask = gs.as_dict().and_then(|g| g.get(b"SMask")).map(|m| doc.resolve(m));
+            mask.as_ref().and_then(|m| m.as_dict()).is_some_and(|m| m.contains(b"G"))
+        })
+}
+
+/// Whether one of `page`'s annotations has an appearance.
+fn has_appearances(doc: &Document, page: &Dict) -> bool {
+    let annots = page.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+    annots.iter().any(|a| doc.resolve(a).as_dict().is_some_and(|a| a.contains(b"AP")))
 }
 
 /// The page's content, concatenated (`/Contents` may be one stream or an array) with a space
@@ -317,14 +347,20 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
         glyph_seen: HashSet::new(),
         glyph_fonts: HashSet::new(),
         forms_seen: HashSet::new(),
+        lent: HashSet::new(),
     };
     for (page, attrs) in &pages {
         let Some(res) = attrs.get(b"Resources") else { continue };
         let Some((res_dict, owner)) = resolve_resources(pruner.doc, res, *page) else { continue };
         let Some(pd) = pruner.doc.get(*page).as_dict().cloned() else { continue };
-        let Some(contents) = pd.get(b"Contents").cloned() else { continue };
-        match content_bytes(pruner.doc, &contents) {
-            Ok(data) if data.is_empty() => {}
+        if has_appearances(pruner.doc, &pd)
+            && let Some((_, key)) = pruner.xobjects(&res_dict, owner)
+        {
+            pruner.lent.insert(key);
+        }
+        // A page without `/Contents` draws nothing, like an empty one.
+        let data = pd.get(b"Contents").map_or_else(|| Ok(Vec::new()), |c| content_bytes(pruner.doc, c));
+        match data {
             Ok(data) => pruner.content(&data, &res_dict, owner, 0),
             Err(_) => {
                 pruner.protect_type3_resources(&res_dict, owner);
@@ -332,13 +368,13 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
             }
         }
     }
-    let Pruner { used, unsure, glyph_budget_exhausted, .. } = pruner;
+    let Pruner { used, unsure, glyph_budget_exhausted, lent, .. } = pruner;
     if glyph_budget_exhausted {
         return Ok(0);
     }
     let mut removed = 0;
     for (key, names) in used {
-        if !unsure.contains(&key) {
+        if !unsure.contains(&key) && !(names.is_empty() && lent.contains(&key)) {
             removed += filter_at(doc, key, &names)?;
         }
     }
