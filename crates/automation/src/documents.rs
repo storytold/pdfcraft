@@ -476,7 +476,7 @@ impl Automation {
     }
 
     pub(crate) fn marks(&mut self, tool: &str, a: &Args) -> Result<Value> {
-        use pdfcraft_engine::{Background, HeaderFooter, MarkKind, Watermark};
+        use pdfcraft_engine::{Background, HeaderFooter, MarkKind, Repeat, Watermark};
         let n = self.doc(a)?.info.pages.len();
         let pages = match a.opt_ints("pages")? {
             Some(_) => self.pages(a, "pages")?,
@@ -520,6 +520,19 @@ impl Automation {
                     Some(_) => a.opt_str("text")?.unwrap_or_default().to_string(),
                     None => a.str("text")?.to_string(),
                 };
+                // Repeat is switched on by `repeat: true`; its settings alone are a mistake, not a no-op.
+                let repeat = if a.opt_bool("repeat")?.unwrap_or(false) {
+                    let d = Repeat::default();
+                    Some(Repeat {
+                        spacing: [a.opt_num("repeat_spacing_x")?.unwrap_or(d.spacing[0]), a.opt_num("repeat_spacing_y")?.unwrap_or(d.spacing[1])],
+                        stagger: a.opt_bool("stagger")?.unwrap_or(false),
+                    })
+                } else {
+                    if ["repeat_spacing_x", "repeat_spacing_y", "stagger"].iter().any(|k| a.get(k).is_some()) {
+                        return Err(ToolError::InvalidArgs("repeat_spacing_x, repeat_spacing_y and stagger need repeat: true".into()));
+                    }
+                    None
+                };
                 let wm = Watermark {
                     text,
                     source: None,
@@ -533,6 +546,7 @@ impl Automation {
                         a.opt_num("offset_x")?.unwrap_or(0.0).clamp(-WATERMARK_MAX_OFFSET, WATERMARK_MAX_OFFSET),
                         a.opt_num("offset_y")?.unwrap_or(0.0).clamp(-WATERMARK_MAX_OFFSET, WATERMARK_MAX_OFFSET),
                     ],
+                    repeat,
                 };
                 Edit::AddWatermark { pages, settings: wm, replace, file }
             }

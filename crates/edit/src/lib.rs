@@ -70,9 +70,9 @@ mod marks;
 mod place;
 
 pub use apply::{add_background, add_header_footer, add_watermark, marks_present, remove_marks};
+pub use marks::{Background, Context, HeaderFooter, MAX_REPEATS, MarkKind, MarkSource, Repeat, Watermark, expand, watermark_centres};
 #[cfg(test)]
-use marks::bates_start;
-pub use marks::{Background, Context, HeaderFooter, MarkKind, MarkSource, Watermark, expand};
+use marks::{bates_start, tile_centres};
 use marks::{matrix_number, n};
 pub(crate) use place::undrawable;
 #[cfg(test)]

@@ -1,5 +1,6 @@
 use super::marks::{
-    Background, Context, HeaderFooter, MarkKind, Watermark, add_picture_resource, bates_start, expand, matrix_number, n, picture, rgb, shrink_matrix,
+    Background, Context, HeaderFooter, Layout, MarkKind, Watermark, add_picture_resource, bates_start, expand, layout_for, matrix_number, n, picture,
+    rgb, shrink_matrix,
 };
 use super::place::{
     END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, contents, free_font_name, isolation, page_fonts, page_list, place,
@@ -166,18 +167,31 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
             check_on_top(doc, &all[i])?;
         }
     }
+    let lines: Vec<&str> = text.lines().collect();
+    // Where every copy goes on every page, worked out before anything changes, so a repeat that
+    // is refused (too many copies, say) leaves the document as it was.
+    let layouts: Vec<Layout> = pages.iter().map(|&i| layout_for(wm, &lines, all[i].display_size(doc))).collect::<Result<_, EditError>>()?;
     if replace {
         remove_marks(doc, pages, MarkKind::Watermark)?;
     }
     let opacity = wm.opacity.clamp(0.0, 1.0);
-    let lines: Vec<&str> = text.lines().collect();
-    for &i in pages {
+    for (&i, layout) in pages.iter().zip(&layouts) {
         let page = page_list(doc)[i].clone();
         let (w, h) = page.display_size(doc);
+        // Each copy of a repeated watermark is drawn in its own q ... Q.
+        let repeated = wm.repeat.is_some();
         if let Some(src) = &wm.source {
             let mut content = begin(MarkKind::Watermark, "Watermark", page.view_matrix(doc));
             content.push_str(&format!("/PCGS{} gs\n", (opacity * 100.0).round() as i64));
-            content.push_str(&picture(src, (w, h), wm.scale, wm.rotation, wm.offset));
+            for &(x, y) in &layout.centres {
+                if repeated {
+                    content.push_str("q\n");
+                }
+                content.push_str(&picture(src, (w, h), wm.scale, wm.rotation, [x - w / 2.0, y - h / 2.0]));
+                if repeated {
+                    content.push_str("Q\n");
+                }
+            }
             content.push_str(END);
             add_resources(doc, &page, Some(opacity), None)?;
             add_picture_resource(doc, &page_list(doc)[i].clone(), src)?;
@@ -185,33 +199,28 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
             place(doc, page, MarkKind::Watermark, content.into_bytes(), wm.behind)?;
             continue;
         }
-        let widest = lines.iter().map(|l| helvetica_width(l, 1.0)).fold(0.0, f64::max).max(0.01);
-        let size = if wm.font_size > 0.0 { wm.font_size } else { ((w * w + h * h).sqrt() * 0.5 / widest).clamp(6.0, 300.0) };
+        let size = layout.font_size;
         let (s, c) = wm.rotation.to_radians().sin_cos();
-        let (cx, cy) = (w / 2.0 + wm.offset[0], h / 2.0 + wm.offset[1]);
         let mut content = begin(MarkKind::Watermark, "Watermark", page.view_matrix(doc)).into_bytes();
-        content.extend(
-            format!(
-                "/PCGS{} gs\n{} {} {} {} {} {} cm\nBT\n/PCHelv {} Tf\n{}\n",
-                (opacity * 100.0).round() as i64,
-                n(c),
-                n(s),
-                n(-s),
-                n(c),
-                n(cx),
-                n(cy),
-                n(size),
-                rgb(wm.color)
-            )
-            .bytes(),
-        );
-        let line_h = size * 1.15;
-        let total = line_h * (lines.len() as f64 - 1.0);
-        for (li, line) in lines.iter().enumerate() {
-            let tw = helvetica_width(line, size);
-            content.extend(text_op(-tw / 2.0, total / 2.0 - li as f64 * line_h - size * 0.35, line));
+        content.extend(format!("/PCGS{} gs\n", (opacity * 100.0).round() as i64).bytes());
+        for &(cx, cy) in &layout.centres {
+            if repeated {
+                content.extend_from_slice(b"q\n");
+            }
+            content.extend(
+                format!("{} {} {} {} {} {} cm\nBT\n/PCHelv {} Tf\n{}\n", n(c), n(s), n(-s), n(c), n(cx), n(cy), n(size), rgb(wm.color)).bytes(),
+            );
+            let line_h = size * 1.15;
+            let total = line_h * (lines.len() as f64 - 1.0);
+            for (li, line) in lines.iter().enumerate() {
+                let tw = helvetica_width(line, size);
+                content.extend(text_op(-tw / 2.0, total / 2.0 - li as f64 * line_h - size * 0.35, line));
+            }
+            content.extend_from_slice(b"ET\n");
+            if repeated {
+                content.extend_from_slice(b"Q\n");
+            }
         }
-        content.extend_from_slice(b"ET\n");
         content.extend_from_slice(END.as_bytes());
         add_resources(doc, &page, Some(opacity), None)?;
         let page = &page_list(doc)[i];
