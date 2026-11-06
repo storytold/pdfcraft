@@ -16,6 +16,7 @@ md-5 = "0.11"
 sha2 = "0.11"
 stringprep = "0.1"
 thiserror.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

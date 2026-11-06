@@ -351,7 +351,7 @@ pub(super) fn password(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let message = crate::i18n::fmt(tl!("“{name}” is protected. Enter a password to open it."), &[("name", &prompt.name)]);
     match password_modal(ctx, "password", tl!("Password required"), message, &mut prompt.input, prompt.error.as_deref(), tl!("Open")) {
         Some(PasswordAnswer::Submit) => {
-            let pw = prompt.input.clone();
+            let pw = std::mem::take(&mut prompt.input);
             app.submit_password(Some(pw));
         }
         Some(PasswordAnswer::Cancel) => app.submit_password(None),
@@ -366,7 +366,7 @@ pub(super) fn unlock(app: &mut PdfCraftApp, ctx: &egui::Context) {
         crate::i18n::fmt(tl!("“{name}” has security restrictions. Enter its permissions password to lift them."), &[("name", &prompt.name)]);
     match password_modal(ctx, "unlock", tl!("Permissions password"), message, &mut prompt.input, prompt.error.as_deref(), tl!("Unlock")) {
         Some(PasswordAnswer::Submit) => {
-            let pw = prompt.input.clone();
+            let pw = std::mem::take(&mut prompt.input);
             app.submit_unlock(Some(pw));
         }
         Some(PasswordAnswer::Cancel) => app.submit_unlock(None),
