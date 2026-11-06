@@ -426,6 +426,429 @@ fn custom_page_cannot_silently_match_a_standard_paper() {
     assert_eq!(h.state().print_draft.size, before.size);
 }
 
+/// A slow capability read must not hold up the usable printer list: the picked printer may still
+/// be changed while its answer is pending, and the untouched printer is never queried.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn printer_list_is_usable_before_delayed_two_sided_answer() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::{Arc, Mutex};
+    let mut h = harness();
+    h.state_mut().printer_source = Some(Arc::new(|| {
+        vec![
+            Printer { name: "Office PCL".into(), default: true, two_sided: None, description: String::new() },
+            Printer { name: "Office PS".into(), default: false, two_sided: None, description: String::new() },
+            Printer { name: "Away WSD".into(), default: false, two_sided: None, description: String::new() },
+        ]
+    }));
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let gate = Arc::new(Mutex::new(()));
+    let hold = gate.lock().unwrap();
+    let wait = gate.clone();
+    let log = asked.clone();
+    h.state_mut().two_sided_source = Some(Arc::new(move |name: &str, _| {
+        log.lock().unwrap().push(name.to_string());
+        if name == "Office PCL" {
+            let _open = wait.lock().unwrap();
+        }
+        Some(name != "Office PS")
+    }));
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while (h.state().print_draft.printers_loading
+        || h.state().print_draft.printer.as_deref() != Some("Office PCL")
+        || asked.lock().unwrap().is_empty())
+        && std::time::Instant::now() < deadline
+    {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!h.state().print_draft.printers_loading);
+    assert_eq!(h.state().print_draft.printers.len(), 3);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some("Office PCL"));
+    assert!(h.state().print_draft.two_sided_for("Office PCL").is_none(), "capability is still delayed");
+
+    h.run_steps(3);
+    let printer = h.get_by(|n| n.role() == Role::ComboBox && n.value().as_deref() == Some("Office PCL"));
+    printer.click();
+    h.run_steps(2);
+    h.get_by_label("Office PS").click();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while asked.lock().unwrap().len() < 2 && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some("Office PS"), "the list remains usable");
+    assert_eq!(*asked.lock().unwrap(), ["Office PCL", "Office PS"], "the untouched printer is not queried");
+
+    drop(hold);
+    h.run_steps(3);
+    assert!(h.state().print_draft.two_sided_for("Office PCL").is_none(), "the cancelled selection's answer is discarded");
+}
+
+/// A capability worker that dies must wake an idle dialog, cache the disconnected read as
+/// unavailable, and not retry the same printer on every frame.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_failed_two_sided_read_is_cached_and_wakes_the_dialog() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    let mut h = harness();
+    h.state_mut().printer_source =
+        Some(Arc::new(|| vec![Printer { name: "Office PCL".into(), default: true, two_sided: None, description: String::new() }]));
+    let gate = Arc::new(Mutex::new(()));
+    let hold = gate.lock().unwrap();
+    let wait = gate.clone();
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let died = Arc::new(AtomicBool::new(false));
+    let log = asked.clone();
+    let failed = died.clone();
+    h.state_mut().two_sided_source = Some(Arc::new(move |name: &str, _| {
+        log.lock().unwrap().push(name.to_string());
+        let _open = wait.lock().unwrap();
+        failed.store(true, Ordering::SeqCst);
+        panic!("two-sided capability read died");
+    }));
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while asked.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(*asked.lock().unwrap(), ["Office PCL"]);
+    while h.state().render_pending() && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run();
+    assert!(!h.ctx.has_requested_repaint(), "the dialog is idle while the read waits");
+    drop(hold);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !(died.load(Ordering::SeqCst) && h.ctx.has_requested_repaint()) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(h.ctx.has_requested_repaint(), "the dead read asked for a frame");
+    h.run();
+    assert_eq!(h.state().print_draft.two_sided_for("Office PCL").copied(), Some(None));
+    h.run_steps(3);
+    assert_eq!(*asked.lock().unwrap(), ["Office PCL"], "the dead read is cached instead of retried");
+}
+
+/// Windows' printer list doesn't say which drivers take two-sided settings: reading a printer
+/// Windows can't reach takes it about 48 s (#2192). The dialog lists every printer at once and
+/// asks only about the one picked, in the background, so a printer nobody picks is never waited on.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn two_sided_support_is_read_only_for_the_printer_picked() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::{Arc, Mutex};
+    let mut h = harness();
+    h.state_mut().printer_source = Some(Arc::new(|| {
+        vec![
+            Printer { name: "Office PCL".into(), default: true, two_sided: None, description: String::new() },
+            Printer { name: "Office PS".into(), default: false, two_sided: None, description: String::new() },
+            Printer { name: "Away WSD".into(), default: false, two_sided: None, description: String::new() },
+        ]
+    }));
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = asked.clone();
+    h.state_mut().two_sided_source = Some(Arc::new(move |name: &str, _| {
+        log.lock().unwrap().push(name.to_string());
+        Some(name != "Office PS")
+    }));
+    assert!(h.state_mut().execute("print.dialog"));
+    let settle = |h: &mut Harness<'static, PdfCraftApp>, done: &dyn Fn(&PdfCraftApp) -> bool| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done(h.state()) && std::time::Instant::now() < deadline {
+            h.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h.run_steps(2);
+    };
+    settle(&mut h, &|a| a.print_draft.two_sided_for("Office PCL").is_some());
+    assert_eq!(h.state().print_draft.printers.len(), 3);
+    let note = "doesn't take two-sided settings";
+    assert!(h.query_by_label_contains(note).is_none(), "a driver that prints two-sided as asked");
+    h.state_mut().print_draft.printer = Some("Office PS".into());
+    settle(&mut h, &|a| a.print_draft.two_sided_for("Office PS").is_some());
+    h.get_by_label_contains(note);
+    assert_eq!(*asked.lock().unwrap(), ["Office PCL", "Office PS"], "each picked printer once, never the others");
+}
+
+#[test]
+fn reopening_print_refreshes_two_sided_support_and_retries_failures() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::{Arc, Mutex};
+    let mut ui = harness();
+    ui.state_mut().printer_source =
+        Some(Arc::new(|| vec![Printer { name: "Office".into(), default: true, two_sided: None, description: String::new() }]));
+    let answers = Arc::new(Mutex::new(std::collections::VecDeque::from([Some(true), None, Some(false)])));
+    let source = answers.clone();
+    ui.state_mut().two_sided_source = Some(Arc::new(move |_, _| source.lock().unwrap().pop_front().flatten()));
+    for expected in [Some(true), None, Some(false)] {
+        assert!(ui.state_mut().execute("print.dialog"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while ui.state().print_draft.two_sided_for("Office").is_none() && std::time::Instant::now() < deadline {
+            ui.run_steps(1);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(ui.state().print_draft.two_sided_for("Office"), Some(&expected));
+        ui.state_mut().dialog = None;
+        ui.run_steps(2);
+    }
+    assert!(answers.lock().unwrap().is_empty());
+}
+
+fn settle_print(ui: &mut Harness<'static, PdfCraftApp>, done: impl Fn(&PdfCraftApp) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !done(ui.state()) && std::time::Instant::now() < deadline {
+        ui.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(done(ui.state()), "print background work did not settle");
+    ui.run_steps(3);
+}
+
+#[cfg(windows)]
+#[test]
+fn a_capability_reply_keeps_print_controls_in_place() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut ui = Harness::builder().with_size(egui::vec2(900.0, 766.0)).build_eframe(|_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app
+    });
+    ui.run_steps(4);
+    ui.state_mut().printer_source =
+        Some(Arc::new(|| vec![Printer { name: "Office".into(), default: true, two_sided: None, description: String::new() }]));
+    let release = Arc::new(AtomicBool::new(false));
+    let gate = release.clone();
+    ui.state_mut().two_sided_source = Some(Arc::new(move |_, cancel| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !gate.load(Ordering::Acquire) && !cancel.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        Some(false)
+    }));
+    assert!(ui.state_mut().execute("print.dialog"));
+    settle_print(&mut ui, |app| !app.print_draft.printers_loading);
+    let properties = ui.get_by_label("Properties…").rect();
+    let print = ui.get_by_role_and_label(Role::Button, "Print").rect();
+    assert!(!ui.get_by_role_and_label(Role::Button, "Print").accesskit_node().is_disabled());
+    release.store(true, Ordering::Release);
+    settle_print(&mut ui, |app| app.print_draft.two_sided_for("Office") == Some(&Some(false)));
+    assert_eq!(ui.get_by_label("Properties…").rect(), properties);
+    assert_eq!(ui.get_by_role_and_label(Role::Button, "Print").rect(), print);
+    assert!(print.bottom() <= 766.0, "Print must remain within the window");
+    if let Ok(out) = std::env::var("PDFCRAFT_SHOT") {
+        let _gpu = crate::gpu();
+        ui.render().unwrap().save(out).unwrap();
+    }
+}
+
+#[test]
+fn switching_printers_cancels_the_old_query_without_waiting_for_its_driver() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    let mut ui = harness();
+    ui.state_mut().printer_source = Some(Arc::new(|| {
+        ["Slow", "Fast"]
+            .into_iter()
+            .map(|name| Printer { name: name.into(), default: name == "Slow", two_sided: None, description: String::new() })
+            .collect()
+    }));
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let seen = cancelled.clone();
+    let log = calls.clone();
+    ui.state_mut().two_sided_source = Some(Arc::new(move |name, cancel| {
+        log.lock().unwrap().push(name.to_string());
+        if name == "Slow" {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !cancel.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            seen.store(cancel.load(Ordering::Acquire), Ordering::Release);
+            return Some(false);
+        }
+        Some(true)
+    }));
+    assert!(ui.state_mut().execute("print.dialog"));
+    settle_print(&mut ui, |_| !calls.lock().unwrap().is_empty());
+    ui.state_mut().print_draft.printer = Some("Fast".into());
+    settle_print(&mut ui, |app| app.print_draft.two_sided_for("Fast") == Some(&Some(true)) && cancelled.load(Ordering::Acquire));
+    assert!(ui.state().print_draft.two_sided_for("Slow").is_none());
+    assert_eq!(*calls.lock().unwrap(), ["Slow", "Fast"]);
+    ui.run_steps(5);
+    assert_eq!(calls.lock().unwrap().len(), 2, "a known capability is reused within this dialog");
+}
+
+#[test]
+fn reopening_discards_a_late_answer_even_for_the_same_printer_name() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let mut ui = harness();
+    ui.state_mut().printer_source =
+        Some(Arc::new(|| vec![Printer { name: "Office".into(), default: true, two_sided: None, description: String::new() }]));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let release = Arc::new(AtomicBool::new(false));
+    let returned = Arc::new(AtomicBool::new(false));
+    let count = calls.clone();
+    let gate = release.clone();
+    let finished = returned.clone();
+    ui.state_mut().two_sided_source = Some(Arc::new(move |_, _| {
+        if count.fetch_add(1, Ordering::SeqCst) == 0 {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !gate.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            finished.store(true, Ordering::Release);
+            return Some(false);
+        }
+        Some(true)
+    }));
+    assert!(ui.state_mut().execute("print.dialog"));
+    settle_print(&mut ui, |_| calls.load(Ordering::SeqCst) == 1);
+    ui.state_mut().dialog = None;
+    assert!(ui.state_mut().execute("print.dialog"));
+    settle_print(&mut ui, |app| app.print_draft.two_sided_for("Office") == Some(&Some(true)));
+    release.store(true, Ordering::Release);
+    settle_print(&mut ui, |_| returned.load(Ordering::Acquire));
+    assert_eq!(ui.state().print_draft.two_sided_for("Office"), Some(&Some(true)));
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[cfg(windows)]
+#[test]
+fn native_properties_refresh_capabilities_after_the_window_closes() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut ui = harness();
+    ui.state_mut().printer_source = Some(Arc::new(|| {
+        ["Office", "Other"]
+            .into_iter()
+            .map(|name| Printer { name: name.into(), default: name == "Office", two_sided: None, description: String::new() })
+            .collect()
+    }));
+    let support = Arc::new(AtomicBool::new(false));
+    let answer = support.clone();
+    ui.state_mut().two_sided_source = Some(Arc::new(move |_, _| Some(answer.load(Ordering::Acquire))));
+    let entered = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let opened = entered.clone();
+    let closed = release.clone();
+    let other_opened = Arc::new(AtomicBool::new(false));
+    let other = other_opened.clone();
+    ui.state_mut().preferences_source = Some(Arc::new(move |printer| {
+        if printer == "Other" {
+            other.store(true, Ordering::Release);
+            return Ok(());
+        }
+        assert_eq!(printer, "Office");
+        opened.store(true, Ordering::Release);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !closed.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        support.store(true, Ordering::Release);
+        Ok(())
+    }));
+    assert!(ui.state_mut().execute("print.dialog"));
+    settle_print(&mut ui, |app| app.print_draft.two_sided_for("Office") == Some(&Some(false)));
+    let job = ui.state().print_draft.job("test.pdf");
+    ui.get_by_label("Properties…").click();
+    settle_print(&mut ui, |_| entered.load(Ordering::Acquire));
+    assert!(ui.get_by_label("Properties…").accesskit_node().is_disabled());
+    assert_eq!(ui.state().print_draft.two_sided_for("Office"), None);
+    ui.state_mut().print_draft.printer = Some("Other".into());
+    ui.run_steps(3);
+    assert!(!ui.get_by_label("Properties…").accesskit_node().is_disabled(), "another printer's settings must remain available");
+    ui.get_by_label("Properties…").click();
+    settle_print(&mut ui, |_| other_opened.load(Ordering::Acquire));
+    ui.state_mut().print_draft.printer = Some("Office".into());
+    ui.run_steps(3);
+    assert!(ui.get_by_label("Properties…").accesskit_node().is_disabled(), "the first window is still pending");
+    release.store(true, Ordering::Release);
+    settle_print(&mut ui, |app| app.print_draft.preferences_loading.is_none() && app.print_draft.two_sided_for("Office") == Some(&Some(true)));
+    assert_eq!(ui.state().print_draft.job("test.pdf").duplex, job.duplex);
+    assert!(ui.state().print_draft.driver_error.is_none());
+    ui.state_mut().preferences_source = Some(Arc::new(|_| Err("native settings failed".into())));
+    ui.get_by_label("Properties…").click();
+    settle_print(&mut ui, |app| app.print_draft.preferences_loading.is_none() && app.print_draft.driver_error.is_some());
+    assert_eq!(ui.state().print_draft.driver_error.as_deref(), Some("native settings failed"));
+    assert!(!ui.get_by_label("Properties…").accesskit_node().is_disabled());
+}
+
+#[cfg(windows)]
+#[test]
+fn closing_properties_keeps_another_printers_cached_answer() {
+    use pdfcraft_engine::print::spool::Printer;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    let mut ui = harness();
+    ui.state_mut().printer_source = Some(Arc::new(|| {
+        ["Office", "Other"]
+            .into_iter()
+            .map(|name| Printer { name: name.into(), default: name == "Office", two_sided: None, description: String::new() })
+            .collect()
+    }));
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = asked.clone();
+    ui.state_mut().two_sided_source = Some(Arc::new(move |name, _| {
+        log.lock().unwrap().push(name.into());
+        Some(name == "Office")
+    }));
+    let entered = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let opened = entered.clone();
+    let closed = release.clone();
+    ui.state_mut().preferences_source = Some(Arc::new(move |_| {
+        opened.store(true, Ordering::Release);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !closed.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        Ok(())
+    }));
+    assert!(ui.state_mut().execute("print.dialog"));
+    settle_print(&mut ui, |app| app.print_draft.two_sided_for("Office").is_some());
+    ui.get_by_label("Properties…").click();
+    settle_print(&mut ui, |_| entered.load(Ordering::Acquire));
+    ui.state_mut().print_draft.printer = Some("Other".into());
+    settle_print(&mut ui, |app| app.print_draft.two_sided_for("Other").is_some());
+    ui.run();
+    assert!(!ui.ctx.has_requested_repaint());
+    release.store(true, Ordering::Release);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !ui.ctx.has_requested_repaint() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(ui.ctx.has_requested_repaint(), "Properties completion must wake the dialog");
+    ui.run_steps(1);
+    settle_print(&mut ui, |app| app.print_draft.two_sided_for("Other").is_some());
+    assert_eq!(*asked.lock().unwrap(), ["Office", "Other"], "unrelated answers must survive Properties completion");
+    ui.state_mut().print_draft.printer = Some("Office".into());
+    settle_print(&mut ui, |app| app.print_draft.two_sided_for("Office").is_some());
+    assert_eq!(*asked.lock().unwrap(), ["Office", "Other", "Office"], "the affected printer must be read again");
+}
+
+#[test]
+fn a_dead_discovery_worker_does_not_leave_print_looking_forever() {
+    let mut ui = harness();
+    ui.state_mut().printer_source = Some(std::sync::Arc::new(|| panic!("spooler query died")));
+    assert!(ui.state_mut().execute("print.dialog"));
+    settle_print(&mut ui, |app| !app.print_draft.printers_loading);
+    assert!(ui.state().print_draft.printers.is_empty());
+    ui.get_by_label_contains("No printers were found");
+}
+
 /// A driver Windows reports without two-sided printing keeps its own setting whatever Two-sided
 /// says (some print both sides with it Off), so the dialog says where to change it.
 #[test]

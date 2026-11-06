@@ -198,6 +198,10 @@ fn rejoin_split_paths(args: Vec<String>, exists: impl Fn(&str) -> bool) -> Vec<S
 }
 
 fn main() -> eframe::Result {
+    #[cfg(windows)]
+    if let Some(success) = pdfcraft_engine::print::spool::query_worker() {
+        std::process::exit(i32::from(!success));
+    }
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
     if let Some(result) = craft_update::self_update::finish(&pdfcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
@@ -417,6 +421,10 @@ fn app_creator<'a>(
         }
         app.set_startup_update_check(true);
         app.printer_source = Some(pdfcraft_ui_egui::system_printers());
+        #[cfg(windows)]
+        {
+            app.two_sided_source = Some(pdfcraft_ui_egui::system_two_sided());
+        }
         app.os_key_store_ids = cfg!(any(target_os = "macos", target_os = "windows"));
         #[cfg(target_os = "macos")]
         {

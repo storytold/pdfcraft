@@ -98,6 +98,10 @@ help and feedback: https://discord.gg/artcraft"
 );
 
 fn main() -> ExitCode {
+    #[cfg(windows)]
+    if let Some(success) = pdfcraft_engine::print::spool::query_worker() {
+        return if success { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    }
     // `std::env::args` panics on an argument that is not UTF-8 ("called `Result::unwrap()` on an
     // `Err` value"), which a Latin-1 file name is, and it panics while collecting them: even
     // `--help` ended that way. Such a name cannot be passed on either, since the paths here are

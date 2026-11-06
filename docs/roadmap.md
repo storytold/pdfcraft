@@ -9,6 +9,8 @@
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged)
 
+> **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** maintenance (M14: inherited strict Clippy diagnostics and a stale Preferences lint expectation removed; behavior and estimates unchanged)
+
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
@@ -295,6 +297,10 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 - Unmeasured fidelity: without an Acrobat comparison harness, quality gaps surface as user reports.
 
 ## Revision history
+
+**2026-11-02, patch:** M10 #2192 separates Windows queue listing from selected-printer capability reads. Tests cover cancellation, refresh, retry, independent Properties windows and stable control positions; CUPS is unchanged. No physical-output qualification or readiness re-estimate.
+
+**2026-11-01, maintenance:** Remove inherited strict Clippy diagnostics with equivalent expressions. No feature or readiness estimate changes.
 
 **2026-10-26 · patch:** M2/PR #4172: reconcile current main and preserve upstream Japanese serif/weight selection alongside the installed CJK viewer and preview fallback. Estimates unchanged.
 
