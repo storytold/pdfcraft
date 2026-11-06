@@ -17,14 +17,27 @@ this object using its `BBox` and optional `Matrix` and edits it as a whole. Its 
 content, resources, clipping box, and transparency settings remain intact. Moving or
 deleting one use of a shared figure does not alter its other placements or pages.
 
+**Ungroup** (in a group's context menu, above Delete, or a double-click on the group) puts the
+form's content on the page in place of the group, so its text becomes editable paragraphs and
+its images and nested groups separate objects. CAD exports (WSCAD among them) draw a whole page
+as one Form, which otherwise selects as one page-sized group. The content is written exactly as
+ISO 32000-2 §8.10.1 paints a form: inside a saved graphics state, through its `Matrix`, clipped
+to its `BBox`; its bytes are kept and only resource names that clash with the page's are
+renamed. The form object and its other placements are left as they are. One level is ungrouped
+at a time, as one undo step. A group stays grouped, with the reason, when inlining could change
+the page: a transparency group whose blending would change, a form in the structure tree
+(`StructParent`, `StructParents`), other default colour spaces, damaged content, or content that
+restores or closes more than it opens. Renderers may differ by an anti-aliasing step where the
+box and an identical clip of the content meet on a pixel edge.
+
 **Replace Image** and **Save Image As** apply only to raster Image XObjects; these menu
-items are disabled for grouped Form artwork. The tool does not ungroup Forms, edit their
-individual internal elements, select arbitrary ungrouped vector paths, or edit inline
+items are disabled for grouped Form artwork. Without ungrouping, the tool does not edit a
+Form's individual internal elements; it does not select arbitrary vector paths or edit inline
 images (`BI`/`ID`/`EI`). A Form's bounding box may include whitespace.
 
 For automation, `page_images` lists both kinds with `kind: "image"` or `kind: "form"`.
 Forms have `pixels: [0, 0]`, since they have no single bitmap resolution. Use the returned
-number with `image_edit` (move, rotate, flip_horizontal, flip_vertical, delete).
+number with `image_edit` (move, rotate, flip_horizontal, flip_vertical, delete, ungroup).
 Coordinates are top-left-origin page points. `image_save` and `image_edit`'s replace action
 return a clear error for Form artwork.
 

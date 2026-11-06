@@ -6,6 +6,7 @@ use super::*;
 
 #[path = "mark_transaction_tests.rs"]
 mod mark_transactions;
+mod ungroup;
 
 /// Three pages: an upright page with content that leaves the graphics state changed (an
 /// unbalanced `cm`), a page rotated 90° and one with inherited, shared resources.
