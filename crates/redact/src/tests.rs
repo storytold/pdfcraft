@@ -124,6 +124,22 @@ fn added_text_parameters_do_not_keep_redacted_text() {
 }
 
 #[test]
+fn a_redacted_header_keeps_no_copy_of_its_text() {
+    // A header and footer records its templates in /PCHeaderFooter, on its own stream and, when
+    // it shrinks the page, on the shrink's `cm` stream too (#5785).
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB) Tj ET", "", vec![]);
+    let mut hf = pdfcraft_edit::HeaderFooter { shrink: true, ..Default::default() };
+    hf.text[1] = "SECRET9".into();
+    pdfcraft_edit::add_header_footer(&mut doc, &[0], &hf, false, &pdfcraft_edit::Context { date: (2026, 10, 1) }).unwrap();
+    assert!(write_full(&doc, &SaveOptions::default()).unwrap().windows(7).any(|w| w == b"SECRET9"), "the settings are written in the clear");
+    mark(&mut doc, 0, &[[0.0, 240.0, 300.0, 300.0]], "");
+    apply(&mut doc, None).unwrap();
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!bytes.windows(7).any(|w| w == b"SECRET9"), "the redacted header's text left in the saved file");
+    assert!(content(&doc, 0).contains("(AB)"), "the rest of the page stays");
+}
+
+#[test]
 fn operators_split_across_content_streams_are_redacted_whole() {
     // One content stream in three pieces, split between tokens: a marked-content dictionary
     // ends in the second piece, and the TJ array that ends it shows its glyphs with the

@@ -1919,9 +1919,15 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
     if req.marks_now
         && let (Dialog::Marks(kind), Some((_, id))) = (dialog, app.active_ids())
     {
-        let count = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
-        let edit = crate::marks_ui::edit(&app.marks_draft, kind, count);
-        app.apply_edit(edit);
+        // Update's choices were read from one document: another brought forward since (an OS open
+        // request, say) may hold a header and footer with the same settings.
+        if app.marks_draft.update_is_for_another(id) {
+            app.notify_tr("Another document came forward: open Update Header and Footer again on this one");
+        } else {
+            let count = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
+            let edit = crate::marks_ui::edit(&app.marks_draft, kind, count);
+            app.apply_edit(edit);
+        }
     }
     if req.boxes_now
         && let Some((i, id)) = app.active_ids()

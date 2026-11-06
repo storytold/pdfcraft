@@ -680,6 +680,8 @@ fn redact_page_content(
     retired_properties.extend(out.retired_properties);
     let mut new_list = list.clone();
     let mut changed = false;
+    // Header and footer settings taken off a redacted stream (see below).
+    let mut redacted_settings: Vec<Object> = Vec::new();
     for (i, new) in out.streams.into_iter().enumerate() {
         let Some(bytes) = new else { continue };
         let mut dict = match &*doc.resolve(&list[i]) {
@@ -691,9 +693,24 @@ fn redact_page_content(
         // are redacted, keeping it would leave the redacted text in the file. The item stays
         // as plain drawn content but is no longer editable.
         dict.remove(b"PCAdded");
+        // A header and footer keeps its text templates in `/PCHeaderFooter` (#5785): the same goes.
+        // The mark stays as drawn content, which Update can only replace page-wide.
+        redacted_settings.extend(dict.remove(b"PCHeaderFooter"));
         // A new object: the original may be shared with other pages.
         new_list[i] = Object::Ref(doc.add(Object::Stream(Stream::flate(dict, &bytes))));
         changed = true;
+    }
+    // A shrinking header's `cm` stream records the same settings but draws no text, so it is
+    // never rewritten above: take its copy of the templates away too.
+    if !redacted_settings.is_empty() {
+        for o in new_list.iter_mut() {
+            let mut stream = match &*doc.resolve(o) {
+                Object::Stream(s) if s.dict.get(b"PCHeaderFooter").is_some_and(|v| redacted_settings.contains(v)) => s.clone(),
+                _ => continue,
+            };
+            stream.dict.remove(b"PCHeaderFooter");
+            *o = Object::Ref(doc.add(Object::Stream(stream)));
+        }
     }
     if changed || !out.xobjects.is_empty() || !out.replaced.is_empty() {
         let mut res = resources.clone();

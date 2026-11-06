@@ -318,11 +318,13 @@ fn update_changes_one_header_and_footer_and_leaves_the_others() {
     let doc = &mut reopen(&doc);
     let found = header_footers(doc);
     assert_eq!(found.iter().map(|m| (&m.settings, &m.pages[..])).collect::<Vec<_>>(), [(&header, &[0][..]), (&footer, &[0][..])]);
+    // "Héader 1" is drawn with its é as an escape: what follows it is the old header's drawing.
+    assert!(streams(doc, 0).iter().any(|x| x.contains("ader 1)")), "{:?}", streams(doc, 0));
 
     update_header_footer(doc, &found[0].settings, &[0], &with_text("New"), &cx()).unwrap();
     let s = streams(doc, 0);
     assert!(s.iter().any(|x| x.contains("(New)")) && s.iter().any(|x| x.contains("(Footer)")), "{s:?}");
-    assert!(!s.iter().any(|x| x.contains("eader 1")), "the old header is gone: {s:?}");
+    assert!(!s.iter().any(|x| x.contains("ader 1)")), "the old header is gone: {s:?}");
     assert_eq!(header_footers(doc).len(), 2);
 
     let gone = update_header_footer(doc, &header, &[0], &with_text("Again"), &cx());
@@ -343,8 +345,8 @@ fn updating_a_shrinking_header_takes_its_shrink_away_too() {
     assert_eq!(s.len(), original.len() + 3, "the original, one wrapper and the new mark: {s:?}");
 }
 
-#[test]
-fn settings_a_file_makes_up_are_not_listed() {
+/// A document with one header "Real" on page 1, and that header's stream.
+fn one_recorded_header() -> (Document, pdfcraft_cos::ObjRef) {
     let mut doc = fixture();
     add_header_footer(&mut doc, &[0], &with_text("Real"), false, &cx()).unwrap();
     let page = crate::page_list(&doc).swap_remove(0);
@@ -355,12 +357,92 @@ fn settings_a_file_makes_up_are_not_listed() {
         .filter(|r| doc.get(*r).as_dict().is_some_and(|d| d.contains(b"PCHeaderFooter")))
         .collect();
     assert_eq!(marks.len(), 1);
-    let mut hostile = Dict::new();
-    hostile.set(b"Text".to_vec(), Object::Array(vec![Object::Int(1)]));
-    hostile.set(b"Size".to_vec(), Object::Real(f64::NAN));
-    doc.update_dict(marks[0], |d| d.set(b"PCHeaderFooter".to_vec(), Object::Dict(hostile))).unwrap();
-    assert!(header_footers(&doc).is_empty());
-    assert_eq!(marks_present(&doc), [MarkKind::HeaderFooter], "still a mark: Remove and page-wide Update reach it");
+    (doc, marks[0])
+}
+
+/// A change made to recorded settings, for [`settings_a_file_makes_up_are_not_listed`].
+type Change = Box<dyn FnOnce(&mut Document, &mut Dict)>;
+
+/// The recorded settings of `with_text("Real")`, changed by `change`.
+fn real_settings_with(doc: &mut Document, change: impl FnOnce(&mut Document, &mut Dict)) -> Object {
+    let mut d = with_text("Real").to_object().as_dict().cloned().unwrap();
+    change(doc, &mut d);
+    Object::Dict(d)
+}
+
+#[test]
+fn settings_a_file_makes_up_are_not_listed() {
+    let texts = |entries: Vec<&[u8]>| Object::Array(entries.into_iter().map(|t| Object::String(pdfcraft_cos::PdfString::literal(t))).collect());
+    let long = vec![b'x'; 16 * 1024 + 1];
+    let cases: Vec<(&str, Change)> = vec![
+        ("not text", Box::new(|_, d| d.set(b"Text".to_vec(), Object::Array(vec![Object::Int(1); 6])))),
+        ("five boxes", Box::new(move |_, d| d.set(b"Text".to_vec(), texts(vec![&b"a"[..]; 5])))),
+        ("a million boxes", Box::new(|_, d| d.set(b"Text".to_vec(), Object::Array(vec![Object::Null; 1_000_000])))),
+        ("a box too long", Box::new(move |_, d| d.set(b"Text".to_vec(), texts(vec![&b""[..], &long[..], &b""[..], &b""[..], &b""[..], &b""[..]])))),
+        ("no text", Box::new(move |_, d| d.set(b"Text".to_vec(), texts(vec![&b""[..]; 6])))),
+        ("undrawable", Box::new(|_, d| d.set(b"Text".to_vec(), Object::Array(vec![Object::String(pdfcraft_cos::PdfString::text("中")); 6])))),
+        ("size not a number", Box::new(|_, d| d.set(b"Size".to_vec(), Object::Real(f64::NAN)))),
+        ("size too big", Box::new(|_, d| d.set(b"Size".to_vec(), Object::Real(300.0)))),
+        ("a negative margin", Box::new(|_, d| d.set(b"Margins".to_vec(), Object::Array(vec![Object::Real(-1.0); 4])))),
+        ("three margins", Box::new(|_, d| d.set(b"Margins".to_vec(), Object::Array(vec![Object::Real(1.0); 3])))),
+        ("a colour out of range", Box::new(|_, d| d.set(b"Color".to_vec(), Object::Array(vec![Object::Real(2.0); 3])))),
+        ("an unknown face", Box::new(|_, d| d.set(b"Font".to_vec(), Object::name("Comic")))),
+        ("a negative start", Box::new(|_, d| d.set(b"Start".to_vec(), Object::Int(-1)))),
+    ];
+    for (what, change) in cases {
+        let (mut doc, mark) = one_recorded_header();
+        let hostile = real_settings_with(&mut doc, change);
+        doc.update_dict(mark, |d| d.set(b"PCHeaderFooter".to_vec(), hostile)).unwrap();
+        assert!(header_footers(&doc).is_empty(), "{what}");
+        assert_eq!(marks_present(&doc), [MarkKind::HeaderFooter], "{what}: still a mark: Remove and page-wide Update reach it");
+        assert_eq!(unrecorded_header_footer_pages(&doc), [0], "{what}");
+        assert_eq!(newest_header_footer(&doc, 0), Some(None), "{what}");
+    }
+}
+
+#[test]
+fn settings_a_rewriting_tool_made_indirect_are_still_listed() {
+    let (mut doc, mark) = one_recorded_header();
+    let indirect = real_settings_with(&mut doc, |doc, d| {
+        for key in [&b"Font"[..], b"Size", b"Start", b"Underline", b"Text"] {
+            let value = d.get(key).cloned().unwrap();
+            d.set(key.to_vec(), Object::Ref(doc.add(value)));
+        }
+        let half = Object::Ref(doc.add(Object::Real(0.5)));
+        d.set(b"Color".to_vec(), Object::Array(vec![half.clone(), half.clone(), half]));
+        let margins = Object::Array(vec![Object::Ref(doc.add(Object::Real(36.0))), Object::Real(36.0), Object::Real(72.0), Object::Real(72.0)]);
+        d.set(b"Margins".to_vec(), Object::Ref(doc.add(margins)));
+    });
+    doc.update_dict(mark, |d| d.set(b"PCHeaderFooter".to_vec(), indirect)).unwrap();
+    let found = header_footers(&doc);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].settings, HeaderFooter { color: [0.5; 3], ..with_text("Real") });
+    assert!(unrecorded_header_footer_pages(&doc).is_empty());
+}
+
+#[test]
+fn a_header_added_with_an_out_of_range_colour_can_be_updated() {
+    let mut doc = fixture();
+    let bright = HeaderFooter { color: [2.0, -1.0, 0.5], ..with_text("Bright") };
+    add_header_footer(&mut doc, &[0], &bright, false, &cx()).unwrap();
+    let found = header_footers(&doc);
+    assert_eq!(found.len(), 1, "listed with the colour it is drawn in");
+    assert_eq!(found[0].settings.color, [1.0, 0.0, 0.5]);
+    update_header_footer(&mut doc, &found[0].settings, &[0], &with_text("Calm"), &cx()).unwrap();
+    assert_eq!(header_footers(&doc).iter().map(|m| m.settings.text[1].as_str()).collect::<Vec<_>>(), ["Calm"]);
+}
+
+#[test]
+fn the_newest_header_on_a_page_is_the_one_added_last() {
+    let mut doc = fixture();
+    assert_eq!(newest_header_footer(&doc, 0), None);
+    let (first, second) = (HeaderFooter { shrink: true, ..with_text("First") }, HeaderFooter { shrink: true, ..with_text("Second") });
+    add_header_footer(&mut doc, &[0, 1], &first, false, &cx()).unwrap();
+    add_header_footer(&mut doc, &[0], &second, false, &cx()).unwrap();
+    // The second shrink goes in ahead of the first, so content order alone would say First.
+    assert_eq!(newest_header_footer(&doc, 0), Some(Some(second)));
+    assert_eq!(newest_header_footer(&doc, 1), Some(Some(first)));
+    assert_eq!(newest_header_footer(&doc, 9), None);
 }
 
 /// The six numbers of the first `… cm` in `content`.

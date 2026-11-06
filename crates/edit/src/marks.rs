@@ -99,15 +99,40 @@ pub struct HeaderFooterMark {
 /// which tokens made it. Private to PdfCraft (like `/PCMark`); other readers ignore it.
 pub(crate) const SETTINGS_KEY: &[u8] = b"PCHeaderFooter";
 
+/// The most bytes one recorded text box may take. A dialog box never needs more, and it bounds
+/// what listing the headers and footers of a hostile file decodes.
+const MAX_RECORDED_TEXT: usize = 16 * 1024;
+
+/// An array of exactly `N` numbers, each resolved: a rewriting tool may make any of them indirect.
 fn numbers<const N: usize>(doc: &Document, o: &Object) -> Option<[f64; N]> {
-    let values: Vec<f64> = doc.resolve(o).as_array()?.iter().map(Object::as_f64).collect::<Option<_>>()?;
+    let array = doc.resolve(o);
+    let items = array.as_array().filter(|a| a.len() == N)?;
+    let values: Vec<f64> = items.iter().map(|v| doc.resolve(v).as_f64()).collect::<Option<_>>()?;
     <[f64; N]>::try_from(values).ok()
 }
 
 impl HeaderFooter {
-    /// These settings as the [`SETTINGS_KEY`] entry.
+    /// Why [`add_header_footer`] refuses these settings, if it does. A recorded header and footer
+    /// is listed only when it passes too, so every one Update offers is one OK can apply.
+    pub(crate) fn check(&self) -> Result<(), EditError> {
+        if self.text.iter().all(|t| t.trim().is_empty()) {
+            return Err(EditError::Invalid("type the header or footer text first".into()));
+        }
+        if let Some(c) = self.first_undrawable() {
+            return Err(super::place::undrawable(c));
+        }
+        if !(self.font_size.is_finite() && self.font_size > 0.0 && self.font_size <= 200.0 && self.margins.iter().all(|m| m.is_finite() && *m >= 0.0))
+        {
+            return Err(EditError::Invalid("invalid font size or margins".into()));
+        }
+        Ok(())
+    }
+
+    /// These settings as the [`SETTINGS_KEY`] entry. The colour is recorded as drawn (see `rgb`),
+    /// so a header added with an out-of-range colour can still be listed and updated.
     pub(crate) fn to_object(&self) -> Object {
         let reals = |v: &[f64]| Object::Array(v.iter().copied().map(Object::Real).collect());
+        let drawn = self.color.map(|c| if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.0 });
         let mut d = Dict::new();
         d.set(b"Text".to_vec(), Object::Array(self.text.iter().map(|t| Object::String(pdfcraft_cos::PdfString::text(t))).collect()));
         d.set(
@@ -119,7 +144,7 @@ impl HeaderFooter {
             }),
         );
         d.set(b"Size".to_vec(), Object::Real(self.font_size));
-        d.set(b"Color".to_vec(), reals(&self.color));
+        d.set(b"Color".to_vec(), reals(&drawn));
         d.set(b"Underline".to_vec(), Object::Bool(self.underline));
         d.set(b"Margins".to_vec(), reals(&self.margins));
         d.set(b"Start".to_vec(), Object::Int(i64::from(self.start_number)));
@@ -132,32 +157,39 @@ impl HeaderFooter {
     pub(crate) fn from_object(doc: &Document, o: &Object) -> Option<Self> {
         let resolved = doc.resolve(o);
         let d = resolved.as_dict()?;
-        let flag = |key: &[u8]| match &*doc.resolve(d.get(key)?) {
+        // Every value resolved: a rewriting tool may make any of them indirect.
+        let value = |key: &[u8]| d.get(key).map(|v| doc.resolve(v));
+        let flag = |key: &[u8]| match &*value(key)? {
             Object::Bool(b) => Some(*b),
             _ => None,
         };
-        let texts: Vec<String> =
-            doc.resolve(d.get(b"Text")?).as_array()?.iter().map(|t| Some(doc.resolve(t).as_string()?.to_text())).collect::<Option<_>>()?;
+        // The count and each size are checked before anything is decoded or copied.
+        let texts = value(b"Text")?;
+        let texts = texts.as_array().filter(|a| a.len() == 6)?;
+        let text: Vec<String> = texts
+            .iter()
+            .map(|t| {
+                let t = doc.resolve(t);
+                let s = t.as_string().filter(|s| s.bytes.len() <= MAX_RECORDED_TEXT)?;
+                Some(s.to_text())
+            })
+            .collect::<Option<_>>()?;
         let hf = Self {
-            text: texts.try_into().ok()?,
-            font: match d.name(b"Font")? {
+            text: text.try_into().ok()?,
+            font: match value(b"Font")?.as_name()? {
                 b"Helvetica" => added::Family::Helvetica,
                 b"Times" => added::Family::Times,
                 b"Courier" => added::Family::Courier,
                 _ => return None,
             },
-            font_size: doc.resolve(d.get(b"Size")?).as_f64()?,
+            font_size: value(b"Size")?.as_f64()?,
             color: numbers(doc, d.get(b"Color")?)?,
             underline: flag(b"Underline")?,
             margins: numbers(doc, d.get(b"Margins")?)?,
-            start_number: u32::try_from(d.int(b"Start")?).ok()?,
+            start_number: u32::try_from(value(b"Start")?.as_int()?).ok()?,
             shrink: flag(b"Shrink")?,
         };
-        let sane = hf.font_size.is_finite()
-            && hf.font_size > 0.0
-            && hf.font_size <= 200.0
-            && hf.margins.iter().all(|m| m.is_finite() && *m >= 0.0)
-            && hf.color.iter().all(|c| (0.0..=1.0).contains(c));
+        let sane = hf.check().is_ok() && hf.color.iter().all(|c| (0.0..=1.0).contains(c));
         sane.then_some(hf)
     }
 }

@@ -65,6 +65,29 @@ pub fn header_footers(doc: &Document) -> Vec<HeaderFooterMark> {
     found
 }
 
+/// The header and footer added last to page `page` (0-based): `Some(None)` when it records no
+/// settings (from before they were recorded, or another tool), `None` when the page has none.
+/// Each mark's own stream goes on top of the page's content, so the last one is the newest; a
+/// shrink goes underneath, inside the wrapper, and is never last.
+pub fn newest_header_footer(doc: &Document, page: usize) -> Option<Option<HeaderFooter>> {
+    let page = page_list(doc).into_iter().nth(page)?;
+    let content = content_list(doc, &page);
+    let newest = content.iter().rev().find(|o| stream_tag(doc, o).as_deref() == Some(MarkKind::HeaderFooter.tag()))?;
+    Some(recorded_settings(doc, newest))
+}
+
+/// Pages (0-based) with a header and footer that records no settings: Update can only replace
+/// those page-wide, as it did before settings were recorded.
+pub fn unrecorded_header_footer_pages(doc: &Document) -> Vec<usize> {
+    let tagged = |o: &Object| stream_tag(doc, o).as_deref() == Some(MarkKind::HeaderFooter.tag());
+    page_list(doc)
+        .iter()
+        .enumerate()
+        .filter(|(_, page)| content_list(doc, page).iter().any(|o| tagged(o) && recorded_settings(doc, o).is_none()))
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// Which existing headers and footers an added one takes the place of.
 #[derive(Clone, Copy)]
 enum Replacing<'a> {
@@ -76,15 +99,7 @@ enum Replacing<'a> {
 fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFooter, replacing: Replacing, cx: &Context) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
-    if hf.text.iter().all(|t| t.trim().is_empty()) {
-        return Err(EditError::Invalid("type the header or footer text first".into()));
-    }
-    if let Some(c) = hf.first_undrawable() {
-        return Err(undrawable(c));
-    }
-    if !(hf.font_size.is_finite() && hf.font_size > 0.0 && hf.font_size <= 200.0 && hf.margins.iter().all(|m| m.is_finite() && *m >= 0.0)) {
-        return Err(EditError::Invalid("invalid font size or margins".into()));
-    }
+    hf.check()?;
     // Page numbers count up from start_number, so the last selected page needs the most room.
     // Refuse the whole run before drawing anything: headers applied to some pages and then a
     // failed page number would leave the document half changed.

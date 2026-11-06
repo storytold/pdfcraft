@@ -453,20 +453,30 @@ impl Automation {
     }
 
     /// The headers and footers with recorded settings, as `doc_header_footer`'s `update` names them.
+    /// Their text is copied out only where the document allows copying, as with `doc_to_copy`.
     pub(crate) fn header_footers(&mut self, a: &Args) -> Result<Value> {
-        let found: Vec<Value> = self
-            .doc(a)?
+        let doc = self.doc(a)?;
+        let copying = doc.check_copying().is_ok();
+        let found: Vec<Value> = doc
             .header_footers()
             .iter()
             .enumerate()
             .map(|(i, m)| {
-                let boxes = ["header_left", "header_center", "header_right", "footer_left", "footer_center", "footer_right"];
-                let text: serde_json::Map<String, Value> =
-                    boxes.iter().zip(&m.settings.text).filter(|(_, t)| !t.is_empty()).map(|(k, t)| ((*k).to_string(), json!(t))).collect();
-                json!({ "index": i, "pages": m.pages.iter().map(|p| p + 1).collect::<Vec<_>>(), "text": text })
+                let mut out = json!({ "index": i, "pages": m.pages.iter().map(|p| p + 1).collect::<Vec<_>>() });
+                if copying {
+                    let boxes = ["header_left", "header_center", "header_right", "footer_left", "footer_center", "footer_right"];
+                    let text: serde_json::Map<String, Value> =
+                        boxes.iter().zip(&m.settings.text).filter(|(_, t)| !t.is_empty()).map(|(k, t)| ((*k).to_string(), json!(t))).collect();
+                    out["text"] = Value::Object(text);
+                }
+                out
             })
             .collect();
-        Ok(json!({ "header_footers": found }))
+        let mut out = json!({ "header_footers": found });
+        if !copying {
+            out["text_withheld"] = json!("the document does not allow copying its text");
+        }
+        Ok(out)
     }
 
     /// Pages whose own backdrop hides a background (see `pdfcraft_edit::backdrop`).
@@ -508,6 +518,7 @@ impl Automation {
             }
             None => None,
         };
+        let updated = updating.is_some();
         let pages = match (a.opt_ints("pages")?, &updating) {
             (Some(_), _) => self.pages(a, "pages")?,
             (None, Some(mark)) => mark.pages.clone(),
@@ -592,7 +603,13 @@ impl Automation {
                 Edit::RemoveMarks { kind }
             }
         };
-        self.apply(a, edit)
+        let mut out = self.apply(a, edit)?;
+        // An update renumbers the listing (the replacement goes on top of the page), so earlier
+        // indices no longer hold: hand back the list they now refer to.
+        if updated {
+            out["header_footers"] = self.header_footers(a)?["header_footers"].take();
+        }
+        Ok(out)
     }
 
     pub(crate) fn export(&mut self, tool: &str, a: &Args) -> Result<Value> {

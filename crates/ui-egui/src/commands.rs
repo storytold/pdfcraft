@@ -495,15 +495,16 @@ impl PdfCraftApp {
                     K::Background
                 };
                 self.marks_draft.replace = id.ends_with(".update");
-                let header_footers = match (id, self.active_ids()) {
-                    ("edit.header_footer.update", Some((i, doc))) => {
-                        let found = self.session.get(doc).map(|d| d.header_footers()).unwrap_or_default();
-                        Some((found, self.views[i].current))
-                    }
+                let choices = match (id, self.active_ids()) {
+                    ("edit.header_footer.update", Some((i, doc))) => self.session.get(doc).map(|d| crate::marks_ui::UpdateChoices {
+                        doc,
+                        found: d.header_footers(),
+                        older_pages: d.unrecorded_header_footer_pages(),
+                        newest: d.newest_header_footer(self.views[i].current),
+                    }),
                     _ => None,
                 };
-                let (found, current) = header_footers.unwrap_or_default();
-                self.marks_draft.update_choices(found, current);
+                self.marks_draft.update_choices(choices);
                 self.marks_draft.opened(kind);
                 self.marks_draft.preview = None;
                 self.dialog = Some(Dialog::Marks(kind));
@@ -512,7 +513,7 @@ impl PdfCraftApp {
                 // Bates numbering ▸ Add: the header & footer dialog with a Bates number in the
                 // bottom-right box (6 digits from 1), ready to edit.
                 self.marks_draft.replace = false;
-                self.marks_draft.update_choices(Vec::new(), 0);
+                self.marks_draft.update_choices(None);
                 if self.marks_draft.hf.text.iter().all(|t| !t.contains("<<Bates")) {
                     self.marks_draft.hf.text[5] = "<<Bates Number#6#1##>>".into();
                 }
