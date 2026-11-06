@@ -210,6 +210,9 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let on_comment = comments::page_input(ui, resp, &pcx, press, taken, view);
     let consumed = taken || on_comment;
     let hover = pointer.and_then(|p| claim_under(&hits, view, p, frame.env.unobstructed));
+    if tool == QuickTool::Select && !preparing {
+        crate::forms_ui::note_hover(view, form, hover.as_ref(), can_fill);
+    }
     PageInput { consumed, area_tool, hover, released_over }
 }
 
