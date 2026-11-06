@@ -11428,3 +11428,92 @@ fn comments_copy_and_paste_between_documents_through_tools() {
     assert!(matches!(a.call("comments_copy", &json!({ "doc": src, "comments": [[2]] })), Err(ToolError::InvalidArgs(_))));
     assert_eq!(ok(&mut a, "comment_list", json!({ "doc": src }))["comments"].as_array().unwrap().len(), 2, "the source is untouched");
 }
+
+#[test]
+fn measurement_caption_move_keeps_the_reading_and_renders_after_reopen() {
+    fn annotation(bytes: std::sync::Arc<Vec<u8>>) -> (pdfcraft_cos::Dict, Vec<u8>) {
+        let pdf = pdfcraft_cos::Document::open(bytes).unwrap();
+        let page = &pdfcraft_model::pages(&pdf)[0];
+        let list = pdf.resolve(page.dict.get(b"Annots").unwrap());
+        let a = pdf.resolve(&list.as_array().unwrap()[0]);
+        let d = a.as_dict().unwrap().clone();
+        let ap = pdf.resolve(d.get(b"AP").unwrap());
+        let normal = pdf.resolve(ap.as_dict().unwrap().get(b"N").unwrap());
+        let pdfcraft_cos::Object::Stream(stream) = normal.as_ref() else {
+            panic!("normal appearance must be a stream");
+        };
+        (d, stream.decoded().unwrap())
+    }
+    fn ink(a: &mut Automation, doc: u64, r: [f64; 4]) -> usize {
+        let out = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":144})).unwrap();
+        let Content::Png { data, .. } = &out[0] else {
+            panic!("page_render must return PNG");
+        };
+        let mut reader = png::Decoder::new(std::io::Cursor::new(data.as_slice())).read_info().unwrap();
+        let mut data = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut data).unwrap();
+        let channels = info.color_type.samples();
+        let mut count = 0;
+        for y in ((300.0 - r[3]) * 2.0).floor() as u32..((300.0 - r[1]) * 2.0).ceil() as u32 {
+            for x in (r[0] * 2.0).floor() as u32..(r[2] * 2.0).ceil() as u32 {
+                let i = (y * info.width + x) as usize * channels;
+                if data[i..i + 3].iter().any(|c| *c < 180) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+    for end_y in [220, 180] {
+        let dir = workdir("measurement-caption");
+        let mut a = auto(&dir);
+        let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+        ok(&mut a, "measure_distance", json!({"doc":doc,"page":1,"points":[[40,220],[160,end_y]]}));
+        let before = ok(&mut a, "measure_list", json!({"doc":doc}));
+        let id = pdfcraft_engine::DocId(doc);
+        let old = a.session().get(id).unwrap().measurement_caption_rect(0, 0).unwrap();
+        let (old_dict, _) = annotation(a.session().get(id).unwrap().bytes.clone());
+        assert!(ink(&mut a, doc, old) > 20, "the original readout is visible");
+        ok(&mut a, "comment_edit", json!({"doc":doc,"page":1,"index":1,"caption_move":[20,-45]}));
+        let moved = a.session().get(id).unwrap().measurement_caption_rect(0, 0).unwrap();
+        for (actual, expected) in moved.into_iter().zip([old[0] + 20.0, old[1] + 45.0, old[2] + 20.0, old[3] + 45.0]) {
+            assert!((actual - expected).abs() < 0.001);
+        }
+        assert_eq!(ok(&mut a, "measure_list", json!({"doc":doc})), before);
+        assert_eq!(ink(&mut a, doc, old), 0, "the old readout is gone");
+        assert!(ink(&mut a, doc, moved) > 20, "the moved readout is drawn inside its enlarged annotation bounds");
+        let (dict, stream) = annotation(a.session().get(id).unwrap().bytes.clone());
+        assert!(dict.get(b"CO").unwrap().as_array().is_some());
+        for key in [b"L".as_slice(), b"Measure", b"PCMeasureValue", b"Contents", b"CP", b"Cap", b"LL", b"LLE", b"LLO"] {
+            assert_eq!(dict.get(key), old_dict.get(key), "{key:?} must stay unchanged");
+        }
+        let text = String::from_utf8_lossy(&stream);
+        let tokens: Vec<_> = text.split_whitespace().collect();
+        let at = tokens.iter().position(|s| *s == "Td").expect("a horizontal caption baseline");
+        let baseline = [tokens[at - 2].parse::<f64>().unwrap(), tokens[at - 1].parse::<f64>().unwrap()];
+        for (actual, expected) in baseline.into_iter().zip([moved[0], moved[1] + 2.5]) {
+            assert!((actual - expected).abs() < 0.001, "AP baseline {baseline:?} must match the shared readout geometry {moved:?}");
+        }
+
+        assert!(text.contains(" Tf ") && text.contains(" Td "), "the appearance keeps horizontal text: {text}");
+        ok(&mut a, "doc_save", json!({"doc":doc,"path":"moved.pdf"}));
+        let reopened = ok(&mut a, "doc_open", json!({"path":"moved.pdf"}))["doc"].as_u64().unwrap();
+        assert!(ink(&mut a, reopened, moved) > 20);
+        let (reopened_dict, _) = annotation(a.session().get(pdfcraft_engine::DocId(reopened)).unwrap().bytes.clone());
+        assert_eq!(reopened_dict.get(b"CO"), dict.get(b"CO"));
+        let reopened_id = pdfcraft_engine::DocId(reopened);
+        let original_rect = a.session().get(reopened_id).unwrap().info.annotations[0].rect;
+        ok(&mut a, "comment_edit", json!({"doc":reopened,"page":1,"index":1,"caption_move":[0,-300]}));
+        ok(&mut a, "comment_edit", json!({"doc":reopened,"page":1,"index":1,"caption_move":[0,300]}));
+        let returned_rect = a.session().get(reopened_id).unwrap().info.annotations[0].rect;
+        for (actual, expected) in returned_rect.into_iter().zip(original_rect) {
+            assert!((actual - expected).abs() < 0.01, "caption round trip must shrink the frame: {original_rect:?} -> {returned_rect:?}");
+        }
+
+        assert!(a.call("doc_save", &json!({"doc":reopened,"path":"../escaped-caption.pdf"})).is_err(), "saving stays confined to --root");
+        assert!(a.call("comment_edit", &json!({"doc":doc,"page":1,"index":1,"caption_move":[1e100,0]})).is_err());
+        ok(&mut a, "comment_lock", json!({"doc":doc,"page":1,"index":1,"locked":true}));
+        assert!(a.call("comment_edit", &json!({"doc":doc,"page":1,"index":1,"caption_move":[1,0]})).is_err(), "locked measurements cannot move");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

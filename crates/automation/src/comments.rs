@@ -765,6 +765,13 @@ impl Automation {
                 doc.info.annotations.iter().find(|c| c.page == page && c.index == index).map_or(rect, |c| c.rect_for_shown(rect, info.rotation));
             edits.push(Edit::ResizeAnnotation { page, index, rect });
         }
+        if let Some([dx, dy]) = a.nums::<2>("caption_move")? {
+            if [dx, dy].iter().any(|v| !v.is_finite() || v.abs() > 14_400.0) {
+                return Err(ToolError::InvalidArgs("caption_move must be finite and within 14400 points".into()));
+            }
+            let (o, d) = (to_user(&info, 0.0, 0.0), to_user(&info, dx, dy));
+            edits.push(Edit::MoveMeasurementCaption { page, index, dx: d[0] - o[0], dy: d[1] - o[1] });
+        }
         if let Some([dx, dy]) = a.nums::<2>("move")? {
             let (o, d) = (to_user(&info, 0.0, 0.0), to_user(&info, dx, dy));
             edits.push(Edit::MoveAnnotation { page, index, dx: d[0] - o[0], dy: d[1] - o[1] });

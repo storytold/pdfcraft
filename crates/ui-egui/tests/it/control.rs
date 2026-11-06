@@ -2179,3 +2179,128 @@ fn accessible_labels_on_format_text_and_pin_dialog() {
     let char_spin = ok(&mut h, &c, "ui.inspect", json!({"query": "Character spacing", "role": "SpinButton"}));
     assert!(char_spin["count"].as_u64().unwrap() >= 1, "character spacing spin button has accessible label: {char_spin}");
 }
+
+#[test]
+fn distance_caption_drag_keeps_geometry_and_survives_undo_and_reopen() {
+    use egui::{Event, Modifiers, PointerButton, pos2};
+    for end_y in [100.0, 160.0] {
+        let (mut h, c) = harness_pages(1);
+        let doc = h.state().views[0].id;
+        h.state_mut().set_option("zoom", "100").unwrap();
+        ok(&mut h, &c, "ui.command", json!({"id":"measure.distance"}));
+        h.run_steps(3);
+        let r = h.state().views[0].page_screen_rect(0).unwrap();
+        let screen = |x: f32, y: f32| pos2(r.left() + x * r.width() / 200.0, r.top() + (300.0 - y) * r.height() / 300.0);
+        for p in [screen(50.0, 100.0), screen(150.0, end_y)] {
+            call_production(&mut h, &c, "ui.click", json!({"x":p.x,"y":p.y})).unwrap();
+            h.run_steps(3);
+        }
+        h.state_mut().set_option("quick", "select").unwrap();
+        h.run_steps(3);
+        let before = h.state().session.get(doc).unwrap().measurements().unwrap().measurements;
+        let old = h.state().session.get(doc).unwrap().measurement_caption_rect(0, 0).unwrap();
+        let start = screen(((old[0] + old[2]) * 0.5) as f32, ((old[1] + old[3]) * 0.5) as f32);
+        call_production(&mut h, &c, "ui.click", json!({"x":start.x,"y":start.y})).unwrap();
+        h.run_steps(3);
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "Select the measurement before dragging its outlined readout");
+        let target = start + egui::vec2(20.0, -35.0);
+        let mut frame = |events: Vec<Event>| {
+            h.input_mut().events.extend(events);
+            production_step(&mut h);
+        };
+        frame(vec![
+            Event::PointerMoved(start),
+            Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+        ]);
+        for t in [0.25, 0.5, 0.75, 1.0] {
+            frame(vec![Event::PointerMoved(start.lerp(target, t))]);
+        }
+        frame(vec![Event::PointerButton { pos: target, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+        h.run_steps(3);
+        let moved = h.state().session.get(doc).unwrap().measurement_caption_rect(0, 0).unwrap();
+        assert_eq!(
+            h.state().session.get(doc).unwrap().measurements().unwrap().measurements,
+            before,
+            "moving the readout must not move endpoints, change the value or the scale"
+        );
+        assert!(moved[0] > old[0] + 10.0 && moved[1] > old[1] + 20.0, "readout moved: {old:?} -> {moved:?}");
+        assert!((moved[2] - moved[0] - (old[2] - old[0])).abs() < 1e-6);
+        assert!((moved[3] - moved[1] - (old[3] - old[1])).abs() < 1e-6, "angled captions stay horizontal");
+        ok(&mut h, &c, "ui.command", json!({"id":"edit.undo"}));
+        h.run_steps(2);
+        assert_eq!(h.state().session.get(doc).unwrap().measurement_caption_rect(0, 0).unwrap(), old);
+        ok(&mut h, &c, "ui.command", json!({"id":"edit.redo"}));
+        h.run_steps(2);
+        assert_eq!(h.state().session.get(doc).unwrap().measurement_caption_rect(0, 0).unwrap(), moved);
+        let bytes = h.state_mut().session.save_bytes(doc).unwrap();
+        h.state_mut().open_bytes("moved-readout.pdf", None, bytes.as_ref().clone()).unwrap();
+        h.run_steps(3);
+        let reopened = h.state().views.last().unwrap().id;
+        let actual = h.state().session.get(reopened).unwrap().measurement_caption_rect(0, 0).unwrap();
+        for (a, b) in actual.into_iter().zip(moved) {
+            assert!((a - b).abs() < 0.01, "save/reopen: {actual:?} vs {moved:?}");
+        }
+        let after = h.state().session.get(reopened).unwrap().measurements().unwrap().measurements;
+        assert_eq!(after[0].reading, before[0].reading);
+        for (a, b) in after[0].points.iter().flatten().zip(before[0].points.iter().flatten()) {
+            assert!((a - b).abs() < 0.001);
+        }
+    }
+}
+
+#[test]
+fn distance_caption_round_trip_leaves_no_hit_in_vacated_space() {
+    use egui::{Event, Modifiers, PointerButton, pos2};
+    fn drag(h: &mut Harness<'static, PdfCraftApp>, start: egui::Pos2, end: egui::Pos2) {
+        h.input_mut().events.extend([
+            Event::PointerMoved(start),
+            Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+        ]);
+        production_step(h);
+        for t in [0.25, 0.5, 0.75, 1.0] {
+            h.input_mut().events.push(Event::PointerMoved(start.lerp(end, t)));
+            production_step(h);
+        }
+        h.input_mut().events.push(Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        production_step(h);
+        h.run_steps(3);
+    }
+    for end_y in [100.0, 160.0] {
+        let (mut h, c) = harness_pages(1);
+        let doc = h.state().views[0].id;
+        h.state_mut().set_option("zoom", "100").unwrap();
+        ok(&mut h, &c, "ui.command", json!({"id":"measure.distance"}));
+        h.run_steps(3);
+        let r = h.state().views[0].page_screen_rect(0).unwrap();
+        let screen = |x: f32, y: f32| pos2(r.left() + x * r.width() / 200.0, r.top() + (300.0 - y) * r.height() / 300.0);
+        for p in [screen(50.0, 100.0), screen(150.0, end_y)] {
+            call_production(&mut h, &c, "ui.click", json!({"x":p.x,"y":p.y})).unwrap();
+            h.run_steps(3);
+        }
+        h.state_mut().set_option("quick", "select").unwrap();
+        h.run_steps(3);
+        let original = h.state().session.get(doc).unwrap().info.annotations[0].rect;
+        let caption = h.state().session.get(doc).unwrap().measurement_caption_rect(0, 0).unwrap();
+        let start = screen(((caption[0] + caption[2]) * 0.5) as f32, ((caption[1] + caption[3]) * 0.5) as f32);
+        call_production(&mut h, &c, "ui.click", json!({"x":start.x,"y":start.y})).unwrap();
+        h.run_steps(3);
+        let far = start - egui::vec2(0.0, 60.0 * r.height() / 300.0);
+        drag(&mut h, start, far);
+        drag(&mut h, far, start);
+        let blank = screen(10.0, 20.0);
+        call_production(&mut h, &c, "ui.click", json!({"x":blank.x,"y":blank.y})).unwrap();
+        h.run_steps(3);
+        assert!(h.state().views[0].comments.selected.is_none());
+        call_production(&mut h, &c, "ui.click", json!({"x":far.x,"y":far.y})).unwrap();
+        h.run_steps(3);
+        assert!(h.state().views[0].comments.selected.is_none(), "vacated readout area must not select the measurement");
+        let returned = h.state().session.get(doc).unwrap().info.annotations[0].rect;
+        for (actual, expected) in returned.into_iter().zip(original) {
+            assert!((actual - expected).abs() < 3.1, "only the old extra caption padding may shrink: {original:?} -> {returned:?}");
+        }
+        let returned_caption = h.state().session.get(doc).unwrap().measurement_caption_rect(0, 0).unwrap();
+        for (actual, expected) in returned_caption.into_iter().zip(caption) {
+            assert!((actual - expected).abs() < 0.001, "the first move must remain jump-free");
+        }
+    }
+}

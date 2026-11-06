@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-06 | **Last updated:** 2026-11-06 | **Change:** patch (M5 #5741: Select drags a PdfCraft distance readout independently through standard caption offsets; endpoints, scale and value stay fixed; current path/caption bounds replace vacated space; undo, save/reopen and headless caption_move; estimates unchanged)
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)

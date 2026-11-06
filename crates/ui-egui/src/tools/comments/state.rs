@@ -24,6 +24,8 @@ pub enum Gesture {
     Draw { page: usize, tool: CommentTool, points: Vec<[f64; 2]> },
     /// Moving a comment, from the press position on screen.
     Move { page: usize, index: usize, from: Pos2 },
+    /// Moving a selected distance measurement's numeric readout only.
+    Caption { page: usize, index: usize, from: Pos2 },
     /// Resizing a comment by one of its handles: (dx, dy) ∈ {-1, 0, 1}² says which sides move.
     Resize { page: usize, index: usize, handle: (i8, i8), from: Pos2, aspect_ratio: Option<f32> },
     /// Dragging point `point` of a line, connected lines, a polygon or a cloud (its `points`
@@ -378,6 +380,7 @@ pub(crate) struct PageCx<'a> {
     /// The pointer as the pages see it this frame.
     pub ptr: &'a PagePointer,
     pub info: &'a DocInfo,
+    pub doc: Option<&'a pdfcraft_engine::Document>,
     pub tool: QuickTool,
     pub prefs: &'a CommentPrefs,
     /// A redaction mark's fill while the pointer is over it, and its opacity (Redaction Tool
@@ -390,6 +393,14 @@ pub(crate) struct PageCx<'a> {
 }
 
 impl PageCx<'_> {
+    pub(super) fn caption_rect(&self, a: &Annotation) -> Option<Rect> {
+        if a.intent.as_deref() != Some("LineDimension") || a.subtype != "Line" {
+            return None;
+        }
+        let r = self.doc?.measurement_caption_rect(self.page, a.index)?;
+        Some(Rect::from_two_pos(self.to_screen([r[0], r[1]]), self.to_screen([r[2], r[3]])))
+    }
+
     pub(super) fn to_user(&self, p: Pos2) -> [f64; 2] {
         let (vx, vy) = self.xf.screen_to_view(p);
         let u = self.info.pages[self.page].view_to_user(vx, vy);
