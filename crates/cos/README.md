@@ -37,8 +37,8 @@ let bytes = write_full(&doc, &SaveOptions::default())?;         // garbage-colle
 let len = write_full_to(&doc, &SaveOptions::default(), file)?;  // the same, streamed to a Write
 ```
 
-Both writers **return the bytes**; the caller decides where they go, which is what lets the engine
-produce a working file in memory after every edit and keep saving atomic. `write_full_to` writes
+`write_incremental` and `write_full` **return the bytes**; the caller decides where they go, which
+is what lets the engine produce a working file in memory after every edit and keep saving atomic. `write_full_to` writes
 the same bytes as `write_full` to any `std::io::Write` as it goes, so a large rewrite never has to
 fit in memory twice (useful when the result goes straight to disk).
 
