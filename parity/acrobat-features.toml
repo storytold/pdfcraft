@@ -9982,9 +9982,9 @@ tier = "P3"
 milestone = "M12"
 status = "partial"
 commands = []
-tools = ["model_render"]
-evidence = ["crates/automation/tests/it/model_render.rs::a_prc_model_is_drawn_over_the_background", "crates/annot/src/model3d/tests.rs::a_3dref_leads_to_the_stream_it_names", "crates/prc-render/tests/model.rs::a_synthetic_prc_renders_its_nearer_triangle_over_the_farther"]
-notes = "headless only: model_render draws a page's PRC model (through a /3DRef too) to a PNG, framed from a chosen direction, with headlight shading. Missing: the 3D view in the app (no activation, no navigation), U3D (an error), the annotation's /3DV views, lighting schemes and /RM render modes, materials and textures, compressed tessellation, picking, cross sections, the model tree, and measurements"
+tools = ["model_render", "model_pick"]
+evidence = ["crates/automation/tests/it/model_render.rs::a_prc_model_is_drawn_over_the_background", "crates/automation/tests/it/model_render.rs::a_pick_finds_the_model_exactly_where_the_picture_shows_it", "crates/prc-render/src/pick/tests.rs::a_pick_hits_exactly_where_the_render_draws", "crates/annot/src/model3d/tests.rs::a_3dref_leads_to_the_stream_it_names", "crates/prc-render/tests/model.rs::a_synthetic_prc_renders_its_nearer_triangle_over_the_farther"]
+notes = "headless only: model_render draws a page's PRC model (through a /3DRef too) to a PNG, framed from a chosen direction, with headlight shading; model_pick reports the triangle, point and normal under a position of that picture. Missing: the 3D view in the app (no activation, no navigation), U3D (an error), the annotation's /3DV views, lighting schemes and /RM render modes, materials and textures, compressed tessellation, picking in the app, cross sections, the model tree, and measurements"
 
 [[feature]]
 id = "misc.3d-add"

@@ -110,3 +110,55 @@ fn a_model_outside_the_root_is_never_opened_to_be_drawn() {
     let doc = open(&mut a, "prc.pdf");
     assert!(a.call("model_render", &json!({ "doc": doc, "page": 1 })).is_ok());
 }
+
+fn json_of(mut out: Vec<Content>) -> Value {
+    match out.remove(0) {
+        Content::Json(v) => v,
+        other => panic!("expected JSON: {other:?}"),
+    }
+}
+
+#[test]
+fn a_pick_finds_the_model_exactly_where_the_picture_shows_it() {
+    let (_dir, mut a) = setup("pick");
+    let doc = open(&mut a, "prc.pdf");
+    let view = json!({ "doc": doc, "page": 1, "width": 64, "height": 48, "direction": [0, 0, -1], "perspective": false });
+    let Content::Png { data, .. } = &a.call("model_render", &view).unwrap()[0] else { panic!("expected a PNG") };
+    let mut drawn = 0;
+    for y in (0..48).step_by(3) {
+        for x in (0..64).step_by(3) {
+            let mut args = view.clone();
+            args["at"] = json!([x as f64 + 0.5, y as f64 + 0.5]);
+            let hit = json_of(a.call("model_pick", &args).unwrap());
+            let shown = rgb(data, x, y) != [255, 255, 255];
+            assert_eq!(!hit["hit"].is_null(), shown, "pixel {x}, {y}: {hit}");
+            drawn += usize::from(shown);
+        }
+    }
+    assert!(drawn > 20, "the triangle fills part of the picture");
+    let mut centre = view.clone();
+    centre["at"] = json!([32.0, 24.0]);
+    let hit = json_of(a.call("model_pick", &centre).unwrap())["hit"].clone();
+    assert_eq!((hit["mesh"].as_u64(), hit["triangle"].as_u64()), (Some(1), Some(1)), "{hit}");
+    assert!(hit["point"][2].as_f64().unwrap().abs() < 1e-9, "the triangle lies at z = 0: {hit}");
+    assert_eq!(hit["normal"], json!([0.0, 0.0, 1.0]), "it faces +z");
+    // The default perspective view meets the model too.
+    let hit = json_of(a.call("model_pick", &json!({ "doc": doc, "page": 1, "at": [256, 256] })).unwrap());
+    assert!(!hit["hit"].is_null(), "{hit}");
+}
+
+#[test]
+fn a_wrong_pick_position_is_a_clear_error() {
+    let (_dir, mut a) = setup("pick-bad");
+    let doc = open(&mut a, "prc.pdf");
+    for at in [json!(null), json!([1]), json!([1, 2, 3]), json!([-1, 0]), json!(["1", 0]), json!([65, 0]), json!([0, 48.5])] {
+        let mut args = json!({ "doc": doc, "page": 1, "width": 64, "height": 48 });
+        if !at.is_null() {
+            args["at"] = at.clone();
+        }
+        let err = a.call("model_pick", &args).unwrap_err().to_string();
+        assert!(err.contains("at must") || err.ends_with("missing argument at"), "{at}: {err}");
+    }
+    let err = a.call("model_pick", &json!({ "doc": doc, "page": 1, "at": [0, 0], "model": 2 })).unwrap_err().to_string();
+    assert!(err.contains("has 1 3D models, not 2"), "{err}");
+}
