@@ -391,6 +391,54 @@ fn of_two_fields_that_share_a_name_the_one_clicked_is_edited() {
     assert_eq!(focused(&h), Some(("last".into(), 0)), "and Tab goes on from the one clicked");
 }
 
+/// `name` on the page twice as one field with two widgets, and `last` below them.
+fn two_widgets_pdf() -> Vec<u8> {
+    pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 8 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R] >>",
+        "<< /FT /Tx /T (name) /Kids [5 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [20 350 280 372] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 4 0 R /Rect [20 270 280 292] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (last) /Rect [20 230 280 252] /P 3 0 R /F 4 >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ])
+}
+
+/// Where the page shows each widget of the fields named `name`, in the form's order.
+fn shown_rects(h: &Harness<'static, PdfCraftApp>, name: &str) -> Vec<egui::Rect> {
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    doc.form
+        .iter()
+        .filter(|f| f.name == name)
+        .flat_map(|f| (0..f.widgets.len()).filter_map(move |w| pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, w)))
+        .collect()
+}
+
+#[test]
+fn pressing_another_widget_of_the_field_being_typed_in_keeps_the_typing() {
+    // The press opened the editor there before the typing was applied, with the value from
+    // before it, and a click away put that back: a field with two widgets lost what was typed in
+    // the first, and so did two fields that share a name once a press on the second opened it.
+    for (pdf, fields) in [(two_widgets_pdf(), 1), (shown_twice_pdf(), 2)] {
+        let mut h = form_harness(pdf);
+        let rects = shown_rects(&h, "name");
+        let [first, second] = rects[..] else { panic!("name shown twice: {rects:?}") };
+        click_at(&mut h, first.center());
+        h.event(egui::Event::Text("Ada".into()));
+        h.run_steps(1);
+        click_at(&mut h, second.center());
+        h.event(egui::Event::Text("!".into()));
+        h.run_steps(1);
+        let editor = h.state().views[0].forms.focus.as_ref().map(|f| f.text.clone());
+        assert_eq!(editor.as_deref(), Some("Ada!"), "the other one opens with the typing, and the caret where it was pressed");
+        let last = copy_rect(&h, "last", 0).center();
+        click_at(&mut h, last);
+        assert_eq!(values(&h, "name"), vec![vec!["Ada!"]; fields]);
+    }
+}
+
 #[test]
 fn page_keys_still_work_with_a_check_box_or_radio_button_focused() {
     // The widget that takes Space for a focused box must not swallow the page keys.

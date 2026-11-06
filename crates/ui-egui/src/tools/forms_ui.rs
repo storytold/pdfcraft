@@ -134,6 +134,18 @@ fn open_focus(f: &FormField, widget: usize) -> Focus {
     }
 }
 
+/// [`open_focus`] right after [`commit`]. Another widget of the field committed, or another field
+/// of its name, opens with the text committed: that is its value once the commit's edit runs, and
+/// its editor is drawn before then. Opened with the value from before the typing, a click away put
+/// that back.
+fn open_after_commit(view: &DocView, f: &FormField, widget: usize) -> Focus {
+    let mut focus = open_focus(f, widget);
+    if let Some(draft) = view.forms.committed.as_ref().filter(|d| d.name == f.name) {
+        focus.text = draft.text.clone();
+    }
+    focus
+}
+
 /// Which field of `form` `focus` is on: the one with its dictionary, else (the form no longer has
 /// that dictionary) the first of its name. Fields that share a name are listed apart (#2217), and
 /// a writer can list a copy that no page shows before the one a page does, as iOS's Quartz
@@ -240,7 +252,7 @@ pub(crate) fn page_input(
         && !focus_on(view.forms.focus.as_ref(), form, field, wi)
     {
         commit(view, form);
-        view.forms.focus = Some(Focus { press: Some(at), ..open_focus(f, wi) });
+        view.forms.focus = Some(Focus { press: Some(at), ..open_after_commit(view, f, wi) });
         view.forms.pressed = true;
     }
     // A click counts released over the widget its press was on, as a button's does: one that slips
@@ -283,7 +295,7 @@ pub(crate) fn page_input(
         FormFieldKind::Text | FormFieldKind::Combo => {
             if !focus_on(view.forms.focus.as_ref(), form, field, wi) {
                 commit(view, form);
-                view.forms.focus = Some(open_focus(f, wi));
+                view.forms.focus = Some(open_after_commit(view, f, wi));
             }
         }
         FormFieldKind::List => {
