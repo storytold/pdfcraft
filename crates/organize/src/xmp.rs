@@ -308,7 +308,9 @@ fn without(xmp: &str, props: &[Prop]) -> Option<String> {
     let mut out = String::with_capacity(xmp.len());
     let mut at = 0;
     for s in spans {
-        // Inside a property already taken out (one property nested in another).
+        // Top-level properties never overlap. A span inside one already taken out would make
+        // `at..s.start` an inverted range, whose `get` is `None` and would abort every removal,
+        // so it is skipped instead.
         if s.start < at {
             continue;
         }
