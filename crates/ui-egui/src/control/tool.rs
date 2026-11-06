@@ -39,6 +39,10 @@ pub(super) fn agent_read_only_tool(name: &str) -> bool {
 
 impl crate::PdfCraftApp {
     pub(crate) fn run_tool(&mut self, name: &str, args: &Value, root: Option<&str>) -> Reply {
+        self.run_connected_tool(0, name, args, root)
+    }
+
+    pub(crate) fn run_connected_tool(&mut self, connection: u64, name: &str, args: &Value, root: Option<&str>) -> Reply {
         // An agent must not overwrite an editor's draft, save an older value, or leave stale
         // field/object indexes after changing the document. The person commits typing first.
         if self.modal_open()
@@ -67,7 +71,7 @@ impl crate::PdfCraftApp {
             return Err("tool.call: this build of PdfCraft can't run automation tools in the window".into());
         };
         let before: Vec<(pdfcraft_engine::DocId, u64)> = self.session.docs().iter().map(|d| (d.id, d.edit_generation())).collect();
-        let result = runner(&mut self.session, name, args, root.map(std::path::Path::new));
+        let result = runner(&mut self.session, connection, name, args, root.map(std::path::Path::new));
         self.show_tool_changes(&before);
         result
     }

@@ -52,7 +52,7 @@ impl Control {
                         root,
                     )))
                 } else {
-                    Ok(Handled::Now(host.tool(name, args, root)))
+                    Ok(Handled::Now(host.connected_tool(self.connection, name, args, root)))
                 }
             }
             "ui.inspect" | "tool.inspect" => {

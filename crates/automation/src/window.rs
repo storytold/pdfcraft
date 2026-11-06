@@ -12,13 +12,46 @@
 //!   back with [`from_wire`], and adds the `ui_*` tools ([`ui_tools`]), which relay the window's
 //!   own `ui.*` methods.
 
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use base64::Engine as _;
 use pdfcraft_engine::Session;
 use serde_json::{Value, json};
 
-use crate::{Automation, Content};
+use crate::{Automation, ConnectedState, Content};
+
+const MAX_CONNECTION_STATES: usize = 32;
+
+/// Stateful window dispatcher. The connection id is assigned by the authenticated transport,
+/// never supplied by the agent. Eviction requires a fresh listing/review, not positional edits.
+#[derive(Default)]
+pub struct WindowTools {
+    connections: HashMap<u64, (u64, ConnectedState)>,
+    serial: u64,
+    next_ocr_review: u64,
+}
+
+impl WindowTools {
+    /// Run a tool on the document owner's thread, retaining only this connection's context.
+    pub fn call(&mut self, connection: u64, session: &mut Session, root: Option<&Path>, name: &str, args: &Value) -> Result<Value, String> {
+        if let Some(why) = refused_relay(name, args) {
+            return Err(why);
+        }
+        self.serial = self.serial.checked_add(1).ok_or_else(|| "connected tool activity counter exhausted; reopen the window".to_string())?;
+        if !self.connections.contains_key(&connection) && self.connections.len() >= MAX_CONNECTION_STATES {
+            let oldest = self.connections.iter().min_by_key(|(_, (used, _))| *used).map(|(id, _)| *id);
+            if let Some(oldest) = oldest {
+                self.connections.remove(&oldest);
+            }
+        }
+        let (used, state) = self.connections.entry(connection).or_default();
+        *used = self.serial;
+        state.next_ocr_review = self.next_ocr_review;
+        let result = Automation::run_on_with_state(session, state, root, name, args);
+        self.next_ocr_review = state.next_ocr_review;
+        result.map(to_wire).map_err(|error| error.to_string())
+    }
+}
 
 /// The window's control method that runs a table tool on its documents.
 pub const TOOL_METHOD: &str = "tool.call";
@@ -35,10 +68,7 @@ pub trait Window {
 /// Run the table tool `name` on the window's `session` (see [`Automation::run_on`]), for the
 /// control method [`TOOL_METHOD`]. Refused first: what [`refused_in_window`] lists.
 pub fn call_for_window(session: &mut Session, root: Option<&Path>, name: &str, args: &Value) -> Result<Value, String> {
-    if let Some(why) = refused_relay(name, args) {
-        return Err(why);
-    }
-    Automation::run_on(session, root, name, args).map(to_wire).map_err(|e| e.to_string())
+    WindowTools::default().call(0, session, root, name, args)
 }
 
 /// Why the window refuses tool `name` with `args` from a connected client, if it does.
@@ -59,6 +89,7 @@ pub fn refused_in_window(name: &str, args: &Value) -> Option<String> {
         ))
     };
     match name {
+        "edit_undo" | "edit_redo" => Some("HUMAN_HISTORY_REQUIRED: shared window history can contain the person's signatures and unrelated edits; use Undo or Redo in the window yourself".into()),
         n if n.starts_with("sign_") => signing(),
         "fill_sign_add" if matches!(args.get("type").and_then(Value::as_str), Some("signature" | "initials")) => signing(),
         "redact_apply" => Some("redact_apply: irreversible redaction needs the person's confirmation in the window; an agent may prepare marks with redact_mark, then ask the person to review and apply them".into()),
@@ -396,8 +427,10 @@ mod tests {
         for step in [signature, json!({"id":"file.close", "params":{"doc":doc,"discard_changes":true}})] {
             let e = call_for_window(&mut s, None, "command_run", &step).unwrap_err();
             assert!(e.contains("person"), "{e}");
-            let e = call_for_window(&mut s, None, "command_batch", &json!({"steps":[step],"stop_on_error":false})).unwrap_err();
-            assert!(e.contains("person"), "{e}");
+            let rotate = json!({"id":"page.rotate","params":{"doc":doc,"pages":[1],"degrees":90}});
+            let error = call_for_window(&mut s, None, "command_batch", &json!({"steps":[rotate,step],"stop_on_error":false})).unwrap_err();
+            assert!(error.contains("person"), "{error}");
+            assert!(!s.docs()[0].dirty, "preflight must refuse the batch before its allowed earlier mutation");
         }
         for name in ["sign_list", "sign_keychain_ids", "sign_windows_ids", "sign_unknown", "redact_apply", "comment_image_preview"] {
             assert!(call_for_window(&mut s, None, name, &json!({"doc":doc})).is_err(), "{name}");
@@ -425,6 +458,44 @@ mod tests {
         {
             assert!(from_wire(&junk).is_err(), "{junk}");
         }
+    }
+
+    #[test]
+    fn connected_context_keeps_ocr_review_private_and_invalidates_changed_documents() {
+        for same_connection_edit in [false, true] {
+            let (mut session, doc) = window_session();
+            let id = pdfcraft_engine::DocId(doc);
+            let guard = session.ocr_job(id, &[0], pdfcraft_engine::ocr::OcrSettings::default()).unwrap().guard;
+            let mut state = ConnectedState { next_ocr_review: 41, ..ConnectedState::default() };
+            state.ocr_reviews.insert(id, crate::OcrReview { handle: 41, guard, pages: Vec::new() });
+            state.remember_versions(&session);
+            let mut tools = WindowTools { next_ocr_review: 41, ..WindowTools::default() };
+            tools.connections.insert(1, (0, state));
+            tools.call(1, &mut session, None, "doc_list", &json!({})).unwrap();
+            tools.call(2, &mut session, None, "doc_list", &json!({})).unwrap();
+            assert_eq!(tools.connections.get(&1).unwrap().1.ocr_reviews.get(&id).unwrap().handle, 41);
+            assert!(tools.connections.get(&2).unwrap().1.ocr_reviews.is_empty());
+            assert_eq!(tools.next_ocr_review, 41, "switching connections does not reset the issued-handle counter");
+            if same_connection_edit {
+                tools.call(1, &mut session, None, "page_rotate", &json!({"doc":doc,"pages":[1],"degrees":90})).unwrap();
+            } else {
+                session.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+            }
+            tools.call(1, &mut session, None, "doc_list", &json!({})).unwrap();
+            assert!(tools.connections.get(&1).unwrap().1.ocr_reviews.is_empty());
+            assert_eq!(tools.next_ocr_review, 41, "invalidation must not allow old handles to be reissued");
+        }
+    }
+
+    #[test]
+    fn connected_context_counter_exhaustion_is_an_error_without_document_changes() {
+        let (mut session, doc) = window_session();
+        let mut tools = WindowTools { serial: u64::MAX, ..WindowTools::default() };
+        let before = session.get(pdfcraft_engine::DocId(doc)).unwrap().bytes.clone();
+        assert!(
+            tools.call(1, &mut session, None, "page_rotate", &json!({"doc":doc,"pages":[1],"degrees":90})).unwrap_err().contains("counter exhausted")
+        );
+        assert_eq!(session.get(pdfcraft_engine::DocId(doc)).unwrap().bytes, before);
     }
 
     #[test]

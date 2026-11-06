@@ -1,7 +1,7 @@
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, nest_rows, security, summary};
 use super::paths::{child, read_input, write_atomic};
-use super::{Arc, Automation, BlockKey, DocId, Document, Edit, Path, PathBuf, TextBlock, Value, comments, file_access, json};
+use super::{Arc, Automation, BlockKey, DocId, Document, Edit, Path, TextBlock, Value, comments, json};
 
 /// How far a watermark may be moved from the page centre, in points (a page is at most 14,400).
 const WATERMARK_MAX_OFFSET: f64 = 20_000.0;
@@ -61,9 +61,9 @@ impl Automation {
     /// dropped at the cap, until the page is listed again.
     pub(crate) fn paragraph_index(&self, doc: DocId, page: usize, k: i64, blocks: &[TextBlock]) -> Result<usize> {
         let keys = self.listed.get(&(doc, page));
-        if keys.is_none() && self.evicted.contains(&doc) {
+        if keys.is_none() && (self.requires_listing || self.evicted.contains(&doc)) {
             return Err(ToolError::InvalidArgs(format!(
-                "page {} has no paragraph listing any more: too many pages were listed and the oldest listings were dropped. List the page again with text_paragraphs",
+                "page {} has no current paragraph listing for this connection. List the page again with text_paragraphs before using a paragraph number",
                 page + 1
             )));
         }
@@ -131,18 +131,19 @@ impl Automation {
     pub(crate) fn doc_save_with(&mut self, a: &Args, write: impl FnOnce(&Path, &[u8]) -> Result<()>) -> Result<Value> {
         let doc = self.doc(a)?;
         let id = doc.id;
-        let target = match a.opt_str("path")? {
+        let requested_path = a.opt_str("path")?;
+        let target = match requested_path {
             Some(p) => self.resolve(p, true)?,
             None => {
                 // Saving in place writes where the file was opened from, which the read root
                 // allows and the write root may not.
                 let own = doc.path.clone().ok_or_else(|| failed("the document has never been saved: pass a path"))?;
-                let own_path = PathBuf::from(&own);
-                self.check_roots(&own, &own_path, file_access::Access::Write)?;
-                own_path
+                let own_path = std::path::absolute(&own).map_err(failed)?;
+                let own_path = own_path.to_str().ok_or_else(|| failed("the document's path is not valid Unicode"))?;
+                self.resolve(own_path, true)?
             }
         };
-        let same_file = doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
+        let same_file = requested_path.is_none() || doc.path.as_deref().is_some_and(|p| Path::new(p) == target);
         // Saving to a new file is a full rewrite unless asked otherwise, like Save As.
         let full = a.opt_bool("full")?.unwrap_or(!same_file);
         let flatten_fill_sign = a.opt_bool("flatten_fill_sign")?.unwrap_or(false);

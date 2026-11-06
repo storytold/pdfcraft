@@ -1,6 +1,37 @@
 use super::*;
 use pdfcraft_platform::staging::STAGING_ATTEMPTS;
 
+#[test]
+fn window_lending_restores_the_session_and_invalidates_context_after_a_panic() {
+    let mut session = Session::new();
+    let id = session.open("fixture.pdf", None, Arc::new(numbered_pages(1)), None).unwrap();
+    let mut state = ConnectedState::default();
+    Automation::run_on_with_state(&mut session, &mut state, None, "text_paragraphs", &json!({"doc":id.0,"page":1})).unwrap();
+    assert!(!state.listed.is_empty());
+    let result = Automation::run_lent(&mut session, &mut state, None, |_| panic!("synthetic escaped tool panic"));
+    assert!(result.is_err());
+    assert_eq!(session.docs().len(), 1);
+    assert!(state.listed.is_empty() && state.ocr_reviews.is_empty());
+    let error =
+        Automation::run_on_with_state(&mut session, &mut state, None, "text_edit", &json!({"doc":id.0,"page":1,"paragraph":1,"text":"stale"}))
+            .unwrap_err();
+    assert!(error.to_string().contains("text_paragraphs"));
+}
+
+#[test]
+fn window_lending_restores_listing_state_when_root_validation_fails() {
+    let mut session = Session::new();
+    let id = session.open("fixture.pdf", None, Arc::new(numbered_pages(1)), None).unwrap();
+    let mut state = ConnectedState::default();
+    Automation::run_on_with_state(&mut session, &mut state, None, "text_paragraphs", &json!({"doc":id.0,"page":1})).unwrap();
+    let root = tempfile::NamedTempFile::new().unwrap();
+    assert!(Automation::run_on_with_state(&mut session, &mut state, Some(root.path()), "doc_list", &json!({})).is_err());
+    assert!(!state.listed.is_empty());
+    assert_eq!(session.docs().len(), 1);
+    Automation::run_on_with_state(&mut session, &mut state, None, "text_edit", &json!({"doc":id.0,"page":1,"paragraph":1,"text":"After refusal"}))
+        .unwrap();
+}
+
 /// `n` pages, page i showing "Page i".
 fn numbered_pages(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];

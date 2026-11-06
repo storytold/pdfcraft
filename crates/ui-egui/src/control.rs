@@ -89,7 +89,7 @@ pub type Reply = Result<Value, String>;
 
 /// Runs automation tool `name` with `args` on the window's session (`tool.call`), with an
 /// optional root folder; the result in the control channel's form. The desktop app provides it.
-pub type ToolRunner = Box<dyn FnMut(&mut pdfcraft_engine::Session, &str, &Value, Option<&std::path::Path>) -> Reply>;
+pub type ToolRunner = Box<dyn FnMut(&mut pdfcraft_engine::Session, u64, &str, &Value, Option<&std::path::Path>) -> Reply>;
 
 /// Seconds to wait for frames (input to be handled, a screenshot to be taken) before reporting
 /// that the window is not being drawn. `App::logic` also runs while a window is hidden,
@@ -125,6 +125,8 @@ fn startup_deadline_expired() -> String {
 pub struct ControlRequest {
     /// Admission time on the sending thread, including time waiting for the next app tick.
     pub since: web_time::Instant,
+    /// Transport-owned connection identity; it is never read from request parameters.
+    pub connection: u64,
     pub method: String,
     pub params: Value,
     pub reply: Sender<Reply>,
@@ -141,8 +143,12 @@ pub struct ControlClient {
 impl ControlClient {
     /// Queue a request; the reply arrives on the returned receiver once the app has handled it.
     pub fn send(&self, method: &str, params: Value) -> Receiver<Reply> {
+        self.send_from_connection(0, method, params)
+    }
+
+    pub(crate) fn send_from_connection(&self, connection: u64, method: &str, params: Value) -> Receiver<Reply> {
         let (reply, rx) = channel();
-        let req = ControlRequest { since: web_time::Instant::now(), method: method.into(), params, reply };
+        let req = ControlRequest { since: web_time::Instant::now(), connection, method: method.into(), params, reply };
         if let Err(e) = self.tx.send(req) {
             let _ = e.0.reply.send(Err("the app has closed".into()));
         }
@@ -239,6 +245,7 @@ pub struct Control {
     deferred: VecDeque<DeferredRequest>,
     /// Keep private snapshots inaccessible until fresh non-private UI passes replaced them.
     private_until_pass: u64,
+    connection: u64,
 }
 
 /// Install the control channel on `ctx`: returns the app half and a client.
@@ -248,7 +255,7 @@ pub fn attach(ctx: &egui::Context) -> (Control, ControlClient) {
     ctx.enable_accesskit();
     let (tx, rx) = channel();
     (
-        Control { rx, shared, pending: Vec::new(), deferred: VecDeque::new(), private_until_pass: 0 },
+        Control { rx, shared, pending: Vec::new(), deferred: VecDeque::new(), private_until_pass: 0, connection: 0 },
         ControlClient { tx, ctx: ctx.clone(), agent_hub: crate::ask_agent::AgentHub::default() },
     )
 }
@@ -282,6 +289,10 @@ pub(crate) trait Host {
         Err("tool.call: not available in this host".into())
     }
     /// Whether a private signing or password view is open, which inspection must not reveal.
+    /// Dispatch with the authenticated transport's identity, preserving simple host adapters.
+    fn connected_tool(&mut self, _connection: u64, name: &str, args: &Value, root: Option<&str>) -> Reply {
+        self.tool(name, args, root)
+    }
     fn private_dialog(&self) -> bool {
         false
     }
@@ -465,6 +476,7 @@ impl Control {
 
     /// `since` is the request's arrival time: the one admission deadline it was admitted under.
     fn dispatch(&mut self, ctx: &egui::Context, host: &mut impl Host, req: ControlRequest, since: web_time::Instant) {
+        self.connection = req.connection;
         match self.handle(ctx, host, &req.method, &req.params, since) {
             Handled::Now(r) => {
                 let _ = req.reply.send(r);

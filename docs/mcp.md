@@ -170,7 +170,11 @@ sent extra keys before get an error now.
   control method `tool.call {name, arguments, root?}`, which runs the same tool table on the
   window's session between frames, like a menu command, and draws what changed. `doc` ids are the
   window's (`doc_list`, `ui_state`); a document a tool opens or makes gets a tab behind the
-  person's. `--root` confines paths as it does headless; `--automation-read-root` and
+  person's. Each authenticated connection keeps its own paragraph listings and OCR review
+  context. List a page with `text_paragraphs` before editing/rendering by paragraph number.
+  Another connection's listing cannot renumber your targets; an outside edit or bounded-state
+  eviction requires a fresh listing/review. `--root` confines paths, including a save destination
+  inherited from an already-open document, as it does headless; `--automation-read-root` and
   `--automation-write-root` are not supported yet with `--connect`.
 - **Read-only window inspection**: `ui_state`, `ui_inspect` and `ui_screenshot` (an image) are
   listed in normal and compact mode. MCP inspection uses the protected `tool.inspect` boundary
@@ -178,16 +182,23 @@ sent extra keys before get an error now.
   bypass path confinement or make a signature without the person's click. Use document tools
   for edits. Inspection and captures are refused while a signing or password dialog is open.
 - **Left to the person**: all `sign_*` calls, `fill_sign_add` with a signature or initials,
-  embedded signature-image export (`comment_image_preview`), `redact_apply` and `doc_close` are
+  embedded signature-image export (`comment_image_preview`), `redact_apply`, `doc_close`,
+  `edit_undo` and `edit_redo` are
   refused in the window, including through `command_run` and `command_batch`. An agent may add
   a signature field, text and dates, or redaction marks; the person reviews and signs/applies in
   the app. No signing credentials are accepted by these connected tools. Headless mode keeps
-  its existing signing behavior.
+  its existing signing and history behavior. Connected history is refused because its snapshots
+  may belong to the person and may restore a signature; no agent-specific history provenance
+  has been established. Use Undo/Redo in the window yourself.
 - **Security**: the control file is checked as `pdfcraft-cli ui` checks it (a regular file of
   yours, owner-only permissions on Unix, no link) and read again at each reconnection. The
   token goes only to `127.0.0.1`. No port is opened by the CLI. A lost, malformed or timed-out
   reply is never automatically replayed: it may already have changed the document. Inspect
   `ui_state`/`doc_info` before deciding whether to retry; a later call reconnects.
+  On Windows this check does not validate file ACLs: keep the control file in a directory only
+  your account can write. Once connected, tools run with the desktop process's permissions;
+  permitted file operations do not ask for a separate confirmation on every call. Configure
+  `--root` to restrict file access; edits to already-open documents are a separate capability.
 - **Typing is preserved**: if a window editor has uncommitted text (comments included), a queued edit or an open dialog, document
   tools refuse with guidance to finish typing and close the dialog first. A tool never saves an older field value
   behind the editor or overwrites the person's draft. Changed documents invalidate cached

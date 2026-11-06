@@ -229,6 +229,10 @@ impl Host for crate::PdfCraftApp {
         self.run_tool(name, args, root)
     }
 
+    fn connected_tool(&mut self, connection: u64, name: &str, args: &Value, root: Option<&str>) -> Reply {
+        self.agent_tool(connection, None, name, args, root)
+    }
+
     fn agent_tool(&mut self, owner: u64, request: Option<u64>, name: &str, args: &Value, root: Option<&str>) -> Reply {
         if super::tool::agent_signing_call(name, args, 0) {
             return Err("HUMAN_SIGNATURE_REQUIRED: signing is person-only".into());
@@ -250,7 +254,7 @@ impl Host for crate::PdfCraftApp {
         // groups them all, and Undo knows how many to take back.
         let doc = request.and_then(|id| self.ask_agent.open_doc(id));
         let before = doc.and_then(|d| self.session.get(d)).map(|d| d.undo_depth());
-        let r = self.run_tool(name, &args, root);
+        let r = self.run_connected_tool(owner, name, &args, root);
         if let (Some(id), false, Ok(_)) = (request, read, &r) {
             let after = doc.and_then(|d| self.session.get(d)).map(|d| d.undo_depth());
             let created = match (before, after) {

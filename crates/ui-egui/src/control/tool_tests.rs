@@ -23,7 +23,7 @@ fn control_tools_preserve_comment_drafts_and_edit_dialogs() {
     let mut app = crate::PdfCraftApp::new();
     let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
     app.open_bytes("synthetic.pdf", None, bytes.as_ref().clone()).unwrap();
-    app.tool_runner = Some(Box::new(|_, _, _, _| panic!("must not run over a draft")));
+    app.tool_runner = Some(Box::new(|_, _, _, _, _| panic!("must not run over a draft")));
     for kind in 0..4 {
         let comments = &mut app.views[0].comments;
         *comments = Default::default();
@@ -59,7 +59,7 @@ fn control_tool_call_keeps_uncommitted_typing() {
     let mut app = crate::PdfCraftApp::new();
     let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
     app.open_bytes("synthetic.pdf", None, bytes.as_ref().clone()).unwrap();
-    app.tool_runner = Some(Box::new(|_, _, _, _| panic!("must not run over a draft")));
+    app.tool_runner = Some(Box::new(|_, _, _, _, _| panic!("must not run over a draft")));
     app.views[0].content.draft = Some(crate::content_ui::TextDraft {
         page: 0,
         index: None,

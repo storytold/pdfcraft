@@ -48,7 +48,8 @@ fn server() -> McpServer {
             )
             .unwrap();
         }
-        app.tool_runner = Some(Box::new(|session, name, args, root| pdfcraft_automation::window::call_for_window(session, root, name, args)));
+        let mut tools = pdfcraft_automation::window::WindowTools::default();
+        app.tool_runner = Some(Box::new(move |session, connection, name, args, root| tools.call(connection, session, root, name, args)));
         *out.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
         app
     });

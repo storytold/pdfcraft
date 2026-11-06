@@ -165,11 +165,16 @@ fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint
                 let _ = writeln!(write, "{e}").and_then(|_| write.flush());
                 continue;
             };
+            static NEXT_CONNECTION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            let Ok(connection) =
+                NEXT_CONNECTION.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |id| id.checked_add(1))
+            else {
+                continue;
+            };
             let client = client.clone();
             let expected = expected.clone();
             let lingering = lingering.clone();
-            static NEXT_OWNER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-            let owner = NEXT_OWNER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let owner = connection;
             let _ = std::thread::Builder::new().name("pdfcraft-control-conn".into()).spawn(move || {
                 // Held until `auth` succeeds; given back however this thread ends.
                 let mut slot = Some(slot);
@@ -350,7 +355,7 @@ fn relay_for_connection(client: &ControlClient, owner: u64, claim: Option<u64>, 
         p.insert("__askConnection".into(), json!(ask));
     }
     client
-        .send(method, params)
+        .send_from_connection(owner, method, params)
         .recv_timeout(std::time::Duration::from_secs(30))
         .unwrap_or_else(|_| Err("NO_UI: the app did not answer within 30 s; open the connected window".into()))
 }
