@@ -218,6 +218,22 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, view: &mut DocView) -> bool {
         }
         return false;
     }
+    // Delete or Backspace removes the selected objects on this page as one edit,
+    // like Edit::DeletePages removes pages. The key is consumed even when the pointer
+    // is off the page, because canvas keys belong to the selection while it exists.
+    if view.objects.page == Some(page)
+        && !view.objects.selected.is_empty()
+        && view.objects.gesture.is_none()
+        && view.pending_edit.is_none()
+        && !ui.ctx().egui_wants_keyboard_input()
+    {
+        let deleted =
+            ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace));
+        if deleted {
+            view.pending_edit = delete_edit(page, view.objects.selected.iter().map(|o| o.target).collect());
+            return true;
+        }
+    }
     let mut selection = std::mem::take(&mut view.objects);
     let result = input(&mut selection, cx, view);
     view.objects = selection;
@@ -526,5 +542,60 @@ mod tests {
     fn one_object_deletes_with_its_own_edit_and_none_with_nothing() {
         assert!(matches!(delete_edit(2, vec![t(ObjectKind::Image, 4)]), Some(Edit::EditPageImage { page: 2, index: 4, .. })));
         assert!(delete_edit(0, Vec::new()).is_none());
+    }
+
+    /// Selecting content objects on a page and pressing Delete must queue one edit that removes
+    /// them: `page_input` selects and moves content objects but never consumes Delete or
+    /// Backspace, so pressing Delete currently does nothing (issue #3780).
+    #[test]
+    fn delete_key_removes_selected_object() {
+        use crate::{PdfCraftApp, canvas::ViewDefaults};
+        use pdfcraft_engine::{DocId, ImageEdit};
+        use pdfcraft_render::PageInfo;
+
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_blank(300.0, 400.0, 1).unwrap();
+        app.open_bytes("blank.pdf", None, bytes.as_ref().clone()).unwrap();
+        let doc = app.session.get(app.views[0].id).unwrap();
+
+        let info = pdfcraft_render::DocInfo {
+            pages: vec![PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+            ..Default::default()
+        };
+        let mut view = DocView::new(DocId(1), &info, ViewDefaults::default());
+        view.objects.page = Some(0);
+        view.objects.selected.push(EditableObject {
+            target: ObjectTarget { kind: ObjectKind::Image, index: 0 },
+            rect: [50.0, 60.0, 100.0, 110.0],
+            content_type: "image",
+            text: None,
+        });
+
+        let ctx = egui::Context::default();
+        let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)), rot: 0, pw: 800.0, ph: 600.0 };
+        let ptr = PagePointer { pos: None, ..Default::default() };
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Delete,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                let resp = ui.interact(ui.available_rect_before_wrap(), egui::Id::new("page"), egui::Sense::click());
+                page_input(ui, &resp, &xf, &ptr, 0, doc, &mut view);
+            },
+        );
+        output.textures_delta.clear();
+
+        assert!(
+            matches!(&view.pending_edit, Some(Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Delete })),
+            "pressing Delete with one object selected must queue that object's deletion as one edit"
+        );
     }
 }
