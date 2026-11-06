@@ -274,6 +274,34 @@ mod tests {
     }
 
     #[test]
+    fn decomposed_hangul_is_composed_into_syllables() {
+        use fallback::{compose_hangul, composed_offset};
+        // 한글 as conjoining jamo (L V T, L V T), with Latin around it.
+        let nfd = "A \u{1112}\u{1161}\u{11AB}\u{1100}\u{1173}\u{11AF} B";
+        let (nfc, map) = compose_hangul(nfd).unwrap();
+        assert_eq!(nfc, "A 한글 B");
+        // Boundaries outside the jamo keep their place; a folded jamo maps to its syllable's end.
+        assert_eq!(composed_offset(&map, 0), 0);
+        assert_eq!(composed_offset(&map, 2), 2);
+        assert_eq!(composed_offset(&map, 5), 5);
+        assert_eq!(composed_offset(&map, 11), 5);
+        assert_eq!(composed_offset(&map, nfd.len()), nfc.len());
+        // Not a char boundary: the boundary before it.
+        assert_eq!(composed_offset(&map, 3), 2);
+        // L V without a trailing consonant, and an LV syllable taking a T.
+        assert_eq!(compose_hangul("\u{1100}\u{1161}").map(|(s, _)| s).as_deref(), Some("가"));
+        assert_eq!(compose_hangul("가\u{11A8}").map(|(s, _)| s).as_deref(), Some("각"));
+        // Nothing to compose: precomposed text, lone jamo, a T after an LVT syllable, compatibility jamo.
+        for text in ["한글 PDF", "\u{1100}", "\u{1161}\u{11A8}", "각\u{11A8}", "ㄱㅏ", ""] {
+            assert!(compose_hangul(text).is_none(), "{text:?}");
+        }
+        // The edges of the jamo ranges: the last L, V and T compose; one past them does not.
+        assert_eq!(compose_hangul("\u{1112}\u{1175}\u{11C2}").map(|(s, _)| s).as_deref(), Some("\u{D7A3}"));
+        assert!(compose_hangul("\u{1113}\u{1161}").is_none());
+        assert!(compose_hangul("\u{1112}\u{1176}").is_none());
+    }
+
+    #[test]
     fn fallback_face_moves_on_when_the_best_face_lacks_a_character() {
         static JPAN: &[&str] = &["Jpan"];
         let mincho = CraftFont { family: "Mincho", style: "Regular", scripts: JPAN, bytes: b"" };
@@ -290,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn hebrew_and_japanese_fallback_shards_are_recognized_as_ours() {
+    fn hebrew_japanese_and_korean_fallback_shards_are_recognized_as_ours() {
         static HEBR: &[&str] = &["Hebr"];
         let face = CraftFont { family: "FakeHebrew", style: "Regular", scripts: HEBR, bytes: b"" };
         let glyph = |code, ch| Type3Glyph { code, ch, path: b"0 0 0 0 0 0 d1\nf\n".to_vec(), width: 0.5 };
@@ -301,7 +329,12 @@ mod tests {
         let he1 = add_type3_font(&mut doc, &mut fonts, &face, true, vec![glyph(1, 'ב')]);
         let jp = add_type3_font(&mut doc, &mut fonts, &face, false, vec![glyph(1, 'あ')]);
         assert_eq!([he.as_str(), he1.as_str(), jp.as_str()], ["PCHe", "PCHe1", "PCJp"]);
-        for name in [&he, &he1, &jp] {
+        // The Korean font is told by its face, whatever the caller passes.
+        static HANG_KORE: &[&str] = &["Hang", "Kore"];
+        let korean = CraftFont { family: "FakeKorean", style: "Regular", scripts: HANG_KORE, bytes: b"" };
+        let ko = add_type3_font(&mut doc, &mut fonts, &korean, false, vec![glyph(1, '한')]);
+        assert_eq!(ko, "PCKo");
+        for name in [&he, &he1, &jp, &ko] {
             let font = fonts.get(name.as_bytes()).and_then(Object::as_dict).cloned().unwrap_or_default();
             assert!(is_type3_fallback(&font), "{name} isn't recognized as a generated fallback font");
         }
