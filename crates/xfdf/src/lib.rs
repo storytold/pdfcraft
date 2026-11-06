@@ -87,11 +87,18 @@ pub struct Report {
     pub rejected: Vec<String>,
 }
 
+/// Whether field `f` is included in exported form data: push buttons, signatures and text fields
+/// with the Password flag (`bNoPassword` in Acrobat's `exportAsFDF` / `exportAsXFDF`, #3945) are
+/// left out.
+pub(crate) fn is_exportable_field(f: &pdfcraft_forms::Field) -> bool {
+    !matches!(f.kind, FieldKind::PushButton | FieldKind::Signature) && !(f.kind == FieldKind::Text && f.has(pdfcraft_forms::flags::PASSWORD))
+}
+
 /// Form data as XML, CSV or tab-delimited text (Acrobat's Export data formats).
 pub fn export_data(doc: &Document, format: Format) -> String {
     let fields: Vec<(String, String)> = pdfcraft_forms::fields(doc)
         .into_iter()
-        .filter(|f| !matches!(f.kind, FieldKind::PushButton | FieldKind::Signature))
+        .filter(is_exportable_field)
         .map(|f| {
             let v = match f.kind {
                 FieldKind::CheckBox | FieldKind::Radio if f.value.is_empty() => "Off".to_string(),
@@ -150,7 +157,7 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
         let doc = Document::open(std::sync::Arc::new(bytes.to_vec())).map_err(|e| DataError::Malformed(e.to_string()))?;
         return Ok(pdfcraft_forms::fields(&doc)
             .into_iter()
-            .filter(|f| !matches!(f.kind, FieldKind::PushButton | FieldKind::Signature))
+            .filter(is_exportable_field)
             .map(|f| {
                 let v = if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) && f.value.is_empty() {
                     vec!["Off".to_string()]

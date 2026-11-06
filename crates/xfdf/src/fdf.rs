@@ -215,7 +215,7 @@ pub fn export_fdf(doc: &Document, comments: bool, fields: bool, file: &str) -> R
     if fields {
         body.extend_from_slice(b"/Fields [");
         for f in pdfcraft_forms::fields(doc) {
-            if matches!(f.kind, FieldKind::PushButton | FieldKind::Signature) {
+            if !super::is_exportable_field(&f) {
                 continue;
             }
             // Field dictionary, /T string and /V scalar/array, plus every emitted list
