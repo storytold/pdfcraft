@@ -5,6 +5,9 @@
 //! decoding lives in [`odoc_path`] (pure Rust, tested on every platform); the
 //! Objective-C adapter lives in [`macos`] and is upstream `fmv-macos-events` 0.1.0
 //! except for the open-documents handler's item decode. The public API is unchanged.
+//! Delivery is best-effort and never silent: an item nothing could verify is still
+//! delivered as an unverified path, and verification failures surface through the
+//! app's own open error instead of the open doing nothing.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 /// Byte-level odoc decoding, independent of Objective-C so its tests run everywhere.

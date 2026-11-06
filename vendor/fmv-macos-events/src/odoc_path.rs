@@ -9,15 +9,18 @@
 //! dropped the item: the app launched showing nothing, without an error.
 //!
 //! This module decodes the descriptor's data directly, with no Objective-C, so the
-//! recovery is unit-testable on every platform. Every parse is total: malformed or
-//! truncated data returns `None`, the caller falls back to the NSURL chain, and a
-//! rebuilt path is delivered only when it names an existing file. The bookmark
-//! component layout (`[length u32 LE][01 01 00 00][utf-8 bytes][NUL padding to a
-//! 4-byte boundary]`, records contiguous) was reverse-engineered from Ventura
-//! captures; see the pinned evidence on issue #6324. Any anomaly falls back to
-//! NSURL, so behaviour can only degrade to the published crate's, never below it.
+//! recovery is unit-testable on every platform. Delivery is best-effort and never
+//! silent (the contract asked for by the review on #6334): bytes that name an
+//! existing file are preferred, the NSURL chain of the published crate comes next,
+//! and an item nothing could verify is still delivered — its decoded string,
+//! unverified — so a failed open reaches the app and its own open error reports
+//! it, instead of the launch showing nothing. Only bytes that decode to nothing
+//! path-like are dropped. Every parse is total: malformed or truncated data
+//! returns `None`. The bookmark component layout (`[length u32 LE][01 01 00 00]
+//! [utf-8 bytes][NUL padding to a 4-byte boundary]`, records contiguous) was
+//! reverse-engineered from Ventura captures; see the pinned evidence on #6324.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A bookmark blob larger than this is not one of Apple's (they are about a KiB);
 /// refuse it rather than scan it. This bounds the chain search, whose worst case is
@@ -30,28 +33,51 @@ const MAX_COMPONENTS: usize = 128;
 /// a longer "record" is noise in the blob, not a name.
 const MAX_COMPONENT_BYTES: usize = 1024;
 
-/// The path of one odoc item: from its descriptor's raw bytes when they name an
-/// existing file, else whatever `nsurl_path` returns (the `fileURLValue` /
-/// `NSURL.path` chain of the published crate).
+/// The path of one odoc item, best-effort and never silent. In order:
 ///
-/// `'bmrk'` data is walked for its byte-exact component records, joined, and
-/// delivered only if the joined path is an existing file; `'furl'` data is
-/// percent-decoded. Anything else — unknown descriptor types, malformed or truncated
-/// data, a rebuilt path that does not exist — takes the NSURL fallback, which is
-/// exactly where the published crate's behaviour already was.
+/// 1. the item's raw bytes, verified — a `'bmrk'` chain of byte-exact components
+///    that names an existing file, or a `'furl'` percent-decode (already gated to
+///    an absolute path by [`file_url_path`]);
+/// 2. whatever `nsurl_path` returns (the `fileURLValue` / `NSURL.path` chain of
+///    the published crate);
+/// 3. the item's raw bytes again, now unverified: the first plausible chain
+///    string, delivered rather than dropping the item silently.
+///
+/// Step 3 is the never-drop rule (review on #6334): an open in which an item
+/// fails every other way still queues a path, and the app's existing open error
+/// reports the file it names — a wrong name surfaced beats a silent no-op, and a
+/// partial multi-file open reports each failed item the same way. The
+/// unverified string is sanity-gated (valid UTF-8 by construction, decoded
+/// lossily; rooted at `/`); only bytes that decode to nothing path-like are
+/// dropped, as before.
 pub(crate) fn item_path(
     descriptor_type: u32,
     data: &[u8],
     nsurl_path: impl FnOnce() -> Option<String>,
 ) -> Option<PathBuf> {
-    let from_raw_bytes = if descriptor_type == u32::from_be_bytes(*b"bmrk") {
-        bookmark_chain(data).filter(|path| path.is_file())
+    let bookmark = descriptor_type == u32::from_be_bytes(*b"bmrk");
+    // 1. Verified raw bytes. A 'furl' decode needs no existence check of its
+    //    own: it is delivered as the published crate delivered NSURL paths.
+    let from_raw_bytes = if bookmark {
+        bookmark_chain(data)
     } else if descriptor_type == u32::from_be_bytes(*b"furl") {
         file_url_path(data)
     } else {
         None
     };
-    from_raw_bytes.or_else(|| nsurl_path().map(PathBuf::from))
+    // 3. The never-drop string, for bookmarks whose chain names no existing
+    //    file (a 'furl' decode was already delivered — gated — at step 1).
+    let best_effort = if bookmark { bookmark_chain_best_effort(data) } else { None };
+    from_raw_bytes
+        .or_else(|| nsurl_path().map(PathBuf::from))
+        .or_else(|| best_effort.filter(|path| rooted_at_slash(path)))
+}
+
+/// The never-drop sanity gate: an unverified string is delivered only when it at
+/// least looks like a local path — rooted at `/`. Both decoders build lossy-UTF-8
+/// strings, so that half of the gate holds by construction.
+fn rooted_at_slash(path: &Path) -> bool {
+    path.as_os_str().as_encoded_bytes().first() == Some(&b'/')
 }
 
 /// The `'file://'` bytes of a `'furl'` descriptor, percent-decoded by hand so the
@@ -130,35 +156,60 @@ fn next_record(data: &[u8], from: usize) -> Option<Record<'_>> {
 /// every name in its exact on-disk bytes — but only when that path is an existing
 /// file. A deliverable chain has two or more non-empty components without NULs; an
 /// on-disk name cannot contain NUL, so a record that does is padding or noise.
+/// Chains that name no file are not delivered here; [`item_path`] may still
+/// deliver the first one unverified, per the never-drop rule.
 pub(crate) fn bookmark_chain(data: &[u8]) -> Option<PathBuf> {
-    if data.len() > MAX_BOOKMARK_BYTES {
-        return None;
-    }
+    chains(data).find(|path| path.is_file())
+}
+
+/// The first plausible chain of 0x0101 records joined into a path, without the
+/// existence requirement: the best-effort string [`item_path`] delivers rather
+/// than drop an item that nothing could verify.
+pub(crate) fn bookmark_chain_best_effort(data: &[u8]) -> Option<PathBuf> {
+    chains(data).next()
+}
+
+/// The plausible paths joined from a bookmark's chains of 0x0101 component
+/// records, in scan order: the records starting at each offset in turn, each
+/// extended while a further record follows it. Every component name keeps its
+/// exact on-disk bytes. A chain whose components cannot all be names (too few,
+/// empty, or holding NUL) yields no path, and the scan always resumes behind the
+/// whole chain, so its records are not rescanned as candidates of their own.
+fn chains(data: &[u8]) -> impl Iterator<Item = PathBuf> + '_ {
     let mut scan = 0;
-    while scan < data.len() {
-        let Some(first) = record_at(data, scan) else {
-            scan += 1;
-            continue;
-        };
-        // Walk the maximal chain of records starting at `first`.
-        let mut components = vec![first.bytes];
-        let mut tail = first.end;
-        while components.len() < MAX_COMPONENTS {
-            match next_record(data, tail) {
-                Some(record) => {
-                    components.push(record.bytes);
-                    tail = record.end;
+    std::iter::from_fn(move || {
+        // A blob over the size cap is not one of Apple's (they are about a KiB);
+        // refuse it rather than scan it. This bounds the chain search, whose
+        // worst case is quadratic in the blob's length.
+        if data.len() > MAX_BOOKMARK_BYTES {
+            return None;
+        }
+        while scan < data.len() {
+            let Some(first) = record_at(data, scan) else {
+                scan += 1;
+                continue;
+            };
+            // Walk the maximal chain of records starting at `first`.
+            let mut components = vec![first.bytes];
+            let mut tail = first.end;
+            while components.len() < MAX_COMPONENTS {
+                match next_record(data, tail) {
+                    Some(record) => {
+                        components.push(record.bytes);
+                        tail = record.end;
+                    }
+                    None => break,
                 }
-                None => break,
+            }
+            let path = join_components(&components);
+            // This chain is spent, path or not; resume the scan behind all of it.
+            scan = tail + 1;
+            if let Some(path) = path {
+                return Some(path);
             }
         }
-        if let Some(path) = join_components(&components).filter(|path| path.is_file()) {
-            return Some(path);
-        }
-        // This chain does not name a file; resume the scan behind the whole chain.
-        scan = tail + 1;
-    }
-    None
+        None
+    })
 }
 
 /// The components joined into an absolute path, if they can all be names.
@@ -374,9 +425,77 @@ mod tests {
             item_path(u32::from_be_bytes(*b"furl"), b"file:///tmp/x", || None),
             Some(PathBuf::from("/tmp/x"))
         );
-        // With nothing to fall back to, the item is dropped, as before.
+        // With nothing to fall back to and nothing path-like in the bytes, the
+        // item is dropped, as before.
         assert_eq!(item_path(bookmark, b"garbage", || None), None);
 
         std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    /// The never-drop rule (review on #6334): a bookmark whose chain names no
+    /// existing file, with nothing from NSURL either, is still delivered — its
+    /// decoded string, unverified — so the app's own open error reports the
+    /// failure instead of the launch showing nothing. A NSURL answer still
+    /// outranks the unverified chain.
+    #[test]
+    fn item_path_delivers_an_unverifiable_chain_rather_than_drop_it() {
+        let missing = "/definitely/missing/nowhere.pdf";
+        let data = blob(&["definitely", "missing", "nowhere.pdf"], missing);
+        let bookmark = u32::from_be_bytes(*b"bmrk");
+        // Nothing verifies — no chain names a file, NSURL has nothing (the
+        // #6324 failure) — and the chain string is still delivered, unverified.
+        assert_eq!(item_path(bookmark, &data, || None), Some(PathBuf::from(missing)));
+        // A NSURL answer outranks the unverified string.
+        assert_eq!(
+            item_path(bookmark, &data, || Some("/from/nsurl".to_owned())),
+            Some(PathBuf::from("/from/nsurl"))
+        );
+    }
+
+    /// A partial multi-file open reports every item: the handler collects one
+    /// decode per item, so a mix of a verified file and an unverifiable one
+    /// delivers both — the app's open error covers the failed one instead of it
+    /// being skipped without notice.
+    #[test]
+    fn a_multi_item_open_delivers_verified_and_unverified_items_alike() {
+        let directory = std::env::temp_dir().join(format!("fmv-multi-{}", std::process::id()));
+        let nfc = directory.join("\u{00c1}rea fiscal");
+        std::fs::create_dir_all(&nfc).expect("create the NFC-named directory");
+        let file = nfc.join("doc.pdf");
+        std::fs::write(&file, b"%PDF-1.4\n").expect("create the file");
+        let nfd_full_path = file.to_str().expect("UTF-8").replace('\u{00c1}', "A\u{0301}");
+        let missing = "/definitely/missing/nowhere.pdf";
+        let bookmark = u32::from_be_bytes(*b"bmrk");
+        // The handler's own fold: one decode per item, dropped only when it
+        // decodes to nothing (macos.rs collects exactly this way).
+        let items = [
+            (bookmark, blob(&components_of(&file), &nfd_full_path)),
+            (bookmark, blob(&["definitely", "missing", "nowhere.pdf"], missing)),
+        ];
+        let delivered =
+            items.into_iter().filter_map(|(t, data)| item_path(t, &data, || None)).collect::<Vec<_>>();
+        assert_eq!(delivered, [file, PathBuf::from(missing)]);
+        std::fs::remove_dir_all(&directory).expect("clean up");
+    }
+
+    /// Only bytes that decode to nothing path-like are dropped: the sanity gate
+    /// ('/'-rooted, lossy UTF-8) refuses the rest, so garbage still yields
+    /// `None` and the item is skipped, as before.
+    #[test]
+    fn garbage_that_decodes_to_no_path_is_still_dropped() {
+        let bookmark = u32::from_be_bytes(*b"bmrk");
+        let furl = u32::from_be_bytes(*b"furl");
+        // No chain anywhere in the bookmark bytes...
+        assert_eq!(item_path(bookmark, b"\xff\x02\xee garbage", || None), None);
+        // ...and none that joins: a single component is not a path.
+        let mut single = b"book\x00\x00\x00\x00".to_vec();
+        push_record(&mut single, 0x0101, b"doc.pdf");
+        assert_eq!(item_path(bookmark, &single, || None), None);
+        // A 'furl' that names no rooted path...
+        assert_eq!(item_path(furl, b"file://host", || None), None);
+        assert_eq!(item_path(furl, b"http://tmp/x", || None), None);
+        assert_eq!(item_path(furl, b"", || None), None);
+        // ...and an unknown descriptor type with nothing to fall back to.
+        assert_eq!(item_path(u32::from_be_bytes(*b"utf8"), b"some text", || None), None);
     }
 }
