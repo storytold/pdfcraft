@@ -22,6 +22,8 @@ mod content;
 mod conventions;
 pub mod file_access;
 mod forms;
+mod hot_folder;
+mod hot_folder_service;
 mod layers;
 mod links;
 #[cfg(feature = "mcp")]
@@ -98,6 +100,10 @@ pub struct Automation {
     /// Documents that lost a listing to the cap. A page of one with no listing is refused rather
     /// than read as "a number is a position", which the page may no longer match.
     evicted: HashSet<DocId>,
+    /// Whether tools may install or control the Hot Folder system service and change its stored
+    /// source credentials. `pdfcraft-cli mcp` turns this off unless given `--allow-hot-folder-admin`.
+    #[cfg(not(target_arch = "wasm32"))]
+    hot_folder_admin: bool,
     /// Review sessions held for `ocr_words` (a guard and the pages read), by document.
     ocr_reviews: HashMap<DocId, OcrReview>,
     next_ocr_review: u64,
@@ -119,6 +125,8 @@ impl Automation {
             texts: TextCache::default(),
             listed: HashMap::new(),
             evicted: HashSet::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            hot_folder_admin: true,
             ocr_reviews: HashMap::new(),
             next_ocr_review: 0,
         }
@@ -139,6 +147,15 @@ impl Automation {
     /// are set.
     pub fn with_automation_roots(mut self, roots: Option<Arc<file_access::AutomationRoots>>) -> Self {
         self.roots = roots;
+        self
+    }
+
+    /// Allow or refuse Hot Folder administration: installing, enabling, starting or stopping the
+    /// system service, and saving, signing in or forgetting a task's source credentials.
+    /// Reading the service and credential status stays available either way.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_hot_folder_admin(mut self, allowed: bool) -> Self {
+        self.hot_folder_admin = allowed;
         self
     }
 

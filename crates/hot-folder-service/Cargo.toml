@@ -1,0 +1,19 @@
+[package]
+name = "pdfcraft-hot-folder-service"
+description = "Explicit operating-system service control for PdfCraft Hot Folder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8.1"
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+ctrlc = { version = "3.5", features = ["termination"] }
+tempfile = "3"

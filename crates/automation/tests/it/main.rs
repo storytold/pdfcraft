@@ -11,6 +11,7 @@ mod batch_secrets;
 mod button_caption;
 mod form_bulk;
 mod hostile_args;
+mod hot_folder;
 mod model_3d;
 mod model_render;
 mod optimize_content_boundaries;

@@ -8,13 +8,16 @@
   ],
   "icon": "assets/app-icon/pdfcraft.ico",
   "localization": [],
-  "extensions": [],
+  "extensions": [
+    "Util"
+  ],
   "payloads": [
     "LICENSE-APACHE",
     "LICENSE-MIT",
     "LICENSE-document.txt",
     "NOTICE",
     "pdfcraft-cli.exe",
+    "pdfcraft-hot-folder.exe",
     "pdfcraft.exe"
   ],
   "registry": [

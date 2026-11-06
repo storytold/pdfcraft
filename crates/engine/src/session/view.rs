@@ -11,6 +11,17 @@ impl Session {
     /// Use a fixed clock (tests) instead of the system time.
     pub fn with_clock(mut self, clock: fn() -> i64) -> Self {
         self.clock = Some(clock);
+        self.fixed_timestamp = None;
+        self.utc_offset = None;
+        self
+    }
+
+    /// Keep newly written PDF metadata identical when a Hot Folder transaction is replayed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn with_timestamp(mut self, timestamp: i64) -> Self {
+        self.fixed_timestamp = Some(timestamp);
+        self.clock = None;
+        self.utc_offset = None;
         self
     }
 
@@ -34,12 +45,13 @@ impl Session {
     pub fn with_wall_clock(mut self, clock: fn() -> i64, utc_offset: fn() -> i64) -> Self {
         self.clock = Some(clock);
         self.utc_offset = Some(utc_offset);
+        self.fixed_timestamp = None;
         self
     }
 
     /// Seconds to add to UTC for the local time of this session: the injected zone, else 0 under
     /// the test clock (which is already local), else the system's.
-    pub(super) fn local_offset(&self) -> i64 {
+    pub(crate) fn local_offset(&self) -> i64 {
         match (self.utc_offset, self.clock) {
             (Some(zone), _) => zone(),
             (None, Some(_)) => 0,
@@ -53,6 +65,9 @@ impl Session {
     }
 
     pub(crate) fn now(&self) -> Option<i64> {
+        if let Some(timestamp) = self.fixed_timestamp {
+            return Some(timestamp);
+        }
         if let Some(c) = self.clock {
             return Some(c());
         }

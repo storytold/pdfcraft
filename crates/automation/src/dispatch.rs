@@ -784,6 +784,7 @@ impl Automation {
             "accessibility_autotag_apply" => self.accessibility_autotag_apply(&a)?,
             "accessibility_autotag_form_fields" => self.accessibility_autotag_form_fields(&a)?,
             "ocr_recognize" => self.ocr_recognize(&a)?,
+            "ocr_enhance" => self.ocr_enhance(&a)?,
             "js_run" => self.js_run(&a)?,
             "js_document_scripts" => self.js_document_scripts(&a)?,
             "js_set_document_script" => self.js_set_document_script(&a)?,
@@ -811,6 +812,12 @@ impl Automation {
             "doc_compare_mark" => self.doc_compare_mark(&a)?,
             "form_set_actions" => self.form_set_actions(&a)?,
             "ocr_status" => self.ocr_status()?,
+            "hot_folder_service" => self.hot_folder_service(&a)?,
+            "hot_folder_source" => self.hot_folder_source(&a)?,
+            "hot_folder_project" => self.hot_folder_project(&a)?,
+            "hot_folder_configure" | "hot_folder_poll" | "hot_folder_status" | "hot_folder_retry" | "hot_folder_run_now" => {
+                self.hot_folder(name, &a)?
+            }
             "ocr_recognize_files" => self.ocr_recognize_files(&a)?,
             "ocr_words" => self.ocr_words(&a)?,
             "ocr_review_apply" => self.ocr_review_apply(&a)?,
