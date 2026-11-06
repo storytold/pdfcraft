@@ -415,8 +415,10 @@ fn jpeg_2000_images_are_embedded_as_is() {
     let p = &pages(&doc)[0];
     let m = media(p);
     assert!((m[2] - 30.0 * 72.0 / 150.0).abs() < 0.2 && (m[3] - 20.0 * 72.0 / 150.0).abs() < 0.2, "{m:?}");
+    // The codestream is a stub, so it can't be decoded, and says so.
     let out = extract_images(&doc, &[0], 0);
-    assert!(out.images.is_empty() && out.skipped.len() == 1, "JPX can't be exported yet: {:?}", out.skipped);
+    assert!(out.images.is_empty() && out.skipped.len() == 1, "{:?}", out.skipped);
+    assert_eq!(out.skipped[0].2, "the JPEG 2000 image can't be decoded");
     // A raw codestream: the size comes from SIZ.
     let mut siz = vec![0xFF, 0x4F, 0xFF, 0x51, 0, 41, 0, 0];
     for v in [64u32, 48, 0, 0] {
@@ -2619,4 +2621,215 @@ fn proportions_up_to_the_limit_scale_as_they_did() {
     // A mask of its image's size comes through as it is.
     let mask = noise(20, 10);
     assert_eq!(crate::extract::scaled(&mask, 20, 10), mask);
+}
+
+/// Contributor-original JPEG 2000 codestream, `w` × `h`, a component of each precision in
+/// `precisions` (bits): one tile, no decomposition, reversible wavelet and an empty packet per
+/// component, so that every sample decodes to its midpoint, 2^(precision − 1), after the DC
+/// level shift.
+fn jpx_midpoint(w: u32, h: u32, precisions: &[u8]) -> Vec<u8> {
+    let components = precisions.len() as u16;
+    let mut cs = vec![0xff, 0x4f, 0xff, 0x51]; // SOC, SIZ.
+    cs.extend_from_slice(&(38 + 3 * components).to_be_bytes());
+    cs.extend_from_slice(&0_u16.to_be_bytes()); // Rsiz.
+    for v in [w, h, 0, 0, w, h, 0, 0] {
+        cs.extend_from_slice(&v.to_be_bytes());
+    }
+    cs.extend_from_slice(&components.to_be_bytes());
+    for p in precisions {
+        cs.extend_from_slice(&[p - 1, 1, 1]); // Unsigned, no subsampling.
+    }
+    // COD: LRCP, one layer, no transform between components, 64 × 64 code blocks, no
+    // decomposition, reversible wavelet. QCD: no quantization.
+    cs.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, 0, 4, 4, 0, 1]);
+    cs.extend_from_slice(&[0xff, 0x5c, 0, 4, 0x40, 0x40]);
+    cs.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0]); // SOT, tile 0.
+    cs.extend_from_slice(&(14 + u32::from(components)).to_be_bytes());
+    cs.extend_from_slice(&[0, 1, 0xff, 0x93]); // One tile part, SOD.
+    cs.extend(std::iter::repeat_n(0, usize::from(components)));
+    cs.extend_from_slice(&[0xff, 0xd9]); // EOC.
+    cs
+}
+
+/// A JPEG 2000 image `w` × `h` of the components [`jpx_midpoint`] makes, with `/ColorSpace`
+/// `space` if any, as page 0's image; `edit` adds to its dictionary.
+fn jpx_doc(w: u32, h: u32, precisions: &[u8], space: Option<Object>, edit: impl FnOnce(&mut Dict)) -> Document {
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |_| {
+        let mut d = image_dict(i64::from(w), i64::from(h), "DeviceGray", 8);
+        d.remove(b"ColorSpace");
+        d.remove(b"BitsPerComponent");
+        if let Some(space) = space {
+            d.set(b"ColorSpace".to_vec(), space);
+        }
+        d.set(b"Filter".to_vec(), Object::name("JPXDecode"));
+        edit(&mut d);
+        Stream::from_raw(d, jpx_midpoint(w, h, precisions))
+    });
+    reopen(&doc)
+}
+
+/// Export ▸ Export all images and Save image as decode a JPEG 2000 image to a PNG (#6121), in the
+/// colours its header gives without a /ColorSpace, or in the /ColorSpace it has.
+#[test]
+fn jpeg_2000_images_export_as_png_in_their_colours() {
+    let rgba = |doc: &Document| {
+        let (ext, rgba) = exported_rgba(doc);
+        assert_eq!(ext, "png");
+        rgba
+    };
+    // No /ColorSpace: three components, RGB, each of its own precision (1, 8 and 2 bits).
+    let doc = jpx_doc(3, 2, &[1, 8, 2], None, |_| {});
+    assert_eq!(rgba(&doc), [255, 128, 170, 255].repeat(6));
+    let image = pdfcraft_model::pages(&doc)[0].clone();
+    let res = doc.resolve(image.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    let r = xo.iter().next().map(|(_, v)| v.as_ref().unwrap()).unwrap();
+    let (ext, bytes) = image_file(&doc, r).unwrap();
+    assert_eq!((ext, exported_png_pixels(&bytes)), ("png", [255, 128, 170].repeat(6)));
+
+    // /DeviceGray, one 8-bit component.
+    assert_eq!(rgba(&jpx_doc(2, 1, &[8], Some(Object::name("DeviceGray")), |_| {})), [128, 128, 128, 255].repeat(2));
+
+    // An /Indexed space reads the palette index at the image's precision: 4 bits, index 8.
+    let palette: Vec<u8> = (0..16u8).flat_map(|i| [i * 10, 0, 255 - i]).collect();
+    let indexed =
+        Object::Array(vec![Object::name("Indexed"), Object::name("DeviceRGB"), Object::Int(15), Object::String(PdfString::literal(palette))]);
+    assert_eq!(rgba(&jpx_doc(2, 1, &[4], Some(indexed), |_| {})), [80, 0, 247, 255].repeat(2));
+
+    // /DeviceCMYK takes all four components as inks, though the codestream alone reads as RGB
+    // with an opacity channel: equal inks give an opaque grey.
+    let cmyk = rgba(&jpx_doc(2, 1, &[8, 8, 8, 8], Some(Object::name("DeviceCMYK")), |_| {}));
+    assert!(cmyk.as_chunks::<4>().0.iter().all(|p| p[0] == p[1] && p[1] == p[2] && p[0] < 128 && p[3] == 255), "{cmyk:?}");
+}
+
+/// The opacity channel of a JPEG 2000 image is its alpha only when /SMaskInData says so, and not
+/// when it has a /SMask (ISO 32000-2 Table 87).
+#[test]
+fn a_jpeg_2000_images_own_opacity_is_its_alpha_when_it_says_so() {
+    let in_data = |d: &mut Dict| d.set(b"SMaskInData".to_vec(), Object::Int(1));
+    // Grey and its opacity, both at their midpoint.
+    assert_eq!(exported_rgba(&jpx_doc(2, 1, &[8, 8], None, in_data)).1, [128, 128, 128, 128].repeat(2));
+    assert_eq!(exported_rgba(&jpx_doc(2, 1, &[8, 8], Some(Object::name("DeviceGray")), in_data)).1, [128, 128, 128, 128].repeat(2));
+    assert_eq!(exported_rgba(&jpx_doc(2, 1, &[8, 8], None, |_| {})).1, [128, 128, 128, 255].repeat(2));
+    // A /SMask overrides it.
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let m = doc.add(Object::Stream(Stream::from_raw(image_dict(2, 1, "DeviceGray", 8), vec![0, 255])));
+        let mut d = image_dict(2, 1, "DeviceGray", 8);
+        d.remove(b"BitsPerComponent");
+        d.set(b"Filter".to_vec(), Object::name("JPXDecode"));
+        d.set(b"SMaskInData".to_vec(), Object::Int(1));
+        d.set(b"SMask".to_vec(), Object::Ref(m));
+        Stream::from_raw(d, jpx_midpoint(2, 1, &[8, 8]))
+    });
+    assert_eq!(alphas(&exported_rgba(&reopen(&doc)).1), [0, 255]);
+    // With 2 its colours are premultiplied by it, which the export can't undo yet: refused, not
+    // exported opaque and darkened.
+    let premultiplied = jpx_doc(2, 1, &[8, 8], None, |d| d.set(b"SMaskInData".to_vec(), Object::Int(2)));
+    let out = extract_images(&premultiplied, &[0], 0);
+    assert!(out.images.is_empty(), "{out:?}");
+    let why: Vec<_> = out.skipped.into_iter().map(|(_, _, why)| why).collect();
+    assert_eq!(why, ["JPEG 2000 images with premultiplied opacity (/SMaskInData 2) can't be exported yet"]);
+    // Without an opacity channel there is nothing premultiplied.
+    let opaque = jpx_doc(2, 1, &[8], None, |d| d.set(b"SMaskInData".to_vec(), Object::Int(2)));
+    assert_eq!(exported_rgba(&opaque).1, [128, 128, 128, 255].repeat(2));
+}
+
+/// A colour-key /Mask is in the image's sample values (8.9.6.4): a JPEG 2000 image's at its own
+/// precision, which the decoder scales to 8 bits, and an /Indexed one's palette indices.
+#[test]
+fn a_jpeg_2000_images_colour_key_is_in_its_own_sample_values() {
+    let keyed = |precision: u8, space: &str, lo: i64, hi: i64| {
+        let doc = jpx_doc(2, 1, &[precision], Some(Object::name(space)), |d| {
+            d.set(b"Mask".to_vec(), Object::Array(vec![Object::Int(lo), Object::Int(hi)]))
+        });
+        alphas(&exported_rgba(&doc).1)
+    };
+    // Every sample is at its precision's midpoint: 8 of 4 bits, 1 of 1 bit, 2 of 2 bits, 128 of 8.
+    assert_eq!(keyed(4, "DeviceGray", 8, 8), [0, 0]);
+    assert_eq!(keyed(4, "DeviceGray", 7, 7), [255, 255]);
+    assert_eq!(keyed(4, "DeviceGray", 9, 15), [255, 255]);
+    assert_eq!(keyed(4, "DeviceGray", 0, 8), [0, 0]);
+    assert_eq!(keyed(1, "DeviceGray", 1, 1), [0, 0]);
+    assert_eq!(keyed(1, "DeviceGray", 0, 0), [255, 255]);
+    assert_eq!(keyed(2, "DeviceGray", 2, 3), [0, 0]);
+    assert_eq!(keyed(8, "DeviceGray", 128, 128), [0, 0]);
+    assert_eq!(keyed(8, "DeviceGray", 127, 127), [255, 255]);
+    // A range past the precision's largest value is held to it.
+    assert_eq!(keyed(4, "DeviceGray", 8, 1000), [0, 0]);
+    // An /Indexed image's key is in palette indices, which the export keeps.
+    let palette: Vec<u8> = (0..16u8).flat_map(|i| [i * 10, 0, 255 - i]).collect();
+    let indexed = || {
+        Object::Array(vec![Object::name("Indexed"), Object::name("DeviceRGB"), Object::Int(15), Object::String(PdfString::literal(palette.clone()))])
+    };
+    let key = |lo: i64, hi: i64| {
+        let doc = jpx_doc(2, 1, &[4], Some(indexed()), |d| d.set(b"Mask".to_vec(), Object::Array(vec![Object::Int(lo), Object::Int(hi)])));
+        alphas(&exported_rgba(&doc).1)
+    };
+    assert_eq!(key(8, 8), [0, 0]);
+    assert_eq!(key(9, 15), [255, 255]);
+}
+
+/// A JPEG 2000 image that isn't what its dictionary says, or can't be decoded, is left out with
+/// a reason: before it is decoded when its codestream is larger than the image. Every truncation
+/// of one, and every byte of one flipped, exports or is left out without a panic.
+#[test]
+fn a_damaged_or_mismatched_jpeg_2000_image_is_reported_not_exported() {
+    let decoded = |doc: &Document| {
+        crate::extract::JPXS_DECODED.with(|n| n.set(0));
+        let out = extract_images(doc, &[0], 0);
+        (out, crate::extract::JPXS_DECODED.with(std::cell::Cell::get))
+    };
+    let skipped = |doc: &Document| {
+        let (out, n) = decoded(doc);
+        assert!(out.images.is_empty(), "{out:?}");
+        (out.skipped.into_iter().map(|(_, _, why)| why).collect::<Vec<_>>(), n)
+    };
+    // A 1 × 1 image whose codestream is 4000 × 4000 is not decoded at all.
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |_| {
+        let mut d = image_dict(1, 1, "DeviceGray", 8);
+        d.set(b"Filter".to_vec(), Object::name("JPXDecode"));
+        Stream::from_raw(d, jpx_midpoint(4000, 4000, &[8]))
+    });
+    assert_eq!(skipped(&reopen(&doc)), (vec!["the JPEG 2000 image can't be decoded".to_string()], 0));
+    // Components the /ColorSpace can't take, and too many for the decoder.
+    assert_eq!(skipped(&jpx_doc(2, 1, &[8, 8, 8], Some(Object::name("DeviceGray")), |_| {})).1, 0);
+    assert_eq!(skipped(&jpx_doc(2, 1, &[8, 8, 8, 8, 8], None, |_| {})).1, 0);
+    // Behind another filter, and as a stencil mask.
+    let why = skipped(&jpx_doc(2, 1, &[8], None, |d| {
+        d.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("JPXDecode")]))
+    }))
+    .0;
+    assert_eq!(why, ["JPEG 2000 images inside other filters can't be exported yet"]);
+    // An entry of the array that isn't a filter's name is still something before it.
+    let why = skipped(&jpx_doc(2, 1, &[8], None, |d| d.set(b"Filter".to_vec(), Object::Array(vec![Object::Int(42), Object::name("JPXDecode")])))).0;
+    assert_eq!(why, ["JPEG 2000 images inside other filters can't be exported yet"]);
+    let why = skipped(&jpx_doc(2, 1, &[1], None, |d| d.set(b"ImageMask".to_vec(), Object::Bool(true)))).0;
+    assert_eq!(why, ["JPEG 2000 stencil masks can't be exported yet"]);
+    // Past the export's allowance it is refused before it is decoded.
+    let doc = jpx_doc(2, 1, &[8], None, |_| {});
+    let out = crate::extract::extract_images_within(&doc, &[0], 0, &mut pdfcraft_cos::ImageBudget::with_work(0), usize::MAX);
+    assert_eq!(out.skipped.len(), 1, "{out:?}");
+    // Every truncation, and every byte flipped, of a valid one.
+    let whole = jpx_midpoint(3, 2, &[8, 8, 8]);
+    for cut in 0..whole.len() {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |_| {
+            let mut d = image_dict(3, 2, "DeviceRGB", 8);
+            d.set(b"Filter".to_vec(), Object::name("JPXDecode"));
+            Stream::from_raw(d, whole[..cut].to_vec())
+        });
+        // The decoder is lenient: missing packet data decodes as it draws, to the midpoint.
+        let _ = extract_images(&doc, &[0], 0);
+        let mut flipped = whole.clone();
+        flipped[cut] ^= 0xff;
+        with_image(&mut doc, |_| {
+            let mut d = image_dict(3, 2, "DeviceRGB", 8);
+            d.set(b"Filter".to_vec(), Object::name("JPXDecode"));
+            Stream::from_raw(d, flipped)
+        });
+        let _ = extract_images(&doc, &[0], 0);
+    }
 }
