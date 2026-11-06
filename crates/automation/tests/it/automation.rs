@@ -2933,9 +2933,18 @@ fn headers_watermarks_and_backgrounds_through_tools() {
     let dir = workdir("marks");
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
-    ok(&mut a, "doc_header_footer", json!({ "doc": doc, "footer_center": "<<Page 1 of n>>", "header_right": "ACME" }));
+    ok(&mut a, "doc_header_footer", json!({ "doc": doc, "footer_center": "<<Page 1 of n>>", "header_right": "ACME", "color": "red" }));
     let texts = page_text(&mut a, doc);
     assert!(texts[2].contains("Page 3 of 3") && texts[0].contains("ACME"), "{texts:?}");
+    ok(
+        &mut a,
+        "doc_header_footer",
+        json!({ "doc": doc, "header_left": "Shared template", "font": "Times", "color": [0.2, 0.4, 0.6], "underline": true, "replace": true }),
+    );
+    assert!(page_text(&mut a, doc)[0].contains("Shared template"));
+    let bad_color = a.call("doc_header_footer", &json!({ "doc": doc, "header_left": "Must not apply", "color": [1.1, 0.0, 0.0] }));
+    assert!(matches!(bad_color, Err(ToolError::InvalidArgs(e)) if e.contains("three numbers from 0 to 1")));
+    assert!(!page_text(&mut a, doc)[0].contains("Must not apply"), "invalid color refuses the whole edit");
     ok(&mut a, "doc_watermark", json!({ "doc": doc, "pages": [1], "text": "DRAFT", "opacity": 0.2 }));
     assert!(page_text(&mut a, doc)[0].contains("DRAFT"));
     ok(&mut a, "doc_background", json!({ "doc": doc, "color": "yellow" }));
