@@ -187,10 +187,15 @@ pub(crate) fn describe(cx: &PageCx<'_>, view: &mut DocView) {
     // tip is that of the one drawn on top, among those with something to say (#3620).
     let top = cx
         .comments()
-        .filter(|a| cx.screen_rects(a).any(|r| r.contains(p)))
-        .filter_map(|a| hover_tip(a, cx.prefs).map(|text| (a.index, text)))
-        .max_by_key(|(index, _)| *index);
-    if let Some((_, text)) = top {
+        .filter_map(|a| {
+            let marker = cx.comment_marker_rect(a).is_some_and(|r| r.contains(p));
+            if !marker && !cx.screen_rects(a).any(|r| r.contains(p)) {
+                return None;
+            }
+            hover_tip(a, cx.prefs).map(|text| (marker, a.index, text))
+        })
+        .max_by_key(|(marker, index, _)| (*marker, *index));
+    if let Some((_, _, text)) = top {
         view.cursor.describe(Subject::Comment, text);
     }
 }
