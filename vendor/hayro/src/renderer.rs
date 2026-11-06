@@ -308,6 +308,47 @@ const SMOOTHED_IMAGE_SIDE: u32 = 512;
 /// Below 1% nearest-neighbour repeats at most one sample in a hundred.
 const SMOOTHED_IMAGE_SCALE: f32 = 1.01;
 
+/// PdfCraft patch: the most distinct colours a smaller image without `/Interpolate` may have and
+/// still keep its hard pixels when enlarged. QR codes, bilevel images and pixel art use a few;
+/// screenshots and photos have hundreds (antialiased text alone has dozens of shades), and drawn
+/// nearest-neighbour their text came out as staircases when zoomed.
+const HARD_PIXEL_COLOURS: usize = 16;
+
+/// PdfCraft patch: the most samples [`has_many_colours`] reads. An image is drawn once per tile, and
+/// a few-colour strip narrower than [`SMOOTHED_IMAGE_SIDE`] may still hold up to
+/// `MAX_IMAGE_PIXELS` samples; reading them all on every tile would stall the page. A screenshot
+/// or photo shows its 17th colour long before this (a 305 × 230 screenshot is read whole).
+const COLOUR_SCAN_SAMPLES: usize = 1 << 20;
+
+/// PdfCraft patch: whether `image` has more than [`HARD_PIXEL_COLOURS`] distinct colours among its
+/// first [`COLOUR_SCAN_SAMPLES`] samples. Stops at the first colour past the limit, so a
+/// screenshot or photo is decided within its first rows; an image with no more colours than that
+/// in the samples read keeps its hard pixels, as every image did before.
+fn has_many_colours(image: &ImageData) -> bool {
+    let mut seen: Vec<u32> = Vec::with_capacity(HARD_PIXEL_COLOURS);
+    let mut many = |colour: u32| {
+        if seen.contains(&colour) {
+            return false;
+        }
+        seen.push(colour);
+        seen.len() > HARD_PIXEL_COLOURS
+    };
+    match image {
+        ImageData::Luma(luma) => luma
+            .data
+            .iter()
+            .take(COLOUR_SCAN_SAMPLES)
+            .any(|&v| many(u32::from(v))),
+        ImageData::Rgb(rgb) => rgb
+            .data
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .take(COLOUR_SCAN_SAMPLES)
+            .any(|&[r, g, b]| many(u32::from_be_bytes([0, r, g, b]))),
+    }
+}
+
 /// PdfCraft patch: fixed-point unit of [`area_shrink`]'s weights.
 const AREA_ONE: u64 = 1 << 16;
 
@@ -1336,13 +1377,16 @@ impl Renderer {
         // Scans rarely ask, and drawn nearest-neighbour each sample of a zoomed scan became a
         // block, so the edges of its text were staircases. Bicubic looked the same on a zoomed
         // 300 dpi scan and drew its tiles five times slower. Smaller images (icons, QR codes,
-        // pixel art) keep their hard pixels. A scan shrunk on one side and stretched on the other
-        // is smoothed too: the area shrink leaves the shrunk side at 1:1, where bilinear adds
-        // nothing, and the stretched side would otherwise be drawn nearest-neighbour.
+        // pixel art) keep their hard pixels, unless they have many colours: a screenshot of a
+        // terminal or a slide is small too, and its text must not turn into staircases either.
+        // A scan shrunk on one side and stretched on the other is smoothed too: the area shrink
+        // leaves the shrunk side at 1:1, where bilinear adds nothing, and the stretched side
+        // would otherwise be drawn nearest-neighbour.
         if !interpolate
             && !self.in_type3_glyph
             && (x_scale > SMOOTHED_IMAGE_SCALE || y_scale > SMOOTHED_IMAGE_SCALE)
-            && source_width.min(source_height) >= SMOOTHED_IMAGE_SIDE
+            && (source_width.min(source_height) >= SMOOTHED_IMAGE_SIDE
+                || has_many_colours(&image_data))
         {
             quality = ImageQuality::Medium;
         }
@@ -3213,5 +3257,54 @@ mod area_shrink_tests {
         assert_eq!(area_shrink::<1>(&data, (4, 4), (0, 2)), None, "an empty side");
         assert_eq!(area_shrink::<1>(&data[1..], (4, 4), (2, 2)), None, "data shorter than the source");
         assert_eq!(area_shrink::<3>(&data, (4, 4), (2, 2)), None, "data of another channel count");
+    }
+}
+
+/// PdfCraft patch: the colour count that decides whether a small enlarged image is smoothed.
+#[cfg(test)]
+mod colour_count_tests {
+    use super::{COLOUR_SCAN_SAMPLES, HARD_PIXEL_COLOURS, ImageData, LumaData, RgbData, has_many_colours};
+
+    fn luma(data: Vec<u8>) -> ImageData {
+        let width = data.len() as u32;
+        ImageData::Luma(LumaData { data, width, height: 1, interpolate: false, scale_factors: (1.0, 1.0) })
+    }
+
+    fn rgb(pixels: &[[u8; 3]]) -> ImageData {
+        let data = pixels.concat();
+        ImageData::Rgb(RgbData { data, width: pixels.len() as u32, height: 1, interpolate: false, scale_factors: (1.0, 1.0) })
+    }
+
+    /// Sixteen colours, each repeated, keep hard pixels; a seventeenth smooths.
+    #[test]
+    fn more_than_sixteen_colours_is_many() {
+        let sixteen: Vec<u8> = (0..HARD_PIXEL_COLOURS as u8).cycle().take(1000).collect();
+        assert!(!has_many_colours(&luma(sixteen.clone())));
+        let mut seventeen = sixteen;
+        seventeen.push(200);
+        assert!(has_many_colours(&luma(seventeen)));
+    }
+
+    /// RGB colours are told apart by all three channels: colours that share a channel are distinct.
+    #[test]
+    fn rgb_colours_differ_by_any_channel() {
+        let reds: Vec<[u8; 3]> = (0..=HARD_PIXEL_COLOURS as u8).map(|r| [r, 0, 0]).collect();
+        assert!(has_many_colours(&rgb(&reds)));
+        let same_red: Vec<[u8; 3]> = (0..=HARD_PIXEL_COLOURS as u8).map(|b| [255, 0, b]).collect();
+        assert!(has_many_colours(&rgb(&same_red)));
+        assert!(!has_many_colours(&rgb(&[[255, 0, 0], [255, 0, 0], [0, 0, 255]])));
+        assert!(!has_many_colours(&rgb(&[])), "an empty image has no colours");
+    }
+
+    /// Only the first `COLOUR_SCAN_SAMPLES` samples are read, so a long few-colour strip is not read
+    /// whole on every tile: colours past them are not counted.
+    #[test]
+    fn colours_past_the_scan_limit_are_not_counted() {
+        let mut strip = vec![0u8; COLOUR_SCAN_SAMPLES];
+        strip.extend(0..=255);
+        assert!(!has_many_colours(&luma(strip)));
+        let mut early = vec![0u8; COLOUR_SCAN_SAMPLES - 256];
+        early.extend(0..=255);
+        assert!(has_many_colours(&luma(early)), "colours within the limit are counted");
     }
 }

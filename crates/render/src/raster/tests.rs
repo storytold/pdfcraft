@@ -6670,6 +6670,33 @@ fn small_non_interpolated_images_keep_hard_pixels_when_enlarged() {
     assert!(page.rgba.as_chunks::<4>().0.iter().all(|px| px[0] == 0 || px[0] == 255), "a small image was smoothed");
 }
 
+/// A screenshot of a terminal (305 × 230 samples) is small too, but its antialiased text has
+/// many shades. Drawn nearest-neighbour when zoomed, the edges of its letters were staircases;
+/// it is smoothed as a scan is.
+#[test]
+fn small_images_with_many_colours_are_smoothed_when_enlarged() {
+    // Left half black, right half a ramp of 32 light grays: a hard edge in a 33-colour image.
+    let source: Vec<u8> = (0..64 * 64).map(|i| if i % 64 < 32 { 0 } else { 192 + (i % 64) as u8 }).collect();
+    let page = draw_minified_image("DeviceGray", (64, 64), None, &source, None, (192, 192));
+    let row = 96 * 192;
+    let edge: Vec<u8> = (90..102).map(|x| page.rgba[(row + x) * 4]).collect();
+    assert!(edge.iter().any(|v| (32..=191).contains(v)), "a hard edge, not a smoothed one: {edge:?}");
+    assert_eq!(page.rgba[(row + 40) * 4], 0, "away from the edge");
+}
+
+/// A small colour image with a palette of a few colours (a logo, pixel art) keeps its hard
+/// pixels when enlarged, as a bilevel one does.
+#[test]
+fn small_rgb_images_with_few_colours_keep_hard_pixels_when_enlarged() {
+    let palette = [[255u8, 0, 0], [0, 128, 255], [255, 255, 255], [20, 20, 20]];
+    let source: Vec<u8> = (0..16 * 16).flat_map(|i| palette[(i / 16 / 4 + i % 16 / 4) % 4]).collect();
+    let page = draw_minified_image("DeviceRGB", (16, 16), None, &source, None, (96, 96));
+    let mut colours: Vec<[u8; 3]> = page.rgba.as_chunks::<4>().0.iter().map(|px| [px[0], px[1], px[2]]).collect();
+    colours.sort_unstable();
+    colours.dedup();
+    assert_eq!(colours.len(), palette.len(), "a few-colour image was smoothed: {colours:?}");
+}
+
 /// A scan shrunk across and stretched down (a fax shown at screen size, zoomed in): the shrunk
 /// side is still averaged, and the stretched side is smoothed as a scan enlarged both ways
 /// is. Shrinking one side kept the nearest sampler for the other, so its edges were staircases.
@@ -8249,7 +8276,8 @@ fn images_converted_through_a_table_keep_every_samples_colour() {
         assert!(got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 1), "pixel {at:?}: got {got:?}, want {want:?}");
     };
     // DeviceN of two inks at 4 bits (256 possible pixels) shown as RGB (a, b, 0), the first
-    // ink's range reversed. 32 × 16 pixels, each drawn 4 pt square.
+    // ink's range reversed. 32 × 16 pixels, drawn 1:1: an image of this many colours is
+    // smoothed when enlarged, which would blend neighbouring samples into the ones read here.
     let mut data = Vec::new();
     for y in 0..16 {
         for x in 0..32 {
@@ -8262,7 +8290,7 @@ fn images_converted_through_a_table_keep_every_samples_colour() {
         data.len()
     );
     let pdf = image_cache_pdf(
-        "q 128 0 0 64 0 0 cm /A Do Q",
+        "q 32 0 0 16 0 0 cm /A Do Q",
         "<< /XObject << /A 5 0 R >> >>",
         &[(&image, &data), ("<< /FunctionType 4 /Domain [0 1 0 1] /Range [0 1 0 1 0 1] /Length 5 >>", b"{ 0 }")],
     );
@@ -8271,8 +8299,8 @@ fn images_converted_through_a_table_keep_every_samples_colour() {
     for y in 0..16 {
         for x in 0..32 {
             let (a, b) = (x % 16, (x / 16 + 2 * y) % 16);
-            // The 64 pt image sits at the bottom of the 70 pt page.
-            close(rgb_at(&out.rgba, w, 4 * x + 2, 6 + 4 * y + 2), [(255 - 17 * a) as u8, (17 * b) as u8, 0], (x, y));
+            // The 16 pt image sits at the bottom of the 70 pt page.
+            close(rgb_at(&out.rgba, w, x, 54 + y), [(255 - 17 * a) as u8, (17 * b) as u8, 0], (x, y));
         }
     }
 
@@ -8301,7 +8329,8 @@ fn images_converted_through_a_table_keep_every_samples_colour() {
     }
 
     // DeviceGray at 8 bits through the range [0.2 0.8] (so not drawn from the raw bytes):
-    // 31 × 12 declared, data for 8 rows and the first 12 pixels of the 9th.
+    // 31 × 12 declared, data for 8 rows and the first 12 pixels of the 9th. Drawn 1:1, as the
+    // DeviceN image is: an image of this many colours is smoothed when enlarged.
     let sample = |x: usize, y: usize| (x * 7 + y * 3) % 256;
     let mut data = Vec::new();
     for y in 0..9 {
@@ -8312,15 +8341,15 @@ fn images_converted_through_a_table_keep_every_samples_colour() {
         "<< /Type /XObject /Subtype /Image /Width 31 /Height 12 /ColorSpace /DeviceGray /BitsPerComponent 8 /Decode [0.2 0.8] /Length {} >>",
         data.len()
     );
-    let pdf = image_cache_pdf("q 124 0 0 60 0 0 cm /A Do Q", "<< /XObject << /A 5 0 R >> >>", &[(&image, &data)]);
+    let pdf = image_cache_pdf("q 31 0 0 12 0 0 cm /A Do Q", "<< /XObject << /A 5 0 R >> >>", &[(&image, &data)]);
     let out = render_first_page(pdf);
     let w = out.width as usize;
     for y in 0..9 {
         for x in 0..31 {
             // The rest of the 9th row is decoded zero (black), not sample 0 (0.2 under this range).
             let gray = if y < 8 || x < 12 { (51.0 + 0.6 * sample(x, y) as f64).round() as u8 } else { 0 };
-            // The rows present keep the declared rows' height: 60 pt / 12.
-            close(rgb_at(&out.rgba, w, 4 * x + 2, 10 + 5 * y + 2), [gray; 3], (x, y));
+            // The rows present keep the declared rows' height: the 12 pt image's rows are 1 pt.
+            close(rgb_at(&out.rgba, w, x, 58 + y), [gray; 3], (x, y));
         }
     }
 }
