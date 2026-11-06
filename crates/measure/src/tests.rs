@@ -112,7 +112,7 @@ fn filled_open_triangle_snaps_to_closing_edge() {
     for (op, closed) in [("f", true), ("F", true), ("f*", true), ("B", true), ("B*", true), ("h f", true), ("S", false)] {
         let d = fixture(&format!("40 50 m 160 50 l 100 170 l {op}"), "", &[]);
         let paths = snap::geometry(&d, 0).unwrap();
-        assert_eq!(paths.segments.len(), if closed { 3 } else { 2 }, "{op}");
+        assert_eq!(paths.segment_count(), if closed { 3 } else { 2 }, "{op}");
         let hit = paths.snap([70.0, 110.0], 5.0, snap::SnapOptions::default()).unwrap();
         assert_eq!(hit.is_some(), closed, "{op}");
     }
@@ -121,7 +121,7 @@ fn filled_open_triangle_snaps_to_closing_edge() {
 fn snap_paths_endpoints_midpoints_and_intersections() {
     let d = fixture("10 20 m 110 20 l S 60 0 m 60 80 l S 10 100 100 40 re S", "", &[]);
     let paths = snap::geometry(&d, 0).unwrap();
-    assert_eq!(paths.segments.len(), 6);
+    assert_eq!(paths.segment_count(), 6);
     let opts = snap::SnapOptions::default();
     let hit = paths.snap([11.0, 20.0], 3.0, opts).unwrap().unwrap();
     assert_eq!(hit.kind, snap::SnapKind::Endpoint);
@@ -147,9 +147,9 @@ fn filled_open_subpath_offers_the_same_snap_edges_as_explicit_close() {
     let explicit = snap::geometry(&closed, 0).unwrap();
     let stroked = snap::geometry(&stroke, 0).unwrap();
 
-    assert_eq!(filled.segments, explicit.segments);
-    assert_eq!(filled.segments.len(), 3);
-    assert_eq!(stroked.segments.len(), 2);
+    assert!(filled.segments().eq(explicit.segments()));
+    assert_eq!(filled.segment_count(), 3);
+    assert_eq!(stroked.segment_count(), 2);
     let paths_only = snap::SnapOptions { endpoints: false, midpoints: false, intersections: false, paths: true };
     let hit = filled.snap([55.0, 80.0], 5.0, paths_only).unwrap().unwrap();
     assert_eq!(hit.kind, snap::SnapKind::Path);
@@ -163,12 +163,12 @@ fn fills_close_all_open_subpaths_but_strokes_do_not() {
     for paint in ["f", "F", "f*", "B", "B*", "b", "b*"] {
         let doc = fixture(&format!("{triangles} {paint}"), "", &[]);
         let geometry = snap::geometry(&doc, 0).unwrap();
-        assert_eq!(geometry.segments.len(), 6, "{paint}");
-        assert!(geometry.segments.contains(&[[10.0, 20.0], [0.0, 0.0]]), "{paint}");
-        assert!(geometry.segments.contains(&[[50.0, 20.0], [40.0, 0.0]]), "{paint}");
+        assert_eq!(geometry.segment_count(), 6, "{paint}");
+        assert!(geometry.segments().any(|s| s == [[10.0, 20.0], [0.0, 0.0]]), "{paint}");
+        assert!(geometry.segments().any(|s| s == [[50.0, 20.0], [40.0, 0.0]]), "{paint}");
     }
     let stroked = fixture(&format!("{triangles} S"), "", &[]);
-    assert_eq!(snap::geometry(&stroked, 0).unwrap().segments.len(), 4);
+    assert_eq!(snap::geometry(&stroked, 0).unwrap().segment_count(), 4);
 }
 
 #[test]
@@ -180,12 +180,12 @@ fn nested_forms_transforms_curves_and_cycles_are_bounded() {
     );
     let d = fixture("q 1 0 0 1 100 200 cm /Nested Do Q", "", &[&form]);
     let geometry = snap::geometry(&d, 0).unwrap();
-    assert_eq!(geometry.segments[0], [[100.0, 200.0], [120.0, 200.0]]);
-    assert!(geometry.endpoints.contains(&[120.0, 200.0]));
-    assert!(geometry.midpoints.contains(&[110.0, 222.5]));
-    assert!(geometry.segments.len() > 4 && geometry.segments.len() < 200);
+    assert_eq!(geometry.segments().next(), Some([[100.0, 200.0], [120.0, 200.0]]));
+    assert!(geometry.endpoints().any(|p| p == [120.0, 200.0]));
+    assert!(geometry.midpoints().any(|p| p == [110.0, 222.5]));
+    assert!(geometry.segment_count() > 4 && geometry.segment_count() < 200);
     let d = fixture(&"0 0 m 1 1 l S ".repeat(20_001), "", &[]);
-    assert!(snap::geometry(&d, 0).unwrap().truncated);
+    assert!(snap::geometry_with_limits(&d, 0, SMALL).unwrap().truncated);
 }
 #[test]
 fn measurement_csv_quotes_newlines_and_blocks_formula_cells() {
@@ -242,35 +242,39 @@ fn imported_measurement_appearance_is_not_silently_replaced() {
     close(list(&d).measurements[0].reading.value, 100.0);
 }
 
+/// The limits snapping had before heavy sheets, which the cap tests below were written for.
+const SMALL: snap::Limits = snap::Limits { segments: 20_000, targets: 40_000, bytes: 16 << 20 };
+
 #[test]
 fn degenerate_and_dense_paths_keep_snap_targets_bounded() {
     // Rejected (zero-length) segments record no endpoints or midpoints at all.
     let d = fixture(&"0 0 0 0 re f ".repeat(100_000), "", &[]);
-    let g = snap::geometry(&d, 0).unwrap();
-    assert!(g.segments.is_empty() && g.endpoints.is_empty() && g.midpoints.is_empty(), "{} {}", g.endpoints.len(), g.midpoints.len());
+    let g = snap::geometry_with_limits(&d, 0, SMALL).unwrap();
+    assert!(g.segment_count() == 0 && g.endpoints().next().is_none() && g.midpoints().next().is_none());
     // Every paint drains into the page geometry; the page-wide target cap still holds.
     let d = fixture(&"0 0 1 1 re f ".repeat(30_000), "", &[]);
-    let g = snap::geometry(&d, 0).unwrap();
+    let g = snap::geometry_with_limits(&d, 0, SMALL).unwrap();
     assert!(g.truncated);
-    assert!(g.endpoints.len() + g.midpoints.len() <= 40_000 + 12, "{}", g.endpoints.len() + g.midpoints.len());
-    assert!(g.segments.len() <= 20_000 + 4);
+    let targets = g.endpoints().count() + g.midpoints().count();
+    assert!(targets <= 40_000 + 12, "{targets}");
+    assert!(g.segment_count() <= 20_000 + 4);
     // Unpainted curves and lines are capped too.
     let d = fixture(&"0 0 m 5 9 1 9 7 0 c 0 3 l ".repeat(30_000), "", &[]);
-    let g = snap::geometry(&d, 0).unwrap();
-    assert!(g.truncated && g.endpoints.is_empty());
+    let g = snap::geometry_with_limits(&d, 0, SMALL).unwrap();
+    assert!(g.truncated && g.endpoints().next().is_none());
 }
 #[test]
 fn deep_graphics_state_and_unreadable_streams_are_skipped_not_fatal() {
     let d = fixture(&format!("0 0 m 10 0 l S {}", "q ".repeat(300)), "", &[]);
     let g = snap::geometry(&d, 0).unwrap();
     assert!(g.truncated);
-    assert_eq!(g.segments.len(), 1);
+    assert_eq!(g.segment_count(), 1);
     // An unsupported filter cannot be decoded at all (corrupt Flate is decoded tolerantly).
     let broken = "<< /Length 10 /Filter /NoSuchDecode >>\nstream\nnot-zlib!!\nendstream";
     let d = fixture_with("[4 0 R 5 0 R]", "0 0 m 10 0 l S", "", &[broken]);
     let g = snap::geometry(&d, 0).unwrap();
     assert_eq!(g.unreadable, 1);
-    assert_eq!(g.segments.len(), 1);
+    assert_eq!(g.segment_count(), 1);
     let d = fixture_with("5 0 R", "", "", &[broken]);
     assert_eq!(snap::geometry(&d, 0).unwrap().unreadable, 1);
 }
@@ -410,7 +414,7 @@ fn xobject_resources_are_read_once_per_stream() {
     let d = fixture(&"/Missing Do\n".repeat(10_000), "", &[]);
     snap::XOBJECT_DICT_READS.with(|c| c.set(0));
     let paths = snap::geometry(&d, 0).unwrap();
-    assert!(paths.segments.is_empty());
+    assert_eq!(paths.segment_count(), 0);
     let reads = snap::XOBJECT_DICT_READS.with(std::cell::Cell::get);
     assert!(reads <= 1, "{reads} reads of the page's XObject resources");
 }
@@ -466,8 +470,8 @@ fn a_stream_over_the_byte_budget_uses_it_up_once() {
     let bomb = String::from_utf8(pdfcraft_testkit::stream_obj("/Filter [/ASCIIHexDecode /FlateDecode]", hex)).unwrap();
     let contents = format!("[4 0 R{}]", " 5 0 R".repeat(50));
     let d = fixture_with(&contents, "0 0 m 10 0 l S", "", &[bomb.as_str()]);
-    let g = snap::geometry(&d, 0).unwrap();
+    let g = snap::geometry_with_limits(&d, 0, SMALL).unwrap();
     assert_eq!(g.unreadable, 1);
     assert!(g.truncated);
-    assert_eq!(g.segments.len(), 1, "the parts before it still snap");
+    assert_eq!(g.segment_count(), 1, "the parts before it still snap");
 }
