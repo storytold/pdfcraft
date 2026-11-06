@@ -7,7 +7,16 @@ use super::{
 /// Properties… on CUPS: the driver's options for this print, grouped as the driver groups them.
 /// Only choices away from the printer's defaults are kept, and sent with the job.
 fn driver_options_panel(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
-    let PrintDraft { driver_options: Some((_, options)), driver_choices: choices, show_driver_options: show, .. } = d else { return };
+    let PrintDraft {
+        driver_options: Some((_, options)),
+        driver_options_diagnostic: diagnostic,
+        driver_choices: choices,
+        show_driver_options: show,
+        ..
+    } = d
+    else {
+        return;
+    };
     egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
@@ -21,8 +30,13 @@ fn driver_options_panel(ui: &mut egui::Ui, d: &mut PrintDraft, t: &Tokens) {
                 }
             });
         });
+        if let Some(message) = diagnostic {
+            ui.label(egui::RichText::new(message.as_str()).small().color(t.text));
+        }
         if options.is_empty() {
-            ui.label(egui::RichText::new(tl!("This printer offers no settings of its own.")).small().color(t.text_muted));
+            if diagnostic.is_none() {
+                ui.label(egui::RichText::new(tl!("This printer offers no settings of its own.")).small().color(t.text_muted));
+            }
             return;
         }
         egui::ScrollArea::vertical().id_salt("driver-options").max_height(240.0).show(ui, |ui| {
@@ -143,9 +157,13 @@ pub(crate) fn body(
                         if spool::HAS_PRINTER_PREFERENCES {
                             d.driver_error = spool::open_printer_preferences(&p).err().map(|e| e.to_string());
                         } else {
-                            if d.driver_options.as_ref().is_none_or(|(read_for, _)| *read_for != p) && d.driver_options_loading.as_deref() != Some(p.as_str()) {
+                            if (d.driver_options.as_ref().is_none_or(|(read_for, _)| *read_for != p)
+                                || (!d.show_driver_options && d.driver_options_diagnostic.is_some()
+                                    && d.driver_options.as_ref().is_some_and(|(_, options)| options.is_empty())))
+                                && d.driver_options_loading.as_deref() != Some(p.as_str()) {
                                 // Read off the GUI thread (#1818): `poll_print` starts it next frame.
                                 d.driver_options = None;
+                                d.driver_options_diagnostic = None;
                                 d.driver_choices.clear();
                                 d.driver_options_loading = Some(p.clone());
                                 d.read_options_for = Some(p);
@@ -156,8 +174,7 @@ pub(crate) fn body(
                 });
                 if d.printer != before {
                     d.printer_picked = true;
-                    d.show_driver_options = false;
-                    d.driver_error = None;
+                    d.reset_driver_options();
                 }
                 ui.end_row();
                 // The spooler answered with no printer at all (#160): say so, rather than

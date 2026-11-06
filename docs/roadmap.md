@@ -257,6 +257,8 @@ total matches the parity estimate.
 | M13 | Automation (MCP, Action Wizard, CLI) + AI providers | 60–120 | 45% | 25–45 | Done: MCP resources (document info, text, page images); headless tool table (123 tools incl. signing, optimizing, initial view, links, stamps, data exchange, comment review, forms authoring and scripts, redaction, sanitize, print, add content), opt-in MCP server over stdio, CLI `run`/`tools` (closed stdout pipes exit cleanly), UI control channel with drag. Missing: Action Wizard, AI providers |
 | | **Total** | **2,085–3,840** | **≈ 49% ready** | **≈ 770–1,400** | Area view of the same work: [target-app-parity.md](target-app-parity.md#by-feature-area) |
 
+Printer properties distinguish read failures from empty settings and retain usable PPD defaults with diagnostics in the UI and headless tool (#4711); synthetic coverage, not real-device qualification. Printer changes clear stale properties/diagnostics and pending replies; unchanged selections preserve settings (PR #4759 review). Retrieval diagnostics omit local paths, queue identifiers and raw OS errors, retaining operation and bounded failure categories. Integration with upstream macOS job metadata retains both regression sets (2026-11-03).
+
 ## Upcoming milestones, ranked
 
 | Rank | Next milestone | Closes | Estimate (h) |
@@ -295,6 +297,12 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 - Unmeasured fidelity: without an Acrobat comparison harness, quality gaps surface as user reports.
 
 ## Revision history
+
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M10, PR #4759: privacy-safe printer-option diagnostics; response shapes and estimates unchanged)
+
+**2026-11-03 · patch:** M10, PR #4759: integrate main 14ae839a, retaining privacy-safe option diagnostics and upstream macOS job metadata with both regression sets. Estimates and real-device qualification unchanged.
+
+**2026-11-01 · patch:** M10, PR #4759: printer-option diagnostics omit local paths, queue identifiers and raw OS errors while retaining bounded failure categories. Synthetic retrieval, tool and UI privacy coverage; response shapes and estimates unchanged.
 
 **2026-10-26 · patch:** M2/PR #4172: reconcile current main and preserve upstream Japanese serif/weight selection alongside the installed CJK viewer and preview fallback. Estimates unchanged.
 
