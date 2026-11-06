@@ -1,6 +1,6 @@
 # PdfCraft roadmap: milestones and what's next
 
-> **2026-11-06, M3 / #5782:** Read mode reclaims the menu/mode/search panel height; existing shortcuts, rail exit and native macOS menus remain. craft-menu keeps Alt/F10/mnemonics through a temporary menu-only overlay with no page-height cost. Estimates unchanged.
+> **Last reviewed:** 2026-11-06 | **Last updated:** 2026-11-06 | **Change:** patch (M3 #5782: Read mode hides the in-window menu, mode tabs and Find tools search while keeping shortcuts and exits; estimates unchanged)
 
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
