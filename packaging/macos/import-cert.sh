@@ -17,7 +17,9 @@ if [[ -z "${APPLE_CERTIFICATE:-}" ]]; then
   exit 0
 fi
 
-TMP="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+# A new, owner-only folder of its own (umask 077): the certificate and keychain are never
+# written through a path someone else could have made first in a shared temporary folder.
+TMP="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/pdfcraft-signing.XXXXXXXX")"
 KEYCHAIN="$TMP/pdfcraft-signing.keychain-db"
 CERT="$TMP/pdfcraft-signing.p12"
 KC_PASS="${KEYCHAIN_PASSWORD:-$(openssl rand -hex 24)}"

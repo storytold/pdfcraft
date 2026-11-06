@@ -1,11 +1,22 @@
 use super::*;
 
-/// A fresh, empty folder for one test.
+/// A fresh, empty folder for one test: made new under a name nobody can guess, never reused,
+/// so nothing planted there beforehand (a symbolic link, say) is written through.
 fn test_dir(test: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("pdfcraft-platform-staging-{}-{test}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    for n in 0..64u32 {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-platform-staging-{}-{test}-{:x}", std::process::id(), seed.wrapping_add(n.into())));
+        let mut made = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt as _;
+            made.mode(0o700);
+        }
+        if made.create(&dir).is_ok() {
+            return dir;
+        }
+    }
+    panic!("no fresh test folder could be made");
 }
 
 fn file_name(p: &Path) -> String {
@@ -446,5 +457,18 @@ fn a_replaced_link_keeps_its_own_attributes_not_its_targets() {
     assert_eq!(std::fs::read(&link).unwrap(), b"NEW");
     assert_eq!(std::fs::read(&referent).unwrap(), b"OLD", "the file the link pointed to is untouched");
     assert_ne!(std::fs::metadata(&referent).unwrap().file_attributes() & HIDDEN, 0, "and still hidden");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A name with a path separator in it would stage the file outside `dir`: it is refused.
+#[test]
+fn a_name_with_path_components_is_refused() {
+    let dir = test_dir("components");
+    let windows_only: &[&str] = if cfg!(windows) { &["sub\\out.pdf"] } else { &[] };
+    for &name in ["../out.pdf", "sub/out.pdf", "/out.pdf", ""].iter().chain(windows_only) {
+        let err = create_staging(&dir, name, StagingName::SuffixThenTag, [0xab]).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{name:?}");
+    }
+    assert!(std::fs::read_dir(&dir).unwrap().next().is_none(), "nothing was created");
     let _ = std::fs::remove_dir_all(&dir);
 }
