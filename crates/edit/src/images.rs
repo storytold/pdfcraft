@@ -5,7 +5,7 @@
 
 use kurbo::{BezPath, Point, Shape};
 use pdfcraft_content::{Matrix, Op, Pieces, parse, serialize_ops};
-use pdfcraft_cos::{Dict, Document, ObjRef, Object};
+use pdfcraft_cos::{Dict, Document, Name, ObjRef, Object};
 use std::sync::Arc;
 
 use crate::EditError;
@@ -43,6 +43,9 @@ pub struct PageImage {
     pub object: Option<ObjRef>,
     /// Whether this is grouped Form artwork, edited as a whole (including its nested content).
     pub is_form: bool,
+    /// Whether Replace image can draw a new picture in its place: any raster image, and grouped
+    /// Form artwork that wraps exactly one picture.
+    pub replaceable: bool,
     /// Pixel size; zero for vector/grouped Form artwork.
     pub width: u32,
     pub height: u32,
@@ -117,6 +120,94 @@ fn xobjects(doc: &Document, page: &Dict) -> Dict {
         .map(|r| doc.resolve(r))
         .and_then(|r| r.as_dict().and_then(|d| d.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned())))
         .unwrap_or_default()
+}
+
+/// How deep [`wrapped_picture`] looks into Forms nested in Forms.
+const MAX_WRAP_DEPTH: usize = 8;
+
+/// A Form's own resources dictionary (empty when it has none).
+fn form_resources(doc: &Document, form: &pdfcraft_cos::Stream) -> Dict {
+    form.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default()
+}
+
+/// A resources dictionary's XObjects (empty when it has none).
+fn resource_xobjects(doc: &Document, res: &Dict) -> Dict {
+    res.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default()
+}
+
+/// The XObject names leading from grouped Form artwork to the one raster picture it draws
+/// (a photo in a round frame, say), through nested Forms. `None` when it draws no picture or
+/// more than one, so Replace never has to guess which. Bounded by depth and a seen-set.
+fn wrapped_picture(doc: &Document, form: &pdfcraft_cos::Stream) -> Option<Vec<Name>> {
+    fn walk(
+        doc: &Document,
+        form: &pdfcraft_cos::Stream,
+        depth: usize,
+        seen: &mut std::collections::HashSet<ObjRef>,
+        path: &mut Vec<Name>,
+        found: &mut Vec<Vec<Name>>,
+    ) {
+        if depth >= MAX_WRAP_DEPTH || found.len() > 1 {
+            return;
+        }
+        for (name, v) in resource_xobjects(doc, &form_resources(doc, form)).iter() {
+            if let Some(r) = v.as_ref()
+                && !seen.insert(r)
+            {
+                // Drawn twice (or a cycle): a second path to the same thing is ambiguous.
+                found.push(Vec::new());
+                found.push(Vec::new());
+                return;
+            }
+            let obj = doc.resolve(v);
+            let Object::Stream(s) = &*obj else { continue };
+            path.push(name.clone());
+            match s.dict.name(b"Subtype") {
+                Some(b"Image") => found.push(path.clone()),
+                Some(b"Form") => walk(doc, s, depth.saturating_add(1), seen, path, found),
+                _ => {}
+            }
+            path.pop();
+            if found.len() > 1 {
+                return;
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(doc, form, 0, &mut std::collections::HashSet::new(), &mut Vec::new(), &mut found);
+    match <[Vec<Name>; 1]>::try_from(found) {
+        Ok([path]) if !path.is_empty() => Some(path),
+        _ => None,
+    }
+}
+
+/// A copy of `form` whose picture at the end of `path` (from [`wrapped_picture`]) is `image`:
+/// each Form on the way is copied with that one resource changed, so the original artwork,
+/// which other pages may share, stays as it was. Returns the new outermost Form.
+fn replace_wrapped(doc: &mut Document, form: &pdfcraft_cos::Stream, path: &[Name], image: ObjRef) -> Result<ObjRef, EditError> {
+    let Some((name, rest)) = path.split_first() else {
+        return Err(EditError::Invalid("the artwork holds no picture to replace".into()));
+    };
+    let mut res = form_resources(doc, form);
+    let mut xo = resource_xobjects(doc, &res);
+    let target = if rest.is_empty() {
+        image
+    } else {
+        let child = xo
+            .get(name)
+            .map(|o| doc.resolve(o))
+            .and_then(|o| match &*o {
+                Object::Stream(s) => Some(s.clone()),
+                _ => None,
+            })
+            .ok_or_else(|| EditError::Invalid("the artwork's nested group is missing".into()))?;
+        replace_wrapped(doc, &child, rest, image)?
+    };
+    xo.set(name.clone(), Object::Ref(target));
+    res.set(b"XObject".to_vec(), Object::Dict(xo));
+    let mut copy = form.clone();
+    copy.dict.set(b"Resources".to_vec(), Object::Dict(res));
+    Ok(doc.add(Object::Stream(copy)))
 }
 
 fn intersection(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
@@ -347,6 +438,7 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
                 name: String::from_utf8_lossy(name).into_owned(),
                 object: resource.as_ref(),
                 is_form,
+                replaceable: !is_form || wrapped_picture(doc, s).is_some(),
                 width: if is_form { 0 } else { s.dict.int(b"Width").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
                 height: if is_form { 0 } else { s.dict.int(b"Height").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
                 stream: pieces.piece_of(op.span.start),
@@ -423,6 +515,7 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
                     name: String::from_utf8_lossy(name).into_owned(),
                     object: Some(r),
                     is_form: false,
+                    replaceable: true,
                     width: s.dict.int(b"Width").unwrap_or(0).max(0) as u32,
                     height: s.dict.int(b"Height").unwrap_or(0).max(0) as u32,
                     stream: stream(op),
@@ -1651,15 +1744,32 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
             return crop_image_impl(doc, &p, &all, &img, *keep);
         }
         ImageChange::Replace(r) => {
-            if img.is_form {
-                return Err(EditError::Invalid(
-                    "grouped Form artwork can be moved, resized, rotated, flipped or deleted; replacing it with a bitmap is not supported".into(),
-                ));
-            }
-            let name = format!("PCImg{}", r.num);
+            // Grouped artwork that wraps one picture keeps its frame, clip and mask: a copy of
+            // the group draws the new picture where the old one was.
+            let (prefix, target) = if img.is_form {
+                // Its object when it has one; a Form written inline in the resources by name.
+                let form = img
+                    .object
+                    .map(|o| doc.get(o))
+                    .or_else(|| xobjects(doc, &p.dict).get(img.name.as_bytes()).map(|o| doc.resolve(o)))
+                    .and_then(|o| match &*o {
+                        Object::Stream(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .ok_or_else(|| EditError::Invalid("the artwork could not be located".into()))?;
+                let Some(path) = wrapped_picture(doc, &form) else {
+                    return Err(EditError::Invalid(
+                        "this grouped artwork holds no single picture; it can be moved, resized, rotated, flipped or deleted, not replaced".into(),
+                    ));
+                };
+                ("PCForm", replace_wrapped(doc, &form, &path, *r)?)
+            } else {
+                ("PCImg", *r)
+            };
+            let name = format!("{prefix}{}", target.num);
             let mut res = p.dict.get(b"Resources").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
             let mut xo = res.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
-            xo.set(name.clone().into_bytes(), Object::Ref(*r));
+            xo.set(name.clone().into_bytes(), Object::Ref(target));
             res.set(b"XObject".to_vec(), Object::Dict(xo));
             resources = Some(res);
             vec![Op::new("Do", vec![Object::name(&name)])]

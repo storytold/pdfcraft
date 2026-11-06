@@ -2130,8 +2130,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.edit_text", "edit.image"]
 tools = ["image_edit"]
-evidence = ["crates/edit/src/tests.rs::page_images_move_turn_replace_and_delete", "crates/ui-egui/tests/it/editing.rs::editing_existing_images_on_the_page", "crates/automation/tests/it/automation.rs::editing_page_images_through_tools"]
-notes = "existing page images (right-click ▸ Replace Image) and added images: the new picture is drawn in the same place"
+evidence = ["crates/edit/src/tests.rs::page_images_move_turn_replace_and_delete", "crates/edit/src/tests.rs::grouped_artwork_with_one_picture_is_replaced_inside_a_copy_of_the_group", "crates/edit/src/tests.rs::a_picture_in_nested_groups_is_replaced_and_an_ambiguous_group_is_refused", "crates/ui-egui/tests/it/editing.rs::editing_existing_images_on_the_page", "crates/automation/tests/it/automation.rs::editing_page_images_through_tools"]
+notes = "existing page images (right-click ▸ Replace Image) and added images: the new picture is drawn in the same place. Grouped Form artwork that wraps exactly one picture (a photo in a clipped frame, nested groups included) is replaced inside a copy of the group, keeping its clip and placement; a group with no picture or several is refused. Not yet: carrying the old soft mask over to the new picture, keeping the new picture's aspect ratio"
 
 [[feature]]
 id = "edit.image-rotate-free"
