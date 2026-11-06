@@ -44,12 +44,29 @@ struct Party {
     cert: Certificate,
 }
 
+fn name(cn: &str) -> Name {
+    Name::build(cn, "", "Chain Tests", "", "US")
+}
+
 /// A certificate for a fresh key, signed by `issuer` (or by itself).
 fn issue(cn: &str, issuer: Option<&Party>, valid: (u32, u32), extensions: &[Vec<u8>]) -> Party {
     let key = PrivateKey::generate_p256().unwrap();
-    let name = Name::build(cn, "", "Chain Tests", "", "US");
+    let name = name(cn);
     let signer = issuer.map_or(&key, |i| &i.key);
     let issuer_name = issuer.map_or(&name, |i| &i.name);
+    let cert = certify(&name, &key, (signer, issuer_name), 1 + cn.len() as u8, valid, extensions);
+    Party { name, key, cert }
+}
+
+/// A certificate naming `subject` for `key`'s public key, signed by `signer` as `issuer_name`.
+fn certify(
+    subject: &Name,
+    key: &PrivateKey,
+    (signer, issuer_name): (&PrivateKey, &Name),
+    serial: u8,
+    valid: (u32, u32),
+    extensions: &[Vec<u8>],
+) -> Certificate {
     let alg = signer.preferred_digest();
     let sig_alg = signer.signature_algorithm(alg);
     let exts: Vec<&[u8]> = extensions.iter().map(Vec::as_slice).collect();
@@ -59,11 +76,11 @@ fn issue(cn: &str, issuer: Option<&Party>, valid: (u32, u32), extensions: &[Vec<
         fields.push(der::explicit(0, &der::int(2)));
     }
     fields.extend([
-        der::uint(&[1 + cn.len() as u8]),
+        der::uint(&[serial]),
         sig_alg.clone(),
         issuer_name.raw.clone(),
         der::seq(&[&time(valid.0).encode(), &time(valid.1).encode()]),
-        name.raw.clone(),
+        subject.raw.clone(),
         key.public_key().spki(),
     ]);
     if !exts.is_empty() {
@@ -72,8 +89,7 @@ fn issue(cn: &str, issuer: Option<&Party>, valid: (u32, u32), extensions: &[Vec<
     let refs: Vec<&[u8]> = fields.iter().map(Vec::as_slice).collect();
     let tbs = der::seq(&refs);
     let signature = signer.sign(alg, &tbs).unwrap();
-    let cert = Certificate::parse(&der::seq(&[&tbs, &sig_alg, &der::bit_string(&signature)])).unwrap();
-    Party { name, key, cert }
+    Certificate::parse(&der::seq(&[&tbs, &sig_alg, &der::bit_string(&signature)])).unwrap()
 }
 
 const FOREVER: (u32, u32) = (2020, 2040);
@@ -361,4 +377,120 @@ fn an_issuer_with_an_unprocessed_critical_extension_does_not_vouch() {
     let l = end_entity("Leaf", &i);
     let pool = [i.cert.clone(), constrained_root.cert.clone()];
     assert_eq!(names(&build_chain(&l.cert, &pool, None)), ["Leaf", "Under Constrained Root", "Name Constrained Root"]);
+}
+
+fn ca_extensions() -> [Vec<u8>; 2] {
+    [basic_constraints(true, None), key_usage(KEY_CERT_SIGN)]
+}
+
+/// The last certificate of the chain from `leaf` through `pool`: where the anchor check looks.
+fn chain_end(leaf: &Certificate, pool: &[Certificate]) -> Option<Vec<u8>> {
+    build_chain(leaf, pool, None).last().map(|c| c.raw.clone())
+}
+
+/// Trusting a root trusts its name and key, however the certificate carrying them arrived
+/// (RFC 5280 §6.1.1(d), issue #6221). A timestamp authority's token can carry a copy of its root
+/// that an older root cross-signed; the chain built from the document's certificates reaches that
+/// copy first, and it is still the trusted root.
+#[test]
+fn a_cross_signed_copy_of_a_trusted_root_is_that_root() {
+    let g4 = issue("Root G4", None, FOREVER, &ca_extensions());
+    let older = issue("Older Root", None, FOREVER, &ca_extensions());
+    let cross = certify(&g4.name, &g4.key, (&older.key, &older.name), 99, FOREVER, &ca_extensions());
+    assert_ne!(cross.raw, g4.cert.raw, "another certificate: issuer, serial and signature differ");
+    let i = ca("Issuing CA", &g4, None);
+    // The scenario: with the document's certificates ahead of the trust store, as validation pools
+    // them, the chain ends at the cross-signed copy, not at the trusted certificate.
+    let leaf = end_entity("Timestamp Signer", &i);
+    let pool = [i.cert.clone(), cross.clone(), g4.cert.clone()];
+    assert_eq!(chain_end(&leaf.cert, &pool), Some(cross.raw.clone()));
+    let (status, details) = verdict(leaf, vec![i.cert.clone(), cross], &g4.cert);
+    assert_eq!(status, Status::Valid, "only the root itself is trusted, not the root that cross-signed it: {details:?}");
+    // The trusted certificate itself, with no copy embedded, still anchors.
+    let (status, details) = verdict(end_entity("Plain Signer", &i), vec![i.cert.clone()], &g4.cert);
+    assert_eq!(status, Status::Valid, "{details:?}");
+}
+
+/// A copy of the anchor that drops a critical extension the anchor carries (here name
+/// constraints, which PdfCraft does not process) does not stand in for the anchor: the
+/// restriction is part of what the user trusted.
+#[test]
+fn a_copy_that_drops_the_anchors_critical_extension_is_not_the_anchor() {
+    let name_constraints = ext("2.5.29.30", &der::seq(&[]));
+    let constrained = issue("Constrained Root", None, FOREVER, &[basic_constraints(true, None), key_usage(KEY_CERT_SIGN), name_constraints]);
+    let i = ca("Issuing CA", &constrained, None);
+    let (status, details) = verdict(end_entity("Honest Signer", &i), vec![i.cert.clone()], &constrained.cert);
+    assert_eq!(status, Status::Valid, "control, no copy: {details:?}");
+    let older = issue("Older Root", None, FOREVER, &ca_extensions());
+    let copy = certify(&constrained.name, &constrained.key, (&older.key, &older.name), 96, FOREVER, &ca_extensions());
+    let (status, details) = verdict(end_entity("Honest Signer", &i), vec![i.cert.clone(), copy], &constrained.cert);
+    assert_eq!(status, Status::Unknown, "a copy without the anchor's name constraints: {details:?}");
+}
+
+/// A certificate with a trusted root's name and another key is an impostor, however it got there.
+#[test]
+fn a_trusted_roots_name_with_another_key_is_not_trusted() {
+    let g4 = issue("Root G4", None, FOREVER, &ca_extensions());
+    let older = issue("Older Root", None, FOREVER, &ca_extensions());
+    // The same name (the same DER), a fresh key, vouched for by a root nobody trusts.
+    let impostor = issue("Root G4", Some(&older), FOREVER, &ca_extensions());
+    assert_eq!(impostor.cert.subject.raw, g4.cert.subject.raw);
+    let i = ca("Issuing CA", &impostor, None);
+    let leaf = end_entity("Impostor Signer", &i);
+    let pool = [i.cert.clone(), impostor.cert.clone(), g4.cert.clone()];
+    assert_eq!(chain_end(&leaf.cert, &pool), Some(impostor.cert.raw.clone()), "the chain reaches the impostor");
+    let (status, details) = verdict(leaf, vec![i.cert.clone(), impostor.cert.clone()], &g4.cert);
+    assert_eq!(status, Status::Unknown, "{details:?}");
+}
+
+/// A trusted root's key under another name is another identity: trust is in the name and the key.
+#[test]
+fn a_trusted_roots_key_under_another_name_is_not_trusted() {
+    let g4 = issue("Root G4", None, FOREVER, &ca_extensions());
+    let older = issue("Older Root", None, FOREVER, &ca_extensions());
+    let other = name("Some Other Root");
+    let renamed = certify(&other, &g4.key, (&older.key, &older.name), 98, FOREVER, &ca_extensions());
+    assert_eq!(renamed.public_key, g4.cert.public_key);
+    // An issuing CA the root's key signed under the other name.
+    let i_name = name("Issuing CA");
+    let i_key = PrivateKey::generate_p256().unwrap();
+    let i_cert = certify(&i_name, &i_key, (&g4.key, &other), 7, FOREVER, &ca_extensions());
+    let i = Party { name: i_name, key: i_key, cert: i_cert };
+    let leaf = end_entity("Renamed Signer", &i);
+    let pool = [i.cert.clone(), renamed.clone(), g4.cert.clone()];
+    assert_eq!(chain_end(&leaf.cert, &pool), Some(renamed.raw.clone()), "the chain reaches the renamed copy");
+    let (status, details) = verdict(leaf, vec![i.cert.clone(), renamed], &g4.cert);
+    assert_eq!(status, Status::Unknown, "{details:?}");
+}
+
+/// A forged "copy" of `anchor`: its name and key, with fields of the forger's choosing, signed by
+/// a throwaway key nobody has heard of. (Tests by tomcatt, from PR #6277 review.)
+fn forged_copy(anchor: &Party, valid: (u32, u32)) -> Certificate {
+    let nobody = PrivateKey::generate_p256().unwrap();
+    certify(&anchor.name, &anchor.key, (&nobody, &name("Nobody")), 97, valid, &ca_extensions())
+}
+
+/// A trusted end-entity certificate may not issue. An embedded "copy" saying `cA` must not change
+/// that.
+#[test]
+fn a_forged_copy_does_not_make_a_trusted_end_entity_a_ca() {
+    let colleague = issue("Colleague", None, FOREVER, &[basic_constraints(false, None), key_usage(DIGITAL_SIGNATURE)]);
+    let trusted = colleague.cert.clone();
+    let (status, details) = verdict(end_entity("Someone Else", &colleague), vec![], &trusted);
+    assert_eq!(status, Status::Unknown, "control, no forged copy: {details:?}");
+    let forged = forged_copy(&colleague, FOREVER);
+    let (status, details) = verdict(end_entity("Someone Else", &colleague), vec![forged], &trusted);
+    assert_eq!(status, Status::Unknown, "a forged copy made an end entity a CA: {details:?}");
+}
+
+/// An expired anchor stays expired, whatever dates a forged copy claims.
+#[test]
+fn a_forged_copy_does_not_extend_an_expired_anchor() {
+    let root = issue("Expired Root", None, (2000, 2010), &ca_extensions());
+    let trusted = root.cert.clone();
+    let (status, details) = verdict(end_entity("Late Signer", &root), vec![], &trusted);
+    assert_eq!(status, Status::Unknown, "control, no forged copy: {details:?}");
+    let forged = forged_copy(&root, FOREVER);
+    let (status, details) = verdict(end_entity("Late Signer", &root), vec![forged], &trusted);
+    assert_eq!(status, Status::Unknown, "a forged copy revived an expired anchor: {details:?}");
 }
