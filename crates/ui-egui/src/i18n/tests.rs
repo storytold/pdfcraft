@@ -982,6 +982,33 @@ fn lithuanian_is_registered_and_persists() {
 }
 
 #[test]
+fn georgian_is_registered_and_persists() {
+    let ka = Lang::from_code("ka").expect("ka registered");
+    assert_eq!(ka.name(), "ქართული");
+    assert_eq!(normalize_pref("KA"), Some("ka"));
+    for tag in ["ka", "ka-GE", "ka_GE.UTF-8", "KA-ge"] {
+        assert_eq!(lang_from_tag(tag), Some(ka), "{tag}");
+    }
+    let mut app = crate::PdfCraftApp::default();
+    app.set_option("language", "KA").unwrap();
+    assert_eq!(app.language, "ka");
+    let mut restored = crate::PdfCraftApp::default();
+    restored.restore(&app.persist());
+    assert_eq!(restored.language, "ka");
+}
+
+#[test]
+fn georgian_titles_stay_uncapitalised() {
+    set_current(Lang::from_code("ka").expect("ka registered"));
+    assert_eq!(upper_label("Advanced"), "დამატებითი");
+    // Section titles arrive already translated (`section_title(ui, tl!(…))`).
+    assert_eq!(upper_label("დამატებითი"), "დამატებითი");
+    // A label with no Georgian row is still English and keeps the English rule.
+    assert_eq!(upper_label("Untranslated title"), "UNTRANSLATED TITLE");
+    set_current(Lang::EN);
+}
+
+#[test]
 fn norwegian_bokmal_is_registered_and_persists() {
     needs_catalogs!();
     let nb = Lang::from_code("nb").expect("nb registered");
