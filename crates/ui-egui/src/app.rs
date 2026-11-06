@@ -211,6 +211,7 @@ impl PdfCraftApp {
             action_files_override: None,
             pdfa: Default::default(),
             compare_old: None,
+            compare_pages: String::new(),
             compare: None,
             js_console: Default::default(),
             doc_js: Default::default(),
