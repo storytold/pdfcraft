@@ -8,6 +8,7 @@
 > **2026-11-03, M7 / #5835 review:** active image crops retain secondary clicks over overlapping images; crop controls share measured layout with hit detection. Rotation, handle and page-edge regressions added; focused tests, scoped Clippy, formatting, layering and asset checks passed locally. Estimates unchanged.
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M2, PR #4742 integrated local tree against main 0cba87ae: R3 Windows locked dependency fetch succeeded, 484 tests passed, zero failed, strict Clippy passed; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 
