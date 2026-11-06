@@ -1,33 +1,75 @@
 //! Literal search in normalized page text, retaining the original glyph owners.
+//!
+//! The page text is read as characters, each owned by the glyph it came from: words and lines are
+//! separated by one space, and a Latin compatibility ligature (U+FB00–U+FB06) reads as its letters
+//! in the page and in the query, so "office" finds "o\u{FB03}ce". A word divided by a hyphen at
+//! the end of a line is also found whole: where a line ends in a hyphen between two letters, the
+//! text is searched a second time without the hyphen and the line break ("example" finds
+//! "exam-" + "ple") and a third time with the hyphen but without the break ("exam-ple"). A hit in
+//! any reading counts; where hits from different readings overlap, the one that starts first is kept
+//! (the longer on a tie).
 use super::{PageText, fold_case};
 use std::ops::Range;
+
+/// How a line ending in a hyphen between two letters is read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Hyphen {
+    /// As written: the hyphen, then a line break (a space).
+    Written,
+    /// One word: neither the hyphen nor the break.
+    Joined,
+    /// A hyphenated compound: the hyphen, but no break.
+    Kept,
+}
+
+/// The letters of a Latin compatibility ligature (U+FB00–U+FB06), their compatibility decomposition.
+fn ligature(c: char) -> Option<&'static str> {
+    match c {
+        '\u{FB00}' => Some("ff"),
+        '\u{FB01}' => Some("fi"),
+        '\u{FB02}' => Some("fl"),
+        '\u{FB03}' => Some("ffi"),
+        '\u{FB04}' => Some("ffl"),
+        '\u{FB05}' | '\u{FB06}' => Some("st"),
+        _ => None,
+    }
+}
+
+/// `s` with each Latin compatibility ligature written as its letters. Nothing else is normalised.
+fn letters(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match ligature(c) {
+            Some(l) => out.push_str(l),
+            None => out.push(c),
+        }
+    }
+    out
+}
+
+/// A hyphen that can divide a word at a line end: HYPHEN-MINUS, SOFT HYPHEN (ISO 32000-2
+/// §14.8.2.3) and HYPHEN.
+fn is_hyphen(c: char) -> bool {
+    matches!(c, '-' | '\u{AD}' | '\u{2010}')
+}
+
+/// Whether a line break separates glyph `i` from the glyph before it.
+fn breaks_before(page: &PageText, i: usize) -> bool {
+    i.checked_sub(1).and_then(|previous| page.line_of.get(previous)).zip(page.line_of.get(i)).is_some_and(|(a, b)| a != b)
+}
 
 pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: bool, limit: usize) -> Vec<Range<usize>> {
     if limit == 0 {
         return Vec::new();
     }
-    let fold = |s: &str| if sensitive { s.to_owned() } else { fold_case(s) };
+    let fold = |s: &str| if sensitive { letters(s) } else { fold_case(&letters(s)) };
     let needle: Vec<char> = fold(query).split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
     if needle.is_empty() {
         return Vec::new();
     }
-    let mut chars: Vec<(char, usize)> = Vec::new();
-    for (i, glyph) in page.glyphs.iter().enumerate() {
-        let line_break = i.checked_sub(1).and_then(|previous| page.line_of.get(previous)).zip(page.line_of.get(i)).is_some_and(|(a, b)| a != b);
-        let gap = page.space_before.get(i).copied().unwrap_or(false) || line_break;
-        if i > 0 && gap && chars.last().is_some_and(|c| c.0 != ' ') {
-            chars.push((' ', i));
-        }
-        for c in fold(&glyph.text).chars() {
-            let c = if c.is_whitespace() { ' ' } else { c };
-            if c != ' ' || chars.last().is_none_or(|last| last.0 != ' ') {
-                chars.push((c, i));
-            }
-        }
-    }
-    if needle.len() > chars.len() {
-        return Vec::new();
-    }
+    let texts: Vec<String> = page.glyphs.iter().map(|g| fold(&g.text)).collect();
+    let divided: Vec<bool> = (0..texts.len()).map(|i| divides(page, &texts, i)).collect();
+    let readings: &[Hyphen] = if divided.contains(&true) { &[Hyphen::Written, Hyphen::Joined, Hyphen::Kept] } else { &[Hyphen::Written] };
     // KMP reuses a matched prefix instead of comparing a long query again at every position.
     // The table is bounded by the page's already materialized character count.
     let mut prefix = vec![0; needle.len()];
@@ -38,11 +80,91 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
             *slot = matched;
         }
     }
-    matched = 0;
+    let mut hits: Vec<(Range<usize>, usize)> = Vec::new();
+    for (r, &reading) in readings.iter().enumerate() {
+        let found = search(&characters(page, &texts, &divided, reading), &needle, &prefix, whole_words, limit);
+        hits.extend(found.into_iter().map(|hit| (hit, r)));
+    }
+    if readings.len() == 1 {
+        return hits.into_iter().map(|(hit, _)| hit).collect();
+    }
+    // Each reading's hits are in order and apart in its characters, though two can share a glyph
+    // ("f" twice in an "ffi" glyph); they are all kept. Across readings, the earliest start wins
+    // (the longer on a tie): a hit is left out where it overlaps one kept from another reading.
+    // The sort is stable, so the earlier reading wins an exact tie.
+    hits.sort_by(|a, b| a.0.start.cmp(&b.0.start).then(b.0.end.cmp(&a.0.end)));
+    // The furthest end of the hits kept from each reading. Hits come in order of start, so one
+    // overlaps an earlier kept hit exactly when it starts before that hit's end.
+    let mut ends = [0usize; 3];
+    let mut kept: Vec<Range<usize>> = Vec::new();
+    for (hit, r) in hits {
+        if ends.iter().enumerate().all(|(other, &end)| other == r || hit.start >= end) {
+            if let Some(end) = ends.get_mut(r) {
+                *end = (*end).max(hit.end);
+            }
+            kept.push(hit);
+            if kept.len() == limit {
+                break;
+            }
+        }
+    }
+    kept
+}
+
+/// Whether glyph `i` ends its line with a hyphen that follows a letter of its word, and the next
+/// line starts with a letter. `texts` are the glyphs' folded texts.
+fn divides(page: &PageText, texts: &[String], i: usize) -> bool {
+    let Some(text) = texts.get(i) else { return false };
+    let mut back = text.chars().rev();
+    if !back.next().is_some_and(is_hyphen) {
+        return false;
+    }
+    let before = match back.next() {
+        Some(c) => Some(c),
+        // A hyphen glyph of its own: the letter is the end of the glyph before, on its line with no word gap.
+        None if !page.space_before.get(i).copied().unwrap_or(false) && !breaks_before(page, i) => {
+            i.checked_sub(1).and_then(|p| texts.get(p)).and_then(|t| t.chars().next_back())
+        }
+        None => None,
+    };
+    let Some(next) = i.checked_add(1) else { return false };
+    before.is_some_and(char::is_alphabetic)
+        && breaks_before(page, next)
+        && texts.get(next).and_then(|t| t.chars().next()).is_some_and(char::is_alphabetic)
+}
+
+/// The page's characters in one `reading`, each with the glyph it came from.
+fn characters(page: &PageText, texts: &[String], divided: &[bool], reading: Hyphen) -> Vec<(char, usize)> {
+    let mut chars: Vec<(char, usize)> = Vec::new();
+    for (i, text) in texts.iter().enumerate() {
+        let after_divide = reading != Hyphen::Written && i.checked_sub(1).and_then(|p| divided.get(p)).copied().unwrap_or(false);
+        let gap = page.space_before.get(i).copied().unwrap_or(false) || (breaks_before(page, i) && !after_divide);
+        if i > 0 && gap && chars.last().is_some_and(|c| c.0 != ' ') {
+            chars.push((' ', i));
+        }
+        // The divided glyph's last character is its hyphen.
+        let last =
+            if reading == Hyphen::Joined && divided.get(i).copied().unwrap_or(false) { text.chars().count().saturating_sub(1) } else { usize::MAX };
+        for c in text.chars().take(last) {
+            let c = if c.is_whitespace() { ' ' } else { c };
+            if c != ' ' || chars.last().is_none_or(|last| last.0 != ' ') {
+                chars.push((c, i));
+            }
+        }
+    }
+    chars
+}
+
+/// Non-overlapping hits of `needle` (with its KMP `prefix` table) in `chars`, as glyph ranges.
+fn search(chars: &[(char, usize)], needle: &[char], prefix: &[usize], whole_words: bool, limit: usize) -> Vec<Range<usize>> {
+    if needle.len() > chars.len() {
+        return Vec::new();
+    }
+    let mut matched = 0;
     let word = |i: Option<usize>| i.and_then(|i| chars.get(i)).is_some_and(|c| c.0.is_alphanumeric());
     let mut hits = Vec::new();
     for (i, &(c, owner)) in chars.iter().enumerate() {
-        matched = advance(&needle, &prefix, matched, c);
+        matched = advance(needle, prefix, matched, c);
         if matched != needle.len() {
             continue;
         }
@@ -74,4 +196,15 @@ fn advance(needle: &[char], prefix: &[usize], mut matched: usize, c: char) -> us
         matched = prefix.get(matched - 1).copied().unwrap_or_default();
     }
     if needle.get(matched) == Some(&c) { matched.saturating_add(1) } else { 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::letters;
+
+    #[test]
+    fn ligatures_read_as_their_letters() {
+        assert_eq!(letters("o\u{FB03}ce \u{FB00}\u{FB01}\u{FB02}\u{FB04}\u{FB05}\u{FB06}"), "office fffiflfflstst");
+        assert_eq!(letters("\u{FB13}é\u{FF21}\u{2460}"), "\u{FB13}é\u{FF21}\u{2460}", "nothing else is normalised");
+    }
 }
