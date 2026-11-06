@@ -28,7 +28,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 |---|---|---|---|
 | Home view (recent files, recommended tools) | yes | yes | shipped |
 | All tools pane, tool sets | yes | yes, with milestone badges | shipped |
-| Quick-action toolbar, customisable | yes | customizable floating/docked hotbar, adjustable size, persistent multi-select picker | partial (`view.customize-quick-tools`; no shortcut reordering) |
+| Quick-action toolbar, customisable | yes | customizable floating/docked hotbar, adjustable size, persistent multi-select picker; Preferences chooses the tools All tools, ⌘K and Home list | partial (`view.customize-quick-tools`; no shortcut reordering) |
 | Command search | "Search tools" | command palette (⌘K), matches translated and English labels | shipped |
 | Document tabs | yes | yes, with unsaved marker | shipped |
 | Multiple windows, drag a tab out | yes | no | planned |
@@ -80,7 +80,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Field Properties (General, Appearance, Position, Options, Actions, Format, Validate, Calculate, Signed) | yes | all but Signed | partial |
 | Comment properties and properties bar | yes | yes; a text box's text, border and fill and a shape's line and fill each take an opacity of their own (Acrobat: one per comment); text boxes and typed text take an oval or a circle for their border (Acrobat: a rectangle) | shipped |
 | Select several comments; copy and paste comments between documents | yes | yes: ⌘/Ctrl-click adds, Delete, a drag, Properties and Colour act on all, ⌘C/⌘V as XFDF (also across PdfCraft processes) | shipped |
-| Preferences | ≈ 20 pages | Interface language, Documents and view, Identity, Fill & Sign, JavaScript | partial (gap 19) |
+| Preferences | ≈ 20 pages | Interface language, Tools shown in All tools, Documents and view, Identity, Fill & Sign, JavaScript | partial (gap 19) |
 
 ## Revision history
 
@@ -88,6 +88,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 |---|---|---|
 | 2026-10-24 | minor | → / ← scroll a page wider than the window sideways before turning it, by the current page's or spread's edges in continuous view; ⌘→ / ⌘← turn at once |
 | 2026-10-24 | minor | Comment Properties sets a text box's text, border and fill opacity and a shape's line and fill opacity each on its own (Acrobat: one per comment); Make Properties Default carries them into the tool |
+| 2026-10-22 | minor | Preferences ▸ Tools shown in All tools: a preset or a checkbox per tool hides it from All tools, ⌘K and Home; menus, mode tabs and shortcuts keep it (`view.customize-quick-tools` partial) |
 | 2026-10-21 | minor | Pages inspector thumbnail sizing (#3808), separate from page and Organize zoom; view setting retained on reload and exposed through UI control. Not persisted between sessions. |
 | 2026-10-15 | minor | A selected field nudges with the arrow keys in Prepare a form: a point, Shift ten points, one undo step per press (#2608) |
 | 2026-10-14 | minor | Full screen shows one fitted page (or spread) at a time on black with click and key paging, as Acrobat's Full Screen Mode (#379, #1459, #1353) |

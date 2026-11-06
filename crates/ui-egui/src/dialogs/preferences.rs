@@ -516,6 +516,12 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     });
     ui.add_space(12.0);
 
+    // Card: which tools All tools, the palette and Home list.
+    preference_card(ui, t, tl!("Tools shown in All tools"), Some("layout-grid"), &mut ctx, |ui, ctx| {
+        crate::tool_visibility::preferences_section(ui, app, t, ctx);
+    });
+    ui.add_space(12.0);
+
     // Card 3: Documents and View
     let title3 = tl!("Documents and view");
     preference_card(ui, t, title3, Some("file-text"), &mut ctx, |ui, ctx| {
