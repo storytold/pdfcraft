@@ -287,6 +287,8 @@ impl Session {
     /// with its number, author, type, date, text and replies, grouped by page.
     pub fn summarize_comments(&self, id: DocId, sort: SummarySort) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        // The summary copies the comments' text out into a new document.
+        doc.check_copying()?;
         let text = comment_summary(&doc.name, &doc.info.annotations, sort);
         self.create_report(&format!("Summary of Comments on {}", doc.name), &text)
     }
