@@ -369,6 +369,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-10-20 (M5, arrow keys move comments):** With a comment selected, the arrow keys move it a screen pixel and ⌘/Ctrl or Shift and an arrow ten, instead of scrolling the view or turning the page; up is up on screen at any zoom and rotation, and each press is one undo step. Text markup and locked comments stay put. Estimates unchanged.
 
+- **2026-10-20 (M8, #3647):** Apply prunes fully removed tiling patterns, then checks retained pattern resources for text, images and unreadable content before reporting success. Shared patterns, Form-owned and inherited patterns, and cells kept by another page cause an atomic refusal when safe removal cannot be shown. Synthetic saved-file and automation regressions cover refusal, preserved marks and undo, and vector-only controls. Estimates unchanged.
+
 - **2026-10-20 (M1, PR #1143 review):** Repair-aware dictionary/preflight edits and snapshot restoration preserve both accepted generations of a damaged live slot. Such edits use the existing full-save fallback; classic and packed rewrites coalesce aliases so page-tree parent links retain one object identity. Explicit generation replacement remains single-generation. Materialized xref diagnostics inspect retained primary and hybrid rows before folding, retaining the 256-object cap plus summary and discarding abandoned-index notes. Synthetic red/green controls cover preflight, undo restoration, equal values, explicit narrowing, encryption packing and four save variants. Estimates unchanged.
 
 - **2026-10-19 (M14, #3373):** The main menu and its long submenus scroll in short windows, keeping their commands reachable. Estimates unchanged.
