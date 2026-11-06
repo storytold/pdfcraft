@@ -8,6 +8,7 @@
 > **2026-11-03, M7 / #5835 review:** active image crops retain secondary clicks over overlapping images; crop controls share measured layout with hit detection. Rotation, handle and page-edge regressions added; focused tests, scoped Clippy, formatting, layering and asset checks passed locally. Estimates unchanged.
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged)
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-01 · **Change:** minor (M7, #3215 partial: consolidated scope and regression evidence for exact Tc/Tz/TJ preservation; unsupported edits refuse atomically; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 
@@ -323,6 +324,7 @@ Estimates unchanged.
 | 2026-10-31 | patch | M2, PR #4172: eight GBK font/alias cases compare exact pixels with independent installed-face and explicit-Unicode references; wrong-glyph and wrong-family negative controls fail. Estimates unchanged. |
 | 2026-10-31 | patch | M2, PR #4172: integrate main fa5f9f8c, preserve both raster test groups and restore explicit display_config imports; display-only CJK policy and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
+| 2026-11-01 | minor | M7 #3215 partial: consolidated exact Tc/Tz/TJ preservation, save/reopen and atomic-refusal regression evidence. Prior implementation history remains in git; scope and estimates unchanged. |
 | 2026-10-24 | minor | M11: the PDF Optimizer and Reduce File Size store Group 3 fax images as Group 4 when smaller (`Document::fax_params`), and pack eight-bit `DeviceRGB` of only black and white (as grey) and indexed images of 2, 4 or 8 bits that use only palette entries 0 and 1 (keeping the palette) to one bit, so Monochrome Images compresses and downsamples them. Estimates unchanged. |
 | 2026-10-24 | minor | M11: monochrome downsampling: the PDF Optimizer and Reduce File Size average black-and-white images (1-bit, CCITT fax, eight-bit black-and-white grey) above 450 ppi down to 300 ppi, by area with ties black, as Monochrome Images ▸ Downsample to and `doc_optimize` `mono: { downsample, ppi, above_ppi }`; CCITT decoding moves into `pdfcraft-filters` (`decode_ccitt`) behind `Document::decoded_image`. Estimates unchanged. |
 | 2026-10-24 | minor | M11: Create PDF stores pictures of only black and white at one bit (Group 4 or Flate, whichever is smaller) instead of eight-bit grey; the optimizer packs eight-bit black-and-white grey images to one bit before Monochrome Images compresses them, unless the grey settings make them smaller, as they can a dithered scan, soft mask counted; Export ▸ Images decodes CCITT fax images. Estimates unchanged. |
@@ -444,3 +446,9 @@ Estimates unchanged.
 ## Pages sidebar keyboard refresh (2026-10-30)
 
 PR #2133 retains document-local Pages sidebar focus for Ctrl/Cmd+A and Escape after the UI module split. The selection does not navigate. The focused regression is in `crates/ui-egui/tests/it/view.rs`; current-head hosted validation is pending. Feature counts and estimates are unchanged.
+
+## #3215 spacing-preservation scope
+
+#3215 (Tc/Tz subset; tested upright Latin line/paragraph edits): later visible runs retain character spacing, horizontal scale and supported sequential TJ kerning after earlier-word edits and save/reopen; complete rotated, Hebrew and visual-order Indic editing is not claimed by these tests; rendering-mode changes remain outside this fix. The #3215 refresh integrates main `e2615187` and retains borrowed Form resources, its public subset-name helper, current paragraph-session snapshots, bounded decoding, paint isolation and fallback batching. Exact rows isolate compatible paint outside text objects and refuse incompatible paint; TJ mapping uses the drawn final operand.
+
+Integration update 2026-11-06 (PR #3825): main `9f04accc` adds OCR Type3 helper exports alongside the spacing imports. Existing exact row BT/ET isolation, soft-mask anchors and delayed underlines are unchanged. Scope and estimates remain unchanged.

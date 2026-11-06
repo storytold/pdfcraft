@@ -5,7 +5,7 @@
 
 use super::{
     BlockStyle, Document, EditError, LineEdit, MAX_TYPE3_GLYPHS, TextBlock, TextEditLayout, TextLine, group_blocks, layout_draft, rewrite_block_from,
-    text_lines,
+    text_lines_with_runs,
 };
 
 /// One paragraph being edited: the document as it was opened, and the page's lines then.
@@ -15,18 +15,19 @@ pub struct TextSession {
     page: usize,
     block: usize,
     lines: Vec<TextLine>,
+    runs: Vec<Vec<TextLine>>,
     source: TextBlock,
 }
 
 impl TextSession {
     /// Opens paragraph `block` on `page` (both 0-based) of `doc`.
     pub fn open(doc: &Document, page: usize, block: usize) -> Result<Self, EditError> {
-        let lines = text_lines(doc, page)?;
+        let (lines, runs) = text_lines_with_runs(doc, page, true)?;
         let source = group_blocks(&lines)
             .get(block)
             .cloned()
             .ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
-        Ok(Self { base: doc.clone(), base_state: doc.read_state(), page, block, lines, source })
+        Ok(Self { base: doc.clone(), base_state: doc.read_state(), page, block, lines, runs, source })
     }
 
     /// The paragraph as it was when the session opened.
@@ -49,7 +50,7 @@ impl TextSession {
 
     /// Lays a draft out without writing it: the rewrite Apply runs, on a copy of the opened document.
     pub fn layout(&self, text: &str, style: &BlockStyle) -> Result<TextEditLayout, EditError> {
-        layout_draft(&self.base, self.page, &self.lines, &self.source, self.block, text, style)
+        layout_draft(&self.base, self.page, (&self.lines, &self.runs), &self.source, self.block, text, style)
     }
 
     /// Writes the draft into `doc`, which must still be the document the session was opened on.
@@ -67,6 +68,6 @@ impl TextSession {
         if !self.is_current(doc) {
             return Err(EditError::Invalid("the paragraph changed while it was being edited".into()));
         }
-        rewrite_block_from(doc, self.page, self.lines.clone(), self.block, text, style, max_glyphs)
+        rewrite_block_from(doc, self.page, (self.lines.clone(), self.runs.clone()), self.block, text, style, max_glyphs)
     }
 }
