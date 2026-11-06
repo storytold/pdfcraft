@@ -286,6 +286,7 @@ pub(crate) fn info(d: &Document) -> Value {
     if let Some(s) = d.security_summary() {
         security["opened_as_owner"] = json!(s.owner);
     }
+    let page_boxes = d.page_boxes();
     json!({
         "document": summary(d),
         "pdf_version": i.pdf_version,
@@ -310,9 +311,22 @@ pub(crate) fn info(d: &Document) -> Value {
         // What was rewritten from, or could not be written to, the XFA data.
         "xfa_warnings": d.xfa_warnings,
         "security": security,
-        "pages": i.pages.iter().enumerate().map(|(n, p)| json!({
-            "page": n + 1, "label": p.label, "width": p.width, "height": p.height, "rotation": p.rotation,
-        })).collect::<Vec<_>>(),
+        "pages": i.pages.iter().enumerate().map(|(n, p)| {
+            // The five page boxes (ISO 32000-2 §14.11.2), effective values (a missing box is its
+            // parent's), in the tools' convention: points from the top-left of the displayed
+            // page, so a rect given to page_set_box reads back unchanged. The crop box is the
+            // displayed page itself, [0, 0, width, height]; the media box can reach past it, so
+            // its coordinates may be negative. `boxes_user` is the same five boxes in PDF user
+            // space ([x0, y0, x1, y1], y up, unrotated), as the file stores them, for prepress
+            // checks. Both null when the document can't be read for editing.
+            let named = |f: &dyn Fn([f64; 4]) -> Value, b: &[[f64; 4]; 5]| json!({ "media": f(b[0]), "crop": f(b[1]), "bleed": f(b[2]), "trim": f(b[3]), "art": f(b[4]) });
+            let b = page_boxes.get(n);
+            json!({
+                "page": n + 1, "label": p.label, "width": p.width, "height": p.height, "rotation": p.rotation,
+                "boxes": b.map(|b| named(&|r| json!(view_rect(i, n, r.map(|v| v as f32))), b)),
+                "boxes_user": b.map(|b| named(&|r| json!(r), b)),
+            })
+        }).collect::<Vec<_>>(),
         "outline": outline(&i.outline),
         "outline_more": i.outline_more,
         // Rectangles use the tools' convention (top-left of the displayed page, like
