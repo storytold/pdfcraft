@@ -39,6 +39,7 @@ where
     T: ObjectLike<'a> + Debug + Clone,
     U: ObjectLike<'a> + Debug + Clone,
 {
+    const GROUP: bool = true;
 }
 
 impl<'a, T, U, V> Readable<'a> for (T, U, V)
@@ -78,6 +79,7 @@ where
     U: ObjectLike<'a> + Debug + Clone,
     V: ObjectLike<'a> + Debug + Clone,
 {
+    const GROUP: bool = true;
 }
 
 impl<'a, T, U, V, W> Readable<'a> for (T, U, V, W)
@@ -122,6 +124,7 @@ where
     V: ObjectLike<'a> + Debug + Clone,
     W: ObjectLike<'a> + Debug + Clone,
 {
+    const GROUP: bool = true;
 }
 
 impl<'a, T, U, V, W, X> Readable<'a> for (T, U, V, W, X)
@@ -171,4 +174,5 @@ where
     W: ObjectLike<'a> + Debug + Clone,
     X: ObjectLike<'a> + Debug + Clone,
 {
+    const GROUP: bool = true;
 }
