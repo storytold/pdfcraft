@@ -384,7 +384,8 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         let blocks = scope.layer_blocks;
         let glyphs = scope.report.glyphs;
         let retained_for_page = std::mem::take(&mut scope.retained_off_layers);
-        drop(scope);
+        // What the walk leaves of the page's allowance, the cleanups below spend.
+        let mut budget = scope.into_budget();
         total += out.residue + blocks + glyphs;
         retained_off_layers.extend(retained_for_page);
         if !write {
@@ -418,14 +419,14 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
                 let mut xo = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
                 // A full save keeps whatever is still referenced: unlink the originals this page no
                 // longer draws so the removed form or image bytes cannot survive in the saved file.
-                crate::interp::prune(doc, &mut xo, &out.replaced, &page_content)?;
+                crate::interp::prune(doc, &mut budget, &mut xo, &out.replaced, &page_content)?;
                 for (n, r) in &out.xobjects {
                     xo.set(n.clone(), Object::Ref(*r));
                 }
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
-            retired_properties.extend(crate::interp::prune_properties(doc, &mut res, &page_content)?);
-            crate::type3::prune_type3_from_resources(doc, &mut res, &page_content)?;
+            retired_properties.extend(crate::interp::prune_properties(doc, &mut budget, &mut res, &page_content)?);
+            crate::type3::prune_type3_from_resources(doc, &mut budget, &mut res, &page_content)?;
             doc.update_dict(page.obj, |d| {
                 d.set(b"Contents".to_vec(), Object::Array(new_list));
                 d.set(b"Resources".to_vec(), Object::Dict(res));

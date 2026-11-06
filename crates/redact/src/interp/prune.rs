@@ -1,22 +1,23 @@
 use super::{
-    CosError, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope, is_vertical, num,
-    overlaps, page_streams, res_dict,
+    CosError, DecodeBudget, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope,
+    is_vertical, num, overlaps, page_streams, res_dict,
 };
 
 /// Drop every `replaced` name of the XObject resources `xo` that the rewritten `content` no
 /// longer draws, so a full-rewrite save stops reaching the original image or form it named. A
 /// name still drawn is kept: by a surviving `Do` (the same image shown again outside a mark), or
-/// by a form without /Resources of its own, which draws through `xo` too. Fails, as the cleanup of
-/// the fonts and properties these forms draw with does, when that can't be told: `Stream::decoded`
-/// refuses such a form (an image codec or a /Filter it can't run, say, or more than 1 GiB), the
-/// walk passes 2,000,000 operators, or the parser can't read all of such a form or of `content`.
+/// by a form without /Resources of its own, which draws through `xo` too. Such forms are read
+/// within `budget`, what is left of the page's allowance ([`resource_ops`]). Fails, as the cleanup
+/// of the fonts and properties these forms draw with does, when that can't be told: such a form
+/// doesn't decode (an image codec or a /Filter it can't run, say) or runs past `budget`, the walk
+/// passes 2,000,000 operators, or the parser can't read all of such a form or of `content`.
 /// Corrupt data in such a form is read, tolerantly, up to the damage, which may be nothing.
-pub(crate) fn prune(doc: &Document, xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) -> Result<(), CosError> {
+pub(crate) fn prune(doc: &Document, budget: &mut DecodeBudget, xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) -> Result<(), CosError> {
     if replaced.is_empty() {
         return Ok(());
     }
     let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(xo.clone()))]);
-    let ops = resource_ops(doc, &res, content)?;
+    let ops = resource_ops(doc, budget, &res, content)?;
     let drawn: HashSet<&[u8]> = ops.iter().filter(|op| op.is("Do")).filter_map(Op::last_name).collect();
     for n in replaced {
         if !drawn.contains(n.as_slice()) {
@@ -162,7 +163,8 @@ fn prune_retired_properties(doc: &Document, res: &mut Dict, names: &[Vec<u8>], c
     }
     let mut used = HashSet::new();
     for content in contents {
-        for op in resource_ops(doc, res, content)? {
+        // Each is one page's content or one form's, with the allowance of a page.
+        for op in resource_ops(doc, &mut DecodeBudget::page(), res, content)? {
             if matches!(op.op.as_slice(), b"BDC" | b"DP")
                 && let Some(name) = op.name(1)
             {
@@ -275,10 +277,11 @@ pub(super) fn clip_out(rects: &[[f64; 4]], ctm: &Matrix, around: [f64; 4]) -> Op
 
 /// The operators of `content`, and of every form without /Resources of its own that it draws
 /// through `res`, nested ones too: what draws with these resources. Each such form is read once,
-/// with its `/DecodeParms` given by reference. An error when that can't all be read: the parser
-/// can't read all of `content` or of such a form, the walk passes 2,000,000 operators, or such a
-/// form doesn't decode.
-pub(crate) fn resource_ops(doc: &Document, res: &Dict, content: &[Vec<u8>]) -> Result<Vec<Op>, CosError> {
+/// with its `/DecodeParms` given by reference, its decoded bytes charged to `budget`, so the
+/// cleanups of one page that walk the same forms spend one allowance between them. An error
+/// when that can't all be read: the parser can't read all of `content` or of such a form, the walk
+/// passes 2,000,000 operators, or such a form doesn't decode or runs past `budget`.
+pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict, content: &[Vec<u8>]) -> Result<Vec<Op>, CosError> {
     let parsed = Pieces::join(content).parse();
     if parsed.skipped > 0 || parsed.ops.len() > 2_000_000 {
         return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully read the content that uses these resources".into() });
@@ -296,7 +299,7 @@ pub(crate) fn resource_ops(doc: &Document, res: &Dict, content: &[Vec<u8>]) -> R
             && s.dict.name(b"Subtype") == Some(b"Form")
             && s.dict.get(b"Resources").is_none_or(|r| doc.resolve(r).as_dict().is_none())
         {
-            let parsed = pdfcraft_content::parse(&doc.with_direct_parms(s).decoded()?);
+            let parsed = pdfcraft_content::parse(&budget.decode(&doc.with_direct_parms(s))?);
             if seen.len() > 2_000_000 || ops.len().saturating_add(parsed.ops.len()) > 2_000_000 || parsed.skipped > 0 {
                 return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect inherited form resources".into() });
             }
@@ -307,13 +310,13 @@ pub(crate) fn resource_ops(doc: &Document, res: &Dict, content: &[Vec<u8>]) -> R
     Ok(ops)
 }
 
-pub(crate) fn prune_properties(doc: &Document, res: &mut Dict, content: &[Vec<u8>]) -> Result<Vec<Object>, CosError> {
+pub(crate) fn prune_properties(doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<Vec<Object>, CosError> {
     let mut properties = res_dict(doc, res, b"Properties");
     if properties.is_empty() {
         return Ok(Vec::new());
     }
     let mut retired = Vec::new();
-    let ops = resource_ops(doc, res, content)?;
+    let ops = resource_ops(doc, budget, res, content)?;
     let names: Vec<Vec<u8>> = properties.iter().map(|(n, _)| n.to_vec()).collect();
     for name in names {
         if !ops.iter().any(|op| matches!(op.op.as_slice(), b"BDC" | b"DP") && op.name(1) == Some(&name))
@@ -330,8 +333,8 @@ pub(crate) fn prune_properties(doc: &Document, res: &mut Dict, content: &[Vec<u8
     Ok(retired)
 }
 
-pub(super) fn prune_form_resources(doc: &Document, res: &mut Dict, content: &[Vec<u8>]) -> Result<(), CosError> {
-    let ops = resource_ops(doc, res, content)?;
+pub(super) fn prune_form_resources(doc: &Document, budget: &mut DecodeBudget, res: &mut Dict, content: &[Vec<u8>]) -> Result<(), CosError> {
+    let ops = resource_ops(doc, budget, res, content)?;
     let mut xo = res_dict(doc, res, b"XObject");
     let names: Vec<Vec<u8>> = xo.iter().map(|(n, _)| n.to_vec()).collect();
     for name in names {

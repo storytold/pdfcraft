@@ -1746,7 +1746,7 @@ fn the_pages_check_does_not_follow_a_form_with_resources_of_its_own() {
         stream(image, b"p"),
     ]);
     let mut xo = Dict::from_iter([(b"FmOwn".to_vec(), Object::Ref(ObjRef::new(3, 0))), (b"Im1".to_vec(), Object::Ref(ObjRef::new(5, 0)))]);
-    crate::interp::prune(&doc, &mut xo, &[b"Im1".to_vec()], &[b"/FmOwn Do".to_vec()]).unwrap();
+    crate::interp::prune(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &mut xo, &[b"Im1".to_vec()], &[b"/FmOwn Do".to_vec()]).unwrap();
     assert!(!xo.contains(b"Im1") && xo.contains(b"FmOwn"), "{xo:?}");
 }
 
@@ -1757,7 +1757,11 @@ fn what_content_draws_through_its_resources_is_read_up_to_two_million_operators(
     let doc = Document::new_empty();
     for (ops, read) in [(2_000_000, true), (2_000_001, false)] {
         let content = b"n ".repeat(ops);
-        assert_eq!(crate::interp::resource_ops(&doc, &Dict::new(), &[content]).is_ok(), read, "{ops} operators");
+        assert_eq!(
+            crate::interp::resource_ops(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &Dict::new(), &[content]).is_ok(),
+            read,
+            "{ops} operators"
+        );
     }
     // The content's own `/Fm Do` is one of them.
     for (ops, read) in [(1_999_999, true), (2_000_000, false)] {
@@ -1767,7 +1771,11 @@ fn what_content_draws_through_its_resources_is_read_up_to_two_million_operators(
             stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b"n ".repeat(ops)),
         ]);
         let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Fm".to_vec(), Object::Ref(ObjRef::new(3, 0)))])))]);
-        assert_eq!(crate::interp::resource_ops(&doc, &res, &[b"/Fm Do".to_vec()]).is_ok(), read, "a form of {ops} operators");
+        assert_eq!(
+            crate::interp::resource_ops(&doc, &mut pdfcraft_cos::DecodeBudget::page(), &res, &[b"/Fm Do".to_vec()]).is_ok(),
+            read,
+            "a form of {ops} operators"
+        );
     }
 }
 
@@ -1839,6 +1847,88 @@ fn an_image_a_surviving_form_with_parameters_by_reference_draws_is_kept() {
     mark(&mut doc, 0, &[[0.0, 0.0, 120.0, 120.0]], "");
     assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
     assert!(surviving_references::full_save_holds(&doc, b"IMAGESECRET"), "the image the form still draws outside the mark");
+}
+
+/// The walk of what content draws through its resources charges the forms it reads to the
+/// allowance it is given: a form decoding to more than is left is refused, one within it read.
+#[test]
+fn what_content_draws_through_its_resources_is_read_within_its_allowance() {
+    let doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [] /Count 0 >>".to_vec(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b"n ".repeat(1000)),
+    ]);
+    let res = Dict::from_iter([(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Fm".to_vec(), Object::Ref(ObjRef::new(3, 0)))])))]);
+    for (allowance, read) in [(2000, true), (1999, false)] {
+        let mut budget = pdfcraft_cos::DecodeBudget::new(allowance, 0);
+        assert_eq!(crate::interp::resource_ops(&doc, &mut budget, &res, &[b"/Fm Do".to_vec()]).is_ok(), read, "{allowance} bytes");
+    }
+}
+
+/// The cleanups after the content walk spend what the walk left of the page's allowance, one
+/// allowance between them. A form without resources of its own that crosses the mark is read by
+/// the walk, then again by the check of what the page still draws and by the font cleanup: at
+/// 100 MiB, three reads are more than the page's 256 MiB, and the redaction is refused; at
+/// 50 MiB it goes on.
+#[test]
+fn the_cleanups_after_the_content_walk_spend_what_it_left_of_the_pages_allowance() {
+    for (mib, refused) in [(100, true), (50, false)] {
+        let blank = pdfcraft_filters::encode_flate(&vec![b' '; mib << 20]);
+        let mut doc = one_page(
+            b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do",
+            "/XObject << /FmBare 7 0 R /Im1 8 0 R >>",
+            vec![
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /FlateDecode", &blank),
+                stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"o"),
+            ],
+        );
+        mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+        assert_eq!(apply(&mut doc, None).is_err(), refused, "{mib} MiB");
+    }
+}
+
+/// The cleanups of a form the redaction rewrites spend the page's allowance too. The rewritten
+/// form draws a form without resources of its own that crosses the mark: the walk reads it, then
+/// the check of what the rewritten form still draws and its font cleanup read it again. At
+/// 100 MiB, three reads are more than the page's 256 MiB, and the redaction is refused; at 50 MiB
+/// it goes on.
+#[test]
+fn the_cleanups_of_a_rewritten_form_spend_the_pages_allowance() {
+    for (mib, refused) in [(100, true), (50, false)] {
+        let blank = pdfcraft_filters::encode_flate(&vec![b' '; mib << 20]);
+        let mut doc = one_page(
+            b"/FmText Do",
+            "/XObject << /FmText 7 0 R /FmBare 8 0 R >>",
+            vec![
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"BT /F1 10 Tf 20 250 Td (SECRET) Tj ET /FmBare Do"),
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /FlateDecode", &blank),
+            ],
+        );
+        mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+        assert_eq!(apply(&mut doc, None).is_err(), refused, "{mib} MiB");
+    }
+}
+
+/// Removing hidden text spends what its content walk left of the page's allowance too. The page
+/// draws a form holding hidden text, which is rewritten, and a form without resources of its own:
+/// the walk reads the second, then the check of what the page still draws and the font cleanup
+/// read it again. At 100 MiB, three reads are more than the page's 256 MiB, and the removal is
+/// refused; at 50 MiB it goes on.
+#[test]
+fn removing_hidden_text_spends_what_the_content_walk_left_of_the_pages_allowance() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    for (mib, refused) in [(100, true), (50, false)] {
+        let blank = pdfcraft_filters::encode_flate(&vec![b' '; mib << 20]);
+        let mut doc = one_page(
+            b"/FmHidden Do /FmBare Do",
+            "/XObject << /FmHidden 7 0 R /FmBare 8 0 R >>",
+            vec![
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"BT /F1 10 Tf 3 Tr 20 250 Td (HIDDEN) Tj ET"),
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /FlateDecode", &blank),
+            ],
+        );
+        assert_eq!(remove_hidden(&mut doc, &[Hidden::HiddenText]).is_err(), refused, "{mib} MiB");
+    }
 }
 
 /// A form with resources of its own draws through those, not its caller's: one on another page

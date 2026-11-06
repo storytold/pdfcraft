@@ -202,6 +202,12 @@ impl<'a> Scope<'a> {
         }
     }
 
+    /// What is left of the page's allowance once the content is walked, for the cleanups after it
+    /// that read the forms drawing through the page's resources ([`prune`]) to go on spending.
+    pub(crate) fn into_budget(self) -> DecodeBudget {
+        self.budget
+    }
+
     /// Sanitizing visits every form XObject (not only those under a region).
     fn everywhere(&self) -> bool {
         self.hidden_text.is_some() || self.layers_enabled
@@ -1065,18 +1071,18 @@ fn xobject(
             }
             if let Some(data) = &new_data {
                 let content = std::slice::from_ref(data);
-                match prune_properties(doc, &mut cleaned_res, content) {
+                match prune_properties(doc, &mut scope.budget, &mut cleaned_res, content) {
                     Ok(retired) => out.retired_properties.extend(retired),
                     Err(error) => {
                         out.error = Some(error);
                         return None;
                     }
                 }
-                if let Err(error) = prune_form_resources(doc, &mut cleaned_res, content) {
+                if let Err(error) = prune_form_resources(doc, &mut scope.budget, &mut cleaned_res, content) {
                     out.error = Some(error);
                     return None;
                 }
-                if let Err(error) = crate::type3::prune_type3_from_resources(doc, &mut cleaned_res, content) {
+                if let Err(error) = crate::type3::prune_type3_from_resources(doc, &mut scope.budget, &mut cleaned_res, content) {
                     out.error = Some(error);
                     return None;
                 }

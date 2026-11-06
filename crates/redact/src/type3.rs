@@ -343,7 +343,12 @@ fn gs_font_object(doc: &Document, state_obj: &Object) -> Option<Object> {
 
 /// Prune Type 3 fonts from a rewritten page or form's `/Resources` dictionary if the rewritten
 /// content no longer draws any text using that font name.
-pub(crate) fn prune_type3_from_resources(doc: &Document, res: &mut Dict, content: &[Vec<u8>]) -> Result<(), CosError> {
+pub(crate) fn prune_type3_from_resources(
+    doc: &Document,
+    budget: &mut pdfcraft_cos::DecodeBudget,
+    res: &mut Dict,
+    content: &[Vec<u8>],
+) -> Result<(), CosError> {
     let mut fonts = res_dict(doc, res, b"Font");
     if fonts.is_empty() {
         return Ok(());
@@ -351,7 +356,7 @@ pub(crate) fn prune_type3_from_resources(doc: &Document, res: &mut Dict, content
 
     // The operators of forms that draw through these resources count too: dropping a font a child
     // form still shows would leave its text without one.
-    let ops = crate::interp::resource_ops(doc, res, content)?;
+    let ops = crate::interp::resource_ops(doc, budget, res, content)?;
 
     let mut drawn_font_names = HashSet::new();
     for op in &ops {
