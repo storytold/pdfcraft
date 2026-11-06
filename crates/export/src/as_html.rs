@@ -105,7 +105,17 @@ fn html_with_mode(pages: &[Page], title: &str, simple: bool) -> String {
             }
             Item::Img(im) => {
                 let mime = if im.ext == "jpg" { "image/jpeg" } else { "image/png" };
-                s.push_str(&format!("<p><img alt=\"\" src=\"data:{mime};base64,{}\"></p>\n", base64(&im.bytes)));
+                // Pictures flow upright: a picture the PDF mirrors or turns half round is flipped
+                // to match (a bottom-up bitmap vertically, a left-right mirror horizontally). The
+                // flip is a style, so simple HTML, which has none, shows the picture as stored.
+                let flip = match im.upright_flips() {
+                    _ if simple => "",
+                    (false, false) => "",
+                    (false, true) => " style=\"transform:scale(1,-1)\"",
+                    (true, false) => " style=\"transform:scale(-1,1)\"",
+                    (true, true) => " style=\"transform:scale(-1,-1)\"",
+                };
+                s.push_str(&format!("<p><img alt=\"\"{flip} src=\"data:{mime};base64,{}\"></p>\n", base64(&im.bytes)));
             }
             Item::PageBreak => s.push_str("<hr>\n"),
         }

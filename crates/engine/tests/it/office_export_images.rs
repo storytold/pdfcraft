@@ -41,3 +41,27 @@ fn an_image_drawn_many_times_is_encoded_once() {
     assert!(!images[0].bytes.is_empty());
     assert!(images.iter().all(|im| im.bytes.as_ptr() == first), "each placement holds its own copy of the image");
 }
+
+/// An image drawn with a negative height (as Acrobat PDFWriter draws a scan's bottom-up bitmap
+/// strips) is exported as mirrored; one drawn upright is not, on a turned page either (/Rotate
+/// turns the page, it doesn't mirror it).
+#[test]
+fn an_image_drawn_with_a_negative_height_is_exported_mirrored() {
+    let doc = |rotate: i32| {
+        let content = "q 10 0 0 -10 0 10 cm /Im Do Q\nq 10 0 0 10 20 0 cm /Im Do Q\n";
+        pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Rotate {rotate} /Contents 4 0 R /Resources << /XObject << /Im 5 0 R >> >> >>"),
+            format!("<< /Length {} >>\nstream\n{content}endstream", content.len()),
+            "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\u{0}\u{40}\u{80}\u{ff}\nendstream".into(),
+        ])
+    };
+    for rotate in [0, 90] {
+        let mut s = Session::new();
+        let id = s.open("scan.pdf", None, Arc::new(doc(rotate)), None).unwrap();
+        let pages = s.get(id).unwrap().export_pages();
+        let flips: Vec<bool> = pages[0].images.iter().map(|im| im.flip).collect();
+        assert_eq!(flips, [true, false], "/Rotate {rotate}");
+    }
+}

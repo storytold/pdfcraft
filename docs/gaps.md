@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-11-01 · **Change:** minor (gap 8: Word export keeps a form's rules, boxes, text placement and fields; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -193,8 +194,16 @@ update the numbers.
   HTML, web pages and PostScript; SVG/XML/EPS/PS/JPEG 2000 export.
 - **Evidence:** `create.export-docx` partial; the synthetic invoice regression for
   [#773](https://github.com/storytold/pdfcraft/issues/773) now covers absent inferred borders,
-  floating watermark text and per-page section sizes. Exact font matching, vector rules and
-  broader layout fidelity remain incomplete;
+  floating watermark text and per-page section sizes. A form keeps its layout on the pages the
+  export recognizes as one (fields, or text framed by rules or boxes; a flattened form with few
+  boxes still flows and loses them): vector rules and boxes become shapes behind the text, text
+  is placed line by line in its PDF font's family, and AcroForm text, check box, radio, combo
+  and list fields become content controls (push buttons and signature fields are left out),
+  filled in without protecting the document (checked
+  in LibreOffice, WordCraft and Word on a 7-page claim form); Word doesn't limit a control's
+  length, so a text field's `/MaxLen` is only named in its title.
+  Holes in filled paths, clipping, shadings, transparency, radio groups, exact font matching
+  and broader layout fidelity remain incomplete;
   `create.export-xlsx`, `create.export-pptx`, `create.from-office`, `create.from-html` planned.
 - **Impact:** "Export PDF" and "Create PDF" are two of Acrobat's most used tools.
 - **Gate:** lossy or missing sub-cases of the convert-and-share workflow (partial, not blocking).

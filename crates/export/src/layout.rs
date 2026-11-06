@@ -18,6 +18,9 @@ pub struct Block {
     /// which `text` leaves out. A block that continues this one on its line is a run of the same
     /// paragraph, and these say whether a space separates them (#4158).
     pub space_around: [bool; 2],
+    /// The PDF font's base name (`Arial-BoldMT`), which Word maps to a font family; empty when
+    /// unknown.
+    pub font: String,
 }
 
 /// An image of a page.
@@ -32,6 +35,83 @@ pub struct Image {
     pub size: [f64; 2],
     /// Counterclockwise rotation in user space (degrees).
     pub rotation: f64,
+    /// Drawn mirrored: the placement turns the image's own up and down around (a negative
+    /// determinant, as print drivers draw bottom-up bitmaps), so it shows flipped vertically in
+    /// its frame, before `rotation`.
+    pub flip: bool,
+}
+
+impl Image {
+    /// The flips (horizontal, vertical) that show the picture the right way round in a frame
+    /// that is not rotated, for the writers that place pictures upright (flowing Word pages,
+    /// PowerPoint, HTML). A mirrored picture turned half round is a left-right mirror (`-w 0 0 h`):
+    /// a horizontal flip, not a vertical one; an upright picture turned half round flips both
+    /// ways. Those writers don't draw other turns.
+    pub(crate) fn upright_flips(&self) -> (bool, bool) {
+        let turn = if self.rotation.is_finite() { self.rotation.rem_euclid(360.0) } else { 0.0 };
+        match ((turn - 180.0).abs() < 1.0, self.flip) {
+            (true, true) => (true, false),
+            (true, false) => (true, true),
+            (false, flip) => (false, flip),
+        }
+    }
+}
+
+/// How a [`Shape`]'s outline is drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stroke {
+    /// sRGB components in 0..=1.
+    pub color: [f64; 3],
+    /// Line width in points; 0 is the thinnest line the device draws.
+    pub width: f64,
+    pub dashed: bool,
+}
+
+/// A painted vector path: a form's rule, box or comb cell, a table border, a filled panel.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shape {
+    /// Each subpath's points on the displayed page in points (y up), and whether it is closed.
+    pub paths: Vec<(Vec<[f64; 2]>, bool)>,
+    pub stroke: Option<Stroke>,
+    /// Fill colour as sRGB components in 0..=1.
+    pub fill: Option<[f64; 3]>,
+}
+
+/// What a [`Field`] is and holds.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FieldKind {
+    /// A text field. `comb`: the number of cells a comb field spreads its characters over;
+    /// `max_len`: the most characters it takes.
+    Text { value: String, multiline: bool, comb: Option<usize>, max_len: Option<usize> },
+    /// A check box.
+    Check { checked: bool },
+    /// One button of a radio group of `buttons` buttons.
+    Radio { checked: bool, buttons: usize },
+    /// A combo or list box: the shown value and the choices' display texts; `editable` for a
+    /// combo box that also takes typed text.
+    Choice { value: String, options: Vec<String>, editable: bool },
+}
+
+/// A fillable form field (an AcroForm widget) on the page.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Field {
+    /// The field's fully qualified name.
+    pub name: String,
+    /// [x0, y0, x1, y1] on the displayed page in points (y up).
+    pub rect: [f64; 4],
+    /// Font size in points; 0 or less for auto (fit the box).
+    pub size: f64,
+    /// The base font the field's text is set in (its `/DA` font, `Helvetica` say); empty when
+    /// the PDF names none.
+    pub font: String,
+    /// The field can't be changed (`/Ff` ReadOnly, the field's or its widget's).
+    pub read_only: bool,
+    pub kind: FieldKind,
+    /// The border a PDF viewer draws around the field (its widget's `/MK /BC` and `/BS`), and
+    /// the colour it fills the field with (`/MK /BG`); `None` for none. A form whose boxes only
+    /// the fields draw keeps them this way.
+    pub border: Option<Stroke>,
+    pub background: Option<[f64; 3]>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -43,6 +123,18 @@ pub struct Page {
     /// The colour the whole page is painted before its content (a page background), as sRGB
     /// components in 0..=1; `None` for a page with no background of its own.
     pub background: Option<[f64; 3]>,
+    /// The vector paths the page paints, in painting order (Word keeps them on positioned pages;
+    /// the flowing formats leave them out).
+    pub shapes: Vec<Shape>,
+    /// The page's form fields (Word makes them content controls on positioned pages).
+    pub fields: Vec<Field>,
+    /// The same text as `blocks`, one block per line, which a positioned Word page places
+    /// instead of the paragraphs: a form's labels, tab-separated pieces and lines far apart that
+    /// share a left edge each keep their own place. Empty to place the paragraphs.
+    pub lines: Vec<Block>,
+    /// Reading the page's paths stopped at a limit, so some are missing from `shapes`. Word lists
+    /// the page as cut short only when it keeps the page's layout: a flowing page draws no shapes.
+    pub art_truncated: bool,
 }
 
 /// One cell of a detected table. `span` is how many grid columns the cell covers (a header
@@ -56,6 +148,8 @@ pub struct Cell {
     /// Text fill colour as sRGB components in 0..=1.
     pub color: [f64; 3],
     pub span: usize,
+    /// The PDF font's base name, as [`Block::font`].
+    pub font: String,
 }
 
 /// A table detected from the page's text layout: rows of cells, and the left edge of each
@@ -341,7 +435,15 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
                 let b = &blocks[bi];
                 let Some(slot) = edges.iter().position(|e| (*e - b.rect[0]).abs() <= COL_TOL) else { continue };
                 let span = edges[slot + 1..].iter().filter(|e| **e > b.rect[0] + COL_TOL && **e < b.rect[2] - COL_TOL).count() + 1;
-                let cell = Cell { text: b.text.trim().to_string(), size: b.size, bold: b.bold, italic: b.italic, color: b.color, span };
+                let cell = Cell {
+                    text: b.text.trim().to_string(),
+                    size: b.size,
+                    bold: b.bold,
+                    italic: b.italic,
+                    color: b.color,
+                    span,
+                    font: b.font.clone(),
+                };
                 match slots.get_mut(slot) {
                     Some(Some((c, sources))) => {
                         c.text.push(' ');
@@ -370,7 +472,15 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
                     }
                     None => {
                         column += 1;
-                        materialized.push(Cell { text: String::new(), size: 11.0, bold: false, italic: false, color: [0.0; 3], span: 1 });
+                        materialized.push(Cell {
+                            text: String::new(),
+                            size: 11.0,
+                            bold: false,
+                            italic: false,
+                            color: [0.0; 3],
+                            span: 1,
+                            font: String::new(),
+                        });
                     }
                 }
             }
