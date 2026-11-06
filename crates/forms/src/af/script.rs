@@ -49,13 +49,8 @@ fn hex4(bytes: &[u8]) -> Option<u16> {
         return None;
     }
     bytes.iter().try_fold(0u16, |value, byte| {
-        let digit = match byte {
-            b'0'..=b'9' => byte - b'0',
-            b'a'..=b'f' => byte - b'a' + 10,
-            b'A'..=b'F' => byte - b'A' + 10,
-            _ => return None,
-        };
-        value.checked_mul(16)?.checked_add(u16::from(digit))
+        let digit = u16::try_from(char::from(*byte).to_digit(16)?).ok()?;
+        value.checked_mul(16)?.checked_add(digit)
     })
 }
 
@@ -359,5 +354,33 @@ pub fn calculate_js(c: &Calculate) -> Option<String> {
         // Acrobat's own translation follows the comment, so a viewer that runs the script instead
         // of reading the comment computes the same value (a placeholder here showed 0).
         Calculate::Notation(expr) => Some(format!("/** BVCALC {expr} EVCALC **/ event.value = {};", notation_js(expr))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hex4;
+
+    /// Every byte reads as a `\uXXXX` digit exactly as the hand-written table it replaced did,
+    /// in each of the four places (#6465).
+    #[test]
+    fn hex4_reads_every_byte_as_the_old_table() {
+        let digit = |b: u8| match b {
+            b'0'..=b'9' => Some(u16::from(b - b'0')),
+            b'a'..=b'f' => Some(u16::from(b - b'a' + 10)),
+            b'A'..=b'F' => Some(u16::from(b - b'A' + 10)),
+            _ => None,
+        };
+        for b in 0..=u8::MAX {
+            for at in 0..4 {
+                let mut bytes = *b"0000";
+                bytes[at] = b;
+                let expected = digit(b).map(|d| d << (4 * (3 - at)));
+                assert_eq!(hex4(&bytes), expected, "byte {b:#04x} at {at}");
+            }
+        }
+        assert_eq!(hex4(b"00e9"), Some(0xe9));
+        assert_eq!(hex4(b"FFFF"), Some(0xffff));
+        assert_eq!(hex4(b"123"), None);
     }
 }
