@@ -8214,11 +8214,11 @@ fn crop_action_pills_interactive_and_apply_cancel_reset() {
     assert_ne!(after_images[0].visible_rect, Some(original_rect), "crop was applied");
 }
 
-/// A picture with a line of text right under it, where the crop's Done and Cancel pills land
-/// (#6420).
-fn picture_over_caption() -> Vec<u8> {
+/// `pages` pages ([`fixture`]) whose first has a picture with a line of text right under it, where
+/// the crop's Done and Cancel pills land (#6420).
+fn picture_over_caption(pages: usize) -> Vec<u8> {
     use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};
-    let mut doc = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let mut doc = Document::open(std::sync::Arc::new(fixture(pages))).unwrap();
     let mut image = Dict::new();
     image.set(b"Type".to_vec(), Object::name("XObject"));
     image.set(b"Subtype".to_vec(), Object::name("Image"));
@@ -8251,7 +8251,7 @@ fn crop_pills_over_text_take_their_clicks() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("caption.pdf", None, picture_over_caption()).unwrap();
+        app.open_bytes("caption.pdf", None, picture_over_caption(1)).unwrap();
         app
     });
     h.run_steps(4);
@@ -8284,13 +8284,14 @@ fn crop_pills_over_text_take_their_clicks() {
 }
 
 /// A crop handle on a text box added over the picture's edge keeps its click: the box opens no
-/// editor and the crop being set stays (#6420 review).
+/// editor and the crop being set stays, and a drag from the same point trims the crop, so the
+/// point is the handle's (#6420 review).
 #[test]
 fn a_crop_handle_over_added_text_keeps_its_click() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("caption.pdf", None, picture_over_caption()).unwrap();
+        app.open_bytes("caption.pdf", None, picture_over_caption(1)).unwrap();
         app
     });
     h.run_steps(4);
@@ -8317,10 +8318,64 @@ fn a_crop_handle_over_added_text_keeps_its_click() {
     let full = h.state().session.get(doc_id).unwrap().page_images(0)[0].rect;
     h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new(full));
     h.run_steps(2);
-    click_at(&mut h, at(30.0, 210.0));
+    // The picture spans (30, 170)–(180, 250): (30, 210) is its left edge's middle crop handle.
+    assert!(full.iter().zip([30.0, 170.0, 180.0, 250.0]).all(|(a, b)| (a - b).abs() < 0.01), "{full:?}");
+    let handle = at(30.0, 210.0);
+    click_at(&mut h, handle);
     let view = &h.state().views[0];
     assert!(view.image_selection.as_ref().is_some_and(|s| s.crop.is_some()), "the crop handle's click keeps crop mode");
     assert!(view.content.draft.is_none(), "the added text opens no editor");
+    // Dragging from the same point trims the crop's left side 20 points and nothing else.
+    let to = at(50.0, 210.0);
+    h.hover_at(handle);
+    h.run_steps(1);
+    h.drag_at(handle);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(handle + (to - handle) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(2);
+    let view = &h.state().views[0];
+    let keep = view.image_selection.as_ref().and_then(|s| s.crop.as_ref()).expect("still cropping").keep;
+    let expected = [full[0] + 20.0, full[1], full[2], full[3]];
+    assert!(keep.iter().zip(expected).all(|(a, b)| (a - b).abs() < 1.0), "the handle trims: {keep:?}, expected {expected:?}");
+    assert!(view.content.draft.is_none(), "the drag opens no editor either");
+    assert_eq!(h.state().session.get(doc_id).unwrap().added().len(), 1, "no text box is added or removed");
+}
+
+/// Cropping a picture holds the presses on its own page only: a paragraph on another page still
+/// opens for editing while the picture is being cropped (#6420 review).
+#[test]
+fn cropping_on_one_page_leaves_another_pages_paragraphs_editable() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("caption.pdf", None, picture_over_caption(2)).unwrap();
+        // Small enough for both pages to be on screen at once.
+        app.set_option("zoom", "75").unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(3);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 1100.0));
+    let page = |h: &Harness<'static, PdfCraftApp>, i: usize| h.state().views[0].page_screen_rect(i).expect("laid out");
+    let (first, second) = (page(&h, 0), page(&h, 1));
+    let at = |r: egui::Rect, x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
+    let target = at(second, 50.0, 158.0);
+    assert!(screen.contains(at(first, 100.0, 210.0)) && screen.contains(target), "both pages on screen: {first:?} {second:?}");
+    click_at(&mut h, at(first, 100.0, 210.0));
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.page == 0 && s.index == 0), "the picture is selected");
+    let doc_id = h.state().views[0].id;
+    let full = h.state().session.get(doc_id).unwrap().page_images(0)[0].rect;
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new(full));
+    h.run_steps(2);
+    // "Page 2" on the second page, in 24-point type on a baseline at 150.
+    click_at(&mut h, target);
+    let editor = h.state().views[0].line_editor.as_ref().map(|e| (e.page, e.text.clone()));
+    assert_eq!(editor, Some((1, "Page 2".to_string())), "the second page's paragraph opens while the first page crops");
 }
 
 #[test]
