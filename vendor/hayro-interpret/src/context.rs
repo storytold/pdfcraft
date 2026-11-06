@@ -86,6 +86,37 @@ pub(crate) fn decode_content<'a>(stream: &Stream<'a>) -> Option<DecodedContent<'
     Some(DecodedContent { data, held })
 }
 
+/// PdfCraft patch (87): what is left of this page's [`MAX_PAGE_CONTENT`].
+pub(crate) fn content_left() -> usize {
+    CONTENT_LEFT.with(core::cell::Cell::get)
+}
+
+/// PdfCraft patch (87): `len` bytes of content held within the page's [`MAX_PAGE_CONTENT`]
+/// until dropped, as [`DecodedContent`] holds what it decoded: content kept from an earlier
+/// decode (a cached Type 3 glyph procedure) counts as it did when it was decoded.
+pub(crate) struct HeldContent(usize);
+
+impl Drop for HeldContent {
+    fn drop(&mut self) {
+        let held = self.0;
+        CONTENT_LEFT.with(|c| c.set(c.get().saturating_add(held).min(MAX_PAGE_CONTENT)));
+    }
+}
+
+/// PdfCraft patch (87): hold `len` bytes of content within what is left of the page's
+/// [`MAX_PAGE_CONTENT`]. `None`, and the page reported truncated, when they don't fit, as
+/// [`decode_content`] skips content the budget can't hold.
+pub(crate) fn hold_content(len: usize) -> Option<HeldContent> {
+    let left = content_left();
+    if left == 0 || left < len {
+        CONTENT_TRUNCATED.with(|truncated| truncated.set(true));
+        warn!("page content budget exceeded");
+        return None;
+    }
+    charge_content(len);
+    Some(HeldContent(len))
+}
+
 /// PdfCraft patch: count `len` bytes held for the rest of the page (its own contents).
 pub(crate) fn charge_content(len: usize) {
     CONTENT_LEFT.with(|c| c.set(c.get().saturating_sub(len)));
