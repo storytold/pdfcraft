@@ -67,7 +67,7 @@ impl Session {
     pub fn compare_pages(&self, old: DocId, new: DocId, pages: &[usize]) -> Result<Comparison, EditError> {
         let mut c = self.compare(old, new)?;
         if !pages.is_empty() {
-            c.changes.retain(|ch| pages.contains(&ch.new.page));
+            c.changes.retain(|ch| pages.iter().any(|page| (ch.new.page..=ch.new.last_page).contains(page)));
         }
         Ok(c)
     }

@@ -204,7 +204,10 @@ impl PdfCraftApp {
         let Some((i, new)) = self.active_ids() else { return };
         let Some(old) = self.compare_old else { return };
         let count = self.views.get(i).map_or(0, |v| v.page_count());
-        let pages = crate::page_selection_ui::parse(&self.compare_pages, count).unwrap_or_default();
+        let pages = match crate::page_selection_ui::parse(&self.compare_pages, count) {
+            Ok(pages) => pages,
+            Err(e) => return self.notify_error(e.said(&|s| crate::i18n::t(s).to_string())),
+        };
         match self.session.compare_pages(old, new, &pages) {
             Ok(result) => {
                 let mut visual = self.session.compare_visual(old, new, 72.0).unwrap_or_default();
