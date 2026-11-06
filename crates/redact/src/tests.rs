@@ -130,7 +130,14 @@ fn content_with_parameters_given_by_reference_is_redacted() {
         mark(&mut doc, 0, &marked, "");
         let r = apply(&mut doc, None).unwrap();
         assert_eq!((r.marks, r.glyphs), (1, 6), "{what}");
-        assert_eq!(under(&mut reopen(&doc), 0, &marked), 0, "{what}");
+        let mut saved = reopen(&doc);
+        assert_eq!(under(&mut saved, 0, &marked), 0, "{what}");
+        // Nor is the text left in a stream the page no longer draws, read with its parameters.
+        for (r, o) in saved.scan_objects() {
+            let Object::Stream(s) = &*o else { continue };
+            let data = pdfcraft_cos::DecodeBudget::new(usize::MAX, 0).decode_with_damage(&saved, s, usize::MAX).map(|(d, _)| d).unwrap_or_default();
+            assert!(!data.windows(6).any(|w| w == b"SECRET"), "{what}: {r:?}");
+        }
     }
 }
 
