@@ -214,7 +214,18 @@ impl Automation {
             Some(r) => t.column_text(&t.glyphs_in(r)),
             None => t.plain_text(),
         };
-        let out: Vec<Value> = pages.iter().zip(texts).map(|(p, t)| json!({ "page": p + 1, "text": text(&t) })).collect();
+        let out: Vec<Value> = pages
+            .iter()
+            .zip(texts)
+            .map(|(p, t)| {
+                let mut page = json!({ "page": p + 1, "text": text(&t) });
+                // Content cut at the renderer's limits (#623): the text is incomplete, and said so.
+                if t.truncated {
+                    page["truncated"] = json!(true);
+                }
+                page
+            })
+            .collect();
         Ok(json!({ "pages": out }))
     }
 
