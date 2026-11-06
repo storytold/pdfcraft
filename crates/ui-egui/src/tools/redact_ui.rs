@@ -235,7 +235,7 @@ fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
 /// Redact tool input on a page. Presses on text are left to text selection (the selection is
 /// marked when it ends, see [`after_text`]); presses nobody holds (`free`) elsewhere draw a box.
 /// Returns `true` when the gesture is a box.
-pub(crate) fn page_input(cx: PageToolContext<'_>, over_text: impl Fn(Pos2) -> bool, free: bool, view: &mut DocView) -> bool {
+pub(crate) fn page_input(cx: PageToolContext<'_>, tool: crate::QuickTool, over_text: impl Fn(Pos2) -> bool, free: bool, view: &mut DocView) -> bool {
     let PageToolContext { resp, xf, ptr, page, info, .. } = cx;
     let pointer = ptr.pos;
     if let Some((dp, start)) = view.redact_drag
@@ -247,7 +247,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, over_text: impl Fn(Pos2) -> bo
             let r = Rect::from_two_pos(start, end).intersect(xf.rect);
             if r.width() >= 3.0 && r.height() >= 3.0 {
                 let (a, b) = (to_user(xf, info, page, r.min), to_user(xf, info, page, r.max));
-                view.pending_redaction = Some((page, vec![rect_quad([a[0], a[1], b[0], b[1]])]));
+                view.pending_redaction = Some((tool, vec![(page, vec![rect_quad([a[0], a[1], b[0], b[1]])])]));
             }
         }
         return true;
@@ -268,13 +268,20 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, over_text: impl Fn(Pos2) -> bo
 }
 
 /// A finished text selection with the Redact tool becomes a mark.
+/// Across pages: a mark on each page it covers, once all are read; refused when one of them could
+/// not be read, rather than leave it unmarked.
 pub(crate) fn after_text(resp: &egui::Response, page: usize, info: &DocInfo, view: &mut DocView) {
-    if !(resp.drag_stopped() || resp.double_clicked()) || view.redact_drag.is_some() {
+    if view.redact_drag.is_some() {
         return;
     }
-    if let Some((p, quads)) = view.selection_quads(info).filter(|(p, _)| *p == page) {
-        view.clear_selection();
-        view.pending_redaction = Some((p, quads));
+    let finished = resp.drag_stopped() || resp.double_clicked();
+    match view.tool_marks(crate::QuickTool::Redact, finished, Some(page), true, info) {
+        crate::canvas::ToolMarks::Marks(marks) => {
+            view.clear_selection();
+            view.pending_redaction = Some((crate::QuickTool::Redact, marks));
+        }
+        crate::canvas::ToolMarks::Unreadable => view.redaction_refused = true,
+        crate::canvas::ToolMarks::None => {}
     }
 }
 

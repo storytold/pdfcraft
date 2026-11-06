@@ -189,7 +189,9 @@ impl DocView {
         self.slow_pages.clear();
         self.waiting_since.clear();
         self.last_queue.clear();
+        // Marks a tool waits to make go with the selection: its glyphs may name other text now.
         self.selection = None;
+        self.marks_waiting = None;
         self.all_text = false;
         // A content change is not reader navigation: keep the automatic anchor so the
         // re-extracted layers still follow it, and keep `follow_ended` so a reader who already
@@ -230,8 +232,10 @@ impl DocView {
         self.text_failed.remove(&page);
         self.errors.remove(&page);
         self.last_queue.clear();
-        if self.selection.is_some_and(|s| s.page == page) {
+        if self.selection.is_some_and(|s| s.pages().contains(&page)) {
+            // With the marks a tool waits to make on it (#5017 review).
             self.selection = None;
+            self.marks_waiting = None;
         }
     }
 
@@ -500,7 +504,7 @@ impl DocView {
         }
         let mut keep: HashSet<usize> = self.frame_visible.clone();
         if let Some(s) = self.selection {
-            keep.insert(s.page);
+            keep.extend(s.pages());
         }
         if let Some(f) = self.find.as_ref() {
             keep.extend(f.matches.iter().map(|(p, _)| *p));
