@@ -980,9 +980,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
             let area = egui::Area::new(egui::Id::unique(("form-toggle", view.id.0))).order(egui::Order::Foreground).interactable(false);
             area.fixed_pos(rect.min).show(ctx, |ui| {
                 let r = ui.interact(rect, id, egui::Sense::focusable_noninteractive());
-                if let Some(fx) = view.forms.focus.as_mut()
-                    && std::mem::take(&mut fx.request_focus)
-                {
+                if ruler_interaction || view.forms.focus.as_mut().is_some_and(|fx| std::mem::take(&mut fx.request_focus)) {
                     r.request_focus();
                 }
                 let filter = egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: false };

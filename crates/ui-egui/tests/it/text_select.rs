@@ -254,6 +254,26 @@ fn a_ruler_press_closes_an_open_page_context_menu() {
     assert!(h.query_by_label_contains("Copy").is_none(), "the closed page popup does not reappear after release");
 }
 
+/// A secondary click owned by ruler chrome cannot reopen the page context menu on release.
+#[test]
+fn a_ruler_secondary_click_does_not_open_the_page_context_menu() {
+    use egui_kittest::kittest::Queryable;
+
+    let (mut h, _) = harness(|app| app.show_rulers = true);
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
+    h.run_steps(2);
+    let viewport = h.state().views[0].viewport_rect();
+    let ruler = egui::pos2(viewport.center().x, viewport.top() + pdfcraft_ui_egui::ruler::HORIZONTAL_RULER_HEIGHT / 2.0);
+    h.event(Event::PointerMoved(ruler));
+    for pressed in [true, false] {
+        h.event(Event::PointerButton { pos: ruler, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+
+    assert!(h.query_by_label_contains("Copy").is_none(), "a ruler secondary click never opens the page context menu");
+}
+
 #[test]
 fn escape_closes_an_open_menu_before_it_clears_the_selection() {
     // #3535: one Escape closed the menu and dropped the selection with it.
