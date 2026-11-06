@@ -1546,10 +1546,23 @@ fn writing_to_a_folder_touches_nothing_beside_it() {
 fn file_names_from_documents_stay_in_the_output_folder() {
     // Folder outputs name their files after the document. A document name with separators,
     // `..` or (on Windows) a drive letter used to take those files out of the folder, and out
-    // of the root.
+    // of the root. One that begins with a device name and a dot (`NUL.v1`) gave names Windows
+    // reads as the device (`NUL.v1_page_1.png`), so those files weren't made.
     let (base, root) = sandbox("doc-names");
     let mut a = auto(&root);
-    let names = ["../../escape", "../../escape.pdf", "x/../../../escape.pdf", "/tmp/escape.pdf", r"x\C:escape.pdf", "C:escape.pdf", "..", "."];
+    let names = [
+        "../../escape",
+        "../../escape.pdf",
+        "x/../../../escape.pdf",
+        "/tmp/escape.pdf",
+        r"x\C:escape.pdf",
+        "C:escape.pdf",
+        "..",
+        ".",
+        "NUL.v1",
+        "aux.draft",
+        "com1.x",
+    ];
     for (i, name) in names.iter().enumerate() {
         let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "pages": 2, "name": name }))["doc"].as_u64().unwrap();
         let out = format!("out{i}");
@@ -1561,10 +1574,15 @@ fn file_names_from_documents_stay_in_the_output_folder() {
         let r = ok(&mut a, "doc_split", json!({ "doc": doc, "every": 1, "out_dir": out }));
         files.extend(r["files"].as_array().unwrap().iter().map(|f| f["path"].as_str().unwrap().to_owned()));
         assert_eq!(files.len(), 5, "{name:?}: {files:?}");
-        for f in &files {
-            let f = Path::new(f);
+        for file in &files {
+            let f = Path::new(file);
             assert_eq!(f.parent(), Some(root.join(&out).as_path()), "{name:?} wrote {}", f.display());
             assert!(f.is_file(), "{name:?}: {} exists", f.display());
+            // By its plain path too, as Explorer opens it: the tools write through the root's
+            // `\\?\` form, which made a device name such as `NUL.v1_page_1.png` a file that only
+            // that form reaches.
+            let plain = Path::new(file.trim_start_matches(r"\\?\"));
+            assert!(plain.is_file(), "{name:?}: {} opens by its plain path", plain.display());
         }
     }
     // The same for the images a page uses, with a document that has one.

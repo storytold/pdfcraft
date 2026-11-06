@@ -1,5 +1,6 @@
 use super::error::{Result, failed};
 use super::{Automation, Path, PathBuf, StagingName, file_access, foreign_share, staging_suffixes};
+use pdfcraft_platform::file_names::is_windows_device_name;
 
 impl Automation {
     // ---- paths -------------------------------------------------------------------------------
@@ -109,9 +110,14 @@ pub(crate) fn lexical(path: &Path) -> Option<PathBuf> {
 /// The file `name` inside `dir`, where `name` comes from a document or an argument: separators,
 /// colons (a Windows drive or stream) and control characters become `_`, and a name of only dots
 /// gets a leading `_`, so it is one plain file name and can't lead out of `dir`.
+///
+/// A Windows device name (`NUL.v1_page_1.png`, from a document named `NUL.v1`) gets a leading
+/// `_` too, as the desktop app's attachment names do. Written as given, it reaches the device,
+/// or, through a root's `\\?\` form, makes a file that Explorer can neither open nor delete.
+/// Prefixed on every system, so the files can be copied to Windows.
 pub(crate) fn child(dir: &Path, name: &str) -> PathBuf {
     let mut safe: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':') || c.is_control() { '_' } else { c }).collect();
-    if safe.chars().all(|c| c == '.') {
+    if safe.chars().all(|c| c == '.') || is_windows_device_name(&safe) {
         safe.insert(0, '_');
     }
     dir.join(safe)
