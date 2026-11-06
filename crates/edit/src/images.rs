@@ -413,6 +413,9 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
     let p = page_of(doc, page)?;
     let xo = xobjects(doc, &p.dict);
     let mut out = Vec::new();
+    // Whether each Form, by its resource name, holds one picture. A name stands for one
+    // stream on this page, and a page may draw the same Form many times, so it is scanned once.
+    let mut replaceable_forms: std::collections::HashMap<&[u8], bool> = std::collections::HashMap::new();
     // The streams are one stream in pieces, so the graphics state and operators carry over.
     let mut state = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
     let pieces = joined(&content_streams(doc, &p.dict)?);
@@ -475,7 +478,7 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
                 name: String::from_utf8_lossy(name).into_owned(),
                 object: resource.as_ref(),
                 is_form,
-                replaceable: !is_form || wrapped_picture(doc, s, resource.as_ref()).is_some(),
+                replaceable: !is_form || *replaceable_forms.entry(name).or_insert_with(|| wrapped_picture(doc, s, resource.as_ref()).is_some()),
                 width: if is_form { 0 } else { s.dict.int(b"Width").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
                 height: if is_form { 0 } else { s.dict.int(b"Height").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
                 stream: pieces.piece_of(op.span.start),

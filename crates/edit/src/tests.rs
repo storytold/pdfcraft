@@ -4885,6 +4885,28 @@ fn a_group_that_draws_itself_is_not_replaced() {
 }
 
 #[test]
+fn a_group_drawn_many_times_is_scanned_once() {
+    // A tiled page: one group with a long content stream, drawn over and over. Scanning the
+    // group again for every draw would decode its content once per tile.
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let mut content = b"q 100 0 0 100 0 0 cm /Ph Do Q\n".to_vec();
+    content.extend(b"0 0 m\n".repeat(100_000));
+    let tile = group(&mut doc, &content, &[("Ph", photo)]);
+    let mut doc = draw_figure(doc, tile);
+    let draws = b"q 1 0 0 1 40 80 cm /Figure Do Q\n".repeat(2_000);
+    doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), &draws)));
+    let doc = reopen(&doc);
+
+    let started = std::time::Instant::now();
+    let images = page_images(&doc, 0).unwrap();
+    let took = started.elapsed();
+    assert_eq!(images.len(), 2_000);
+    assert!(images.iter().all(|i| i.is_form && i.replaceable));
+    assert!(took < std::time::Duration::from_secs(20), "page_images took {took:?}");
+}
+
+#[test]
 fn form_artwork_edits_only_the_selected_placement() {
     let mut doc = fixture(); // three pages share resources; pages 0 and 1 also share contents
     let mut form = Dict::new();
