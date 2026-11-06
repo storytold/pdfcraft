@@ -62,7 +62,8 @@ fn vendor_provenance_window_stack_graph_is_resolved() {
     }
 }
 
-/// Renderer, security and PostScript vendors are unrelated to the UI port and must stay path patches.
+/// Renderer, security, PostScript and macOS-event vendors are unrelated to the UI port and must
+/// stay path patches.
 #[test]
 fn renderer_and_security_vendors_remain() {
     let manifest = std::fs::read_to_string(root().join("Cargo.toml")).expect("root Cargo.toml");
@@ -74,6 +75,7 @@ fn renderer_and_security_vendors_remain() {
         "vendor/hayro-jbig2",
         "vendor/hayro-postscript",
         "vendor/lopdf",
+        "vendor/fmv-macos-events",
         "vendor/vello_common",
     ] {
         assert!(manifest.contains(&format!("path = \"{vendor}\"")), "{vendor} must stay a path patch");
