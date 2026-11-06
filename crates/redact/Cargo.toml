@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+aho-corasick = "1"
 pdfcraft-cos = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-fonts = { workspace = true }
@@ -24,6 +25,10 @@ thiserror = { workspace = true }
 unicode-normalization = "0.1"
 # Reads the PDF/A and PDF/UA identification by namespace; already in the build through pdfcraft-xfa.
 roxmltree = "0.21"
+sha2 = "0.11"
 
 [dev-dependencies]
 pdfcraft-testkit = { workspace = true }
+# The redacted page is rendered in `tests::a_page_whose_pruned_pattern_is_still_selected_renders`:
+# layer 3 from layer 4, a dev dependency only.
+pdfcraft-render = { workspace = true }

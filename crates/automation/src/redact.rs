@@ -219,8 +219,8 @@ impl Automation {
     }
 
     pub(crate) fn doc_remove_hidden(&mut self, a: &Args) -> Result<Value> {
-        let edit = match a.get("categories") {
-            None => Edit::Sanitize,
+        let which = match a.get("categories") {
+            None => None,
             Some(_) => {
                 let which = a
                     .strs("categories")?
@@ -230,10 +230,24 @@ impl Automation {
                 if which.is_empty() {
                     return Err(ToolError::InvalidArgs("categories is empty".into()));
                 }
+                Some(which)
+            }
+        };
+        // One scan, for this check and for what was removed. The removal refuses when it counts
+        // every listed category as 0 (an AcroForm with no fields counts 1), with an error about
+        // redaction marks; this reads the same scan, so it refuses exactly then. A document that
+        // can't be edited has no scan: `apply` says why.
+        let info = self.doc(a)?.hidden_info();
+        let edit = match which {
+            None => Edit::Sanitize,
+            Some(which) => {
+                if !info.is_empty() && which.iter().all(|h| info.iter().find(|c| c.0 == *h).is_none_or(|c| c.1 == 0)) {
+                    return Err(failed("nothing to remove: the listed categories hold nothing (see doc_hidden_info)"));
+                }
                 Edit::RemoveHidden { which }
             }
         };
-        let before: usize = self.doc(a)?.hidden_info().iter().map(|c| c.1).sum();
+        let before: usize = info.iter().map(|c| c.1).sum();
         let mut out = self.apply(a, edit)?;
         let after: usize = self.doc(a)?.hidden_info().iter().map(|c| c.1).sum();
         out["removed"] = json!(before.saturating_sub(after));
