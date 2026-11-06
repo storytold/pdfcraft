@@ -1,9 +1,10 @@
 use super::{
     AddedContent, Arc, Edit, EditError, FieldValue, ImageEdit, NewAnnotation, Shape, a11y, copy_image, decode_data_file, embed_image, fit_picture,
-    image_content_type, is_xfa_data_file, js, mark_source, measure, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+    image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
 };
 use crate::SourceProblem;
 use crate::sources::{comment_source, import_pdf_comments};
+use pdfcraft_content::Matrix;
 
 /// Whether the opening password allows an edit (§7.6.4.2, Table 22).
 pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), EditError> {
@@ -26,6 +27,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::SetBookmarkPage { .. }
         | Edit::SetBookmarkColor { .. }
         | Edit::SetBookmarkStyle { .. }
+        | Edit::ImportBookmarks { .. }
         | Edit::BookmarksFromStructure
         | Edit::NumberPages { .. } => {
             if p.assemble() {
@@ -47,7 +49,9 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         }
         Edit::AddMeasurement(_)
         | Edit::AddAnnotation(_)
+        | Edit::PasteComments { .. }
         | Edit::AddCustomStamp { .. }
+        | Edit::AddModel3d { .. }
         | Edit::DeleteAnnotation { .. }
         | Edit::SetAnnotationContents { .. }
         | Edit::ReplyToAnnotation { .. }
@@ -61,7 +65,10 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::ResizeAnnotation { .. }
         | Edit::StyleAnnotation { .. }
         | Edit::FillAnnotation { .. }
+        | Edit::PartOpacity { .. }
         | Edit::FontSizeAnnotation { .. }
+        | Edit::BorderColorAnnotation { .. }
+        | Edit::BorderShapeAnnotation { .. }
         | Edit::SetAnnotationInfo { .. }
         | Edit::SetMeasurementScale { .. } => {
             if p.annotate() {
@@ -135,6 +142,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::MarkDecorative { .. }
         | Edit::MarkTagArtifact { .. }
         | Edit::AddOcrText { .. }
+        | Edit::EnhanceScan { .. }
         | Edit::SetDocumentScript { .. }
         | Edit::SetFieldScript { .. }
         | Edit::RemoveStandardId { .. }
@@ -250,6 +258,169 @@ impl EditCtx {
     }
 }
 
+fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usize, change: &ImageEdit) -> Result<(), EditError> {
+    match change {
+        ImageEdit::Move(to) if !to.iter().all(|v| v.is_finite()) => {
+            return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid position".into())));
+        }
+        ImageEdit::Transform(t) => {
+            let [a, b, c, d, _, _] = *t;
+            let determinant = a * d - b * c;
+            if !t.iter().all(|v| v.is_finite()) || !determinant.is_finite() || determinant.abs() < 1e-9 {
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("the image transform must be finite and nonsingular".into())));
+            }
+        }
+        ImageEdit::Crop(keep) if !keep.iter().all(|v| v.is_finite()) => {
+            return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid crop".into())));
+        }
+        _ => {}
+    }
+    let img = pdfcraft_edit::page_images(doc, page)?
+        .into_iter()
+        .nth(index)
+        .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1))))?;
+    let c = match change {
+        ImageEdit::Move(to) => pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::rect_to_rect(img.rect, *to)),
+        ImageEdit::Transform(t) => pdfcraft_edit::ImageChange::Transform(*t),
+        ImageEdit::Rotate(q) => {
+            pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(img.visible_rect.unwrap_or(img.rect), *q, false, false))
+        }
+        ImageEdit::RotateBy(degrees) => {
+            let t = pdfcraft_edit::turn_by_degrees(img.visible_rect.unwrap_or(img.rect), *degrees)
+                .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid("the rotation angle must be a finite number".into())))?;
+            pdfcraft_edit::ImageChange::Transform(t)
+        }
+        ImageEdit::Flip { horizontal } => pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(
+            img.visible_rect.unwrap_or(img.rect),
+            0,
+            *horizontal,
+            !*horizontal,
+        )),
+        ImageEdit::Replace { name, bytes } => {
+            if img.is_form {
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("grouped Form artwork cannot be replaced with a bitmap".into())));
+            }
+            pdfcraft_edit::ImageChange::Replace(embed_image(doc, name, bytes)?.0)
+        }
+        ImageEdit::Crop(keep) => pdfcraft_edit::ImageChange::Crop(*keep),
+        ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
+        ImageEdit::Arrange(order) => pdfcraft_edit::ImageChange::Arrange(*order),
+        ImageEdit::RemoveCrop => pdfcraft_edit::ImageChange::RemoveCrop,
+    };
+    let page_model = pdfcraft_model::pages(doc)
+        .into_iter()
+        .nth(page)
+        .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page {} not found", page + 1))))?;
+    let target_stream_obj = match page_model.dict.get(b"Contents") {
+        None => None,
+        Some(c) => match &*doc.resolve(c) {
+            pdfcraft_cos::Object::Array(a) => a.get(img.stream).and_then(|o| o.as_ref()),
+            _ if img.stream == 0 => c.as_ref(),
+            _ => None,
+        },
+    };
+
+    let added_items: Vec<(usize, pdfcraft_edit::Added)> = pdfcraft_edit::list_added(doc).into_iter().filter(|a| a.page == page).enumerate().collect();
+    // Ownership belongs to the drawing stream, not the XObject: original and added images may
+    // show the same resource without sharing an editable item.
+    let shows_image = |a: &pdfcraft_edit::Added| img.object.is_some_and(|t| matches!(&a.content, AddedContent::Image(ai) if ai.image == t));
+    let matched_added = added_items.iter().find(|(_, a)| target_stream_obj == Some(a.obj) && (img.object.is_none() || shows_image(a)));
+
+    let mut ai_to_update = None;
+    if let Some((added_idx, added_item)) = matched_added
+        && let AddedContent::Image(ai) = added_item.content.clone()
+    {
+        let has_active_crop = ai.crop.iter().any(|v| v.abs() > 1e-6)
+            || img.visible_rect.is_some_and(|v| {
+                (v[0] - img.rect[0]).abs() > 1e-4
+                    || (v[1] - img.rect[1]).abs() > 1e-4
+                    || (v[2] - img.rect[2]).abs() > 1e-4
+                    || (v[3] - img.rect[3]).abs() > 1e-4
+            });
+        let non_axis_transform = matches!(change, ImageEdit::Transform([a, b, c, d, _, _])
+            if !((b.abs() < 1e-5 && c.abs() < 1e-5) || (a.abs() < 1e-5 && d.abs() < 1e-5)));
+        let should_promote = has_active_crop
+            || non_axis_transform
+            || matches!(change, ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete);
+
+        if should_promote {
+            doc.update_dict(added_item.obj, |d| {
+                d.remove(b"PCAdded");
+                d.remove(b"PCMark");
+            })
+            .map_err(|e| EditError::Edit(pdfcraft_edit::EditError::Invalid(e.to_string())))?;
+        } else {
+            ai_to_update = Some((*added_idx, ai));
+        }
+    }
+
+    if let Some((added_idx, mut ai)) = ai_to_update {
+        let view = Matrix(page_model.view_matrix(doc));
+        let to_display = view.invert().ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid page transform".into())))?;
+
+        match change {
+            ImageEdit::Move(to) => {
+                ai.rect = to_display.bbox(*to);
+                pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
+            }
+            ImageEdit::Transform(_) | ImageEdit::Flip { .. } => {
+                let pdfcraft_edit::ImageChange::Transform(t) = c else {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("expected transform".into())));
+                };
+                let t_display = view.then(&Matrix(t)).then(&to_display);
+                let [ta, tb, tc, td, _, _] = t_display.0;
+                let is_parallel = tb.abs() < 1e-5 && tc.abs() < 1e-5;
+                let is_perpendicular = ta.abs() < 1e-5 && td.abs() < 1e-5;
+
+                let (quarters_ccw, disp_flip_h, disp_flip_v) = if is_parallel {
+                    (0, ta < 0.0, td < 0.0)
+                } else if is_perpendicular {
+                    match (tb > 0.0, tc > 0.0) {
+                        (true, false) => (1, false, false),
+                        (false, true) => (3, false, false),
+                        (true, true) => (1, false, true),
+                        (false, false) => (1, true, false),
+                    }
+                } else {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(
+                        "non-axis-aligned transforms are not supported for added images".into(),
+                    )));
+                };
+                let (toggle_h, toggle_v) = if ai.rotation % 2 == 1 { (disp_flip_v, disp_flip_h) } else { (disp_flip_h, disp_flip_v) };
+                ai.flip_h ^= toggle_h;
+                ai.flip_v ^= toggle_v;
+                ai.rotation = (ai.rotation + quarters_ccw) % 4;
+                ai.rect = t_display.bbox(ai.rect);
+                pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
+            }
+            ImageEdit::Rotate(q) => {
+                let k = ((4 - q.rem_euclid(4)) % 4) as u8;
+                ai.rotation = (ai.rotation + k) % 4;
+                let r = ai.rect;
+                let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+                if k % 2 == 1 {
+                    let (w, h) = (r[2] - r[0], r[3] - r[1]);
+                    ai.rect = [cx - h / 2.0, cy - w / 2.0, cx + h / 2.0, cy + w / 2.0];
+                }
+                pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
+            }
+            ImageEdit::Replace { .. } => {
+                let pdfcraft_edit::ImageChange::Replace(new_image) = c else {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("expected replace".into())));
+                };
+                ai.image = new_image;
+                pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
+            }
+            ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete => {
+                pdfcraft_edit::change_image(doc, page, index, &c)?;
+            }
+        }
+    } else {
+        pdfcraft_edit::change_image(doc, page, index, &c)?;
+    }
+    Ok(())
+}
+
 /// Perform an edit on a working copy (the caller discards it on error).
 pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> Result<(), EditError> {
     match edit {
@@ -290,6 +461,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::SetBookmarkPage { path, page } => pdfcraft_organize::set_bookmark_page(doc, path, *page)?,
         Edit::SetBookmarkColor { path, color } => pdfcraft_organize::set_bookmark_color(doc, path, *color)?,
         Edit::SetBookmarkStyle { path, bold, italic } => pdfcraft_organize::set_bookmark_style(doc, path, *bold, *italic)?,
+        Edit::ImportBookmarks { parent, index, bookmarks, replace } => {
+            pdfcraft_organize::import_outline(doc, parent, *index, bookmarks, *replace)?;
+        }
         Edit::BookmarksFromStructure => {
             let entries: Vec<_> = pdfcraft_a11y::headings(doc)
                 .into_iter()
@@ -325,6 +499,14 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::AddAnnotation(a) => {
             pdfcraft_annot::add_annotation(doc, a, &cx.meta())?;
         }
+        Edit::PasteComments { xfdf, page, offset } => {
+            // Names from the edit's own id generator: unique to this paste within the document.
+            let prefix = cx.meta().id;
+            let report = pdfcraft_xfdf::import_comments(doc, xfdf, Some(*page), Some(&prefix), *offset)?;
+            if report.comments == 0 {
+                return Err(EditError::Invalid("the clipboard holds no comments".into()));
+            }
+        }
         Edit::AddCustomStamp { page, rect, name, file, author } => {
             let src = mark_source(doc, file)?;
             let (sw, sh) = (src.size.0.max(1.0), src.size.1.max(1.0));
@@ -344,6 +526,16 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             let new = NewAnnotation { page: *page, shape, style, contents: name.clone(), author: author.clone() };
             let index = pdfcraft_annot::add_annotation(doc, &new, &cx.meta())?;
             pdfcraft_annot::orient_image_stamp(doc, *page, index, rotation)?;
+        }
+        Edit::AddModel3d { page, rect, model, poster, activation, name } => {
+            // A file that is not a model is refused before its poster is brought in.
+            pdfcraft_annot::check_model(model)?;
+            let poster = match poster {
+                Some(file) => Some(model_poster(doc, *rect, file)?),
+                None => None,
+            };
+            let new = pdfcraft_annot::NewModel3d { page: *page, rect: *rect, model, activation: *activation, poster, contents: name };
+            pdfcraft_annot::add_3d_model(doc, &new, &cx.meta())?;
         }
         Edit::DeleteAnnotation { page, index } => pdfcraft_annot::delete_annotation(doc, *page, *index)?,
         Edit::SetAnnotationContents { page, index, text } => pdfcraft_annot::set_contents(doc, *page, *index, text, &cx.meta())?,
@@ -395,7 +587,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             )?;
         }
         Edit::FillAnnotation { page, index, fill } => pdfcraft_annot::set_fill(doc, *page, *index, *fill, &cx.meta())?,
+        Edit::PartOpacity { page, index, fill, text } => pdfcraft_annot::set_part_opacity(doc, *page, *index, *fill, *text, &cx.meta())?,
         Edit::FontSizeAnnotation { page, index, size } => pdfcraft_annot::set_font_size(doc, *page, *index, *size, &cx.meta())?,
+        Edit::BorderColorAnnotation { page, index, color } => pdfcraft_annot::set_border_color(doc, *page, *index, *color, &cx.meta())?,
+        Edit::BorderShapeAnnotation { page, index, shape } => pdfcraft_annot::set_border_shape(doc, *page, *index, *shape, &cx.meta())?,
         Edit::SetAnnotationInfo { page, index, author, subject, icon } => {
             pdfcraft_annot::set_info(doc, *page, *index, author.as_deref(), subject.as_deref(), *icon, &cx.meta())?;
         }
@@ -523,42 +718,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::RemoveStandardId { standard } => pdfcraft_organize::remove_standard_id(doc, *standard)?,
         Edit::SetDocumentScript { name, script } => pdfcraft_forms::set_document_script(doc, name, script.as_deref())?,
         Edit::AddOcrText { page, words } => {
-            pdfcraft_edit::stamp(doc, *page, "OCR", pdfcraft_ocr::text_layer(words))?;
+            crate::ocr::layer::add_text(doc, *page, words)?;
         }
-        Edit::EditPageImage { page, index, change } => {
-            let img = pdfcraft_edit::page_images(doc, *page)?
-                .into_iter()
-                .nth(*index)
-                .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1))))?;
-            let c = match change {
-                ImageEdit::Move(to) => pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::rect_to_rect(img.rect, *to)),
-                ImageEdit::Rotate(q) => {
-                    pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(img.visible_rect.unwrap_or(img.rect), *q, false, false))
-                }
-                ImageEdit::RotateBy(degrees) => {
-                    let t = pdfcraft_edit::turn_by_degrees(img.visible_rect.unwrap_or(img.rect), *degrees)
-                        .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid("the rotation angle must be a finite number".into())))?;
-                    pdfcraft_edit::ImageChange::Transform(t)
-                }
-                ImageEdit::Flip { horizontal } => pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(
-                    img.visible_rect.unwrap_or(img.rect),
-                    0,
-                    *horizontal,
-                    !*horizontal,
-                )),
-                ImageEdit::Replace { name, bytes } => {
-                    if img.is_form {
-                        return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(
-                            "grouped Form artwork cannot be replaced with a bitmap".into(),
-                        )));
-                    }
-                    pdfcraft_edit::ImageChange::Replace(embed_image(doc, name, bytes)?.0)
-                }
-                ImageEdit::Crop(keep) => pdfcraft_edit::ImageChange::Crop(*keep),
-                ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
-            };
-            pdfcraft_edit::change_image(doc, *page, *index, &c)?;
-        }
+        Edit::EnhanceScan { images } => crate::scan_clean::write_back(doc, images)?,
+        Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;

@@ -120,6 +120,7 @@ impl Automation {
         self.texts.remove(&id);
         self.listed.retain(|(d, _), _| *d != id);
         self.evicted.remove(&id);
+        self.ocr_reviews.remove(&id);
         Ok(json!({ "closed": id.0 }))
     }
 
@@ -410,6 +411,7 @@ impl Automation {
             "images": o.images,
             "images_resampled": o.images_resampled,
             "images_recompressed": o.images_recompressed,
+            "images_refused": o.images_refused,
             "image_bytes_before": o.image_bytes_before,
             "image_bytes_after": o.image_bytes_after,
             "thumbnails": o.thumbnails,
