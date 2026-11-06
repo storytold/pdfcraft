@@ -6396,6 +6396,29 @@ fn draw_minified_image(
     alpha: Option<&[u8]>,
     device: (u32, u32),
 ) -> RenderedPage {
+    draw_image_as(RenderConfig::default(), space, size, interpolate, data, alpha, device)
+}
+
+/// [`draw_minified_image`], rendered with `config`.
+fn draw_image_as(
+    config: RenderConfig,
+    space: &str,
+    size: (u32, u32),
+    interpolate: Option<bool>,
+    data: &[u8],
+    alpha: Option<&[u8]>,
+    device: (u32, u32),
+) -> RenderedPage {
+    let pdf = image_page(space, size, interpolate, data, alpha, device);
+    let mut renderer = PageRenderer::new(Arc::new(pdf), config);
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.width, page.height), device);
+    page
+}
+
+/// The page [`draw_minified_image`] draws.
+fn image_page(space: &str, size: (u32, u32), interpolate: Option<bool>, data: &[u8], alpha: Option<&[u8]>, device: (u32, u32)) -> Vec<u8> {
     let (width, height) = size;
     let interp = interpolate.map_or_else(String::new, |value| format!("/Interpolate {value} "));
     let (smask, mask) = match alpha {
@@ -6423,11 +6446,7 @@ fn draw_minified_image(
         content.len(),
         image.len() + 1
     );
-    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
-    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
-    assert!(page.error.is_none(), "{:?}", page.error);
-    assert_eq!((page.width, page.height), device);
-    page
+    pdf.into_bytes()
 }
 
 /// Issue #624: an image drawn below its source resolution was pre-resampled with Catmull-Rom
@@ -6684,6 +6703,54 @@ fn a_scan_shrunk_one_way_is_smoothed_the_way_it_is_stretched() {
     assert!(edge.iter().any(|v| (16..=112).contains(v)), "a hard edge down the stretched side: {edge:?}");
     assert_eq!(gray(128, 700), 0, "above the edge");
     assert!((0..256).all(|x| gray(x, 836).abs_diff(128) <= 1), "the shrunk side is averaged at 1:1");
+}
+
+/// Preferences ▸ Smooth images off (`RenderConfig::sharp_images`, hayro patch 29): a large image
+/// without `/Interpolate`, such as a shipping label or a big barcode, keeps its hard edges when
+/// enlarged, on a whole page and in a tile.
+#[test]
+fn sharp_images_keep_a_large_image_s_edges_hard_when_enlarged() {
+    let side = 512usize;
+    let half: Vec<u8> = (0..side * side).map(|i| if i % side < side / 2 { 0 } else { 255 }).collect();
+    let sharp = RenderConfig { sharp_images: true, ..Default::default() };
+    let page = draw_image_as(sharp.clone(), "DeviceGray", (512, 512), None, &half, None, (1536, 1536));
+    let row = 768 * 1536;
+    let edge: Vec<u8> = (760..776).map(|x| page.rgba[(row + x) * 4]).collect();
+    assert!(edge.iter().all(|v| *v == 0 || *v == 255), "a smoothed edge: {edge:?}");
+    let pdf = image_page("DeviceGray", (512, 512), None, &half, None, (1536, 1536));
+    let tile = PageRenderer::new(Arc::new(pdf), sharp).render(RenderRequest {
+        page: 0,
+        tile: Some(Tile { x: 752, y: 760, w: 32, h: 16 }),
+        scale: 1.0,
+        ..Default::default()
+    });
+    assert!(tile.error.is_none(), "{:?}", tile.error);
+    let tile_px = tile.rgba.as_chunks::<4>().0;
+    assert!(tile_px.iter().any(|px| px[0] == 0) && tile_px.iter().any(|px| px[0] == 255), "the tile misses the edge");
+    assert!(tile_px.iter().all(|px| px[0] == 0 || px[0] == 255), "a smoothed edge in a tile");
+}
+
+/// With Smooth images off, an image shrunk below its resolution is drawn with its own samples
+/// (nearest-neighbour), not averaged: a stroke two samples wide, at a third of its resolution,
+/// comes out black where the average makes it a third white.
+#[test]
+fn sharp_images_shrink_with_the_image_s_own_samples() {
+    let mut stroke = [255u8; 9];
+    stroke[3] = 0;
+    stroke[4] = 0;
+    let grays = |page: RenderedPage| page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect::<Vec<u8>>();
+    let sharp = RenderConfig { sharp_images: true, ..Default::default() };
+    assert_eq!(grays(draw_image_as(sharp, "DeviceGray", (9, 1), None, &stroke, None, (3, 1))), [255, 0, 255]);
+    assert_eq!(grays(draw_minified_image("DeviceGray", (9, 1), None, &stroke, None, (3, 1))), [255, 85, 255], "averaged by default");
+}
+
+/// Smooth images off leaves an image that asks for `/Interpolate` interpolated, as its file asks.
+#[test]
+fn sharp_images_still_interpolate_images_that_ask() {
+    let checker: Vec<u8> = (0..64).map(|i| if (i / 8 + i % 8) % 2 == 0 { 0 } else { 255 }).collect();
+    let sharp = RenderConfig { sharp_images: true, ..Default::default() };
+    let page = draw_image_as(sharp, "DeviceGray", (8, 8), Some(true), &checker, None, (80, 80));
+    assert!(page.rgba.as_chunks::<4>().0.iter().any(|px| px[0] != 0 && px[0] != 255), "an interpolated image was drawn sharp");
 }
 
 /// An image shrunk across and stretched down (a 204 × 98 dpi fax shown at screen size): the

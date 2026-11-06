@@ -784,6 +784,9 @@ pub(crate) struct Renderer {
     /// PdfCraft patch: when set, solid text and line-art paint colours are remapped
     /// while rendering (the "reading colours" view setting).
     color_replacement: Option<ColorReplacement>,
+    /// PdfCraft patch (29): images that don't ask for `/Interpolate` keep their own samples
+    /// (`RenderSettings::sharp_images`).
+    sharp_images: bool,
     /// PdfCraft patch (17): while the page's annotations are being drawn, paints keep their
     /// colours — reading colours replace document colours, never annotation colours.
     in_annotations: bool,
@@ -901,11 +904,13 @@ impl Renderer {
         settings: RenderSettings,
         cache: &RenderCache<'_>,
         color_replacement: Option<ColorReplacement>,
+        sharp_images: bool,
         preview: bool,
     ) -> Self {
         Self {
             ctx: RenderContext::new_with(width, height, settings),
             color_replacement,
+            sharp_images,
             in_annotations: false,
             knockout: Vec::new(),
             erasing: false,
@@ -1012,6 +1017,7 @@ impl Renderer {
                 // PdfCraft patch: this renders an image's alpha mask, which must keep its
                 // original values, so it is never remapped by the reading-colours setting.
                 color_replacement: None,
+                sharp_images: self.sharp_images,
                 in_annotations: false,
                 knockout: Vec::new(),
                 erasing: false,
@@ -1252,8 +1258,10 @@ impl Renderer {
         // PdfCraft patch: an image that did not ask for interpolation and is drawn below its
         // resolution is shrunk by area averaging (`area_shrink`), not nearest-neighbour, which
         // broke up the text of scans shown at screen size. Type 3 glyph images keep the nearest
-        // shrink of #624: they are drawn with a frame of their own and never snapped.
+        // shrink of #624: they are drawn with a frame of their own and never snapped. With
+        // `sharp_images` (29) the shrink stays nearest-neighbour, as the image asked.
         let area = !interpolate
+            && !self.sharp_images
             && requested_resize
             && !self.in_type3_glyph
             // Wider sources keep #624's bounded nearest-neighbour shrink (`area_shrink` refuses
@@ -1338,8 +1346,10 @@ impl Renderer {
         // 300 dpi scan and drew its tiles five times slower. Smaller images (icons, QR codes,
         // pixel art) keep their hard pixels. A scan shrunk on one side and stretched on the other
         // is smoothed too: the area shrink leaves the shrunk side at 1:1, where bilinear adds
-        // nothing, and the stretched side would otherwise be drawn nearest-neighbour.
+        // nothing, and the stretched side would otherwise be drawn nearest-neighbour. Not with
+        // `sharp_images` (29): a large barcode or label keeps its hard edges.
         if !interpolate
+            && !self.sharp_images
             && !self.in_type3_glyph
             && (x_scale > SMOOTHED_IMAGE_SCALE || y_scale > SMOOTHED_IMAGE_SCALE)
             && source_width.min(source_height) >= SMOOTHED_IMAGE_SIDE
@@ -1582,6 +1592,7 @@ impl Renderer {
         let mut renderer = Self {
             ctx: RenderContext::new_with(width, height, derive_settings(self.ctx.render_settings())),
             color_replacement: None,
+            sharp_images: self.sharp_images,
             in_annotations: self.in_annotations,
             inside_pattern: self.inside_pattern,
             soft_mask_cache: HashMap::default(),
@@ -1855,6 +1866,7 @@ impl Renderer {
                                     derive_settings(self.ctx.render_settings()),
                                 ),
                                 color_replacement: None,
+                                sharp_images: self.sharp_images,
                                 in_annotations: false,
                                 knockout: Vec::new(),
                                 erasing: false,
@@ -1919,6 +1931,7 @@ impl Renderer {
                             // PdfCraft patch: a pattern cell is painted as one artwork, so its
                             // content is never remapped by the reading-colours setting.
                             color_replacement: None,
+                            sharp_images: self.sharp_images,
                             in_annotations: false,
                             knockout: Vec::new(),
                             erasing: false,
@@ -2225,6 +2238,7 @@ impl<'a> Device<'a> for Renderer {
                                         // coverage values, so its content is never remapped by
                                         // the reading-colours setting.
                                         color_replacement: None,
+                                        sharp_images: self.sharp_images,
                                         in_annotations: false,
                                         knockout: Vec::new(),
                                         erasing: false,
@@ -2422,7 +2436,7 @@ impl<'a> Device<'a> for Renderer {
 
                 self.soft_mask_cache
                     .entry(m.cache_key())
-                    .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview))
+                    .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.sharp_images, self.preview))
                     .clone()
             }),
             None,
@@ -2551,7 +2565,7 @@ impl<'a> Device<'a> for Renderer {
 
             self.soft_mask_cache
                 .entry(m.cache_key())
-                .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview))
+                .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.sharp_images, self.preview))
                 .clone()
         });
         if let Some(mask) = self.cur_mask.clone() {
@@ -2736,12 +2750,13 @@ fn render_shading_texture(
     )
 }
 
-fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, height: u16, preview: bool) -> Mask {
+fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, height: u16, sharp_images: bool, preview: bool) -> Mask {
     let mut renderer = Renderer {
         ctx: RenderContext::new_with(width, height, derive_settings(&settings)),
         // PdfCraft patch: a soft mask must keep its original luminance values, so its
         // content is never remapped by the reading-colours setting.
         color_replacement: None,
+        sharp_images,
         in_annotations: false,
         knockout: Vec::new(),
         erasing: false,

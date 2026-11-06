@@ -229,6 +229,11 @@ impl PdfCraftApp {
                     _ => return Err("always-default-view must be on or off".into()),
                 };
             }
+            ("smooth-images", _) => match value {
+                "on" => self.set_smooth_images(true),
+                "off" => self.set_smooth_images(false),
+                _ => return Err("smooth-images must be on or off".into()),
+            },
             ("tools-side", _) => {
                 self.side_panels.tools_side = match value {
                     "left" => side_panels::ToolsSide::Left,

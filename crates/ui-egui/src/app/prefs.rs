@@ -59,6 +59,18 @@ impl PdfCraftApp {
         }
     }
 
+    /// The app-wide Smooth images preference: sets it and applies it to every open document. A
+    /// document the change actually touches re-renders.
+    pub fn set_smooth_images(&mut self, smooth: bool) {
+        self.smooth_images = smooth;
+        for i in 0..self.views.len() {
+            // Idempotent per document: the engine says whether anything changed.
+            if self.session.set_sharp_images(self.views[i].id, !smooth) {
+                self.views[i].invalidate_content();
+            }
+        }
+    }
+
     /// Enable the Linux desktop portal in a native window. Headless contexts keep
     /// their supplied input and never connect to the user's session bus.
     #[cfg(target_os = "linux")]
@@ -155,6 +167,7 @@ impl PdfCraftApp {
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
         v["show_page_edge_shadows"] = self.show_page_edge_shadows.into();
+        v["smooth_images"] = self.smooth_images.into();
         // Not `check_updates_at_start`: that key was an opt-in of its own, off unless chosen, and
         // settings written then would turn this off unasked.
         v["update_check_at_start"] = self.update_check_at_start.into();
@@ -318,6 +331,9 @@ impl PdfCraftApp {
         }
         if let Some(show) = v["show_page_edge_shadows"].as_bool() {
             self.show_page_edge_shadows = show;
+        }
+        if let Some(smooth) = v["smooth_images"].as_bool() {
+            self.set_smooth_images(smooth);
         }
         if let Some(width) = v["fill_text_border"].as_f64().and_then(fill_sign::valid_text_border) {
             self.fill_text_default.width = width;
