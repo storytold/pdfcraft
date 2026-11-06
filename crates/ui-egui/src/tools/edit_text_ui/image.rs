@@ -289,7 +289,7 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
     }
 
     if let Some(o) = ptr.pressed() {
-        mode.pressed_on = b.contains(o) || crop_controls_contain(image, mode, xf, info, page, o);
+        mode.pressed_on = crate::canvas::crop_contains_point(image, mode, xf, info, page, o);
     }
     if allow_interaction
         && resp.drag_started()
@@ -461,13 +461,14 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
     let reset_clicked = allow_interaction
         && reset
             .is_some_and(|r| reset_resp.as_ref().is_some_and(|res| res.clicked()) || (resp.clicked() && hover_pos.is_some_and(|p| r.contains(p))));
-    // A click away from the picture and its crop box and handles applies the crop and lets the
-    // picture go, as Done and then that click would (#6422). A pill's click is the pill's.
+    // A click away from the picture (its shape, uncropped, not its bounds) and its crop box and
+    // handles applies the crop and lets the picture go, as Done and then that click would
+    // (#6422). A pill's click is the pill's.
     let away_clicked = allow_interaction
         && resp.clicked()
         && !(done_clicked || cancel_clicked || reset_clicked)
         && !mode.pressed_on
-        && hover_pos.is_some_and(|p| !b.contains(p) && !crop_controls_contain(image, mode, xf, info, page, p));
+        && hover_pos.is_some_and(|p| !crate::canvas::crop_contains_point(image, mode, xf, info, page, p));
 
     if reset_clicked {
         mode.keep = if image.has_editor_crop() { image.rect } else { initial_keep };

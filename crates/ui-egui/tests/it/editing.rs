@@ -8132,6 +8132,45 @@ fn test_rotated_image_crop_secondary_click_in_outer_bounding_box_clears_selectio
     assert!(h.query_by_label("Rotate view clockwise").is_some());
 }
 
+/// A turned picture is its shape, not its bounds: a click in a corner of its bounds, off the
+/// picture and its crop box, is a click away that applies the crop (#6422 review).
+#[test]
+fn a_click_beside_a_turned_picture_in_its_bounds_applies_its_crop() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 80, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    let full = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    let (qw, qh) = ((full[2] - full[0]) / 4.0, (full[3] - full[1]) / 4.0);
+    let (mx, my) = ((full[0] + full[2]) / 2.0, (full[1] + full[3]) / 2.0);
+    let edit = |change| pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change };
+    h.state_mut().apply_edit(edit(pdfcraft_engine::ImageEdit::Move([mx - qw, my - qh, mx + qw, my + qh])));
+    h.run_steps(4);
+    h.state_mut().apply_edit(edit(pdfcraft_engine::ImageEdit::RotateBy(45.0)));
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let c = h.state().views[0].page_screen_rect(0).expect("on screen").center();
+    click_at(&mut h, c);
+    assert!(h.state().views[0].image_selection.is_some(), "selected");
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new([mx - 5.0, my - 5.0, mx + 5.0, my + 5.0]));
+    h.run_steps(2);
+
+    let img = h.state().session.get(id).unwrap().page_images(0)[0].clone();
+    let xf = h.state().views[0].page_xform(0).unwrap();
+    let b = pdfcraft_ui_egui::canvas::image_screen_rect(&img, &xf, &h.state().session.get(id).unwrap().info, 0);
+    // The bounds' top-left corner lies outside the 45° diamond.
+    click_at(&mut h, b.left_top() + egui::vec2(2.0, 2.0));
+    assert!(h.state().views[0].image_selection.is_none(), "a click off the turned picture lets it go");
+    assert_ne!(h.state().session.get(id).unwrap().page_images(0)[0].visible_rect, img.visible_rect, "the crop is applied");
+}
+
 /// A picture alone in the middle of a page, empty page around it (#6422).
 fn picture_with_room_around() -> Vec<u8> {
     use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};
