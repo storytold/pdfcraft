@@ -81,6 +81,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("engine", Class::Layer(6)),
     // L7 platform + frontends
     ("platform", Class::Layer(7)),
+    ("collab-client", Class::Layer(7)),
     ("collab-hub", Class::Layer(7)),
     ("collab-pdf", Class::Layer(7)),
     ("collab-server", Class::Layer(7)),
@@ -115,6 +116,8 @@ pub const SIDEWAYS: &[(&str, &str)] = &[
     ("automation", "platform"),
     ("collab-pdf", "collab-server"),
     ("collab-hub", "collab-server"),
+    ("collab-client", "collab-hub"),
+    ("collab-client", "collab-server"),
     ("collab-ws", "collab-hub"),
     ("collab-ws", "collab-server"),
 ];

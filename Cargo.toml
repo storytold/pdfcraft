@@ -30,6 +30,7 @@ craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-l
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "1b34eba41e62138fc2438d2734523b302840b45d", features = ["egui"] }
 # internal
+pdfcraft-collab-client = { path = "crates/collab-client", version = "0.18.1" }
 pdfcraft-collab-hub = { path = "crates/collab-hub", version = "0.18.1" }
 pdfcraft-collab-pdf = { path = "crates/collab-pdf", version = "0.18.1" }
 pdfcraft-collab-proto = { path = "crates/collab-proto", version = "0.18.1" }
