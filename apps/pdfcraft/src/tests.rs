@@ -152,6 +152,39 @@ fn a_software_renderer_is_shown_to_the_user() {
     }
 }
 
+#[cfg(windows)]
+#[test]
+fn a_failed_update_says_why_at_the_next_start() {
+    // Issue #5546: the Windows update helper failed, started the old copy again, and left its
+    // reason where craft-update's `take_failure` reads it (`self-update-error.txt` in the logs).
+    let root = std::env::temp_dir().join(format!("pdfcraft-update-failure-{}", std::process::id()));
+    let paths = craft_update::Paths::under(&root);
+    std::fs::create_dir_all(paths.logs()).unwrap();
+    std::fs::write(paths.logs().join("self-update-error.txt"), "couldn't replace pdfcraft.exe (Access is denied. (os error 5))").unwrap();
+    let mut app = super::PdfCraftApp::new();
+    super::notify_failed_update(&mut app, &paths);
+    let notice = app.toast.as_ref().map(|(m, _)| m.as_str()).unwrap_or_default();
+    assert!(notice.contains("didn't install") && notice.contains("Access is denied"), "{notice:?}");
+    // Said once: the start after that, like one after an update that worked, says nothing.
+    let mut app = super::PdfCraftApp::new();
+    super::notify_failed_update(&mut app, &paths);
+    assert!(app.toast.is_none(), "{:?}", app.toast);
+    // The file is outside PdfCraft's hands: a long one is cut, not shown whole. Its start and its
+    // end stay, and the end of a failed put-back says where the previous files are.
+    let long = format!(
+        "couldn't replace pdfcraft.exe ({}); couldn't put back pdfcraft.exe (Access is denied). The previous files are in C:\\PdfCraft\\update-recovery-1",
+        "é".repeat(100_000)
+    );
+    std::fs::write(paths.logs().join("self-update-error.txt"), long).unwrap();
+    let mut app = super::PdfCraftApp::new();
+    super::notify_failed_update(&mut app, &paths);
+    let notice = app.toast.as_ref().map(|(m, _)| m.as_str()).unwrap_or_default();
+    assert!(notice.chars().count() < 700, "{} chars", notice.chars().count());
+    assert!(notice.contains("couldn't replace pdfcraft.exe (éé") && notice.contains("é … é"), "{notice}");
+    assert!(notice.ends_with("The previous files are in C:\\PdfCraft\\update-recovery-1"), "{notice}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn gpu_setup_avoids_vulkan_and_stretched_resizes_on_windows_and_prefers_low_power() {
     let mut native = eframe::NativeOptions::default();
