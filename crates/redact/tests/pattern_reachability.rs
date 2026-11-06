@@ -293,7 +293,9 @@ fn an_incremental_save_after_apply_is_the_full_save() {
     mark(&mut doc, 0);
     apply(&mut doc, None).unwrap();
     for object_streams in [true, false] {
-        let opts = SaveOptions { object_streams, ..SaveOptions::default() };
+        // A redacted rewrite gets a new identifier from fresh entropy; pin it so the two saves
+        // can be compared byte for byte.
+        let opts = SaveOptions { object_streams, id_entropy: Some([7; 16]), ..SaveOptions::default() };
         assert_eq!(write_incremental(&doc, &opts).unwrap(), write_full(&doc, &opts).unwrap());
     }
     // A later edit after a save-and-reopen starts from the clean file.
