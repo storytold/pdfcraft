@@ -5,13 +5,9 @@ use crate::{Failure, Step, is_pdf_whitespace};
 
 const NAME: &str = "ASCIIHexDecode";
 
+/// The value of hex digit `b`, either case; `None` for any other byte.
 fn nibble(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
+    char::from(b).to_digit(16).and_then(|d| u8::try_from(d).ok())
 }
 
 pub(crate) fn decode(data: &[u8], max: usize) -> Step {
@@ -68,6 +64,20 @@ mod tests {
 
     fn dec(d: &[u8]) -> Result<Vec<u8>, FilterError> {
         decode(d, 1000).map_err(|f| f.error)
+    }
+
+    /// Every byte reads as the hand-written table it replaced did (#6465).
+    #[test]
+    fn nibble_reads_every_byte_as_the_old_table() {
+        let table = |b: u8| match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        };
+        for b in 0..=u8::MAX {
+            assert_eq!(nibble(b), table(b), "byte {b:#04x}");
+        }
     }
 
     #[test]
