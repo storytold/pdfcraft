@@ -485,6 +485,33 @@ fn bigtiff_images_become_pages() {
     assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 2.0, 1.0], "4×2 px at 144 dpi");
 }
 
+/// A 24-bit planar PCX: 4 by 2 pixels, one plane per colour, 72 dpi.
+#[test]
+fn pcx_images_become_pages() {
+    let mut pcx = vec![0u8; 128];
+    pcx[0] = 0x0A;
+    pcx[1] = 5;
+    pcx[2] = 1;
+    pcx[3] = 8;
+    pcx[8..10].copy_from_slice(&3u16.to_le_bytes());
+    pcx[10..12].copy_from_slice(&1u16.to_le_bytes());
+    pcx[12..14].copy_from_slice(&72u16.to_le_bytes());
+    pcx[14..16].copy_from_slice(&72u16.to_le_bytes());
+    pcx[18] = 3;
+    pcx[20..22].copy_from_slice(&4u16.to_le_bytes());
+    // One plane per colour: the red, then green, then blue rows, all below 0xC0 so each byte
+    // stands for itself in the PCX run-length encoding.
+    pcx.extend_from_slice(&[10; 8]);
+    pcx.extend_from_slice(&[20; 8]);
+    pcx.extend_from_slice(&[30; 8]);
+    let result = from_images(&[("a.pcx".into(), pcx)]);
+    assert!(result.is_ok(), "PCX should become a page");
+    let doc = reopen(&result.unwrap());
+    assert_eq!(pages(&doc).len(), 1);
+    assert_eq!(media(&pages(&doc)[0]), [0.0, 0.0, 4.0, 2.0]);
+    assert_eq!(image_of(&doc, 0).name(b"ColorSpace"), Some(&b"DeviceRGB"[..]));
+}
+
 /// A synthetic ICC profile: a 128-byte header (size, device class, colour space, `acsp`) and
 /// some payload. Only the header is read.
 fn icc_profile(space: &[u8; 4]) -> Vec<u8> {

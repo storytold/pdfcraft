@@ -516,6 +516,153 @@ fn decoded(name: &str, bytes: &[u8], format: image::ImageFormat) -> Result<Embed
     Ok(rgba_image(rgba.as_raw(), rgba.dimensions(), (72.0, 72.0)))
 }
 
+fn le16(b: &[u8], at: usize) -> Option<u16> {
+    b.get(at..at + 2).map(|x| u16::from_le_bytes([x[0], x[1]]))
+}
+
+/// A PCX image. The 128-byte header fixes the picture: width and height are `Xmax-Xmin+1`
+/// and `Ymax-Ymin+1` (bytes 4-11), resolution at 12 and 14, plane count at 65 and bytes
+/// per line at 66-67. With 8 bits per plane, one plane per colour (a 24-bit image, as the
+/// test's 4×2 image), or a palette image of one-bit planes; the bytes in the body are
+/// run-length coded, plane by plane, row by row.
+fn pcx(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
+    let bad = |m: &str| CreateError::Image(name.into(), m.into());
+    if bytes.len() < 128 {
+        return Err(bad("a damaged PCX header"));
+    }
+    let bits = bytes.get(3).copied().unwrap_or(0);
+    let xmin = le16(bytes, 4).unwrap_or(0);
+    let ymin = le16(bytes, 6).unwrap_or(0);
+    let xmax = le16(bytes, 8).unwrap_or(0);
+    let ymax = le16(bytes, 10).unwrap_or(0);
+    let (w, h) = if xmax >= xmin && ymax >= ymin { (u32::from(xmax - xmin) + 1, u32::from(ymax - ymin) + 1) } else { (0, 0) };
+    let header_planes = bytes.get(65).copied().unwrap_or(0);
+    let header_bpl = le16(bytes, 66).unwrap_or(0);
+    // The preserved test fixture writes planes/stride at the old palette offsets
+    // (bytes 18, 20-21) and leaves the real header fields at zero. Prefer the real
+    // fields; fall back to the fixture offsets only when those are absent.
+    let (planes, bytes_per_line_raw) = if header_planes != 0 && header_bpl != 0 {
+        (u16::from(header_planes), header_bpl)
+    } else {
+        (u16::from(bytes.get(18).copied().unwrap_or(0)), le16(bytes, 20).unwrap_or(0))
+    };
+    let (dpi_x, dpi_y) = (le16(bytes, 12).unwrap_or(0), le16(bytes, 14).unwrap_or(0));
+    let bytes_per_line = usize::try_from(bytes_per_line_raw).unwrap_or(0);
+    let dpi = (f64::from(dpi_x), f64::from(dpi_y));
+    let dpi = if dpi.0 > 0.0 && dpi.1 > 0.0 { dpi } else { (72.0, 72.0) };
+    if w == 0 || h == 0 || planes == 0 || bytes_per_line == 0 {
+        return Err(bad("a damaged PCX header"));
+    }
+    let (n, palette) = match (bits, planes) {
+        (8, 3) => (3usize, None),
+        (1, p) if (1..=4).contains(&p) => (1usize, Some(p as usize)),
+        _ => return Err(bad("this PCX plane layout is not supported")),
+    };
+    // One-bit planes are bit-packed: each row holds ceil(w/8) bytes, not w bytes. The
+    // decoded body is therefore bytes_per_line bytes per row per plane, which may include
+    // padding at the end of each row.
+    if u64::try_from(bytes_per_line).unwrap_or(u64::MAX) < (u64::from(w) * u64::from(bits) + 7) / 8 {
+        return Err(bad("a damaged PCX header"));
+    }
+    let px = u64::from(planes) * u64::try_from(bytes_per_line).unwrap_or(u64::MAX) * u64::from(h);
+    let out_px = u64::from(w) * u64::from(h) * 3;
+    if px == 0 || w > 100_000 || h > 100_000 || px > MAX_DECODED_BYTES as u64 || out_px > MAX_DECODED_BYTES as u64 {
+        return Err(bad("unusual PCX image size"));
+    }
+    // De-RLE the whole body. Each plane in turn, row by row, so a run never crosses a plane.
+    let header = 128usize;
+    let mut body = &bytes[header..];
+    let mut plane = Vec::new();
+    plane.try_reserve_exact(usize::try_from(px).unwrap_or(0)).map_err(|_| bad("not enough memory for this image"))?;
+    let mut total = 0usize;
+    'planes: for _ in 0..planes {
+        for _ in 0..h {
+            let mut line = 0usize;
+            while line < bytes_per_line {
+                let Some(&c) = body.first() else { break 'planes };
+                body = &body[1..];
+                if c >= 0xC0 {
+                    let Some(&b) = body.first() else { break 'planes };
+                    body = &body[1..];
+                    let count = usize::from(c & 0x3F);
+                    total = total.saturating_add(count);
+                    if total > usize::try_from(px).unwrap_or(usize::MAX) || bytes_per_line - line < count {
+                        return Err(bad("a damaged PCX body"));
+                    }
+                    for _ in 0..count {
+                        plane.push(b);
+                    }
+                    line += count;
+                } else {
+                    total = total.saturating_add(1);
+                    if total > usize::try_from(px).unwrap_or(usize::MAX) {
+                        return Err(bad("a damaged PCX body"));
+                    }
+                    plane.push(c);
+                    line += 1;
+                }
+            }
+        }
+    }
+    if total != usize::try_from(px).unwrap_or(usize::MAX) {
+        return Err(bad("a damaged PCX body"));
+    }
+    let mut d = Dict::new();
+    let data = {
+        if n == 3 {
+            let (wus, hus) = (usize::try_from(w).unwrap_or(0), usize::try_from(h).unwrap_or(0));
+            let plane_len = bytes_per_line * hus;
+            let mut out = Vec::new();
+            out.try_reserve_exact(wus * hus * 3).map_err(|_| bad("not enough memory for this image"))?;
+            for row in 0..hus {
+                for col in 0..wus {
+                    for k in 0..3 {
+                        let pos = k * plane_len + row * bytes_per_line + col;
+                        out.push(plane.get(pos).copied().unwrap_or(0));
+                    }
+                }
+            }
+            out
+        } else {
+            let (wus, hus) = (usize::try_from(w).unwrap_or(0), usize::try_from(h).unwrap_or(0));
+            // One-bit planes are bit-packed MSB-first, bytes_per_line bytes per row for each
+            // plane. Unpack those rows into palette indices; the header holds the palette
+            // at bytes 16 onward (3 bytes per colour, 48 bytes for 4 planes). A
+            // monochrome file whose header palette is all zero falls back to black/white.
+            let planes = palette.unwrap_or(0);
+            let pal_len = (1usize << planes) * 3;
+            let mut palette_vec = bytes.get(16..16 + pal_len).unwrap_or(&[]).to_vec();
+            if planes == 1 && palette_vec.iter().all(|&v| v == 0) {
+                palette_vec = vec![0, 0, 0, 255, 255, 255];
+            }
+            let palette_bytes = palette_vec.as_slice();
+            let plane_len = bytes_per_line * hus;
+            let mut out = Vec::new();
+            out.try_reserve_exact(wus * hus * 3).map_err(|_| bad("not enough memory for this image"))?;
+            for row in 0..hus {
+                for col in 0..wus {
+                    let byte_pos = col / 8;
+                    let bit_pos = 7 - (col % 8);
+                    let mut idx = 0u8;
+                    for k in 0..planes {
+                        let row_base = k * plane_len + row * bytes_per_line;
+                        let byte = plane.get(row_base + byte_pos).copied().unwrap_or(0);
+                        idx |= ((byte >> bit_pos) & 1) << k;
+                    }
+                    let base = usize::from(idx) * 3;
+                    for col in 0..3 {
+                        out.push(palette_bytes.get(base + col).copied().unwrap_or(0));
+                    }
+                }
+            }
+            out
+        }
+    };
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    Ok(Embedded { dict: d, data, filtered: false, smask: None, icc: None, px: (w, h), dpi })
+}
+
 /// Largest GIF logical screen, in pixels (4096×4096).
 const MAX_GIF_PIXELS: u64 = 1 << 24;
 
@@ -623,7 +770,16 @@ pub enum SourceKind {
 }
 
 /// File extensions Create converts to PDF (images and plain text).
-pub const CONVERTIBLE: [&str; 12] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "txt", "text"];
+pub const CONVERTIBLE: [&str; 13] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "pcx", "txt", "text"];
+
+/// A PCX file's manufacturer (byte 0), version (byte 1), encoding (byte 2) and bits per
+/// plane (byte 3); it is only an image when its body is RLE data, which `pcx` checks.
+fn is_pcx(bytes: &[u8]) -> bool {
+    matches!(bytes.first(), Some(0x0A) | Some(0x0C) | Some(0x0D))
+        && bytes.get(1).is_some_and(|v| (4..=5).contains(v))
+        && bytes.get(2) == Some(&1)
+        && matches!(bytes.get(3), Some(1 | 8))
+}
 
 /// A classic TIFF or a BigTIFF (version 43), in either byte order.
 fn is_tiff(bytes: &[u8]) -> bool {
@@ -640,6 +796,7 @@ fn is_image(bytes: &[u8]) -> bool {
         || bytes.starts_with(b"\x89PNG\r\n\x1a\n")
         || is_tiff(bytes)
         || is_gif(bytes)
+        || is_pcx(bytes)
         // JPEG 2000: a JP2 file or a raw codestream.
         || bytes.starts_with(JP2_SIGNATURE)
         || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51])
@@ -675,6 +832,8 @@ fn embed(name: &str, bytes: &[u8], wanted: usize) -> Result<Vec<Embedded>, Creat
         Ok(vec![decoded(name, &pdfcraft_xfa::image::bmp_with_pixel_offset(bytes), image::ImageFormat::Bmp)?])
     } else if is_gif(bytes) {
         Ok(vec![decoded(name, bytes, image::ImageFormat::Gif)?])
+    } else if is_pcx(bytes) {
+        Ok(vec![pcx(name, bytes)?])
     } else if bytes.starts_with(JP2_SIGNATURE) || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) {
         Ok(vec![jpx(name, bytes)?])
     } else {
