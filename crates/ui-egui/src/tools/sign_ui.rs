@@ -527,6 +527,7 @@ impl PdfCraftApp {
             sign::SignError::WrongPassword => "The password is incorrect.".to_string(),
             e => e.to_string(),
         })?;
+        refuse_expired(&id.certificate, time_now())?;
         Ok(self.add_digital_id(&d.file, &id.certificate))
     }
 
@@ -868,6 +869,21 @@ mod tests {
         assert_eq!(app.digital_ids.len(), 2, "still there to be removed");
         assert!(app.digital_ids[0].unusable.is_some());
         assert_eq!(app.sign_draft.as_ref().unwrap().selected, Some(1));
+    }
+
+    #[test]
+    fn importing_an_expired_id_file_is_refused_and_adds_nothing() {
+        let key = PrivateKey::generate_p256().unwrap();
+        let certificate = Certificate::self_signed(&Name::build("Old", "", "", "", ""), &key, sign::Time::from_unix(0), 1, &[1]).unwrap();
+        let id = DigitalId { key, certificate, chain: Vec::new(), friendly_name: None };
+        let file = scratch().join("old.p12");
+        std::fs::write(&file, sign::pkcs12::write(&id, "secret12").unwrap()).unwrap();
+        let mut app = PdfCraftApp::new();
+        let mut draft = SignDraft::new(0, None, None, None, &[]);
+        draft.new_id = NewIdDraft { file: file.to_string_lossy().into_owned(), file_password: "secret12".into(), ..NewIdDraft::default() };
+        app.sign_draft = Some(draft);
+        assert_eq!(app.import_digital_id(), Err("This digital ID has expired.".to_string()));
+        assert!(app.digital_ids.is_empty());
     }
 
     #[test]
