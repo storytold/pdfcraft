@@ -316,9 +316,11 @@ impl Orbit {
         Ok(camera)
     }
 
-    /// The pan, each part held within [`PAN_LIMIT`].
+    /// The pan, each part held within [`PAN_LIMIT`]; a non-finite pan changes nothing.
     fn set_pan(&mut self, pan: [f64; 2]) {
-        self.pan = pan.map(|c| c.clamp(-PAN_LIMIT, PAN_LIMIT));
+        if pan.iter().all(|c| c.is_finite()) {
+            self.pan = pan.map(|c| c.clamp(-PAN_LIMIT, PAN_LIMIT));
+        }
     }
 }
 

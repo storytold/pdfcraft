@@ -124,20 +124,31 @@ fn an_orbit_frames_the_model_from_a_named_view_and_its_moves() {
     let top = draw(&mut a, json!({ "view": "top" }));
     assert_eq!(rgb(&top, 32, 24), [190, 192, 200], "the top view sees the face head on");
     let front = draw(&mut a, json!({ "view": "front" }));
-    assert_eq!(rgb(&front, 32, 18), [255, 255, 255], "the front view sees only its edge");
+    assert!((0..48).all(|y| rgb(&front, 32, y) == [255, 255, 255]), "the front view sees only its edge");
+    let tipped = draw(&mut a, json!({ "view": "front", "turn": [0, 30] }));
+    assert_ne!(rgb(&tipped, 32, 24), [255, 255, 255], "tipped down from the front, the face is in the middle");
     // With y up the Front view looks along -z, onto the face.
     let y_up = draw(&mut a, json!({ "view": "front", "up": "+y" }));
     assert_eq!(rgb(&y_up, 32, 24), [190, 192, 200]);
     // Turning the front view down by 90° stops just short of the top view and sees the face.
     let turned = draw(&mut a, json!({ "view": "front", "turn": [0, 90] }));
     assert_ne!(rgb(&turned, 32, 24), [255, 255, 255]);
-    // A pan of three model radii to the right moves the model out of the picture.
+    // A pan moves the target right, so the model moves left; three radii take it out of the picture.
+    let (left, right) = extent(&top, 24);
+    let (moved_left, moved_right) = extent(&draw(&mut a, json!({ "view": "top", "pan": [0.5, 0] })), 24);
+    assert!(moved_left < left && moved_right < right, "{left}..{right} moved to {moved_left}..{moved_right}");
     let panned = draw(&mut a, json!({ "view": "top", "pan": [3, 0] }));
     assert!((0..64).all(|x| rgb(&panned, x, 24) == [255, 255, 255]), "the model has left the picture");
     // Zooming in about the centre keeps the face under it and leaves no background at the corner.
     let zoomed = draw(&mut a, json!({ "view": "top", "zoom": 8 }));
     assert_eq!(rgb(&zoomed, 32, 24), [190, 192, 200]);
     assert_ne!(rgb(&zoomed, 0, 0), [255, 255, 255], "zoomed in, the face fills the corner too");
+}
+
+/// The first and last columns on row `y` that are not background.
+fn extent(data: &[u8], y: usize) -> (usize, usize) {
+    let drawn: Vec<usize> = (0..64).filter(|&x| rgb(data, x, y) != [255, 255, 255]).collect();
+    (*drawn.first().expect("the model is on the row"), *drawn.last().expect("the model is on the row"))
 }
 
 #[test]
@@ -150,6 +161,7 @@ fn a_wrong_orbit_is_a_clear_error() {
         json!({ "orbit": { "up": "+z", "front": "-z" } }),
         json!({ "orbit": { "turn": [1] } }),
         json!({ "orbit": { "zoom": 0 } }),
+        json!({ "orbit": { "zoom_at": [0.1, 0] } }),
         json!({ "orbit": { "pan": [1, "a"] } }),
         json!({ "orbit": { "spin": 1 } }),
         json!({ "orbit": 1 }),

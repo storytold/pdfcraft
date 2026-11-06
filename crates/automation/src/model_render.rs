@@ -121,6 +121,8 @@ fn orbit_camera(moves: &Value, meshes: &[WorldMesh], perspective: bool, aspect: 
             Some(v) => pair(v).ok_or_else(|| wrong("zoom_at as [right, up] in picture heights"))?,
         };
         orbit.zoom_at(&bounds, reach, aspect, factor, at);
+    } else if moves.contains_key("zoom_at") {
+        return Err(wrong("an object with zoom when it has zoom_at"));
     }
     if let Some(v) = moves.get("pan") {
         orbit.pan_by(pair(v).ok_or_else(|| wrong("pan as [right, up] in model radii"))?);

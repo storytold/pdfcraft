@@ -157,6 +157,9 @@ fn a_far_pan_is_held_and_an_out_of_range_model_is_an_error_not_a_panic() {
     assert!(orbit.camera(&huge, f64::MAX, 1.0).is_err());
     let flat = Bounds { min: [0.0; 3], max: [0.0; 3] };
     assert!(orbit.camera(&flat, 0.0, f64::NAN).is_ok(), "an empty extent falls back to a unit radius");
+    // A shift that overflows to NaN (a zoom about a model at the edge of the range) leaves the pan.
+    orbit.set_pan([f64::NAN, 0.0]);
+    assert_eq!(orbit.pan(), [PAN_LIMIT, -PAN_LIMIT]);
 }
 
 #[test]
