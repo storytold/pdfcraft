@@ -116,11 +116,14 @@ pub struct CropMode {
     pub keep: [f64; 4],
     /// A drag in progress: the grip (0–7 handles, 8 inside), where it started and the box then.
     pub(crate) drag: Option<(usize, Pos2, [f64; 4])>,
+    /// The last press began on the picture, its crop box or its handles: its click, wherever it
+    /// is let go, is not a click away (#6422).
+    pressed_on: bool,
 }
 
 impl CropMode {
     pub fn new(keep: [f64; 4]) -> Self {
-        Self { keep, drag: None }
+        Self { keep, drag: None, pressed_on: false }
     }
 }
 
@@ -285,6 +288,9 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
         return true;
     }
 
+    if let Some(o) = ptr.pressed() {
+        mode.pressed_on = crate::canvas::crop_contains_point(image, mode, xf, info, page, o);
+    }
     if allow_interaction
         && resp.drag_started()
         && let Some(o) = ptr.origin
@@ -455,11 +461,19 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
     let reset_clicked = allow_interaction
         && reset
             .is_some_and(|r| reset_resp.as_ref().is_some_and(|res| res.clicked()) || (resp.clicked() && hover_pos.is_some_and(|p| r.contains(p))));
+    // A click away from the picture (its shape, uncropped, not its bounds) and its crop box and
+    // handles applies the crop and lets the picture go, as Done and then that click would
+    // (#6422). A pill's click is the pill's.
+    let away_clicked = allow_interaction
+        && resp.clicked()
+        && !(done_clicked || cancel_clicked || reset_clicked)
+        && !mode.pressed_on
+        && hover_pos.is_some_and(|p| !crate::canvas::crop_contains_point(image, mode, xf, info, page, p));
 
     if reset_clicked {
         mode.keep = if image.has_editor_crop() { image.rect } else { initial_keep };
         mode.drag = None;
-    } else if done_clicked || keys(egui::Key::Enter) {
+    } else if done_clicked || away_clicked || keys(egui::Key::Enter) {
         let keep = mode.keep;
         if let Some(s) = view.image_selection.as_mut() {
             s.crop = None;
@@ -471,6 +485,9 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
             }
         } else if image.visible_rect != Some(keep) {
             view.pending_edit = Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Crop(keep) });
+        }
+        if away_clicked {
+            view.image_selection = None;
         }
     } else if (cancel_clicked || keys(egui::Key::Escape))
         && let Some(s) = view.image_selection.as_mut()
