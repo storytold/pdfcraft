@@ -77,15 +77,9 @@ fn contention_during_one_calibration_does_not_raise_the_budget() {
     assert_eq!(budget_scale(round_calibration(contended, contended)), 3.0);
 }
 
-/// Measure calibration just before and just after each frame round, and set that round's budget from
-/// the faster of the two. The lowest average-to-budget ratio determines the result.
-/// Later rounds run only when the measured average exceeds that round's calibrated budget.
+/// Run `step` for `frames` frames per round, with the integer workload as calibration.
 fn best_average(label: &str, frames: usize, mut step: impl FnMut(usize)) -> (std::time::Duration, std::time::Duration) {
-    let mut best = std::time::Duration::MAX;
-    let mut best_budget = BUDGET;
-    let mut best_ratio = f64::INFINITY;
-    for round in 1..=3 {
-        let before = calibration_average();
+    calibrated_rounds(label, calibration_average, || {
         let start = std::time::Instant::now();
         let mut worst = std::time::Duration::ZERO;
         for f in 0..frames {
@@ -93,8 +87,26 @@ fn best_average(label: &str, frames: usize, mut step: impl FnMut(usize)) -> (std
             step(f);
             worst = worst.max(t.elapsed());
         }
-        let avg = start.elapsed() / frames as u32;
-        let after = calibration_average();
+        (start.elapsed() / frames as u32, worst)
+    })
+}
+
+/// Run `calibrate` just before and just after each round of frames, and set that round's budget from
+/// the faster of the two. `frames` returns the round's average and worst frame. The lowest
+/// average-to-budget ratio determines the result. Later rounds run only when the measured average
+/// exceeds that round's calibrated budget.
+fn calibrated_rounds(
+    label: &str,
+    mut calibrate: impl FnMut() -> std::time::Duration,
+    mut frames: impl FnMut() -> (std::time::Duration, std::time::Duration),
+) -> (std::time::Duration, std::time::Duration) {
+    let mut best = std::time::Duration::MAX;
+    let mut best_budget = BUDGET;
+    let mut best_ratio = f64::INFINITY;
+    for round in 1..=3 {
+        let before = calibrate();
+        let (avg, worst) = frames();
+        let after = calibrate();
         let calibration = round_calibration(before, after);
         let scale = budget_scale(calibration);
         let budget = BUDGET.mul_f64(scale);
@@ -112,6 +124,28 @@ fn best_average(label: &str, frames: usize, mut step: impl FnMut(usize)) -> (std
         }
     }
     (best, best_budget)
+}
+
+#[test]
+fn the_returned_budget_is_the_selected_rounds_faster_calibration() {
+    let ms = std::time::Duration::from_millis;
+    let run = |calibrations: &[u64], averages: &[u64]| {
+        let mut calibrations = calibrations.iter().map(|&c| ms(c));
+        let mut averages = averages.iter().map(|&a| ms(a));
+        let result = calibrated_rounds(
+            "fixed",
+            || calibrations.next().expect("a calibration for each run"),
+            || (averages.next().expect("an average for each round"), ms(0)),
+        );
+        assert!(calibrations.next().is_none() && averages.next().is_none(), "every planned round ran");
+        result
+    };
+    // Round 2 has the lowest ratio; contention after its frames, or before round 3's, leaves both at 40 ms.
+    assert_eq!(run(&[60, 60, 17, 60, 60, 17], &[130, 41, 50]), (ms(41), ms(40)));
+    // Every round contended: the selected round keeps its own raised budget.
+    assert_eq!(run(&[60, 60, 60, 60, 60, 60], &[130, 125, 140]), (ms(125), ms(120)));
+    // A round within its budget ends the run.
+    assert_eq!(run(&[60, 17], &[30]), (ms(30), ms(40)));
 }
 
 /// `n` text pages with a few comments each, so panels and overlays have work to do.
