@@ -538,6 +538,82 @@ fn save_writes_an_incremental_update_and_clears_dirty() {
     let _ = std::fs::remove_file(out);
 }
 
+/// #5307: the top bar's Save button is greyed out while a document with a file of its own has
+/// no changes, comes back with the first edit, and goes grey again once saved. A document with no
+/// file yet keeps it, since Save asks where to put it.
+#[test]
+fn the_save_button_is_greyed_out_until_there_is_something_to_save() {
+    let out = temp_path("greyed-save.pdf");
+    std::fs::write(&out, fixture(2)).unwrap();
+    let path = out.to_string_lossy().into_owned();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe({
+        let path = path.clone();
+        move |_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("greyed-save.pdf", Some(path), fixture(2)).unwrap();
+            app
+        }
+    });
+    h.ctx.set_os(egui::os::OperatingSystem::Windows);
+    h.run_steps(4);
+    let disabled = |h: &Harness<'static, PdfCraftApp>| h.get_by_role_and_label(Role::Button, "Save (Ctrl+S)").accesskit_node().is_disabled();
+    assert!(disabled(&h), "nothing to save yet");
+    h.get_by_role_and_label(Role::Button, "Save (Ctrl+S)").hover();
+    h.run_steps(30);
+    h.get_by_label("No changes to save");
+
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    h.run_steps(2);
+    assert!(!disabled(&h), "an edit can be saved");
+    h.state_mut().save_override = Some(path);
+    h.get_by_role_and_label(Role::Button, "Save (Ctrl+S)").click();
+    h.run_steps(3);
+    assert!(!dirty(&h));
+    assert!(disabled(&h), "saved: nothing left to save");
+
+    // Opened without a file of its own: Save is how it gets one.
+    assert!(h.state_mut().open_bytes("untitled.pdf", None, fixture(1)).is_ok());
+    h.run_steps(3);
+    assert!(!disabled(&h));
+    let _ = std::fs::remove_file(out);
+}
+
+/// FredApps on #5336: a file repaired as it opened (here, its cross-reference offset is wrong)
+/// keeps Save available, since only a save keeps the repair; the saved file opens clean, and the
+/// button greys out.
+#[test]
+fn a_file_repaired_as_it_opened_can_be_saved_and_then_greys_out() {
+    let mut bytes = fixture(1);
+    let at = bytes.windows(10).rposition(|w| w == b"startxref\n").unwrap() + 10;
+    let end = at + bytes[at..].iter().position(|b| *b == b'\n').unwrap();
+    bytes.splice(at..end, b"7".iter().copied());
+    let out = temp_path("repaired-save.pdf");
+    std::fs::write(&out, &bytes).unwrap();
+    let path = out.to_string_lossy().into_owned();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe({
+        let path = path.clone();
+        move |_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("repaired-save.pdf", Some(path), bytes).unwrap();
+            app
+        }
+    });
+    h.ctx.set_os(egui::os::OperatingSystem::Windows);
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    assert!(!h.state().session.get(id).unwrap().repair_log().is_empty(), "the setup is a repaired file");
+    let disabled = |h: &Harness<'static, PdfCraftApp>| h.get_by_role_and_label(Role::Button, "Save (Ctrl+S)").accesskit_node().is_disabled();
+    assert!(!dirty(&h) && !disabled(&h), "nothing edited, but the repair is only kept by saving");
+    h.state_mut().save_override = Some(path);
+    h.get_by_role_and_label(Role::Button, "Save (Ctrl+S)").click();
+    h.run_steps(3);
+    assert!(h.state().session.get(id).unwrap().repair_log().is_empty(), "the saved file needs no repair");
+    assert!(disabled(&h), "saved: nothing left to save");
+    let _ = std::fs::remove_file(out);
+}
+
 #[test]
 fn save_as_to_a_new_file_drops_earlier_revisions() {
     // #2165: Save As appended a revision, so a deleted page stayed in the new file's first one.
