@@ -272,9 +272,11 @@ fn bounds(subpaths: &[Subpath]) -> Option<[f64; 4]> {
     b.iter().all(|v| v.is_finite()).then_some(b)
 }
 
-/// Whether two boxes meet (touching edges count; an empty or inverted box meets nothing).
-fn touches(a: [f64; 4], b: [f64; 4]) -> bool {
-    a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
+/// Whether a path's box `a` meets the clip `clip` (touching edges count). A clip of no area
+/// shows nothing: a clipping path of no width or height, or clips that don't meet (their
+/// intersection is inverted), meet no path, however far it reaches across them.
+fn touches(a: [f64; 4], clip: [f64; 4]) -> bool {
+    clip[0] < clip[2] && clip[1] < clip[3] && a[0] <= clip[2] && clip[0] <= a[2] && a[1] <= clip[3] && clip[1] <= a[3]
 }
 
 impl Walk<'_> {

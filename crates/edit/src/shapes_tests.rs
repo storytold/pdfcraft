@@ -133,3 +133,21 @@ fn reading_shapes_stops_at_its_limit_and_says_so() {
     let doc = page(&"0 0 m 1 1 l S ".repeat(10), "", &[]);
     assert!(!reading_shapes(&doc, 0).unwrap().truncated);
 }
+
+/// A clip of no area shows nothing: a path through a clip of no height, or across two clips
+/// that don't meet, is left out, as a renderer draws none of it.
+#[test]
+fn reading_shapes_leaves_out_what_an_empty_clip_hides() {
+    let content = [
+        // A clip of no height: a page-wide rule along it shows nothing.
+        "q 0 300 612 0 re W n 0 G 0 300 m 612 300 l S Q",
+        // Two clips that don't meet: a box over both shows nothing.
+        "q 100 100 100 100 re W n 300 300 100 100 re W n 0 g 150 150 200 200 re f Q",
+        // The same box without them shows.
+        "0 g 150 150 200 200 re f",
+    ]
+    .join("\n");
+    let shapes = reading_shapes(&page(&content, "", &[]), 0).unwrap().shapes;
+    assert_eq!(shapes.len(), 1, "{shapes:#?}");
+    assert_eq!(shapes[0].bounds, [150.0, 150.0, 350.0, 350.0]);
+}
