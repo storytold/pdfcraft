@@ -11,7 +11,7 @@ use crate::font::true_type::TrueTypeFont;
 use crate::font::type1::Type1Font;
 use crate::font::type3::Type3;
 use crate::interpret::state::State;
-use crate::{CMapResolverFn, CacheKey, FontResolverFn, InterpreterSettings, Paint};
+use crate::{CMapResolverFn, CacheKey, FontResolverFn, FurtherFacesFn, InterpreterSettings, Paint};
 use bitflags::bitflags;
 use hayro_syntax::object::Name;
 use hayro_syntax::object::dict::keys::SUBTYPE;
@@ -155,8 +155,13 @@ impl OutlineGlyph {
 
     /// Get raw font bytes and metadata for downstream use.
     ///
-    /// Returns `None` for Type1 fonts.
+    /// Returns `None` for Type1 fonts. PdfCraft patch: also `None` for a glyph a further face
+    /// of a substitute draws (`InterpreterSettings::further_faces`): its id indexes that face,
+    /// not the font these bytes are.
     pub fn font_data(&self) -> Option<OutlineFontData> {
+        if self.font.is_further_glyph(self.id) {
+            return None;
+        }
         self.font.font_data()
     }
 
@@ -242,6 +247,7 @@ impl<'a> Font<'a> {
     pub(crate) fn new(
         dict: &Dict<'a>,
         font_resolver: &FontResolverFn,
+        further_faces: &FurtherFacesFn,
         cmap_resolver: &CMapResolverFn,
     ) -> Option<Self> {
         let f_type = match dict.get::<Name<'_>>(SUBTYPE)?.deref() {
@@ -254,7 +260,12 @@ impl<'a> Font<'a> {
                 font_resolver,
                 cmap_resolver,
             )?)),
-            TYPE0 => FontType::Type0(Rc::new(Type0Font::new(dict, font_resolver, cmap_resolver)?)),
+            TYPE0 => FontType::Type0(Rc::new(Type0Font::new(
+                dict,
+                font_resolver,
+                further_faces,
+                cmap_resolver,
+            )?)),
             TYPE3 => FontType::Type3(Rc::new(Type3::new(dict, cmap_resolver)?)),
             f => {
                 warn!(
@@ -560,6 +571,12 @@ pub struct FallbackFontQuery {
     pub is_small_cap: bool,
     /// The character collection (registry/ordering) if this is a CID font.
     pub character_collection: Option<CharacterCollection>,
+    /// PdfCraft patch (72): the standard font the name only hints at ("mono", "serif",
+    /// "sans") when the font is a CID font of an Adobe CJK collection. Such a font is asked for
+    /// as a fallback, so a resolver with a face for the collection's script can answer first;
+    /// [`pick_standard_font`](Self::pick_standard_font) returns this font, as a standard query
+    /// for it would have.
+    pub standard_hint: Option<StandardFont>,
 }
 
 impl FallbackFontQuery {
@@ -618,6 +635,10 @@ impl FallbackFontQuery {
 
     /// Do a best-effort fallback to the 14 standard fonts based on the query.
     pub fn pick_standard_font(&self) -> StandardFont {
+        // PdfCraft patch (72): the standard font the name hinted at.
+        if let Some(hint) = self.standard_hint {
+            return hint;
+        }
         if self.is_fixed_pitch {
             match (self.is_bold, self.is_italic) {
                 (true, true) => StandardFont::CourierBoldOblique,
@@ -657,6 +678,7 @@ impl Default for FallbackFontQuery {
             is_bold: false,
             is_small_cap: false,
             character_collection: None,
+            standard_hint: None,
         }
     }
 }
