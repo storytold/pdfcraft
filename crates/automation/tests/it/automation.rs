@@ -8439,6 +8439,7 @@ fn named_layer_verdicts_are_reported_and_rendered_through_tools() {
 /// identity (user PIN 1234). Linux-only (the tools return an empty listing elsewhere);
 /// skipped when the bench isn't configured (CI stays green).
 #[cfg(target_os = "linux")]
+#[ignore = "needs the SoftHSM bench (PDFCRAFT_PKCS11_MODULE; see crates/sign/tests/it/pkcs11.rs)"]
 #[test]
 fn signing_with_a_pkcs11_token_through_tools() {
     if std::env::var("PDFCRAFT_PKCS11_MODULE").map(|v| v.is_empty()).unwrap_or(true) {
