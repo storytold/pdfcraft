@@ -19,6 +19,10 @@ pdfcraft-engine = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "persistence", "links", "clipboard"] }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 serde_json = { workspace = true }
+# Format the existing eframe string map in the native save callback. Both crates are
+# already locked dependencies; NamedTempFile publishes a complete file atomically.
+ron = "0.12"
+tempfile = "3.27"
 # Records from every crate go to standard error and the log file (src/logging.rs).
 log = { workspace = true }
 # The log timestamp goes through chrono (no hand-rolled calendar code).
