@@ -296,6 +296,9 @@ fn core_tool_buttons(ui: &mut egui::Ui, app: &mut PdfCraftApp, cell: f32, popup_
             app.execute(command);
             ui.close();
         }
+        if crate::fill_sign::repeat_entry(ui, app) {
+            ui.close();
+        }
     });
 }
 

@@ -233,13 +233,26 @@ impl Session {
 
     /// The certificates trusted for signing.
     pub fn trusted_certificates(&self) -> &[pdfcraft_sign::Certificate] {
-        &self.trust.certs
+        &self.user_trust
     }
 
     /// Replace the trusted certificates, revalidate every open document's signatures,
     /// and rebuild its display copy and renderer to match (working file untouched,
     /// generation/dirty unchanged: trust alone is not an edit).
     pub fn set_trusted_certificates(&mut self, certs: Vec<pdfcraft_sign::Certificate>) {
+        self.user_trust = certs;
+        self.retrust();
+    }
+
+    /// Also trust these operating-system root certificates (Windows: Trusted Root Certification
+    /// Authorities), as Acrobat can. They are kept apart from the user's list and never saved.
+    pub fn set_system_trust(&mut self, certs: Vec<pdfcraft_sign::Certificate>) {
+        self.system_trust = certs;
+        self.retrust();
+    }
+
+    fn retrust(&mut self) {
+        let certs = self.user_trust.iter().chain(&self.system_trust).cloned().collect();
         self.trust = Arc::new(TrustStore { certs });
         for doc in &mut self.docs {
             doc.trust = self.trust.clone();

@@ -210,6 +210,22 @@ impl PdfCraftApp {
                 if matches!(edit, Edit::AddAnnotation(_)) {
                     view.comments.comment_added();
                 }
+                // Fill & Sign's Repeat holds a page index and that page's geometry: a page-list
+                // edit makes them stale, while comment edits keep them.
+                if matches!(
+                    edit,
+                    Edit::RotatePages { .. }
+                        | Edit::DeletePages { .. }
+                        | Edit::MovePages { .. }
+                        | Edit::ReversePages { .. }
+                        | Edit::InsertBlankPage { .. }
+                        | Edit::DuplicatePages { .. }
+                        | Edit::ReplacePages { .. }
+                        | Edit::SetPageBox { .. }
+                        | Edit::InsertPagesFrom { .. }
+                ) {
+                    view.last_fill_sig = None;
+                }
                 // Keep the pages the user acted on selected, where they now are.
                 select_after_edit(view, &edit, info, &annots_before, self.quick_tool);
                 if let (Some((target, ambiguous_before)), Edit::EditPageImage { page, .. }) = (target_arrange_image, &edit) {
@@ -366,6 +382,8 @@ impl PdfCraftApp {
                 if let Some(view) = self.views.get_mut(i) {
                     view.comments.selected = None;
                     view.comments.history_stepped();
+                    // Undo or redo may move the pages under it, or take the placement itself.
+                    view.last_fill_sig = None;
                 }
                 let label = crate::i18n::edit_label(&label);
                 if undo {

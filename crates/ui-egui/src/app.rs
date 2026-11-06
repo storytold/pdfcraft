@@ -110,6 +110,7 @@ impl PdfCraftApp {
             fill_text_size: fill_sign::TEXT_SIZE,
             fill_tool: fill_sign::FillTool::Signature,
             fill_text_color: [0.0; 3],
+            fill_repeat: Default::default(),
             fill_text_border: 0.0,
             fill_text_border_color: None,
             fill_text_border_shape: pdfcraft_engine::BorderShape::Rectangle,
