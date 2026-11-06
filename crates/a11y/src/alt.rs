@@ -99,7 +99,9 @@ pub(crate) fn elements(doc: &Document) -> Vec<Element> {
         match k {
             Object::Array(a) => stack.extend(a.into_iter().rev().map(|x| (x, pg, parent, depth))),
             Object::Ref(r) => {
-                if !seen.insert(r) {
+                // By number: objects are looked up by number, so `4 1 R` is `4 0 R` again, and
+                // must not be collected (with its children) once per generation written.
+                if !seen.insert(r.num) {
                     continue;
                 }
                 let Some(d) = doc.get(r).as_dict().cloned() else { continue };
