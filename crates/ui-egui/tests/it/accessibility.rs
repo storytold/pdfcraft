@@ -3,7 +3,7 @@
 
 use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_engine::a11y::{Rule, Status};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp, RightPanel};
 
@@ -345,6 +345,53 @@ fn tags_panel_edits_a_tag_property_and_undoes_it() {
     h.get_by_label("Document · 6");
     h.get_by_label("Photo · 8");
     assert!(h.query_by_label("First figure · 7").is_none());
+}
+
+#[test]
+fn tags_panel_renames_a_structure_class() {
+    let pdf = String::from_utf8_lossy(FIGURES)
+        .replace("/RoleMap << /Photo /Figure >>", "/RoleMap << /Photo /Figure >> /ClassMap << /Old << /O /Layout /TextAlign /Start >> >>")
+        .replace("/S /Figure /P 6 0 R /Pg 3 0 R /K 0", "/S /Figure /P 6 0 R /Pg 3 0 R /K 0 /C /Old");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("figures.pdf", None, pdf.into_bytes()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("a11y.tags"));
+    h.run_steps(2);
+    h.get_by_label("Figure · 7").click();
+    h.run_steps(1);
+    let class = h.get_by_role_and_label(Role::TextInput, "Classes, separated by commas");
+    assert_eq!(class.value().as_deref(), Some("Old"));
+    h.get_by_role_and_label(Role::TextInput, "Rename class").focus();
+    h.get_by_role_and_label(Role::TextInput, "Rename class").type_text("Old");
+    h.get_by_role_and_label(Role::TextInput, "New class name").focus();
+    h.get_by_role_and_label(Role::TextInput, "New class name").type_text("Renamed");
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::TextInput, "Rename class").focus();
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Rename class").value().as_deref(), Some("Old"));
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "New class name").value().as_deref(), Some("Renamed"));
+    h.get_by_label("Rename structure class").scroll_to_me();
+    h.run_steps(2);
+    let rename = h.get_by_label("Rename structure class");
+    assert!(!rename.accesskit_node().is_disabled(), "the entered class names enable renaming");
+    rename.click_accesskit();
+    h.run_steps(5);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Rename structure class"));
+    assert_eq!(doc.tags()[1].classes, ["Renamed"]);
+    assert_eq!(doc.class_map(0, 10).1[0].name, "Renamed");
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Classes, separated by commas").value().as_deref(), Some("Renamed"));
+
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Classes, separated by commas").value().as_deref(), Some("Old"));
+    assert!(h.state_mut().execute("edit.redo"));
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Classes, separated by commas").value().as_deref(), Some("Renamed"));
 }
 
 #[test]

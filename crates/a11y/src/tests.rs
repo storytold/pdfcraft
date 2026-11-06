@@ -367,6 +367,283 @@ fn reachable_tag_properties_round_trip_and_reject_unrelated_objects() {
     assert!(matches!(set_tag_property(&mut doc, pdfcraft_cos::ObjRef::new(4, 1), TagProperty::Title, Some("No")), Err(TagError::NotATag(_))));
 }
 
+#[test]
+fn class_map_rename_keeps_attributes_and_updates_shared_array_assignments() {
+    let mut doc = structure_doc(&[
+        "<< /S /Document /K [4 0 R 5 0 R] >>".into(),
+        "<< /S /P /C [/Cell /Shared] >>".into(),
+        "<< /S /P /C /Shared >>".into(),
+        "<< /O /Table /RowSpan 2 >>".into(),
+        "<< /Cell 6 0 R /Shared << /O /Table /ColSpan 3 >> >>".into(),
+    ]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(b"ClassMap".to_vec(), Object::Ref(pdfcraft_cos::ObjRef::new(7, 0)));
+    })
+    .unwrap();
+    assert_eq!(class_map(&doc, 0, 1).0, 2);
+    assert_eq!(class_map(&doc, 0, 1).1[0].assignments, 1);
+    assert!(matches!(rename_class(&mut doc, "Cell", "Shared"), Err(TagError::DuplicateClass(_))));
+    rename_class(&mut doc, "Cell", "CellRenamed").unwrap();
+    let (count, classes) = class_map(&doc, 0, 10);
+    assert_eq!(count, 2);
+    let renamed = classes.iter().find(|entry| entry.name == "CellRenamed").unwrap();
+    assert_eq!(renamed.assignments, 1);
+    assert_eq!(tags(&doc)[1].classes, ["CellRenamed", "Shared"]);
+    assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(2, 0)).as_dict().unwrap().reference(b"ClassMap"), Some(pdfcraft_cos::ObjRef::new(7, 0)));
+    let map_object = doc.get(pdfcraft_cos::ObjRef::new(7, 0));
+    let map = map_object.as_dict().unwrap();
+    assert_eq!(map.reference(b"CellRenamed"), Some(pdfcraft_cos::ObjRef::new(6, 0)));
+    assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().unwrap().get(b"RowSpan"), Some(&Object::Int(2)));
+    assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(5, 0)).as_dict().unwrap().get(b"C").and_then(Object::as_name), Some(b"Shared".as_slice()));
+}
+
+#[test]
+fn class_map_all_returns_entries_beyond_the_page_limit() {
+    let mut doc = structure_doc(&["<< /S /Document /K 4 0 R >>".into(), "<< /S /P /C /Class1000 >>".into()]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(
+            b"ClassMap".to_vec(),
+            Object::Dict({
+                let mut map = pdfcraft_cos::Dict::new();
+                for index in 0..1001 {
+                    map.set(format!("Class{index}").into_bytes(), Object::Dict(pdfcraft_cos::Dict::new()));
+                }
+                map
+            }),
+        );
+    })
+    .unwrap();
+
+    let (count, entries) = class_map_all(&doc);
+    assert_eq!(count, 1001);
+    assert_eq!(entries.len(), 1001);
+    assert_eq!(entries.iter().find(|entry| entry.name == "Class1000").map(|entry| entry.assignments), Some(1));
+}
+
+#[test]
+fn class_rename_accepts_existing_names_outside_the_new_name_policy() {
+    let mut doc = structure_doc(&["<< /S /Document /K 4 0 R >>".into(), "<< /S /P /C /Old#20Name >>".into()]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(
+            b"ClassMap".to_vec(),
+            Object::Dict({
+                let mut map = pdfcraft_cos::Dict::new();
+                map.set(b"Old Name".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                map
+            }),
+        );
+    })
+    .unwrap();
+    rename_class(&mut doc, "Old Name", "NewName").unwrap();
+    assert_eq!(tags(&doc)[1].classes, ["NewName"]);
+    assert_eq!(class_map(&doc, 0, 10).1[0].name, "NewName");
+}
+
+#[test]
+fn class_assignment_requires_an_existing_class_and_can_be_cleared() {
+    let mut doc = structure_doc(&["<< /S /Document /K 4 0 R >>".into(), "<< /S /P >>".into()]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(
+            b"ClassMap".to_vec(),
+            Object::Dict({
+                let mut map = pdfcraft_cos::Dict::new();
+                map.set(b"Paragraph".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                map
+            }),
+        );
+    })
+    .unwrap();
+    let tag = pdfcraft_cos::ObjRef::new(4, 0);
+    assert!(matches!(set_tag_property(&mut doc, tag, TagProperty::Class, Some("Missing")), Err(TagError::UnknownClass(_))));
+    set_tag_property(&mut doc, tag, TagProperty::Class, Some("Paragraph")).unwrap();
+    assert_eq!(tags(&doc)[1].classes, ["Paragraph"]);
+    set_tag_property(&mut doc, tag, TagProperty::Class, None).unwrap();
+    assert!(tags(&doc)[1].classes.is_empty());
+}
+
+#[test]
+fn class_assignment_accepts_exact_comma_and_legacy_names() {
+    let mut doc = structure_doc(&["<< /S /Document /K 4 0 R >>".into(), "<< /S /P >>".into()]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(
+            b"ClassMap".to_vec(),
+            Object::Dict({
+                let mut map = pdfcraft_cos::Dict::new();
+                map.set(b"Name,Comma".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                map.set(b"Legacy Name".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                map.set(b" ".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                map
+            }),
+        );
+    })
+    .unwrap();
+    let tag = pdfcraft_cos::ObjRef::new(4, 0);
+    set_tag_property(&mut doc, tag, TagProperty::Class, Some("Name,Comma")).unwrap();
+    assert_eq!(doc.get(tag).as_dict().unwrap().get(b"C").and_then(Object::as_name), Some(b"Name,Comma".as_slice()));
+    set_tag_property(&mut doc, tag, TagProperty::Class, Some("Legacy Name")).unwrap();
+    assert_eq!(tags(&doc)[1].classes, ["Legacy Name"]);
+    set_tag_property(&mut doc, tag, TagProperty::Class, Some(" ")).unwrap();
+    assert_eq!(doc.get(tag).as_dict().unwrap().get(b"C").and_then(Object::as_name), Some(b" ".as_slice()));
+}
+
+#[test]
+fn class_assignment_matches_comma_names_before_splitting_multiple_classes() {
+    let mut doc = structure_doc(&["<< /S /Document /K 4 0 R >>".into(), "<< /S /P >>".into()]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(
+            b"ClassMap".to_vec(),
+            Object::Dict({
+                let mut map = pdfcraft_cos::Dict::new();
+                for name in ["North,East", "West", "North", "East"] {
+                    map.set(name.as_bytes().to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                }
+                map
+            }),
+        );
+    })
+    .unwrap();
+    let tag = pdfcraft_cos::ObjRef::new(4, 0);
+    set_tag_property(&mut doc, tag, TagProperty::Class, Some("North,East, West")).unwrap();
+    let tag = doc.get(tag);
+    let classes = tag.as_dict().unwrap().get(b"C").and_then(Object::as_array).unwrap();
+    assert_eq!(classes.iter().filter_map(Object::as_name).collect::<Vec<_>>(), [b"North,East".as_slice(), b"West".as_slice()]);
+}
+
+#[test]
+fn class_map_counts_inline_classes_and_follows_indirect_k_arrays() {
+    let mut doc = structure_doc(&[
+        "<< /S /Document /K 4 0 R >>".into(),
+        "[<< /S /Span /C /Inline >> 5 0 R]".into(),
+        "<< /S /Span /C /Indirect /K 6 0 R >>".into(),
+        "[<< /S /Span /C /Nested >>]".into(),
+    ]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(
+            b"ClassMap".to_vec(),
+            Object::Dict({
+                let mut map = pdfcraft_cos::Dict::new();
+                for name in ["Inline", "Indirect", "Nested"] {
+                    map.set(name.as_bytes().to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                }
+                map
+            }),
+        );
+    })
+    .unwrap();
+    let entries = class_map(&doc, 0, 10).1;
+    for name in ["Inline", "Indirect", "Nested"] {
+        assert_eq!(entries.iter().find(|entry| entry.name == name).map(|entry| entry.assignments), Some(1), "{name}");
+    }
+}
+
+#[test]
+fn class_rename_follows_indirect_k_arrays_and_renames_inline_classes() {
+    let mut doc = structure_doc(&[
+        "<< /S /Document /K 4 0 R >>".into(),
+        "[5 0 R]".into(),
+        "<< /S /Span /C /Old /K 6 0 R >>".into(),
+        "[<< /S /Span /C /Old >> 7 0 R]".into(),
+        "<< /S /P /C /Old >>".into(),
+    ]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(
+            b"ClassMap".to_vec(),
+            Object::Dict({
+                let mut map = pdfcraft_cos::Dict::new();
+                map.set(b"Old".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                map
+            }),
+        );
+    })
+    .unwrap();
+    assert!(tags(&doc).iter().any(|tag| tag.object == pdfcraft_cos::ObjRef::new(7, 0)));
+    rename_class(&mut doc, "Old", "New").unwrap();
+    assert_eq!(
+        tags(&doc).iter().find(|tag| tag.object == pdfcraft_cos::ObjRef::new(7, 0)).map(|tag| tag.classes.clone()),
+        Some(vec!["New".to_owned()])
+    );
+    let inline = doc.get(pdfcraft_cos::ObjRef::new(6, 0));
+    assert_eq!(
+        inline.as_array().and_then(|items| items.first()).and_then(Object::as_dict).and_then(|dict| dict.get(b"C")).and_then(Object::as_name),
+        Some(b"New".as_slice()),
+    );
+}
+
+#[test]
+fn class_rename_supports_direct_roots_and_updates_inline_tags() {
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /StructTreeRoot << /Type /StructTreeRoot /K 2 0 R /ClassMap << /Old << /O /Layout /TextAlign /Start >> >> >> >>"
+                .into(),
+            "<< /S /Document /K [3 0 R << /S /Span /C /Old >>] >>".into(),
+            "<< /S /P /C /Old >>".into(),
+        ],
+        "",
+    );
+    rename_class(&mut doc, "Old", "New").unwrap();
+    assert_eq!(tags(&doc)[1].classes, ["New"]);
+    let structure = doc.get(pdfcraft_cos::ObjRef::new(2, 0));
+    assert_eq!(
+        structure
+            .as_dict()
+            .unwrap()
+            .get(b"K")
+            .and_then(Object::as_array)
+            .and_then(|kids| kids.get(1))
+            .and_then(Object::as_dict)
+            .and_then(|inline| inline.get(b"C"))
+            .and_then(Object::as_name),
+        Some(b"New".as_slice()),
+    );
+    assert_eq!(class_map(&doc, 0, 10).1[0].name, "New");
+}
+
+#[test]
+fn class_map_skips_non_utf8_identifiers_instead_of_returning_lossy_names() {
+    let mut doc = structure_doc(&["<< /S /Document /K 4 0 R >>".into(), "<< /S /P /C /Bad#FF >>".into()]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(
+            b"ClassMap".to_vec(),
+            Object::Dict({
+                let mut map = pdfcraft_cos::Dict::new();
+                map.set(b"Bad\xFF".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                map.set(b"Good".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                map
+            }),
+        );
+    })
+    .unwrap();
+    let (count, classes) = class_map(&doc, 0, 10);
+    assert_eq!(count, 1);
+    assert_eq!(classes.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>(), ["Good"]);
+    assert!(tags(&doc)[1].classes.is_empty());
+}
+
+#[test]
+fn class_map_edits_bound_cyclic_tags_and_leave_malformed_assignments_intact() {
+    let mut doc = structure_doc(&["<< /S /P /K 3 0 R /C [/Old 7 /Old] >>".into()]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(
+            b"ClassMap".to_vec(),
+            Object::Dict({
+                let mut map = pdfcraft_cos::Dict::new();
+                map.set(b"Old".to_vec(), Object::Int(12));
+                map
+            }),
+        );
+    })
+    .unwrap();
+    assert_eq!(tags(&doc).len(), 1);
+    rename_class(&mut doc, "Old", "New").unwrap();
+    assert_eq!(tags(&doc).len(), 1);
+    assert_eq!(tags(&doc)[0].classes, ["New", "New"]);
+    assert_eq!(
+        doc.get(pdfcraft_cos::ObjRef::new(3, 0)).as_dict().unwrap().get(b"C"),
+        Some(&Object::Array(vec![Object::name("New"), Object::Int(7), Object::name("New")])),
+    );
+    assert_eq!(class_map(&doc, 0, 10).1[0].assignments, 1);
+}
+
 /// A table (object 4) with a header cell (6) and a data cell (7); `th` is the header cell's
 /// dictionary and `extra` more objects from 8 on, of which the Document element (3) lists `kids`
 /// after the table. The role map maps /MyTable to /Table.
@@ -904,6 +1181,22 @@ fn sibling_tags_move_in_reading_order_without_changing_content() {
 }
 
 #[test]
+fn sibling_tags_move_inside_an_indirect_parent_k_array() {
+    use pdfcraft_cos::{ObjRef, Object};
+    let mut doc = figures_doc();
+    let children = doc.add(Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))]));
+    doc.update_dict(ObjRef::new(6, 0), |parent| parent.set(b"K".to_vec(), Object::Ref(children))).unwrap();
+
+    move_tag(&mut doc, ObjRef::new(8, 0), ObjRef::new(7, 0), TagPlacement::Before).unwrap();
+
+    assert_eq!(tags(&doc).into_iter().map(|tag| tag.object.num).collect::<Vec<_>>(), [6, 8, 7]);
+    assert_eq!(
+        doc.get(children).as_array().map(|items| items.iter().filter_map(Object::as_ref).map(|r| r.num).collect::<Vec<_>>()),
+        Some(vec![8, 7]),
+    );
+}
+
+#[test]
 fn setting_alt_text_and_marking_decorative() {
     let mut doc = figures_doc();
     let f = figures(&doc);
@@ -1038,6 +1331,53 @@ fn mark_tag_artifact_finds_named_property_lists_and_indirect_mcrs() {
     assert_eq!(nums, Some(Object::Array(vec![Object::Int(0), Object::Array(vec![Object::Null, Object::Null])])));
     let r = check(&doc, &Options { rules: [Rule::FiguresAltText, Rule::TaggedContent].into(), pages: None });
     assert_eq!(failed(&r), Vec::<Rule>::new(), "{:?}", r.results);
+}
+
+#[test]
+fn artifact_edits_update_indirect_parent_k_arrays() {
+    use pdfcraft_cos::{ObjRef, Object};
+
+    let mut artifact = figures_doc();
+    let artifact_kids = artifact.add(Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))]));
+    artifact.update_dict(ObjRef::new(6, 0), |parent| parent.set(b"K".to_vec(), Object::Ref(artifact_kids))).unwrap();
+    mark_tag_artifact(&mut artifact, ObjRef::new(7, 0)).unwrap();
+    assert_eq!(
+        artifact.get(artifact_kids).as_array().map(|items| items.iter().filter_map(Object::as_ref).map(|r| r.num).collect::<Vec<_>>()),
+        Some(vec![8]),
+    );
+    assert_eq!(tags(&artifact).iter().map(|tag| tag.object.num).collect::<Vec<_>>(), [6, 8]);
+    assert_eq!(
+        artifact
+            .get(ObjRef::new(9, 0))
+            .as_dict()
+            .and_then(|dict| dict.get(b"Nums"))
+            .and_then(Object::as_array)
+            .and_then(|nums| nums.get(1))
+            .and_then(Object::as_array)
+            .map(Vec::as_slice),
+        Some([Object::Null, Object::Ref(ObjRef::new(8, 0))].as_slice()),
+    );
+
+    let mut decorative = figures_doc();
+    let decorative_kids = decorative.add(Object::Array(vec![Object::Ref(ObjRef::new(7, 0)), Object::Ref(ObjRef::new(8, 0))]));
+    decorative.update_dict(ObjRef::new(6, 0), |parent| parent.set(b"K".to_vec(), Object::Ref(decorative_kids))).unwrap();
+    mark_decorative(&mut decorative, ObjRef::new(7, 0)).unwrap();
+    assert_eq!(
+        decorative.get(decorative_kids).as_array().map(|items| items.iter().filter_map(Object::as_ref).map(|r| r.num).collect::<Vec<_>>()),
+        Some(vec![8]),
+    );
+    assert_eq!(figures(&decorative).iter().map(|figure| figure.obj.num).collect::<Vec<_>>(), [8]);
+    assert_eq!(
+        decorative
+            .get(ObjRef::new(9, 0))
+            .as_dict()
+            .and_then(|dict| dict.get(b"Nums"))
+            .and_then(Object::as_array)
+            .and_then(|nums| nums.get(1))
+            .and_then(Object::as_array)
+            .map(Vec::as_slice),
+        Some([Object::Null, Object::Ref(ObjRef::new(8, 0))].as_slice()),
+    );
 }
 
 #[test]

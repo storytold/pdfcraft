@@ -138,6 +138,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::SetAltText { .. }
         | Edit::AutoTagFormFields
         | Edit::SetTagProperty { .. }
+        | Edit::RenameClass { .. }
         | Edit::MoveTag { .. }
         | Edit::MarkDecorative { .. }
         | Edit::MarkTagArtifact { .. }
@@ -698,6 +699,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::SetTagProperty { object, property, value } => {
             a11y::set_tag_property(doc, *object, *property, value.as_deref()).map_err(|e| EditError::Accessibility(e.to_string()))?;
+        }
+        Edit::RenameClass { old, new } => {
+            a11y::rename_class(doc, old, new).map_err(|e| EditError::Accessibility(e.to_string()))?;
         }
         Edit::MoveTag { object, anchor, placement } => {
             a11y::move_tag(doc, *object, *anchor, *placement).map_err(|e| EditError::Accessibility(e.to_string()))?;

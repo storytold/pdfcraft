@@ -377,6 +377,11 @@ pub enum Edit {
         property: a11y::TagProperty,
         value: Option<String>,
     },
+    /// Rename a ClassMap entry and its reachable tag assignments.
+    RenameClass {
+        old: String,
+        new: String,
+    },
     /// Move a structure tag before or after a direct sibling in reading order.
     MoveTag {
         object: pdfcraft_cos::ObjRef,

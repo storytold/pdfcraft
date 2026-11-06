@@ -3301,6 +3301,58 @@ trailer << /Root 1 0 R >>
     assert!(matches!(a.call("accessibility_set_alt", &json!({ "doc": fd, "figure": 6, "alt": "x" })), Err(ToolError::Failed(_))));
 }
 
+#[test]
+fn structure_classes_list_rename_assign_undo_and_save_reopen() {
+    let dir = workdir("structure-classes");
+    let mut a = auto(&dir);
+    std::fs::write(
+        dir.join("classes.pdf"),
+        b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /StructParents 0 >> endobj
+5 0 obj << /Type /StructTreeRoot /K 6 0 R /ClassMap << /RowHead << /O /Table /RowSpan 2 >> /Column << /O /Table /ColSpan 3 >> /Name,Comma << /O /Layout >> /Legacy#20Name << /O /Layout >> >> >> endobj
+6 0 obj << /S /Document /P 5 0 R /K [7 0 R 8 0 R] >> endobj
+7 0 obj << /S /P /P 6 0 R /Pg 3 0 R /C [/Column /RowHead] >> endobj
+8 0 obj << /S /P /P 6 0 R /Pg 3 0 R /C /RowHead >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+    )
+    .unwrap();
+    let doc = ok(&mut a, "doc_open", json!({ "path": "classes.pdf" }))["doc"].as_u64().unwrap();
+    let classes = ok(&mut a, "accessibility_classes", json!({ "doc": doc }));
+    assert_eq!(classes["count"], 4);
+    let renamed = ok(&mut a, "accessibility_rename_class", json!({ "doc": doc, "old": "RowHead", "new": "HeaderCell" }));
+    assert_eq!(renamed["classes"].as_array().unwrap().iter().find(|c| c["name"] == "HeaderCell").unwrap()["assignments"], 2);
+    let tags = ok(&mut a, "accessibility_tags", json!({ "doc": doc }));
+    assert_eq!(tags["tags"][1]["classes"], json!(["Column", "HeaderCell"]));
+    assert_eq!(tags["tags"][2]["classes"], json!(["HeaderCell"]));
+    assert!(matches!(a.call("accessibility_rename_class", &json!({ "doc": doc, "old": "HeaderCell", "new": "Column" })), Err(ToolError::Failed(_))));
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Rename structure class");
+    let tags = ok(&mut a, "accessibility_tags", json!({ "doc": doc }));
+    assert_eq!(tags["tags"][1]["classes"], json!(["Column", "RowHead"]));
+    ok(
+        &mut a,
+        "accessibility_set_tag_property",
+        json!({ "doc": doc, "object": 8, "generation": 0, "property": "class", "value": "Column, RowHead" }),
+    );
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Change tag properties");
+    ok(&mut a, "accessibility_set_tag_property", json!({ "doc": doc, "object": 8, "generation": 0, "property": "class", "value": "Name,Comma" }));
+    assert_eq!(ok(&mut a, "accessibility_tags", json!({ "doc": doc }))["tags"][2]["classes"], json!(["Name,Comma"]));
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Change tag properties");
+    ok(&mut a, "accessibility_set_tag_property", json!({ "doc": doc, "object": 8, "generation": 0, "property": "class", "value": "Legacy Name" }));
+    assert_eq!(ok(&mut a, "accessibility_tags", json!({ "doc": doc }))["tags"][2]["classes"], json!(["Legacy Name"]));
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Change tag properties");
+    ok(&mut a, "accessibility_rename_class", json!({ "doc": doc, "old": "RowHead", "new": "HeaderCell" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "classes-saved.pdf", "full": true }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "classes-saved.pdf" }))["doc"].as_u64().unwrap();
+    let tags = ok(&mut a, "accessibility_tags", json!({ "doc": reopened }));
+    assert_eq!(
+        tags["tags"].as_array().unwrap().iter().find(|tag| tag["classes"].as_array().is_some_and(|v| v.iter().any(|c| c == "HeaderCell"))).unwrap()["classes"],
+        json!(["Column", "HeaderCell"])
+    );
+}
+
 /// A table's summary and a header cell's scope are set through `accessibility_set_tag_property`
 /// (#4103, #4104): the summary clears the table-summary finding, both are listed with the tags,
 /// undone, and saved.

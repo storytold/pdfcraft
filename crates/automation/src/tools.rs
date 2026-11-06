@@ -1260,7 +1260,7 @@ pub fn tools() -> Vec<ToolDef> {
         t("accessibility_set_alt", "Set alternate text", "Set a figure's alternate text (alt; empty or omitted clears it), or mark it decorative (decorative: true: its content becomes an artifact and the figure leaves the tags). figure is a number from accessibility_figures. Returns the figures. Undoable.")
             .cmd("a11y.alt_text")
             .with(schema(json!({ "doc": doc(), "figure": { "type": "integer", "minimum": 1 }, "alt": { "type": "string" }, "decorative": { "type": "boolean" } }), &["doc", "figure"])),
-        t("accessibility_tags", "List structure tags", "List reachable indirect structure tags in document order with PDF object number, generation, nearest indirect parent, depth, page, type, title, actual text, alternate text, language, a table's summary and a header cell's scope, one page at a time: count is how many tags match, next the offset of the following page (null at the end). types, pages and max_depth keep only some tags. Inline tag dictionaries have no stable object reference and are not listed.")
+        t("accessibility_tags", "List structure tags", "List reachable indirect structure tags in document order with PDF object number, generation, nearest indirect parent, depth, page, type, title, actual text, alternate text, language, classes, a table's summary and a header cell's scope, one page at a time: count is how many tags match, next the offset of the following page (null at the end). types, pages and max_depth keep only some tags. Inline tag dictionaries have no stable object reference and are not listed.")
             .ro()
             .cmd("a11y.tags")
             .with(schema(
@@ -1274,15 +1274,21 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc"],
             )),
+        t("accessibility_classes", "List structure classes", "List entries in the document's `/ClassMap` without changing their attribute dictionaries. Each entry includes the number of reachable tags that assign it; use offset and limit to page through large maps.")
+            .ro()
+            .cmd("a11y.tags")
+            .with(schema(json!({ "doc": doc(), "offset": { "type": "integer", "minimum": 0 }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 } }), &["doc"])),
+        t("accessibility_rename_class", "Rename a structure class", "Rename one existing `/ClassMap` name and update every reachable tag's `/C` name, including entries in array-valued `/C`. Existing class attribute values are preserved. Refuses a name already in the map. Undoable.")
+            .with(schema(json!({ "doc": doc(), "old": { "type": "string" }, "new": { "type": "string" } }), &["doc", "old", "new"])),
         t("accessibility_tag_content", "List tag content", "List the marked-content references directly owned by one reachable indirect structure tag, including page, MCID and extracted text.")
             .ro()
             .cmd("a11y.tags")
             .with(schema(json!({ "doc": doc(), "object": { "type": "integer", "minimum": 1 }, "generation": { "type": "integer", "minimum": 0, "maximum": 65535 } }), &["doc", "object", "generation"])),
-        t("accessibility_set_tag_property", "Edit tag property", "Set or clear one property of a reachable indirect structure tag. Use object and generation from accessibility_tags. Properties: type, title, actual_text, alternate_text, language, summary (Table tags: the table's Summary attribute), scope (TH tags: Row, Column or Both). Summary and scope are written in the tag's Table attribute object (/A, /O /Table); the role map decides a tag's type. Empty or omitted value clears text properties, summary and scope; type requires a nonempty PDF name. Undoable.")
+        t("accessibility_set_tag_property", "Edit tag property", "Set or clear one property of a reachable indirect structure tag. Use object and generation from accessibility_tags. Properties: type, title, actual_text, alternate_text, language, summary (Table tags: the table's Summary attribute), scope (TH tags: Row, Column or Both), class (one existing class name or comma-separated existing names). A value exactly matching a ClassMap name is treated as one name, including names containing commas or legacy characters. Summary and scope are written in the tag's Table attribute object (/A, /O /Table); the role map decides a tag's type. Empty or omitted value clears text properties, summary, scope and class; type requires a nonempty PDF name. Undoable.")
             .with(schema(json!({
                 "doc": doc(), "object": { "type": "integer", "minimum": 1 },
                 "generation": { "type": "integer", "minimum": 0, "maximum": 65535 },
-                "property": { "type": "string", "enum": ["type", "title", "actual_text", "alternate_text", "language", "summary", "scope"] },
+                "property": { "type": "string", "enum": ["type", "title", "actual_text", "alternate_text", "language", "summary", "scope", "class"] },
                 "value": { "type": "string" },
             }), &["doc", "object", "generation", "property"])),
         t("accessibility_mark_tag_artifact", "Mark tag content as artifact", "Mark a reachable leaf structure tag's direct marked content as an artifact and remove the tag from the reading structure. Use object and generation from accessibility_tags. Tags with child structure elements, no direct marked content, or content not found on its page are rejected. Undoable.")

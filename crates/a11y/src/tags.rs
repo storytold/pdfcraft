@@ -1,6 +1,7 @@
 //! Properties of reachable indirect structure elements.
 
 use pdfcraft_cos::{CosError, Dict, Document, ObjRef, Object, PdfString};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::alt;
 
@@ -21,6 +22,8 @@ pub struct TagInfo {
     pub summary: Option<String>,
     /// A header cell's `Scope` attribute (`Row`, `Column` or `Both`).
     pub scope: Option<String>,
+    /// Structure class names from the tag's `/C` entry.
+    pub classes: Vec<String>,
     /// Zero-based page when `/Pg` is known.
     pub page: Option<usize>,
 }
@@ -31,6 +34,14 @@ pub struct TagContentItem {
     pub page: Option<usize>,
     pub mcid: i64,
     pub text: String,
+}
+
+/// One preserved `/ClassMap` entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClassMapEntry {
+    pub name: String,
+    /// Number of reachable tags whose `/C` entry names this class.
+    pub assignments: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +55,7 @@ pub enum TagProperty {
     Summary,
     /// A header cell's `Scope` (a Table attribute): `Row`, `Column` or `Both`.
     Scope,
+    Class,
 }
 
 /// Where to place a structure tag relative to one of its direct siblings.
@@ -63,6 +75,7 @@ impl TagProperty {
             "language" => Some(Self::Language),
             "summary" => Some(Self::Summary),
             "scope" => Some(Self::Scope),
+            "class" => Some(Self::Class),
             _ => None,
         }
     }
@@ -76,6 +89,7 @@ impl TagProperty {
             Self::Language => b"Lang",
             Self::Summary => b"Summary",
             Self::Scope => b"Scope",
+            Self::Class => b"C",
         }
     }
 
@@ -107,6 +121,16 @@ pub enum TagError {
     WrongTagType(&'static str, &'static str),
     #[error("a scope must be Row, Column or Both")]
     InvalidScope,
+    #[error("the document has no class map")]
+    NoClassMap,
+    #[error("class name must be a nonempty PDF name using letters, digits, colon, period, underscore or hyphen (maximum 127 bytes)")]
+    InvalidClass,
+    #[error("class {0} already exists")]
+    DuplicateClass(String),
+    #[error("class {0} does not exist")]
+    UnknownClass(String),
+    #[error("the structure tree is too large to rename a class safely")]
+    StructureTooLarge,
     #[error(transparent)]
     Cos(#[from] CosError),
 }
@@ -126,16 +150,13 @@ pub fn move_tag(doc: &mut Document, object: ObjRef, anchor: ObjRef, placement: T
     if parent_of(anchor) != Some(parent) {
         return Err(TagError::NotSiblings);
     }
-    let owner = doc.get(parent);
-    let Some(children) = owner.as_dict().and_then(|d| d.get(b"K").and_then(Object::as_array)) else {
-        return Err(TagError::AmbiguousChildren);
-    };
+    let (children, array_ref) = parent_kids(doc, parent).ok_or(TagError::AmbiguousChildren)?;
     let one_position = |child| {
         let mut matches = children.iter().enumerate().filter(|(_, item)| item.as_ref() == Some(child));
         matches.next().and_then(|(index, _)| matches.next().is_none().then_some(index))
     };
     let (Some(from), Some(to)) = (one_position(object), one_position(anchor)) else { return Err(TagError::AmbiguousChildren) };
-    let mut reordered = children.clone();
+    let mut reordered = children;
     let moved = reordered.remove(from);
     let target = if from < to { to - 1 } else { to };
     let destination = target + usize::from(placement == TagPlacement::After);
@@ -143,8 +164,25 @@ pub fn move_tag(doc: &mut Document, object: ObjRef, anchor: ObjRef, placement: T
         return Err(TagError::AlreadyThere);
     }
     reordered.insert(destination, moved);
-    doc.update_dict(parent, |d| d.set(b"K".to_vec(), Object::Array(reordered)))?;
-    Ok(())
+    write_parent_kids(doc, parent, array_ref, reordered).map_err(Into::into)
+}
+
+fn parent_kids(doc: &Document, parent: ObjRef) -> Option<(Vec<Object>, Option<ObjRef>)> {
+    let kids = doc.get(parent).as_dict()?.get(b"K")?.clone();
+    match kids {
+        Object::Array(items) => Some((items, None)),
+        Object::Ref(array) => doc.get(array).as_array().cloned().map(|items| (items, Some(array))),
+        _ => None,
+    }
+}
+
+fn write_parent_kids(doc: &mut Document, parent: ObjRef, array: Option<ObjRef>, kids: Vec<Object>) -> Result<(), CosError> {
+    if let Some(array) = array {
+        doc.set(array, Object::Array(kids));
+        Ok(())
+    } else {
+        doc.update_dict(parent, |d| d.set(b"K".to_vec(), Object::Array(kids)))
+    }
 }
 
 fn text(doc: &Document, d: &pdfcraft_cos::Dict, key: &[u8]) -> Option<String> {
@@ -169,10 +207,160 @@ pub fn tags(doc: &Document) -> Vec<TagInfo> {
                 language: text(doc, &e.dict, b"Lang"),
                 summary: table_attribute(doc, &e.dict, b"Summary").and_then(|o| o.as_string().map(PdfString::to_text)),
                 scope: table_attribute(doc, &e.dict, b"Scope").and_then(|o| o.as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
+                classes: class_names(doc, &e.dict),
                 page: e.page.and_then(|p| page_index.get(&p).copied()),
             })
         })
         .collect()
+}
+
+/// List a page of `/ClassMap` entries without resolving or flattening their values.
+pub fn class_map(doc: &Document, offset: usize, limit: usize) -> (usize, Vec<ClassMapEntry>) {
+    class_map_page(doc, offset, Some(limit.min(1000)))
+}
+
+/// List every `/ClassMap` entry and its assignment count in one structure-tree walk.
+pub fn class_map_all(doc: &Document) -> (usize, Vec<ClassMapEntry>) {
+    class_map_page(doc, 0, None)
+}
+
+fn class_map_page(doc: &Document, offset: usize, limit: Option<usize>) -> (usize, Vec<ClassMapEntry>) {
+    let Some(map) = class_map_dict(doc) else { return (0, Vec::new()) };
+    let assignments = tags(doc).into_iter().fold(HashMap::<String, usize>::new(), |mut counts, tag| {
+        for name in tag.classes.into_iter().collect::<BTreeSet<_>>() {
+            let count = counts.entry(name).or_default();
+            *count = count.saturating_add(1);
+        }
+        counts
+    });
+    let mut assignments = assignments;
+    if let Some(root) = alt::tree_root(doc)
+        && let Some(kids) = root.get(b"K")
+    {
+        let mut budget = 1_000_000usize;
+        count_inline_class_assignments(doc, kids, &mut assignments, 0, &mut budget, &mut HashSet::new());
+    }
+    let count = map.iter().filter(|(key, _)| std::str::from_utf8(key).is_ok()).count();
+    let entries = map
+        .iter()
+        .filter_map(|(key, _)| std::str::from_utf8(key).ok().map(|name| (name, key)))
+        .skip(offset)
+        .take(limit.unwrap_or(usize::MAX))
+        .map(|(name, _)| ClassMapEntry { assignments: assignments.get(name).copied().unwrap_or_default(), name: name.to_owned() })
+        .collect();
+    (count, entries)
+}
+
+fn count_inline_class_assignments(
+    doc: &Document,
+    object: &Object,
+    counts: &mut HashMap<String, usize>,
+    depth: usize,
+    budget: &mut usize,
+    seen: &mut HashSet<ObjRef>,
+) {
+    let Some(remaining) = budget.checked_sub(1) else { return };
+    *budget = remaining;
+    if depth > 128 {
+        return;
+    }
+    match object {
+        Object::Array(items) => {
+            for item in items {
+                count_inline_class_assignments(doc, item, counts, depth + 1, budget, seen);
+            }
+        }
+        Object::Ref(reference) => {
+            if !seen.insert(*reference) {
+                return;
+            }
+            let target = doc.get(*reference);
+            if let Object::Dict(dict) = &*target
+                && dict.contains(b"S")
+            {
+                if let Some(kids) = dict.get(b"K") {
+                    count_inline_class_assignments(doc, kids, counts, depth + 1, budget, seen);
+                }
+            } else {
+                count_inline_class_assignments(doc, &target, counts, depth + 1, budget, seen);
+            }
+        }
+        Object::Dict(dict) if dict.contains(b"S") => {
+            for name in class_names(doc, dict).into_iter().collect::<BTreeSet<_>>() {
+                let count = counts.entry(name).or_default();
+                *count = count.saturating_add(1);
+            }
+            if let Some(kids) = dict.get(b"K") {
+                count_inline_class_assignments(doc, kids, counts, depth + 1, budget, seen);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn class_map_dict(doc: &Document) -> Option<Dict> {
+    alt::tree_root(doc)?.get(b"ClassMap").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned())
+}
+
+fn class_names(doc: &Document, tag: &Dict) -> Vec<String> {
+    let Some(value) = tag.get(b"C") else { return Vec::new() };
+    let value = doc.resolve(value);
+    match &*value {
+        Object::Name(name) => std::str::from_utf8(name).ok().map(str::to_owned).into_iter().collect(),
+        Object::Array(items) => {
+            items.iter().filter_map(|item| doc.resolve(item).as_name().and_then(|name| std::str::from_utf8(name).ok()).map(str::to_owned)).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn valid_class_name(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 127 && value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'.' | b'_' | b'-'))
+}
+
+fn parse_class_assignments(value: &str, map: &Dict) -> Vec<String> {
+    if map.contains(value.as_bytes()) {
+        return vec![value.to_owned()];
+    }
+    let trimmed = value.trim();
+    if map.contains(trimmed.as_bytes()) {
+        return vec![trimmed.to_owned()];
+    }
+    let parts: Vec<&str> = trimmed.split(',').map(str::trim).collect();
+    let max_name_len = map.iter().map(|(key, _)| key.len()).max().unwrap_or_default();
+    let mut next = vec![None; parts.len() + 1];
+    next[parts.len()] = Some((parts.len(), String::new()));
+    for start in (0..parts.len()).rev() {
+        let mut candidate = String::new();
+        for end in start..parts.len() {
+            if end > start {
+                candidate.push(',');
+            }
+            candidate.push_str(parts[end]);
+            if candidate.len() > max_name_len {
+                break;
+            }
+            if map.contains(candidate.as_bytes()) && next[end + 1].is_some() {
+                next[start] = Some((end + 1, candidate.clone()));
+            }
+        }
+        if next[start].is_none() {
+            next[start] = Some((start + 1, parts[start].to_owned()));
+        }
+    }
+    let mut classes = Vec::new();
+    let mut index = 0usize;
+    while index < parts.len() {
+        let Some((following, name)) = next.get(index).and_then(Clone::clone) else {
+            break;
+        };
+        if following <= index {
+            break;
+        }
+        classes.push(name);
+        index = following;
+    }
+    classes
 }
 
 /// List marked-content references directly owned by an indirect tag.
@@ -328,6 +516,37 @@ pub fn set_tag_property(doc: &mut Document, object: ObjRef, property: TagPropert
     {
         return Err(TagError::InvalidType);
     }
+    if property == TagProperty::Class {
+        let map = class_map_dict(doc);
+        let classes = value
+            .map(|s| {
+                if map.as_ref().is_some_and(|map| map.contains(s.as_bytes())) {
+                    vec![s.to_owned()]
+                } else if !s.trim().is_empty() {
+                    map.as_ref().map_or_else(|| s.split(',').map(str::trim).map(str::to_owned).collect(), |map| parse_class_assignments(s, map))
+                } else {
+                    Vec::new()
+                }
+            })
+            .unwrap_or_default();
+        for class in &classes {
+            let exists = map.as_ref().is_some_and(|map| map.contains(class.as_bytes()));
+            if !valid_class_name(class) && !exists {
+                return Err(TagError::InvalidClass);
+            }
+            if !exists {
+                return Err(if map.is_none() { TagError::NoClassMap } else { TagError::UnknownClass((*class).to_owned()) });
+            }
+        }
+        doc.update_dict(object, |d| match classes.as_slice() {
+            [] => {
+                d.remove(b"C");
+            }
+            [class] => d.set(b"C".to_vec(), Object::name(class)),
+            _ => d.set(b"C".to_vec(), Object::Array(classes.iter().map(|class| Object::name(class)).collect())),
+        })?;
+        return Ok(());
+    }
     if let Some(owner) = property.table_attribute_of() {
         let role_map =
             alt::tree_root(doc).and_then(|r| r.get(b"RoleMap").map(|o| doc.resolve(o))).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
@@ -356,4 +575,135 @@ pub fn set_tag_property(doc: &mut Document, object: ObjRef, property: TagPropert
         }
     })?;
     Ok(())
+}
+
+/// Rename one `/ClassMap` entry and every reachable `/C` use, preserving the class value object.
+pub fn rename_class(doc: &mut Document, old: &str, new: &str) -> Result<(), TagError> {
+    if !valid_class_name(new) {
+        return Err(TagError::InvalidClass);
+    }
+    let map = class_map_dict(doc).ok_or(TagError::NoClassMap)?;
+    if !map.contains(old.as_bytes()) {
+        return Err(TagError::UnknownClass(old.to_owned()));
+    }
+    if old == new {
+        return Ok(());
+    }
+    if map.contains(new.as_bytes()) {
+        return Err(TagError::DuplicateClass(new.to_owned()));
+    }
+    let catalog_ref = doc.root().ok_or(TagError::NoClassMap)?;
+    let catalog = doc.get(catalog_ref).as_dict().cloned().ok_or(TagError::NoClassMap)?;
+    let root_object = catalog.get(b"StructTreeRoot").cloned().ok_or(TagError::NoClassMap)?;
+    let mut root = doc.resolve(&root_object).as_dict().cloned().ok_or(TagError::NoClassMap)?;
+    let map_object = root.get(b"ClassMap").cloned().ok_or(TagError::NoClassMap)?;
+    let map_update = match map_object {
+        Object::Ref(reference) => {
+            let mut map = doc.get(reference).as_dict().cloned().ok_or(TagError::NoClassMap)?;
+            rename_map_entry(&mut map, old, new);
+            Some((reference, map))
+        }
+        Object::Dict(mut map) => {
+            rename_map_entry(&mut map, old, new);
+            root.set(b"ClassMap".to_vec(), Object::Dict(map));
+            None
+        }
+        _ => return Err(TagError::NoClassMap),
+    };
+
+    let mut budget = 1_000_000usize;
+    let mut root_changed = false;
+    let mut seen_refs = HashSet::new();
+    if let Some(k) = root.get_mut(b"K") {
+        root_changed = rename_inline_classes(doc, k, old.as_bytes(), new, 0, &mut budget, &mut seen_refs)?;
+    }
+
+    if let Some((reference, map)) = map_update {
+        doc.update_dict(reference, |d| *d = map.clone())?;
+    }
+    if root_changed || matches!(root.get(b"ClassMap"), Some(Object::Dict(_))) {
+        match root_object {
+            Object::Ref(reference) => doc.update_dict(reference, |d| *d = root.clone())?,
+            Object::Dict(_) => doc.update_dict(catalog_ref, |d| d.set(b"StructTreeRoot".to_vec(), Object::Dict(root)))?,
+            _ => return Err(TagError::NoClassMap),
+        }
+    }
+    Ok(())
+}
+
+fn rename_map_entry(map: &mut Dict, old: &str, new: &str) {
+    if let Some(value) = map.remove(old.as_bytes()) {
+        map.set(new.as_bytes().to_vec(), value);
+    }
+}
+
+fn renamed_class_value(doc: &Document, value: &Object, old: &[u8], new: &str) -> Option<Object> {
+    let value = doc.resolve(value);
+    match &*value {
+        Object::Name(name) if name == old => Some(Object::name(new)),
+        Object::Array(items) => {
+            let mut items = items.clone();
+            let mut changed = false;
+            for item in &mut items {
+                if item.as_name() == Some(old) || doc.resolve(item).as_name() == Some(old) {
+                    *item = Object::name(new);
+                    changed = true;
+                }
+            }
+            changed.then_some(Object::Array(items))
+        }
+        _ => None,
+    }
+}
+
+fn rename_inline_classes(
+    doc: &mut Document,
+    object: &mut Object,
+    old: &[u8],
+    new: &str,
+    depth: usize,
+    budget: &mut usize,
+    seen: &mut HashSet<ObjRef>,
+) -> Result<bool, TagError> {
+    *budget = budget.checked_sub(1).ok_or(TagError::StructureTooLarge)?;
+    if depth > 128 {
+        return Err(TagError::StructureTooLarge);
+    }
+    match object {
+        Object::Array(items) => {
+            let mut changed = false;
+            for item in items {
+                changed |= rename_inline_classes(doc, item, old, new, depth + 1, budget, seen)?;
+            }
+            Ok(changed)
+        }
+        Object::Dict(dict) => {
+            let mut changed = if dict.contains(b"S")
+                && let Some(value) = dict.get(b"C").cloned()
+                && let Some(renamed) = renamed_class_value(doc, &value, old, new)
+            {
+                dict.set(b"C".to_vec(), renamed);
+                true
+            } else {
+                false
+            };
+            if let Some(k) = dict.get_mut(b"K") {
+                changed |= rename_inline_classes(doc, k, old, new, depth + 1, budget, seen)?;
+            }
+            Ok(changed)
+        }
+        Object::Ref(reference) => {
+            if !seen.insert(*reference) {
+                return Ok(false);
+            }
+            let mut target = (*doc.get(*reference)).clone();
+            if rename_inline_classes(doc, &mut target, old, new, depth + 1, budget, seen)? {
+                doc.set(*reference, target);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        _ => Ok(false),
+    }
 }
