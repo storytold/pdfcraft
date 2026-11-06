@@ -127,6 +127,7 @@ fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
     h.run_steps(4);
 }
 
+/// Clicking an XFA button runs its click script: one adds a row, another shows a message.
 #[test]
 fn xfa_buttons_run_their_scripts_in_the_app() {
     let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template()));
@@ -143,6 +144,100 @@ fn xfa_buttons_run_their_scripts_in_the_app() {
     assert!(h.query_by_label_contains("Hello 2").is_some(), "script console: {:?}", h.state().js_console.log);
 }
 
+/// A laid-out XFA form tabs through its read-only field, which typing leaves alone, and passes
+/// over its protected field and the protected button of its exclusion group, both ways: XFA
+/// keeps a read-only field in the tab order and leaves a protected one out of it, and another
+/// viewer tabs a probe form that way.
+#[test]
+fn tab_stops_on_read_only_xfa_fields_and_passes_over_protected_ones() {
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::access_template()));
+    crate::support::settle(&mut h);
+    let focused = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].forms.focus.as_ref().map(|f| (f.name.clone(), f.widget));
+    let value = |h: &Harness<'static, PdfCraftApp>, name: &str| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).map(|f| f.value.clone())
+    };
+    click_field(&mut h, "first");
+    assert_eq!(focused(&h), Some(("first".into(), 0)));
+    for (name, widget) in [("locked", 0), ("pick", 0), ("last", 0), ("first", 0)] {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+        assert_eq!(focused(&h), Some((name.into(), widget)), "Tab");
+        if name == "locked" {
+            h.event(egui::Event::Text("Changed".into()));
+            h.run_steps(2);
+        }
+    }
+    assert_eq!(value(&h, "locked"), Some(vec!["Fixed".to_string()]), "typing left the read-only field alone");
+    for (name, widget) in [("last", 0), ("pick", 0), ("locked", 0), ("first", 0)] {
+        h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+        h.run_steps(3);
+        assert_eq!(focused(&h), Some((name.into(), widget)), "Shift+Tab");
+    }
+}
+
+/// The arrows move within an exclusion group as Tab does: they never land on, or select, its
+/// protected button.
+#[test]
+fn arrows_in_an_xfa_exclusion_group_pass_over_its_protected_button() {
+    let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::access_template()));
+    crate::support::settle(&mut h);
+    let focused = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].forms.focus.as_ref().map(|f| (f.name.clone(), f.widget));
+    let picked_b = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "pick").is_some_and(|f| f.value.iter().any(|v| v == "B"))
+    };
+    click_field(&mut h, "first");
+    for _ in 0..2 {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+    }
+    assert_eq!(focused(&h), Some(("pick".into(), 0)));
+    for key in [egui::Key::ArrowRight, egui::Key::ArrowLeft, egui::Key::ArrowDown, egui::Key::ArrowUp] {
+        h.key_press(key);
+        h.run_steps(3);
+        assert_eq!(focused(&h), Some(("pick".into(), 0)), "{key:?}");
+        assert!(!picked_b(&h), "{key:?} selected the protected button");
+    }
+}
+
+/// A read-only button in an open exclusion group is a Tab stop, but the arrows from its
+/// open neighbours pass over it, so they never choose it.
+#[test]
+fn arrows_in_an_xfa_exclusion_group_pass_over_its_read_only_button() {
+    let xml = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form1" layout="tb"><pageSet><pageArea><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+<subform name="page" layout="position" w="7.5in" h="10in">
+<field name="first" x="0in" y="0in" w="2in" h="0.35in"><ui><textEdit/></ui></field>
+<exclGroup name="pick" x="0in" y="0.5in" w="3in" h="0.35in" layout="lr-tb">
+<field name="a" w="0.5in" h="0.35in"><ui><checkButton/></ui><items><text>A</text></items></field>
+<field name="b" w="0.5in" h="0.35in" access="readOnly"><ui><checkButton/></ui><items><text>B</text></items></field>
+<field name="c" w="0.5in" h="0.35in"><ui><checkButton/></ui><items><text>C</text></items></field>
+</exclGroup></subform></subform></template></xdp:xdp>"#;
+    let mut h = open(pdfcraft_xfa::fixtures::shell(xml));
+    crate::support::settle(&mut h);
+    let focused = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].forms.focus.as_ref().map(|f| (f.name.clone(), f.widget));
+    let picked = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "pick").map(|f| f.value.clone()).unwrap_or_default()
+    };
+    click_field(&mut h, "first");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("pick".into(), 0)));
+    for (key, widget, value) in [(egui::Key::ArrowRight, 2, "C"), (egui::Key::ArrowRight, 0, "A"), (egui::Key::ArrowLeft, 2, "C")] {
+        h.key_press(key);
+        h.run_steps(3);
+        assert_eq!(focused(&h), Some(("pick".into(), widget)), "{key:?}");
+        assert_eq!(picked(&h), [value], "{key:?}");
+    }
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("pick".into(), 1)), "the read-only button is still a Tab stop");
+}
+
+/// A message box from a script run on open shows at once, while its print request is refused:
+/// only a click may print.
 #[test]
 fn messages_from_scripts_run_on_open_show_right_away() {
     let tpl = pdfcraft_xfa::fixtures::scripted_template()

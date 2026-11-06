@@ -257,6 +257,7 @@ impl Layouter<'_> {
             multiline: f.multiline,
             max_chars: f.max_chars,
             read_only,
+            tab_stop: f.access != Access::Protected,
             border,
             value,
             default: template_default,

@@ -124,7 +124,9 @@ pub struct Widget {
     /// The current appearance state (`/AS`).
     pub state: Option<String>,
     /// Position in the document's tab order (pages in order; within a page by its `/Tabs`:
-    /// rows, columns, or annotation/structure order). `usize::MAX` when not on a page.
+    /// rows, columns, or annotation/structure order). `usize::MAX` when not on a page, or when
+    /// the widget is no Tab stop (one PdfCraft laid out for a protected XFA field,
+    /// `/PCXfaNoTab true`).
     pub tab: usize,
     /// The widget's Locked flag (`/F` bit 8): its properties can't be changed.
     pub locked: bool,
