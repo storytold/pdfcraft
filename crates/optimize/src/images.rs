@@ -751,7 +751,9 @@ fn process(
     if w == 0 || h == 0 || (w as u64) * (h as u64) > MAX_PIXELS {
         return None;
     }
-    let resize = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0;
+    // Downsampling never enlarges: a target at or above the image's own resolution (settings whose
+    // threshold is below their target) leaves the size alone, as the black-and-white path does.
+    let resize = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0 && settings.target_ppi < ppi;
     let recompress = matches!(settings.compression, Compression::Jpeg(_)) || (matches!(settings.compression, Compression::Flate) && was_dct);
     if !resize && !recompress {
         return None;
