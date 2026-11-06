@@ -171,8 +171,12 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let others_own_pointer = on_objects || on_content;
     let on_edit_text = (tool == QuickTool::EditText || over_source) && can_modify && {
         // Editable text takes precedence over background/overlapping artwork. Both
-        // inventories are painted every frame, even when text owns the pointer.
-        let text_used = crate::edit_text_ui::page_input(cx, &lines, view, !others_own_pointer);
+        // inventories are painted every frame, even when text owns the pointer. A picture being
+        // cropped owns every press on its page (`edit_text_ui::crop_hit`), its click's release
+        // included, when the router has already let the press go: the text under its Done and
+        // Cancel pills must not take that click from them (#6420).
+        let cropping = tool == QuickTool::EditText && view.image_selection.as_ref().is_some_and(|s| s.page == i && s.crop.is_some());
+        let text_used = crate::edit_text_ui::page_input(cx, &lines, view, !others_own_pointer && !cropping);
         let image_cx = crate::edit_text_ui::ImageCx {
             ui,
             resp,
@@ -180,7 +184,8 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
             ptr,
             page: i,
             info,
-            allow_interaction: !others_own_pointer && (matches!(view.router.owner(i), Some(crate::page_router::Owner::Picture { .. })) || !text_used),
+            allow_interaction: !others_own_pointer
+                && (cropping || matches!(view.router.owner(i), Some(crate::page_router::Owner::Picture { .. })) || !text_used),
         };
         let image_used = crate::edit_text_ui::image_input(&image_cx, &images, view);
         !others_own_pointer && (text_used || image_used)
