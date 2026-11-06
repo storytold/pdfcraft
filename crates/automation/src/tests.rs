@@ -550,3 +550,13 @@ fn tool_file_reads_refuse_inputs_exceeding_512_mib() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_match_text_is_clipped_at_a_character_boundary() {
+    use crate::pages::{FIND_MAX_MATCH_TEXT_BYTES, clip_match_text};
+    assert_eq!(clip_match_text("short".into()), ("short".into(), false));
+    // A multi-byte character straddling the limit is dropped whole.
+    let long = format!("{}é", "a".repeat(FIND_MAX_MATCH_TEXT_BYTES - 1));
+    let (clipped, cut) = clip_match_text(long);
+    assert!(cut && clipped.len() == FIND_MAX_MATCH_TEXT_BYTES - 1);
+}
