@@ -260,7 +260,7 @@ The model is framed to fill the image and shaded by a headlight on white. `orbit
 `direction`, frames it as a viewer's orbit control would: `{view, up, front, turn, zoom,
 zoom_at, pan}`, all optional. `view` is `iso` (default), `front`, `right`, `top` or `back`
 about the `up` axis (default `+z`) and the `front` axis (perpendicular to `up`); `turn` is
-`[yaw, pitch]` in degrees, pitch down; `zoom` is a positive factor, at `zoom_at` `[right, up]`
+`[yaw, pitch]` in degrees, pitch down; `zoom` is a positive factor, the result held within 0.05 to 50, at `zoom_at` `[right, up]`
 in picture heights from the centre, where the point under it stays still; `pan` `[right, up]`
 moves the target, in model radii, so the model moves the other way. Every view frames the model
 at the same size, whatever its direction. U3D models are refused
