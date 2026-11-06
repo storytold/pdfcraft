@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-06 | **Last updated:** 2026-11-06 | **Change:** patch (M7 #6169 Windows review: allow five seconds for native clipboard reads on Windows/macOS, retain one second on Linux/BSD; platform-budget and blocked-caller regressions; estimates unchanged)
+
 > **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M7 #6169 adjacent follow-up: Create from Clipboard falls back to readable text when an image is oversized or malformed; pure format-priority regressions; estimates unchanged)
 
 > **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M7 #6169: native clipboard reads run on a worker with a one-second wait; context menus do not read it and Copy never waits on a stuck reader; estimates unchanged)
@@ -233,6 +235,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-06 (M7, #6169 Windows review):** Native clipboard reads allow five seconds on Windows/macOS, giving margin above the reviewer's 1.07-second image read; Linux/BSD retain the one-second selection-owner bound. Menus still perform no read and a stuck worker cannot block Copy on the lock. Platform-budget and bounded real-caller tests cover both policies. The pinned egui-winit Ctrl+V path remains synchronous on non-Wayland platforms, outside this app-worker change; no Windows host was available to reproduce the reported intermittent stall. Estimates unchanged.
 
 - **2026-11-05 (M7, #6169 adjacent follow-up):** Create from Clipboard uses readable text when an available image has zero/overflowing dimensions, exceeds the side/byte limits, or has a mismatched pixel byte count. This corrects the early-return behavior moved from the old Create reader. Pure result-selection tests preserve image-before-text in Create and nonempty-text-before-image in ImagePaste, with a literal-revert red for the fallback. Worker timeout and nonblocking-lock behavior stay unchanged. Estimates unchanged.
 

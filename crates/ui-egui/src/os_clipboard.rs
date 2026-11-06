@@ -7,7 +7,14 @@ use std::time::Duration;
 use crate::create_ui::{Clip, MAX_IMAGE_BYTES, MAX_IMAGE_SIDE};
 
 static LOCK: Mutex<()> = Mutex::new(());
-const READ_TIMEOUT: Duration = Duration::from_secs(1);
+// Windows/macOS publish our clipboard data eagerly. Allow headroom above the Windows
+// review's 1.07 s image read; keep selection-owner waits short on Linux/BSD (Wayland/X11).
+// External owners can still stall on any platform, so neither budget is unbounded.
+const READ_TIMEOUT: Duration = read_timeout_for(cfg!(any(target_os = "windows", target_os = "macos")));
+
+const fn read_timeout_for(windows_or_macos: bool) -> Duration {
+    Duration::from_secs(if windows_or_macos { 5 } else { 1 })
+}
 
 fn acquire(lock: &Mutex<()>) -> Result<MutexGuard<'_, ()>, arboard::Error> {
     match lock.try_lock() {

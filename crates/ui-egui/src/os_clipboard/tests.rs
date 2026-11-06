@@ -51,7 +51,7 @@ pub(super) fn access() -> Option<Result<(), arboard::Error>> {
             backend.first_on_ui.store(std::thread::current().id() == backend.ui, Ordering::SeqCst);
             if backend.block {
                 let released = backend.released.lock().unwrap();
-                let _ = backend.wake.wait_timeout_while(released, Duration::from_secs(3), |released| !*released).unwrap();
+                let _ = backend.wake.wait_timeout_while(released, expected_read_timeout() + Duration::from_secs(2), |released| !*released).unwrap();
             }
         }
         Ok(())
@@ -206,8 +206,21 @@ fn paste_from_menu(h: &mut Harness<'_, PdfCraftApp>) {
     input(h, []);
 }
 
+// Keep this independent of READ_TIMEOUT so accidentally extending the selection-owner
+// budget still fails the real-caller regressions, with a finite backend release deadline.
+fn expected_read_timeout() -> Duration {
+    if cfg!(any(target_os = "windows", target_os = "macos")) { Duration::from_secs(5) } else { Duration::from_secs(1) }
+}
+
+#[test]
+fn native_clipboard_read_deadline_matches_the_platform() {
+    assert_eq!(super::read_timeout_for(false), Duration::from_secs(1));
+    assert_eq!(super::read_timeout_for(true), Duration::from_secs(5));
+    assert_eq!(super::READ_TIMEOUT, expected_read_timeout());
+}
+
 fn timed_out(h: &Harness<'_, PdfCraftApp>, probe: &ClipboardProbe, elapsed: Duration) {
-    assert!(elapsed < Duration::from_millis(1600), "UI frame exceeded the bounded clipboard wait: {elapsed:?}");
+    assert!(elapsed < expected_read_timeout() + Duration::from_millis(600), "UI frame exceeded the bounded clipboard wait: {elapsed:?}");
     assert_eq!(probe.accesses(), 1, "one read, no duplicate text probe");
     assert!(!probe.backend.first_on_ui.load(Ordering::SeqCst), "read runs off the UI thread");
     assert_eq!(h.state().toast.as_ref().map(|toast| toast.0.as_str()), Some("The clipboard isn't responding"));
