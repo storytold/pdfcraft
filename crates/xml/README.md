@@ -26,3 +26,9 @@ roxmltree then judges well-formedness and enforces the node limit each caller pi
 
 The work budget works around the parser's current loops. When roxmltree removes them, relax the
 budget (the model in `src/scan.rs` names each loop it charges for).
+
+`span` finds byte ranges in the parsed text, for edits that splice it instead of re-serialising
+it: where an element's start tag ends, its name as written, its content, and an attribute's value.
+The value comes from `Attribute::range`, because roxmltree's `range_value` is wrong past a
+65,535-byte name or 254 spaces around `=`. The functions take ranges the parser reported, so they
+only ever look at text roxmltree has already accepted.

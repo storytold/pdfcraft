@@ -22,6 +22,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod scan;
+pub mod span;
 
 /// The default bound on element nesting: far beyond any real form or packet, and well within what
 /// a recursive walk of the tree can afford on a worker thread's stack.

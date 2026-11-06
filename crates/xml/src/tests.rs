@@ -273,3 +273,57 @@ fn errors_say_what_was_refused() {
     assert!(XmlError::Doctype.to_string().contains("DTD"));
     assert!(XmlError::TooComplex { limit: 1 }.to_string().contains("attributes"));
 }
+
+// ── spans for splicing edits (`span`) ─────────────────────────────────────────────────────────
+
+use crate::span;
+
+#[test]
+fn start_tags_end_past_quoted_values_and_names_read_as_written() {
+    let text = r#"<r xmlns:d="u"><d:t a="x>y" b='/>'>v</d:t><e/></r>"#;
+    let doc = parse(text, ROOMY).unwrap();
+    let t = doc.root_element().first_element_child().unwrap();
+    let range = t.range();
+    assert_eq!(span::start_tag_end(text, &range).map(|i| &text[..=i]), Some(r#"<r xmlns:d="u"><d:t a="x>y" b='/>'>"#));
+    assert_eq!(span::qname(text, &range), Some("d:t"));
+    assert_eq!(span::content(text, &range).map(|c| &text[c]), Some("v"));
+    let e = t.next_sibling_element().unwrap();
+    assert_eq!(span::content(text, &e.range()), None, "an empty-element tag has no content");
+}
+
+#[test]
+fn content_ends_at_the_end_tag_not_at_markup_inside() {
+    let text = "<a>x<!-- </a> --><![CDATA[</a>]]><?p </a>?>y</a >";
+    let doc = parse(text, ROOMY).unwrap();
+    let range = doc.root_element().range();
+    assert_eq!(span::content(text, &range).map(|c| &text[c]), Some("x<!-- </a> --><![CDATA[</a>]]><?p </a>?>y"));
+    let empty = "<a></a>";
+    let doc = parse(empty, ROOMY).unwrap();
+    assert_eq!(span::content(empty, &doc.root_element().range()), Some(3..3));
+}
+
+/// roxmltree's `range_value` keeps the `=` and its spaces in a u8, so past 254 spaces its start is
+/// wrong; `span::attribute_value` finds the quote instead.
+#[test]
+fn attribute_values_are_found_past_range_values_limits() {
+    let text = format!("<a n{}={}'v\"&gt;' m=\"\"/>", " ".repeat(300), " ".repeat(300));
+    let doc = parse(&text, ROOMY).unwrap();
+    let mut attrs = doc.root_element().attributes();
+    let n = attrs.next().unwrap();
+    assert_ne!(text.get(n.range_value()), Some("v\"&gt;"), "roxmltree's own range is off here");
+    assert_eq!(span::attribute_value(&text, &n.range()).map(|(r, q)| (&text[r], q)), Some(("v\"&gt;", '\'')));
+    let m = attrs.next().unwrap();
+    assert_eq!(span::attribute_value(&text, &m.range()).map(|(r, q)| (r.is_empty(), q)), Some((true, '"')));
+}
+
+#[test]
+fn spans_outside_the_text_are_none() {
+    #[allow(clippy::reversed_empty_ranges)] // a backwards range is one of the inputs under test
+    let backwards = 5..2;
+    for range in [4..100, backwards, 9..12] {
+        assert_eq!(span::start_tag_end("<a/>", &range), None, "{range:?}");
+        assert_eq!(span::qname("<a/>", &range), None, "{range:?}");
+        assert_eq!(span::content("<a/>", &range), None, "{range:?}");
+        assert_eq!(span::attribute_value("<a/>", &range), None, "{range:?}");
+    }
+}

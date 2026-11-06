@@ -3,6 +3,7 @@ use super::import::{ImportNode, serialize_nodes};
 use super::values::Want;
 use super::write::MAX_PACKET_WRITE;
 use super::{DataPath, HashMap, WRAPPED_XML_LIMITS, XFA_DATA_NS, XML_LIMITS};
+use pdfcraft_xml::span::{qname, start_tag_end};
 
 /// What a rewrite of the datasets packet does.
 #[derive(Clone, Copy)]
@@ -15,30 +16,6 @@ pub(super) enum Op<'a> {
     ReplaceData(&'a [ImportNode]),
     /// Make the leaf at this path a picture: base64 text with its content type.
     Picture(&'a DataPath, &'a str, &'a str),
-}
-
-/// Where an element's start tag ends (the index of its `>`), skipping quoted attribute values.
-pub(super) fn start_tag_end(src: &str, range: &std::ops::Range<usize>) -> Option<usize> {
-    let bytes = src.as_bytes();
-    let mut quote = None;
-    for i in range.clone() {
-        let b = *bytes.get(i)?;
-        match (quote, b) {
-            (Some(q), _) if b == q => quote = None,
-            (Some(_), _) => {}
-            (None, b'"' | b'\'') => quote = Some(b),
-            (None, b'>') => return Some(i),
-            _ => {}
-        }
-    }
-    None
-}
-
-/// An element's qualified name as written.
-pub(super) fn qname<'s>(src: &'s str, range: &std::ops::Range<usize>) -> Option<&'s str> {
-    let rest = src.get(range.start.checked_add(1)?..range.end)?;
-    let end = rest.find(|c: char| c.is_whitespace() || c == '/' || c == '>')?;
-    rest.get(..end).filter(|n| !n.is_empty())
 }
 
 /// One change to the packet text: replace `start..end` with `text`.

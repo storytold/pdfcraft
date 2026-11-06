@@ -1,8 +1,9 @@
 use super::build::{escape, fresh_datasets, xml_name};
-use super::merge::{Op, WRAP_CLOSE, WRAP_OPEN, qname, start_tag_end};
+use super::merge::{Op, WRAP_CLOSE, WRAP_OPEN};
 use super::values::Want;
 use super::write::{DatasetsWrite, rewrite};
 use super::{DataPath, Document, MAX_DEPTH, MAX_NODES, ObjRef, Object, WRAPPED_XML_LIMITS, XFA_DATA_NS, XML_LIMITS, XfaError};
+use pdfcraft_xml::span::{qname, start_tag_end};
 
 /// Data read from a file, held as a tree so it can be written into any packet with the
 /// prefix that packet uses, never as the file's own markup.
