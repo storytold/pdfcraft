@@ -298,3 +298,29 @@ fn type3_font_used_in_a_form_xobject_has_its_redacted_glyph_removed() {
     assert_eq!(report.glyphs, 1);
     assert!(!full_save_holds(&doc, b"SECRET_FORM_GLYPH_PAYLOAD"), "redacted glyph program survived");
 }
+
+/// Resource cleanup read a form without /Resources of its own again for every name that could
+/// still reach the removed image. Here 3 000 names of one redacted image sit in the inherited
+/// /Pages resources, and the other page draws a large such form: it is read once, and every name
+/// leaves with the image.
+#[test]
+fn many_names_of_a_redacted_image_are_unlinked_reading_inherited_forms_once() {
+    const ALIASES: usize = 3_000;
+    let aliases: String = (0..ALIASES).map(|i| format!("/A{i} 6 0 R ")).collect();
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /Resources 5 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 8 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 9 0 R >>".to_vec(),
+        format!("<< /XObject << /Im 6 0 R /Fm 7 0 R {aliases}>> >>").into_bytes(),
+        stream("/Type /XObject /Subtype /Image /Width 11 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"IMAGESECRET"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"200 200 m 210 210 l S ".repeat(20_000)),
+        stream("", b"q 100 0 0 100 0 0 cm /Im Do Q"),
+        stream("", b"/Fm Do"),
+    ]);
+    mark(&mut doc, 0, &[[0.0, 0.0, 120.0, 120.0]], "");
+    let started = std::time::Instant::now();
+    assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
+    assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
+    assert!(!full_save_holds(&doc, b"IMAGESECRET"), "an alias kept the removed image reachable");
+}
