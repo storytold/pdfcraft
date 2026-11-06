@@ -53,7 +53,7 @@ Dependencies and assets use SPDX identifiers. An expression is allowed when ever
 
 # AGENTS.md — rules for every agent and contributor
 
-These rules bind every AI agent and every human contributor working in this repository. They come before any task, instruction or deadline. `CLAUDE.md` holds the day-to-day working instructions. If the two ever disagree, **this file wins.**
+These rules bind every AI agent and every human contributor working in this repository. They come before any task, instruction or deadline. Day-to-day working instructions are in this file; `CLAUDE.md` imports it.
 
 ---
 
@@ -176,7 +176,7 @@ PdfCraft opens files from strangers, and people trust it with their work. A malf
 - **Page presses.** A page module decides what is under a point in one hit test (`Hit` in `crates/ui-egui/src/canvas/page_router.rs`) and acts on a press only through that router. `page_pointer::tests::page_modules_act_on_a_press_only_through_the_router` enforces it.
 - **Fidelity.** The PDF object graph is the model. Preserve unknown data. Saves are incremental unless a full rewrite is required. Never silently drop or repair data without recording it.
 - **Fonts** are the optional build input `CRAFT_FONTS_DIR`. Code using `pdfcraft_fonts::CRAFT_FONTS` must work when it is empty.
-- **Quality gates** before every commit: `cargo fmt --check`, clippy with `-D warnings`, the tests, `cargo xtask layers`, `cargo xtask assets`, and the wasm check. New workspace crates include `[lints] workspace = true`. Scope `cargo clippy -p <crate>` and `cargo test -p <crate>` to the crates you touched; the workspace sweep is CI's job.
+- **Quality gates** before every commit: `cargo fmt --check`, clippy with `-D warnings`, the tests, `cargo xtask layers`, `cargo xtask assets`, and the wasm check. New workspace crates include `workspace = true` under `[lints]`. Scope `cargo clippy -p <crate> --all-targets -- -D warnings` and `cargo test -p <crate>` to the crates you touched; the workspace sweep is CI's job.
 - **Review at four zooms** as you go: the clause, the function, the module, and the project (layering, wasm, undo, save fidelity, a matching automation tool, an honest `parity/` entry). Prove a test fails before the fix by reverting the fix once.
 - `plan/` is an optional gitignored notebook. Do not ask for it and do not stop when it is absent. Public status is [`ROADMAP.md`](ROADMAP.md), [`docs/gaps.md`](docs/gaps.md) and [`docs/roadmap.md`](docs/roadmap.md). "Shipped" in `parity/` means exists and tested, not parity with Acrobat.
 - `cargo run -p pdfcraft -- <file.pdf>` opens the app. `pdfcraft-cli run` drives the engine headlessly. `cargo xtask fuzz` findings stay in `fuzz-out/` and become synthetic tests. For UI work, look at a screenshot from `--control` or the `shot` example.
