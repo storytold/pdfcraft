@@ -61,13 +61,23 @@ impl Default for HeaderFooter {
 }
 
 impl HeaderFooter {
-    /// The first character [`add_header_footer`] would refuse, because the standard fonts can't
-    /// draw it (#125). Tokens only add ASCII (Bates prefixes and suffixes are part of the
-    /// template), so checking the templates, split as `expand`'s output is, covers every page
-    /// (and a `\r` that would be drawn is refused too). The dialog asks this too, so its preview
-    /// never offers text that applying refuses (#2013).
+    /// The first character [`add_header_footer`] would refuse, because neither the standard fonts
+    /// nor the Inter fallback it chooses for the whole block can draw it (#125). Tokens only add
+    /// ASCII (Bates prefixes and suffixes are part of the template), so checking the templates,
+    /// split as `expand`'s output is, covers every page (and a `\r` that would be drawn is refused
+    /// too). The dialog asks this too, so its preview never offers text that applying refuses
+    /// (#2013).
     pub fn first_undrawable(&self) -> Option<char> {
-        self.text.iter().flat_map(|t| t.lines()).find_map(pdfcraft_fonts::first_non_win_ansi)
+        let lines = crate::mark_font::sanitized_lines(self.text.iter().map(String::as_str));
+        crate::mark_font::refused_char(lines.iter().map(String::as_str))
+    }
+
+    /// Whether the text needs Inter (Vietnamese, Cyrillic, Greek...) instead of the standard face:
+    /// it has something WinAnsi can't encode, and Inter draws all of it. Every box is then drawn
+    /// in Inter.
+    pub(crate) fn needs_unicode(&self) -> bool {
+        let lines = crate::mark_font::sanitized_lines(self.text.iter().map(String::as_str));
+        crate::mark_font::needs_inter(lines.iter().map(String::as_str))
     }
 
     /// The room the header and the footer take at the top and the bottom of a page, in points:
@@ -139,13 +149,26 @@ pub struct Watermark {
 }
 
 impl Watermark {
-    /// The first character of a text watermark [`add_watermark`] would refuse, because the
-    /// standard fonts can't draw it (#125). A picture watermark draws no text.
+    /// The first character of a text watermark [`add_watermark`] would refuse, because neither
+    /// the standard fonts nor the Inter fallback it chooses for the whole text can draw it (#125).
+    /// A picture watermark draws no text.
     pub fn first_undrawable(&self) -> Option<char> {
         match self.source {
             Some(_) => None,
-            None => self.text.trim().lines().find_map(pdfcraft_fonts::first_non_win_ansi),
+            None => {
+                let lines = crate::mark_font::sanitized_lines(std::iter::once(self.text.trim()));
+                crate::mark_font::refused_char(lines.iter().map(String::as_str))
+            }
         }
+    }
+
+    /// Whether the text needs Inter instead of the standard face (see HeaderFooter).
+    pub(crate) fn needs_unicode(&self) -> bool {
+        if self.source.is_some() {
+            return false;
+        }
+        let lines = crate::mark_font::sanitized_lines(std::iter::once(self.text.trim()));
+        crate::mark_font::needs_inter(lines.iter().map(String::as_str))
     }
 }
 
