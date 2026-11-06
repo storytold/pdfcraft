@@ -356,6 +356,61 @@ fn form_text_the_standard_fonts_cannot_draw_is_reported() {
     assert!(!render_into(&mut doc).unwrap().warnings.iter().any(|w| w.contains("standard fonts")));
 }
 
+/// Romanian and Polish letters in a dynamic form's text extract back from the written page as the
+/// same Unicode, through the page's own font and `/Differences`: what a viewer copies or searches.
+/// ț and Ț must come back as U+021B and U+021A, not as the cedilla letters ţ Ţ.
+#[test]
+fn extra_latin_letters_in_form_text_extract_back_to_the_same_unicode() {
+    let letters: String = pdfcraft_fonts::LATIN_EXTRA.iter().map(|e| e.0).collect();
+    let text = format!("DECLARAȚIE PRIVIND OBLIGAȚIILE DE PLATĂ {letters}");
+    let xdp = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<draw w="7in" h="0.3in"><font typeface="Arial" size="8pt"/><value><text>{text}</text></value></draw>
+</subform></template></xdp:xdp>"##
+    );
+    let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+    let report = render_into(&mut doc).unwrap();
+    assert!(!report.warnings.iter().any(|w| w.contains("standard fonts")), "{:?}", report.warnings);
+    let doc = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let root = doc.get(doc.root().unwrap());
+    let pages = doc.resolve(root.as_dict().unwrap().get(b"Pages").unwrap());
+    let kid = pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap()[0].clone();
+    let page = doc.resolve(&kid);
+    let page = page.as_dict().unwrap();
+    let res = doc.resolve(page.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let contents = doc.resolve(page.get(b"Contents").unwrap());
+    let Object::Stream(c) = &*contents else { panic!("a content stream") };
+    let ops = c.decoded().unwrap();
+    // Each run is written `… /<font> <size> Tf … Tm (<string>) Tj`: decode the string with that font.
+    let mut got = String::new();
+    let mut font = None;
+    let mut lx = pdfcraft_cos::Lexer::new(&ops, 0);
+    loop {
+        lx.skip_ws();
+        if lx.pos >= ops.len() {
+            break;
+        }
+        match ops[lx.pos] {
+            b'/' => font = lx.object().ok().and_then(|o| o.as_name().map(<[u8]>::to_vec)),
+            b'(' => {
+                let s = lx.object().unwrap();
+                let f = doc.resolve(fonts.as_dict().unwrap().get(font.as_deref().expect("a font before the text")).unwrap());
+                got.push_str(&pdfcraft_fonts::pdf::Metrics::from_dict(&doc, f.as_dict().unwrap()).decode(&s.as_string().unwrap().bytes));
+            }
+            _ => {
+                lx.token();
+            }
+        }
+    }
+    let squash = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    assert_eq!(squash(&got), squash(&text));
+    assert_eq!(got.matches('\u{021B}').count(), text.matches('\u{021B}').count(), "ț read back as U+021B");
+    assert_eq!(got.matches('\u{021A}').count(), text.matches('\u{021A}').count(), "Ț read back as U+021A");
+    assert!(!got.contains('?'), "{got}");
+}
+
 /// A field whose ui doesn't scroll in the direction its text runs out (`hScrollPolicy="off"` for
 /// one line, `vScrollPolicy="off"` for several) is written with DoNotScroll (`/Ff` bit 24), so it
 /// takes no more text than it shows; the other direction's policy, or the default, doesn't.

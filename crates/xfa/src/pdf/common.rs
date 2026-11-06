@@ -92,8 +92,30 @@ pub(super) fn standard_font(base: &str) -> Object {
     f.set(b"Type".to_vec(), Object::name("Font"));
     f.set(b"Subtype".to_vec(), Object::name("Type1"));
     f.set(b"BaseFont".to_vec(), Object::name(base));
-    f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    // WinAnsi plus the Romanian and Polish letters it lacks (`LATIN_EXTRA`, codes 1..), which
+    // `win_ansi_extra` writes: a plain WinAnsiEncoding drew them as `?`.
+    let mut enc = Dict::new();
+    enc.set(b"Type".to_vec(), Object::name("Encoding"));
+    enc.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
+    // One `code /name` pair per letter: the codes skip the white-space controls, so they are not one run.
+    let diffs: Vec<Object> = pdfcraft_fonts::LATIN_EXTRA.iter().flat_map(|e| [Object::Int(i64::from(e.1)), Object::name(e.2)]).collect();
+    enc.set(b"Differences".to_vec(), Object::Array(diffs));
+    f.set(b"Encoding".to_vec(), Object::Dict(enc));
     Object::Dict(f)
+}
+
+/// Whether `font` is a non-embedded standard-14 `base` in plain WinAnsiEncoding, as forms bring
+/// in their `/DR`: [`standard_font`] replaces it without changing how any code already drawn in
+/// it looks (the `LATIN_EXTRA` codes are undefined in WinAnsi), and adds the letters it lacks.
+/// Embedded, measured (`/Widths`) or differently encoded fonts are left as they are, and so is
+/// one with a `/ToUnicode` map: extraction reads codes through it, which the replacement would drop.
+pub(super) fn is_plain_standard_font(font: &Dict, base: &str) -> bool {
+    font.name(b"Subtype") == Some(&b"Type1"[..])
+        && font.name(b"BaseFont") == Some(base.as_bytes())
+        && font.name(b"Encoding") == Some(&b"WinAnsiEncoding"[..])
+        && !font.contains(b"FontDescriptor")
+        && !font.contains(b"Widths")
+        && !font.contains(b"ToUnicode")
 }
 
 /// Every face the content streams or `/DA` strings may name.
