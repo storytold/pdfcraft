@@ -177,6 +177,8 @@ pub const WORDINGS: &[&str] = &[
     "The signature value does not match the signer's certificate: the signature is corrupt.",
     "The signature could not be checked ({}).",
     "The signature could not be verified ({}).",
+    // Whether the signature certifies the document.
+    "This signature carries certification permissions, but the document does not name it as its certification, so it is checked as an approval signature.",
     // What came after the signature.
     "This document has not been modified since this signature was applied.",
     "The document has been modified since this signature was applied, but the changes are permitted ({}).",
