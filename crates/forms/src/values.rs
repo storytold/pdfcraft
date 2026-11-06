@@ -113,7 +113,13 @@ fn fill(doc: &mut Document, all: &[Field], named: &[usize], name: &str, value: &
 fn share_value(doc: &mut Document, source: ObjRef, twin: &Field, value: &[String], scripts: &mut dyn Scripts) -> Result<(), FormError> {
     match twin.kind {
         FieldKind::CheckBox => {
-            let state = twin.widgets.iter().find_map(|w| w.on_state.clone()).unwrap_or_else(|| "Yes".into());
+            // The twin's widget with the source's on-state, else its first.
+            let state = value
+                .first()
+                .and_then(|v| twin.state_for(v))
+                .map(str::to_owned)
+                .or_else(|| twin.widgets.iter().find_map(|w| w.on_state.clone()))
+                .unwrap_or_else(|| "Yes".into());
             set_states(doc, twin, (!value.is_empty()).then_some(state.as_str()))
         }
         FieldKind::Radio => {
@@ -222,13 +228,17 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             redraw(doc, f, std::slice::from_ref(t), scripts)
         }
         (FieldKind::CheckBox, v) => {
-            let state = f.widgets.iter().find_map(|w| w.on_state.clone()).unwrap_or_else(|| "Yes".into());
+            let mut state = f.widgets.iter().find_map(|w| w.on_state.clone()).unwrap_or_else(|| "Yes".into());
             let on = match v {
                 FieldValue::Check(on) => *on,
-                // The on-state name or a yes/no word also work (agents, FDF-style data).
+                // The on-state name or a yes/no word also work (agents, FDF-style data). A
+                // widget's own on-state (or export value) turns on that widget of the group.
                 FieldValue::Text(t) | FieldValue::Radio(Some(t)) => {
                     let t = t.trim();
-                    if t == state || f.state_for(t).is_some() || ["yes", "true", "on", "1", "x", "checked"].contains(&t.to_lowercase().as_str()) {
+                    if let Some(s) = f.state_for(t) {
+                        state = s.to_owned();
+                        true
+                    } else if t == state || ["yes", "true", "on", "1", "x", "checked"].contains(&t.to_lowercase().as_str()) {
                         true
                     } else if t.is_empty() || ["no", "false", "off", "0", "unchecked"].contains(&t.to_lowercase().as_str()) {
                         false
