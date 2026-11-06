@@ -8379,8 +8379,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/ui-egui/tests/it/print.rs::print_dialog_lays_out_sheets_and_saves_a_pdf", "crates/automation/tests/it/automation.rs::printing_through_tools", "crates/engine/src/tests.rs::printing_lays_out_sheets_that_render"]
-notes = "Save as PDF from the dialog"
+evidence = ["crates/ui-egui/tests/it/print.rs::print_dialog_lays_out_sheets_and_saves_a_pdf", "crates/automation/tests/it/automation.rs::printing_through_tools", "crates/engine/src/tests.rs::printing_lays_out_sheets_that_render", "crates/engine/src/tests.rs::printing_keeps_hidden_layers_hidden", "crates/engine/src/tests.rs::printing_applies_the_print_auto_state"]
+notes = "Save as PDF from the dialog. Layers print as shown in the Layers panel, then as the default configuration's auto state for the Print event sets them (/AS, /PrintState; ISO 32000-2 §8.11.4.4), vector or as image; the print copy keeps those states in /D without /AS or the layers' /Usage."
 
 [[feature]]
 id = "print.print-pages-from-thumbnails"
