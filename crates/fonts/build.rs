@@ -35,12 +35,13 @@ fn main() {
     }
 }
 
-/// The main manifest, plus the native-only Simplified Chinese manifest. The latter is optional
-/// for ordinary builds and required when `CRAFT_FONTS_REQUIRED` is set, so a required build can
-/// never pass the Chinese UI tests only by skipping them.
+/// The main manifest, plus the native-only Simplified Chinese and optional Hebrew manifests. The
+/// Chinese manifest is optional for ordinary builds and required when `CRAFT_FONTS_REQUIRED` is
+/// set, so a required build can never pass the Chinese UI tests only by skipping them.
 fn craft_fonts(dir: &std::path::Path, required: bool) -> Result<String, String> {
     let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
-    let mut out = manifest(dir, &dir.join("fonts/manifest.txt"), wasm, false)?;
+    let mut seen_files = std::collections::HashSet::new();
+    let mut out = manifest_dedup(dir, &dir.join("fonts/manifest.txt"), wasm, false, &mut seen_files)?;
     if !wasm {
         let chinese = dir.join("fonts/simplified-chinese-manifest.txt");
         println!("cargo::rerun-if-changed={}", chinese.display());
@@ -49,7 +50,7 @@ fn craft_fonts(dir: &std::path::Path, required: bool) -> Result<String, String> 
                 return Err(format!("{}: CRAFT_FONTS_REQUIRED is set but the simplified-Chinese font manifest is missing", chinese.display()));
             }
             Ok(false) => {}
-            Ok(true) => match manifest(dir, &chinese, false, required) {
+            Ok(true) => match manifest_dedup(dir, &chinese, false, required, &mut seen_files) {
                 Ok(entries) => out.push_str(&entries),
                 // A broken optional addition must never discard the main Japanese/symbol/RTL faces.
                 Err(e) if required => return Err(e),
@@ -57,6 +58,17 @@ fn craft_fonts(dir: &std::path::Path, required: bool) -> Result<String, String> 
             },
             Err(e) if required => return Err(format!("{}: {e}", chinese.display())),
             Err(e) => println!("cargo::warning=skipping optional Chinese fonts: {}: {e}", chinese.display()),
+        }
+        let hebrew = dir.join("fonts/hebrew-manifest.txt");
+        println!("cargo::rerun-if-changed={}", hebrew.display());
+        match hebrew.try_exists() {
+            Ok(false) => {}
+            Ok(true) => match manifest_dedup(dir, &hebrew, false, false, &mut seen_files) {
+                Ok(entries) => out.push_str(&entries),
+                Err(e) => println!("cargo::warning=skipping optional Hebrew fonts: {e}"),
+            },
+            Err(e) if required => return Err(format!("{}: {e}", hebrew.display())),
+            Err(e) => println!("cargo::warning=skipping optional Hebrew fonts: {}: {e}", hebrew.display()),
         }
     }
     Ok(out)
@@ -67,7 +79,19 @@ fn craft_fonts(dir: &std::path::Path, required: bool) -> Result<String, String> 
 /// `strict_cap` is set for the required native Simplified Chinese manifest: a face that does not
 /// fit its cap must fail the build rather than be silently left out, so a required build cannot
 /// pass without the Chinese face it promises.
+#[cfg_attr(not(test), allow(dead_code))]
 fn manifest(dir: &std::path::Path, manifest: &std::path::Path, wasm: bool, strict_cap: bool) -> Result<String, String> {
+    let mut seen_files = std::collections::HashSet::new();
+    manifest_dedup(dir, manifest, wasm, strict_cap, &mut seen_files)
+}
+
+fn manifest_dedup(
+    dir: &std::path::Path,
+    manifest: &std::path::Path,
+    wasm: bool,
+    strict_cap: bool,
+    seen_files: &mut std::collections::HashSet<String>,
+) -> Result<String, String> {
     println!("cargo::rerun-if-changed={}", manifest.display());
     let text = std::fs::read_to_string(manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
     let mut out = String::new();
@@ -113,6 +137,9 @@ fn manifest(dir: &std::path::Path, manifest: &std::path::Path, wasm: bool, stric
         if wasm && !web_face {
             continue;
         }
+        if !seen_files.insert((*file).to_string()) {
+            continue;
+        }
         has_hans |= cjk_scripts::has_script_tag(scripts, "Hans");
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
         println!("cargo::rerun-if-changed={}", path.display());
@@ -154,6 +181,20 @@ mod manifest_tests {
         assert!(manifest(&root, &path, false, true).unwrap().contains("CraftFont {"));
         std::fs::remove_file(root.join("face.ttf")).unwrap();
         assert!(manifest(&root, &path, false, true).is_err(), "a missing Hans asset cannot satisfy required input");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Regression test: on wasm, a non-web manifest row for a font file must not prevent a later
+    /// web-eligible (`Hebr`) row for the same file from being emitted.
+    #[test]
+    fn wasm_manifest_dedup_records_only_emitted_files() {
+        let root = std::env::temp_dir().join(format!("pdfcraft-wasm-dedup-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("face.ttf"), b"synthetic manifest fixture").unwrap();
+        let path = root.join("manifest.txt");
+        std::fs::write(&path, "Fixture | Regular | face.ttf | Latn\nFixture | Regular | face.ttf | Hebr,Latn\n").unwrap();
+        let emitted = manifest(&root, &path, true, false).unwrap();
+        assert!(emitted.contains("CraftFont {"), "Hebr row must still be emitted on wasm");
         std::fs::remove_dir_all(root).unwrap();
     }
 }
