@@ -1792,6 +1792,79 @@ fn pages_panel_thumbnails_have_a_context_menu() {
     assert_eq!(h.state().page_clipboard.as_ref().map(|c| c.pages.clone()), Some(vec![2]));
 }
 
+/// ⌘C in one tab's Pages panel and ⌘V in another tab's copies pages from one document into the
+/// other, after the page picked there; ⌘X takes them out of the first. The desktop delivers the
+/// keys as clipboard events, with the pointer over the panel: those paste pages too, and nothing
+/// lands on the page.
+#[test]
+fn the_pages_panel_copies_and_pastes_pages_between_documents_by_keyboard() {
+    use egui::{Key, Modifiers};
+    let (a, b) = (sized_fixture(&[(200, 300), (200, 300)]), sized_fixture(&[(400, 300), (500, 300), (600, 300)]));
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("a.pdf", None, a).unwrap();
+        app.open_bytes("b.pdf", None, b).unwrap();
+        app.right = Some(pdfcraft_ui_egui::RightPanel::Pages);
+        app
+    });
+    h.run_steps(6);
+    let sizes = |h: &Harness<'static, PdfCraftApp>, tab: usize| {
+        let s = h.state();
+        s.session.get(s.views[tab].id).unwrap().info.pages.iter().map(|p| (p.width.round() as i32, p.height.round() as i32)).collect::<Vec<_>>()
+    };
+    let tab = |h: &mut Harness<'static, PdfCraftApp>, i: usize| {
+        h.state_mut().active = Some(i);
+        h.run_steps(6);
+    };
+    // b.pdf's page 2, picked in its Pages panel and copied.
+    tab(&mut h, 1);
+    let at = thumbnail(&h, "Page 2");
+    press(&mut h, at, egui::PointerButton::Primary);
+    h.run_steps(4);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::C);
+    h.run_steps(2);
+    assert_eq!(h.state().page_clipboard.as_ref().map(|c| c.pages.clone()), Some(vec![1]));
+    // Pasted in a.pdf after its page 1.
+    tab(&mut h, 0);
+    let at = thumbnail(&h, "Page 1");
+    press(&mut h, at, egui::PointerButton::Primary);
+    h.run_steps(4);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::V);
+    h.run_steps(4);
+    assert_eq!(sizes(&h, 0), [(200, 300), (500, 300), (200, 300)]);
+    assert_eq!(h.state().views[0].target_pages(), vec![1], "the pasted page is selected");
+    assert_eq!(sizes(&h, 1).len(), 3, "copied, not moved");
+    // As the desktop sends ⌘V: a paste event, with the pointer over the panel and the keyboard
+    // nobody's. The copied page goes after the selection again; no comment or picture is added.
+    h.state_mut().views[0].select_pages(&[2]);
+    h.ctx.memory_mut(|m| {
+        if let Some(focused) = m.focused() {
+            m.surrender_focus(focused);
+        }
+    });
+    let over = thumbnail(&h, "Page 3");
+    h.hover_at(over);
+    h.run_steps(2);
+    assert!(!h.ctx.egui_wants_keyboard_input());
+    h.event(egui::Event::Paste("some text".into()));
+    h.run_steps(4);
+    assert_eq!(sizes(&h, 0), [(200, 300), (500, 300), (200, 300), (500, 300)]);
+    let s = h.state();
+    assert!(s.session.get(s.views[0].id).unwrap().info.annotations.is_empty(), "nothing pasted onto a page");
+    // ⌘X in b.pdf takes its page 3 out; one undo step brings it back.
+    tab(&mut h, 1);
+    let at = thumbnail(&h, "Page 3");
+    press(&mut h, at, egui::PointerButton::Primary);
+    h.run_steps(4);
+    h.key_press_modifiers(Modifiers::COMMAND, Key::X);
+    h.run_steps(4);
+    assert_eq!(sizes(&h, 1), [(400, 300), (500, 300)]);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(sizes(&h, 1).len(), 3);
+}
+
 /// Where the Pages panel draws page `n`'s thumbnail.
 fn thumbnail_rect(h: &Harness<'static, PdfCraftApp>, n: usize) -> egui::Rect {
     h.get_all_by_label(&format!("Page {n}")).find(|t| t.rect().left() > 1000.0).expect("the Pages panel thumbnail").rect()
