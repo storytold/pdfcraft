@@ -217,13 +217,30 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
     // archiving (§12.8.5). Those timestamps draw nothing. Any other signature added since — an
     // approval signature, an unsigned signature widget, or a widget that paints over the signed
     // page — is a change the certification forbids, however it is labelled.
-    if p == Some(1) && allowed.contains(&kind::SIGNATURE) && !only_invisible_timestamps_added(doc, &old) {
+    if p == Some(1) {
+        only_validation_data(&mut allowed, &mut disallowed, doc, &old);
+    }
+    if disallowed.is_empty() { Modification::Allowed(allowed) } else { Modification::Disallowed(disallowed) }
+}
+
+/// DocMDP P=1 ("no changes allowed") permits only validation data to follow the signed revision:
+/// the security store, and document timestamps that draw nothing. A later approval signature, a
+/// visible widget or a changed catalog `/Perms` breaks the certification.
+fn only_validation_data(allowed: &mut Vec<&'static str>, disallowed: &mut Vec<&'static str>, doc: &Document, old: &Document) {
+    if allowed.contains(&kind::SIGNATURE) && !only_invisible_timestamps_added(doc, old) {
         allowed.retain(|k| *k != kind::SIGNATURE);
         if !disallowed.contains(&kind::SIGNATURE) {
             disallowed.push(kind::SIGNATURE);
         }
     }
-    if disallowed.is_empty() { Modification::Allowed(allowed) } else { Modification::Disallowed(disallowed) }
+    // The catalog's /Perms names the certification signature itself. Elsewhere a change to it is
+    // judged as signing; under P=1 dropping or redirecting it is a change like any other.
+    // Compared by content: an indirect /Perms rewritten in place keeps its reference (and, shared
+    // with the trailer's /Info, would otherwise pass as a metadata change).
+    let perms = |d: &Document| d.root().and_then(|r| d.get(r).as_dict().and_then(|c| c.get(b"Perms").map(|p| (*d.resolve(p)).clone())));
+    if perms(doc) != perms(old) && !disallowed.contains(&kind::STRUCTURE) {
+        disallowed.push(kind::STRUCTURE);
+    }
 }
 
 /// Whether every signature object `doc` gained or changed since the signed revision `old` is an
@@ -891,4 +908,56 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
         return kind::FORM_FILL;
     }
     kind::OTHER
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// A PDF of `objs` (numbered from 1) whose trailer also holds `trailer_extra`.
+    fn pdf(objs: &[&str], trailer_extra: &str) -> Vec<u8> {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R {trailer_extra} >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    /// A P=1 signed revision whose catalog `/Perms` and trailer `/Info` are one indirect
+    /// dictionary (object 3). A later revision points its `/DocMDP` at another signature
+    /// dictionary already in the file, in place: the reference stays, no object is added, and
+    /// as the signed `/Info` the object reads as metadata, but the certification's own record
+    /// has changed.
+    #[test]
+    fn a_perms_dictionary_shared_with_info_rewritten_in_place_is_a_structure_change() {
+        let signed = pdf(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R /Perms 3 0 R >>",
+                "<< /Type /Pages /Kids [] /Count 0 >>",
+                "<< /DocMDP 4 0 R >>",
+                "<< /Type /Sig >>",
+                "<< /Type /Sig >>",
+            ],
+            "/Info 3 0 R",
+        );
+        let old = Document::open(Arc::new(signed.clone())).unwrap();
+        let mut doc = Document::open(Arc::new(signed)).unwrap();
+        let other = ObjRef { num: 5, generation: 0 };
+        doc.update_dict(ObjRef { num: 3, generation: 0 }, |p| p.set(b"DocMDP".to_vec(), Object::Ref(other))).unwrap();
+        let edited = pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() }).unwrap();
+        let doc = Document::open(Arc::new(edited)).unwrap();
+        match classify_changes(&doc, Some(old), Some(1)) {
+            Modification::Disallowed(kinds) => assert!(kinds.contains(&kind::STRUCTURE), "{kinds:?}"),
+            other => panic!("the certification's /Perms changed in place under P=1: {other:?}"),
+        }
+    }
 }

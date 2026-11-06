@@ -3164,3 +3164,32 @@ fn signing_a_field_with_a_null_value_after_another_signature_keeps_the_first_val
         all.iter().map(|s| (&s.status, &s.modification)).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn the_catalogs_perms_do_not_change_under_no_changes() {
+    // /Perms names the certification signature (DocMDP). Under P=1 nothing may change, so a later
+    // revision that drops it, or points it elsewhere, breaks the certification.
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let certified = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(1), ..opts() }).unwrap();
+    let elsewhere = dict_of(vec![("DocMDP", oref(5))]);
+    for (how, perms) in [("dropped", None), ("pointed elsewhere", Some(Object::Dict(elsewhere)))] {
+        let edited = edit_after(&certified, |doc| {
+            let root = doc.root().unwrap();
+            doc.update_dict(root, |c| match &perms {
+                Some(p) => c.set(b"Perms".to_vec(), p.clone()),
+                None => {
+                    c.remove(b"Perms");
+                }
+            })
+            .unwrap();
+        });
+        let s = signatures(&open(&edited), &edited, &trust).into_iter().find(|s| s.field == "Signature1").unwrap();
+        assert!(
+            s.status == Status::Invalid && matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::STRUCTURE)),
+            "/Perms {how} under P=1: {:?}, {:?}",
+            s.status,
+            s.modification
+        );
+    }
+}
