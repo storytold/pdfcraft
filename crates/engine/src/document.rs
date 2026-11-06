@@ -491,13 +491,14 @@ impl Document {
         self.editable() && self.permissions().is_none_or(|p| p.modify())
     }
 
-    /// How widget `widget` of text field `name` lays its value out, for asking whether a typed
-    /// value fits it ([`form_appearance::TextBox::fits`]): a field that doesn't scroll takes no
-    /// more than fits. `None` without such a field or widget, or when the document can't be
+    /// How widget `widget` of the text field with dictionary `field` lays its value out, for asking
+    /// whether a typed value fits it ([`form_appearance::TextBox::fits`]): a field that doesn't
+    /// scroll takes no more than fits. Found by its dictionary, as fields that share a name can
+    /// differ in size. `None` without such a field or widget, or when the document can't be
     /// edited.
-    pub fn field_text_box(&self, name: &str, widget: usize) -> Option<form_appearance::TextBox> {
+    pub fn field_text_box(&self, field: pdfcraft_cos::ObjRef, widget: usize) -> Option<form_appearance::TextBox> {
         let cos = &self.editor.as_ref()?.cos;
-        let f = self.form.iter().find(|f| f.name == name)?;
+        let f = self.form.iter().find(|f| f.obj == field)?;
         let w = f.widgets.get(widget)?;
         Some(form_appearance::text_box(cos, f, w))
     }

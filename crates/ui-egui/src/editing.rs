@@ -706,7 +706,7 @@ impl PdfCraftApp {
                 && let Some(focus) = view.forms.focus.as_mut()
                 && focus.request_focus
                 && committed.as_ref().is_some_and(|draft| draft.name == focus.name)
-                && let Some(field) = self.session.get(view.id).and_then(|doc| doc.form.iter().find(|field| field.name == focus.name))
+                && let Some(field) = self.session.get(view.id).and_then(|doc| crate::forms_ui::focused_field(&doc.form, focus))
             {
                 focus.text = crate::forms_ui::draft_text(field);
                 focus.picked = field.value.clone();
@@ -1112,6 +1112,7 @@ mod revert_draft_tests {
     fn focus(text: &str) -> Focus {
         Focus {
             name: "name".into(),
+            field: name_field(),
             widget: 0,
             text: text.into(),
             picked: Vec::new(),
@@ -1129,6 +1130,12 @@ mod revert_draft_tests {
         let mut app = PdfCraftApp::new();
         app.open_bytes("source.pdf", None, include_bytes!("../tests/data/form.pdf").to_vec()).unwrap();
         app
+    }
+
+    /// The dictionary of form.pdf's `name`, the field these tests type in.
+    fn name_field() -> pdfcraft_cos::ObjRef {
+        let app = app();
+        app.session.get(app.views[0].id).unwrap().form.iter().find(|f| f.name == "name").unwrap().obj
     }
 
     fn queue_draft(app: &mut PdfCraftApp, index: usize, text: &str) {
