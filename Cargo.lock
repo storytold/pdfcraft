@@ -4671,6 +4671,7 @@ version = "0.18.1"
 dependencies = [
  "chrono",
  "hayro-syntax",
+ "js-sys",
  "pdfcraft-crypt",
  "pdfcraft-filters",
  "pdfcraft-oracle",
@@ -4678,6 +4679,7 @@ dependencies = [
  "proptest",
  "serde_json",
  "thiserror 2.0.21",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -4903,6 +4905,7 @@ dependencies = [
  "image",
  "ocrs",
  "pdfcraft-fonts",
+ "png 0.18.1",
  "rten",
  "rten-imageproc",
  "rten-tensor",
@@ -5100,6 +5103,7 @@ dependencies = [
  "pdfcraft-engine",
  "pdfcraft-fonts",
  "pdfcraft-model",
+ "pdfcraft-ocr",
  "pdfcraft-platform",
  "pdfcraft-render",
  "pdfcraft-xfa",

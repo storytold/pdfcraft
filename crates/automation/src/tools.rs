@@ -32,11 +32,6 @@ fn pages(what: &str) -> Value {
     json!({ "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1, "description": format!("1-based page numbers {what}.") })
 }
 
-fn ocr_language() -> Value {
-    let codes: Vec<&str> = pdfcraft_engine::ocr::LANGUAGES.iter().map(|language| language.0).collect();
-    json!({ "type": "string", "enum": codes, "description": "Document language (default en)." })
-}
-
 /// The Search & Redact pattern ids, from the engine's registry, so the advertised schema cannot
 /// drift from the patterns the runtime accepts.
 fn pattern_enum() -> Value {
@@ -88,6 +83,12 @@ fn comment_ref(mut extra: Value) -> Value {
 
 fn schema(props: Value, required: &[&str]) -> Value {
     json!({ "type": "object", "properties": props, "required": required, "additionalProperties": false })
+}
+
+/// The language codes the engines read, as the `language` enum — from the engine's own table,
+/// so the schema and the validator can never disagree.
+fn language_enum() -> Value {
+    Value::Array(pdfcraft_engine::ocr::LANGUAGES.iter().map(|(code, _)| json!(code)).collect())
 }
 
 struct T {
@@ -1378,34 +1379,92 @@ pub fn tools() -> Vec<ToolDef> {
             )),
         t("js_enabled", "JavaScript on or off", "Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript: set it with `enabled`, or read it. With JavaScript off, field scripts other than Acrobat's AF calls don't run.")
             .with(schema(json!({ "enabled": { "type": "boolean" } }), &[])),
-        t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable (a searchable image). Automatically corrects orientation and skew by default. Optionally auto_crop detected scanner borders, with crop_margin padding (0..20 pt, default 2). Set auto_rotate, deskew and auto_crop to false for an exact image, or recognize to false for correction only. Pages that already have text are skipped unless skip_text_pages is false; then pictures on those pages are read too, and recognised words that the page's own text already has (an earlier OCR layer included) are left out and counted as already_on_page. Returns each page's recognised text (left out when the document's security doesn't allow copying), word count or why it was skipped. Needs the OCR models (ocr_status). Undoable as one step.")
+        t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable (a searchable image; the image is not changed). Pages that already have text are skipped unless skip_text_pages or force_ocr say otherwise; words overlapping existing text are omitted and counted as already_on_page. With output_mode \"editable\" nothing is applied: a NEW document of visible text at the recognised boxes is written to out (which must not be the source; empty pages stay blank). engine and strategy choose the readers (an engine that cannot run is an error named up front); the four preprocessing flags clean the raster first. region reads just that part of one page ([x0, y0, x1, y1] in points from the top-left of the displayed page). Returns each page's recognised text, word count or why it was skipped. Correct scanned pages runs with it: rotate_pages and straighten_pages (default true) turn and straighten the pages themselves (unlike auto_rotate and deskew, which only clean the picture that is read), and auto_crop crops detected scanner borders to the paper edge with crop_margin padding (0..20 pt, default 2); set the three to false for an exact image, or recognize to false for correction only. Each page reports its rotation, deskew and crop_box. Needs the engines (ocr_status). Searchable output is undoable as one step.")
             .cmd("ocr.recognize")
             .with(schema(
                 json!({
                     "doc": doc(),
                     "pages": pages("to recognise (default: all)"),
                     "dpi": { "type": "number", "minimum": 72, "maximum": 600, "description": "Resolution pages are read at (default 300; a scanned page is read at most at its own resolution)." },
-                    "auto_rotate": { "type": "boolean", "default": true }, "deskew": { "type": "boolean", "default": true }, "auto_crop": { "type": "boolean", "default": false }, "crop_margin": { "type": "number", "minimum": 0, "maximum": 20, "default": 2 }, "recognize": { "type": "boolean", "default": true }, "language": ocr_language(),
-                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true); false reads pictures without duplicating existing text." },
+                    "language": { "type": "string", "enum": language_enum(), "description": "Document language (default en)." },
+                    "engine": { "type": "string", "enum": ["auto", "ocrs", "tesseract"], "description": "Which engine reads the pages (default ocrs). auto: ocrs first and tesseract as the second engine, combined by strategy (only the engines that can run take part)." },
+                    "strategy": { "type": "string", "enum": ["primary", "confidence", "rover"], "description": "How two engines' readings combine: primary = the first engine alone; confidence = the second engine joins when the first reading's mean confidence is under 70 or unknown; rover = both always read, merged. Default: confidence with engine auto, primary otherwise." },
+                    "output_mode": { "type": "string", "enum": ["searchable", "editable"], "description": "searchable (default): invisible text over the pages of the open document. editable: a NEW <document>_ocr-style file of visible text written to out; the source is not touched." },
+                    "out": { "type": "string", "description": "Where the editable output is written (required with output_mode editable; a new file: never the source path, never an existing file)." },
+                    "region": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "[x0, y0, x1, y1] in points from the top-left of the displayed page: read only that part. Needs exactly one page." },
+                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true)." },
+                    "skip_text_files": { "type": "boolean", "description": "Batch: leave whole files that already contain text alone (they come back skipped, not read)." },
+                    "force_ocr": { "type": "boolean", "description": "Read pages and files even when the skip options would leave them alone (default false)." },
+                    "auto_rotate": { "type": "boolean", "description": "Turn pages scanned sideways or upside down upright before reading (default false)." },
+                    "deskew": { "type": "boolean", "description": "Straighten skewed text lines before reading (default false)." },
+                    "denoise": { "type": "boolean", "description": "A 3×3 median filter against scan speckle (default false)." },
+                    "binarize": { "type": "boolean", "description": "Sauvola binarization: ink to black, paper to white (default false)." },
+                    "rotate_pages": { "type": "boolean", "description": "Correct scanned pages: turn pages scanned sideways or upside down upright in the document (default true; needs the ocrs models' orientation classifier)." },
+                    "straighten_pages": { "type": "boolean", "description": "Correct scanned pages: straighten skewed pages in the document, up to 12 degrees (default true)." },
+                    "auto_crop": { "type": "boolean", "description": "Crop detected scanner borders to the paper edge (default false)." },
+                    "crop_margin": { "type": "number", "minimum": 0, "maximum": 20, "description": "Padding kept around the paper edge, in points (default 2)." },
+                    "recognize": { "type": "boolean", "description": "Add the recognised text (default true); false corrects the pages only." },
                 }),
                 &["doc"],
             )),
-        t("ocr_recognize_files", "Recognize text in multiple files", "Scan & OCR ▸ Recognize text ▸ In multiple files: read every page of each PDF in paths and write the searchable result into folder under the same name (pages that already have text are left alone unless skip_text_pages is false, as in ocr_recognize). Two inputs that would write the same output file are refused before anything is read or written. Returns, per file, the output path, word count and skipped pages, or the error.")
+        t("ocr_words", "Words of a recognition (for review)", "The words a recognition finds, for inspection without the GUI: per page, each word's text, its box ([x, y, w, h] in points from the top-left of the displayed page), its confidence and band (high >= 90, medium 70–89, low < 70), which engine read it, and whether it is a suspect (low band). suspects counts the words a reviewer should look at first. Changes nothing on the document. retain_review returns a session-local handle for ocr_review_apply (one per document, at most eight; a new retained recognition replaces the old one). Needs the engines (ocr_status).")
+            .ro()
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "retain_review": { "type": "boolean" },
+                    "region": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
+                    "pages": pages("to read (default: all)"),
+                    "dpi": { "type": "number", "minimum": 72, "maximum": 600 },
+                    "language": { "type": "string", "enum": language_enum() },
+                    "engine": { "type": "string", "enum": ["auto", "ocrs", "tesseract"] },
+                    "strategy": { "type": "string", "enum": ["primary", "confidence", "rover"] },
+                    "auto_rotate": { "type": "boolean" },
+                    "deskew": { "type": "boolean" },
+                    "denoise": { "type": "boolean" },
+                    "binarize": { "type": "boolean" },
+                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true)." },
+                    "force_ocr": { "type": "boolean", "description": "Read pages even when the skip options would leave them alone (default false)." },
+                }),
+                &["doc"],
+            )),
+        t("ocr_review_apply", "Apply or discard reviewed OCR words", "Accept corrected recognition from ocr_words retain_review. Corrections use 1-based page/word positions and text only; empty text removes a word, omitted words keep their original text and boxes. The stored document guard refuses stale, foreign or consumed reviews. Searchable output is one undoable step; editable requires out and writes a new document (out must not exist yet; the review is kept when it does). discard releases the review without applying it. Input is capped at 65536 words and 4 MiB, never truncated.")
+            .cmd("ocr.correct")
+            .with(schema(json!({ "doc": doc(), "review": { "type": "integer", "minimum": 1 }, "discard": { "type": "boolean" }, "output_mode": { "type": "string", "enum": ["searchable", "editable"] }, "out": { "type": "string" },
+                "corrections": { "type": "array", "maxItems": 65536, "items": { "type": "object", "additionalProperties": false, "properties": { "page": { "type": "integer", "minimum": 1 }, "word": { "type": "integer", "minimum": 1 }, "text": { "type": "string" } }, "required": ["page", "word", "text"] } } }), &["doc", "review"])),
+        t("ocr_dictionary", "Read or update an OCR review dictionary", "Read or add/remove words in an OCR Verify dictionary file (one case-insensitive word per UTF-8 line). Choose its per-language ocr-dictionary-<language>.txt path. Paths honor root; updates are atomic. Refuses invalid words, over 65536 entries or over 4 MiB. No document changes.")
+            .destructive()
+            .cmd("ocr.correct")
+            .with(schema(json!({ "path": { "type": "string" }, "add": { "type": "array", "maxItems": 65536, "items": { "type": "string" } }, "remove": { "type": "array", "maxItems": 65536, "items": { "type": "string" } } }), &["path"])),
+        t("ocr_recognize_files", "Recognize text in multiple files", "Scan & OCR ▸ Recognize text ▸ In multiple files: read every page of each PDF in paths and write the searchable result into folder under the same name. skip_text_files leaves whole files that already contain text alone (they are their own skipped bucket, nothing is written); skip_text_pages leaves single text pages alone; force_ocr reads regardless of both. Every output name is checked before the first page is read: two paths sharing a file name (from different folders) are refused, and a file of that name already in folder aborts the batch, with the names in the error. Each written file carries a low_confidence note when words at or under 60 confidence sit on it (1-based sorted pages). Returns, per file, the output path, word count, skipped pages or the error, plus recognized/words/skipped_files totals. Needs the engines (ocr_status).")
             .cmd("ocr.recognize_batch")
             .with(schema(
                 json!({
                     "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
                     "folder": { "type": "string" },
                     "dpi": { "type": "number", "minimum": 72, "maximum": 600 },
-                    "auto_rotate": { "type": "boolean", "default": true }, "deskew": { "type": "boolean", "default": true }, "auto_crop": { "type": "boolean", "default": false }, "crop_margin": { "type": "number", "minimum": 0, "maximum": 20, "default": 2 }, "recognize": { "type": "boolean", "default": true }, "language": ocr_language(),
-                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true); see ocr_recognize." },
+                    "language": { "type": "string", "enum": language_enum() },
+                    "engine": { "type": "string", "enum": ["auto", "ocrs", "tesseract"] },
+                    "strategy": { "type": "string", "enum": ["primary", "confidence", "rover"] },
+                    "skip_text_pages": { "type": "boolean", "description": "Leave pages that already contain text alone (default true)." },
+                    "skip_text_files": { "type": "boolean", "description": "Leave whole files that already contain text alone (default false)." },
+                    "force_ocr": { "type": "boolean", "description": "Read even where the skip options would leave things alone (default false)." },
+                    "auto_rotate": { "type": "boolean" },
+                    "deskew": { "type": "boolean" },
+                    "denoise": { "type": "boolean" },
+                    "binarize": { "type": "boolean" },
+                    "rotate_pages": { "type": "boolean", "description": "Correct scanned pages: turn pages scanned sideways or upside down upright in the document (default true; needs the ocrs models' orientation classifier)." },
+                    "straighten_pages": { "type": "boolean", "description": "Correct scanned pages: straighten skewed pages in the document, up to 12 degrees (default true)." },
+                    "auto_crop": { "type": "boolean", "description": "Crop detected scanner borders to the paper edge (default false)." },
+                    "crop_margin": { "type": "number", "minimum": 0, "maximum": 20, "description": "Padding kept around the paper edge, in points (default 2)." },
+                    "recognize": { "type": "boolean", "description": "Add the recognised text (default true); false corrects the pages only." },
                 }),
                 &["paths", "folder"],
             )),
-        t("ocr_enhance", "Correct scanned pages", "Crop clear black/white scanner borders to the paper edge, correct sideways/upside-down scans and straighten skew up to 12 degrees without adding text. auto_crop defaults to true, crop_margin to 2 pt (0..20). Uncertain paper edges are kept; crop_box reports the rectangle in original PDF user space. Existing text is preserved and processed unless skip_text_pages is true. Original image data is preserved. Low-confidence rotations are left unchanged. Deskew refuses pages with annotations to avoid misalignment. Undoable as one step.")
+        t("ocr_enhance", "Correct scanned pages", "Crop clear black/white scanner borders to the paper edge, correct sideways/upside-down scans and straighten skew up to 12 degrees without adding text (rotate_pages, straighten_pages and auto_crop). auto_crop defaults to true, crop_margin to 2 pt (0..20). Uncertain paper edges are kept; crop_box reports the rectangle in original PDF user space. Existing text is preserved and processed unless skip_text_pages is true. Original image data is preserved. Low-confidence rotations are left unchanged. Deskew refuses pages with annotations to avoid misalignment. Undoable as one step.")
             .cmd("ocr.correct_scan")
-            .with(schema(json!({"doc":doc(),"pages":pages("to correct (default all)"),"dpi":{"type":"number","minimum":72,"maximum":600},"auto_rotate":{"type":"boolean","default":true},"deskew":{"type":"boolean","default":true},"auto_crop":{"type":"boolean","default":true},"crop_margin":{"type":"number","minimum":0,"maximum":20,"default":2},"skip_text_pages":{"type":"boolean","default":false}}), &["doc"])),
-        t("ocr_status", "OCR status", "Whether text recognition is available (its models are installed: release packages include them; a source build fetches them with `cargo xtask models`; PDFCRAFT_MODELS overrides), where it looks for them, and the languages it reads.")
+            .with(schema(json!({"doc":doc(),"pages":pages("to correct (default all)"),"dpi":{"type":"number","minimum":72,"maximum":600},"rotate_pages":{"type":"boolean","default":true},"straighten_pages":{"type":"boolean","default":true},"auto_crop":{"type":"boolean","default":true},"crop_margin":{"type":"number","minimum":0,"maximum":20,"default":2},"skip_text_pages":{"type":"boolean","default":false}}), &["doc"])),
+        t("ocr_status", "OCR status", "Whether text recognition is available, where it looks for models (release packages include them; a source build fetches them with `cargo xtask models`; PDFCRAFT_MODELS overrides), its languages, and the engines: ocrs (built in, models) and tesseract (an installed program, with its path).")
             .ro()
             .cmd("ocr.recognize")
             .with(schema(json!({}), &[])),

@@ -78,6 +78,12 @@ pub(crate) use paths::{read_input, read_input_bytes};
 #[cfg(test)]
 use paths::{write_atomic_synced, write_atomic_with};
 
+struct OcrReview {
+    handle: u64,
+    guard: pdfcraft_engine::ocr::OcrGuard,
+    pages: Vec<pdfcraft_engine::ocr::OcrPage>,
+}
+
 /// A headless PdfCraft session driven by tool calls.
 pub struct Automation {
     session: Session,
@@ -98,6 +104,9 @@ pub struct Automation {
     /// source credentials. `pdfcraft-cli mcp` turns this off unless given `--allow-hot-folder-admin`.
     #[cfg(not(target_arch = "wasm32"))]
     hot_folder_admin: bool,
+    /// Review sessions held for `ocr_words` (a guard and the pages read), by document.
+    ocr_reviews: HashMap<DocId, OcrReview>,
+    next_ocr_review: u64,
 }
 
 impl Default for Automation {
@@ -118,6 +127,8 @@ impl Automation {
             evicted: HashSet::new(),
             #[cfg(not(target_arch = "wasm32"))]
             hot_folder_admin: true,
+            ocr_reviews: HashMap::new(),
+            next_ocr_review: 0,
         }
     }
 

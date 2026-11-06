@@ -13,7 +13,7 @@ fn task(base: &Path, id: &str) -> Task {
         enabled: true,
         interval_seconds: 1,
         settle_seconds: 1,
-        settings: ocr::OcrSettings { recognize: false, auto_rotate: false, deskew: false, ..Default::default() },
+        settings: ocr::OcrSettings { recognize: false, rotate_pages: false, straighten_pages: false, ..Default::default() },
         ..Default::default()
     }
 }

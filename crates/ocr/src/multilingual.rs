@@ -101,11 +101,11 @@ impl Multilingual {
         let (mut text, mut previous, mut start, mut end, mut confidence, mut count) = (String::new(), 0, 0, 0, 0.0, 0);
         let scale = width as f32 / rw as f32 * w as f32 / steps.max(1) as f32;
         let flush = |words: &mut Vec<Word>, text: &mut String, start: usize, end: usize, confidence: f32, count: usize| {
-            if !text.is_empty() && confidence / count.max(1) as f32 >= 0.5 {
-                words.push(Word {
-                    text: std::mem::take(text),
-                    rect: [x as f32 + start as f32 * scale, y as f32, (x as f32 + (end + 1) as f32 * scale).min(r), (y + h) as f32],
-                });
+            let mean = confidence / count.max(1) as f32;
+            if !text.is_empty() && mean >= 0.5 {
+                let rect = [x as f32 + start as f32 * scale, y as f32, (x as f32 + (end + 1) as f32 * scale).min(r), (y + h) as f32];
+                // The engine id is the recognizer's (`ocrs`); confidence on the 0–100 scale.
+                words.push(Word::new(std::mem::take(text), rect, "ocrs").with_confidence(mean * 100.0));
             } else {
                 text.clear();
             }

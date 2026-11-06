@@ -925,7 +925,7 @@ fn remove_staged(path: &Path, expected: &str) -> Result<(), String> {
 }
 
 fn step(task: &Task, state: &mut State, current: u64, config_path: &Path, root: Option<&Path>, should_stop: &dyn Fn() -> bool) -> Result<(), String> {
-    step_with_model_check(task, state, current, config_path, root, should_stop, &|| ocr::engine().map(|_| ()))
+    step_with_model_check(task, state, current, config_path, root, should_stop, &|| ocr::recognizers(&task.settings).map(|_| ()))
 }
 
 /// What every phase of one step shares: the task, its confined folders and how to stop.
@@ -1196,7 +1196,7 @@ fn prepare_one(
     }
     // Completed receipts need only verified cleanup, even when the models are unavailable.
     // New work still treats missing models as an environment failure, not a permanent bad input.
-    if !task.analysis_only && (task.settings.recognize || task.settings.auto_rotate || task.settings.deskew || task.settings.auto_crop) {
+    if !task.analysis_only && (task.settings.recognize || task.settings.rotate_pages || task.settings.straighten_pages || task.settings.auto_crop) {
         check_models()?;
     }
     let processed = match prepare(task, &source, bytes, cx.config_path, MAX_INPUT.saturating_sub(budget.prepared), publication_time, cx.stopped) {
@@ -1518,10 +1518,10 @@ fn prepare(
             Err("all pages are blank; select a blank-page archive to keep them separately".into())
         };
     };
-    if !task.settings.recognize && !task.settings.auto_rotate && !task.settings.deskew && !task.settings.auto_crop {
+    if !task.settings.recognize && !task.settings.rotate_pages && !task.settings.straighten_pages && !task.settings.auto_crop {
         return Ok(preprocess::BlankResult { document: Some(pdf), blank_pages: blanks });
     }
-    let model = ocr::engine()?;
+    let model = ocr::recognizers(&task.settings)?;
     let mut cancelled = false;
     let mut session = Session::new().with_timestamp(timestamp);
     let id = session.open(name.as_ref(), None, pdf, None).map_err(|e| e.to_string())?;
@@ -1727,8 +1727,8 @@ mod tests {
         let (_dir, config, mut task) = setup();
         task.originals = Originals::Delete;
         task.settings.recognize = false;
-        task.settings.auto_rotate = false;
-        task.settings.deskew = false;
+        task.settings.rotate_pages = false;
+        task.settings.straighten_pages = false;
         task.output_plan.steps = vec![
             output::SaveStep {
                 grouping: output::Grouping::All,
@@ -1764,8 +1764,8 @@ mod tests {
         let (_dir, config, mut task) = setup();
         task.originals = Originals::Delete;
         task.settings.recognize = false;
-        task.settings.auto_rotate = false;
-        task.settings.deskew = false;
+        task.settings.rotate_pages = false;
+        task.settings.straighten_pages = false;
         task.output_plan.steps.push(output::SaveStep {
             format: output::Format::Txt,
             folder: Some(task.archive.join("missing")),
@@ -1798,8 +1798,8 @@ mod tests {
         let (_dir, config, mut task) = setup();
         task.originals = Originals::Delete;
         task.settings.recognize = false;
-        task.settings.auto_rotate = false;
-        task.settings.deskew = false;
+        task.settings.rotate_pages = false;
+        task.settings.straighten_pages = false;
         task.preprocessing.pages = "1".into();
         task.output_plan.steps[0].optimization.mode = output::optimization::Mode::Lossless;
         let p12 = fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
@@ -2019,8 +2019,8 @@ mod tests {
         let (_dir, config, mut task) = setup();
         task.originals = Originals::Delete;
         task.settings.recognize = false;
-        task.settings.auto_rotate = false;
-        task.settings.deskew = false;
+        task.settings.rotate_pages = false;
+        task.settings.straighten_pages = false;
         task.output_plan.steps.push(output::SaveStep { format: output::Format::Txt, ..Default::default() });
         save_config(&config, &Config { tasks: vec![task.clone()] }, None).unwrap();
         let original = text_pdf();
@@ -2060,8 +2060,8 @@ mod tests {
         .unwrap();
         task.source = sources::SourceConfig::Project(sources::ProjectSource { manifest, action: sources::SourceAction::Delete });
         task.settings.recognize = false;
-        task.settings.auto_rotate = false;
-        task.settings.deskew = false;
+        task.settings.rotate_pages = false;
+        task.settings.straighten_pages = false;
         task.output_plan.steps = vec![output::SaveStep { grouping: output::Grouping::All, ..Default::default() }];
         save_config(&config, &Config { tasks: vec![task.clone()] }, None).unwrap();
         let mut state = State::default();
@@ -2087,8 +2087,8 @@ mod tests {
             task.originals = Originals::Delete;
             task.preprocessing.grayscale = true;
             task.settings.recognize = false;
-            task.settings.auto_rotate = false;
-            task.settings.deskew = false;
+            task.settings.rotate_pages = false;
+            task.settings.straighten_pages = false;
             task.settings.dpi = 72.0;
             save_config(&config, &Config { tasks: vec![task.clone()] }, None).unwrap();
             fs::write(task.input.join("source.pdf"), text_pdf().as_slice()).unwrap();
@@ -2128,8 +2128,8 @@ mod tests {
         }
         let (_dir, config, mut task) = setup();
         task.recursive = true;
-        task.settings.auto_rotate = false;
-        task.settings.deskew = false;
+        task.settings.rotate_pages = false;
+        task.settings.straighten_pages = false;
         let mut s = Session::new();
         save_config(&config, &Config { tasks: vec![task.clone()] }, None).unwrap();
         let id = s.open("text", None, text_pdf(), None).unwrap();
@@ -2149,8 +2149,8 @@ mod tests {
             return;
         }
         let (_dir, config, mut task) = setup();
-        task.settings.auto_rotate = false;
-        task.settings.deskew = false;
+        task.settings.rotate_pages = false;
+        task.settings.straighten_pages = false;
         task.preprocessing.regions.push(preprocess::Region { exclude: true, ..Default::default() });
         save_config(&config, &Config { tasks: vec![task.clone()] }, None).unwrap();
         let mut session = Session::new();

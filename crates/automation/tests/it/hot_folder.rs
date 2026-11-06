@@ -46,7 +46,7 @@ fn hot_folder_optimization_never_revives_stale_page_content() {
     let task = json!({
         "id":"generations", "name":"Generations", "input":"in", "output":"out", "enabled":true,
         "interval_seconds":1, "settle_seconds":1,
-        "settings":{"recognize":false,"auto_rotate":false,"deskew":false},
+        "settings":{"recognize":false,"rotate_pages":false,"straighten_pages":false},
         "output_plan":{"steps":steps}
     });
     call(&mut a, "hot_folder_configure", json!({"config":"tasks.json","settings":{"tasks":[task]}}));
@@ -89,7 +89,7 @@ fn hot_folder_pdf_optimization_is_optional_reports_real_sizes_and_preserves_sour
     let task = json!({
         "id":"optimize", "name":"Optimize", "input":"in", "output":"out", "enabled":true,
         "interval_seconds":1, "settle_seconds":1,
-        "settings":{"recognize":false,"auto_rotate":false,"deskew":false},
+        "settings":{"recognize":false,"rotate_pages":false,"straighten_pages":false},
         "output_plan":{"steps":[
             {"format":"pdf","name_template":"unchanged"},
             {"format":"pdf","name_template":"lossless","optimization":{"mode":"lossless"}},
@@ -179,7 +179,7 @@ fn hot_folder_project_sources_preserve_order_and_ack_only_after_all_outputs() {
     assert_eq!(project["project"]["files"], json!(["z.pdf", "a.pdf"]));
     assert!(a.call("hot_folder_project", &json!({"path":"../escaped.json","files":["sources/z.pdf"]})).is_err());
     assert!(a.call("hot_folder_project", &json!({"path":"sources/project.json","files":["sources/z.pdf"]})).is_err());
-    let task = json!({"id":"project","name":"Project","input":"stage","output":"out","enabled":true,"interval_seconds":1,"settle_seconds":1,"settings":{"language":"de","recognize":false,"auto_rotate":false,"deskew":false},"source":{"kind":"project","manifest":"sources/project.json","action":{"kind":"delete"}},"output_plan":{"steps":[{"format":"pdf","grouping":"all","name_template":"combined"},{"format":"txt","grouping":"all","name_template":"combined"},{"format":"xlsx","grouping":"all","name_template":"combined"},{"format":"epub","grouping":"all","name_template":"combined"}]}});
+    let task = json!({"id":"project","name":"Project","input":"stage","output":"out","enabled":true,"interval_seconds":1,"settle_seconds":1,"settings":{"language":"de","recognize":false,"rotate_pages":false,"straighten_pages":false},"source":{"kind":"project","manifest":"sources/project.json","action":{"kind":"delete"}},"output_plan":{"steps":[{"format":"pdf","grouping":"all","name_template":"combined"},{"format":"txt","grouping":"all","name_template":"combined"},{"format":"xlsx","grouping":"all","name_template":"combined"},{"format":"epub","grouping":"all","name_template":"combined"}]}});
     call(&mut a, "hot_folder_configure", json!({"config":"tasks.json","settings":{"tasks":[task]}}));
     let mut overlapping = call(&mut a, "hot_folder_status", json!({"config":"tasks.json"}))["settings"].clone();
     overlapping["tasks"].as_array_mut().unwrap().push(json!({"id":"other","name":"Other","input":"sources","output":"out","enabled":true}));
@@ -272,7 +272,7 @@ fn hot_folder_tools_apply_page_templates_blank_archives_and_multiple_outputs() {
     let source = session.combine(&[("text.pdf".into(), text), ("blank.pdf".into(), blank)]).unwrap();
     std::fs::write(root.join("in/source.pdf"), source.as_slice()).unwrap();
     let mut a = Automation::new().with_root(&root).unwrap();
-    let task = json!({"id":"pipeline","name":"Pipeline","input":"in","output":"out","blank_archive":"blank","remove_blank_pages":true,"enabled":true,"interval_seconds":1,"settle_seconds":1,"settings":{"recognize":false,"auto_rotate":false,"deskew":false},"preprocessing":{"pages":"1-2"},"output_plan":{"steps":[{"format":"pdf"},{"format":"txt"}]}});
+    let task = json!({"id":"pipeline","name":"Pipeline","input":"in","output":"out","blank_archive":"blank","remove_blank_pages":true,"enabled":true,"interval_seconds":1,"settle_seconds":1,"settings":{"recognize":false,"rotate_pages":false,"straighten_pages":false},"preprocessing":{"pages":"1-2"},"output_plan":{"steps":[{"format":"pdf"},{"format":"txt"}]}});
     let mut escaped = task.clone();
     escaped["output_plan"]["steps"][1]["folder"] = json!("../outside");
     assert!(a.call("hot_folder_configure", &json!({"config":"bad.json","settings":{"tasks":[escaped]}})).is_err());

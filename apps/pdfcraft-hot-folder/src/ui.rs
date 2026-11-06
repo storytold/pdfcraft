@@ -525,8 +525,8 @@ impl HotFolderApp {
                             });
                             ui.add(crate::widgets::checkbox(&mut task.settings.recognize, t("Add searchable text")));
                             ui.add(crate::widgets::checkbox(&mut task.settings.skip_text_pages, t("Skip pages that already contain text")));
-                            ui.add(crate::widgets::checkbox(&mut task.settings.auto_rotate, t("Automatically correct page orientation")));
-                            ui.add(crate::widgets::checkbox(&mut task.settings.deskew, t("Straighten skewed scans")));
+                            ui.add(crate::widgets::checkbox(&mut task.settings.rotate_pages, t("Automatically correct page orientation")));
+                            ui.add(crate::widgets::checkbox(&mut task.settings.straighten_pages, t("Straighten skewed scans")));
                             ui.add(crate::widgets::checkbox(&mut task.settings.auto_crop, t("Crop to detected paper edges")));
                             ui.add_enabled_ui(task.settings.auto_crop, |ui| {
                                 ui.horizontal(|ui| {
@@ -732,7 +732,7 @@ fn image_preparation(ui: &mut egui::Ui, settings: &mut pdfcraft_engine::hot_fold
 }
 
 fn needs_ocr(task: &hf::Task) -> bool {
-    !task.analysis_only && (task.settings.recognize || task.settings.auto_rotate || task.settings.deskew || task.settings.auto_crop)
+    !task.analysis_only && (task.settings.recognize || task.settings.rotate_pages || task.settings.straighten_pages || task.settings.auto_crop)
 }
 
 fn output_steps(ui: &mut egui::Ui, plan: &mut output::OutputPlan, language: Language, analysis: bool) {
