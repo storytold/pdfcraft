@@ -5,7 +5,7 @@
 //! presence and access changes become overrides kept in the PDF, added or removed rows change
 //! the datasets, and any of those lays the form out again.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use pdfcraft_js::xfa::{XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode};
@@ -159,6 +159,41 @@ fn to_js(n: &FormNode) -> XfaNode {
     }
 }
 
+/// The names of a run of `resetData` calls, applied together: each name once, in the order
+/// first given. A call without names resets the whole form, which takes in every other.
+#[derive(Default)]
+struct ResetRun {
+    names: Vec<String>,
+    /// `names` as a set, so adding a name costs the same however many there are (a script
+    /// may pass hundreds of thousands).
+    seen: HashSet<String>,
+    whole: bool,
+}
+
+impl ResetRun {
+    fn add(&mut self, names: &[String]) {
+        if self.whole {
+            return;
+        }
+        if names.is_empty() {
+            self.whole = true;
+            self.names.clear();
+            self.seen.clear();
+            return;
+        }
+        for n in names {
+            if self.seen.insert(n.clone()) {
+                self.names.push(n.clone());
+            }
+        }
+    }
+
+    /// The names to reset; none for the whole form.
+    fn names(&self) -> &[String] {
+        if self.whole { &[] } else { &self.names }
+    }
+}
+
 fn find_container<'a>(n: &'a FormNode, som: &str, depth: usize) -> Option<&'a FormNode> {
     if depth > 64 {
         return None;
@@ -198,15 +233,52 @@ fn plain_som(som: &str) -> String {
     out
 }
 
-/// Does `name` from a script (`qty`, `page1.qty`, `xfa.form.form.page1.qty`, or a container
-/// such as `table`) name this SOM or one of its ancestors?
-fn som_matches(som: &str, name: &str) -> bool {
-    let plain = plain_som(som);
-    let n = plain_som(name.trim());
-    let n = n.strip_prefix("xfa.form.").or_else(|| n.strip_prefix("$form.")).unwrap_or(&n);
-    let want: Vec<&str> = n.split('.').filter(|s| !s.is_empty()).collect();
-    let have: Vec<&str> = plain.split('.').filter(|s| !s.is_empty()).collect();
-    !want.is_empty() && have.windows(want.len()).any(|w| w == want.as_slice())
+/// The names a script passed to a reset (`qty`, `page1.qty`, `xfa.form.form.page1.qty`, or a
+/// container such as `table`), indexed, so matching an object against them costs the same
+/// however many names there are.
+struct ResetTargets {
+    /// Each name's steps without indexes, joined by `.`.
+    wants: HashSet<String>,
+    /// The most steps of a name.
+    longest: usize,
+}
+
+impl ResetTargets {
+    fn new(names: &[String]) -> Self {
+        let mut wants = HashSet::new();
+        let mut longest = 0;
+        for name in names {
+            let n = plain_som(name.trim());
+            let n = n.strip_prefix("xfa.form.").or_else(|| n.strip_prefix("$form.")).unwrap_or(&n);
+            let steps: Vec<&str> = n.split('.').filter(|s| !s.is_empty()).collect();
+            if !steps.is_empty() {
+                longest = longest.max(steps.len());
+                wants.insert(steps.join("."));
+            }
+        }
+        ResetTargets { wants, longest }
+    }
+
+    /// Does a name name this SOM or one of its ancestors: is it a run of the SOM's steps? The
+    /// runs are looked up, at most [`Self::longest`] steps each, so the work depends on the
+    /// SOM's depth and not on how many names there are.
+    fn matches(&self, som: &str) -> bool {
+        let plain = plain_som(som);
+        let have: Vec<&str> = plain.split('.').filter(|s| !s.is_empty()).collect();
+        for start in 0..have.len() {
+            let mut run = String::new();
+            for (k, step) in have.iter().skip(start).take(self.longest).enumerate() {
+                if k > 0 {
+                    run.push('.');
+                }
+                run.push_str(step);
+                if self.wants.contains(&run) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 /// A generated field as the runner tracks it: kind, value and on state.
@@ -256,6 +328,11 @@ struct Runner<'a, 'b> {
     skipped: usize,
     relayouts: usize,
     relayouts_skipped: bool,
+    /// Lay the form out once, when the event ends, rather than after every script that changed
+    /// its structure (opening: see [`on_open`]).
+    defer_relayout: bool,
+    /// A deferred layout is owed.
+    relayout_owed: bool,
     dropped_output: usize,
     truncated_warned: bool,
     data: Option<pdfcraft_xfa::DataNode>,
@@ -270,6 +347,9 @@ struct Runner<'a, 'b> {
     fields: Option<HashMap<String, FieldInfo>>,
     /// The live form as last built; dropped when a script changed the form.
     cached: Option<LiveForm>,
+    /// `cached` as the scripts get it, made once and sent to each script until the live form
+    /// changes in any way (a value too): the script engine reuses what it built from it.
+    js_root: Option<Arc<XfaNode>>,
     /// The script engine for this event: one thread for all its scripts, each run in a fresh
     /// context on the form as it is then (`cached`, kept up to date in place for values and
     /// rebuilt when the structure changed).
@@ -291,6 +371,8 @@ impl<'a, 'b> Runner<'a, 'b> {
             skipped: 0,
             relayouts: 0,
             relayouts_skipped: false,
+            defer_relayout: false,
+            relayout_owed: false,
             dropped_output: 0,
             truncated_warned: false,
             data,
@@ -302,6 +384,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             by_path: None,
             fields: None,
             cached: None,
+            js_root: None,
             session: None,
             changes: Changes::default(),
         }
@@ -311,6 +394,7 @@ impl<'a, 'b> Runner<'a, 'b> {
     /// script.
     fn invalidate(&mut self) {
         self.cached = None;
+        self.js_root = None;
     }
 
     /// The script engine for this event.
@@ -327,6 +411,8 @@ impl<'a, 'b> Runner<'a, 'b> {
         let op = pdfcraft_xfa::DataOp::Value { path, text };
         self.data.get_or_insert_with(Default::default).apply(&op);
         self.pending.push(op);
+        // The value changes in the live form below: the scripts' copy is made again.
+        self.js_root = None;
         let refreshed = match self.cached.as_mut() {
             Some(live) => pdfcraft_xfa::refresh_value(&mut live.root, self.tpl, self.data.as_ref(), som).is_some(),
             None => true,
@@ -536,17 +622,40 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn reset(&mut self, names: &[String]) -> Result<(), String> {
         self.flush()?;
         let by_som = self.by_som().clone();
-        let listed: Option<Vec<String>> = if names.is_empty() {
-            None
-        } else {
-            Some(by_som.iter().filter(|(som, _)| names.iter().any(|n| som_matches(som, n))).map(|(_, f)| f.clone()).collect())
+        let targets = (!names.is_empty()).then(|| ResetTargets::new(names));
+        let wanted = |som: &str| targets.as_ref().is_none_or(|t| t.matches(som));
+        let listed: Option<Vec<String>> = targets.as_ref().map(|_| by_som.iter().filter(|(som, _)| wanted(som)).map(|(_, f)| f.clone()).collect());
+        // Fields and exclusion groups of the live form with no widget yet (a row an opening
+        // script added, before the form is laid out again): their data goes back to the
+        // template's default too, or the value would stay and be laid out and saved.
+        let unshown: Vec<String> = {
+            let live = self.live();
+            let mut out = Vec::new();
+            let mut stack: Vec<&pdfcraft_xfa::FormNode> = vec![&live.root];
+            while let Some(n) = stack.pop() {
+                if matches!(n.kind, Some(pdfcraft_xfa::NodeKind::Field | pdfcraft_xfa::NodeKind::ExclGroup))
+                    && !by_som.contains_key(&n.som)
+                    && wanted(&n.som)
+                {
+                    out.push(n.som.clone());
+                }
+                stack.extend(n.children.iter());
+            }
+            out
         };
+        for som in unshown {
+            let Some(text) = pdfcraft_xfa::reset_default(self.tpl, &som) else { continue };
+            let path = pdfcraft_xfa::data_path(self.tpl, &som);
+            self.reset_data(path, text);
+        }
         if listed.as_ref().is_some_and(Vec::is_empty) {
+            self.invalidate();
             return Ok(());
         }
         pdfcraft_forms::reset(self.doc, listed.as_deref()).map_err(|e| e.to_string())?;
         self.fields = None;
         let infos = self.fields().clone();
+        let listed: Option<HashSet<&String>> = listed.as_ref().map(|l| l.iter().collect());
         for (som, name) in &by_som {
             if listed.as_ref().is_some_and(|l| !l.contains(name)) {
                 continue;
@@ -556,14 +665,19 @@ impl<'a, 'b> Runner<'a, 'b> {
                 continue;
             }
             let path = pdfcraft_xfa::data_path(self.tpl, som);
-            let text = data_text(info);
-            if self.data.as_ref().and_then(|d| d.text_at(&path)).unwrap_or("") != text {
-                self.data_op(pdfcraft_xfa::DataOp::Value { path, text });
-                self.changes.values += 1;
-            }
+            self.reset_data(path, data_text(info));
         }
         self.invalidate();
         Ok(())
+    }
+
+    /// Put a reset's `text` in the data at `path`, unless it already holds it: a multi-select
+    /// list's picks (`value` elements) are compared as its lines, and replaced.
+    fn reset_data(&mut self, path: pdfcraft_xfa::DataPath, text: String) {
+        if self.data.as_ref().and_then(|d| d.value_at(&path)).unwrap_or_default() != text {
+            self.data_op(pdfcraft_xfa::DataOp::Reset { path, text });
+            self.changes.values += 1;
+        }
     }
 
     /// Apply what a script of `ev` did. Returns whether the form has to be laid out again.
@@ -584,7 +698,9 @@ impl<'a, 'b> Runner<'a, 'b> {
                 }
             }
         }
-        for e in effects {
+        // Resets in a row, applied together when the run of them ends.
+        let mut pending_reset: Option<ResetRun> = None;
+        for (at, e) in effects.iter().enumerate() {
             // Only a click script may print, save, open links or move the focus (not the
             // calculations a click sets off, nor anything run on open or on a change).
             if let Some(what) = click_only(e)
@@ -633,7 +749,15 @@ impl<'a, 'b> Runner<'a, 'b> {
                     relayout = true;
                 }
                 XfaEffect::MessageBox(m) => self.alert(m.clone()),
-                XfaEffect::ResetData(names) => self.reset(names)?,
+                XfaEffect::ResetData(names) => {
+                    // A script resetting several subforms in a row (`resetData` once for each)
+                    // resets them together: the same fields end up at their defaults.
+                    pending_reset.get_or_insert_with(ResetRun::default).add(names);
+                    let next_is_reset = effects.get(at.saturating_add(1)).is_some_and(|e| matches!(e, XfaEffect::ResetData(_)));
+                    if !next_is_reset && let Some(run) = pending_reset.take() {
+                        self.reset(run.names())?;
+                    }
+                }
                 XfaEffect::Print => self.run.out.requests.push(Request::Print),
                 XfaEffect::SaveAs => self.run.out.requests.push(Request::SaveAs),
                 XfaEffect::LaunchUrl(u) => self.run.out.requests.push(Request::LaunchUrl(u.clone())),
@@ -662,7 +786,14 @@ impl<'a, 'b> Runner<'a, 'b> {
         #[cfg(test)]
         self.check_live();
         let event = XfaEvent { activity: ev.activity.clone(), target: ev.som.clone(), new_text: new_text.to_string(), prev_text: String::new() };
-        let root = to_js(&self.live().root);
+        let root = match &self.js_root {
+            Some(r) => Arc::clone(r),
+            None => {
+                let r = Arc::new(to_js(&self.live().root));
+                self.js_root = Some(Arc::clone(&r));
+                r
+            }
+        };
         let script = Script {
             source: ev.script.clone(),
             formcalc: ev.formcalc,
@@ -689,7 +820,11 @@ impl<'a, 'b> Runner<'a, 'b> {
             self.error(format!("{} ({}): {e}", ev.som, ev.activity));
         }
         if self.apply_effects(ev, &o.effects)? {
-            self.relayout()?;
+            if self.defer_relayout {
+                self.relayout_owed = true;
+            } else {
+                self.relayout()?;
+            }
         }
         Ok(Some(o))
     }
@@ -719,9 +854,10 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn finish(mut self) -> Result<Changes, String> {
         #[cfg(test)]
         self.check_live();
-        if self.relayouts_skipped {
+        if self.relayouts_skipped || self.relayout_owed {
             self.relayouts = 0;
             self.relayouts_skipped = false;
+            self.relayout_owed = false;
             self.relayout()?;
         }
         self.flush()?;
@@ -825,6 +961,12 @@ pub(crate) fn relayout_changed_text(
 /// On open: initialize scripts, then calculations. Returns what they changed.
 pub(crate) fn on_open(doc: &mut pdfcraft_cos::Document, tpl: &Template, run: &mut XfaRun) -> Result<Changes, String> {
     let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
+    // The scripts read the live form (template, data and overrides), not the pages, so the
+    // pages are laid out once, after the last of them. Laying a large form out after every
+    // script that hides a subform spent the time limit on the first few, and the form was kept
+    // half initialized: a page its initialize scripts hide stayed open to typing until the
+    // next opening hid it and reset its data.
+    r.defer_relayout = true;
     let events: Vec<ScriptEvent> = r.live().events.iter().filter(|e| e.activity == "initialize" || e.activity == "docReady").cloned().collect();
     for ev in &events {
         r.run(ev, "")?;
@@ -941,14 +1083,70 @@ pub(crate) fn mark_script_buttons(doc: &pdfcraft_cos::Document, fields: &mut [pd
 mod tests {
     use super::*;
 
+    /// A run of resets keeps each name once, in the order first given, and a reset of the whole
+    /// form takes in the rest, before or after it.
+    #[test]
+    fn resets_in_a_row_keep_each_name_once_and_a_whole_form_reset_wins() {
+        let v = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let mut run = ResetRun::default();
+        run.add(&v(&["a", "b", "a"]));
+        run.add(&v(&["c", "b"]));
+        assert_eq!(run.names(), v(&["a", "b", "c"]).as_slice());
+        run.add(&[]);
+        assert!(run.names().is_empty());
+        run.add(&v(&["d"]));
+        assert!(run.names().is_empty(), "still the whole form");
+        let mut first = ResetRun::default();
+        first.add(&[]);
+        first.add(&v(&["a"]));
+        assert!(first.names().is_empty());
+    }
+
+    /// Adding a name to a run costs the same however many it holds: two runs of 60,000
+    /// distinct names merge at once (comparing each name with every kept one is 3.6 billion
+    /// comparisons).
+    #[test]
+    fn a_long_run_of_reset_names_merges_in_linear_time() {
+        let a: Vec<String> = (0..60_000).map(|i| format!("form1[0].a{i}")).collect();
+        let b: Vec<String> = (0..60_000).map(|i| format!("form1[0].b{i}")).collect();
+        let started = std::time::Instant::now();
+        let mut run = ResetRun::default();
+        run.add(&a);
+        run.add(&b);
+        assert_eq!(run.names().len(), 120_000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "took {:?}", started.elapsed());
+    }
+
+    /// Matching objects against a reset's names costs the same however many names there are:
+    /// 5,000 objects against 50,000 names that miss them all is 250 million comparisons when
+    /// each object is compared with every name.
+    #[test]
+    fn matching_many_objects_against_many_reset_names_is_bounded() {
+        let names: Vec<String> = (0..50_000).map(|i| format!("form1.page1.other{i}")).collect();
+        let started = std::time::Instant::now();
+        let targets = ResetTargets::new(&names);
+        let hits = (0..5_000).filter(|i| targets.matches(&format!("form1[0].page1[0].table[0].row[{i}].item[0]"))).count();
+        assert_eq!(hits, 0);
+        assert!(targets.matches("form1[0].page1[0].other49999[0]"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "took {:?}", started.elapsed());
+    }
+
     #[test]
     fn script_names_match_indexed_som_paths() {
+        let som_matches = |som: &str, name: &str| ResetTargets::new(&[name.to_string()]).matches(som);
         assert!(som_matches("form[0].page1[0].qty[0]", "qty"));
         assert!(som_matches("form[0].page1[0].qty[0]", "page1.qty"));
         assert!(som_matches("form[0].page1[0].qty[0]", "xfa.form.form.page1.qty"));
+        assert!(som_matches("form[0].page1[0].qty[0]", "$form.form.page1.qty"));
         assert!(som_matches("form[0].page1[0].table[0].row[2].amount[0]", "table"));
+        assert!(som_matches("form[0].page1[0].table[0].row[2].amount[0]", "table.row[0].amount"));
         assert!(!som_matches("form[0].page1[0].qty[0]", "qt"));
         assert!(!som_matches("form[0].page1[0].price[0]", "qty"));
+        assert!(!som_matches("form[0].page1[0].qty[0]", "page1.page1.qty"));
+        assert!(!som_matches("form[0].page1[0].qty[0]", " . "));
+        assert!(!ResetTargets::new(&[]).matches("form[0].qty[0]"));
+        let many = ResetTargets::new(&["price".into(), "page1.qty".into()]);
+        assert!(many.matches("form[0].page1[0].qty[0]") && many.matches("form[0].page2[0].price[0]"));
         assert_eq!(
             split_instance(&Template::default(), "form[0].table[0].row[2]").map(|(p, ps, n, i)| (p.len(), ps, n, i)),
             Some((2, "form[0].table[0]".into(), "row".into(), 2))

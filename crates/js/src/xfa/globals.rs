@@ -69,13 +69,13 @@ fn set_focus(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVal
     let som = match target.as_object() {
         Some(_) if node_index(&target, ctx).is_ok() => {
             let i = node_index(&target, ctx)?;
-            host(ctx)?.borrow().nodes.get(i).map(|n| n.som.clone()).unwrap_or_default()
+            host(ctx)?.borrow().nodes.get(i).map(|n| n.som.to_string()).unwrap_or_default()
         }
         _ => {
             let expr = text(&target, ctx)?;
             let h = host(ctx)?.borrow();
             let found = resolve_som(&h, h.current, &expr);
-            found.first().and_then(|i| h.nodes.get(*i)).map(|n| n.som.clone()).unwrap_or(expr)
+            found.first().and_then(|i| h.nodes.get(*i)).map(|n| n.som.to_string()).unwrap_or(expr)
         }
     };
     effect(ctx, XfaEffect::SetFocus(som))?;
@@ -329,7 +329,7 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
             let h = host(ctx)?.borrow();
             h.nodes
                 .get(scope)
-                .map(|n| n.children.iter().filter_map(|&c| h.nodes.get(c).map(|k| (c, k.name.clone(), k.repeatable && !k.gone))).collect())
+                .map(|n| n.children.iter().filter_map(|&c| h.nodes.get(c).map(|k| (c, k.name.to_string(), k.repeatable && !k.gone))).collect())
                 .unwrap_or_default()
         };
         for (c, name, repeatable) in kids {

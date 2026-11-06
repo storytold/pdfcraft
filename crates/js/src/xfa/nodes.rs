@@ -70,14 +70,14 @@ fn value_js(h: &HNode) -> JsValue {
 /// `(idx, name)` of the child of `parent` named `name`, first instance.
 pub(crate) fn child_named(h: &XHost, parent: usize, name: &str) -> Option<usize> {
     let p = h.nodes.get(parent)?;
-    p.children.iter().copied().find(|&c| h.nodes.get(c).is_some_and(|n| !n.gone && n.name == name))
+    p.children.iter().copied().find(|&c| h.nodes.get(c).is_some_and(|n| !n.gone && &*n.name == name))
 }
 
 /// Every live instance named `name` under `parent`, in order.
 pub(crate) fn instances(h: &XHost, parent: usize, name: &str) -> Vec<usize> {
     h.nodes
         .get(parent)
-        .map(|p| p.children.iter().copied().filter(|&c| h.nodes.get(c).is_some_and(|n| !n.gone && n.name == name)).collect())
+        .map(|p| p.children.iter().copied().filter(|&c| h.nodes.get(c).is_some_and(|n| !n.gone && &*n.name == name)).collect())
         .unwrap_or_default()
 }
 
@@ -179,11 +179,11 @@ pub(crate) fn descendants_named(h: &XHost, from: usize, name: &str, depth: usize
         return out;
     }
     let Some(n) = h.nodes.get(from) else { return out };
-    for &c in &n.children {
+    for &c in n.children.iter() {
         if let Some(k) = h.nodes.get(c)
             && !k.gone
         {
-            if k.name == name {
+            if &*k.name == name {
                 out.push(c);
             } else {
                 out.extend(descendants_named(h, c, name, depth + 1));
@@ -211,7 +211,7 @@ fn node_get(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
     Ok(match key.as_str() {
         IDX => JsValue::from(idx as f64),
         "rawValue" | "value" => host(ctx)?.borrow().nodes.get(idx).map_or(JsValue::null(), value_js),
-        "formattedValue" => s(&host(ctx)?.borrow().nodes.get(idx).and_then(|n| n.formatted.clone()).unwrap_or(value)),
+        "formattedValue" => s(&host(ctx)?.borrow().nodes.get(idx).and_then(|n| n.formatted.as_deref().map(str::to_string)).unwrap_or(value)),
         "name" => s(&name),
         "somExpression" => s(&som),
         "className" => s(kind.class_name()),
@@ -289,7 +289,7 @@ fn node_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
     let value = if value.is_null() || value.is_undefined() { String::new() } else { text(&value, ctx)? };
     let mut h = host(ctx)?.borrow_mut();
     let Some(n) = h.nodes.get(idx) else { return Ok(JsValue::from(true)) };
-    let som = n.som.clone();
+    let som = n.som.to_string();
     match key.as_str() {
         "rawValue" | "value" | "formattedValue" => {
             // Not a field: the property doesn't exist, as in Acrobat, and nothing is recorded.
