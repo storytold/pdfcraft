@@ -227,12 +227,20 @@ fn buttons(ui: &mut egui::Ui, primary: &str, others: &[&str]) -> Option<String> 
     clicked
 }
 
+/// The note the console shows while JavaScript is off. A function of its own so the test lays out
+/// exactly what the console draws: the arrow must be in the app's own faces, because egui 0.37
+/// panics on a character no loaded face has (`MissingGlyphPolicy::Panic`), and "▸" (U+25B8),
+/// which this note used before, is in none of them (#5880).
+fn javascript_off_note() -> &'static str {
+    tl!("JavaScript is turned off (Preferences → JavaScript).")
+}
+
 /// The JavaScript console. Returns `true` to close.
 pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new(tl!("JavaScript Console")).font(theme::semibold(18.0)));
     ui.add_space(6.0);
     if !app.session.javascript() {
-        ui.label(egui::RichText::new(tl!("JavaScript is turned off (Preferences → JavaScript).")).small().color(t.text_muted));
+        ui.label(egui::RichText::new(javascript_off_note()).small().color(t.text_muted));
     }
     egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -324,6 +332,18 @@ pub(crate) use crate::dialogs::preferences::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The off note is drawn by the app's own faces. Opening the console with JavaScript off
+    /// crashed when no installed face had its arrow (`PDFCRAFT_SYSTEM_FONTS=0`, or a system
+    /// without one): egui 0.37 panics on a missing glyph. Checked against the bundled faces
+    /// only, so an installed face that happens to have the character can't hide it (#5880).
+    #[test]
+    fn the_javascript_off_note_has_glyphs_in_the_bundled_faces() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let mut fonts = egui::epaint::text::Fonts::new(egui::epaint::text::TextOptions::default(), theme::font_definitions());
+        let note = javascript_off_note();
+        assert!(fonts.has_glyphs(&egui::FontId::proportional(11.0), note), "a bundled face draws every character of {note:?}");
+    }
 
     #[test]
     fn date_language_names_fall_back_when_the_native_name_cannot_be_drawn() {
