@@ -17,6 +17,7 @@ pub(crate) struct State {
     collapsed: BTreeSet<ObjRef>,
     query: String,
     draft: Draft,
+    draft_source: Option<TagInfo>,
     /// The tag list per (document, edit generation): walking the structure tree is too slow
     /// to repeat every frame on a large tagged PDF.
     cache: Option<(DocId, u64, Arc<Vec<TagInfo>>)>,
@@ -32,6 +33,8 @@ struct Draft {
     actual_text: String,
     alt: String,
     language: String,
+    summary: String,
+    scope: String,
 }
 
 impl Draft {
@@ -42,10 +45,13 @@ impl Draft {
             actual_text: tag.actual_text.clone().unwrap_or_default(),
             alt: tag.alt.clone().unwrap_or_default(),
             language: tag.language.clone().unwrap_or_default(),
+            summary: tag.summary.clone().unwrap_or_default(),
+            scope: tag.scope.clone().unwrap_or_default(),
         }
     }
 
-    fn edit(&self, tag: &TagInfo) -> Option<Edit> {
+    /// Creates edits for the draft fields that apply to this tag's mapped standard type.
+    fn edit(&self, tag: &TagInfo, standard_kind: &str) -> Option<Edit> {
         let mut edits = Vec::new();
         let mut add = |property, prior: Option<&str>, next: &str| {
             let value = (!next.is_empty()).then(|| next.to_owned());
@@ -58,6 +64,12 @@ impl Draft {
         add(TagProperty::ActualText, tag.actual_text.as_deref(), &self.actual_text);
         add(TagProperty::AlternateText, tag.alt.as_deref(), &self.alt);
         add(TagProperty::Language, tag.language.as_deref(), &self.language);
+        if standard_kind == "Table" {
+            add(TagProperty::Summary, tag.summary.as_deref(), &self.summary);
+        }
+        if standard_kind == "TH" {
+            add(TagProperty::Scope, tag.scope.as_deref(), &self.scope);
+        }
         match edits.len() {
             0 => None,
             1 => edits.pop(),
@@ -97,22 +109,23 @@ impl State {
     }
 
     /// Select a checker finding's tag without discarding an unfinished edit.
-    pub(crate) fn select(&mut self, doc: DocId, tags: &[TagInfo], object: ObjRef) -> bool {
+    pub(crate) fn select(&mut self, doc: &pdfcraft_engine::Document, tags: &[TagInfo], object: ObjRef) -> bool {
         let Some(tag) = tags.iter().find(|tag| tag.object == object) else { return false };
-        if self.doc == Some(doc)
+        if self.doc == Some(doc.id)
             && self
                 .selected
                 .and_then(|selected| tags.iter().find(|tag| tag.object == selected))
-                .is_some_and(|current| self.draft.edit(current).is_some())
+                .is_some_and(|current| self.draft.edit(current, &doc.standard_tag_kind(&self.draft.kind)).is_some())
         {
             return false;
         }
-        if self.doc != Some(doc) {
+        if self.doc != Some(doc.id) {
             self.collapsed.clear();
         }
-        self.doc = Some(doc);
+        self.doc = Some(doc.id);
         self.selected = Some(object);
         self.draft = Draft::from_tag(tag);
+        self.draft_source = Some(tag.clone());
         self.query.clear();
         self.collapsed.clear();
         true
@@ -120,19 +133,21 @@ impl State {
 }
 
 /// The chosen page and an edit to apply after the panel releases its document borrow.
-pub(crate) fn panel(
-    ui: &mut Ui,
-    t: &Tokens,
-    doc: DocId,
-    tags: &[TagInfo],
-    content: &[TagContentItem],
-    state: &mut State,
-    can_edit: bool,
-) -> (Option<usize>, Option<Edit>) {
+pub(crate) struct PanelContext<'a> {
+    pub(crate) doc: DocId,
+    pub(crate) document: &'a pdfcraft_engine::Document,
+    pub(crate) tags: &'a [TagInfo],
+    pub(crate) content: &'a [TagContentItem],
+    pub(crate) can_edit: bool,
+}
+
+pub(crate) fn panel(ui: &mut Ui, t: &Tokens, state: &mut State, context: PanelContext<'_>) -> (Option<usize>, Option<Edit>) {
+    let PanelContext { doc, document, tags, content, can_edit } = context;
     if state.doc != Some(doc) {
         state.doc = Some(doc);
         state.selected = None;
         state.draft = Draft::default();
+        state.draft_source = None;
         state.query.clear();
         state.collapsed.clear();
     }
@@ -143,6 +158,7 @@ pub(crate) fn panel(
     if state.selected.is_none_or(|r| !tags.iter().any(|t| t.object == r)) {
         state.selected = Some(tags[0].object);
         state.draft = Draft::from_tag(&tags[0]);
+        state.draft_source = Some(tags[0].clone());
     }
     let search_label = ui.label(tl!("Find a tag"));
     ui.add(egui::TextEdit::singleline(&mut state.query).hint_text(tl!("Find a tag"))).labelled_by(search_label.id);
@@ -150,7 +166,10 @@ pub(crate) fn panel(
     let query = state.query.to_lowercase();
     let matching = visible_tags(tags, &query, &state.collapsed);
     let parents: HashSet<ObjRef> = tags.iter().filter_map(|tag| tag.parent).collect();
-    let dirty = state.selected.and_then(|r| tags.iter().find(|t| t.object == r)).is_some_and(|tag| state.draft.edit(tag).is_some());
+    let dirty = state
+        .selected
+        .and_then(|r| tags.iter().find(|t| t.object == r))
+        .is_some_and(|tag| state.draft.edit(tag, &document.standard_tag_kind(&state.draft.kind)).is_some());
     ui.label(egui::RichText::new(crate::i18n::fmt(tl!("{n} tags"), &[("n", &matching.len().to_string())])).small().color(t.text_muted));
     let mut page = None;
     egui::ScrollArea::vertical().max_height(100.0).show_rows(ui, 26.0, matching.len(), |ui, range| {
@@ -185,6 +204,7 @@ pub(crate) fn panel(
                 {
                     state.selected = Some(tag.object);
                     state.draft = Draft::from_tag(tag);
+                    state.draft_source = Some((*tag).clone());
                     page = tag.page;
                 }
             });
@@ -192,6 +212,18 @@ pub(crate) fn panel(
     });
     ui.separator();
     let Some(tag) = state.selected.and_then(|r| tags.iter().find(|t| t.object == r)) else { return (page, None) };
+    if let Some(source) = state.draft_source.as_ref().filter(|source| source.object == tag.object) {
+        refresh_draft_field(&mut state.draft.kind, Some(source.kind.as_str()), Some(tag.kind.as_str()));
+        refresh_draft_field(&mut state.draft.title, source.title.as_deref(), tag.title.as_deref());
+        refresh_draft_field(&mut state.draft.actual_text, source.actual_text.as_deref(), tag.actual_text.as_deref());
+        refresh_draft_field(&mut state.draft.alt, source.alt.as_deref(), tag.alt.as_deref());
+        refresh_draft_field(&mut state.draft.language, source.language.as_deref(), tag.language.as_deref());
+        refresh_draft_field(&mut state.draft.summary, source.summary.as_deref(), tag.summary.as_deref());
+        refresh_draft_field(&mut state.draft.scope, source.scope.as_deref(), tag.scope.as_deref());
+    } else {
+        state.draft = Draft::from_tag(tag);
+    }
+    state.draft_source = Some(tag.clone());
     ui.label(egui::RichText::new(format!("{} {} R", tag.object.num, tag.object.generation)).small().color(t.text_faint));
     if let Some(p) = tag.page
         && ui.button(crate::i18n::fmt(tl!("Go to page {p}"), &[("p", &(p + 1).to_string())])).clicked()
@@ -200,12 +232,37 @@ pub(crate) fn panel(
     }
     ui.add_enabled_ui(can_edit, |ui| {
         field(ui, tl!("Tag type"), &mut state.draft.kind, false);
+        let standard_kind = document.standard_tag_kind(&state.draft.kind);
+        if standard_kind == "Table" {
+            field(ui, tl!("Summary"), &mut state.draft.summary, false);
+        }
+        if standard_kind == "TH" {
+            ui.horizontal(|ui| {
+                let scope_label = match state.draft.scope.as_str() {
+                    "Row" => tl!("Row"),
+                    "Column" => tl!("Column"),
+                    "Both" => tl!("Both"),
+                    _ => tl!("Unspecified"),
+                };
+                let response = craft_ui::ComboBox::from_id_salt("tag_scope")
+                    .selected_text(scope_label)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut state.draft.scope, String::new(), tl!("Unspecified"));
+                        for (scope, label) in [("Row", tl!("Row")), ("Column", tl!("Column")), ("Both", tl!("Both"))] {
+                            ui.selectable_value(&mut state.draft.scope, scope.to_owned(), label);
+                        }
+                    })
+                    .response
+                    .labelled_by(ui.label(tl!("Scope")).id);
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), tl!("Scope")));
+            });
+        }
         field(ui, tl!("Title"), &mut state.draft.title, false);
         field(ui, tl!("Actual text"), &mut state.draft.actual_text, true);
         field(ui, tl!("Alternate text"), &mut state.draft.alt, true);
         field(ui, tl!("Language"), &mut state.draft.language, false);
     });
-    let edit = state.draft.edit(tag);
+    let edit = state.draft.edit(tag, &document.standard_tag_kind(&state.draft.kind));
     let mut save = false;
     let siblings: Vec<&TagInfo> = tag.parent.map(|parent| tags.iter().filter(|other| other.parent == Some(parent)).collect()).unwrap_or_default();
     let position = siblings.iter().position(|sibling| sibling.object == tag.object);
@@ -215,6 +272,7 @@ pub(crate) fn panel(
         save = ui.add_enabled(can_edit && !state.draft.kind.is_empty() && edit.is_some(), egui::Button::new(tl!("Save tag properties"))).clicked();
         if ui.add_enabled(dirty, egui::Button::new(tl!("Revert changes"))).clicked() {
             state.draft = Draft::from_tag(tag);
+            state.draft_source = Some(tag.clone());
         }
     });
     let (mut earlier, mut later, mut artifact) = (false, false, false);
@@ -289,5 +347,27 @@ fn field(ui: &mut Ui, label: &str, value: &mut String, multiline: bool) {
         ui.add(widgets::block(value).desired_rows(2).desired_width(f32::INFINITY)).labelled_by(l.id);
     } else {
         ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY)).labelled_by(l.id);
+    }
+}
+
+fn refresh_draft_field(draft: &mut String, previous: Option<&str>, current: Option<&str>) {
+    if previous != current && draft == previous.unwrap_or_default() {
+        *draft = current.unwrap_or_default().to_owned();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refreshes_only_clean_draft_fields_from_the_restored_tag() {
+        let mut clean = "Saved value".to_owned();
+        refresh_draft_field(&mut clean, Some("Saved value"), Some("Restored value"));
+        assert_eq!(clean, "Restored value");
+
+        let mut dirty = "Unfinished edit".to_owned();
+        refresh_draft_field(&mut dirty, Some("Saved value"), Some("Restored value"));
+        assert_eq!(dirty, "Unfinished edit");
     }
 }
