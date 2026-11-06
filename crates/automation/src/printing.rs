@@ -37,6 +37,19 @@ fn bad(m: impl Into<String>) -> ToolError {
     ToolError::InvalidArgs(m.into())
 }
 
+/// `doc_print`'s `area` for layout area: [x0, y0, x1, y1] in points on the displayed page, origin
+/// at its bottom left, with some width and height.
+fn print_area(a: &Args) -> Result<[f64; 4]> {
+    let what = "[x0, y0, x1, y1] in points, with x1 - x0 and y1 - y0 each more than 1 point";
+    let v = a.get("area").ok_or_else(|| bad("layout area needs area [x0, y0, x1, y1]"))?;
+    // Every element a finite number: a stray null or string is an error, not skipped.
+    let n: Option<Vec<f64>> = v.as_array().and_then(|r| r.iter().map(|x| x.as_f64().filter(|f| f.is_finite())).collect());
+    match *n.unwrap_or_default().as_slice() {
+        [x0, y0, x1, y1] if x1 - x0 > 1.0 && y1 - y0 > 1.0 => Ok([x0, y0, x1, y1]),
+        _ => Err(Args::wrong("area", what)),
+    }
+}
+
 /// `doc_print`'s `paper`, by its name or a short form ("Letter", "ARCH D"), as its `PAPERS`
 /// index and size; US Letter when none is given.
 fn paper_named(name: Option<&str>) -> Result<(usize, (f64, f64))> {
@@ -169,7 +182,23 @@ impl Automation {
                 overlap: a.opt_num("overlap")?.unwrap_or(18.0),
                 cut_marks: a.opt_bool("cut_marks")?.unwrap_or(true),
             },
+            // Print ▸ Area…: only `area` of each page, fitted to the sheet as a label is.
+            "area" => Layout::Label { flip: a.opt_bool("flip")?.unwrap_or(false) },
             l => return Err(bad(format!("unknown layout {l:?}"))),
+        };
+        let crops = if matches!(layout, Layout::Label { .. }) {
+            let area = print_area(a)?;
+            // An area off a printed page would print that page whole (the label layout's fallback).
+            let info = &self.doc(a)?.info;
+            for &p in &pages {
+                let (w, h) = info.pages.get(p).map_or((0.0, 0.0), |pg| (f64::from(pg.width), f64::from(pg.height)));
+                if area[2].min(w) - area[0].max(0.0) <= 1.0 || area[3].min(h) - area[1].max(0.0) <= 1.0 {
+                    return Err(bad(format!("area misses page {}", p + 1)));
+                }
+            }
+            vec![Some(print::Crop { rect: area, text_up: false }); count]
+        } else {
+            Vec::new()
         };
         let duplex = job_duplex(a.opt_str("duplex")?.unwrap_or("off"), &layout)?;
         if a.opt_str("order")? == Some("cut-stack") && !matches!(layout, Layout::Multiple { .. }) {
@@ -200,7 +229,7 @@ impl Automation {
         } else {
             None
         };
-        let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new() };
+        let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops };
         let sizes: Vec<(f64, f64)> = self.doc(a)?.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
         let sheets = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?.len();
         let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;

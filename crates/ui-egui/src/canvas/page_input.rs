@@ -318,7 +318,7 @@ fn tool_input(
     if matches!(tool, QuickTool::SignArea { .. }) {
         crate::sign_ui::page_input(cx, free, view);
     }
-    if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
+    if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot | QuickTool::PrintArea) {
         crate::zoom_snap::page_input(ui, resp, &xf, ptr, i, free, view);
     }
     if tool == QuickTool::EnhanceCamera {
