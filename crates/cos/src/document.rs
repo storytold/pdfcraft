@@ -19,6 +19,7 @@ mod reader;
 mod state;
 mod xref;
 
+pub(crate) use objects::Held;
 #[cfg(test)]
 pub(crate) use reader::find;
 #[cfg(test)]
@@ -27,7 +28,7 @@ pub(crate) use state::ObjectReader;
 use state::{ObjStm, Slot};
 pub use state::{ReadState, SourceIdentity};
 #[cfg(test)]
-use state::{SECTION_READS, objstm_member, owned_bytes};
+use state::{SECTION_READS, held_bytes, objstm_member};
 use xref::XrefIndex;
 pub use xref::{Revision, XrefEntry};
 
@@ -47,7 +48,7 @@ pub struct Document {
     /// `fill_xref_gaps`.
     located: Arc<BTreeMap<u32, (u64, u16)>>,
     repair_log: Arc<Vec<String>>,
-    cache: Arc<Mutex<HashMap<u32, Arc<Object>>>>,
+    cache: Arc<Mutex<state::ObjectCache>>,
     objstms: Arc<Mutex<HashMap<u32, Arc<ObjStm>>>>,
     /// What `/JBIG2Globals` streams of the file decode to, by object number: the images of a scan
     /// share them, and each would otherwise decode them again (see `Document::jbig2_globals`).
@@ -62,10 +63,17 @@ pub struct Document {
     security: Option<Arc<pdfcraft_crypt::SecurityHandler>>,
     /// Object number of the `/Encrypt` dictionary (never encrypted itself).
     encrypt_num: Option<u32>,
+    /// What that dictionary and `/ID` refer to, which the key comes from, and so is as stored.
+    encrypt_members: Arc<HashSet<u32>>,
+    /// Object numbers a scan of the file didn't find: the file doesn't change, so it never will.
+    unfound: Arc<Mutex<HashSet<u32>>>,
     /// Encryption was added, changed or removed since opening: only a full save can apply it.
     encryption_changed: bool,
     /// Set by edits that must not leave earlier revisions in the file (redaction).
     full_save: bool,
+    /// The next full save also gives the file a new identifier (`/ID`), see
+    /// [`Document::require_full_save_with_new_id`].
+    new_id: bool,
     /// The handler and `/Encrypt` object number that saves use, when encryption changed.
     out_security: Option<Arc<pdfcraft_crypt::SecurityHandler>>,
     out_encrypt_num: Option<u32>,
