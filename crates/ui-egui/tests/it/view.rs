@@ -1197,6 +1197,20 @@ fn always_use_my_default_zoom_and_page_layout_survives_a_restart() {
     assert!(!legacy.always_default_view, "a legacy file without the key keeps it off");
 }
 
+/// Preferences names its Appearance card once: the theme settings in it have no second
+/// "Appearance" heading, and Show Page Edge Shadows is in that card, below its title.
+#[test]
+fn preferences_name_the_appearance_card_once() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(&[]);
+    assert!(h.state_mut().execute("app.preferences"));
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Appearance").count(), 1, "one Appearance heading");
+    let card = h.get_by_label("Appearance").rect().top();
+    assert!(h.get_by_label("Show Page Edge Shadows").rect().top() > card, "the shadows box is in the Appearance card");
+    assert!(h.get_by_label("Appearance mode").rect().top() > card, "so are the theme settings");
+}
+
 #[test]
 fn preferences_turn_on_always_use_my_default_zoom_and_page_layout() {
     use egui_kittest::kittest::Queryable;
