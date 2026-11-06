@@ -285,6 +285,36 @@ fn assert_trust_and_id_persist(h: &Harness<'static, PdfCraftApp>) {
     assert_eq!((fresh.digital_ids.len(), fresh.session.trusted_certificates().len()), (1, 1));
 }
 
+/// The picker greys an expired ID when it lists it. One that expires with the dialog open gets
+/// past that, so signing itself has to refuse it.
+#[test]
+fn an_id_that_expired_with_the_dialog_open_signs_nothing() {
+    use pdfcraft_engine::sign::{Certificate, DigitalId, Name, PrivateKey, Time, pkcs12};
+
+    let dir = dir().join("expired");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = harness(dir.clone());
+    let key = PrivateKey::generate_p256().unwrap();
+    let certificate = Certificate::self_signed(&Name::build("Old Signer", "", "", "", ""), &key, Time::from_unix(0), 1, &[1]).unwrap();
+    let id = DigitalId { key, certificate: certificate.clone(), chain: Vec::new(), friendly_name: None };
+    let p12 = dir.join("old.p12");
+    std::fs::write(&p12, pkcs12::write(&id, "secret12").unwrap()).unwrap();
+    assert!(h.state_mut().execute("sign.certify_invisible"));
+    h.run_steps(2);
+    let entry = h.state_mut().add_digital_id(&p12.to_string_lossy(), &certificate);
+    {
+        let d = h.state_mut().sign_draft.as_mut().unwrap();
+        d.selected = Some(entry);
+        d.step = SignStep::SignAs;
+        d.password = "secret12".into();
+    }
+    h.run_steps(2);
+    support::outside_menus(&h, "Sign").click();
+    h.run_steps(6);
+    assert_eq!(h.state().sign_draft.as_ref().and_then(|d| d.error.as_deref()), Some("This digital ID has expired."));
+    assert!(!dir.join("contract_signed.pdf").exists());
+}
+
 #[test]
 fn certifying_without_a_visible_signature() {
     let dir = dir().join("certify");
@@ -581,6 +611,7 @@ fn os_store_identities_are_not_persisted() {
             issuer: "Test issuer".into(),
             email: String::new(),
             expires: "2030.01.01".into(),
+            expires_at: None,
             unusable: None,
         });
     }
@@ -606,6 +637,7 @@ fn windows_store_identity_does_not_ask_for_a_file_password() {
         issuer: "Test issuer".into(),
         email: String::new(),
         expires: "2030.01.01".into(),
+        expires_at: None,
         unusable: None,
     });
     let draft = h.state_mut().sign_draft.as_mut().unwrap();
@@ -623,6 +655,69 @@ fn windows_store_identity_does_not_ask_for_a_file_password() {
     assert!(h.state().sign_draft.as_ref().unwrap().error.as_ref().unwrap().contains("Windows certificate store"));
 }
 
+/// Typing a letter in the picker selects the next digital ID that starts with it.
+#[test]
+fn typing_a_letter_moves_the_picker_selection() {
+    let mut h = harness(dir());
+    h.state_mut().start_signing(0, None, None, None);
+    for name in ["Zeca", "Nora", "Ana", "Nádia"] {
+        h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
+            path: format!("/ids/{name}.p12"),
+            name: name.into(),
+            issuer: "Test issuer".into(),
+            email: String::new(),
+            expires: "2030.01.01".into(),
+            expires_at: None,
+            unusable: None,
+        });
+    }
+    let draft = h.state_mut().sign_draft.as_mut().unwrap();
+    draft.step = SignStep::Choose;
+    draft.selected = Some(2);
+    h.run_steps(3);
+    let chosen = |h: &Harness<'static, PdfCraftApp>| {
+        let state = h.state();
+        state.sign_draft.as_ref().and_then(|d| d.selected).map(|i| state.digital_ids[i].name.clone())
+    };
+    h.event(egui::Event::Text("n".into()));
+    h.run_steps(3);
+    assert_eq!(chosen(&h).as_deref(), Some("Nádia"));
+    h.event(egui::Event::Text("n".into()));
+    h.run_steps(3);
+    assert_eq!(chosen(&h).as_deref(), Some("Nora"));
+    // Letters that land in one frame all count.
+    h.input_mut().events.extend([egui::Event::Text("n".into()), egui::Event::Text("n".into())]);
+    h.run_steps(3);
+    assert_eq!(chosen(&h).as_deref(), Some("Nora"));
+}
+
+/// The ID a letter selects may start below the list's fold: the list scrolls to it.
+#[test]
+fn typing_a_letter_scrolls_to_the_selected_id() {
+    let mut h = harness(dir());
+    h.state_mut().start_signing(0, None, None, None);
+    for name in ('a'..='z').map(|c| format!("{c} signer")) {
+        h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
+            path: format!("/ids/{name}.p12"),
+            name,
+            issuer: "Test issuer".into(),
+            email: String::new(),
+            expires: "2030.01.01".into(),
+            expires_at: None,
+            unusable: None,
+        });
+    }
+    let draft = h.state_mut().sign_draft.as_mut().unwrap();
+    draft.step = SignStep::Choose;
+    draft.selected = Some(0);
+    h.run_steps(3);
+    let buttons_top = h.get_by_label("Continue").rect().top();
+    assert!(h.get_by_label("t signer").rect().bottom() > buttons_top, "the row starts below the list");
+    h.event(egui::Event::Text("t".into()));
+    h.run_steps(5);
+    assert!(h.get_by_label("t signer").rect().bottom() <= buttons_top, "the list scrolled to the row");
+}
+
 /// Certificate names are as long as their owners made them: the picker cuts both lines of a
 /// row with "…" instead of painting them past the dialog's edge.
 #[test]
@@ -636,6 +731,7 @@ fn long_digital_id_names_stay_inside_the_picker() {
         issuer: long,
         email: String::new(),
         expires: "2030.01.01".into(),
+        expires_at: None,
         unusable: None,
     });
     h.state_mut().sign_draft.as_mut().unwrap().step = SignStep::Choose;
@@ -673,6 +769,7 @@ fn an_unusable_id_is_shown_with_its_reason_and_cannot_be_chosen() {
         issuer: String::new(),
         email: String::new(),
         expires: String::new(),
+        expires_at: None,
         unusable: Some("its private key can't be opened: the key is missing from its key store (Windows error 0x80090016)".into()),
     });
     h.state_mut().start_signing(0, None, None, None);
@@ -693,6 +790,7 @@ fn an_unusable_id_is_shown_with_its_reason_and_cannot_be_chosen() {
         issuer: "Test issuer".into(),
         email: String::new(),
         expires: "2030.01.01".into(),
+        expires_at: None,
         unusable: None,
     });
     h.state_mut().start_signing(0, None, None, None);

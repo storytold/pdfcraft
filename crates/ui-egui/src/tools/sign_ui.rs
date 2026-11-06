@@ -35,6 +35,10 @@ pub struct DigitalIdEntry {
     pub issuer: String,
     pub email: String,
     pub expires: String,
+    /// The moment it expires, in Unix seconds. `expires` is only the date, for showing; settings
+    /// saved before this field have just that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
     /// Why the ID can't sign (a Windows store certificate whose key PdfCraft can't use): shown
     /// greyed with the reason, and never selectable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -138,7 +142,7 @@ impl SignDraft {
             field,
             certify,
             step: if ids.is_empty() { SignStep::Configure } else { SignStep::Choose },
-            selected: ids.iter().position(|e| e.unusable.is_none()),
+            selected: first_usable(ids),
             password: String::new(),
             reason: String::new(),
             location: String::new(),
@@ -264,9 +268,70 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
         name: c.display_name(),
         issuer: c.issuer.common_name().map(str::to_string).unwrap_or_else(|| c.issuer.display()),
         email: c.subject.email().unwrap_or("").to_string(),
-        expires: format!("{:04}.{:02}.{:02}", c.not_after.year, c.not_after.month, c.not_after.day),
+        expires: expiry_stamp(c.not_after),
+        expires_at: Some(c.not_after.unix()),
         unusable: None,
     }
+}
+
+/// The current time, in the form certificates state theirs.
+fn time_now() -> sign::Time {
+    let elapsed = web_time::SystemTime::now().duration_since(web_time::SystemTime::UNIX_EPOCH);
+    sign::Time::from_unix(elapsed.ok().and_then(|d| i64::try_from(d.as_secs()).ok()).unwrap_or(0))
+}
+
+/// A date as `DigitalIdEntry::expires` holds it. These compare in date order.
+fn expiry_stamp(t: sign::Time) -> String {
+    format!("{:04}.{:02}.{:02}", t.year, t.month, t.day)
+}
+
+/// Whether `entry` has expired by `now`. An entry with only a date lasts through that day, and
+/// one with no date, such as a greyed Windows certificate, isn't known to have expired.
+fn has_expired(entry: &DigitalIdEntry, now: sign::Time) -> bool {
+    match entry.expires_at {
+        Some(at) => at < now.unix(),
+        None => !entry.expires.is_empty() && entry.expires < expiry_stamp(now),
+    }
+}
+
+/// Remove the expired IDs of an OS key store listing and say how many went.
+fn drop_expired(listed: &mut Vec<DigitalIdEntry>, now: sign::Time) -> usize {
+    let before = listed.len();
+    listed.retain(|e| !has_expired(e, now));
+    before - listed.len()
+}
+
+/// Refuse a certificate past its end. The picker works from what it last listed, so this is what
+/// stops an ID that expired while the dialog or the save panel was open.
+fn refuse_expired(c: &Certificate, now: sign::Time) -> Result<(), String> {
+    if c.not_after < now { Err(tl!("This digital ID has expired.").to_string()) } else { Ok(()) }
+}
+
+/// The list positions of `ids` in the picker's alphabetical order. Only the picker sorts: the
+/// list itself keeps its order, so `SignDraft::selected` and the saved settings don't move.
+fn picker_order(ids: &[DigitalIdEntry]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..ids.len()).collect();
+    order.sort_by_cached_key(|&i| crate::i18n::name_sort_key(&ids[i].name));
+    order
+}
+
+/// The first ID the picker can select, top down.
+fn first_usable(ids: &[DigitalIdEntry]) -> Option<usize> {
+    picker_order(ids).into_iter().find(|&i| ids[i].unusable.is_none())
+}
+
+/// The usable ID after `selected` in the picker whose name starts with `letter`, wrapping, so
+/// pressing a letter again walks through the IDs that start with it.
+fn next_with_letter(ids: &[DigitalIdEntry], order: &[usize], selected: Option<usize>, letter: char) -> Option<usize> {
+    let letter = crate::i18n::name_sort_key(&letter.to_string());
+    let start = selected.and_then(|s| order.iter().position(|&i| i == s)).map_or(0, |at| at + 1);
+    order
+        .iter()
+        .cycle()
+        .skip(start)
+        .take(order.len())
+        .copied()
+        .find(|&i| ids[i].unusable.is_none() && crate::i18n::name_sort_key(&ids[i].name).starts_with(&letter))
 }
 
 /// A greyed entry for a Windows store certificate that can't sign, with the reason.
@@ -278,6 +343,7 @@ fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
         issuer: String::new(),
         email: String::new(),
         expires: String::new(),
+        expires_at: None,
         unusable: Some(u.reason.clone()),
     }
 }
@@ -304,9 +370,27 @@ impl PdfCraftApp {
         self.dialog = Some(crate::Dialog::Sign);
     }
 
-    /// List OS key store signing identities (after the file-based IDs).
+    /// List OS key store signing identities (after the file-based IDs). A failed listing keeps
+    /// the entries already listed. Expired OS IDs aren't listed; an expired ID file stays,
+    /// greyed, because the picker is where it can be removed.
     fn refresh_os_key_store_ids(&mut self) {
+        let now = time_now();
+        for e in self.digital_ids.iter_mut().filter(|e| e.unusable.is_none() && has_expired(e, now)) {
+            e.unusable = Some(tl!("This digital ID has expired.").to_string());
+        }
+        let Some(mut listed) = self.list_os_key_store_ids() else { return };
+        let dropped = drop_expired(&mut listed, now);
         self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:"));
+        self.digital_ids.extend(listed);
+        if dropped > 0 && first_usable(&self.digital_ids).is_none() {
+            self.notify(tl!("The digital IDs on this computer have expired."));
+        }
+    }
+
+    /// The OS key store's signing identities, or `None` after telling the user it couldn't be read.
+    fn list_os_key_store_ids(&mut self) -> Option<Vec<DigitalIdEntry>> {
+        #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(unused_mut))]
+        let mut listed = Vec::new();
         #[cfg(target_os = "macos")]
         if self.os_key_store_ids {
             match sign::keychain::identities(None) {
@@ -317,10 +401,13 @@ impl PdfCraftApp {
                         if let Some(name) = id.friendly_name {
                             entry.name = name;
                         }
-                        self.digital_ids.push(entry);
+                        listed.push(entry);
                     }
                 }
-                Err(e) => self.notify_fmt("The Keychain's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
+                Err(e) => {
+                    self.notify_fmt("The Keychain's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]);
+                    return None;
+                }
             }
         }
         #[cfg(target_os = "windows")]
@@ -328,15 +415,35 @@ impl PdfCraftApp {
             match sign::windows::list() {
                 Ok(listing) => {
                     for id in &listing.ids {
-                        self.digital_ids.push(entry_for(&sign::windows::reference(&id.certificate), &id.certificate));
+                        listed.push(entry_for(&sign::windows::reference(&id.certificate), &id.certificate));
                     }
                     // Certificates without a private key aren't identities; the rest are shown
                     // greyed with why they can't sign (issue #179).
                     for u in listing.unusable.iter().filter(|u| !u.no_private_key) {
-                        self.digital_ids.push(entry_unusable(u));
+                        listed.push(entry_unusable(u));
                     }
                 }
-                Err(e) => self.notify_fmt("The Windows store's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]),
+                Err(e) => {
+                    self.notify_fmt("The Windows store's digital IDs couldn't be listed: {e}", &[("e", &e.to_string())]);
+                    return None;
+                }
+            }
+        }
+        Some(listed)
+    }
+
+    /// Refresh: list the OS key store again, keeping the selection on its ID. Refresh on the
+    /// empty Configure step goes to the picker once there is something to pick.
+    fn refresh_digital_ids(&mut self) {
+        let selected = self.sign_draft.as_ref().and_then(|d| d.selected).and_then(|i| self.digital_ids.get(i)).map(|e| e.path.clone());
+        self.refresh_os_key_store_ids();
+        if let Some(d) = self.sign_draft.as_mut() {
+            d.confirm_remove = None;
+            d.selected = selected
+                .and_then(|path| self.digital_ids.iter().position(|e| e.path == path && e.unusable.is_none()))
+                .or_else(|| first_usable(&self.digital_ids));
+            if !self.digital_ids.is_empty() {
+                d.step = SignStep::Choose;
             }
         }
     }
@@ -363,7 +470,7 @@ impl PdfCraftApp {
             d.confirm_remove = None;
             d.selected = match d.selected {
                 Some(s) if s > index => Some(s - 1),
-                Some(s) if s == index => self.digital_ids.iter().position(|e| e.unusable.is_none()),
+                Some(s) if s == index => first_usable(&self.digital_ids),
                 s => s,
             };
             if self.digital_ids.is_empty() {
@@ -420,6 +527,7 @@ impl PdfCraftApp {
             sign::SignError::WrongPassword => "The password is incorrect.".to_string(),
             e => e.to_string(),
         })?;
+        refuse_expired(&id.certificate, time_now())?;
         Ok(self.add_digital_id(&d.file, &id.certificate))
     }
 
@@ -444,6 +552,7 @@ impl PdfCraftApp {
                 e => e.to_string(),
             })?
         };
+        refuse_expired(&id.certificate, time_now())?;
         let some = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
         // Only a visible signature shows its graphic.
         let graphic = match self.graphic_sig(&d.graphic) {
@@ -476,6 +585,7 @@ impl PdfCraftApp {
             if !app.commit_typing_in(doc_id) {
                 return Err(String::new());
             }
+            refuse_expired(&id.certificate, time_now())?;
             let signed = app.session.sign(doc_id, &id, opts).map_err(|e| e.to_string())?;
             crate::editing::write_atomically(&path.to_string_lossy(), signed.as_slice()).map_err(|e| format!("Could not save: {e}"))?;
             // Our own write is not a change on disk to reload (#431).
@@ -692,6 +802,110 @@ mod tests {
         Ok(PathBuf::from(&app.digital_ids[i].path))
     }
 
+    fn unusable_id(path: &str, name: &str) -> DigitalIdEntry {
+        DigitalIdEntry { unusable: Some("no key".to_string()), ..listed(path, name) }
+    }
+
+    #[test]
+    fn the_picker_lists_ids_alphabetically_and_selects_the_first_usable_one() {
+        let ids = [listed("/z", "Zeca"), unusable_id("/a", "água Viva"), listed("/b", "beto"), listed("/v", "Ávila")];
+        let order = picker_order(&ids);
+        assert_eq!(order.iter().map(|&i| ids[i].name.as_str()).collect::<Vec<_>>(), ["água Viva", "Ávila", "beto", "Zeca"]);
+        assert_eq!(first_usable(&ids), Some(3), "the greyed ID on top can't be selected");
+    }
+
+    #[test]
+    fn a_letter_walks_through_the_ids_that_start_with_it() {
+        let ids = [listed("/o", "Nora"), listed("/a", "Ana"), listed("/d", "Nádia"), unusable_id("/i", "Nilo")];
+        let order = picker_order(&ids);
+        assert_eq!(next_with_letter(&ids, &order, Some(1), 'n'), Some(2), "accents and case don't matter");
+        assert_eq!(next_with_letter(&ids, &order, Some(2), 'N'), Some(0), "the greyed Nilo is skipped");
+        assert_eq!(next_with_letter(&ids, &order, Some(0), 'n'), Some(2), "wraps to the first");
+        assert_eq!(next_with_letter(&ids, &order, None, 'a'), Some(1));
+        assert_eq!(next_with_letter(&ids, &order, Some(1), 'x'), None);
+        assert_eq!(next_with_letter(&[], &[], None, 'x'), None);
+    }
+
+    #[test]
+    fn refreshing_the_picker_keeps_the_selection_on_its_id() {
+        let mut app = PdfCraftApp::new();
+        app.digital_ids = vec![listed("windows:gone", "Gone"), listed("/ids/a.p12", "Ana"), listed("/ids/b.p12", "Beto")];
+        let mut draft = SignDraft::new(0, None, None, None, &app.digital_ids);
+        draft.selected = Some(2);
+        draft.confirm_remove = Some(1);
+        app.sign_draft = Some(draft);
+        app.refresh_digital_ids();
+        let d = app.sign_draft.as_ref().unwrap();
+        assert_eq!(d.selected.map(|i| app.digital_ids[i].name.as_str()), Some("Beto"), "the store entry above it is gone");
+        assert_eq!(d.confirm_remove, None);
+    }
+
+    #[test]
+    fn an_expired_os_id_is_not_listed() {
+        let now = sign::Time::from_unix(1_800_000_000);
+        let at = |path, at: i64| DigitalIdEntry { expires: expiry_stamp(sign::Time::from_unix(at)), expires_at: Some(at), ..listed(path, path) };
+        let mut ids = vec![at("windows:gone", 1_800_000_000 - 1), at("windows:now", 1_800_000_000), unusable_id("windows:nokey", "No key")];
+        assert_eq!(ids[0].expires, expiry_stamp(now), "it ended earlier the same day");
+        assert_eq!(drop_expired(&mut ids, now), 1);
+        let left: Vec<_> = ids.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(left, ["windows:now", "windows:nokey"], "it lasts to its last second, and no date isn't expired");
+    }
+
+    #[test]
+    fn an_id_saved_with_only_a_date_lasts_through_that_day() {
+        let dated = |path, expires: &str| DigitalIdEntry { expires: expires.into(), ..listed(path, path) };
+        let now = sign::Time::from_unix(1_800_000_000);
+        assert!(!has_expired(&dated("/today.p12", &expiry_stamp(now)), now));
+        assert!(has_expired(&dated("/old.p12", "2000.01.01"), now));
+    }
+
+    #[test]
+    fn an_expired_id_file_stays_greyed_and_is_not_selected() {
+        let mut app = PdfCraftApp::new();
+        app.digital_ids = vec![DigitalIdEntry { expires: "2000.01.01".into(), ..listed("/ids/a.p12", "Ana") }, listed("/ids/b.p12", "Bia")];
+        app.sign_draft = Some(SignDraft::new(0, None, None, None, &app.digital_ids));
+        app.sign_draft.as_mut().unwrap().selected = Some(0);
+        app.refresh_digital_ids();
+        assert_eq!(app.digital_ids.len(), 2, "still there to be removed");
+        assert!(app.digital_ids[0].unusable.is_some());
+        assert_eq!(app.sign_draft.as_ref().unwrap().selected, Some(1));
+    }
+
+    #[test]
+    fn importing_an_expired_id_file_is_refused_and_adds_nothing() {
+        let key = PrivateKey::generate_p256().unwrap();
+        let certificate = Certificate::self_signed(&Name::build("Old", "", "", "", ""), &key, sign::Time::from_unix(0), 1, &[1]).unwrap();
+        let id = DigitalId { key, certificate, chain: Vec::new(), friendly_name: None };
+        let file = scratch().join("old.p12");
+        std::fs::write(&file, sign::pkcs12::write(&id, "secret12").unwrap()).unwrap();
+        let mut app = PdfCraftApp::new();
+        let mut draft = SignDraft::new(0, None, None, None, &[]);
+        draft.new_id = NewIdDraft { file: file.to_string_lossy().into_owned(), file_password: "secret12".into(), ..NewIdDraft::default() };
+        app.sign_draft = Some(draft);
+        assert_eq!(app.import_digital_id(), Err("This digital ID has expired.".to_string()));
+        assert!(app.digital_ids.is_empty());
+    }
+
+    #[test]
+    fn signing_refuses_a_certificate_past_its_end() {
+        let key = PrivateKey::generate_p256().unwrap();
+        let cert = Certificate::self_signed(&Name::build("Old", "", "", "", ""), &key, sign::Time::from_unix(0), 1, &[1]).unwrap();
+        assert!(refuse_expired(&cert, cert.not_after).is_ok(), "valid up to its last second");
+        assert!(refuse_expired(&cert, time_now()).is_err());
+    }
+
+    #[test]
+    fn refreshing_the_empty_configure_step_opens_the_picker() {
+        let mut app = PdfCraftApp::new();
+        app.sign_draft = Some(SignDraft::new(0, None, None, None, &app.digital_ids));
+        app.refresh_digital_ids();
+        assert_eq!(app.sign_draft.as_ref().unwrap().step, SignStep::Configure, "still nothing to pick");
+        app.digital_ids = vec![listed("/ids/a.p12", "Ana")];
+        app.refresh_digital_ids();
+        let d = app.sign_draft.as_ref().unwrap();
+        assert_eq!((d.step, d.selected), (SignStep::Choose, Some(0)));
+    }
+
     #[test]
     fn an_exported_certificate_is_written_inside_the_chosen_folder() {
         let dir = scratch();
@@ -770,7 +984,15 @@ mod tests {
     }
 
     fn listed(path: &str, name: &str) -> DigitalIdEntry {
-        DigitalIdEntry { path: path.into(), name: name.into(), issuer: String::new(), email: String::new(), expires: String::new(), unusable: None }
+        DigitalIdEntry {
+            path: path.into(),
+            name: name.into(),
+            issuer: String::new(),
+            email: String::new(),
+            expires: String::new(),
+            expires_at: None,
+            unusable: None,
+        }
     }
 
     /// Issue #1396: an imported ID can be taken off the list (its file stays), the dialog's
