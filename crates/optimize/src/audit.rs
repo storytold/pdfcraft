@@ -10,6 +10,36 @@ use std::collections::{HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
+fn resolve(doc: &Document, obj: &Object) -> Object {
+    let mut cur = obj.clone();
+    for _ in 0..16 {
+        match cur {
+            Object::Ref(r) => cur = (*doc.get(r)).clone(),
+            _ => return cur,
+        }
+    }
+    cur
+}
+
+fn dict_name(doc: &Document, d: &Dict, key: &[u8]) -> Option<Vec<u8>> {
+    d.get(key).and_then(|v| resolve(doc, v).as_name().map(<[u8]>::to_vec))
+}
+
+fn target_ref(doc: &Document, obj: &Object) -> Option<ObjRef> {
+    let mut cur = obj.clone();
+    let mut last = None;
+    for _ in 0..16 {
+        match cur {
+            Object::Ref(r) => {
+                last = Some(r);
+                cur = (*doc.get(r)).clone();
+            }
+            _ => break,
+        }
+    }
+    last
+}
+
 /// The categories, in Acrobat's order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SpaceCategory {
@@ -105,7 +135,7 @@ impl Audit<'_> {
                     }
                     // Pages belong to the page tree, not to whatever links to them.
                     let obj = self.doc.get(r);
-                    if obj.as_dict().is_some_and(|d| matches!(d.name(b"Type"), Some(b"Page" | b"Pages"))) {
+                    if obj.as_dict().is_some_and(|d| matches!(dict_name(self.doc, d, b"Type").as_deref(), Some(b"Page" | b"Pages"))) {
                         continue;
                     }
                     self.owner.insert(r.num, cat);
@@ -120,16 +150,18 @@ impl Audit<'_> {
     }
 
     fn resolve_dict(&self, o: Option<&Object>) -> Dict {
-        o.map(|x| self.doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default()
+        o.and_then(|x| resolve(self.doc, x).as_dict().cloned()).unwrap_or_default()
     }
 
     /// A resource dictionary, by kind; `depth` counts the form XObjects it is nested in.
     fn resources(&mut self, res: &Dict, depth: usize) {
         let xobjects = self.resolve_dict(res.get(b"XObject"));
         for (_, x) in xobjects.iter() {
-            let Some(r) = x.as_ref() else { continue };
+            let Some(r) = target_ref(self.doc, x) else { continue };
             match &*self.doc.get(r) {
-                Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image") => self.claim(x, SpaceCategory::Images),
+                Object::Stream(s) if dict_name(self.doc, &s.dict, b"Subtype").as_deref() == Some(b"Image") => {
+                    self.claim(x, SpaceCategory::Images);
+                }
                 Object::Stream(s) if depth < MAX_FORM_DEPTH && !self.owner.contains_key(&r.num) => {
                     // A form: its own resources first, by kind, then the rest of it. Owning it
                     // first stops a form that draws itself.
@@ -137,6 +169,7 @@ impl Audit<'_> {
                     let inner = self.resolve_dict(s.dict.get(b"Resources"));
                     self.resources(&inner, depth + 1);
                     self.claim(&Object::Dict(s.dict.clone()), SpaceCategory::XObjectForms);
+                    self.claim(x, SpaceCategory::XObjectForms);
                 }
                 _ => self.claim(x, SpaceCategory::XObjectForms),
             }
@@ -159,11 +192,11 @@ impl Audit<'_> {
     fn appearance_resources(&mut self, annot: &Object) {
         let ap = self.resolve_dict(self.resolve_dict(Some(annot)).get(b"AP"));
         for (_, v) in ap.iter() {
-            let streams = match &*self.doc.resolve(v) {
+            let streams = match resolve(self.doc, v) {
                 Object::Stream(s) => vec![s.dict.clone()],
                 Object::Dict(states) => states
                     .iter()
-                    .filter_map(|(_, s)| match &*self.doc.resolve(s) {
+                    .filter_map(|(_, s)| match resolve(self.doc, s) {
                         Object::Stream(s) => Some(s.dict.clone()),
                         _ => None,
                     })
@@ -180,12 +213,12 @@ impl Audit<'_> {
 
 /// A page's annotations.
 fn annotations(doc: &Document, page: &Dict) -> Vec<Object> {
-    page.get(b"Annots").and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default()
+    page.get(b"Annots").and_then(|a| resolve(doc, a).as_array().cloned()).unwrap_or_default()
 }
 
 /// Form fields' widgets belong to the form; every other annotation is a comment.
 fn annotation_category(doc: &Document, annot: &Object) -> SpaceCategory {
-    let widget = annot.as_ref().is_some_and(|r| doc.get(r).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Widget")));
+    let widget = resolve(doc, annot).as_dict().is_some_and(|d| dict_name(doc, d, b"Subtype").as_deref() == Some(b"Widget"));
     if widget { SpaceCategory::Forms } else { SpaceCategory::Comments }
 }
 
@@ -268,4 +301,91 @@ pub fn audit_space(doc: &Document, file_len: u64) -> Vec<SpaceUse> {
             SpaceUse { category: c, bytes: b, percent: b as f64 * 100.0 / total as f64 }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pdfcraft_cos::Stream;
+
+    #[test]
+    fn audit_space_handles_indirect_subtypes_and_chained_xobject_refs() {
+        let mut doc = Document::new_empty();
+        let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
+
+        let image_sub = doc.add(Object::name("Image"));
+        let mut img_d = Dict::new();
+        img_d.set(b"Subtype".to_vec(), Object::Ref(image_sub));
+        let img = doc.add(Object::Stream(Stream::from_raw(img_d, vec![0; 4096])));
+        let img_chain = doc.add(Object::Ref(img));
+
+        let mut xo = Dict::new();
+        xo.set(b"Im0".to_vec(), Object::Ref(img_chain));
+        let mut res = Dict::new();
+        res.set(b"XObject".to_vec(), Object::Dict(xo));
+
+        let widget_sub = doc.add(Object::name("Widget"));
+        let mut widget = Dict::new();
+        widget.set(b"Subtype".to_vec(), Object::Ref(widget_sub));
+        widget.set(b"T".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(vec![b'x'; 1024])));
+        let widget_ref = doc.add(Object::Dict(widget));
+
+        let page_ty = doc.add(Object::name("Page"));
+        let mut p = Dict::new();
+        p.set(b"Type".to_vec(), Object::Ref(page_ty));
+        p.set(b"Parent".to_vec(), Object::Ref(pages));
+        p.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]));
+        p.set(b"Resources".to_vec(), Object::Dict(res));
+        p.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(widget_ref)]));
+        let page = doc.add(Object::Dict(p));
+        doc.update_dict(pages, |d| {
+            d.set(b"Count".to_vec(), Object::Int(1));
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+        })
+        .unwrap();
+
+        let report = audit_space(&doc, 10_000);
+        let get = |cat: SpaceCategory| report.iter().find(|r| r.category == cat).unwrap().bytes;
+        assert!(get(SpaceCategory::Images) >= 4096, "indirect /Subtype /Image behind chained ref is an Image: {report:?}");
+        assert_eq!(get(SpaceCategory::XObjectForms), 0, "not misclassified as form XObject: {report:?}");
+        assert!(get(SpaceCategory::Forms) >= 1024, "widget with indirect /Subtype /Widget is counted as Forms: {report:?}");
+        assert_eq!(get(SpaceCategory::Comments), 0, "widget is not misclassified as Comments: {report:?}");
+    }
+
+    #[test]
+    fn audit_space_terminates_on_cyclic_xobject_refs_and_skips_indirect_type_pages() {
+        let mut doc = Document::new_empty();
+        let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
+
+        let cyc = doc.add(Object::Null);
+        doc.set(cyc, Object::Ref(cyc));
+        let mut xo = Dict::new();
+        xo.set(b"Cyc".to_vec(), Object::Ref(cyc));
+        let mut res = Dict::new();
+        res.set(b"XObject".to_vec(), Object::Dict(xo));
+
+        let page_ty = doc.add(Object::name("Page"));
+        let mut p = Dict::new();
+        p.set(b"Type".to_vec(), Object::Ref(page_ty));
+        p.set(b"Parent".to_vec(), Object::Ref(pages));
+        p.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]));
+        p.set(b"Resources".to_vec(), Object::Dict(res));
+        let page = doc.add(Object::Dict(p));
+
+        // Link annotation pointing to `page` (which has an indirect /Type /Page): must not claim `page` as Comments.
+        let mut link = Dict::new();
+        link.set(b"Subtype".to_vec(), Object::name("Link"));
+        link.set(b"Dest".to_vec(), Object::Array(vec![Object::Ref(page), Object::name("Fit")]));
+        let link_ref = doc.add(Object::Dict(link));
+        doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(link_ref)]))).unwrap();
+        doc.update_dict(pages, |d| {
+            d.set(b"Count".to_vec(), Object::Int(1));
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+        })
+        .unwrap();
+
+        let report = audit_space(&doc, 5_000);
+        let get = |cat: SpaceCategory| report.iter().find(|r| r.category == cat).unwrap().bytes;
+        assert!(get(SpaceCategory::Comments) < 200, "page with indirect /Type /Page was not claimed by link: {report:?}");
+    }
 }
