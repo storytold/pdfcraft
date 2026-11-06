@@ -571,15 +571,20 @@ fn grab_at(boxes: &[Rect], p: Pos2, upright: bool) -> Option<(usize, Grip)> {
     })
 }
 
-/// A paragraph's box on screen: its text rect (user space), with a little room around it.
-fn paragraph_box(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> Rect {
-    xf.user_rect(info, page, rect.map(|v| v as f32)).expand(2.0)
+/// A paragraph's box on screen: its text rect (user space), with a little room around it. A
+/// paragraph drawn as a clipping path can't be rewritten or moved (#3447), so it gets no box: it
+/// is neither outlined, hit nor opened, rather than refused after the click (#4786).
+fn paragraph_box(xf: &PageXform, info: &DocInfo, page: usize, block: &pdfcraft_engine::TextBlock) -> Rect {
+    if block.clips {
+        return Rect::NOTHING;
+    }
+    xf.user_rect(info, page, block.rect.map(|v| v as f32)).expand(2.0)
 }
 
 /// Whether `p` lies in the box of one of the paragraphs `lines` on `page`, its edge grips there
 /// included, not beside it: where Add text acts on the page's own paragraphs.
 pub(crate) fn over_paragraph(xf: &PageXform, info: &DocInfo, page: usize, lines: &[pdfcraft_engine::TextBlock], p: Pos2) -> bool {
-    lines.iter().any(|l| paragraph_box(xf, info, page, l.rect).contains(p))
+    lines.iter().any(|l| paragraph_box(xf, info, page, l).contains(p))
 }
 
 /// The width handles need the page upright (or upside down): on a quarter-turned page the
@@ -597,7 +602,7 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, lines: &[pdfcraft
     if !xf.rect.contains(p) {
         return None;
     }
-    let boxes: Vec<Rect> = lines.iter().map(|l| paragraph_box(xf, info, page, l.rect)).collect();
+    let boxes: Vec<Rect> = lines.iter().map(|l| paragraph_box(xf, info, page, l)).collect();
     // Edges rewrap closed paragraphs only: around the open one lies its frame (`object_ui`).
     let (block, grip) = grab_at(&boxes, p, has_edges(info, page) && active.is_none())?;
     let paragraph = |part| Owner::Paragraph { block, part };
@@ -622,7 +627,8 @@ pub(crate) fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> 
 fn open_editor(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], boxes: &[Rect], block: usize, view: &mut DocView) {
     let PageToolContext { ui, xf, doc, page, .. } = cx;
     view.pending_text_open = None;
-    let (Some(l), Some(b)) = (lines.get(block), boxes.get(block)) else { return };
+    // No box: a clipping-path paragraph, which isn't offered for editing (#4786).
+    let (Some(l), Some(b)) = (lines.get(block), boxes.get(block).filter(|b| b.is_positive())) else { return };
     view.image_selection = None;
     let source_lines = doc.text_lines(page);
     let text = l.editor_text.clone();
@@ -668,12 +674,12 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         view.block_drag = None;
         return true;
     }
-    let boxes: Vec<Rect> = lines.iter().map(|l| paragraph_box(xf, info, page, l.rect)).collect();
+    let boxes: Vec<Rect> = lines.iter().map(|l| paragraph_box(xf, info, page, l)).collect();
     // Outlines stay on their page, like its text (#3061).
     let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(xf.rect.expand(1.0)));
     let active = view.line_editor.as_ref().filter(|e| e.page == page).map(|e| e.block);
     for (i, b) in boxes.iter().enumerate() {
-        if active != Some(i) {
+        if active != Some(i) && b.is_positive() {
             painter.rect_stroke(*b, CornerRadius::same(2), Stroke::new(0.75, ACCENT.gamma_multiply(0.35)), egui::StrokeKind::Outside);
         }
     }

@@ -34,6 +34,10 @@ pub struct TextBlock {
     /// pixels show the words. A rewrite draws the new text visibly, on top of the page when
     /// the scan is drawn after it (see [`BlockStyle::cover`]).
     pub invisible: bool,
+    /// Some of its text draws in a clipping mode (`4 Tr` to `7 Tr`): its glyphs mask artwork
+    /// behind them, so it can't be rewritten, cleared or moved (#3447) and the editor doesn't
+    /// offer it (#4786).
+    pub clips: bool,
 }
 
 impl TextBlock {
