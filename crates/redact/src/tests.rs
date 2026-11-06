@@ -2597,6 +2597,87 @@ fn inline_outline_children_count_towards_the_total_budget() {
     assert_eq!(scan(&doc).iter().find(|c| c.0 == Hidden::Bookmarks), Some(&(Hidden::Bookmarks, 100_000)));
 }
 
+/// A redacted copy and a sanitized copy are different files from their source: neither may keep
+/// the source's file identifier (ISO 32000-2 §14.4). A save without the rewrite keeps it.
+#[test]
+fn a_redacted_or_sanitized_copy_gets_a_new_identifier() {
+    fn with_id(mut doc: Document) -> Document {
+        let id = Object::Array(vec![
+            Object::String(pdfcraft_cos::PdfString::literal(vec![0x11; 16])),
+            Object::String(pdfcraft_cos::PdfString::literal(vec![0x22; 16])),
+        ]);
+        doc.trailer_mut().set(b"ID".to_vec(), id);
+        doc
+    }
+    fn saved_ids(doc: &Document) -> Vec<Vec<u8>> {
+        let saved = Document::open(Arc::new(write_full(doc, &SaveOptions::default()).unwrap())).unwrap();
+        match saved.trailer().get(b"ID") {
+            Some(Object::Array(a)) => a.iter().map(|s| s.as_string().map(|s| s.bytes.clone()).unwrap_or_default()).collect(),
+            _ => Vec::new(),
+        }
+    }
+    let source = vec![vec![0x11; 16], vec![0x22; 16]];
+    let assert_new = |ids: &[Vec<u8>], what: &str| {
+        assert_eq!(ids.len(), 2, "{what}");
+        for (new, old) in ids.iter().zip(&source) {
+            assert_eq!(new.len(), 16, "{what}");
+            assert_ne!(new, old, "{what}: the copy keeps the source's identifier");
+        }
+    };
+
+    // Redaction: the same save keeps the identifier until the redaction asks for a new one.
+    let mut doc = with_id(one_page(b"BT /F1 10 Tf 10 100 Td (Secret) Tj ET", "", vec![]));
+    mark(&mut doc, 0, &[[0.0, 95.0, 300.0, 110.0]], "");
+    assert_eq!(saved_ids(&doc), source, "before the redaction");
+    apply(&mut doc, None).unwrap();
+    assert!(doc.new_id_required());
+    assert_new(&saved_ids(&doc), "redaction");
+
+    // Sanitizing with hidden information to remove.
+    let mut doc = with_id(hidden_fixture());
+    crate::sanitize::sanitize(&mut doc).unwrap();
+    assert!(doc.new_id_required());
+    assert_new(&saved_ids(&doc), "sanitizing");
+
+    // Sanitizing a file with nothing hidden still rewrites it, so it gets a new identifier too.
+    let mut doc = with_id(one_page(b"BT ET", "", vec![]));
+    assert!(crate::sanitize::sanitize(&mut doc).unwrap().is_empty());
+    assert_new(&saved_ids(&doc), "sanitizing without hidden information");
+}
+
+/// A copy that lost hidden information through `remove_hidden` itself is a different file from its
+/// source, so it does not keep the source's identifier either: the remove-hidden edit and the
+/// optimizer's discard option call `remove_hidden` directly, not through `sanitize`.
+#[test]
+fn a_remove_hidden_copy_gets_a_new_identifier() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let with_id = |mut doc: Document| {
+        doc.trailer_mut().set(
+            b"ID".to_vec(),
+            Object::Array(vec![
+                Object::String(pdfcraft_cos::PdfString::literal(vec![0x11; 16])),
+                Object::String(pdfcraft_cos::PdfString::literal(vec![0x22; 16])),
+            ]),
+        );
+        doc
+    };
+    let saved_ids = |doc: &Document| {
+        let saved = Document::open(Arc::new(write_full(doc, &SaveOptions::default()).unwrap())).unwrap();
+        match saved.trailer().get(b"ID") {
+            Some(Object::Array(a)) => a.iter().map(|s| s.as_string().map(|s| s.bytes.clone()).unwrap_or_default()).collect::<Vec<_>>(),
+            _ => Vec::new(),
+        }
+    };
+
+    let mut doc = with_id(hidden_fixture());
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::Metadata]).unwrap().len(), 1, "the fixture has metadata to remove");
+    assert!(doc.new_id_required());
+    let ids = saved_ids(&doc);
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], vec![0x11; 16], "the copy keeps the source's first identifier string");
+    assert_ne!(ids[1], vec![0x22; 16], "the copy keeps the source's second identifier string");
+}
+
 /// Issue #2447: in a tagged PDF the structure tree points at the link and the comment it tags
 /// (`/OBJR`). Removing them must drop those references too, or the full rewrite keeps the
 /// annotations, the URL and the comment text included, while the page no longer lists them.
@@ -4216,6 +4297,41 @@ fn a_reply_on_another_page_to_a_removed_popup_goes_too() {
     for gone in [&b"POPUP-REPLY"[..], b"POPUP-TEXT", b"PARENT-NOTE"] {
         assert!(!bytes.windows(gone.len()).any(|w| w == gone), "{} survived", String::from_utf8_lossy(gone));
     }
+}
+
+/// An invisible OCR-style text layer drawn in a Type3 font (what the OCR output writes for
+/// characters beyond WinAnsi) is redacted like any other text: its glyphs are hit-tested by
+/// their real advances, removed, and the verifier passes.
+#[test]
+fn a_type3_text_layer_is_redacted_like_any_other() {
+    // One glyph (code 1): a filled box, 500 units wide, with a ToUnicode CMap that reads it
+    // back as U+3042.
+    let t3 = b"<< /Type /Font /Subtype /Type3 /Name /PCOcr /FontBBox [0 0 700 700] /FontMatrix [0.001 0 0 0.001 0 0] \
+        /FirstChar 1 /LastChar 1 /Widths [500] /Encoding << /Type /Encoding /Differences [1 /g01] >> \
+        /CharProcs << /g01 8 0 R >> /ToUnicode 9 0 R >>";
+    let charproc = b"500 0 0 0 0 700 700 d1\n0 0 700 700 re f\n";
+    let cmap = b"/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapType 2 def\n1 begincodespacerange\n<01> <01>\nendcodespacerange\n1 beginbfchar\n<01> <3042>\nendbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n";
+    let layer = b"BT 3 Tr /T3 10 Tf 100 100 Td (\x01) Tj ET";
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /T3 5 0 R >> >> >>".to_vec(),
+        stream("", layer),
+        t3.to_vec(),
+        FONT.replace("95 0 R", "6 0 R").into_bytes(),
+        widths(),
+        stream("", charproc),
+        stream("", cmap),
+    ]);
+    // The glyph box at size 10: 5 pt wide, from the font's descent to its ascent.
+    assert_eq!(under(&mut doc, 0, &[[98.0, 96.0, 112.0, 110.0]]), 1, "the Type3 glyph is found under the mark");
+    assert_eq!(under(&mut doc, 0, &[[200.0, 200.0, 250.0, 250.0]]), 0, "elsewhere the page is clean");
+    mark(&mut doc, 0, &[[98.0, 96.0, 112.0, 110.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    assert_eq!(report.glyphs, 1, "{report:?}");
+    // The verified apply left no text-showing operator: the re-read page is empty of them.
+    assert!(!content(&doc, 0).contains("Tj"), "{}", content(&doc, 0));
+    assert_eq!(under(&mut doc, 0, &[[98.0, 96.0, 112.0, 110.0]]), 0, "nothing is left under the mark");
 }
 
 #[test]

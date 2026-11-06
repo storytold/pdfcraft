@@ -1,4 +1,6 @@
 //! Measure objects: page-space clicks, live readings and persistent drawing scales.
+#[cfg(not(target_arch = "wasm32"))]
+use crate::file_filter::AddFilterAnyCase as _;
 use crate::{LeftPanel, PdfCraftApp, QuickTool, canvas::DocView, page_cursor::Layer, theme::Tokens, widgets};
 use egui::{Color32, Pos2, Stroke};
 use pdfcraft_engine::{
@@ -576,7 +578,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     }
     if let Some((page, annotation, reading, scale)) = select {
         app.views[index].current = page;
-        app.views[index].comments.selected = Some((page, annotation));
+        app.views[index].comments.select_only((page, annotation));
         app.views[index].measure.reading = Some(reading);
         app.views[index].measure.scale = Some(scale);
         app.quick_tool = QuickTool::Select;
@@ -627,7 +629,7 @@ fn export_csv(app: &mut PdfCraftApp) {
                 match app.export_dir_override.as_ref().map(|d| std::path::PathBuf::from(d).join("measurements.csv")) {
                     Some(path) => write(app, path),
                     None => {
-                        let dialog = rfd::AsyncFileDialog::new().set_file_name("measurements.csv").add_filter("CSV", &["csv"]);
+                        let dialog = rfd::AsyncFileDialog::new().set_file_name("measurements.csv").add_filter_any_case("CSV", &["csv"]);
                         app.ask_one(crate::pickers::Ask::Save(dialog), None, write);
                     }
                 }

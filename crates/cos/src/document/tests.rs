@@ -599,7 +599,7 @@ pub(crate) fn build(bodies: &[&str], trailer: &str) -> Vec<u8> {
 
 fn assert_compact_matches_materialized(doc: &Document) {
     assert!(matches!(doc.entries.as_ref(), XrefIndex::Compact { .. }), "valid xrefs should not retain a per-entry map");
-    let (entries, _, revisions, _) = doc.read_xref_chain_materialized(&mut Vec::new()).unwrap();
+    let (entries, _, revisions, _, _) = doc.read_xref_chain_materialized(&mut Vec::new()).unwrap();
     assert_eq!(revisions.as_slice(), doc.revisions());
     let max = entries.keys().next_back().copied().unwrap_or(0);
     assert_eq!(doc.entries.max_num(), max);
@@ -687,7 +687,7 @@ fn malformed_size_uses_the_materialized_compatibility_path() {
     let at = bytes.windows(marker.len()).position(|window| window == marker).unwrap();
     bytes[at..at + marker.len()].copy_from_slice(b"/Size 2");
     let doc = Document::open(Arc::new(bytes)).unwrap();
-    assert!(matches!(doc.entries.as_ref(), XrefIndex::Materialized(_)));
+    assert!(matches!(doc.entries.as_ref(), XrefIndex::Materialized(..)));
     assert_eq!(doc.next_num, 4);
     assert_eq!(doc.object_numbers(), vec![1, 2, 3]);
 }
@@ -1181,15 +1181,18 @@ fn reads_classic_revision_and_edits_are_copy_on_write() {
 fn object_numbers_merge_source_and_overlay_in_order() {
     let mut doc = Document::new_empty();
     doc.overlay.clear();
-    doc.entries = Arc::new(XrefIndex::Materialized(Arc::new(BTreeMap::from([
-        (0, XrefEntry::Free { next_generation: 65535 }),
-        (2, XrefEntry::InFile { offset: 10, generation: 7 }),
-        (4, XrefEntry::Free { next_generation: 9 }),
-        (6, XrefEntry::InStream { stream: 80, index: 1 }),
-        (8, XrefEntry::InFile { offset: 20, generation: 5 }),
-        (10, XrefEntry::InFile { offset: 30, generation: 3 }),
-        (u32::MAX, XrefEntry::InFile { offset: 40, generation: 1 }),
-    ]))));
+    doc.entries = Arc::new(XrefIndex::Materialized(
+        Arc::new(BTreeMap::from([
+            (0, XrefEntry::Free { next_generation: 65535 }),
+            (2, XrefEntry::InFile { offset: 10, generation: 7 }),
+            (4, XrefEntry::Free { next_generation: 9 }),
+            (6, XrefEntry::InStream { stream: 80, index: 1 }),
+            (8, XrefEntry::InFile { offset: 20, generation: 5 }),
+            (10, XrefEntry::InFile { offset: 30, generation: 3 }),
+            (u32::MAX, XrefEntry::InFile { offset: 40, generation: 1 }),
+        ])),
+        Arc::default(),
+    ));
     doc.set(ObjRef::new(1, 2), Object::Int(1)); // before the first live source slot
     doc.set(ObjRef::new(2, 8), Object::Int(2)); // override, without duplication
     doc.set(ObjRef::new(4, 9), Object::Int(4)); // reuse a source free slot
@@ -1844,6 +1847,32 @@ fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
         let _ = tx.send(());
     });
     rx.recv_timeout(std::time::Duration::from_secs(20)).expect("loading must not retry exponentially");
+}
+
+#[test]
+fn a_restored_revision_keeps_what_the_saved_file_held_in_object_streams() {
+    // The earlier revision: an empty document read back from a file whose catalog and pages
+    // sit in an object stream.
+    let earlier = Document::open(Arc::new(crate::write_full(&Document::new_empty(), &crate::SaveOptions::default()).unwrap())).unwrap();
+    // The saved revision adds an object the catalog links to, so a full save numbers its objects
+    // anew; an undo then returns to the earlier graph.
+    let mut later = earlier.clone();
+    let extra = later.add(Object::Int(7));
+    let root = later.root().unwrap();
+    later.update_dict(root, |c| c.set(b"Extra".to_vec(), Object::Ref(extra))).unwrap();
+    let saved = crate::write_full(&later, &crate::SaveOptions::default()).unwrap();
+    let mut base = Document::open(Arc::new(saved)).unwrap();
+    assert!(
+        base.object_numbers().iter().any(|&n| matches!(base.xref_entry(n), Some(XrefEntry::InStream { .. }))),
+        "the saved file holds objects in a stream"
+    );
+    base.overlay_changes_from(&earlier).unwrap();
+    let file = crate::write_incremental(&base, &crate::SaveOptions::default()).unwrap();
+    let reread = Document::open(Arc::new(file)).unwrap();
+    let catalog = reread.get(reread.root().unwrap()).as_dict().unwrap().clone();
+    assert!(catalog.get(b"Extra").is_none(), "the restored catalog");
+    let pages = reread.resolve(catalog.get(b"Pages").unwrap());
+    assert_eq!(pages.as_dict().and_then(|d| d.name(b"Type")), Some(&b"Pages"[..]), "the pages survive: {pages:?}");
 }
 
 /// The cache keeps the sum of what its objects hold as they come and go, so neither reader has

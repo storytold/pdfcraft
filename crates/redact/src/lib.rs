@@ -591,8 +591,9 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     } else {
         clear_marked_metadata(doc, &fragments, &kerned, &mut report)?;
     }
-    // The previous revision still holds the removed content: the next save must rewrite.
-    doc.require_full_save();
+    // The previous revision still holds the removed content: the next save must rewrite, and the
+    // rewritten file is a different file from its source, so it gets a new identifier.
+    doc.require_full_save_with_new_id();
     Ok(report)
 }
 
