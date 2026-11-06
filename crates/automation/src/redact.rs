@@ -165,6 +165,24 @@ impl Automation {
         let after = self.doc(a)?.redaction_marks();
         out["applied"] = json!(before - after);
         out["marks_pending"] = json!(after);
+        // Where the removed text is still held that applying leaves as it is.
+        let left = self.doc(a)?.redaction_elsewhere().unwrap_or_default();
+        out["still_holding"] = json!({
+            "bookmarks": left.bookmarks,
+            "attachments": left.attachments,
+            "comments": left.comments,
+            "xmp": left.xmp,
+            "total": left.total(),
+            "unsearched": left.unsearched,
+        });
+        // What became of a PDF/A or PDF/UA claim in the document XMP the scrub removed.
+        let claim = |c: pdfcraft_engine::RedactionClaim| match c {
+            pdfcraft_engine::RedactionClaim::None => "none",
+            pdfcraft_engine::RedactionClaim::Kept => "kept",
+            pdfcraft_engine::RedactionClaim::Lost => "lost",
+        };
+        let id = self.doc(a)?.redaction_identification().unwrap_or_default();
+        out["identification"] = json!({ "pdfa": claim(id.pdfa), "pdfua": claim(id.pdfua) });
         Ok(out)
     }
 
