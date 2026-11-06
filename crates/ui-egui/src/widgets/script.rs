@@ -130,7 +130,19 @@ pub(crate) fn script_editor(ui: &mut egui::Ui, text: &mut String, id_salt: &str,
     // Named in the caller's `ui`, as `id_salt` alone would; what the box has to say goes under it,
     // also in a grid cell or a horizontal row.
     let id = ui.make_persistent_id(id_salt);
-    ui.vertical(|ui| if text.len() > MAX_EDITED_BYTES { too_long(ui, text, width) } else { editor(ui, text, id, rows, width, hint) }).inner
+    let loaded = ui.ctx().data_mut(|d| d.remove_temp::<bool>(loaded_key(id_salt))).is_some();
+    ui.vertical(|ui| if text.len() > MAX_EDITED_BYTES { too_long(ui, text, width) } else { editor(ui, text, id, loaded, rows, width, hint) }).inner
+}
+
+/// Tells the box named `id_salt` that its caller has put another script in it, as the box can't tell
+/// when the two scripts' text is the same. It starts that script's own undo history: Undo must not
+/// bring back the other script, for Save to write under this one's name.
+pub(crate) fn script_loaded(ctx: &egui::Context, id_salt: &str) {
+    ctx.data_mut(|d| d.insert_temp(loaded_key(id_salt), true));
+}
+
+fn loaded_key(id_salt: &str) -> egui::Id {
+    egui::Id::unique(("script-loaded", id_salt))
 }
 
 /// In place of the box, for a script past [`MAX_EDITED_BYTES`], which the box itself never makes.
@@ -151,15 +163,21 @@ fn too_long(ui: &mut egui::Ui, text: &mut String, width: f32) -> egui::Response 
     response
 }
 
-fn editor(ui: &mut egui::Ui, text: &mut String, id: egui::Id, rows: usize, width: f32, hint: Option<&str>) -> egui::Response {
+fn editor(ui: &mut egui::Ui, text: &mut String, id: egui::Id, loaded: bool, rows: usize, width: f32, hint: Option<&str>) -> egui::Response {
     let (seen_id, colours_id, height_id) = (id.with("script-seen"), id.with("script-colours"), id.with("script-height"));
     let now = ui.input(|i| i.time);
     let stored: Option<Seen> = ui.data(|d| d.get_temp(seen_id));
     let arrived = hash(text);
+    // The box's size last frame, if it was there. The dialog's size is last frame's too, so it is used
+    // below only if the box was in it then (a box just opened could be measured against another
+    // dialog, and the box keeps a height it is clamped to).
+    let frame = ui.ctx().cumulative_frame_nr();
+    let last = ui.data(|d| d.get_temp::<(u64, f32)>(height_id)).filter(|(at, _)| at.saturating_add(1) >= frame).map(|(_, h)| h);
     // Text the box did not type itself (another field's script loaded into the same box) starts its
     // own undo history: Cmd+Z must not bring back the script shown before it. It has its own
-    // indentation too. Told apart by content: one identical to what the box left keeps the history.
-    let outside = stored.as_ref().is_none_or(|s| s.text != arrived);
+    // indentation too, and nothing to say of an earlier refusal. That is text other than what the box
+    // left, a script its caller says it loaded ([`script_loaded`]), or a box just opened.
+    let outside = loaded || last.is_none() || stored.as_ref().is_none_or(|s| s.text != arrived);
     if outside {
         ui.data_mut(|d| d.remove_temp::<String>(id.with(INDENT_KEY)));
         if let Some(mut state) = egui::text_edit::TextEditState::load(ui.ctx(), id) {
@@ -194,15 +212,7 @@ fn editor(ui: &mut egui::Ui, text: &mut String, id: egui::Id, rows: usize, width
     let box_width = if width.is_finite() { width } else { ui.available_width() };
     let min_height = row_height * 2.0 + 14.0;
     // In a dialog, no taller than the dialog can grow and still fit in the window: a box dragged
-    // past that would push the dialog's own buttons off the screen. The dialog's size is last
-    // frame's, so it is used only if the box was in it then (a box just opened could be measured
-    // against another dialog, and the box keeps a height it is clamped to).
-    let frame = ui.ctx().cumulative_frame_nr();
-    let last = ui.data(|d| d.get_temp::<(u64, f32)>(height_id)).filter(|(at, _)| at.saturating_add(1) >= frame).map(|(_, h)| h);
-    // Not there last frame, it has just opened, and a refusal from the last time isn't news.
-    if last.is_none() {
-        seen.refused = false;
-    }
+    // past that would push the dialog's own buttons off the screen.
     let max_height = match (crate::widgets::dialog_room(ui), last) {
         (Some(room), Some(last)) if (last + room).is_finite() => (last + room).clamp(min_height, MAX_HEIGHT.max(min_height)),
         _ => MAX_HEIGHT,

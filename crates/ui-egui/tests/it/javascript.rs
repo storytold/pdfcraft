@@ -284,6 +284,85 @@ fn a_field_script_too_long_to_edit_is_left_as_it_is() {
     assert!(!doc.dirty);
 }
 
+fn key(h: &mut Harness<'static, PdfCraftApp>, key: egui::Key, modifiers: egui::Modifiers) {
+    h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+    h.run_steps(3);
+}
+
+/// Picking a script with the same text as the box holds starts that script's own undo history. It kept
+/// the other's, so Undo brought the other script back, for Save to write under this one's name.
+#[test]
+fn undo_does_not_bring_another_script_into_one_with_the_same_text() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("tools.document_js"));
+    h.run_steps(3);
+    for (name, script) in [("first-script", "xy"), ("second-script", "x")] {
+        h.state_mut().doc_js.name = name.into();
+        h.state_mut().doc_js.script = script.into();
+        h.run_steps(3);
+        h.get_by_label("Save").click();
+        h.run_steps(3);
+    }
+    h.get_by_label("first-script").click();
+    h.run_steps(3);
+    h.get_by_label("JavaScript").focus();
+    h.run_steps(3);
+    key(&mut h, egui::Key::End, egui::Modifiers::NONE);
+    key(&mut h, egui::Key::Backspace, egui::Modifiers::NONE);
+    assert_eq!(h.state().doc_js.script, "x");
+    h.get_by_label("second-script").click();
+    h.run_steps(3);
+    h.get_by_label("JavaScript").focus();
+    h.run_steps(3);
+    key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+    assert_eq!(h.state().doc_js.script, "x", "the second script as it came");
+}
+
+/// The same for a field's script: Edit puts it in the box, over the same text typed there.
+#[test]
+fn undo_does_not_bring_back_what_was_typed_before_edit() {
+    let mut h = harness_of(form_with("go\\(\\);"));
+    h.state_mut().open_field_props("hello", 0);
+    h.state_mut().field_props.as_mut().unwrap().tab = pdfcraft_ui_egui::prepare::FieldTab::Actions;
+    h.run_steps(3);
+    h.get_by_role(egui::accesskit::Role::MultilineTextInput).focus();
+    h.run_steps(3);
+    h.event(egui::Event::Text("go();y".into()));
+    h.run_steps(3);
+    key(&mut h, egui::Key::Backspace, egui::Modifiers::NONE);
+    assert_eq!(h.state().field_props.as_ref().unwrap().new_action.text, "go();");
+    h.get_all_by_label("Edit").last().unwrap().click();
+    h.run_steps(3);
+    h.get_by_role(egui::accesskit::Role::MultilineTextInput).focus();
+    h.run_steps(3);
+    key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+    assert_eq!(h.state().field_props.as_ref().unwrap().new_action.text, "go();", "the field's script as it came");
+}
+
+/// A box opened again starts afresh: Undo in an empty box brought back what was typed the last time.
+#[test]
+fn a_box_opened_again_has_no_undo_from_the_last_time() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("tools.document_js"));
+    h.run_steps(3);
+    h.get_by_label("JavaScript").focus();
+    h.run_steps(3);
+    // Long enough each for the box to keep it as an undo point.
+    h.event(egui::Event::Text("y".into()));
+    h.run_steps(10);
+    key(&mut h, egui::Key::Backspace, egui::Modifiers::NONE);
+    h.run_steps(10);
+    assert_eq!(h.state().doc_js.script, "");
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    assert!(h.state_mut().execute("tools.document_js"));
+    h.run_steps(3);
+    h.get_by_label("JavaScript").focus();
+    h.run_steps(3);
+    key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+    assert_eq!(h.state().doc_js.script, "");
+}
+
 /// Text past the limit typed for another kind of action, then turned into a script: the box says it is
 /// too long, Add is off, and neither the field's actions nor the document change.
 #[test]

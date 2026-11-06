@@ -217,7 +217,8 @@ const REFUSED: &str = "Not added";
 /// where it isn't drawn, so most tests read the line and those read this.
 fn refused(ctx: &egui::Context) -> bool {
     let mut id = egui::Id::NULL;
-    ctx.run_ui(egui::RawInput::default(), |ui| id = ui.make_persistent_id("probe")).drop_without_applying_deltas();
+    // The box's id, from a context of its own: a frame of this one without the box would close it.
+    egui::Context::default().run_ui(egui::RawInput::default(), |ui| id = ui.make_persistent_id("probe")).drop_without_applying_deltas();
     ctx.data(|d| d.get_temp::<Seen>(id.with("script-seen"))).expect("the editor keeps what it saw").refused
 }
 

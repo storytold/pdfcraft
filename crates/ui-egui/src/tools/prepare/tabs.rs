@@ -329,6 +329,7 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
         if let Some((trigger, text)) = edit {
             d.new_action = ActionDraft { trigger, kind: 0, text };
             d.editing = Some(trigger);
+            crate::widgets::script_loaded(ui.ctx(), "action-text");
         }
         if let Some(i) = remove {
             if d.actions.get(i).map(|(x, _)| Some(*x)) == Some(d.editing) {

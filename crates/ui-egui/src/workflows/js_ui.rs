@@ -287,6 +287,7 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             for (name, js) in &scripts {
                 if ui.selectable_label(app.doc_js.name == *name, name).clicked() {
                     app.doc_js = DocJsDraft { name: name.clone(), script: js.clone() };
+                    crate::widgets::script_loaded(ui.ctx(), "doc-js-script");
                 }
             }
         });
