@@ -866,6 +866,37 @@ fn damaged_masks_and_sizes_never_panic() {
 }
 
 #[test]
+fn a_jpeg_with_thousands_of_extended_xmp_chunks_is_exported_without_decoding() {
+    // Export decodes a JPEG with a soft mask, or a JPEG soft mask, to make a PNG with alpha: a JPEG
+    // whose Extended XMP chunks would take the decoder quadratic time is written as it is instead,
+    // and such a mask is left out, without reaching the decoder.
+    let flood = crate::upright_image::tests::with_extended_xmp_chunks(&real_jpeg(), 5_000);
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let mask = doc.add(Object::Stream(Stream::from_raw(image_dict(4, 2, "DeviceGray", 8), vec![0; 8])));
+        let mut d = image_dict(4, 2, "DeviceGray", 8);
+        d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        d.set(b"SMask".to_vec(), Object::Ref(mask));
+        Stream::from_raw(d, flood.clone())
+    });
+    crate::extract::JPEGS_DECODED.with(|n| n.set(0));
+    let out = extract_images(&doc, &[0], 0);
+    assert_eq!((out.images[0].extension, &out.images[0].data), ("jpg", &flood));
+
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let mut md = image_dict(4, 2, "DeviceGray", 8);
+        md.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        let mask = doc.add(Object::Stream(Stream::from_raw(md, flood.clone())));
+        let mut d = image_dict(4, 2, "DeviceRGB", 8);
+        d.set(b"SMask".to_vec(), Object::Ref(mask));
+        Stream::from_raw(d, vec![10; 24])
+    });
+    assert_eq!(alphas(&exported_rgba(&doc).1), [255; 8]);
+    assert_eq!(crate::extract::JPEGS_DECODED.with(std::cell::Cell::get), 0);
+}
+
+#[test]
 fn indexed_image_export_clamps_samples_to_hival() {
     for palette in [vec![255, 0, 0, 0, 0, 255], vec![255, 0, 0, 0, 0, 255, 0, 255, 0, 255, 255, 255]] {
         let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
@@ -2619,4 +2650,31 @@ fn proportions_up_to_the_limit_scale_as_they_did() {
     // A mask of its image's size comes through as it is.
     let mask = noise(20, 10);
     assert_eq!(crate::extract::scaled(&mask, 20, 10), mask);
+}
+
+/// A CMYK JPEG past the decoder's Extended XMP bound is still decoded (its chunks left out) and
+/// exported with the colours the page shows, not written as stored, which inverts them.
+#[test]
+fn a_cmyk_jpeg_flooded_with_extended_xmp_is_exported_in_its_colours() {
+    let jpeg = crate::upright_image::tests::with_extended_xmp_chunks(&flat_four_component_jpeg([255, 0, 0, 0], 0), 5_000);
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let mut d = image_dict(8, 8, "DeviceCMYK", 8);
+        d.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        let m = doc.add(Object::Stream(Stream::from_raw(image_dict(8, 8, "DeviceGray", 8), vec![255; 64])));
+        d.set(b"SMask".to_vec(), Object::Ref(m));
+        Stream::from_raw(d, jpeg.clone())
+    });
+    let (_, rgba) = exported_rgba(&doc);
+    assert!(rgba.as_chunks::<4>().0.iter().all(|p| p[0] <= 6 && p[1] >= 249 && p[2] >= 249), "{:?}", &rgba[..4]);
+}
+
+/// Stripping leaves everything but the Extended XMP chunks, byte for byte.
+#[test]
+fn stripping_extended_xmp_leaves_the_rest_of_the_jpeg() {
+    let plain = flat_four_component_jpeg([255, 0, 0, 0], 0);
+    let flooded = crate::upright_image::tests::with_extended_xmp_chunks(&plain, 3);
+    assert_ne!(flooded, plain);
+    // The helper puts a stray byte before the chunks, which the decoder skips: it stays.
+    assert_eq!(crate::upright_image::without_extended_xmp(&flooded), [&plain[..2], b"\0".as_slice(), &plain[2..]].concat());
 }
