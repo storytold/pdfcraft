@@ -24,6 +24,18 @@ fn an_image_decoding_far_past_its_raster_is_removed_without_decoding_it_all() {
     assert_eq!((r.images_removed, r.images_cleared), (1, 0), "{r:?}");
 }
 
+#[test]
+fn an_image_whose_pixel_count_overflows_is_removed() {
+    // 2^32 × 2^32 pixels is 2^64, one past the largest `u64`; 2^33 × 2^31 and 2^40 × 2^40 too.
+    for (w, h) in [(1u64 << 32, 1u64 << 32), (1 << 33, 1 << 31), (1 << 40, 1 << 40)] {
+        let dict = format!("/Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 8");
+        let mut doc = one_page(b"q 40 0 0 10 100 100 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(&dict, b"")]);
+        mark(&mut doc, 0, &[[95.0, 95.0, 120.0, 115.0]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!((r.images_removed, r.images_cleared), (1, 0), "{w}×{h}: {r:?}");
+    }
+}
+
 /// Marked content nested `depth` deep, each level with its own MCID, around `depth` drawing
 /// operators.
 fn nested_marked_content(depth: usize) -> Vec<u8> {
