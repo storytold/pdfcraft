@@ -1,0 +1,30 @@
+69d68
+< pub type __uint16_t = ::std::os::raw::c_ushort;
+74d72
+< pub type __mode_t = __uint16_t;
+76,82d73
+< pub type __acl_tag_t = __uint32_t;
+< pub type __acl_perm_t = __uint32_t;
+< pub type __acl_entry_type_t = __uint16_t;
+< pub type __acl_flag_t = __uint16_t;
+< pub type __acl_type_t = __uint32_t;
+< pub type __acl_permset_t = *mut __uint32_t;
+< pub type __acl_flagset_t = *mut __uint16_t;
+84d74
+< pub type mode_t = __mode_t;
+87,93c77,83
+< pub type acl_tag_t = __acl_tag_t;
+< pub type acl_perm_t = __acl_perm_t;
+< pub type acl_entry_type_t = __acl_entry_type_t;
+< pub type acl_flag_t = __acl_flag_t;
+< pub type acl_type_t = __acl_type_t;
+< pub type acl_permset_t = __acl_permset_t;
+< pub type acl_flagset_t = __acl_flagset_t;
+---
+> pub type acl_tag_t = u32;
+> pub type acl_perm_t = u32;
+> pub type acl_entry_type_t = u16;
+> pub type acl_flag_t = u16;
+> pub type acl_type_t = ::std::os::raw::c_int;
+> pub type acl_permset_t = *mut ::std::os::raw::c_int;
+> pub type acl_flagset_t = *mut u16;

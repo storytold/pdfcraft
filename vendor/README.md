@@ -27,6 +27,13 @@ licence files unchanged. Every patch is marked `PdfCraft patch:` in the source, 
 PdfCraft test, and should be proposed upstream. Remove the vendored copy once upstream releases
 the fix. Vendoring copyleft code is never allowed (plan/adr/0001).
 
+`exacl` is the MIT upstream commit `18275aa1a82aae9a786b108b0db0992a4d06e6e2` with one marked safe macOS descriptor-copy facade.
+A caller validator first inspects a native-ID entry view of the captured ACL, then the same native object passes directly between descriptors, retaining entry order, principals and ACL-level flags without entry reconstruction.
+The platform staging tests cover explicit ACL preservation, inherited flags, conservative inherited-stage and deny-delete refusal, cleanup and observed destination changes; automation tests cover Save, full Save, Save As and retained unsaved edits.
+The unchanged upstream license and exact provenance are in `vendor/exacl/LICENSE.txt` and `vendor/exacl/README-PDFCRAFT.md`.
+Remove this temporary vendor when an upstream release provides the equivalent opaque-copy operation.
+
+
 A PdfCraft patch in `hayro-syntax::Page::base_dimensions` expresses the existing one-point floor as a raw reciprocal of `/UserUnit`, rounded upward only when f32 multiplication would fall below one point. Five `pdfcraft-render` regressions with prefix `raster::tests::raw_crop_` cover the observed dimensions, origins and rotations, units 41/47, bounded vector rasters and unchanged nearly-zero A4 fallback. Accepted page-unit policy and licences are unchanged.
 
 In `hayro-interpret`, Type 3 glyph bounding boxes are transformed to device space before intersecting clip and shading bounds; `raster::tests::shaded_type3_glyph_draws_at_multiple_positions` covers translated glyphs (#3178).
