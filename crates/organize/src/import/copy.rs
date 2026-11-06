@@ -63,6 +63,15 @@ impl<'a> Copier<'a> {
         Copier { src, depth: 0, map, pages, annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() }
     }
 
+    /// A copier seeded with the objects and pages already copied from this source.
+    pub(crate) fn seeded(src: &'a Document, map: HashMap<ObjRef, ObjRef>, pages: HashMap<ObjRef, ObjRef>) -> Self {
+        Self::new(src, map, pages)
+    }
+
+    pub(crate) fn copy_val(&mut self, dst: &mut Document, o: &Object, this: Option<ObjRef>) -> Object {
+        self.copy_value(dst, o, this).unwrap_or(Object::Null)
+    }
+
     /// Copy an indirect object (once), returning its destination reference.
     pub(super) fn copy_ref(&mut self, dst: &mut Document, r: ObjRef) -> Result<ObjRef, OrganizeError> {
         if let Some(d) = self.map.get(&r) {

@@ -23,6 +23,7 @@ mod outline;
 mod outline_io;
 mod pdfx;
 mod prune;
+mod structure;
 mod transition;
 pub mod view;
 mod xmp;
