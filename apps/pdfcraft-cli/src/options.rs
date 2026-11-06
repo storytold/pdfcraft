@@ -4,6 +4,42 @@ pub(crate) fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
 }
 
+/// Like `flag`, but respect each option's actual value slot in the ordered argument stream. This
+/// prevents a password like `--out` from hiding the real `--out` output option that comes later.
+pub(crate) fn flag_in_order<'a>(args: &'a [String], name: &str, specs: &[OptionSpec]) -> Option<&'a str> {
+    let mut i = 0;
+    while let Some(arg) = args.get(i).map(String::as_str) {
+        if arg == name {
+            return args.get(i + 1).map(String::as_str);
+        }
+        if let Some(spec) = specs.iter().find(|spec| spec.name == arg) {
+            if spec.takes_value {
+                i += 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+pub(crate) fn has_flag_in_order(args: &[String], name: &str, specs: &[OptionSpec]) -> bool {
+    let mut i = 0;
+    while let Some(arg) = args.get(i).map(String::as_str) {
+        if arg == name {
+            return true;
+        }
+        if let Some(spec) = specs.iter().find(|spec| spec.name == arg) {
+            if spec.takes_value {
+                i += 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct OptionSpec {
     pub(crate) name: &'static str,
@@ -101,6 +137,12 @@ pub(crate) const RENDER_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--dpi", takes_value: true },
     OptionSpec { name: "--out", takes_value: true },
     OptionSpec { name: "--password", takes_value: true },
+];
+
+pub(crate) const EXPORT_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--out", takes_value: true },
+    OptionSpec { name: "--password", takes_value: true },
+    OptionSpec { name: "--force", takes_value: false },
 ];
 
 pub(crate) const CHECK_ONE_OPTIONS: &[OptionSpec] =

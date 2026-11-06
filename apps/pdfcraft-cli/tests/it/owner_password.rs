@@ -101,6 +101,19 @@ fn text_accepts_the_owner_password() {
     }
 }
 
+#[test]
+fn export_requires_the_owner_password_for_a_copy_restricted_document() {
+    for alg in ALGORITHMS {
+        let path = tmp(&format!("export-{alg:?}.pdf"));
+        let out = tmp(&format!("export-{alg:?}.docx"));
+        std::fs::write(&path, protected(alg)).unwrap();
+        let r = Command::new(BIN).args(["export", path.to_str().unwrap(), "--password", "user", "--out", out.to_str().unwrap()]).output().unwrap();
+        let stderr = String::from_utf8_lossy(&r.stderr);
+        assert!(!r.status.success(), "{alg:?}: copying needs the owner password");
+        assert!(stderr.contains("don't allow copying"), "{alg:?}: {stderr}");
+    }
+}
+
 /// Asserts that `data` is a PNG of the fixture's 200×300 pt page at `dpi` with the text drawn:
 /// a blank page of the right size fails too.
 fn assert_rendered_page(data: &[u8], dpi: u32, what: &str) {
