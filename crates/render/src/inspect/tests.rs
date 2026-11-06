@@ -832,6 +832,50 @@ fn repeated_annotations_are_listed_once_within_a_byte_budget() {
     assert!(notes.iter().map(retained).sum::<usize>() <= MAX_ANNOTATION_BYTES);
 }
 
+/// Blank text is not kept, so only reading it is charged: many comments sharing one large blank
+/// string stop being built at the budget instead of decoding it once each.
+#[test]
+fn comments_sharing_a_blank_string_stop_at_the_read_budget() {
+    let small = "<< /Subtype /Text /Rect [0 0 1 1] /Contents 7 0 R >> ".repeat(1200);
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [{small}] >> endobj\n\
+             7 0 obj ({}) endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        " ".repeat(64 << 10),
+    );
+    let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+    let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+    let mut info = DocInfo { pages: vec![page], ..Default::default() };
+    Inspector::new(&doc).fill(&mut info);
+    assert!(!info.annotations.is_empty() && info.annotations.len() < 1200, "{}", info.annotations.len());
+}
+
+/// Many fields sharing one large tooltip, and one layer listed many times, are read within a byte
+/// allowance rather than once each.
+#[test]
+fn fields_sharing_a_tooltip_and_repeated_layers_stop_at_the_text_budget() {
+    let fields = (0..1300).map(|i| format!("<< /FT /Tx /T (f{i}) /TU 7 0 R /V 7 0 R >> ")).collect::<String>();
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [{fields}] >> \
+             /OCProperties << /OCGs [{}] >> >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\n\
+             6 0 obj << /Type /OCG /Name (Ink) >> endobj\n\
+             7 0 obj ({}) endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        "6 0 R ".repeat(1000),
+        "x".repeat(32 << 10),
+    );
+    let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+    let page = PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() };
+    let mut info = DocInfo { pages: vec![page], ..Default::default() };
+    Inspector::new(&doc).fill(&mut info);
+    let kept: usize = info.fields.iter().map(|f| f.tooltip.as_ref().map_or(0, String::len) + f.value.as_ref().map_or(0, String::len)).sum();
+    assert!(kept > 0 && kept <= super::core::MAX_FIELD_TEXT_BYTES, "{kept}");
+    assert!(info.fields.iter().any(|f| f.tooltip.is_none()), "text past the allowance is left out");
+    assert_eq!(info.layers.len(), 1);
+}
+
 /// A link reached through an indirect object that holds only a reference to it is the same
 /// annotation as the link itself, and so is a page array reached the same way: each is listed once.
 #[test]
