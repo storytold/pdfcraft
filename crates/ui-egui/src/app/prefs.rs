@@ -59,6 +59,20 @@ impl PdfCraftApp {
         }
     }
 
+    /// The app-wide "Smooth images" preference: sets it and applies it to every open document,
+    /// not just the active one (Preferences ▸ Documents and view). A document the change actually
+    /// touches re-renders.
+    pub fn set_smooth_images(&mut self, on: bool) {
+        if self.session.set_smooth_images(on) {
+            for view in &mut self.views {
+                view.invalidate_content();
+            }
+            if let Some(ctx) = self.ctx.clone() {
+                ctx.request_repaint();
+            }
+        }
+    }
+
     /// Enable the Linux desktop portal in a native window. Headless contexts keep
     /// their supplied input and never connect to the user's session bus.
     #[cfg(target_os = "linux")]
@@ -138,6 +152,7 @@ impl PdfCraftApp {
             "trusted": trusted,
             "custom_stamps": stamps_ui::encode(&self.custom_stamps),
             "javascript": self.session.javascript(),
+            "smooth_images": self.session.smooth_images(),
             "actions": actions_ui::encode(&self.custom_actions),
             "combine_columns": self.combine_columns.to_json(),
             "combine_view": self.combine_view.as_str(),
@@ -351,6 +366,12 @@ impl PdfCraftApp {
         // fails to deserialize and keeps Off.
         if let Ok(colors) = serde_json::from_value::<pdfcraft_render::ReadingColors>(v["reading_colors"].clone()) {
             self.reading_colors = colors;
+        }
+        // Settings are untrusted: only a boolean is accepted; anything else keeps the default (on).
+        // Go through the app-level setter so a restore after a document opened invalidates its
+        // views, as the Preferences checkbox and the control channel do.
+        if let Some(on) = v["smooth_images"].as_bool() {
+            self.set_smooth_images(on);
         }
         // Settings are untrusted: a size out of range follows the system instead.
         self.ui_scale = v["ui_scale"].as_f64().and_then(ui_scale::valid);

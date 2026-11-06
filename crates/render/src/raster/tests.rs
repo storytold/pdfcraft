@@ -6396,6 +6396,19 @@ fn draw_minified_image(
     alpha: Option<&[u8]>,
     device: (u32, u32),
 ) -> RenderedPage {
+    draw_minified_image_with(space, size, interpolate, data, alpha, device, RenderConfig::default())
+}
+
+/// [`draw_minified_image`] with an explicit config, for the Smooth images preference tests.
+fn draw_minified_image_with(
+    space: &str,
+    size: (u32, u32),
+    interpolate: Option<bool>,
+    data: &[u8],
+    alpha: Option<&[u8]>,
+    device: (u32, u32),
+    config: RenderConfig,
+) -> RenderedPage {
     let (width, height) = size;
     let interp = interpolate.map_or_else(String::new, |value| format!("/Interpolate {value} "));
     let (smask, mask) = match alpha {
@@ -6423,7 +6436,7 @@ fn draw_minified_image(
         content.len(),
         image.len() + 1
     );
-    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), config);
     let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
     assert!(page.error.is_none(), "{:?}", page.error);
     assert_eq!((page.width, page.height), device);
@@ -6698,6 +6711,35 @@ fn an_image_shrunk_one_way_and_stretched_the_other_is_still_averaged() {
     assert_eq!(grays, [15, 35, 55, 75].repeat(4), "each pixel is the mean of the two columns it covers");
 }
 
+/// A side shrunk by area averaging stays on whole device pixels even when the other side is
+/// enlarged and capped at its source size. The cap used to drop the snapped transform for both
+/// sides, so the shrunk side was sampled again at a fractional offset: a bilinearly smoothed
+/// scan's hard edge became a grey band. Here a 512 × 512 scan is shrunk to 256 across and
+/// stretched to 1024 down, offset by 0.4 device pixels.
+#[test]
+fn a_shrunk_side_stays_snapped_when_the_other_side_is_enlarged() {
+    let side = 512usize;
+    let source: Vec<u8> = (0..side * side).map(|i| if i % side < side / 2 { 0 } else { 255 }).collect();
+    let content = "q 256 0 0 1024 0.4 0.6 cm /Im0 Do Q";
+    let image = hex(&source);
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 256 1024] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width {side} /Height {side} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len(),
+        image.len() + 1
+    );
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.width, page.height), (256, 1024));
+    let row: Vec<u8> = (0..256).map(|x| page.rgba[(512 * 256 + x) * 4]).collect();
+    assert!(row.iter().all(|v| *v == 0 || *v == 255), "the shrunk side was resampled at a fractional offset: {:?}", &row[120..136]);
+}
+
 /// Averaging straight colours would tint an opaque sample with the colour of a transparent
 /// neighbour: white beside transparent black, shrunk to one pixel, came out gray over the white
 /// page. Premultiplied, the transparent sample adds nothing but its transparency.
@@ -6761,6 +6803,38 @@ fn an_interpolated_smaller_soft_mask_stays_smooth_when_its_image_is_minified() {
     let row: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().skip(16 * 32).take(32).map(|[r, ..]| *r).collect();
     let ramp = row.iter().filter(|v| (1..255).contains(*v)).count();
     assert!(ramp >= 8 && row.is_sorted() && row.first() == Some(&0) && row.last() == Some(&255), "a smooth black to white edge, got {row:?}");
+}
+
+/// An interpolated mask of the same size as its non-interpolated image keeps its own
+/// `/Interpolate` on the side the image is enlarged. Combined onto the image's grid, the mask was
+/// shrunk with the image and then enlarged by the image's nearest sampler, so its edge became a
+/// hard step. Here a 64 × 64 black image (shrunk to 32 across, stretched to 128 down) has a mask
+/// that is opaque above halfway and clear below, and asks for interpolation: the boundary must
+/// have intermediate coverage, not one hard row.
+#[test]
+fn an_interpolated_equal_size_mask_stays_smooth_when_the_image_is_stretched() {
+    let side = 64usize;
+    let image = "00".repeat(side * side);
+    let mask: String = (0..side * side).map(|i| if i / side < side / 2 { "FF" } else { "00" }).collect();
+    let content = "q 32 0 0 128 0 0 cm /Im0 Do Q";
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 32 128] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /XObject /Subtype /Image /Width {side} /Height {side} /ColorSpace /DeviceGray /BitsPerComponent 8 /SMask 6 0 R /Filter /ASCIIHexDecode /Length {} >> stream\n{image}>\nendstream endobj\n\
+         6 0 obj << /Type /XObject /Subtype /Image /Width {side} /Height {side} /ColorSpace /DeviceGray /BitsPerComponent 8 /Interpolate true /Filter /ASCIIHexDecode /Length {} >> stream\n{mask}>\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len(),
+        image.len() + 1,
+        mask.len() + 1
+    );
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.width, page.height), (32, 128));
+    let column: Vec<u8> = (0..128).map(|y| page.rgba[(y * 32 + 16) * 4]).collect();
+    assert!(column.iter().any(|v| (1..255).contains(v)), "the mask edge stayed hard: {:?}", &column[58..70]);
 }
 
 #[test]
@@ -6909,6 +6983,169 @@ fn non_interpolated_type3_glyph_images_are_not_smoothed_when_minified() {
     }
     let enabled = render("/Interpolate true ");
     assert!(interior(&enabled).iter().any(|px| !palette.contains(px)), "/Interpolate true glyph image should still be sampled bicubically");
+}
+
+/// A nested Type 3 glyph must not clear the outer glyph's state. An image drawn after the
+/// nested glyph is still inside the outer Type 3 glyph, so it keeps the nearest shrink: without
+/// saving and restoring the flag it was area-averaged and its samples blended.
+#[test]
+fn a_nested_type3_glyph_keeps_the_outer_glyphs_image_sampling() {
+    // Every sample is 1 mod 8; area averaging makes 5 mod 8 (or blends), which nearest cannot.
+    let source: Vec<u8> = (0..32).map(|i| (i * 8 + 1) as u8).collect();
+    let data = hex(&source);
+    let content = "BT /F1 1 Tf 0 0.7 Td (A) Tj ET";
+    let outer = "4.6 0 d0 BT /F2 1 Tf 100 100 Td (B) Tj ET q 4.6 0 0 2.3 0 0 cm /Im0 Do Q";
+    let inner = "1 0 d0 0 0 m 1 0 l 1 1 l 0 1 l f";
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 5 3] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [1 0 0 1 0 0] /FirstChar 65 /LastChar 65 /Widths [5] /Encoding << /Differences [65 /a] >> /CharProcs << /a 6 0 R >> /Resources << /Font << /F2 8 0 R >> /XObject << /Im0 7 0 R >> >> >> endobj\n\
+         6 0 obj << /Length {} >> stream\n{outer}\nendstream endobj\n\
+         7 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode /Length {} >> stream\n{data}>\nendstream endobj\n\
+         8 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /FirstChar 66 /LastChar 66 /Widths [1] /Encoding << /Differences [66 /b] >> /CharProcs << /b 9 0 R >> >> endobj\n\
+         9 0 obj << /Length {} >> stream\n{inner}\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len(),
+        outer.len(),
+        data.len() + 1,
+        inner.len()
+    );
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.width, page.height), (5, 3));
+    // The image covers columns 0–3 and rows 0–1; a nested glyph must not smooth it.
+    let nearest: Vec<u8> = (0..32).map(|i| (i * 8 + 1) as u8).collect();
+    for y in 0..2 {
+        for x in 0..4 {
+            let gray = page.rgba[(y * 5 + x) * 4];
+            assert!(nearest.contains(&gray), "a nested glyph cleared the outer Type 3 state: pixel ({x}, {y}) is {gray}");
+        }
+    }
+}
+
+/// A pattern-painted stencil inside a Type 3 glyph keeps the glyph's nearest image sampling.
+/// Its mask used to be drawn by a nested renderer with the Type 3 flag off, so it was
+/// area-averaged and snapped, leaving partly covered (pink) pixels beside the red pattern.
+#[test]
+fn a_pattern_painted_stencil_in_a_type3_glyph_keeps_its_hard_pixels() {
+    let content = "/CsP cs 1 0 0 /P1 scn BT /F1 1 Tf 0 0.7 Td (A) Tj ET";
+    let glyph = "q 4.6 0 0 2.3 0 0 cm /Im0 Do Q";
+    let pattern = "0 0 1 1 re f";
+    let stencil = "AA55AA55"; // 8 × 4 one-bit samples: a checker.
+    let pdf = format!(
+        "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 5 3] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /ColorSpace << /CsP [/Pattern /DeviceRGB] >> /Pattern << /P1 8 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [1 0 0 1 0 0] /FirstChar 65 /LastChar 65 /Widths [5] /Encoding << /Differences [65 /a] >> /CharProcs << /a 6 0 R >> /Resources << /XObject << /Im0 7 0 R >> >> >> endobj\n\
+         6 0 obj << /Length {} >> stream\n{glyph}\nendstream endobj\n\
+         7 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 4 /ImageMask true /Filter /ASCIIHexDecode /Length {} >> stream\n{stencil}>\nendstream endobj\n\
+         8 0 obj << /Type /Pattern /PatternType 1 /PaintType 2 /TilingType 1 /BBox [0 0 1 1] /XStep 1 /YStep 1 /Resources << >> /Length {} >> stream\n{pattern}\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len(),
+        glyph.len(),
+        stencil.len() + 1,
+        pattern.len()
+    );
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    assert!(page.error.is_none(), "{:?}", page.error);
+    assert_eq!((page.width, page.height), (5, 3));
+    for y in 0..2 {
+        for x in 0..4 {
+            let i = (y * 5 + x) * 4;
+            let px = [page.rgba[i], page.rgba[i + 1], page.rgba[i + 2]];
+            assert!(px == [255, 0, 0] || px == [255, 255, 255], "the pattern-painted stencil was smoothed: pixel ({x}, {y}) is {px:?}");
+        }
+    }
+}
+
+/// With the Smooth images preference off, an image that doesn't ask for interpolation goes back
+/// to the nearest-neighbour shrink of #635: the area average read whole columns instead.
+#[test]
+fn non_interpolated_minification_is_nearest_when_smoothing_is_off() {
+    let ramp = [10u8, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+    let page =
+        draw_minified_image_with("DeviceGray", (10, 1), None, &ramp, None, (6, 1), RenderConfig { smooth_images: false, ..Default::default() });
+    let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+    assert_eq!(grays, [10, 30, 50, 60, 80, 100], "nearest read whole columns 0, 2, 4, 5, 7 and 9");
+}
+
+/// The masked nearest path of #635 too: colour and mask come from the same column, so a mask
+/// sample never pairs with a neighbour's colour.
+#[test]
+fn non_interpolated_masked_minification_is_nearest_when_smoothing_is_off() {
+    let ramp = [10u8, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+    let mask = [255u8, 0, 0, 0, 255, 255, 0, 0, 0, 255];
+    let page = draw_minified_image_with(
+        "DeviceGray",
+        (10, 1),
+        None,
+        &ramp,
+        Some(&mask),
+        (6, 1),
+        RenderConfig { smooth_images: false, ..Default::default() },
+    );
+    let expected: Vec<[u8; 4]> = [10u8, 255, 50, 60, 255, 100].iter().map(|&v| [v, v, v, 255]).collect();
+    assert_eq!(page.rgba.as_chunks::<4>().0.to_vec(), expected);
+}
+
+/// With the preference off, a page-scan-sized image enlarged without `/Interpolate` is drawn
+/// nearest-neighbour again, so every device pixel is one source tone.
+#[test]
+fn non_interpolated_enlargement_keeps_hard_pixels_when_smoothing_is_off() {
+    let side = 512usize;
+    let half: Vec<u8> = (0..side * side).map(|i| if i % side < side / 2 { 0 } else { 255 }).collect();
+    let page = draw_minified_image_with(
+        "DeviceGray",
+        (512, 512),
+        None,
+        &half,
+        None,
+        (1536, 1536),
+        RenderConfig { smooth_images: false, ..Default::default() },
+    );
+    assert!(page.rgba.as_chunks::<4>().0.iter().all(|px| px[0] == 0 || px[0] == 255), "a scan enlarged with smoothing off was blended");
+}
+
+/// A barcode-like 1-bit pattern (4 × 4 modules) enlarged above the scan threshold keeps its hard
+/// pixels when smoothing is off: no grey edge between modules.
+#[test]
+fn barcode_like_image_keeps_hard_pixels_when_smoothing_is_off() {
+    let side = 512usize;
+    let modules: Vec<u8> = (0..side * side).map(|i| if ((i / side) / 4 + (i % side) / 4).is_multiple_of(2) { 0 } else { 255 }).collect();
+    let page = draw_minified_image_with(
+        "DeviceGray",
+        (512, 512),
+        None,
+        &modules,
+        None,
+        (1024, 1024),
+        RenderConfig { smooth_images: false, ..Default::default() },
+    );
+    assert!(page.rgba.as_chunks::<4>().0.iter().all(|px| px[0] == 0 || px[0] == 255), "a barcode-like pattern was smoothed");
+}
+
+/// The preference only gates images that don't ask for interpolation: `/Interpolate true` still
+/// blends when it is off.
+#[test]
+fn interpolated_images_still_smooth_when_smoothing_is_off() {
+    let palette: [[u8; 3]; 8] = [[0, 0, 0], [255, 255, 255], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [255, 0, 255], [0, 255, 255]];
+    let rgb: Vec<u8> = block_source(palette).concat();
+    let exact: Vec<[u8; 4]> = palette.iter().map(|c| [c[0], c[1], c[2], 255]).collect();
+    let page =
+        draw_minified_image_with("DeviceRGB", (8, 4), Some(true), &rgb, None, (4, 2), RenderConfig { smooth_images: false, ..Default::default() });
+    let pixels = page.rgba.as_chunks::<4>().0.to_vec();
+    assert_ne!(pixels, exact, "/Interpolate true must still blend with smoothing off");
+    assert!(pixels.iter().any(|px| px[..3].iter().any(|&c| (32..=223).contains(&c))), "/Interpolate true made no mid-tone");
+}
+
+#[test]
+fn smooth_images_is_on_by_default() {
+    assert!(RenderConfig::default().smooth_images);
 }
 
 /// From `cargo xtask fuzz`: a CID font whose /W range spans every u32 inserted billions of

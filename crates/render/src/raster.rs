@@ -60,7 +60,7 @@ impl Stopwatch {
 }
 
 /// Per-document rendering configuration.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct RenderConfig {
     /// User or owner password for encrypted documents.
     pub password: Option<Arc<str>>,
@@ -87,6 +87,27 @@ pub struct RenderConfig {
     /// `hayro_syntax::MAX_PAGE_JBIG2_WORK`. Those past it aren't drawn, like an image that can't
     /// be decoded.
     pub jbig2_work: Option<u64>,
+    /// Preferences ▸ Documents and view ▸ Smooth images: an image that doesn't ask for
+    /// `/Interpolate` is area-averaged when shrunk and bilinearly smoothed when a page-scan-sized
+    /// one is enlarged. On by default; off keeps QR codes, barcodes and pixel art hard, as before
+    /// the scan fix. `/Interpolate true` is unaffected either way.
+    pub smooth_images: bool,
+}
+
+impl Default for RenderConfig {
+    fn default() -> Self {
+        Self {
+            password: None,
+            layers: Arc::default(),
+            hide_comments: false,
+            reject_oversize: false,
+            reading_colors: ReadingColors::default(),
+            transparent: false,
+            system_fonts: false,
+            jbig2_work: None,
+            smooth_images: true,
+        }
+    }
 }
 
 impl RenderConfig {
@@ -344,10 +365,11 @@ pub fn device_pixels(pt: f32, scale: f32) -> u32 {
     if px.is_finite() { px.ceil().max(1.0) as u32 } else { 1 }
 }
 
-/// Render one page with a caller-owned parser and cache. Panics inside the renderer are caught
-/// and reported as `Err((message, panicked))`.
+/// Width, height, pixels and optional text of a rendered page.
 type Output = (u32, u32, Pixels, Option<Arc<crate::text::PageText>>);
 
+/// Render one page with a caller-owned parser and cache. Panics inside the renderer are caught
+/// and reported as `Err((message, panicked))`.
 fn render_page<'a>(
     pdf: &'a Pdf,
     cache: &RenderCache<'a>,
@@ -408,6 +430,7 @@ fn render_page<'a>(
                     y_offset: t.y as f32,
                     bg_color,
                     color_replacement,
+                    smooth_images: config.smooth_images,
                 }
             }
             None => {
@@ -429,6 +452,7 @@ fn render_page<'a>(
                     height: Some(side(h)),
                     bg_color,
                     color_replacement,
+                    smooth_images: config.smooth_images,
                     ..Default::default()
                 }
             }
