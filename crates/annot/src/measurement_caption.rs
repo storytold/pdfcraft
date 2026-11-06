@@ -100,8 +100,17 @@ pub fn measurement_caption_rect(doc: &Document, page: usize, index: usize) -> Op
     Some(layout(a.as_dict()?)?.rect())
 }
 
-/// Move only a PdfCraft distance readout, in page user-space points. /L, /Measure and leader
-/// geometry remain untouched; /CO (ISO 32000-2 Table 178) and the appearance persist the move.
+/// Move only a PdfCraft distance readout by the relative vector `[dx, dy]` in the PDF page's
+/// native, unrotated user space: positive x is right and positive y is up. These units equal
+/// points only when /UserUnit is 1; this is not an absolute position or a displayed-page delta.
+/// Automation's `comment_edit.caption_move` takes displayed page points (right/down) and
+/// converts once with `pdfcraft_engine::Document::object_move_offset` before reaching here.
+/// Both delta components and the resulting line-frame /CO components must be finite and
+/// within +/-14400 native units. Locked annotations and anything other than a PdfCraft
+/// distance readout return an error; perimeter and area labels are not supported.
+/// /L, /Measure and leader geometry remain untouched; /CO (ISO 32000-2 Table 178) and the
+/// appearance persist the move. PdfCraft keeps the caption horizontal; another viewer
+/// regenerating the appearance may draw it along the line instead.
 pub fn move_measurement_caption(doc: &mut Document, page: usize, index: usize, dx: f64, dy: f64, meta: &Meta) -> Result<(), AnnotError> {
     if [dx, dy].iter().any(|v| !v.is_finite() || v.abs() > MAX_OFFSET) {
         return Err(AnnotError::Invalid("caption offset must be finite and within 14400 points".into()));

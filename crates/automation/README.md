@@ -3,7 +3,18 @@
 Agent control for PdfCraft: a headless tool table over the engine, and an opt-in MCP server.
 
 - **Layer:** L7 (architecture §13), but headless. It depends on `engine`, `render` and `organize`, never on a UI toolkit.
-- **Status:** over a hundred tools; `pdfcraft-cli tools` lists the current set with their schemas (the count isn't repeated here, so it can't go stale). They cover inspection, rendering, text, page edits and organizing, page labels, bookmarks, comments and their review, form filling and authoring (fields, properties, scripts, data exchange, detection), redaction and sanitizing, password protection and signatures, calibrated 2D measurements and CSV export, adding text, images, links and stamps, optimizing, OCR, printing, export, metadata, undo/redo, save, combine, extract and split. `comment_edit` can move only a PdfCraft distance readout with `caption_move: [dx, dy]`, leaving the measured endpoints and scale fixed. Comment tools take geometry in the same top-left-origin points as everything else, and `comment_add` can mark text by searching for it (`find`). The MCP server also serves the open documents as resources, page images included. The running app's UI is driven separately, through the `ui.*` control channel in `pdfcraft-ui-egui`.
+- **Status:** over a hundred tools; `pdfcraft-cli tools` lists the current set with their schemas (the count isn't repeated here, so it can't go stale). They cover inspection, rendering, text, page edits and organizing, page labels, bookmarks, comments and their review, form filling and authoring (fields, properties, scripts, data exchange, detection), redaction and sanitizing, password protection and signatures, calibrated 2D measurements and CSV export, adding text, images, links and stamps, optimizing, OCR, printing, export, metadata, undo/redo, save, combine, extract and split. `comment_edit` can move only a PdfCraft distance readout with `caption_move: [dx, dy]`, a relative move in displayed page points (right/down), leaving the measured endpoints and scale fixed. Comment tools take geometry in the same top-left-origin points as everything else, and `comment_add` can mark text by searching for it (`find`). The MCP server also serves the open documents as resources, page images included. The running app's UI is driven separately, through the `ui.*` control channel in `pdfcraft-ui-egui`.
+
+`comment_edit.caption_move: [dx, dy]` is a **relative** displacement, not an absolute position,
+in the displayed page's top-left-origin points: positive `dx` moves right and positive `dy`
+moves down, independent of zoom. Both components must be finite and within +/-14400 points.
+The tool converts the vector once with `Document::object_move_offset` before the annotation
+API receives native, unrotated PDF user-space units (right/up; points only when `/UserUnit`
+is 1). The converted vector and resulting line-frame `/CO` components must also stay within
++/-14400 native units. Unsupported annotations and locked measurements fail without moving
+the readout. Only PdfCraft-created **distance** readouts are supported, not perimeter or area
+labels. Endpoints, scale and leader geometry stay fixed. PdfCraft keeps the caption horizontal;
+other viewers regenerating its appearance may draw it along the line instead.
 
 `fill_sign_add` text accepts line breaks, including blank lines. Its typewriter box grows to hold all wrapped rows, and saving/reopening preserves the contents and appearance.
 
