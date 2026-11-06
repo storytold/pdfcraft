@@ -60,8 +60,10 @@ fn paper_named(name: Option<&str>) -> Result<(usize, (f64, f64))> {
 
 /// The spooler job for `doc_print` to `printer`. It feeds the paper the PDF was laid out on
 /// (`PAPERS[paper]`, as `media` after the driver's `options`) rather than the queue's default
-/// paper, which a job naming none got (A4 under Letter sheets on the queue in #3752).
-fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duplex>, paper: usize) -> Result<spool::Job> {
+/// paper, which a job naming none got (A4 under Letter sheets on the queue in #3752), and tells
+/// CUPS which way the laid-out `sheets` run, as the Print dialog does (#2713): an orientation the
+/// caller chose in `options` stands.
+fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duplex>, paper: usize, sheets: &[print::Sheet]) -> Result<spool::Job> {
     let options = match a.get("options") {
         None => Vec::new(),
         Some(Value::Object(m)) => m
@@ -81,7 +83,11 @@ fn spool_job(a: &Args, printer: &str, title: String, duplex: Option<spool::Duple
         scaling: spool::Scaling::Exact,
         grayscale: a.opt_bool("grayscale")?.unwrap_or(false),
         title,
-        options: options.into_iter().chain(print::media_option(paper)).collect(),
+        options: {
+            let mut options: Vec<(String, String)> = options.into_iter().chain(print::media_option(paper)).collect();
+            print::add_cups_orientation(&mut options, sheets);
+            options
+        },
     })
 }
 
@@ -202,7 +208,8 @@ impl Automation {
         };
         let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new() };
         let sizes: Vec<(f64, f64)> = self.doc(a)?.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
-        let sheets = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?.len();
+        let laid_out = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?;
+        let sheets = laid_out.len();
         let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
         let mut out = json!({ "sheets": sheets, "pages": settings.pages.len(), "bytes": bytes.len() });
         match (a.opt_str("path")?, a.opt_str("printer")?) {
@@ -212,7 +219,7 @@ impl Automation {
                 out["path"] = json!(path.to_string_lossy());
             }
             (None, Some(printer)) => {
-                let job = spool_job(a, printer, self.doc(a)?.name.clone(), duplex, paper_index)?;
+                let job = spool_job(a, printer, self.doc(a)?.name.clone(), duplex, paper_index, &laid_out)?;
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),
@@ -251,13 +258,31 @@ mod tests {
         assert!(duplex("sideways", false).is_err());
     }
 
+    /// #2713, #3739: `doc_print` to a printer tells CUPS when every sheet runs landscape, after
+    /// the paper, so a landscape sheet is turned onto the portrait paper rather than printed
+    /// unrotated and cut off. Portrait and mixed jobs say nothing, and an orientation passed in
+    /// `options` stands and isn't sent twice.
+    #[test]
+    fn printing_landscape_sheets_to_a_printer_asks_cups_to_turn_them() {
+        let sheets = |sizes: &[(f64, f64)]| sizes.iter().map(|&size| print::Sheet { size, ..Default::default() }).collect::<Vec<_>>();
+        let job = |args: Value, s: &[print::Sheet]| spool_job(&Args(&args), "Office", "a.pdf".into(), None, 0, s).unwrap().options;
+        let media = ("media".to_string(), "Letter".to_string());
+        let landscape = sheets(&[(792.0, 612.0), (792.0, 612.0)]);
+        let turned = if cfg!(windows) { vec![media.clone()] } else { vec![media.clone(), ("orientation-requested".to_string(), "4".to_string())] };
+        assert_eq!(job(json!({}), &landscape), turned);
+        assert_eq!(job(json!({}), &sheets(&[(612.0, 792.0)])), vec![media.clone()], "portrait sheets");
+        assert_eq!(job(json!({}), &sheets(&[(792.0, 612.0), (612.0, 792.0)])), vec![media.clone()], "a job that mixes them");
+        let chosen = ("orientation-requested".to_string(), "5".to_string());
+        assert_eq!(job(json!({ "options": { "orientation-requested": "5" } }), &landscape), [chosen, media], "the caller's own choice, once");
+    }
+
     /// #3752: `doc_print` to a printer sent no paper, so the queue's default paper stood in for
     /// the one the sheets were laid out on (A4 under Letter sheets on the report's queue).
     #[test]
     fn printing_to_a_printer_feeds_the_laid_out_paper() {
         let job = |args: Value, paper_name: Option<&str>| {
             let (index, _) = paper_named(paper_name).unwrap();
-            spool_job(&Args(&args), "Office", "a.pdf".into(), None, index).unwrap()
+            spool_job(&Args(&args), "Office", "a.pdf".into(), None, index, &[]).unwrap()
         };
         let media = |m: &str| ("media".to_string(), m.to_string());
         // US Letter when no paper is asked for, after the driver's own options.
@@ -273,7 +298,7 @@ mod tests {
         assert_eq!(job(json!({}), Some("letter")).options, [media("Letter")]);
         assert_eq!(job(json!({}), Some("ARCH D")).options, [media("na_arch-d_24x36in")]);
         assert!(matches!(paper_named(Some("Quarto")), Err(ToolError::InvalidArgs(m)) if m.contains("US Letter")));
-        assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, 0).ok().map(|j| j.printer), Some(None));
-        assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, 0).is_err());
+        assert_eq!(spool_job(&Args(&json!({})), "default", String::new(), None, 0, &[]).ok().map(|j| j.printer), Some(None));
+        assert!(spool_job(&Args(&json!({ "options": { "InputSlot": 3 } })), "Office", String::new(), None, 0, &[]).is_err());
     }
 }
