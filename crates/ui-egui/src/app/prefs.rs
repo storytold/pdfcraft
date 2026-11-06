@@ -105,6 +105,7 @@ impl PdfCraftApp {
             "fill_text_size": self.fill_text_size,
             "fill_text_border": self.fill_text_default.width,
             "fill_text_border_color": self.fill_text_default.color,
+            "fill_text_border_shape": self.fill_text_default.shape.name(),
             "date_format": self.session.date_format(),
             // Null follows the interface language.
             "date_language": self.session.date_language(),
@@ -123,6 +124,7 @@ impl PdfCraftApp {
                     "width": s.width,
                     "fill": s.fill,
                     "border_color": s.border_color,
+                    "border_shape": s.border_shape.name(),
                 }))
                 .collect::<Vec<_>>(),
             // Drawn signatures keep their original form (older settings read the same).
@@ -142,6 +144,7 @@ impl PdfCraftApp {
             "combine_zoom": self.combine_zoom,
             "comments_panel_closed": self.comments_panel_closed,
             "right_panel_closed": self.right_panel_closed,
+            "ocr": self.ocr_draft.to_pref(),
         });
         // Set apart: one more key inside the macro above passes serde_json's recursion limit.
         v["default_page_gaps"] = serde_json::Value::Bool(self.view_defaults.show_page_gaps);
@@ -293,6 +296,9 @@ impl PdfCraftApp {
         if let Some(closed) = v["right_panel_closed"].as_bool() {
             self.right_panel_closed = closed;
         }
+        // Scan & OCR choices (language, engine, strategy, output mode, preprocessing and skip
+        // flags); unknown or malformed values keep the defaults.
+        self.ocr_draft.apply_pref(&v["ocr"]);
         if let Some(defaults) = v["default_zoom"].as_str().and_then(|zoom| self.view_defaults.with_zoom(zoom)) {
             self.view_defaults = defaults;
         }
@@ -316,6 +322,9 @@ impl PdfCraftApp {
         if let Some(width) = v["fill_text_border"].as_f64().and_then(fill_sign::valid_text_border) {
             self.fill_text_default.width = width;
         }
+        if let Some(shape) = v["fill_text_border_shape"].as_str().and_then(pdfcraft_engine::BorderShape::parse) {
+            self.fill_text_default.shape = shape;
+        }
         // `null` is a saved "the text's colour"; a missing or malformed one keeps the setting.
         match v.get("fill_text_border_color") {
             Some(serde_json::Value::Null) => self.fill_text_default.color = None,
@@ -329,6 +338,7 @@ impl PdfCraftApp {
         // Fill & Sign text starts from the saved border.
         self.fill_text_border = self.fill_text_default.width;
         self.fill_text_border_color = self.fill_text_default.color;
+        self.fill_text_border_shape = self.fill_text_default.shape;
         if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"]) {
             self.redact_prefs = prefs.clone();
             self.redact_defaults = prefs;
@@ -404,6 +414,9 @@ impl PdfCraftApp {
                         }
                     }
                     None => {}
+                }
+                if let Some(shape) = e["border_shape"].as_str().and_then(pdfcraft_engine::BorderShape::parse) {
+                    self.comment_prefs.set_border_shape(tool, shape);
                 }
             }
         }

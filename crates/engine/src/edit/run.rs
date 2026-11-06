@@ -68,6 +68,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::PartOpacity { .. }
         | Edit::FontSizeAnnotation { .. }
         | Edit::BorderColorAnnotation { .. }
+        | Edit::BorderShapeAnnotation { .. }
         | Edit::SetAnnotationInfo { .. }
         | Edit::SetMeasurementScale { .. } => {
             if p.annotate() {
@@ -592,6 +593,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::PartOpacity { page, index, fill, text } => pdfcraft_annot::set_part_opacity(doc, *page, *index, *fill, *text, &cx.meta())?,
         Edit::FontSizeAnnotation { page, index, size } => pdfcraft_annot::set_font_size(doc, *page, *index, *size, &cx.meta())?,
         Edit::BorderColorAnnotation { page, index, color } => pdfcraft_annot::set_border_color(doc, *page, *index, *color, &cx.meta())?,
+        Edit::BorderShapeAnnotation { page, index, shape } => pdfcraft_annot::set_border_shape(doc, *page, *index, *shape, &cx.meta())?,
         Edit::SetAnnotationInfo { page, index, author, subject, icon } => {
             pdfcraft_annot::set_info(doc, *page, *index, author.as_deref(), subject.as_deref(), *icon, &cx.meta())?;
         }
@@ -748,7 +750,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::RemoveStandardId { standard } => pdfcraft_organize::remove_standard_id(doc, *standard)?,
         Edit::SetDocumentScript { name, script } => pdfcraft_forms::set_document_script(doc, name, script.as_deref())?,
         Edit::AddOcrText { page, words } => {
-            pdfcraft_edit::stamp(doc, *page, "OCR", pdfcraft_ocr::text_layer(words))?;
+            crate::ocr::layer::add_text(doc, *page, words)?;
         }
         Edit::EnhanceScan { images } => crate::scan_clean::write_back(doc, images)?,
         Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
