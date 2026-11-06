@@ -13,9 +13,15 @@ use std::collections::HashMap;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 use crate::OrganizeError;
+use crate::xmp::{PDFXID, Prop};
 
 /// Decoding limit for an output profile or an XMP packet (ICC profiles are a few MB at most).
 const MAX_DECODED: usize = 64 << 20;
+
+/// The XMP properties that identify a PDF/X file (ISO 15930) and its trapping.
+pub(crate) const PDFX_VERSION: Prop = Prop::new("pdfxid", PDFXID, "GTS_PDFXVersion");
+pub(crate) const PDFX_CONFORMANCE: Prop = Prop::new("pdfxid", PDFXID, "GTS_PDFXConformance");
+const TRAPPED: Prop = Prop::new("pdf", "http://ns.adobe.com/pdf/1.3/", "Trapped");
 
 /// What a document declares about the print standard it meets.
 #[derive(Debug, Default)]
@@ -56,18 +62,19 @@ impl PrintStandard {
             })
             .collect();
         let xmp = metadata(doc, &catalog);
-        let declared = |info_key: &str, xmp_key: &str| {
+        let declared = |info_key: &str, xmp_key: Prop| {
             crate::info(doc, info_key)
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty())
-                .or_else(|| xmp.as_deref().and_then(|x| xmp_value(x, xmp_key)))
+                .or_else(|| xmp.as_deref().and_then(|x| crate::xmp::simple_value(x, xmp_key)))
         };
-        let trapped = info_trapped(doc).or_else(|| xmp.as_deref().and_then(|x| xmp_value(x, "pdf:Trapped")).and_then(|t| trapped(t.as_bytes())));
+        let trapped =
+            info_trapped(doc).or_else(|| xmp.as_deref().and_then(|x| crate::xmp::simple_value(x, TRAPPED)).and_then(|t| trapped(t.as_bytes())));
         Self {
             intents,
             conditions,
-            version: declared("GTS_PDFXVersion", "pdfxid:GTS_PDFXVersion"),
-            conformance: declared("GTS_PDFXConformance", "pdfxid:GTS_PDFXConformance"),
+            version: declared("GTS_PDFXVersion", PDFX_VERSION),
+            conformance: declared("GTS_PDFXConformance", PDFX_CONFORMANCE),
             trapped,
             xmp: xmp.is_some(),
         }
@@ -169,25 +176,6 @@ fn metadata(doc: &Document, catalog: &Dict) -> Option<String> {
         Object::Stream(s) => s.decoded_within(MAX_DECODED).ok().map(|b| String::from_utf8_lossy(&b).into_owned()),
         _ => None,
     }
-}
-
-/// A simple XMP property, written as an attribute (`pdfxid:GTS_PDFXVersion="PDF/X-4"`) or as an
-/// element (`<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>`).
-fn xmp_value(xmp: &str, key: &str) -> Option<String> {
-    for quote in ['"', '\''] {
-        let attr = format!("{key}={quote}");
-        if let Some(rest) = xmp.find(&attr).and_then(|i| xmp.get(i + attr.len()..)) {
-            return rest.find(quote).and_then(|end| rest.get(..end)).map(unescape).filter(|v| !v.is_empty());
-        }
-    }
-    let open = format!("<{key}>");
-    let rest = xmp.get(xmp.find(&open)? + open.len()..)?;
-    let value = rest.get(..rest.find(&format!("</{key}>"))?)?;
-    Some(unescape(value.trim())).filter(|v| !v.is_empty())
-}
-
-fn unescape(s: &str) -> String {
-    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
 }
 
 /// `s` as XML text: markup escaped, and characters XML 1.0 does not allow left out.

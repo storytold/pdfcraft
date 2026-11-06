@@ -11,6 +11,8 @@ workspace = true
 [dependencies]
 pdfcraft-content = { workspace = true }
 pdfcraft-cos = { workspace = true }
+pdfcraft-xml = { workspace = true }
+roxmltree = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

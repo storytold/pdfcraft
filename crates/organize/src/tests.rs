@@ -688,6 +688,39 @@ fn document_info_falls_back_to_the_xmp_packet() {
     assert_eq!(info(&doc, "Subject"), None);
 }
 
+/// The XMP packet is read as XML: by namespace whatever its prefixes, past markup inside comments,
+/// and not at all when it isn't well-formed (the string reader took `&#x+41;` for `A`).
+#[test]
+fn document_info_reads_the_xmp_packet_as_xml() {
+    let prefixed = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><r:RDF xmlns:r=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">                    <r:Description r:about=\"\" xmlns:d=\"http://purl.org/dc/elements/1.1/\" xmlns:p=\"http://ns.adobe.com/pdf/1.3/\" p:Keywords=\"k &amp; l\">                    <d:title><r:Alt><r:li xml:lang=\"x-default\">Re<!-- </r:li> -->port</r:li></r:Alt></d:title></r:Description></r:RDF></x:xmpmeta>";
+    let mut doc = doc_with_xmp(prefixed.as_bytes());
+    doc.trailer_mut().remove(b"Info");
+    assert_eq!(info(&doc, "Title").as_deref(), Some("Report"));
+    assert_eq!(info(&doc, "Keywords").as_deref(), Some("k & l"));
+    let signed = LIBREOFFICE_XMP.replace("Old subject", "&#x+41;");
+    let mut doc = doc_with_xmp(signed.as_bytes());
+    doc.trailer_mut().remove(b"Info");
+    assert_eq!(info(&doc, "Subject"), None, "not well-formed: no value, rather than a guess");
+}
+
+/// An edit changes the property, not a lookalike in a comment, and a packet that isn't
+/// well-formed is not edited at all.
+#[test]
+fn document_info_edits_change_the_property_not_a_comment() {
+    let commented = LIBREOFFICE_XMP.replace("<dc:title>", "<!-- <dc:title>draft</dc:title> --><dc:title>");
+    let mut doc = doc_with_xmp(commented.as_bytes());
+    set_info(&mut doc, "Title", "New").unwrap();
+    let xmp = xmp_text(&save_and_reopen(&doc)).unwrap();
+    assert!(xmp.contains("<!-- <dc:title>draft</dc:title> -->"), "{xmp}");
+    assert!(xmp.contains("<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">New</rdf:li></rdf:Alt></dc:title>"), "{xmp}");
+    let broken = LIBREOFFICE_XMP.replace("Old subject", "a & b");
+    let mut doc = doc_with_xmp(broken.as_bytes());
+    set_info(&mut doc, "Title", "New").unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(info(&doc, "Title").as_deref(), Some("New"), "/Info still changes");
+    assert_eq!(xmp_text(&doc).as_deref(), Some(broken.as_str()), "the packet is left as it was");
+}
+
 #[test]
 fn document_info_edits_leave_files_without_usable_xmp_alone() {
     // No packet: none is added.
@@ -1399,6 +1432,16 @@ fn removing_the_pdfa_identification_removes_its_xmp_properties_in_either_form() 
     assert!(!packet.contains("pdfaid:part") && !packet.contains("pdfaid:conformance"), "{packet}");
     assert!(packet.contains(">Report</rdf:li>"), "the rest of the packet stays: {packet}");
     assert_eq!(x.intents.len(), 1, "the output intent stays");
+}
+
+/// The PDF/A identification is removed whatever prefix the packet binds its namespace to.
+#[test]
+fn removing_the_pdfa_identification_matches_its_namespace_not_its_prefix() {
+    let xmp = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description                rdf:about=\"\" xmlns:a=\"http://www.aiim.org/pdfa/ns/id/\" a:part=\"2\"><a:conformance>B</a:conformance></rdf:Description></rdf:RDF></x:xmpmeta>";
+    let mut doc = doc_print("sRGB IEC61966-2.1", "icc", "/Title (Report)", Some(xmp));
+    remove_standard_id(&mut doc, Standard::PdfA).unwrap();
+    let packet = pdfx_of(&full_roundtrip(&doc)).xmp.unwrap();
+    assert!(!packet.contains("a:part") && !packet.contains("a:conformance"), "{packet}");
 }
 
 #[test]

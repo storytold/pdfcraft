@@ -8,22 +8,51 @@
 //! `dc:description`, Keywords → `pdf:Keywords`, Creator → `xmp:CreatorTool`, Producer →
 //! `pdf:Producer`.
 //!
-//! The packet is edited as text, touching only the property that changed: everything else in it
-//! (other schemas, padding, unknown properties) stays byte for byte. A file without XMP gets
-//! none, and a packet this can't edit safely (not UTF-8, no `rdf:RDF`, too large to decode) is
-//! left as it was.
+//! The packet is read through one bounded XML parse (`pdfcraft_xml::parse`), and properties are
+//! found by namespace, whatever prefix the packet binds it to. An edit splices the packet's text
+//! at the spans the parser reports, touching only the property that changed: everything else in
+//! it (other schemas, padding, unknown properties, comments) stays byte for byte, and the result
+//! must parse again or the edit is dropped. A file without XMP gets none, and a packet this can't
+//! read safely (not UTF-8, not well-formed XML, too large or costly to parse, no `rdf:RDF`) is
+//! left as it was and gives no values.
+
+use std::ops::Range;
 
 use pdfcraft_cos::{Document, Object, Stream};
+use pdfcraft_xml::span;
+use roxmltree::Node;
 
 use crate::OrganizeError;
 use crate::pdfx::esc;
 
 /// Decoding limit for an XMP packet (they are a few kB; padding rarely takes them past 100 kB).
 const MAX_XMP: usize = 16 << 20;
+/// The most nodes a packet may hold. A PDF/A packet with extension schemas has a few hundred.
+const MAX_NODES: u32 = 200_000;
 
+const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const DC: &str = "http://purl.org/dc/elements/1.1/";
 const PDF: &str = "http://ns.adobe.com/pdf/1.3/";
 const XMP: &str = "http://ns.adobe.com/xap/1.0/";
+/// The PDF/A identification schema (ISO 19005).
+pub(crate) const PDFAID: &str = "http://www.aiim.org/pdfa/ns/id/";
+/// The PDF/X identification schema (ISO 15930).
+pub(crate) const PDFXID: &str = "http://www.npes.org/pdfx/ns/id/";
+
+/// An XMP property: its namespace and local name, and the prefix a description this module adds
+/// declares for it. The packet's own prefix may be different; it is what matching ignores.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Prop {
+    prefix: &'static str,
+    ns: &'static str,
+    local: &'static str,
+}
+
+impl Prop {
+    pub(crate) const fn new(prefix: &'static str, ns: &'static str, local: &'static str) -> Self {
+        Prop { prefix, ns, local }
+    }
+}
 
 /// How an XMP property holds its value.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -36,15 +65,15 @@ enum Shape {
     Text,
 }
 
-/// The XMP property (qualified name, namespace) that mirrors a document information key.
-fn property(key: &str) -> Option<(&'static str, &'static str, Shape)> {
+/// The XMP property that mirrors a document information key.
+fn property(key: &str) -> Option<(Prop, Shape)> {
     Some(match key {
-        "Title" => ("dc:title", DC, Shape::LangAlt),
-        "Author" => ("dc:creator", DC, Shape::Seq),
-        "Subject" => ("dc:description", DC, Shape::LangAlt),
-        "Keywords" => ("pdf:Keywords", PDF, Shape::Text),
-        "Creator" => ("xmp:CreatorTool", XMP, Shape::Text),
-        "Producer" => ("pdf:Producer", PDF, Shape::Text),
+        "Title" => (Prop::new("dc", DC, "title"), Shape::LangAlt),
+        "Author" => (Prop::new("dc", DC, "creator"), Shape::Seq),
+        "Subject" => (Prop::new("dc", DC, "description"), Shape::LangAlt),
+        "Keywords" => (Prop::new("pdf", PDF, "Keywords"), Shape::Text),
+        "Creator" => (Prop::new("xmp", XMP, "CreatorTool"), Shape::Text),
+        "Producer" => (Prop::new("pdf", PDF, "Producer"), Shape::Text),
         _ => return None,
     })
 }
@@ -53,23 +82,14 @@ fn property(key: &str) -> Option<(&'static str, &'static str, Shape)> {
 /// packet say the same. Does nothing for keys XMP doesn't mirror, files without XMP, and packets
 /// that can't be edited safely.
 pub(crate) fn sync_info(doc: &mut Document, key: &str, value: &str) -> Result<(), OrganizeError> {
-    let Some((name, ns, shape)) = property(key) else { return Ok(()) };
-    edit_packet(doc, |xmp| set_property(xmp, name, ns, shape, value)).map(|_| ())
+    let Some((prop, shape)) = property(key) else { return Ok(()) };
+    edit_packet(doc, |xmp| set_property(xmp, prop, shape, value)).map(|_| ())
 }
 
-/// Remove every occurrence of the properties `names` from the catalog's XMP packet; whether any
+/// Remove every occurrence of the properties `props` from the catalog's XMP packet; whether any
 /// was there.
-pub(crate) fn remove_properties(doc: &mut Document, names: &[&str]) -> Result<bool, OrganizeError> {
-    edit_packet(doc, |xmp| {
-        let mut out: Option<String> = None;
-        for name in names {
-            // Each removal shortens the packet, so this ends.
-            while let Some(next) = set_property(out.as_deref().unwrap_or(xmp), name, "", Shape::Text, "") {
-                out = Some(next);
-            }
-        }
-        out
-    })
+pub(crate) fn remove_properties(doc: &mut Document, props: &[Prop]) -> Result<bool, OrganizeError> {
+    edit_packet(doc, |xmp| without(xmp, props))
 }
 
 /// Rewrite the catalog's XMP packet with `edit` (`None`: unchanged); whether it changed. Files
@@ -98,233 +118,224 @@ fn edit_packet(doc: &mut Document, edit: impl FnOnce(&str) -> Option<String>) ->
 /// several authors are joined with "; ". `None` for keys XMP doesn't mirror, files without XMP,
 /// packets that can't be read safely, and empty values.
 pub(crate) fn info_value(doc: &Document, key: &str) -> Option<String> {
-    let (name, _, shape) = property(key)?;
+    let (prop, shape) = property(key)?;
     let root = doc.root()?;
     let r = doc.get(root).as_dict()?.reference(b"Metadata")?;
     let obj = doc.get(r);
     let Object::Stream(stream) = &*obj else { return None };
     let xmp = String::from_utf8(stream.decoded_within(MAX_XMP).ok()?).ok()?;
-    get_property(&xmp, name, shape)
+    get_property(&xmp, prop, shape)
 }
 
-/// The text of the property `name` in `xmp`, element or attribute form (see [`info_value`]).
-fn get_property(xmp: &str, name: &str, shape: Shape) -> Option<String> {
-    let value = if let Some((start, end)) = element_span(xmp, name) {
-        let element = xmp.get(start..end)?;
-        let open_end = element.find('>')?;
-        // `<dc:title/>`: no value.
-        if element.get(..open_end)?.ends_with('/') {
-            return None;
-        }
-        let inner = element.get(open_end + 1..)?.strip_suffix(&format!("</{name}>"))?;
-        let items = list_items(inner);
-        if items.is_empty() {
-            // An empty `<rdf:Alt/>` or `<rdf:Seq></rdf:Seq>` has no value, not its markup.
-            text_value(inner)?
-        } else if shape == Shape::LangAlt {
-            let (_, text) = items.iter().find(|(lang, _)| lang.as_deref() == Some("x-default")).or(items.first())?;
-            text_value(text)?
-        } else {
-            items.iter().filter_map(|(_, text)| text_value(text)).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("; ")
-        }
-    } else {
-        let (_, value_start, value_end, _) = attribute_span(xmp, name)?;
-        unescape(xmp.get(value_start..value_end)?.trim())
+/// The text of a simple property in the packet `xmp` (`pdfxid:GTS_PDFXVersion`), element or
+/// attribute form; `None` when it is absent, empty, or the packet can't be read safely.
+pub(crate) fn simple_value(xmp: &str, prop: Prop) -> Option<String> {
+    get_property(xmp, prop, Shape::Text)
+}
+
+/// `xmp` as a tree, within the bounds every XMP read here shares.
+fn parse(xmp: &str) -> Option<roxmltree::Document<'_>> {
+    pdfcraft_xml::parse(xmp, pdfcraft_xml::Limits::new(MAX_NODES)).ok()
+}
+
+/// The packet's `rdf:RDF` element.
+fn rdf_root<'a, 'i>(doc: &'a roxmltree::Document<'i>) -> Option<Node<'a, 'i>> {
+    doc.descendants().find(|n| is(*n, RDF, "RDF"))
+}
+
+/// Whether `n` is the element `local` of the namespace `ns`.
+fn is(n: Node, ns: &str, local: &str) -> bool {
+    n.is_element() && n.tag_name().namespace() == Some(ns) && n.tag_name().name() == local
+}
+
+/// Where a property was found.
+enum Found<'a, 'i> {
+    /// The element form, `<dc:title>…</dc:title>`.
+    Element(Node<'a, 'i>),
+    /// The attribute form, `pdf:Keywords="…"`: its range (name through closing quote) and value.
+    Attribute(Range<usize>, &'a str),
+}
+
+/// Every place `prop` appears under `rdf`, in document order.
+fn occurrences<'a, 'i: 'a>(rdf: Node<'a, 'i>, prop: Prop) -> impl Iterator<Item = Found<'a, 'i>> + 'a {
+    rdf.descendants().filter(|n| n.is_element()).flat_map(move |n| {
+        let element = is(n, prop.ns, prop.local).then_some(Found::Element(n));
+        let attributes =
+            n.attributes().filter(move |a| a.namespace() == Some(prop.ns) && a.name() == prop.local).map(|a| Found::Attribute(a.range(), a.value()));
+        element.into_iter().chain(attributes)
+    })
+}
+
+/// The text of the property `prop` in `xmp` (see [`info_value`]).
+fn get_property(xmp: &str, prop: Prop, shape: Shape) -> Option<String> {
+    let doc = parse(xmp)?;
+    let value = match occurrences(rdf_root(&doc)?, prop).next()? {
+        Found::Attribute(_, value) => value.trim().to_string(),
+        Found::Element(e) => element_value(e, shape)?,
     };
-    Some(value).filter(|v| !v.trim().is_empty())
+    Some(value).filter(|v| !v.is_empty())
 }
 
-/// Character data `text` as a value, unescaped; `None` when it still holds markup (a `<`, which
-/// a value escapes as `&lt;`), so a structure the reader doesn't take apart never shows as text.
-fn text_value(text: &str) -> Option<String> {
-    let text = text.trim();
-    (!text.contains('<')).then(|| unescape(text))
-}
-
-/// The `rdf:li` items of a property's content: each one's `xml:lang` (if any) and its text.
-fn list_items(inner: &str) -> Vec<(Option<String>, &str)> {
-    let mut items = Vec::new();
-    let mut rest = inner;
-    while let Some(i) = rest.find("<rdf:li") {
-        let Some(after) = rest.get(i + "<rdf:li".len()..) else { break };
-        // `<rdf:li` must end there: not `<rdf:link`.
-        if !after.starts_with(|c: char| c == '>' || c == '/' || c.is_whitespace()) {
-            rest = after;
-            continue;
-        }
-        let Some(tag_end) = after.find('>') else { break };
-        let tag = after.get(..tag_end).unwrap_or_default();
-        let lang = tag.find("xml:lang=").and_then(|at| {
-            let v = tag.get(at + "xml:lang=".len()..)?;
-            let quote = v.chars().next().filter(|c| matches!(c, '"' | '\''))?;
-            let v = v.get(1..)?;
-            Some(v.get(..v.find(quote)?)?.to_string())
-        });
-        let Some(body) = after.get(tag_end + 1..) else { break };
-        if tag.ends_with('/') {
-            items.push((lang, ""));
-            rest = body;
-            continue;
-        }
-        let Some(close) = body.find("</rdf:li>") else { break };
-        items.push((lang, body.get(..close).unwrap_or_default()));
-        rest = body.get(close..).unwrap_or_default();
+/// The value of a property element: its text, or the items of the `rdf:Alt`, `rdf:Seq` or
+/// `rdf:Bag` it holds. Any other structure has no value here, so markup never shows as text.
+fn element_value(e: Node, shape: Shape) -> Option<String> {
+    if !e.children().any(|c| c.is_element()) {
+        return text(e);
     }
-    items
+    let container = e.children().find(|c| ["Alt", "Seq", "Bag"].iter().any(|name| is(*c, RDF, name)))?;
+    let items: Vec<Node> = container.children().filter(|c| is(*c, RDF, "li")).collect();
+    if shape == Shape::LangAlt {
+        let item = items.iter().find(|li| li.attribute((roxmltree::NS_XML_URI, "lang")) == Some("x-default")).or(items.first())?;
+        return text(*item);
+    }
+    let values: Vec<String> = items.iter().filter_map(|li| text(*li)).filter(|t| !t.is_empty()).collect();
+    (!values.is_empty()).then(|| values.join("; "))
 }
 
-/// XML text with its character and entity references resolved (an unknown one is kept as is).
-fn unescape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(i) = rest.find('&') {
-        out.push_str(rest.get(..i).unwrap_or_default());
-        let after = rest.get(i..).unwrap_or_default();
-        let Some(semi) = after.find(';').filter(|&n| n <= 12) else {
-            out.push('&');
-            rest = after.get(1..).unwrap_or_default();
-            continue;
-        };
-        let entity = after.get(1..semi).unwrap_or_default();
-        let c = match entity {
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "apos" => Some('\''),
-            _ => entity
-                .strip_prefix("#x")
-                .or_else(|| entity.strip_prefix("#X"))
-                .and_then(|h| u32::from_str_radix(h, 16).ok())
-                .or_else(|| entity.strip_prefix('#').and_then(|d| d.parse().ok()))
-                .and_then(char::from_u32),
-        };
-        match c {
-            Some(c) => {
-                out.push(c);
-                rest = after.get(semi + 1..).unwrap_or_default();
+/// An element's character data, trimmed (comments and processing instructions split it, so it is
+/// every text child, not only the first); `None` when it holds an element.
+fn text(n: Node) -> Option<String> {
+    if n.children().any(|c| c.is_element()) {
+        return None;
+    }
+    let all: String = n.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
+    Some(all.trim().to_string())
+}
+
+/// The markup a property of `shape` holds for `value`, with `rdf` the packet's prefix for the
+/// RDF namespace (needed by the structured shapes only).
+fn inner_markup(shape: Shape, rdf: Option<&str>, value: &str) -> Option<String> {
+    let v = esc(value);
+    Some(match shape {
+        Shape::Text => v,
+        Shape::LangAlt => {
+            let r = rdf?;
+            format!("<{r}:Alt><{r}:li xml:lang=\"x-default\">{v}</{r}:li></{r}:Alt>")
+        }
+        Shape::Seq => {
+            let r = rdf?;
+            format!("<{r}:Seq><{r}:li>{v}</{r}:li></{r}:Seq>")
+        }
+    })
+}
+
+/// The packet's prefix for the RDF namespace where `n` is; `None` when RDF is the default
+/// namespace there, which leaves no prefix to write new RDF markup with.
+fn rdf_prefix<'i>(n: Node<'_, 'i>) -> Option<&'i str> {
+    n.lookup_prefix(RDF).filter(|p| !p.is_empty())
+}
+
+/// `xmp` with the property `prop` set to `value`, or removed when `value` is empty; `None` when
+/// nothing changes, the packet can't be read safely, or the edit can't be written in it.
+fn set_property(xmp: &str, prop: Prop, shape: Shape, value: &str) -> Option<String> {
+    let doc = parse(xmp)?;
+    let rdf = rdf_root(&doc)?;
+    let edited = match occurrences(rdf, prop).next() {
+        // The element form: its content is replaced and its start tag kept as written, with any
+        // namespace declarations and attributes it carries.
+        Some(Found::Element(e)) => {
+            let range = e.range();
+            if value.is_empty() {
+                splice(xmp, range, "")?
+            } else {
+                let inner = inner_markup(shape, rdf_prefix(e), value)?;
+                match span::content(xmp, &range) {
+                    Some(content) => splice(xmp, content, &inner)?,
+                    // `<dc:title/>` becomes `<dc:title>…</dc:title>`.
+                    None => {
+                        let name = span::qname(xmp, &range)?;
+                        let slash = span::start_tag_end(xmp, &range)?.checked_sub(1)?;
+                        splice(xmp, slash..range.end, &format!(">{inner}</{name}>"))?
+                    }
+                }
             }
-            None => {
-                out.push('&');
-                rest = after.get(1..).unwrap_or_default();
+        }
+        // The attribute form: only simple text can be written there; a structured value moves to
+        // an element of its own.
+        Some(Found::Attribute(range, _)) => {
+            if shape == Shape::Text && !value.is_empty() {
+                let (value_range, quote) = span::attribute_value(xmp, &range)?;
+                let escaped = if quote == '"' { esc(value) } else { esc(value).replace('\'', "&apos;") };
+                splice(xmp, value_range, &escaped)?
+            } else {
+                let removed = splice(xmp, attribute_span(xmp, &range)?, "")?;
+                if value.is_empty() {
+                    removed
+                } else {
+                    // The packet changed, so the description goes in through a fresh parse.
+                    return set_property(&removed, prop, shape, value);
+                }
             }
         }
-    }
-    out.push_str(rest);
-    out
+        None if value.is_empty() => return None,
+        None => insert_description(xmp, rdf, prop, &inner_markup(shape, rdf_prefix(rdf), value)?)?,
+    };
+    checked(edited)
 }
 
-/// `xmp` with the property `name` (namespace `ns`) set to `value`, or removed when `value` is
-/// empty; `None` when nothing changes or the packet has no `rdf:RDF` to add the property to.
-fn set_property(xmp: &str, name: &str, ns: &str, shape: Shape, value: &str) -> Option<String> {
-    let element = (!value.is_empty()).then(|| match shape {
-        Shape::LangAlt => format!("<{name}><rdf:Alt><rdf:li xml:lang=\"x-default\">{}</rdf:li></rdf:Alt></{name}>", esc(value)),
-        Shape::Seq => format!("<{name}><rdf:Seq><rdf:li>{}</rdf:li></rdf:Seq></{name}>", esc(value)),
-        Shape::Text => format!("<{name}>{}</{name}>", esc(value)),
-    });
-    // The element form, `<dc:title>…</dc:title>` (or `<dc:title/>`): replaced where it stands, so
-    // it keeps the namespace declaration of the description around it.
-    if let Some((start, end)) = element_span(xmp, name) {
-        let mut out = String::with_capacity(xmp.len());
-        out.push_str(xmp.get(..start)?);
-        out.push_str(element.as_deref().unwrap_or_default());
-        out.push_str(xmp.get(end..)?);
-        return Some(out);
-    }
-    // The attribute form, `pdf:Keywords="…"` on an `rdf:Description`: only simple text can be
-    // written there; a structured value moves to an element of its own.
-    if let Some((start, value_start, value_end, quote)) = attribute_span(xmp, name) {
-        let mut out = String::with_capacity(xmp.len());
-        if shape == Shape::Text && !value.is_empty() {
-            let escaped = if quote == '"' { esc(value) } else { esc(value).replace('\'', "&apos;") };
-            out.push_str(xmp.get(..value_start)?);
-            out.push_str(&escaped);
-            out.push_str(xmp.get(value_end..)?);
-            return Some(out);
-        }
-        out.push_str(xmp.get(..start)?);
-        out.push_str(xmp.get(value_end + 1..)?);
-        return match element {
-            Some(e) => insert_description(&out, name, ns, &e),
-            None => Some(out),
-        };
-    }
-    insert_description(xmp, name, ns, element.as_deref()?)
-}
-
-/// `xmp` with a new `rdf:Description` holding `element` (and declaring its namespace) as the last
-/// description of the packet.
-fn insert_description(xmp: &str, name: &str, ns: &str, element: &str) -> Option<String> {
-    let prefix = name.split(':').next()?;
-    let at = xmp.rfind("</rdf:RDF>")?;
+/// `xmp` with a new `rdf:Description` holding `prop` (with `inner` as its content, and declaring
+/// its namespace) as the last description of the packet. `None` for an empty `<rdf:RDF/>` or an
+/// RDF namespace without a prefix.
+fn insert_description(xmp: &str, rdf: Node, prop: Prop, inner: &str) -> Option<String> {
+    let r = rdf_prefix(rdf)?;
+    let at = span::content(xmp, &rdf.range())?.end;
     // Every description of a packet describes the same resource (XMP: one `rdf:about` value).
-    let about = attribute_span(xmp, "rdf:about").and_then(|(_, s, e, _)| xmp.get(s..e)).unwrap_or_default().replace('"', "&quot;");
-    let mut out = String::with_capacity(xmp.len() + element.len() + 128);
-    out.push_str(xmp.get(..at)?);
-    out.push_str(&format!("<rdf:Description rdf:about=\"{about}\" xmlns:{prefix}=\"{ns}\">{element}</rdf:Description>\n"));
+    let about = rdf.descendants().find_map(|n| n.attribute((RDF, "about")).filter(|_| is(n, RDF, "Description"))).unwrap_or_default();
+    let Prop { prefix: p, ns, local } = prop;
+    let description =
+        format!("<{r}:Description {r}:about=\"{}\" xmlns:{p}=\"{}\"><{p}:{local}>{inner}</{p}:{local}></{r}:Description>\n", esc(about), esc(ns));
+    splice(xmp, at..at, &description)
+}
+
+/// What removing the attribute at `range` takes out: the attribute and the whitespace before it.
+fn attribute_span(xmp: &str, range: &Range<usize>) -> Option<Range<usize>> {
+    Some(xmp.get(..range.start)?.trim_end().len()..range.end)
+}
+
+/// `xmp` without any occurrence of `props`; `None` when there is none, or the packet can't be
+/// read safely.
+fn without(xmp: &str, props: &[Prop]) -> Option<String> {
+    let doc = parse(xmp)?;
+    let rdf = rdf_root(&doc)?;
+    let mut spans: Vec<Range<usize>> = props
+        .iter()
+        .flat_map(|p| occurrences(rdf, *p))
+        .filter_map(|found| match found {
+            Found::Element(e) => Some(e.range()),
+            Found::Attribute(range, _) => attribute_span(xmp, &range),
+        })
+        .collect();
+    spans.sort_by_key(|s| s.start);
+    let mut out = String::with_capacity(xmp.len());
+    let mut at = 0;
+    for s in spans {
+        // Inside a property already taken out (one property nested in another).
+        if s.start < at {
+            continue;
+        }
+        out.push_str(xmp.get(at..s.start)?);
+        at = s.end;
+    }
+    if at == 0 {
+        return None;
+    }
     out.push_str(xmp.get(at..)?);
+    checked(out)
+}
+
+/// `xmp` with `range` replaced by `text`.
+fn splice(xmp: &str, range: Range<usize>, text: &str) -> Option<String> {
+    let mut out = String::with_capacity(xmp.len().saturating_add(text.len()));
+    out.push_str(xmp.get(..range.start)?);
+    out.push_str(text);
+    out.push_str(xmp.get(range.end..)?);
     Some(out)
 }
 
-/// Where the element `name` is in `xmp`, from its `<` to past its end tag (or past `/>`).
-fn element_span(xmp: &str, name: &str) -> Option<(usize, usize)> {
-    let open = format!("<{name}");
-    let mut from = 0;
-    while let Some(i) = xmp.get(from..).and_then(|s| s.find(&open)).map(|i| i + from) {
-        let after = i + open.len();
-        from = after;
-        // `<dc:title` must end there: not `<dc:titles`.
-        match xmp.get(after..).and_then(|s| s.chars().next()) {
-            Some('>' | '/') => {}
-            Some(c) if c.is_whitespace() => {}
-            _ => continue,
-        }
-        let tag_end = after + xmp.get(after..)?.find('>')?;
-        if xmp.get(..tag_end)?.ends_with('/') {
-            return Some((i, tag_end + 1));
-        }
-        let close = format!("</{name}>");
-        let end = tag_end + xmp.get(tag_end..)?.find(&close)? + close.len();
-        return Some((i, end));
-    }
-    None
-}
-
-/// Where the attribute `name` is in `xmp`: its start (including the whitespace before it), the
-/// start and end of its value, and its quote character. Only matches inside a start tag.
-fn attribute_span(xmp: &str, name: &str) -> Option<(usize, usize, usize, char)> {
-    let mut from = 0;
-    // The last `<` and `>` before the match, found by one pass over the packet rather than by
-    // searching back from every match.
-    let (mut scanned, mut last_open, mut last_close) = (0, None, None);
-    while let Some(i) = xmp.get(from..).and_then(|s| s.find(name)).map(|i| i + from) {
-        from = i + name.len();
-        let before = xmp.get(..i)?;
-        let gap = xmp.get(scanned..i)?;
-        #[cfg(test)]
-        crate::work(gap.len());
-        if let Some(at) = gap.rfind('<') {
-            last_open = Some(scanned + at);
-        }
-        if let Some(at) = gap.rfind('>') {
-            last_close = Some(scanned + at);
-        }
-        scanned = i;
-        // Preceded by whitespace, and inside a tag (the last `<` comes after the last `>`).
-        if !before.ends_with(char::is_whitespace) || last_open < last_close || last_open.is_none() {
-            continue;
-        }
-        let rest = xmp.get(from..)?;
-        let trimmed = rest.trim_start();
-        let Some(after_eq) = trimmed.strip_prefix('=') else { continue };
-        let after_eq = after_eq.trim_start();
-        let Some(quote) = after_eq.chars().next().filter(|c| matches!(c, '"' | '\'')) else { continue };
-        let value_start = xmp.len() - after_eq.len() + 1;
-        let value_end = value_start + xmp.get(value_start..)?.find(quote)?;
-        let start = before.trim_end().len();
-        return Some((start, value_start, value_end, quote));
-    }
-    None
+/// The edited packet, if it still parses: an edit that would leave the packet unreadable is not
+/// written.
+fn checked(edited: String) -> Option<String> {
+    parse(&edited).is_some().then_some(edited)
 }
 
 #[cfg(test)]
@@ -341,103 +352,192 @@ mod tests {
    <dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">Old subject</rdf:li></rdf:Alt></dc:description>\n\
   </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>";
 
+    const TITLE: Prop = Prop::new("dc", DC, "title");
+    const CREATOR: Prop = Prop::new("dc", DC, "creator");
+    const DESCRIPTION: Prop = Prop::new("dc", DC, "description");
+    const KEYWORDS: Prop = Prop::new("pdf", PDF, "Keywords");
+    const PRODUCER: Prop = Prop::new("pdf", PDF, "Producer");
+    const CREATOR_TOOL: Prop = Prop::new("xmp", XMP, "CreatorTool");
+
+    /// `body` inside an `rdf:Description` of a packet declaring the usual prefixes.
+    fn packet(body: &str) -> String {
+        format!(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"{RDF}\"><rdf:Description rdf:about=\"\" \
+             xmlns:dc=\"{DC}\" xmlns:pdf=\"{PDF}\">{body}</rdf:Description></rdf:RDF></x:xmpmeta>"
+        )
+    }
+
     #[test]
     fn values_are_read_back_unescaped() {
-        assert_eq!(unescape("a &amp; b &lt;c&gt; &#65;&#x42; &bogus; &#xD800; & end"), "a & b <c> AB &bogus; &#xD800; & end");
-        assert_eq!(get_property(PACKET, "dc:title", Shape::LangAlt).as_deref(), Some("Untitled 1"));
-        assert_eq!(get_property(PACKET, "dc:creator", Shape::Seq).as_deref(), Some("Old Author"));
-        assert_eq!(get_property(PACKET, "pdf:Producer", Shape::Text).as_deref(), Some("Writer 1.0"));
-        assert_eq!(get_property(PACKET, "pdf:Keywords", Shape::Text), None);
+        let refs = packet("<pdf:Keywords>a &amp; b &lt;c&gt; &#65;&#x42; &#xD800;</pdf:Keywords>");
+        assert_eq!(get_property(&refs, KEYWORDS, Shape::Text).as_deref(), Some("a & b <c> AB \u{FFFD}"));
+        assert_eq!(get_property(PACKET, TITLE, Shape::LangAlt).as_deref(), Some("Untitled 1"));
+        assert_eq!(get_property(PACKET, CREATOR, Shape::Seq).as_deref(), Some("Old Author"));
+        assert_eq!(get_property(PACKET, PRODUCER, Shape::Text).as_deref(), Some("Writer 1.0"));
+        assert_eq!(get_property(PACKET, KEYWORDS, Shape::Text), None);
         // No x-default: the first language; empty and self-closed items are skipped.
-        let alt = "<dc:title><rdf:Alt><rdf:li xml:lang='fr'>Rapport</rdf:li><rdf:li xml:lang='en'>Report</rdf:li></rdf:Alt></dc:title>";
-        assert_eq!(get_property(alt, "dc:title", Shape::LangAlt).as_deref(), Some("Rapport"));
-        let seq = "<dc:creator><rdf:Seq><rdf:li/><rdf:li> </rdf:li><rdf:li>Ada</rdf:li></rdf:Seq></dc:creator>";
-        assert_eq!(get_property(seq, "dc:creator", Shape::Seq).as_deref(), Some("Ada"));
-        // Unfinished markup reads as nothing rather than as a wrong value.
-        assert_eq!(get_property("<dc:title><rdf:Alt><rdf:li>Cut", "dc:title", Shape::LangAlt), None);
+        let alt = packet("<dc:title><rdf:Alt><rdf:li xml:lang='fr'>Rapport</rdf:li><rdf:li xml:lang='en'>Report</rdf:li></rdf:Alt></dc:title>");
+        assert_eq!(get_property(&alt, TITLE, Shape::LangAlt).as_deref(), Some("Rapport"));
+        let seq = packet("<dc:creator><rdf:Seq><rdf:li/><rdf:li> </rdf:li><rdf:li>Ada</rdf:li></rdf:Seq></dc:creator>");
+        assert_eq!(get_property(&seq, CREATOR, Shape::Seq).as_deref(), Some("Ada"));
         // An empty alternative or list, or an item holding markup, has no value: never the markup.
-        assert_eq!(get_property("<dc:title><rdf:Alt/></dc:title>", "dc:title", Shape::LangAlt), None);
-        assert_eq!(get_property("<dc:title><rdf:Alt></rdf:Alt></dc:title>", "dc:title", Shape::LangAlt), None);
-        assert_eq!(get_property("<dc:creator><rdf:Seq/></dc:creator>", "dc:creator", Shape::Seq), None);
-        let nested = "<dc:creator><rdf:Seq><rdf:li><rdf:Description/></rdf:li><rdf:li>Ada</rdf:li></rdf:Seq></dc:creator>";
-        assert_eq!(get_property(nested, "dc:creator", Shape::Seq).as_deref(), Some("Ada"));
+        for body in ["<dc:title><rdf:Alt/></dc:title>", "<dc:title><rdf:Alt></rdf:Alt></dc:title>", "<dc:title/>"] {
+            assert_eq!(get_property(&packet(body), TITLE, Shape::LangAlt), None, "{body}");
+        }
+        assert_eq!(get_property(&packet("<dc:creator><rdf:Seq/></dc:creator>"), CREATOR, Shape::Seq), None);
+        let nested = packet("<dc:creator><rdf:Seq><rdf:li><rdf:Description/></rdf:li><rdf:li>Ada</rdf:li></rdf:Seq></dc:creator>");
+        assert_eq!(get_property(&nested, CREATOR, Shape::Seq).as_deref(), Some("Ada"));
+    }
+
+    /// The string reader took the first `</rdf:li>` or `<dc:title>` it saw, even inside a comment
+    /// or CDATA section, and matched the prefix as written (rs-xml-end-tag-find).
+    #[test]
+    fn markup_in_comments_and_other_prefixes_are_read_as_xml() {
+        let commented = packet(
+            "<!-- <dc:title>fake</dc:title> --><dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">Re<!-- </rdf:li> -->port</rdf:li></rdf:Alt></dc:title>",
+        );
+        assert_eq!(get_property(&commented, TITLE, Shape::LangAlt).as_deref(), Some("Report"));
+        let out = set_property(&commented, TITLE, Shape::LangAlt, "New").unwrap();
+        assert!(out.contains("<!-- <dc:title>fake</dc:title> -->"), "the comment is not edited: {out}");
+        assert_eq!(get_property(&out, TITLE, Shape::LangAlt).as_deref(), Some("New"));
+        let cdata = packet("<pdf:Keywords><![CDATA[a </pdf:Keywords> b]]></pdf:Keywords>");
+        assert_eq!(get_property(&cdata, KEYWORDS, Shape::Text).as_deref(), Some("a </pdf:Keywords> b"));
+        // DC bound to `d`, RDF to `r`: found by namespace, and written with the packet's prefixes.
+        let other = format!(
+            "<r:RDF xmlns:r=\"{RDF}\"><r:Description r:about=\"\" xmlns:d=\"{DC}\"><d:title><r:Alt><r:li xml:lang=\"x-default\">Old</r:li></r:Alt></d:title></r:Description></r:RDF>"
+        );
+        assert_eq!(get_property(&other, TITLE, Shape::LangAlt).as_deref(), Some("Old"));
+        let out = set_property(&other, CREATOR, Shape::Seq, "Ada").unwrap();
+        assert!(out.contains("<r:Description r:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:creator><r:Seq><r:li>Ada</r:li></r:Seq></dc:creator></r:Description>\n</r:RDF>"), "{out}");
+        let out = set_property(&other, TITLE, Shape::LangAlt, "New").unwrap();
+        assert!(out.contains("<d:title><r:Alt><r:li xml:lang=\"x-default\">New</r:li></r:Alt></d:title>"), "{out}");
+    }
+
+    /// A packet that isn't well-formed XML is neither read nor edited, where the string reader
+    /// read `&#x+41;` as `A` (XML allows no sign in a character reference).
+    #[test]
+    fn packets_that_are_not_xml_are_left_alone() {
+        for bad in [packet("<pdf:Keywords>&#x+41;</pdf:Keywords>"), packet("<pdf:Keywords>a & b</pdf:Keywords>"), packet("<pdf:Keywords>open")] {
+            assert_eq!(get_property(&bad, KEYWORDS, Shape::Text), None, "{bad}");
+            assert_eq!(set_property(&bad, KEYWORDS, Shape::Text, "new"), None, "{bad}");
+            assert_eq!(without(&bad, &[KEYWORDS]), None, "{bad}");
+        }
+        // No rdf:RDF, or an empty one: nothing to add a description to.
+        assert_eq!(set_property("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>", KEYWORDS, Shape::Text, "a"), None);
+        assert_eq!(set_property(&format!("<rdf:RDF xmlns:rdf=\"{RDF}\"/>"), KEYWORDS, Shape::Text, "a"), None);
+        // RDF as the default namespace leaves no prefix to write an rdf:Alt with; text still works.
+        let default_ns =
+            format!("<RDF xmlns=\"{RDF}\"><Description about=\"\" xmlns:pdf=\"{PDF}\"><pdf:Keywords>a</pdf:Keywords></Description></RDF>");
+        assert_eq!(set_property(&default_ns, TITLE, Shape::LangAlt, "T"), None);
+        assert!(set_property(&default_ns, KEYWORDS, Shape::Text, "b").is_some_and(|out| out.contains("<pdf:Keywords>b</pdf:Keywords>")));
+    }
+
+    /// A packet past pdfcraft-xml's work budget is not parsed, so it is neither read nor edited.
+    /// 12,000 attributes on one tag: about 7·10⁷ comparisons for roxmltree's duplicate check, past
+    /// the 2²⁶ budget, refused by the linear scan before the parser runs.
+    #[test]
+    fn packets_past_the_parse_budget_are_left_alone() {
+        let attrs = |n: usize| (0..n).map(|i| format!(" a{i}=\"v\"")).collect::<String>();
+        let costly = packet(&format!("<pdf:Keywords{}>k</pdf:Keywords>", attrs(12_000)));
+        assert_eq!(get_property(&costly, KEYWORDS, Shape::Text), None);
+        assert_eq!(set_property(&costly, KEYWORDS, Shape::Text, "new"), None);
+        let fine = packet(&format!("<pdf:Keywords{}>k</pdf:Keywords>", attrs(120)));
+        assert_eq!(get_property(&fine, KEYWORDS, Shape::Text).as_deref(), Some("k"));
+    }
+
+    #[test]
+    fn an_edit_that_would_not_parse_is_dropped() {
+        assert_eq!(checked("<a><b></a>".to_string()), None);
+        assert!(checked("<a><b/></a>".to_string()).is_some());
     }
 
     #[test]
     fn element_values_are_replaced_in_place() {
-        let out = set_property(PACKET, "dc:title", DC, Shape::LangAlt, "Guide & <draft>").unwrap();
+        let out = set_property(PACKET, TITLE, Shape::LangAlt, "Guide & <draft>").unwrap();
         assert!(out.contains("<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">Guide &amp; &lt;draft&gt;</rdf:li></rdf:Alt></dc:title>\n"), "{out}");
-        assert!(!out.contains("Untitled 1"));
         // Everything else is untouched.
         assert_eq!(out.replace("Guide &amp; &lt;draft&gt;", "Untitled 1"), PACKET);
-        let out = set_property(PACKET, "dc:creator", DC, Shape::Seq, "Demo Consulting").unwrap();
+        let out = set_property(PACKET, CREATOR, Shape::Seq, "Demo Consulting").unwrap();
         assert!(out.contains("<dc:creator><rdf:Seq><rdf:li>Demo Consulting</rdf:li></rdf:Seq></dc:creator>"), "{out}");
+        // The start tag stays as written, with what it declares.
+        let declaring = packet(&format!("<pdf:Producer xmlns:pdf=\"{PDF}\" rdf:parseType=\"Literal\">Old</pdf:Producer>"));
+        let out = set_property(&declaring, PRODUCER, Shape::Text, "New").unwrap();
+        assert!(out.contains(&format!("<pdf:Producer xmlns:pdf=\"{PDF}\" rdf:parseType=\"Literal\">New</pdf:Producer>")), "{out}");
+        // An empty element gains content.
+        let out = set_property(&packet("<pdf:Producer a='x/'/>"), PRODUCER, Shape::Text, "New").unwrap();
+        assert!(out.contains("<pdf:Producer a='x/'>New</pdf:Producer>"), "{out}");
     }
 
     #[test]
     fn an_empty_value_removes_the_property() {
-        let out = set_property(PACKET, "dc:description", DC, Shape::LangAlt, "").unwrap();
+        let out = set_property(PACKET, DESCRIPTION, Shape::LangAlt, "").unwrap();
         assert!(!out.contains("dc:description"), "{out}");
         assert!(out.contains("Untitled 1") && out.contains("Old Author"));
         // Nothing to remove: no change.
-        assert_eq!(set_property(PACKET, "pdf:Keywords", PDF, Shape::Text, ""), None);
+        assert_eq!(set_property(PACKET, KEYWORDS, Shape::Text, ""), None);
     }
 
     #[test]
     fn a_missing_property_gets_a_description_of_its_own() {
-        let out = set_property(PACKET, "pdf:Keywords", PDF, Shape::Text, "alpha, beta").unwrap();
+        let out = set_property(PACKET, KEYWORDS, Shape::Text, "alpha, beta").unwrap();
         let added =
             "<rdf:Description rdf:about=\"\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\"><pdf:Keywords>alpha, beta</pdf:Keywords></rdf:Description>\n";
         assert!(out.find(added).is_some_and(|at| at > out.find("<dc:creator>").unwrap() && at < out.find("</rdf:RDF>").unwrap()), "{out}");
         assert_eq!(out.replacen(added, "", 1), PACKET);
-        // A packet with no rdf:RDF to add to is left alone.
-        assert_eq!(set_property("<x:xmpmeta/>", "pdf:Keywords", PDF, Shape::Text, "alpha"), None);
     }
 
     #[test]
     fn attribute_values_are_rewritten_where_they_stand() {
-        let packet = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"r\"><rdf:Description rdf:about='uuid:1' \
-                      xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmp:CreatorTool='Old \"tool\"' dc:title=\"Odd\"/></rdf:RDF></x:xmpmeta>";
-        let out = set_property(packet, "xmp:CreatorTool", XMP, Shape::Text, "Writer's tool").unwrap();
+        let packet = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about='uuid:1' \
+                      xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmp:CreatorTool='Old \"tool\" &gt;' dc:title=\"Odd\"/></rdf:RDF></x:xmpmeta>";
+        assert_eq!(get_property(packet, CREATOR_TOOL, Shape::Text).as_deref(), Some("Old \"tool\" >"));
+        let out = set_property(packet, CREATOR_TOOL, Shape::Text, "Writer's tool").unwrap();
         assert!(out.contains("xmp:CreatorTool='Writer&apos;s tool'"), "{out}");
         // A title can't be an attribute: it moves to an element, in a description for the same resource.
-        let out = set_property(packet, "dc:title", DC, Shape::LangAlt, "Guide").unwrap();
+        let out = set_property(packet, TITLE, Shape::LangAlt, "Guide").unwrap();
         assert!(!out.contains("dc:title=\"Odd\""), "{out}");
         assert!(out.contains("<rdf:Description rdf:about=\"uuid:1\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title><rdf:Alt>"), "{out}");
-        let out = set_property(packet, "xmp:CreatorTool", XMP, Shape::Text, "").unwrap();
+        let out = set_property(packet, CREATOR_TOOL, Shape::Text, "").unwrap();
         assert!(out.contains("xmlns:dc=\"http://purl.org/dc/elements/1.1/\" dc:title=\"Odd\"/>"), "{out}");
     }
 
     #[test]
     fn lookalike_names_and_text_are_not_matched() {
-        let packet = "<rdf:RDF xmlns:rdf=\"r\"><rdf:Description rdf:about=\"\"><dc:titles>keep</dc:titles>\
-                      <dc:subject>say dc:title=\"no\"</dc:subject><dc:title/></rdf:Description></rdf:RDF>";
-        let out = set_property(packet, "dc:title", DC, Shape::LangAlt, "New").unwrap();
+        let packet = packet("<dc:titles>keep</dc:titles><dc:subject>say dc:title=\"no\"</dc:subject><dc:title/>");
+        let out = set_property(&packet, TITLE, Shape::LangAlt, "New").unwrap();
         assert!(out.contains("<dc:titles>keep</dc:titles>") && out.contains("say dc:title=\"no\""), "{out}");
         assert!(out.contains("<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">New</rdf:li></rdf:Alt></dc:title></rdf:Description>"), "{out}");
     }
 
     #[test]
-    fn hostile_packets_do_not_panic() {
-        for packet in ["", "<", "<dc:title", "<dc:title>", "<dc:title x='", " dc:title=", "<a dc:title=\"", "</rdf:RDF>", "é<dc:title é>"] {
-            for value in ["", "v"] {
-                let _ = set_property(packet, "dc:title", DC, Shape::LangAlt, value);
-                let _ = set_property(packet, "pdf:Keywords", PDF, Shape::Text, value);
-            }
-        }
+    fn every_occurrence_is_removed_in_one_pass() {
+        let ids = Prop::new("pdfaid", PDFAID, "part");
+        let conformance = Prop::new("pdfaid", PDFAID, "conformance");
+        let packet = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\"><rdf:Description rdf:about=\"\" xmlns:a=\"{PDFAID}\" a:conformance='B'><a:part>2</a:part></rdf:Description>\
+             <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"{PDFAID}\" pdfaid:part=\"3\"/></rdf:RDF>"
+        );
+        let out = without(&packet, &[ids, conformance]).unwrap();
+        assert_eq!(
+            out,
+            format!(
+                "<rdf:RDF xmlns:rdf=\"{RDF}\"><rdf:Description rdf:about=\"\" xmlns:a=\"{PDFAID}\"></rdf:Description><rdf:Description rdf:about=\"\" xmlns:pdfaid=\"{PDFAID}\"/></rdf:RDF>"
+            )
+        );
+        assert_eq!(without(&out, &[ids, conformance]), None, "nothing left to remove");
     }
 
     #[test]
-    fn attribute_search_scans_the_packet_once() {
-        // Thousands of attribute-like words in one text node: none is inside a tag.
-        let packet = format!("<x:xmpmeta><rdf:RDF><rdf:Description>{}</rdf:Description></rdf:RDF></x:xmpmeta>", " rdf:about".repeat(5_000));
-        crate::take_work();
-        assert_eq!(attribute_span(&packet, "rdf:about"), None);
-        let work = crate::take_work();
-        assert!(work <= 2 * packet.len(), "{work} bytes scanned in a {}-byte packet", packet.len());
-        // A real attribute after them is still found.
-        let packet = packet.replace("</rdf:Description>", "</rdf:Description><rdf:Description rdf:about='u'/>");
-        let (_, s, e, q) = attribute_span(&packet, "rdf:about").unwrap();
-        assert_eq!((packet.get(s..e), q), (Some("u"), '\''));
+    fn hostile_packets_do_not_panic() {
+        for body in ["", "<", "<dc:title", "<dc:title>", "<dc:title x='", " dc:title=", "<a dc:title=\"", "</rdf:RDF>", "é<dc:title é>"] {
+            for packet in [body.to_string(), packet(body)] {
+                for value in ["", "v"] {
+                    let _ = set_property(&packet, TITLE, Shape::LangAlt, value);
+                    let _ = set_property(&packet, KEYWORDS, Shape::Text, value);
+                    let _ = get_property(&packet, TITLE, Shape::LangAlt);
+                    let _ = without(&packet, &[TITLE, KEYWORDS]);
+                }
+            }
+        }
     }
 }

@@ -748,11 +748,12 @@ impl Standard {
 /// information and as `pdfxid:` XMP properties. Output intents and other metadata stay. Refused
 /// when the document declares nothing of the kind.
 pub fn remove_standard_id(doc: &mut Document, standard: Standard) -> Result<(), OrganizeError> {
-    let (props, info_keys): (&[&str], &[&str]) = match standard {
-        Standard::PdfA => (&["pdfaid:part", "pdfaid:conformance", "pdfaid:amd", "pdfaid:rev"], &[]),
-        Standard::PdfX => (&["pdfxid:GTS_PDFXVersion", "pdfxid:GTS_PDFXConformance"], &["GTS_PDFXVersion", "GTS_PDFXConformance"]),
+    let pdfa = |local| xmp::Prop::new("pdfaid", xmp::PDFAID, local);
+    let (props, info_keys): (Vec<xmp::Prop>, &[&str]) = match standard {
+        Standard::PdfA => (vec![pdfa("part"), pdfa("conformance"), pdfa("amd"), pdfa("rev")], &[]),
+        Standard::PdfX => (vec![pdfx::PDFX_VERSION, pdfx::PDFX_CONFORMANCE], &["GTS_PDFXVersion", "GTS_PDFXConformance"]),
     };
-    let mut removed = xmp::remove_properties(doc, props)?;
+    let mut removed = xmp::remove_properties(doc, &props)?;
     for key in info_keys {
         if info(doc, key).is_some() {
             set_info_entry(doc, key.as_bytes(), None)?;
