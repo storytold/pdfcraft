@@ -239,12 +239,8 @@ impl ImageState {
                     self.path.curve_to(p1, end, end);
                 }
             }
-            b"h" => {
-                // ClosePath with no subpath panics by the same contract (#3581).
-                if self.has_current_point() {
-                    self.path.close_path();
-                }
-            }
+            // ClosePath with no subpath panics by the same contract (#3581).
+            b"h" if self.has_current_point() => self.path.close_path(),
             b"re" => {
                 if let Some([x, y, w, h]) = op.nums::<4>()
                     && let (Some(p0), Some(p1), Some(p2), Some(p3)) =
@@ -1627,7 +1623,10 @@ fn remove_image_crop(doc: &mut Document, p: &pdfcraft_model::Page, all: &[(Objec
 /// Change image `index` (from [`page_images`]) on `page`.
 pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &ImageChange) -> Result<(), EditError> {
     let images = page_images(doc, page)?;
-    let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;
+    let img = images
+        .get(index)
+        .cloned()
+        .ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page.saturating_add(1), index.saturating_add(1))))?;
     let p = page_of(doc, page)?;
     let all = content_streams(doc, &p.dict)?;
     let pieces = joined(&all);
