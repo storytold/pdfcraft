@@ -484,11 +484,8 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
             }
         }
         // The selected comments this tool made take the colour too (locked ones keep theirs).
-        if let Some(color) = comments::quick_bar_controls(ui, tool, &mut app.comment_prefs)
-            && let Some((_, id)) = app.active_ids()
-            && app.session.get(id).is_some_and(|doc| doc.allows_annotation())
-        {
-            app.colour_selection(color, |a| comments::made_by(a, tool));
+        if let Some(color) = comments::quick_bar_controls(ui, tool, &mut app.comment_prefs) {
+            comments::apply_quick_bar_color(app, tool, color);
         }
     }
 }

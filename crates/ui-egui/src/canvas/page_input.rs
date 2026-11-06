@@ -894,10 +894,6 @@ pub(super) fn cancel_on_escape(ctx: &egui::Context, view: &mut DocView, ptr: &Pa
     {
         // A text selection being dragged goes with its drag: the markup, redaction or Replace
         // Text that its end would make is not made.
-        if view.selection_drag {
-            view.clear_selection();
-        }
-        view.cancel_pointer_gestures();
-        view.press_cancelled = true;
+        view.cancel_press();
     }
 }

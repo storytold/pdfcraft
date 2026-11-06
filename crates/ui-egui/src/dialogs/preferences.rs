@@ -687,6 +687,21 @@ fn card_appearance(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &m
     ui.add_space(4.0);
     crate::appearance::preferences_section_with_context(ui, app, t, ctx);
     ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        use crate::touch::TouchMode;
+        ctx.label_primary(ui, tl!("Touch and pen"), t);
+        // Named with the setting, so screen readers (and tests) tell these from other Auto/On/Off.
+        let named = |choice: &str| format!("{}: {choice}", tl!("Touch and pen"));
+        let (auto, on, off) = (named(tl!("Auto")), named(tl!("On")), named(tl!("Off")));
+        ctx.pill_choice_a11y(
+            ui,
+            t,
+            &mut app.touch_mode,
+            &[(TouchMode::Auto, tl!("Auto"), &auto), (TouchMode::On, tl!("On"), &on), (TouchMode::Off, tl!("Off"), &off)],
+        );
+    });
+    ctx.label_secondary(ui, tl!("Larger drawing tools. Use two fingers to move or zoom; use Hand to move with one finger."), t);
+    ui.add_space(8.0);
     reading_colours_section(ui, app, t, ctx);
 }
 

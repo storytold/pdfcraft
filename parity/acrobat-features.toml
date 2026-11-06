@@ -3806,8 +3806,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.ink"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/it/comments.rs::shapes_and_ink_are_drawn_by_dragging", "crates/annot/src/tests.rs::ink_strokes_are_smooth_curves_through_their_points", "crates/annot/src/tests.rs::drawings_resize_by_scaling_their_strokes"]
-notes = "one ink annotation per stroke; strokes are drawn as smooth curves through their points, as in Acrobat; resize with the 8 handles (the strokes scale into the new box)"
+evidence = ["crates/ui-egui/tests/it/comments.rs::shapes_and_ink_are_drawn_by_dragging", "crates/annot/src/tests.rs::ink_strokes_are_smooth_curves_through_their_points", "crates/annot/src/tests.rs::drawings_resize_by_scaling_their_strokes", "crates/ui-egui/tests/it/comments.rs::touch_ink_keeps_all_samples_and_the_release_before_pointer_gone", "crates/ui-egui/tests/it/comments.rs::two_fingers_cancel_ink_without_a_last_finger_mark_and_next_stroke_works", "crates/ui-egui/tests/it/comments.rs::two_finger_pan_and_pinch_navigate_without_editing", "crates/ui-egui/tests/it/control.rs::touch_mode_is_automatable_and_tools_have_large_hit_targets"]
+notes = "One editable, undoable ink annotation per stroke, smoothed PDF appearance and resizing. Touch preference auto/on/off exposes a scrollable 44-point drawing toolbar. All delivered intra-frame pointer samples and pen taps are retained, bounded to 65536 samples. Two contacts navigate and cancel unfinished marks. Native/WASM shared implementation; pressure, tilt and hardware palm rejection remain unclaimed. See docs/touch-and-pen.md."
 
 [[feature]]
 id = "comment.eraser"

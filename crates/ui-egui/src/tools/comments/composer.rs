@@ -3,7 +3,7 @@ use super::paint::{edited_in_view, new_comment};
 use super::state::{ComposerKind, PageCx};
 use super::{
     Color32, CommentPrefs, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NoteIcon, PagePointer, QuickTool, Shape, Tokens, pos2,
-    theme,
+    theme, vec2,
 };
 
 /// The floating composer card (new note, new text box, edit). Returns the edit to apply.
@@ -31,6 +31,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
     let anchor = cx.to_screen(c.at);
     let viewport = view.viewport_rect();
     let t = Tokens::get(ctx);
+    let target = crate::touch::control_size(ctx, 0.0);
     let mut post = false;
     let mut cancel = false;
     let c = view.comments.composer.as_mut()?;
@@ -89,14 +90,17 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                     if ui
                         .add_enabled(
                             can_post,
-                            egui::Button::new(egui::RichText::new(tl!("Post")).color(Color32::WHITE)).fill(t.accent).corner_radius(14),
+                            egui::Button::new(egui::RichText::new(tl!("Post")).color(Color32::WHITE))
+                                .fill(t.accent)
+                                .corner_radius(14)
+                                .min_size(vec2(target, target)),
                         )
                         .clicked()
                         || (enter && can_post)
                     {
                         post = true;
                     }
-                    if ui.add(egui::Button::new(tl!("Cancel")).corner_radius(14)).clicked() {
+                    if ui.add(egui::Button::new(tl!("Cancel")).corner_radius(14).min_size(vec2(target, target))).clicked() {
                         cancel = true;
                     }
                 });

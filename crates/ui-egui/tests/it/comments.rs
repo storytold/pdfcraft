@@ -156,6 +156,201 @@ fn sidebar_comment_centres_the_annotation_at_high_zoom() {
     }
 }
 
+fn ink_strokes(h: &Harness<'static, PdfCraftApp>) -> Vec<Vec<[f64; 2]>> {
+    let app = h.state();
+    let bytes = app.session.save_bytes(app.views[0].id).unwrap();
+    let doc = pdfcraft_cos::Document::open(bytes).unwrap();
+    doc.object_numbers()
+        .into_iter()
+        .filter_map(|number| doc.try_get(number).ok())
+        .filter_map(|object| object.as_dict().cloned())
+        .filter(|dict| dict.name(b"Subtype") == Some(b"Ink"))
+        .flat_map(|dict| dict.get(b"InkList").unwrap().as_array().unwrap().clone())
+        .map(|stroke| {
+            stroke.as_array().unwrap().as_chunks::<2>().0.iter().map(|point| [point[0].as_f64().unwrap(), point[1].as_f64().unwrap()]).collect()
+        })
+        .collect()
+}
+
+/// Touch backends deliver both the contact metadata and pointer emulation.
+fn contact(id: u64, phase: egui::TouchPhase, pos: Pos2) -> egui::Event {
+    egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos, force: Some(0.5) }
+}
+
+fn pointer_button(pos: Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE }
+}
+
+fn frame(h: &mut Harness<'static, PdfCraftApp>, events: Vec<egui::Event>) {
+    h.input_mut().events.extend(events);
+    h.run_steps(1);
+}
+
+#[test]
+fn touch_ink_keeps_all_samples_and_the_release_before_pointer_gone() {
+    let mut h = harness(|app| {
+        app.set_option("touch-mode", "on").unwrap();
+        app.set_option("quick", "ink").unwrap();
+    });
+    let positions = [(40.0, 100.0), (50.0, 130.0), (65.0, 80.0), (80.0, 120.0), (100.0, 90.0)];
+    let p: Vec<Pos2> = positions.iter().map(|(x, y)| at(&h, *x, *y)).collect();
+    let before = h.state().views[0].page_screen_rect(0).unwrap();
+    frame(&mut h, vec![egui::Event::PointerMoved(p[0]), contact(1, egui::TouchPhase::Start, p[0]), pointer_button(p[0], true)]);
+    frame(
+        &mut h,
+        vec![
+            egui::Event::PointerMoved(p[1]),
+            egui::Event::PointerMoved(p[2]),
+            egui::Event::PointerMoved(p[3]),
+            contact(1, egui::TouchPhase::Move, p[3]),
+        ],
+    );
+    frame(&mut h, vec![pointer_button(p[4], false), contact(1, egui::TouchPhase::End, p[4]), egui::Event::PointerGone]);
+    h.run_steps(3);
+    let annotations = comments(&h);
+    assert_eq!(annotations.len(), 1, "one complete undoable mark");
+    let ink = ink_strokes(&h);
+    assert_eq!(ink.len(), 1);
+    assert_eq!(ink[0].len(), positions.len(), "all intra-frame points and the final release survive: {ink:?}");
+    for (actual, expected) in ink[0].iter().zip(positions) {
+        assert!((actual[0] - f64::from(expected.0)).abs() < 1.0 && (actual[1] - f64::from(expected.1)).abs() < 1.0, "{actual:?} != {expected:?}");
+    }
+    assert_eq!(h.state().views[0].page_screen_rect(0).unwrap(), before, "drawing must not scroll the page");
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert!(comments(&h).is_empty());
+    h.state_mut().redo();
+    h.run_steps(2);
+    assert_eq!(comments(&h).len(), 1);
+}
+
+#[test]
+fn two_fingers_cancel_ink_without_a_last_finger_mark_and_next_stroke_works() {
+    let mut h = harness(|app| {
+        app.set_option("touch-mode", "on").unwrap();
+        app.set_option("quick", "ink").unwrap();
+    });
+    let a = at(&h, 70.0, 100.0);
+    let b = at(&h, 100.0, 100.0);
+    frame(&mut h, vec![egui::Event::PointerMoved(a), contact(1, egui::TouchPhase::Start, a), pointer_button(a, true)]);
+    frame(&mut h, vec![contact(2, egui::TouchPhase::Start, b), egui::Event::PointerMoved(b)]);
+    frame(&mut h, vec![contact(2, egui::TouchPhase::End, b)]);
+    frame(&mut h, vec![pointer_button(b, false), contact(1, egui::TouchPhase::End, b), egui::Event::PointerGone]);
+    h.run_steps(3);
+    assert!(comments(&h).is_empty(), "navigation creates no partial stroke or dot");
+    drag_pt(&mut h, (80.0, 100.0), (120.0, 70.0));
+    assert_eq!(comments(&h).len(), 1, "drawing resumes after all contacts leave");
+}
+
+#[test]
+fn a_pen_tap_makes_a_dot_and_touch_cancel_makes_nothing() {
+    let mut h = harness(|app| app.set_option("quick", "ink").unwrap());
+    click_pt(&mut h, (100.0, 100.0));
+    assert_eq!(comments(&h).len(), 1);
+    assert_eq!(ink_strokes(&h)[0].len(), 1, "a tap is one point, drawn with round caps");
+    let a = at(&h, 150.0, 100.0);
+    frame(&mut h, vec![egui::Event::PointerMoved(a), contact(1, egui::TouchPhase::Start, a), pointer_button(a, true)]);
+    frame(&mut h, vec![contact(1, egui::TouchPhase::Cancel, a), pointer_button(a, false), egui::Event::PointerGone]);
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1);
+}
+
+#[test]
+fn two_finger_pan_and_pinch_navigate_without_editing() {
+    let mut h = harness(|app| {
+        app.set_option("touch-mode", "on").unwrap();
+        app.set_option("quick", "ink").unwrap();
+        app.set_option("zoom", "400").unwrap();
+    });
+    let a = at(&h, 80.0, 100.0);
+    let b = a + egui::vec2(100.0, 0.0);
+    let before = h.state().views[0].page_screen_rect(0).unwrap();
+    frame(
+        &mut h,
+        vec![egui::Event::PointerMoved(a), pointer_button(a, true), contact(1, egui::TouchPhase::Start, a), contact(2, egui::TouchPhase::Start, b)],
+    );
+    let delta = egui::vec2(0.0, -70.0);
+    frame(
+        &mut h,
+        vec![egui::Event::PointerMoved(a + delta), contact(1, egui::TouchPhase::Move, a + delta), contact(2, egui::TouchPhase::Move, b + delta)],
+    );
+    h.run_steps(2);
+    let moved = h.state().views[0].page_screen_rect(0).unwrap();
+    assert!((moved.top() - before.top() + 70.0).abs() < 2.0, "two-finger translation: {before:?} -> {moved:?}");
+    let zoom = h.state().views[0].zoom;
+    frame(&mut h, vec![contact(2, egui::TouchPhase::Move, b + delta + egui::vec2(40.0, 0.0))]);
+    assert!(h.state().views[0].zoom > zoom, "separating the contacts zooms in");
+    frame(&mut h, vec![pointer_button(a + delta, false), contact(1, egui::TouchPhase::End, a + delta), contact(2, egui::TouchPhase::End, b + delta)]);
+    h.run_steps(2);
+    assert!(comments(&h).is_empty());
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+}
+
+#[test]
+fn a_touch_drag_highlights_text_instead_of_panning() {
+    let mut h = harness(|app| {
+        app.set_option("touch-mode", "on").unwrap();
+        app.set_option("quick", "highlight").unwrap();
+    });
+    let v = &h.state().views[0];
+    let (a, b) = (v.glyph_screen_pos(0, 4).unwrap(), v.glyph_screen_pos(0, 14).unwrap());
+    let before = v.page_screen_rect(0).unwrap();
+    frame(&mut h, vec![egui::Event::PointerMoved(a), contact(1, egui::TouchPhase::Start, a), pointer_button(a, true)]);
+    frame(&mut h, vec![egui::Event::PointerMoved(b), contact(1, egui::TouchPhase::Move, b)]);
+    frame(&mut h, vec![pointer_button(b, false), contact(1, egui::TouchPhase::End, b), egui::Event::PointerGone]);
+    h.run_steps(2);
+    assert_eq!(comments(&h).len(), 1);
+    assert_eq!(comments(&h)[0].subtype, "Highlight");
+    assert_eq!(h.state().views[0].page_screen_rect(0).unwrap(), before);
+}
+
+#[test]
+fn lifting_the_pen_does_not_draw_its_later_hover_path() {
+    let mut h = harness(|app| app.set_option("quick", "ink").unwrap());
+    let a = at(&h, 40.0, 100.0);
+    let b = at(&h, 80.0, 110.0);
+    let c = at(&h, 160.0, 50.0);
+    frame(&mut h, vec![egui::Event::PointerMoved(a), pointer_button(a, true)]);
+    frame(&mut h, vec![egui::Event::PointerMoved(b), pointer_button(b, false), egui::Event::PointerMoved(c)]);
+    h.run_steps(2);
+    let ink = ink_strokes(&h);
+    assert_eq!(ink.len(), 1);
+    assert_eq!(ink[0].len(), 2, "a hover after release is not ink: {ink:?}");
+    assert!((ink[0][1][0] - 80.0).abs() < 1.0 && (ink[0][1][1] - 110.0).abs() < 1.0);
+}
+
+#[test]
+fn simultaneous_pan_and_zoom_keep_the_pdf_point_between_the_fingers() {
+    let mut h = harness(|app| {
+        app.set_option("touch-mode", "on").unwrap();
+        app.set_option("quick", "ink").unwrap();
+        app.set_option("zoom", "400").unwrap();
+    });
+    let a = at(&h, 60.0, 100.0);
+    let b = a + egui::vec2(100.0, 0.0);
+    let before = h.state().views[0].page_screen_rect(0).unwrap();
+    let center = a + (b - a) * 0.5;
+    let fraction = (center - before.min) / before.size();
+    frame(
+        &mut h,
+        vec![egui::Event::PointerMoved(a), pointer_button(a, true), contact(1, egui::TouchPhase::Start, a), contact(2, egui::TouchPhase::Start, b)],
+    );
+    let pan = egui::vec2(-35.0, -60.0);
+    frame(
+        &mut h,
+        vec![
+            egui::Event::PointerMoved(a + pan),
+            contact(1, egui::TouchPhase::Move, a + pan - egui::vec2(20.0, 0.0)),
+            contact(2, egui::TouchPhase::Move, b + pan + egui::vec2(20.0, 0.0)),
+        ],
+    );
+    h.run_steps(3);
+    let after = h.state().views[0].page_screen_rect(0).unwrap();
+    let anchored = after.min + fraction * after.size();
+    assert!(anchored.distance(center + pan) < 2.0, "PDF point {anchored:?}, contact midpoint {:?}", center + pan);
+    assert!(comments(&h).is_empty());
+}
+
 /// A double-click on the text of a card in the Comments panel edits it, as one on its header does
 /// (a click there would select a word): on a selected card, and on one the first click selects.
 #[test]
@@ -245,6 +440,32 @@ fn the_quick_bar_colour_changes_the_selected_comment() {
     assert_eq!(state.comment_prefs.style(CommentTool::Highlight).color, [0.0, 0.47, 0.84]);
 }
 
+#[test]
+fn the_touch_toolbar_colour_changes_the_selected_comment() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+
+    let mut h = harness(|app| {
+        app.set_option("touch-mode", "on").unwrap();
+        app.set_option("quick", "highlight").unwrap();
+    });
+    let (a, b) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
+    };
+    drag(&mut h, a, b);
+    assert_eq!(comments(&h)[0].color, Some([1.0, 0.94, 0.0]));
+
+    h.get_by_label("Colour").click();
+    h.run_steps(2);
+    h.get_by_label("Blue").click();
+    h.run_steps(3);
+
+    let state = h.state();
+    let doc = state.session.get(state.views[0].id).expect("document");
+    assert_eq!(doc.comment_props(0, 0).and_then(|props| props.color), Some([0.0, 0.47, 0.84]));
+    assert_eq!(doc.can_undo(), Some("Change comment properties"), "recoloring is one undo step");
+    assert_eq!(state.comment_prefs.style(CommentTool::Highlight).color, [0.0, 0.47, 0.84]);
+}
 #[test]
 fn the_quick_bar_colour_changes_the_selected_arrow() {
     use pdfcraft_ui_egui::comments::CommentTool;

@@ -24,6 +24,10 @@ pub(crate) enum Edge {
 /// double-click in a slow frame), but one after a stall can hold any number.
 const MAX_EDGES: usize = 8;
 
+/// How many of a frame's pointer moves are kept. A pen reports a few per frame; one after a
+/// stall can hold any number.
+const MAX_SAMPLES: usize = 1024;
+
 /// One frame's pointer, as the pages see it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct PagePointer {
@@ -39,6 +43,10 @@ pub(crate) struct PagePointer {
     pub origin: Option<Pos2>,
     /// This frame's primary presses and releases of a press the pages hold, in order.
     pub edges: Vec<Edge>,
+    /// Where the pointer moved this frame while the pages hold a press, in order: after the
+    /// frame's last press and before its release. A pen or a finger can move several times in
+    /// one frame, and a stroke keeps every point.
+    pub samples: Vec<Pos2>,
     /// Where this frame's last primary release of a press the pages hold was: where a click came
     /// up, which the pointer may have left by the frame's end. Kept past the cap on `edges`.
     pub released: Option<Pos2>,
@@ -52,11 +60,12 @@ impl PagePointer {
     /// The pointer for `resp`, the content widget that holds every page, allocated in `ui`, while
     /// a dialog is open over the window or not (`modal`).
     pub(crate) fn read(ui: &egui::Ui, resp: &egui::Response, modal: bool) -> Self {
-        let (at, origin, edges, released, primary_down, any_down) = ui.input(|i| {
+        let (at, origin, edges, samples, released, primary_down, any_down) = ui.input(|i| {
             (
                 i.pointer.interact_pos(),
                 i.pointer.press_origin(),
                 edges(&i.events),
+                samples(&i.events),
                 last_release(&i.events),
                 i.pointer.primary_down(),
                 i.pointer.any_down(),
@@ -71,13 +80,21 @@ impl PagePointer {
         let on_top =
             |p: &Pos2| !modal && !dragged_elsewhere(ui, resp) && resp.contains_pointer() && ui.ctx().layer_id_at(*p).is_none_or(|l| l == layer);
         let press_origin = origin.or_else(|| first_press(&edges));
-        let held =
-            resp.dragged() || resp.drag_stopped() || (!modal && (resp.interact_pointer_pos().is_some() || press_origin.is_some_and(|p| on_top(&p))));
+        // A press the pages held last frame is theirs up to its release, also when the pointer
+        // moved and lifted in one frame and egui decided neither a click nor a drag.
+        let holding = resp.id.with("page-pointer-holding");
+        let was_holding = ui.data(|d| d.get_temp::<bool>(holding)).unwrap_or(false);
+        let held = resp.dragged()
+            || resp.drag_stopped()
+            || (was_holding && released.is_some())
+            || (!modal && (resp.interact_pointer_pos().is_some() || press_origin.is_some_and(|p| on_top(&p))));
+        let still_down = held && primary_down && !matches!(edges.last(), Some(Edge::Release(_)));
+        ui.data_mut(|d| d.insert_temp(holding, still_down));
         let pos = at.filter(|p| held || on_top(p));
         if !held {
-            return Self { pos, origin: None, edges: Vec::new(), released: None, primary_down, any_down };
+            return Self { pos, origin: None, edges: Vec::new(), samples: Vec::new(), released: None, primary_down, any_down };
         }
-        Self { pos, origin: press_origin, edges, released, primary_down, any_down }
+        Self { pos, origin: press_origin, edges, samples, released, primary_down, any_down }
     }
 
     /// Where the pointer is, when it is inside `r`.
@@ -127,6 +144,22 @@ fn edges(events: &[Event]) -> Vec<Edge> {
             _ => None,
         })
         .take(MAX_EDGES)
+        .collect()
+}
+
+/// The first [`MAX_SAMPLES`] finite pointer moves among `events` after the last primary press
+/// (from the start when there is none) and before the primary release that follows it.
+fn samples(events: &[Event]) -> Vec<Pos2> {
+    let start = events.iter().rposition(|e| matches!(e, Event::PointerButton { button: PointerButton::Primary, pressed: true, .. })).unwrap_or(0);
+    events
+        .iter()
+        .skip(start)
+        .take_while(|e| !matches!(e, Event::PointerButton { button: PointerButton::Primary, pressed: false, .. }))
+        .filter_map(|e| match e {
+            Event::PointerMoved(p) if p.is_finite() => Some(*p),
+            _ => None,
+        })
+        .take(MAX_SAMPLES)
         .collect()
 }
 

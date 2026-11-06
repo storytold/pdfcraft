@@ -160,6 +160,26 @@ fn page_shadows_are_an_observable_app_wide_preference() {
 }
 
 #[test]
+fn touch_mode_is_automatable_and_tools_have_large_hit_targets() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({"key": "touch-mode", "value": "on"}));
+    h.run_steps(3);
+    let state = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(state["touch_mode"], "on");
+    assert_eq!(state["touch_active"], true);
+    let draw = h.get_by_label("Draw");
+    let bounds = draw.rect();
+    assert!(bounds.width() >= 44.0 && bounds.height() >= 44.0, "{bounds:?}");
+    draw.click();
+    h.run_steps(2);
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["quick_tool"], "ink");
+    assert!(call(&mut h, &c, "ui.set", json!({"key": "touch-mode", "value": "invalid"})).is_err());
+    ok(&mut h, &c, "ui.set", json!({"key": "touch-mode", "value": "off"}));
+    h.run_steps(2);
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["touch_active"], false);
+}
+
+#[test]
 fn control_resize_reports_observed_dimensions_and_rejects_invalid_sizes() {
     let (mut h, c) = harness();
     for params in [
