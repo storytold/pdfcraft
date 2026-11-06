@@ -1,4 +1,4 @@
-use super::{Arc, Face, HAlign, Rect, Span};
+use super::{Arc, Face, HAlign, Pattern, Rect, Span};
 
 /// How far below its baseline an underline is drawn, in the text's size: an underline is the
 /// level line pushed just before its span, this far below it (the PDF writer tells it apart from
@@ -7,9 +7,11 @@ pub(crate) const UNDERLINE_DROP: f64 = 0.1;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
+    /// A box filled with `color`, and `pattern`'s lines drawn over it.
     Fill {
         rect: Rect,
         color: [f64; 3],
+        pattern: Option<Pattern>,
     },
     Line {
         from: (f64, f64),
@@ -55,6 +57,8 @@ pub struct Rounded {
     /// Corners whose curve goes into the box rather than around it, in the same order.
     pub inverted: [bool; 4],
     pub fill: Option<[f64; 3]>,
+    /// Lines drawn over the fill, inside its curves.
+    pub pattern: Option<Pattern>,
     /// The edge: its width, colour and whether it is dashed.
     pub edge: Option<(f64, [f64; 3], bool)>,
     /// A page break cut the box here: that side has no edge, and its corners are square.

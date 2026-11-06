@@ -2458,11 +2458,12 @@ fn rounded_boxes_are_written_as_curved_paths() {
         radii: [18.0; 4],
         inverted,
         fill: Some([0.9, 0.9, 0.9]),
+        pattern: None,
         edge: edge.then_some((2.0, [1.0, 0.0, 0.0], false)),
         open_top: open.0,
         open_bottom: open.1,
     };
-    let content = |r: Rounded| crate::pdf::rounded(&r, 792.0);
+    let content = |r: Rounded| crate::pdf::rounded(&r, 792.0, None);
     let ops = content(shape([false; 4], true, (false, false)));
     // The fill: from the top-left corner's start, a quarter circle to (54, 36), closed.
     assert!(ops.contains("0.9 0.9 0.9 rg 36 738 m 36 747.941 44.059 756 54 756 c "), "{ops}");
@@ -2477,6 +2478,160 @@ fn rounded_boxes_are_written_as_curved_paths() {
     let cut = content(Rounded { radii: [18.0, 18.0, 0.0, 0.0], ..shape([false; 4], true, (false, true)) });
     let edge = cut.lines().find(|l| l.contains(" RG ")).unwrap_or_default();
     assert!(edge.starts_with("q 1 0 0 RG 2 w 37 685 m 37 738 l ") && edge.ends_with(" 179 685 l S Q") && !edge.contains(" h "), "{edge}");
+}
+
+/// A `<draw>` at `y` inches holding a yellow-filled rectangle, the fill ending in `pattern` and
+/// the rectangle (or the draw) given `extra`, as #5558's fill-type rows are.
+fn pattern_row(y: f64, pattern: &str, rect_extra: &str, draw_extra: &str) -> String {
+    format!(
+        r#"<draw x="0.5in" y="{y}in" w="2in" h="0.5in" {draw_extra}><value><rectangle><edge/>{rect_extra}<fill><color value="255,211,0"/>{pattern}</fill></rectangle></value></draw>"#
+    )
+}
+
+/// The form holding `rows` at their own places.
+fn pattern_form(rows: &[String]) -> String {
+    one_area_form(r#"layout="tb""#, &format!(r#"<subform name="body" layout="position" w="7.5in" h="9in">{}</subform>"#, rows.concat()))
+}
+
+/// A `<fill>`'s `<pattern>` comes through to the layout with the fill (#6074): a bare one is
+/// a cross-hatch in black, as XFA defines it; a type and a `<color>` choose the lines and
+/// their colour; a type naming no pattern is a cross-hatch too; a fill without one has no
+/// pattern, a hidden fill draws neither; and a rounded rectangle keeps its pattern.
+#[test]
+fn pattern_fills_carry_their_lines_into_the_layout() {
+    let form = layout_xml(&pattern_form(&[
+        pattern_row(0.0, "<pattern/>", "", ""),
+        pattern_row(1.0, r#"<pattern type="diagonalLeft"><color value="255,0,0"/></pattern>"#, "", ""),
+        pattern_row(2.0, r#"<pattern type="zigzag"/>"#, "", ""),
+        pattern_row(3.0, "", "", ""),
+        pattern_row(4.0, "<pattern/>", "", "").replace("<fill>", r#"<fill presence="hidden">"#),
+        pattern_row(5.0, r#"<pattern type="vertical"/>"#, r#"<corner radius="0.1in"/>"#, ""),
+    ]))
+    .unwrap();
+    let items = &form.pages[0].items;
+    let fill_at = |y: f64| {
+        items.iter().find_map(|i| match i {
+            Item::Fill { rect, color, pattern } if (rect.y - 36.0 - y * 72.0).abs() < 0.01 => Some((*color, *pattern)),
+            _ => None,
+        })
+    };
+    let yellow = [1.0, 211.0 / 255.0, 0.0];
+    let lines = |hatch: Hatch, color: [f64; 3]| Some(Pattern { hatch, color: Color(color) });
+    assert_eq!(fill_at(0.0), Some((yellow, lines(Hatch::CrossHatch, [0.0; 3]))), "a bare pattern is a black cross-hatch");
+    assert_eq!(fill_at(1.0), Some((yellow, lines(Hatch::DiagonalLeft, [1.0, 0.0, 0.0]))));
+    assert_eq!(fill_at(2.0), Some((yellow, lines(Hatch::CrossHatch, [0.0; 3]))), "an unknown type is a cross-hatch");
+    assert_eq!(fill_at(3.0), Some((yellow, None)), "a fill without a pattern stays plain");
+    assert_eq!(fill_at(4.0), None, "a hidden fill draws neither colour nor pattern");
+    let round = rounded(&form.pages[0]).into_iter().find(|r| (r.rect.y - 36.0 - 5.0 * 72.0).abs() < 0.01).expect("the rounded row");
+    assert_eq!((round.fill, round.pattern), (Some(yellow), lines(Hatch::Vertical, [0.0; 3])));
+}
+
+/// A patterned fill cut by a page break keeps its pattern on both pages (#6074): the
+/// fill is divided at the content area's bottom, and each piece carries the lines.
+#[test]
+fn a_patterned_fill_cut_by_a_page_break_keeps_its_pattern_on_both_pages() {
+    // A 12-inch bordered box in a 10-inch content area: it is cut at the area's bottom.
+    let body = r#"<subform name="body" layout="tb" w="7.5in"><subform name="tall" layout="position" w="7.5in" h="12in"><border><edge/><fill><color value="255,211,0"/><pattern type="diagonalLeft"><color value="255,0,0"/></pattern></fill></border><draw name="note" x="0in" y="0in" w="2in" h="0.3in"><value><text>Note</text></value></draw></subform></subform>"#;
+    let xdp = one_area_form(r#"layout="tb""#, body);
+    let form = layout_xml(&xdp).unwrap();
+    assert_eq!(form.pages.len(), 2);
+    let fills = |page: &Page| {
+        page.items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Fill { rect, color, pattern } => Some((*rect, *color, *pattern)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let (first, last) = (fills(&form.pages[0]), fills(&form.pages[1]));
+    assert_eq!((first.len(), last.len()), (1, 1), "{first:?} {last:?}");
+    let want = Some(Pattern { hatch: Hatch::DiagonalLeft, color: Color([1.0, 0.0, 0.0]) });
+    assert_eq!((first[0].2, last[0].2), (want, want), "both pieces keep the pattern");
+    assert!((first[0].0.h + last[0].0.h - 12.0 * 72.0).abs() < 0.01, "the two parts make the whole box");
+    // And the written pages hatch their pieces: each page's stream paints its piece with
+    // the pattern, named in that page's own /Pattern resources.
+    for at in 0..2 {
+        let (doc, page) = written_page(&xdp, at);
+        let ops = page_content(&doc, &page);
+        let lines: Vec<&str> = ops.lines().collect();
+        let hatch = lines
+            .iter()
+            .position(|l| l.starts_with("q /Pattern cs /Ph") && l.contains(" scn "))
+            .unwrap_or_else(|| panic!("page {at} hatches its piece: {ops}"));
+        // The hatch fills the same path as the background fill written just before it.
+        let path = lines[hatch - 1]
+            .split_once(" rg ")
+            .and_then(|(_, f)| f.strip_suffix('f'))
+            .unwrap_or_else(|| panic!("the colour first: {}", lines[hatch - 1]));
+        assert!(lines[hatch].ends_with(&format!(" scn {path}f Q")), "{} after {}", lines[hatch], lines[hatch - 1]);
+        // And the path sits where the layout put the piece: its rectangle in page coordinates.
+        let piece = [first[0].0, last[0].0][at];
+        let operands: Vec<f64> = path.split_whitespace().filter_map(|v| v.parse().ok()).collect();
+        let expect = [piece.x, 792.0 - piece.bottom(), piece.w, piece.h];
+        assert_eq!(operands.len(), 4, "page {at}'s piece is one rectangle: {path}");
+        for (got, want) in operands.iter().zip(expect) {
+            assert!((got - want).abs() < 0.01, "page {at}'s piece sits at {operands:?}, not {expect:?}");
+        }
+        let painted = lines[hatch]
+            .split_whitespace()
+            .nth(3)
+            .map(|name| name.trim_start_matches('/'))
+            .unwrap_or_else(|| panic!("page {at} hatches its piece: {ops}"));
+        let resources = doc.resolve(page.get(b"Resources").unwrap());
+        let patterns = resources.as_dict().unwrap().get(b"Pattern").map(|p| doc.resolve(p)).expect("the page names its patterns");
+        assert_eq!(patterns.as_dict().unwrap().len(), 1, "page {at} names the one pattern it paints with");
+        assert!(patterns.as_dict().unwrap().reference(painted.as_bytes()).is_some(), "page {at} names the pattern {painted} it paints with");
+    }
+}
+
+/// A pattern fill is written as the fill's colour, then the same path filled with a coloured
+/// tiling pattern of the lines, named in the page's `/Pattern` resources: one pattern object
+/// for each kind of line and colour, a rounded box's lines kept inside its curves, and a turned
+/// draw's lines turned with it (a pattern lies on the page's own space).
+#[test]
+fn pattern_fills_are_written_as_tiling_patterns_over_the_colour() {
+    let (doc, page) = written(&pattern_form(&[
+        pattern_row(0.0, "<pattern/>", "", ""),
+        pattern_row(1.0, "<pattern/>", "", ""),
+        pattern_row(2.0, r#"<pattern type="diagonalLeft"><color value="255,0,0"/></pattern>"#, "", ""),
+        pattern_row(3.0, r#"<pattern type="horizontal"/>"#, r#"<corner radius="0.1in"/>"#, ""),
+        pattern_row(4.5, r#"<pattern type="horizontal"/>"#, "", r#"rotate="90""#),
+    ]));
+    let ops = page_content(&doc, &page);
+    let lines: Vec<&str> = ops.lines().collect();
+    let hatched: Vec<usize> = (0..lines.len()).filter(|i| lines[*i].starts_with("q /Pattern cs /")).collect();
+    assert_eq!(hatched.len(), 5, "each row's fill is hatched: {ops}");
+    let mut names = Vec::new();
+    for &i in &hatched {
+        // Right after the yellow fill, over the same path.
+        let fill = lines[i - 1];
+        let path = fill.strip_prefix("1 0.827 0 rg ").and_then(|f| f.strip_suffix('f')).unwrap_or_else(|| panic!("the colour first: {fill}"));
+        assert!(lines[i].ends_with(&format!(" scn {path}f Q")), "{} after {fill}", lines[i]);
+        names.push(lines[i].split_whitespace().nth(3).unwrap().trim_start_matches('/').to_string());
+    }
+    assert_eq!(names, ["Ph0", "Ph0", "Ph1", "Ph2", "Ph3"], "one pattern for each kind of line and colour");
+    assert!(lines[hatched[3]].contains(" c "), "the rounded box's lines follow its curves: {}", lines[hatched[3]]);
+    let resources = doc.resolve(page.get(b"Resources").unwrap());
+    let patterns = resources.as_dict().unwrap().get(b"Pattern").map(|p| doc.resolve(p)).expect("the page names its patterns");
+    let patterns = patterns.as_dict().unwrap();
+    assert_eq!(patterns.len(), 4);
+    let cell = |name: &str| {
+        let r = patterns.reference(name.as_bytes()).unwrap_or_else(|| panic!("{name} is an object"));
+        let Object::Stream(s) = &*doc.get(r) else { panic!("{name} is a stream") };
+        for (key, want) in [(&b"PatternType"[..], 1), (&b"PaintType"[..], 1), (&b"TilingType"[..], 1)] {
+            assert_eq!(s.dict.int(key), Some(want), "{name} {}", String::from_utf8_lossy(key));
+        }
+        String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+    };
+    // A cross-hatch in black: a level line and an upright one across the 9pt cell.
+    let cross = cell("Ph0");
+    assert!(cross.starts_with("0 0 0 RG 0 w ") && cross.contains("-1 4.5 m 10 4.5 l 4.5 -1 m 4.5 10 l "), "{cross}");
+    // Red lines falling left to right, drawn where the neighbouring cells' fall too.
+    let left = cell("Ph1");
+    assert!(left.starts_with("1 0 0 RG ") && left.contains("-10 10 m 1 -1 l -1 10 m 10 -1 l 8 10 m 19 -1 l "), "{left}");
+    assert!(cell("Ph2").contains(" -1 4.5 m 10 4.5 l S"), "horizontal");
+    assert!(cell("Ph3").contains(" 4.5 -1 m 4.5 10 l S"), "horizontal lines turned a quarter are vertical on the page");
 }
 
 /// A flowed subform without a fixed height gets its border and fill round all it takes, margins
@@ -4207,12 +4362,17 @@ fn line_draw(x: &str, y: &str, rotate: &str) -> String {
 
 /// `xdp` laid out into its document, and that document's first page.
 fn written(xdp: &str) -> (Document, Dict) {
+    written_page(xdp, 0)
+}
+
+/// `xdp` laid out into its document, and that document's page `at`.
+fn written_page(xdp: &str, at: usize) -> (Document, Dict) {
     let mut doc = Document::open(Arc::new(shell(xdp))).unwrap();
     render_into(&mut doc).unwrap();
     let root = doc.get(doc.root().unwrap());
     let pages = doc.get(root.as_dict().unwrap().reference(b"Pages").unwrap());
     let kids = pages.as_dict().unwrap().get(b"Kids").map(|k| doc.resolve(k)).unwrap();
-    let page = doc.get(kids.as_array().unwrap()[0].as_ref().unwrap());
+    let page = doc.get(kids.as_array().unwrap()[at].as_ref().unwrap());
     let page = page.as_dict().unwrap().clone();
     (doc, page)
 }

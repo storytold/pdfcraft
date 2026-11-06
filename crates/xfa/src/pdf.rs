@@ -9,7 +9,7 @@ use pdfcraft_fonts::{literal, win_ansi};
 
 use crate::XfaError;
 use crate::layout::{Action, BorderShape, Form, Item, Page, Rounded, Turned, Widget, WidgetKind};
-use crate::model::Rect;
+use crate::model::{Hatch, Pattern, Rect};
 use crate::text::{Face, Family, Span};
 
 mod common;
@@ -18,7 +18,8 @@ mod strip;
 pub use common::jpeg_size;
 pub(crate) use common::rounded;
 use common::{
-    all_faces, content_hash, empty_form, hex32, jpeg_info, js_action, js_string, n, parse_hex32, rgb, rgb_array, standard_font, state_name,
+    HATCH_CELL, all_faces, content_hash, empty_form, hatch_cell, hatched, hex32, jpeg_info, js_action, js_string, n, parse_hex32, rgb, rgb_array,
+    standard_font, state_name,
 };
 pub(crate) use strip::USAGE_RIGHTS_REMOVED;
 use strip::drop_usage_rights;
@@ -82,6 +83,9 @@ struct Emitter<'a> {
     /// The fields above the signature fields named by their SOM paths, by the path they name:
     /// each one's object and the fields it holds.
     nodes: HashMap<String, (ObjRef, Vec<ObjRef>)>,
+    /// The tiling patterns drawn so far, one per kind of line and colour (the colour as it is
+    /// written), each with the number its resource name carries.
+    hatches: HashMap<(Hatch, String), (ObjRef, usize)>,
 }
 
 /// A signature field of the file that has been signed.
@@ -558,6 +562,38 @@ impl Emitter<'_> {
         }
     }
 
+    /// The name, in a page's `/Pattern` resources `patterns`, of the tiling pattern drawing
+    /// `p`'s lines, adding it there (and to the document, the first time it is drawn). Inside a
+    /// draw turned by `quarters`, the lines turn with it: a pattern is laid on the page's own
+    /// space, whatever matrix the content is drawn under.
+    fn hatch(&mut self, p: Pattern, quarters: u8, patterns: &mut Dict) -> String {
+        let hatch = if quarters % 2 == 1 { p.hatch.quarter_turned() } else { p.hatch };
+        let color = p.color.0;
+        let next = self.hatches.len();
+        let key = (hatch, rgb(color));
+        let (r, id) = match self.hatches.get(&key) {
+            Some(found) => *found,
+            None => {
+                let mut d = Dict::new();
+                d.set(b"Type".to_vec(), Object::name("Pattern"));
+                d.set(b"PatternType".to_vec(), Object::Int(1));
+                // Coloured: the cell paints its own lines, in the pattern's colour.
+                d.set(b"PaintType".to_vec(), Object::Int(1));
+                d.set(b"TilingType".to_vec(), Object::Int(1));
+                d.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, HATCH_CELL, HATCH_CELL].iter().map(|v| Object::Real(*v)).collect()));
+                d.set(b"XStep".to_vec(), Object::Real(HATCH_CELL));
+                d.set(b"YStep".to_vec(), Object::Real(HATCH_CELL));
+                d.set(b"Resources".to_vec(), Object::Dict(Dict::new()));
+                let r = self.doc.add(Object::Stream(Stream::flate(d, hatch_cell(hatch, color).as_bytes())));
+                self.hatches.insert(key, (r, next));
+                (r, next)
+            }
+        };
+        let name = format!("Ph{id}");
+        patterns.set(name.clone().into_bytes(), Object::Ref(r));
+        name
+    }
+
     /// Write one laid-out page under `pages_ref`: its fills, lines, text and pictures in a
     /// content stream, the fonts and images it uses as resources, and its widgets and the links
     /// in its text as annotations. Returns the page object.
@@ -566,24 +602,29 @@ impl Emitter<'_> {
         let mut content: Vec<u8> = Vec::new();
         let mut fonts: BTreeMap<&'static str, &'static str> = BTreeMap::new();
         let mut xobjects = Dict::new();
+        let mut patterns = Dict::new();
         let mut annots = Vec::new();
         let h = page.height;
         // The link the text before ended in, which a next piece of it on the line widens.
         let mut last_link: Option<LinkPiece> = None;
         let steps = steps(&page.items);
         let mut turn = None;
+        // The quarter turns the draw being written is turned by.
+        let mut quarters = 0;
         for (i, step) in steps.iter().enumerate() {
             let item = match step {
                 Step::Item(item) => *item,
                 Step::Turn(t) => {
                     let matrix = turn_matrix(t, h);
                     turn = Some(matrix);
+                    quarters = t.quarters;
                     last_link = None;
                     content.extend(format!("q {} cm\n", matrix.map(n).join(" ")).bytes());
                     continue;
                 }
                 Step::EndTurn => {
                     turn = None;
+                    quarters = 0;
                     last_link = None;
                     content.extend_from_slice(b"Q\n");
                     continue;
@@ -603,10 +644,18 @@ impl Emitter<'_> {
                 last_link = None;
             }
             match item {
-                Item::Fill { rect, color } => {
-                    content.extend(format!("{} rg {} {} {} {} re f\n", rgb(*color), n(rect.x), n(h - rect.bottom()), n(rect.w), n(rect.h)).bytes());
+                Item::Fill { rect, color, pattern } => {
+                    let path = format!("{} {} {} {} re ", n(rect.x), n(h - rect.bottom()), n(rect.w), n(rect.h));
+                    content.extend(format!("{} rg {path}f\n", rgb(*color)).bytes());
+                    if let Some(p) = pattern {
+                        let name = self.hatch(*p, quarters, &mut patterns);
+                        content.extend(hatched(&name, &path).bytes());
+                    }
                 }
-                Item::Rounded(r) => content.extend(rounded(r, h).bytes()),
+                Item::Rounded(r) => {
+                    let name = r.pattern.map(|p| self.hatch(p, quarters, &mut patterns));
+                    content.extend(rounded(r, h, name.as_deref()).bytes());
+                }
                 Item::Line { from, to, width, color, dashed } => {
                     content.extend(
                         format!(
@@ -675,6 +724,9 @@ impl Emitter<'_> {
         res.set(b"Font".to_vec(), Object::Dict(font_dict));
         if !xobjects.is_empty() {
             res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        }
+        if !patterns.is_empty() {
+            res.set(b"Pattern".to_vec(), Object::Dict(patterns));
         }
         let mut cd = Dict::new();
         cd.set(b"Type".to_vec(), Object::name("XObject"));
@@ -939,6 +991,7 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
         signed,
         taken,
         nodes: HashMap::new(),
+        hatches: HashMap::new(),
     };
     // Every name a field of this pass takes at the top, wherever and in whatever order it is
     // written: a signature field named by its SOM path must not repeat one.

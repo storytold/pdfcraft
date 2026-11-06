@@ -6,9 +6,9 @@ use roxmltree::Node as XmlNode;
 
 use crate::XfaError;
 use crate::model::{
-    Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Margin, Node,
-    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Rect, RichText, Run, Script, Stroke, Subform, Template, Ui, VAlign,
-    Value,
+    Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Hatch, Layout, Margin,
+    Node, Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Pattern, Placement, Presence, Rect, RichText, Run, Script, Stroke, Subform,
+    Template, Ui, VAlign, Value,
 };
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
@@ -136,6 +136,17 @@ fn parse_fill(n: Option<XmlNode>) -> Option<Color> {
     Some(parse_color(child(n, "color")).unwrap_or(Color::WHITE))
 }
 
+/// A `<fill>`'s `<pattern>`: its `type` (crossHatch by default) and its lines' `<color>`
+/// (black by default). `None` without one, or when the fill isn't drawn.
+fn parse_pattern(n: Option<XmlNode>) -> Option<Pattern> {
+    let n = n?;
+    if Presence::parse(n.attribute("presence")) != Presence::Visible {
+        return None;
+    }
+    let p = child(n, "pattern")?;
+    Some(Pattern { hatch: Hatch::parse(p.attribute("type")), color: parse_color(child(p, "color")).unwrap_or(Color::BLACK) })
+}
+
 /// `<border>`: edges in XFA order. One edge applies to all four; two: top/bottom then
 /// left/right; three: top, left/right, bottom; four: top, right, bottom, left.
 fn parse_border(n: Option<XmlNode>) -> Option<Border> {
@@ -150,7 +161,13 @@ fn parse_border(n: Option<XmlNode>) -> Option<Border> {
         3 => [e(0), e(1), e(2), e(1)],
         _ => [e(0), e(1), e(2), e(3)],
     };
-    Some(Border { presence: Presence::parse(n.attribute("presence")), edges: four, corners: parse_corners(n), fill: parse_fill(child(n, "fill")) })
+    Some(Border {
+        presence: Presence::parse(n.attribute("presence")),
+        edges: four,
+        corners: parse_corners(n),
+        fill: parse_fill(child(n, "fill")),
+        pattern: parse_pattern(child(n, "fill")),
+    })
 }
 
 /// The `<corner>` children of a border or rectangle, top-left, top-right, bottom-right then
@@ -420,6 +437,7 @@ fn parse_value(n: Option<XmlNode>, warnings: &mut Vec<String>) -> Value {
             "rectangle" => {
                 let mut b = parse_border(Some(c)).unwrap_or_default();
                 b.fill = parse_fill(child(c, "fill"));
+                b.pattern = parse_pattern(child(c, "fill"));
                 return Value::Rectangle(Box::new(b));
             }
             "date" | "time" | "dateTime" | "integer" | "decimal" | "float" | "boolean" => return Value::Text(text_of(c)),
