@@ -13404,3 +13404,35 @@ fn a_document_encrypting_only_its_embedded_files_opens_and_saves_without_a_passw
     let reopened = pdfcraft_cos::Document::open(saved).unwrap();
     assert!(reopened.embedded_files_locked(), "the attachment stays encrypted");
 }
+
+/// Collaboration addresses a page and a comment by their object references, not by an index.
+/// The references must be available through the façade (ADR-0002) and survive comment edits.
+#[test]
+fn page_and_comment_references_survive_comment_edits() {
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let id = session.open_new("refs.pdf", fixture(2).into()).unwrap();
+    let refs = session.get(id).unwrap().page_refs();
+    assert_eq!(refs.len(), 2);
+    assert_eq!(session.get(id).unwrap().page_ref(0), Some(refs[0]));
+    assert_eq!(session.get(id).unwrap().page_ref(1), Some(refs[1]));
+    assert!(session.get(id).unwrap().page_ref(2).is_none());
+
+    let shape = Shape::Note { at: [40.0, 250.0], icon: NoteIcon::Comment };
+    session
+        .apply(
+            id,
+            Edit::AddAnnotation(NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: "first".into(), author: "Ada".into() }),
+        )
+        .unwrap();
+    let doc = session.get(id).unwrap();
+    let annot = doc.annotation_ref(0, 0).expect("an indirect annotation");
+    let name = doc.info.annotations[0].name.clone().expect("an /NM");
+    assert_eq!(doc.annotation_refs_named(0, &name), vec![annot]);
+    assert!(doc.annotation_refs_named(0, "missing").is_empty());
+    assert!(doc.annotation_ref(1, 0).is_none());
+
+    session.apply(id, Edit::SetAnnotationContents { page: 0, index: 0, text: "second".into() }).unwrap();
+    let doc = session.get(id).unwrap();
+    assert_eq!(doc.annotation_ref(0, 0), Some(annot), "editing a comment keeps its reference");
+    assert_eq!(doc.page_ref(0), Some(refs[0]), "a comment edit does not touch the page tree");
+}

@@ -495,6 +495,57 @@ impl Document {
         self.editor.as_ref().is_some_and(|e| pdfcraft_annot::deletable(&e.cos, page, index).is_ok())
     }
 
+    /// The indirect references of the leaf pages, in document order. A page's reference is the
+    /// identity a collaboration session uses for a page (`ADR-0002`); it survives incremental
+    /// saves and changes only on a full rewrite. Empty when the document cannot be edited.
+    pub fn page_refs(&self) -> Vec<pdfcraft_cos::ObjRef> {
+        self.editor
+            .as_ref()
+            .and_then(|e| pdfcraft_organize::pages(&e.cos).ok())
+            .map(|pages| pages.into_iter().map(|p| p.obj).collect())
+            .unwrap_or_default()
+    }
+
+    /// The indirect reference of leaf page `page`, or `None` when the document cannot be edited
+    /// or the page does not exist. See [`Self::page_refs`].
+    pub fn page_ref(&self, page: usize) -> Option<pdfcraft_cos::ObjRef> {
+        self.page_refs().get(page).copied()
+    }
+
+    /// The indirect reference of the annotation at `(page, index)`, its position in the page's
+    /// `/Annots`. `None` for an inline annotation dictionary: such an entry has no reference of
+    /// its own until an edit promotes it (an edit that needs `/IRT` does so).
+    pub fn annotation_ref(&self, page: usize, index: usize) -> Option<pdfcraft_cos::ObjRef> {
+        let editor = self.editor.as_ref()?;
+        let annots = editor.cos.get(self.page_ref(page)?);
+        let annots = annots.as_dict()?.get(b"Annots").map(|a| editor.cos.resolve(a))?;
+        annots.as_array()?.get(index)?.as_ref()
+    }
+
+    /// Every indirect annotation on `page` whose `/NM` is `name`. `/NM` need not be unique
+    /// (`crates/automation/src/comments.rs` refuses an ambiguous one), so callers that address
+    /// a comment by name must treat more than one result as ambiguous.
+    pub fn annotation_refs_named(&self, page: usize, name: &str) -> Vec<pdfcraft_cos::ObjRef> {
+        let Some(editor) = self.editor.as_ref() else { return Vec::new() };
+        let Some(page_ref) = self.page_ref(page) else { return Vec::new() };
+        let page_dict = editor.cos.get(page_ref);
+        let Some(annots) = page_dict.as_dict().and_then(|d| d.get(b"Annots")) else { return Vec::new() };
+        let annots = editor.cos.resolve(annots);
+        let mut found = Vec::new();
+        for item in annots.as_array().into_iter().flatten() {
+            let Some(annot) = item.as_ref() else { continue };
+            let dict = editor.cos.get(annot);
+            let Some(value) = dict.as_dict().and_then(|d| d.get(b"NM")) else { continue };
+            let value = editor.cos.resolve(value);
+            if let pdfcraft_cos::Object::String(s) = &*value
+                && s.to_text() == name
+            {
+                found.push(annot);
+            }
+        }
+        found
+    }
+
     pub fn can_undo(&self) -> Option<&str> {
         self.undo_label().map(Label::as_str)
     }
