@@ -3,7 +3,7 @@ use crate::font::standard_font::{StandardFont, StandardKind, select_standard_fon
 use crate::font::true_type::{Width, read_encoding, read_widths};
 use crate::font::{
     Encoding, FallbackFontQuery, glyph_name_to_text, glyph_name_to_unicode, normalized_glyph_name,
-    read_to_unicode,
+    numbered_glyph_name_at_its_code, read_to_unicode,
 };
 use crate::{CMapResolverFn, CacheKey, FontResolverFn};
 use hayro_cmap::{BfString, CMap};
@@ -128,15 +128,17 @@ impl Type1Font {
         }
         // PdfCraft patch (#3169, #3170): a name outside the glyph list still reads by the
         // glyph list specification's full mapping (`f_i`, `hyphen.case`). A name that only
-        // numbers the glyph (`C39`, `c251`) says nothing about the character and reads as
-        // nothing: the code's StandardEncoding character would be a guess, wrong wherever the
-        // font's /Encoding puts the glyph elsewhere (review on #3239).
+        // numbers the glyph (`C39`, `c251`) reads as the code's character only when its number
+        // is that code (`C39` at 39), as pdftotext, PDFium and MuPDF read it; a number naming
+        // another code is no evidence and reads as nothing: the code's StandardEncoding
+        // character would be a guess, wrong wherever the font's /Encoding puts the glyph
+        // elsewhere (review on #3239).
         let name = match &self.1 {
             Kind::Standard(s) => s.code_to_ps_name(code),
             Kind::Cff(c) => c.code_to_ps_name(code),
             Kind::Type1(t) => t.code_to_ps_name(code),
         }?;
-        glyph_name_to_text(name)
+        glyph_name_to_text(name).or_else(|| numbered_glyph_name_at_its_code(name, code))
     }
 }
 

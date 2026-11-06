@@ -462,10 +462,12 @@ fn the_annex_d2_alias_codes_read_as_an_ordinary_hyphen_and_space() {
 
 /// #3169, #3170: glyph names outside the Adobe Glyph List still read as text. Ligature
 /// (`f_i`) and suffixed (`hyphen.case`) names go by the glyph list specification's full
-/// mapping. A name that only numbers the glyph (`c251` small caps, `C39`, `C174`, `C39.sc`)
-/// reads as nothing, not as a guess from the code (review on #3239: with `/C1` at 233,
-/// StandardEncoding's 233 would read `Ø` for a glyph drawn as `é`), and so do a ZapfDingbats
-/// name (`a12`) and a name with no meaning left (`foo`).
+/// mapping. A name that only numbers the glyph reads as nothing, not as a guess from the code
+/// (review on #3239: with `/C1` at 233, StandardEncoding's 233 would read `Ø` for a glyph drawn
+/// as `é`), unless its number is its own code: `c251` at 97 and `C39.sc` at 61 read as nothing,
+/// `C39` at 39 and `C174` at 174 as `'` and `®` (see
+/// `numbered_glyph_names_read_as_their_own_code`). A ZapfDingbats name (`a12`) and a name with
+/// no meaning left (`foo`) read as nothing.
 #[test]
 fn glyph_names_outside_the_glyph_list_still_read_as_text() {
     use lopdf::{Object, dictionary};
@@ -491,7 +493,37 @@ fn glyph_names_outside_the_glyph_list_still_read_as_text() {
     let pdf = encoded_pages(&[(differences, &content[..])]);
     let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text();
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-    assert_eq!(lines, ["fi", "fl", "-", "fi"], "{text:?}");
+    assert_eq!(lines, ["fi", "fl", "-", "'", "\u{ae}", "fi"], "{text:?}");
+}
+
+/// A glyph name that only numbers its glyph, with no `/ToUnicode` (ISO 32000-2 §9.10.2 has no
+/// route for it), reads as its code's character when the number is that very code, in decimal
+/// (`C70` at 70, `C0071` at 71, `MT72` at 72) or hexadecimal (`G49` at 0x49, `GE9` at 0xE9), as
+/// pdftotext, PDFium and MuPDF all read it: Windows printer drivers name subset glyphs so. A
+/// number naming another code (`C70` at 1, `/C1` at 234) or a control character (`C9` at 9)
+/// still reads as nothing.
+#[test]
+fn numbered_glyph_names_read_as_their_own_code() {
+    use lopdf::{Object, dictionary};
+    let name = |n: &str| Object::Name(n.as_bytes().to_vec());
+    let differences = Object::Dictionary(dictionary! {
+        "Type" => "Encoding",
+        "Differences" => vec![
+            Object::Integer(70), name("C70"), name("C0071"), name("MT72"), name("G49"),
+            Object::Integer(233), name("GE9"), Object::Integer(1), name("C70"), Object::Integer(234), name("C1"),
+            Object::Integer(9), name("C9"),
+        ],
+    });
+    // One glyph per line, as in `glyph_names_outside_the_glyph_list_still_read_as_text`.
+    let mut content = b"BT /F1 20 Tf 20 290 Td".to_vec();
+    for code in *b"FGHI\xe9\x01\xea\x09" {
+        content.extend_from_slice(format!(" <{code:02x}> Tj 0 -25 Td").as_bytes());
+    }
+    content.extend_from_slice(b" ET");
+    let pdf = encoded_pages(&[(differences, &content[..])]);
+    let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text();
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    assert_eq!(lines, ["F", "G", "H", "I", "\u{e9}"], "{text:?}");
 }
 
 /// Review on #3239: the glyph list specification's `uni` and `u` forms take uppercase hex

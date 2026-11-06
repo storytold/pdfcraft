@@ -91,8 +91,13 @@ Glyph names outside the Adobe Glyph List (#3169, #3170): hayro-interpret's `glyp
 maps a name by the glyph list specification's full mapping (drop from the first `.`, split on `_`,
 each part through the list, `uniXXXX…` or `uXXXX`; a `uni` part with any group that isn't a
 character maps to nothing), so `f_i`, `f_l` and `hyphen.case` read as text. A name that only
-numbers the glyph (`C39`, `c251`) still reads as nothing: the code's StandardEncoding character
-would be a guess, wrong wherever the font's /Encoding puts the glyph elsewhere (review on #3239). Covered by `text::tests::glyph_names_outside_the_glyph_list_still_read_as_text`.
+numbers the glyph (`c251` at 97, `C1` at 233) still reads as nothing: the code's StandardEncoding
+character would be a guess, wrong wherever the font's /Encoding puts the glyph elsewhere (review
+on #3239). When the number is the glyph's own code, in decimal or hexadecimal (`C39` at 39,
+`C0032` at 32, `GE9` at 0xE9), `numbered_glyph_name_at_its_code` reads it as that code's Latin-1
+character (controls excepted), as pdftotext, PDFium and MuPDF do: name and code agree, so nothing
+is guessed (Type 1 fonts only). Covered by `text::tests::glyph_names_outside_the_glyph_list_still_read_as_text`
+and `text::tests::numbered_glyph_names_read_as_their_own_code`.
 
 Text extraction: hayro-interpret exposes `OutlineGlyph::is_vertical` from a Type0 font’s CMap writing mode. PdfCraft follows negative glyph-space y for WMode 1 so upright vertical columns can be searched (#126).
 
