@@ -1317,23 +1317,41 @@ impl Renderer {
         let Some(bytes) = pixels.checked_mul(4) else {
             return Vec::new();
         };
+        let Ok(mut cache) = self.barcode_cache.try_borrow_mut() else {
+            return Vec::new();
+        };
+        // Compare the same canonical RGBA bytes lazily: a warm hit needs no expanded raster.
+        // Keeping the complete byte comparison preserves identity across Luma/RGB sources.
+        if let Some(entry) = cache.entries.iter().find(|e| {
+            e.divisor == self.barcode_divisor
+                && e.width == width
+                && e.height == height
+                && match image {
+                    ImageData::Luma(a) => {
+                        let cached = e.rgba.as_chunks::<4>().0;
+                        cached.len() == a.data.len() && cached.iter().zip(&a.data).all(|(rgba, v)| *rgba == [*v, *v, *v, 255])
+                    }
+                    ImageData::Rgb(a) => {
+                        let cached = e.rgba.as_chunks::<4>().0;
+                        let source = a.data.as_chunks::<3>().0;
+                        cached.len() == source.len() && cached.iter().zip(source).all(|(rgba, [r, g, b])| *rgba == [*r, *g, *b, 255])
+                    }
+                }
+        }) {
+            return if cancel.load(Ordering::Relaxed) { Vec::new() } else { entry.overlays.clone() };
+        }
         let mut rgba = Vec::new();
         if rgba.try_reserve_exact(bytes).is_err() {
             return Vec::new();
         }
+        #[cfg(test)]
+        TEST_BARCODE_RGBA_BYTES.with(|n| n.set(n.get().saturating_add(bytes)));
         match image {
             ImageData::Luma(a) => rgba.extend(a.data.iter().flat_map(|v| [*v, *v, *v, 255])),
             ImageData::Rgb(a) => rgba.extend(a.data.as_chunks::<3>().0.iter().flat_map(|[r, g, b]| [*r, *g, *b, 255])),
         }
         if rgba.len() != bytes || cancel.load(Ordering::Relaxed) {
             return Vec::new();
-        }
-        let Ok(mut cache) = self.barcode_cache.try_borrow_mut() else {
-            return Vec::new();
-        };
-        if let Some(entry) = cache.entries.iter().find(|e| e.divisor == self.barcode_divisor && e.width == width && e.height == height && e.rgba == rgba)
-        {
-            return if cancel.load(Ordering::Relaxed) { Vec::new() } else { entry.overlays.clone() };
         }
         let detected =
             std::panic::catch_unwind(|| crate::barcode::detect_with_divisor(width as usize, height as usize, &rgba, None, cancel, self.barcode_divisor));
@@ -3766,4 +3784,51 @@ mod barcode_diagnostic_path_tests {
 #[cfg(test)]
 pub(crate) fn test_cached_region_count(cache: &RenderCache<'_>) -> usize {
     cache.barcode_cache.borrow().entries.iter().map(|entry|entry.overlays.len()).sum()
+}
+
+// Counts this path's successfully reserved RGBA bytes, not all renderer/allocator traffic.
+#[cfg(test)]
+std::thread_local! {
+    static TEST_BARCODE_RGBA_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(crate) fn take_barcode_rgba_bytes() -> usize {
+    TEST_BARCODE_RGBA_BYTES.with(|n| n.replace(0))
+}
+#[cfg(test)]
+mod barcode_warm_cache_tests {
+    use super::*;
+    #[test]
+    fn warm_cache_reuses_exact_pixels_without_materializing_rgba() {
+        let cache = RenderCache::new();
+        let mut r = Renderer::new(64, 64, RenderSettings::default(), &cache, None, false);
+        let image =
+            ImageData::Luma(LumaData { width: 2048, height: 2048, data: vec![120; 2048 * 2048], interpolate: false, scale_factors: (1.0, 1.0) });
+        let mut rgb =
+            ImageData::Rgb(RgbData { width: 2048, height: 2048, data: vec![120; 2048 * 2048 * 3], interpolate: false, scale_factors: (1.0, 1.0) });
+        take_barcode_rgba_bytes();
+        r.barcode_overlays(&image, None);
+        assert_eq!(take_barcode_rgba_bytes(), 16 * 1024 * 1024);
+        assert_eq!(cache.barcode_cache.borrow().entries.len(), 1);
+        for same in [&image, &rgb] {
+            r.barcode_overlays(same, None);
+            let bytes = take_barcode_rgba_bytes();
+            println!("warm_rgba_reserved_bytes={bytes}");
+            assert_eq!(bytes, 0, "a warm exact-key hit needlessly rebuilds the entire RGBA raster");
+            assert_eq!(cache.barcode_cache.borrow().entries.len(), 1);
+        }
+        // Every channel of every canonical pixel and the fixed allowance still matter.
+        if let ImageData::Rgb(a) = &mut rgb {
+            *a.data.last_mut().unwrap() = 121;
+        }
+        r.barcode_overlays(&rgb, None);
+        assert_eq!(take_barcode_rgba_bytes(), 16 * 1024 * 1024);
+        assert_eq!(cache.barcode_cache.borrow().entries.len(), 2);
+        r.barcode_divisor = 2;
+        r.barcode_overlays(&image, None);
+        assert_eq!(take_barcode_rgba_bytes(), 16 * 1024 * 1024);
+        assert_eq!(cache.barcode_cache.borrow().entries.len(), 2); // Three 4 Mi-pixel keys force FIFO eviction at 8 Mi.
+        r.barcode_overlays(&image, None);
+        assert_eq!(take_barcode_rgba_bytes(), 0);
+    }
 }
