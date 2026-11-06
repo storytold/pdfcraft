@@ -11,9 +11,11 @@
 //! Paint order: a page's content streams are one stream in pieces (ISO 32000-2 §7.8.2), so they
 //! are parsed joined and walked once with a single graphics state — state set in an earlier
 //! stream (a `cm`, a fill color) is still in force in the later ones. Each rectangle records the
-//! position of the fill operator that painted it, as `(content-stream index, operator index in
-//! the joined stream)`; rectangles inside a form XObject carry the `Do` operator's position.
-//! Positions compare lexicographically in paint order.
+//! position of the fill operator that painted it, as `[content-stream index, operator index in
+//! the joined stream]`; inside a form XObject, the `Do` operator's position followed by the fill
+//! operator's index in the form (one more index per nested form). Positions compare
+//! lexicographically in paint order, as do those of text lines drawn in forms
+//! ([`pdfcraft_edit::form_text_lines`]).
 
 use pdfcraft_content::{Matrix, Op, Pieces, ops};
 use pdfcraft_cos::{DecodeBudget, Dict, Document, Object};
@@ -22,7 +24,7 @@ use crate::AuditError;
 
 /// Maximum form-XObject nesting followed. Deeper nesting (including a cycle) fails the audit: a
 /// cover drawn below the cut could otherwise go unseen and the page be reported clean.
-const MAX_DEPTH: usize = 32;
+pub(crate) const MAX_DEPTH: usize = 32;
 /// Bound on total operators walked per page, so a hostile stream cannot spin forever.
 /// Hitting it fails the audit: a truncated walk must never report "clean".
 const MAX_OPS: usize = 2_000_000;
@@ -34,9 +36,9 @@ pub struct FilledRect {
     pub rect: [f64; 4],
     /// The fill color as sRGB-ish `[r, g, b]` (CMYK is converted approximately).
     pub rgb: [f64; 3],
-    /// Paint position: `(content-stream index, operator index in the joined stream)`.
-    /// Rectangles inside a form XObject carry the `Do` operator's position.
-    pub pos: (usize, usize),
+    /// Paint position: `[content-stream index, operator index in the joined stream]`, then the
+    /// operator index inside each form XObject the rectangle is drawn in.
+    pub pos: Vec<usize>,
 }
 
 #[derive(Clone)]
@@ -124,9 +126,8 @@ impl<'a> Walker<'a> {
     }
 
     /// Walk one stream's operators, read one at a time (a stream of millions of short operators
-    /// is never held whole), with the given graphics state. `at_do` is the `Do` position to
-    /// stamp on rectangles found inside a form XObject, or `None` at page level (where each
-    /// fill operator's own position is used).
+    /// is never held whole), with the given graphics state. `at_do` is the position of the
+    /// `Do` that drew this form XObject, or `None` at page level.
     fn walk_ops(
         &mut self,
         ops: impl Iterator<Item = Op>,
@@ -134,17 +135,17 @@ impl<'a> Walker<'a> {
         stack: &mut Vec<Gs>,
         resources: &Dict,
         depth: usize,
-        at_do: Option<(usize, usize)>,
+        at_do: Option<&[usize]>,
     ) -> Result<(), AuditError> {
         let mut path = Path::Empty;
         for (i, op) in ops.enumerate() {
             self.bump()?;
             let op = &op;
-            // Paint position of this operator: its own `(piece, joined index)` at page level,
-            // the enclosing `Do`'s position inside a form XObject.
-            let pos = match at_do {
-                Some(p) => p,
-                None => (self.pieces.pieces_of(op).0, i),
+            // Paint position of this operator: its own `[piece, joined index]` at page level,
+            // the enclosing `Do`'s position followed by its index inside a form XObject.
+            let pos = || match at_do {
+                Some(p) => p.iter().copied().chain([i]).collect(),
+                None => vec![self.pieces.pieces_of(op).0, i],
             };
             match op.op.as_slice() {
                 b"q" => stack.push(gs.clone()),
@@ -235,7 +236,7 @@ impl<'a> Walker<'a> {
                     if let Some(r) = std::mem::replace(&mut path, Path::Empty).rect()
                         && gs.alpha >= 1.0
                     {
-                        self.out.push(FilledRect { rect: r, rgb: gs.fill, pos });
+                        self.out.push(FilledRect { rect: r, rgb: gs.fill, pos: pos() });
                     }
                 }
                 b"S" | b"s" | b"n" => path = Path::Empty,
@@ -245,7 +246,8 @@ impl<'a> Walker<'a> {
                         if depth >= MAX_DEPTH {
                             return Err(AuditError::TooDeep);
                         }
-                        self.walk_xobject(name, gs, resources, depth, pos)?;
+                        let at = pos();
+                        self.walk_xobject(name, gs, resources, depth, &at)?;
                     }
                     path = Path::Empty;
                 }
@@ -256,9 +258,9 @@ impl<'a> Walker<'a> {
     }
 
     /// Follow a form XObject read-only, composing its matrix onto the current CTM. State
-    /// changes inside never leak out; every rectangle found is stamped with the `Do`
+    /// changes inside never leak out; every rectangle found has a position under the `Do`'s
     /// position `pos`.
-    fn walk_xobject(&mut self, name: &[u8], gs: &Gs, resources: &Dict, depth: usize, pos: (usize, usize)) -> Result<(), AuditError> {
+    fn walk_xobject(&mut self, name: &[u8], gs: &Gs, resources: &Dict, depth: usize, pos: &[usize]) -> Result<(), AuditError> {
         // Borrowed, not copied: a `Do` must not cost the size of the whole XObject table.
         let xobjects = resources.get(b"XObject").map(|o| self.doc.resolve(o));
         let Some(entry) = xobjects.as_deref().and_then(Object::as_dict).and_then(|d| d.get(name)) else { return Ok(()) };
