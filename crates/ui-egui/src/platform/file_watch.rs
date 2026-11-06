@@ -653,4 +653,77 @@ mod tests {
         assert_eq!(d.info.pages.len(), 2, "the old file's version was not applied to the new one");
         assert!(d.can_undo().is_some() && !d.dirty, "the saved document and its history stay");
     }
+
+    /// The path the document is watched under, as the watcher reports it.
+    fn watched_path(app: &PdfCraftApp, id: DocId) -> String {
+        app.session.get(id).and_then(|d| d.path.clone()).unwrap()
+    }
+
+    /// `stamp` with only its change time moved, as macOS leaves a saved file a moment later
+    /// when it rewrites the file's extended attributes (#3443).
+    fn ctime_moved(stamp: Stamp) -> Stamp {
+        let mut later = stamp;
+        later.extra[3] = later.extra[3].wrapping_add(1);
+        later
+    }
+
+    /// #3443: after a save, the watcher finds the file with only its change time moved (macOS
+    /// rewrote its extended attributes). It holds the saved bytes, so it is not reloaded: the
+    /// undo history stays and the version is remembered, so a later save doesn't ask either.
+    #[test]
+    fn a_saved_file_whose_metadata_alone_moves_is_not_reloaded() {
+        let (_dir, path) = TempDir::new("metadata-only", &fixture(2));
+        let mut h = harness(&path);
+        let app = h.state_mut();
+        let id = app.views[0].id;
+        app.views[0].select_pages(&[0]);
+        app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+        assert!(app.save_active(SaveTarget::InPlace));
+        let later = ctime_moved(Stamp::at(&path).unwrap());
+        let bytes = Arc::new(std::fs::read(&path).unwrap());
+        let epoch = app.watch.epoch(id);
+        // Handed over directly: the change time can't be moved alone on every platform.
+        app.file_changed(Changed { doc: id, path: watched_path(app, id), epoch, stamp: later, bytes });
+        let app = h.state();
+        assert!(doc(&h).can_undo().is_some(), "not reloaded: the undo history stays");
+        assert_eq!((app.watch.known.get(&id), app.watch.basis.get(&id)), (Some(&later), Some(&later)), "the moved stamp is this version");
+    }
+
+    /// #3443: a stamp with only its change time moved but other bytes in the file is a new
+    /// version (a writer that keeps the length and the modification time), reloaded as before.
+    #[test]
+    fn a_metadata_only_stamp_with_other_bytes_is_still_reloaded() {
+        let (_dir, path) = TempDir::new("metadata-other-bytes", &fixture(2));
+        let mut h = harness(&path);
+        let app = h.state_mut();
+        let id = app.views[0].id;
+        let later = ctime_moved(app.watch.known.get(&id).copied().unwrap());
+        let epoch = app.watch.epoch(id);
+        app.file_changed(Changed { doc: id, path: watched_path(app, id), epoch, stamp: later, bytes: Arc::new(fixture(3)) });
+        assert_eq!(doc(&h).info.pages.len(), 3, "the other bytes were applied");
+    }
+
+    /// #3443, #3755 (review on #3468): a metadata-only change while the document has unsaved
+    /// edits is not a conflict either: no notice, and Save doesn't ask. Unix only: Save's own
+    /// check tells a change-time-only move apart there, where the change time is in the stamp.
+    #[cfg(unix)]
+    #[test]
+    fn a_metadata_change_with_unsaved_changes_is_not_a_conflict() {
+        let (_dir, path) = TempDir::new("metadata-dirty", &fixture(2));
+        let mut h = harness(&path);
+        let app = h.state_mut();
+        let id = app.views[0].id;
+        app.views[0].select_pages(&[0]);
+        app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+        let later = ctime_moved(Stamp::at(&path).unwrap());
+        let bytes = Arc::new(std::fs::read(&path).unwrap());
+        let epoch = app.watch.epoch(id);
+        app.file_changed(Changed { doc: id, path: watched_path(app, id), epoch, stamp: later, bytes });
+        assert!(!app.views[0].disk_changed, "no changed-on-disk notice");
+        assert!(doc(&h).can_undo().is_some(), "the unsaved edit stays");
+        let app = h.state_mut();
+        app.reload_changed_files = false;
+        assert!(app.save_active(SaveTarget::InPlace), "saved without asking");
+        assert!(app.dialog.is_none());
+    }
 }
