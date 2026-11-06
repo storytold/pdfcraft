@@ -373,6 +373,14 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
     // The renderer takes only the user password of R2–R4 files; `Session::open` and the display
     // copy take either.
     let render_password = pdfcraft_engine::render_password_for(bytes.clone(), password);
+    // A page image is an image taken out of the document, as a snapshot or Export is in the app:
+    // like `text`, it needs the document to allow copying (or the permissions password).
+    let mut session = pdfcraft_engine::Session::new();
+    if let Some(doc) = session.open(path, None, bytes.clone(), password).ok().and_then(|id| session.get(id)) {
+        doc.check_copying().map_err(
+            |_| "render: the document's permissions don't allow copying its pages as images; pass the owner password with --password to render it",
+        )?;
+    }
     let display = if inspect(bytes.clone(), render_password.as_deref()).is_ok_and(|info| info.xfa == Some(pdfcraft_render::Xfa::Dynamic)) {
         let mut session = pdfcraft_engine::Session::new();
         let id = session.open(path, None, bytes, password).map_err(|e| e.to_string())?;
