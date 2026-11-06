@@ -2803,6 +2803,20 @@ fn a_flowed_subform_is_as_tall_as_its_content_whatever_its_minimum_height() {
 }
 
 #[test]
+fn a_caption_beside_a_check_box_wraps_in_its_reserve() {
+    // A 7.5in check box whose right-hand caption reserves 6.5in: two lines of text, not one or
+    // two words to a line in the 1in the box keeps. The field after it follows directly.
+    let words = "Applicant does not authorize the office to permit a participating office access to the application as filed. ".repeat(2);
+    let body = format!(
+        r#"<subform name="body" layout="tb" w="7.5in"><field name="opt" w="7.5in" minH="0.3in"><ui><checkButton/></ui><caption placement="right" reserve="6.5in"><value><text>{words}</text></value></caption></field><field name="who" w="3in" h="0.4in"><ui><textEdit/></ui></field></subform>"#
+    );
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+    let w = widgets(&form.pages[0]);
+    let gap = w[1].rect.y - w[0].rect.y;
+    assert!(gap < 72.0, "the check box took {gap}pt");
+}
+
+#[test]
 fn the_form_packet_restores_a_caption_a_script_changed() {
     let body = r#"<subform name="body" layout="tb" w="7.5in"><field name="bar" w="2in" h="0.3in"><ui><button/></ui><caption><value><text>Show Bar</text></value></caption></field></subform>"#;
     let template = one_area_form(r#"layout="tb""#, body);
