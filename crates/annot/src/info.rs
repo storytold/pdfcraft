@@ -2,7 +2,7 @@ use super::create::finite;
 use super::draw::set_appearance;
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, drawn_upright, is_fill_sign, page_ref, page_refs};
 use super::modify::{fillable, touch, unlocked};
-use super::types::{BorderShape, FLAG_LOCKED, LineEnding, Meta, NoteIcon, Rgb};
+use super::types::{AnnotFont, BorderShape, FLAG_LOCKED, LineEnding, Meta, NoteIcon, Rgb};
 use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, appearance};
 
 // ── reading ─────────────────────────────────────────────────────────────────────────────────
@@ -215,6 +215,8 @@ pub struct Props {
     pub fillable: bool,
     /// The interior colour (`None`: no fill).
     pub fill: Option<Rgb>,
+    /// Text boxes, typewriter text and callouts: the `/DA` font.
+    pub font: Option<AnnotFont>,
     /// Text boxes, typewriter text and callouts: the `/DA` font size in points.
     pub font_size: Option<f64>,
     /// Text boxes, typewriter text and callouts: the border's own colour (`None`: the text's).
@@ -244,6 +246,12 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
             d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0)
         }
     });
+    let (font, font_size) = if subtype == "FreeText" {
+        let (_, sz, f) = appearance::parse_da(d);
+        (Some(f), Some(sz))
+    } else {
+        (None, None)
+    };
     Some(Props {
         author: text_value(doc, d, b"T").unwrap_or_default(),
         subject: text_value(doc, d, b"Subj").unwrap_or_default(),
@@ -256,7 +264,8 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
         fillable: fillable(&subtype),
         fill: fill_of(d),
-        font_size: (subtype == "FreeText").then(|| appearance::parse_da(d).1),
+        font,
+        font_size,
         border_color: (subtype == "FreeText").then(|| appearance::da_border(d)).flatten(),
         border_shape: (subtype == "FreeText" && !d.contains(b"CL")).then(|| BorderShape::of(d)),
         fill_opacity: fillable(&subtype).then(|| appearance::part_opacity(d).fill),

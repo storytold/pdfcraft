@@ -24,6 +24,16 @@ pub(crate) use look::button_appearance;
 pub use look::{BorderStyle, CheckStyle, FieldFont, Look, LookPatch, check_style, look, redraw_field, set_button_icon};
 pub(crate) use tree::{ensure_form, form_fonts_as_objects};
 
+pub use pdfcraft_fonts::embedding::FALLBACK_FONT_NAME;
+
+/// Ensure the form's `/DR` contains a Unicode fallback font (`PCFallback`, Inter Regular)
+/// that can draw Central European, Polish, Cyrillic and other Unicode characters.
+pub fn ensure_fallback_font(doc: &mut Document) -> Result<String, FormError> {
+    ensure_form(doc)?;
+    pdfcraft_fonts::embedding::ensure_fallback_font(doc).map_err(FormError::Invalid)?;
+    Ok(FALLBACK_FONT_NAME.to_string())
+}
+
 /// The smallest width and height of a field's widget, in points: a smaller one is refused.
 pub const MIN_FIELD_SIDE: f64 = 4.0;
 

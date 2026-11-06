@@ -3,7 +3,7 @@
 //! subject, modified) and Review History (status changes), with Acrobat's Locked box.
 
 use egui::{Align, Layout};
-use pdfcraft_engine::{CommentProps, Edit, LineEnding, NoteIcon};
+use pdfcraft_engine::{AnnotFont, CommentProps, Edit, LineEnding, NoteIcon};
 
 use crate::comments::swatch_grid;
 use crate::theme::{self, Tokens};
@@ -272,6 +272,12 @@ fn changes(o: &CommentProps, e: &CommentProps, page: usize, index: usize, t: &Co
         out.push(Edit::PartOpacity { page, index, fill: e.fill_opacity.filter(|_| fill), text: e.text_opacity.filter(|_| text) });
     }
     if t.restylable
+        && t.font.is_some()
+        && let Some(font) = e.font.filter(|f| Some(*f) != o.font)
+    {
+        out.push(Edit::SetAnnotationFont { page, index, font });
+    }
+    if t.restylable
         && t.font_size.is_some()
         && let Some(size) = e.font_size.filter(|s| Some(*s) != o.font_size)
     {
@@ -393,6 +399,15 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                         if let Some(f) = crate::comments::fill_picker(ui, e.fill) {
                             e.fill = f;
                         }
+                        ui.end_row();
+                    }
+                    if let Some(font) = e.font.as_mut() {
+                        ui.label(tl!("Font:"));
+                        craft_ui::ComboBox::from_id_salt("comment-font").selected_text(font.name()).show_ui(ui, |ui| {
+                            for f in AnnotFont::ALL {
+                                ui.selectable_value(font, f, f.name());
+                            }
+                        });
                         ui.end_row();
                     }
                     if let Some(size) = e.font_size.as_mut() {

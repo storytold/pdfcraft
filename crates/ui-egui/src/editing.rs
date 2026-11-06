@@ -916,6 +916,7 @@ fn content_page(edit: &Edit) -> Option<usize> {
     }
 }
 
+/// The page index associated with a comment edit, if any.
 fn comment_page(edit: &Edit) -> Option<usize> {
     match edit {
         Edit::AddAnnotation(a) => Some(a.page),
@@ -930,6 +931,7 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::FillAnnotation { page, .. }
         | Edit::PartOpacity { page, .. }
         | Edit::FontSizeAnnotation { page, .. }
+        | Edit::SetAnnotationFont { page, .. }
         | Edit::BorderColorAnnotation { page, .. }
         | Edit::BorderShapeAnnotation { page, .. }
         | Edit::SetAnnotationInfo { page, .. } => Some(*page),

@@ -315,6 +315,11 @@ pub fn redraw_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
 /// `FormError::NoSuchField` when no field is named `name`.
 pub(super) fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>) -> Result<(), FormError> {
     let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    let can_fallback = |s: &str| pdfcraft_fonts::first_undrawable(s).is_some() && pdfcraft_fonts::first_undrawable_with_fallback(s).is_none();
+    let needs_fallback = f.value.iter().any(|v| can_fallback(v)) || f.options.iter().any(|(_, d)| can_fallback(d));
+    if needs_fallback {
+        super::ensure_fallback_font(doc)?;
+    }
     let mut undrawn = false;
     for (index, w) in f.widgets.iter().enumerate() {
         if only.is_some_and(|only| only != index) {

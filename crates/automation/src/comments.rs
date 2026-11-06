@@ -721,6 +721,7 @@ impl Automation {
         self.deliver(a, &format!("Summary of comments on {stem}.pdf"), bytes)
     }
 
+    /// Edit a comment's contents, appearance (colour, fill, opacity, font, font size), geometry or position.
     pub(crate) fn comment_edit(&mut self, a: &Args) -> Result<Value> {
         let (page, index) = self.comment_target(a)?;
         let info = self.doc(a)?.info.pages[page].clone();
@@ -757,6 +758,11 @@ impl Automation {
             }
             edits.push(Edit::FontSizeAnnotation { page, index, size });
         }
+        if let Some(font_name) = a.opt_str("font")? {
+            let font = pdfcraft_engine::AnnotFont::from_name(font_name)
+                .ok_or_else(|| ToolError::InvalidArgs(format!("unknown font {font_name:?}: use Helvetica, Times, Courier or Inter")))?;
+            edits.push(Edit::SetAnnotationFont { page, index, font });
+        }
         if let Some(r) = a.nums::<4>("rect")? {
             // The rectangle as comment_list reports it: where the comment is drawn.
             let doc = self.doc(a)?;
@@ -784,7 +790,7 @@ impl Automation {
         }
         if edits.is_empty() {
             return Err(ToolError::InvalidArgs(
-                "nothing to change: pass contents, color, opacity, fill_opacity, text_opacity, width, fill, border_color, border_shape, font_size, rect, move or points".into(),
+                "nothing to change: pass contents, color, opacity, fill_opacity, text_opacity, width, fill, border_color, border_shape, font, font_size, rect, move or points".into(),
             ));
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Edit comment".into(), edits } };

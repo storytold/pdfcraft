@@ -500,7 +500,7 @@ pub fn comment_outlines(text: &str) -> Vec<Outline> {
                     if let Some(s) = node.children().find(|c| c.has_tag_name("defaultappearance")).and_then(|c| c.text()) {
                         da.set(b"DA".to_vec(), PdfString::literal(s.as_bytes().to_vec()));
                     }
-                    let (text_color, size) = pdfcraft_annot::appearance::parse_da(&da);
+                    let (text_color, size, _) = pdfcraft_annot::appearance::parse_da(&da);
                     let fringe = node.attribute("fringe").map(csv).filter(|f| callout.is_some() && f.len() == 4 && f.iter().all(|v| v.is_finite()));
                     let rect = match fringe.as_deref() {
                         Some([l, b, r, t]) => [rect[0] + l, rect[1] + b, rect[2] - r, rect[3] - t],

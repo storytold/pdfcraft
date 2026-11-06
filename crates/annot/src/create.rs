@@ -2,7 +2,8 @@ use super::draw::draw_appearance;
 use super::lookup::{annot_dict, annot_ref, annots, fill_sign_shape, page_ref, set_annots};
 use super::modify::{free_text_da, n, rich_text, set_part_keys, shape_text_box};
 use super::types::{
-    FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, Style,
+    AnnotFont, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup,
+    Style,
 };
 use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, appearance};
 
@@ -385,7 +386,17 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                 d.set(b"IT".to_vec(), Object::name("FreeTextTypeWriter"));
             }
             let size = if font_size.is_finite() && *font_size > 0.0 { font_size.clamp(1.0, 400.0) } else { 12.0 };
-            d.set(b"DA".to_vec(), free_text_da(style.color, style.border_color, size));
+            let font = if new
+                .contents
+                .chars()
+                .any(|c| !pdfcraft_fonts::win_ansi_encodable(c) && !matches!(c, '\n' | '\r') && pdfcraft_fonts::fallback_has_char(c))
+                && pdfcraft_fonts::embedding::ensure_fallback_font(doc).is_ok()
+            {
+                AnnotFont::Inter
+            } else {
+                AnnotFont::Helvetica
+            };
+            d.set(b"DA".to_vec(), free_text_da(style.color, style.border_color, size, font));
             d.set(b"Q".to_vec(), Object::Int(0));
             if let Some(f) = style.fill {
                 d.set(b"C".to_vec(), rgb(f));
