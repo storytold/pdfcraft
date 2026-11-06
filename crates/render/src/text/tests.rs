@@ -1979,7 +1979,24 @@ fn a_tounicode_written_as_cid_ranges_gives_text() {
     assert_eq!(cid_range_to_unicode_text(four), "Texy", "four-byte entries");
 }
 
-/// The page [`a_tounicode_written_as_cid_ranges_gives_text`] reads: four codes in a Type 0 font
+/// When a `/ToUnicode` gives one code both a bf entry and a CID entry, the bf entry is the
+/// code's text (ISO 32000-2 §9.10.3 defines `/ToUnicode` by `beginbfchar` / `beginbfrange`); the
+/// CID number is read only for codes no bf entry covers (vendored hayro-interpret patch 85).
+#[test]
+fn a_tounicode_bf_entry_wins_over_a_cid_entry_for_the_same_code() {
+    // Codes 1 and 3 have both kinds of entry: bf says `T` / `x`, CID says `X` / `Y`. Codes 2 and 4
+    // have CID entries only.
+    let two = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Words def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 3 begincidchar <0001> 88 <0002> 101 <0004> 116 endcidchar 1 begincidrange <0003> <0003> 89 endcidrange 1 beginbfchar <0001> <0054> endbfchar 1 beginbfrange <0003> <0003> <0078> endbfrange endcmap CMapName currentdict /CMap defineresource pop end end";
+    assert_eq!(cid_range_to_unicode_text(two), "Text", "two-byte entries");
+    // The same with one-byte entries. For two-byte entries the CID lookup, tried at one byte
+    // first, already falls back to the bf entries at that length; one-byte entries are where
+    // reading CID entries before bf entries would show, as `XeYt`.
+    let one = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Words def /CMapType 2 def 1 begincodespacerange <00> <FF> endcodespacerange 3 begincidchar <01> 88 <02> 101 <04> 116 endcidchar 1 begincidrange <03> <03> 89 endcidrange 1 beginbfchar <01> <0054> endbfchar 1 beginbfrange <03> <03> <0078> endbfrange endcmap CMapName currentdict /CMap defineresource pop end end";
+    assert_eq!(cid_range_to_unicode_text(one), "Text", "one-byte entries");
+}
+
+/// The page [`a_tounicode_written_as_cid_ranges_gives_text`] and
+/// [`a_tounicode_bf_entry_wins_over_a_cid_entry_for_the_same_code`] read: four codes in a Type 0 font
 /// (Inter, Identity-H) whose `/ToUnicode` is `cmap`.
 fn cid_range_to_unicode_text(cmap: &[u8]) -> String {
     use lopdf::{Document, Object, Stream, dictionary};
