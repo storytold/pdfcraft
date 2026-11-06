@@ -342,8 +342,12 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
             });
         let non_axis_transform = matches!(change, ImageEdit::Transform([a, b, c, d, _, _])
             if !((b.abs() < 1e-5 && c.abs() < 1e-5) || (a.abs() < 1e-5 && d.abs() < 1e-5)));
+        // A Form drawn as an added image (a file can mark one so) is replaced inside a copy of
+        // the Form, keeping its frame: as an added image it would become the bare picture.
+        let replaces_form = img.is_form && matches!(change, ImageEdit::Replace { .. });
         let should_promote = has_active_crop
             || non_axis_transform
+            || replaces_form
             || matches!(change, ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete);
 
         if should_promote {

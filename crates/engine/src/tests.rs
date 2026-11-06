@@ -9702,6 +9702,71 @@ fn replace_on_added_image_replaces_xobject_and_undo_restores() {
     assert_eq!(s.get(id).unwrap().page_images(0)[0].object.expect("undo promoted replace"), crop_obj);
 }
 
+/// A file may mark a Form as an added image. Replacing it goes through the Form copy, so its
+/// frame stays: as an added image it would be redrawn as the bare new picture.
+#[test]
+fn replacing_a_form_marked_as_an_added_image_keeps_its_frame() {
+    use pdfcraft_cos::{Dict, Object, Stream};
+    let make_png = |rgb: [u8; 3]| {
+        let mut png = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png, 2, 2);
+            enc.set_color(png::ColorType::Rgb);
+            enc.write_header().unwrap().write_image_data(&[rgb, rgb, rgb, rgb].concat()).unwrap();
+        }
+        Arc::new(png)
+    };
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "a.png".into(), bytes: make_png([255, 0, 0]) }).unwrap();
+    let image = s.get(id).unwrap().page_images(0)[0].object.expect("the added image");
+
+    // Wrap the added picture in a clipping Form, and point both the drawing and the item at it.
+    let mut doc = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    let mut xo = Dict::new();
+    xo.set(b"Ph".to_vec(), Object::Ref(image));
+    let mut res = Dict::new();
+    res.set(b"XObject".to_vec(), Object::Dict(xo));
+    let mut fd = Dict::new();
+    fd.set(b"Subtype".to_vec(), Object::name("Form"));
+    fd.set(b"BBox".to_vec(), Object::Array([0, 0, 1, 1].map(Object::Int).to_vec()));
+    fd.set(b"Resources".to_vec(), Object::Dict(res));
+    let form = doc.add(Object::Stream(Stream::flate(fd, b"0.5 1 m 1 0.5 l 0.5 0 l 0 0.5 l h W n /Ph Do")));
+    let item = pdfcraft_edit::list_added(&doc).into_iter().next().expect("the added item").obj;
+    doc.update_dict(item, |d| {
+        if let Some(Object::Dict(added)) = d.get_mut(b"PCAdded") {
+            added.set(b"Image".to_vec(), Object::Ref(form));
+        }
+    })
+    .unwrap();
+    let page = pdfcraft_model::pages(&doc).swap_remove(0);
+    let resources = page.dict.get(b"Resources").cloned().expect("page resources");
+    let mut page_res = doc.resolve(&resources).as_dict().cloned().expect("a resources dictionary");
+    let mut page_xo = page_res.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).expect("page XObjects");
+    let names: Vec<_> = page_xo.iter().filter(|(_, v)| v.as_ref() == Some(image)).map(|(n, _)| n.clone()).collect();
+    assert!(!names.is_empty(), "the page draws the added image by name");
+    for name in names {
+        page_xo.set(name, Object::Ref(form));
+    }
+    page_res.set(b"XObject".to_vec(), Object::Dict(page_xo));
+    match resources.as_ref() {
+        Some(r) => doc.set(r, Object::Dict(page_res)),
+        None => doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(page_res))).unwrap(),
+    }
+    let bytes = pdfcraft_cos::write_incremental(&doc, &Default::default()).unwrap();
+    let id = s.open("wrapped.pdf", None, Arc::new(bytes), None).expect("opens");
+    let before = s.get(id).unwrap().page_images(0);
+    assert_eq!(before.len(), 1);
+    assert!(before[0].is_form && before[0].replaceable, "{:?}", before[0]);
+
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Replace { name: "b.png".into(), bytes: make_png([0, 0, 255]) } })
+        .unwrap();
+    let after = s.get(id).unwrap().page_images(0);
+    assert_eq!(after.len(), 1);
+    assert!(after[0].is_form, "the Form's frame is kept: {:?}", after[0]);
+    assert_ne!(after[0].object, Some(form), "a copy of the Form draws the new picture");
+    assert!(after[0].rect.iter().zip(before[0].rect).all(|(a, b)| (a - b).abs() < 1e-6), "in the same place: {:?}", after[0].rect);
+}
+
 #[test]
 fn mirroring_transform_on_added_image_flips_and_non_finite_is_refused() {
     let make_png = |rgb: [u8; 3]| {

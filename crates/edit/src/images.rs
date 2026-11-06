@@ -124,6 +124,10 @@ fn xobjects(doc: &Document, page: &Dict) -> Dict {
 
 /// How deep [`wrapped_picture`] looks into Forms nested in Forms.
 const MAX_WRAP_DEPTH: usize = 8;
+/// How many `Do` operators [`wrapped_picture`] follows in one group, nested Forms included.
+const MAX_WRAP_DRAWS: usize = 256;
+/// How many bytes of Form content [`wrapped_picture`] decodes for one group, in all.
+const MAX_WRAP_CONTENT: usize = 16 << 20;
 
 /// A Form's own resources dictionary (empty when it has none).
 fn form_resources(doc: &Document, form: &pdfcraft_cos::Stream) -> Dict {
@@ -135,47 +139,80 @@ fn resource_xobjects(doc: &Document, res: &Dict) -> Dict {
     res.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default()
 }
 
-/// The XObject names leading from grouped Form artwork to the one raster picture it draws
-/// (a photo in a round frame, say), through nested Forms. `None` when it draws no picture or
-/// more than one, so Replace never has to guess which. Bounded by depth and a seen-set.
-fn wrapped_picture(doc: &Document, form: &pdfcraft_cos::Stream) -> Option<Vec<Name>> {
-    fn walk(
-        doc: &Document,
-        form: &pdfcraft_cos::Stream,
-        depth: usize,
-        seen: &mut std::collections::HashSet<ObjRef>,
-        path: &mut Vec<Name>,
-        found: &mut Vec<Vec<Name>>,
-    ) {
-        if depth >= MAX_WRAP_DEPTH || found.len() > 1 {
-            return;
+/// The XObject names leading from grouped Form artwork (object `root`, when it has one) to the
+/// one raster picture it draws (a photo in a round frame, say), through nested Forms.
+///
+/// It follows what the group draws, its `Do` operators, not what its resources list: a
+/// resource nothing draws doesn't count, and a picture drawn twice (by two `Do`s, or inside a
+/// Form drawn twice) counts twice. `None` when the group draws no picture, more than one, or an
+/// inline image, so Replace never has to guess which. A Form that draws itself, a group nested
+/// deeper than [`MAX_WRAP_DEPTH`] or past the draw and content budgets is `None` too: what lies
+/// beyond the limit is unknown, so it may hold another picture.
+fn wrapped_picture(doc: &Document, form: &pdfcraft_cos::Stream, root: Option<ObjRef>) -> Option<Vec<Name>> {
+    #[derive(Default)]
+    struct Scan {
+        found: Vec<Vec<Name>>,
+        draws: usize,
+        decoded: usize,
+        /// Something past a limit, or a cycle: the group's pictures can't be known.
+        unknown: bool,
+    }
+    impl Scan {
+        fn done(&self) -> bool {
+            self.unknown || self.found.len() > 1
         }
-        for (name, v) in resource_xobjects(doc, &form_resources(doc, form)).iter() {
-            if let Some(r) = v.as_ref()
-                && !seen.insert(r)
-            {
-                // Drawn twice (or a cycle): a second path to the same thing is ambiguous.
-                found.push(Vec::new());
-                found.push(Vec::new());
-                return;
+    }
+    fn walk(doc: &Document, form: &pdfcraft_cos::Stream, on_path: &mut Vec<ObjRef>, path: &mut Vec<Name>, scan: &mut Scan) {
+        let Ok(content) = form.decoded_within(MAX_WRAP_CONTENT.saturating_sub(scan.decoded)) else {
+            scan.unknown = true;
+            return;
+        };
+        scan.decoded = scan.decoded.saturating_add(content.len());
+        let xobjects = resource_xobjects(doc, &form_resources(doc, form));
+        for op in parse(&content).ops {
+            if op.is("BI") {
+                // An inline picture has no resource to swap: a second picture, never the one.
+                scan.found.push(Vec::new());
+            } else if op.is("Do") {
+                scan.draws = scan.draws.saturating_add(1);
+                if scan.draws > MAX_WRAP_DRAWS {
+                    scan.unknown = true;
+                    return;
+                }
+                let Some((name, v)) = op.name(0).and_then(|n| xobjects.get(n).map(|v| (n, v))) else { continue };
+                let r = v.as_ref();
+                if r.is_some_and(|r| on_path.contains(&r)) {
+                    scan.unknown = true;
+                    return;
+                }
+                let obj = doc.resolve(v);
+                let Object::Stream(s) = &*obj else { continue };
+                path.push(name.to_vec());
+                match s.dict.name(b"Subtype") {
+                    Some(b"Image") => scan.found.push(path.clone()),
+                    Some(b"Form") if path.len() >= MAX_WRAP_DEPTH => scan.unknown = true,
+                    Some(b"Form") => {
+                        on_path.extend(r);
+                        walk(doc, s, on_path, path, scan);
+                        if r.is_some() {
+                            on_path.pop();
+                        }
+                    }
+                    _ => {}
+                }
+                path.pop();
             }
-            let obj = doc.resolve(v);
-            let Object::Stream(s) = &*obj else { continue };
-            path.push(name.clone());
-            match s.dict.name(b"Subtype") {
-                Some(b"Image") => found.push(path.clone()),
-                Some(b"Form") => walk(doc, s, depth.saturating_add(1), seen, path, found),
-                _ => {}
-            }
-            path.pop();
-            if found.len() > 1 {
+            if scan.done() {
                 return;
             }
         }
     }
-    let mut found = Vec::new();
-    walk(doc, form, 0, &mut std::collections::HashSet::new(), &mut Vec::new(), &mut found);
-    match <[Vec<Name>; 1]>::try_from(found) {
+    let mut scan = Scan::default();
+    walk(doc, form, &mut root.into_iter().collect(), &mut Vec::new(), &mut scan);
+    if scan.unknown {
+        return None;
+    }
+    match <[Vec<Name>; 1]>::try_from(scan.found) {
         Ok([path]) if !path.is_empty() => Some(path),
         _ => None,
     }
@@ -438,7 +475,7 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
                 name: String::from_utf8_lossy(name).into_owned(),
                 object: resource.as_ref(),
                 is_form,
-                replaceable: !is_form || wrapped_picture(doc, s).is_some(),
+                replaceable: !is_form || wrapped_picture(doc, s, resource.as_ref()).is_some(),
                 width: if is_form { 0 } else { s.dict.int(b"Width").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
                 height: if is_form { 0 } else { s.dict.int(b"Height").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
                 stream: pieces.piece_of(op.span.start),
@@ -1757,7 +1794,7 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
                         _ => None,
                     })
                     .ok_or_else(|| EditError::Invalid("the artwork could not be located".into()))?;
-                let Some(path) = wrapped_picture(doc, &form) else {
+                let Some(path) = wrapped_picture(doc, &form, img.object) else {
                     return Err(EditError::Invalid(
                         "this grouped artwork holds no single picture; it can be moved, resized, rotated, flipped or deleted, not replaced".into(),
                     ));

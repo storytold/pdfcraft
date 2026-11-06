@@ -4801,6 +4801,89 @@ fn a_picture_in_nested_groups_is_replaced_and_an_ambiguous_group_is_refused() {
     assert!(images::change_image(&mut doc, 0, 0, &images::ImageChange::Replace(new_photo)).is_err());
 }
 
+/// `photo` drawn as `/Ph` inside `nested` Forms, inside the group returned.
+fn nested_groups(doc: &mut Document, photo: pdfcraft_cos::ObjRef, nested: usize) -> pdfcraft_cos::ObjRef {
+    let mut inner = group(doc, b"100 0 0 100 0 0 cm /Ph Do", &[("Ph", photo)]);
+    for _ in 0..nested {
+        inner = group(doc, b"/In Do", &[("In", inner)]);
+    }
+    inner
+}
+
+/// Whether the group drawn on page 0 offers Replace, and whether Replace agrees.
+fn replace_offered_and_done(mut doc: Document) -> (bool, bool) {
+    let offered = images::page_images(&doc, 0).unwrap()[0].replaceable;
+    let new_photo = tiny_image(&mut doc, 200);
+    (offered, images::change_image(&mut doc, 0, 0, &images::ImageChange::Replace(new_photo)).is_ok())
+}
+
+#[test]
+fn replace_looks_as_deep_as_its_limit_and_refuses_what_lies_beyond() {
+    // The picture eight names deep (seven Forms below the group) is found and replaced.
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let deepest = nested_groups(&mut doc, photo, 7);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, deepest)), (true, true));
+    // One Form deeper, the scan stops at the limit: what it can't see may be another picture.
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let too_deep = nested_groups(&mut doc, photo, 8);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, too_deep)), (false, false));
+    // A shallow picture beside one just past the limit (eight Forms down) is not the only one.
+    let mut doc = fixture();
+    let (shallow, hidden) = (tiny_image(&mut doc, 40), tiny_image(&mut doc, 90));
+    let deep = nested_groups(&mut doc, hidden, 7);
+    let both = group(&mut doc, b"q 50 0 0 50 0 0 cm /Ph Do Q /Deep Do", &[("Ph", shallow), ("Deep", deep)]);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, both)), (false, false));
+}
+
+#[test]
+fn replace_follows_what_a_group_draws() {
+    // A frame drawn twice around one picture: still one picture.
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let frame = group(&mut doc, b"0 0 100 100 re S", &[]);
+    let framed = group(&mut doc, b"/Fr Do q 100 0 0 100 0 0 cm /Ph Do Q /Fr Do", &[("Fr", frame), ("Ph", photo)]);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, framed)), (true, true));
+    // A picture the group lists but never draws doesn't count.
+    let mut doc = fixture();
+    let (photo, unused) = (tiny_image(&mut doc, 40), tiny_image(&mut doc, 90));
+    let listed = group(&mut doc, b"100 0 0 100 0 0 cm /Ph Do", &[("Ph", photo), ("Unused", unused)]);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, listed)), (true, true));
+    // One picture drawn twice, or inside a Form drawn twice: replacing it would change both.
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let twice = group(&mut doc, b"q 50 0 0 50 0 0 cm /Ph Do Q q 50 0 0 50 50 50 cm /Ph Do Q", &[("Ph", photo)]);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, twice)), (false, false));
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let inner = nested_groups(&mut doc, photo, 0);
+    let shared = group(&mut doc, b"/In Do /In Do", &[("In", inner)]);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, shared)), (false, false));
+    // An inline picture beside it: two pictures.
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let inline = group(&mut doc, b"q 100 0 0 100 0 0 cm /Ph Do Q q 10 0 0 10 0 0 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x80 EI Q", &[("Ph", photo)]);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, inline)), (false, false));
+}
+
+#[test]
+fn a_group_that_draws_itself_is_not_replaced() {
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let looped = group(&mut doc, b"q 100 0 0 100 0 0 cm /Ph Do Q /Self Do", &[("Ph", photo)]);
+    // The group names itself: a cycle the scan must stop at, never a picture.
+    doc.update_dict(looped, |d| {
+        if let Some(Object::Dict(res)) = d.get_mut(b"Resources")
+            && let Some(Object::Dict(xo)) = res.get_mut(b"XObject")
+        {
+            xo.set(b"Self".to_vec(), Object::Ref(looped));
+        }
+    })
+    .unwrap();
+    assert_eq!(replace_offered_and_done(draw_figure(doc, looped)), (false, false));
+}
+
 #[test]
 fn form_artwork_edits_only_the_selected_placement() {
     let mut doc = fixture(); // three pages share resources; pages 0 and 1 also share contents
