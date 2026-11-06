@@ -137,6 +137,11 @@ pub struct WindowState {
     pub(crate) last_right: RightPanel,
     /// The keys this window's menu bar clicked (Copy, Delete …), for its next frame's input.
     pub(crate) menu_input: Vec<egui::Event>,
+    /// The widths of this window's Tools pane and side panel: dragging a border in one window
+    /// leaves the others as they are. Where the panes dock stays one choice for every window
+    /// (Preferences), and Preferences keep the main window's widths.
+    pub(crate) tools_width: f32,
+    pub(crate) side_width: f32,
 }
 
 impl Default for WindowState {
@@ -216,6 +221,8 @@ impl Default for WindowState {
             pdfa: Default::default(),
             last_right: RightPanel::Comments,
             menu_input: Vec::new(),
+            tools_width: crate::side_panels::TOOLS_WIDTH,
+            side_width: crate::side_panels::SIDE_WIDTH,
         }
     }
 }
@@ -389,6 +396,8 @@ impl PdfCraftApp {
             pdfa,
             last_right,
             menu_input,
+            tools_width,
+            side_width,
         } = state;
         std::mem::swap(&mut self.views, views);
         std::mem::swap(&mut self.active, active);
@@ -463,6 +472,8 @@ impl PdfCraftApp {
         std::mem::swap(&mut self.pdfa, pdfa);
         std::mem::swap(&mut self.last_right, last_right);
         std::mem::swap(&mut self.menu_input, menu_input);
+        std::mem::swap(&mut self.side_panels.tools_width, tools_width);
+        std::mem::swap(&mut self.side_panels.side_width, side_width);
     }
 
     /// Make window `id` the current one: park the current window's state and load `id`'s.
@@ -613,16 +624,28 @@ impl PdfCraftApp {
         Self::windows_supported() && index < self.views.len() && (self.current_window == WindowId::ROOT || self.views.len() > 1)
     }
 
-    /// A window for `view`, laid out like window `from` (same mode and panels), at `at` (a screen
-    /// position the tab is dropped at) or a little below and to the right of `from`.
+    /// A window for `view`, laid out like window `from` (same mode, panels and panel widths), at
+    /// `at` (a screen position the tab is dropped at) or a little below and to the right of `from`.
     fn open_window_with(&mut self, view: DocView, from: WindowId, at: Option<Pos2>) {
-        let layout = self.with_window(from, |a| (a.mode, a.left, a.left_open, a.right, a.all_tools_expanded));
-        let (mode, left, left_open, right, all_tools_expanded) =
-            layout.unwrap_or((self.mode, self.left, self.left_open, self.right, self.all_tools_expanded));
+        let layout_of =
+            |a: &PdfCraftApp| (a.mode, a.left, a.left_open, a.right, a.all_tools_expanded, a.side_panels.tools_width, a.side_panels.side_width);
+        let layout = self.with_window(from, |a| layout_of(a));
+        let (mode, left, left_open, right, all_tools_expanded, tools_width, side_width) = layout.unwrap_or_else(|| layout_of(self));
         let (pos, size) = new_window_place(self.window_geometry.get(&from).filter(|g| g.known), at);
         let id = WindowId(self.next_window_id);
         self.next_window_id = self.next_window_id.saturating_add(1);
-        let state = WindowState { views: vec![view], active: Some(0), mode, left, left_open, right, all_tools_expanded, ..WindowState::default() };
+        let state = WindowState {
+            views: vec![view],
+            active: Some(0),
+            mode,
+            left,
+            left_open,
+            right,
+            all_tools_expanded,
+            tools_width,
+            side_width,
+            ..WindowState::default()
+        };
         self.windows.push(WindowSlot { id, state: Some(state), wanted: Some((pos, size)) });
         self.focused_window = id;
     }
@@ -1031,6 +1054,46 @@ mod tests {
         assert_eq!(app.views.len(), 2);
         assert_eq!(app.mode, Mode::Read);
         assert_eq!(app.palette_query, "find");
+    }
+
+    /// Each window keeps the widths its panel borders were dragged to (a border dragged in a second
+    /// window widened the main window's side panel too). A new window starts with the widths of
+    /// the window its tab came from.
+    #[test]
+    fn each_window_keeps_its_own_panel_widths() {
+        let mut app = app_with(&["a.pdf", "b.pdf", "c.pdf"]);
+        let ctx = egui::Context::default();
+        app.side_panels.side_width = 400.0;
+        app.side_panels.tools_width = 300.0;
+        let b = app.views[1].id;
+        app.queue_window_op(WindowOp::MoveTab { doc: b, from: WindowId::ROOT, to: None, at: None });
+        app.apply_window_ops(&ctx);
+        let second = app.windows[0].id;
+        fn widths(a: &mut PdfCraftApp) -> (f32, f32) {
+            (a.side_panels.tools_width, a.side_panels.side_width)
+        }
+        assert_eq!(app.with_window(second, widths), Some((300.0, 400.0)), "as wide as where the tab came from");
+        // Dragged wider in the second window: the main window keeps its width.
+        app.with_window(second, |a| a.side_panels.side_width = 480.0);
+        assert_eq!(widths(&mut app), (300.0, 400.0));
+        assert_eq!(app.with_window(second, widths), Some((300.0, 480.0)));
+        // And narrower in the main window: the second window keeps its own.
+        app.side_panels.side_width = 300.0;
+        app.side_panels.tools_width = 280.0;
+        assert_eq!(app.with_window(second, widths), Some((300.0, 480.0)));
+        assert_eq!(widths(&mut app), (280.0, 300.0));
+        // Preferences keep the main window's.
+        app.with_window(second, |a| a.side_panels.side_width = 500.0);
+        let saved: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
+        assert_eq!(saved["side_panels"]["side_width"].as_f64(), Some(300.0));
+        // A tab dragged out of the second window opens a window as wide as the second one.
+        let c = app.views[1].id;
+        app.queue_window_op(WindowOp::MoveTab { doc: c, from: WindowId::ROOT, to: Some((second, None)), at: None });
+        app.apply_window_ops(&ctx);
+        app.queue_window_op(WindowOp::MoveTab { doc: c, from: second, to: None, at: None });
+        app.apply_window_ops(&ctx);
+        let third = app.windows.iter().map(|w| w.id).find(|id| *id != second).expect("a third window");
+        assert_eq!(app.with_window(third, widths), Some((300.0, 500.0)));
     }
 
     #[test]
