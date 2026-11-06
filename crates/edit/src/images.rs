@@ -1428,13 +1428,14 @@ fn arrange_image(doc: &mut Document, p: &pdfcraft_model::Page, all: &[ContentStr
     };
 
     if let Some(piece) = owned_destination {
+        let insertion = piece.saturating_add(usize::from(insert_after));
+        crate::text::drawn_before_damage(all, insertion)?;
         let changed = pieces.splice([(target_span, removal_replacement)]);
         let contents = crate::text::rewritten_contents(doc, all, changed)?;
         let mut list = match contents {
             Object::Array(list) => list,
             one => vec![one],
         };
-        let insertion = piece.saturating_add(usize::from(insert_after));
         if insertion > list.len() {
             return Err(EditError::Invalid("the destination content stream is missing".into()));
         }

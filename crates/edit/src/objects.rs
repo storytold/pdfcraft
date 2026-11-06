@@ -338,7 +338,7 @@ fn checked_streams(doc: &Document, page: usize) -> Result<Vec<ContentStream>, Ed
                 return Err(EditError::Invalid("the page graphics state is nested too deeply".into()));
             }
         }
-        streams.push(ContentStream { entry: object, data: bytes, damaged: false });
+        streams.push(ContentStream { entry: object, data: bytes, read: crate::text::Read::Whole });
     }
     Ok(streams)
 }
