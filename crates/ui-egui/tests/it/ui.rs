@@ -1271,6 +1271,33 @@ fn explicit_mode_overrides_default_before_and_after_open() {
 }
 
 #[test]
+fn a_host_opens_documents_in_its_mode_without_changing_the_users_default() {
+    use pdfcraft_ui_egui::Mode;
+    for (value, mode) in [("all", Mode::AllTools), ("read", Mode::Read), ("edit", Mode::Edit), ("convert", Mode::Convert), ("sign", Mode::Sign)] {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.default_mode = Mode::AllTools;
+        app.open_in_mode(value).unwrap();
+        app.open_bytes("first.pdf", None, FIXTURE.to_vec()).unwrap();
+        assert_eq!(app.mode, mode, "{value}");
+        app.open_bytes("second.pdf", None, FIXTURE.to_vec()).unwrap();
+        assert_eq!(app.mode, mode, "{value}");
+        // The user's own default is what is saved.
+        assert_eq!(app.default_mode, Mode::AllTools);
+        let saved: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
+        assert_eq!(saved["default_mode"], "all", "{value}");
+    }
+    // Anything else is refused and changes nothing (where --mode falls back to All tools).
+    for value in ["", "Read", "view", "sign ", "all-tools"] {
+        let mut app = PdfCraftApp::new();
+        app.default_mode = Mode::Read;
+        assert!(app.open_in_mode(value).is_err(), "{value:?}");
+        app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
+        assert_eq!(app.mode, Mode::Read, "{value:?}");
+    }
+}
+
+#[test]
 fn preferences_selects_default_workspace_for_next_open() {
     use egui::accesskit::Role;
     use pdfcraft_ui_egui::Mode;
