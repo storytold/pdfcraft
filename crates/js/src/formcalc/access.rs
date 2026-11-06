@@ -32,9 +32,12 @@ impl Interp<'_> {
         Ok(())
     }
 
-    /// `more` nodes into `out`, each once, never past [`MAX_LIST`].
+    /// `more` nodes into `out`, each once, never past [`MAX_LIST`]. Every node visited costs a
+    /// step, kept or not, and the call itself one more: a search that matches nothing still
+    /// costs work when it is repeated over a long list.
     pub(super) fn gather(&mut self, out: &mut Vec<usize>, seen: &mut HashSet<usize>, more: impl IntoIterator<Item = usize>) -> R<()> {
         for i in more {
+            self.step()?;
             if seen.insert(i) {
                 out.push(i);
                 if out.len() > MAX_LIST {
@@ -42,7 +45,7 @@ impl Interp<'_> {
                 }
             }
         }
-        self.charge(1)
+        self.step()
     }
 
     /// The nodes of `v`, each once.
@@ -293,8 +296,10 @@ impl Interp<'_> {
         }
     }
 
-    /// `v` onto `out`: a node only once, never past [`MAX_LIST`].
+    /// `v` onto `out`: a node only once, never past [`MAX_LIST`]. A duplicate costs its step
+    /// too: `all` on a list of same-named siblings makes one for every pair.
     fn list_push(&mut self, out: &mut Vec<Val>, seen: &mut HashSet<usize>, v: Val) -> R<()> {
+        self.step()?;
         if let Val::Node(i) = v
             && !seen.insert(i)
         {
@@ -304,7 +309,7 @@ impl Interp<'_> {
         if out.len() > MAX_LIST {
             return Err(LIST_TOO_LONG.into());
         }
-        self.charge(1)
+        Ok(())
     }
 
     /// Property `name` of form object `i` as FormCalc reads it: its value, attributes,

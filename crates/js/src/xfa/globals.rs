@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::host::host;
 use super::instances::instance_manager;
 use super::model::{MAX_DEPTH, XfaDoc, XfaEffect, XfaEvent, clip, reset_names};
@@ -323,7 +325,7 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
         "DataView",
         "Intl",
     ];
-    let mut defined: Vec<String> = RESERVED.iter().map(ToString::to_string).collect();
+    let mut defined: HashSet<String> = RESERVED.iter().map(ToString::to_string).collect();
     for scope in scopes {
         let kids: Vec<(usize, String, bool)> = {
             let h = host(ctx)?.borrow();
@@ -342,7 +344,7 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
                 let im = instance_manager(ctx, scope, &name)?;
                 ctx.register_global_property(JsString::from(format!("_{name}").as_str()), im, rw)?;
             }
-            defined.push(name);
+            defined.insert(name);
         }
     }
     Ok(())

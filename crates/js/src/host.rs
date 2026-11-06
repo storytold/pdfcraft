@@ -138,9 +138,27 @@ pub(crate) fn strings(v: &JsValue, ctx: &mut Context) -> JsResult<Vec<String>> {
             return Err(error(format!("array length exceeds {MAX_ARRAY_LENGTH}")));
         }
         let mut out = Vec::new();
+        let mut bytes = 0usize;
         for i in 0..n {
             let x = a.get(i, ctx)?;
-            out.push(text(&x, ctx)?);
+            let t = if x.is_undefined() || x.is_null() {
+                String::new()
+            } else {
+                let js = x.to_string(ctx)?;
+                // Checked before the copy: UTF-16 units never outnumber the UTF-8 bytes they
+                // become, so this refuses nothing the byte check below would accept.
+                if bytes.saturating_add(js.len()) > xfa::MAX_PAYLOAD {
+                    return Err(error(format!("the array holds more than {} bytes of text", xfa::MAX_PAYLOAD)));
+                }
+                js.to_std_string_escaped()
+            };
+            // One long string listed many times is copied once per listing: the copies
+            // together are held to the run's byte budget.
+            bytes = bytes.saturating_add(t.len());
+            if bytes > xfa::MAX_PAYLOAD {
+                return Err(error(format!("the array holds more than {} bytes of text", xfa::MAX_PAYLOAD)));
+            }
+            out.push(t);
         }
         return Ok(out);
     }
