@@ -31,8 +31,8 @@ pub use author::{
 };
 pub use calc_order::{CalculatedField, CalculationIssue, CalculationOrder, calculation_order, set_calculation_order};
 pub use scripting::{
-    FieldChange, FieldEvent, NoScripts, ScriptResult, Scripts, apply_script_changes, document_scripts, document_scripts_named, set_document_script,
-    set_field_script,
+    FieldChange, FieldEvent, NoScripts, ScriptResult, Scripts, apply_open_script_changes, apply_script_changes, document_scripts,
+    document_scripts_named, set_document_script, set_field_script,
 };
 
 mod appearances;

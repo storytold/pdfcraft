@@ -163,7 +163,7 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
         let current = f.value.first().cloned().unwrap_or_default();
         let v = if let Some(js) = &f.actions.scripts.calculate {
             let r = scripts.run(FieldEvent::Calculate, js, &f, &current, &all);
-            scripting::apply_changes(doc, &r.changes, &f.name)?;
+            scripting::apply_changes(doc, &r.changes, &f.name, scripts)?;
             if !r.changes.is_empty() {
                 all = fields(doc);
             }

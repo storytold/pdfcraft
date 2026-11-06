@@ -289,6 +289,10 @@ pub struct Outcome {
     pub doc_errors: Vec<String>,
     /// The script's completion value (what the console prints), unless undefined.
     pub result: Option<String>,
+    /// The script ran past its time limit ([`crate::run_shared_within`]) and was left running on
+    /// its own thread (the engine can't interrupt it): nothing it did is in this outcome, and the
+    /// caller should run no more of the document's scripts for now.
+    pub abandoned: bool,
 }
 
 /// Bounds that keep a script from hanging the viewer.

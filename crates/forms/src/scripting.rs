@@ -75,6 +75,12 @@ pub trait Scripts {
     ) -> Option<ScriptResult> {
         None
     }
+
+    /// A value a script set on another field that the field does not take (`why`), such as text
+    /// longer than its `/MaxLen`: the field keeps its value, and this says so (on the console).
+    fn refused(&mut self, why: &str) {
+        let _ = why;
+    }
 }
 
 /// No script engine (or JavaScript turned off): scripts change nothing.
@@ -97,7 +103,7 @@ pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut d
         let Some(js) = script else { continue };
         let all = fields(doc);
         let r = scripts.run(event, js, f, &v, &all);
-        apply_changes(doc, &r.changes, &f.name)?;
+        apply_changes(doc, &r.changes, &f.name, scripts)?;
         if !r.rc {
             return Err(FormError::Invalid(r.message.unwrap_or_else(|| format!("{default} [ {} ]", f.name))));
         }
@@ -122,8 +128,10 @@ pub(crate) fn formatted_in_english(doc: &Document, f: &Field, value: &str, scrip
 
 /// Apply script changes to other fields (values written without re-running their scripts;
 /// read-only, required and visibility as flags). `except` is the event's own field, whose value
-/// the event sets.
-pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except: &str) -> Result<(), FormError> {
+/// the event sets. A value the field does not take (text longer than its `/MaxLen`, ISO 32000-2
+/// §12.7.5.3 Table 232, or an option it doesn't have) is refused as typing it is: the field keeps
+/// its value, `scripts` is told why, and the script's other changes still apply.
+pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except: &str, scripts: &mut dyn Scripts) -> Result<(), FormError> {
     if changes.is_empty() {
         return Ok(());
     }
@@ -144,7 +152,13 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
             let mut tmp = f.clone();
             tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
             tmp.actions = Default::default();
-            crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
+            // `write_value` refuses a value before writing anything, so a refused one leaves the
+            // field as it was.
+            match crate::write_value(doc, &tmp, &value, &mut NoScripts) {
+                Ok(()) => {}
+                Err(FormError::Invalid(why)) => scripts.refused(&why),
+                Err(e) => return Err(e),
+            }
         }
         let mut ff = f.flags;
         for (on, bit) in [(c.read_only, flags::READ_ONLY), (c.required, flags::REQUIRED)] {
@@ -180,8 +194,19 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
 /// Apply what a button or console script changed (values, read-only, required, visibility),
 /// then recalculate.
 pub fn apply_script_changes(doc: &mut Document, changes: &[FieldChange], scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    apply_changes(doc, changes, "")?;
+    apply_changes(doc, changes, "", scripts)?;
     crate::recalculate_with(doc, scripts)?;
+    Ok(())
+}
+
+/// Apply what the document-level scripts changed as the document opened (values, read-only,
+/// required, visibility). Calculations run again only when a value changed: hiding a field or
+/// setting a flag leaves every calculated value as it was saved.
+pub fn apply_open_script_changes(doc: &mut Document, changes: &[FieldChange], scripts: &mut dyn Scripts) -> Result<(), FormError> {
+    apply_changes(doc, changes, "", scripts)?;
+    if changes.iter().any(|c| c.value.is_some()) {
+        crate::recalculate_with(doc, scripts)?;
+    }
     Ok(())
 }
 
