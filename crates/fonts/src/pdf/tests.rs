@@ -795,3 +795,13 @@ fn low_codes_resolve_to_the_covering_range() {
     assert_eq!(covered, [5, 6, 7, 100, 101]);
     assert_eq!((u.covering(0xFFFF).is_some(), u.covering(0x1_0001).is_some(), u.covering(0x1_0002).is_none()), (true, true, true));
 }
+
+#[test]
+fn codespaces_are_deduplicated_and_at_most_four_bytes() {
+    let cmap = "3 begincodespacerange <00> <7F> <00> <7F> <0000000000> <FFFFFFFFFF> endcodespacerange";
+    let (spaces, _) = parse_cmap(cmap.as_bytes());
+    assert_eq!(spaces, vec![(1, vec![0x00], vec![0x7F])]);
+    let many: String = (0..2000).map(|_| "<0000> <FFFF>\n").collect();
+    let (spaces, _) = parse_cmap(format!("2000 begincodespacerange\n{many}endcodespacerange").as_bytes());
+    assert_eq!(spaces.len(), 1);
+}
