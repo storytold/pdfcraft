@@ -145,6 +145,8 @@ fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &
 }
 
 fn write_indirect(num: u32, generation: u16, o: &Object, out: &mut Vec<u8>) {
+    #[cfg(test)]
+    STAGED.with(|staged| staged.set(staged.get() + 1));
     let _ = writeln!(out, "{num} {generation} obj");
     serialize(o, out);
     out.extend_from_slice(b"\nendobj\n");
@@ -337,6 +339,27 @@ pub fn reachable_objects(doc: &Document) -> Result<HashSet<u32>, CosError> {
 
 /// Write only reachable objects, renumbered from 1, with a table or cross-reference stream.
 pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
+    let mut out = Vec::new();
+    write_full_to(doc, opts, &mut out)?;
+    // The size isn't known until the end, and the buffer grew by doubling. The result is often
+    // kept as a document's working bytes for as long as it's open: drop the unused capacity.
+    out.shrink_to_fit();
+    Ok(out)
+}
+
+/// [`write_full`] into any [`Write`] sink, such as a file, without holding the output in memory:
+/// each object is passed on as soon as it is serialized (in chunks of about 64 KB). Only the
+/// output buffer goes away; the writer's working memory is the same as `write_full`'s, such as
+/// object-stream batches (up to 8 MiB, briefly more while one is assembled and
+/// compressed), the largest single object, bookkeeping that grows with the number of objects and
+/// references, and the cross-reference section, which is built in full before it is written.
+/// The bytes are identical to `write_full`'s. Returns the number of bytes written. The sink is
+/// flushed at the end; on an error, what was already written is incomplete.
+///
+/// One exception: a document that asked for a new file identifier (redaction, sanitizing) is
+/// held in memory until its trailer is written, because that identifier is a hash of every byte
+/// before it, prefixed by their count.
+pub fn write_full_to<W: Write>(doc: &Document, opts: &SaveOptions, sink: W) -> Result<u64, CosError> {
     if doc.stream_limited() {
         return Err(CosError::ReadOnlyLimit);
     }
@@ -348,10 +371,10 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     let (map, order) = full_save_order(&mut reader, &trailer_in)?;
     let version = reader.document.version().chars().take(3).collect::<String>();
     let version = if opts.object_streams && version.as_str() < "1.5" { "1.5".to_string() } else { version };
-    let mut out = Vec::new();
-    let _ = writeln!(out, "%PDF-{version}");
+    let mut out = Sink::new(sink, reader.document.new_id_required());
+    let _ = writeln!(out.buf, "%PDF-{version}");
     // A binary comment (raw high bytes) marks the file as binary for transfer tools.
-    out.extend_from_slice(&[b'%', 0xE2, 0xE3, 0xCF, 0xD3, b'\n']);
+    out.buf.extend_from_slice(&[b'%', 0xE2, 0xE3, 0xCF, 0xD3, b'\n']);
     // The /Encrypt dictionary and everything it references (e.g. indirect /CF crypt-filter
     // dictionaries) are needed before anything can be decrypted: never inside object streams.
     let mut encryption_objects: std::collections::HashSet<u32> = std::collections::HashSet::new();
@@ -384,8 +407,9 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         } else {
             let o = reread(&mut reader, *r, *is_stream)?;
             let o = renumber(&prepared(&reader.document, r.num, num, 0, &o), &map);
-            rows.insert(num, Row::InFile(out.len() as u64, 0));
-            write_indirect(num, 0, &o, &mut out);
+            rows.insert(num, Row::InFile(out.pos(), 0));
+            write_indirect(num, 0, &o, &mut out.buf);
+            out.spill()?;
         }
     }
     // Object streams take the numbers after the last object. Their contents are not encrypted
@@ -409,23 +433,91 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         }
     }
     batch.flush(&reader.document, &mut next, &mut rows, &mut out)?;
-    let mut trailer = full_save_trailer(&reader.document, &trailer_in, &map, opts, &out);
+    // A held sink has written nothing yet, so `buf` is every byte before the trailer.
+    debug_assert!(!out.hold || out.written == 0);
+    let mut trailer = full_save_trailer(&reader.document, &trailer_in, &map, opts, &out.buf);
     if opts.object_streams {
-        write_xref_stream(&mut out, 0, &mut trailer, rows, next);
+        // `buf` holds the file from byte `written` on, which is what `base` means there.
+        write_xref_stream(&mut out.buf, out.written, &mut trailer, rows, next);
     } else {
         trailer.set(b"Size".to_vec(), Object::Int(next as i64));
         let offsets: BTreeMap<u32, (u64, u16, bool)> =
             rows.iter().filter_map(|(n, r)| if let Row::InFile(o, g) = r { Some((*n, (*o, *g, true))) } else { None }).collect();
-        let xref_at = out.len();
-        write_xref_table(&mut out, &offsets, true);
-        out.extend_from_slice(b"trailer\n");
-        write_dict(&trailer, &mut out);
-        let _ = write!(out, "\nstartxref\n{xref_at}\n%%EOF\n");
+        let xref_at = out.pos();
+        write_xref_table(&mut out.buf, &offsets, true);
+        out.buf.extend_from_slice(b"trailer\n");
+        write_dict(&trailer, &mut out.buf);
+        let _ = write!(out.buf, "\nstartxref\n{xref_at}\n%%EOF\n");
     }
-    // The size isn't known until the end, and the buffer grew by doubling. The result is often
-    // kept as a document's working bytes for as long as it's open: drop the unused capacity.
-    out.shrink_to_fit();
-    Ok(out)
+    out.finish()
+}
+
+/// Bytes on their way to a full save's sink. Objects are serialized into `buf` and handed on
+/// once it holds [`SINK_CHUNK`] bytes, so offsets come from [`Sink::pos`], not a buffer length.
+struct Sink<W: Write> {
+    inner: W,
+    /// Bytes already handed to `inner`: the file offset of `buf[0]`.
+    written: u64,
+    buf: Vec<u8>,
+    /// Keep everything in `buf` until [`Sink::finish`]: set when the trailer needs the whole
+    /// file before it (a regenerated identifier).
+    hold: bool,
+}
+
+/// How much a full save stages before writing to its sink.
+const SINK_CHUNK: usize = 64 * 1024;
+
+#[cfg(test)]
+thread_local! {
+    /// Test builds only: how many indirect objects (object streams included) this thread has
+    /// serialized, counted in `write_indirect` so it does not depend on the sink code under
+    /// test. A test sink reads it to tell whether output reached it while serialization was
+    /// still going on, not only after it.
+    static STAGED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+impl<W: Write> Sink<W> {
+    /// A sink at file offset 0 that stages up to [`SINK_CHUNK`] bytes, or everything if `hold`.
+    fn new(inner: W, hold: bool) -> Self {
+        Self { inner, written: 0, buf: Vec::with_capacity(SINK_CHUNK), hold }
+    }
+
+    /// File offset of the next byte.
+    fn pos(&self) -> u64 {
+        self.written + self.buf.len() as u64
+    }
+
+    /// Called after each object or object stream is staged: hands the staged bytes on once there
+    /// are enough of them, unless the sink holds them.
+    fn spill(&mut self) -> Result<(), CosError> {
+        if !self.hold && self.buf.len() >= SINK_CHUNK { self.drain() } else { Ok(()) }
+    }
+
+    /// Writes every staged byte to `inner` and empties the buffer.
+    fn drain(&mut self) -> Result<(), CosError> {
+        self.inner.write_all(&self.buf).map_err(|e| sink_error(&e))?;
+        self.written += self.buf.len() as u64;
+        self.buf.clear();
+        // One large object (an image, a full object stream) must not leave a buffer of its
+        // size alive for the rest of the save.
+        if self.buf.capacity() > 4 * SINK_CHUNK {
+            self.buf.shrink_to(SINK_CHUNK);
+        }
+        Ok(())
+    }
+
+    /// Writes what is left, flushes `inner` and returns the file's length.
+    fn finish(mut self) -> Result<u64, CosError> {
+        self.drain()?;
+        self.inner.flush().map_err(|e| sink_error(&e))?;
+        Ok(self.written)
+    }
+}
+
+/// A sink failure as [`CosError::Io`], keeping its kind (`CosError` is `Clone` and `PartialEq`,
+/// which `std::io::Error` is not, so the error itself cannot be stored).
+fn sink_error(e: &std::io::Error) -> CosError {
+    CosError::Io { kind: e.kind(), message: e.to_string() }
 }
 
 /// Assemble the full rewrite's trailer and apply its identifier policy.
@@ -475,7 +567,9 @@ struct ObjectStreamBatch {
 }
 
 impl ObjectStreamBatch {
-    fn flush(&mut self, doc: &Document, next: &mut u32, rows: &mut BTreeMap<u32, Row>, out: &mut Vec<u8>) -> Result<(), CosError> {
+    /// Writes the batch as one compressed object stream numbered `*next` (then advances `next`),
+    /// records its offset in `rows`, and empties the batch. An empty batch writes nothing.
+    fn flush<W: Write>(&mut self, doc: &Document, next: &mut u32, rows: &mut BTreeMap<u32, Row>, out: &mut Sink<W>) -> Result<(), CosError> {
         if self.count == 0 {
             return Ok(());
         }
@@ -491,10 +585,10 @@ impl ObjectStreamBatch {
         d.set(b"N".to_vec(), Object::Int(count as i64));
         d.set(b"First".to_vec(), Object::Int(first as i64));
         let stm = Object::Stream(Stream::flate(d, &header));
-        rows.insert(*next, Row::InFile(out.len() as u64, 0));
-        write_indirect(*next, 0, &prepared(doc, u32::MAX, *next, 0, &stm), out);
+        rows.insert(*next, Row::InFile(out.pos(), 0));
+        write_indirect(*next, 0, &prepared(doc, u32::MAX, *next, 0, &stm), &mut out.buf);
         *next = following;
-        Ok(())
+        out.spill()
     }
 }
 
@@ -933,6 +1027,179 @@ mod tests {
         let mut out = Vec::new();
         serialize(o, &mut out);
         Lexer::new(&out, 0).object().expect("parses")
+    }
+
+    /// A document whose catalog reaches `streams` streams of `size` bytes each and `dicts` small
+    /// dictionaries (packed into object streams when those are on).
+    fn sized_document(streams: usize, size: usize, dicts: usize) -> Document {
+        let mut doc = Document::new_empty();
+        let mut items = Vec::new();
+        for i in 0..streams {
+            let raw: Vec<u8> = (0..size).map(|j| (i * 31 + j * 7) as u8).collect();
+            items.push(Object::Ref(doc.add(Object::Stream(Stream { dict: Dict::new(), raw: raw.into() }))));
+        }
+        for i in 0..dicts {
+            let mut d = Dict::new();
+            d.set(b"N".to_vec(), Object::Int(i as i64));
+            items.push(Object::Ref(doc.add(Object::Dict(d))));
+        }
+        let mut catalog = Dict::new();
+        catalog.set(b"Type".to_vec(), Object::name("Catalog"));
+        catalog.set(b"Items".to_vec(), Object::Array(items));
+        let root = doc.add(Object::Dict(catalog));
+        doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(root));
+        doc
+    }
+
+    /// A document whose catalog reaches `dicts` dictionaries and no streams, each dictionary
+    /// holding `bytes` pseudo-random bytes, so they all go into object streams and compression
+    /// does not shrink a batch below a sink chunk.
+    fn packed_document(dicts: usize, bytes: usize) -> Document {
+        let mut doc = Document::new_empty();
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut items = Vec::new();
+        for _ in 0..dicts {
+            let data: Vec<u8> = (0..bytes)
+                .map(|_| {
+                    state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                    (state >> 56) as u8
+                })
+                .collect();
+            let mut d = Dict::new();
+            d.set(b"Data".to_vec(), Object::String(PdfString { bytes: data, hex: true }));
+            items.push(Object::Ref(doc.add(Object::Dict(d))));
+        }
+        let mut catalog = Dict::new();
+        catalog.set(b"Type".to_vec(), Object::name("Catalog"));
+        catalog.set(b"Items".to_vec(), Object::Array(items));
+        let root = doc.add(Object::Dict(catalog));
+        doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(root));
+        doc
+    }
+
+    /// A sink that keeps what it is given, counts the calls, and notes how many objects had been
+    /// staged when the first bytes arrived.
+    #[derive(Default)]
+    struct Recording {
+        bytes: Vec<u8>,
+        writes: usize,
+        staged_at_first_write: Option<usize>,
+        flushed: bool,
+    }
+
+    impl Write for Recording {
+        /// Keeps `data`, and on the first call notes how many objects were staged by then.
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            assert!(!self.flushed, "nothing is written after the final flush");
+            self.staged_at_first_write.get_or_insert_with(|| STAGED.with(std::cell::Cell::get));
+            self.writes += 1;
+            self.bytes.extend_from_slice(data);
+            Ok(data.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.flushed = true;
+            Ok(())
+        }
+    }
+
+    /// A sink that fails once it has taken `limit` bytes.
+    struct Failing {
+        taken: usize,
+        limit: usize,
+    }
+
+    impl Write for Failing {
+        /// Takes `data` unless that would pass `limit`; then fails with `StorageFull`.
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            if self.taken + data.len() > self.limit {
+                return Err(std::io::Error::new(std::io::ErrorKind::StorageFull, "disk full"));
+            }
+            self.taken += data.len();
+            Ok(data.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// `write_full_to` gives `write_full`'s bytes, in chunks, while serialization is still going on.
+    #[test]
+    fn a_full_save_to_a_sink_writes_the_same_bytes_in_chunks() {
+        // Streams larger than a chunk, and enough dictionaries for more than one object stream.
+        let doc = sized_document(12, SINK_CHUNK + SINK_CHUNK / 2, OBJSTM_SIZE * 2 + 50);
+        for object_streams in [false, true] {
+            let opts = SaveOptions { object_streams, ..Default::default() };
+            let whole = write_full(&doc, &opts).unwrap();
+            let mut sink = Recording::default();
+            STAGED.with(|staged| staged.set(0));
+            let written = write_full_to(&doc, &opts, &mut sink).unwrap();
+            let staged = STAGED.with(std::cell::Cell::get);
+            assert_eq!(written, whole.len() as u64);
+            assert!(sink.bytes == whole, "same bytes as write_full (object_streams: {object_streams})");
+            assert!(sink.writes > 10, "handed on in chunks ({} writes)", sink.writes);
+            // Chunked writes alone would also come from building the whole file first. Streaming
+            // means output reached the sink while objects were still being serialized.
+            let first = sink.staged_at_first_write.unwrap();
+            assert!(first * 2 < staged, "first write after {first} of {staged} objects staged: not streamed");
+            assert!(sink.flushed);
+            let reopened = Document::open(Arc::new(whole)).unwrap();
+            assert!(reopened.repair_log().is_empty(), "offsets are right: no reconstruction");
+        }
+    }
+
+    /// Object streams reach the sink one by one too, not only standalone objects.
+    #[test]
+    fn a_full_save_streams_packed_objects_too() {
+        // No standalone streams that could reach the sink first: only packed objects, enough for
+        // several object streams, each larger than a sink chunk.
+        let doc = packed_document(OBJSTM_SIZE * 5, 1024);
+        let opts = SaveOptions::default();
+        assert!(opts.object_streams, "the default packs non-stream objects");
+        let whole = write_full(&doc, &opts).unwrap();
+        let mut sink = Recording::default();
+        STAGED.with(|staged| staged.set(0));
+        write_full_to(&doc, &opts, &mut sink).unwrap();
+        let staged = STAGED.with(std::cell::Cell::get);
+        assert!(sink.bytes == whole, "same bytes as write_full");
+        assert!(staged >= 5, "several object streams ({staged} objects serialized)");
+        let first = sink.staged_at_first_write.unwrap();
+        assert!(first * 2 < staged, "first write after {first} of {staged} objects serialized: packed output not streamed");
+    }
+
+    /// The new identifier hashes every byte before the trailer, so nothing may reach the sink
+    /// before it is known; the bytes and the identifier are still `write_full`'s.
+    #[test]
+    fn a_save_that_needs_a_new_identifier_is_held_until_the_trailer() {
+        let mut doc = sized_document(6, SINK_CHUNK + SINK_CHUNK / 2, OBJSTM_SIZE + 50);
+        let opts = SaveOptions { id_entropy: Some([7; 16]), ..Default::default() };
+        let ordinary = write_full(&doc, &opts).unwrap();
+        doc.require_full_save_with_new_id();
+        for object_streams in [false, true] {
+            let opts = SaveOptions { object_streams, ..opts.clone() };
+            let whole = write_full(&doc, &opts).unwrap();
+            let mut sink = Recording::default();
+            STAGED.with(|staged| staged.set(0));
+            write_full_to(&doc, &opts, &mut sink).unwrap();
+            let staged = STAGED.with(std::cell::Cell::get);
+            assert!(sink.bytes == whole, "same bytes as write_full (object_streams: {object_streams})");
+            assert_eq!(sink.staged_at_first_write, Some(staged), "nothing written before every object was staged");
+            let id = |bytes: &[u8]| Document::open(Arc::new(bytes.to_vec())).unwrap().trailer().get(b"ID").cloned();
+            assert!(id(&whole).is_some());
+            assert_ne!(id(&whole), id(&ordinary), "the identifier was regenerated");
+        }
+    }
+
+    /// A sink error fails the save as `CosError::Io`, keeping the sink's `ErrorKind` and text.
+    #[test]
+    fn a_failing_sink_fails_the_save() {
+        let doc = sized_document(4, SINK_CHUNK * 2, 10);
+        let result = write_full_to(&doc, &SaveOptions::default(), Failing { taken: 0, limit: SINK_CHUNK * 3 });
+        assert!(
+            matches!(result, Err(CosError::Io { kind: std::io::ErrorKind::StorageFull, ref message }) if message.contains("disk full")),
+            "{result:?}"
+        );
     }
 
     #[test]

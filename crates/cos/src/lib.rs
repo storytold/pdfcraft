@@ -30,7 +30,7 @@ pub use parser::{Lexer, is_whitespace, parse_indirect};
 pub use pdfcraft_crypt::{
     Algorithm, Auth, Method as CryptMethod, NewEncryption, Permissions, SecurityHandler, effective_password, pdfdoc_byte, pdfdoc_char,
 };
-pub use writer::{SaveOptions, pdf_date, reachable_objects, serialize, write_full, write_incremental};
+pub use writer::{SaveOptions, pdf_date, reachable_objects, serialize, write_full, write_full_to, write_incremental};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum CosError {
@@ -54,4 +54,8 @@ pub enum CosError {
     Poisoned,
     #[error("this document was opened read-only with a decode limit and cannot be saved")]
     ReadOnlyLimit,
+    /// The output sink given to [`write_full_to`] failed. `kind` is the sink's
+    /// [`std::io::ErrorKind`], for callers that branch on it; `message` is the error's text.
+    #[error("writing the output failed: {message}")]
+    Io { kind: std::io::ErrorKind, message: String },
 }

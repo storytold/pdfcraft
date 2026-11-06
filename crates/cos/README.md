@@ -34,10 +34,13 @@ doc.free(r);
 
 let bytes = write_incremental(&doc, &SaveOptions::default())?;  // append a revision
 let bytes = write_full(&doc, &SaveOptions::default())?;         // garbage-collected rewrite
+let len = write_full_to(&doc, &SaveOptions::default(), file)?;  // the same, streamed to a Write
 ```
 
-Both writers **return the bytes**; the caller decides where they go, which is what lets the engine
-produce a working file in memory after every edit and keep saving atomic.
+`write_incremental` and `write_full` **return the bytes**; the caller decides where they go, which
+is what lets the engine produce a working file in memory after every edit and keep saving atomic. `write_full_to` writes
+the same bytes as `write_full` to any `std::io::Write` as it goes, so a large rewrite never has to
+fit in memory twice (useful when the result goes straight to disk).
 
 Useful alongside: `doc.repair_log()` (what was reconstructed), `doc.revisions()` and
 `doc.revision_ends()` (the incremental history), `doc.is_edited(num)` and `doc.modified_objects()`,
@@ -90,6 +93,13 @@ garbage-collecting path. By default (`SaveOptions::object_streams`) it packs non
 into compressed object streams with a cross-reference stream (PDF 1.5+); turning that off writes a
 classic table any reader accepts. Both forms map accepted xref/header aliases to one output
 object, retaining shared identity such as page-tree parent links; unrelated generations stay null.
+`write_full_to` is the same writer handing each object to a `Write` sink as it is serialized, so
+the output is never held whole. Only the output buffer goes away: the writer's own working memory
+(object-stream batches of up to 8 MiB, the largest single object, bookkeeping that grows with the
+number of objects and references, and the cross-reference section, built in full before it is
+written) is the same as `write_full`'s. A document that asked for a new identifier (below) is the
+exception: the identifier hashes every byte before the trailer, so `write_full_to` holds that
+output until the trailer is written.
 
 A full save keeps the file's `/ID` as it is, unless the document asked for a new identifier with
 `Document::require_full_save_with_new_id` (redaction and sanitizing do). Then both strings are
@@ -105,7 +115,8 @@ recognisable in a diff and byte-stable when re-serialized.
 ## Errors
 
 `CosError`: `NotPdf`, `Syntax { offset, detail }`, `MissingObject`, `NotADictionary`, `Filter`,
-`NeedsPassword`, `WrongPassword`, `Security`, `Poisoned`.
+`NeedsPassword`, `WrongPassword`, `Security`, `Poisoned`, and `Io { kind, message }` when the
+sink given to `write_full_to` fails (`kind` is its `std::io::ErrorKind`).
 
 ## Not done here
 

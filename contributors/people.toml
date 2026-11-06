@@ -186,3 +186,8 @@ sync_github_name = true
 
 [people.helenkwok]
 real_name = "Helen Kwok"
+
+[people.DesignsByRay]
+real_name = "Raymond L"
+display_name = "Raymond L"
+sync_github_name = false
