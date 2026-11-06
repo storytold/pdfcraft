@@ -142,7 +142,11 @@ fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Decode
             .and_then(|w| w.as_dict().and_then(|wd| wd.get(b"AA").map(|a| doc.resolve(a))))
             .and_then(|a| a.as_dict().cloned())
     });
-    let mut out = af::Actions::default();
+    let mut out = af::Actions {
+        // A date field the XFA layout generated: what its format doesn't read is kept as typed.
+        xfa_date: matches!(d.get(b"PCXfaDate").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true))),
+        ..af::Actions::default()
+    };
     let Some(aa) = aa else { return out };
     let mut js = |k: &[u8]| aa.get(k).and_then(|a| script(doc, a, scripts));
     if let Some(f) = js(b"F") {
