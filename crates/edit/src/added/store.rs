@@ -3,12 +3,14 @@ use super::layout::{first_undrawable, is_thai, nums, shaped_arabic, thai_error};
 use super::types::{Added, AddedImage, AddedText, CHAR_SPACING_LIMIT, Family, MarkerScan, TAG};
 use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, align_from, check, contents, page_list, place_tagged};
 
+/// Parses an added item dictionary (`/PCAdded`) into [`Content`].
 fn parse(doc: &Document, d: &Dict) -> Option<Content> {
     let r = nums(doc, d.get(b"Rect"));
     let rect: [f64; 4] = r.try_into().ok()?;
     match d.name(b"Kind")? {
         b"Text" => {
             let (family, bold, italic) = Family::from_base(d.name(b"Font").unwrap_or(b"Helvetica"));
+            let font_resource = d.name(b"FontResource").map(|n| String::from_utf8_lossy(n).into_owned());
             let c = nums(doc, d.get(b"Color"));
             let text = d.get(b"Text").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text())).unwrap_or_default();
             let align = align_from(d.int(b"Align"));
@@ -33,6 +35,7 @@ fn parse(doc: &Document, d: &Dict) -> Option<Content> {
                 aligns: crate::paragraph_align::tidy(aligns, align),
                 // Items written before character spacing have none.
                 char_spacing: d.get(b"CharSpacing").and_then(Object::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0),
+                font_resource,
             }))
         }
         b"Image" => {
@@ -120,6 +123,7 @@ pub fn scan_markers(doc: &Document) -> MarkerScan {
     scan
 }
 
+/// Validates that `c` has finite positions, sensible dimensions, and encodable text.
 fn validate(c: &Content) -> Result<(), EditError> {
     let r = c.rect();
     if !r.iter().all(|v| v.is_finite()) {
@@ -141,22 +145,24 @@ fn validate(c: &Content) -> Result<(), EditError> {
             if (r[2] - r[0]).abs() < 1.0 {
                 return Err(EditError::Invalid("the text box is too narrow".into()));
             }
-            if t.text.chars().any(is_thai) && pdfcraft_fonts::document_thai_font().is_none() {
-                return Err(thai_error(GlyphError::NoFont, &t.text));
-            }
-            // Without the Arabic face, `draw` decides for the Arabic letters themselves (#403): a new
-            // item is refused with what's missing, and one that already holds Arabic stays movable.
-            // Everything else in it is drawn in the standard font, so it still has to fit.
-            let undrawable = if t.text.chars().any(shaped_arabic) && pdfcraft_fonts::document_arabic_font().is_none() {
-                t.text.split('\n').find_map(|line| {
-                    line.chars()
-                        .find(|c| !(shaped_arabic(*c) || is_thai(*c) && pdfcraft_fonts::thai_has(*c) || pdfcraft_fonts::win_ansi_encodable(*c)))
-                })
-            } else {
-                first_undrawable(t)
-            };
-            if let Some(c) = undrawable {
-                return Err(crate::undrawable(c));
+            if t.font_resource.is_none() {
+                if t.text.chars().any(is_thai) && pdfcraft_fonts::document_thai_font().is_none() {
+                    return Err(thai_error(GlyphError::NoFont, &t.text));
+                }
+                // Without the Arabic face, `draw` decides for the Arabic letters themselves (#403): a new
+                // item is refused with what's missing, and one that already holds Arabic stays movable.
+                // Everything else in it is drawn in the standard font, so it still has to fit.
+                let undrawable = if t.text.chars().any(shaped_arabic) && pdfcraft_fonts::document_arabic_font().is_none() {
+                    t.text.split('\n').find_map(|line| {
+                        line.chars()
+                            .find(|c| !(shaped_arabic(*c) || is_thai(*c) && pdfcraft_fonts::thai_has(*c) || pdfcraft_fonts::win_ansi_encodable(*c)))
+                    })
+                } else {
+                    first_undrawable(t)
+                };
+                if let Some(c) = undrawable {
+                    return Err(crate::undrawable(c));
+                }
             }
         }
         Content::Image(_) => {
@@ -183,11 +189,11 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
         drop_fonts(doc, &mut pres, &own_fonts(doc, r));
     }
     let taken = pres.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
-    let (content, res) = draw(doc, c, view, &taken, obj.is_some())?;
+    let drawn = draw(doc, c, view, &taken, obj.is_some())?;
     if obj.is_none() {
         crate::check_on_top(doc, p)?;
     }
-    for (k, v) in res.iter() {
+    for (k, v) in drawn.resources.iter() {
         let mut sub = pres.get(k).map(|s| doc.resolve(s)).and_then(|s| s.as_dict().cloned()).unwrap_or_default();
         for (n2, o) in v.as_dict().into_iter().flat_map(|d| d.iter()) {
             sub.set(n2.clone(), o.clone());
@@ -198,11 +204,15 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
     let mut sd = Dict::new();
     sd.set(b"PCMark".to_vec(), Object::name(TAG));
     let mut added = params(c);
+    if let Some(rect) = drawn.custom_rect {
+        let arr = |v: &[f64]| Object::Array(v.iter().map(|x| Object::Real(*x)).collect());
+        added.set(b"Rect".to_vec(), arr(&rect));
+    }
     if user_unit != 1.0 {
         added.set(b"UserUnit".to_vec(), Object::Real(user_unit));
     }
     sd.set(b"PCAdded".to_vec(), Object::Dict(added));
-    let stream = Stream::flate(sd, &content);
+    let stream = Stream::flate(sd, &drawn.stream);
     match obj {
         Some(r) => {
             doc.set(r, Object::Stream(stream));
@@ -211,7 +221,7 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
         None => {
             // place_tagged appends a new stream; recover its reference.
             let p = page_list(doc).swap_remove(page);
-            place_tagged(doc, &p, TAG, content.clone(), false)?;
+            place_tagged(doc, &p, TAG, drawn.stream.clone(), false)?;
             let p = page_list(doc).swap_remove(page);
             let r = contents(doc, &p)?.last().and_then(Object::as_ref).ok_or_else(|| EditError::Invalid("could not add the content".into()))?;
             doc.set(r, Object::Stream(stream));
