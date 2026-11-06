@@ -21,7 +21,12 @@ fn button(pos: Pos2, pressed: bool) -> Event {
 }
 
 fn touch(phase: TouchPhase, pos: Pos2) -> Event {
-    Event::Touch { device_id: TouchDeviceId(1), id: TouchId(1), phase, pos, force: None }
+    contact(phase, pos, None)
+}
+
+/// A finger's touch has no pressure (`force`); a Windows pen's, which winit reports as touch, has.
+fn contact(phase: TouchPhase, pos: Pos2, force: Option<f32>) -> Event {
+    Event::Touch { device_id: TouchDeviceId(1), id: TouchId(1), phase, pos, force }
 }
 
 /// A finger tap at `p`, or a pen tap on Windows: the touch starts (touch, move, press in one
@@ -36,13 +41,41 @@ pub fn touch_tap<S>(h: &mut Harness<'_, S>, p: Pos2) {
 /// A finger drag from `a` to `b` in six moves, one frame each, ending as a touch does: release
 /// and `PointerGone` in one frame.
 pub fn touch_drag<S>(h: &mut Harness<'_, S>, a: Pos2, b: Pos2) {
-    one_frame(h, [touch(TouchPhase::Start, a), Event::PointerMoved(a), button(a, true)]);
+    contact_drag(h, a, b, None);
+}
+
+/// A Windows pen drag from `a` to `b`, which winit reports as touch with the pen's pressure: as
+/// [`touch_drag`] otherwise.
+pub fn pen_drag<S>(h: &mut Harness<'_, S>, a: Pos2, b: Pos2) {
+    contact_drag(h, a, b, Some(0.3));
+}
+
+/// A finger drag on a Windows touch screen without a pressure sensor, which reports Windows'
+/// default pressure (512 of 1024, a force of 0.5) for every contact: as [`touch_drag`] otherwise.
+pub fn default_pressure_touch_drag<S>(h: &mut Harness<'_, S>, a: Pos2, b: Pos2) {
+    contact_drag(h, a, b, Some(0.5));
+}
+
+fn contact_drag<S>(h: &mut Harness<'_, S>, a: Pos2, b: Pos2, force: Option<f32>) {
+    one_frame(h, [contact(TouchPhase::Start, a, force), Event::PointerMoved(a), button(a, true)]);
     for i in 1..=6 {
         let p = a + (b - a) * (i as f32 / 6.0);
-        one_frame(h, [touch(TouchPhase::Move, p), Event::PointerMoved(p)]);
+        one_frame(h, [contact(TouchPhase::Move, p, force), Event::PointerMoved(p)]);
     }
-    one_frame(h, [touch(TouchPhase::End, b), button(b, false), Event::PointerGone]);
+    one_frame(h, [contact(TouchPhase::End, b, force), button(b, false), Event::PointerGone]);
     h.run_steps(4);
+}
+
+/// A finger's double tap at `p`: two taps, each a whole touch in one frame, in consecutive frames
+/// (0.25 s apart, within egui's 0.3 s double-click delay).
+pub fn touch_double_tap<S>(h: &mut Harness<'_, S>, p: Pos2) {
+    for _ in 0..2 {
+        one_frame(
+            h,
+            [touch(TouchPhase::Start, p), Event::PointerMoved(p), button(p, true), touch(TouchPhase::End, p), button(p, false), Event::PointerGone],
+        );
+    }
+    h.run_steps(2);
 }
 
 /// A mouse click at `p` whose press and release land in one slow frame (#2100).

@@ -191,6 +191,13 @@ impl PageRouter {
         self.capture.as_ref().is_some_and(|c| !c.declines_drag)
     }
 
+    /// Whether a drag of the press moves nothing on the page: nobody holds it, its holder lets the
+    /// drag go (a highlight's, to the text), or it is a link's, which follows a click and does
+    /// nothing with a drag. A finger's drag then pans the page in the Select tool (#5667).
+    pub(crate) fn drag_moves_nothing(&self) -> bool {
+        self.capture.as_ref().is_none_or(|c| c.declines_drag || matches!(c.owner, Owner::Link { .. }))
+    }
+
     /// The press is over once the button is up and its release has been seen.
     pub(crate) fn settle(&mut self, any_down: bool, edges: bool) {
         if !any_down && !edges {
@@ -284,5 +291,25 @@ mod tests {
         assert!(r.owner(0).is_some() && !r.keeps_drag());
         r.cancel();
         assert_eq!(r.owner(0), None);
+    }
+
+    /// What a finger's drag in the Select tool pans past (#5667): everything but a press that
+    /// moves something with its drag.
+    #[test]
+    fn a_drag_moves_nothing_unless_its_holder_keeps_it() {
+        let mut r = PageRouter::default();
+        assert!(r.drag_moves_nothing(), "no press");
+        r.begin();
+        r.press(0, [], QuickTool::Select);
+        assert!(r.drag_moves_nothing(), "a press nobody holds");
+        r.begin();
+        r.press(0, [Hit::new(Owner::Link { index: 0 }, Layer::Link, CursorIcon::PointingHand)], QuickTool::Select);
+        assert!(r.keeps_drag() && r.drag_moves_nothing(), "a link holds its drag but does nothing with it");
+        r.begin();
+        r.press(0, [Hit { declines_drag: true, ..hit(Layer::Comment, 0) }], QuickTool::Select);
+        assert!(r.drag_moves_nothing(), "a highlight lets its drag go");
+        r.begin();
+        r.press(0, [hit(Layer::Comment, 1)], QuickTool::Select);
+        assert!(!r.drag_moves_nothing(), "a comment moves with its drag");
     }
 }

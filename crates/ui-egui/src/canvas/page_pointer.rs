@@ -46,13 +46,18 @@ pub(crate) struct PagePointer {
     pub primary_down: bool,
     /// Some button is down, wherever it was pressed.
     pub any_down: bool,
+    /// The press the pages hold came from a finger on a touch screen: a touch that began without
+    /// a pressure reading (none, or Windows' default for a screen that senses none). winit reports
+    /// a Windows pen as touch too, but a pen reports its pressure, so it stays a pen and draws or
+    /// selects as a mouse does.
+    pub finger: bool,
 }
 
 impl PagePointer {
     /// The pointer for `resp`, the content widget that holds every page, allocated in `ui`, while
     /// a dialog is open over the window or not (`modal`).
     pub(crate) fn read(ui: &egui::Ui, resp: &egui::Response, modal: bool) -> Self {
-        let (at, origin, edges, released, primary_down, any_down) = ui.input(|i| {
+        let (at, origin, edges, released, primary_down, any_down, finger_down) = ui.input(|i| {
             (
                 i.pointer.interact_pos(),
                 i.pointer.press_origin(),
@@ -60,6 +65,7 @@ impl PagePointer {
                 last_release(&i.events),
                 i.pointer.primary_down(),
                 i.pointer.any_down(),
+                finger_down(&i.events),
             )
         });
         // egui's own answer to "do the pages hold a press?": from the press on until the frame
@@ -75,9 +81,18 @@ impl PagePointer {
             resp.dragged() || resp.drag_stopped() || (!modal && (resp.interact_pointer_pos().is_some() || press_origin.is_some_and(|p| on_top(&p))));
         let pos = at.filter(|p| held || on_top(p));
         if !held {
-            return Self { pos, origin: None, edges: Vec::new(), released: None, primary_down, any_down };
+            return Self { pos, origin: None, edges: Vec::new(), released: None, primary_down, any_down, finger: false };
         }
-        Self { pos, origin: press_origin, edges, released, primary_down, any_down }
+        // What made the press is known on its frame only, so it is kept with the pages' widget
+        // until the next press.
+        let id = resp.id.with("finger");
+        let finger = if first_press(&edges).is_some() {
+            ui.data_mut(|d| d.insert_temp(id, finger_down));
+            finger_down
+        } else {
+            ui.data(|d| d.get_temp(id)).unwrap_or(false)
+        };
+        Self { pos, origin: press_origin, edges, released, primary_down, any_down, finger }
     }
 
     /// Where the pointer is, when it is inside `r`.
@@ -113,6 +128,21 @@ fn last_release(events: &[Event]) -> Option<Pos2> {
     events.iter().rev().find_map(|e| match e {
         Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, .. } if pos.is_finite() => Some(*pos),
         _ => None,
+    })
+}
+
+/// The force a Windows touch screen without a pressure sensor reports: Windows fills
+/// `POINTER_TOUCH_INFO::pressure` with its default, 512 of 1024, and winit passes that on without
+/// looking at `touchMask`, which says whether the reading is real.
+const WINDOWS_DEFAULT_TOUCH_FORCE: f32 = 0.5;
+
+/// Whether a finger touched down among `events`: egui-winit presses the primary button for the
+/// first touch, in the same frame. A finger reports no pressure, or Windows' default for a screen
+/// that senses none; a pen's first reading is its own.
+fn finger_down(events: &[Event]) -> bool {
+    events.iter().any(|e| match e {
+        Event::Touch { phase: egui::TouchPhase::Start, force, .. } => force.is_none_or(|f| f == WINDOWS_DEFAULT_TOUCH_FORCE),
+        _ => false,
     })
 }
 
