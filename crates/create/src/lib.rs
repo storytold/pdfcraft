@@ -281,7 +281,8 @@ fn jp2_boxes(b: &[u8]) -> Vec<([u8; 4], &[u8])> {
             },
             n => (8, n),
         };
-        let end = i.saturating_add(len as usize).min(b.len());
+        // `len as usize` would truncate on 32-bit targets and put the end before the payload.
+        let end = i.saturating_add(usize::try_from(len).unwrap_or(usize::MAX)).min(b.len());
         if len < head as u64 || end <= i {
             break;
         }
@@ -428,7 +429,13 @@ fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     // The decoded size comes from the header alone, so a file of a few bytes can claim any
     // size: keep the ceiling, and ask for the memory fallibly (a failed allocation would abort
     // the whole app, and no `catch_unwind` stops that).
-    let size = reader.output_buffer_size().filter(|n| *n <= MAX_DECODED_BYTES).ok_or_else(|| bad("image too large".into()))?;
+    // Flate expands at most 1032:1 and decoding at most 32:1 more (1-bit palette to RGBA), so a
+    // file cannot honestly hold more than that: refuse a header the bytes cannot back before
+    // zero-filling a buffer of its size. The slack keeps tiny real images out of the check.
+    let size = reader
+        .output_buffer_size()
+        .filter(|n| *n <= MAX_DECODED_BYTES && *n <= bytes.len().saturating_mul(PNG_MAX_EXPANSION).saturating_add(PNG_SLACK))
+        .ok_or_else(|| bad("image too large".into()))?;
     let mut buf = Vec::new();
     buf.try_reserve_exact(size).map_err(|_| bad("not enough memory for this image".into()))?;
     buf.resize(size, 0);
@@ -522,6 +529,11 @@ const MAX_GIF_PIXELS: u64 = 1 << 24;
 /// Most decoded bytes one TIFF page or PNG may take: room for the 768 MiB CMYK poster in #665,
 /// twice over.
 const MAX_DECODED_BYTES: usize = 2 << 30;
+
+/// Most a PNG's decoded size can exceed its file size: Flate's 1032:1 times the 32:1 of
+/// expanding a 1-bit palette to RGBA, plus a fixed allowance for small files.
+const PNG_MAX_EXPANSION: usize = 1032 * 32;
+const PNG_SLACK: usize = 1 << 20;
 
 /// Most decoded bytes all the pages of one TIFF may take together: its pages stay in memory until
 /// they are embedded, and many small directories can share one compressed strip. Saturates to the
