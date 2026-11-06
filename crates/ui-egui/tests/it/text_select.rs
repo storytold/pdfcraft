@@ -274,6 +274,38 @@ fn a_ruler_secondary_click_does_not_open_the_page_context_menu() {
     assert!(h.query_by_label_contains("Copy").is_none(), "a ruler secondary click never opens the page context menu");
 }
 
+/// A ruler-owned secondary click cannot reach a page when a held primary drag ends in the same
+/// frame. The primary drag deliberately keeps the page pointer available across ruler chrome.
+#[test]
+fn a_ruler_secondary_click_is_blocked_when_a_page_drag_ends_in_the_same_frame() {
+    use egui_kittest::kittest::Queryable;
+
+    let (mut h, at) = harness(|app| app.show_rulers = true);
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
+    h.run_steps(2);
+    let viewport = h.state().views[0].viewport_rect();
+    let ruler = egui::pos2(viewport.center().x, viewport.top() + pdfcraft_ui_egui::ruler::HORIZONTAL_RULER_HEIGHT / 2.0);
+
+    // Give the page ownership of a primary drag first.
+    h.event(Event::PointerMoved(at));
+    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+
+    // End that primary drag in the same frame as a complete ruler-owned secondary click. The
+    // primary release keeps `ptr.pos` available, while the secondary press must keep page context
+    // handling blocked.
+    h.input_mut().events.extend([
+        Event::PointerMoved(ruler),
+        Event::PointerButton { pos: ruler, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE },
+        Event::PointerButton { pos: ruler, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+        Event::PointerButton { pos: ruler, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE },
+    ]);
+    h.run_steps(1);
+    h.run_steps(2);
+
+    assert!(h.query_by_label_contains("Copy").is_none(), "the mixed release frame does not open the page context menu behind the ruler");
+}
+
 #[test]
 fn escape_closes_an_open_menu_before_it_clears_the_selection() {
     // #3535: one Escape closed the menu and dropped the selection with it.
