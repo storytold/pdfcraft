@@ -342,6 +342,52 @@ fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
     }
 }
 
+/// `o` without the entries `keep` refuses, through nested arrays (an `/Order` holds sub-lists, and
+/// `/RBGroups` holds groups); arrays written by reference are copied in place.
+fn filtered(doc: &Document, o: &Object, keep: &impl Fn(&Object) -> bool, depth: usize) -> Result<Object, RedactError> {
+    if depth > MAX_DIRECT_DEPTH {
+        return Err(RedactError::TooDeep);
+    }
+    match &*doc.resolve(o) {
+        Object::Array(a) => {
+            let mut out = Vec::with_capacity(a.len());
+            for x in a.iter().filter(|x| keep(x)) {
+                out.push(filtered(doc, x, keep, depth + 1)?);
+            }
+            Ok(Object::Array(out))
+        }
+        _ => Ok(o.clone()),
+    }
+}
+
+/// An optional-content configuration without the layers `keep` refuses, in every list that names
+/// them: on, off, order, locked, radio-button groups and usage rules (a rule left with no layer
+/// goes). A removed layer still named in any of them would stay in the file, its name included.
+fn config_without(doc: &Document, mut d: Dict, keep: &impl Fn(&Object) -> bool) -> Result<Dict, RedactError> {
+    for k in [&b"ON"[..], b"OFF", b"Order", b"Locked", b"RBGroups"] {
+        if let Some(v) = d.get(k).cloned() {
+            let v = filtered(doc, &v, keep, 0)?;
+            d.set(k.to_vec(), v);
+        }
+    }
+    if let Some(Object::Array(rules)) = d.get(b"AS").map(|a| (*doc.resolve(a)).clone()) {
+        let mut kept = Vec::with_capacity(rules.len());
+        for rule in rules {
+            let Some(mut rule) = doc.resolve(&rule).as_dict().cloned() else { continue };
+            if let Some(layers) = rule.get(b"OCGs").cloned() {
+                let layers = filtered(doc, &layers, keep, 0)?;
+                if layers.as_array().is_some_and(Vec::is_empty) {
+                    continue;
+                }
+                rule.set(b"OCGs".to_vec(), layers);
+            }
+            kept.push(Object::Dict(rule));
+        }
+        d.set(b"AS".to_vec(), Object::Array(kept));
+    }
+    Ok(d)
+}
+
 /// Glyphs of hidden text, or content of hidden layers, on every page (`write` = remove them).
 fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Result<(usize, std::collections::HashSet<ObjRef>), RedactError> {
     let off = if layers { hidden_layers(doc) } else { Vec::new() };
@@ -636,13 +682,17 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
                     if let Some(Object::Array(a)) = oc.get(b"OCGs").map(|g| (*doc.resolve(g)).clone()) {
                         oc.set(b"OCGs".to_vec(), Object::Array(a.into_iter().filter(keep).collect()));
                     }
-                    if let Some(mut d) = sub(doc, &oc, b"D") {
-                        for k in [&b"ON"[..], b"OFF", b"Order", b"Locked"] {
-                            if let Some(Object::Array(a)) = d.get(k).map(|g| (*doc.resolve(g)).clone()) {
-                                d.set(k.to_vec(), Object::Array(a.into_iter().filter(keep).collect()));
+                    if let Some(d) = sub(doc, &oc, b"D") {
+                        oc.set(b"D".to_vec(), Object::Dict(config_without(doc, d, &keep)?));
+                    }
+                    if let Some(Object::Array(configs)) = oc.get(b"Configs").map(|c| (*doc.resolve(c)).clone()) {
+                        let mut kept = Vec::with_capacity(configs.len());
+                        for config in configs {
+                            if let Some(config) = doc.resolve(&config).as_dict().cloned() {
+                                kept.push(Object::Dict(config_without(doc, config, &keep)?));
                             }
                         }
-                        oc.set(b"D".to_vec(), Object::Dict(d));
+                        oc.set(b"Configs".to_vec(), Object::Array(kept));
                     }
                     cat.set(b"OCProperties".to_vec(), Object::Dict(oc));
                 }
