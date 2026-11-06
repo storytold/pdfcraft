@@ -148,12 +148,17 @@ pub struct MonoSettings {
     pub target_ppi: f64,
     pub above_ppi: f64,
     pub compression: MonoCompression,
+    /// Binarize pristine near-bilevel scanned text (≥98% extreme levels, ≤0.5% midtones) to
+    /// 1-bit mono (compressed with [`MonoCompression`], typically CCITT Group 4 or JBIG2).
+    /// Scans with faint content, midtones, or ambiguous histograms are left unconverted.
+    pub binarize_scans: bool,
 }
 
 impl MonoSettings {
     /// Reduce File Size and the presets: to 300 ppi above 450 ppi, CCITT Group 4. Text in a scan
     /// stays sharp at 300 ppi.
-    pub const REDUCE: MonoSettings = MonoSettings { downsample: true, target_ppi: 300.0, above_ppi: 450.0, compression: MonoCompression::CcittG4 };
+    pub const REDUCE: MonoSettings =
+        MonoSettings { downsample: true, target_ppi: 300.0, above_ppi: 450.0, compression: MonoCompression::CcittG4, binarize_scans: false };
 }
 
 /// Acrobat's JPEG quality steps.
