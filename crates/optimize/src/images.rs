@@ -1416,7 +1416,7 @@ pub(crate) fn run(
             hold(doc, r, size, bits, report);
             continue;
         }
-        let Some((new, smask)) = processed else {
+        let Some((mut new, smask)) = processed else {
             // Read to be packed and again to be resampled, it is still one image, and it stayed.
             report.images_refused += usize::from(budget.refused() > refused);
             continue;
@@ -1429,10 +1429,12 @@ pub(crate) fn run(
         } else {
             report.images_recompressed += 1;
         }
-        doc.set(r, Object::Stream(new));
-        if let Some((mr, m)) = smask {
-            doc.set(mr, Object::Stream(m));
+        // The resized mask is a new object: other images may share the original, which must stay as it was.
+        if let Some((_, m)) = smask {
+            let mr = doc.add(Object::Stream(m));
+            new.dict.set(b"SMask".to_vec(), Object::Ref(mr));
         }
+        doc.set(r, Object::Stream(new));
     }
     share(doc, &mut group, report);
     if !progress(Stage::Images { done: total, total }) {
