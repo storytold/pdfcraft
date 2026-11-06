@@ -336,6 +336,21 @@ fn structure_doc(objects: &[String]) -> Document {
 }
 
 #[test]
+fn many_tags_naming_one_large_string_share_the_listing_text_allowance() {
+    let elements = 100;
+    let kids = (0..elements).map(|i| format!("{} 0 R", 5 + i)).collect::<Vec<_>>().join(" ");
+    let mut objects = vec![format!("<< /S /Document /K [{kids}] >>"), format!("({})", "a".repeat(512 << 10))];
+    objects.extend((0..elements).map(|_| "<< /S /Figure /Alt 4 0 R >>".to_string()));
+    let doc = structure_doc(&objects);
+    let listed = tags(&doc);
+    assert_eq!(listed.len(), elements + 1);
+    let kept: usize = listed.iter().filter_map(|t| t.alt.as_ref()).map(String::len).sum();
+    assert!(kept > 0 && kept <= crate::alt::MAX_LISTED_TEXT, "{kept}");
+    let kept: usize = figures(&doc).iter().filter_map(|f| f.alt.as_ref()).map(String::len).sum();
+    assert!(kept > 0 && kept <= crate::alt::MAX_LISTED_TEXT, "{kept}");
+}
+
+#[test]
 fn reachable_tag_properties_round_trip_and_reject_unrelated_objects() {
     let mut doc =
         structure_doc(&["<< /S /Document /K [4 0 R] >>".into(), "<< /S /Figure /T (Old) /Alt (A chart) >>".into(), "<< /S /Figure >>".into()]);
