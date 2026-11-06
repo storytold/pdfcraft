@@ -59,6 +59,9 @@ use vello_cpu::color::palette::css::TRANSPARENT;
 use vello_cpu::color::palette::css::WHITE;
 use vello_cpu::{Level, Pixmap, RenderMode};
 
+mod barcode;
+#[cfg(test)]
+mod barcode_render_tests;
 mod renderer;
 /// PdfCraft patch: exported for its regression test.
 pub use renderer::{image_resampling_size, tiling_cell_pixels, tiling_cell_scale, usable_cell_scale};
@@ -74,6 +77,10 @@ pub use renderer::set_skip_offscreen_paths;
 pub struct RenderCache<'a> {
     pub(crate) interpreter_cache: InterpreterCache<'a>,
     pub(crate) outline_cache: Rc<RefCell<HashMap<u128, Rc<kurbo::BezPath>>>>,
+    pub(crate) barcode_cache: Rc<RefCell<renderer::BarcodeCache>>,
+    pub(crate) barcode_admission: Rc<RefCell<std::collections::VecDeque<renderer::BarcodeAdmissionEntry<'a>>>>,
+    #[cfg(test)]
+    pub(crate) barcode_admission_passes: Rc<std::cell::Cell<usize>>,
 }
 
 impl<'a> RenderCache<'a> {
@@ -82,6 +89,10 @@ impl<'a> RenderCache<'a> {
         Self {
             interpreter_cache: InterpreterCache::new(),
             outline_cache: Rc::new(RefCell::new(HashMap::new())),
+            barcode_cache: Rc::new(RefCell::new(renderer::BarcodeCache::default())),
+            barcode_admission: Rc::new(RefCell::new(std::collections::VecDeque::new())),
+            #[cfg(test)]
+            barcode_admission_passes: Rc::new(std::cell::Cell::new(0)),
         }
     }
 }
@@ -231,6 +242,9 @@ pub fn render_into<'a>(
     if expected != Some(buffer.len()) {
         return;
     }
+    // A metadata pass uses interpreter thread-local work budgets too. Finish it before
+    // creating the real context, which resets those budgets for both cache hits and misses.
+    let barcode_images = renderer::barcode_page_image_count(page, cache, interpreter_settings);
     let mut state = Context::new(
         initial_transform,
         Rect::new(0.0, 0.0, pix_width as f64, pix_height as f64),
@@ -253,6 +267,10 @@ pub fn render_into<'a>(
         render_settings.color_replacement,
         interpreter_settings.preview,
     );
+
+    device.barcode_enabled = barcode_images.is_some();
+    device.barcode_divisor = barcode_images.unwrap_or(1);
+    device.barcode_cancel = interpreter_settings.cancelled.clone();
 
     // PdfCraft patch (18): the page renders as one transparency group (the page group). Its
     // objects composite with an initially transparent backdrop, and the group is then put on
