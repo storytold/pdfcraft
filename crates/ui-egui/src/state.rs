@@ -142,6 +142,9 @@ pub enum Dialog {
     Revert,
     /// Save over a file that changed on disk since the document came from it (#2166).
     OverwriteChanged,
+    /// Save a document whose redaction marks aren't applied yet: what they cover is still in the
+    /// file (#4741).
+    RedactBeforeSave,
     /// Link Properties.
     LinkProps,
     /// Organize ▸ Extract (options), Rotate Pages.

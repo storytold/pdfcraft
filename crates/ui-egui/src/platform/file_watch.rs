@@ -608,6 +608,37 @@ mod tests {
         assert!(matches!(app.dialog, Some(crate::Dialog::OverwriteChanged)));
     }
 
+    /// Save with marks over a file changed on disk, then Cancel at the question about it: nothing
+    /// is written, so the marks aren't noted as kept, and the next Save asks about them again
+    /// (#4741). Noting them before the write let that next Save write them unasked.
+    #[cfg(unix)]
+    #[test]
+    fn a_cancelled_save_with_redaction_marks_asks_about_the_marks_again() {
+        let (_dir, path) = TempDir::new("redact-cancelled", &fixture(2));
+        let mut h = harness(&path);
+        let original = std::fs::read(&path).unwrap();
+        let app = h.state_mut();
+        app.execute("redact.pages");
+        app.redact_pages();
+        assert_eq!(doc(&h).redaction_marks(), 1, "the current page is marked");
+        rebuild(&path, &String::from_utf8(fixture(2)).unwrap().replace("200 300", "201 300").into_bytes());
+        let changed = std::fs::read(&path).unwrap();
+        assert_ne!(changed, original);
+        let app = h.state_mut();
+        assert!(!app.save_active(SaveTarget::InPlace));
+        assert_eq!(app.dialog, Some(crate::Dialog::RedactBeforeSave));
+        app.dialog = None;
+        app.save_keeping_redaction_marks();
+        assert_eq!(app.dialog, Some(crate::Dialog::OverwriteChanged), "the file changed on disk: asks before writing over it");
+        // Cancel, as the dialog does.
+        app.dialog = None;
+        app.pending_overwrite = None;
+        assert_eq!(std::fs::read(&path).unwrap(), changed, "a cancelled save writes nothing");
+        assert!(app.kept_redaction_marks.is_empty(), "marks a save didn't write aren't kept");
+        assert!(!app.save_active(SaveTarget::InPlace));
+        assert_eq!(app.dialog, Some(crate::Dialog::RedactBeforeSave), "the next Save asks about the marks again");
+    }
+
     /// #1802: the watcher found version B of the file, then the user saved version C over it
     /// before B was applied. B is older than the document now: it is not applied, the undo history
     /// stays, and C stays on disk.
