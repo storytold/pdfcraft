@@ -48,31 +48,44 @@ pub struct TransitionSpec {
     pub display: Option<f32>,
 }
 
+fn validate_transition(t: &Transition) -> Result<(), OrganizeError> {
+    let bad = OrganizeError::Invalid;
+    let style = t.style.as_str();
+    if !TRANSITION_STYLES.contains(&style) {
+        return Err(bad(format!("unknown transition style {:?}; one of {}", t.style, TRANSITION_STYLES.join(", "))));
+    }
+    if !(t.duration.is_finite() && t.duration >= 0.0) {
+        return Err(bad("the transition duration must be zero or more seconds".into()));
+    }
+    match t.direction {
+        None if style != "Fly" => {
+            return Err(bad("direction None (/Di /None) is only valid for Fly transitions".into()));
+        }
+        Some(d) if !TRANSITION_DIRECTIONS.contains(&d) => {
+            return Err(bad(format!("the direction must be one of {:?} degrees", TRANSITION_DIRECTIONS)));
+        }
+        Some(315) if matches!(style, "Fly" | "Push" | "Cover" | "Uncover") => {
+            return Err(bad(format!("direction 315 degrees is not valid for {style} transitions")));
+        }
+        _ => {}
+    }
+    if !(t.scale.is_finite() && t.scale > 0.0) {
+        return Err(bad("the Fly scale must be more than zero".into()));
+    }
+    Ok(())
+}
+
 /// Set (or remove) the transition and display time of `pages` (0-based). Every value is checked
 /// before any page changes: an unknown style, a direction that is not one of the five, a negative
 /// or non-finite duration, scale or display time are refused.
 pub fn set_transition(doc: &mut Document, pages: &[usize], spec: &TransitionSpec) -> Result<(), OrganizeError> {
-    let bad = |m: String| OrganizeError::Invalid(m);
     if let Some(t) = &spec.transition {
-        if !TRANSITION_STYLES.contains(&t.style.as_str()) {
-            return Err(bad(format!("unknown transition style {:?}; one of {}", t.style, TRANSITION_STYLES.join(", "))));
-        }
-        if !(t.duration.is_finite() && t.duration >= 0.0) {
-            return Err(bad("the transition duration must be zero or more seconds".into()));
-        }
-        if let Some(d) = t.direction
-            && !TRANSITION_DIRECTIONS.contains(&d)
-        {
-            return Err(bad(format!("the direction must be one of {:?} degrees", TRANSITION_DIRECTIONS)));
-        }
-        if !(t.scale.is_finite() && t.scale > 0.0) {
-            return Err(bad("the Fly scale must be more than zero".into()));
-        }
+        validate_transition(t)?;
     }
     if let Some(s) = spec.display
         && !(s.is_finite() && s >= 0.0)
     {
-        return Err(bad("the display time must be zero or more seconds".into()));
+        return Err(OrganizeError::Invalid("the display time must be zero or more seconds".into()));
     }
     let all = walk(doc)?;
     check(pages, all.len())?;
@@ -130,4 +143,50 @@ fn trans_dict(t: &Transition) -> Dict {
         }
     }
     d
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn one_page_doc() -> Document {
+        let objs = [
+            &b"<< /Type /Catalog /Pages 2 0 R >>"[..],
+            &b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>"[..],
+            &b"<< /Type /Page /Parent 2 0 R >>"[..],
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend_from_slice(o);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(b"xref\n0 4\n0000000000 65535 f \n");
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+        Document::open(Arc::new(out)).expect("fixture")
+    }
+
+    #[test]
+    fn rejects_none_direction_for_non_fly_and_diagonal_for_cardinal_styles() {
+        let mut doc = one_page_doc();
+        for style in ["Wipe", "Glitter", "Push", "Cover", "Uncover", "Split"] {
+            let spec = TransitionSpec { transition: Some(Transition { direction: None, ..Transition::new(style) }), display: None };
+            assert!(set_transition(&mut doc, &[0], &spec).is_err(), "{style} must reject direction: None");
+        }
+        for style in ["Fly", "Push", "Cover", "Uncover"] {
+            let spec = TransitionSpec { transition: Some(Transition { direction: Some(315), ..Transition::new(style) }), display: None };
+            assert!(set_transition(&mut doc, &[0], &spec).is_err(), "{style} must reject 315 degrees");
+        }
+        for style in ["Wipe", "Glitter"] {
+            let spec = TransitionSpec { transition: Some(Transition { direction: Some(315), ..Transition::new(style) }), display: None };
+            assert!(set_transition(&mut doc, &[0], &spec).is_ok(), "{style} allows 315 degrees");
+        }
+    }
 }
