@@ -1,6 +1,6 @@
 use super::draw::draw_appearance;
 use super::lookup::{annot_dict, annot_ref, annots, fill_sign_shape, page_ref, set_annots};
-use super::modify::{n, rich_text};
+use super::modify::{free_text_da, n, rich_text, set_part_keys, shape_text_box};
 use super::types::{
     FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, OverlayLook, Rgb, Shape, StampGroup, Style,
 };
@@ -31,6 +31,16 @@ pub(crate) fn bounds(points: impl Iterator<Item = [f64; 2]>) -> Option<[f64; 4]>
 
 pub(crate) fn grow(r: [f64; 4], by: f64) -> [f64; 4] {
     [r[0] - by, r[1] - by, r[2] + by, r[3] + by]
+}
+
+/// Tight bounding box of ink strokes, including Bezier control points for strokes with three or
+/// more points (matching [`appearance::smooth_segments`]).
+pub(crate) fn ink_bounds(strokes: &[Vec<[f64; 2]>]) -> Option<[f64; 4]> {
+    let controls = strokes.iter().filter(|s| s.len() > 2).flat_map(|s| {
+        let pts: Vec<(f64, f64)> = s.iter().map(|p| (p[0], p[1])).collect();
+        appearance::smooth_segments(&pts).into_iter().flat_map(|[a, b, _]| [[a.0, a.1], [b.0, b.1]])
+    });
+    bounds(strokes.iter().flatten().copied().chain(controls))
 }
 
 pub(crate) fn ending_draws(ending: LineEnding) -> bool {
@@ -87,17 +97,11 @@ pub(crate) fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotEr
             let pad = half + if ending_draws(*start) || ending_draws(*end) { appearance::arrow_size(style.width) } else { 0.0 };
             grow(bounds([*from, *to].into_iter()).unwrap_or_default(), pad + 1.0)
         }
-        Shape::Ink { strokes } | Shape::Signature { strokes } => {
+        Shape::Ink { strokes } | Shape::FreehandHighlight { strokes } | Shape::Signature { strokes } => {
             if strokes.iter().all(Vec::is_empty) || !strokes.iter().flatten().all(|p| finite(p)) {
                 return Err(bad("drawing (no points)"));
             }
-            // Strokes of three or more points are drawn as curves, which stay within their
-            // points and control points.
-            let controls = strokes.iter().filter(|s| s.len() > 2).flat_map(|s| {
-                let pts: Vec<(f64, f64)> = s.iter().map(|p| (p[0], p[1])).collect();
-                appearance::smooth_segments(&pts).into_iter().flat_map(|[a, b, _]| [[a.0, a.1], [b.0, b.1]])
-            });
-            grow(bounds(strokes.iter().flatten().copied().chain(controls)).unwrap_or_default(), half + 1.0)
+            grow(ink_bounds(strokes).unwrap_or_default(), half + 1.0)
         }
         Shape::Polygon { vertices, cloud } => {
             let b = bounds(vertices.iter().copied())
@@ -164,6 +168,7 @@ fn subject(shape: &Shape) -> &'static str {
         Shape::Oval { .. } => "Oval",
         Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. } => "Arrow",
         Shape::Line { .. } => "Line",
+        Shape::FreehandHighlight { .. } => "Freehand Highlight",
         Shape::Ink { .. } => "Pencil",
         Shape::TextBox { .. } => "Text Box",
         Shape::Typewriter { .. } => "Typewriter",
@@ -209,8 +214,13 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
     let rect = rect_for(&new.shape, style)?;
     let mut d = base_dict(new.shape.subtype(), rect, page, &new.contents, &new.author, meta);
     d.set(b"Subj".to_vec(), PdfString::text(subject(&new.shape)));
-    let opacity = style.opacity.clamp(0.0, 1.0);
-    set_non_opaque_style(&mut d, opacity);
+    if style.fill_opacity.into_iter().chain(style.text_opacity).any(|o| !o.is_finite()) {
+        return Err(AnnotError::Invalid("invalid opacity".into()));
+    }
+    let line = style.opacity.clamp(0.0, 1.0);
+    let fill = style.fill_opacity.map_or(line, |o| o.clamp(0.0, 1.0));
+    let text = style.text_opacity.map_or(fill, |o| o.clamp(0.0, 1.0));
+    set_part_keys(&mut d, appearance::PartOpacity { line, fill, text });
     let border = |d: &mut Dict| {
         let mut bs = Dict::new();
         bs.set(b"W".to_vec(), Object::Real(style.width.max(0.0)));
@@ -292,10 +302,13 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                 }
             }
         }
-        Shape::Ink { strokes } | Shape::Signature { strokes } => {
+        Shape::Ink { strokes } | Shape::FreehandHighlight { strokes } | Shape::Signature { strokes } => {
             d.set(b"C".to_vec(), rgb(style.color));
             let list = strokes.iter().filter(|s| !s.is_empty()).map(|s| num_array(&s.concat())).collect();
             d.set(b"InkList".to_vec(), Object::Array(list));
+            if matches!(&new.shape, Shape::FreehandHighlight { .. }) {
+                d.set(b"IT".to_vec(), Object::name("FreehandHighlight"));
+            }
             border(&mut d);
         }
         Shape::Polygon { vertices, cloud } => {
@@ -372,20 +385,22 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                 d.set(b"IT".to_vec(), Object::name("FreeTextTypeWriter"));
             }
             let size = if font_size.is_finite() && *font_size > 0.0 { font_size.clamp(1.0, 400.0) } else { 12.0 };
-            let [r, g, b] = style.color.map(|x| x.clamp(0.0, 1.0));
-            d.set(b"DA".to_vec(), PdfString::literal(format!("{} {} {} rg /Helv {} Tf", n(r), n(g), n(b), n(size)).into_bytes()));
+            d.set(b"DA".to_vec(), free_text_da(style.color, style.border_color, size));
             d.set(b"Q".to_vec(), Object::Int(0));
             if let Some(f) = style.fill {
                 d.set(b"C".to_vec(), rgb(f));
             }
             border(&mut d);
             rich_text(&mut d);
-            // The text is laid out for the page as displayed, like a stamp's label.
             if !matches!(new.shape, Shape::Callout { .. }) {
+                // The text is laid out for the page as displayed, like a stamp's label.
                 let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
                 if matches!(turn, 90 | 180 | 270) {
                     d.set(b"PCTextRotate".to_vec(), Object::Int(turn));
                 }
+                // An oval or a circle goes around the text box, its text wrapped as displayed:
+                // after `/PCTextRotate`, which swaps the box's sides on a quarter-turned page.
+                shape_text_box(&mut d, rect, style.border_shape, style.width);
             }
         }
         _ => {}
@@ -413,7 +428,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
 }
 
 fn validate_style(style: &Style) -> Result<(), AnnotError> {
-    if !finite(&style.color) || !style.opacity.is_finite() || !style.width.is_finite() {
+    if !finite(&style.color) || style.border_color.is_some_and(|c| !finite(&c)) || !style.opacity.is_finite() || !style.width.is_finite() {
         return Err(AnnotError::Invalid("invalid style".into()));
     }
     Ok(())
@@ -432,12 +447,6 @@ fn set_redaction_properties(dict: &mut Dict, style: &Style, quads: &[[f64; 8]], 
         if look.repeat {
             dict.set(b"Repeat".to_vec(), Object::Bool(true));
         }
-    }
-}
-
-fn set_non_opaque_style(dict: &mut Dict, opacity: f64) {
-    if opacity < 1.0 {
-        dict.set(b"CA".to_vec(), Object::Real(opacity));
     }
 }
 

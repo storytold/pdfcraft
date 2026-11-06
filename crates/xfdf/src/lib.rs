@@ -29,9 +29,9 @@ pub use fdf::export_fdf;
 use fdf::{ImportBudget, fdf_body, import_fdf, walk_fdf};
 #[cfg(test)]
 use fdf::{MAX_FDF_BYTES, MAX_FDF_OBJECTS};
-pub use xfdf::export_xfdf;
 #[cfg(test)]
 use xfdf::{LOCKED, find_by_name};
+pub use xfdf::{Outline, comment_count, comment_outlines, comments_bounds, export_xfdf, export_xfdf_comments, import_comments, is_xfdf_comments};
 use xfdf::{apply_values, import_xfdf};
 
 #[cfg(test)]
@@ -95,7 +95,7 @@ pub fn export_data(doc: &Document, format: Format) -> String {
         .map(|f| {
             let v = match f.kind {
                 FieldKind::CheckBox | FieldKind::Radio if f.value.is_empty() => "Off".to_string(),
-                _ => f.value.join(", "),
+                _ => f.export_values().join(", "),
             };
             (f.name, v)
         })
@@ -152,8 +152,11 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
             .into_iter()
             .filter(|f| !matches!(f.kind, FieldKind::PushButton | FieldKind::Signature))
             .map(|f| {
-                let v =
-                    if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) && f.value.is_empty() { vec!["Off".to_string()] } else { f.value };
+                let v = if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) && f.value.is_empty() {
+                    vec!["Off".to_string()]
+                } else {
+                    f.export_values()
+                };
                 (f.name, v)
             })
             .collect());

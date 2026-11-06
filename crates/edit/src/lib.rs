@@ -1,6 +1,11 @@
 //! pdfcraft-edit — page content editing (L4). Today: page marks, Acrobat's Header & footer,
 //! Watermark, Background and Bates numbering (execution plan M7.6).
 //!
+//! **Atomic page-mark operations.** Adding or replacing headers/footers, watermarks and backgrounds
+//! stages the whole call on a document snapshot and commits only after every selected page succeeds.
+//! An error preserves existing marks, content, resources, pending edits and allocated objects. The
+//! snapshot shares original PDF bytes and unchanged objects; it copies the overlay table and metadata.
+//!
 //! **How marks are stored.** Each mark is one content stream appended to (or, for content behind
 //! the page, inserted after the backgrounds at the start of) the page's `/Contents`, drawn in
 //! display space (after `/Rotate`) and wrapped in a marked-content artifact (§14.8.2.2) so
@@ -33,6 +38,9 @@ pub enum EditError {
 
 pub type Rgb = [f64; 3];
 
+pub mod backdrop;
+pub use backdrop::{Backdrop, backdrops_left_off, page_backdrop, page_backdrops};
+pub use text::strip_subset_tag;
 mod background;
 pub use background::page_background;
 pub mod objects;
@@ -41,10 +49,11 @@ pub use objects::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, ed
 mod flatten;
 pub use flatten::{FlattenOptions, flatten, flatten_fill_sign, flatten_with};
 pub mod images;
-pub use images::{ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
+pub use images::{ArrangeOrder, ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
 pub mod bidi;
 pub mod indic;
 mod linebreak;
+pub mod paragraph_align;
 pub mod text;
 pub use text::{
     BlockKey, BlockStyle, LineEdit, MAX_FORM_DEPTH, MAX_FORM_VISITS, RangeStyle, ReadingBlocks, TextBlock, TextLine, TextSession, block_overlapping,
@@ -68,8 +77,8 @@ use marks::{matrix_number, n};
 pub(crate) use place::undrawable;
 #[cfg(test)]
 use place::{ISOLATION_MAX_DEPTH, OLD_WRAP_CLOSE, WRAP_CLOSE, WRAP_OPEN, is_wrap_close, page_fonts, stream_bytes, stream_tag, tagged, wrapper_role};
-use place::{check, check_on_top, contents, page_list, place_tagged};
-pub use place::{stamp, undrawable_message};
+use place::{Reach, check, check_on_top, contents, draw_on_top, lift_on_top, page_list, place_tagged, revealed_under_paint};
+pub use place::{add_type3_fonts, stamp, stamp_with_fonts, undrawable_message};
 
 #[cfg(test)]
 mod marked_isolation_tests;

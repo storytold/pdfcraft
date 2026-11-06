@@ -1,0 +1,11 @@
+{
+  "name": "repeated step opens as one",
+  "content": "BT /F1 12 Tf 72 700 Td (One) Tj ET BT /F1 12 Tf 72 672.4 Td (Two) Tj ET BT /F1 12 Tf 72 644.8 Td (Three) Tj ET BT /F1 12 Tf 14.4 TL 1 0 0 1 72 500 Tm (Kept.) Tj ET",
+  "steps": [
+    {"command": {"id": "edit.edit_text"}},
+    {"click_page": {"x": 90, "y": 676}},
+    {"expect_editor": {"contains": "Two", "text": "One\nTwo\nThree"}},
+    {"click_page": {"x": 90, "y": 504}},
+    {"expect_editor": {"contains": "Kept", "text": "Kept."}}
+  ]
+}
