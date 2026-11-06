@@ -245,6 +245,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-11-02 (M14, #5737, #5460):** Preferences can turn off the update check at start. It stays on by default, and Help ▸ Check for updates still asks.
 
+- **2026-10-29 (M3, Windows, Reveal in File Explorer):** Revealing a file no longer reports "Could not reveal the file in the system file manager" after it has worked. Explorer exits with 1 even when it has opened the folder and selected the file, so on Windows only Explorer not starting counts as a failure; a unit test pins it. Estimates unchanged.
+
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
 
 - **2026-11-01 (M14, #5572):** Preferences ▸ Documents and view sets how many recent files to keep, from 0 to 50 with 12 by default. At 0 Home has no Recent section and File ▸ Open Recent is disabled. The list is cut when Preferences closes, so the number can pass through 0 on its way to another.
