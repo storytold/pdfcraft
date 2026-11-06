@@ -1,7 +1,7 @@
 use super::core::{limited_pdf_string, pretty_date, spend};
 use super::model::{Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, link_replies};
 use super::navigation::text_string;
-use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
+use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId, OnceCell};
 
 /// At most this many `/State` entries of a set-layer-visibility action are read.
 const MAX_LAYER_STATE: usize = 1024;
@@ -21,6 +21,14 @@ pub(super) const MAX_ANNOTATION_BYTES: usize = 64 << 20;
 /// address, an attachment under its generic name without a description, and an embedded file whose
 /// key does not fit is not listed.
 pub(super) const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
+
+/// `/NM` bytes, with a slot per entry, that the per-page annotation-name indexes for GoToE targets
+/// hash in all. One `/Annots` array or one long name many pages share would otherwise be hashed
+/// again for each page; past it a page is scanned for each name instead.
+pub(super) const MAX_ANNOTATION_NAME_INDEX_BYTES: usize = 16 << 20;
+
+/// A longer `/NM` is not indexed: it is scanned for. Real names are short identifiers.
+const MAX_INDEXED_ANNOTATION_NAME_BYTES: usize = 1024;
 
 /// The bytes a listed annotation keeps.
 pub(super) fn retained(a: &Annotation) -> usize {
@@ -214,6 +222,7 @@ impl<'a> Inspector<'a> {
                 Some("SetOCGState") => self.layer_state(a),
                 Some("GoToR") => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
                 Some("Launch") => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
+                Some("GoToE") => self.embedded_go_to(a, text_budget).unwrap_or_else(|| LinkTarget::Other("GoToE".into())),
                 Some(other) => LinkTarget::Other(other.to_string()),
                 None => return None,
             }
@@ -223,7 +232,15 @@ impl<'a> Inspector<'a> {
 
     fn remote_go_to(&self, action: &Dictionary) -> Option<LinkTarget> {
         let file = self.action_file(action)?;
-        let destination = match action.get(b"D") {
+        let destination = self.remote_destination(action)?;
+        Some(LinkTarget::RemoteGoTo { launch: false, file, destination, new_window: self.new_window(action) })
+    }
+
+    /// The `/D` of a remote or embedded Go-To: a destination in another document, so an
+    /// explicit one names its page by number (§12.3.2.2). No `/D` is that document's default
+    /// view; an unusable one is `None`.
+    fn remote_destination(&self, action: &Dictionary) -> Option<RemoteDestination> {
+        Some(match action.get(b"D") {
             Err(_) => RemoteDestination::Default,
             Ok(o) => match self.resolve(o) {
                 Object::Array(items) => {
@@ -248,8 +265,98 @@ impl<'a> Inspector<'a> {
                 }
                 _ => return None,
             },
+        })
+    }
+
+    /// An embedded Go-To action (§12.6.4.4). Only a child of this document is opened: a target
+    /// dictionary with `/R /C` and no further `/T`, naming the file by its `/N` key in the
+    /// EmbeddedFiles name tree, or, for a file attachment annotation, by `/P` (a page number, or
+    /// a named destination giving it) and `/A` (the annotation's index in `/Annots`, or its
+    /// `/NM`) (Table 205). The parent (`/R /P`), a nested path, or a target under another root
+    /// document (`/F`) is `None`: not followed.
+    fn embedded_go_to(&self, action: &Dictionary, text_budget: &mut usize) -> Option<LinkTarget> {
+        if action.has(b"F") {
+            return None;
+        }
+        let t = self.dict(action.get(b"T").ok()?)?;
+        if self.name(t, b"R").as_deref() != Some("C") || t.has(b"T") {
+            return None;
+        }
+        let source = match t.get(b"N") {
+            Ok(n) => {
+                let Object::String(bytes, _) = self.resolve(n) else { return None };
+                // Converted as the EmbeddedFiles keys `DocInfo::attachments` lists are.
+                AttachmentSource::Document { key: spend(bytes, text_budget, text_string)? }
+            }
+            Err(_) => {
+                let page = match self.resolve(t.get(b"P").ok()?) {
+                    Object::Integer(p) => usize::try_from(*p).ok()?,
+                    named @ Object::String(..) => self.dest(named, 0)?.0,
+                    _ => return None,
+                };
+                let index = match self.resolve(t.get(b"A").ok()?) {
+                    Object::Integer(i) => usize::try_from(*i).ok()?,
+                    Object::String(nm, _) => self.annotation_named(page, nm)?,
+                    _ => return None,
+                };
+                AttachmentSource::Annotation { page, index }
+            }
         };
-        Some(LinkTarget::RemoteGoTo { launch: false, file, destination, new_window: self.new_window(action) })
+        Some(LinkTarget::EmbeddedGoTo { source, destination: self.remote_destination(action)?, new_window: self.new_window(action) })
+    }
+
+    /// The position in page `page`'s `/Annots` of the first annotation whose `/NM` is `nm`.
+    fn annotation_named(&self, page: usize, nm: &[u8]) -> Option<usize> {
+        let pages = self.annotation_names.get_or_init(|| self.page_ids.iter().map(|_| OnceCell::new()).collect());
+        let names = pages.get(page)?.get_or_init(|| self.annotation_names_on(page));
+        match names {
+            // A name longer than an indexed one is not in the index: scanned for.
+            Some(names) if nm.len() <= MAX_INDEXED_ANNOTATION_NAME_BYTES => names.get(nm).copied(),
+            _ => self.annotations_on(page)?.iter().position(|a| self.annotation_name(a) == Some(nm)),
+        }
+    }
+
+    /// Each `/NM` on page `page` up to [`MAX_INDEXED_ANNOTATION_NAME_BYTES`] long, with the
+    /// position in its `/Annots` of the first annotation that has it, spent from
+    /// `annotation_name_budget`. `None` once the budget does not cover the page.
+    fn annotation_names_on(&self, page: usize) -> super::core::AnnotationNames {
+        let mut names = HashMap::new();
+        let Some(annots) = self.annotations_on(page) else { return Some(names) };
+        let mut budget = self.annotation_name_budget.get();
+        for (i, a) in annots.iter().enumerate() {
+            let Some(nm) = self.annotation_name(a).filter(|nm| nm.len() <= MAX_INDEXED_ANNOTATION_NAME_BYTES) else { continue };
+            // A repeated name keeps its first position and adds no entry, so it costs nothing.
+            if names.contains_key(nm) {
+                continue;
+            }
+            // Each entry costs its name and its slot, so many short names are bounded too.
+            let Some(left) = budget.checked_sub(nm.len().saturating_add(std::mem::size_of::<(Vec<u8>, usize)>())) else {
+                // What the page used so far is spent; nothing of it is kept.
+                self.annotation_name_budget.set(budget);
+                return None;
+            };
+            budget = left;
+            names.insert(nm.to_vec(), i);
+        }
+        self.annotation_name_budget.set(budget);
+        Some(names)
+    }
+
+    /// Page `page`'s `/Annots`.
+    fn annotations_on(&self, page: usize) -> Option<&'a [Object]> {
+        let page = self.doc.get_dictionary(*self.page_ids.get(page)?).ok()?;
+        match self.resolve(page.get(b"Annots").ok()?) {
+            Object::Array(annots) => Some(annots),
+            _ => None,
+        }
+    }
+
+    /// An annotation's `/NM` string bytes.
+    fn annotation_name(&self, a: &'a Object) -> Option<&'a [u8]> {
+        match self.resolve(self.dict(a)?.get(b"NM").ok()?) {
+            Object::String(nm, _) => Some(nm),
+            _ => None,
+        }
     }
 
     /// The non-empty local file an action's `/F` names (a string or a file specification), shared

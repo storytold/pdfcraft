@@ -1,10 +1,11 @@
-use super::annotations::MAX_LINK_ATTACHMENT_TEXT_BYTES;
+use super::annotations::{MAX_ANNOTATION_NAME_INDEX_BYTES, MAX_LINK_ATTACHMENT_TEXT_BYTES};
 use super::model::{AttachmentSource, PageInfo, Xfa};
 use super::navigation::text_string;
 use super::{
     Arc, AssertUnwindSafe, DecryptionError, Dictionary, DocInfo, Document, HashMap, HashSet, LazyStructure, LoadOptions, LoadPdfError, Object,
     ObjectId, OnceCell, OpenError, Pdf, Structure, catch_unwind,
 };
+use std::cell::Cell;
 
 /// lopdf decodes object and cross-reference streams while it loads, with no limit unless one is
 /// set: a few hundred bytes of nested FlateDecode then inflate to gigabytes. Real object and
@@ -133,6 +134,11 @@ pub(super) fn inspect_structure(info: &mut DocInfo, fill: impl FnOnce(&mut DocIn
     }
 }
 
+/// The names are copies (borrowing them would make `Inspector` invariant in its lifetime), each
+/// short, and all of them within [`MAX_ANNOTATION_NAME_INDEX_BYTES`]. `None` when the page's names
+/// did not fit what was left of it: that page is scanned for each name instead.
+pub(super) type AnnotationNames = Option<HashMap<Vec<u8>, usize>>;
+
 pub(super) struct Inspector<'a> {
     pub(super) doc: &'a dyn Structure,
     pub(super) page_ids: Vec<ObjectId>,
@@ -144,13 +150,26 @@ pub(super) struct Inspector<'a> {
     /// has no `/P`. Searching every page's `/Annots` for each such field was O(fields ×
     /// annotations): a second on a form of 8,000 fields.
     pub(super) annotation_pages: OnceCell<HashMap<ObjectId, usize>>,
+    /// Per page, the position in `/Annots` of the first annotation with each `/NM`, built when a
+    /// GoToE target names one. Scanning `/Annots` for each link was O(links × annotations).
+    pub(super) annotation_names: OnceCell<Vec<OnceCell<AnnotationNames>>>,
+    /// What is left of [`MAX_ANNOTATION_NAME_INDEX_BYTES`] for `annotation_names`.
+    pub(super) annotation_name_budget: Cell<usize>,
 }
 
 impl<'a> Inspector<'a> {
     pub(super) fn new(doc: &'a dyn Structure) -> Self {
         let page_ids = doc.page_ids();
         let page_index = page_ids.iter().copied().enumerate().map(|(index, id)| (id, index)).collect();
-        let mut me = Self { doc, page_ids, page_index, named: HashMap::new(), annotation_pages: OnceCell::new() };
+        let mut me = Self {
+            doc,
+            page_ids,
+            page_index,
+            named: HashMap::new(),
+            annotation_pages: OnceCell::new(),
+            annotation_names: OnceCell::new(),
+            annotation_name_budget: Cell::new(MAX_ANNOTATION_NAME_INDEX_BYTES),
+        };
         let mut named = HashMap::new();
         if let Some(tree) =
             doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| me.dict(o)).and_then(|n| n.get(b"Dests").ok()).and_then(|o| me.dict(o))

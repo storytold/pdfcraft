@@ -231,6 +231,13 @@ impl<'a> Inspector<'a> {
     }
 }
 
+/// Whether `bytes` (an attachment's, from [`attachment_data`]) are a PDF file: the `%PDF-`
+/// header (ISO 32000-2 §7.5.2) within their first 1024 bytes. Embedded go-to actions open only
+/// these (§12.6.4.4).
+pub fn looks_like_pdf(bytes: &[u8]) -> bool {
+    bytes.get(..bytes.len().min(1024)).is_some_and(|head| head.windows(5).any(|w| w == b"%PDF-"))
+}
+
 /// Fetch an attachment's bytes (decoded). Capped at 1 GiB to defuse decompression bombs.
 pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -> Result<Vec<u8>, String> {
     let run = || -> Result<Vec<u8>, String> {

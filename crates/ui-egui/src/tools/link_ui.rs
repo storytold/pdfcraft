@@ -89,6 +89,12 @@ fn target_label(info: &DocInfo, target: &LinkTarget) -> String {
         LinkTarget::Uri(u) => u.clone(),
         LinkTarget::SetLayers { .. } => tl!("Set layer visibility").to_string(),
         LinkTarget::RemoteGoTo { file, .. } => file.clone(),
+        // The attachment's name, as the Attachments panel lists it.
+        LinkTarget::EmbeddedGoTo { source, .. } => info
+            .attachments
+            .iter()
+            .find(|a| a.source == *source)
+            .map_or_else(|| crate::i18n::fmt(tl!("{s} action"), &[("s", "GoToE")]), |a| a.name.clone()),
         LinkTarget::Other(s) => crate::i18n::fmt(tl!("{s} action"), &[("s", s)]),
     }
 }
