@@ -567,6 +567,8 @@ struct ObjectStreamBatch {
 }
 
 impl ObjectStreamBatch {
+    /// Writes the batch as one compressed object stream numbered `*next` (then advances `next`),
+    /// records its offset in `rows`, and empties the batch. An empty batch writes nothing.
     fn flush<W: Write>(&mut self, doc: &Document, next: &mut u32, rows: &mut BTreeMap<u32, Row>, out: &mut Sink<W>) -> Result<(), CosError> {
         if self.count == 0 {
             return Ok(());
@@ -1086,6 +1088,7 @@ mod tests {
     }
 
     impl Write for Recording {
+        /// Keeps `data`, and on the first call notes how many objects were staged by then.
         fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
             assert!(!self.flushed, "nothing is written after the final flush");
             self.staged_at_first_write.get_or_insert_with(|| STAGED.with(std::cell::Cell::get));
@@ -1107,6 +1110,7 @@ mod tests {
     }
 
     impl Write for Failing {
+        /// Takes `data` unless that would pass `limit`; then fails with `StorageFull`.
         fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
             if self.taken + data.len() > self.limit {
                 return Err(std::io::Error::new(std::io::ErrorKind::StorageFull, "disk full"));
@@ -1120,6 +1124,7 @@ mod tests {
         }
     }
 
+    /// `write_full_to` gives `write_full`'s bytes, in chunks, while serialization is still going on.
     #[test]
     fn a_full_save_to_a_sink_writes_the_same_bytes_in_chunks() {
         // Streams larger than a chunk, and enough dictionaries for more than one object stream.
@@ -1144,6 +1149,7 @@ mod tests {
         }
     }
 
+    /// Object streams reach the sink one by one too, not only standalone objects.
     #[test]
     fn a_full_save_streams_packed_objects_too() {
         // No standalone streams that could reach the sink first: only packed objects, enough for
@@ -1162,6 +1168,30 @@ mod tests {
         assert!(first * 2 < staged, "first write after {first} of {staged} objects serialized: packed output not streamed");
     }
 
+    /// The new identifier hashes every byte before the trailer, so nothing may reach the sink
+    /// before it is known; the bytes and the identifier are still `write_full`'s.
+    #[test]
+    fn a_save_that_needs_a_new_identifier_is_held_until_the_trailer() {
+        let mut doc = sized_document(6, SINK_CHUNK + SINK_CHUNK / 2, OBJSTM_SIZE + 50);
+        let opts = SaveOptions { id_entropy: Some([7; 16]), ..Default::default() };
+        let ordinary = write_full(&doc, &opts).unwrap();
+        doc.require_full_save_with_new_id();
+        for object_streams in [false, true] {
+            let opts = SaveOptions { object_streams, ..opts.clone() };
+            let whole = write_full(&doc, &opts).unwrap();
+            let mut sink = Recording::default();
+            STAGED.with(|staged| staged.set(0));
+            write_full_to(&doc, &opts, &mut sink).unwrap();
+            let staged = STAGED.with(std::cell::Cell::get);
+            assert!(sink.bytes == whole, "same bytes as write_full (object_streams: {object_streams})");
+            assert_eq!(sink.staged_at_first_write, Some(staged), "nothing written before every object was staged");
+            let id = |bytes: &[u8]| Document::open(Arc::new(bytes.to_vec())).unwrap().trailer().get(b"ID").cloned();
+            assert!(id(&whole).is_some());
+            assert_ne!(id(&whole), id(&ordinary), "the identifier was regenerated");
+        }
+    }
+
+    /// A sink error fails the save as `CosError::Io`, keeping the sink's `ErrorKind` and text.
     #[test]
     fn a_failing_sink_fails_the_save() {
         let doc = sized_document(4, SINK_CHUNK * 2, 10);
