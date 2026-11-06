@@ -87,6 +87,7 @@ impl PdfCraftApp {
             "reload_changed_files": self.reload_changed_files,
             "system_title_bar": self.system_title_bar,
             "pinned_folders": self.pinned.folders,
+            "pinned_tabs": self.pinned_tabs,
             "theme": self.theme_preference,
             "scroll_speed": self.scroll_speed,
             "invert_middle_drag": self.invert_middle_drag,
@@ -237,6 +238,7 @@ impl PdfCraftApp {
             self.show_secured_notice = on;
         }
         self.pinned.restore(&v["pinned_folders"]);
+        self.pinned_tabs = tab_context::pinned_from_json(&v["pinned_tabs"]);
         if let Some(items) = v.get("pinned_tools").and_then(serde_json::Value::as_array) {
             let mut tools = Vec::new();
             for item in items {

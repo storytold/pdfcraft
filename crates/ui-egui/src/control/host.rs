@@ -137,6 +137,8 @@ impl Host for crate::PdfCraftApp {
             "default_mode": self.default_mode,
             "hotbar": self.hotbar,
             "comment_tool_pinned": self.comment_prefs.pinned,
+            // The pinned files (#2926), in pin order: they open first at every start.
+            "pinned_tabs": self.pinned_tabs,
             "left_panel": if self.left_open { json!(format!("{:?}", self.left)) } else { Value::Null },
             "tools_side": if self.side_panels.tools_on_right() { "right" } else { "left" },
             "rail_side": if self.side_panels.rail_on_right() { "right" } else { "left" },

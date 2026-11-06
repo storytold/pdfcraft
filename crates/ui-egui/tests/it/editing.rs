@@ -957,6 +957,129 @@ fn the_last_session_is_off_by_default_and_skips_missing_and_duplicate_files() {
     assert!(later.views.is_empty(), "neither opens from the session");
 }
 
+/// #2926: a tab's menu pins it: it moves to the end of the pinned tabs at the strip's start,
+/// and its file opens at the next start whatever Reopen last session says, first in the strip.
+/// Closing it doesn't unpin it (quitting closes unsaved tabs one by one); Unpin Tab does. A
+/// pinned file that is missing at a start is left closed but stays pinned.
+#[test]
+fn pinned_tabs_lead_the_strip_and_open_at_every_start() {
+    use egui_kittest::kittest::Queryable as _;
+    let dir = TempPdfs::new("pinned");
+    let files = [dir.file("a.pdf", 1), dir.file("b.pdf", 1), dir.file("c.pdf", 1)];
+    let opened = files.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        opened.iter().for_each(|f| {
+            app.open_path(f);
+        });
+        app
+    });
+    h.run_steps(4);
+    let menu = |h: &mut Harness<'static, PdfCraftApp>, tab: &str, item: &str| {
+        h.get_by_role_and_label(egui::accesskit::Role::Tab, tab).click_secondary();
+        h.run_steps(2);
+        h.get_by_label(item).click();
+        h.run_steps(3);
+    };
+    let names = |app: &PdfCraftApp| -> Vec<String> {
+        open_paths(app).iter().map(|p| std::path::Path::new(p).file_name().unwrap().to_string_lossy().into_owned()).collect()
+    };
+    menu(&mut h, "c.pdf", "Pin Tab");
+    assert_eq!(names(h.state()), ["c.pdf", "a.pdf", "b.pdf"], "c.pdf leads the strip");
+    menu(&mut h, "b.pdf", "Pin Tab");
+    assert_eq!(names(h.state()), ["c.pdf", "b.pdf", "a.pdf"], "b.pdf follows the pinned c.pdf");
+    assert!(h.state().tab_pinned(h.state().views[0].id) && !h.state().tab_pinned(h.state().views[2].id));
+    // Closing a pinned tab leaves it pinned.
+    menu(&mut h, "b.pdf", "Close Tab");
+    assert_eq!(names(h.state()), ["c.pdf", "a.pdf"]);
+    assert_eq!(h.state().pinned_tabs.len(), 2);
+    // The next start, with Reopen last session off: the pinned files, in pinned order.
+    let settings = h.state().persist();
+    let mut later = PdfCraftApp::new();
+    later.restore(&settings);
+    assert!(!later.reopen_last_session);
+    later.reopen_last_files(&[]);
+    assert_eq!(names(&later), ["c.pdf", "b.pdf"]);
+    // A command-line pinned file is opened by the caller after startup restoration. Once it is
+    // open, the next tab-order pass restores the saved pin order rather than leaving it last.
+    let mut command_line = PdfCraftApp::new();
+    command_line.restore(&settings);
+    command_line.reopen_last_files(&[files[2].clone()]);
+    command_line.open_path(&files[2]);
+    command_line.pinned_tabs_first();
+    assert_eq!(names(&command_line), ["c.pdf", "b.pdf"]);
+    // A pinned file opened from the command line isn't opened twice; a missing one stays pinned.
+    std::fs::remove_file(&files[1]).unwrap();
+    let mut again = PdfCraftApp::new();
+    again.restore(&settings);
+    again.reopen_last_files(&[files[2].clone()]);
+    assert!(again.views.is_empty(), "c.pdf comes from the command line, b.pdf is gone");
+    assert_eq!(again.pinned_tabs.len(), 2, "b.pdf stays pinned while it is missing");
+    // Unpin Tab: no longer opened at a start.
+    menu(&mut h, "c.pdf", "Unpin Tab");
+    assert!(h.state().pinned_tabs.iter().all(|p| !p.ends_with("c.pdf")));
+    let mut last = PdfCraftApp::new();
+    last.restore(&h.state().persist());
+    last.reopen_last_files(&[]);
+    assert!(names(&last).is_empty(), "b.pdf is gone and c.pdf is unpinned: {:?}", names(&last));
+}
+
+/// CodeRabbit on #4575: a pinned file opened again while other tabs are open goes back among the
+/// pinned tabs; the tab that was active last time stays active when it is a pinned one; and a
+/// pinned file with a recovery snapshot is left to the Recovery dialog, as session restore leaves
+/// it, so recovering it doesn't make a second tab for the same file.
+#[test]
+fn pinned_files_reopen_among_the_pinned_tabs_and_keep_the_session() {
+    use pdfcraft_ui_egui::last_session::{LastSession, SessionFile};
+    let dir = TempPdfs::new("pinned-reopen");
+    let files = [dir.file("a.pdf", 1), dir.file("b.pdf", 1), dir.file("c.pdf", 3)];
+    let names = |app: &PdfCraftApp| -> Vec<String> {
+        open_paths(app).iter().map(|p| std::path::Path::new(p).file_name().unwrap().to_string_lossy().into_owned()).collect()
+    };
+    // As the app keeps pins: absolute, links not resolved.
+    let abs = |p: &str| std::path::absolute(p).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| p.to_string());
+    let mut app = PdfCraftApp::new();
+    app.run_inline = true;
+    app.pinned_tabs = vec![abs(&files[2])];
+    app.open_path(&files[0]);
+    app.open_path(&files[1]);
+    app.open_path(&files[2]);
+    assert_eq!(names(&app), ["a.pdf", "b.pdf", "c.pdf"], "opened last, at the end until the next frame");
+    app.pinned_tabs_first();
+    assert_eq!(names(&app), ["c.pdf", "a.pdf", "b.pdf"], "the pinned c.pdf leads the strip");
+    assert_eq!(app.active.and_then(|i| app.views.get(i)).map(|v| v.id), app.views.first().map(|v| v.id), "and is the tab shown");
+
+    // The last session had b.pdf and the pinned c.pdf open, c.pdf active.
+    let mut later = PdfCraftApp::new();
+    later.run_inline = true;
+    later.reopen_last_session = true;
+    later.pinned_tabs = vec![abs(&files[2])];
+    later.last_session = LastSession {
+        files: vec![SessionFile { path: abs(&files[1]), page: 0 }, SessionFile { path: abs(&files[2]), page: 2 }],
+        active: Some(abs(&files[2])),
+    };
+    later.reopen_last_files(&[]);
+    assert_eq!(names(&later), ["c.pdf", "b.pdf"]);
+    assert_eq!(later.active, Some(0), "c.pdf, active last time, is active again");
+    assert_eq!(later.views[0].current, 2, "and on the page the session left it on, though the pinned loop opened it");
+
+    // c.pdf has a recovery snapshot: the Recovery dialog offers it, start doesn't open it.
+    let mut recovering = PdfCraftApp::new();
+    recovering.run_inline = true;
+    recovering.pinned_tabs = vec![abs(&files[2])];
+    recovering.recoverable = vec![pdfcraft_ui_egui::RecoveryMeta {
+        key: "k".into(),
+        name: "c.pdf".into(),
+        path: Some(abs(&files[2])),
+        saved_at: 0,
+        encrypted: false,
+        instance: None,
+    }];
+    recovering.reopen_last_files(&[]);
+    assert!(recovering.views.is_empty(), "{:?}", names(&recovering));
+}
+
 #[test]
 fn opening_the_same_path_again_focuses_its_tab() {
     let pdfs = TempPdfs::new("dedup-open");

@@ -1,13 +1,106 @@
-//! PDF-tab actions. Closed history contains paths only, never bytes or passwords.
+//! PDF-tab actions. Closed history and pinned tabs contain paths only, never bytes or passwords.
 use pdfcraft_engine::DocId;
 
 pub(crate) enum Action {
     Close(DocId),
     Reopen,
     Reveal(DocId),
+    /// Pin the tab (#2926): its file opens at every start, first in the tab strip.
+    Pin(DocId),
+    Unpin(DocId),
+}
+
+/// The most files kept pinned: a settings file listing more is read up to here.
+const MAX_PINNED: usize = 64;
+
+/// How a pinned file is kept: its absolute path, so a file opened by a relative path matches.
+/// The web has no paths to make absolute.
+fn pin_key(path: &str) -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::last_session::absolute(path)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        path.to_string()
+    }
+}
+
+/// The pinned files a settings file lists: text entries only, each once, at most [`MAX_PINNED`].
+pub(crate) fn pinned_from_json(v: &serde_json::Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for path in v.as_array().into_iter().flatten().filter_map(serde_json::Value::as_str) {
+        if out.len() >= MAX_PINNED {
+            break;
+        }
+        if !path.is_empty() {
+            // Normalize on restore just as when pinning an open document, so a
+            // relative persisted path can still be matched and unpinned.
+            let path = pin_key(path);
+            if !out.iter().any(|p| p == &path) {
+                out.push(path);
+            }
+        }
+    }
+    out
 }
 
 impl crate::PdfCraftApp {
+    /// Whether document `id`'s file is pinned.
+    pub fn tab_pinned(&self, id: DocId) -> bool {
+        self.session.get(id).and_then(|d| d.path.as_deref()).is_some_and(|p| {
+            let p = pin_key(p);
+            self.pinned_tabs.contains(&p)
+        })
+    }
+
+    /// Puts the pinned tabs first, in the order they are in, and keeps the active tab (#2926).
+    /// A file opened while it is pinned is added at the end, as any other: the steps that follow
+    /// an open (a link's destination, a recovery, the file watcher) act on the newest tab, so the
+    /// tab joins the pinned ones afterwards, here, once a frame.
+    pub fn pinned_tabs_first(&mut self) {
+        if self.pinned_tabs.is_empty() {
+            return;
+        }
+        let active = self.active_ids().map(|(_, id)| id);
+        let mut views = std::mem::take(&mut self.views);
+        // Stable sorting keeps unpinned tabs in their existing order, while pinned tabs follow
+        // the user's saved pin order. This also handles a pinned file opened from the command line
+        // after the other pinned files were restored.
+        views.sort_by_key(|v| {
+            self.session
+                .get(v.id)
+                .and_then(|d| d.path.as_deref())
+                .map(pin_key)
+                .and_then(|path| self.pinned_tabs.iter().position(|p| p == &path))
+                .map_or((1usize, 0usize), |index| (0, index))
+        });
+        self.views = views;
+        if let Some(id) = active {
+            self.active = self.views.iter().position(|v| v.id == id);
+        }
+    }
+
+    /// `ui.set tab-pinned true|false` (#2926): pins or unpins the active tab, as its context menu
+    /// does, for the control channel. Refused, with the reason, for a document without a file
+    /// (nothing to open at the next start) and past [`MAX_PINNED`].
+    pub(crate) fn set_tab_pinned(&mut self, value: &str) -> Result<(), String> {
+        let pin = match value {
+            "true" => true,
+            "false" => false,
+            _ => return Err("tab-pinned must be true or false".into()),
+        };
+        let (_, id) = self.active_ids().ok_or("tab-pinned: no document is open")?;
+        if self.session.get(id).and_then(|d| d.path.as_deref()).is_none() {
+            return Err("tab-pinned: only a document saved to a file can be pinned".into());
+        }
+        if pin && !self.tab_pinned(id) && self.pinned_tabs.len() >= MAX_PINNED {
+            return Err(format!("tab-pinned: at most {MAX_PINNED} tabs can be pinned; unpin one first"));
+        }
+        self.tab_action(if pin { Action::Pin(id) } else { Action::Unpin(id) });
+        Ok(())
+    }
+
     pub(crate) fn tab_action(&mut self, action: Action) {
         match action {
             Action::Close(id) => {
@@ -31,6 +124,26 @@ impl crate::PdfCraftApp {
                             self.closed_tabs.pop();
                         }
                     }
+                }
+            }
+            Action::Pin(id) => {
+                let Some(path) = self.session.get(id).and_then(|d| d.path.as_deref()).map(pin_key) else { return };
+                if !self.pinned_tabs.contains(&path) {
+                    if self.pinned_tabs.len() >= MAX_PINNED {
+                        self.notify_tr("No more tabs can be pinned: unpin one first");
+                        return;
+                    }
+                    self.pinned_tabs.push(path);
+                }
+                // To the end of the pinned tabs, which lead the strip.
+                if let Some(from) = self.views.iter().position(|v| v.id == id) {
+                    let to = self.views.iter().take(from).filter(|v| self.tab_pinned(v.id)).count();
+                    self.move_tab(from, to);
+                }
+            }
+            Action::Unpin(id) => {
+                if let Some(path) = self.session.get(id).and_then(|d| d.path.as_deref()).map(pin_key) {
+                    self.pinned_tabs.retain(|p| *p != path);
                 }
             }
             Action::Reveal(id) => {
@@ -157,6 +270,25 @@ fn reveal_command(platform: &str, path: &std::path::Path) -> Result<(&'static st
 mod tests {
     use super::*;
     const PDF: &[u8] = include_bytes!("../../tests/data/form.pdf");
+
+    /// The settings file is untrusted: pinned tabs are read as text paths only, each once, and
+    /// no more than the cap however many it lists.
+    #[test]
+    fn pinned_tabs_are_read_leniently_and_capped() {
+        let v = serde_json::json!(["/a.pdf", 7, null, "", "/a.pdf", { "path": "/x.pdf" }, "/b.pdf"]);
+        assert_eq!(pinned_from_json(&v), [pin_key("/a.pdf"), pin_key("/b.pdf")]);
+        assert_eq!(
+            pinned_from_json(&serde_json::json!(["report.pdf"])),
+            [pin_key("report.pdf")],
+            "relative entries use the same normalization as an opened document"
+        );
+        assert!(pinned_from_json(&serde_json::json!("/a.pdf")).is_empty(), "not a list");
+        assert!(pinned_from_json(&serde_json::Value::Null).is_empty());
+        let many: Vec<String> = (0..1000).map(|i| format!("/f{i}.pdf")).collect();
+        let read = pinned_from_json(&serde_json::json!(many));
+        assert_eq!(read.len(), MAX_PINNED);
+        assert_eq!(read.first().map(String::as_str), Some("/f0.pdf"));
+    }
 
     #[test]
     fn confirmed_close_uses_id_and_cancel_keeps_history_empty() {
