@@ -1970,7 +1970,13 @@ fn text_outside_the_crop_box_is_clipped() {
 /// `descendant` (`CIDFontType0` takes the bundled CFF program, `CIDFontType2` a TrueType one)
 /// of the Adobe-Japan1 collection, with `to_unicode` as its `/ToUnicode` CMap when given.
 fn japan1_page(encoding: &str, descendant: &str, to_unicode: Option<&[u8]>, codes: &str) -> String {
+    collection_page(("Adobe", "Japan1"), encoding, descendant, to_unicode, codes)
+}
+
+/// [`japan1_page`] for the character collection `(registry, ordering)`.
+fn collection_page(collection: (&str, &str), encoding: &str, descendant: &str, to_unicode: Option<&[u8]>, codes: &str) -> String {
     use lopdf::{Document, Object, Stream, dictionary};
+    let (registry, ordering) = collection;
     let mut doc = Document::with_version("1.7");
     let (key, program): (&str, &[u8]) = if descendant == "CIDFontType0" {
         ("FontFile3", include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb"))
@@ -1985,7 +1991,7 @@ fn japan1_page(encoding: &str, descendant: &str, to_unicode: Option<&[u8]>, code
     let descriptor = doc.add_object(dictionary! { "Type" => "FontDescriptor", "FontName" => "TestJapan1", "Flags" => 4, key => program });
     let cid = doc.add_object(dictionary! {
         "Type" => "Font", "Subtype" => descendant, "BaseFont" => "TestJapan1",
-        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal("Adobe"), "Ordering" => Object::string_literal("Japan1"), "Supplement" => 6 },
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal(registry), "Ordering" => Object::string_literal(ordering), "Supplement" => 6 },
         "FontDescriptor" => descriptor, "DW" => 1000, "CIDToGIDMap" => "Identity"
     });
     let mut font = dictionary! { "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "TestJapan1", "Encoding" => encoding, "DescendantFonts" => vec![Object::Reference(cid)] };
@@ -2022,4 +2028,29 @@ fn an_embedded_adobe_collection_font_reads_through_its_ucs2_cmap() {
     assert_eq!(japan1_page("Identity-H", "CIDFontType2", Some(empty), "00220465034B"), "A亜あ", "a /ToUnicode with no mappings");
     let one = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /One def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfchar <0022> <005A> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
     assert_eq!(japan1_page("Identity-H", "CIDFontType0", Some(one), "00220465034B"), "Z亜あ", "/ToUnicode first, the UCS2 CMap for the rest");
+}
+
+/// The same route for the other Adobe collections, each through its own UCS2 CMap
+/// (Adobe-GB1-UCS2, Adobe-CNS1-UCS2, Adobe-Korea1-UCS2), and for vertical writing (Identity-V)
+/// and a predefined CMap over a CFF program. The pairs are read from the bundled CMaps.
+#[test]
+fn every_adobe_collection_reads_through_its_own_ucs2_cmap() {
+    for descendant in ["CIDFontType0", "CIDFontType2"] {
+        // Adobe-GB1 CID 4000 is 姓, Adobe-CNS1 CID 4000 is 團, Adobe-Korea1 CID 2000 is 밧; CID 34
+        // is A in each.
+        for (ordering, codes, text) in [("GB1", "00220FA0", "A姓"), ("CNS1", "00220FA0", "A團"), ("Korea1", "002207D0", "A밧")] {
+            assert_eq!(collection_page(("Adobe", ordering), "Identity-H", descendant, None, codes), text, "Adobe-{ordering}, {descendant}");
+        }
+        assert_eq!(japan1_page("Identity-V", descendant, None, "00220465034B"), "A亜あ", "Identity-V, {descendant}");
+    }
+    assert_eq!(japan1_page("H", "CIDFontType0", None, "302124222341"), "亜あＡ", "predefined /H, CFF");
+}
+
+/// A Type 0 font outside the Adobe collections has no UCS2 CMap: without a `/ToUnicode` its codes
+/// give no text through this route (the CIDs mean nothing outside their collection).
+#[test]
+fn a_font_outside_the_adobe_collections_gets_no_text_from_a_ucs2_cmap() {
+    for descendant in ["CIDFontType0", "CIDFontType2"] {
+        assert_eq!(collection_page(("Example", "Custom"), "Identity-H", descendant, None, "00220465034B"), "", "{descendant}");
+    }
 }
