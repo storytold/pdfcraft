@@ -1779,6 +1779,45 @@ fn low_resolution_printing_prints_only_the_chosen_content() {
     }
 }
 
+/// A comment and a field the file leaves without an appearance print as the page shows them:
+/// a text box (`/FreeText` with only `/Contents` and `/DA`) and a check box set on with
+/// `/NeedAppearances`. The vector print drew only appearance streams, so both were on screen and
+/// in Print as Image but not on paper (pdf.js `bug1865341`, `freetext_print_no_appearance`).
+/// ISO 32000-2 §12.5.3: an annotation with the Print flag is printed.
+#[test]
+fn comments_and_fields_without_an_appearance_print_as_shown() {
+    let content = "";
+    let pdf = format!(
+        "%PDF-1.7
+         1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /NeedAppearances true /DA (/Helv 0 Tf 0 g) >> >> endobj
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Annots [5 0 R 6 0 R] >> endobj
+         4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+         5 0 obj << /Type /Annot /Subtype /FreeText /F 4 /P 3 0 R /Rect [10 120 190 190] /DA (/Helv 40 Tf 0 g) /Contents (WWWW) >> endobj
+         6 0 obj << /Type /Annot /Subtype /Widget /FT /Btn /T (Box) /V /Yes /AS /Yes /F 4 /P 3 0 R /Rect [10 10 110 110] /MK << /CA (8) >> >> endobj
+         trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+    );
+    let mut s = Session::new();
+    let id = s.open("bare.pdf", None, Arc::new(pdf.into_bytes()), None).unwrap();
+    let settings =
+        print::Settings { pages: vec![0], paper: (200.0, 200.0), layout: print::Layout::Size(print::SizeMode::Actual), ..Default::default() };
+    let (w, h, rgba) = printed_pixels(s.print_pdf(id, &settings).unwrap());
+    assert_eq!((w, h), (200, 200));
+    // Dark pixels in the text box (top half) and in the check box (bottom half).
+    let dark = |y0: usize, y1: usize| {
+        (y0..y1)
+            .flat_map(|y| (0..w as usize).map(move |x| (x, y)))
+            .filter(|&(x, y)| rgba.get((y * w as usize + x) * 4).is_some_and(|&r| r < 128))
+            .count()
+    };
+    assert!(dark(10, 80) > 50, "the text box prints");
+    assert!(dark(90, 190) > 50, "the check box prints");
+}
+
 #[test]
 fn the_permissions_password_unlocks_an_open_document() {
     // Only a permissions password (#995, #1077): opens without asking. Changes are allowed,
