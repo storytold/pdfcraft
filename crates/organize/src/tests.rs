@@ -2335,6 +2335,20 @@ fn page_boxes_default_inherit_and_set() {
 }
 
 #[test]
+fn empty_intersections_fall_back_to_the_media_or_crop_box() {
+    let mut doc = open(fixture());
+    let page = pages(&doc).unwrap()[0].obj;
+    doc.update_dict(page, |d| {
+        d.set(b"CropBox".to_vec(), Object::Array([400, 500, 600, 700].into_iter().map(Object::Int).collect()));
+        d.set(b"BleedBox".to_vec(), Object::Array([700, 800, 900, 1000].into_iter().map(Object::Int).collect()));
+    })
+    .unwrap();
+    let boxes = page_boxes(&doc).unwrap();
+    assert_eq!(boxes[0][1], boxes[0][0], "an empty crop intersection uses MediaBox");
+    assert_eq!(boxes[0][2], boxes[0][0], "an empty child-box intersection uses the effective CropBox");
+}
+
+#[test]
 fn duplicate_pages_inserts_copies_after_the_last() {
     let mut doc = open(fixture());
     duplicate_pages(&mut doc, &[0, 1], None).unwrap();

@@ -8,7 +8,7 @@
 //! - `event`: `value`, `change`, `willCommit`, `rc`, `name`, `type`, `target`, `targetName`.
 //! - the document (`this`, also the global object): `getField`, `numFields`,
 //!   `getNthFieldName`, `numPages`, `pageNum`, `documentFileName`, `info`, `resetForm`,
-//!   `calculateNow`, `print`, `submitForm`, `mailDoc`.
+//!   `calculateNow`, `getPageBox`, `print`, `submitForm`, `mailDoc`.
 //! - Field objects: `name`, `type`, `value`, `valueAsString`, `defaultValue`, `readonly`,
 //!   `required`, `display`, `hidden`, `numItems`, `getItemAt`, `currentValueIndices`,
 //!   `isBoxChecked`, `checkThisBox`, `exportValues`, `charLimit`, `textColor`, `fillColor`,
