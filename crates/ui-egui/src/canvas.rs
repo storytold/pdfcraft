@@ -3214,9 +3214,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
 
     view.viewport_screen = out.inner_rect;
     view.auto_scroll.paint(ui, avail);
-    if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
-        copy_selected |= selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden, can_copy);
-    }
+    let (selection_copied, highlight_colour) = if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
+        selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden, can_copy)
+    } else {
+        (false, None)
+    };
+    copy_selected |= selection_copied;
 
     // Collect all main-page demand, including cached surfaces, for byte admission later.
     // Pan-settle debounce for tiled pages: each tile costs a full page interpret, so holding
@@ -3299,6 +3302,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         open_table,
         form_notice,
         copy_selected,
+        highlight_colour,
         copy_comments,
         paste_comments_at,
         comment_notice,
@@ -3325,6 +3329,8 @@ struct FrameRequests {
     open_table: Option<(usize, [f64; 4])>,
     form_notice: Option<crate::forms_ui::FormNotice>,
     copy_selected: bool,
+    /// A selection-bar colour choice also becomes the Highlight tool default.
+    highlight_colour: Option<pdfcraft_engine::Rgb>,
     /// Copy comments / Paste comments from the page's menu or a Comments panel card, and what
     /// the comment tools have to say.
     copy_comments: bool,
@@ -3354,6 +3360,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         open_table,
         form_notice,
         copy_selected,
+        highlight_colour,
         copy_comments,
         paste_comments_at,
         comment_notice,
@@ -3363,6 +3370,10 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         generation,
         avail,
     } = requests;
+    if let Some(colour) = highlight_colour {
+        // Match the comment quick bar, once the document/page environment is no longer borrowed.
+        app.comment_prefs.set_color(comments::CommentTool::Highlight, colour);
+    }
     if let Some((page, at)) = app.views[index].comments.attach_at.take() {
         app.attach_file_comment(page, at);
     }
