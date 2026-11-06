@@ -156,13 +156,16 @@ enum Found<'a, 'i> {
     Attribute(Range<usize>, &'a str),
 }
 
-/// Every place `prop` appears under `rdf`, in document order.
+/// Every place `prop` is a property of the packet's resource, in document order: an attribute of,
+/// or an element in, an `rdf:Description` directly under `rdf:RDF`. Property sets nested inside a
+/// value (the resources an Illustrator or InDesign file embeds, in `xmpMM:Pantry` or
+/// `xmpMM:Ingredients`) describe something else, and are never read, edited or removed here.
 fn occurrences<'a, 'i: 'a>(rdf: Node<'a, 'i>, prop: Prop) -> impl Iterator<Item = Found<'a, 'i>> + 'a {
-    rdf.descendants().filter(|n| n.is_element()).flat_map(move |n| {
-        let element = is(n, prop.ns, prop.local).then_some(Found::Element(n));
+    rdf.children().filter(|d| is(*d, RDF, "Description")).flat_map(move |d| {
         let attributes =
-            n.attributes().filter(move |a| a.namespace() == Some(prop.ns) && a.name() == prop.local).map(|a| Found::Attribute(a.range(), a.value()));
-        element.into_iter().chain(attributes)
+            d.attributes().filter(move |a| a.namespace() == Some(prop.ns) && a.name() == prop.local).map(|a| Found::Attribute(a.range(), a.value()));
+        let elements = d.children().filter(move |n| is(*n, prop.ns, prop.local)).map(Found::Element);
+        attributes.chain(elements)
     })
 }
 
@@ -225,9 +228,13 @@ fn rdf_prefix<'i>(n: Node<'_, 'i>) -> Option<&'i str> {
     n.lookup_prefix(RDF).filter(|p| !p.is_empty())
 }
 
-/// `xmp` with the property `prop` set to `value`, or removed when `value` is empty; `None` when
-/// nothing changes, the packet can't be read safely, or the edit can't be written in it.
+/// `xmp` with the property `prop` set to `value`, or removed (every occurrence) when `value` is
+/// empty; `None` when nothing changes, the packet can't be read safely, or the edit can't be
+/// written in it.
 fn set_property(xmp: &str, prop: Prop, shape: Shape, value: &str) -> Option<String> {
+    if value.is_empty() {
+        return without(xmp, &[prop]);
+    }
     let doc = parse(xmp)?;
     let rdf = rdf_root(&doc)?;
     let edited = match occurrences(rdf, prop).next() {
@@ -235,39 +242,31 @@ fn set_property(xmp: &str, prop: Prop, shape: Shape, value: &str) -> Option<Stri
         // namespace declarations and attributes it carries.
         Some(Found::Element(e)) => {
             let range = e.range();
-            if value.is_empty() {
-                splice(xmp, range, "")?
-            } else {
-                let inner = inner_markup(shape, rdf_prefix(e), value)?;
-                match span::content(xmp, &range) {
-                    Some(content) => splice(xmp, content, &inner)?,
-                    // `<dc:title/>` becomes `<dc:title>…</dc:title>`.
-                    None => {
-                        let name = span::qname(xmp, &range)?;
-                        let slash = span::start_tag_end(xmp, &range)?.checked_sub(1)?;
-                        splice(xmp, slash..range.end, &format!(">{inner}</{name}>"))?
-                    }
+            let inner = inner_markup(shape, rdf_prefix(e), value)?;
+            match span::content(xmp, &range) {
+                Some(content) => splice(xmp, content, &inner)?,
+                // `<dc:title/>` becomes `<dc:title>…</dc:title>`.
+                None => {
+                    let name = span::qname(xmp, &range)?;
+                    let slash = span::start_tag_end(xmp, &range)?.checked_sub(1)?;
+                    splice(xmp, slash..range.end, &format!(">{inner}</{name}>"))?
                 }
             }
         }
-        // The attribute form: only simple text can be written there; a structured value moves to
-        // an element of its own.
-        Some(Found::Attribute(range, _)) => {
-            if shape == Shape::Text && !value.is_empty() {
-                let (value_range, quote) = span::attribute_value(xmp, &range)?;
-                let escaped = if quote == '"' { esc(value) } else { esc(value).replace('\'', "&apos;") };
-                splice(xmp, value_range, &escaped)?
-            } else {
-                let removed = splice(xmp, attribute_span(xmp, &range)?, "")?;
-                if value.is_empty() {
-                    removed
-                } else {
-                    // The packet changed, so the description goes in through a fresh parse.
-                    return set_property(&removed, prop, shape, value);
-                }
-            }
+        // The attribute form: only simple text can be written there.
+        Some(Found::Attribute(range, _)) if shape == Shape::Text => {
+            let (value_range, quote) = span::attribute_value(xmp, &range)?;
+            let escaped = if quote == '"' { esc(value) } else { esc(value).replace('\'', "&apos;") };
+            splice(xmp, value_range, &escaped)?
         }
-        None if value.is_empty() => return None,
+        // A structured value moves to an element of its own: every occurrence goes in one pass,
+        // then the new description goes in through one fresh parse of what is left.
+        Some(Found::Attribute(..)) => {
+            let removed = without(xmp, &[prop])?;
+            let rest = parse(&removed)?;
+            let rdf = rdf_root(&rest)?;
+            insert_description(&removed, rdf, prop, &inner_markup(shape, rdf_prefix(rdf), value)?)?
+        }
         None => insert_description(xmp, rdf, prop, &inner_markup(shape, rdf_prefix(rdf), value)?)?,
     };
     checked(edited)
@@ -280,7 +279,7 @@ fn insert_description(xmp: &str, rdf: Node, prop: Prop, inner: &str) -> Option<S
     let r = rdf_prefix(rdf)?;
     let at = span::content(xmp, &rdf.range())?.end;
     // Every description of a packet describes the same resource (XMP: one `rdf:about` value).
-    let about = rdf.descendants().find_map(|n| n.attribute((RDF, "about")).filter(|_| is(n, RDF, "Description"))).unwrap_or_default();
+    let about = rdf.children().filter(|d| is(*d, RDF, "Description")).find_map(|d| d.attribute((RDF, "about"))).unwrap_or_default();
     let Prop { prefix: p, ns, local } = prop;
     let description =
         format!("<{r}:Description {r}:about=\"{}\" xmlns:{p}=\"{}\"><{p}:{local}>{inner}</{p}:{local}></{r}:Description>\n", esc(about), esc(ns));
@@ -525,6 +524,38 @@ mod tests {
             )
         );
         assert_eq!(without(&out, &[ids, conformance]), None, "nothing left to remove");
+    }
+
+    /// A structured value replacing attribute forms takes out every one in a single pass and adds
+    /// one element: no re-parse per occurrence (and no recursion a packet of thousands could
+    /// overflow). Clearing a property removes every occurrence, not only the first.
+    #[test]
+    fn every_occurrence_goes_in_one_pass() {
+        let many: String = (0..3_000).map(|i| format!("<rdf:Description rdf:about=\"\" xmlns:dc=\"{DC}\" dc:title=\"t{i}\"/>")).collect();
+        let packet = format!("<rdf:RDF xmlns:rdf=\"{RDF}\">{many}</rdf:RDF>");
+        let out = set_property(&packet, TITLE, Shape::LangAlt, "T").unwrap();
+        assert!(!out.contains("dc:title=") && out.matches("<dc:title>").count() == 1, "one element, no attributes left");
+        assert_eq!(get_property(&out, TITLE, Shape::LangAlt).as_deref(), Some("T"));
+        let both = packet.replacen("/>", "><dc:title>e</dc:title></rdf:Description>", 1);
+        let cleared = set_property(&both, TITLE, Shape::LangAlt, "").unwrap();
+        assert!(!cleared.contains("dc:title"), "every occurrence, element and attribute forms");
+    }
+
+    /// Embedded resources (Illustrator's `xmpMM:Pantry`) carry property sets of their own: they are
+    /// not the document's, so they are neither read, edited nor removed.
+    #[test]
+    fn nested_property_sets_are_not_the_documents() {
+        let pantry = format!(
+            "<rdf:RDF xmlns:rdf=\"{RDF}\"><rdf:Description rdf:about=\"\" xmlns:xmpMM=\"http://ns.adobe.com/xap/1.0/mm/\" xmlns:xmp=\"{XMP}\" \
+             xmlns:pdfaid=\"{PDFAID}\"><xmpMM:Pantry><rdf:Bag><rdf:li><rdf:Description xmp:CreatorTool=\"Illustrator\" pdfaid:part=\"1\">\
+             <dc:title xmlns:dc=\"{DC}\">Logo</dc:title></rdf:Description></rdf:li></rdf:Bag></xmpMM:Pantry></rdf:Description></rdf:RDF>"
+        );
+        assert_eq!(get_property(&pantry, CREATOR_TOOL, Shape::Text), None);
+        assert_eq!(get_property(&pantry, TITLE, Shape::LangAlt), None);
+        assert_eq!(without(&pantry, &[Prop::new("pdfaid", PDFAID, "part")]), None, "the embedded claim stays");
+        let out = set_property(&pantry, CREATOR_TOOL, Shape::Text, "PdfCraft").unwrap();
+        assert!(out.contains("xmp:CreatorTool=\"Illustrator\""), "{out}");
+        assert_eq!(get_property(&out, CREATOR_TOOL, Shape::Text).as_deref(), Some("PdfCraft"));
     }
 
     #[test]
