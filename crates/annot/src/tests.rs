@@ -2621,6 +2621,81 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
     }
 }
 
+/// A fitted view looks at the box's centre from the front, right and top with the whole box in
+/// sight, and is written as the 3D stream's only and default view, CAD-lit; an empty or broken box
+/// gets none.
+#[test]
+fn a_fitted_3d_view_is_the_streams_lit_default_view() {
+    let view = View3d::fitted([[-1.0, 0.0, -1.0], [4.0, 0.0, 1.0]], 2.0).unwrap();
+    let c = view.camera_to_world;
+    let target: Vec<f64> = (0..3).map(|i| c[9 + i] + view.orbit * c[6 + i]).collect();
+    for (got, want) in target.iter().zip([1.5, 0.0, 0.0]) {
+        assert!((got - want).abs() < 1e-9, "orbits the centre: {target:?}");
+    }
+    assert!(c[9] > 1.5 && c[10] < 0.0 && c[11] > 0.0, "front (-y), right (+x), top (+z): {c:?}");
+    // The half-diagonal 2.69 fills the narrower, vertical half-angle atan(tan 15° / 2).
+    let half = (15f64.to_radians().tan() / 2.0).atan();
+    assert!((view.orbit - 7.25f64.sqrt() / half.sin()).abs() < 1e-9, "{}", view.orbit);
+    for (bounds, aspect) in [
+        ([[0.0; 3], [0.0; 3]], 1.0),
+        ([[1.0, 0.0, 0.0], [0.0, 1.0, 1.0]], 1.0),
+        ([[0.0; 3], [f64::NAN, 1.0, 1.0]], 1.0),
+        ([[0.0; 3], [1.0; 3]], 0.0),
+        ([[0.0; 3], [f64::INFINITY, 1.0, 1.0]], 1.0),
+        ([[0.0; 3], [1.0; 3]], -1.0),
+        ([[0.0; 3], [1.0; 3]], f64::NAN),
+        // The orbit is finite but the camera would stand past f64::MAX.
+        ([[f64::MAX, 0.0, 0.0], [f64::MAX, 1.0, 1.0]], 1e307),
+    ] {
+        assert_eq!(View3d::fitted(bounds, aspect), None, "{bounds:?} {aspect}");
+    }
+    // Boxes too large or too small to square their extents still fit.
+    for scale in [1e200, 1e-200] {
+        let view = View3d::fitted([[-scale; 3], [scale; 3]], 1.0);
+        assert!(view.is_some_and(|v| v.orbit.is_finite() && v.orbit > 0.0), "{scale}: {view:?}");
+    }
+
+    let mut doc = fixture();
+    let new = NewModel3d {
+        page: 0,
+        rect: [100.0, 100.0, 300.0, 200.0],
+        model: b"PRC rest",
+        activation: Activation3d::default(),
+        poster: None,
+        contents: "",
+        view: Some(view),
+    };
+    let index = add_3d_model(&mut doc, &new, &meta("m")).unwrap();
+    let doc = reopen(&doc);
+    let annot = list(&doc, 0)[index].clone();
+    let Object::Stream(stream) = doc.get(annot.reference(b"3DD").unwrap()).as_ref().clone() else { panic!("a 3D stream") };
+    assert_eq!(stream.dict.get(b"DV").and_then(Object::as_int), Some(0));
+    let views = doc.resolve(stream.dict.get(b"VA").unwrap()).as_array().unwrap().clone();
+    let [only] = views.as_slice() else { panic!("one view: {views:?}") };
+    let only = only.as_dict().unwrap();
+    assert_eq!(only.name(b"MS"), Some(&b"M"[..]));
+    let ls = only.get(b"LS").unwrap().as_dict().unwrap();
+    assert_eq!((ls.name(b"Type"), ls.name(b"Subtype")), (Some(&b"3DLightingScheme"[..]), Some(&b"CAD"[..])));
+    let c2w: Vec<f64> = only.get(b"C2W").unwrap().as_array().unwrap().iter().filter_map(Object::as_f64).collect();
+    assert_eq!(c2w, c);
+    let p = only.get(b"P").unwrap().as_dict().unwrap();
+    assert_eq!(p.name(b"Subtype"), Some(&b"P"[..]));
+    assert!(p.get(b"N").and_then(Object::as_f64).is_some_and(|n| n > 0.0 && n < view.orbit));
+
+    let mut doc = fixture();
+    let index = add_3d_model(&mut doc, &NewModel3d { view: None, ..new }, &meta("m")).unwrap();
+    let annot = list(&doc, 0)[index].clone();
+    let Object::Stream(stream) = doc.get(annot.reference(b"3DD").unwrap()).as_ref().clone() else { panic!("a 3D stream") };
+    assert!(stream.dict.get(b"VA").is_none() && stream.dict.get(b"DV").is_none(), "no view without one");
+
+    // A lighting scheme is PDF 1.7: a U3D model with a view raises an older file that far.
+    let mut doc = fixture();
+    doc.set_version("1.4");
+    add_3d_model(&mut doc, &NewModel3d { model: b"U3D rest", ..new }, &meta("m")).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(doc.get(doc.root().unwrap()).as_dict().unwrap().name(b"Version"), Some(&b"1.7"[..]));
+}
+
 /// A 3D annotation is PDF 1.6 and a PRC model 1.7 (ISO 32000-2 §13.6): an older document's
 /// catalog says so, and a newer one is left as it is.
 #[test]
@@ -2630,7 +2705,15 @@ fn a_3d_model_raises_an_older_document_to_its_version() {
         doc.get(root).as_dict().unwrap().name(b"Version").map(<[u8]>::to_vec)
     };
     let add = |doc: &mut Document, model: &[u8]| {
-        let new = NewModel3d { page: 0, rect: [100.0, 100.0, 300.0, 300.0], model, activation: Activation3d::default(), poster: None, contents: "" };
+        let new = NewModel3d {
+            page: 0,
+            rect: [100.0, 100.0, 300.0, 300.0],
+            model,
+            activation: Activation3d::default(),
+            poster: None,
+            contents: "",
+            view: None,
+        };
         add_3d_model(doc, &new, &meta("m")).unwrap();
     };
     let mut doc = fixture();
@@ -2661,7 +2744,15 @@ fn a_prc_model_declares_the_adobe_extension_before_pdf_2() {
         })
     };
     let add = |doc: &mut Document, model: &[u8]| {
-        let new = NewModel3d { page: 0, rect: [100.0, 100.0, 300.0, 300.0], model, activation: Activation3d::default(), poster: None, contents: "" };
+        let new = NewModel3d {
+            page: 0,
+            rect: [100.0, 100.0, 300.0, 300.0],
+            model,
+            activation: Activation3d::default(),
+            poster: None,
+            contents: "",
+            view: None,
+        };
         add_3d_model(doc, &new, &meta("m")).unwrap();
     };
     let mut doc = fixture();
@@ -2731,6 +2822,7 @@ fn a_3d_poster_outside_its_rectangle_or_without_a_size_is_refused() {
             activation: Activation3d::default(),
             poster: Some(poster),
             contents: "",
+            view: None,
         };
         assert!(matches!(add_3d_model(&mut doc, &new, &meta("m")), Err(AnnotError::Invalid(_))), "{why}");
         assert_eq!(list(&doc, 0).len(), 1, "{why}: nothing added");
@@ -2752,6 +2844,7 @@ fn a_3d_poster_fitted_to_its_rectangle_with_rounding_is_taken() {
         activation: Activation3d::default(),
         poster: Some(poster),
         contents: "",
+        view: None,
     };
     assert_eq!(add_3d_model(&mut doc, &new, &meta("m")), Ok(1));
 }

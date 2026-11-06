@@ -1,6 +1,6 @@
 [package]
 name = "pdfcraft-prc"
-description = "PRC 3D model reader (ISO 14739-1): container, bit-level primitives, schema"
+description = "PRC 3D model reader and mesh writer (ISO 14739-1), with a glTF 2.0 importer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 flate2.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

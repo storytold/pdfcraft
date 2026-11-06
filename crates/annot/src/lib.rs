@@ -45,7 +45,7 @@ pub use modify::{
     set_border_color, set_border_shape, set_contents, set_fill, set_font_size, set_locked, set_marked, set_part_opacity, set_points, set_rect,
     set_review_state, set_style, with_replies_and_popups,
 };
-pub use threed::{Activation as Activation3d, MAX_MODEL_BYTES, ModelFormat, NewModel3d, PosterPicture, add_3d_model, check_model};
+pub use threed::{Activation as Activation3d, MAX_MODEL_BYTES, ModelFormat, NewModel3d, PosterPicture, View3d, add_3d_model, check_model};
 pub use types::{
     AttachIcon, BorderShape, FillMark, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook, ReviewState, Rgb,
     Shape, StampGroup, StampKind, Style, StyleChange, TextReplacement, rect_quad,

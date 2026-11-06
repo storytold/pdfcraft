@@ -1,5 +1,5 @@
-//! `model_add` embeds a U3D or PRC model as a 3D annotation (ISO 32000-2 §13.6.2) with a poster,
-//! end to end: the tool, the saved file, undo, and the refusals.
+//! `model_add` embeds a U3D or PRC model, or a glTF scene converted to PRC, as a 3D annotation
+//! (ISO 32000-2 §13.6.2) with a poster, end to end: the tool, the saved file, undo, and the refusals.
 
 use pdfcraft_automation::{Automation, Content, ToolError};
 use pdfcraft_cos::{Dict, Document, Object, Stream};
@@ -62,6 +62,7 @@ fn model_add_embeds_the_model_with_a_fitted_poster() {
     assert_eq!(model.dict.name(b"Subtype"), Some(&b"PRC"[..]));
     assert_eq!(model.dict.name(b"Filter"), Some(&b"FlateDecode"[..]));
     assert_eq!(model.decoded().unwrap().to_vec(), prc, "the model is stored unchanged");
+    assert!(model.dict.get(b"VA").is_none(), "a PRC file keeps its own views");
     let activation = saved.resolve(annot.get(b"3DA").unwrap()).as_dict().unwrap().clone();
     assert_eq!(activation.name(b"A"), Some(&b"PO"[..]));
     // The 80 × 40 picture fitted in the 300 × 300 box: 300 × 150, centred top to bottom.
@@ -117,4 +118,186 @@ fn model_add_refuses_what_is_not_a_model_and_adds_nothing() {
     }
     tool(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
     assert!(saved_3d(dir.path()).1.is_empty());
+}
+
+/// One triangle's three corners as little-endian `f32`s, and a glTF document drawing it from
+/// buffer `uri` (`None`: the GLB binary chunk).
+fn triangle_gltf(uri: Option<&str>) -> (Vec<u8>, String) {
+    let bin: Vec<u8> = [0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let buffer = match uri {
+        Some(uri) => json!({ "byteLength": 36, "uri": uri }),
+        None => json!({ "byteLength": 36 }),
+    };
+    let doc = json!({
+        "asset": { "version": "2.0" },
+        "buffers": [buffer],
+        "bufferViews": [{ "buffer": 0, "byteLength": 36 }],
+        "accessors": [{ "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0] }],
+        "meshes": [{ "name": "tri", "primitives": [{ "attributes": { "POSITION": 0 } }] }],
+        "nodes": [{ "mesh": 0 }],
+        "scenes": [{ "nodes": [0] }],
+        "scene": 0
+    });
+    (bin, doc.to_string())
+}
+
+/// A GLB container holding `json` and `bin`.
+fn glb(json: &str, bin: &[u8]) -> Vec<u8> {
+    let mut json = json.as_bytes().to_vec();
+    json.resize(json.len().next_multiple_of(4), b' ');
+    let total = 12 + 8 + json.len() + 8 + bin.len();
+    let mut out = b"glTF".to_vec();
+    for v in [2, total as u32, json.len() as u32, 0x4E4F_534A] {
+        out.extend(u32::to_le_bytes(v));
+    }
+    out.extend(&json);
+    out.extend(u32::to_le_bytes(bin.len() as u32));
+    out.extend(u32::to_le_bytes(0x004E_4942));
+    out.extend(bin);
+    out
+}
+
+/// The PRC stream of the one 3D annotation in the saved file, parsed.
+fn saved_prc(dir: &std::path::Path) -> pdfcraft_prc::PrcFile {
+    let (saved, found) = saved_3d(dir);
+    let [annot] = found.as_slice() else { panic!("one 3D annotation: {found:?}") };
+    let model = stream(&saved, annot.get(b"3DD").unwrap());
+    assert_eq!(model.dict.name(b"Subtype"), Some(&b"PRC"[..]));
+    pdfcraft_prc::PrcFile::parse(&model.decoded().unwrap()).unwrap()
+}
+
+#[test]
+fn model_add_converts_a_glb_to_prc() {
+    let dir = tempfile::tempdir().unwrap();
+    let (bin, json) = triangle_gltf(None);
+    std::fs::write(dir.path().join("tri.glb"), glb(&json, &bin)).unwrap();
+    let mut a = Automation::new().with_root(dir.path()).unwrap();
+    let doc = tool(&mut a, "doc_create", json!({ "from": "blank", "width": 600, "height": 800 }))["doc"].as_u64().unwrap();
+    let out = tool(&mut a, "model_add", json!({ "doc": doc, "page": 1, "path": "tri.glb", "rect": [100, 100, 400, 400] }));
+    assert_eq!(out["converted"]["from"], "glTF", "{out}");
+    assert_eq!(out["converted"]["triangles"], 1, "{out}");
+    tool(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
+    let prc = saved_prc(dir.path());
+    assert_eq!(prc.placements().unwrap().len(), 1, "the triangle's node is placed");
+
+    // A converted scene has no lights: its default view is CAD-lit and orbits the triangle, which
+    // is turned Z-up to the box [0 0 0]–[1 0 1].
+    let (saved, found) = saved_3d(dir.path());
+    let model = stream(&saved, found[0].get(b"3DD").unwrap());
+    assert_eq!(model.dict.get(b"DV").and_then(Object::as_int), Some(0));
+    let views = saved.resolve(model.dict.get(b"VA").unwrap()).as_array().unwrap().clone();
+    let [view] = views.as_slice() else { panic!("one view: {views:?}") };
+    let view = view.as_dict().unwrap();
+    assert_eq!(view.get(b"LS").and_then(Object::as_dict).and_then(|l| l.name(b"Subtype")), Some(&b"CAD"[..]));
+    let c: Vec<f64> = view.get(b"C2W").unwrap().as_array().unwrap().iter().filter_map(Object::as_f64).collect();
+    let orbit = view.get(b"CO").and_then(Object::as_f64).unwrap();
+    let target: Vec<f64> = (0..3).map(|i| c[9 + i] + orbit * c[6 + i]).collect();
+    for (got, want) in target.iter().zip([0.5, 0.0, 0.5]) {
+        assert!((got - want).abs() < 1e-9, "{target:?}");
+    }
+}
+
+/// The model turns with its page, so on a page turned a quarter the view is fitted to the
+/// user-space box: a displayed box 300 wide and 100 high is 100 wide and 300 high to the camera.
+#[test]
+fn model_add_fits_the_view_to_the_box_the_model_is_drawn_in_on_a_rotated_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let (bin, json) = triangle_gltf(None);
+    std::fs::write(dir.path().join("tri.glb"), glb(&json, &bin)).unwrap();
+    let mut a = Automation::new().with_root(dir.path()).unwrap();
+    let doc = tool(&mut a, "doc_create", json!({ "from": "blank", "width": 600, "height": 800 }))["doc"].as_u64().unwrap();
+    tool(&mut a, "page_rotate", json!({ "doc": doc, "degrees": 90 }));
+    let out = tool(&mut a, "model_add", json!({ "doc": doc, "page": 1, "path": "tri.glb", "rect": [100, 100, 400, 200] }));
+    assert_eq!(out["converted"]["view"], true, "{out}");
+    tool(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
+    let (saved, found) = saved_3d(dir.path());
+    let rect: Vec<f64> = found[0].get(b"Rect").unwrap().as_array().unwrap().iter().filter_map(Object::as_f64).collect();
+    assert!((rect[2] - rect[0] - 100.0).abs() < 1e-9 && (rect[3] - rect[1] - 300.0).abs() < 1e-9, "{rect:?}");
+    let model = stream(&saved, found[0].get(b"3DD").unwrap());
+    let views = saved.resolve(model.dict.get(b"VA").unwrap()).as_array().unwrap().clone();
+    let orbit = views[0].as_dict().unwrap().get(b"CO").and_then(Object::as_f64).unwrap();
+    // The box [0 0 0]–[1 0 1] has half-diagonal √0.5; in a tall box the 30° width is the narrower angle.
+    let want = 0.5f64.sqrt() / 15f64.to_radians().sin();
+    assert!((orbit - want).abs() < 1e-9, "orbit {orbit}, want {want}");
+}
+
+#[test]
+fn model_add_reads_a_gltf_buffer_beside_it_and_nothing_outside_the_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("root");
+    std::fs::create_dir_all(root.join("parts/sub")).unwrap();
+    let (bin, beside) = triangle_gltf(Some("sub/tri%20data.bin"));
+    std::fs::write(root.join("parts/sub/tri data.bin"), &bin).unwrap();
+    std::fs::write(root.join("parts/tri.gltf"), beside).unwrap();
+    std::fs::write(dir.path().join("outside.bin"), &bin).unwrap();
+    let outside = dir.path().join("outside.bin").to_string_lossy().replace('\\', "/");
+    let mut a = Automation::new().with_root(&root).unwrap();
+    let doc = tool(&mut a, "doc_create", json!({ "from": "blank", "width": 600, "height": 800 }))["doc"].as_u64().unwrap();
+    let out = tool(&mut a, "model_add", json!({ "doc": doc, "page": 1, "path": "parts/tri.gltf", "rect": [10, 10, 200, 200] }));
+    assert_eq!(out["converted"]["triangles"], 1, "{out}");
+
+    for (n, uri) in
+        ["../../outside.bin", "%2e%2e/%2e%2e/outside.bin", "C:outside.bin", outside.as_str(), "file:///outside.bin"].into_iter().enumerate()
+    {
+        let name = format!("parts/escape{n}.gltf");
+        std::fs::write(root.join(&name), triangle_gltf(Some(uri)).1).unwrap();
+        let refused = a.call("model_add", &json!({ "doc": doc, "page": 1, "path": name, "rect": [10, 10, 200, 200] }));
+        assert!(matches!(&refused, Err(ToolError::Failed(m)) if m.contains("buffer 0")), "{uri}: {refused:?}");
+    }
+    tool(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
+    assert_eq!(saved_3d(&root).1.len(), 1, "only the model whose buffer is inside the root");
+}
+
+#[test]
+fn model_add_refuses_a_broken_gltf_and_adds_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("broken.gltf"), b"{ \"asset\": ").unwrap();
+    let (_, json) = triangle_gltf(None);
+    std::fs::write(dir.path().join("no-chunk.glb"), glb(&json, &[])).unwrap();
+    let mut a = Automation::new().with_root(dir.path()).unwrap();
+    let doc = tool(&mut a, "doc_create", json!({ "from": "blank", "width": 600, "height": 800 }))["doc"].as_u64().unwrap();
+    for name in ["broken.gltf", "no-chunk.glb"] {
+        let refused = a.call("model_add", &json!({ "doc": doc, "page": 1, "path": name, "rect": [10, 10, 200, 200] }));
+        assert!(matches!(&refused, Err(ToolError::Failed(m)) if m.contains(name)), "{name}: {refused:?}");
+    }
+    tool(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
+    assert!(saved_3d(dir.path()).1.is_empty());
+}
+
+/// A scene that is a single point has nothing to fit a view to: the report says so.
+#[test]
+fn model_add_reports_no_view_for_a_scene_that_is_a_point() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, json) = triangle_gltf(None);
+    let json = json.replace("\"max\":[1,1,0]", "\"max\":[0,0,0]");
+    std::fs::write(dir.path().join("dot.glb"), glb(&json, &[0u8; 36])).unwrap();
+    let mut a = Automation::new().with_root(dir.path()).unwrap();
+    let doc = tool(&mut a, "doc_create", json!({ "from": "blank", "width": 600, "height": 800 }))["doc"].as_u64().unwrap();
+    let out = tool(&mut a, "model_add", json!({ "doc": doc, "page": 1, "path": "dot.glb", "rect": [100, 100, 400, 400] }));
+    assert_eq!(out["converted"]["view"], false, "{out}");
+}
+
+/// A link beside the scene that leads out of its folder is not followed, even inside the root.
+#[test]
+fn model_add_does_not_follow_a_link_out_of_the_scenes_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("parts")).unwrap();
+    let (bin, json) = triangle_gltf(Some("link.bin"));
+    std::fs::write(root.join("elsewhere.bin"), &bin).unwrap();
+    std::fs::write(root.join("parts/tri.gltf"), json).unwrap();
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_file(root.join("elsewhere.bin"), root.join("parts/link.bin"));
+    #[cfg(unix)]
+    let linked = std::os::unix::fs::symlink(root.join("elsewhere.bin"), root.join("parts/link.bin"));
+    #[cfg(not(any(windows, unix)))]
+    let linked: std::io::Result<()> = Err(std::io::ErrorKind::Unsupported.into());
+    if linked.is_err() {
+        eprintln!("skipped: this account cannot make a symbolic link");
+        return;
+    }
+    let mut a = Automation::new().with_root(&root).unwrap();
+    let doc = tool(&mut a, "doc_create", json!({ "from": "blank", "width": 600, "height": 800 }))["doc"].as_u64().unwrap();
+    let refused = a.call("model_add", &json!({ "doc": doc, "page": 1, "path": "parts/tri.gltf", "rect": [10, 10, 200, 200] }));
+    assert!(matches!(&refused, Err(ToolError::Failed(m)) if m.contains("buffer 0")), "{refused:?}");
 }

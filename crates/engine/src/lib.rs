@@ -116,7 +116,7 @@ pub use pdfcraft_annot::{
     Activation3d, AppearanceCache, AttachIcon, BorderShape, FillMark, LineEnding, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont,
     OverlayLook, Props as CommentProps, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, rect_quad,
 };
-pub use pdfcraft_annot::{MAX_MODEL_BYTES as MAX_3D_MODEL_BYTES, ModelFormat as Model3dFormat};
+pub use pdfcraft_annot::{MAX_MODEL_BYTES as MAX_3D_MODEL_BYTES, ModelFormat as Model3dFormat, View3d};
 pub use pdfcraft_forms::detect;
 pub use pdfcraft_optimize as optimize;
 pub use pdfcraft_preflight as pdfa;
