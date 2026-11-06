@@ -266,6 +266,12 @@ moves the target, in model radii, so the model moves the other way. Every view f
 at the same size, whatever its direction. U3D models are refused
 with an error, and the annotation's own views, lighting and render modes are not applied yet.
 
+`model_pick` takes the same arguments plus `at`, a pixel position `[x, y]` from the picture's
+top left (pixel (i, j)'s centre is `[i + 0.5, j + 0.5]`), and says what of the model lies there:
+`{"hit": {"mesh", "triangle", "point", "normal", "distance"}}` (mesh and triangle counted from 1,
+point and normal in model coordinates), or `{"hit": null}` over the background. A position
+outside the picture is an error.
+
 ## Viewer navigation history
 
 A running PdfCraft instance launched with `--control FILE` exposes its per-tab history through
