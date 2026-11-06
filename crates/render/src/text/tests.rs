@@ -1965,3 +1965,92 @@ fn text_outside_the_crop_box_is_clipped() {
         assert!(text.is_empty(), "expected no glyphs on {crop:?}, got {:?}", text.plain_text());
     }
 }
+
+/// A one-page document showing `codes` in a Type 0 font with `encoding` over an embedded
+/// `descendant` (`CIDFontType0` takes the bundled CFF program, `CIDFontType2` a TrueType one)
+/// of the Adobe-Japan1 collection, with `to_unicode` as its `/ToUnicode` CMap when given.
+fn japan1_page(encoding: &str, descendant: &str, to_unicode: Option<&[u8]>, codes: &str) -> String {
+    collection_page(("Adobe", "Japan1"), encoding, descendant, to_unicode, codes)
+}
+
+/// [`japan1_page`] for the character collection `(registry, ordering)`.
+fn collection_page(collection: (&str, &str), encoding: &str, descendant: &str, to_unicode: Option<&[u8]>, codes: &str) -> String {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let (registry, ordering) = collection;
+    let mut doc = Document::with_version("1.7");
+    let (key, program): (&str, &[u8]) = if descendant == "CIDFontType0" {
+        ("FontFile3", include_bytes!("../../../../vendor/hayro-interpret/assets/FoxitFixed.pfb"))
+    } else {
+        ("FontFile2", include_bytes!("../../../../assets/fonts/Inter-Regular.ttf"))
+    };
+    let mut file = dictionary! {};
+    if descendant == "CIDFontType0" {
+        file.set("Subtype", "CIDFontType0C");
+    }
+    let program = doc.add_object(Stream::new(file, program.to_vec()));
+    let descriptor = doc.add_object(dictionary! { "Type" => "FontDescriptor", "FontName" => "TestJapan1", "Flags" => 4, key => program });
+    let cid = doc.add_object(dictionary! {
+        "Type" => "Font", "Subtype" => descendant, "BaseFont" => "TestJapan1",
+        "CIDSystemInfo" => dictionary! { "Registry" => Object::string_literal(registry), "Ordering" => Object::string_literal(ordering), "Supplement" => 6 },
+        "FontDescriptor" => descriptor, "DW" => 1000, "CIDToGIDMap" => "Identity"
+    });
+    let mut font = dictionary! { "Type" => "Font", "Subtype" => "Type0", "BaseFont" => "TestJapan1", "Encoding" => encoding, "DescendantFonts" => vec![Object::Reference(cid)] };
+    if let Some(cmap) = to_unicode {
+        font.set("ToUnicode", doc.add_object(Stream::new(dictionary! {}, cmap.to_vec())));
+    }
+    let font = doc.add_object(font);
+    let content = doc.add_object(Stream::new(dictionary! {}, format!("BT /F1 20 Tf 1 0 0 1 20 250 Tm <{codes}> Tj ET").into_bytes()));
+    let pages = doc.new_object_id();
+    let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(300), Object::Integer(300)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+    doc.objects.insert(pages, dictionary! {"Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1}.into());
+    let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages});
+    doc.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    doc.save_to(&mut bytes).unwrap();
+    let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap().plain_text()
+}
+
+/// An embedded font of an Adobe character collection reads as text through the collection's
+/// UCS2 CMap, code to CID to Unicode (ISO 32000-2 §9.10.2), where its `/ToUnicode` is missing or
+/// has nothing for a code: with Identity-H or a predefined CMap such as `/H`, CFF or TrueType.
+/// Only fonts that are not embedded took that route, so Japanese and Chinese pages whose fonts
+/// are embedded without a `/ToUnicode` had no text to select, find or copy. `/ToUnicode` still
+/// comes first where it maps a code.
+#[test]
+fn an_embedded_adobe_collection_font_reads_through_its_ucs2_cmap() {
+    // Adobe-Japan1 CIDs 34, 1125 and 843: A, 亜 and あ.
+    assert_eq!(japan1_page("Identity-H", "CIDFontType0", None, "00220465034B"), "A亜あ", "Identity-H, CFF, no /ToUnicode");
+    assert_eq!(japan1_page("Identity-H", "CIDFontType2", None, "00220465034B"), "A亜あ", "Identity-H, TrueType, no /ToUnicode");
+    // `/H` maps JIS X 0208 codes to CIDs: 3021 亜, 2422 あ, 2341 Ａ.
+    assert_eq!(japan1_page("H", "CIDFontType2", None, "302124222341"), "亜あＡ", "predefined /H");
+    let empty = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Empty def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange endcmap CMapName currentdict /CMap defineresource pop end end";
+    assert_eq!(japan1_page("Identity-H", "CIDFontType2", Some(empty), "00220465034B"), "A亜あ", "a /ToUnicode with no mappings");
+    let one = b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /One def /CMapType 2 def 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfchar <0022> <005A> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    assert_eq!(japan1_page("Identity-H", "CIDFontType0", Some(one), "00220465034B"), "Z亜あ", "/ToUnicode first, the UCS2 CMap for the rest");
+}
+
+/// The same route for the other Adobe collections, each through its own UCS2 CMap
+/// (Adobe-GB1-UCS2, Adobe-CNS1-UCS2, Adobe-Korea1-UCS2), and for vertical writing (Identity-V)
+/// and a predefined CMap over a CFF program. The pairs are read from the bundled CMaps.
+#[test]
+fn every_adobe_collection_reads_through_its_own_ucs2_cmap() {
+    for descendant in ["CIDFontType0", "CIDFontType2"] {
+        // Adobe-GB1 CID 4000 is 姓, Adobe-CNS1 CID 4000 is 團, Adobe-Korea1 CID 2000 is 밧; CID 34
+        // is A in each.
+        for (ordering, codes, text) in [("GB1", "00220FA0", "A姓"), ("CNS1", "00220FA0", "A團"), ("Korea1", "002207D0", "A밧")] {
+            assert_eq!(collection_page(("Adobe", ordering), "Identity-H", descendant, None, codes), text, "Adobe-{ordering}, {descendant}");
+        }
+        assert_eq!(japan1_page("Identity-V", descendant, None, "00220465034B"), "A亜あ", "Identity-V, {descendant}");
+    }
+    assert_eq!(japan1_page("H", "CIDFontType0", None, "302124222341"), "亜あＡ", "predefined /H, CFF");
+}
+
+/// A Type 0 font outside the Adobe collections has no UCS2 CMap: without a `/ToUnicode` its codes
+/// give no text through this route (the CIDs mean nothing outside their collection).
+#[test]
+fn a_font_outside_the_adobe_collections_gets_no_text_from_a_ucs2_cmap() {
+    for descendant in ["CIDFontType0", "CIDFontType2"] {
+        assert_eq!(collection_page(("Example", "Custom"), "Identity-H", descendant, None, "00220465034B"), "", "{descendant}");
+    }
+}

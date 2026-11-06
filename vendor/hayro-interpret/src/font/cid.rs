@@ -6,6 +6,7 @@ use crate::font::{
 };
 use crate::{CMapResolverFn, CacheKey, FontResolverFn};
 use hayro_cmap::{BfString, CMap, CharacterCollection, CidFamily, WritingMode};
+use std::sync::OnceLock;
 use hayro_syntax::object;
 use hayro_syntax::object::Dict;
 use hayro_syntax::object::Name;
@@ -42,6 +43,9 @@ pub(crate) struct Type0Font {
     /// Whether the `to_unicode` map is a UCS2 `CMap` (CID-indexed) rather than
     /// a `ToUnicode` `CMap` (code-indexed).
     to_unicode_is_cid_indexed: bool,
+    /// PdfCraft patch (84): the character collection's UCS2 CMap (by CID), for the codes the
+    /// font's own `/ToUnicode` gives nothing for, whether or not its program is embedded.
+    ucs2: Option<Ucs2>,
     /// PdfCraft patch: whether the CIDs belong to an Adobe character collection (Japan1, GB1,
     /// CNS1, Korea1), whose glyph numbering no substitute other than a CID-keyed CFF font shares.
     adobe_collection: bool,
@@ -131,18 +135,17 @@ impl Type0Font {
             .is_some_and(|n| matches!(n.as_ref(), b"Identity-H" | b"Identity-V"));
         let mut to_unicode_is_cid_indexed = false;
 
+        // PdfCraft patch (84): the character collection's UCS2 CMap (ISO 32000-2 §9.10.2), CID
+        // to Unicode, for a font of an Adobe collection whether or not its program is embedded.
+        let mut ucs2 = character_collection
+            .as_ref()
+            .and_then(|cc| cc.family.ucs2_cmap())
+            .and_then(|name| (cmap_resolver)(name))
+            .map(|data| Ucs2 { data, resolver: cmap_resolver.clone(), map: OnceLock::new() });
         // If there is no ToUnicode map, try to get the UCS2 CMap.
-        if fallback
-            && to_unicode.is_none()
-            && let Some(cc) = character_collection.as_ref()
-            && let Some(ucs2_name) = cc.family.ucs2_cmap()
-            && let Some(data) = (cmap_resolver)(ucs2_name)
-        {
-            let resolver = cmap_resolver.clone();
-            if let Some(ucs2_cmap) = CMap::parse(data, move |n| (resolver)(n)) {
-                to_unicode = Some(ucs2_cmap);
-                to_unicode_is_cid_indexed = true;
-            }
+        if fallback && to_unicode.is_none() && let Some(ucs2_cmap) = ucs2.take().and_then(|u| u.parse()) {
+            to_unicode = Some(ucs2_cmap);
+            to_unicode_is_cid_indexed = true;
         }
 
         let adobe_collection = character_collection
@@ -173,6 +176,7 @@ impl Type0Font {
             font_flags,
             fallback,
             to_unicode_is_cid_indexed,
+            ucs2,
             adobe_collection,
             identity_to_unicode,
         })
@@ -466,10 +470,43 @@ impl Type0Font {
             } else {
                 code
             };
-            return to_unicode.lookup_bf_string(key);
+            if let Some(s) = to_unicode.lookup_bf_string(key) {
+                return Some(s);
+            }
+        }
+        // PdfCraft patch (84): then the collection's UCS2 CMap, by the code's CID.
+        if let Some(ucs2) = self.ucs2.as_ref().and_then(Ucs2::cmap)
+            && let Some(s) = self.code_to_cid(code).and_then(|cid| ucs2.lookup_bf_string(cid))
+        {
+            return Some(s);
         }
 
         None
+    }
+}
+
+/// PdfCraft patch (84): a collection's UCS2 CMap, parsed the first time a code needs it: a font
+/// whose `/ToUnicode` maps every code it shows never parses it.
+struct Ucs2 {
+    data: &'static [u8],
+    resolver: CMapResolverFn,
+    map: OnceLock<Option<CMap>>,
+}
+
+impl Ucs2 {
+    fn parse(&self) -> Option<CMap> {
+        let resolver = self.resolver.clone();
+        CMap::parse(self.data, move |n| (resolver)(n))
+    }
+
+    fn cmap(&self) -> Option<&CMap> {
+        self.map.get_or_init(|| self.parse()).as_ref()
+    }
+}
+
+impl std::fmt::Debug for Ucs2 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ucs2").field("bytes", &self.data.len()).finish_non_exhaustive()
     }
 }
 
