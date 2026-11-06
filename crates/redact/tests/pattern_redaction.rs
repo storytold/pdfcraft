@@ -700,3 +700,59 @@ fn a_form_without_resources_keeps_the_page_pattern_it_still_paints() {
     let patterns = reopened.dict(res.get(b"Pattern").unwrap()).unwrap();
     assert!(patterns.get(b"P0").is_some(), "the form still paints with /P0 outside the mark");
 }
+
+#[test]
+fn a_shared_appearance_of_a_reply_or_pop_up_removed_on_another_page_is_refused() {
+    // The marked comment on page 1 has no appearance; its reply (or pop-up) is listed on page 2,
+    // goes with it, and shares its appearance with a stamp that stays on page 2. That stamp keeps
+    // the text-bearing cell reachable, so the all-pages check must run and refuse.
+    for link in ["IRT", "Parent"] {
+        let mut doc = two_pages();
+        let pages = pdfcraft_model::pages(&doc);
+        for page in &pages {
+            let mut resources = doc.dict(page.dict.get(b"Resources").unwrap()).unwrap();
+            resources.remove(b"Pattern");
+            doc.update_dict(page.obj, |dict| dict.set(b"Resources".to_vec(), Object::Dict(resources.clone()))).unwrap();
+        }
+        let ap = doc.add(Object::Stream(Stream::from_raw(
+            Dict::from_iter([
+                (b"Subtype".to_vec(), Object::name("Form")),
+                (b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 500.into(), 300.into()])),
+                (
+                    b"Resources".to_vec(),
+                    Object::Dict(Dict::from_iter([(
+                        b"Pattern".to_vec(),
+                        Object::Dict(Dict::from_iter([(b"P0".to_vec(), Object::Ref(ObjRef::new(6, 0)))])),
+                    )])),
+                ),
+            ]),
+            b"/Pattern cs /P0 scn 35 110 170 35 re f".to_vec(),
+        )));
+        let comment = doc.add(Object::Dict(Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Annot")),
+            (b"Subtype".to_vec(), Object::name("Text")),
+            (b"Rect".to_vec(), Object::Array(vec![40.into(), 110.into(), 60.into(), 130.into()])),
+        ])));
+        let follower = doc.add(Object::Dict(Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Annot")),
+            (b"Subtype".to_vec(), Object::name(if link == "IRT" { "Text" } else { "Popup" })),
+            (b"Rect".to_vec(), Object::Array(vec![300.into(), 200.into(), 400.into(), 260.into()])),
+            (link.as_bytes().to_vec(), Object::Ref(comment)),
+            (b"AP".to_vec(), Object::Dict(Dict::from_iter([(b"N".to_vec(), Object::Ref(ap))]))),
+        ])));
+        let stamp = doc.add(Object::Dict(Dict::from_iter([
+            (b"Type".to_vec(), Object::name("Annot")),
+            (b"Subtype".to_vec(), Object::name("Stamp")),
+            (b"Rect".to_vec(), Object::Array(vec![30.into(), 105.into(), 215.into(), 150.into()])),
+            (b"AP".to_vec(), Object::Dict(Dict::from_iter([(b"N".to_vec(), Object::Ref(ap))]))),
+        ])));
+        doc.update_dict(pages[0].obj, |dict| dict.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(comment)]))).unwrap();
+        doc.update_dict(pages[1].obj, |dict| dict.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(follower), Object::Ref(stamp)]))).unwrap();
+        mark(&mut doc, 0);
+        let before = saved(&doc);
+        let error = apply(&mut doc, Some(&[0])).unwrap_err();
+        assert_eq!(error, RedactError::Pattern { page: 2, reason: PatternProblem::Content }, "/{link}");
+        assert_eq!(saved(&doc), before, "/{link}");
+        assert_eq!(marks(&doc).len(), 1, "/{link}");
+    }
+}

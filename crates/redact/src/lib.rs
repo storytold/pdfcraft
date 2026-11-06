@@ -516,8 +516,8 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         retired_properties,
         mut removed_everywhere,
         mut images,
-        removed_appearances,
-        appearance_scan_limit,
+        mut removed_appearances,
+        mut appearance_scan_limit,
         pruned_patterns,
         ..
     } = applying;
@@ -543,6 +543,19 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
                     d.get(b"IRT").and_then(Object::as_ref).is_some_and(|x| removed_everywhere.contains(&x)) && d.name(b"Subtype") != Some(b"Widget");
                 let is_popup = d.get(b"Parent").and_then(Object::as_ref).is_some_and(|x| removed_everywhere.contains(&x));
                 if removed_everywhere.contains(&r) || is_reply || is_popup {
+                    // A reply or pop-up removed here can share its appearance with an annotation
+                    // that stays on an unselected page, like one removed under a mark: the
+                    // all-pages pattern check must see it.
+                    if !appearance_scan_limit {
+                        match appearance_refs(doc, d) {
+                            Some(references) => removed_appearances.extend(references),
+                            None => appearance_scan_limit = true,
+                        }
+                        if removed_appearances.len() > 16_384 {
+                            appearance_scan_limit = true;
+                            removed_appearances.clear();
+                        }
+                    }
                     if removed_everywhere.insert(r) {
                         grew = true;
                         if is_reply {
