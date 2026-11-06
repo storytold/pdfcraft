@@ -70,7 +70,14 @@ impl PdfCraftApp {
         }
         for r in out.requests {
             match r {
-                Request::Print => self.open_print(),
+                Request::Print => {
+                    if let Some(i) = view {
+                        // The print dialog reads the active document throughout its lifetime.
+                        // Keep the source selected; restoring the comparison tab would retarget it.
+                        self.active = Some(i);
+                        self.open_print();
+                    }
+                }
                 Request::GoToPage(p) => {
                     if let Some(i) = view {
                         self.views[i].go_to_page(p);
@@ -81,7 +88,11 @@ impl PdfCraftApp {
                     "The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.",
                     &[("u", &u)],
                 ),
-                Request::SaveAs => self.run_command("file.save_as"),
+                Request::SaveAs => {
+                    if let Some(i) = view {
+                        self.save_view(i, crate::SaveTarget::As);
+                    }
+                }
                 Request::ShowPanel(p) => {
                     let panel = match p {
                         Panel::Bookmarks => crate::RightPanel::Bookmarks,
@@ -93,7 +104,31 @@ impl PdfCraftApp {
                     // Show/Hide: a panel already showing closes.
                     self.right = (self.right != Some(panel)).then_some(panel);
                 }
-                Request::Focus(_) | Request::Beep | Request::Reset(_) => {}
+                Request::Zoom(z) => {
+                    if let Some(i) = view {
+                        self.views[i].zoom = (z / 100.0) as f32;
+                        self.views[i].fit = crate::canvas::Fit::None;
+                    }
+                }
+                Request::Highlight(h) => {
+                    if let Some(i) = view {
+                        self.views[i].highlight_fields = h;
+                    }
+                }
+                Request::Focus(name) => {
+                    if let Some(i) = view
+                        && let Some(f) = self.session.get(id).and_then(|d| d.form.iter().find(|f| f.name == name))
+                        && !f.read_only()
+                        && let Some((wi, widget)) = f.widgets.iter().enumerate().find(|(_, w)| !w.hidden && w.page.is_some())
+                    {
+                        let page = widget.page.unwrap_or(0);
+                        if self.views[i].page_screen_rect(page).is_none() {
+                            self.views[i].go_to_page(page);
+                        }
+                        self.views[i].forms.focus = Some(crate::forms_ui::open_focus(f, wi));
+                    }
+                }
+                Request::Beep | Request::Reset(_) => {}
             }
         }
         self.show_script_messages(out.alerts);
@@ -139,11 +174,20 @@ impl PdfCraftApp {
 
     /// Run a push button's JavaScript (its Mouse Up action).
     pub fn run_button_script(&mut self, id: DocId, field: &str, script: &str) {
+        self.run_button_script_target(id, field, None, script);
+    }
+    /// Run the action of the exact clicked button, preserving legacy name-only entry points.
+    pub fn run_button_script_target(&mut self, id: DocId, field: &str, identity: Option<u64>, script: &str) {
         // A script reads the fields: include what's still being typed in one (#166).
         if !self.commit_form_typing() {
             return;
         }
-        match self.session.run_javascript(id, script, Some(field)) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.session.get(id).is_some_and(|d| d.info.xfa.is_none()) {
+            self.start_ui_script(id, script, Some(field), identity);
+            return;
+        }
+        match self.session.run_javascript_target(id, script, Some(field), identity) {
             Ok(o) => {
                 if let Some(i) = self.views.iter().position(|v| v.id == id)
                     && let Some(info) = self.session.get(id).map(|d| d.info.clone())

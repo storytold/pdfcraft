@@ -21,7 +21,7 @@ fn names_lock() -> MutexGuard<'static, ()> {
 
 /// `util.printd(fmt)` of 18 October 2026, then of what `util.scand(fmt, typed)` reads.
 fn printd(fmt: &str, typed: &str) -> String {
-    let doc = DocInfo { file_name: "form.pdf".into(), num_pages: 1, page: 0, info: Vec::new(), xfa: false };
+    let doc = DocInfo { file_name: "form.pdf".into(), num_pages: 1, page: 0, ..Default::default() };
     let script = format!("event.value = util.printd('{fmt}', new Date(2026, 9, 18)) + '|' + util.printd('{fmt}', util.scand('{fmt}', '{typed}'));");
     let o = run(&script, &Event::field("Format", "date", ""), &doc, &[], &[], Limits::default());
     assert_eq!(o.error, None);
@@ -75,7 +75,7 @@ fn form_dates_follow_the_date_language() {
 #[test]
 fn an_english_weekday_before_a_shared_month_name_reads_as_english() {
     let _names = names_lock();
-    let doc = DocInfo { file_name: "form.pdf".into(), num_pages: 1, page: 0, info: Vec::new(), xfa: false };
+    let doc = DocInfo { file_name: "form.pdf".into(), num_pages: 1, page: 0, ..Default::default() };
     let mar17 = DateTime { y: 2026, m: 3, d: 17, hh: 0, mm: 0, ss: 0 };
     let mut bad = Vec::new();
     for language in ["it", "es", "ro", "sq"] {
@@ -111,7 +111,7 @@ fn an_english_weekday_before_a_shared_month_name_reads_as_english() {
 /// letter that writes a name, through the form path and through `util.scand`. Called from the
 /// one test, which owns the process-wide names.
 fn every_date_language_reads_back_what_it_writes() {
-    let doc = DocInfo { file_name: "form.pdf".into(), num_pages: 1, page: 0, info: Vec::new(), xfa: false };
+    let doc = DocInfo { file_name: "form.pdf".into(), num_pages: 1, page: 0, ..Default::default() };
     let mut bad = Vec::new();
     for l in pdfcraft_engine::dates::DATE_LANGUAGES.iter() {
         use_form_date_language(l.code);
@@ -319,7 +319,7 @@ fn an_english_run_that_prints_the_stored_value_is_drawn() {
 
 /// What `util.scand(fmt, text)` reads, as `yyyy-mm-dd`, or `null`.
 fn scanned(fmt: &str, text: &str) -> String {
-    let doc = DocInfo { file_name: "form.pdf".into(), num_pages: 1, page: 0, info: Vec::new(), xfa: false };
+    let doc = DocInfo { file_name: "form.pdf".into(), num_pages: 1, page: 0, ..Default::default() };
     let script = format!("var d = util.scand('{fmt}', {text:?}); event.value = d ? util.printd('yyyy-mm-dd', d) : 'null';");
     let o = run(&script, &Event::field("Format", "date", ""), &doc, &[], &[], Limits::default());
     assert_eq!(o.error, None);

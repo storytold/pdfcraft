@@ -328,6 +328,12 @@ pub enum Edit {
         name: String,
         image: Arc<Vec<u8>>,
     },
+    /// Set the picture of one exact push-button field; legacy name-only calls remain available.
+    SetFieldImageTarget {
+        name: String,
+        object: pdfcraft_cos::ObjRef,
+        image: Arc<Vec<u8>>,
+    },
     /// Duplicate a field onto other pages (same field, shared value).
     DuplicateField {
         name: String,
@@ -413,8 +419,8 @@ pub enum Edit {
     RemoveStandardId {
         standard: Standard,
     },
-    /// What a script (button or console) changed in form fields: values, read-only, required
-    /// and visibility.
+    /// What a script (button or console) changed in form fields: values, appearance colours,
+    /// read-only, required and visibility.
     ApplyScriptChanges {
         changes: Vec<pdfcraft_forms::FieldChange>,
     },

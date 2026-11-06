@@ -158,12 +158,12 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
         let Some(f) = all.iter().find(|f| f.obj == obj).cloned() else { continue };
         let lookup = |n: &str| -> Vec<String> {
             let prefix = format!("{n}.");
-            all.iter().filter(|x| x.name == n || x.name.starts_with(&prefix)).flat_map(|x| x.value.first().cloned()).collect()
+            all.iter().filter(|x| x.name == n || x.name.starts_with(&prefix)).flat_map(|x| x.value.iter().cloned()).collect()
         };
         let current = f.value.first().cloned().unwrap_or_default();
         let v = if let Some(js) = &f.actions.scripts.calculate {
-            let r = scripts.run(FieldEvent::Calculate, js, &f, &current, &all);
-            scripting::apply_changes(doc, &r.changes, &f.name)?;
+            let r = scripts.run(FieldEvent::Calculate, js, &f, &current, &all, doc);
+            scripting::apply_changes(doc, &r.changes, &f.name, Some(f.obj))?;
             if !r.changes.is_empty() {
                 all = fields(doc);
             }
@@ -658,6 +658,13 @@ fn unread_stream(doc: &Document, field: ObjRef, key: &[u8]) -> bool {
     false
 }
 
+/// Whether this snapshot contains a known default, including a genuinely absent /DV.
+/// An unread nonempty default stream is unknown, not an instruction to clear the field.
+/// Reuse this policy when exposing reset defaults to other execution layers.
+pub fn default_value_known(doc: &Document, field: &Field) -> bool {
+    !field.default.is_empty() || !unread_stream(doc, field.obj, b"DV")
+}
+
 /// Acrobat's Clear form: every field (or the named ones) back to its default value.
 pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, FormError> {
     let all = fields(doc);
@@ -675,7 +682,7 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
         // the field to nothing would lose the value it should go back to. A value it didn't decode
         // isn't known to be the default, so it is reset.
         let unread = |key: &[u8], read: &[String]| read.is_empty() && unread_stream(doc, f.obj, key);
-        if unread(b"DV", &f.default) || (f.value == f.default && !unread(b"V", &f.value)) {
+        if !default_value_known(doc, f) || (f.value == f.default && !unread(b"V", &f.value)) {
             continue;
         }
         let v = match f.kind {

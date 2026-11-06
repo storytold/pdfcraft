@@ -11,6 +11,63 @@ pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Pan
 
 use crate::{DocId, Edit, EditError, Session};
 
+/// Reset writeback does two full passes (preview and commit); reject amplification before either.
+const MAX_SCRIPT_RESETS: usize = pdfcraft_js::MAX_RESET_CALLS;
+const MAX_SCRIPT_RESET_SELECTORS: usize = 4096;
+const MAX_SCRIPT_RESET_WORK: usize = 1 << 24;
+
+/// Bound request count, selector storage/scans and estimated form/calculation visits before cloning a PDF.
+fn validate_reset_work(fields: &[Field], states: &[pdfcraft_js::FieldState], requests: &[Request]) -> Result<(), EditError> {
+    let invalid = || EditError::Invalid("script reset work limit exceeded; use fewer reset calls or combine field selections".into());
+    let (mut resets, mut named_resets, mut selectors, mut bytes) = (0usize, 0usize, 0usize, 0usize);
+    for request in requests {
+        if let Request::Reset(names) = request {
+            resets = resets.saturating_add(1);
+            named_resets = named_resets.saturating_add(usize::from(!names.is_empty()));
+            selectors = selectors.saturating_add(names.len());
+            if resets > MAX_SCRIPT_RESETS || selectors > MAX_SCRIPT_RESET_SELECTORS {
+                return Err(invalid());
+            }
+            bytes = names.iter().fold(bytes, |n, name| n.saturating_add(name.len()));
+        }
+    }
+    if resets == 0 {
+        return Ok(());
+    }
+    let count = fields.len().max(states.len());
+    let (mut calculations, mut references, mut source_bytes) = (0usize, 0usize, 0usize);
+    for field in fields {
+        use pdfcraft_forms::af::Calculate;
+        if field.actions.calculate != Calculate::None || field.actions.scripts.calculate.is_some() {
+            calculations = calculations.saturating_add(1);
+        }
+        references = references.saturating_add(match &field.actions.calculate {
+            Calculate::Simple { fields, .. } => fields.len(),
+            Calculate::Notation(source) => source.len(),
+            Calculate::None => 0,
+        });
+        source_bytes = source_bytes.saturating_add(field.actions.scripts.calculate.as_ref().map_or(0, String::len));
+    }
+    let name_bytes =
+        fields.iter().fold(0usize, |n, f| n.saturating_add(f.name.len())).max(states.iter().fold(0usize, |n, f| n.saturating_add(f.name.len())));
+    let widgets = fields.iter().fold(0usize, |n, f| n.saturating_add(f.widgets.len()));
+    let per_pass = count
+        .saturating_mul(1usize.saturating_add(calculations).saturating_add(references))
+        .saturating_add(source_bytes)
+        .saturating_add(name_bytes)
+        .saturating_add(widgets);
+    // A named reset may expand to every field. The forms layer validates each expanded
+    // name against all fields and scans the selection again for each field. Charge the
+    // worst case before performing expansion, including bytes read by string comparisons.
+    let expanded = named_resets.saturating_mul(count).saturating_mul(count.saturating_add(name_bytes)).saturating_mul(2);
+    let comparisons = count.saturating_mul(selectors).saturating_add(count.saturating_mul(bytes));
+    let work = resets.saturating_mul(per_pass).saturating_add(expanded).saturating_add(comparisons).saturating_add(bytes).saturating_mul(2);
+    if work > MAX_SCRIPT_RESET_WORK {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 /// What scripts produced for the viewer since it last looked.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct JsOutput {
@@ -107,22 +164,86 @@ fn display(doc: &pdfcraft_cos::Document, f: &Field) -> i32 {
     }
 }
 
-/// A form field as scripts see it.
-pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field) -> pdfcraft_js::FieldState {
-    field_state_with_display(f, display(doc, f))
+/// Document-local PDF field identity used by snapshots, tools and native hit tests.
+pub fn field_object_id(object: pdfcraft_cos::ObjRef) -> u64 {
+    (u64::from(object.num) << 16) | u64::from(object.generation)
 }
 
-fn field_state_with_display(f: &Field, display: i32) -> pdfcraft_js::FieldState {
+fn validate_script_target(target: Option<&str>, identity: Option<u64>, fields: &[Field]) -> Result<(), EditError> {
+    if let Some(id) = identity
+        && !fields.iter().any(|f| Some(f.name.as_str()) == target && field_object_id(f.obj) == id)
+    {
+        return Err(EditError::Invalid("script field identity does not match the named field in this document".into()));
+    }
+    Ok(())
+}
+
+/// Snapshot a current form field using page geometry already read once for this runner.
+/// Values/appearances come from `doc` and `f`, never from the cached calculation plan.
+pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field, geometry: &pdfcraft_js::DocInfo) -> pdfcraft_js::FieldState {
     let mut s = pdfcraft_js::FieldState::new(f.name.clone(), kind(f.kind), f.value.clone());
+    s.object_id = Some(field_object_id(f.obj));
     s.default = f.default.clone();
+    s.default_known = pdfcraft_forms::default_value_known(doc, f);
     s.readonly = f.read_only();
     s.required = f.has(pdfcraft_forms::flags::REQUIRED);
-    s.display = display;
+    s.display = display(doc, f);
+    let look = pdfcraft_forms::look(doc, f);
+    s.text_color = Some(std::iter::once("RGB".to_string()).chain(look.text.map(|v| v.to_string())).collect());
+    s.fill_color = look.fill.map(|fill| std::iter::once("RGB".to_string()).chain(fill.map(|v| v.to_string())).collect());
     s.char_limit = f.max_len;
     s.options = match f.kind {
         FieldKind::CheckBox | FieldKind::Radio => f.widgets.iter().filter_map(|w| w.on_state.clone()).map(|o| (o.clone(), o)).collect(),
         _ => f.options.clone(),
     };
+    s.caption = f.widgets.first().and_then(|w| w.caption.clone());
+    s.caption_mixed = f.widgets.iter().any(|w| w.caption != s.caption);
+    s.line_width = look.width;
+    s.border_style = match look.style {
+        pdfcraft_forms::BorderStyle::Solid => "solid",
+        pdfcraft_forms::BorderStyle::Dashed => "dashed",
+        pdfcraft_forms::BorderStyle::Beveled => "beveled",
+        pdfcraft_forms::BorderStyle::Inset => "inset",
+        pdfcraft_forms::BorderStyle::Underline => "underline",
+    }
+    .into();
+    s.stroke_color =
+        Some(look.border.map_or_else(|| vec!["T".into()], |rgb| std::iter::once("RGB".into()).chain(rgb.map(|v| v.to_string())).collect()));
+    s.fill_color = Some(look.fill.map_or_else(|| vec!["T".into()], |rgb| std::iter::once("RGB".into()).chain(rgb.map(|v| v.to_string())).collect()));
+    s.user_name = doc
+        .get(f.obj)
+        .as_dict()
+        .and_then(|d| d.get(b"TU").map(|v| doc.resolve(v)))
+        .and_then(|v| v.as_string().map(|v| v.to_text()))
+        .unwrap_or_default();
+    s.text_size =
+        f.da.split_whitespace()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .find_map(|p| (p.get(1) == Some(&"Tf")).then(|| p.first()?.parse::<f64>().ok()).flatten())
+            .unwrap_or(0.0);
+    if let Some(w) = f.widgets.first() {
+        let page = w.page.unwrap_or(0);
+        s.page_rotation = geometry.page_rotations.get(page).copied().unwrap_or(0);
+        s.page_crop = geometry.page_boxes.get(page).map_or([0.0; 4], |boxes| boxes[1]);
+        s.rect = Some(pdfcraft_js::rotate_rect(w.rect, s.page_crop, s.page_rotation));
+        s.icon = doc
+            .get(w.obj)
+            .as_dict()
+            .and_then(|d| d.get(b"MK").map(|v| doc.resolve(v)))
+            .and_then(|v| v.as_dict().and_then(|d| d.get(b"I")).and_then(pdfcraft_cos::Object::as_ref))
+            .map(|r| ((r.num as u64) << 16) | r.generation as u64);
+    }
+
+    s.icon_mixed = f.widgets.iter().any(|w| {
+        let icon = doc
+            .get(w.obj)
+            .as_dict()
+            .and_then(|d| d.get(b"MK").map(|v| doc.resolve(v)))
+            .and_then(|v| v.as_dict().and_then(|d| d.get(b"I")).and_then(pdfcraft_cos::Object::as_ref))
+            .map(field_object_id);
+        icon != s.icon
+    });
     s
 }
 
@@ -137,51 +258,141 @@ fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]
     for field in before {
         by_name.entry(field.name.as_str()).or_insert(field);
     }
+    let by_id: std::collections::HashMap<_, _> = before.iter().filter_map(|f| f.object_id.map(|id| (id, f))).collect();
+    let mut names = std::collections::HashSet::new();
+    let duplicates: std::collections::HashSet<_> =
+        before.iter().filter_map(|f| (!names.insert(f.name.as_str())).then_some(f.name.as_str())).collect();
     after
         .iter()
         .filter_map(|a| {
-            let b = by_name.get(a.name.as_str())?;
+            let b = if let Some(id) = a.object_id { by_id.get(&id)? } else { by_name.get(a.name.as_str())? };
             let c = FieldChange {
                 name: a.name.clone(),
+                object: a
+                    .object_id
+                    .filter(|_| duplicates.contains(a.name.as_str()))
+                    .map(|id| pdfcraft_cos::ObjRef::new((id >> 16) as u32, id as u16)),
                 value: (a.value != b.value).then(|| a.value.clone()),
                 read_only: (a.readonly != b.readonly).then_some(a.readonly),
                 required: (a.required != b.required).then_some(a.required),
                 display: (a.display != b.display).then_some(a.display),
+                rect: (a.rect != b.rect).then(|| a.rect.map(|r| pdfcraft_js::unrotate_rect(r, b.page_crop, b.page_rotation))).flatten(),
+                stroke_color: (a.stroke_color != b.stroke_color).then(|| a.stroke_color.clone()).flatten(),
+                text_size: (a.text_size != b.text_size).then_some(a.text_size),
+                line_width: (a.line_width != b.line_width).then_some(a.line_width),
+                border_style: (a.border_style != b.border_style).then(|| a.border_style.clone()),
+                user_name: (a.user_name != b.user_name).then(|| a.user_name.clone()),
+                icon: (a.icon != b.icon || (a.icon_written && b.icon_mixed)).then_some(a.icon),
+                text_color: (a.text_color != b.text_color).then(|| a.text_color.clone()).flatten(),
+                fill_color: (a.fill_color != b.fill_color).then(|| a.fill_color.clone()).flatten(),
+                caption: (a.caption != b.caption || (a.caption_written && b.caption_mixed)).then(|| a.caption.clone()).flatten(),
             };
-            (c.value.is_some() || c.read_only.is_some() || c.required.is_some() || c.display.is_some()).then_some(c)
+            (c.value.is_some()
+                || c.read_only.is_some()
+                || c.required.is_some()
+                || c.display.is_some()
+                || c.caption.is_some()
+                || c.text_color.is_some()
+                || c.fill_color.is_some()
+                || c.rect.is_some()
+                || c.stroke_color.is_some()
+                || c.text_size.is_some()
+                || c.line_width.is_some()
+                || c.border_style.is_some()
+                || c.user_name.is_some()
+                || c.icon.is_some())
+            .then_some(c)
         })
         .collect()
 }
 
 /// Runs field scripts with the document's object model and keeps what they print or ask for.
+pub type Runtime = std::sync::Arc<std::sync::Mutex<pdfcraft_js::session::ScriptSession>>;
+
 pub struct JsRunner {
+    pub runtime: Runtime,
     pub doc: pdfcraft_js::DocInfo,
     pub doc_scripts: Vec<String>,
     pub output: JsOutput,
-    /// Immutable document snapshot from the start of the edit (for widget `display`).
-    cos: pdfcraft_cos::Document,
-    // `cos` is the same immutable pre-edit snapshot for the runner's lifetime. Cache only
-    // its scalar display readings, not COS objects: large forms exceed the object cache and
-    // otherwise reparse every widget for every calculation. Values/flags still come from
-    // the live `fields` snapshot on each call. A new edit gets a new runner and cache.
-    displays: std::collections::HashMap<pdfcraft_cos::ObjRef, i32>,
+    /// Source/order cache for this edit only; each callback still snapshots current field values.
+    calculations: Option<Vec<(usize, String)>>,
 }
 
 impl JsRunner {
+    /// Forget the per-edit calculation plan after a calculation source is changed.
+    pub(crate) fn invalidate_calculations(&mut self) {
+        self.calculations = None;
+    }
+
+    /// Refresh structural/document sources between batch children, retaining the realm,
+    /// accumulated output and the current viewer snapshot. Ordinary value edits reuse caches.
+    pub(crate) fn refresh_after_batch_edit(&mut self, cos: &pdfcraft_cos::Document, edit: &Edit) {
+        if matches!(edit, Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::ApplyScriptChanges { .. } | Edit::Batch { .. }) {
+            return;
+        }
+        let mut current = Self::new(cos, &self.doc.file_name);
+        current.doc.zoom = self.doc.zoom;
+        current.doc.runtime_highlight = self.doc.runtime_highlight;
+        current.doc.page = self.doc.page;
+        self.doc = current.doc;
+        self.doc_scripts = current.doc_scripts;
+        self.calculations = None;
+    }
+
     /// A runner for `cos`: what scripts read about the document (pages, info, whether it is
     /// an XFA form) and its document-level scripts, read once.
     pub fn new(cos: &pdfcraft_cos::Document, file_name: &str) -> JsRunner {
         let xfa = pdfcraft_xfa::xfa_shape(cos).is_some();
-        let doc =
-            pdfcraft_js::DocInfo { file_name: file_name.to_string(), num_pages: pdfcraft_model::pages(cos).len(), page: 0, info: info(cos), xfa };
+        #[cfg(test)]
+        SNAPSHOT_WORK.with(|c| {
+            let (g, p) = c.get();
+            c.set((g + 1, p));
+        });
+        let pages = pdfcraft_model::pages(cos);
+        let doc = pdfcraft_js::DocInfo {
+            file_name: file_name.to_string(),
+            num_pages: pages.len(),
+            page: 0,
+            info: info(cos),
+            page_boxes: pdfcraft_organize::page_boxes(cos).unwrap_or_default(),
+            page_rotations: pages.iter().map(|page| page.rotation(cos)).collect(),
+            xfa,
+            zoom: 100.0,
+            runtime_highlight: true,
+        };
         // Once XFA owns the form, the PDF container's scripts belong to its fallback view.
         // Keep them in the file and in Document JavaScripts, but do not initialize an
         // AcroForm context with them: a viewer-compatibility alert would be misleading.
         // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
         let xfa_active = xfa && pdfcraft_xfa::existing_layout(cos).is_some();
         let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
-        JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new() }
+        JsRunner { doc, doc_scripts, output: JsOutput::default(), runtime: Default::default(), calculations: None }
     }
+}
+
+/// Index calculation sources by PDF object identity, retaining their matching snapshot positions.
+fn calculation_scripts(cos: &pdfcraft_cos::Document, fields: &[Field]) -> Vec<(usize, String)> {
+    #[cfg(test)]
+    SNAPSHOT_WORK.with(|c| {
+        let (g, p) = c.get();
+        c.set((g, p + 1));
+    });
+    let by_object: std::collections::HashMap<_, _> = fields.iter().enumerate().map(|(i, f)| (f.obj, (i, f))).collect();
+    pdfcraft_forms::calculation_order(cos, fields)
+        .fields
+        .iter()
+        .filter_map(|ordered| {
+            let (index, field) = by_object.get(&ordered.obj)?;
+            let script = field.actions.scripts.calculate.clone().or_else(|| {
+                let source = pdfcraft_forms::af::calculate_js(&field.actions.calculate)?;
+                Some(match &field.actions.calculate {
+                    pdfcraft_forms::af::Calculate::Simple { .. } => format!("event.value = {source}"),
+                    _ => source,
+                })
+            })?;
+            Some((*index, script))
+        })
+        .collect()
 }
 
 /// The Info dictionary as `this.info` keys (lower-case).
@@ -198,50 +409,60 @@ fn info(cos: &pdfcraft_cos::Document) -> Vec<(String, String)> {
 impl Scripts for JsRunner {
     /// Run field `target`'s script for `event` over the form's fields, keeping what it showed and
     /// asked for; a refusal carries its last message.
-    fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult {
-        // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
-        self.run_logged(event, script, target, value, fields, true).unwrap_or_else(|| ScriptResult {
-            rc: true,
-            value: value.to_string(),
-            changes: Vec::new(),
-            message: None,
-        })
-    }
-
-    fn rerun_with_english_dates(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> Option<ScriptResult> {
-        pdfcraft_js::with_english_printd(true, || self.run_logged(event, script, target, value, fields, false))
-    }
-}
-
-impl JsRunner {
-    /// [`Scripts::run`], keeping what the script showed and asked for only when `log`; `None`
-    /// when the script failed.
-    fn run_logged(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], log: bool) -> Option<ScriptResult> {
-        let states: Vec<_> = fields
-            .iter()
-            .map(|f| {
-                let display = match f.widgets.first() {
-                    Some(w) => *self.displays.entry(w.obj).or_insert_with(|| display(&self.cos, f)),
-                    None => pdfcraft_js::DISPLAY_VISIBLE,
-                };
-                field_state_with_display(f, display)
-            })
-            .collect();
+    fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], doc: &pdfcraft_cos::Document) -> ScriptResult {
+        let states: Vec<_> = fields.iter().map(|f| field_state(doc, f, &self.doc)).collect();
         let states = std::sync::Arc::new(states);
-        let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
-        let o = pdfcraft_js::run_shared(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default());
-        if log {
-            self.output.absorb(&o);
+        let mut ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
+        ev.target_id = Some((u64::from(target.obj.num) << 16) | u64::from(target.obj.generation));
+        let calculations = self.calculations.get_or_insert_with(|| calculation_scripts(doc, fields)).clone();
+        let o = match self.runtime.lock() {
+            Ok(mut runtime) => runtime.run(
+                pdfcraft_js::session::Job {
+                    script: script.into(),
+                    event: ev,
+                    doc: self.doc.clone(),
+                    fields: states.clone(),
+                    doc_scripts: self.doc_scripts.clone(),
+                    calculations,
+                },
+                &[],
+            ),
+            Err(_) => Outcome { error: Some("document script runtime is unavailable".into()), ..Default::default() },
+        };
+        self.output.absorb(&o);
+        if o.error.is_some() || o.reset_limit_exceeded {
+            // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
+            return ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None };
         }
-        if o.error.is_some() {
-            return None;
-        }
-        Some(ScriptResult {
+        ScriptResult {
             rc: o.rc,
             value: o.value.clone(),
             changes: changes(&states, &o.changed),
             message: (!o.rc).then(|| o.alerts.last().map(|m| m.text.clone())).flatten(),
-        })
+        }
+    }
+
+    /// Retry appearance formatting in isolation so the font fallback cannot replay persistent side effects.
+    fn rerun_with_english_dates(
+        &mut self,
+        event: FieldEvent,
+        script: &str,
+        target: &Field,
+        value: &str,
+        fields: &[Field],
+        doc: &pdfcraft_cos::Document,
+    ) -> Option<ScriptResult> {
+        let states = std::sync::Arc::new(fields.iter().map(|f| field_state(doc, f, &self.doc)).collect());
+        let mut ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
+        ev.target_id = Some(field_object_id(target.obj));
+        let calculations = self.calculations.get_or_insert_with(|| calculation_scripts(doc, fields));
+        let o = pdfcraft_js::with_english_printd(true, || {
+            pdfcraft_js::run_shared_calculations(script, &ev, &self.doc, states, &self.doc_scripts, calculations, Limits::default())
+        });
+        if o.error.is_some() || o.reset_limit_exceeded {
+            return None;
+        }
+        Some(ScriptResult { rc: o.rc, value: o.value.clone(), changes: Vec::new(), message: None })
     }
 }
 
@@ -271,6 +492,11 @@ impl Session {
     /// Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript (on by default).
     pub fn set_javascript(&mut self, on: bool) {
         self.js_off = !on;
+        if !on {
+            for doc in &mut self.docs {
+                doc.js_runtime = Default::default();
+            }
+        }
     }
 
     pub fn javascript(&self) -> bool {
@@ -286,15 +512,42 @@ impl Session {
     /// the console (no target). Field changes and `resetForm` are applied as one undoable step;
     /// everything else the script asked for is returned.
     pub fn run_javascript(&mut self, id: DocId, script: &str, target: Option<&str>) -> Result<Outcome, EditError> {
+        self.run_javascript_answers(id, script, target, &[])
+    }
+
+    /// Run a button/console event with ordered headless prompt answers and commit field changes as one undo step.
+    pub fn run_javascript_answers(
+        &mut self,
+        id: DocId,
+        script: &str,
+        target: Option<&str>,
+        answers: &[Option<String>],
+    ) -> Result<Outcome, EditError> {
+        self.run_javascript_answers_target(id, script, target, None, answers)
+    }
+    /// Run with an optional exact PDF field identity; name-only callers keep first-match behavior.
+    pub fn run_javascript_target(&mut self, id: DocId, script: &str, target: Option<&str>, target_id: Option<u64>) -> Result<Outcome, EditError> {
+        self.run_javascript_answers_target(id, script, target, target_id, &[])
+    }
+    /// Exact-target counterpart of run_javascript_answers, including deterministic prompt replies.
+    pub fn run_javascript_answers_target(
+        &mut self,
+        id: DocId,
+        script: &str,
+        target: Option<&str>,
+        target_id: Option<u64>,
+        answers: &[Option<String>],
+    ) -> Result<Outcome, EditError> {
         if self.js_off {
             return Err(EditError::Invalid("JavaScript is turned off (Preferences ▸ JavaScript)".into()));
         }
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let cos = doc.editor.as_ref().map(|e| e.cos.clone()).ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
+        validate_script_target(target, target_id, &doc.form)?;
         // A button PdfCraft generated from an XFA template runs its XFA click script.
         if let Some(t) = target
             && let Some(tpl) = doc.xfa_template.clone()
-            && let Some(field) = doc.form.iter().find(|f| f.name == t)
+            && let Some(field) = doc.form.iter().find(|f| f.name == t && target_id.is_none_or(|id| field_object_id(f.obj) == id))
             && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, field)
         {
             self.apply(id, Edit::XfaEvent { som, activity: "click".into() })?;
@@ -308,15 +561,45 @@ impl Session {
                 ..Default::default()
             });
         }
-        let runner = JsRunner::new(&cos, &doc.name);
+        let mut runner = JsRunner::new(&cos, &doc.name);
+        runner.doc.zoom = doc.js_zoom;
+        runner.doc.runtime_highlight = doc.js_highlight;
+        runner.doc.page = doc.js_page;
         let fields = pdfcraft_forms::fields(&cos);
-        let states: Vec<_> = fields.iter().map(|f| field_state(&cos, f)).collect();
+        let states = std::sync::Arc::new(fields.iter().map(|f| field_state(&cos, f, &runner.doc)).collect::<Vec<_>>());
         let event = match target {
-            Some(t) => pdfcraft_js::Event { will_commit: false, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
+            Some(t) => pdfcraft_js::Event { will_commit: false, target_id, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
             None => pdfcraft_js::Event::doc("Console"),
         };
-        let mut o = pdfcraft_js::run(script, &event, &runner.doc, &states, &runner.doc_scripts, Limits::default());
-        let changes = changes(&states, &o.changed);
+        let calculations = calculation_scripts(&cos, &fields);
+        let runtime = doc.js_runtime.clone();
+        let o = runtime.lock().map_err(|_| EditError::Invalid("document script runtime is unavailable".into()))?.run(
+            pdfcraft_js::session::Job {
+                script: script.into(),
+                event,
+                doc: runner.doc,
+                fields: states.clone(),
+                doc_scripts: runner.doc_scripts,
+                calculations,
+            },
+            answers,
+        );
+        let result = self.apply_script_outcome(id, &states, o);
+        if result.is_err() {
+            self.invalidate_javascript(id);
+        }
+        result
+    }
+
+    /// Convert the worker snapshot delta and reset requests into permission-checked atomic document edits.
+    fn apply_script_outcome(&mut self, id: DocId, states: &[pdfcraft_js::FieldState], mut o: Outcome) -> Result<Outcome, EditError> {
+        if o.reset_limit_exceeded {
+            return Err(EditError::Invalid("script reset call limit exceeded; no script edits were committed".into()));
+        }
+        if o.requests.iter().any(|r| matches!(r, Request::Reset(_))) {
+            let doc = self.get(id).ok_or(EditError::NoDocument)?;
+            validate_reset_work(&doc.form, states, &o.requests)?;
+        }
         let resets: Vec<Vec<String>> = o
             .requests
             .iter()
@@ -326,15 +609,43 @@ impl Session {
             })
             .collect();
         o.requests.retain(|r| !matches!(r, Request::Reset(_)));
+        // Reset the PDF first, then apply the final live shadow. Compare against the
+        // reset baseline so writes restoring an original value are not mistaken for no-ops.
+        let mut baseline = std::borrow::Cow::Borrowed(states);
+        let mut reset_document = if resets.is_empty() {
+            None
+        } else {
+            let doc = self.get(id).ok_or(EditError::NoDocument)?;
+            let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
+            Some(editor.cos.clone())
+        };
         let mut edits = Vec::new();
+        for names in resets {
+            let all: Vec<String> = states.iter().map(|f| f.name.clone()).collect();
+            let names: Option<Vec<String>> = (!names.is_empty()).then(|| {
+                all.iter().filter(|n| names.iter().any(|x| *n == x || n.strip_prefix(x).is_some_and(|rest| rest.starts_with('.')))).cloned().collect()
+            });
+            if let Some(doc) = reset_document.as_mut() {
+                // Reuse the actual reset path, whose built-in recalculation uses NoScripts.
+                // Unnamed dependent text/combo values belong to the comparison baseline too.
+                pdfcraft_forms::reset(doc, names.as_deref())?;
+            }
+            edits.push(Edit::ResetForm { names });
+        }
+        if let Some(doc) = reset_document {
+            let mut values = std::collections::HashMap::new();
+            for field in pdfcraft_forms::fields(&doc) {
+                values.entry((u64::from(field.obj.num) << 16) | u64::from(field.obj.generation)).or_insert(field.value);
+            }
+            for field in baseline.to_mut() {
+                if let Some(value) = field.object_id.and_then(|id| values.get(&id)) {
+                    field.value.clone_from(value);
+                }
+            }
+        }
+        let changes = changes(&baseline, &o.changed);
         if !changes.is_empty() {
             edits.push(Edit::ApplyScriptChanges { changes });
-        }
-        for names in resets {
-            let all: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
-            let names = (!names.is_empty())
-                .then(|| all.iter().filter(|n| names.iter().any(|x| *n == x || n.starts_with(&format!("{x}.")))).cloned().collect());
-            edits.push(Edit::ResetForm { names });
         }
         if !edits.is_empty() {
             self.apply(id, Edit::Batch { label: "Run JavaScript".into(), edits })?;
@@ -572,5 +883,364 @@ mod review_tests {
         let mut missing = first;
         missing.name = "missing".into();
         assert!(changes(&before, &[missing]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod caption_tests {
+    use super::*;
+
+    #[test]
+    /// A setter matching widget zero still updates other widgets whose normal captions differ.
+    fn setting_the_first_widgets_caption_still_emits_a_field_wide_change() {
+        let mut button = pdfcraft_js::FieldState::new("go", pdfcraft_js::FieldType::Button, vec![]);
+        button.caption = Some("First".into());
+        button.caption_mixed = true;
+        let before = vec![button];
+        let outcome = pdfcraft_js::run(
+            "getField('go').buttonSetCaption('First');",
+            &pdfcraft_js::Event::field("Mouse Up", "go", ""),
+            &pdfcraft_js::DocInfo { file_name: "buttons.pdf".into(), num_pages: 1, page: 0, info: vec![], xfa: false, ..Default::default() },
+            &before,
+            &[],
+            Limits::default(),
+        );
+        assert_eq!(outcome.error, None);
+        let changed = changes(&before, &outcome.changed);
+        assert_eq!(changed.len(), 1, "other widgets may have different captions");
+        assert_eq!(changed[0].caption.as_deref(), Some("First"));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub struct PendingScript {
+    pub id: DocId,
+    generation: u64,
+    runtime: Runtime,
+    states: std::sync::Arc<Vec<pdfcraft_js::FieldState>>,
+    pub receiver: std::sync::mpsc::Receiver<pdfcraft_js::interaction::InteractiveEvent>,
+}
+#[cfg(not(target_arch = "wasm32"))]
+impl Session {
+    /// Check document identity/generation and the JavaScript preference before accepting a worker completion.
+    pub fn script_pending_current(&self, p: &PendingScript) -> bool {
+        !self.js_off && self.get(p.id).is_some_and(|d| d.generation == p.generation && std::sync::Arc::ptr_eq(&d.js_runtime, &p.runtime))
+    }
+    /// Capture the current fields/view and start a native script without blocking the caller on its prompts.
+    pub fn start_javascript(&mut self, id: DocId, script: &str, target: Option<&str>) -> Result<PendingScript, EditError> {
+        self.start_javascript_target(id, script, target, None)
+    }
+    /// Start an asynchronous button event retaining the clicked field's exact identity.
+    pub fn start_javascript_target(
+        &mut self,
+        id: DocId,
+        script: &str,
+        target: Option<&str>,
+        target_id: Option<u64>,
+    ) -> Result<PendingScript, EditError> {
+        if self.js_off {
+            return Err(EditError::Invalid("JavaScript is disabled".into()));
+        }
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let cos = &doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?.cos;
+        let mut runner = JsRunner::new(cos, &doc.name);
+        runner.doc.zoom = doc.js_zoom;
+        runner.doc.runtime_highlight = doc.js_highlight;
+        runner.doc.page = doc.js_page;
+        let fields = pdfcraft_forms::fields(cos);
+        validate_script_target(target, target_id, &fields)?;
+        let states = std::sync::Arc::new(fields.iter().map(|f| field_state(cos, f, &runner.doc)).collect::<Vec<_>>());
+        let job = pdfcraft_js::session::Job {
+            script: script.into(),
+            event: target.map_or_else(
+                || pdfcraft_js::Event::doc("Console"),
+                |t| pdfcraft_js::Event { will_commit: false, target_id, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
+            ),
+            doc: runner.doc,
+            fields: states.clone(),
+            doc_scripts: runner.doc_scripts,
+            calculations: calculation_scripts(cos, &fields),
+        };
+        let receiver =
+            doc.js_runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.start(job).map_err(EditError::Invalid)?;
+        Ok(PendingScript { id, generation: doc.generation, runtime: doc.js_runtime.clone(), states, receiver })
+    }
+    /// Discard only the captured runtime, preserving a newer realm created by an intervening edit.
+    pub fn discard_javascript(&mut self, p: &PendingScript) {
+        if let Some(doc) = self.docs.iter_mut().find(|d| d.id == p.id)
+            && std::sync::Arc::ptr_eq(&doc.js_runtime, &p.runtime)
+        {
+            doc.js_runtime = Default::default();
+        }
+    }
+    /// Apply a current worker result, or discard it and reset the realm when the document changed.
+    pub fn finish_javascript(&mut self, p: PendingScript, out: Outcome) -> Result<Outcome, EditError> {
+        if !self.script_pending_current(&p) {
+            self.discard_javascript(&p);
+            return Err(EditError::Invalid("document changed while the script was running".into()));
+        }
+        p.runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.acknowledge_completion();
+        let result = self.apply_script_outcome(p.id, &p.states, out);
+        if result.is_err() {
+            self.invalidate_javascript(p.id);
+        }
+        result
+    }
+}
+pub use pdfcraft_js::interaction::{InteractiveEvent, MenuItem, Prompt};
+impl Session {
+    /// Supply current viewer state for script getters, clamping invalid zoom to the supported range.
+    pub fn set_javascript_view(&mut self, id: DocId, zoom: f64, highlight: bool, page: usize) {
+        if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) {
+            doc.js_zoom = if zoom.is_finite() { zoom.clamp(1.0, 6400.0) } else { 100.0 };
+            doc.js_highlight = highlight;
+            doc.js_page = page;
+        }
+    }
+}
+
+impl Session {
+    /// Release this document runtime after cancellation or lifecycle changes; the next event initializes anew.
+    pub fn invalidate_javascript(&mut self, id: DocId) {
+        if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) {
+            doc.js_runtime = Default::default();
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Page-tree snapshots and calculation-plan builds performed on this test thread.
+    static SNAPSHOT_WORK: std::cell::Cell<(usize,usize)> = const { std::cell::Cell::new((0,0)) };
+}
+
+#[cfg(test)]
+mod snapshot_review_tests {
+    use super::*;
+
+    /// Real page/info edits and completed Save As refresh metadata without losing script state.
+    #[test]
+    fn retained_document_metadata_tracks_edits_undo_and_save_as() {
+        let mut session = Session::new();
+        let bytes = session.create_blank(200.0, 300.0, 1).unwrap();
+        let id = session.open("before.pdf", None, bytes, None).unwrap();
+        assert_eq!(session.run_javascript(id, "var retained=41;numPages;", None).unwrap().result.as_deref(), Some("1"));
+        session.apply(id, Edit::InsertBlankPage { at: 1, width: 200.0, height: 300.0 }).unwrap();
+        session.apply(id, Edit::SetInfo { key: "Title".into(), value: "After".into() }).unwrap();
+        let out = session.run_javascript(id, "[numPages,info.title,retained].join('/');", None).unwrap();
+        assert_eq!(out.result.as_deref(), Some("2/After/41"));
+        session.undo(id).unwrap();
+        assert_eq!(session.run_javascript(id, "typeof info.title;", None).unwrap().result.as_deref(), Some("undefined"));
+        session.redo(id).unwrap();
+        let saved = session.save_bytes(id).unwrap();
+        session.mark_saved(id, saved, Some("after.pdf".into())).unwrap();
+        assert_eq!(
+            session.run_javascript(id, "[documentFileName,numPages,info.title,retained].join('/');", None).unwrap().result.as_deref(),
+            Some("after.pdf/2/After/41")
+        );
+        session.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
+        assert_eq!(session.run_javascript(id, "[numPages,retained].join('/');", None).unwrap().result.as_deref(), Some("1/41"));
+        session.undo(id).unwrap();
+        assert_eq!(session.run_javascript(id, "numPages;", None).unwrap().result.as_deref(), Some("2"));
+        session.redo(id).unwrap();
+        assert_eq!(session.run_javascript(id, "numPages;", None).unwrap().result.as_deref(), Some("1"));
+    }
+
+    /// A batch child that changes page structure or calculation sources invalidates cached plans.
+    #[test]
+    fn batch_children_refresh_geometry_metadata_and_calculation_sources() {
+        let mut session = Session::new();
+        let bytes = session.create_blank(200.0, 300.0, 1).unwrap();
+        let id = session.open("batch.pdf", None, bytes, None).unwrap();
+        for (i, name) in ["input", "total", "seen"].into_iter().enumerate() {
+            session
+                .apply(
+                    id,
+                    Edit::AddField {
+                        page: 0,
+                        rect: [20.0, 20.0 + i as f64 * 40.0, 120.0, 40.0 + i as f64 * 40.0],
+                        kind: crate::NewField::Text { multiline: false },
+                        name: Some(name.into()),
+                    },
+                )
+                .unwrap();
+        }
+        session.apply(id, Edit::SetFieldValue { name: "input".into(), value: crate::FieldValue::Text("2".into()) }).unwrap();
+        session
+            .apply(
+                id,
+                Edit::SetFieldScript {
+                    name: "total".into(),
+                    event: "calculate".into(),
+                    script: Some("event.value=Number(getField('input').value)+1;".into()),
+                },
+            )
+            .unwrap();
+        session
+            .apply(
+                id,
+                Edit::SetFieldScript {
+                    name: "input".into(),
+                    event: "validate".into(),
+                    script: Some("calculateNow();getField('seen').value=numPages+'/'+getField('total').value;".into()),
+                },
+            )
+            .unwrap();
+        session
+            .apply(
+                id,
+                Edit::Batch {
+                    label: "Structural batch".into(),
+                    edits: vec![
+                        Edit::SetFieldValue { name: "input".into(), value: crate::FieldValue::Text("3".into()) },
+                        Edit::InsertBlankPage { at: 1, width: 200.0, height: 300.0 },
+                        Edit::SetFieldScript {
+                            name: "total".into(),
+                            event: "calculate".into(),
+                            script: Some("event.value=Number(getField('input').value)+10;".into()),
+                        },
+                        Edit::SetFieldValue { name: "input".into(), value: crate::FieldValue::Text("4".into()) },
+                    ],
+                },
+            )
+            .unwrap();
+        let out = session.run_javascript(id, "getField('seen').value;", None).unwrap();
+        assert_eq!(out.error, None);
+        assert_eq!(out.result.as_deref(), Some("2/13"));
+    }
+
+    /// Operation counts, rather than wall time, pin the absence of per-field tree/plan walks.
+    #[test]
+    fn field_events_reuse_page_geometry_and_calculation_plans() {
+        let mut session = Session::new();
+        let bytes = session.create_blank(600.0, 800.0, 4).unwrap();
+        let id = session.open("synthetic.pdf", None, bytes, None).unwrap();
+        for i in 0..12 {
+            session
+                .apply(
+                    id,
+                    Edit::AddField {
+                        page: i % 4,
+                        rect: [20.0, 20.0, 100.0, 40.0],
+                        kind: crate::NewField::Text { multiline: false },
+                        name: Some(format!("f{i}")),
+                    },
+                )
+                .unwrap();
+        }
+        let cos = &session.get(id).unwrap().editor.as_ref().unwrap().cos;
+        let mut fields = pdfcraft_forms::fields(cos);
+        fields[1].actions.scripts.calculate = Some("event.value=Number(getField('f0').value)+1;".into());
+        SNAPSHOT_WORK.with(|c| c.set((0, 0)));
+        let mut runner = JsRunner::new(cos, "synthetic.pdf");
+        for i in 0..8 {
+            fields[0].value = vec![i.to_string()];
+            let out = runner.run(FieldEvent::Calculate, "calculateNow();event.value=getField('f1').value;", &fields[1], "", &fields, cos);
+            assert_eq!(out.value, (i + 1).to_string());
+            assert!(runner.output.errors.is_empty(), "{:?}", runner.output.errors);
+        }
+        let work = SNAPSHOT_WORK.with(std::cell::Cell::get);
+        eprintln!("geometry snapshots={}, calculation plan builds={}", work.0, work.1);
+        assert_eq!(work, (1, 1), "one geometry snapshot and one calculation plan per runner");
+    }
+}
+
+#[cfg(test)]
+mod reset_budget_review_tests {
+    use super::*;
+    fn state(name: String) -> pdfcraft_js::FieldState {
+        pdfcraft_js::FieldState::new(name, pdfcraft_js::FieldType::Text, Vec::new())
+    }
+    #[test]
+    fn reset_budget_charges_expanded_descendants() {
+        let states: Vec<_> = (0..3000).map(|i| state(format!("parent.{i}"))).collect();
+        assert!(validate_reset_work(&[], &states, &[Request::Reset(vec!["parent".into()])]).is_err());
+        assert!(validate_reset_work(&[], &states, &[Request::Reset(Vec::new())]).is_ok());
+    }
+    #[test]
+    fn reset_budget_charges_shared_prefix_comparisons() {
+        let prefix = "p".repeat(4096);
+        let states: Vec<_> = (0..128).map(|i| state(format!("{prefix}.{i}"))).collect();
+        let names = (0..128).map(|i| format!("{prefix}.missing{i}")).collect();
+        assert!(validate_reset_work(&[], &states, &[Request::Reset(names)]).is_err());
+    }
+    #[test]
+    fn reset_budget_charges_full_form_name_copies() {
+        let states = vec![state("n".repeat(140_000))];
+        let resets = vec![Request::Reset(Vec::new()); 64];
+        assert!(validate_reset_work(&[], &states, &resets).is_err());
+        assert!(validate_reset_work(&[], &states, &[Request::Reset(Vec::new())]).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod widget_budget_review_tests {
+    use super::*;
+    #[test]
+    fn reset_budget_charges_all_widgets() {
+        let widget = pdfcraft_forms::Widget {
+            obj: pdfcraft_cos::ObjRef { num: 1, generation: 0 },
+            page: None,
+            rect: [0.0; 4],
+            on_state: None,
+            state: None,
+            tab: 0,
+            locked: false,
+            hidden: false,
+            read_only: false,
+            rotation: 0,
+            caption: None,
+            mouse_up_script: None,
+            list: None,
+            round: false,
+        };
+        let mut field = Field {
+            name: "x".into(),
+            obj: widget.obj,
+            kind: FieldKind::Text,
+            value: vec![],
+            default: vec![],
+            flags: 0,
+            max_len: None,
+            options: vec![],
+            da: String::new(),
+            quadding: 0,
+            tooltip: None,
+            widgets: vec![widget; 140_000],
+            actions: Default::default(),
+            button: None,
+        };
+        let resets = vec![Request::Reset(Vec::new()); 64];
+        assert!(validate_reset_work(std::slice::from_ref(&field), &[], &resets).is_err());
+        field.widgets.truncate(1);
+        assert!(validate_reset_work(&[field], &[], &resets).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod icon_mixed_review_tests {
+    use super::*;
+    /// Mixed widgets need a field-wide icon delta even when the first icon is already correct.
+    #[test]
+    fn mixed_icons_emit_only_after_an_explicit_setter() {
+        for icon in [None, Some(7)] {
+            let mut before = pdfcraft_js::FieldState::new("go", pdfcraft_js::FieldType::Button, vec![]);
+            before.icon = icon;
+            before.icon_mixed = true;
+            let fields = vec![before.clone()];
+            let script =
+                if icon.is_some() { "getField('go').buttonSetIcon(getField('go').buttonGetIcon());" } else { "getField('go').buttonSetIcon(null);" };
+            let out = pdfcraft_js::run(
+                script,
+                &pdfcraft_js::Event::doc("Test"),
+                &pdfcraft_js::DocInfo::default(),
+                &fields,
+                &[],
+                pdfcraft_js::Limits::default(),
+            );
+            assert_eq!(out.error, None);
+            assert_eq!(changes(&[before.clone()], &out.changed)[0].icon, Some(icon));
+            assert!(changes(&[before.clone()], &[before]).is_empty());
+        }
     }
 }

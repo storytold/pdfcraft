@@ -7792,9 +7792,23 @@ fn javascript_through_tools() {
         ])
     );
     assert_eq!(r["requests"][0]["page"], 2);
+    let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "JSON.stringify(this.getPageBox())" }));
+    assert_eq!(r["result"], "[0,300,200,0]");
+    ok(&mut a, "page_set_box", json!({ "doc":doc, "pages":[1], "box":"crop", "margins":[10,20,30,40] }));
+    let cropped = ok(&mut a, "js_run", json!({ "doc":doc, "script":"JSON.stringify(getPageBox('Crop',0))" }));
+    assert_eq!(cropped["result"], "[10,260,170,20]");
+    ok(&mut a, "page_set_box", json!({ "doc":doc, "pages":[1], "box":"crop" }));
     let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
     let total = f["fields"].as_array().unwrap().iter().find(|x| x["name"] == "Total").unwrap().clone();
     assert_eq!(total["value"], "3750");
+    let calculated = ok(
+        &mut a,
+        "js_run",
+        json!({ "doc": doc, "script": "getField('Price').value = 3; getField('Qty').value = 2; calculateNow(); console.println(getField('Total').value);" }),
+    );
+    assert!(calculated["console"].as_array().unwrap().iter().any(|line| line == "6"), "{calculated}");
+    let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    assert_eq!(f["fields"].as_array().unwrap().iter().find(|x| x["name"] == "Total").unwrap()["value"], "6");
     let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "nope()" }));
     assert!(r["error"].as_str().unwrap().contains("nope"));
     assert_eq!(r["document_errors"], json!([]));
@@ -7803,6 +7817,26 @@ fn javascript_through_tools() {
     let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "money(5)" }));
     assert_eq!((r["error"].clone(), r["result"].clone()), (json!(null), json!("EUR 5,00")));
     assert!(r["document_errors"][0].as_str().unwrap().starts_with("document script 2: TypeError"), "{r}");
+    ok(
+        &mut a,
+        "form_add_field",
+        json!({ "doc": doc, "page": 1, "type": "button", "rect": [20, 150, 120, 180], "name": "CaptionButton", "caption": "Before" }),
+    );
+    let r = ok(
+        &mut a,
+        "js_run",
+        json!({ "doc": doc, "field": "CaptionButton", "script": "getField('CaptionButton').buttonSetCaption('Continue'); getField('CaptionButton').buttonGetCaption();" }),
+    );
+    assert_eq!(r["result"], "Continue");
+    let routed = ok(&mut a, "js_run", json!({ "doc":doc, "field":"CaptionButton", "script":"event.name+'|'+event.targetName" }));
+    assert_eq!(routed["result"], "Mouse Up|CaptionButton");
+    assert_eq!(
+        ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"].as_array().unwrap().iter().find(|f| f["name"] == "CaptionButton").unwrap()["caption"],
+        "Continue"
+    );
+    let bad_face =
+        ok(&mut a, "js_run", json!({ "doc": doc, "field": "CaptionButton", "script": "getField('CaptionButton').buttonSetCaption('Ignored', 1);" }));
+    assert!(bad_face["error"].as_str().is_some_and(|e| e.contains("normal button face")));
     assert_eq!(ok(&mut a, "js_enabled", json!({ "enabled": false }))["enabled"], false);
     assert!(a.call("js_run", &json!({ "doc": doc, "script": "1" })).is_err());
 }
@@ -7891,6 +7925,14 @@ fn detecting_form_fields_preserves_content_piece_comments() {
         } else {
             json!([])
         };
+        let check_inventory = |a: &mut Automation, doc| {
+            let mut fields = ok(a, "form_fields", json!({"doc": doc}))["fields"].clone();
+            for field in fields.as_array_mut().unwrap() {
+                assert!(field["field_id"].as_u64().is_some());
+                field.as_object_mut().unwrap().remove("field_id");
+            }
+            assert_eq!(fields, inventory);
+        };
         let check_text = |a: &mut Automation, doc| {
             let text = page_text(a, doc).join(" ");
             assert_eq!(text.split_whitespace().collect::<Vec<_>>(), ["FIRST", "LAST"]);
@@ -7911,12 +7953,12 @@ fn detecting_form_fields_preserves_content_piece_comments() {
         assert_eq!(ok(&mut a, "form_detect_fields", json!({"doc": doc, "add": false}))["fields"], candidates);
         assert_eq!(ok(&mut a, "form_fields", json!({"doc": doc}))["fields"], json!([]));
         assert_eq!(ok(&mut a, "form_detect_fields", json!({"doc": doc}))["fields"], candidates);
-        assert_eq!(ok(&mut a, "form_fields", json!({"doc": doc}))["fields"], inventory);
+        check_inventory(&mut a, doc);
         assert_eq!(ok(&mut a, "form_detect_fields", json!({"doc": doc}))["fields"], json!([]));
         ok(&mut a, "doc_save", json!({"doc": doc, "path": "saved.pdf"}));
         let mut reopened = auto(&dir);
         let again = ok(&mut reopened, "doc_open", json!({"path": "saved.pdf"}))["doc"].as_u64().unwrap();
-        assert_eq!(ok(&mut reopened, "form_fields", json!({"doc": again}))["fields"], inventory);
+        check_inventory(&mut reopened, again);
         check_text(&mut reopened, again);
         check_render(&mut reopened, again);
         std::fs::remove_dir_all(dir).unwrap();

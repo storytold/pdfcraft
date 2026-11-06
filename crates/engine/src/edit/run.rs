@@ -77,7 +77,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Err(EditError::NotPermitted("comments"))
             }
         }
-        Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::SetFieldImage { .. } | Edit::ApplyScriptChanges { .. } | Edit::XfaEvent { .. } => {
+        Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::SetFieldImage { .. } | Edit::SetFieldImageTarget { .. } | Edit::ApplyScriptChanges { .. } | Edit::XfaEvent { .. } => {
             if p.fill_forms() {
                 Ok(())
             } else {
@@ -624,7 +624,14 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             cx.xfa_ran_away |= run.ran_away;
             ran.map_err(EditError::Invalid)?;
         }
-        Edit::SetFieldImage { name, image } => {
+        Edit::SetFieldImage { name, image } | Edit::SetFieldImageTarget { name, image, .. } => {
+            let object = match edit {
+                Edit::SetFieldImageTarget { object, .. } => Some(*object),
+                _ => None,
+            };
+            if object.is_some_and(|object| !pdfcraft_forms::fields(doc).iter().any(|f| f.name == *name && f.obj == object)) {
+                return Err(EditError::Invalid("the selected image field is no longer available".into()));
+            }
             let (img, _) = embed_image(doc, name, image)?;
             let px = match &*doc.get(img) {
                 pdfcraft_cos::Object::Stream(s) => (s.dict.int(b"Width").unwrap_or(1) as u32, s.dict.int(b"Height").unwrap_or(1) as u32),
@@ -641,7 +648,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 let Some(content_type) = image_content_type(image) else {
                     return Err(EditError::Invalid(format!("{name}: an XFA form keeps a PNG, JPEG, GIF, BMP or TIFF picture; choose one of those")));
                 };
-                pdfcraft_forms::set_button_icon(doc, name, img, px)?;
+                pdfcraft_forms::set_button_icon_target(doc, name, object, img, px)?;
                 let som = pdfcraft_xfa::fields_by_som(doc).into_iter().find(|(_, n)| n == name).map(|(s, _)| s).unwrap_or_else(|| name.clone());
                 let path = match cx.xfa.as_deref() {
                     Some(tpl) => pdfcraft_xfa::data_path(tpl, &som),
@@ -656,7 +663,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 cx.xfa_out.errors.extend(r.warnings);
                 xfa_after_data_change(doc, cx, false)?;
             } else {
-                pdfcraft_forms::set_button_icon(doc, name, img, px)?;
+                pdfcraft_forms::set_button_icon_target(doc, name, object, img, px)?;
             }
         }
         Edit::ResetForm { names } => {
@@ -680,6 +687,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         // As after a script edit: the values the new order gives show at once.
         Edit::SetCalculationOrder { names } => {
             pdfcraft_forms::set_calculation_order(doc, names)?;
+            if let Some(js) = cx.js.as_mut() {
+                js.invalidate_calculations();
+            }
             match cx.js.as_mut() {
                 Some(js) => pdfcraft_forms::recalculate_with(doc, js)?,
                 None => pdfcraft_forms::recalculate(doc)?,
@@ -707,6 +717,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::SetFieldScript { name, event, script } => {
             pdfcraft_forms::set_field_script(doc, name, event, script.as_deref())?;
+            if let Some(js) = cx.js.as_mut() {
+                js.invalidate_calculations();
+            }
             match cx.js.as_mut() {
                 Some(js) => pdfcraft_forms::recalculate_with(doc, js)?,
                 None => pdfcraft_forms::recalculate(doc)?,
@@ -926,6 +939,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::Batch { edits, .. } => {
             for e in edits {
                 run_edit(doc, e, cx)?;
+                if let Some(js) = cx.js.as_mut() {
+                    js.refresh_after_batch_edit(doc, e);
+                }
             }
         }
     }

@@ -314,7 +314,18 @@ pub fn redraw_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
 /// other widgets' appearances as they are), or for every widget when `only` is `None`. Fails with
 /// `FormError::NoSuchField` when no field is named `name`.
 pub(super) fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>) -> Result<(), FormError> {
-    let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    redraw_widgets_target(doc, name, None, only)
+}
+
+pub(crate) fn redraw_field_object(doc: &mut Document, name: &str, object: ObjRef) -> Result<(), FormError> {
+    redraw_widgets_target(doc, name, Some(object), None)
+}
+
+pub(super) fn redraw_widgets_target(doc: &mut Document, name: &str, object: Option<ObjRef>, only: Option<usize>) -> Result<(), FormError> {
+    let f = fields(doc)
+        .into_iter()
+        .find(|f| f.name == name && object.is_none_or(|obj| f.obj == obj))
+        .ok_or_else(|| FormError::NoSuchField(name.into()))?;
     let mut undrawn = false;
     for (index, w) in f.widgets.iter().enumerate() {
         if only.is_some_and(|only| only != index) {
@@ -415,8 +426,12 @@ pub(crate) fn button_appearance(doc: &Document, w: &Widget, field_da: &str) -> (
             && x1 > x0
             && y1 > y0
         {
-            // Proportional, as large as fits (Acrobat's default icon placement), centred.
-            let k = ((width - 2.0) / (x1 - x0)).min((height - 2.0) / (y1 - y0)).max(0.0);
+            // /IF /FB fits the icon to the whole widget, including its border area.
+            let fit_bounds = mk.get(b"IF").is_some_and(|fit| {
+                doc.resolve(fit).as_dict().and_then(|fit| fit.get(b"FB")).is_some_and(|flag| matches!(&*doc.resolve(flag), Object::Bool(true)))
+            });
+            let inset = if fit_bounds { 0.0 } else { 2.0 };
+            let k = ((width - inset) / (x1 - x0)).min((height - inset) / (y1 - y0)).max(0.0);
             let (dx, dy) = ((width - (x1 - x0) * k) / 2.0 - x0 * k, (height - (y1 - y0) * k) / 2.0 - y0 * k);
             content.extend(format!("q {k:.6} 0 0 {k:.6} {dx:.3} {dy:.3} cm /Icon Do Q\n").bytes());
             xobjects.set(b"Icon".to_vec(), Object::Ref(icon));
@@ -443,7 +458,15 @@ pub(crate) fn button_appearance(doc: &Document, w: &Widget, field_da: &str) -> (
 /// Give a push button (an image field) the picture `image` (an image XObject of `px` pixels):
 /// it becomes the button's icon (`/MK /I`) and its appearance.
 pub fn set_button_icon(doc: &mut Document, name: &str, image: ObjRef, px: (u32, u32)) -> Result<(), FormError> {
-    let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    set_button_icon_target(doc, name, None, image, px)
+}
+
+/// Give the exact field its image without changing another field with the same name.
+pub fn set_button_icon_target(doc: &mut Document, name: &str, object: Option<ObjRef>, image: ObjRef, px: (u32, u32)) -> Result<(), FormError> {
+    let f = fields(doc)
+        .into_iter()
+        .find(|f| f.name == name && object.is_none_or(|obj| f.obj == obj))
+        .ok_or_else(|| FormError::NoSuchField(name.into()))?;
     if f.kind != FieldKind::PushButton {
         return invalid(format!("{name} is not a button or image field"));
     }
@@ -464,7 +487,7 @@ pub fn set_button_icon(doc: &mut Document, name: &str, image: ObjRef, px: (u32, 
         }
         doc.update_dict(wd.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
     }
-    redraw_field(doc, name)
+    redraw_field_object(doc, name, f.obj)
 }
 
 fn empty_box(doc: &Document, w: &Widget) -> Stream {

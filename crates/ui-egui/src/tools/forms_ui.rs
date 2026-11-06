@@ -64,8 +64,8 @@ pub struct FormView {
     pub unbaked: HashSet<(String, usize)>,
     /// A message for the app to show (e.g. "buttons run JavaScript").
     pub notice: Option<FormNotice>,
-    /// A push button was clicked: (its field name, what it does).
-    pub button: Option<(String, pdfcraft_engine::form_scripts::ButtonAction)>,
+    /// A push button was clicked: (its field name, exact PDF identity, what it does).
+    pub button: Option<(String, u64, pdfcraft_engine::form_scripts::ButtonAction)>,
     /// The focused check box or radio button was clicked. It toggles once no other edit is
     /// queued: the text the click committed goes first, and the toggle is dropped if that text
     /// is refused and its field reopens.
@@ -113,7 +113,8 @@ pub(crate) fn draft_text(f: &FormField) -> String {
     value
 }
 
-fn open_focus(f: &FormField, widget: usize) -> Focus {
+/// Focus a named visible form field using its current page and widget geometry.
+pub(crate) fn open_focus(f: &FormField, widget: usize) -> Focus {
     Focus {
         name: f.name.clone(),
         widget,
@@ -231,9 +232,18 @@ pub(crate) fn page_input(
     match f.kind {
         _ if f.read_only() || w.read_only => view.forms.notice = Some(FormNotice::ReadOnly(f.name.clone())),
         FormFieldKind::PushButton => match &f.button {
-            Some(a) => view.forms.button = Some((f.name.clone(), a.clone())),
+            Some(a) => view.forms.button = Some((f.name.clone(), pdfcraft_engine::js::field_object_id(f.obj), a.clone())),
             None => view.forms.notice = Some(FormNotice::NoAction(f.name.clone())),
         },
+        FormFieldKind::Text if let Some(script) = &w.mouse_up_script => {
+            // Close the editor so the script can replace its value without a stale draft.
+            commit(view, form);
+            view.forms.button = Some((
+                f.name.clone(),
+                pdfcraft_engine::js::field_object_id(f.obj),
+                pdfcraft_engine::form_scripts::ButtonAction::Script(script.clone()),
+            ));
+        }
         FormFieldKind::Signature => view.sign.field = Some(f.name.clone()),
         FormFieldKind::CheckBox | FormFieldKind::Radio => {
             // The box takes the focus, as in Acrobat, so Tab goes on from it (#2223). The overlay

@@ -227,6 +227,27 @@ fn value_for(f: &FormField, v: &Value) -> Result<FieldValue> {
 }
 
 impl Automation {
+    /// Import an image using an optional exact field ID, preserving the legacy name-only tool.
+    pub(crate) fn form_set_image(&mut self, a: &Args) -> Result<Value> {
+        let name = a.str("field")?.to_owned();
+        let object = a
+            .0
+            .get("field_id")
+            .map(|value| -> Result<pdfcraft_cos::ObjRef> {
+                let key =
+                    value.as_u64().filter(|key| *key < 1u64 << 48).ok_or_else(|| bad("field_id must be an integer between 0 and 281474976710655"))?;
+                Ok(pdfcraft_cos::ObjRef::new((key >> 16) as u32, key as u16))
+            })
+            .transpose()?;
+        let path = self.resolve(a.str("path")?, false)?;
+        let image = std::sync::Arc::new(crate::paths::read_input(&path)?);
+        let edit = match object {
+            Some(object) => Edit::SetFieldImageTarget { name, object, image },
+            None => Edit::SetFieldImage { name, image },
+        };
+        self.apply(a, edit)
+    }
+
     pub(crate) fn form_fields(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let out: Vec<Value> = doc
@@ -241,6 +262,7 @@ impl Automation {
                 });
                 let mut v = json!({
                     "name": f.name,
+                    "field_id": pdfcraft_engine::js::field_object_id(f.obj),
                     "type": kind_name(f.kind),
                     "value": match f.kind {
                         FormFieldKind::CheckBox => json!(!f.value.is_empty()),

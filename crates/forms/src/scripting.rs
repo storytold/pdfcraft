@@ -37,11 +37,24 @@ impl FieldEvent {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FieldChange {
     pub name: String,
+    /// Optional exact object target for malformed forms with duplicate field names.
+    pub object: Option<ObjRef>,
     pub value: Option<Vec<String>>,
     pub read_only: Option<bool>,
     pub required: Option<bool>,
     /// `display.visible` 0, `hidden` 1, `noPrint` 2, `noView` 3.
     pub display: Option<i32>,
+    /// Normal push-button caption, applied to every widget of the field.
+    pub caption: Option<String>,
+    pub text_color: Option<Vec<String>>,
+    pub fill_color: Option<Vec<String>>,
+    pub rect: Option<[f64; 4]>,
+    pub stroke_color: Option<Vec<String>>,
+    pub text_size: Option<f64>,
+    pub line_width: Option<f64>,
+    pub border_style: Option<String>,
+    pub user_name: Option<String>,
+    pub icon: Option<Option<u64>>,
 }
 
 /// What a script did.
@@ -59,7 +72,7 @@ pub struct ScriptResult {
 /// Runs field scripts (JavaScript).
 pub trait Scripts {
     /// Run `script` for `event` on `target`, whose value is `value`; `fields` is the whole form.
-    fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field]) -> ScriptResult;
+    fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], doc: &Document) -> ScriptResult;
 
     /// [`Self::run`] again for an appearance, with dates written in English names (`util.printd`)
     /// because no font of the field can draw the date language's (#5303); what it logs was
@@ -72,6 +85,7 @@ pub trait Scripts {
         _target: &Field,
         _value: &str,
         _fields: &[Field],
+        _doc: &Document,
     ) -> Option<ScriptResult> {
         None
     }
@@ -81,7 +95,8 @@ pub trait Scripts {
 pub struct NoScripts;
 
 impl Scripts for NoScripts {
-    fn run(&mut self, _: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field]) -> ScriptResult {
+    /// Provide the no-JavaScript fallback: accept the current field value without additional script mutations.
+    fn run(&mut self, _: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field], _: &Document) -> ScriptResult {
         ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None }
     }
 }
@@ -96,8 +111,8 @@ pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut d
     ] {
         let Some(js) = script else { continue };
         let all = fields(doc);
-        let r = scripts.run(event, js, f, &v, &all);
-        apply_changes(doc, &r.changes, &f.name)?;
+        let r = scripts.run(event, js, f, &v, &all, doc);
+        apply_changes(doc, &r.changes, &f.name, Some(f.obj))?;
         if !r.rc {
             return Err(FormError::Invalid(r.message.unwrap_or_else(|| format!("{default} [ {} ]", f.name))));
         }
@@ -109,42 +124,96 @@ pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut d
 /// The text a custom Format script shows for `value`, if the field has one.
 pub(crate) fn formatted(doc: &Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Option<String> {
     let js = f.actions.scripts.format.as_ref()?;
-    let r = scripts.run(FieldEvent::Format, js, f, value, &fields(doc));
+    let r = scripts.run(FieldEvent::Format, js, f, value, &fields(doc), doc);
     Some(r.value)
+}
+
+/// Immediate and aliased MK references of one widget; cycles and depth are bounded.
+fn widget_mk_refs(doc: &Document, widget: ObjRef) -> Vec<ObjRef> {
+    let mut value = doc.get(widget).as_dict().and_then(|d| d.get(b"MK")).cloned();
+    let mut seen = Vec::new();
+    for _ in 0..64 {
+        let Some(Object::Ref(reference)) = value else { break };
+        if seen.contains(&reference) {
+            break;
+        }
+        seen.push(reference);
+        value = Some(doc.get(reference).as_ref().clone());
+    }
+    seen
+}
+
+/// Keep target widgets' shared indirect MK in place, while outside widgets retain old colors.
+fn protect_other_mk_owners(doc: &mut Document, field: &Field, owners: &std::collections::HashMap<ObjRef, Vec<ObjRef>>) -> Result<(), FormError> {
+    let own: HashSet<_> = field.widgets.iter().map(|w| w.obj).collect();
+    let refs: HashSet<_> = field.widgets.iter().filter_map(|w| doc.get(w.obj).as_dict().and_then(|d| d.reference(b"MK"))).collect();
+    for reference in refs {
+        for widget in owners.get(&reference).into_iter().flatten().filter(|w| !own.contains(w)) {
+            if !widget_mk_refs(doc, *widget).contains(&reference) {
+                continue;
+            }
+            let mk =
+                doc.get(*widget).as_dict().and_then(|d| d.get(b"MK")).map(|m| doc.resolve(m)).and_then(|v| v.as_dict().cloned()).unwrap_or_default();
+            doc.update_dict(*widget, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
+        }
+    }
+    Ok(())
 }
 
 /// [`formatted`] with dates in English names, for widgets whose fonts can't draw the date
 /// language's; `None` when the field has no Format script or the English run didn't happen.
 pub(crate) fn formatted_in_english(doc: &Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Option<String> {
     let js = f.actions.scripts.format.as_ref()?;
-    scripts.rerun_with_english_dates(FieldEvent::Format, js, f, value, &fields(doc)).map(|r| r.value)
+    scripts.rerun_with_english_dates(FieldEvent::Format, js, f, value, &fields(doc), doc).map(|r| r.value)
 }
 
 /// Apply script changes to other fields (values written without re-running their scripts;
-/// read-only, required and visibility as flags). `except` is the event's own field, whose value
-/// the event sets.
-pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except: &str) -> Result<(), FormError> {
+/// read-only, required and visibility as flags; button captions). `except` is the event's own
+/// field, whose value the event sets.
+pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except: &str, except_object: Option<ObjRef>) -> Result<(), FormError> {
     if changes.is_empty() {
         return Ok(());
     }
-    let all = fields(doc);
+    // Validate every colour before applying any part of the script's changes.
     for c in changes {
-        let Some(f) = all.iter().find(|f| f.name == c.name) else { continue };
+        if let Some(color) = &c.text_color {
+            js_rgb(color)?;
+        }
+        for color in [&c.fill_color, &c.stroke_color].into_iter().flatten() {
+            js_color(color)?;
+        }
+    }
+    let all = fields(doc);
+    let mut mk_owners: std::collections::HashMap<ObjRef, Vec<ObjRef>> = std::collections::HashMap::new();
+    if changes.iter().any(|c| c.fill_color.is_some() || c.stroke_color.is_some()) {
+        for field in &all {
+            for widget in &field.widgets {
+                for reference in widget_mk_refs(doc, widget.obj) {
+                    mk_owners.entry(reference).or_default().push(widget.obj);
+                }
+            }
+        }
+    }
+
+    for c in changes {
+        let Some(f) = all.iter().find(|f| f.name == c.name && c.object.is_none_or(|obj| f.obj == obj)) else { continue };
         if let Some(v) = &c.value
-            && c.name != except
+            && !except_object.map_or(c.name == except, |obj| f.obj == obj)
             && *v != f.value
         {
             let value = match f.kind {
-                FieldKind::Text => FieldValue::Text(v.first().cloned().unwrap_or_default()),
-                FieldKind::CheckBox => FieldValue::Check(!v.is_empty()),
-                FieldKind::Radio => FieldValue::Radio(v.first().cloned()),
-                FieldKind::Combo | FieldKind::List => FieldValue::Choice(v.clone()),
-                _ => continue,
+                FieldKind::Text => Some(FieldValue::Text(v.first().cloned().unwrap_or_default())),
+                FieldKind::CheckBox => Some(FieldValue::Check(!v.is_empty())),
+                FieldKind::Radio => Some(FieldValue::Radio(v.first().cloned())),
+                FieldKind::Combo | FieldKind::List => Some(FieldValue::Choice(v.clone())),
+                _ => None,
             };
-            let mut tmp = f.clone();
-            tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
-            tmp.actions = Default::default();
-            crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
+            if let Some(value) = value {
+                let mut tmp = f.clone();
+                tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
+                tmp.actions = Default::default();
+                crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
+            }
         }
         let mut ff = f.flags;
         for (on, bit) in [(c.read_only, flags::READ_ONLY), (c.required, flags::REQUIRED)] {
@@ -173,15 +242,134 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
                 }
             }
         }
+        if c.fill_color.is_some() || c.stroke_color.is_some() {
+            protect_other_mk_owners(doc, f, &mk_owners)?;
+        }
+        let appearance = crate::LookPatch {
+            text: c.text_color.as_deref().map(js_rgb).transpose()?,
+            fill: c.fill_color.as_deref().map(js_color).transpose()?,
+            border: c.stroke_color.as_deref().map(js_color).transpose()?,
+            width: c.line_width,
+            style: c
+                .border_style
+                .as_deref()
+                .map(|style| match style {
+                    "solid" => Ok(crate::BorderStyle::Solid),
+                    "dashed" => Ok(crate::BorderStyle::Dashed),
+                    "beveled" => Ok(crate::BorderStyle::Beveled),
+                    "inset" => Ok(crate::BorderStyle::Inset),
+                    "underline" => Ok(crate::BorderStyle::Underline),
+                    _ => Err(FormError::Invalid("unsupported borderStyle".into())),
+                })
+                .transpose()?,
+            ..Default::default()
+        };
+        if appearance != crate::LookPatch::default() || c.text_size.is_some() || c.user_name.is_some() {
+            crate::author::set_props_object(
+                doc,
+                &c.name,
+                f.obj,
+                &crate::FieldProps {
+                    appearance: (appearance != crate::LookPatch::default()).then_some(appearance),
+                    font_size: c.text_size,
+                    tooltip: c.user_name.clone(),
+                    ..Default::default()
+                },
+            )?;
+        }
+        if let Some(rect) = c.rect {
+            if !rect.iter().all(|v| v.is_finite() && v.abs() <= 1e7) || rect[2] < rect[0] || rect[3] < rect[1] {
+                return Err(FormError::Invalid("invalid script rectangle".into()));
+            }
+            let widget = f.widgets.first().ok_or_else(|| FormError::Invalid("field has no widget rectangle".into()))?;
+            doc.update_dict(widget.obj, |d| d.set(b"Rect".to_vec(), Object::Array(rect.into_iter().map(Object::Real).collect())))?;
+            crate::author::redraw_field_object(doc, &c.name, f.obj)?;
+        }
+        if let Some(icon) = c.icon {
+            if f.kind != FieldKind::PushButton {
+                return Err(FormError::Invalid("icons require a push button".into()));
+            }
+            if icon.is_some_and(|id| id >> 48 != 0) {
+                return Err(FormError::Invalid("invalid button icon handle".into()));
+            }
+            let reference = icon.map(|id| pdfcraft_cos::ObjRef::new((id >> 16) as u32, id as u16));
+            if let Some(reference) = reference {
+                let obj = doc.get(reference);
+                let valid = match &*obj {
+                    Object::Stream(stream) => stream.dict.name(b"Subtype") == Some(b"Form".as_slice()),
+                    _ => false,
+                };
+                if !valid {
+                    return Err(FormError::Invalid("button icon is not a form in this document".into()));
+                }
+            }
+            for widget in &f.widgets {
+                let mut mk = doc
+                    .get(widget.obj)
+                    .as_dict()
+                    .and_then(|d| d.get(b"MK").map(|m| doc.resolve(m)))
+                    .and_then(|m| m.as_dict().cloned())
+                    .unwrap_or_default();
+                match reference {
+                    Some(r) => mk.set(b"I".to_vec(), Object::Ref(r)),
+                    None => {
+                        mk.remove(b"I");
+                    }
+                }
+                doc.update_dict(widget.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
+            }
+            crate::author::redraw_field_object(doc, &c.name, f.obj)?;
+        }
+        if let Some(caption) = &c.caption {
+            if f.kind != FieldKind::PushButton {
+                return Err(FormError::Invalid(format!("{} is not a push button", f.name)));
+            }
+            // An unindexed Field object writes widget properties to every child, not just
+            // the first widget used by the getter. Keep each widget's other MK/AP entries.
+            for (index, widget) in f.widgets.iter().enumerate() {
+                if widget.caption.as_deref() != Some(caption.as_str()) {
+                    crate::author::set_props_object(
+                        doc,
+                        &f.name,
+                        f.obj,
+                        &crate::FieldProps { caption: Some((index, caption.clone())), ..Default::default() },
+                    )?;
+                }
+            }
+        }
     }
     Ok(())
 }
 
-/// Apply what a button or console script changed (values, read-only, required, visibility),
-/// then recalculate.
+/// Validate bounded Acrobat colour components and convert gray/RGB/CMYK or transparency to the editor representation.
+fn js_color(values: &[String]) -> Result<Option<[f64; 3]>, FormError> {
+    let invalid = || FormError::Invalid("JavaScript colours require T, G, RGB or CMYK with finite components between 0 and 1".into());
+    let (space, parts) = values.split_first().ok_or_else(invalid)?;
+    let numbers = parts
+        .iter()
+        .map(|v| v.parse::<f64>().ok().filter(|v| v.is_finite() && (0.0..=1.0).contains(v)).ok_or_else(invalid))
+        .collect::<Result<Vec<_>, _>>()?;
+    match (space.as_str(), numbers.as_slice()) {
+        ("T", []) => Ok(None),
+        ("G", [g]) => Ok(Some([*g; 3])),
+        ("RGB", [r, g, b]) => Ok(Some([*r, *g, *b])),
+        ("CMYK", [c, m, y, k]) => Ok(Some([1.0 - (c + k).min(1.0), 1.0 - (m + k).min(1.0), 1.0 - (y + k).min(1.0)])),
+        _ => Err(invalid()),
+    }
+}
+/// Require an opaque validated colour for text, which cannot use the transparent colour space.
+fn js_rgb(values: &[String]) -> Result<[f64; 3], FormError> {
+    js_color(values)?.ok_or_else(|| FormError::Invalid("textColor cannot be transparent".into()))
+}
+
+/// Apply button/console field and appearance changes, recalculating after value writes.
 pub fn apply_script_changes(doc: &mut Document, changes: &[FieldChange], scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    apply_changes(doc, changes, "")?;
-    crate::recalculate_with(doc, scripts)?;
+    apply_changes(doc, changes, "", None)?;
+    // Acrobat's automatic calculation is driven by value changes. A keypad caption,
+    // position or visibility update must not execute every calculated field again.
+    if changes.iter().any(|change| change.value.is_some()) {
+        crate::recalculate_with(doc, scripts)?;
+    }
     Ok(())
 }
 

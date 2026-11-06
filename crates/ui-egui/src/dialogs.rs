@@ -80,8 +80,10 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
         ctx.set_cursor_icon(egui::CursorIcon::Default);
     }
     dialogs(app, ctx);
-    // Last, so it sits above Document Properties when Security's Unlock… asked for it.
+    // Above Document Properties when Security's Unlock… asked for it; script prompts stay on top.
     unlock(app, ctx);
+    #[cfg(not(target_arch = "wasm32"))]
+    app.show_script_dialog(ctx);
 }
 
 /// Draw the active modal dialog and apply the action the user chose.

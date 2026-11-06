@@ -25,6 +25,12 @@ impl Session {
         let js_off = self.js_off;
         let xfa_time_scale = self.xfa_time_scale.unwrap_or(1);
         let doc = self.doc_mut(id)?;
+        // An edit must never read globals from a completed-but-unapplied button invocation.
+        // Fork its realm before any edit-triggered calculation, even if the edit later fails.
+        #[cfg(not(target_arch = "wasm32"))]
+        if doc.js_runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.is_pending() {
+            doc.js_runtime = Default::default();
+        }
         doc.edit_notices.clear();
         let name = doc.name.clone();
         let is_xfa = doc.info.xfa.is_some();
@@ -65,7 +71,12 @@ impl Session {
         }
         let mut next = editor.cos.clone();
         if !js_off && uses_scripts(&edit) {
-            cx.js = Some(js::JsRunner::new(&next, &name));
+            let mut runner = js::JsRunner::new(&next, &name);
+            runner.runtime = doc.js_runtime.clone();
+            runner.doc.zoom = doc.js_zoom;
+            runner.doc.runtime_highlight = doc.js_highlight;
+            runner.doc.page = doc.js_page;
+            cx.js = Some(runner);
         }
         cx.renamed_fields.clear();
         cx.redaction_overlays.clear();
@@ -208,6 +219,9 @@ impl Session {
             return Err(e);
         }
         doc.dirty = true;
+        if let Ok(mut runtime) = doc.js_runtime.lock() {
+            runtime.sync_field_ids(doc.form.iter().map(|f| crate::js::field_object_id(f.obj)));
+        }
         doc.generation += 1;
         doc.edit_notices = notices;
         if !cx.xfa_removed.is_empty() {
@@ -256,6 +270,9 @@ impl Session {
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
+        if let Ok(mut runtime) = doc.js_runtime.lock() {
+            runtime.sync_field_ids(doc.form.iter().map(|f| crate::js::field_object_id(f.obj)));
+        }
         doc.generation += 1;
         Ok(label)
     }
@@ -285,6 +302,9 @@ impl Session {
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
+        if let Ok(mut runtime) = doc.js_runtime.lock() {
+            runtime.sync_field_ids(doc.form.iter().map(|f| crate::js::field_object_id(f.obj)));
+        }
         doc.generation += 1;
         Ok(label)
     }

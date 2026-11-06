@@ -5462,6 +5462,82 @@ fn form_javascript_validates_calculates_and_formats() {
     assert!(s.run_javascript(id, "1", None).is_err());
 }
 
+#[test]
+/// Synchronous calculation exposes pending values immediately and persists the invocation as one undo transaction.
+fn calculate_now_updates_live_fields_in_one_undo_step() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("calculate-now.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let value = |s: &Session, name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
+    let before_price = value(&s, "price");
+    let before_qty = value(&s, "qty");
+    let out = s
+        .run_javascript(
+            id,
+            "getField('price').value = 3; getField('qty').value = 2; calculateNow(); var seen = getField('total').value; console.println(seen);",
+            Some("go"),
+        )
+        .unwrap();
+    assert!(out.console.iter().any(|line| line == "6"), "next statement sees calculation result: {out:?}");
+    let total = s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value.clone();
+    assert_eq!(total, ["6"]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
+    s.undo(id).unwrap();
+    assert_eq!(value(&s, "price"), before_price);
+    assert_eq!(value(&s, "qty"), before_qty);
+    assert!(s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value.is_empty());
+    s.redo(id).unwrap();
+    assert_eq!(value(&s, "price"), ["3"]);
+    assert_eq!(value(&s, "qty"), ["2"]);
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value, ["6"]);
+    let bytes = s.save_bytes(id).unwrap();
+    let reopened = s.open("reopened.pdf", None, bytes, None).unwrap();
+    assert_eq!(s.get(reopened).unwrap().form.iter().find(|f| f.name == "total").unwrap().value, ["6"]);
+}
+
+#[test]
+/// Respect explicit calculation order, restore the outer event and stop recursive calculation requests.
+fn calculate_now_uses_calculation_order_and_bounds_recursion() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("calculate-chain.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    for (name, script) in
+        [("qty", "event.value = Number(getField('price').value) + 1;"), ("total", "event.value = Number(getField('qty').value) * 2;")]
+    {
+        s.apply(id, Edit::SetFieldScript { name: name.into(), event: "calculate".into(), script: Some(script.into()) }).unwrap();
+    }
+    s.apply(id, Edit::SetCalculationOrder { names: vec!["qty".into(), "total".into()] }).unwrap();
+    let out = s.run_javascript(id, "getField('price').value = 3; calculateNow(); console.println(getField('total').value);", None).unwrap();
+    assert!(out.error.is_none(), "{out:?}");
+    assert!(out.console.iter().any(|line| line == "8"), "{out:?}");
+
+    s.set_javascript(false); // Installing scripts must not change the 4/8 starting values.
+    for (name, script) in
+        [("qty", "event.value = Number(getField('total').value) + 1;"), ("total", "event.value = Number(getField('qty').value) + 1;")]
+    {
+        s.apply(id, Edit::SetFieldScript { name: name.into(), event: "calculate".into(), script: Some(script.into()) }).unwrap();
+    }
+    s.set_javascript(true);
+    let starting = |name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
+    assert_eq!(starting("qty"), ["4"]);
+    assert_eq!(starting("total"), ["8"]);
+    let cyclic =
+        s.run_javascript(id, "calculateNow(); console.println(getField('qty').value); console.println(getField('total').value);", None).unwrap();
+    assert!(cyclic.error.is_none(), "a cyclic calculation runs once in order: {cyclic:?}");
+    let field = |name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
+    assert_eq!(cyclic.console, ["9", "10"], "the explicit ordered pass runs exactly once");
+    // Applying the value delta invokes the existing automatic form-recalculation pass.
+    assert_eq!(field("qty"), ["11"]);
+    assert_eq!(field("total"), ["12"]);
+
+    s.apply(id, Edit::SetFieldScript { name: "total".into(), event: "calculate".into(), script: Some("calculateNow(); event.value = 12;".into()) })
+        .unwrap();
+    let out = s.run_javascript(id, "calculateNow();", None).unwrap();
+    assert!(out.error.as_deref().is_some_and(|e| e.contains("calculateNow recursion limit exceeded")), "{out:?}");
+    s.set_javascript(false);
+    assert!(s.run_javascript(id, "calculateNow();", None).is_err());
+    s.set_javascript(true);
+    assert!(s.run_javascript(id, "1 + 1", None).unwrap().error.is_none());
+}
+
 /// XFA forms check `xfa_installed` and `xfa_version` in a document script that runs before
 /// each of their scripts, and alert when either is missing.
 #[test]
@@ -5481,20 +5557,19 @@ fn scripts_in_an_xfa_form_see_the_xfa_plugin_installed() {
 /// helper stays defined, the form calculates, and the error is reported once.
 #[test]
 fn a_document_script_that_throws_still_lets_the_form_calculate() {
-    let helpers =
-        "function times\\(a, b\\) { return a * b; } this.getField\\('go'\\).buttonSetIcon\\(this.getField\\('go'\\).buttonGetIcon\\(\\)\\);";
+    let helpers = "function times\\(a, b\\) { return a * b; } this.getField\\('go'\\).missingTestMethod\\(\\);";
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("order.pdf", None, Arc::new(scripted_form_with(helpers)), None).unwrap();
-    let _ = s.take_js_output(id);
+    let initial = s.take_js_output(id);
+    assert_eq!(initial.doc_errors.len(), 1, "the initializer error is reported at open");
     s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) }).unwrap();
     let total = s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value.clone();
     assert_eq!(total, ["10"], "calculated through the helper the failing script defined");
     let out = s.take_js_output(id);
-    assert_eq!(out.errors.len(), 1, "reported once, not once per script: {out:?}");
-    assert!(out.errors[0].starts_with("document script 1: TypeError"), "{out:?}");
-    // The console runs too, and says which document script failed.
+    assert!(out.errors.is_empty(), "the initializer is not replayed: {out:?}");
+    // The console runs too, without replaying the failed initializer.
     let o = s.run_javascript(id, "times(2, 3)", None).unwrap();
-    assert_eq!((o.error, o.result.as_deref(), o.doc_errors.len()), (None, Some("6"), 1));
+    assert_eq!((o.error, o.result.as_deref(), o.doc_errors.len()), (None, Some("6"), 0));
 }
 
 #[test]
@@ -5567,6 +5642,24 @@ fn inactive_xfa_and_ordinary_pdfs_keep_document_helpers_and_alerts() {
         assert_eq!(out.result.as_deref(), Some("6"));
         assert_eq!(out.alerts, [js::Message::plain("PDF message")]);
     }
+}
+
+#[test]
+/// Read inherited page boxes without dirtying the document and reject invalid box/page requests.
+fn js_get_page_box_reads_effective_boxes_without_editing_the_document() {
+    let (mut s, id) = session_with(1);
+    let before = s.get(id).expect("opened document").can_undo().map(str::to_owned);
+    let out = s.run_javascript(id, "JSON.stringify([this.getPageBox(), this.getPageBox('Media', 0)])", None).expect("script runs");
+    assert_eq!(out.error, None, "{out:?}");
+    assert_eq!(out.result.as_deref(), Some("[[0,300,200,0],[0,300,200,0]]"));
+    assert_eq!(s.get(id).expect("document remains open").can_undo(), before.as_deref());
+
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).expect("rotate page");
+    let before = s.get(id).expect("rotated document").can_undo().map(str::to_owned);
+    let out = s.run_javascript(id, "JSON.stringify(this.getPageBox('Crop', 0))", None).expect("script runs");
+    assert_eq!(out.error, None, "{out:?}");
+    assert_eq!(out.result.as_deref(), Some("[0,200,300,0]"));
+    assert_eq!(s.get(id).expect("document remains open").can_undo(), before.as_deref());
 }
 
 #[test]
@@ -9208,36 +9301,50 @@ fn dynamic_calculation_reads_and_side_effects_reach_later_fields() {
 }
 
 #[test]
-fn scripted_display_changes_survive_warm_cache_and_new_edit() {
+/// Later field callbacks see current COS appearance/flags rather than the runner creation snapshot.
+fn field_scripts_read_current_appearance_during_an_edit() {
     use pdfcraft_forms::{FieldEvent, Scripts};
     let mut cos = pdfcraft_cos::Document::open(Arc::new(synthetic_acroform(2, 0))).unwrap();
     for (display, flags) in [(1, 6), (3, 36), (2, 0), (0, 4)] {
         let fields = pdfcraft_forms::fields(&cos);
-        let target = fields.iter().find(|f| f.name == "ranks").unwrap();
-        let other = fields.iter().find(|f| f.name == "trained").unwrap();
-        let old_display = crate::js::field_state(&cos, other).display;
+        let target = fields.iter().find(|f| f.name == "trained").unwrap();
+        let other = fields.iter().find(|f| f.name == "ranks").unwrap();
         let mut runner = crate::js::JsRunner::new(&cos, "synthetic.pdf");
-        // Populate the display cache before a script writes the same field.
-        let warm = runner.run(FieldEvent::Calculate, "event.value = getField('trained').display;", target, "", &fields);
+        let old_display = crate::js::field_state(&cos, other, &runner.doc).display;
+        // Populate script state before a script writes the same field.
+        let warm = runner.run(FieldEvent::Calculate, "event.value = getField('ranks').display;", target, "", &fields, &cos);
         assert_eq!(warm.value, old_display.to_string());
         let result = runner.run(
             FieldEvent::Calculate,
-            &format!("getField('trained').display = {display}; event.value = getField('trained').display;"),
+            &format!("getField('ranks').display = {display}; event.value = getField('ranks').display;"),
             target,
             "",
             &fields,
+            &cos,
         );
         assert_eq!(result.value, display.to_string());
         assert_eq!(result.changes.len(), 1);
         assert_eq!(result.changes.first().unwrap().display, Some(display));
         pdfcraft_forms::apply_script_changes(&mut cos, &result.changes, &mut pdfcraft_forms::NoScripts).unwrap();
         assert_eq!(cos.get(other.widgets.first().unwrap().obj).as_dict().unwrap().int(b"F").unwrap() & 38, flags);
-        // Within an edit the original implementation reads an immutable pre-edit COS snapshot.
-        let same_edit = runner.run(FieldEvent::Calculate, "event.value = getField('trained').display;", target, "", &fields);
-        assert_eq!(same_edit.value, old_display.to_string());
-        // The next edit must rebuild its cache from the newly written annotation flags.
+        pdfcraft_forms::apply_script_changes(
+            &mut cos,
+            &[pdfcraft_forms::FieldChange {
+                name: "ranks".into(),
+                fill_color: Some(vec!["RGB".into(), "0".into(), "1".into(), "0".into()]),
+                ..Default::default()
+            }],
+            &mut pdfcraft_forms::NoScripts,
+        )
+        .unwrap();
+        // A later script in this edit sees the document after the earlier appearance change.
+        let same_edit = runner.run(FieldEvent::Calculate, "event.value = getField('ranks').display;", target, "", &fields, &cos);
+        assert_eq!(same_edit.value, display.to_string());
+        let same_edit_color = runner.run(FieldEvent::Calculate, "event.value = getField('ranks').fillColor.join(',');", target, "", &fields, &cos);
+        assert_eq!(same_edit_color.value, "RGB,0,1,0");
+        // A new runner sees the same current appearance.
         let mut next = crate::js::JsRunner::new(&cos, "synthetic.pdf");
-        let read = next.run(FieldEvent::Calculate, "event.value = getField('trained').display;", target, "", &pdfcraft_forms::fields(&cos));
+        let read = next.run(FieldEvent::Calculate, "event.value = getField('ranks').display;", target, "", &pdfcraft_forms::fields(&cos), &cos);
         assert_eq!(read.value, display.to_string());
         assert!(read.changes.is_empty());
         assert!(runner.output.errors.is_empty());
@@ -10492,6 +10599,706 @@ fn fill_sign_multiline_text_survives_engine_save_reopen_and_render() {
     assert_eq!(before.rgba, render_page(&reopened, again).rgba, "the saved appearance is identical");
 }
 
+#[test]
+/// Colour writes survive save/reopen and Undo while preserving unrelated appearance properties.
+fn javascript_field_colours_persist_and_undo_without_changing_other_appearance_properties() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    s.apply(
+        id,
+        Edit::SetFieldProps {
+            name: "price".into(),
+            props: Box::new(FieldProps {
+                appearance: Some(pdfcraft_forms::LookPatch {
+                    border: Some(Some([0.1, 0.2, 0.3])),
+                    font: Some(pdfcraft_forms::FieldFont::Courier),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        },
+    )
+    .unwrap();
+    let before = s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value.clone();
+    let out = s.run_javascript(id, "var f = getField('price'); f.fillColor = color.red; f.textColor = color.blue;", None).unwrap();
+    assert_eq!(out.error, None);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
+
+    let inspect = |bytes: Arc<Vec<u8>>| {
+        let doc = pdfcraft_cos::Document::open(bytes).unwrap();
+        let f = pdfcraft_forms::fields(&doc).into_iter().find(|f| f.name == "price").unwrap();
+        let look = pdfcraft_forms::look(&doc, &f);
+        assert_eq!(look.fill, Some([1.0, 0.0, 0.0]));
+        assert_eq!(look.text, [0.0, 0.0, 1.0]);
+        assert_eq!(look.border, Some([0.1, 0.2, 0.3]));
+        assert_eq!(look.font, pdfcraft_forms::FieldFont::Courier);
+        assert_eq!(f.value, before);
+    };
+    inspect(s.save_bytes(id).unwrap());
+    s.undo(id).unwrap();
+    let undone = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    let f = pdfcraft_forms::fields(&undone).into_iter().find(|f| f.name == "price").unwrap();
+    assert_eq!(pdfcraft_forms::look(&undone, &f).fill, None);
+    s.redo(id).unwrap();
+    inspect(s.save_bytes(id).unwrap());
+
+    let reopened = s.open("saved.pdf", None, s.save_bytes(id).unwrap(), None).unwrap();
+    let reopened_doc = pdfcraft_cos::Document::open(s.save_bytes(reopened).unwrap()).unwrap();
+    let f = pdfcraft_forms::fields(&reopened_doc).into_iter().find(|f| f.name == "price").unwrap();
+    assert_eq!(pdfcraft_forms::look(&reopened_doc, &f).fill, Some([1.0, 0.0, 0.0]));
+    assert_eq!(pdfcraft_forms::look(&reopened_doc, &f).text, [0.0, 0.0, 1.0]);
+}
+
+#[test]
+/// Reject malformed colour arrays before any field or appearance mutation is applied.
+fn javascript_invalid_field_colour_array_is_refused_without_partial_changes() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let before = s.save_bytes(id).unwrap();
+    let err = s.run_javascript(id, "var f = getField('price'); f.value = '9'; f.fillColor = ['RGB', 2, 0, 0];", None).unwrap_err();
+    assert!(err.to_string().contains("finite components between 0 and 1"), "{err}");
+    assert_eq!(s.save_bytes(id).unwrap(), before, "a refused script changes nothing");
+}
+
+#[test]
+/// Script colour edits obey the same document permission boundary as other form changes.
+fn javascript_field_colours_respect_document_fill_permissions() {
+    let mut plain = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    plain
+        .set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: "",
+            owner_password: "owner",
+            permissions: 0,
+            encrypt_metadata: true,
+            seed: [7; 32],
+        })
+        .unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&plain, &Default::default()).unwrap());
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("locked.pdf", None, bytes, None).unwrap();
+    assert!(!s.get(id).unwrap().allows_form_filling());
+    assert_eq!(
+        s.run_javascript(id, "getField('price').fillColor = color.red;", None).unwrap_err(),
+        EditError::NotPermitted("filling in form fields")
+    );
+    assert!(!s.get(id).unwrap().dirty);
+}
+
+/// An intervening edit gets a fresh realm before calculation, even after the worker has completed.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn pending_button_globals_cannot_leak_into_intervening_edits() {
+    use crate::js::InteractiveEvent;
+    for valid in [true, false] {
+        let mut s = Session::new();
+        let id = s.open("pending.pdf", None, Arc::new(scripted_form()), None).unwrap();
+        let value = |s: &Session, name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
+        s.apply(id, Edit::SetDocumentScript { name: "lib".into(), script: Some("var retained='clean';".into()) }).unwrap();
+        s.apply(id, Edit::SetFieldScript { name: "total".into(), event: "calculate".into(), script: Some("event.value=retained;".into()) }).unwrap();
+        let pending = s.start_javascript(id, "retained='stale';getField('price').value=99;", Some("go")).unwrap();
+        let InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(2)).unwrap() else { panic!("completion") };
+        let edited = s.apply(id, Edit::SetFieldValue { name: if valid { "qty" } else { "missing" }.into(), value: FieldValue::Text("3".into()) });
+        assert_eq!(edited.is_ok(), valid);
+        assert_eq!(value(&s, "total"), ["clean"]);
+        assert_eq!(s.run_javascript(id, "retained='fresh'", None).unwrap().error, None);
+        assert!(s.finish_javascript(pending, out).is_err());
+        assert_eq!(s.run_javascript(id, "retained", None).unwrap().result.as_deref(), Some("fresh"));
+        assert_ne!(value(&s, "price"), ["99"]);
+    }
+}
+
+/// Shared synthetic reset fixture; scripts are disabled while the document and actions are installed.
+fn reset_order_session(reset: &str) -> (Session, DocId) {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    let source = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "price").unwrap();
+    cos.update_dict(source.obj, |d| {
+        d.set(b"DV".to_vec(), pdfcraft_cos::PdfString::text("7"));
+        d.set(b"V".to_vec(), pdfcraft_cos::PdfString::text("99"));
+    })
+    .unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
+    let mut s = Session::new();
+    s.set_javascript(false);
+    let id = s.open("reset-order.pdf", None, bytes, None).unwrap();
+    s.apply(
+        id,
+        Edit::SetDocumentScript { name: "reset".into(), script: Some(format!("var held=getField('price');{reset}var openedValue=held.value;")) },
+    )
+    .unwrap();
+    (s, id)
+}
+
+/// Reinitialization resets before the first event reads, while later writes survive save and Undo/Redo.
+#[test]
+fn doc_open_reset_and_first_event_persist_in_script_order() {
+    for reset in ["resetForm();", "resetForm(['price']);"] {
+        for (target, restore) in [(None, false), (None, true), (Some("go"), false), (Some("go"), true)] {
+            let (mut s, id) = reset_order_session(reset);
+            let value = |s: &Session, id, name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
+            let before = [value(&s, id, "price"), value(&s, id, "qty")];
+            s.set_javascript(true);
+            let script =
+                format!("getField('qty').value=held.value;{}openedValue+'/'+getField('qty').value", if restore { "held.value='99';" } else { "" });
+            let out = s.run_javascript(id, &script, target).unwrap();
+            let expected = if restore { "99" } else { "7" };
+            assert_eq!(out.error, None);
+            assert_eq!(out.result.as_deref(), Some("7/7"));
+            assert_eq!(value(&s, id, "price"), [expected]);
+            assert_eq!(value(&s, id, "qty"), ["7"]);
+            s.undo(id).unwrap();
+            assert_eq!([value(&s, id, "price"), value(&s, id, "qty")], before);
+            s.redo(id).unwrap();
+            assert_eq!(value(&s, id, "price"), [expected]);
+            assert_eq!(value(&s, id, "qty"), ["7"]);
+            let saved = s.save_bytes(id).unwrap();
+            s.set_javascript(false);
+            let reopened = s.open("saved-reset.pdf", None, saved, None).unwrap();
+            assert_eq!(value(&s, reopened, "price"), [expected]);
+            assert_eq!(value(&s, reopened, "qty"), ["7"]);
+        }
+    }
+}
+
+/// Reset comparison includes unnamed built-in dependents and never runs custom calculations in the preview.
+#[test]
+fn reset_baseline_includes_builtin_dependents_without_custom_preview_runs() {
+    use form_scripts::{CalcOp, Calculate};
+    for combo in [false, true] {
+        let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+        for f in pdfcraft_forms::fields(&cos) {
+            match f.name.as_str() {
+                "price" => cos
+                    .update_dict(f.obj, |d| {
+                        d.set(b"V".to_vec(), pdfcraft_cos::PdfString::text("99"));
+                        d.set(b"DV".to_vec(), pdfcraft_cos::PdfString::text("7"));
+                    })
+                    .unwrap(),
+                "qty" => cos.update_dict(f.obj, |d| d.set(b"V".to_vec(), pdfcraft_cos::PdfString::text("2"))).unwrap(),
+                "total" if combo => cos
+                    .update_dict(f.obj, |d| {
+                        d.set(b"FT".to_vec(), pdfcraft_cos::Object::Name(b"Ch".to_vec()));
+                        d.set(b"Ff".to_vec(), pdfcraft_cos::Object::Int((1 << 17) | (1 << 18)));
+                        d.set(
+                            b"Opt".to_vec(),
+                            pdfcraft_cos::Object::Array(vec![
+                                pdfcraft_cos::PdfString::text("14").into(),
+                                pdfcraft_cos::PdfString::text("198").into(),
+                            ]),
+                        );
+                    })
+                    .unwrap(),
+                _ => (),
+            }
+        }
+        let mut s = Session::new();
+        s.set_javascript(false);
+        let id = s.open("reset-dependent.pdf", None, Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap()), None).unwrap();
+        s.apply(id, Edit::SetDocumentScript { name: "counter".into(), script: Some("var calculationCalls=0;".into()) }).unwrap();
+        s.apply(id, Edit::SetFieldScript { name: "qty".into(), event: "calculate".into(), script: Some("calculationCalls++;event.value=2;".into()) })
+            .unwrap();
+        s.apply(
+            id,
+            Edit::SetFieldProps {
+                name: "total".into(),
+                props: Box::new(FieldProps {
+                    calculate: Some(Calculate::Simple { op: CalcOp::Product, fields: vec!["price".into(), "qty".into()] }),
+                    ..Default::default()
+                }),
+            },
+        )
+        .unwrap();
+        let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap().value.clone();
+        assert_eq!(value(&s, "total"), ["198"]);
+        s.set_javascript(true);
+        let out = s.run_javascript(id, "resetForm(['price']);getField('total').value=198;", None).unwrap();
+        assert_eq!(out.error, None);
+        // The explicit dependent-field delta must be emitted even though it restores its original value.
+        // Its normal writeback recalculation runs the custom callback exactly once; preview/reset run none.
+        assert_eq!(s.run_javascript(id, "calculationCalls", None).unwrap().result.as_deref(), Some("1"));
+        assert_eq!(value(&s, "price"), ["7"]);
+        assert_eq!(value(&s, "total"), ["14"], "existing automatic calculation after a value write is preserved");
+    }
+}
+
+/// Native completions preserve reset/default/restore ordering and persist the resulting values.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_reset_completion_preserves_values_and_atomic_undo() {
+    use crate::js::InteractiveEvent;
+    for repetitions in [1, 64] {
+        for restore in [false, true] {
+            let (mut s, id) = reset_order_session(&"resetForm(['price']);".repeat(repetitions));
+            s.set_javascript(true);
+            let script =
+                format!("getField('qty').value=held.value;{}openedValue+'/'+getField('qty').value", if restore { "held.value='99';" } else { "" });
+            let pending = s.start_javascript(id, &script, Some("go")).unwrap();
+            let InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap() else {
+                panic!("completion")
+            };
+            let out = s.finish_javascript(pending, out).unwrap();
+            assert_eq!(out.error, None);
+            assert_eq!(out.result.as_deref(), Some("7/7"));
+            let value = |s: &Session, id, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap().value.clone();
+            let expected = if restore { "99" } else { "7" };
+            assert_eq!(value(&s, id, "price"), [expected]);
+            assert_eq!(value(&s, id, "qty"), ["7"]);
+            assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
+            s.undo(id).unwrap();
+            assert_eq!(value(&s, id, "price"), ["99"]);
+            s.redo(id).unwrap();
+            assert_eq!(value(&s, id, "price"), [expected]);
+            let bytes = s.save_bytes(id).unwrap();
+            s.set_javascript(false);
+            let reopened = s.open("native-reset-saved.pdf", None, bytes, None).unwrap();
+            assert_eq!(value(&s, reopened, "price"), [expected]);
+            assert_eq!(value(&s, reopened, "qty"), ["7"]);
+        }
+    }
+}
+
+/// Over-budget native results are rejected before resetting or committing any PDF edits.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_reset_flood_is_rejected_without_changing_the_document() {
+    use crate::js::InteractiveEvent;
+    for (repetitions, caught) in [(65, false), (10_000, false), (10_000, true)] {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("reset-flood.pdf", None, Arc::new(scripted_form()), None).unwrap();
+        let before = s.save_bytes(id).unwrap();
+        let generation = s.get(id).unwrap().generation;
+        let reset = if caught { "try{resetForm(['price']);}catch(e){}" } else { "resetForm(['price']);" };
+        let script = format!("for(var i=0;i<{repetitions};i++){{{reset}}}getField('qty').value='uncommitted';");
+        let pending = s.start_javascript(id, &script, Some("go")).unwrap();
+        let InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap() else { panic!("completion") };
+        assert!(out.reset_limit_exceeded);
+        assert_eq!(out.error.is_none(), caught);
+        assert_eq!(out.requests.iter().filter(|r| matches!(r, crate::js::Request::Reset(_))).count(), pdfcraft_js::MAX_RESET_CALLS);
+        let error = s.finish_javascript(pending, out).expect_err("the reset flood must be rejected before applying it");
+        assert!(error.to_string().contains("reset"), "{error}");
+        assert_eq!(s.get(id).unwrap().generation, generation);
+        assert_eq!(s.get(id).unwrap().can_undo(), None);
+        assert_eq!(s.save_bytes(id).unwrap(), before);
+        assert!(s.run_javascript(id, "1+1", None).unwrap().error.is_none());
+    }
+}
+
+/// The aggregate budget also rejects expensive batches below the reset-count cap.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_reset_aggregate_work_is_bounded() {
+    use crate::js::InteractiveEvent;
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("large-reset.pdf", None, Arc::new(synthetic_acroform(1200, 500)), None).unwrap();
+    let before = s.save_bytes(id).unwrap();
+    let generation = s.get(id).unwrap().generation;
+    let pending = s.start_javascript(id, "for(var i=0;i<32;i++)resetForm();", None).unwrap();
+    let InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap() else { panic!("completion") };
+    assert_eq!(out.error, None);
+    let error = s.finish_javascript(pending, out).expect_err("aggregate reset work must be refused");
+    assert!(error.to_string().contains("reset work limit"), "{error}");
+    assert_eq!(s.get(id).unwrap().generation, generation);
+    assert_eq!(s.get(id).unwrap().can_undo(), None);
+    assert_eq!(s.save_bytes(id).unwrap(), before);
+}
+
+/// A huge selector list must be rejected before copying requests or expanding names against fields.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_reset_selector_count_is_bounded() {
+    use crate::js::InteractiveEvent;
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("selectors.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let before = s.save_bytes(id).unwrap();
+    let generation = s.get(id).unwrap().generation;
+    let pending = s.start_javascript(id, "resetForm(new Array(4097).fill('price'));", Some("go")).unwrap();
+    let InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap() else { panic!("completion") };
+    assert_eq!(out.error, None);
+    assert!(s.finish_javascript(pending, out).unwrap_err().to_string().contains("reset work limit"));
+    assert_eq!(s.get(id).unwrap().generation, generation);
+    assert_eq!(s.save_bytes(id).unwrap(), before);
+}
+
+/// An unread default is preserved by both reset paths; explicit script assignments still win.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn javascript_reset_preserves_unknown_default_like_native_reset() {
+    for inherited in [false, true] {
+        for native in [false, true] {
+            for reset in ["resetForm(['price']);", "resetForm();"] {
+                for (before, after, expected) in
+                    [("", "", "99"), ("getField('price').value=42;", "", "42"), ("", "getField('price').value=43;", "43")]
+                {
+                    let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+                    let price = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "price").unwrap();
+                    let mut dict = pdfcraft_cos::Dict::new();
+                    dict.set(b"Filter".to_vec(), pdfcraft_cos::Object::name("UnknownReviewFilter"));
+                    let dv = cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::from_raw(dict, vec![1])));
+                    let parent = if inherited {
+                        let mut parent = pdfcraft_cos::Dict::new();
+                        parent.set(b"DV".to_vec(), pdfcraft_cos::Object::Ref(dv));
+                        parent.set(b"Kids".to_vec(), pdfcraft_cos::Object::Array(vec![pdfcraft_cos::Object::Ref(price.obj)]));
+                        Some(cos.add(pdfcraft_cos::Object::Dict(parent)))
+                    } else {
+                        None
+                    };
+                    cos.update_dict(price.obj, |d| {
+                        d.set(b"V".to_vec(), pdfcraft_cos::PdfString::text("99"));
+                        if let Some(parent) = parent {
+                            d.set(b"Parent".to_vec(), pdfcraft_cos::Object::Ref(parent));
+                        } else {
+                            d.set(b"DV".to_vec(), pdfcraft_cos::Object::Ref(dv));
+                        }
+                    })
+                    .unwrap();
+                    if let Some(parent) = parent {
+                        let root = cos.root().unwrap();
+                        cos.update_dict(root, |catalog| {
+                            let mut form = catalog.get(b"AcroForm").unwrap().as_dict().unwrap().clone();
+                            let mut refs = form.get(b"Fields").unwrap().as_array().unwrap().clone();
+                            for reference in &mut refs {
+                                if reference.as_ref() == Some(price.obj) {
+                                    *reference = pdfcraft_cos::Object::Ref(parent);
+                                }
+                            }
+                            form.set(b"Fields".to_vec(), pdfcraft_cos::Object::Array(refs));
+                            catalog.set(b"AcroForm".to_vec(), pdfcraft_cos::Object::Dict(form));
+                        })
+                        .unwrap();
+                    }
+                    let mut direct = cos.clone();
+                    pdfcraft_forms::reset(&mut direct, Some(&["price".into()])).unwrap();
+                    assert_eq!(pdfcraft_forms::fields(&direct).into_iter().find(|f| f.name == "price").unwrap().value, ["99"]);
+                    let mut s = Session::new().with_clock(|| 1_700_000_000);
+                    s.set_javascript(false);
+                    let id =
+                        s.open("unknown-default.pdf", None, Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap()), None).unwrap();
+                    s.set_javascript(true);
+                    let script = format!("{before}{reset}{after}String(getField('price').value);");
+                    let out = if native {
+                        let pending = s.start_javascript(id, &script, Some("go")).unwrap();
+                        let crate::js::InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap()
+                        else {
+                            panic!("completion")
+                        };
+                        s.finish_javascript(pending, out).unwrap()
+                    } else {
+                        s.run_javascript(id, &script, None).unwrap()
+                    };
+                    assert_eq!(out.error, None);
+                    assert_eq!(out.result.as_deref(), Some(expected));
+                    let value = |s: &Session, id| s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value.clone();
+                    assert_eq!(value(&s, id), [expected]);
+                    assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
+                    s.undo(id).unwrap();
+                    assert_eq!(value(&s, id), ["99"]);
+                    s.redo(id).unwrap();
+                    assert_eq!(value(&s, id), [expected]);
+                    let saved = s.save_bytes(id).unwrap();
+                    s.set_javascript(false);
+                    let reopened = s.open("saved-unknown.pdf", None, saved, None).unwrap();
+                    assert_eq!(value(&s, reopened), [expected]);
+                }
+            }
+        }
+    }
+}
+
+/// Exhausting the shared default decode budget must also reach the JavaScript snapshot as unknown.
+#[test]
+fn javascript_snapshot_preserves_default_decode_budget_exhaustion() {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    let stream = cos.add(pdfcraft_cos::Object::Stream(pdfcraft_cos::Stream::from_raw(pdfcraft_cos::Dict::new(), vec![b'd'; 1 << 20])));
+    let mut refs = Vec::new();
+    for i in 0..70 {
+        let mut field = pdfcraft_cos::Dict::new();
+        field.set(b"FT".to_vec(), pdfcraft_cos::Object::name("Tx"));
+        field.set(b"T".to_vec(), pdfcraft_cos::PdfString::text(&format!("budget{i}")));
+        field.set(b"V".to_vec(), pdfcraft_cos::PdfString::text("typed"));
+        field.set(b"DV".to_vec(), pdfcraft_cos::Object::Ref(stream));
+        refs.push(pdfcraft_cos::Object::Ref(cos.add(pdfcraft_cos::Object::Dict(field))));
+    }
+    let root = cos.root().unwrap();
+    cos.update_dict(root, |catalog| {
+        let mut form = pdfcraft_cos::Dict::new();
+        form.set(b"Fields".to_vec(), pdfcraft_cos::Object::Array(refs));
+        catalog.set(b"AcroForm".to_vec(), pdfcraft_cos::Object::Dict(form));
+    })
+    .unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    assert_eq!(fields.first().unwrap().default.first().unwrap().len(), 1 << 20);
+    let last = fields.iter().find(|f| f.name == "budget69").unwrap();
+    assert!(last.default.is_empty());
+    let snapshot = crate::js::field_state(&cos, last, &pdfcraft_js::DocInfo::default());
+    assert!(!snapshot.default_known);
+    let out = pdfcraft_js::run(
+        "resetForm();String(getField('budget69').value);",
+        &pdfcraft_js::Event::doc("Console"),
+        &Default::default(),
+        &[snapshot],
+        &[],
+        Default::default(),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("typed"));
+    assert!(out.changed.is_empty());
+}
+
+/// Immediate dependent reads can explicitly request calculation without changing reset callback ordering.
+#[test]
+fn calculate_now_after_reset_reads_and_persists_recalculated_dependents() {
+    use form_scripts::{CalcOp, Calculate};
+    let (mut s, id) = reset_order_session("");
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("2".into()) }).unwrap();
+    s.apply(
+        id,
+        Edit::SetFieldProps {
+            name: "total".into(),
+            props: Box::new(FieldProps {
+                calculate: Some(Calculate::Simple { op: CalcOp::Product, fields: vec!["price".into(), "qty".into()] }),
+                ..Default::default()
+            }),
+        },
+    )
+    .unwrap();
+    s.set_javascript(true);
+    let out = s.run_javascript(id, "resetForm(['price']);calculateNow();String(getField('total').value);", None).unwrap();
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("14"));
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value, ["14"]);
+}
+
+/// Duplicate names retain distinct Calculate scripts, targets and persisted values.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn calculate_now_preserves_duplicate_field_object_identity() {
+    for (native, reverse) in [(false, false), (false, true), (true, false), (true, true)] {
+        let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+        let fields = pdfcraft_forms::fields(&cos);
+        let a = fields.iter().find(|f| f.name == "price").unwrap().obj;
+        let b = fields.iter().find(|f| f.name == "qty").unwrap().obj;
+        for (obj, tag, color) in [(a, "A", "color.red"), (b, "B", "color.blue")] {
+            cos.update_dict(obj, |d| {
+                d.set(b"T".to_vec(), pdfcraft_cos::PdfString::text("duplicate"));
+                d.set(b"V".to_vec(), pdfcraft_cos::PdfString::text(tag));
+                let mut action = pdfcraft_cos::Dict::new();
+                action.set(b"S".to_vec(), pdfcraft_cos::Object::name("JavaScript"));
+                action.set(
+                    b"JS".to_vec(),
+                    pdfcraft_cos::PdfString::text(&format!(
+                        "trace+='{tag}'+event.target.value;event.target.userName='{tag}';event.target.fillColor={color};event.target.value='{tag}-temporary';event.value='{tag}-done';"
+                    )),
+                );
+                let mut aa = pdfcraft_cos::Dict::new();
+                aa.set(b"C".to_vec(), pdfcraft_cos::Object::Dict(action));
+                d.set(b"AA".to_vec(), pdfcraft_cos::Object::Dict(aa));
+            })
+            .unwrap();
+        }
+        let root = cos.root().unwrap();
+        cos.update_dict(root, |d| {
+            let mut af = d.get(b"AcroForm").unwrap().as_dict().unwrap().clone();
+            af.set(b"CO".to_vec(), pdfcraft_cos::Object::Array(if reverse { vec![b.into(), a.into()] } else { vec![a.into(), b.into()] }));
+            d.set(b"AcroForm".to_vec(), pdfcraft_cos::Object::Dict(af));
+        })
+        .unwrap();
+        // Disable the unrelated original total calculation.
+        let total = fields.iter().find(|f| f.name == "total").unwrap().obj;
+        cos.update_dict(total, |d| {
+            d.remove(b"AA");
+        })
+        .unwrap();
+        let mut s = Session::new();
+        s.set_javascript(false);
+        let id = s.open("duplicate-calculations.pdf", None, Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap()), None).unwrap();
+        s.set_javascript(true);
+        let script = "var trace='';calculateNow();trace;";
+        let out = if native {
+            let p = s.start_javascript(id, script, Some("go")).unwrap();
+            let crate::js::InteractiveEvent::Complete(out) = p.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap() else {
+                panic!("completion")
+            };
+            s.finish_javascript(p, out).unwrap()
+        } else {
+            s.run_javascript(id, script, None).unwrap()
+        };
+        assert_eq!(out.error, None);
+        let duplicate_fields: Vec<_> = s.get(id).unwrap().form.iter().filter(|f| f.name == "duplicate").collect();
+        assert_eq!(duplicate_fields.iter().map(|f| f.tooltip.as_deref()).collect::<Vec<_>>(), [Some("A"), Some("B")]);
+        let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
+        assert_eq!(pdfcraft_forms::look(cos, duplicate_fields[0]).fill, Some([1.0, 0.0, 0.0]));
+        assert_eq!(pdfcraft_forms::look(cos, duplicate_fields[1]).fill, Some([0.0, 0.0, 1.0]));
+
+        assert_eq!(out.result.as_deref(), Some(if reverse { "BBAA" } else { "AABB" }));
+        let values = |s: &Session| s.get(id).unwrap().form.iter().filter(|f| f.name == "duplicate").map(|f| f.value.clone()).collect::<Vec<_>>();
+        assert_eq!(values(&s), vec![vec!["A-done"], vec!["B-done"]]);
+        s.undo(id).unwrap();
+        assert_eq!(values(&s), vec![vec!["A"], vec!["B"]]);
+        s.redo(id).unwrap();
+        assert_eq!(values(&s), vec![vec!["A-done"], vec!["B-done"]]);
+        let bytes = s.save_bytes(id).unwrap();
+        s.set_javascript(false);
+        let reopened = s.open("saved-duplicates.pdf", None, bytes, None).unwrap();
+        assert_eq!(
+            s.get(reopened).unwrap().form.iter().filter(|f| f.name == "duplicate").map(|f| f.value.clone()).collect::<Vec<_>>(),
+            vec![vec!["A-done"], vec!["B-done"]]
+        );
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn script_colors_do_not_mutate_another_fields_shared_mk() {
+    for native in [false, true] {
+        for (script, fill, border) in [
+            ("getField('price').fillColor=color.red;", Some([1., 0., 0.]), Some([0., 0., 0.])),
+            ("getField('price').strokeColor=color.blue;", Some([1., 1., 1.]), Some([0., 0., 1.])),
+            ("getField('price').fillColor=color.red;getField('price').strokeColor=color.blue;", Some([1., 0., 0.]), Some([0., 0., 1.])),
+            ("getField('price').fillColor=color.transparent;", None, Some([0., 0., 0.])),
+        ] {
+            let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+            let all = pdfcraft_forms::fields(&cos);
+            let price = all.iter().find(|f| f.name == "price").unwrap().obj;
+            let qty = all.iter().find(|f| f.name == "qty").unwrap().obj;
+            let total = all.iter().find(|f| f.name == "total").unwrap().obj;
+            let mut mk = pdfcraft_cos::Dict::new();
+            mk.set(b"BG".to_vec(), pdfcraft_cos::Object::Array(vec![1.into(), 1.into(), 1.into()]));
+            mk.set(b"BC".to_vec(), pdfcraft_cos::Object::Array(vec![0.into(), 0.into(), 0.into()]));
+            mk.set(b"CA".to_vec(), pdfcraft_cos::PdfString::text("keep"));
+            let shared = cos.add(pdfcraft_cos::Object::Dict(mk));
+            let alias = cos.add(pdfcraft_cos::Object::Ref(shared));
+            for (object, reference) in [(qty, shared), (total, alias)] {
+                cos.update_dict(object, |d| d.set(b"MK".to_vec(), reference)).unwrap();
+            }
+            let mut widgets = Vec::new();
+            for x in [20, 90] {
+                let mut w = pdfcraft_cos::Dict::new();
+                w.set(b"Subtype".to_vec(), pdfcraft_cos::Object::name("Widget"));
+                w.set(b"Parent".to_vec(), price);
+                w.set(b"P".to_vec(), pdfcraft_cos::ObjRef::new(3, 0));
+                w.set(b"Rect".to_vec(), pdfcraft_cos::Object::Array(vec![x.into(), 250.into(), (x + 50).into(), 270.into()]));
+                w.set(b"MK".to_vec(), shared);
+                widgets.push(cos.add(pdfcraft_cos::Object::Dict(w)));
+            }
+            cos.update_dict(price, |d| {
+                d.remove(b"Rect");
+                d.set(b"Kids".to_vec(), pdfcraft_cos::Object::Array(widgets.iter().map(|r| (*r).into()).collect()));
+            })
+            .unwrap();
+            cos.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |d| {
+                let mut a = d.get(b"Annots").unwrap().as_array().unwrap().clone();
+                a.retain(|o| o.as_ref() != Some(price));
+                a.extend(widgets.iter().map(|r| (*r).into()));
+                d.set(b"Annots".to_vec(), pdfcraft_cos::Object::Array(a));
+            })
+            .unwrap();
+            let mut alias_probe = cos.clone();
+            pdfcraft_forms::apply_script_changes(
+                &mut alias_probe,
+                &[pdfcraft_forms::FieldChange {
+                    name: "price".into(),
+                    fill_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]),
+                    ..Default::default()
+                }],
+                &mut pdfcraft_forms::NoScripts,
+            )
+            .unwrap();
+            for name in ["qty", "total"] {
+                let field = pdfcraft_forms::fields(&alias_probe).into_iter().find(|f| f.name == name).unwrap();
+                assert_eq!(pdfcraft_forms::look(&alias_probe, &field).fill, Some([1., 1., 1.]));
+            }
+            let mut s = Session::new();
+            s.set_javascript(false);
+            let id = s.open("shared-colors.pdf", None, Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap()), None).unwrap();
+            s.set_javascript(true);
+            let original_id = id;
+            let owned_reference = {
+                let doc = s.get(id).unwrap();
+                let widget = doc.form.iter().find(|f| f.name == "price").unwrap().widgets.first().unwrap().obj;
+                doc.editor.as_ref().unwrap().cos.get(widget).as_dict().unwrap().reference(b"MK").unwrap()
+            };
+            let out = if native {
+                let p = s.start_javascript(id, script, Some("go")).unwrap();
+                let crate::js::InteractiveEvent::Complete(out) = p.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap() else {
+                    panic!("completion")
+                };
+                s.finish_javascript(p, out).unwrap()
+            } else {
+                s.run_javascript(id, script, None).unwrap()
+            };
+            assert_eq!(out.error, None);
+            let verify = |s: &Session, id, expected_fill, expected_border| {
+                let doc = s.get(id).unwrap();
+                let cos = &doc.editor.as_ref().unwrap().cos;
+                let f = doc.form.iter().find(|f| f.name == "price").unwrap();
+                assert_eq!(f.widgets.len(), 2);
+                let look = pdfcraft_forms::look(cos, f);
+                assert_eq!(look.fill, expected_fill);
+                assert_eq!(look.border, expected_border);
+                let actual_reference = cos.get(f.widgets.first().unwrap().obj).as_dict().unwrap().reference(b"MK").unwrap();
+                if id == original_id {
+                    assert_eq!(actual_reference, owned_reference);
+                }
+                for w in &f.widgets {
+                    assert_eq!(cos.get(w.obj).as_dict().unwrap().reference(b"MK"), Some(actual_reference));
+                }
+                for name in ["qty", "total"] {
+                    let f = doc.form.iter().find(|f| f.name == name).unwrap();
+                    let look = pdfcraft_forms::look(cos, f);
+                    assert_eq!(look.fill, Some([1., 1., 1.]));
+                    assert_eq!(look.border, Some([0., 0., 0.]));
+                    let mk = cos.get(f.widgets.first().unwrap().obj).as_dict().unwrap().get(b"MK").cloned().unwrap();
+                    assert_eq!(cos.resolve(&mk).as_dict().unwrap().get(b"CA").unwrap().as_string().unwrap().to_text(), "keep");
+                }
+            };
+            verify(&s, id, fill, border);
+            s.undo(id).unwrap();
+            verify(&s, id, Some([1., 1., 1.]), Some([0., 0., 0.]));
+            s.redo(id).unwrap();
+            verify(&s, id, fill, border);
+            let bytes = s.save_bytes(id).unwrap();
+            s.set_javascript(false);
+            let reopened = s.open("saved-colors.pdf", None, bytes, None).unwrap();
+            verify(&s, reopened, fill, border);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn exact_button_target_ids_are_validated_before_script_execution() {
+    for native in [false, true] {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("buttons.pdf", None, Arc::new(scripted_form()), None).unwrap();
+        let fields = s.get(id).unwrap().form.clone();
+        let go = fields.iter().find(|f| f.name == "go").unwrap();
+        let identity = crate::js::field_object_id(go.obj);
+        let price = crate::js::field_object_id(fields.iter().find(|f| f.name == "price").unwrap().obj);
+        let before = s.save_bytes(id).unwrap();
+        for (name, key) in [(Some("go"), price), (None, identity), (Some("missing"), identity), (Some("go"), u64::MAX)] {
+            if native {
+                assert!(s.start_javascript_target(id, "var shouldNotRun=1;", name, Some(key)).is_err());
+            } else {
+                assert!(s.run_javascript_target(id, "var shouldNotRun=1;", name, Some(key)).is_err());
+            }
+        }
+        assert_eq!(s.save_bytes(id).unwrap(), before);
+        assert_eq!(s.run_javascript(id, "typeof shouldNotRun", None).unwrap().result.as_deref(), Some("undefined"));
+        let out = s
+            .run_javascript_answers_target(
+                id,
+                "event.target.buttonSetCaption(app.response({cQuestion:'Caption'}));event.target.name;",
+                Some("go"),
+                Some(identity),
+                &[Some("answered".into())],
+            )
+            .unwrap();
+        assert_eq!(out.error, None);
+        assert_eq!(out.result.as_deref(), Some("go"));
+        assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "go").unwrap().widgets.first().unwrap().caption.as_deref(), Some("answered"));
+    }
+}
+
 /// A whole tree goes in as one undoable step, and a refused tree changes nothing.
 #[test]
 fn imported_bookmarks_undo_in_one_step() {
@@ -10522,4 +11329,213 @@ fn imported_bookmarks_undo_in_one_step() {
     let err = s.apply(id, Edit::ImportBookmarks { parent: vec![4], index: 0, bookmarks, replace: false }).unwrap_err();
     assert!(err.to_string().contains("no bookmark"), "{err}");
     assert!(s.get(id).unwrap().info.outline.is_empty());
+}
+
+/// Rejected host writeback must invalidate globals for both synchronous and native completion.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn refused_script_writeback_retires_the_runtime() {
+    for native in [false, true] {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("bounded.pdf", None, Arc::new(synthetic_acroform(1200, 500)), None).unwrap();
+        let before = s.save_bytes(id).unwrap();
+        let script = "var refusedGlobal=42;for(var i=0;i<32;i++)resetForm();";
+        if native {
+            let pending = s.start_javascript(id, script, None).unwrap();
+            let crate::js::InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(5)).unwrap() else {
+                panic!("completion")
+            };
+            assert!(s.finish_javascript(pending, out).is_err());
+        } else {
+            assert!(s.run_javascript(id, script, None).is_err());
+        }
+        assert_eq!(s.save_bytes(id).unwrap(), before);
+        assert_eq!(s.run_javascript(id, "typeof refusedGlobal", None).unwrap().result.as_deref(), Some("undefined"));
+    }
+}
+/// History retires removed fields without discarding document globals or aliasing reused numbers.
+#[test]
+fn undo_removed_field_references_cannot_write_replacement_fields() {
+    let (mut s, id) = session_with(1);
+    let add =
+        |name: &str| Edit::AddField { page: 0, rect: [20.0, 20.0, 120.0, 40.0], kind: NewField::Text { multiline: false }, name: Some(name.into()) };
+    s.apply(id, add("old")).unwrap();
+    let original = s.get(id).unwrap().form.iter().find(|f| f.name == "old").unwrap().obj;
+    s.run_javascript(id, "var kept=99;var held=getField('old');held.custom=42;", None).unwrap();
+    s.undo(id).unwrap();
+    s.apply(id, add("replacement")).unwrap();
+    let replacement = s.get(id).unwrap().form.iter().find(|f| f.name == "replacement").unwrap().obj;
+    assert_eq!(original, replacement, "exercise the reused PDF number");
+    assert_eq!(
+        s.run_javascript(id, "kept===99 && getField('replacement')!==held && getField('replacement').custom===undefined;", None)
+            .unwrap()
+            .result
+            .as_deref(),
+        Some("true")
+    );
+    let out = s.run_javascript(id, "held.value='wrong';", None).unwrap();
+    assert!(out.error.is_some());
+    assert!(s.get(id).unwrap().form.iter().find(|f| f.name == "replacement").unwrap().value.is_empty());
+    s.undo(id).unwrap();
+    s.redo(id).unwrap();
+    assert_eq!(s.run_javascript(id, "kept", None).unwrap().result.as_deref(), Some("99"));
+}
+/// An exact image target changes only the selected duplicate-name field, with history and persistence.
+#[test]
+fn exact_image_import_targets_only_the_selected_duplicate_button() {
+    let (mut s, id) = session_with(1);
+    for (name, x) in [("first", 20.0), ("second", 160.0)] {
+        s.apply(id, Edit::AddField { page: 0, rect: [x, 20.0, x + 100.0, 80.0], kind: NewField::Image, name: Some(name.into()) }).unwrap();
+    }
+    let mut cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    for field in pdfcraft_forms::fields(&cos) {
+        cos.update_dict(field.obj, |d| d.set(b"T".to_vec(), pdfcraft_cos::PdfString::text("same"))).unwrap();
+    }
+    let bytes = pdfcraft_cos::write_full(&cos, &Default::default()).unwrap();
+    let id = s.open("duplicate-image.pdf", None, Arc::new(bytes), None).unwrap();
+    let target = s.get(id).unwrap().form[1].obj;
+    let edit = Edit::SetFieldImageTarget { name: "same".into(), object: target, image: Arc::new(pdfcraft_xfa::fixtures::TINY_GIF.to_vec()) };
+    let has_icons = |s: &Session, id| {
+        let doc = s.get(id).unwrap();
+        let cos = &doc.editor.as_ref().unwrap().cos;
+        doc.form
+            .iter()
+            .map(|f| {
+                cos.get(f.widgets[0].obj)
+                    .as_dict()
+                    .and_then(|d| d.get(b"MK").map(|m| cos.resolve(m)))
+                    .is_some_and(|m| m.as_dict().is_some_and(|d| d.contains(b"I")))
+            })
+            .collect::<Vec<_>>()
+    };
+    s.apply(id, edit).unwrap();
+    assert_eq!(has_icons(&s, id), [false, true]);
+    s.undo(id).unwrap();
+    assert_eq!(has_icons(&s, id), [false, false]);
+    s.redo(id).unwrap();
+    assert_eq!(has_icons(&s, id), [false, true]);
+    let bytes = s.save_bytes(id).unwrap();
+    let reopened = s.open("again.pdf", None, bytes, None).unwrap();
+    s.apply(reopened, Edit::SetInfo { key: "Title".into(), value: "check".into() }).unwrap();
+    assert_eq!(has_icons(&s, reopened), [false, true]);
+}
+
+/// Native automatic calculations and explicit calculateNow agree on all selected export values.
+#[test]
+fn multiselect_calculation_matches_explicit_script_and_saved_result() {
+    let (mut s, id) = session_with(1);
+    for (name, kind, y) in [
+        ("choices", NewField::List { options: vec!["2".into(), "5".into()], multi: true }, 100.0),
+        ("sum", NewField::Text { multiline: false }, 50.0),
+    ] {
+        s.apply(id, Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 30.0], kind, name: Some(name.into()) }).unwrap();
+    }
+    s.apply(
+        id,
+        Edit::SetFieldProps {
+            name: "sum".into(),
+            props: Box::new(pdfcraft_forms::FieldProps {
+                calculate: Some(pdfcraft_forms::af::Calculate::Simple { op: pdfcraft_forms::af::CalcOp::Sum, fields: vec!["choices".into()] }),
+                ..Default::default()
+            }),
+        },
+    )
+    .unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "choices".into(), value: pdfcraft_forms::FieldValue::Choice(vec!["2".into(), "5".into()]) }).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "sum").unwrap().value, ["7"]);
+    let out = s.run_javascript(id, "calculateNow();getField('sum').value", None).unwrap();
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("7"));
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "sum").unwrap().value, ["7"]);
+    let bytes = s.save_bytes(id).unwrap();
+    let reopened = s.open("again.pdf", None, bytes, None).unwrap();
+    assert_eq!(s.get(reopened).unwrap().form.iter().find(|f| f.name == "sum").unwrap().value, ["7"]);
+}
+
+/// Real mixed widgets converge even when buttonSetIcon repeats widget zero's existing icon.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn mixed_widget_icons_are_normalized_with_history_and_save() {
+    for native in [false, true] {
+        for first_has_icon in [false, true] {
+            use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+            let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+            let go = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "go").unwrap().obj;
+            let mut dict = Dict::new();
+            dict.set(b"Type".to_vec(), Object::name("XObject"));
+            dict.set(b"Subtype".to_vec(), Object::name("Form"));
+            dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+            let a = cos.add(Object::Stream(Stream::flate(dict.clone(), b"")));
+            let b = cos.add(Object::Stream(Stream::flate(dict, b"")));
+            let mut widgets = vec![];
+            for (i, icon) in [first_has_icon.then_some(a), Some(b)].into_iter().enumerate() {
+                let mut w = Dict::new();
+                w.set(b"Subtype".to_vec(), Object::name("Widget"));
+                w.set(b"Parent".to_vec(), go);
+                w.set(b"P".to_vec(), ObjRef::new(3, 0));
+                w.set(b"Rect".to_vec(), Object::Array(vec![(20 + i as i64 * 80).into(), 20.into(), (80 + i as i64 * 80).into(), 60.into()]));
+                let mut mk = Dict::new();
+                if let Some(icon) = icon {
+                    mk.set(b"I".to_vec(), icon);
+                }
+                w.set(b"MK".to_vec(), Object::Dict(mk));
+                widgets.push(cos.add(Object::Dict(w)));
+            }
+            cos.update_dict(go, |d| {
+                d.remove(b"Rect");
+                d.set(b"Kids".to_vec(), Object::Array(widgets.iter().map(|r| (*r).into()).collect()));
+            })
+            .unwrap();
+            cos.update_dict(ObjRef::new(3, 0), |d| {
+                let mut annots = d.get(b"Annots").unwrap().as_array().unwrap().clone();
+                annots.retain(|v| v.as_ref() != Some(go));
+                annots.extend(widgets.iter().map(|r| Object::Ref(*r)));
+                d.set(b"Annots".to_vec(), Object::Array(annots));
+            })
+            .unwrap();
+            let mut s = Session::new().with_clock(|| 1_700_000_000);
+            let id = s.open("mixed-icons.pdf", None, Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap()), None).unwrap();
+            let script = "getField('go').buttonSetIcon(getField('go').buttonGetIcon());";
+            if native {
+                let pending = s.start_javascript(id, script, Some("go")).unwrap();
+                let crate::js::InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(5)).unwrap() else {
+                    panic!("completion")
+                };
+                assert_eq!(s.finish_javascript(pending, out).unwrap().error, None);
+            } else {
+                assert_eq!(s.run_javascript(id, script, Some("go")).unwrap().error, None);
+            }
+            let icons = |s: &mut Session, id| {
+                let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+                pdfcraft_forms::fields(&cos)
+                    .iter()
+                    .find(|f| f.name == "go")
+                    .unwrap()
+                    .widgets
+                    .iter()
+                    .map(|w| {
+                        cos.get(w.obj)
+                            .as_dict()
+                            .and_then(|d| d.get(b"MK").map(|v| cos.resolve(v)))
+                            .and_then(|v| v.as_dict().and_then(|d| d.reference(b"I")))
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let after = icons(&mut s, id);
+            assert_eq!(after.len(), 2);
+            assert_eq!(after[0], after[1]);
+            assert_eq!(after[0].is_some(), first_has_icon);
+            s.undo(id).unwrap();
+            let before = icons(&mut s, id);
+            assert_ne!(before[0], before[1]);
+            s.redo(id).unwrap();
+            let after = icons(&mut s, id);
+            assert_eq!(after[0], after[1]);
+            let bytes = s.save_bytes(id).unwrap();
+            let reopened = s.open("again.pdf", None, bytes, None).unwrap();
+            let after = icons(&mut s, reopened);
+            assert_eq!(after[0], after[1]);
+            assert_eq!(after[0].is_some(), first_has_icon);
+        }
+    }
 }

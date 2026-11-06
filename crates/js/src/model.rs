@@ -37,11 +37,17 @@ pub const DISPLAY_NO_VIEW: i32 = 3;
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldState {
     pub name: String,
+    /// Stable PDF object identity, absent for synthetic name-only callers.
+    pub object_id: Option<u64>,
+    /// Runtime instance token; retired field references cannot alias reused PDF numbers.
+    pub instance_id: u64,
     pub kind: FieldType,
     /// Text: the text. Check box / radio: the selected export value (empty when off). Choice:
     /// the selected export values.
     pub value: Vec<String>,
     pub default: Vec<String>,
+    /// False when a PDF default stream was not decoded; reset must preserve the live value.
+    pub default_known: bool,
     pub readonly: bool,
     pub required: bool,
     pub display: i32,
@@ -52,15 +58,35 @@ pub struct FieldState {
     /// `textColor` / `fillColor` as Acrobat colour arrays (`["RGB", r, g, b]` etc.), when set.
     pub text_color: Option<Vec<String>>,
     pub fill_color: Option<Vec<String>>,
+    /// Normal push-button caption, when this is a button.
+    pub caption: Option<String>,
+    /// A setter ran, even if its text equals widget 0: other widgets may differ.
+    pub caption_written: bool,
+    pub rect: Option<[f64; 4]>,
+    pub page_rotation: i64,
+    pub page_crop: [f64; 4],
+    pub stroke_color: Option<Vec<String>>,
+    pub text_size: f64,
+    pub line_width: f64,
+    pub border_style: String,
+    pub user_name: String,
+    pub icon: Option<u64>,
+    pub caption_mixed: bool,
+    pub icon_mixed: bool,
+    pub icon_written: bool,
 }
 
 impl FieldState {
+    /// Construct a field snapshot with explicit defaults for optional appearance and interaction state.
     pub fn new(name: impl Into<String>, kind: FieldType, value: Vec<String>) -> FieldState {
         FieldState {
             name: name.into(),
+            object_id: None,
+            instance_id: 0,
             kind,
             value,
             default: Vec::new(),
+            default_known: true,
             readonly: false,
             required: false,
             display: DISPLAY_VISIBLE,
@@ -68,6 +94,20 @@ impl FieldState {
             char_limit: None,
             text_color: None,
             fill_color: None,
+            caption: None,
+            caption_written: false,
+            rect: None,
+            page_rotation: 0,
+            page_crop: [0.0; 4],
+            stroke_color: None,
+            text_size: 0.0,
+            line_width: 1.0,
+            border_style: "solid".into(),
+            user_name: String::new(),
+            icon: None,
+            caption_mixed: false,
+            icon_mixed: false,
+            icon_written: false,
         }
     }
 
@@ -85,6 +125,8 @@ pub struct Event {
     pub kind: String,
     /// The field the event is for.
     pub target: Option<String>,
+    /// Identity for an unambiguous event.target, even with duplicate field names.
+    pub target_id: Option<u64>,
     pub value: String,
     pub change: String,
     pub will_commit: bool,
@@ -93,12 +135,28 @@ pub struct Event {
 impl Event {
     /// A field event (`event.type` = "Field").
     pub fn field(name: &str, target: &str, value: &str) -> Event {
-        Event { name: name.into(), kind: "Field".into(), target: Some(target.into()), value: value.into(), change: String::new(), will_commit: true }
+        Event {
+            name: name.into(),
+            kind: "Field".into(),
+            target: Some(target.into()),
+            target_id: None,
+            value: value.into(),
+            change: String::new(),
+            will_commit: true,
+        }
     }
 
     /// A document event (`event.type` = "Doc"), e.g. Open or WillSave.
     pub fn doc(name: &str) -> Event {
-        Event { name: name.into(), kind: "Doc".into(), target: None, value: String::new(), change: String::new(), will_commit: false }
+        Event {
+            name: name.into(),
+            kind: "Doc".into(),
+            target: None,
+            target_id: None,
+            value: String::new(),
+            change: String::new(),
+            will_commit: false,
+        }
     }
 }
 
@@ -111,8 +169,14 @@ pub struct DocInfo {
     pub page: usize,
     /// Document information (`this.info.title` etc.): lower-case key, value.
     pub info: Vec<(String, String)>,
+    /// Effective page boxes in PDF user space, ordered media, crop, bleed, trim, art.
+    pub page_boxes: Vec<[[f64; 4]; 5]>,
+    /// Clockwise page rotations, normalized to 0, 90, 180 or 270 degrees.
+    pub page_rotations: Vec<i64>,
     /// The document has an XFA form, so scripts see `xfa_installed`.
     pub xfa: bool,
+    pub zoom: f64,
+    pub runtime_highlight: bool,
 }
 
 /// The icon a script's message shows: `app.alert`'s `nIcon` and `xfa.host.messageBox`'s
@@ -234,6 +298,8 @@ pub enum Request {
     /// `field.setFocus()`.
     Focus(String),
     Beep,
+    Zoom(f64),
+    Highlight(bool),
     /// `app.execMenuItem("SaveAs")` (XFA forms' Save buttons).
     SaveAs,
     /// `app.execMenuItem("ShowHide…")`: show the side panel, or hide it when it is showing.
@@ -271,6 +337,8 @@ impl Panel {
 /// What running a script did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Outcome {
+    /// Sticky admission failure: callers must not commit a partial run, even if JS caught the error.
+    pub reset_limit_exceeded: bool,
     /// `event.rc`: `false` rejects the keystroke or value.
     pub rc: bool,
     /// `event.value` after the script.

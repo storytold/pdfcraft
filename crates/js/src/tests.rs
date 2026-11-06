@@ -15,8 +15,9 @@ fn fields() -> Vec<FieldState> {
     ]
 }
 
+/// Provide synthetic document metadata and page boxes for isolated JavaScript API tests.
 fn doc() -> DocInfo {
-    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], xfa: false }
+    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], ..Default::default() }
 }
 
 fn go(script: &str, event: &Event) -> Outcome {
@@ -29,6 +30,44 @@ fn calculate_scripts_read_fields_and_set_the_value() {
     assert_eq!(o.error, None);
     assert_eq!(o.value, "50");
     assert!(o.rc);
+}
+
+#[test]
+/// Expose all supported page boxes in rotated-user-space order using only supplied document geometry.
+fn get_page_box_returns_supported_boxes_in_rotated_user_space() {
+    let mut document = doc();
+    document.page_boxes = vec![
+        [
+            [10.0, 20.0, 210.0, 320.0],
+            [20.0, 30.0, 200.0, 310.0],
+            [25.0, 35.0, 195.0, 305.0],
+            [30.0, 40.0, 190.0, 300.0],
+            [35.0, 45.0, 185.0, 295.0]
+        ];
+        3
+    ];
+    document.page_rotations = vec![0, 90, 270];
+    let out = run(
+        "JSON.stringify([this.getPageBox(), this.getPageBox('Media', 1), this.getPageBox('Art', 2)])",
+        &Event::doc("Console"),
+        &document,
+        &[],
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("[[20,310,200,30],[-10,190,290,-10],[15,165,265,15]]"));
+}
+
+#[test]
+/// Unknown box names, malformed page indices and pages outside the snapshot produce script errors.
+fn get_page_box_rejects_unknown_boxes_and_invalid_pages() {
+    for script in
+        ["this.getPageBox('BBox')", "this.getPageBox(1)", "this.getPageBox('Crop', -1)", "this.getPageBox('Crop', 1.5)", "this.getPageBox('Crop', 3)"]
+    {
+        let out = go(script, &Event::doc("Console"));
+        assert!(out.error.is_some(), "{script}");
+    }
 }
 
 #[test]
@@ -71,6 +110,34 @@ fn scripts_change_other_fields_and_their_properties() {
     assert_eq!(total.text_color.as_deref(), Some(&["RGB".to_string(), "1".into(), "0".into(), "0".into()][..]));
     assert_eq!(o.changed.iter().find(|f| f.name == "agree").unwrap().value, ["Yes"]);
     assert_eq!(o.changed.iter().find(|f| f.name == "size").unwrap().value, ["l"]);
+}
+
+#[test]
+/// Normal captions read/write correctly; unsupported faces cannot partially mutate a button.
+fn push_button_caption_methods_read_write_and_reject_other_faces() {
+    let mut button = FieldState::new("go", FieldType::Button, vec![]);
+    button.caption = Some("Old".into());
+    let fields = vec![button, FieldState::new("text", FieldType::Text, vec![])];
+    let run = |script: &str| run(script, &Event::field("Mouse Up", "go", ""), &doc(), &fields, &[], Limits::default());
+    let got = run("event.value = getField('go').buttonGetCaption();");
+    assert_eq!(got.value, "Old");
+    let set = run("getField('go').buttonSetCaption('New'); event.value = getField('go').buttonGetCaption();");
+    assert_eq!(set.value, "New");
+    assert_eq!(set.changed[0].caption.as_deref(), Some("New"));
+    assert!(got.changed.is_empty(), "a getter must not change the form");
+    for face in ["1", "2", "-1", "0.5", "NaN", "Infinity"] {
+        for method in [format!("getField('go').buttonGetCaption({face});"), format!("getField('go').buttonSetCaption('Bad', {face});")] {
+            let rejected = run(&method);
+            assert!(rejected.error.is_some(), "{method}");
+            assert!(rejected.changed.is_empty(), "an invalid face must not mutate the caption");
+        }
+    }
+    assert!(run("getField('text').buttonSetCaption('Bad');").error.is_some());
+    assert!(run("getField('text').buttonGetCaption();").error.is_some());
+    let cleared = run("getField('go').buttonSetCaption('', 0); event.value = getField('go').buttonGetCaption(0);");
+    assert_eq!(cleared.error, None);
+    assert_eq!(cleared.value, "");
+    assert_eq!(cleared.changed[0].caption.as_deref(), Some(""));
 }
 
 #[test]
@@ -355,12 +422,21 @@ fn app_alert_titles_are_clipped_and_charged() {
     // The title's bytes count against the budget with the text's, and a message the budget
     // has no room for is left out and counted.
     let mut h = Host {
+        icons: Vec::new(),
+        objects: Default::default(),
+        field_keys: Default::default(),
         fields: Arc::new(Vec::new()),
         changed: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
         requests: Vec::new(),
         doc: doc(),
+        calculations: Vec::new(),
+        calculate_depth: 0,
+        calculation_work: 0,
+        current_event: JsValue::undefined(),
+        reset_calls: 0,
+        reset_limit_exceeded: false,
         kept: 0,
         dropped: 0,
     };
@@ -2071,4 +2147,62 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     assert_eq!(o.error, None);
     assert_eq!(o.value, "undefined number 3.5");
     assert_eq!(o.alerts, [Message::plain("old viewer")]);
+}
+
+#[test]
+fn string_arrays_refuse_aggregate_text_before_request_clipping() {
+    let o = go("resetForm(new Array(65).fill('x'.repeat(1 << 19)));", &Event::doc("Console"));
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("string array byte limit")), "{:?}", o.error);
+    assert!(o.requests.is_empty() && o.changed.is_empty());
+}
+
+#[test]
+fn reset_call_limit_precedes_argument_conversion_and_survives_catches() {
+    let o = go("for(var i=0;i<64;i++)resetForm();resetForm([{toString(){throw Error('argument read');}}]);", &Event::doc("Console"));
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("reset call limit")), "{:?}", o.error);
+    assert_eq!(o.requests.iter().filter(|r| matches!(r, Request::Reset(_))).count(), 64);
+}
+
+#[test]
+fn caught_reset_limit_cannot_admit_additional_resets() {
+    let out = go("for(var i=0;i<10000;i++){try{resetForm();}catch(e){}} getField('price').value=99;", &Event::doc("Console"));
+    assert_eq!(out.error, None);
+    assert!(out.reset_limit_exceeded);
+    assert_eq!(out.requests.iter().filter(|r| matches!(r, Request::Reset(_))).count(), 64);
+}
+
+#[test]
+fn af_simple_calculate_expands_groups_and_duplicate_names() {
+    let fields = vec![
+        FieldState::new("row.0", FieldType::Text, vec!["2".into()]),
+        FieldState::new("row.1", FieldType::Text, vec!["3".into()]),
+        FieldState::new("row.1", FieldType::Text, vec!["5".into()]),
+        FieldState::new("rowExtra", FieldType::Text, vec!["100".into()]),
+    ];
+    for (op, names, expected) in [
+        ("SUM", "['row']", 10.0),
+        ("SUM", "['row.1']", 8.0),
+        ("SUM", "['row','row.1']", 18.0),
+        ("PRD", "['row']", 30.0),
+        ("AVG", "['row']", 10.0 / 3.0),
+        ("MIN", "['row']", 2.0),
+        ("MAX", "['row']", 5.0),
+        ("SUM", "['missing']", 0.0),
+        ("PRD", "['missing']", 1.0),
+        ("AVG", "['missing']", 0.0),
+        ("MIN", "[]", 0.0),
+        ("MAX", "[]", 0.0),
+    ] {
+        let script = format!("event.value=AFSimple_Calculate('{op}',{names});event.value;");
+        let out = run(&script, &Event::field("Calculate", "out", ""), &Default::default(), &fields, &[], Default::default());
+        assert_eq!(out.error, None, "{script}");
+        assert!((out.result.unwrap().parse::<f64>().unwrap() - expected).abs() < 1e-10, "{script}");
+    }
+}
+#[test]
+fn af_simple_calculate_bounds_selector_work_before_expansion() {
+    let fields = vec![FieldState::new("n", FieldType::Text, vec!["1".into()]); 4096];
+    let out =
+        run("AFSimple_Calculate('SUM',new Array(4096).fill('n'));", &Event::doc("Console"), &Default::default(), &fields, &[], Default::default());
+    assert!(out.error.as_deref().is_some_and(|e| e.contains("calculation field lookup exceeds")));
 }
