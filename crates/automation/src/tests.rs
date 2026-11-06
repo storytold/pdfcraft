@@ -147,6 +147,84 @@ fn search_bounds_warning_volume_and_does_not_reach_distant_failures() {
 }
 
 #[test]
+fn stop_at_limit_ends_at_a_lone_match_without_reading_the_distant_tail() {
+    let mut a = Automation::new();
+    let id = search_document(&mut a, 200);
+    // #5328: "Page 1" is only on page 1 (every other readable page reads "Page 2"), and the last
+    // page fails, so only a search that runs on to the end hears about it.
+    let requested = std::cell::RefCell::new(Vec::new());
+    let mut extract = |bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]| {
+        requested.borrow_mut().extend_from_slice(pages);
+        let filler = extract_parallel(bytes, password.clone(), &[1]).remove(0).1;
+        let first = extract_parallel(bytes, password, &[0]).remove(0).1;
+        pages
+            .iter()
+            .map(|&p| {
+                (
+                    p,
+                    match p {
+                        0 => first.clone(),
+                        199 => Err("synthetic page 200 failure".into()),
+                        _ => filler.clone(),
+                    },
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let looked_ahead = a.text_find_with(&Args(&json!({ "doc": id.0, "query": "Page 1", "limit": 1 })), &mut extract).unwrap();
+    assert_eq!((looked_ahead["count"].clone(), looked_ahead["warning_count"].clone()), (json!(1), json!(1)), "{looked_ahead}");
+    assert!(looked_ahead.get("next").is_none() && looked_ahead.get("stopped_at_limit").is_none());
+
+    a.texts.remove(&id);
+    requested.borrow_mut().clear();
+    let args = json!({ "doc": id.0, "query": "Page 1", "limit": 1, "stop_at_limit": true });
+    let stopped = a.text_find_with(&Args(&args), &mut extract).unwrap();
+    assert_eq!(stopped["matches"][0]["page"], 1);
+    assert_eq!((stopped["count"].clone(), stopped["warning_count"].clone()), (json!(1), json!(0)), "{stopped}");
+    assert_eq!((stopped["complete"].clone(), stopped["stopped_at_limit"].clone()), (json!(false), json!(true)));
+    assert_eq!(stopped["next"], json!({ "start_page": 1, "skip": 1 }));
+    assert_eq!(*requested.borrow(), [0], "a match on the first page reads only that page");
+
+    // Resuming finds nothing more and reaches the failing page, which it now reports.
+    let mut resume = args.clone();
+    resume["start_page"] = stopped["next"]["start_page"].clone();
+    resume["skip"] = stopped["next"]["skip"].clone();
+    let rest = a.text_find_with(&Args(&resume), &mut extract).unwrap();
+    assert_eq!((rest["count"].clone(), rest["stopped_at_limit"].clone(), rest["complete"].clone()), (json!(0), json!(false), json!(false)));
+    assert_eq!(rest["warnings"][0]["page"], 200);
+    assert!(rest.get("next").is_none());
+}
+
+#[test]
+fn stop_at_limit_continuations_return_every_match_once_and_end_complete() {
+    let mut a = Automation::new();
+    let id = search_document(&mut a, 120);
+    let all = json(&mut a, "text_find", json!({ "doc": id.0, "query": "1", "limit": 10_000 }));
+    assert_eq!(all["complete"], true);
+    // "1" appears twice on pages like 11 and 111, so resuming has to skip within a page.
+    for limit in [1, 2, 3] {
+        let mut args = json!({ "doc": id.0, "query": "1", "limit": limit, "stop_at_limit": true });
+        let mut pieced = Vec::new();
+        for _ in 0..=all["count"].as_u64().unwrap() {
+            let part = json(&mut a, "text_find", args.clone());
+            assert_eq!(part["warning_count"], 0);
+            pieced.extend(part["matches"].as_array().unwrap().iter().cloned());
+            if part["stopped_at_limit"] == false {
+                assert_eq!(part["complete"], true);
+                assert!(part.get("next").is_none());
+                break;
+            }
+            assert_eq!((part["count"].clone(), part["complete"].clone()), (json!(limit), json!(false)));
+            args["start_page"] = part["next"]["start_page"].clone();
+            args["skip"] = part["next"]["skip"].clone();
+        }
+        assert_eq!(pieced, *all["matches"].as_array().unwrap(), "limit {limit}: no match lost or repeated");
+    }
+    let none = json(&mut a, "text_find", json!({ "doc": id.0, "query": "absent", "limit": 1, "stop_at_limit": true }));
+    assert_eq!((none["count"].clone(), none["complete"].clone(), none["stopped_at_limit"].clone()), (json!(0), json!(true), json!(false)));
+}
+
+#[test]
 fn a_bounded_text_find_reads_only_the_pages_it_needs_and_says_it_stopped() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-automation-find-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
