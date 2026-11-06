@@ -10472,6 +10472,25 @@ fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
 }
 
 #[test]
+fn resizing_an_added_image_back_inside_the_page_keeps_its_identity() {
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 2, 2);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
+    }
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([-30.0, -20.0, 70.0, 80.0]), name: "edge.png".into(), bytes: Arc::new(png) }).unwrap();
+    let original = s.get(id).unwrap().added()[0].obj;
+    let target = [10.0, 10.0, 60.0, 60.0];
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move(target) }).unwrap();
+    let added = s.get(id).unwrap().added();
+    assert_eq!(added.len(), 1);
+    assert_eq!(added[0].obj, original);
+    assert_eq!(added[0].content.rect(), target);
+}
+
+#[test]
 fn fill_sign_multiline_text_survives_engine_save_reopen_and_render() {
     let (mut session, id) = rotated_blank(0);
     let text = "\nAda\n\nLovelace\n";

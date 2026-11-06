@@ -330,13 +330,10 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
     if let Some((added_idx, added_item)) = matched_added
         && let AddedContent::Image(ai) = added_item.content.clone()
     {
+        // Page visibility alone is not a crop: dragging an added image over the page edge
+        // must not discard its editable added-item identity on the next resize.
         let has_active_crop = ai.crop.iter().any(|v| v.abs() > 1e-6)
-            || img.visible_rect.is_some_and(|v| {
-                (v[0] - img.rect[0]).abs() > 1e-4
-                    || (v[1] - img.rect[1]).abs() > 1e-4
-                    || (v[2] - img.rect[2]).abs() > 1e-4
-                    || (v[3] - img.rect[3]).abs() > 1e-4
-            });
+            || img.frame_rect().is_none_or(|frame| frame.iter().zip(img.rect).any(|(a, b)| (a - b).abs() > 1e-4));
         let non_axis_transform = matches!(change, ImageEdit::Transform([a, b, c, d, _, _])
             if !((b.abs() < 1e-5 && c.abs() < 1e-5) || (a.abs() < 1e-5 && d.abs() < 1e-5)));
         let should_promote = has_active_crop

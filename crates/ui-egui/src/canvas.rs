@@ -99,39 +99,15 @@ impl PainterExt for egui::Painter {
     }
 }
 
-/// User-space selectable bounding box for an image object.
-/// If the image object has an active clipping path applied to it (the crop box),
-/// this is the mathematical intersection of the full CTM-derived rect and the clipping path's rect.
+/// User-space editing frame: explicit PDF/editor crops apply, but the page edge does not
+/// truncate a selected image's handles. Body hit testing still respects page visibility.
 pub fn image_selectable_bounds(im: &pdfcraft_engine::PageImage) -> [f64; 4] {
-    if let Some(clip) = im.clip_rect {
-        let r = [im.rect[0].max(clip[0]), im.rect[1].max(clip[1]), im.rect[2].min(clip[2]), im.rect[3].min(clip[3])];
-        if r.iter().all(|v| v.is_finite()) && r[2] > r[0] && r[3] > r[1] {
-            return r;
-        }
-    }
-    im.visible_rect.unwrap_or(im.rect)
+    im.frame_rect().unwrap_or(im.rect)
 }
 
-/// Screen-space selectable bounding box for an image object.
-/// If the image object has an active clipping path applied to it (the crop box),
-/// the final selectable `egui::Rect` is the mathematical intersection of the image's
-/// full CTM-derived rect and the clipping path's rect.
+/// Screen-space editing frame, including selected handles outside the page.
 pub fn image_screen_rect(im: &pdfcraft_engine::PageImage, xf: &PageXform, info: &DocInfo, page: usize) -> Rect {
-    let full = xf.user_rect_f64(info, page, im.rect);
-    if let Some(clip) = im.clip_rect {
-        let clip_r = xf.user_rect_f64(info, page, clip);
-        let inter = full.intersect(clip_r);
-        if inter.is_positive() {
-            return inter;
-        }
-    }
-    if let Some(vr) = im.visible_rect {
-        let r = xf.user_rect_f64(info, page, vr);
-        if r.is_positive() {
-            return r;
-        }
-    }
-    full
+    xf.user_rect_f64(info, page, image_selectable_bounds(im))
 }
 
 /// An Oriented Bounding Box (OBB) representing a rotated rectangle in screen space,
@@ -1664,7 +1640,12 @@ fn draw_pages(
     if delta != Vec2::ZERO && delta.is_finite() {
         ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
     }
-    let (resp_rect, resp) = ui.allocate_exact_size(vec2(content_w, content_h), Sense::click_and_drag());
+    // A resized handle can sit in the window beside a page that does not fill it. The
+    // response has to cover that visible area or the next press never starts: the pointer
+    // is reported only inside this rectangle once the previous drag has been released.
+    // Page positions stay on `content_w`/`content_h`; the extra area is not a new page.
+    let response_size = vec2(content_w.max(viewport.width()), content_h.max(viewport.height()));
+    let (resp_rect, resp) = ui.allocate_exact_size(response_size, Sense::click_and_drag());
     view.page_widget = Some(resp.id);
     // A drag lasts only while egui reports it, so the mark can't outlive one.
     if !resp.dragged_by(egui::PointerButton::Primary) {
@@ -1738,7 +1719,11 @@ fn draw_pages(
                         let obb = ImageObb::from_image(img, &xf, info, page_idx);
                         let b = image_screen_rect(img, &xf, info, page_idx);
                         let selected_crop = view.image_selection.as_ref().is_some_and(|s| s.page == page_idx && s.index == idx && s.crop.is_some());
-                        let hit = if selected_crop { crate::edit_text_ui::quad_contains(obb.corners(), p) } else { obb.contains(b, p) };
+                        let hit = if selected_crop {
+                            crate::edit_text_ui::quad_contains(obb.corners(), p)
+                        } else {
+                            xf.rect.contains(p) && obb.contains(b, p)
+                        };
                         if hit {
                             over_image = true;
                             if view.image_selection.as_ref().is_none_or(|s| s.page != page_idx || s.index != idx) {
@@ -1755,6 +1740,7 @@ fn draw_pages(
         }
         if !over_image && tool == QuickTool::EditText {
             view.image_selection = None;
+            ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
         }
     }
     let mut frame = PageFrame {
@@ -1966,7 +1952,7 @@ fn draw_pages(
                     let Some(img) = images.get(sel.index) else { return false };
                     let obb = ImageObb::from_image(img, &xf, info, sel.page);
                     let b = image_screen_rect(img, &xf, info, sel.page);
-                    obb.contains(b, p)
+                    xf.rect.contains(p) && obb.contains(b, p)
                 }));
         if is_image_menu && let Some(sel) = view.image_selection.clone() {
             let images = cached_edit_images(view, doc, sel.page).to_vec();

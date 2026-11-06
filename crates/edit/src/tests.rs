@@ -10696,3 +10696,22 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
         }
     }
 }
+
+#[test]
+fn image_editing_frame_keeps_page_edge_outside_explicit_clips() {
+    for (prefix, expected) in [
+        ("", [-30.0, -20.0, 70.0, 80.0]),
+        ("-10 -5 60 65 re W n ", [-10.0, -5.0, 50.0, 60.0]),
+        ("/PdfCraftImageCrop MP -10 -5 60 65 re W n ", [-10.0, -5.0, 50.0, 60.0]),
+    ] {
+        let doc = image_page_with(&format!("q {prefix}100 0 0 100 -30 -20 cm /Im0 Do Q"));
+        for doc in [&doc, &reopen(&doc)] {
+            let im = images::page_images(doc, 0).unwrap().remove(0);
+            assert_eq!(im.frame_rect(), Some(expected));
+            assert_eq!(im.has_editor_crop(), prefix.starts_with("/PdfCraftImageCrop"));
+            assert_eq!(im.visible_rect.unwrap()[0..2], [0.0, 0.0]);
+            assert!(!im.contains([-5.0, 10.0]), "out-of-page pixels stay unselectable");
+            assert!(im.contains([10.0, 10.0]));
+        }
+    }
+}
