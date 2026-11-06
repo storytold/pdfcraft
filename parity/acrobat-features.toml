@@ -226,8 +226,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/crypt/src/tests.rs::identity_crypt_filters_leave_data_alone", "crates/cos/tests/it/encryption.rs::a_crypt_filter_selected_by_reference_is_used", "crates/cos/tests/it/encryption.rs::an_identity_crypt_filter_selected_by_reference_leaves_a_stream_alone", "crates/render/src/raster/tests.rs::a_stream_with_a_crypt_filter_of_its_own_is_drawn"]
-notes = "a stream can name its own filter (/Crypt in /Filter, its name in /DecodeParms), read and written, each part given directly or by reference, in cos and in the renderer; /StmF, /StrF, /EFF and /CFM by reference too. A /Filter given by reference selects the crypt filter, but Stream::decoded still refuses it, so such a stream is decrypted and not decoded outside the renderer."
+evidence = ["crates/crypt/src/tests.rs::identity_crypt_filters_leave_data_alone", "crates/cos/tests/it/encryption.rs::a_crypt_filter_selected_by_reference_is_used", "crates/cos/tests/it/encryption.rs::an_identity_crypt_filter_selected_by_reference_leaves_a_stream_alone", "crates/render/src/raster/tests.rs::a_stream_with_a_crypt_filter_of_its_own_is_drawn", "crates/crypt/src/tests.rs::a_v4_rc4_key_shorter_than_16_bytes_is_extended_with_zeros"]
+notes = "a stream can name its own filter (/Crypt in /Filter, its name in /DecodeParms), read and written, each part given directly or by reference, in cos and in the renderer; /StmF, /StrF, /EFF and /CFM by reference too. A /Filter given by reference selects the crypt filter, but Stream::decoded still refuses it, so such a stream is decrypted and not decoded outside the renderer. A /V 4 RC4 filter with a 40- or 48-bit key reads as Acrobat writes it, the key extended to 16 bytes with zeros before Algorithm 1, in cos as in the renderer (pdf.js issue 19484)."
 
 [[feature]]
 id = "core.attachment-only-encryption"
