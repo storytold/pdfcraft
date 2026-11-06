@@ -1742,8 +1742,8 @@ milestone = "M4"
 status = "shipped"
 commands = ["help.shortcuts"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/commands.rs::the_shortcuts_dialog_lists_the_real_bindings"]
-notes = ""
+evidence = ["crates/ui-egui/tests/it/commands.rs::the_shortcuts_dialog_lists_the_real_bindings", "crates/ui-egui/tests/it/commands.rs::a_shortcut_changed_in_the_shortcuts_dialog_runs_its_command", "crates/ui-egui/tests/it/commands.rs::a_custom_single_key_shortcut_leaves_text_fields_their_typing", "crates/ui-egui/tests/it/commands.rs::keys_another_command_has_are_taken_only_after_reassign", "crates/ui-egui/src/dialogs/custom_shortcuts.rs::assigning_a_key_takes_it_from_the_command_that_had_it", "crates/ui-egui/src/dialogs/custom_shortcuts.rs::settings_round_trip_and_damaged_ones_are_read_leniently", "crates/ui-egui/src/dialogs/custom_shortcuts.rs::menus_and_tooltips_name_the_published_keys"]
+notes = "editable (#4635): Change takes the next key press, Remove and Reset per command, Reset all, and a search to give a key to a command that has none; a key another command has is named in the dialog and only taken from it on Reassign (Cancel leaves both as they were), Alt combinations and the view's own keys (copy, zoom, the page arrows, find next) are refused with a reason; kept in the settings and used by menus, the palette and tooltips. The control channel changes them by the same rules (`ui.set shortcut <command>=<keys>|none|default`, `all=default`), and `ui.commands` lists the bindings the keys run; the engine tools have none, as shortcuts are an app setting, not a document's. One key per command, no Alt, and the document view's own keys (V, H, the arrows, zoom) are not rebindable"
 
 [[feature]]
 id = "view.menus-from-registry"
