@@ -28,11 +28,15 @@ pub mod sanitize;
 mod tags;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_verify;
 pub(crate) mod type3;
 pub(crate) mod type3_tables;
+pub mod verify;
 
 use interp::{Mode, Scope, process};
 pub use pattern_guard::PatternProblem;
+pub use verify::{Proof, ProofOptions, Snapshot};
 
 pub type Rgb = [f64; 3];
 
@@ -63,6 +67,11 @@ pub enum RedactError {
         "redaction appearance has invalid geometry or exceeds the 8 MiB budget; reduce the marked area, turn off repeated text or apply fewer pages at once (nothing was redacted)"
     )]
     OverlayLimit,
+    /// A stream the redaction created to draw the marks' boxes and labels can't be read back, so
+    /// the proof can't tell it apart from content that was there before and nothing can be
+    /// exempted from the sweep.
+    #[error("a stream the redaction created can't be read back, so the result can't be proven")]
+    OverlayUnreadable,
     /// The structure tree couldn't be cleaned completely (#3302): an element written in place that
     /// would need changing, an element whose inherited page can't be found, or a tree too large to
     /// walk. Tags that kept the removed text or annotation would undo the redaction.
@@ -170,7 +179,7 @@ pub struct Report {
     pub overlays: Vec<ObjRef>,
 }
 
-fn rect_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
+pub(crate) fn rect_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
     let v: Vec<f64> = doc.resolve(o?).as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
     (v.len() == 4 && v.iter().all(|x| x.is_finite())).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
 }
@@ -641,8 +650,9 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     // Whatever reference keeps a pruned pattern in the file -- one no walk above follows -- the
     // full save would write it: prove it safe or refuse.
     pattern_guard::check_pruned_unreachable(doc, &pruned_patterns, first_page)?;
-    // The previous revision still holds the removed content: the next save must rewrite.
-    doc.require_full_save();
+    // The previous revision still holds the removed content: the next save must rewrite, and the
+    // rewritten file is a different file from its source, so it gets a new identifier.
+    doc.require_full_save_with_new_id();
     Ok(report)
 }
 
