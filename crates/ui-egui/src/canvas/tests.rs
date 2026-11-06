@@ -2436,10 +2436,10 @@ fn closing_page_context_menu_keeps_an_unrelated_popup_open() {
     let page_menu = egui::Id::unique("page-context-menu-test");
     let unrelated = egui::Id::unique("unrelated-popup-test");
     egui::Popup::open_id(&ctx, page_menu);
-    egui::Popup::open_id(&ctx, unrelated);
-
     close_page_context_menu(&ctx, page_menu);
-
     assert!(!egui::Popup::is_id_open(&ctx, page_menu), "the page menu closes");
+
+    egui::Popup::open_id(&ctx, unrelated);
+    close_page_context_menu(&ctx, page_menu);
     assert!(egui::Popup::is_id_open(&ctx, unrelated), "an unrelated popup remains open");
 }
