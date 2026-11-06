@@ -351,6 +351,77 @@ fn later_changes_are_classified_under_the_signature_permissions() {
     assert_eq!((s.certify, s.status), (Some(1), Status::Invalid), "{:?}", s.modification);
 }
 
+/// Certify `fixture` with "no changes allowed" (DocMDP P=1).
+fn certified_p1() -> (DigitalId, TrustStore, Vec<u8>) {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let trust = TrustStore { certs: vec![id.certificate.clone()] };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { certify: Some(1), ..opts() }).unwrap();
+    (id, trust, signed)
+}
+
+/// Add a signature widget to page 3's /Annots (not to /Fields), with value `v` and rectangle
+/// `rect`.
+fn add_sig_widget(doc: &mut Document, v: Option<&[(&[u8], Object)]>, rect: [i64; 4]) {
+    let mut w = Dict::new();
+    w.set(b"Type".to_vec(), Object::name("Annot"));
+    w.set(b"Subtype".to_vec(), Object::name("Widget"));
+    w.set(b"FT".to_vec(), Object::name("Sig"));
+    w.set(b"Rect".to_vec(), Object::Array(rect.map(Object::Int).to_vec()));
+    w.set(b"P".to_vec(), Object::Ref(ObjRef { num: 3, generation: 0 }));
+    if let Some(entries) = v {
+        let mut value = Dict::new();
+        for (k, o) in entries {
+            value.set(k.to_vec(), o.clone());
+        }
+        let vr = doc.add(Object::Dict(value));
+        w.set(b"V".to_vec(), Object::Ref(vr));
+    }
+    let wr = doc.add(Object::Dict(w));
+    doc.update_dict(ObjRef { num: 3, generation: 0 }, |pg| {
+        let mut a = pg.get(b"Annots").and_then(Object::as_array).cloned().unwrap_or_default();
+        a.push(Object::Ref(wr));
+        pg.set(b"Annots".to_vec(), Object::Array(a));
+    })
+    .unwrap();
+}
+
+/// Under P=1, a signature added after signing breaks the certification unless it is an invisible
+/// document timestamp. A visible overlay, an unsigned widget, an approval signature and a visible
+/// widget wearing a timestamp /SubFilter each break it; a genuine document timestamp does not.
+#[test]
+fn only_an_invisible_document_timestamp_survives_a_no_changes_certification() {
+    let (_, trust, signed) = certified_p1();
+    let check = |bytes: &[u8]| signatures(&open(bytes), bytes, &trust).into_iter().find(|s| s.signed && s.certify == Some(1)).unwrap();
+    assert_eq!(check(&signed).status, Status::Valid, "{:?}", check(&signed).details);
+    let approval: &[(&[u8], Object)] = &[(b"Type", Object::name("Sig")), (b"SubFilter", Object::name("adbe.pkcs7.detached"))];
+    let timestamp: &[(&[u8], Object)] = &[(b"Type", Object::name("DocTimeStamp")), (b"SubFilter", Object::name("ETSI.RFC3161"))];
+    // Each of these breaks the certification: it is a change P=1 does not allow.
+    for (what, v, rect) in [
+        ("visible overlay widget", None, [0, 0, 300, 300]),
+        ("invisible unsigned widget", None, [0, 0, 0, 0]),
+        ("visible approval signature", Some(approval), [0, 0, 300, 300]),
+        ("invisible approval signature", Some(approval), [0, 0, 0, 0]),
+        ("visible widget wearing a timestamp subfilter", Some(timestamp), [0, 0, 300, 300]),
+    ] {
+        let edited = edit_after(&signed, |doc| add_sig_widget(doc, v, rect));
+        let s = check(&edited);
+        assert!(matches!(&s.modification, Modification::Disallowed(k) if k.contains(&kind::SIGNATURE)), "{what}: {:?}", s.modification);
+        assert_ne!(s.status, Status::Valid, "{what}");
+    }
+}
+
+/// A genuine document timestamp, which draws nothing, is validation data P=1 permits: the
+/// certification stays valid.
+#[test]
+fn a_document_timestamp_keeps_a_no_changes_certification_valid() {
+    let (_, trust, signed) = certified_p1();
+    let tsa = TestTsa { id: tsa_id(), time: Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 } };
+    let stamped = pdfcraft_sign::timestamp_document(&open(&signed), &tsa, "D:20261006120000Z").unwrap();
+    let s = signatures(&open(&stamped), &stamped, &trust).into_iter().find(|s| s.certify == Some(1)).unwrap();
+    assert_eq!(s.status, Status::Valid, "{:?}", s.details);
+    assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::SIGNATURE)), "{:?}", s.modification);
+}
+
 #[test]
 fn invisible_signatures_and_refusals() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();

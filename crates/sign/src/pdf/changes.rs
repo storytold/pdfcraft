@@ -197,7 +197,58 @@ pub(super) fn classify_changes(doc: &Document, old: Option<Document>, p: Option<
             disallowed.push(what);
         }
     }
+    // DocMDP P=1 ("no changes allowed", ISO 32000-2 §12.8.2.2) permits only validation data to
+    // follow: the document security store, and document timestamps added for PAdES long-term
+    // archiving (§12.8.5). Those timestamps draw nothing. Any other signature added since — an
+    // approval signature, an unsigned signature widget, or a widget that paints over the signed
+    // page — is a change the certification forbids, however it is labelled.
+    if p == Some(1) && allowed.contains(&kind::SIGNATURE) && !only_invisible_timestamps_added(doc, &old) {
+        allowed.retain(|k| *k != kind::SIGNATURE);
+        if !disallowed.contains(&kind::SIGNATURE) {
+            disallowed.push(kind::SIGNATURE);
+        }
+    }
     if disallowed.is_empty() { Modification::Allowed(allowed) } else { Modification::Disallowed(disallowed) }
+}
+
+/// Whether every signature object `doc` gained or changed since the signed revision `old` is an
+/// invisible document timestamp. A signature annotation (a widget, or a dictionary carrying a
+/// signature value or role) that the signed revision did not hold byte for byte must be a
+/// `/SubFilter /ETSI.RFC3161` value in a widget that shows nothing — no positive-area `/Rect`,
+/// or the Hidden or NoView flag set. An approval signature, an empty signature widget, or a
+/// visible one fails, whatever `/Type` or `/SubFilter` it claims. Judged on the objects
+/// themselves, not on the `/AcroForm /Fields` listing, so a widget with no `/T` or one reached
+/// only through a page's `/Annots` is covered too.
+fn only_invisible_timestamps_added(doc: &Document, old: &Document) -> bool {
+    /// A widget shows nothing: no `/Rect` enclosing a positive area, or Hidden (2) / NoView (32).
+    fn invisible(doc: &Document, w: &Dict) -> bool {
+        let flags = w.get(b"F").and_then(|o| doc.resolve(o).as_int()).unwrap_or(0);
+        let area =
+            super::listing::nums(doc, w, b"Rect").filter(|r| r.len() == 4).is_some_and(|r| (r[0] - r[2]).abs() > 0.5 && (r[1] - r[3]).abs() > 0.5);
+        !area || flags & (2 | 32) != 0
+    }
+    for num in doc.object_numbers() {
+        let new = doc.get(ObjRef { num, generation: doc.generation(num) });
+        let Some(d) = new.as_dict() else { continue };
+        // A signature object: a signature value, or a field or widget that carries one.
+        let is_value = matches!(d.name(b"Type"), Some(b"Sig" | b"DocTimeStamp"));
+        let is_field = d.name(b"FT") == Some(b"Sig") || d.name(b"Subtype") == Some(b"Widget");
+        if !is_value && !is_field {
+            continue;
+        }
+        // Unchanged since signing: the certification already covered it.
+        if old.try_get(num).ok().filter(|o| !matches!(**o, Object::Null)).as_deref() == Some(&*new) {
+            continue;
+        }
+        let value = if is_value { Some(d.clone()) } else { d.get(b"V").map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()) };
+        // A new or changed signature object passes only as an invisible document timestamp. A
+        // widget with no value (an empty signature field placed on the page) never does.
+        let timestamp = value.as_ref().is_some_and(super::validate::is_doc_timestamp);
+        if !timestamp || (is_field && !invisible(doc, d)) {
+            return false;
+        }
+    }
+    true
 }
 
 struct ChangedObjectClassifier<'a> {
