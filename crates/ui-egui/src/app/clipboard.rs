@@ -77,7 +77,8 @@ impl PdfCraftApp {
         if paste {
             let has_override_image = matches!(self.clipboard_override, Some(crate::create_ui::Clip::Image { .. }));
             #[cfg(not(target_arch = "wasm32"))]
-            let system_has_text = if !has_override_image && self.system_clipboard { crate::os_clipboard::has_text() } else { false };
+            let system_has_text =
+                !has_override_image && self.system_clipboard && (self.own_clipboard_text.is_some() || crate::os_clipboard::has_text());
             #[cfg(target_arch = "wasm32")]
             let system_has_text = false;
 
@@ -213,6 +214,23 @@ impl PdfCraftApp {
         }
         ctx.copy_text(text);
         true
+    }
+
+    /// Keeps [`Self::own_clipboard_text`] up to date at the end of a frame: the text this frame
+    /// copied through egui (the last copy wins), or nothing once the window has lost focus, when
+    /// another app may have replaced it.
+    pub(crate) fn note_own_clipboard(&mut self, ctx: &egui::Context) {
+        let copied = ctx.output(|o| {
+            o.commands.iter().rev().find_map(|c| match c {
+                egui::OutputCommand::CopyText(t) => Some(t.clone()),
+                _ => None,
+            })
+        });
+        if let Some(text) = copied {
+            self.own_clipboard_text = Some(text).filter(|t| !t.is_empty());
+        } else if !ctx.input(|i| i.focused) {
+            self.own_clipboard_text = None;
+        }
     }
 
     /// The clipboard text of a whole-document copy, once its pages are read; dropped with the
@@ -454,5 +472,60 @@ mod review_tests {
         ctx.run_ui(egui::RawInput { events: vec![egui::Event::Cut], ..Default::default() }, |ui| app.clipboard_keys(0, ui.ctx()))
             .drop_without_applying_deltas();
         assert!(app.views[0].image_selection.is_some());
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod own_clipboard_tests {
+    use super::*;
+
+    /// A frame that copies `copy` through egui (if any), with the window focused or not.
+    fn frame(app: &mut PdfCraftApp, ctx: &egui::Context, focused: bool, copy: Option<&str>) {
+        ctx.run_ui(egui::RawInput { focused, ..Default::default() }, |ui| {
+            if let Some(text) = copy {
+                ui.ctx().copy_text(text.to_owned());
+            }
+            app.note_own_clipboard(ui.ctx());
+        })
+        .drop_without_applying_deltas();
+    }
+
+    /// #6169: after the window copied text, a right-click's Paste Image check, Paste Image and
+    /// Create ▸ Clipboard answer from that text. None of them opens the system clipboard:
+    /// reading this window's own selection back waits for this thread, for good on Wayland.
+    #[test]
+    fn after_copying_text_nothing_reads_the_clipboard_back() {
+        let mut app = PdfCraftApp::new();
+        app.system_clipboard = true;
+        app.create_blank();
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx, true, Some("copied words"));
+        assert_eq!(app.own_clipboard_text.as_deref(), Some("copied words"));
+
+        let opened = crate::os_clipboard::opens();
+        assert!(!app.can_paste_image(), "text supersedes an image");
+        assert!(!app.paste_image(0, None), "no image to paste");
+        let docs = app.views.len();
+        app.create_from_clipboard();
+        assert_eq!(app.views.len(), docs + 1, "a new document from the copied text");
+        assert_eq!(crate::os_clipboard::opens(), opened, "the system clipboard was opened");
+    }
+
+    /// Another app can replace the clipboard only while the window doesn't have focus: losing
+    /// focus forgets the copied text. A later copy replaces it, and an empty one clears it.
+    #[test]
+    fn the_copied_text_lasts_until_the_window_loses_focus_or_a_later_copy() {
+        let mut app = PdfCraftApp::new();
+        let ctx = egui::Context::default();
+        frame(&mut app, &ctx, true, Some("first"));
+        frame(&mut app, &ctx, true, None);
+        assert_eq!(app.own_clipboard_text.as_deref(), Some("first"), "kept while focused");
+        frame(&mut app, &ctx, true, Some("second"));
+        assert_eq!(app.own_clipboard_text.as_deref(), Some("second"));
+        frame(&mut app, &ctx, false, None);
+        assert_eq!(app.own_clipboard_text, None, "forgotten once the window lost focus");
+        frame(&mut app, &ctx, true, Some("third"));
+        frame(&mut app, &ctx, true, Some(""));
+        assert_eq!(app.own_clipboard_text, None, "an empty copy");
     }
 }

@@ -962,6 +962,7 @@ impl crate::PdfCraftApp {
             if self.system_clipboard {
                 let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&rgba) };
                 crate::os_clipboard::with(|c| c.set_image(img)).map_err(|e| e.to_string())?;
+                self.own_clipboard_text = None;
             }
             #[cfg(target_arch = "wasm32")]
             if self.system_clipboard {
@@ -1085,7 +1086,10 @@ impl crate::PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.system_clipboard {
-                return matches!(crate::os_clipboard::for_image_paste(), Some(crate::create_ui::Clip::Image { .. }));
+                // Our own text is there: text supersedes an image, and reading it back would wait
+                // for this thread (#6169).
+                return self.own_clipboard_text.is_none()
+                    && matches!(crate::os_clipboard::for_image_paste(), Some(crate::create_ui::Clip::Image { .. }));
             }
         }
         self.last_copied_image.is_some() || self.last_copied_file.is_some()
@@ -1123,7 +1127,11 @@ impl crate::PdfCraftApp {
 
     fn paste_image_internal(&mut self, page: usize, rect: Option<[f64; 4]>, at: Option<[f64; 2]>) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
-        let system = if self.clipboard_override.is_none() && self.system_clipboard { crate::os_clipboard::for_image_paste() } else { None };
+        let system = match (&self.clipboard_override, &self.own_clipboard_text) {
+            (None, Some(_)) if self.system_clipboard => Some(crate::create_ui::Clip::Text(String::new())),
+            (None, None) if self.system_clipboard => crate::os_clipboard::for_image_paste(),
+            _ => None,
+        };
         #[cfg(target_arch = "wasm32")]
         let system = None;
         self.paste_image_with_system(

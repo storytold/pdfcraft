@@ -9,8 +9,22 @@ use std::sync::{Mutex, PoisonError};
 
 static LOCK: Mutex<()> = Mutex::new(());
 
+#[cfg(test)]
+thread_local! {
+    /// Test hook: how many times this thread has opened the system clipboard.
+    static OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has opened the system clipboard ([`with`]).
+#[cfg(test)]
+pub(crate) fn opens() -> usize {
+    OPENS.with(std::cell::Cell::get)
+}
+
 /// Opens the system clipboard, runs `f` on it and closes it, with no other thread inside.
 pub(crate) fn with<T>(f: impl FnOnce(&mut arboard::Clipboard) -> Result<T, arboard::Error>) -> Result<T, arboard::Error> {
+    #[cfg(test)]
+    OPENS.with(|n| n.set(n.get() + 1));
     let _turn = LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     // Declared after the guard, so it's closed before the lock is released.
     let mut clipboard = arboard::Clipboard::new()?;

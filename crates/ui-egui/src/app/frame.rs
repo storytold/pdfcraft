@@ -95,6 +95,8 @@ impl PdfCraftApp {
 impl PdfCraftApp {
     pub(crate) fn finish_render_frame(&mut self, ctx: &egui::Context) {
         self.finish_document_copy(ctx);
+        // After the document copy, which may copy text itself this frame.
+        self.note_own_clipboard(ctx);
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
         self.combine_thumbs_frame(ctx);
         // Retire hidden documents before admitting the visible document's textures, so the

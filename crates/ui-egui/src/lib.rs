@@ -590,6 +590,13 @@ pub struct PdfCraftApp {
     /// system clipboard as a file when `system_clipboard` is on.
     pub last_copied_file: Option<(String, Vec<u8>)>,
     pub system_clipboard: bool,
+    /// The text this window last copied through egui, while it is still what the system
+    /// clipboard holds: no other app can have replaced it since (the window kept focus) and this
+    /// app hasn't put an image or a file there. The window's own event loop (this thread) serves
+    /// that selection, so reading it back here waits for itself: on Wayland a right-click after
+    /// Copy froze for good (#6169). Paste, Paste Image and Create ▸ Clipboard answer from this
+    /// instead of reading the system clipboard ([`PdfCraftApp::note_own_clipboard`]).
+    pub(crate) own_clipboard_text: Option<String>,
     /// What ⌘V reads instead of the system clipboard (tests).
     pub clipboard_override: Option<create_ui::Clip>,
     /// Attach file: the file to attach instead of asking (tests, automation).
