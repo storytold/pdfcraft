@@ -176,7 +176,8 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
             v
         };
         if current != v && matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
-            doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), PdfString::text(&v)))?;
+            let text = doc.text_string(&v);
+            doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), text))?;
             redraw(doc, &f, std::slice::from_ref(&v), scripts)?;
             if let Some(target) = all.iter_mut().find(|x| x.obj == obj) {
                 target.value = vec![v];
@@ -210,12 +211,13 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             let t = &af::keystroke(&f.actions.format, &f.name, t).map_err(FormError::Format)?;
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
             let t = &scripting::accept(doc, f, t, scripts)?;
+            let text = doc.text_string(t);
             let shadow = t.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
             doc.update_dict(f.obj, |d| {
                 if t.is_empty() && !shadow {
                     d.remove(b"V");
                 } else {
-                    d.set(b"V".to_vec(), PdfString::text(t));
+                    d.set(b"V".to_vec(), text);
                 }
                 d.remove(b"RV");
             })?;
@@ -294,16 +296,17 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             // in other viewers: a pick below the last visible row would otherwise not show (#1524).
             let picked: Vec<usize> = indices.iter().filter_map(|i| i.as_int()).filter_map(|i| usize::try_from(i).ok()).collect();
             let top = list_scroll(f, &picked, f.options.len());
-            // An empty value of its own keeps a parent field's /V from showing through.
             let shadow = exports.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
+            let texts: Vec<PdfString> = exports.iter().map(|e| doc.text_string(e)).collect();
+            let empty = doc.text_string("");
             doc.update_dict(f.obj, |d| {
-                match exports.as_slice() {
-                    [] if shadow => d.set(b"V".to_vec(), PdfString::text("")),
+                match texts.as_slice() {
+                    [] if shadow => d.set(b"V".to_vec(), Object::String(empty.clone())),
                     [] => {
                         d.remove(b"V");
                     }
-                    [one] => d.set(b"V".to_vec(), PdfString::text(one)),
-                    many => d.set(b"V".to_vec(), Object::Array(many.iter().map(|e| Object::String(PdfString::text(e))).collect())),
+                    [one] => d.set(b"V".to_vec(), one.clone()),
+                    many => d.set(b"V".to_vec(), Object::Array(many.iter().cloned().map(Object::String).collect())),
                 }
                 if indices.is_empty() {
                     d.remove(b"I");
@@ -633,7 +636,10 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
         }
         let restored: Vec<String> = f.default.first().cloned().into_iter().collect();
         match restored.first() {
-            Some(dv) => doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), PdfString::text(dv)))?,
+            Some(dv) => {
+                let text = doc.text_string(dv);
+                doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), text))?
+            }
             None if shared_value_kept => doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), PdfString::text("")))?,
             None => {}
         }

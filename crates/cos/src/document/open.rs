@@ -29,6 +29,7 @@ impl Document {
             next_num: 1,
             header_offset: 0,
             version: "1.7".into(),
+            saved_version: "1.7".into(),
             security: None,
             encrypt_num: None,
             encrypt_members: Arc::default(),
@@ -115,6 +116,7 @@ impl Document {
             overlay: BTreeMap::new(),
             next_num: 1,
             header_offset,
+            saved_version: version.clone(),
             version,
             security: None,
             encrypt_num: None,
@@ -303,7 +305,7 @@ impl Document {
     /// The next save must rewrite the whole file (see [`Document::require_full_save`]).
     /// Repair-aware edits retaining two accepted generations cannot use one incremental slot.
     pub fn full_save_required(&self) -> bool {
-        self.full_save || self.overlay.values().any(|slot| matches!(slot, Slot::RepairedSet(..)))
+        self.full_save || self.version != self.saved_version || self.overlay.values().any(|slot| matches!(slot, Slot::RepairedSet(..)))
     }
 
     /// The next full save gives the file a new identifier (see [`Document::require_full_save_with_new_id`]).

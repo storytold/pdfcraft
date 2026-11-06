@@ -58,19 +58,17 @@ fn items_to_sort(doc: &Document, f: &Field, props: &FieldProps) -> (Vec<(String,
 /// Sort a choice field's items (export value, display text) by display text, ignoring case, and
 /// write them as `/Opt`; export values stay with their items. Returns the export values in their
 /// new order and the `old` positions carried through the sort.
-fn write_sorted_opt(d: &mut Dict, items: &[(String, String)], old: &[usize]) -> (Vec<String>, Vec<usize>) {
+fn write_sorted_opt(d: &mut Dict, items: &[(String, String)], old: &[usize], text: &impl Fn(&str) -> PdfString) -> (Vec<String>, Vec<usize>) {
     let mut order: Vec<usize> = (0..items.len()).collect();
     order.sort_by_key(|&i| items.get(i).map(|(_, display)| display.to_lowercase()));
     let sorted: Vec<&(String, String)> = order.iter().filter_map(|&i| items.get(i)).collect();
     let opt = sorted
         .iter()
-        .map(|(e, disp)| {
-            if e == disp {
-                Object::String(PdfString::text(disp))
-            } else {
-                Object::Array(vec![Object::String(PdfString::text(e)), Object::String(PdfString::text(disp))])
-            }
-        })
+        .map(
+            |(e, disp)| {
+                if e == disp { Object::String(text(disp)) } else { Object::Array(vec![Object::String(text(e)), Object::String(text(disp))]) }
+            },
+        )
         .collect();
     d.set(b"Opt".to_vec(), Object::Array(opt));
     let carried = old.iter().filter_map(|o| order.iter().position(|i| i == o)).collect();
@@ -78,7 +76,7 @@ fn write_sorted_opt(d: &mut Dict, items: &[(String, String)], old: &[usize]) -> 
 }
 
 /// Build /Opt before modifying the document, preserving appearance states and selection.
-fn button_export_options(f: &Field, index: usize, value: &str) -> Result<Vec<Object>, FormError> {
+fn button_export_options(f: &Field, index: usize, value: &str, text: &impl Fn(&str) -> PdfString) -> Result<Vec<Object>, FormError> {
     if !matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) {
         return invalid("only check boxes and radio buttons have an export value");
     }
@@ -101,7 +99,7 @@ fn button_export_options(f: &Field, index: usize, value: &str) -> Result<Vec<Obj
         if same_state && Some(export) != previous {
             return invalid("widgets with the same appearance state have conflicting export values");
         }
-        out.push(Object::String(PdfString::text(if same_state { value } else { export })));
+        out.push(Object::String(text(if same_state { value } else { export })));
     }
     Ok(out)
 }
@@ -125,7 +123,9 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     }
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
-    let export_options = props.export_value.as_ref().map(|(index, value)| button_export_options(&f, *index, value)).transpose()?;
+    let utf8 = doc.version().starts_with("2.");
+    let text = move |s: &str| if utf8 { PdfString::text_utf8(s) } else { PdfString::text(s) };
+    let export_options = props.export_value.as_ref().map(|(index, value)| button_export_options(&f, *index, value, &text)).transpose()?;
     if props.export_value.is_some() && props.options.is_some() {
         return invalid("give export_value or options, not both");
     }
@@ -241,7 +241,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
             if t.is_empty() {
                 d.remove(b"TU");
             } else {
-                d.set(b"TU".to_vec(), PdfString::text(t));
+                d.set(b"TU".to_vec(), text(t));
             }
         }
         if let Some(m) = props.max_len {
@@ -261,12 +261,12 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
             d.set(b"Opt".to_vec(), Object::Array(options.clone()));
         }
         if let Some(opts) = &props.options {
-            d.set(b"Opt".to_vec(), Object::Array(opts.iter().map(|o| Object::String(PdfString::text(o))).collect()));
+            d.set(b"Opt".to_vec(), Object::Array(opts.iter().map(|o| Object::String(text(o))).collect()));
             new_exports = Some(opts.clone());
         }
         // "Sort items": the list itself is kept in order (export values stay with their items).
         if ff & flags::SORT != 0 && matches!(f.kind, FieldKind::Combo | FieldKind::List) {
-            let (exports, carried) = write_sorted_opt(d, &sort_items, &old_selection);
+            let (exports, carried) = write_sorted_opt(d, &sort_items, &old_selection, &text);
             new_exports = Some(exports);
             kept = carried;
         }
@@ -281,13 +281,13 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         match &props.default_value {
             // Buttons name their default state; text and choices hold a string.
             Some(Some(v)) if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) => d.set(b"DV".to_vec(), Object::Name(crate::name_bytes(v))),
-            Some(Some(v)) => d.set(b"DV".to_vec(), PdfString::text(v)),
+            Some(Some(v)) => d.set(b"DV".to_vec(), text(v)),
             // `/DV` is inheritable: with an ancestor's in place, removing the field's own would
             // bring that one back, so the field keeps an empty default of its own instead.
             Some(None) if parent_default && matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) => {
                 d.set(b"DV".to_vec(), Object::Name(b"Off".to_vec()))
             }
-            Some(None) if parent_default => d.set(b"DV".to_vec(), PdfString::text("")),
+            Some(None) if parent_default => d.set(b"DV".to_vec(), text("")),
             Some(None) => {
                 d.remove(b"DV");
             }
@@ -435,7 +435,8 @@ fn rename_field(doc: &mut Document, all: &[Field], f: &Field, name: &str, props:
             if child_named(doc, af, parent, n).is_some_and(|r| r != f.obj) {
                 return invalid(format!("a field named {new_name:?} already exists"));
             }
-            doc.update_dict(f.obj, |d| d.set(b"T".to_vec(), PdfString::text(n)))?;
+            let own = doc.text_string(n);
+            doc.update_dict(f.obj, |d| d.set(b"T".to_vec(), own))?;
         }
         // Calculations read the field by its new name, unless another field keeps the old one.
         if all.iter().filter(|x| x.name == f.name).count() == 1 {
