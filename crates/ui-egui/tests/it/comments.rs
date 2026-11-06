@@ -4465,3 +4465,29 @@ fn selection_highlight_picker_closes_when_comments_are_hidden() {
     assert_eq!(h.state().comment_prefs.style(pdfcraft_ui_egui::comments::CommentTool::Highlight).color, before);
     assert!(!h.state().session.get(id).unwrap().dirty);
 }
+
+#[test]
+fn selection_highlight_shows_a_dropdown_icon_when_the_picker_is_available() {
+    let mut h = selection_bar_words();
+    let button = h.query_all_by_label("Highlight").find(|n| n.rect().width() > 40.0).unwrap().rect();
+    fn icon_in(shape: &egui::Shape, button: egui::Rect) -> bool {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().any(|shape| icon_in(shape, button)),
+            egui::Shape::Rect(shape) if shape.brush.is_some() => {
+                let rect = shape.rect;
+                button.contains_rect(rect) && rect.left() > button.center().x && rect.width() >= 6.0 && rect.height() >= 6.0
+            }
+            _ => false,
+        }
+    }
+    assert!(h.output().shapes.iter().any(|shape| icon_in(&shape.shape, button)), "Highlight paints its dropdown icon inside the button");
+    assert!(button.width() < 110.0, "the indicator adds only a small amount of width");
+    let add = h.query_all_by_label("Add comment").find(|n| n.rect().width() > 40.0).unwrap().rect();
+    let underline = h.query_all_by_label("Underline").find(|n| n.rect().width() > 40.0).unwrap().rect();
+    assert!(add.right() <= button.left() && button.right() <= underline.left(), "the button order stays unchanged");
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().session.set_hide_comments(id, true));
+    h.run_steps(3);
+    let button = h.query_all_by_label("Highlight").find(|n| n.rect().width() > 40.0).unwrap().rect();
+    assert!(!h.output().shapes.iter().any(|shape| icon_in(&shape.shape, button)), "no dropdown indicator when the picker is unavailable");
+}

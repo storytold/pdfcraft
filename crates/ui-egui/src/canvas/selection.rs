@@ -203,8 +203,13 @@ pub(super) fn selection_actions(
                         (tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut, None)),
                         (tl!("Replace text"), SelectionAction::Replace),
                     ] {
-                        let response = ui.add_enabled(can_comment, egui::Button::new(label));
-                        if can_comment && matches!(action, SelectionAction::Markup(comments::CommentTool::Highlight, None)) {
+                        let picker = can_comment && matches!(action, SelectionAction::Markup(comments::CommentTool::Highlight, None));
+                        let mut button = egui::Button::new(label);
+                        if picker {
+                            button = button.right_text(crate::icons::image("chevron-down", 8.0, ui.visuals().text_color())).gap(4.0);
+                        }
+                        let response = ui.add_enabled(can_comment, button);
+                        if picker {
                             egui::Popup::menu(&response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
                                 ui.horizontal(|ui| {
                                     let current = prefs.style(comments::CommentTool::Highlight).color;
