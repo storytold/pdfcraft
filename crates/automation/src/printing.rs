@@ -128,7 +128,7 @@ impl Automation {
         };
         let pages = print::select_pages(count, a.opt_str("pages")?, &labels, subset, a.opt_bool("reverse")?.unwrap_or(false))
             .map_err(|e| bad(e.to_string()))?;
-        let layout = match a.opt_str("layout")?.unwrap_or("fit") {
+        let mut layout = match a.opt_str("layout")?.unwrap_or("fit") {
             "fit" => Layout::Size(SizeMode::Fit),
             "actual" => Layout::Size(SizeMode::Actual),
             "shrink" => Layout::Size(SizeMode::Shrink),
@@ -169,7 +169,29 @@ impl Automation {
                 overlap: a.opt_num("overlap")?.unwrap_or(18.0),
                 cut_marks: a.opt_bool("cut_marks")?.unwrap_or(true),
             },
+            "view" => Layout::View { rect: [0.0; 4] },
             l => return Err(bad(format!("unknown layout {l:?}"))),
+        };
+        let pages = if matches!(layout, Layout::View { .. }) {
+            let page = a.opt_int("view_page")?.ok_or_else(|| bad("view needs view_page (1-based)"))?;
+            let page = usize::try_from(page.checked_sub(1).filter(|p| *p >= 0).ok_or_else(|| bad("view_page must be a 1-based page number"))?)
+                .map_err(|_| bad("view_page is outside the document"))?;
+            if page >= count {
+                return Err(bad(format!("view_page must be between 1 and {count}")));
+            }
+            let values =
+                a.get("view_rect").and_then(Value::as_array).ok_or_else(|| bad("view needs view_rect [x0, y0, x1, y1] in displayed points"))?;
+            if values.len() != 4 {
+                return Err(bad("view_rect must have four displayed-coordinate numbers"));
+            }
+            let mut rect = [0.0; 4];
+            for (slot, value) in rect.iter_mut().zip(values) {
+                *slot = value.as_f64().filter(|v| v.is_finite()).ok_or_else(|| bad("view_rect must have four finite numbers"))?;
+            }
+            layout = Layout::View { rect };
+            vec![page]
+        } else {
+            pages
         };
         let duplex = job_duplex(a.opt_str("duplex")?.unwrap_or("off"), &layout)?;
         if a.opt_str("order")? == Some("cut-stack") && !matches!(layout, Layout::Multiple { .. }) {

@@ -80,6 +80,10 @@ pub enum Layout {
         overlap: f64,
         cut_marks: bool,
     },
+    /// Print one page's displayed-coordinate rectangle at fit size.
+    View {
+        rect: [f64; 4],
+    },
     /// Shipping label: each page cut to its [`Settings::crops`] box, turned so its text reads
     /// upright on the sheet and fitted with [`LABEL_MARGIN`]; `flip` turns it a further 180°.
     Label {

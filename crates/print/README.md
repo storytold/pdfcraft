@@ -24,6 +24,10 @@ spool::submit(&pdf, &spool::Job { printer: None, copies: 2, ..Default::default()
   `per_sheet: 4` (or any supported grid size), plus `path` or `printer`.
 - **Booklet**: saddle-stitch imposition padded to a multiple of 4; both sides, front or back
   only; left or right binding.
+- **Current view**: `Layout::View { rect }` prints one page's displayed-coordinate rectangle,
+  fitted on the selected paper. Headless `doc_print` accepts
+  `layout: "view"`, one-based `view_page`, and `view_rect: [x0, y0, x1, y1]` in displayed
+  points. The source PDF is unchanged.
 - **Poster**: tile scale, overlap shared by neighbouring tiles, cut marks.
 - **Comments & forms**: document, + markups, + stamps, or form fields only; annotations print
   only with their Print flag, drawn from their appearance streams (Algorithm 8.1).
