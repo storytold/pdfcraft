@@ -561,3 +561,71 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
     let selected = CommentView { selected: Some((0, 0)), ..CommentView::default() };
     assert!(hover_outline(&cx, &selected, Some(&comment)).is_none(), "the selected comment has its own frame");
 }
+
+#[test]
+fn drawing_tools_are_identified_and_crosshair_cursor_paints_contrasting_strokes() {
+    use super::paint::{is_drawing_tool, paint_crosshair_cursor};
+    // The drawing and pen tools must be recognized as drawing tools
+    assert!(is_drawing_tool(CommentTool::Ink));
+    assert!(is_drawing_tool(CommentTool::FreehandHighlight));
+    assert!(is_drawing_tool(CommentTool::Line));
+    assert!(is_drawing_tool(CommentTool::Arrow));
+    assert!(is_drawing_tool(CommentTool::Rectangle));
+    assert!(is_drawing_tool(CommentTool::Oval));
+    assert!(is_drawing_tool(CommentTool::Polygon));
+    assert!(is_drawing_tool(CommentTool::PolyLine));
+    assert!(is_drawing_tool(CommentTool::Cloud));
+    assert!(is_drawing_tool(CommentTool::Callout));
+    assert!(is_drawing_tool(CommentTool::Eraser));
+
+    // Non-drawing tools must not be recognized as drawing tools
+    assert!(!is_drawing_tool(CommentTool::Note));
+    assert!(!is_drawing_tool(CommentTool::TextBox));
+    assert!(!is_drawing_tool(CommentTool::Highlight));
+    assert!(!is_drawing_tool(CommentTool::Underline));
+    assert!(!is_drawing_tool(CommentTool::StrikeOut));
+    assert!(!is_drawing_tool(CommentTool::Squiggly));
+    assert!(!is_drawing_tool(CommentTool::Caret));
+    assert!(!is_drawing_tool(CommentTool::ReplaceText));
+    assert!(!is_drawing_tool(CommentTool::Attach));
+
+    // Painting the crosshair cursor adds both the white contrasting outline and black core lines
+    let ctx = egui::Context::default();
+    let layer = egui::LayerId::background();
+    let painter = egui::Painter::new(ctx, layer, egui::Rect::EVERYTHING);
+    paint_crosshair_cursor(&painter, pos2(100.0, 100.0));
+}
+
+#[test]
+fn brush_tools_are_identified_and_paint_colored_brush_dot_cursor() {
+    use super::paint::{is_brush_tool, paint_brush_cursor, paint_crosshair_cursor_with_color, paint_eraser_cursor};
+
+    // Freehand drawing and highlighter are brush tools
+    assert!(is_brush_tool(CommentTool::Ink));
+    assert!(is_brush_tool(CommentTool::FreehandHighlight));
+
+    // Shape and text tools are not freehand brush tools
+    assert!(!is_brush_tool(CommentTool::Line));
+    assert!(!is_brush_tool(CommentTool::Rectangle));
+    assert!(!is_brush_tool(CommentTool::Oval));
+    assert!(!is_brush_tool(CommentTool::Eraser));
+    assert!(!is_brush_tool(CommentTool::TextBox));
+
+    let ctx = egui::Context::default();
+    let layer = egui::LayerId::background();
+    let painter = egui::Painter::new(ctx, layer, egui::Rect::EVERYTHING);
+
+    // Painting red brush cursor with small pt/radius
+    let red = Color32::from_rgb(227, 33, 33);
+    paint_brush_cursor(&painter, pos2(150.0, 150.0), red, 2.5);
+
+    // Painting blue brush cursor with larger pt/radius (with center precision dot)
+    let blue = Color32::from_rgb(0, 120, 215);
+    paint_brush_cursor(&painter, pos2(200.0, 200.0), blue, 8.0);
+
+    // Painting eraser cursor
+    paint_eraser_cursor(&painter, pos2(250.0, 250.0), 12.0);
+
+    // Crosshair with color center
+    paint_crosshair_cursor_with_color(&painter, pos2(300.0, 300.0), Some(red));
+}

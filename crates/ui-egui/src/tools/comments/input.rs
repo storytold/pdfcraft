@@ -426,8 +426,13 @@ impl Gestures<'_> {
         if !cx.allowed {
             return false;
         }
-        if over_page {
-            view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+        if over_page || cv.gesture.is_some() {
+            let icon = if matches!(tool, CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Eraser) {
+                egui::CursorIcon::None
+            } else {
+                egui::CursorIcon::Crosshair
+            };
+            view.cursor.claim(Layer::ToolArea, icon);
         }
         if resp.drag_started()
             && pressed_here

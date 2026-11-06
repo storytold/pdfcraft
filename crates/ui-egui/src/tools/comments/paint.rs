@@ -156,6 +156,101 @@ fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
         let label = crate::i18n::fmt(tl!("Comments: {n}"), &[("n", &count.to_string())]);
         painter.text(r.left_top() + vec2(0.0, -4.0), egui::Align2::LEFT_BOTTOM, label, crate::theme::regular(11.0), SELECT_BLUE);
     }
+    // Live preview cursor for drawing and annotation tools: a PowerPoint-style colored dot
+    // matching the chosen color and stroke pt size for brush tools, an eraser disc for eraser,
+    // and a precision crosshair for shapes.
+    if cx.allowed
+        && !cx.hidden
+        && let QuickTool::Comment(tool) = cx.tool
+        && is_drawing_tool(tool)
+        && let Some(p) = cx.ptr.pos
+        && (cx.xf.rect.contains(p) || matches!(&view.comments.gesture, Some(Gesture::Draw { page, .. }) if *page == cx.page))
+    {
+        paint_tool_cursor(painter, cx, tool, p);
+    }
+}
+
+/// Whether a commenting tool is a freehand brush tool (Ink / Draw, Freehand Highlight).
+pub(crate) fn is_brush_tool(tool: CommentTool) -> bool {
+    matches!(tool, CommentTool::Ink | CommentTool::FreehandHighlight)
+}
+
+/// Whether a commenting tool is a freehand or shape drawing tool.
+pub(crate) fn is_drawing_tool(tool: CommentTool) -> bool {
+    tool.draws() || tool.clicks_points() || tool == CommentTool::Callout
+}
+
+/// A PowerPoint-style circular brush dot cursor matching the selected color, opacity,
+/// and line thickness (pt) scaled to the screen zoom.
+pub(crate) fn paint_brush_cursor(painter: &egui::Painter, p: Pos2, color: Color32, radius: f32) {
+    let r = radius.max(1.5);
+    // Outer dark shadow/ring for high contrast on bright/white document pages
+    painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(110)));
+    // Inner white contrasting ring for high contrast on dark document pages
+    painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(200)));
+    // Filled dot with the active brush color
+    painter.circle_filled(p, r, color);
+
+    // For larger brush sizes (>= 4.0 px radius), add a subtle precision center point
+    if r >= 4.0 {
+        painter.circle_filled(p, 1.0, Color32::WHITE);
+        painter.circle_stroke(p, 1.0, Stroke::new(0.5, Color32::from_black_alpha(180)));
+    }
+}
+
+/// An eraser preview cursor matching the eraser radius.
+pub(crate) fn paint_eraser_cursor(painter: &egui::Painter, p: Pos2, radius: f32) {
+    painter.circle_stroke(p, radius + 0.5, Stroke::new(1.0, Color32::from_black_alpha(110)));
+    painter.circle_stroke(p, radius, Stroke::new(1.0, Color32::from_white_alpha(200)));
+    painter.circle_filled(p, radius, Color32::from_gray(128).gamma_multiply(0.2));
+}
+
+/// Paint the cursor for drawing tools: a PowerPoint-style colored brush dot for Ink and
+/// FreehandHighlight, an eraser circle for Eraser, and a high-contrast crosshair for shapes.
+pub(crate) fn paint_tool_cursor(painter: &egui::Painter, cx: &PageCx<'_>, tool: CommentTool, p: Pos2) {
+    let style = cx.prefs.style(tool);
+    let zoom = cx.xf.zoom();
+    if is_brush_tool(tool) {
+        let screen_width = (style.width as f32 * zoom).max(1.0);
+        let radius = (screen_width / 2.0).max(2.0);
+        let color = color32(style.color).gamma_multiply(style.opacity.clamp(0.1, 1.0) as f32);
+        paint_brush_cursor(painter, p, color, radius);
+    } else if tool == CommentTool::Eraser {
+        let radius = eraser_radius_px(style.width) as f32;
+        paint_eraser_cursor(painter, p, radius);
+    } else {
+        let center_color = color32(style.color);
+        paint_crosshair_cursor_with_color(painter, p, Some(center_color));
+    }
+}
+
+/// A high-contrast crosshair cursor visible on both light and dark backgrounds.
+///
+/// Drawn with a dark inner core and a contrasting bright outer border so it remains crisp and
+/// clearly positioned over white document pages, dark photos, annotations, and colored backgrounds.
+#[cfg(test)]
+pub(crate) fn paint_crosshair_cursor(painter: &egui::Painter, p: Pos2) {
+    paint_crosshair_cursor_with_color(painter, p, None);
+}
+
+/// A high-contrast crosshair cursor with an optional center color indicator.
+pub(crate) fn paint_crosshair_cursor_with_color(painter: &egui::Painter, p: Pos2, center_color: Option<Color32>) {
+    let arm = 7.5;
+    // Outer white contrasting border
+    let outline_stroke = Stroke::new(2.5, Color32::WHITE);
+    painter.line_segment([pos2(p.x - arm, p.y), pos2(p.x + arm, p.y)], outline_stroke);
+    painter.line_segment([pos2(p.x, p.y - arm), pos2(p.x, p.y + arm)], outline_stroke);
+
+    // Inner dark/black precision core
+    let core_stroke = Stroke::new(1.0, Color32::BLACK);
+    painter.line_segment([pos2(p.x - arm, p.y), pos2(p.x + arm, p.y)], core_stroke);
+    painter.line_segment([pos2(p.x, p.y - arm), pos2(p.x, p.y + arm)], core_stroke);
+
+    // If a tool color is specified, paint a tiny colored center dot
+    if let Some(c) = center_color {
+        painter.circle_filled(p, 2.0, c);
+        painter.circle_stroke(p, 2.0, Stroke::new(0.5, Color32::WHITE));
+    }
 }
 
 /// One copied comment's outline on screen (`at` maps a user-space point, moved to where the
