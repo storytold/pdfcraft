@@ -241,13 +241,7 @@ pub(crate) fn file_stem_from_user(name: &str) -> String {
     let cleaned = cleaned.get(..end).unwrap_or_default();
     // Trimming trailing dots also leaves "." and ".." empty.
     let stem = cleaned.trim().trim_end_matches(['.', ' ']).trim_start();
-    // Windows reserves these device names whatever the extension: "NUL.pdf" writes nowhere.
-    let device = stem.split('.').next().unwrap_or_default().to_ascii_uppercase();
-    let reserved = matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (device.len() == 4
-            && (device.starts_with("COM") || device.starts_with("LPT"))
-            && device.as_bytes().get(3).is_some_and(|d| (b'1'..=b'9').contains(d)));
-    if reserved { format!("_{stem}") } else { stem.to_string() }
+    if pdfcraft_platform::file_names::is_windows_device_name(stem) { format!("_{stem}") } else { stem.to_string() }
 }
 
 /// A plain file name for a PDF-supplied attachment name: the Save suggestion, and the tab name
@@ -263,13 +257,7 @@ pub(crate) fn attachment_file_name(name: &str) -> String {
     if name.is_empty() {
         return "attachment".into();
     }
-    let device = name.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
-    let reserved = matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || device
-            .strip_prefix("COM")
-            .or_else(|| device.strip_prefix("LPT"))
-            .is_some_and(|number| matches!(number, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"));
-    if reserved { format!("_{name}") } else { name.to_string() }
+    if pdfcraft_platform::file_names::is_windows_device_name(name) { format!("_{name}") } else { name.to_string() }
 }
 
 /// Whether `name` names a file directly inside a folder: not empty, with no `/` or `\\`, no drive
@@ -1126,6 +1114,12 @@ mod stem_tests {
         assert_eq!(file_stem_from_user("COM1.pdf"), "_COM1");
         assert_eq!(file_stem_from_user("lpt9.tar"), "_lpt9.tar");
         assert_eq!(file_stem_from_user("COM10"), "COM10");
+        // Spaces before the dot and superscript digits name a device too.
+        assert_eq!(file_stem_from_user("nul .txt"), "_nul .txt");
+        assert_eq!(file_stem_from_user("COM¹"), "_COM¹");
+        assert_eq!(file_stem_from_user("lpt³.pdf"), "_lpt³");
+        assert_eq!(file_stem_from_user("clock$"), "_clock$");
+        assert_eq!(attachment_file_name("CONOUT$"), "_CONOUT$");
         assert_eq!(file_stem_from_user("Console"), "Console");
         // At most 200 bytes, cut on a character boundary.
         let long = file_stem_from_user(&"文".repeat(300));
