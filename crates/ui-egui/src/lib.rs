@@ -184,6 +184,7 @@ use workflows::js_ui;
 use workflows::ocr_ui;
 use workflows::ocr_verify;
 use workflows::optimize_ui;
+use workflows::print_paper;
 use workflows::print_ui;
 use workflows::scan_clean_ui;
 use workflows::web_print;
