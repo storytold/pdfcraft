@@ -1087,3 +1087,140 @@ fn call_exhaustion_real_clock_probe() {
         println!("observation={observation} warm_ms={:.3} calls={}", t.elapsed().as_secs_f64() * 1000., crate::barcode::take_native_calls());
     }
 }
+
+/// Draw a bounded whole image or tile while tying cache lifetime to its synthetic PDF.
+fn draw_region_cap<'a>(pdf: &'a hayro::hayro_syntax::Pdf, cache: &hayro::RenderCache<'a>, tile: Option<(usize, usize)>) -> Vec<u8> {
+    hayro::render(
+        &pdf.pages()[0],
+        cache,
+        &Default::default(),
+        &hayro::RenderSettings {
+            x_scale: 0.4,
+            y_scale: 0.4,
+            x_offset: tile.map_or(0., |v| v.0 as f32),
+            y_offset: tile.map_or(0., |v| v.1 as f32),
+            width: tile.map(|_| 240),
+            height: tile.map(|_| 240),
+            ..Default::default()
+        },
+    )
+    .data_as_u8_slice()
+    .to_vec()
+}
+
+/// Paint separate repeated-payload symbols with independently fixed ink/quiet bounds and scanned strokes.
+pub(crate) fn region_cap_fixture(count: usize, mixed: bool) -> (Vec<u8>, Vec<crate::barcode::Rect>, Vec<crate::barcode::Rect>) {
+    use crate::barcode::Rect;
+    let mut data = vec![255; 1200 * 1200];
+    let mut inks = Vec::new();
+    let mut quiets = Vec::new();
+    for i in 0..count {
+        let x0 = 80 + i % 4 * 230;
+        let y0 = 80 + i / 4 * 170;
+        if mixed && i == 0 {
+            let (qr, _, _) = qr_fixture();
+            for y in 0..100 {
+                data[(y0 + y) * 1200 + x0..(y0 + y) * 1200 + x0 + 100].copy_from_slice(&qr[(200 + y) * W + 100..(200 + y) * W + 200]);
+            }
+            inks.push(Rect { x0, y0, x1: x0 + 100, y1: y0 + 100 });
+            quiets.push(Rect { x0: x0 - 16, y0: y0 - 16, x1: x0 + 116, y1: y0 + 116 });
+        } else {
+            for y in y0..y0 + 64 {
+                for (x, bit) in BITS.bytes().enumerate() {
+                    if bit == b'1' {
+                        data[y * 1200 + x0 + x * 3..y * 1200 + x0 + x * 3 + 3].fill(0);
+                    }
+                }
+            }
+            inks.push(Rect { x0, y0, x1: x0 + BITS.len() * 3, y1: y0 + 64 });
+            quiets.push(Rect { x0: x0 - 36, y0: y0 - 4, x1: x0 + BITS.len() * 3 + 36, y1: y0 + 68 });
+        }
+    }
+    for y in 1060..1100 {
+        for x in (850..1100).step_by(7) {
+            data[y * 1200 + x] = 0;
+        }
+    }
+    (data, inks, quiets)
+}
+
+/// Characterize the image-wide cap: duplicates do not proliferate; a real seventeenth returns failure.
+#[test]
+fn region_cap_detector_keeps_sixteen_and_declines_seventeen() {
+    use std::sync::atomic::AtomicBool;
+    for mixed in [false, true] {
+        for count in [16, 17] {
+            let (data, inks, quiets) = region_cap_fixture(count, mixed);
+            let rgba = data.iter().flat_map(|v| [*v, *v, *v, 255]).collect::<Vec<_>>();
+            let result = crate::barcode::detect(1200, 1200, &rgba, None, &AtomicBool::new(false));
+            println!("region_cap mixed={mixed} count={count} result={:?}", result.as_ref().map(|r| r.len()));
+            if count == 17 {
+                assert_eq!(result.unwrap_err(), "region budget; discard all");
+            } else {
+                let regions = result.unwrap();
+                assert_eq!(regions.len(), 16);
+                for (i, (&ink, &quiet)) in inks.iter().zip(&quiets).enumerate() {
+                    let found = regions.iter().find(|r| r.ink == ink).unwrap();
+                    assert!(found.quiet.contains(quiet));
+                    if !mixed || i != 0 {
+                        assert_eq!(found.format, "CODE_128");
+                        assert_eq!(found.payload, "A");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Retain the documented all-or-nothing smoothing fallback across source cache reuse and tile draws.
+#[test]
+fn region_cap_render_fallback_cache_and_tiles() {
+    use crate::barcode::{take_native_calls, with_test_decoder};
+    for mixed in [false, true] {
+        for count in [16, 17] {
+            let (data, _, quiets) = region_cap_fixture(count, mixed);
+            let pdf = hayro::hayro_syntax::Pdf::new(raster_pdf(&data, 1200, 1200, "", "1200 0 0 1200 0 0", (1200, 1200))).unwrap();
+            let fallback = with_test_decoder(|_| Some(Ok(Vec::new())), || draw_region_cap(&pdf, &hayro::RenderCache::new(), None));
+            let cache = hayro::RenderCache::new();
+            take_native_calls();
+            let actual = draw_region_cap(&pdf, &cache, None);
+            let cold_calls = take_native_calls();
+            assert_eq!(crate::renderer::test_cached_region_count(&cache), if count == 16 { 16 } else { 0 });
+            assert_eq!(draw_region_cap(&pdf, &cache, None), actual);
+            assert_eq!(take_native_calls(), 0, "positive and negative cache hits must not rescan");
+            let different = actual.chunks_exact(4).zip(fallback.chunks_exact(4)).filter(|(a, b)| a != b).count();
+            if count == 17 {
+                assert_eq!(different, 0, "overflow must preserve ordinary smoothing for the entire source");
+            } else {
+                assert!(different > 0);
+                for y in 0..480 {
+                    for x in 0..480 {
+                        let sx = ((x as f64 + 0.5) / f64::from(0.4_f32)).floor() as usize;
+                        let sy = ((y as f64 + 0.5) / f64::from(0.4_f32)).floor() as usize;
+                        let at = (y * 480 + x) * 4;
+                        if quiets.iter().any(|q| sx > q.x0 && sx + 1 < q.x1 && sy > q.y0 && sy + 1 < q.y1) {
+                            assert_eq!(actual[at], data[sy * 1200 + sx], "protected source sample {x},{y}");
+                        } else if !quiets.iter().any(|q| sx + 2 >= q.x0 && sx <= q.x1 + 2 && sy + 2 >= q.y0 && sy <= q.y1 + 2) {
+                            assert_eq!(actual[at..at + 4], fallback[at..at + 4], "outside region {x},{y}");
+                        }
+                    }
+                }
+            }
+            let mut stitched = vec![0; actual.len()];
+            let tile_cache = hayro::RenderCache::new();
+            for ty in 0..2 {
+                for tx in 0..2 {
+                    let tile = draw_region_cap(&pdf, &tile_cache, Some((tx * 240, ty * 240)));
+                    for y in 0..240 {
+                        let to = ((ty * 240 + y) * 480 + tx * 240) * 4;
+                        stitched[to..to + 240 * 4].copy_from_slice(&tile[y * 240 * 4..(y + 1) * 240 * 4]);
+                    }
+                }
+            }
+            assert_eq!(stitched, actual);
+            println!(
+                "region_pixels mixed={mixed} count={count} changed_pixels={different} cold_calls={cold_calls} warm_calls=0 tile_different_bytes=0"
+            );
+        }
+    }
+}

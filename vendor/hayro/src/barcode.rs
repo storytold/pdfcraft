@@ -87,7 +87,8 @@ impl Budget<'_> {
         }
         Ok(())
     }
-    /// Charge inspected source pixels against this occurrence's fixed page share.
+    /// Reserve conservative source-pixel inspections before a bounded batch, including repeated reads.
+    /// Native decoder internals use the separate cooperative time/call allowance.
     fn charge(&mut self, n: usize) -> Result<(), String> {
         self.poll()?;
         self.visits = self.visits.checked_add(n).ok_or("work overflow")?;
@@ -203,7 +204,8 @@ impl View<'_> {
 }
 
 /// Deduplicate overlapping same-format/payload regions while preserving separate locations.
-/// Refuse a seventeenth distinct region so the caller can retain conservative smoothing.
+/// Refuse a seventeenth distinct region as an image-wide failure, retaining ordinary smoothing.
+/// A successful prefix would leave another known barcode smoothed; duplicate overlaps do not spend the cap.
 fn insert(regions: &mut Vec<Region>, region: Region) -> Result<(), String> {
     if regions
         .iter()
@@ -495,8 +497,9 @@ fn scan_bars(gray: &Gray, regions: &mut Vec<Region>, budget: &mut Budget<'_>) ->
     Ok(())
 }
 
-/// Check a finder against pixel-derived module centres; missing corner varies with orientation.
-fn finder(view: &View<'_>, ink: Rect, pitch: usize, right: bool, bottom: bool) -> Result<bool, String> {
+/// Reserve all 49 centre reads and poll before checking one bounded finder; corners vary with orientation.
+fn finder(view: &View<'_>, ink: Rect, pitch: usize, right: bool, bottom: bool, budget: &mut Budget<'_>) -> Result<bool, String> {
+    budget.charge(7 * 7)?;
     let x0 = if right { ink.x1 - 7 * pitch } else { ink.x0 };
     let y0 = if bottom { ink.y1 - 7 * pitch } else { ink.y0 };
     let mut errors = 0;
@@ -509,11 +512,11 @@ fn finder(view: &View<'_>, ink: Rect, pitch: usize, right: bool, bottom: bool) -
     Ok(errors <= 1)
 }
 
-/// Count pixels that disagree with their fitted QR module center, charging every inspected row.
+/// Compare QR pixels with fitted module centres, reserving both reads once per inspected row.
 fn grid_error(view: &View<'_>, ink: Rect, pitch: usize, budget: &mut Budget<'_>) -> Result<usize, String> {
     let mut errors = 0;
     for y in ink.y0..ink.y1 {
-        budget.charge(ink.x1 - ink.x0)?;
+        budget.charge((ink.x1 - ink.x0) * 2)?;
         let cy = ink.y0 + ((y - ink.y0) / pitch) * pitch + pitch / 2;
         for x in ink.x0..ink.x1 {
             let cx = ink.x0 + ((x - ink.x0) / pitch) * pitch + pitch / 2;
@@ -572,7 +575,7 @@ fn reconstruct_qr(gray: &Gray, result: &RXingResult, budget: &mut Budget<'_>) ->
                     }
                     let mut finders = 0;
                     for (right, bottom) in [(false, false), (true, false), (false, true), (true, true)] {
-                        finders += usize::from(finder(&view, ink, pitch, right, bottom)?);
+                        finders += usize::from(finder(&view, ink, pitch, right, bottom, budget)?);
                     }
                     if finders != 3 {
                         continue;
@@ -1126,5 +1129,90 @@ mod quantized_pitch_tests {
             assert_eq!(found[0].pitch, 1.5);
             assert!(found[0].quiet.contains(Rect { x0: 32, y0: 98, x1: 137, y1: 142 }));
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod qr_work_regressions {
+    use super::*;
+    /// Obtain a real checksum-decoded QR seed before testing deliberately invalid pixel geometry.
+    fn seed() -> RXingResult {
+        let (data, _, _) = crate::barcode_render_tests::qr_fixture();
+        let mut hints = DecodeHints { PossibleFormats: Some(HashSet::from([BarcodeFormat::QR_CODE])), ..Default::default() };
+        let found = rxing::helpers::detect_multiple_in_luma_with_hints(data, 700, 1000, &mut hints).unwrap();
+        assert_eq!(found.len(), 1);
+        found[0].clone()
+    }
+    /// Reserve finder reads before touching pixels, and never convert an exhausted search into None.
+    #[test]
+    fn rejected_qr_candidates_charge_and_propagate_exhaustion() {
+        let seed = seed();
+        let gray = Gray { w: 700, h: 1000, pixels: vec![255; 700 * 1000], threshold: 127 };
+        let stop = AtomicBool::new(false);
+        let limits = ScanLimits { millis: u64::MAX, visits: 145, calls: 1 };
+        let mut budget = Budget { cancel: &stop, start: Instant::now(), limits, visits: 0, calls: 0 };
+        let result = reconstruct_qr(&gray, &seed, &mut budget);
+        println!("near_budget result={:?} charged={} calls={}", result.as_ref().err(), budget.visits, budget.calls);
+        assert_eq!(result.unwrap_err(), "pixel visit budget");
+        assert_eq!(budget.visits, 147);
+        assert_eq!(budget.calls, 0);
+    }
+    /// Rejected finder-only searches must observe cancellation and an already expired clock.
+    #[test]
+    fn rejected_qr_candidates_poll_cancellation_and_deadline() {
+        let seed = seed();
+        let gray = Gray { w: 700, h: 1000, pixels: vec![255; 700 * 1000], threshold: 127 };
+        let stop = AtomicBool::new(true);
+        let limits = ScanLimits { millis: 1, visits: 1_000_000, calls: 1 };
+        let mut budget = Budget { cancel: &stop, start: Instant::now(), limits, visits: 0, calls: 0 };
+        assert_eq!(reconstruct_qr(&gray, &seed, &mut budget).unwrap_err(), "cancelled");
+        stop.store(false, Ordering::Relaxed);
+        budget.start = Instant::now() - Duration::from_millis(2);
+        assert_eq!(reconstruct_qr(&gray, &seed, &mut budget).unwrap_err(), "deadline");
+        assert_eq!(budget.visits, 0);
+        assert_eq!(budget.calls, 0);
+    }
+    /// A grid comparison reserves both its source-pixel and module-centre read, including at the cap.
+    #[test]
+    fn qr_grid_charges_both_reads_before_each_row() {
+        let gray = Gray { w: 64, h: 64, pixels: vec![255; 64 * 64], threshold: 127 };
+        let view = View { gray: &gray, vertical: false, reverse: false, inverted: false };
+        let ink = Rect { x0: 10, y0: 10, x1: 31, y1: 31 };
+        let stop = AtomicBool::new(false);
+        let limits = ScanLimits { millis: u64::MAX, visits: 882, calls: 1 };
+        let mut budget = Budget { cancel: &stop, start: Instant::now(), limits, visits: 0, calls: 0 };
+        assert_eq!(grid_error(&view, ink, 1, &mut budget).unwrap(), 0);
+        assert_eq!(budget.visits, 882);
+        budget.visits = 0;
+        budget.limits.visits = 881;
+        assert_eq!(grid_error(&view, ink, 1, &mut budget), Err("pixel visit budget".into()));
+        assert_eq!(budget.visits, 882);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod region_cap_tests {
+    use super::*;
+    /// Repeated sightings of validated locations do not spend the sixteen-region cap.
+    #[test]
+    fn duplicate_regions_do_not_trigger_overflow() {
+        let (data, _, _) = crate::barcode_render_tests::region_cap_fixture(16, false);
+        let rgba = data.iter().flat_map(|v| [*v, *v, *v, 255]).collect::<Vec<_>>();
+        let validated = detect(1200, 1200, &rgba, None, &AtomicBool::new(false)).unwrap();
+        assert_eq!(validated.len(), 16);
+        let mut regions = Vec::new();
+        for region in validated.iter().cycle().take(48) {
+            insert(&mut regions, region.clone()).unwrap();
+        }
+        assert_eq!(regions.len(), 16);
+        let mut next = validated[0].clone();
+        next.ink.y0 += 680;
+        next.ink.y1 += 680;
+        next.quiet.y0 += 680;
+        next.quiet.y1 += 680;
+        assert_eq!(insert(&mut regions, next), Err("region budget; discard all".into()));
+        assert_eq!(regions.len(), 16, "the caller receives an error, never a successful partial result");
     }
 }
