@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **2026-11-06, M3 / #5782:** Read mode reclaims the menu/mode/search panel height; existing shortcuts, rail exit and native macOS menus remain. craft-menu keeps Alt/F10/mnemonics through a temporary menu-only overlay with no page-height cost. Estimates unchanged.
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)

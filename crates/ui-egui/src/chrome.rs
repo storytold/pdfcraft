@@ -478,6 +478,10 @@ fn tab(ui: &mut egui::Ui, spec: TabSpec<'_>, close: &mut Option<usize>) -> egui:
 }
 
 pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+    if app.mode == Mode::Read {
+        app.read_menu_shortcuts(ui);
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     egui::Panel::top("mode_bar")
         .exact_size(48.0)

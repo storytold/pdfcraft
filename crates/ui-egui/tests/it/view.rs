@@ -2226,7 +2226,8 @@ fn switching_modes_keeps_the_current_page_at_fixed_zoom() {
     h.state_mut().views[0].go_to_page(5);
     h.run_steps(8);
     assert_eq!(h.state().views[0].current, 5);
-    h.get_by_label("All tools").click();
+    // The mode tabs are hidden in Read mode; use its existing toggle to leave.
+    h.state_mut().run_command("view.read_mode");
     h.run_steps(8);
     assert_eq!(h.state().views[0].current, 5, "switching to All tools should keep the current page");
     h.state_mut().open_bytes("other.pdf", None, other).unwrap();

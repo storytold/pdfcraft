@@ -593,6 +593,32 @@ impl PdfCraftApp {
         }
     }
 
+    /// Read mode has no chrome panel, but craft-menu must still see every frame's keys.
+    /// Let its existing keyboard state reveal only the menu, without reserving page space.
+    pub(crate) fn read_menu_shortcuts(&mut self, ui: &mut egui::Ui) {
+        if self.native_menu.is_some() {
+            return;
+        }
+        let ctx = ui.ctx().clone();
+        let visible = craft_menu::bar::is_open(&ctx) || craft_menu::bar::is_focused(&ctx);
+        let available = ui.available_rect_before_wrap();
+        egui::Area::new(egui::Id::unique("read-mode-menu"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(available.min + egui::vec2(8.0, 0.0))
+            .movable(false)
+            .interactable(visible)
+            .show(&ctx, |ui| {
+                if !visible {
+                    ui.set_invisible();
+                }
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_max_width((available.width() - 32.0).max(0.0));
+                    ui.set_max_height(ui.spacing().interact_size.y);
+                    self.menu_bar_ui(ui);
+                });
+            });
+    }
+
     /// Install the native menu bar (macOS), once, from the eframe app creator. `false` when
     /// AppKit refused it: the in-window bar stays.
     #[cfg(target_os = "macos")]
