@@ -2755,6 +2755,133 @@ fn visible_appearance_draws_central_european_characters_with_embedded_font() {
     assert_eq!(s.reason.as_deref(), Some("Podpisano s potrdilom"));
 }
 
+/// A visible signature with Arabic characters embeds the Arabic font and shapes and draws
+/// them cleanly instead of refusing or writing `?`.
+#[test]
+fn visible_appearance_draws_arabic_characters_with_embedded_font() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        assert!(std::env::var_os("PDFCRAFT_TEST_ARABIC_REQUIRED").is_none(), "Arabic test font is missing");
+        return;
+    }
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let name = Name::build("فراس شماس", "مجلس الإدارة", "SMSA", "firas@example.com", "SY");
+    let cert = Certificate::self_signed(&name, &id.key, Time::from_unix(1_700_000_000), 5, &[1]).unwrap();
+    let firas_id = DigitalId { key: id.key, certificate: cert, chain: Vec::new(), friendly_name: None };
+    let shown =
+        pdfcraft_sign::Appearance { name: true, distinguished_name: true, reason: true, location: true, ..pdfcraft_sign::Appearance::default() };
+    let sl = SignOptions {
+        rect: Some([150.0, 20.0, 280.0, 70.0]),
+        reason: Some("موافق على المستند".into()),
+        location: Some("دمشق، سورية".into()),
+        appearance: shown,
+        ..opts()
+    };
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &firas_id, &sl).unwrap();
+    let (content, res) = appearance_of(&signed, "Signature1");
+    // Verify that the appearance stream does not write `?` in place of Arabic characters.
+    assert!(!content.contains('?'), "appearance content should not write '?' for Arabic characters: {content}");
+    // Verify an embedded font was added to the appearance resources.
+    let fonts = res.get(b"Font").and_then(|o| o.as_dict()).unwrap();
+    assert!(fonts.contains(b"PCFull0") || fonts.contains(b"PCNotoSansArabic0"), "appearance should reference the embedded font: {fonts:?}");
+    // Verify signature validation still passes.
+    let doc = open(&signed);
+    let arabic = doc.resolve(fonts.get(b"PCFull0").unwrap());
+    let arabic = arabic.as_dict().unwrap();
+    assert_eq!(arabic.get(b"Subtype").and_then(Object::as_name), Some(b"Type3".as_slice()));
+    let cmap = doc.resolve(arabic.get(b"ToUnicode").unwrap());
+    let Object::Stream(cmap) = cmap.as_ref() else { panic!("ToUnicode must be a stream") };
+    let cmap = String::from_utf8(cmap.decoded().unwrap()).unwrap();
+    assert!(cmap.contains("/CMapName /PdfCraftSignature def") && cmap.contains("/CIDSystemInfo"), "{cmap}");
+    let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, arabic);
+    let texts: String = content
+        .lines()
+        .filter(|line| line.starts_with("/PCFull0 "))
+        .map(|line| {
+            let (_, operand) = line.rsplit_once('<').expect("Arabic text must use a hex string");
+            let hex = operand.strip_suffix("> Tj").expect("Arabic text must be drawn with Tj");
+            assert_eq!(hex.len() % 2, 0, "Arabic codes must be whole bytes");
+            let codes: Vec<u8> =
+                hex.as_bytes().as_chunks::<2>().0.iter().map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()).collect();
+            metrics.decode(&codes)
+        })
+        .collect();
+    // Drawing order: large name, signed-by name, the DN's wrapped organization and
+    // common name, reason, location. Shape each expected Arabic run RTL so ligature
+    // clusters retain their logical text while the clusters themselves are visual-order.
+    let expected: String = ["فراس شماس", "فراس شماس", "مجلس", "الإدارة", "فراس شماس", "موافق على المستند", "دمشق، سورية"]
+        .into_iter()
+        .flat_map(|run| pdfcraft_fonts::shape_arabic(run, true).unwrap())
+        .map(|cluster| cluster.text)
+        .collect();
+    assert_eq!(texts, expected, "drawn Arabic codes must decode to the expected visual-order cluster text");
+    let trust = TrustStore { certs: vec![firas_id.certificate.clone()] };
+    let s = signatures(&doc, &signed, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.status, Status::Valid);
+    assert_eq!(s.reason.as_deref(), Some("موافق على المستند"));
+}
+
+/// Mixed scripts use real fallback fonts, and CR/LF are layout breaks, not glyphs.
+#[test]
+fn visible_arabic_appearance_supports_latin_fallback_and_line_breaks() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        assert!(std::env::var_os("PDFCRAFT_TEST_ARABIC_REQUIRED").is_none(), "Arabic test font is missing");
+        return;
+    }
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    for reason in ["موافق Luka Petravić", "موافق\r\nApproved\nدمشق"] {
+        let options =
+            SignOptions { reason: Some(reason.into()), appearance: pdfcraft_sign::Appearance { reason: true, ..Default::default() }, ..opts() };
+        let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &options).unwrap();
+        let doc = open(&signed);
+        let (content, resources) = appearance_of(&signed, "Signature1");
+        let fonts = resources.get(b"Font").and_then(Object::as_dict).unwrap();
+        let inter = doc.resolve(fonts.get(b"PCFull1").unwrap());
+        let inter = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, inter.as_dict().unwrap());
+        let ch = if reason.contains('ć') { "ć" } else { "A" };
+        let bytes = inter.encode(ch).unwrap();
+        assert_eq!(inter.decode(&bytes), ch);
+        let hex = bytes.iter().map(|b| format!("{b:02X}")).collect::<String>();
+        assert!(content.lines().any(|l| l.starts_with("/PCFull1 ") && l.ends_with(&format!("<{hex}> Tj"))), "{content}");
+        let trust = TrustStore { certs: vec![id.certificate.clone()] };
+        assert_eq!(signatures(&doc, &signed, &trust).into_iter().find(|s| s.signed).unwrap().status, Status::Valid);
+    }
+}
+
+/// A hidden unsupported signer name must not prevent drawing an otherwise supported Arabic reason.
+#[test]
+fn visible_arabic_appearance_does_not_shape_a_hidden_name() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        assert!(std::env::var_os("PDFCRAFT_TEST_ARABIC_REQUIRED").is_none(), "Arabic test font is missing");
+        return;
+    }
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let name = Name::build("日本", "", "", "", "JP");
+    let certificate = Certificate::self_signed(&name, &id.key, Time::from_unix(1_700_000_000), 5, &[1]).unwrap();
+    let id = DigitalId { certificate, ..id };
+    let options = SignOptions {
+        reason: Some("موافق".into()),
+        appearance: pdfcraft_sign::Appearance { name: false, distinguished_name: false, reason: true, ..Default::default() },
+        ..opts()
+    };
+    pdfcraft_sign::sign(&open(&fixture()), &id, &options).unwrap();
+}
+
+/// When built without craft-fonts, signing with Arabic characters returns an actionable error.
+#[test]
+fn visible_appearance_arabic_without_craft_fonts_returns_actionable_error() {
+    if pdfcraft_fonts::document_arabic_font().is_some() {
+        return;
+    }
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let name = Name::build("فراس", "SMSA", "SMSA", "firas@example.com", "SY");
+    let cert = Certificate::self_signed(&name, &id.key, Time::from_unix(1_700_000_000), 5, &[1]).unwrap();
+    let firas_id = DigitalId { key: id.key, certificate: cert, chain: Vec::new(), friendly_name: None };
+    let sl = SignOptions { rect: Some([150.0, 20.0, 280.0, 70.0]), ..opts() };
+    let err = pdfcraft_sign::sign(&open(&fixture()), &firas_id, &sl).unwrap_err();
+    assert!(matches!(err, SignError::Unsupported(_)), "{err:?}");
+    assert!(err.to_string().contains("Noto Sans Arabic"), "{err}");
+}
+
 /// A label Helvetica can't draw is refused even when a detail already needs the embedded font: the
 /// labels never choose the font, so a Japanese label beside a Latin Extended name is never written
 /// as the wrong glyphs.
