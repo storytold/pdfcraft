@@ -74,6 +74,40 @@ fn scripts_change_other_fields_and_their_properties() {
 }
 
 #[test]
+fn push_button_caption_methods_read_write_and_reject_other_faces() {
+    let mut button = FieldState::new("go", FieldType::Button, vec![]);
+    button.caption = Some("Old".into());
+    let fields = vec![button, FieldState::new("blank", FieldType::Button, vec![]), FieldState::new("text", FieldType::Text, vec![])];
+    let run = |script: &str| run(script, &Event::field("Mouse Up", "go", ""), &doc(), &fields, &[], Limits::default());
+    let got = run("event.value = getField('go').buttonGetCaption();");
+    assert_eq!(got.value, "Old");
+    let set = run("getField('go').buttonSetCaption('New'); event.value = getField('go').buttonGetCaption();");
+    assert_eq!(set.value, "New");
+    assert_eq!(set.changed[0].caption.as_deref(), Some("New"));
+    let same = run("getField('go').buttonSetCaption('Old');");
+    assert_eq!(same.changed[0].caption.as_deref(), Some("Old"), "same-text writes still update every widget");
+    assert!(run("getField('go').buttonSetCaption();").error.is_some());
+    let long_caption = "x".repeat(crate::xfa::MAX_LINE + 10);
+    let capped = run(&format!("getField('go').buttonSetCaption('{long_caption}');"));
+    assert_eq!(capped.error, None);
+    let caption = capped.changed[0].caption.as_deref().unwrap_or_default();
+    assert_eq!(caption.chars().count(), crate::xfa::MAX_LINE + 1);
+    assert!(caption.ends_with('…'));
+    let explicit = run("event.value = getField('go').buttonGetCaption(0);");
+    assert_eq!(explicit.value, "Old");
+    let format =
+        super::run("getField('go').buttonSetCaption('Discarded');", &Event::field("Format", "go", "Old"), &doc(), &fields, &[], Limits::default());
+    assert!(format.error.as_deref().is_some_and(|e| e.contains("buttonSetCaption is not available in a Format event")));
+    assert!(run("getField('go').buttonSetCaption('Bad', 1);").error.is_some());
+    assert!(run("getField('text').buttonSetCaption('Bad');").error.is_some());
+    assert!(run("getField('go').buttonGetCaption(1);").error.is_some());
+    let empty = run("event.value = getField('blank').buttonGetCaption();");
+    assert_eq!(empty.error, None);
+    assert_eq!(empty.value, "");
+    assert!(run("getField('text').buttonGetCaption();").error.is_some());
+}
+
+#[test]
 fn choice_and_check_box_object_model() {
     let o = go(
         "var s = getField('size'); event.value = [s.numItems, s.getItemAt(2, false), s.currentValueIndices, s.valueAsString, \
@@ -355,6 +389,7 @@ fn app_alert_titles_are_clipped_and_charged() {
     // The title's bytes count against the budget with the text's, and a message the budget
     // has no room for is left out and counted.
     let mut h = Host {
+        event_name: "Open".into(),
         fields: Arc::new(Vec::new()),
         changed: BTreeSet::new(),
         alerts: Vec::new(),

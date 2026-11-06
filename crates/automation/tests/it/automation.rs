@@ -7803,6 +7803,24 @@ fn javascript_through_tools() {
     let r = ok(&mut a, "js_run", json!({ "doc": doc, "script": "money(5)" }));
     assert_eq!((r["error"].clone(), r["result"].clone()), (json!(null), json!("EUR 5,00")));
     assert!(r["document_errors"][0].as_str().unwrap().starts_with("document script 2: TypeError"), "{r}");
+    ok(
+        &mut a,
+        "form_add_field",
+        json!({ "doc": doc, "page": 1, "type": "button", "rect": [20, 150, 120, 180], "name": "CaptionButton", "caption": "Before" }),
+    );
+    let r = ok(
+        &mut a,
+        "js_run",
+        json!({ "doc": doc, "field": "CaptionButton", "script": "getField('CaptionButton').buttonSetCaption('Continue'); getField('CaptionButton').buttonGetCaption();" }),
+    );
+    assert_eq!(r["result"], "Continue");
+    assert_eq!(
+        ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"].as_array().unwrap().iter().find(|f| f["name"] == "CaptionButton").unwrap()["caption"],
+        "Continue"
+    );
+    let bad_face =
+        ok(&mut a, "js_run", json!({ "doc": doc, "field": "CaptionButton", "script": "getField('CaptionButton').buttonSetCaption('Ignored', 1);" }));
+    assert!(bad_face["error"].as_str().is_some_and(|e| e.contains("normal button face")));
     assert_eq!(ok(&mut a, "js_enabled", json!({ "enabled": false }))["enabled"], false);
     assert!(a.call("js_run", &json!({ "doc": doc, "script": "1" })).is_err());
 }

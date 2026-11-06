@@ -6,6 +6,7 @@ use super::{
 };
 
 pub(crate) struct Host {
+    pub(crate) event_name: String,
     pub(crate) fields: Arc<Vec<FieldState>>,
     pub(crate) changed: BTreeSet<usize>,
     pub(crate) alerts: Vec<Message>,

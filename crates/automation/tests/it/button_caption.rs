@@ -34,11 +34,16 @@ fn button_caption_can_be_changed_after_creation() {
     let id = tool(&mut a, "doc_open", json!({"path": "buttons.pdf"}))["doc"].as_u64().unwrap();
     let before = a.session().save_bytes(DocId(id)).unwrap();
     let (_, _, empty_pixels) = a.render_pixels(id, 1, 1.0).unwrap();
-    tool(&mut a, "form_set_props", json!({"doc": id, "field": "clear_button", "caption": "Clear Form"}));
+    let result = tool(
+        &mut a,
+        "js_run",
+        json!({ "doc": id, "field": "clear_button", "script": "getField('clear_button').value='ignored'; getField('clear_button').buttonSetCaption('Clear Form'); getField('clear_button').buttonGetCaption();" }),
+    );
+    assert_eq!(result["result"], "Clear Form");
     let fields = tool(&mut a, "form_fields", json!({"doc": id}));
     assert_eq!(fields["fields"][0]["caption"], "Clear Form");
     assert_eq!(fields["fields"][0]["captions"], json!([{"widget": 1, "caption": "Clear Form"}]));
-    assert_eq!(a.session().get(DocId(id)).unwrap().can_undo(), Some("Change field properties"));
+    assert_eq!(a.session().get(DocId(id)).unwrap().can_undo(), Some("Run JavaScript"));
     let (_, _, labelled_pixels) = a.render_pixels(id, 1, 1.0).unwrap();
     assert_ne!(empty_pixels, labelled_pixels, "the label must reach the actual page appearance");
     tool(&mut a, "edit_undo", json!({"doc": id}));

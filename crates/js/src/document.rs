@@ -1,4 +1,4 @@
-use super::host::{arg, colour, error, function, host, read, s, set_value, strings, text, value_of, write};
+use super::host::{arg, colour, error, function, host, read, s, set_value, strings, text, text_line, value_of, write};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldType, Request};
 use super::{Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, js_string};
 
@@ -95,6 +95,38 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
     };
 
+    fn button_get_caption(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let f = read(c, name)?;
+        if f.kind != FieldType::Button {
+            return Err(error(format!("{} is not a push button", f.name)));
+        }
+        let face = if args.is_empty() { 0.0 } else { arg(args, 0).to_number(c)? };
+        if !face.is_finite() || face != 0.0 {
+            return Err(error("only the normal button face (0) is supported"));
+        }
+        Ok(s(f.caption.as_deref().unwrap_or("")))
+    }
+    fn button_set_caption(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let f = read(c, name)?;
+        if f.kind != FieldType::Button {
+            return Err(error("buttonSetCaption is only available on push buttons"));
+        }
+        let caption_arg = args.first().ok_or_else(|| error("buttonSetCaption requires a caption argument"))?;
+        let caption = text_line(caption_arg, c)?;
+        let face = if args.get(1).is_none() { 0.0 } else { arg(args, 1).to_number(c)? };
+        if !face.is_finite() || face != 0.0 {
+            return Err(error("only the normal button face (0) is supported"));
+        }
+        if host(c)?.borrow().event_name == "Format" {
+            return Err(error("buttonSetCaption is not available in a Format event"));
+        }
+        write(c, name, |f| {
+            f.caption = Some(caption);
+            f.caption_was_set = true;
+        })?;
+        Ok(JsValue::undefined())
+    }
+
     fn get_item_at(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
         let f = read(c, name)?;
         let i = arg(args, 0).to_number(c)?;
@@ -134,6 +166,8 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
     let is_box_checked = NativeFunction::from_copy_closure_with_captures(is_box_checked, n.clone());
     let check_this_box = NativeFunction::from_copy_closure_with_captures(check_this_box, n.clone());
     let set_focus = NativeFunction::from_copy_closure_with_captures(set_focus, n.clone());
+    let button_get_caption = NativeFunction::from_copy_closure_with_captures(button_get_caption, n.clone());
+    let button_set_caption = NativeFunction::from_copy_closure_with_captures(button_set_caption, n.clone());
     ObjectInitializer::new(ctx)
         .accessor(js_string!("value"), Some(value_get), Some(value_set), rw)
         .accessor(js_string!("valueAsString"), Some(as_string), None, rw)
@@ -154,6 +188,8 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         .function(is_box_checked, js_string!("isBoxChecked"), 1)
         .function(check_this_box, js_string!("checkThisBox"), 2)
         .function(set_focus, js_string!("setFocus"), 0)
+        .function(button_get_caption, js_string!("buttonGetCaption"), 1)
+        .function(button_set_caption, js_string!("buttonSetCaption"), 2)
         .build()
 }
 
