@@ -163,12 +163,7 @@ impl Merged {
                         kids(src, &mut copier, dst, v, e.page, pages, objects, &child, &direct)
                     }
                     b"S" => Some(rename(v, &roles).unwrap_or_else(|| copier.copy_val(dst, v, None))),
-                    b"C" => Some(match v {
-                        Object::Array(a) => {
-                            Object::Array(a.iter().map(|c| rename(c, &classes).unwrap_or_else(|| copier.copy_val(dst, c, None))).collect())
-                        }
-                        other => rename(other, &classes).unwrap_or_else(|| copier.copy_val(dst, other, None)),
-                    }),
+                    b"C" => Some(renamed_classes(src, &mut copier, dst, v, &classes)),
                     b"ID" => Some(match src.resolve(v).as_string() {
                         Some(s) => {
                             Object::String(pdfcraft_cos::PdfString::literal(renamed_ids.get(&s.bytes).cloned().unwrap_or_else(|| s.bytes.clone())))
@@ -619,6 +614,19 @@ fn merge_names(merged: &mut Dict, src: &Document, map: Option<&Object>, copier: 
 fn rename(v: &Object, renamed: &HashMap<Vec<u8>, Vec<u8>>) -> Option<Object> {
     let name = v.as_name()?;
     Some(Object::Name(renamed.get(name).cloned().unwrap_or_else(|| name.to_vec())))
+}
+
+/// Class names and the array containing them can be indirect. Resolve them in the source
+/// before applying this source's rename, rather than copying an old name into the new tree.
+/// `Document::resolve` bounds reference chains; malformed/cyclic values retain the copier's
+/// existing bounded fallback, and non-name entries (class revision numbers) stay unchanged.
+fn renamed_classes(src: &Document, copier: &mut Copier<'_>, dst: &mut Document, value: &Object, renamed: &HashMap<Vec<u8>, Vec<u8>>) -> Object {
+    match src.resolve(value).as_ref() {
+        Object::Array(items) => {
+            Object::Array(items.iter().map(|item| rename(&src.resolve(item), renamed).unwrap_or_else(|| copier.copy_val(dst, item, None))).collect())
+        }
+        resolved => rename(resolved, renamed).unwrap_or_else(|| copier.copy_val(dst, value, None)),
+    }
 }
 
 /// An ID not in `taken`, made from `id`.

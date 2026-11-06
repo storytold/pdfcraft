@@ -230,6 +230,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- 2026-11-06: M4, PR #1946 independent review: class-name renaming resolves indirect `/C` names, arrays and array members in their source. Synthetic collision tests preserve each file's attribute meaning and revision numbers after save/reopen; cyclic references remain bounded. Estimates unchanged.
+
 - 2026-11-06: M4, PR #1946 review: conflicting class-map meanings are checked on each source's own structure elements after combine/save/reopen. Documented role/class renaming and transitive role mappings; existing language and untagged-source regressions retained. Estimates unchanged.
 
 - **2026-10-28 (M10, #4119 partial):** Scan & OCR ▸ Enhance scanned file cleans scanned pages in place: background removal (level 0–100, as the camera clean-up), edge shadow removal (book gutters, copier borders) and despeckle. Each scan image is decoded, cleaned and written back into its own object at the same size and colour space (JPEG stays JPEG, others lossless, 1-bit stays 1-bit), so the OCR text layer, comments and links stay; one undo step, shared images once, unsupported images (CMYK, indexed, JPEG 2000, JBIG2, CCITT, broken data) reported. `page_enhance_scan` drives it headlessly. Not yet an option of Recognize text. Estimates unchanged.
