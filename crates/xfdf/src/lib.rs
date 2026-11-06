@@ -115,7 +115,7 @@ pub fn export_data(doc: &Document, format: Format) -> String {
             // A formula-like cell gets a leading `'`, as in `merge_csv`; import takes it off again.
             let q = |s: &str| {
                 let s = if csv_guarded(s) { format!("'{s}") } else { s.to_string() };
-                if s.contains([',', '"', '\n', '\r', '\t']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
+                if s.is_empty() || s.contains([',', '"', '\n', '\r', '\t']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
             };
             format!(
                 "{}\n{}\n",
