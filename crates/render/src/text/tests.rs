@@ -785,6 +785,37 @@ fn limited_search_stops_after_the_requested_matches() {
     assert_eq!(text.find_opts_limited("o", false, false, 10), vec![0..1, 1..2, 2..3, 3..4]);
 }
 
+fn tall(t: &str, x0: f32, y0: f32, x1: f32, h: f32) -> TextGlyph {
+    let rect = [x0, y0, x1, y0 + h];
+    TextGlyph { text: t.into(), rect, quad: [[x0, y0], [x1, y0], [x1, rect[3]], [x0, rect[3]]], direction: [1.0, 0.0] }
+}
+
+/// #3172: blanks drawn over big digits must not show inside the number, and the word gap next to big digits follows
+/// the glyphs it lies between.
+#[test]
+fn blanks_under_a_number_and_a_word_gap_next_to_big_digits() {
+    // Big dark digits, then a smaller sentence drawn over them with blanks where the digits sit.
+    let mut v = Vec::new();
+    for (t, x) in [("5", 0.0), ("0", 6.0), ("1", 100.0), ("4", 106.0)] {
+        v.push(tall(t, x, 3.0, x + 6.0, 34.0));
+    }
+    for (t, x) in [("F", 16.5), ("R", 22.5), (" ", 100.0), (" ", 106.0), ("C", 130.0), ("D", 136.0)] {
+        v.push(tall(t, x, 6.0, x + 6.0, 28.0));
+    }
+    assert_eq!(layout(v).plain_text(), "50 FR 14 CD");
+}
+
+/// #3172: a word break on the covered blank that opens an overprinted run moves to the run's next glyph.
+#[test]
+fn a_covered_leading_blank_keeps_the_word_break_of_its_run() {
+    let mut v = Vec::new();
+    v.push(g("1", 0.0, 10.0, 6.0));
+    // " X" drawn over the "1": the blank is covered, and "X" sits right behind it.
+    v.push(g(" ", 0.0, 10.0, 6.0));
+    v.push(g("X", 6.0, 10.0, 12.0));
+    assert_eq!(layout(v).plain_text(), "1 X");
+}
+
 fn word(v: &mut Vec<TextGlyph>, s: &str, x: f32, y: f32, advance: f32) {
     for (i, c) in s.chars().enumerate() {
         let x0 = x + i as f32 * advance;
