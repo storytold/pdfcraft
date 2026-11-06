@@ -19,6 +19,9 @@ pdfcraft-engine = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "persistence", "links", "clipboard"] }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 serde_json = { workspace = true }
+# Reads Preferences ▸ JavaScript from `app.ron` for the Print verb, which runs without the window
+# (src/main.rs). Already in the tree through eframe's persistence; same version.
+ron = "0.12"
 # Records from every crate go to standard error and the log file (src/logging.rs).
 log = { workspace = true }
 # The log timestamp goes through chrono (no hand-rolled calendar code).
@@ -42,6 +45,10 @@ wayland-protocols = { version = "0.32", features = ["client"] }
 raw-window-handle = "0.6"
 
 [dev-dependencies]
+# The scripted XFA form fixture for the Print verb's JavaScript test (src/print_verb.rs).
+pdfcraft-xfa = { workspace = true }
+# Temporary files for the --print tests (src/print_verb.rs).
+tempfile = "3.27"
 # Waits for wgpu's adapter, device and error-scope futures in tests (already in the tree through wgpu).
 pollster = "1.0"
 

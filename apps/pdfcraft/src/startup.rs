@@ -9,13 +9,23 @@ pub(super) struct Arguments {
     pub create_images: bool,
     pub new_window: bool,
     pub two_paged: bool,
+    /// `--print`: File Explorer's Print verb (#1695).
+    pub print: bool,
     pub version: bool,
     pub help: bool,
 }
 
 impl Arguments {
+    /// A print launch never hands off: it prints and exits, or opens the files it couldn't print
+    /// with the Print dialog in its own window.
     pub fn may_hand_off(&self) -> bool {
-        !self.new_window && !self.files.is_empty() && self.options.is_empty() && self.control_file.is_none() && !self.create_images && !self.two_paged
+        !self.new_window
+            && !self.files.is_empty()
+            && self.options.is_empty()
+            && self.control_file.is_none()
+            && !self.create_images
+            && !self.two_paged
+            && !self.print
     }
 
     pub fn parse(args: impl IntoIterator<Item = String>) -> Self {
@@ -34,6 +44,7 @@ impl Arguments {
                 "--control" => parsed.control_file = args.next(),
                 "--create-images" => parsed.create_images = true,
                 "--new-window" => parsed.new_window = true,
+                "--print" => parsed.print = true,
                 "--two-paged" => parsed.two_paged = true,
                 flag if flag.starts_with("--two-paged=") => {
                     // It has no value: do not consume the following filename on malformed use.
@@ -90,9 +101,13 @@ mod tests {
             &["--layout", "two-page", "first.pdf"],
             &["--control", "control.json", "first.pdf"],
             &["--create-images", "first.png"],
+            &["--print", "first.pdf"],
         ] {
             assert!(!parse(args).may_hand_off());
         }
+        let print = parse(&["--print", "first.pdf", "second.pdf"]);
+        assert!(print.print && print.options.is_empty());
+        assert_eq!(print.files, ["first.pdf", "second.pdf"]);
     }
 
     #[test]

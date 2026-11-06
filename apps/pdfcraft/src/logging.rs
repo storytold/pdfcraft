@@ -5,7 +5,9 @@
 //! A launch from a desktop menu has no terminal, so the file is what a bug report can attach:
 //! `<data dir>/logs/pdfcraft.log` (the PdfCraft eframe storage directory, or portable data). Each
 //! start moves the previous log to `pdfcraft.1.log` (and that one to `.2`), so the log of a run
-//! that crashed survives the next launch.
+//! that crashed survives the next launch. A run that opens no window (File Explorer's Print verb)
+//! adds to the current log instead ([`append_to`]): Explorer starts one per selected file, all at
+//! once, and each rotating would push the app's own logs out.
 //!
 //! Levels: `info` for PdfCraft's own crates, `warn` for everything else (wgpu and naga are
 //! chatty). `RUST_LOG` replaces that with env_logger-style directives: `debug`,
@@ -142,6 +144,18 @@ pub fn rotate(dir: &Path) -> std::io::Result<(PathBuf, File)> {
     Ok((path, file))
 }
 
+/// The current log file in `dir`, opened to add to its end, and how long it already is; created
+/// when missing, and the previous logs are left as they are. For the Print verb (#1695): File
+/// Explorer starts it once per selected file, at the same moment, and three of them rotating
+/// pushed every earlier log out, leaving three one-line files.
+pub fn append_to(dir: &Path) -> std::io::Result<(PathBuf, File, u64)> {
+    std::fs::create_dir_all(dir)?;
+    let path = numbered(dir, 0);
+    let file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+    let len = file.metadata().map_or(0, |m| m.len());
+    Ok((path, file, len))
+}
+
 /// One formatted log line: `<timestamp> <LEVEL> [<thread>] <target>: <message>\n`.
 pub fn format_line(ts: &str, level: log::Level, thread: &str, target: &str, message: &str) -> String {
     let message = message.strip_suffix('\n').unwrap_or(message);
@@ -175,6 +189,13 @@ impl Sink {
             return;
         }
         self.append(line);
+    }
+
+    /// Start writing to `file`, which already holds `written` bytes (they count towards the size
+    /// cap), first the lines kept so far.
+    pub fn attach_after(&mut self, file: File, written: u64) {
+        self.written = written;
+        self.attach(file);
     }
 
     /// Start writing to `file`, first the lines kept so far.
@@ -227,6 +248,14 @@ impl AppLogger {
     pub fn attach_dir(&self, dir: &Path) -> Result<PathBuf, String> {
         let (path, file) = rotate(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         self.sink.lock().unwrap_or_else(PoisonError::into_inner).attach(file);
+        Ok(path)
+    }
+
+    /// Send records to the end of the current log in `dir` without rotating ([`append_to`]);
+    /// returns its path.
+    pub fn append_dir(&self, dir: &Path) -> Result<PathBuf, String> {
+        let (path, file, len) = append_to(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        self.sink.lock().unwrap_or_else(PoisonError::into_inner).attach_after(file, len);
         Ok(path)
     }
 }
@@ -372,6 +401,44 @@ mod tests {
         assert_eq!(read(&dir.join("pdfcraft.1.log")), "run 3");
         assert_eq!(read(&dir.join("pdfcraft.2.log")), "run 2");
         assert!(!dir.join("pdfcraft.3.log").exists(), "only {KEEP} old logs are kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #1695: the Print verb runs once per file File Explorer was given, all at once. Each adds
+    /// to the current log: the earlier logs stay, and every run's lines are kept.
+    #[test]
+    fn runs_that_append_keep_the_earlier_logs() {
+        let dir = temp_dir("append");
+        for run in 1..=2 {
+            let (path, _file) = rotate(&dir).expect("rotate");
+            std::fs::write(&path, format!("app run {run}\n")).expect("write");
+        }
+        for file in 1..=3 {
+            let (path, mut f, len) = append_to(&dir).expect("append");
+            assert_eq!(path, dir.join(LOG_FILE));
+            assert_eq!(len, read(&path).len() as u64, "the length so far");
+            f.write_all(format!("printed {file}\n").as_bytes()).expect("write");
+        }
+        assert_eq!(read(&dir.join(LOG_FILE)), "app run 2\nprinted 1\nprinted 2\nprinted 3\n");
+        assert_eq!(read(&dir.join("pdfcraft.1.log")), "app run 1\n", "the earlier log stays");
+        let fresh = temp_dir("append-fresh");
+        let (path, _f, len) = append_to(&fresh).expect("a missing log is created");
+        assert_eq!((read(&path).as_str(), len), ("", 0));
+        assert!(!fresh.join("pdfcraft.1.log").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&fresh);
+    }
+
+    /// An appended log's earlier bytes count towards the size cap.
+    #[test]
+    fn an_appended_log_counts_what_it_already_holds() {
+        let dir = temp_dir("append-cap");
+        std::fs::create_dir_all(&dir).expect("dir");
+        let (path, file, _) = append_to(&dir).expect("append");
+        let mut sink = Sink::new(10);
+        sink.attach_after(file, 8);
+        sink.write("abc\n");
+        assert_eq!(read(&path), "log file reached 10 bytes; later records go to standard error only\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

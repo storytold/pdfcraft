@@ -707,3 +707,19 @@ fn start_up_and_the_panic_hook_never_use_eprintln() {
         offenders.join("\n")
     );
 }
+
+/// #1723 review: the Print verb reads Preferences ▸ JavaScript from `app.ron` as the window does,
+/// under the current key or the PrintCraft one, and leaves JavaScript on when the file can't be
+/// read or doesn't say.
+#[test]
+fn the_print_verb_reads_the_saved_javascript_preference() {
+    let ron = |key: &str, prefs: &str| ron::to_string(&std::collections::HashMap::from([(key.to_string(), prefs.to_string())])).unwrap();
+    assert!(!super::javascript_in(&ron("pdfcraft", r#"{"javascript":false,"zoom":1.0}"#)));
+    assert!(!super::javascript_in(&ron(super::LEGACY_STORAGE_KEY, r#"{"javascript":false}"#)));
+    assert!(super::javascript_in(&ron("pdfcraft", r#"{"javascript":true}"#)));
+    assert!(super::javascript_in(&ron("pdfcraft", r#"{"zoom":1.0}"#)), "not saved: the default");
+    assert!(super::javascript_in(&ron("pdfcraft", "not JSON")));
+    assert!(super::javascript_in("not RON at all"));
+    // eframe's own layout: a map of strings, pretty-printed.
+    assert!(!super::javascript_in("{\n    \"pdfcraft\": \"{\\\"javascript\\\":false}\",\n    \"egui\": \"()\",\n}"));
+}
