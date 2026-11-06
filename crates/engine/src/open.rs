@@ -17,6 +17,7 @@ pub struct OpenContext {
     now: Option<i64>,
     js_off: bool,
     trust: Arc<TrustStore>,
+    highlight: bool,
     xfa_time_scale: u32,
 }
 
@@ -37,6 +38,14 @@ struct DocumentOpenData<'a> {
 }
 
 impl OpenContext {
+    /// This context with Highlight fields `on`, which the document's scripts read as
+    /// `app.runtimeHighlight` while it opens. A new document opens with the remembered setting
+    /// while the session keeps the one of the document in front, which its scripts read.
+    pub fn with_highlight(mut self, on: bool) -> Self {
+        self.highlight = on;
+        self
+    }
+
     /// Prepare a document without mutating the session that supplied this context.
     pub fn prepare_open(
         &self,
@@ -54,7 +63,13 @@ impl OpenContext {
 impl Session {
     /// Snapshot the session state that affects open-time scripts, dates and signature trust.
     pub fn open_context(&self) -> OpenContext {
-        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone(), xfa_time_scale: self.xfa_time_scale.unwrap_or(1) }
+        OpenContext {
+            now: self.now(),
+            js_off: self.js_off,
+            trust: self.trust.clone(),
+            highlight: self.field_highlight,
+            xfa_time_scale: self.xfa_time_scale.unwrap_or(1),
+        }
     }
 
     /// Prepare a document without adding it to this session.
@@ -84,6 +99,8 @@ impl Session {
         Ok(self.commit_open(prepared))
     }
 
+    /// What [`OpenContext::prepare_open`] runs inside its panic guard: read, decrypt and lay out
+    /// the document, and run an XFA form's opening scripts.
     fn prepare_open_unguarded(
         context: &OpenContext,
         name: String,
@@ -188,6 +205,7 @@ impl Session {
                             out: &mut script_output,
                             datasets: None,
                             ran_away: false,
+                            highlight: context.highlight,
                             time_scale: context.xfa_time_scale,
                         };
                         let changes = xfa::on_open(&mut work, &tpl, &mut run);
