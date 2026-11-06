@@ -1792,6 +1792,45 @@ fn pages_panel_thumbnails_have_a_context_menu() {
     assert_eq!(h.state().page_clipboard.as_ref().map(|c| c.pages.clone()), Some(vec![2]));
 }
 
+/// Right-click a thumbnail ▸ Insert blank page…: a blank page after that page in the size it
+/// shows (on its side here), or before it on a paper chosen, turned. Each is one undo step.
+#[test]
+fn insert_blank_page_from_a_thumbnail_goes_before_or_after_it_in_its_size_or_on_a_paper() {
+    let mut h = pages_panel_harness(&[(200, 300), (400, 300), (200, 300)]);
+    let id = h.state().views[0].id;
+    let sizes = |h: &Harness<'static, PdfCraftApp>| {
+        h.state().session.get(id).unwrap().info.pages.iter().map(|p| (p.width.round() as i32, p.height.round() as i32)).collect::<Vec<_>>()
+    };
+    let open = |h: &mut Harness<'static, PdfCraftApp>, page: &str| {
+        let at = thumbnail(h, page);
+        press(h, at, egui::PointerButton::Secondary);
+        h.run_steps(2);
+        h.get_by_label("Insert blank page…").click();
+        h.run_steps(3);
+        assert_eq!(h.state().dialog, Some(Dialog::InsertBlank), "right-clicked {page}");
+    };
+    let size = |h: &Harness<'static, PdfCraftApp>| h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Page size:").value().unwrap_or_default();
+    open(&mut h, "Page 2");
+    assert!(size(&h).starts_with("Same as page 2 ("), "{}", size(&h));
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(sizes(&h), [(200, 300), (400, 300), (400, 300), (200, 300)], "after page 2, as large as it is");
+    assert_eq!(h.state().views[0].target_pages(), vec![2], "the new page is selected");
+    open(&mut h, "Page 1");
+    h.get_by_label("Before page 1").click();
+    h.state_mut().blank_draft.paper = pdfcraft_ui_egui::BLANK_PAPERS.iter().position(|p| p.0 == "A2");
+    h.run_steps(2);
+    assert!(size(&h).starts_with("A2 ("), "{}", size(&h));
+    h.get_by_label("Landscape").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(sizes(&h), [(1684, 1191), (200, 300), (400, 300), (400, 300), (200, 300)], "A2 on its side, before page 1");
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(sizes(&h).len(), 4, "one undo step");
+}
+
 /// Where the Pages panel draws page `n`'s thumbnail.
 fn thumbnail_rect(h: &Harness<'static, PdfCraftApp>, n: usize) -> egui::Rect {
     h.get_all_by_label(&format!("Page {n}")).find(|t| t.rect().left() > 1000.0).expect("the Pages panel thumbnail").rect()

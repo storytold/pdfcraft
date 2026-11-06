@@ -407,6 +407,7 @@ impl PdfCraftApp {
                     self.apply_edit(Edit::InsertBlankPage { at: last + 1, width: w, height: h });
                 }
             }
+            "page.insert_blank_dialog" => self.open_insert_blank_dialog(),
             "page.insert" => self.insert_from_file_dialog(),
             "page.replace" => self.replace_pages_dialog(),
             "page.copy" => self.copy_pages(false),

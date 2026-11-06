@@ -1286,8 +1286,8 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/view.rs::pages_sidebar_select_all_keeps_current_page_and_keyboard_scope", "crates/ui-egui/tests/it/editing.rs::dragging_pages_panel_thumbnails_reorders_pages", "crates/ui-egui/tests/it/viewer.rs::pages_panel_thumbnails_have_a_context_menu", "crates/ui-egui/tests/it/editing.rs::split_from_pages_panel_context_menu", "crates/ui-egui/tests/it/editing.rs::deleting_pages_from_the_pages_panel_menu", "crates/ui-egui/tests/it/editing.rs::the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page"]
-notes = "Ctrl/Cmd+A selects every page while the Pages sidebar owns the keyboard, without navigation; Escape clears that selection. Viewer and text-field shortcuts keep their own scope. Drag the selection (or the page grabbed) to reorder, with a drop bar and edge scrolling; right-click offers Split document…, Extract pages, Cut, Copy, Paste after and Delete pages (also the Delete key over the panel). Deleting pages makes the next Save a full rewrite (unsigned files), so the deleted pages leave the file; signed files stay incremental. Not yet: Rotate, Insert and Page labels in the menu, dragging pages between documents, or dropping files onto the panel."
+evidence = ["crates/ui-egui/tests/it/view.rs::pages_sidebar_select_all_keeps_current_page_and_keyboard_scope", "crates/ui-egui/tests/it/editing.rs::dragging_pages_panel_thumbnails_reorders_pages", "crates/ui-egui/tests/it/viewer.rs::pages_panel_thumbnails_have_a_context_menu", "crates/ui-egui/tests/it/editing.rs::split_from_pages_panel_context_menu", "crates/ui-egui/tests/it/editing.rs::deleting_pages_from_the_pages_panel_menu", "crates/ui-egui/tests/it/editing.rs::the_delete_key_deletes_pages_picked_in_the_pages_panel_but_never_every_page", "crates/ui-egui/tests/it/viewer.rs::insert_blank_page_from_a_thumbnail_goes_before_or_after_it_in_its_size_or_on_a_paper"]
+notes = "Ctrl/Cmd+A selects every page while the Pages sidebar owns the keyboard, without navigation; Escape clears that selection. Viewer and text-field shortcuts keep their own scope. Drag the selection (or the page grabbed) to reorder, with a drop bar and edge scrolling; right-click offers Split document…, Extract pages, Insert blank page… (before or after the page, in its size or on a paper), Cut, Copy, Paste after and Delete pages (also the Delete key over the panel). Deleting pages makes the next Save a full rewrite (unsigned files), so the deleted pages leave the file; signed files stay incremental. Not yet: Rotate, Insert from a file and Page labels in the menu, dragging pages between documents, or dropping files onto the panel."
 
 [[feature]]
 id = "view.bookmarks-panel"
@@ -2768,10 +2768,10 @@ area = "D"
 tier = "P0"
 milestone = "M4"
 status = "shipped"
-commands = ["page.insert_blank"]
+commands = ["page.insert_blank", "page.insert_blank_dialog"]
 tools = ["page_insert_blank"]
-evidence = ["crates/organize/src/tests.rs::inserts_blank_page", "crates/ui-egui/tests/it/editing.rs::insert_blank_page_after_selection", "crates/engine/src/tests.rs::insert_blank_between_pages_keeps_both_neighbours"]
-notes = ""
+evidence = ["crates/organize/src/tests.rs::inserts_blank_page", "crates/ui-egui/tests/it/editing.rs::insert_blank_page_after_selection", "crates/engine/src/tests.rs::insert_blank_between_pages_keeps_both_neighbours", "crates/ui-egui/tests/it/viewer.rs::insert_blank_page_from_a_thumbnail_goes_before_or_after_it_in_its_size_or_on_a_paper", "crates/ui-egui/src/workflows/files.rs::a_blank_page_goes_next_to_the_selection_in_the_size_chosen"]
+notes = "Insert blank page adds one after the selection, the size of the last selected page. Insert blank page… (Pages menu, the Pages panel's Page tools, a thumbnail's right-click menu) asks where and how large: before the first selected page or after the last, in the size that page shows (turned as shown) or on A2, A3, A4, A5, Letter or Legal paper, upright or on its side. One undo step; the new page becomes the selection. Not measured against Acrobat's Insert Pages dialog, which also takes a page number and a count."
 
 [[feature]]
 id = "organize.insert-from-file"
