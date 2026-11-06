@@ -8277,9 +8277,50 @@ fn crop_pills_over_text_take_their_clicks() {
         let view = &h.state().views[0];
         assert!(view.image_selection.as_ref().is_some_and(|s| s.crop.is_none()), "{pill} ends crop mode");
         assert!(view.line_editor.is_none(), "{pill} opens no editor on the caption");
-        let visible = h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect;
-        assert_eq!(visible != Some(full), applies, "{pill}: the crop is applied only by Done");
+        let visible = h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect.expect("a visible box");
+        let expected = if applies { [full[0] + 20.0, full[1], full[2], full[3]] } else { full };
+        assert!(visible.iter().zip(expected).all(|(a, b)| (a - b).abs() < 0.5), "{pill}: {visible:?}, expected {expected:?}");
     }
+}
+
+/// A crop handle on a text box added over the picture's edge keeps its click: the box opens no
+/// editor and the crop being set stays (#6420 review).
+#[test]
+fn a_crop_handle_over_added_text_keeps_its_click() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("caption.pdf", None, picture_over_caption()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Page;
+    h.run_steps(3);
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
+    // A text box added across the picture's left edge, where its middle crop handle will be.
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    click_at(&mut h, at(25.0, 215.0));
+    assert!(h.state().views[0].content.draft.is_some(), "the added text's editor opened");
+    h.event(egui::Event::Text("Added".into()));
+    h.run_steps(2);
+    h.get_by_label("Done adding text").click();
+    h.run_steps(3);
+    let doc_id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(doc_id).unwrap().added().len(), 1, "one text box added");
+
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    click_at(&mut h, at(100.0, 240.0));
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.index == 0), "the picture is selected");
+    let full = h.state().session.get(doc_id).unwrap().page_images(0)[0].rect;
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new(full));
+    h.run_steps(2);
+    click_at(&mut h, at(30.0, 210.0));
+    let view = &h.state().views[0];
+    assert!(view.image_selection.as_ref().is_some_and(|s| s.crop.is_some()), "the crop handle's click keeps crop mode");
+    assert!(view.content.draft.is_none(), "the added text opens no editor");
 }
 
 #[test]

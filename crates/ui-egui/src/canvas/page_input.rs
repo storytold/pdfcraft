@@ -136,6 +136,11 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         };
         crate::redact_ui::page_input(cx, over_text, press == PagePress::Free, view)
     };
+    // A picture being cropped owns every press on its page (`edit_text_ui::crop_hit`), its click's
+    // release included, when the router has already let the press go: what lies under its handles
+    // and its Done and Cancel pills (added content, the page's text) must not
+    // take that click from it (#6420).
+    let cropping = tool == QuickTool::EditText && view.image_selection.as_ref().is_some_and(|s| s.page == i && s.crop.is_some());
     let on_objects = tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(cx, view);
     // Add text acts on the page's own paragraphs over them, and on the one its press was on until
     // the button is up: a drag that leaves the box still ends, and no new box takes it over.
@@ -151,7 +156,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         }
         view.content.selected = None;
     }
-    let on_content = !on_objects && !placing && editing_content && can_modify && {
+    let on_content = !on_objects && !placing && !cropping && editing_content && can_modify && {
         source_blocked
             || crate::content_ui::page_input(
                 cx,
@@ -171,11 +176,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let others_own_pointer = on_objects || on_content;
     let on_edit_text = (tool == QuickTool::EditText || over_source) && can_modify && {
         // Editable text takes precedence over background/overlapping artwork. Both
-        // inventories are painted every frame, even when text owns the pointer. A picture being
-        // cropped owns every press on its page (`edit_text_ui::crop_hit`), its click's release
-        // included, when the router has already let the press go: the text under its Done and
-        // Cancel pills must not take that click from them (#6420).
-        let cropping = tool == QuickTool::EditText && view.image_selection.as_ref().is_some_and(|s| s.page == i && s.crop.is_some());
+        // inventories are painted every frame, even when text owns the pointer.
         let text_used = crate::edit_text_ui::page_input(cx, &lines, view, !others_own_pointer && !cropping);
         let image_cx = crate::edit_text_ui::ImageCx {
             ui,
