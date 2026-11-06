@@ -37,6 +37,7 @@ macro_rules! tl_ctx {
 pub mod canvas;
 mod chrome;
 mod image_engine;
+pub mod pan_zoom_ui;
 pub use combine_grid::ThumbState as CombineThumb;
 pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
 mod commands;
@@ -350,6 +351,8 @@ pub struct PdfCraftApp {
     /// Current Properties Default last took from typed text (none at first).
     pub fill_text_default: fill_sign::TextBorder,
     pub dialog: Option<Dialog>,
+    /// Pan & zoom overview window state (`pan_zoom_ui`).
+    pub pan_zoom: Option<pan_zoom_ui::PanZoomState>,
     /// How to ask for the latest release (the desktop app sets it; see `updates`).
     pub(crate) updates: updates::Updates,
     /// Lists the Print dialog's printers in the background (the desktop app sets it; see

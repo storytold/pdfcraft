@@ -115,6 +115,7 @@ impl PdfCraftApp {
             fill_text_border_shape: pdfcraft_engine::BorderShape::Rectangle,
             fill_text_default: fill_sign::TextBorder::NONE,
             dialog: None,
+            pan_zoom: None,
             updates: updates::Updates::default(),
             printer_source: None,
             options_source: None,
