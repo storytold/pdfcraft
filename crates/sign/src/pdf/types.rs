@@ -16,8 +16,9 @@ impl TrustStore {
     /// ([`PublicKey::same_key`](crate::keys::PublicKey::same_key)). A certificate with the name
     /// and another key, or the key and another name, is not the anchor — and neither is a copy
     /// claiming more than the trusted certificate does: a looser `pathLenConstraint`, the
-    /// right to issue certificates when the trusted certificate has none, or a validity
-    /// window reaching beyond the trusted certificate's. Nothing verifies the signature on
+    /// right to issue certificates when the trusted certificate has none, a validity
+    /// window reaching beyond the trusted certificate's, or a different set of critical
+    /// extensions than the trusted certificate's. Nothing verifies the signature on
     /// a copy, so its fields are its bearer's word; the restrictions the user trusted
     /// govern, not the copy's.
     pub(super) fn trusts(&self, c: &Certificate) -> bool {
@@ -44,7 +45,21 @@ fn loosens_path_len(t: &Certificate, c: &Certificate) -> bool {
 /// certificate the user actually trusted: make an end entity a CA, or keep an expired
 /// anchor issuing.
 fn loosens(t: &Certificate, c: &Certificate) -> bool {
-    loosens_path_len(t, c) || (c.may_issue() && !t.may_issue()) || c.not_before < t.not_before || c.not_after > t.not_after
+    loosens_path_len(t, c)
+        || (c.may_issue() && !t.may_issue())
+        || c.not_before < t.not_before
+        || c.not_after > t.not_after
+        || loosens_critical_extensions(t, c)
+}
+
+/// Whether `c`'s unprocessed critical extensions loosen `t`'s: it drops one `t` carries
+/// (name constraints the user trusted, say, left behind), or it adds one `t` does not
+/// carry while not being self-signed, so the extension would go unexamined — the chain
+/// builder refuses such a certificate as an issuer for the same reason, exempting a
+/// self-signed root, whose extensions are the trust store's business.
+fn loosens_critical_extensions(t: &Certificate, c: &Certificate) -> bool {
+    t.unknown_critical.iter().any(|x| !c.unknown_critical.contains(x))
+        || (!c.is_self_signed() && c.unknown_critical.iter().any(|x| !t.unknown_critical.contains(x)))
 }
 
 #[cfg(test)]
@@ -138,6 +153,60 @@ mod tests {
         ]);
         let signature = key.sign(alg, &tbs).unwrap();
         Certificate::parse(&der::seq(&[&tbs, &sig_alg, &der::bit_string(&signature)])).unwrap()
+    }
+
+    /// A CA certificate for `key` under `name`, issued by `signer` under `issuer`, valid
+    /// from `FROM` until `until`, carrying `exts` beside its basic constraints.
+    fn issued(name: &Name, key: &PrivateKey, issuer: &Name, signer: &PrivateKey, serial: u8, until: Time, exts: &[Vec<u8>]) -> Certificate {
+        let alg = signer.preferred_digest();
+        let sig_alg = signer.signature_algorithm(alg);
+        let bc = der::seq(&[&der::oid("2.5.29.19"), &der::boolean(true), &der::octets(&der::seq(&[&der::boolean(true)]))]);
+        let mut extensions: Vec<&[u8]> = vec![&bc];
+        extensions.extend(exts.iter().map(Vec::as_slice));
+        let tbs = der::seq(&[
+            &der::explicit(0, &der::int(2)),
+            &der::uint(&[serial]),
+            &sig_alg,
+            &issuer.raw,
+            &der::seq(&[&FROM.encode(), &until.encode()]),
+            &name.raw,
+            &key.public_key().spki(),
+            &der::explicit(3, &der::seq(&extensions)),
+        ]);
+        let signature = signer.sign(alg, &tbs).unwrap();
+        Certificate::parse(&der::seq(&[&tbs, &sig_alg, &der::bit_string(&signature)])).unwrap()
+    }
+
+    /// A critical name-constraints extension, which PdfCraft does not process.
+    fn name_constraints() -> Vec<u8> {
+        der::seq(&[&der::oid("2.5.29.30"), &der::boolean(true), &der::octets(&der::seq(&[]))])
+    }
+
+    #[test]
+    fn a_copy_of_the_anchor_may_not_change_its_critical_extensions() {
+        let name = Name::build("Trust Anchor", "", "Anchor Tests", "", "US");
+        let key = PrivateKey::generate_p256().unwrap();
+        let until = Time { year: FROM.year + 20, ..FROM };
+        let nc = name_constraints();
+        // The anchor carries a critical extension PdfCraft does not process; a copy
+        // without it has dropped a restriction the user trusted.
+        let trust = TrustStore { certs: vec![issued(&name, &key, &name, &key, 1, until, std::slice::from_ref(&nc))] };
+        assert!(!trust.trusts(&copy_with(&name, &key, 2, true, until)), "a copy that dropped the anchor's critical extension");
+        assert!(trust.trusts(&issued(&name, &key, &name, &key, 3, until, std::slice::from_ref(&nc))), "a copy carrying the same extension");
+        // And a copy may not add one of its own the anchor does not carry, unless it is
+        // the anchor re-issued by its own key: a self-signed root's extensions are the
+        // trust store's business, as in the chain builder.
+        let trust = TrustStore { certs: vec![copy_with(&name, &key, 1, true, until)] };
+        let other = Name::build("Other Root", "", "Anchor Tests", "", "US");
+        let other_key = PrivateKey::generate_p256().unwrap();
+        assert!(
+            !trust.trusts(&issued(&name, &key, &other, &other_key, 2, until, std::slice::from_ref(&nc))),
+            "a cross-signed copy carrying an unexamined critical extension"
+        );
+        assert!(
+            trust.trusts(&issued(&name, &key, &name, &key, 3, until, std::slice::from_ref(&nc))),
+            "the anchor re-issued by its own key, with the extension"
+        );
     }
 
     #[test]

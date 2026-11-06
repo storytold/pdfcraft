@@ -411,6 +411,22 @@ fn a_cross_signed_copy_of_a_trusted_root_is_that_root() {
     assert_eq!(status, Status::Valid, "{details:?}");
 }
 
+/// A copy of the anchor that drops a critical extension the anchor carries (here name
+/// constraints, which PdfCraft does not process) does not stand in for the anchor: the
+/// restriction is part of what the user trusted.
+#[test]
+fn a_copy_that_drops_the_anchors_critical_extension_is_not_the_anchor() {
+    let name_constraints = ext("2.5.29.30", &der::seq(&[]));
+    let constrained = issue("Constrained Root", None, FOREVER, &[basic_constraints(true, None), key_usage(KEY_CERT_SIGN), name_constraints]);
+    let i = ca("Issuing CA", &constrained, None);
+    let (status, details) = verdict(end_entity("Honest Signer", &i), vec![i.cert.clone()], &constrained.cert);
+    assert_eq!(status, Status::Valid, "control, no copy: {details:?}");
+    let older = issue("Older Root", None, FOREVER, &ca_extensions());
+    let copy = certify(&constrained.name, &constrained.key, (&older.key, &older.name), 96, FOREVER, &ca_extensions());
+    let (status, details) = verdict(end_entity("Honest Signer", &i), vec![i.cert.clone(), copy], &constrained.cert);
+    assert_eq!(status, Status::Unknown, "a copy without the anchor's name constraints: {details:?}");
+}
+
 /// A certificate with a trusted root's name and another key is an impostor, however it got there.
 #[test]
 fn a_trusted_roots_name_with_another_key_is_not_trusted() {
