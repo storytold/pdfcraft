@@ -17,8 +17,8 @@ impl Document {
                 return Ok((index, trailer, revisions, Vec::new()));
             }
         }
-        let (entries, trailer, revisions, oddities) = self.read_xref_chain_materialized(log)?;
-        Ok((XrefIndex::Materialized(Arc::new(entries)), trailer, revisions, oddities))
+        let (entries, trailer, revisions, oddities, generation_repairs) = self.read_xref_chain_materialized(log)?;
+        Ok((XrefIndex::Materialized(Arc::new(entries), Arc::new(generation_repairs)), trailer, revisions, oddities))
     }
 
     fn read_compact_xref_chain(&self, log: &mut Vec<String>) -> Result<Option<(XrefIndex, Dict, Vec<Revision>)>, CosError> {
@@ -323,7 +323,7 @@ impl Document {
     pub(super) fn read_xref_chain_materialized(
         &self,
         log: &mut Vec<String>,
-    ) -> Result<(BTreeMap<u32, XrefEntry>, Dict, Vec<Revision>, Vec<(u64, u32)>), CosError> {
+    ) -> Result<(BTreeMap<u32, XrefEntry>, Dict, Vec<Revision>, Vec<(u64, u32)>, Vec<String>), CosError> {
         let data = &self.data;
         let tail_start = data.len().saturating_sub(4096);
         let sx = rfind(data, b"startxref", tail_start).ok_or(CosError::Syntax { offset: data.len(), detail: "no startxref".into() })?;
@@ -343,6 +343,9 @@ impl Document {
         // At most MAX_XREF_OBJECTS entries are kept in all; a stream past that is read again.
         let mut hybrids: HashMap<i64, Option<BTreeMap<u32, XrefEntry>>> = HashMap::new();
         let (mut hybrid_rows, mut noted) = (0usize, HashSet::new());
+        let mut generation_repairs = Vec::new();
+        let mut recorded = HashSet::new();
+        let mut diagnose = true;
         let mut next = Some(first);
         while let Some(off) = next.take() {
             if !visited.insert(off) || visited.len() > 10_000 {
@@ -371,6 +374,12 @@ impl Document {
                 }
             };
             revisions.push(Revision { xref_offset: off, is_stream, header_relative });
+            for (&num, &entry) in &sect {
+                if !diagnose {
+                    break;
+                }
+                diagnose = self.inspect_xref_generation_repair(num, entry, &mut recorded, &mut generation_repairs);
+            }
             // Hybrid files (§7.5.8.4): the /XRefStm entries supplement the table and replace the
             // free entries it gives objects only a cross-reference stream can locate.
             let hybrid = sect_trailer.int(b"XRefStm").filter(|x| *x >= 0);
@@ -390,6 +399,12 @@ impl Document {
                 let mut stm = BTreeMap::new();
                 let read = match self.read_section(x as usize, &mut stm, &mut odd, log) {
                     Ok(_) => {
+                        for (&num, &entry) in &stm {
+                            if !diagnose {
+                                break;
+                            }
+                            diagnose = self.inspect_xref_generation_repair(num, entry, &mut recorded, &mut generation_repairs);
+                        }
                         for (&num, &e) in &stm {
                             match sect.get(&num) {
                                 None | Some(XrefEntry::Free { .. }) => {
@@ -427,7 +442,7 @@ impl Document {
         for k in [&b"Prev"[..], b"XRefStm", b"Type", b"W", b"Index", b"Filter", b"DecodeParms", b"Length"] {
             trailer.remove(k);
         }
-        Ok((entries, trailer, revisions, oddities))
+        Ok((entries, trailer, revisions, oddities, generation_repairs))
     }
 
     /// Read one section at `off`, adding entries not already known (newer sections win). `odd`
@@ -606,7 +621,7 @@ impl Document {
         }
         if found > 0 {
             log.push(format!("the cross-reference data leaves out {found} objects the file contains; located them by their object headers"));
-            self.entries = Arc::new(XrefIndex::Materialized(Arc::new(filled)));
+            self.entries = Arc::new(XrefIndex::Materialized(Arc::new(filled), Arc::default()));
         }
         self.located = Arc::new(located);
     }
@@ -631,7 +646,7 @@ impl Document {
         if entries.is_empty() {
             return Err(CosError::Syntax { offset: 0, detail: "no objects found".into() });
         }
-        self.entries = Arc::new(XrefIndex::Materialized(Arc::new(entries.clone())));
+        self.entries = Arc::new(XrefIndex::Materialized(Arc::new(entries.clone()), Arc::default()));
         self.cache.lock().map_err(|_| CosError::Poisoned)?.clear();
         // Objects inside object streams.
         for num in objstms {
@@ -648,7 +663,7 @@ impl Document {
             }
         }
         let object_count = entries.len();
-        self.entries = Arc::new(XrefIndex::Materialized(Arc::new(entries)));
+        self.entries = Arc::new(XrefIndex::Materialized(Arc::new(entries), Arc::default()));
         self.cache.lock().map_err(|_| CosError::Poisoned)?.clear();
         // Trailer: the last `trailer` dictionary or cross-reference stream dictionary with a
         // usable /Root (last in the file, whichever kind), else the catalog itself. One whose
@@ -658,7 +673,7 @@ impl Document {
         // A file whose only trailers are cross-reference streams (and whose `startxref` is gone
         // or points nowhere) keeps its /Info, /ID and /Encrypt this way.
         let rank = |at: usize, d: &Dict| {
-            let root = self.try_get(d.reference(b"Root")?.num).ok()?;
+            let root = self.try_get_reference(d.reference(b"Root")?).ok()?;
             let Object::Dict(c) = &*root else { return None };
             Some((c.name(b"Type") == Some(b"Catalog") || c.contains(b"Pages"), at))
         };
@@ -816,18 +831,6 @@ pub(super) fn rfind(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
         return None;
     }
     (from..=hay.len() - needle.len()).rev().find(|&i| &hay[i..i + needle.len()] == needle)
-}
-
-/// A file identifier derived from entropy supplied by the caller.
-pub(super) fn generated_id(seed: &[u8; 32]) -> Vec<u8> {
-    use std::hash::{Hash, Hasher};
-    let mut out = Vec::new();
-    for i in 0..2u8 {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        (seed, i, b"pdfcraft id").hash(&mut h);
-        out.extend_from_slice(&h.finish().to_be_bytes());
-    }
-    out
 }
 
 /// The object number a classic xref subsection really starts at. A common producer bug heads the
