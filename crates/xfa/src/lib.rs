@@ -16,6 +16,7 @@ pub mod packets;
 pub mod parse;
 pub mod pdf;
 pub mod picture;
+mod proto;
 pub mod script;
 pub mod text;
 
