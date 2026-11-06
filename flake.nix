@@ -41,6 +41,15 @@
       };
     in
     {
+      packages.${system} = rec {
+        pdfcraft = pkgs.callPackage ./nix/package.nix { };
+        default = pdfcraft;
+      };
+
+      overlays.default = final: _prev: {
+        pdfcraft = final.callPackage ./nix/package.nix { };
+      };
+
       devShells.${system}.default = pkgs.mkShell {
         nativeBuildInputs = with pkgs; [
           launcher
