@@ -95,6 +95,38 @@ fn fillable(f: &FormField) -> bool {
     !f.read_only() && !matches!(f.kind, FormFieldKind::PushButton | FormFieldKind::Signature)
 }
 
+/// The fillable widgets in the order Tab and Shift+Tab visit them.
+pub fn tab_order(form: &[FormField], info: &DocInfo) -> Vec<(usize, usize)> {
+    let mut order: Vec<(usize, usize, usize)> = form
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| fillable(field))
+        .flat_map(|(fi, field)| {
+            field
+                .widgets
+                .iter()
+                .enumerate()
+                .filter(|(_, widget)| {
+                    let Some(page) = widget.page.and_then(|page| info.pages.get(page)) else { return false };
+                    let [x0, y0, x1, y1] = widget.rect;
+                    let [cx0, cy0, cx1, cy1] = page.crop.map(f64::from);
+                    !widget.hidden
+                        && !widget.read_only
+                        && [x0, y0, x1, y1].into_iter().all(f64::is_finite)
+                        && x0 < x1
+                        && y0 < y1
+                        && x1 > cx0
+                        && x0 < cx1
+                        && y1 > cy0
+                        && y0 < cy1
+                })
+                .map(move |(wi, widget)| (widget.tab, fi, wi))
+        })
+        .collect();
+    order.sort_by_key(|(tab, _, _)| *tab);
+    order.into_iter().map(|(_, fi, wi)| (fi, wi)).collect()
+}
+
 /// Whether a combo box takes typed text as well as a choice from its list: the Edit flag
 /// (ISO 32000-2 Table 233), which only means something with Combo set.
 fn editable_combo(f: &FormField) -> bool {
@@ -718,27 +750,56 @@ fn settle_text_editor(
 
 /// Tab / Shift+Tab: commits the field and moves to the next fillable widget in the document's tab
 /// order, returning the edit to apply (the commit's, or `edit`).
-fn tab_to_next_field(view: &mut DocView, form: &[FormField], f: &FormField, widget: usize, forward: bool, edit: Option<Edit>) -> Option<Edit> {
+fn tab_to_next_field(
+    view: &mut DocView,
+    info: &DocInfo,
+    form: &[FormField],
+    f: &FormField,
+    widget: usize,
+    forward: bool,
+    edit: Option<Edit>,
+) -> Option<Edit> {
     commit(view, form);
     let pending = view.pending_edit.take();
     // The next field that can be filled in, check boxes and radio buttons included (#2223), in
     // the document's tab order (each page's /Tabs: rows, columns or structure), wrapping.
-    let mut order: Vec<(usize, &FormField, usize)> = form
-        .iter()
-        .filter(|x| fillable(x))
-        .flat_map(|x| x.widgets.iter().enumerate().filter(|(_, w)| w.page.is_some() && !w.hidden).map(move |(wi, w)| (w.tab, x, wi)))
-        .collect();
-    order.sort_by_key(|o| o.0);
-    if let Some(pos) =
-        order.iter().position(|(_, x, wi)| x.name == f.name && *wi == widget).or_else(|| order.iter().position(|(_, x, _)| x.name == f.name))
-    {
-        let k = if forward { (pos + 1) % order.len() } else { (pos + order.len() - 1) % order.len() };
-        let (_, target, wi) = order[k];
+    let order = tab_order(form, info);
+    let exact = order.iter().position(|(fi, wi)| form.get(*fi).is_some_and(|x| x.name == f.name && *wi == widget));
+    let same_field = order.iter().position(|(fi, _)| form.get(*fi).is_some_and(|x| x.name == f.name));
+    let next_after_removed = if exact.is_none() && same_field.is_none() {
+        form.iter().position(|field| field.name == f.name).and_then(|fi| {
+            let tab = form.get(fi)?.widgets.get(widget)?.tab;
+            let key = (tab, fi, widget);
+            let tab_key = |(fi, wi): &(usize, usize)| form.get(*fi).and_then(|field| field.widgets.get(*wi)).map(|other| (other.tab, *fi, *wi));
+            if forward {
+                order.iter().position(|entry| tab_key(entry).is_some_and(|other| other > key)).or_else(|| (!order.is_empty()).then_some(0))
+            } else {
+                order.iter().rposition(|entry| tab_key(entry).is_some_and(|other| other < key)).or_else(|| order.len().checked_sub(1))
+            }
+        })
+    } else {
+        None
+    };
+    if let Some(pos) = exact.or(same_field).or(next_after_removed) {
+        // A focused widget that left the order is replaced by the field's first remaining stop.
+        let k = if next_after_removed.is_some() || (forward && exact.is_none()) {
+            pos
+        } else if forward {
+            (pos + 1) % order.len()
+        } else {
+            (pos + order.len() - 1) % order.len()
+        };
+        let Some((fi, wi)) = order.get(k).copied() else { return edit.or(pending) };
+        let Some(target) = form.get(fi) else { return edit.or(pending) };
         view.forms.focus = Some(Focus { select_all: true, ..open_focus(target, wi) });
-        if let Some(p) = target.widgets[wi].page
-            && view.page_screen_rect(p).is_none()
+        if let Some(widget) = target.widgets.get(wi)
+            && let Some(page) = widget.page
+            && !field_screen_rect(view, info, target, wi).is_some_and(|rect| {
+                let viewport = view.viewport_rect();
+                viewport.contains(rect.min) && viewport.contains(rect.max)
+            })
         {
-            view.go_to_page(p);
+            view.reveal_rect(page, widget.rect.map(|coord| coord as f32), info);
         }
     }
     edit.or(pending)
@@ -1005,7 +1066,7 @@ pub(crate) fn overlay(
         view.forms.focus = None;
     }
     if let Some(forward) = next {
-        edit = tab_to_next_field(view, form, f, focus.widget, forward, edit);
+        edit = tab_to_next_field(view, info, form, f, focus.widget, forward, edit);
     }
     edit.or_else(|| view.pending_edit.take())
 }
