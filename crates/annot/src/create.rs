@@ -51,6 +51,11 @@ pub(crate) fn ending_pair(start: LineEnding, end: LineEnding) -> Object {
     Object::Array(vec![Object::name(start.name()), Object::name(end.name())])
 }
 
+/// Shared Line margin: stroke radius, room for any ending, and one point of antialiasing.
+pub(crate) fn line_padding(width: f64, draws_ending: bool) -> f64 {
+    width.max(0.0) / 2.0 + if draws_ending { appearance::arrow_size(width) } else { 0.0 } + 1.0
+}
+
 /// Validate and compute `/Rect` for a new comment.
 pub(crate) fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotError> {
     let bad = |what: &str| AnnotError::Invalid(format!("invalid {what}"));
@@ -94,8 +99,7 @@ pub(crate) fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotEr
             if !finite(from) || !finite(to) || (from[0] - to[0]).hypot(from[1] - to[1]) < 1.0 {
                 return Err(bad("line (too short)"));
             }
-            let pad = half + if ending_draws(*start) || ending_draws(*end) { appearance::arrow_size(style.width) } else { 0.0 };
-            grow(bounds([*from, *to].into_iter()).unwrap_or_default(), pad + 1.0)
+            grow(bounds([*from, *to].into_iter()).unwrap_or_default(), line_padding(style.width, ending_draws(*start) || ending_draws(*end)))
         }
         Shape::Ink { strokes } | Shape::FreehandHighlight { strokes } | Shape::Signature { strokes } => {
             if strokes.iter().all(Vec::is_empty) || !strokes.iter().flatten().all(|p| finite(p)) {

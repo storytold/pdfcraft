@@ -75,6 +75,8 @@ pub(crate) enum ParagraphPart {
 pub(crate) enum CommentPart {
     /// The comment itself: a drag moves it, a click selects it.
     Body,
+    /// A selected distance measurement's horizontal numeric caption.
+    Caption,
     /// A resize handle of the selected comment: (-1, 0 or 1) across, then down.
     Handle(i8, i8),
     /// A point of the selected line, polygon or cloud.

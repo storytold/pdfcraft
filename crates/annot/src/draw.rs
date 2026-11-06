@@ -80,7 +80,8 @@ fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> 
         });
     doc.update_dict(r, |d| {
         d.set(b"AP".to_vec(), Object::Dict(apd));
-        if let Some(rect) = icon_rect {
+        // Keep /Rect and the generated /BBox in agreement after every moved-caption rebuild.
+        if let Some(rect) = icon_rect.or_else(|| crate::measurement_caption::bounds(d)) {
             d.set(b"Rect".to_vec(), num_array(&rect));
         }
         d.remove(b"AS");

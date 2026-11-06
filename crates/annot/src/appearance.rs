@@ -21,6 +21,46 @@ mod symbols;
 pub(crate) use symbols::display_stamp;
 use symbols::{CAPTION_SIZE, attach_icon, ellipse, line_caption, line_layout, note_icon, stamp};
 
+/// The displaced dimension line's midpoint and its original direction; caption geometry shares
+/// the existing leader layout rather than reimplementing /LL, /LLE or /LLO.
+pub(crate) fn measurement_line_frame(d: &Dict, l: [f64; 4]) -> Option<([f64; 2], [f64; 2])> {
+    let line = line_layout(d, [(l[0], l[1]), (l[2], l[3])], border_width(d)).line;
+    let dx = line[1].0 - line[0].0;
+    let dy = line[1].1 - line[0].1;
+    let len = dx.hypot(dy);
+    if !len.is_finite() || len <= 0.0 {
+        return None;
+    }
+    Some(([(line[0].0 + line[1].0) * 0.5, (line[0].1 + line[1].1) * 0.5], [dx / len, dy / len]))
+}
+
+/// Bounds of the actual dimension path, from the same leader layout the appearance draws.
+/// The creator's Line padding includes arrowheads, border width and antialiasing. An earlier
+/// annotation Rect is deliberately not an input, so moving a caption back also shrinks its frame.
+pub(crate) fn measurement_line_bounds(d: &Dict, l: [f64; 4]) -> Option<[f64; 4]> {
+    let width = border_width(d);
+    let draws_ending = match d.get(b"LE") {
+        None => false,
+        Some(o) => {
+            let a = o.as_array().filter(|a| a.len() == 2)?;
+            let mut draws = false;
+            for end in a {
+                let name = end.as_name()?;
+                if !known_ending(name) {
+                    return None;
+                }
+                draws |= name != b"None";
+            }
+            draws
+        }
+    };
+    let margin = crate::create::line_padding(width, draws_ending);
+    let layout = line_layout(d, [(l[0], l[1]), (l[2], l[3])], width);
+    let points = layout.line.iter().chain(layout.strokes.iter().flatten()).chain(layout.leaders.iter().flatten()).chain(layout.tick.iter().flatten());
+    let rect = crate::create::grow(crate::create::bounds(points.map(|p| [p.0, p.1]))?, margin);
+    rect.iter().all(|v| v.is_finite() && v.abs() <= 1e9).then_some(rect)
+}
+
 /// Length of an arrowhead for a line of width `w`.
 pub fn arrow_size(w: f64) -> f64 {
     6.0 + 3.0 * w.max(0.0)
@@ -508,6 +548,7 @@ fn appearance_context(d: &Dict) -> Option<AppearanceContext<'_>> {
     let subtype = d.name(b"Subtype")?;
     let rect = nums(d, b"Rect").filter(|r| r.len() == 4)?;
     let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+    let rect = crate::measurement_caption::bounds(d).unwrap_or(rect);
     // Cloudy borders (§12.5.4) are drawn for polygons only.
     let cloudy = d.get(b"BE").and_then(|b| b.as_dict()).is_some_and(|b| b.name(b"S") == Some(b"C"));
     if cloudy && subtype != b"Polygon" {
@@ -547,8 +588,9 @@ fn finish_appearance(context: &AppearanceContext<'_>, mut drawing: AppearanceDra
         let value = value.to_text();
         if value.chars().count() <= 256 && matches!(context.subtype, b"Line" | b"PolyLine" | b"Polygon") {
             let size = 10.0;
-            let x = (context.rect[0] + context.rect[2] - text_width(&value, size)) * 0.5;
-            let y = context.rect[3] - 12.0;
+            let [x, y] = crate::measurement_caption::layout(context.dict)
+                .map(|c| c.baseline)
+                .unwrap_or_else(|| [(context.rect[0] + context.rect[2] - text_width(&value, size)) * 0.5, context.rect[3] - 12.0]);
             let col = context.stroke.unwrap_or([0.0, 0.47, 0.84]);
             out.extend(format!("{}BT /Helv {} Tf {} {} Td ", rg(col), n(size), n(x), n(y)).bytes());
             // WinAnsi bytes (e.g. 0xB2 for "²") go into the stream as-is, not through UTF-8.

@@ -230,6 +230,13 @@ pub enum Edit {
         index: usize,
         locked: bool,
     },
+    /// Move only the readout of a PdfCraft distance measurement, in user space.
+    MoveMeasurementCaption {
+        page: usize,
+        index: usize,
+        dx: f64,
+        dy: f64,
+    },
     MoveAnnotation {
         page: usize,
         index: usize,

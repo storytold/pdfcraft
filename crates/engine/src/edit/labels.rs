@@ -229,6 +229,7 @@ impl Edit {
             Edit::MarkAnnotation { .. } => Label::of("Remove checkmark"),
             Edit::LockAnnotation { locked: true, .. } => Label::of("Lock comment"),
             Edit::LockAnnotation { .. } => Label::of("Unlock comment"),
+            Edit::MoveMeasurementCaption { .. } => Label::of("Move measurement readout"),
             Edit::MoveAnnotation { .. } => Label::of("Move comment"),
             Edit::ReshapeAnnotation { .. } => Label::of("Reshape comment"),
             Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
