@@ -286,3 +286,8 @@ a match of the `CobaltStrikeBeacon` family rule.
 7. **Report.** To the scanner, send the file's SHA-256, the release URL, the rule name and revision,
    and the matched identifiers and offsets. Report PdfCraft problems at
    <https://github.com/storytold/pdfcraft/issues> with the same facts.
+
+
+## Distribution build configuration (2026-11-02)
+
+Compiled PDFCRAFT_BUILD_LABEL identifies desktop and document windows and disables automatic startup update checks; manual checks stay available.
