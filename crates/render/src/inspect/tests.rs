@@ -1048,6 +1048,24 @@ fn links_and_attachments_past_the_comment_budget_are_listed() {
     assert_eq!(info.attachments.len(), 1);
 }
 
+#[test]
+fn javascript_links_share_the_annotation_text_budget() {
+    let pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+        2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+        3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [\
+        << /Subtype /Link /Rect [0 0 10 10] /A << /S /JavaScript /JS (1234) >> >>\
+        << /Subtype /Link /Rect [10 0 20 10] /A << /S /JavaScript /JS 4 0 R >> >>] >> endobj\n\
+        4 0 obj << /Length 4 >> stream\n5678\nendstream\nendobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+    let doc = Document::load_mem(pdf).unwrap();
+    let mut info = DocInfo::default();
+    let mut budget = 4;
+    Inspector::new(&doc).annotations(&mut info, &mut budget);
+    assert_eq!(budget, 0);
+    assert!(matches!(&info.links[0].target, LinkTarget::JavaScript(s) if s == "1234"));
+    assert!(matches!(&info.links[1].target, LinkTarget::Other(s) if s == "JavaScript"));
+    assert!(info.has_javascript);
+}
+
 /// Widgets without `/P` are placed on the page that lists them with one pass over the pages'
 /// `/Annots`, not a search of every page per field: that was O(fields × annotations), a
 /// second to open a form of 8,000 fields. A widget two pages list is on the first of them.

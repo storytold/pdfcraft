@@ -2403,11 +2403,11 @@ title = "Run-a-JavaScript action"
 area = "C"
 tier = "P1"
 milestone = "M6"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["js_run"]
+evidence = ["crates/ui-egui/tests/it/javascript.rs::schematic_link_opens_properties_without_selecting_the_background", "crates/automation/tests/it/automation.rs::schematic_component_properties_through_tools", "crates/js/src/tests.rs::schematic_popup_labels_and_separators_are_preserved"]
+notes = "Imported link annotations run JavaScript with the existing script limits and preference gate. Flat app.popUpMenu/popUpMenuEx labels appear as component properties beside the click, constrained to the document viewport; js_run reports the same labels headlessly. Menus are informational and return null: choosing actions and nested submenus are not supported. Creating JavaScript link actions, bookmarks and /Next action chains remain unsupported."
 
 [[feature]]
 id = "edit.action-thread"

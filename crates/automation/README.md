@@ -7,6 +7,8 @@ Agent control for PdfCraft: a headless tool table over the engine, and an opt-in
 
 `fill_sign_add` text accepts line breaks, including blank lines. Its typewriter box grows to hold all wrapped rows, and saving/reopening preserves the contents and appearance.
 
+`doc_info` exposes a JavaScript link's source as `links[].target.javascript`. Run it with `js_run` to read schematic component properties headlessly: `app.popUpMenu` and `app.popUpMenuEx` report a `popup_menu` request containing the display labels. They return `null` to the script; choosing menu actions and nested submenus are not supported.
+
 ## API
 
 ```rust

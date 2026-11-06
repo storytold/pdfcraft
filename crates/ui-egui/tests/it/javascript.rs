@@ -5,6 +5,73 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
+/// A schematic image with a component's JavaScript link above it.
+fn schematic() -> Vec<u8> {
+    let paint = "q 400 0 0 400 0 0 cm /Im Do Q\n";
+    let objects: [String; 6] = [
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources << /XObject << /Im 5 0 R >> >> /Contents 4 0 R /Annots [6 0 R] >>".into(),
+        format!("<< /Length {} >>\nstream\n{paint}endstream", paint.len()),
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\nabc\nendstream".into(),
+        "<< /Type /Annot /Subtype /Link /Rect [150 150 250 250] /A << /S /JavaScript /JS (app.popUpMenuEx\\({cName: 'Designator: R1'}, {cName: 'Value: 10k'}\\);) >> >>".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(b"xref\n0 7\n0000000000 65535 f \n");
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    out
+}
+
+#[test]
+fn schematic_link_opens_properties_without_selecting_the_background() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("schematic.pdf", None, schematic()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    let at = h.state().views[0].page_screen_rect(0).unwrap().center();
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    h.get_by_label("Component Properties");
+    h.get_by_label("10k");
+    h.hover_at(at);
+    h.run_steps(2);
+    assert!(h.query_by_label("JavaScript action").is_none(), "the link tooltip must not cover the properties");
+    assert!(h.state().views[0].picked_image.is_none(), "the component link owns this click");
+    let popup = h.ctx.memory(|m| m.area_rect(egui::Id::unique("popup-menu"))).unwrap();
+    assert!(popup.min.distance(at) < 32.0, "properties open beside the component: {popup:?}, {at:?}");
+    h.get_by_label("Close (Esc)").click();
+    h.run_steps(2);
+    assert!(h.state().popup_menu.is_none());
+
+    h.state_mut().right = Some(pdfcraft_ui_egui::RightPanel::Pages);
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    h.state_mut().run_link_script(id, "app.popUpMenu('Value: 10k')");
+    h.state_mut().popup_menu.as_mut().unwrap().anchor = egui::pos2(1390.0, 890.0);
+    h.run_steps(4);
+    let popup = h.ctx.memory(|m| m.area_rect(egui::Id::unique("popup-menu"))).unwrap();
+    let sidebar = h.get_all_by_label("Pages").find(|n| n.rect().left() > 900.0).expect("right sidebar heading").rect();
+    assert!(h.ctx.content_rect().contains_rect(popup) && popup.right() < sidebar.left(), "properties stay out of the sidebar: {popup:?}");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().popup_menu.is_none());
+}
+
 /// A form with a text field and a push button whose Mouse Up script fills it in.
 fn form() -> Vec<u8> {
     let objs = [

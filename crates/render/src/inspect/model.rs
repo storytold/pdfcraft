@@ -220,6 +220,8 @@ pub enum LinkTarget {
         destination: RemoteDestination,
         new_window: Option<bool>,
     },
+    /// A JavaScript action (`/S /JavaScript /JS …`). The source is the script to run.
+    JavaScript(String),
     Other(String),
 }
 

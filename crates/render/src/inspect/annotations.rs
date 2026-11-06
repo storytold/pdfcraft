@@ -15,10 +15,10 @@ const MAX_REMOTE_DESTINATION_NAME_BYTES: usize = 1024;
 /// are not listed: real comments stay far below, many small ones sharing one long string do not.
 pub(super) const MAX_ANNOTATION_BYTES: usize = 64 << 20;
 
-/// Web-address text the link listing, and name, description and embedded-file key text the
+/// Web-address and JavaScript text the link listing, and name, description and embedded-file key text the
 /// attachment listing, keep together. Many links or attachments can share one long string, which
 /// each would otherwise copy. Past it, a link to a web address lists as a URI action without its
-/// address, an attachment under its generic name without a description, and an embedded file whose
+/// address, a script as an unsupported action, an attachment under its generic name without a description, and an embedded file whose
 /// key does not fit is not listed.
 pub(super) const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
 
@@ -102,7 +102,7 @@ impl<'a> Inspector<'a> {
             }
             if subtype == "Link" {
                 if let Some(link) = self.link(page, index, d, text_budget) {
-                    if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
+                    if matches!(&link.target, LinkTarget::JavaScript(_)) || matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
                         info.has_javascript = true;
                     }
                     info.links.push(link);
@@ -214,6 +214,21 @@ impl<'a> Inspector<'a> {
                 Some("SetOCGState") => self.layer_state(a),
                 Some("GoToR") => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
                 Some("Launch") => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
+                Some("JavaScript") => {
+                    // Read /JS: a PDF string or a stream (ISO 32000-2 §12.6.4.16).
+                    // Scripts share the document-wide link/attachment text budget.
+                    let js = a.get(b"JS").ok().and_then(|js| match self.resolve(js) {
+                        Object::String(bytes, _) => spend(bytes, text_budget, text_string),
+                        Object::Stream(s) if *text_budget > 0 => {
+                            s.decompressed_content_with_limit(*text_budget).ok().and_then(|b| spend(&b, text_budget, text_string))
+                        }
+                        _ => None,
+                    });
+                    match js {
+                        Some(script) if !script.is_empty() => LinkTarget::JavaScript(script),
+                        _ => LinkTarget::Other("JavaScript".into()),
+                    }
+                }
                 Some(other) => LinkTarget::Other(other.to_string()),
                 None => return None,
             }

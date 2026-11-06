@@ -14,6 +14,7 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
         R::Beep => json!({ "beep": true }),
         R::SaveAs => json!({ "save_as": true }),
         R::ShowPanel(p) => json!({ "panel": p.id() }),
+        R::PopUpMenu(items) => json!({ "popup_menu": items }),
     }
 }
 

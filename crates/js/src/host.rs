@@ -60,13 +60,16 @@ impl Host {
         }
         let r = match r {
             Request::Reset(names) => Request::Reset(names.into_iter().map(xfa::clip).collect()),
+            Request::PopUpMenu(items) => Request::PopUpMenu(items.into_iter().map(xfa::clip).collect()),
             Request::LaunchUrl(u) => Request::LaunchUrl(xfa::clip(u)),
             Request::Submit(u) => Request::Submit(xfa::clip(u)),
             Request::Focus(n) => Request::Focus(xfa::clip(n)),
             other => other,
         };
         let bytes = match &r {
-            Request::Reset(names) => names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>())),
+            Request::Reset(names) | Request::PopUpMenu(names) => {
+                names.iter().fold(0usize, |n, s| n.saturating_add(s.len()).saturating_add(std::mem::size_of::<String>()))
+            }
             Request::LaunchUrl(u) | Request::Submit(u) | Request::Focus(u) => u.len(),
             _ => 0,
         };
