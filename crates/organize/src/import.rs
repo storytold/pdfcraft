@@ -100,8 +100,8 @@ fn added_objects(dst: &Document, before: &HashSet<u32>) -> Vec<ObjRef> {
 /// Insert Pages from File: [`import_pages_with`], and the inserted file's bookmarks come along
 /// under one new bookmark titled `title` (the file's name) at its first inserted page, as Combine
 /// Files does for each file. That bookmark goes among the top-level bookmarks where the pages went:
-/// before the first one that points after them. Bookmarks to pages left out lose their destination;
-/// a file without bookmarks adds none.
+/// before the first one that points after them. Bookmarks to pages left out stay behind, unless a
+/// bookmark below them leads to an inserted page; a file without bookmarks adds none.
 pub fn insert_file_pages(
     dst: &mut Document,
     src: &Document,
