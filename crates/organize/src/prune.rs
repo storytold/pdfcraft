@@ -222,6 +222,9 @@ impl Pruner<'_> {
     fn form(&mut self, xobjects: &Dict, name: &[u8], resources: &Dict, owner: Owner, depth: u8) {
         let Some(r) = xobjects.get(name).and_then(Object::as_ref) else { return };
         let Object::Stream(s) = &*self.doc.get(r) else { return };
+        // A `/Subtype` given by reference reads as no form here, as wherever the workspace tells
+        // forms from images (redaction, edit and Optimize among them): resolving it is a change
+        // across all of them.
         if s.dict.name(b"Subtype") != Some(b"Form") {
             return;
         }
