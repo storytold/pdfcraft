@@ -760,3 +760,61 @@ fn highlighted_link_can_be_requested_again_after_cancel() {
         assert_eq!(h.state().last_opened_url, None);
     }
 }
+
+/// One 300×400 page with two links (ISO 32000-2 §12.5.6.5, §12.6.4.8): at y 300..350 a relative
+/// address the catalog's `/URI /Base` resolves, and at y 200..250 a link whose `/Rect` spans the
+/// page but whose `/QuadPoints` cover only x 50..120.
+fn base_and_quads_fixture() -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /URI << /Base (https://example.org/base/) >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [50 300 250 350] /Border [0 0 0] /A << /S /URI /URI (page.html) >> >>",
+        "<< /Type /Annot /Subtype /Link /Rect [50 200 250 250] /QuadPoints [50 200 120 200 120 250 50 250] /Border [0 0 0] /A << /S /URI /URI (https://example.org/first-word) >> >>",
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// A relative link opens at the address the document's base gives it, through the usual
+/// confirmation; a link is active only in its `/QuadPoints`, not over the rest of its `/Rect`.
+#[test]
+fn relative_links_use_the_base_and_quad_points_limit_where_a_link_is_active() {
+    let _gpu = gpu();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("base.pdf", None, base_and_quads_fixture()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "none").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(8);
+    click_link(&mut h);
+    assert_eq!(h.state().pending_link, pending("https://example.org/base/page.html", LinkOrigin::Link));
+    h.get_by_label("Cancel").click();
+    h.run_steps(4);
+    let point = |h: &Harness<'static, PdfCraftApp>, x: f32, y: f32| {
+        let r = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+        egui::pos2(r.min.x + r.width() * (x / 300.0), r.min.y + r.height() * (1.0 - y / 400.0))
+    };
+    // Inside /Rect, outside the quadrilateral: nothing.
+    let away = point(&h, 200.0, 225.0);
+    click_at(&mut h, away);
+    assert_eq!(h.state().pending_link, None, "the rest of /Rect is not the link");
+    let on = point(&h, 80.0, 225.0);
+    click_at(&mut h, on);
+    assert_eq!(h.state().pending_link, pending("https://example.org/first-word", LinkOrigin::Link));
+}

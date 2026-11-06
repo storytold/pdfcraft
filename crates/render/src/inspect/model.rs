@@ -196,13 +196,39 @@ pub struct Link {
     /// Zero-based position in the page's raw `/Annots` array.
     pub index: usize,
     pub rect: [f32; 4],
+    /// Where the link is active when that isn't the whole of `rect`: its `/QuadPoints`, 8 numbers
+    /// each in user space (ISO 32000-2 Table 176). Empty when the link is active over `rect`
+    /// ([`crate::link_quads`]).
+    pub quads: Vec<[f32; 8]>,
     pub target: LinkTarget,
+}
+
+impl Link {
+    /// Whether the user-space point `(x, y)` activates the link: inside one of its quadrilaterals,
+    /// or inside its rectangle when it has none.
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        let [x0, y0, x1, y1] = self.rect;
+        if self.quads.is_empty() {
+            return x >= x0 && x <= x1 && y >= y0 && y <= y1;
+        }
+        // Every kept quadrilateral lies within `/Rect` give or take the slack `link_quads`
+        // accepts, so a point outside that is in none of them: skip the scan (up to
+        // `MAX_LINK_QUADS` per link, run per link on every pointer move).
+        let s = crate::link_area::RECT_SLACK;
+        if !(x >= x0 - s && x <= x1 + s && y >= y0 - s && y <= y1 + s) {
+            return false;
+        }
+        self.quads.iter().any(|q| crate::quad_contains(q, x, y))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LinkTarget {
     /// A destination in this document: the 0-based page and where on it the view goes.
     Page(usize, DestView),
+    /// A URI action's address, resolved against the catalog's `/URI /Base` when it is a relative
+    /// reference ([`crate::resolve_uri`]); not yet checked, as the opener must
+    /// (`pdfcraft_engine::links::document_url`).
     Uri(String),
     /// A set-layer-visibility action (`SetOCGState`, ISO 32000-2 §12.6.4.13): each change in
     /// order, naming the layer by its optional content group. With `preserve_rb`, a layer turned
