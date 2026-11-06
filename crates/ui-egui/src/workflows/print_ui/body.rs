@@ -202,15 +202,45 @@ pub(crate) fn body(
                     ui.end_row();
                 }
                 let paper_label = ui.label(tl!("Paper:"));
-                let paper_name = PAPERS.get(d.paper).map_or("US Letter", |p| p.0);
+                // The printer's own sizes (a label printer's 4 × 6 in, an office printer's
+                // envelopes), read when the dialog opens and when the printer changes (a label
+                // driver's one stock is whatever its settings say at the time); Save as PDF and
+                // the browser have none. A paper chosen earlier stays chosen when this printer has
+                // it; else the printer's default size is chosen when it reports one, else the size
+                // so far when this printer has it, else the first standard size.
+                let wanted = d.printer.clone().filter(|_| !browser);
+                if !d.papers_read || d.printer_papers.as_ref().map(|(read_for, _)| read_for) != wanted.as_ref() {
+                    // The size chosen so far, and its keyword when it was one of the last printer's own.
+                    let (size, key) = match (d.paper.checked_sub(PAPERS.len()), &d.printer_papers) {
+                        (Some(i), Some((_, last))) => last.get(i).map_or((PAPERS[0].1, None), |p| (p.size, Some(p.key.clone()))),
+                        _ => (d.paper_size(), None),
+                    };
+                    d.printer_papers = wanted.map(|p| {
+                        let papers = spool::printer_papers(&p);
+                        (p, papers)
+                    });
+                    d.papers_read = true;
+                    d.paper = d.paper_after_read(size, key.as_deref());
+                }
                 let before = d.paper;
-                craft_ui::ComboBox::from_id_salt("paper").selected_text(tl!(paper_name)).width(260.0).show_ui(ui, |ui| {
+                let own = d.own_papers_listed();
+                // Tall enough for a dozen rows: a label printer's own sizes come after the standard ones.
+                craft_ui::ComboBox::from_id_salt("paper").selected_text(d.paper_name()).width(260.0).height(420.0).show_ui(ui, |ui| {
                     for (i, (name, _)) in PAPERS.iter().enumerate() {
                         ui.selectable_value(&mut d.paper, i, tl!(name));
+                    }
+                    if !own.is_empty() {
+                        ui.separator();
+                    }
+                    for (i, label) in &own {
+                        ui.selectable_value(&mut d.paper, *i, label.as_str());
                     }
                 })
                 .response
                 .labelled_by(paper_label.id);
+                if d.paper != before {
+                    d.paper_picked = true;
+                }
                 // Label stock gets the label layout (cut, turned upright, fitted).
                 if d.paper != before && d.paper == print::LABEL_PAPER {
                     d.paper_before_label = Some(before);
@@ -242,11 +272,12 @@ pub(crate) fn body(
             if let Some(&source) = sizes.get(d.current_page) {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(crate::i18n::fmt(tl!("PDF page: {size}"), &[("size", &d.units.size(source.0, source.1))]));
-                    let matched = print::matching_paper(source);
+                    let matched = d.paper_index(source);
                     if ui.add_enabled(matched.is_some(), egui::Button::new(tl!("Match page at 100%"))).clicked()
                         && let Some(paper) = matched
                     {
                         d.paper = paper;
+                        d.paper_picked = true;
                         // A paper picked outright: nothing for leaving Label to give back.
                         d.paper_before_label = None;
                         d.handling = Handling::Size;
