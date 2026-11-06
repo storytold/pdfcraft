@@ -1,5 +1,7 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **2026-11-06, M7 / #6421 review:** Enter/Done and an image-menu edit in one frame preserve the crop as its own undo step before Rotate/Flip; estimates unchanged.
+
 > **Last reviewed:** 2026-11-06 | **Last updated:** 2026-11-06 | **Change:** patch (M7 #6421: crop mode keeps a stable Edit image context menu; menu actions finish the crop before dispatch with separate undo steps and unchanged-crop no-ops; estimates unchanged)
 
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)

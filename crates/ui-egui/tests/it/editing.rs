@@ -10109,3 +10109,48 @@ fn crop_menu_icon_again_commits_the_pending_crop() {
     h.run_steps(3);
     assert!(h.state().session.get(id).unwrap().can_undo().is_none());
 }
+
+#[test]
+fn crop_done_and_image_menu_action_in_one_frame_keep_both_edits() {
+    for label in ["Rotate Clockwise", "Flip horizontal", "Flip vertical"] {
+        let mut h = crop_menu_harness();
+        let id = h.state().views[0].id;
+        let original = h.state().session.get(id).unwrap().page_images(0)[0].clone();
+        enter_crop_through_menu(&mut h);
+        let r = crop_image_rect(&h);
+        crop_drag(&mut h, r.left_center(), r.left_center() + egui::vec2(r.width() * 0.25, 0.0));
+        let keep = h.state().views[0].image_selection.as_ref().unwrap().crop.as_ref().unwrap().keep;
+        crop_secondary_click(&mut h, r.center());
+        let p = h.get_by_label(label).rect().center();
+        crop_production_frame(&mut h, [egui::Event::PointerMoved(p)]);
+        crop_production_frame(
+            &mut h,
+            [egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }],
+        );
+        crop_production_frame(
+            &mut h,
+            [
+                egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() },
+                egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() },
+            ],
+        );
+        crop_production_frame(
+            &mut h,
+            [egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: false, repeat: false, modifiers: Default::default() }],
+        );
+        h.run_steps(3);
+        assert_ne!(h.state().session.get(id).unwrap().page_images(0)[0].matrix, original.matrix, "{label} ran");
+        h.state_mut().undo();
+        h.run_steps(3);
+        let image = h.state().session.get(id).unwrap().page_images(0)[0].clone();
+        assert_eq!(image.matrix, original.matrix, "first undo removes only {label}");
+        let crop = image.visible_rect.expect("same-frame Done must survive the menu action");
+        for (actual, expected) in crop.into_iter().zip(keep) {
+            assert!((actual - expected).abs() < 1e-6, "{label}: {crop:?} != {keep:?}");
+        }
+        h.state_mut().undo();
+        h.run_steps(3);
+        assert_eq!(h.state().session.get(id).unwrap().page_images(0)[0].visible_rect, original.visible_rect);
+        assert!(h.state().session.get(id).unwrap().can_undo().is_none());
+    }
+}

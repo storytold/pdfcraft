@@ -1021,6 +1021,14 @@ pub(crate) fn image_context_menu(
     let Some(img) = images.get(hit) else { return };
     use pdfcraft_engine::ImageEdit as E;
     let raster = !img.is_form;
+    // Done/Enter runs before this menu and may already have queued the crop this frame.
+    // Preserve it before Rotate/Flip (or another image edit) replaces pending_edit.
+    if matches!(
+        &view.pending_edit,
+        Some(Edit::EditPageImage { page: p, index, change: E::Crop(_) | E::RemoveCrop }) if (*p, *index) == (page, hit)
+    ) {
+        *finish_crop = view.pending_edit.take();
+    }
     let cropping = view.image_selection.as_ref().filter(|s| (s.page, s.index) == (page, hit)).and_then(|s| s.crop.clone());
     let chose_action = std::cell::Cell::new(false);
 
