@@ -130,7 +130,7 @@ pub(super) fn save_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
 
 /// `name` cut to at most `max` characters by replacing its middle with "…", keeping the start and
 /// the end, where the extension and version suffixes sit. Counts `char`s, so it never splits one.
-fn shorten_middle(name: &str, max: usize) -> String {
+pub(crate) fn shorten_middle(name: &str, max: usize) -> String {
     let count = name.chars().count();
     if count <= max {
         return name.to_string();
