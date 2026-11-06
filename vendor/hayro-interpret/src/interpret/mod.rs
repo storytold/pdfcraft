@@ -200,7 +200,15 @@ pub fn interpret_page<'a>(
         // PdfCraft patch (29): bracket the annotations so devices can tell their paints from
         // the document's own (the reading-colours setting recolours the document, not comments).
         device.begin_annotations();
+        // PdfCraft patch (86): form fields' widgets are drawn after the page's other
+        // annotations, each group in `/Annots` order, as other readers draw them: a filled
+        // comment listed after a check box covered the box. ISO 32000-2 doesn't order the two.
+        // Two passes over the array, so nothing is held for every entry of a long one.
+        for widgets in [false, true] {
         for annot in annot_arr.iter::<Dict<'_>>() {
+            if (annot.get::<hayro_syntax::object::Name<'_>>(SUBTYPE).as_deref() == Some(b"Widget")) != widgets {
+                continue;
+            }
             let flags = annot.get::<u32>(F).unwrap_or(0);
 
             // Annotation should be hidden (Hidden = bit 2, NoView = bit 6).
@@ -315,6 +323,7 @@ pub fn interpret_page<'a>(
                 // PdfCraft patch: a Highlight without a usable normal appearance was not drawn.
                 draw_highlight_without_appearance(&annot, context, device);
             }
+        }
         }
         device.end_annotations();
     }
