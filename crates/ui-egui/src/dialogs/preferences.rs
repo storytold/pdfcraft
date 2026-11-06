@@ -686,7 +686,7 @@ fn card_appearance(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &m
     }
     let mut smooth = app.smooth_images;
     let smoothing = ctx.checkbox(ui, &mut smooth, tl!("Smooth images"), t).on_hover_text(tl!(
-        "Scans and pictures drawn smaller or larger than their own resolution are smoothed. Turn off to keep barcodes, QR codes and pixel art sharp, in page exports and Print as image too."
+        "Pictures drawn smaller than their own resolution are averaged, and scan-sized pictures drawn larger are smoothed (small ones keep their pixels). Turn off to draw them with their own pixels, so barcodes, QR codes and pixel art stay sharp, in page exports and Print as image too. A picture whose PDF asks for smoothing is smoothed either way."
     ));
     if smoothing.changed() {
         app.set_smooth_images(smooth);
