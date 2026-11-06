@@ -1578,11 +1578,11 @@ fn file_names_from_documents_stay_in_the_output_folder() {
             let f = Path::new(file);
             assert_eq!(f.parent(), Some(root.join(&out).as_path()), "{name:?} wrote {}", f.display());
             assert!(f.is_file(), "{name:?}: {} exists", f.display());
-            // By its plain path too, as Explorer opens it: the tools write through the root's
-            // `\\?\` form, which made a device name such as `NUL.v1_page_1.png` a file that only
-            // that form reaches.
-            let plain = Path::new(file.trim_start_matches(r"\\?\"));
-            assert!(plain.is_file(), "{name:?}: {} opens by its plain path", plain.display());
+            // A file by its plain path too, the path Explorer uses: the tools write through the
+            // root's `\\?\` form, which made a device name such as `NUL.v1_page_1.png` a file
+            // that only that form reaches.
+            let plain = plain_path(file);
+            assert!(plain.is_file(), "{name:?}: {} is a file by its plain path", plain.display());
         }
     }
     // The same for the images a page uses, with a document that has one.
@@ -1603,6 +1603,23 @@ fn file_names_from_documents_stay_in_the_output_folder() {
     // The root itself must be a folder.
     assert!(Automation::new().with_root(root.join("inside.pdf")).is_err());
     let _ = std::fs::remove_dir_all(&base);
+}
+
+/// `path` without its `\\?\` prefix, the form Explorer and most programs use: `\\?\C:\x` is
+/// `C:\x`, and `\\?\UNC\host\share\x` is `\\host\share\x`, as automation's own
+/// `file_access::plain` gives it.
+fn plain_path(path: &str) -> PathBuf {
+    match path.strip_prefix(r"\\?\UNC\") {
+        Some(share) => PathBuf::from(format!(r"\\{share}")),
+        None => PathBuf::from(path.strip_prefix(r"\\?\").unwrap_or(path)),
+    }
+}
+
+#[test]
+fn plain_paths_keep_a_share_a_share() {
+    assert_eq!(plain_path(r"\\?\C:\x\a.png"), PathBuf::from(r"C:\x\a.png"));
+    assert_eq!(plain_path(r"\\?\UNC\host\share\a.png"), PathBuf::from(r"\\host\share\a.png"));
+    assert_eq!(plain_path("/tmp/a.png"), PathBuf::from("/tmp/a.png"));
 }
 
 #[test]
