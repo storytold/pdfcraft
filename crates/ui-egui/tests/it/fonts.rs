@@ -23,12 +23,13 @@ fn families() -> Vec<FontId> {
 
 /// The bundled faces, with no craft-fonts and no installed system face: 0.37 gates its emoji
 /// fonts behind `monochrome_emoji_fonts`, which the app and this test crate explicitly enable.
-/// Text symbols must keep working with `PDFCRAFT_SYSTEM_FONTS=0`.
+/// Text symbols must keep working with `PDFCRAFT_SYSTEM_FONTS=0`. "⋯" is the menu bar's overflow
+/// menu (craft-menu), which Inter lacks: JetBrains Mono draws it.
 #[test]
 fn bundled_monochrome_symbols_have_glyphs() {
     let mut fonts = Fonts::new(TextOptions::default(), theme::font_definitions());
     for id in families() {
-        for text in ["✔", "▲", "▼"] {
+        for text in ["✔", "▲", "▼", "⋯"] {
             assert!(fonts.has_glyphs(&id, text), "{id:?} lacks {text} with default_fonts + monochrome_emoji_fonts");
         }
     }
