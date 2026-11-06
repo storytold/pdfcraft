@@ -741,6 +741,7 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
     });
     ctx.label_secondary(ui, tl!("Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages."), t);
     ctx.checkbox(ui, &mut app.always_default_view, tl!("Always use my default zoom and page layout"), t);
+    ctx.checkbox(ui, &mut app.show_page_indicator, tl!("Show the current page number over the document"), t);
     ui.add_space(6.0);
 
     ui.horizontal(|ui| {
