@@ -588,6 +588,8 @@ impl PdfCraftApp {
         let p = progress.clone();
         // The summary is written on the worker thread: draw it in the UI's language.
         let lang = crate::i18n::current();
+        // Each file opens in its own session; it keeps this one's JavaScript preference.
+        let javascript = self.session.javascript();
         let work = move || {
             crate::i18n::set_current(lang);
             #[cfg(not(target_arch = "wasm32"))]
@@ -597,7 +599,8 @@ impl PdfCraftApp {
             #[cfg(target_arch = "wasm32")]
             let write = move |name: &str, r: &pdfcraft_engine::ocr::FileResult| crate::editing::download(name, &r.bytes);
             // A panic in the recognizer still ends the batch with a summary (#3919).
-            let msg = pdfcraft_engine::guard(|| run_batch_files(files, settings, &recognizers, &p, write)).unwrap_or_else(|panic| failed(&panic));
+            let msg = pdfcraft_engine::guard(|| run_batch_files(files, settings, &recognizers, javascript, &p, write))
+                .unwrap_or_else(|panic| failed(&panic));
             if let Ok(mut s) = p.lock() {
                 s.done = s.total;
                 s.message = Some(msg);
@@ -773,11 +776,13 @@ impl PdfCraftApp {
 /// The batch's worker: read each file, hand the searchable copy to `write` (the output folder,
 /// or the web's download), count the buckets, and compose the summary. A file the skip-files
 /// option passes over is its own bucket and `write` is never called for it. A cancel is asked
-/// for between files: the file in flight finishes, the rest are counted as not run.
+/// for between files: the file in flight finishes, the rest are counted as not run. `javascript`
+/// is the app session's preference, for each file's own session.
 pub(crate) fn run_batch_files(
     files: Vec<(String, Vec<u8>)>,
     settings: OcrSettings,
     recognizers: &pdfcraft_engine::ocr::Recognizers,
+    javascript: bool,
     progress: &Mutex<BatchProgress>,
     mut write: impl FnMut(&str, &pdfcraft_engine::ocr::FileResult) -> Result<(), String>,
 ) -> String {
@@ -792,7 +797,7 @@ pub(crate) fn run_batch_files(
         if let Ok(mut s) = progress.lock() {
             s.done = i;
         }
-        let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), recognizers, |_, _| true);
+        let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), recognizers, javascript, |_, _| true);
         match r {
             Ok(res) if res.skipped() => skipped += 1,
             Ok(res) => match write(&name, &res) {
@@ -1104,7 +1109,7 @@ mod tests {
         let recognizers = Recognizers { primary: Arc::new(Fake { confidence: 95.0 }), secondary: None };
         let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let w = writes.clone();
-        let msg = run_batch_files(files, OcrSettings { skip_text_files: true, ..Default::default() }, &recognizers, &progress, move |_, _| {
+        let msg = run_batch_files(files, OcrSettings { skip_text_files: true, ..Default::default() }, &recognizers, true, &progress, move |_, _| {
             w.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         });
@@ -1114,7 +1119,7 @@ mod tests {
         let files = vec![("a.pdf".into(), pdf.to_vec()), ("b.pdf".into(), pdf.to_vec())];
         let progress = Mutex::new(BatchProgress { total: files.len(), ..Default::default() });
         let w = writes.clone();
-        let msg = run_batch_files(files, OcrSettings { skip_text_files: true, ..Default::default() }, &recognizers, &progress, move |_, _| {
+        let msg = run_batch_files(files, OcrSettings { skip_text_files: true, ..Default::default() }, &recognizers, true, &progress, move |_, _| {
             w.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         });
@@ -1135,13 +1140,13 @@ mod tests {
         // The fixtures are text PDFs standing in for scans; the default skip-text-pages option
         // would (correctly) leave them alone, so the batch here reads everything.
         let settings = OcrSettings { skip_text_pages: false, ..Default::default() };
-        let msg = run_batch_files(files, settings.clone(), &recognizers, &progress, |_, _| Ok(()));
+        let msg = run_batch_files(files, settings.clone(), &recognizers, true, &progress, |_, _| Ok(()));
         assert!(msg.contains("Recognized 2 words in 2 files"), "{msg}");
         assert!(msg.contains("scan.pdf: 1 low-confidence word(s) on pages 1"), "{msg}");
         // The write failing is a per-file failure, named in the summary.
         let files = vec![("scan.pdf".into(), pdf.to_vec())];
         let progress = Mutex::new(BatchProgress { total: files.len(), ..Default::default() });
-        let msg = run_batch_files(files, settings, &recognizers, &progress, |_, _| Err("disk full".into()));
+        let msg = run_batch_files(files, settings, &recognizers, true, &progress, |_, _| Err("disk full".into()));
         assert!(msg.contains("; failed: scan.pdf: disk full"), "{msg}");
     }
 
@@ -1156,7 +1161,7 @@ mod tests {
             let files = vec![("scan.pdf".into(), pdf.to_vec())];
             let progress = Mutex::new(BatchProgress { total: files.len(), ..Default::default() });
             let settings = OcrSettings { skip_text_pages: false, low_confidence_threshold: threshold, ..Default::default() };
-            run_batch_files(files, settings, &recognizers, &progress, |_, _| Ok(()))
+            run_batch_files(files, settings, &recognizers, true, &progress, |_, _| Ok(()))
         };
         assert!(run(OcrSettings::default().low_confidence_threshold).contains("1 low-confidence word(s)"), "the default flags a 40% word");
         assert!(run(40.0).contains("1 low-confidence word(s)"), "at the threshold counts");

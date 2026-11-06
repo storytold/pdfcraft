@@ -118,6 +118,9 @@ impl Automation {
         Ok(json!({ "actions": actions, "steps": steps }))
     }
 
+    /// `action_run`: run a named action or a list of steps on each file in `paths`, writing the
+    /// results into `folder`; each file is processed in its own session that keeps this
+    /// session's JavaScript preference.
     pub(crate) fn action_run(&mut self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::actions::{Action, Step, builtin, run_on};
         let action = if let Some(name) = a.opt_str("action")? {
@@ -138,6 +141,8 @@ impl Automation {
         };
         let folder = self.resolve(a.str("folder")?, true)?;
         std::fs::create_dir_all(&folder).map_err(|e| failed(e.to_string()))?;
+        // Each file runs in its own session; it keeps this one's JavaScript preference.
+        let javascript = self.session.javascript();
         let mut out = Vec::new();
         for p in a.strs("paths")? {
             let name = std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document.pdf".into());
@@ -145,7 +150,7 @@ impl Automation {
                 .resolve(p, false)
                 .map_err(|e| e.to_string())
                 .and_then(|src| crate::read_input_bytes(&src).map_err(|e| e.to_string()))
-                .and_then(|bytes| run_on(&action, &name, std::sync::Arc::new(bytes), |_, _| {}));
+                .and_then(|bytes| run_on(&action, &name, std::sync::Arc::new(bytes), javascript, |_, _| {}));
             out.push(match result {
                 Ok(r) => {
                     let target = child(&folder, &name);

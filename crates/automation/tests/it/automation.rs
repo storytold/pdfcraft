@@ -7978,6 +7978,8 @@ fn comparing_documents_through_tools() {
     assert!(a.call("doc_compare", &json!({ "doc": v2, "other": 999 })).is_err());
 }
 
+/// `action_list` and `action_run`: built-in actions by name and ad-hoc steps run on files,
+/// missing inputs are reported per file, and an unknown step is refused.
 #[test]
 fn actions_through_tools() {
     let dir = workdir("actions");
@@ -7993,6 +7995,71 @@ fn actions_through_tools() {
     let r = ok(&mut a, "action_run", json!({ "steps": [{ "step": "set_title", "arg": "Hello" }], "paths": ["a.pdf"], "folder": "out2" }));
     assert_eq!(r["files"][0]["log"][0], "Set document title");
     assert!(a.call("action_run", &json!({ "steps": [{ "step": "fly" }], "paths": ["a.pdf"], "folder": "x" })).is_err());
+}
+
+/// JavaScript stays off in the short-lived sessions used by the three file-processing entry
+/// points (#5080). The input's initialize script changes `qty` to 42, which is visible in the
+/// saved XFA data if any entry point opens it with JavaScript enabled.
+#[test]
+fn file_processing_keeps_javascript_off_for_xfa_open_scripts() {
+    let dir = workdir("batch-javascript-off-xfa");
+    let mut seed = 0x1234_5678_u32;
+    let padding: String = (0..32_000)
+        .map(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            char::from(b'a' + (seed % 26) as u8)
+        })
+        .collect();
+    let template = pdfcraft_xfa::fixtures::scripted_template()
+        .replace("if (qty.rawValue === null) qty.rawValue = 2;", "qty.rawValue = 42; pad.rawValue = '';")
+        .replace(
+            "<field name=\"qty\"",
+            &format!(
+                "<field name=\"pad\" w=\"2in\" h=\"0.3in\"><ui><textEdit/></ui><value><text>{padding}</text></value></field>\n  <field name=\"qty\""
+            ),
+        );
+    let mut source = pdfcraft_xfa::fixtures::shell(&template);
+    // Give the optimizer an unreferenced stream to discard so the optimized output is saved,
+    // carrying any XFA script mutation along with it if JavaScript was accidentally enabled.
+    let previous_xref =
+        std::str::from_utf8(&source).unwrap().rsplit_once("startxref\n").unwrap().1.split_whitespace().next().unwrap().parse::<usize>().unwrap();
+    let orphan = "x".repeat(64_000);
+    let orphan_offset = source.len();
+    source.extend_from_slice(format!("999 0 obj\n<< /Length {} >>\nstream\n{orphan}\nendstream\nendobj\n", orphan.len()).as_bytes());
+    let xref = source.len();
+    source.extend_from_slice(
+        format!("xref\n999 1\n{orphan_offset:010} 00000 n \ntrailer\n<< /Size 1000 /Root 1 0 R /Prev {previous_xref} >>\nstartxref\n{xref}\n%%EOF\n")
+            .as_bytes(),
+    );
+    std::fs::write(dir.join("scripted.pdf"), &source).unwrap();
+
+    let mut a = auto(&dir);
+    ok(&mut a, "js_enabled", json!({ "enabled": false }));
+
+    ok(&mut a, "action_run", json!({ "steps": [{ "step": "set_title", "arg": "Processed" }], "paths": ["scripted.pdf"], "folder": "actions" }));
+    ok(&mut a, "doc_batch", json!({ "paths": ["scripted.pdf"], "steps": ["optimize"], "out_dir": "batch" }));
+
+    // Open each result through the same JavaScript-off session and inspect the field data.
+    for path in ["actions/scripted.pdf", "batch/scripted.pdf"] {
+        let doc = ok(&mut a, "doc_open", json!({ "path": path }))["doc"].as_u64().unwrap();
+        let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+        let qty = fields["fields"].as_array().unwrap().iter().find(|field| field["name"] == "qty").unwrap();
+        assert_ne!(qty["value"], "42", "{path} ran the XFA initialize script");
+    }
+
+    // OCR needs its language models. When present, it uses the same per-file open path and must
+    // also keep the script from changing the saved field value. Without them, the engine's
+    // `ocr::tests::files_open_for_recognition_with_the_callers_javascript_preference` still
+    // checks the preference `recognize_file` opens each file with.
+    if ok(&mut a, "ocr_status", json!({}))["available"] == true {
+        ok(&mut a, "ocr_recognize_files", json!({ "paths": ["scripted.pdf"], "folder": "ocr", "skip_text_pages": false }));
+        let doc = ok(&mut a, "doc_open", json!({ "path": "ocr/scripted.pdf" }))["doc"].as_u64().unwrap();
+        let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
+        let qty = fields["fields"].as_array().unwrap().iter().find(|field| field["name"] == "qty").unwrap();
+        assert_ne!(qty["value"], "42", "OCR ran the XFA initialize script");
+    }
 }
 
 #[test]
