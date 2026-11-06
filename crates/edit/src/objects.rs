@@ -52,6 +52,10 @@ fn valid_rect(rect: [f64; 4]) -> bool {
 }
 
 pub fn editable_objects(doc: &Document, page: usize) -> Result<Vec<EditableObject>, EditError> {
+    editable_objects_with_layers(doc, page, &[])
+}
+
+pub fn editable_objects_with_layers(doc: &Document, page: usize, layers: &[(i32, i32, bool)]) -> Result<Vec<EditableObject>, EditError> {
     checked_streams(doc, page)?;
     let added: Vec<_> = crate::list_added(doc).into_iter().filter(|a| a.page == page).collect();
     if added.len() > MAX_PAGE_OBJECTS {
@@ -80,7 +84,7 @@ pub fn editable_objects(doc: &Document, page: usize) -> Result<Vec<EditableObjec
             text: Some(b.text),
         });
     }
-    for (index, image) in crate::images::selectable_images(doc, page, &excluded)? {
+    for (index, image) in crate::images::selectable_images(doc, page, &excluded, layers)? {
         let Some(rect) = image.visible_rect else { continue };
         objects.push(EditableObject {
             target: ObjectTarget { kind: ObjectKind::Image, index },
@@ -101,13 +105,24 @@ pub fn editable_objects(doc: &Document, page: usize) -> Result<Vec<EditableObjec
 /// Move selected mixed objects by a user-space vector as one atomic operation. All targets
 /// refer to the original inventories. A refusal leaves the graph, including overlay, untouched.
 pub fn move_objects(doc: &mut Document, page: usize, targets: &[ObjectTarget], offset: [f64; 2]) -> Result<(), EditError> {
+    move_objects_with_layers(doc, page, targets, offset, &[])
+}
+
+/// [`move_objects`] evaluated with live layer overrides `(num, gen, visible)` on top of `/OCProperties /D`.
+pub fn move_objects_with_layers(
+    doc: &mut Document,
+    page: usize,
+    targets: &[ObjectTarget],
+    offset: [f64; 2],
+    layers: &[(i32, i32, bool)],
+) -> Result<(), EditError> {
     if targets.is_empty() || targets.len() > MAX_MOVE_OBJECTS {
         return Err(EditError::Invalid("select between 1 and 1000 objects to move".into()));
     }
     if !offset.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORDINATE) || offset == [0.0, 0.0] {
         return Err(EditError::Invalid("the move must be finite and non-zero".into()));
     }
-    let inventory: BTreeMap<_, _> = editable_objects(doc, page)?.into_iter().map(|o| (o.target, o)).collect();
+    let inventory: BTreeMap<_, _> = editable_objects_with_layers(doc, page, layers)?.into_iter().map(|o| (o.target, o)).collect();
     let mut unique = BTreeSet::new();
     for target in targets {
         if !unique.insert(*target) {
@@ -123,11 +138,11 @@ pub fn move_objects(doc: &mut Document, page: usize, targets: &[ObjectTarget], o
     let indexes = |kind| targets.iter().filter(|t| t.kind == kind).map(|t| t.index).collect::<Vec<_>>();
     let mut work = doc.clone();
     crate::text::translate_blocks(&mut work, page, &indexes(ObjectKind::Text), offset)?;
-    crate::images::translate_images(&mut work, page, &indexes(ObjectKind::Image), offset)?;
+    crate::images::translate_images_with_layers(&mut work, page, &indexes(ObjectKind::Image), offset, layers)?;
     translate_added(&mut work, page, &indexes(ObjectKind::Added), offset)?;
     // Placement operators add to size/depth/work budgets, and moving paragraphs can change
     // their grouping. Keep the resulting inventory usable; refuse before swapping otherwise.
-    editable_objects(&work, page)?;
+    editable_objects_with_layers(&work, page, layers)?;
     *doc = work;
     Ok(())
 }
