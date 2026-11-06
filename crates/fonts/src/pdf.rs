@@ -1362,6 +1362,24 @@ mod encoding_tests {
         Object::Dict(enc)
     }
 
+    /// Names are found by binary search, so an entry out of order would be missed.
+    #[test]
+    fn the_glyph_name_table_is_sorted_and_has_no_duplicates() {
+        assert!(crate::encodings::NAMES.windows(2).all(|w| w[0].0 < w[1].0));
+    }
+
+    /// The f-ligatures by their own names, as TeX's fonts give them: Annex D has `fi` and `fl`
+    /// only, and `ff`, `ffi` and `ffl` used to read as nothing.
+    #[test]
+    fn every_f_ligature_reads_by_its_own_name() {
+        assert_eq!(glyph_text("fi").as_deref(), Some("\u{fb01}"));
+        assert_eq!(glyph_text("fl").as_deref(), Some("\u{fb02}"));
+        assert_eq!(glyph_text("ff").as_deref(), Some("\u{fb00}"));
+        assert_eq!(glyph_text("ffi").as_deref(), Some("\u{fb03}"));
+        assert_eq!(glyph_text("ffl").as_deref(), Some("\u{fb04}"));
+        assert_eq!(glyph_text("ff.sc").as_deref(), Some("\u{fb00}"));
+    }
+
     #[test]
     fn glyph_names_follow_the_naming_algorithm() {
         // Annex D names and the two hex forms, as before.
