@@ -10229,6 +10229,15 @@ fn pasting_copied_comments_adds_copies_that_undo_as_one_step() {
 }
 
 #[test]
+fn attachments_only_protection_needs_an_aes_level() {
+    let p = |algorithm| Protection { algorithm, attachments_only: true, ..protection(Some("pw"), None) };
+    assert!(p(pdfcraft_cos::Algorithm::Aes256).validate().is_ok());
+    assert!(p(pdfcraft_cos::Algorithm::Aes128).validate().is_ok());
+    assert!(p(pdfcraft_cos::Algorithm::Rc4_128).validate().is_err());
+    assert!(p(pdfcraft_cos::Algorithm::Rc4_40).validate().is_err());
+}
+
+#[test]
 fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes() {
     let white = "1 g";
     let rectangle = "0 0 100 100 re f";
