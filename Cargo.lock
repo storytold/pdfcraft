@@ -144,6 +144,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aho-corasick"
+version = "1.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "aligned-vec"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4333,6 +4342,7 @@ version = "0.18.1"
 dependencies = [
  "chrono",
  "hayro-syntax",
+ "js-sys",
  "pdfcraft-crypt",
  "pdfcraft-filters",
  "pdfcraft-oracle",
@@ -4340,6 +4350,7 @@ dependencies = [
  "proptest",
  "serde_json",
  "thiserror 2.0.21",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -4516,6 +4527,7 @@ version = "0.18.1"
 dependencies = [
  "ocrs",
  "pdfcraft-fonts",
+ "png 0.18.1",
  "rten",
  "tempfile",
  "thiserror 2.0.21",
@@ -4607,6 +4619,7 @@ dependencies = [
 name = "pdfcraft-redact"
 version = "0.18.1"
 dependencies = [
+ "aho-corasick",
  "pdfcraft-annot",
  "pdfcraft-content",
  "pdfcraft-cos",
@@ -4617,6 +4630,7 @@ dependencies = [
  "pdfcraft-model",
  "pdfcraft-testkit",
  "pdfcraft-xfa",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
 ]
 
@@ -4711,6 +4725,7 @@ dependencies = [
  "pdfcraft-engine",
  "pdfcraft-fonts",
  "pdfcraft-model",
+ "pdfcraft-ocr",
  "pdfcraft-platform",
  "pdfcraft-render",
  "pdfcraft-xfa",
