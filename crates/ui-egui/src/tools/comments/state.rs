@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::geometry::{corner_ratio, is_markup, resized};
+use super::geometry::{corner_ratio, is_markup, point_for_zoomed, resized, zoomed_point, zoomed_quad, zoomed_rect};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect};
 
 /// The user's login name, which Acrobat uses as the default comment author.
@@ -371,6 +371,15 @@ pub enum SortBy {
     Color,
 }
 
+/// The user-space bounds `[x0, y0, x1, y1]` of the `/QuadPoints` quadrilateral `q`.
+fn quad_bounds(q: &[f32; 8]) -> [f32; 4] {
+    let xs = [q[0], q[2], q[4], q[6]];
+    let ys = [q[1], q[3], q[5], q[7]];
+    let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
+    let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
+    [x0, y0, x1, y1]
+}
+
 /// What a page needs to know to handle comment input.
 pub(crate) struct PageCx<'a> {
     pub page: usize,
@@ -401,14 +410,53 @@ impl PageCx<'_> {
         self.xf.norm_to_screen(v[0] / self.xf.pw, v[1] / self.xf.ph)
     }
 
+    /// Where the point `q` of `a` (an end or corner) is drawn in user space at this page's
+    /// magnification ([`zoomed_point`]).
+    pub(super) fn shown_point(&self, a: &Annotation, q: [f64; 2]) -> [f64; 2] {
+        zoomed_point(a, q, self.magnification())
+    }
+
+    /// Where the point `q` of `a` is drawn on screen.
+    pub(super) fn point_to_screen(&self, a: &Annotation, q: [f64; 2]) -> Pos2 {
+        self.to_screen(self.shown_point(a, q))
+    }
+
+    /// `points` of `a` with point `i` dragged to the screen position `to`, as drawn: the new
+    /// point is where the drag ends on screen once the comment is drawn at this magnification.
+    pub(super) fn reshaped_as_drawn(&self, a: &Annotation, points: &[[f64; 2]], i: usize, to: Pos2, shift: bool) -> Vec<[f64; 2]> {
+        let m = self.magnification();
+        let shown: Vec<[f64; 2]> = points.iter().map(|q| zoomed_point(a, *q, m)).collect();
+        // The other points stay exactly as stored rather than going through the scale and back.
+        let mut out = points.to_vec();
+        if let (Some(d), Some(s)) = (out.get_mut(i), super::geometry::reshaped(&shown, i, self.to_user(to), shift).get(i)) {
+            *d = point_for_zoomed(a, *s, m);
+        }
+        out
+    }
+
     /// The page's clockwise `/Rotate`.
     pub(super) fn rotation(&self) -> u16 {
         self.info.pages.get(self.page).map_or(0, |p| p.rotation)
     }
 
-    /// Where a comment is drawn on screen (a sticky note stays upright on a turned page).
+    /// Where a comment is drawn on screen (a NoZoom comment or a note keeps its size, and a
+    /// sticky note stays upright on a turned page).
     pub(super) fn screen_rect(&self, a: &Annotation) -> Rect {
-        self.xf.user_rect(self.info, self.page, a.shown_rect(self.rotation()))
+        self.zoomed_screen_rect(a, a.rect.map(f64::from))
+    }
+
+    /// The page's magnification on screen (1.0 = 100%): what the canvas asks the renderer to
+    /// draw it at.
+    pub(super) fn magnification(&self) -> f32 {
+        self.xf.zoom() / crate::canvas::PT
+    }
+
+    /// Where `a` is drawn on screen with its `/Rect` at `rect`: [`zoomed_rect`] at this page's
+    /// magnification, then turned upright for a NoRotate comment ([`Annotation::shown`]). Both
+    /// keep the upper-left corner of `/Rect` in place, as the renderer's scale and turn do.
+    fn zoomed_screen_rect(&self, a: &Annotation, rect: [f64; 4]) -> Rect {
+        let shown = a.shown(zoomed_rect(a, rect, self.magnification()), self.rotation());
+        self.xf.user_rect(self.info, self.page, shown.map(|v| v as f32))
     }
 
     /// Top-level comments on this page, in paint order.
@@ -420,33 +468,25 @@ impl PageCx<'_> {
     pub(crate) fn screen_rects<'b>(&'b self, a: &'b Annotation) -> impl Iterator<Item = Rect> + 'b {
         let quads = if is_markup(&a.subtype) { a.quads.as_slice() } else { &[] };
         let fallback = quads.is_empty().then(|| self.screen_rect(a));
-        quads
-            .iter()
-            .map(|q| {
-                let xs = [q[0], q[2], q[4], q[6]];
-                let ys = [q[1], q[3], q[5], q[7]];
-                let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
-                let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
-                self.xf.user_rect(self.info, self.page, [x0, y0, x1, y1])
-            })
-            .chain(fallback)
+        quads.iter().map(|q| self.quad_screen_rect(a, q)).chain(fallback)
     }
 
-    /// A redaction mark's areas: one per marked quad, or its rectangle.
+    /// A redaction mark's areas: one per marked quad, or its rectangle. They are the content
+    /// regions that applying the mark removes (ISO 32000-2 §12.5.6.23, Table 195), so a NoZoom
+    /// flag doesn't scale them, nor a NoRotate flag turn them upright on a turned page: the fill
+    /// shown over the page is what goes, at any zoom and page rotation.
     pub(super) fn redact_rects(&self, a: &Annotation) -> Vec<Rect> {
         if a.quads.is_empty() {
-            return vec![self.screen_rect(a)];
+            return vec![self.xf.user_rect(self.info, self.page, a.rect)];
         }
-        a.quads
-            .iter()
-            .map(|q| {
-                let xs = [q[0], q[2], q[4], q[6]];
-                let ys = [q[1], q[3], q[5], q[7]];
-                let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
-                let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
-                self.xf.user_rect(self.info, self.page, [x0, y0, x1, y1])
-            })
-            .collect()
+        a.quads.iter().map(|q| self.xf.user_rect(self.info, self.page, quad_bounds(q))).collect()
+    }
+
+    /// Where the `/QuadPoints` quadrilateral `q` of `a` is drawn on screen: its bounds, scaled
+    /// with `a` as [`zoomed_quad`] scales them.
+    fn quad_screen_rect(&self, a: &Annotation, q: &[f32; 8]) -> Rect {
+        let bounds = zoomed_quad(a, quad_bounds(q).map(f64::from), self.magnification());
+        self.xf.user_rect(self.info, self.page, bounds.map(|v| v as f32))
     }
 
     /// The topmost comment under `p`: the one drawn last, in `/Annots` order (inspection lists
@@ -478,13 +518,13 @@ impl PageCx<'_> {
         if let Some(Edit::ResizeAnnotation { page, index, rect }) = pending
             && (*page, *index) == (self.page, a.index)
         {
-            return self.xf.user_rect(self.info, self.page, a.shown(*rect, self.rotation()).map(|v| v as f32));
+            return self.zoomed_screen_rect(a, *rect);
         }
         if let Some(Edit::MoveAnnotation { page, index, dx, dy }) = pending
             && (*page, *index) == (self.page, a.index)
         {
-            let r = a.shown_rect(self.rotation());
-            return self.xf.user_rect(self.info, self.page, [r[0] + *dx as f32, r[1] + *dy as f32, r[2] + *dx as f32, r[3] + *dy as f32]);
+            let r = a.rect.map(f64::from);
+            return self.zoomed_screen_rect(a, [r[0] + *dx, r[1] + *dy, r[2] + *dx, r[3] + *dy]);
         }
         match (gesture, pointer) {
             (Some(Gesture::Move { page, index, from }), Some(p)) if (*page, *index) == (self.page, a.index) => r.translate(p - *from),

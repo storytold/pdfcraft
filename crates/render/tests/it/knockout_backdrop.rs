@@ -75,7 +75,8 @@ fn render(group: &str, content: &str) -> impl Fn(u32, u32) -> [u8; 3] {
         ),
     ];
     let mut renderer = PageRenderer::new(Arc::new(pdf(&objects)), RenderConfig::default());
-    let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    let page =
+        renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
     assert!(page.error.is_none(), "{content}: {:?}", page.error);
     let (rgba, width) = (page.rgba.to_vec(), page.width);
     move |x, y| {

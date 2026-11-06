@@ -25,21 +25,21 @@ fn a_moved_or_reshaped_line_is_drawn_at_its_new_points() {
     let to_user = |p: Pos2| [f64::from(p.x), f64::from(p.y)];
     let moving = Gesture::Move { page: 0, index: 3, from: pos2(20.0, 10.0) };
     let at = Some(pos2(25.0, 30.0));
-    assert_eq!(changing_points(Some(&moving), None, (0, 3), &line, to_user, at, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
-    assert_eq!(changing_points(Some(&moving), None, (0, 4), &line, to_user, at, false), None, "another comment's move");
+    assert_eq!(changing_points(Some(&moving), None, (0, 3), &line, (to_user, |q| q), at, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(Some(&moving), None, (0, 4), &line, (to_user, |q| q), at, false), None, "another comment's move");
     let released = Edit::MoveAnnotation { page: 0, index: 3, dx: 5.0, dy: 20.0 };
-    assert_eq!(changing_points(None, Some(&released), (0, 3), &line, to_user, None, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(None, Some(&released), (0, 3), &line, (to_user, |q| q), None, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
     let dragging = Gesture::Reshape { page: 0, index: 3, point: 1, points: line.to_vec() };
     let to = Some(pos2(60.0, 10.0));
-    assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, to_user, to, false), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
-    assert_eq!(changing_points(None, None, (0, 3), &line, to_user, to, false), None, "not changing");
+    assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, (to_user, |q| q), to, false), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
+    assert_eq!(changing_points(None, None, (0, 3), &line, (to_user, |q| q), to, false), None, "not changing");
     // Released with the rest of the selection: its own move in the batch.
     let together = Edit::Batch {
         label: "Move comments".into(),
         edits: vec![Edit::MoveAnnotation { page: 0, index: 1, dx: 1.0, dy: 1.0 }, Edit::MoveAnnotation { page: 0, index: 3, dx: 5.0, dy: 20.0 }],
     };
-    assert_eq!(changing_points(None, Some(&together), (0, 3), &line, to_user, None, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
-    assert_eq!(changing_points(None, Some(&together), (0, 2), &line, to_user, None, false), None, "not in the batch");
+    assert_eq!(changing_points(None, Some(&together), (0, 3), &line, (to_user, |q| q), None, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(None, Some(&together), (0, 2), &line, (to_user, |q| q), None, false), None, "not in the batch");
 }
 
 /// A sticky note on a page turned a quarter is drawn upright beside its `/Rect`: an edit
@@ -66,6 +66,7 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
         fill_sign: false,
         no_rotate,
         points: Vec::new(),
+        no_zoom: false,
     };
     let page = PageInfo { width: 140.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 140.0], rotation: 90 };
     let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(140.0, 200.0)), rot: 0, pw: 140.0, ph: 200.0 };
@@ -86,6 +87,70 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
             redact_mark: ([0.0; 3], 1.0),
         };
         assert_eq!(edited_in_view(&cx, 0, viewport), in_view, "no_rotate: {no_rotate}");
+    }
+}
+
+/// A redaction mark a file flags NoZoom shows, under the pointer, the areas applying it removes
+/// (its `/QuadPoints`, or its `/Rect` without them, ISO 32000-2 Table 195) at any zoom, not its
+/// appearance scaled to keep its size on the screen. At 50% that scale would double the fill
+/// over content the mark leaves in place. A mark also flagged NoRotate on a turned page shows its
+/// `/Rect` as stored too, not the upright box its appearance is turned into: that is what goes.
+#[test]
+fn a_no_zoom_redaction_mark_shows_the_areas_it_removes() {
+    let mark = |quads: Vec<[f32; 8]>, no_rotate: bool| Annotation {
+        page: 0,
+        subtype: "Redact".into(),
+        author: None,
+        contents: None,
+        modified: None,
+        name: None,
+        in_reply_to: None,
+        parent: None,
+        grouped: false,
+        rect: [40.0, 100.0, 80.0, 120.0],
+        color: None,
+        index: 0,
+        state: None,
+        quads,
+        locked: false,
+        intent: None,
+        fill_sign: false,
+        no_rotate,
+        points: Vec::new(),
+        no_zoom: true,
+    };
+    let prefs = CommentPrefs::default();
+    let quad = [40.0, 120.0, 80.0, 120.0, 40.0, 100.0, 80.0, 100.0];
+    for ((magnification, scaled), (rotation, no_rotate)) in
+        [(0.5, true), (1.0, false), (2.0, true)].into_iter().flat_map(|m| [(m, (0, false)), (m, (90, true))])
+    {
+        let page = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation };
+        let side = 200.0 * magnification * crate::canvas::PT;
+        let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(side, side)), rot: 0, pw: 200.0, ph: 200.0 };
+        for quads in [vec![quad], Vec::new()] {
+            let info = DocInfo { pages: vec![page.clone()], annotations: vec![mark(quads.clone(), no_rotate)], ..Default::default() };
+            let cx = PageCx {
+                page: 0,
+                xf: &xf,
+                ptr: &PagePointer::default(),
+                info: &info,
+                tool: QuickTool::Select,
+                prefs: &prefs,
+                allowed: true,
+                hidden: false,
+                redact_mark: ([0.0; 3], 1.0),
+            };
+            let a = &info.annotations[0];
+            let removed = xf.user_rect(&info, 0, [40.0, 100.0, 80.0, 120.0]);
+            assert_eq!(cx.redact_rects(a), vec![removed], "{magnification}, /Rotate {rotation}, quads: {}", quads.len());
+            if no_rotate {
+                let upright = xf.user_rect(&info, 0, a.shown_rect(rotation));
+                assert_ne!(upright, removed, "{magnification}: the NoRotate mark is drawn turned upright");
+            }
+            if scaled {
+                assert_ne!(cx.screen_rect(a), removed, "{magnification}: the mark is drawn NoZoom");
+            }
+        }
     }
 }
 
@@ -111,6 +176,7 @@ fn listed(page: usize, index: usize, contents: &str, parent: Option<(usize, usiz
         fill_sign: false,
         no_rotate: false,
         points: Vec::new(),
+        no_zoom: false,
     }
 }
 
@@ -200,6 +266,7 @@ fn annotation(subtype: &str, contents: Option<&str>, fill_sign: bool) -> Annotat
         fill_sign,
         no_rotate: false,
         points: Vec::new(),
+        no_zoom: false,
     }
 }
 
@@ -405,6 +472,7 @@ fn context_menu_colour_submenu_keeps_its_picker_open_and_a_swatch_closes_the_men
             fill_sign: false,
             points: Vec::new(),
             no_rotate: false,
+            no_zoom: false,
         }],
         ..Default::default()
     };

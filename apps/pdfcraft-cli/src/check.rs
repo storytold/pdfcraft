@@ -50,8 +50,19 @@ pub(crate) fn check_one(args: &[String]) -> Result<(), CliError> {
             let mut r = PageRenderer::new(bytes, RenderConfig::default());
             let mut failed = Vec::new();
             for i in 0..info.pages.len().min(500) {
-                let p = r.render(RenderRequest { page: i, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0, preview: false });
-                if let Some(e) = r.render(RenderRequest { page: i, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false }).error {
+                let p = r.render(RenderRequest {
+                    page: i,
+                    kind: RequestKind::Pixels,
+                    tile: None,
+                    scale: dpi / 72.0,
+                    tag: 0,
+                    preview: false,
+                    magnification: None,
+                });
+                if let Some(e) = r
+                    .render(RenderRequest { page: i, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None })
+                    .error
+                {
                     failed.push(format!("p{} text: {e}", i + 1));
                 }
                 if let Some(e) = p.error {

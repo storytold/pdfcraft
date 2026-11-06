@@ -91,7 +91,8 @@ fn render_matches_the_engine_layout_on_the_second_page() {
     assert_eq!(doc.info.pages.len(), 2);
     assert!(doc.text_lines(1).iter().any(|line| line.text.contains("Second XFA page")));
     let mut renderer = PageRenderer::new(doc.display.clone(), RenderConfig::default());
-    let expected = renderer.render(RenderRequest { page: 1, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    let expected =
+        renderer.render(RenderRequest { page: 1, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
     assert!(expected.error.is_none(), "{:?}", expected.error);
     assert!(expected.rgba.as_chunks::<4>().0.iter().filter(|[r, _, _, a]| *r < 128 && *a > 0).count() > 10, "the layout has visible ink");
     let out = path.with_extension("pam");

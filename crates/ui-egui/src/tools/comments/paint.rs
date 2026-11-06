@@ -78,26 +78,32 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
 /// one is dragged (or its edit is on its way), the new shape over the old.
 /// The points a selected line, polygon or cloud is drawn with while it changes: an end or corner
 /// being dragged, the whole comment being moved by its body, or the edit just released (until the
-/// page is drawn again). `None` while it isn't changing.
+/// page is drawn again). `None` while it isn't changing. `points` are the comment's points as
+/// drawn, `to_user` maps a screen position to user space, and `shown` maps a stored point (the
+/// dragged or released shape's) to where it is drawn: a NoZoom comment's are scaled about its
+/// `/Rect` ([`super::geometry::zoomed_point`]).
 pub(super) fn changing_points(
     gesture: Option<&Gesture>,
     pending: Option<&Edit>,
     (page, index): (usize, usize),
     points: &[[f64; 2]],
-    to_user: impl Fn(Pos2) -> [f64; 2],
+    (to_user, shown): (impl Fn(Pos2) -> [f64; 2], impl Fn([f64; 2]) -> [f64; 2]),
     pointer: Option<Pos2>,
     shift: bool,
 ) -> Option<Vec<[f64; 2]>> {
     let shifted = |dx: f64, dy: f64| points.iter().map(|q| [q[0] + dx, q[1] + dy]).collect();
     match (gesture, pending) {
         (Some(Gesture::Reshape { page: p, index: i, point, points: from }), _) if (*p, *i) == (page, index) => {
-            pointer.map(|at| reshaped(from, *point, to_user(at), shift))
+            let from: Vec<[f64; 2]> = from.iter().map(|q| shown(*q)).collect();
+            pointer.map(|at| reshaped(&from, *point, to_user(at), shift))
         }
         (Some(Gesture::Move { page: p, index: i, from }), _) if (*p, *i) == (page, index) => pointer.map(|at| {
             let (a, b) = (to_user(*from), to_user(at));
             shifted(b[0] - a[0], b[1] - a[1])
         }),
-        (_, Some(Edit::ReshapeAnnotation { page: p, index: i, points: to })) if (*p, *i) == (page, index) => Some(to.clone()),
+        (_, Some(Edit::ReshapeAnnotation { page: p, index: i, points: to })) if (*p, *i) == (page, index) => {
+            Some(to.iter().map(|q| shown(*q)).collect())
+        }
         (_, Some(Edit::MoveAnnotation { page: p, index: i, dx, dy })) if (*p, *i) == (page, index) => Some(shifted(*dx, *dy)),
         // Moved with the rest of the selection: its own move in the batch.
         (_, Some(Edit::Batch { edits, .. })) => edits.iter().find_map(|e| match e {
@@ -110,8 +116,16 @@ pub(super) fn changing_points(
 
 fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &Annotation, pointer: Option<Pos2>, shift: bool) {
     let cv = &view.comments;
-    let points: Vec<[f64; 2]> = a.points.iter().map(|q| [f64::from(q[0]), f64::from(q[1])]).collect();
-    let changing = changing_points(cv.gesture.as_ref(), view.pending_edit.as_ref(), (cx.page, a.index), &points, |p| cx.to_user(p), pointer, shift);
+    let points: Vec<[f64; 2]> = a.points.iter().map(|q| cx.shown_point(a, [f64::from(q[0]), f64::from(q[1])])).collect();
+    let changing = changing_points(
+        cv.gesture.as_ref(),
+        view.pending_edit.as_ref(),
+        (cx.page, a.index),
+        &points,
+        (|p| cx.to_user(p), |q| cx.shown_point(a, q)),
+        pointer,
+        shift,
+    );
     let changed = changing.is_some();
     let points = changing.unwrap_or(points);
     let screen: Vec<Pos2> = points.iter().map(|q| cx.to_screen(*q)).collect();

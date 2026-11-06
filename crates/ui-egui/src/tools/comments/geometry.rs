@@ -5,6 +5,78 @@ pub(super) fn is_markup(subtype: &str) -> bool {
     matches!(subtype, "Highlight" | "Underline" | "StrikeOut" | "Squiggly")
 }
 
+/// Where `a`, with its `/Rect` at `rect`, is drawn in user space on a page shown at
+/// `magnification` (the view's zoom, 1.0 = 100%): `rect`, or for a comment that keeps its size on
+/// the screen ([`Annotation::no_zoom`]) `rect` scaled by `1/magnification` about its upper-left
+/// corner, which stays where it is on the page (ISO 32000-2 §12.5.3). The renderer draws it there
+/// (hayro-interpret patch 54). A magnification that isn't finite and greater than zero leaves
+/// `rect` as it is, as the renderer does.
+pub(crate) fn zoomed_rect(a: &Annotation, rect: [f64; 4], magnification: f32) -> [f64; 4] {
+    let s = 1.0 / f64::from(magnification);
+    if !(a.no_zoom && magnification.is_finite() && magnification > 0.0 && s.is_finite()) {
+        return rect;
+    }
+    let [x0, y0, x1, y1] = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+    [x0, y1 - (y1 - y0) * s, x0 + (x1 - x0) * s, y1]
+}
+
+/// Where the user-space box `bounds` (a text markup quadrilateral's) of `a` is drawn on a page
+/// shown at `magnification`: for a comment that keeps its size on the screen, scaled by
+/// `1/magnification` about the upper-left corner of `a`'s `/Rect`, as the renderer scales its
+/// appearance (hayro-interpret patch 54), and as it is otherwise. The guards are
+/// [`zoomed_rect`]'s, and a scaled box that isn't finite leaves `bounds` as it is.
+pub(crate) fn zoomed_quad(a: &Annotation, bounds: [f64; 4], magnification: f32) -> [f64; 4] {
+    let s = 1.0 / f64::from(magnification);
+    if !(a.no_zoom && magnification.is_finite() && magnification > 0.0 && s.is_finite()) {
+        return bounds;
+    }
+    let (px, py) = rect_corner(a);
+    let scaled = [px + (bounds[0] - px) * s, py + (bounds[1] - py) * s, px + (bounds[2] - px) * s, py + (bounds[3] - py) * s];
+    if scaled.iter().all(|v| v.is_finite()) { scaled } else { bounds }
+}
+
+/// Where the user-space point `p` of `a` (an end or corner of a line, connected lines or polygon)
+/// is drawn on a page shown at `magnification`: scaled with `a` about the upper-left corner of its
+/// `/Rect`, as [`zoomed_quad`] scales a box. The guards are [`zoomed_rect`]'s, and a scaled point
+/// that isn't finite leaves `p` as it is.
+pub(crate) fn zoomed_point(a: &Annotation, p: [f64; 2], magnification: f32) -> [f64; 2] {
+    let s = 1.0 / f64::from(magnification);
+    if !(a.no_zoom && magnification.is_finite() && magnification > 0.0 && s.is_finite()) {
+        return p;
+    }
+    let (px, py) = rect_corner(a);
+    let scaled = [px + (p[0] - px) * s, py + (p[1] - py) * s];
+    if scaled.iter().all(|v| v.is_finite()) { scaled } else { p }
+}
+
+/// The point of `a` that [`zoomed_point`] draws at the user-space point `shown`: its inverse, for
+/// an end or corner dragged as drawn. Exact while the drag leaves the upper-left corner of `/Rect`
+/// where it is; a point dragged past that corner moves it when the appearance is redrawn.
+pub(crate) fn point_for_zoomed(a: &Annotation, shown: [f64; 2], magnification: f32) -> [f64; 2] {
+    let m = f64::from(magnification);
+    if !(a.no_zoom && m.is_finite() && m > 0.0) {
+        return shown;
+    }
+    let (px, py) = rect_corner(a);
+    let p = [px + (shown[0] - px) * m, py + (shown[1] - py) * m];
+    if p.iter().all(|v| v.is_finite()) { p } else { shown }
+}
+
+/// The upper-left corner of `a`'s `/Rect`, which a NoZoom comment is scaled about.
+fn rect_corner(a: &Annotation) -> (f64, f64) {
+    let r = a.rect.map(f64::from);
+    (r[0].min(r[2]), r[1].max(r[3]))
+}
+
+/// The `/Rect` that [`zoomed_rect`] draws in the user-space box `shown`: its inverse, for a box
+/// resized as drawn. The upper-left corner stays, and the sides grow by `magnification`.
+pub(crate) fn rect_for_zoomed(a: &Annotation, shown: [f64; 4], magnification: f32) -> [f64; 4] {
+    let m = f64::from(magnification);
+    let [x0, y0, x1, y1] = [shown[0].min(shown[2]), shown[1].min(shown[3]), shown[0].max(shown[2]), shown[1].max(shown[3])];
+    let rect = [x0, y1 - (y1 - y0) * m, x0 + (x1 - x0) * m, y1];
+    if a.no_zoom && m.is_finite() && m > 0.0 && rect.iter().all(|v| v.is_finite()) { rect } else { shown }
+}
+
 /// Rectangles, ovals, text boxes, stamps and drawings (drawn signatures among them). A callout's
 /// `/Rect` also holds its leader line, so it only moves.
 pub(super) fn resizable(a: &Annotation) -> bool {
@@ -27,9 +99,10 @@ pub(super) fn reaches_points(tool: QuickTool) -> bool {
     !matches!(tool, QuickTool::Comment(t) if t.draws() || t.clicks_points())
 }
 
-/// The point of `a` (an end or a corner) whose handle is at `p` on screen.
+/// The point of `a` (an end or a corner) whose handle is at `p` on screen: where the point is
+/// drawn, which for a NoZoom comment is scaled about its `/Rect` ([`zoomed_point`]).
 pub(super) fn point_handle(cx: &PageCx<'_>, a: &Annotation, p: Pos2) -> Option<usize> {
-    a.points.iter().position(|q| cx.to_screen([f64::from(q[0]), f64::from(q[1])]).distance(p) <= 7.0)
+    a.points.iter().position(|q| cx.point_to_screen(a, [f64::from(q[0]), f64::from(q[1])]).distance(p) <= 7.0)
 }
 
 /// `to` held level or plumb with `last` while Shift is down (ortho, as in a CAD drawing): the

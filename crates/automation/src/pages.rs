@@ -95,7 +95,15 @@ impl Automation {
                 .ok_or_else(|| ToolError::InvalidArgs("hide_added_text must be a positive added text index from object_list".into()))?;
             self.doc(a)?.added_text_preview(page, index).map_err(failed)?.render_background(scale).map_err(failed)?
         } else {
-            self.renderer(id)?.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag: 0, preview: false })
+            self.renderer(id)?.render(RenderRequest {
+                page,
+                kind: RequestKind::Pixels,
+                tile: None,
+                scale,
+                tag: 0,
+                preview: false,
+                magnification: None,
+            })
         };
         if let Some(e) = out.error {
             return Err(failed(format!("page {} could not be rendered: {e}", page + 1)));
@@ -117,7 +125,15 @@ impl Automation {
         if page < 1 || page > n {
             return Err(ToolError::InvalidArgs(format!("page {page} is out of range: the document has {n} pages")));
         }
-        let out = self.renderer(id)?.render(RenderRequest { page: page - 1, kind: RequestKind::Pixels, tile: None, scale, tag: 0, preview: false });
+        let out = self.renderer(id)?.render(RenderRequest {
+            page: page - 1,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale,
+            tag: 0,
+            preview: false,
+            magnification: None,
+        });
         if let Some(e) = out.error {
             return Err(failed(format!("page {page} could not be rendered: {e}")));
         }
@@ -351,7 +367,7 @@ fn render_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str 
 /// Extract the text of `pages` (0-based) with one renderer per worker thread.
 pub(crate) fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]) -> PageTexts {
     let extract = |r: &mut PageRenderer, p: usize| {
-        let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
+        let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None });
         match out.error {
             Some(e) => Err(e),
             None => Ok(out.text.unwrap_or_default()),

@@ -263,6 +263,7 @@ fn request_sharper(
             tag: GRID_TAG,
             // Grid cells are previews: tiny images are skipped for them.
             preview: true,
+            magnification: None,
         });
     }
 }

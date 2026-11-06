@@ -68,7 +68,7 @@ fn stream(dict: &[u8], body: &[u8]) -> Vec<u8> {
 }
 
 fn request(page: usize, kind: RequestKind) -> RenderRequest {
-    RenderRequest { page, kind, tile: None, scale: 1.0, tag: 0, preview: false }
+    RenderRequest { page, kind, tile: None, scale: 1.0, tag: 0, preview: false, magnification: None }
 }
 
 fn texts(contents: &[String]) -> Vec<Arc<PageText>> {

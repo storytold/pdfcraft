@@ -1,6 +1,6 @@
 use super::geometry::{
-    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, handle_pos, held, is_markup, point_handle, reaches_points, reshapable, reshaped,
-    resizable, resized, snapped_caret,
+    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, handle_pos, held, is_markup, point_handle, reaches_points, rect_for_zoomed, reshapable,
+    reshaped, resizable, resized, snapped_caret,
 };
 use super::paint::{closes_at, drawn_shape, edit_anchor, erase, new_comment};
 use super::state::{Composer, ComposerKind, Gesture, PageCx};
@@ -352,7 +352,7 @@ fn finish_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, view: &mut DocView, p: 
                 let from_rect = cx.screen_rect(a);
                 let shift = ui.input(|i| i.modifiers.shift);
                 let r = resized(from_rect, handle, p - from, corner_ratio(from_rect, aspect_ratio, shift));
-                let rect = a.rect_for_shown(cx.rect_to_user(r), cx.rotation());
+                let rect = rect_for_zoomed(a, a.rect_for_shown(cx.rect_to_user(r), cx.rotation()), cx.magnification());
                 if r.width() >= 4.0 && r.height() >= 4.0 {
                     view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
                 }
@@ -361,9 +361,15 @@ fn finish_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, view: &mut DocView, p: 
         Some(Gesture::Reshape { page, index, point, points }) if page == cx.page => {
             view.comments.gesture = None;
             let shift = ui.input(|i| i.modifiers.shift);
-            let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
+            // Where the point is drawn: a NoZoom comment's are scaled about its /Rect.
+            let a = cx.get(index);
+            let moved = points.get(point).is_some_and(|q| a.map_or(cx.to_screen(*q), |a| cx.point_to_screen(a, *q)).distance(p) >= 2.0);
             if moved {
-                view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, cx.to_user(p), shift) });
+                let points = match a {
+                    Some(a) => cx.reshaped_as_drawn(a, &points, point, p, shift),
+                    None => reshaped(&points, point, cx.to_user(p), shift),
+                };
+                view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points });
             }
         }
         _ => {}
