@@ -2760,6 +2760,29 @@ fn a_damaged_form_at_the_depth_limit_has_its_forms_read() {
     assert!(names.iter().any(|n| n.as_slice() == b"ImA"), "{names:?}");
 }
 
+/// A chain of forms nested far past the depth limit, whole or each damaged partway, is read only
+/// down to it: the walk's depth stays bounded however long the chain is, and pruning goes on.
+#[test]
+fn a_long_chain_of_forms_is_read_only_to_the_depth_limit() {
+    use pdfcraft_cos::ObjRef;
+    let whole = |content: &[u8]| pdfcraft_cos::Stream::from_raw(Dict::new(), content.to_vec());
+    let xobjects = |names: Dict| Object::Dict([(b"XObject".to_vec(), Object::Dict(names))].into_iter().collect());
+    for damaged in [false, true] {
+        let mut doc = doc_shared_form_resources(whole(b"/C Do"), whole(b""), whole(b""));
+        let mut names = Dict::new();
+        for _ in 0..100_000 {
+            let mut form = if damaged { damaged_flate(b"", b"/C Do") } else { whole(b"/C Do") };
+            form.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+            form.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+            form.dict.set(b"Resources".to_vec(), xobjects(names));
+            let next = doc.add(Object::Stream(form));
+            names = [(b"C".to_vec(), Object::Ref(next))].into_iter().collect();
+        }
+        doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Resources".to_vec(), xobjects(names))).unwrap();
+        assert!(crate::prune::prune_unused_xobjects(&mut doc).is_ok(), "damaged: {damaged}");
+    }
+}
+
 /// A form whose `/DecodeParms` is given by reference is read through it: the image it draws is
 /// kept, not lost to content read with the predictor's tag bytes left in it.
 #[test]
