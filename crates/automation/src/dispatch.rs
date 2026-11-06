@@ -816,6 +816,9 @@ impl Automation {
             "ocr_addon_install" => self.ocr_addon_install(&a)?,
             "ocr_addon_remove" => self.ocr_addon_remove(&a)?,
             "ocr_recognize_files" => self.ocr_recognize_files(&a)?,
+            "ocr_words" => self.ocr_words(&a)?,
+            "ocr_review_apply" => self.ocr_review_apply(&a)?,
+            "ocr_dictionary" => self.ocr_dictionary(&a)?,
             "accessibility_report" => self.a11y_report(&a)?,
             "accessibility_review_record" => self.a11y_review_record(&a)?,
             "accessibility_review_save" => self.a11y_review_save(&a)?,
@@ -871,6 +874,8 @@ impl Automation {
             "comments_summarize" => self.comments_summarize(&a)?,
             "comment_edit" => self.comment_edit(&a)?,
             "comment_delete" => self.comment_delete(&a)?,
+            "comments_copy" => self.comments_copy(&a)?,
+            "comments_paste" => self.comments_paste(&a)?,
             other => return Err(ToolError::UnknownTool(other.into())),
         };
         Ok(vec![Content::Json(out)])

@@ -2,7 +2,7 @@
 //!
 //! The historical Kraken PP-OCRv6 recognizer uses RGB ink values, 96-pixel lines
 //! and 16 pixels of horizontal padding. This differs from the modern recognizer.
-use crate::{OcrError, Word};
+use crate::{Line, Models, Ocr, OcrError, OcrImage, RecognizeOptions, Recognizer, Word};
 use image::{RgbImage, imageops};
 use rten_tensor::{NdTensor, Tensor, prelude::*};
 use std::path::Path;
@@ -10,6 +10,10 @@ use unicode_normalization::UnicodeNormalization;
 
 pub const MODEL: &str = "historical-recognition.onnx";
 pub const DICTIONARY: &str = "historical-dictionary.json";
+/// [`Recognizer::id`] of the historical print recognizer, and the source of its words.
+pub const PRINT: &str = "historical";
+/// [`Recognizer::id`] of the historical handwriting recognizer.
+pub const HANDWRITING: &str = "historical-handwriting";
 const HEIGHT: u32 = 96;
 const PADDING: u32 = 16;
 const MAX_WIDTH: u32 = 8192;
@@ -112,6 +116,56 @@ impl Historical {
     }
 }
 
+/// The optional historical model as a [`Recognizer`]: historical print ([`PRINT`]) over the
+/// lines the ocrs detector finds, or upright handwriting in one column ([`HANDWRITING`]) over
+/// ink-projection lines. It reads one model for every language, so the requested language is
+/// ignored. It reports no confidence; the page orientation comes from the modern models'
+/// classifier, which it loads for line detection anyway. Loading reads local files only.
+pub struct HistoricalRecognizer {
+    ocr: Ocr,
+    model: Historical,
+    handwriting: bool,
+}
+
+impl HistoricalRecognizer {
+    /// Load the ocrs detector from `models` and the add-on from `dir`; `handwriting` picks the
+    /// line finder.
+    pub fn load(models: &Models, dir: &Path, handwriting: bool) -> Result<HistoricalRecognizer, OcrError> {
+        Ok(HistoricalRecognizer { ocr: Ocr::load(models)?, model: Historical::load(dir)?, handwriting })
+    }
+}
+
+impl Recognizer for HistoricalRecognizer {
+    fn id(&self) -> &'static str {
+        if self.handwriting { HANDWRITING } else { PRINT }
+    }
+
+    fn available(&self) -> bool {
+        true
+    }
+
+    fn languages(&self) -> Vec<(String, String)> {
+        // One model for historical German-script sources; the language setting is not used.
+        vec![("de".into(), "Deutsch".into())]
+    }
+
+    fn recognize(&self, image: &OcrImage, _options: &RecognizeOptions) -> Result<Vec<Line>, OcrError> {
+        let rgb: Vec<u8> = image.rgba().as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+        let rgb = RgbImage::from_raw(image.width(), image.height(), rgb).ok_or(OcrError::EmptyImage)?;
+        let mut lines =
+            if self.handwriting { self.ocr.recognize_handwriting(&rgb, &self.model)? } else { self.ocr.recognize_historical(&rgb, &self.model)? };
+        let id = self.id();
+        for word in lines.iter_mut().flat_map(|l| l.words.iter_mut()) {
+            word.source = id.into();
+        }
+        Ok(lines)
+    }
+
+    fn orientation(&self, image: &RgbImage) -> Option<Result<u16, OcrError>> {
+        Some(self.ocr.orientation(image))
+    }
+}
+
 fn decode(
     alphabet: &[String],
     output: &Tensor<f32>,
@@ -131,7 +185,7 @@ fn decode(
     let (mut text, mut previous, mut start, mut end) = (String::new(), 0, 0, 0);
     let flush = |words: &mut Vec<Word>, text: &mut String, start, end| {
         if !text.is_empty() && coordinate(end) > coordinate(start) {
-            words.push(Word { text: text.nfc().collect(), rect: [coordinate(start), y as f32, coordinate(end), (y + height) as f32] });
+            words.push(Word::new(text.nfc().collect::<String>(), [coordinate(start), y as f32, coordinate(end), (y + height) as f32], PRINT));
         }
         text.clear();
     };

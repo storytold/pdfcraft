@@ -12,7 +12,14 @@ const WORD: [u32; 4] = [40, 40, 100, 60];
 
 /// A 200 × 100 pt "scan" on tinted paper, with OCR text over its word.
 fn scanned() -> (Session, pdfcraft_engine::DocId) {
-    scanned_with(vec![PlacedWord { text: "John".into(), origin: [40.0, 40.0], across: [60.0, 0.0], up: [0.0, 20.0] }])
+    scanned_with(vec![PlacedWord {
+        text: "John".into(),
+        origin: [40.0, 40.0],
+        across: [60.0, 0.0],
+        up: [0.0, 20.0],
+        confidence: None,
+        source: "ocrs".into(),
+    }])
 }
 
 fn scanned_with(words: Vec<PlacedWord>) -> (Session, pdfcraft_engine::DocId) {
@@ -86,11 +93,18 @@ fn an_explicit_colour_is_kept_for_the_new_text() {
 /// descender line when it has descenders, up to the cap height.
 fn scanned_word(text: &str, x0: f64, x1: f64, baseline: f64, size: f64) -> PlacedWord {
     let low = if text.chars().any(|c| "gjpqy".contains(c)) { 0.21 * size } else { 0.0 };
-    PlacedWord { text: text.into(), origin: [x0, baseline - low], across: [x1 - x0, 0.0], up: [0.0, 0.718 * size + low] }
+    PlacedWord {
+        text: text.into(),
+        origin: [x0, baseline - low],
+        across: [x1 - x0, 0.0],
+        up: [0.0, 0.718 * size + low],
+        confidence: None,
+        source: "ocrs".into(),
+    }
 }
 
 fn word(text: &str, x0: f64, x1: f64, baseline: f64) -> PlacedWord {
-    PlacedWord { text: text.into(), origin: [x0, baseline], across: [x1 - x0, 0.0], up: [0.0, 10.0] }
+    PlacedWord { text: text.into(), origin: [x0, baseline], across: [x1 - x0, 0.0], up: [0.0, 10.0], confidence: None, source: "ocrs".into() }
 }
 
 /// OCR words keep the scan's layout: a phrase is one paragraph, a value in the next table cell and

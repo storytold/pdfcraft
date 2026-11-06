@@ -15,9 +15,11 @@ the dialog, selecting the text style, checking status and running OCR do not dow
 anything. The add-on can be removed separately from documents and the application.
 
 CLI/MCP use `ocr_addon_status`, `ocr_addon_install` and `ocr_addon_remove` for the
-same model management. Both `ocr_recognize` and `ocr_recognize_files` accept
+same model management. `ocr_recognize`, `ocr_words` and `ocr_recognize_files` accept
 `"recognizer": "historical"` for print or `"historical-handwriting"` for a single
-column of handwriting; their default is `"modern"`. Model-management paths
+column of handwriting; their default is `"modern"`. A historical recognizer reads alone,
+in place of the modern engine choice (ocrs, Tesseract or Automatic), which stays
+available for modern print. Model-management paths
 obey the automation root. Historical recognition with a missing or corrupt add-on
 reports the problem and leaves the document unchanged.
 

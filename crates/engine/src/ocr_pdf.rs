@@ -1,98 +1,15 @@
-//! Lossless scan correction and Unicode-only invisible OCR fonts (no font assets).
+//! Lossless scan correction: straighten a page's content in place (Scan & OCR ▸ Correct
+//! scanned pages). The OCR text layer itself is written by `ocr::layer`.
 use crate::EditError;
 use pdfcraft_cos::{Dict, Document, Object, Stream};
-use pdfcraft_ocr::PlacedWord;
-use std::collections::{BTreeMap, BTreeSet};
-
-fn numbers(values: impl IntoIterator<Item = f64>) -> Object {
-    Object::Array(values.into_iter().map(Object::Real).collect())
-}
-
-pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) -> Result<(), EditError> {
-    let p = pdfcraft_model::pages(doc).get(page).cloned().ok_or_else(|| EditError::Invalid("no such page".into()))?;
-    if words.iter().any(|w| w.text.len() > 100_000 || w.origin.iter().chain(&w.across).chain(&w.up).any(|v| !v.is_finite())) {
-        return Err(EditError::Invalid("invalid OCR word geometry or text".into()));
-    }
-    let chars: Vec<char> = words.iter().flat_map(|w| w.text.chars()).collect::<BTreeSet<_>>().into_iter().collect();
-    let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
-    let mut fonts = res.get(b"Font").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
-    let mut codes = BTreeMap::new();
-    // Empty Type 3 glyphs with explicit metrics and ToUnicode keep text selectable without
-    // shipping any typeface. Chunks also handle pages with more than 255 unique characters.
-    for (index, chunk) in chars.chunks(255).enumerate() {
-        let mut name = format!("PCOcr{index}");
-        while fonts.contains(name.as_bytes()) {
-            name.push('_');
-        }
-        let glyph = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"1000 0 0 -210 1000 720 d1\n".to_vec())));
-        let mut procs = Dict::new();
-        let mut differences = vec![Object::Int(1)];
-        let mut cmap = String::from(
-            "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (PdfCraft) /Ordering (Unicode) /Supplement 0 >> def\n/CMapName /PdfCraftOCR def\n/CMapType 2 def\n1 begincodespacerange\n<01> <FF>\nendcodespacerange\n",
-        );
-        for entries in chunk.chunks(100) {
-            cmap.push_str(&format!("{} beginbfchar\n", entries.len()));
-            for ch in entries {
-                let code = codes.len() % 255 + 1;
-                let g = format!("g{code}");
-                procs.set(g.as_bytes().to_vec(), Object::Ref(glyph));
-                differences.push(Object::name(&g));
-                let mut utf16 = [0u16; 2];
-                let hex: String = ch.encode_utf16(&mut utf16).iter().map(|u| format!("{u:04X}")).collect();
-                cmap.push_str(&format!("<{code:02X}> <{hex}>\n"));
-                codes.insert(*ch, (name.clone(), code));
-            }
-            cmap.push_str("endbfchar\n");
-        }
-        cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
-        let cmap = doc.add(Object::Stream(Stream::flate(Dict::new(), cmap.as_bytes())));
-        let mut encoding = Dict::new();
-        encoding.set(b"Type".to_vec(), Object::name("Encoding"));
-        encoding.set(b"Differences".to_vec(), Object::Array(differences));
-        let mut font = Dict::new();
-        font.set(b"Type".to_vec(), Object::name("Font"));
-        font.set(b"Subtype".to_vec(), Object::name("Type3"));
-        font.set(b"FontBBox".to_vec(), numbers([0.0, -210.0, 1000.0, 720.0]));
-        font.set(b"FontMatrix".to_vec(), numbers([0.001, 0.0, 0.0, 0.001, 0.0, 0.0]));
-        font.set(b"FirstChar".to_vec(), Object::Int(1));
-        font.set(b"LastChar".to_vec(), Object::Int(chunk.len() as i64));
-        font.set(b"Widths".to_vec(), numbers(std::iter::repeat_n(1000.0, chunk.len())));
-        font.set(b"Encoding".to_vec(), Object::Dict(encoding));
-        font.set(b"CharProcs".to_vec(), Object::Dict(procs));
-        font.set(b"ToUnicode".to_vec(), Object::Ref(cmap));
-        font.set(b"Resources".to_vec(), Object::Dict(Dict::new()));
-        fonts.set(name.into_bytes(), Object::Ref(doc.add(Object::Dict(font))));
-    }
-    res.set(b"Font".to_vec(), Object::Dict(fonts));
-    doc.update_dict(p.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res))).map_err(|e| EditError::Invalid(e.to_string()))?;
-    // ET does not reset text rendering mode or the font. Keep our invisible Unicode
-    // layer isolated, including when another producer later appends page content.
-    let mut out = String::from("/OCR BMC\nq\nBT\n3 Tr\n");
-    for word in words {
-        let len = word.text.chars().count() as f64;
-        if len == 0.0 {
-            continue;
-        }
-        let [a, b] = word.across.map(|v| v / len);
-        let [c, d] = word.up.map(|v| v / 0.93);
-        let (x, y) = (word.origin[0] + c * 0.21, word.origin[1] + d * 0.21);
-        out.push_str(&format!("{a:.6} {b:.6} {c:.6} {d:.6} {x:.6} {y:.6} Tm\n"));
-        for ch in word.text.chars() {
-            if let Some((name, code)) = codes.get(&ch) {
-                out.push_str(&format!("/{name} 1 Tf <{code:02X}> Tj\n"));
-            }
-        }
-    }
-    out.push_str("ET\nQ\nEMC\n");
-    pdfcraft_edit::stamp(doc, page, "OCR", out.into_bytes())?;
-    Ok(())
-}
 
 /// Whether `page` has annotations: deskewing would leave them where the content was.
 pub(crate) fn has_annotations(doc: &Document, page: &pdfcraft_model::Page) -> bool {
     page.dict.get(b"Annots").map(|v| doc.resolve(v)).and_then(|v| v.as_array().map(|a| !a.is_empty())).unwrap_or(false)
 }
 
+/// Turn page `page`'s content by `degrees` (-12..12) about its crop box centre, scaled to stay
+/// inside it. Pages with annotations are refused: their rectangles would not follow.
 pub(crate) fn deskew(doc: &mut Document, page: usize, degrees: f64) -> Result<(), EditError> {
     if !degrees.is_finite() || degrees.abs() > 12.0 {
         return Err(EditError::Invalid("deskew must be between -12 and 12 degrees".into()));
@@ -138,7 +55,15 @@ mod tests {
         let session = crate::Session::new();
         let bytes = session.create_from_text("OCR state", "Original text").unwrap();
         let mut doc = Document::open(bytes).unwrap();
-        add_text(&mut doc, 0, &[PlacedWord { text: "Été 中文".into(), origin: [10.0, 20.0], across: [90.0, 0.0], up: [0.0, 12.0] }]).unwrap();
+        let word = pdfcraft_ocr::PlacedWord {
+            text: "Été 中文".into(),
+            origin: [10.0, 20.0],
+            across: [90.0, 0.0],
+            up: [0.0, 12.0],
+            confidence: None,
+            source: "ocrs".into(),
+        };
+        crate::ocr::layer::add_text(&mut doc, 0, &[word]).unwrap();
         let page = pdfcraft_model::pages(&doc).remove(0);
         let contents = doc.resolve(page.dict.get(b"Contents").unwrap());
         let last = doc.resolve(contents.as_array().unwrap().last().unwrap());

@@ -3758,8 +3758,20 @@ milestone = "M5"
 status = "shipped"
 commands = ["sign.fill.text"]
 tools = ["fill_sign_add"]
-evidence = ["crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/ui-egui/tests/it/fill_sign.rs::text_marks_and_date", "crates/ui-egui/tests/it/fill_sign.rs::fill_text_size_controls_new_text_and_survives_settings_restore", "crates/automation/tests/it/automation.rs::fill_sign_text_font_size_is_saved_and_validated"]
-notes = "Fill & Sign text and dates have a 4–300 pt size control in the active toolbar; new items use the chosen size, which persists across launches. fill_sign_add accepts font_size for text and dates."
+evidence = ["crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/ui-egui/tests/it/fill_sign.rs::text_marks_and_date", "crates/ui-egui/tests/it/fill_sign.rs::fill_text_size_controls_new_text_and_survives_settings_restore", "crates/automation/tests/it/automation.rs::fill_sign_text_font_size_is_saved_and_validated", "crates/ui-egui/tests/it/fill_sign.rs::fill_text_border_frames_new_and_selected_text", "crates/annot/src/tests.rs::a_typewriter_border_goes_around_its_text_which_stays_put", "crates/automation/tests/it/automation.rs::fill_sign_text_border_is_saved_and_validated", "crates/ui-egui/tests/it/fill_sign.rs::the_toolbar_shows_and_changes_the_selected_texts_border", "crates/ui-egui/tests/it/fill_sign.rs::typed_text_made_default_is_what_new_text_gets", "crates/annot/src/tests.rs::a_text_border_can_have_its_own_colour"]
+notes = "Fill & Sign text and dates have a 4–300 pt size control in the active toolbar; new items use the chosen size, which persists across launches (with a placed text selected it resizes that text too). A Border control (none to 3 pt) frames new text or the selected text, in the text's colour or a Border colour of its own; the box grows outwards so the text keeps its place. With a placed text selected, the border controls show its own border and border colour (also after Comment Properties changed them) and change only that text; without one they set new text's until PdfCraft quits. Make Current Properties Default on typed text (its menus, or the box in Comment Properties) sets what new text gets, its size and border, kept across launches. Text boxes and callouts take a border colour too (quick bar, Comment Properties), the stroking colour in /DA. fill_sign_add accepts font_size, border and border_color for text and dates; comment_edit border_color."
+
+[[feature]]
+id = "comment.text-border-shape"
+title = "An oval or a circle around a text box's or typed text's text"
+area = "E"
+tier = "P2"
+milestone = "M5"
+status = "shipped"
+commands = []
+tools = ["comment_add", "comment_edit", "fill_sign_add", "comment_list"]
+evidence = ["crates/annot/src/tests.rs::text_boxes_take_an_oval_or_a_circle_around_their_text", "crates/annot/src/tests.rs::a_circle_goes_snug_around_its_text_and_follows_it", "crates/annot/src/tests.rs::a_circle_touching_its_text_box_keeps_following_its_text", "crates/ui-egui/tests/it/fill_sign.rs::typed_text_takes_an_oval_or_a_circle_from_the_toolbar", "crates/ui-egui/tests/it/comments.rs::text_box_properties_choose_the_border_shape", "crates/automation/tests/it/automation.rs::text_borders_take_an_oval_or_a_circle_through_the_tools"]
+notes = "Comment Properties ▸ Border shape (text boxes, typewriter text) and Fill & Sign's toolbar beside Border (typed text and dates, for new text and the selected one, and showing the selected one's) choose Rectangle, Oval or Circle: a position number in a circle, a label in an oval on a plan. The text box keeps its place and the shape goes around it, centred: an oval through its corners (√2 its size), a point clear of the border; the text is centred in it. A circle goes snug around its text: the text box is no wider than its text needs (typed text with a circle skips the 40 pt a box to type into keeps; choosing Circle shrinks an existing box to its lines), the circle a point clear of the text's lines and touching the box's longer sides, so a 10 pt \"3\" gets a 20 pt circle; a snug circle follows its text and font size, one made larger by hand keeps its size. /Rect grows to hold the shape and /RD keeps the text box inside it (§12.5.6.6, as a callout's; 0 where a circle touches the box, a hair below 0 read as 0), with PdfCraft's /PCBorderShape; background and border take the shape, the appearance draws it so every viewer shows it, and an app that redraws the comment from its keys draws a rectangle. Resizing the frame takes the text box along (a circle's keeping its proportions); a thicker border leaves the text where it is. Make Properties Default carries it into the Text box tool, and on typed text into Fill & Sign's new text. Headless: comment_add / comment_edit / fill_sign_add `border_shape` (rectangle, oval, circle); comment_list reports an oval or a circle. Callouts keep a rectangle. Acrobat's text boxes have a rectangular border only."
 
 [[feature]]
 id = "comment.text-box"
@@ -3878,8 +3890,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.polyline"]
 tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::polygons_clouds_connected_lines_callouts_and_carets_are_drawn", "crates/ui-egui/tests/it/comments.rs::polygons_clouds_connected_lines_callouts_and_inserted_text", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools"]
-notes = ""
+evidence = ["crates/annot/src/tests.rs::polygons_clouds_connected_lines_callouts_and_carets_are_drawn", "crates/ui-egui/tests/it/comments.rs::polygons_clouds_connected_lines_callouts_and_inserted_text", "crates/ui-egui/tests/it/comments.rs::connected_lines_are_completed_from_the_context_menu", "crates/automation/tests/it/automation.rs::drawing_comments_through_tools"]
+notes = "Click the corners; Enter, a double-click or the right-click menu's Complete finishes the lines (the menu also takes the last point back and cancels the drawing), Backspace takes a point back."
 
 [[feature]]
 id = "comment.cloud"
@@ -4010,8 +4022,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.list"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/comments.rs::make_current_properties_default", "crates/ui-egui/tests/it/comments.rs::properties_dialog_makes_the_strikethrough_colour_default"]
-notes = "colour, opacity and line width become the tool's defaults (canvas and Comments panel menus, and Acrobat's Make Properties Default box in Comment Properties, applied on OK with the edited look) and survive a restart: the per-tool styles are persisted with the settings and restored through their clamping setters (#340)"
+evidence = ["crates/ui-egui/tests/it/comments.rs::make_current_properties_default", "crates/ui-egui/tests/it/comments.rs::properties_dialog_makes_the_strikethrough_colour_default", "crates/ui-egui/tests/it/fill_sign.rs::typed_text_made_default_is_what_new_text_gets"]
+notes = "colour, opacity and line width become the tool's defaults (canvas and Comments panel menus, and Acrobat's Make Properties Default box in Comment Properties, applied on OK with the edited look) and survive a restart: the per-tool styles are persisted with the settings and restored through their clamping setters (#340). Typed text, which no comment tool makes, gives Fill & Sign's new text its size and border"
 
 [[feature]]
 id = "comment.keep-tool-selected"
@@ -4343,11 +4355,35 @@ title = "Export selected comments"
 area = "E"
 tier = "P2"
 milestone = "M5"
-status = "planned"
+status = "partial"
+commands = ["comment.copy"]
+tools = ["comments_copy"]
+evidence = ["crates/xfdf/src/tests.rs::exporting_selected_comments_takes_them_and_their_replies", "crates/automation/tests/it/automation.rs::comments_copy_and_paste_between_documents_through_tools", "crates/xfdf/src/tests.rs::copies_keep_their_intent_cloud_and_pdfcraft_keys"]
+notes = "The selected comments, each with its replies, as XFDF: Copy puts it on the clipboard (desktop) and comments_copy returns it headlessly. Each keeps what it is meant as (`intent`: typewriter text, a cloud, an arrow), a cloudy border (`style`, `intensity`; both also in File ▸ Export comments) and PdfCraft's own keys (`pdfcraft:keys`, in a namespace of its own: a Fill & Sign item, a turned comment's box and angle), so a paste is the same comment. Not yet: a Save as… to a data file from the interface."
+
+[[feature]]
+id = "comment.multi-select"
+title = "Select several comments (⌘-click, ⇧-click)"
+area = "E"
+tier = "P1"
+milestone = "M5"
+status = "shipped"
 commands = []
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/comments.rs::ctrl_click_selects_several_comments_and_delete_removes_them_all", "crates/ui-egui/tests/it/comments.rs::properties_change_every_selected_comment_where_it_applies", "crates/ui-egui/tests/it/comments.rs::dragging_any_selected_comment_moves_the_whole_selection", "crates/ui-egui/src/tools/comments/tests.rs::shift_click_selects_the_range_from_the_comment_with_the_handles"]
+notes = "On the page, ⌘-click (Ctrl on Windows and Linux) or ⇧-click adds a comment to the selection or takes it out again; in the Comments panel ⌘/Ctrl-click does, and ⇧-click selects the cards from the one with the handles to the one clicked. The one clicked last has the handles and is what Reply acts on. Delete (key or menu) removes every selected comment as one undo step, dragging one of them moves them all (text markup stays with its text, a locked one where it is), and the context menu copies them all. Properties (opened on one of them), the context menu's Colour and the quick bar's colour change every selected comment as one undo step, each where the property applies (a font size to text, a fill to shapes, a width to lines and shapes); one that stays locked keeps its look. Escape and a plain click select one alone again. Not yet: a rubber-band (marquee) selection on the page."
+
+[[feature]]
+id = "comment.copy-paste"
+title = "Copy and paste comments, within and between documents"
+area = "E"
+tier = "P1"
+milestone = "M5"
+status = "shipped"
+commands = ["comment.copy", "comment.paste"]
+tools = ["comments_copy", "comments_paste"]
+evidence = ["crates/ui-egui/tests/it/comments.rs::copied_comments_paste_into_another_document", "crates/ui-egui/tests/it/comments.rs::copied_comments_take_the_click_from_the_tool_that_is_on", "crates/engine/src/tests.rs::pasting_copied_comments_adds_copies_that_undo_as_one_step", "crates/xfdf/src/tests.rs::importing_comments_as_copies_adds_them_on_the_page_with_fresh_names", "crates/xfdf/src/tests.rs::copied_marks_and_text_boxes_show_what_they_are_while_placed_and_once_pasted", "crates/automation/tests/it/automation.rs::comments_copy_and_paste_between_documents_through_tools"]
+notes = "⌘C with comments selected (and no text selected) copies them as XFDF, each with its replies, to the app's clipboard (every tab and window) and as text to the system clipboard. ⌘V or Edit ▸ Paste comments hangs the copies on the pointer as one bundle (their box, with a count, and each comment's outline in its colour: Fill & Sign ticks, crosses, dots and lines as themselves, text boxes with their text); a click places them, centred there, on the page clicked (whatever tool is on: Fill & Sign's Text tool opens no box, a stamp tool places no stamp), so a copy never lands on its original and a bundle from an A0 page goes where it fits on an A4 one (placed as it is when larger than the page, with a notice); Escape or a right-click lets the bundle go. The page's context menu places the bundle at the point the menu was opened at. The copies are new comments under names of their own (nothing is replaced; pasting twice gives two sets) and are selected afterwards. XFDF with comments on the system clipboard pastes too, so comments travel between PdfCraft processes. The Comments panel's card menu copies that card's comment. Headless: comments_copy / comments_paste (`at` places the bundle's centre), undoable as one step. Not yet: appearance streams (the copies are drawn again), file attachments' data (the attachment comment is copied without its file), pasting in the web build's other tabs through the system clipboard."
 
 [[feature]]
 id = "comment.import-from-pdf"
@@ -6499,8 +6535,8 @@ milestone = "M9"
 status = "shipped"
 commands = ["sign.panel"]
 tools = ["sign_list"]
-evidence = ["crates/sign/tests/it/pdf.rs::later_changes_are_classified_under_the_signature_permissions", "crates/sign/tests/it/pdf.rs::signing_an_existing_field_and_counter_signing", "crates/engine/src/tests.rs::signing_saving_trusting_and_commenting_afterwards", "crates/sign/tests/it/pdf.rs::validation_data_and_xmp_added_after_signing_are_not_tampering", "crates/sign/tests/it/pdf.rs::a_dss_entry_does_not_make_the_object_it_names_part_of_the_store", "crates/sign/tests/it/pdf.rs::an_existing_dictionary_is_not_a_store_part_because_the_store_names_it", "crates/sign/tests/it/pdf.rs::an_existing_array_stays_what_it_is_when_the_store_points_at_it", "crates/sign/tests/it/pdf.rs::a_signed_store_may_grow_but_not_lose_or_swap_entries", "crates/sign/tests/it/pdf.rs::a_dictionary_labelled_metadata_is_not_a_metadata_change", "crates/sign/tests/it/pdf.rs::a_stream_already_labelled_metadata_when_signed_is_not_metadata_unless_the_catalog_names_it", "crates/sign/tests/it/pdf.rs::the_catalogs_own_xmp_stream_may_still_be_rewritten_after_signing", "crates/sign/tests/it/pdf.rs::rewritten_page_resources_are_page_content_whatever_keys_they_carry", "crates/sign/tests/it/pdf.rs::rewriting_a_certified_forms_xfa_data_is_a_form_fill"]
-notes = "revision diff classified as signing, form fill, comments, metadata, page content or structure. Later revisions that add DSS data (new /Certs, /CRLs, /OCSPs, /VRI objects, or ones of the signed store that only grew) or rewrite the catalog's XMP are permitted changes; a /DSS entry that names other objects, or a /Type /DSS or /Type /Metadata label on an existing dictionary or stream, does not excuse changing them (negative tests at every DocMDP level). A signed page's resources (fonts, XObjects, graphics states and what they reach) are page content by the role they held when signed, whatever keys a later revision writes into them (#1787). Rewriting the XFA `datasets` or `form` packet the signed revision named is form fill, as a Reader Extensions (UR3) save of a certified form does (#2759); the packets' roles come from the signed revision"
+evidence = ["crates/sign/tests/it/pdf.rs::later_changes_are_classified_under_the_signature_permissions", "crates/sign/tests/it/pdf.rs::signing_an_existing_field_and_counter_signing", "crates/engine/src/tests.rs::signing_saving_trusting_and_commenting_afterwards", "crates/sign/tests/it/pdf.rs::validation_data_and_xmp_added_after_signing_are_not_tampering", "crates/sign/tests/it/pdf.rs::a_dss_entry_does_not_make_the_object_it_names_part_of_the_store", "crates/sign/tests/it/pdf.rs::an_existing_dictionary_is_not_a_store_part_because_the_store_names_it", "crates/sign/tests/it/pdf.rs::an_existing_array_stays_what_it_is_when_the_store_points_at_it", "crates/sign/tests/it/pdf.rs::a_signed_store_may_grow_but_not_lose_or_swap_entries", "crates/sign/tests/it/pdf.rs::a_dictionary_labelled_metadata_is_not_a_metadata_change", "crates/sign/tests/it/pdf.rs::a_stream_already_labelled_metadata_when_signed_is_not_metadata_unless_the_catalog_names_it", "crates/sign/tests/it/pdf.rs::the_catalogs_own_xmp_stream_may_still_be_rewritten_after_signing", "crates/sign/tests/it/pdf.rs::rewritten_page_resources_are_page_content_whatever_keys_they_carry", "crates/sign/tests/it/pdf.rs::rewriting_a_certified_forms_xfa_data_is_a_form_fill", "crates/sign/tests/it/pdf.rs::the_catalogs_perms_do_not_change_under_no_changes"]
+notes = "revision diff classified as signing, form fill, comments, metadata, page content or structure. Later revisions that add DSS data (new /Certs, /CRLs, /OCSPs, /VRI objects, or ones of the signed store that only grew) or rewrite the catalog's XMP are permitted changes; a /DSS entry that names other objects, or a /Type /DSS or /Type /Metadata label on an existing dictionary or stream, does not excuse changing them (negative tests at every DocMDP level). A signed page's resources (fonts, XObjects, graphics states and what they reach) are page content by the role they held when signed, whatever keys a later revision writes into them (#1787). Rewriting the XFA `datasets` or `form` packet the signed revision named is form fill, as a Reader Extensions (UR3) save of a certified form does (#2759); the packets' roles come from the signed revision. Under P=1 a change to the catalog's /Perms breaks the certification."
 
 [[feature]]
 id = "sign.view-signed-version"
@@ -6647,7 +6683,7 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize", "ocr_status"]
-evidence = ["crates/ocr/src/lib.rs::model_discovery_prefers_the_complete_onnx_pair", "crates/ocr/src/lib.rs::model_discovery_falls_back_to_legacy_when_the_onnx_pair_is_incomplete", "crates/ocr/src/lib.rs::model_discovery_refuses_mixed_format_pairs", "crates/ocr/src/lib.rs::model_discovery_keeps_legacy_only_installations", "crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
+evidence = ["crates/ocr/src/ocrs.rs::model_discovery_prefers_the_complete_onnx_pair", "crates/ocr/src/ocrs.rs::model_discovery_falls_back_to_legacy_when_the_onnx_pair_is_incomplete", "crates/ocr/src/ocrs.rs::model_discovery_refuses_mixed_format_pairs", "crates/ocr/src/ocrs.rs::model_discovery_keeps_legacy_only_installations", "crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
 notes = "ocrs engine (MIT/Apache) with CC-BY-SA ONNX models fetched and SHA-256 checked by `cargo xtask models`; within each search directory, a complete ONNX pair takes precedence over a complete legacy RTEN pair, incomplete and mixed-format pairs are not combined, and directory precedence is unchanged; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
 
 [[feature]]
@@ -6672,7 +6708,7 @@ status = "shipped"
 commands = ["ocr.recognize_batch"]
 tools = ["ocr_recognize_files"]
 evidence = ["crates/automation/tests/it/automation.rs::ocr_recognize_files_writes_searchable_copies", "crates/ui-egui/tests/it/ocr.rs::recognize_text_in_multiple_files_writes_searchable_copies"]
-notes = "Pick PDFs, then an output folder; copies are saved incrementally under the same names, in the background with progress."
+notes = "Pick PDFs, then an output folder (the last folder is remembered and reused; Clear asks again); copies are saved incrementally under the same names, in the background with progress. Output names are pre-flighted (a collision aborts before the first page is read), files that already have text are skipped whole only when that option is on (skip_text_files, off by default; Force OCR overrides), and the summary counts recognized words, the skipped bucket, per-file failures, low-confidence notes and what a cancel left unrun."
 
 [[feature]]
 id = "ocr.ocr-languages"
@@ -6683,8 +6719,8 @@ milestone = "M10"
 status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/engine/tests/it/scan_ocr.rs::scan_recognizes_accents_in_requested_languages", "crates/engine/tests/it/scan_ocr.rs::scan_recognizes_japanese_with_release_fonts", "crates/engine/tests/it/scan_ocr.rs::additional_latin_languages_keep_accented_words_after_save", "crates/engine/tests/it/scan_ocr.rs::catalan_ocr_keeps_accents_after_save", "crates/ocr/src/lib.rs::system_locale_selects_ocr_language_with_english_fallback", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "English, German, French, Spanish, Catalan, Italian, Dutch, Danish, Norwegian Bokmål, Swedish, Finnish, Portuguese and horizontal Japanese run offline. The UI initially selects the primary system/browser locale, with English fallback when unavailable or unsupported; manual choices remain available. CLI/MCP language arguments retain their deterministic English default. Chinese zh-Hant/zh-Hans choices share the unmasked dictionary, with locale/script mapping, decoder, UI selection, automation dispatch and Unicode save/reopen coverage; real Chinese scan accuracy is not yet measured. Close/overlapping horizontal Chinese fragments are joined before recognition, tested with original centred-punctuation geometry/model checks; general column/layout accuracy and thin numeral recall remain limited. No script conversion or speculative Catalan spelling substitution. Icelandic, other language choices and vertical Japanese/Chinese remain unclaimed."
+evidence = ["crates/engine/tests/it/scan_ocr.rs::scan_recognizes_accents_in_requested_languages", "crates/engine/tests/it/scan_ocr.rs::scan_recognizes_japanese_with_release_fonts", "crates/engine/tests/it/scan_ocr.rs::additional_latin_languages_keep_accented_words_after_save", "crates/engine/tests/it/scan_ocr.rs::catalan_ocr_keeps_accents_after_save", "crates/ocr/src/lib.rs::system_locale_selects_ocr_language_with_english_fallback", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text", "crates/ocr/src/tesseract.rs::language_table_maps_and_falls_back"]
+notes = "English, German, French, Spanish, Catalan, Italian, Dutch, Danish, Norwegian Bokmål, Swedish, Finnish, Portuguese and horizontal Japanese run offline. The UI initially selects the primary system/browser locale, with English fallback when unavailable or unsupported; manual choices remain available. CLI/MCP language arguments retain their deterministic English default. Chinese zh-Hant/zh-Hans choices share the unmasked dictionary, with locale/script mapping, decoder, UI selection, automation dispatch and Unicode save/reopen coverage; real Chinese scan accuracy is not yet measured. Close/overlapping horizontal Chinese fragments are joined before recognition, tested with original centred-punctuation geometry/model checks; general column/layout accuracy and thin numeral recall remain limited. No script conversion or speculative Catalan spelling substitution. Icelandic, other language choices and vertical Japanese/Chinese remain unclaimed. The choice feeds both engines: the built-in engine reads English with the ocrs model and the other languages with the multilingual model; tesseract maps 12 allow-listed codes (the language enum comes from the engine's own table) but only as far as the installed language packs cover."
 
 [[feature]]
 id = "ocr.historical-scripts"
@@ -6695,8 +6731,8 @@ milestone = "M10"
 status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize", "ocr_recognize_files", "ocr_addon_status", "ocr_addon_install", "ocr_addon_remove"]
-evidence = ["crates/engine/tests/it/scan_ocr.rs::historical_fraktur_and_kurrent_scans_roundtrip_through_the_engine", "crates/engine/tests/it/scan_ocr.rs::historical_handwriting_full_page_is_searchable_after_save_and_undo", "crates/engine/tests/it/scan_ocr.rs::historical_addon_recognition_preserves_pixels_unicode_save_and_undo", "crates/automation/tests/it/automation.rs::historical_ocr_tools_report_status_and_enforce_the_root", "crates/automation/tests/it/automation.rs::historical_ocr_automation_makes_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::historical_ocr_choice_requires_an_explicit_addon_download"]
-notes = "Explicit optional 13 MB historical PP-OCRv6 add-on (Apache-2.0); pinned size/SHA-256, per-user installation and removal, offline Rust/RTen inference. Separate historical print and single-column handwriting profiles. Fraktur and Kurrent samples exercise full-page recognition, Unicode, save/reopen and undo; the public samples overlap training sources and are not a general accuracy benchmark. Historical spelling is retained. Handwriting requires upright horizontal lines in one column; tables, marginal notes, complex layouts, arbitrary writers and historical Japanese are unclaimed. See docs/historical-ocr.md."
+evidence = ["crates/engine/tests/it/scan_ocr.rs::historical_fraktur_and_kurrent_scans_roundtrip_through_the_engine", "crates/engine/tests/it/scan_ocr.rs::historical_handwriting_full_page_is_searchable_after_save_and_undo", "crates/engine/tests/it/scan_ocr.rs::historical_addon_recognition_preserves_pixels_unicode_save_and_undo", "crates/engine/tests/it/scan_ocr.rs::historical_choice_reads_with_the_addon_alone_or_fails_named", "crates/automation/tests/it/automation.rs::historical_ocr_tools_report_status_and_enforce_the_root", "crates/automation/tests/it/automation.rs::historical_ocr_automation_makes_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::historical_ocr_choice_requires_an_explicit_addon_download"]
+notes = "Explicit optional 13 MB historical PP-OCRv6 add-on (Apache-2.0); pinned size/SHA-256, per-user installation and removal, offline Rust/RTen inference. Separate historical print and single-column handwriting profiles, each its own engine (Recognizer) beside ocrs and Tesseract; it reads alone, without the ensemble or confidences. Fraktur and Kurrent samples exercise full-page recognition, Unicode, save/reopen and undo; the public samples overlap training sources and are not a general accuracy benchmark. Historical spelling is retained. Handwriting requires upright horizontal lines in one column; tables, marginal notes, complex layouts, arbitrary writers and historical Japanese are unclaimed. See docs/historical-ocr.md."
 
 [[feature]]
 id = "ocr.searchable-image"
@@ -6707,8 +6743,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/engine/tests/it/scan_ocr.rs::unicode_ocr_survives_save_search_and_undo_without_changing_pixels"]
-notes = "Unicode invisible text with ToUnicode mappings; optional orientation and deskew correction preserves original image streams."
+evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/engine/src/ocr.rs::searchable_layer_round_trips_non_win_ansi_words", "crates/engine/src/ocr.rs::preprocessing_flags_flow_through_the_job", "crates/engine/tests/it/scan_ocr.rs::unicode_ocr_survives_save_search_and_undo_without_changing_pixels"]
+notes = "Invisible text (Tr 3) fitted to each word box. The page's own image object is left untouched; the raster the engines read can be cleaned first (opt-in rotate/deskew/denoise/binarize), with word boxes mapped back to the original raster. Words beyond WinAnsi are written in Type3 fonts with empty character programs and a ToUnicode CMap, so extraction reads them back while nothing needs a display font (no craft-fonts input, and no character is ever substituted with '?'; those substitutions belong to the editable output). Missing: the downsampled Searchable Image variant (ocr.ocr-downsample). Correct scanned pages (rotate_pages, straighten_pages, auto_crop) changes the page itself, keeping the original image streams; with all three off the page image is untouched."
 
 [[feature]]
 id = "ocr.searchable-image-exact"
@@ -6720,7 +6756,7 @@ status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
 evidence = ["crates/engine/tests/it/scan_ocr.rs::unicode_ocr_survives_save_search_and_undo_without_changing_pixels"]
-notes = "Disable auto_rotate, deskew and auto_crop for unchanged page pixels; OCR does not recompress the original image."
+notes = "Disable rotate_pages, straighten_pages and auto_crop (auto_rotate and deskew preprocessing only touches the raster that is read) for unchanged page pixels; OCR does not recompress the original image."
 
 [[feature]]
 id = "ocr.editable-text-output"
@@ -6729,9 +6765,9 @@ area = "I"
 tier = "P1"
 milestone = "M10"
 status = "partial"
-commands = ["edit.edit_text"]
-tools = ["text_edit"]
-evidence = ["crates/engine/tests/it/ocr_edit.rs::editing_an_ocr_word_covers_the_scan_and_shows_the_new_text", "crates/engine/tests/it/ocr_edit.rs::an_explicit_colour_is_kept_for_the_new_text", "crates/engine/tests/it/ocr_edit.rs::ocr_words_group_into_phrases_that_edit_in_place", "crates/engine/tests/it/ocr_edit.rs::a_longer_ocr_phrase_grows_rightwards", "crates/engine/tests/it/ocr_edit.rs::a_rewritten_ocr_phrase_keeps_its_word_widths", "crates/engine/tests/it/ocr_edit.rs::an_ocr_layer_under_the_scan_image_shows_its_edit", "crates/engine/tests/it/ocr_edit.rs::an_ocr_phrase_split_from_visible_text_under_the_scan_shows_its_edit", "crates/ui-egui/tests/it/ocr.rs::an_ocr_word_opens_for_editing_and_stays_open", "crates/ui-egui/tests/it/ocr.rs::editing_a_scanned_page_recognizes_its_text_first_and_only_once"]
+commands = ["edit.edit_text", "ocr.correct"]
+tools = ["text_edit", "ocr_recognize"]
+evidence = ["crates/engine/tests/it/ocr_edit.rs::editing_an_ocr_word_covers_the_scan_and_shows_the_new_text", "crates/engine/tests/it/ocr_edit.rs::an_explicit_colour_is_kept_for_the_new_text", "crates/engine/tests/it/ocr_edit.rs::ocr_words_group_into_phrases_that_edit_in_place", "crates/engine/tests/it/ocr_edit.rs::a_longer_ocr_phrase_grows_rightwards", "crates/engine/tests/it/ocr_edit.rs::a_rewritten_ocr_phrase_keeps_its_word_widths", "crates/engine/tests/it/ocr_edit.rs::an_ocr_layer_under_the_scan_image_shows_its_edit", "crates/engine/tests/it/ocr_edit.rs::an_ocr_phrase_split_from_visible_text_under_the_scan_shows_its_edit", "crates/ui-egui/tests/it/ocr.rs::an_ocr_word_opens_for_editing_and_stays_open", "crates/ui-egui/tests/it/ocr.rs::editing_a_scanned_page_recognizes_its_text_first_and_only_once", "crates/engine/src/ocr.rs::editable_writer_refuses_empty_and_writes_visible_words", "crates/engine/src/ocr.rs::editable_output_round_trips_non_win_ansi_words", "crates/engine/src/ocr.rs::editable_writer_maps_rotated_pages", "crates/automation/tests/it/automation.rs::ocr_recognize_editable_output_writes_visible_text"]
 notes = "On demand, per edit: in Edit text & images, recognised text (the invisible OCR layer over a scan) is grouped into phrases (words across a word space; a wider gap such as a table cell, and each scanned line, stay separate) and opens for editing on a click. Applying draws the new text visibly in the scan's sampled ink colour (or the chosen one) and first covers the old words with the paper colour sampled around them, so the scanned word no longer shows; when an image or form is drawn after the OCR layer over where the edit lands (its old box, moved, rewrapped or grown to more lines), or an inline image or shading after it (a layer written under its scan, #3973), the cover and new text are drawn on top of the page instead, so they show; the phrase keeps each word's position and width and grows rightwards instead of wrapping. Turning Edit text & images on for a scanned page (an image covering at least half of a page that has no text of its own, once per page per window; comments and text boxes over it do not count as text, a page with real text and a background picture is left alone; one undoable \"Recognize text\" step) now recognizes its words first, as Acrobat's \"Converting scanned page to Editable Text and Images\" does (English only until more OCR languages exist, gap 7). Still missing: separating the photographs on the page from the lettering, matching the scanned typeface (the layer's Helvetica is used), covering on a textured or patterned background (one flat colour is used), a scan painted by a pattern fill or a filled rectangle over a layer written under it, and, for text drawn on top, the clip, optional content and marked content (tags) that enclosed the OCR layer."
 
 [[feature]]
@@ -6755,8 +6791,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/engine/src/tests.rs::recognize_text_reads_a_picture_on_a_page_that_has_text", "crates/automation/tests/it/automation.rs::ocr_recognize_reads_pictures_on_pages_with_text", "crates/ui-egui/tests/it/ocr.rs::recognize_text_can_read_pictures_on_pages_with_text"]
-notes = "Pages that already have text are skipped and reported by default. The dialog's \"Also recognize pages that already have text\" (skip_text_pages false, also for multiple files) reads pictures on such pages (#1028); a recognised word at least half covered by the page's own text (an earlier OCR layer included) is left out and counted (already_on_page). Missing: recognising only the image areas (the whole page is still read, so it takes as long as a scan), and a word in a picture that sits under real text is treated as that text."
+evidence = ["crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/engine/src/tests.rs::recognize_text_reads_a_picture_on_a_page_that_has_text", "crates/automation/tests/it/automation.rs::ocr_recognize_reads_pictures_on_pages_with_text", "crates/ui-egui/tests/it/ocr.rs::recognize_text_can_read_pictures_on_pages_with_text", "crates/automation/tests/it/automation.rs::ocr_recognize_files_writes_searchable_copies"]
+notes = "Text pages are skipped by default; skip_text_pages false or Force OCR reads pictures on them while omitting words overlapping existing text (already_on_page). Batch skip_text_files reports skipped files without writing them; Force OCR overrides both skips. Recognition still reads the whole page, and image text under real text can be omitted."
 
 [[feature]]
 id = "ocr.rotation-detection"
@@ -6767,8 +6803,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize", "ocr.correct_scan"]
 tools = ["ocr_recognize", "ocr_enhance"]
-evidence = ["crates/engine/tests/it/scan_ocr.rs::scan_correction_handles_all_quarter_turns_and_stale_results", "crates/automation/tests/it/automation.rs::ocr_enhance_corrects_rotation_without_adding_text"]
-notes = "Confidence-gated 90/180/270 degree correction using PP-LCNet. Blank and uncertain pages stay unchanged; correction alone or before OCR, undoable."
+evidence = ["crates/engine/tests/it/scan_ocr.rs::scan_correction_handles_all_quarter_turns_and_stale_results", "crates/automation/tests/it/automation.rs::ocr_enhance_corrects_rotation_without_adding_text", "crates/ocr/src/preprocess.rs::quarter_turns_are_detected_corrected_and_mapped_back", "crates/ocr/src/preprocess.rs::realistic_letter_pages_are_left_upright"]
+notes = "Confidence-gated 90/180/270 degree correction using PP-LCNet. Blank and uncertain pages stay unchanged; correction alone or before OCR, undoable. Corrects the page in the document (rotate_pages), with the ocrs models. Separately, recognition-only preprocessing (auto_rotate): 0/90/180/270 detected from projection-profile banding (conservative: under 32 px, blank, or without a clear margin it is a no-op); word boxes map back to the scanned raster through the exact inverse. Correction is proven at the preprocessing layer and the flag flows through the job (needs the models), but correction of a genuinely rotated page through the workflow is not yet covered by a cited end-to-end test."
 
 [[feature]]
 id = "ocr.deskew"
@@ -6779,8 +6815,8 @@ milestone = "M10"
 status = "partial"
 commands = ["ocr.recognize", "ocr.correct_scan"]
 tools = ["ocr_recognize", "ocr_enhance"]
-evidence = ["crates/engine/tests/it/scan_ocr.rs::scan_deskew_without_ocr_persists_and_is_undoable"]
-notes = "Projection-profile deskew up to 12 degrees, fitting the whole scan inside the page. Preserves original image streams; pages with annotations are refused to avoid misalignment. No perspective or camera dewarping."
+evidence = ["crates/engine/tests/it/scan_ocr.rs::scan_deskew_without_ocr_persists_and_is_undoable", "crates/engine/tests/it/scan_ocr.rs::annotated_skewed_scan_is_recognized_without_deskew", "crates/ocr/src/preprocess.rs::skew_is_estimated_and_straight_pages_are_left_alone", "crates/ocr/src/preprocess.rs::deskew_inverse_maps_off_centre_points_back_onto_the_source_line"]
+notes = "Projection-profile deskew up to 12 degrees, fitting the whole scan inside the page. Preserves original image streams; a page with annotations is left unstraightened (reported as deskew_skipped) so its annotations stay aligned, while its words are still placed. No perspective or camera dewarping. That straightens the page in the document (straighten_pages). Separately, recognition-only preprocessing (deskew), opt-in: skew estimated over +/-5 degrees by a shear-scored projection profile; conservative no-ops (under 64 px, blank, below 0.1 degrees, no clear winner); boxes map back off-centre-exact through the composed inverse. Correction is proven at the preprocessing layer; a cited end-to-end test of a skewed page through the workflow is still owed."
 
 [[feature]]
 id = "ocr.despeckle"
@@ -6789,9 +6825,9 @@ area = "I"
 tier = "P1"
 milestone = "M10"
 status = "partial"
-commands = ["ocr.enhance_camera", "ocr.enhance"]
-tools = ["page_enhance_camera", "page_enhance_scan"]
-evidence = ["crates/engine/src/camera_clean.rs::a_shadow_and_a_yellow_cast_become_white_paper", "crates/engine/src/tests.rs::enhance_camera_page_at_a_level_whitens_a_shadowed_sheet", "crates/ui-egui/tests/it/camera.rs::the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn", "crates/engine/src/scan_clean/tests.rs::despeckle_is_its_own_switch", "crates/automation/tests/it/automation.rs::enhance_scanned_file_cleans_the_scan_in_place_through_tools", "crates/ui-egui/tests/it/scan_clean.rs::enhance_scanned_file_cleans_the_chosen_pages_and_says_what_it_did"]
+commands = ["ocr.enhance_camera", "ocr.enhance", "ocr.recognize"]
+tools = ["page_enhance_camera", "page_enhance_scan", "ocr_recognize"]
+evidence = ["crates/engine/src/camera_clean.rs::a_shadow_and_a_yellow_cast_become_white_paper", "crates/engine/src/tests.rs::enhance_camera_page_at_a_level_whitens_a_shadowed_sheet", "crates/ui-egui/tests/it/camera.rs::the_clean_up_level_enhances_again_from_the_photo_and_keeps_the_turn", "crates/engine/src/scan_clean/tests.rs::despeckle_is_its_own_switch", "crates/automation/tests/it/automation.rs::enhance_scanned_file_cleans_the_scan_in_place_through_tools", "crates/ui-egui/tests/it/scan_clean.rs::enhance_scanned_file_cleans_the_chosen_pages_and_says_what_it_did", "crates/ocr/src/preprocess.rs::denoise_removes_specks_and_keeps_dimensions"]
 notes = "Camera images, and scanned pages through Enhance scanned file (ocr.enhance, page_enhance_scan despeckle): isolated dark pixels (at most one dark neighbour) turn white, on grey, RGB and 1-bit scans, in place (the OCR text layer, comments and links stay). Missing: as an option of Recognize text; specks larger than two pixels; CMYK, indexed, JPEG 2000, JBIG2 and CCITT scans and scans inside form XObjects (reported, not changed)."
 
 [[feature]]
@@ -6872,11 +6908,11 @@ title = "Correct recognized text (low-confidence suspects)"
 area = "I"
 tier = "P2"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["ocr.correct"]
+tools = ["ocr_words", "ocr_review_apply", "ocr_dictionary"]
+evidence = ["crates/ui-egui/src/workflows/ocr_verify.rs::dictionary_uses_recognition_language_instead_of_interface_locale", "crates/ui-egui/src/workflows/ocr_verify.rs::dictionary_limit_and_normalization_failures_preserve_file_and_review", "crates/ui-egui/src/workflows/ocr_verify.rs::dictionary_undo_persists_and_failed_undo_keeps_history", "crates/ui-egui/src/workflows/ocr_verify.rs::rereading_keeps_captured_language_when_the_draft_changes", "crates/automation/tests/it/automation.rs::ocr_review_corrections_keep_boxes_are_guarded_and_apply_once", "crates/automation/tests/it/automation.rs::ocr_dictionary_updates_are_atomic_bounded_and_confined", "crates/automation/tests/it/automation.rs::ocr_retained_reviews_have_eight_document_cap_and_close_releases_slot", "crates/ui-egui/src/workflows/ocr_verify.rs::accept_zero_words_fails_and_a_live_review_applies_once", "crates/ui-egui/src/workflows/ocr_verify.rs::legend_rows_carry_the_classifier_thresholds", "crates/ui-egui/src/workflows/ocr_verify.rs::suggestions_are_near_dictionary_and_page_words", "crates/ui-egui/tests/it/ocr.rs::ocr_verify_screen_controls_keyboard_and_accept", "crates/ui-egui/src/workflows/ocr_verify.rs::accepting_pages_one_by_one_then_the_review_applies_every_page_once", "crates/ui-egui/src/workflows/ocr_verify.rs::rereading_a_region_remaps_marks_and_selects_the_first_new_word"]
+notes = "The OCR Verify screen: page list, source page with confidence-coloured word boxes (click-select, drag a region), recognised-text preview, zoom + word inspector; corrections commit on Enter (an empty commit removes), Remove/Restore, +Dictionary (a per-language user file), per-word Verified, suggestions within edit distance 2; F8/Shift+F8 walk the low-confidence suspects, Ctrl+T marks the page reviewed, Ctrl+Tab moves the pane focus; Re-OCR of a region or a page; Accept/Reject entire page; a real Cancel keeps the pages already read; a stale session is refused with its reason; review edits are undoable in the panel; Accept (searchable) is one undoable step through the guard path, and pages accepted one by one each apply once (the guard follows each accepted page); a re-read keeps every review mark on the word it was made for. Headless: ocr_words (retain_review) returns the words and a review handle, ocr_review_apply applies corrections at the stored boxes (an empty one removes the word) through the same stale-document guard, or discards the review, and ocr_dictionary edits the dictionary file. Still missing: suggestions, per-word Verified marks and region re-reads are UI-only, and Acrobat's suspect walk across a whole saved document (outside one review) is not offered."
 
 [[feature]]
 id = "ocr.adaptive-compression"
@@ -6908,11 +6944,11 @@ title = "Pluggable OCR engines (ocrs default; tesseract optional)"
 area = "I"
 tier = "P1"
 milestone = "M10"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["ocr.recognize"]
+tools = ["ocr_recognize"]
+evidence = ["crates/engine/src/ocr.rs::selector_names_the_missing_engine", "crates/ocr/src/tesseract.rs::recognize_runs_the_installed_binary", "crates/ocr/src/merge.rs::rover_vote_always_runs_both_and_degrades_without_a_secondary", "crates/ocr/src/merge.rs::confidence_weighted_runs_the_secondary_on_an_unknown_primary", "crates/ocr/src/merge.rs::an_unknown_primary_word_yields_only_to_a_confident_secondary", "crates/ocr/src/tesseract.rs::an_invalid_configured_program_fails_closed", "crates/ocr/src/tesseract.rs::list_langs_come_from_stderr_when_stdout_has_none", "crates/engine/src/ocr.rs::automatic_defaults_to_the_confidence_weighted_strategy"]
+notes = "ocrs (pure Rust, MIT/Apache, CC-BY-SA models fetched by `cargo xtask models`) is the default; an installed tesseract binary runs as an external process (fixed argv, allow-listed language codes, private temp dir, timeout and output cap, a user-validated PDFCRAFT_TESSERACT path or the PATH); Automatic is an ensemble (ROVER and confidence-weighted merge; a failing partner degrades to the primary with a note). Partial, because part of the evidence is conditional: `recognize_runs_the_installed_binary` runs only where tesseract is installed and skips elsewhere, so a build machine without it proves nothing about the process path, the absent-binary paths are exercised only on machines without tesseract, and the process-level tests (timeout, output cap, minimal environment) are Unix-only (fake scripts). What always runs: location validation and the fail-closed rule, the --list-langs parsing (stdout or stderr), the engine selector, the merge rules and the default strategy. Automatic defaults to the confidence-weighted strategy (Primary only would never run the second engine)."
 
 [[feature]]
 id = "ocr.ocr-web"
@@ -7820,11 +7856,11 @@ title = "Optimize multiple files"
 area = "K"
 tier = "P2"
 milestone = "M13"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["doc_batch"]
+evidence = ["apps/pdfcraft-cli/tests/it/batch.rs::cli_batch_reports_partial_failure_and_continues_into_subfolders"]
+notes = "Headless and CLI only: doc_batch with the optimize step (`pdfcraft-cli batch --steps optimize`, or `convert,optimize` as the cited test runs) over files and folders. No GUI batch dialog, no report file, no parallel workers, no resume. See docs/cli-batch.md."
 
 [[feature]]
 id = "optimize.preflight"
@@ -7972,7 +8008,7 @@ notes = ""
 
 [[feature]]
 id = "optimize.pdfa-validate"
-title = "Verify PDF/A compliance (1-4)"
+title = "Verify PDF/A compliance (2b and 3b so far; 1, 2a, 2u, 3a, 3u, 4 not yet)"
 area = "K"
 tier = "P1"
 milestone = "M11"
@@ -7984,7 +8020,7 @@ notes = "PDF/A-2b/3b structural rules: identification, encryption, output intent
 
 [[feature]]
 id = "optimize.pdfa-convert"
-title = "Save as PDF/A (1b, 2b, 3b, 4)"
+title = "Save as PDF/A (2b and 3b so far)"
 area = "K"
 tier = "P1"
 milestone = "M11"
@@ -9428,11 +9464,11 @@ title = "Run guided actions on files"
 area = "N"
 tier = "P1"
 milestone = "M13"
-status = "shipped"
+status = "partial"
 commands = ["actions.wizard"]
 tools = ["action_list", "action_run"]
 evidence = ["crates/ui-egui/tests/it/actions.rs::desktop_actions_preserve_duplicate_names_and_results_from_earlier_runs", "crates/engine/src/tests.rs::actions_run_their_steps_on_files", "crates/automation/tests/it/automation.rs::actions_through_tools", "crates/ui-egui/tests/it/actions.rs::run_and_create_actions"]
-notes = "Desktop output filenames receive numbered suffixes when occupied, preserving every batch result and previous outputs. Pick an action and files; results go to a chosen folder, in the background with progress."
+notes = "Desktop output filenames receive numbered suffixes when occupied, preserving every batch result and previous outputs. Pick an action and files; results go to a chosen folder, in the background with progress. Known gap: a failing non-removal step still publishes its output as success (crates/engine/src/actions.rs:200-208)."
 
 [[feature]]
 id = "misc.action-wizard-create"

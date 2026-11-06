@@ -38,7 +38,14 @@ fn crop_scanner_borders_preserves_pixels_rotation_text_and_undo() {
             id,
             Edit::AddOcrText {
                 page: 0,
-                words: vec![PlacedWord { text: "Kept text".into(), origin: [150.0, 150.0], across: [100.0, 0.0], up: [0.0, 20.0] }],
+                words: vec![PlacedWord {
+                    text: "Kept text".into(),
+                    origin: [150.0, 150.0],
+                    across: [100.0, 0.0],
+                    up: [0.0, 20.0],
+                    confidence: None,
+                    source: "ocrs".into(),
+                }],
             },
         )
         .unwrap();
@@ -47,8 +54,8 @@ fn crop_scanner_borders_preserves_pixels_rotation_text_and_undo() {
             auto_crop: true,
             crop_margin: 0.0,
             recognize: false,
-            auto_rotate: false,
-            deskew: false,
+            rotate_pages: false,
+            straighten_pages: false,
             skip_text_pages: false,
             ..Default::default()
         };
@@ -69,7 +76,8 @@ fn crop_scanner_borders_preserves_pixels_rotation_text_and_undo() {
         s.redo(id).unwrap();
         assert_eq!(after.width, s.get(id).unwrap().info.pages[0].width);
         // Correction-only file processing must save the crop even with zero recognized words.
-        let file = ocr::recognize_file("scan.pdf", before.clone(), None, settings, &ocr::engine().unwrap(), |_, _| true).unwrap();
+        let file = ocr::recognize_file("scan.pdf", before.clone(), None, settings, &ocr::recognizers(&OcrSettings::default()).unwrap(), |_, _| true)
+            .unwrap();
         assert_ne!(file.bytes, before);
         assert_eq!(file.words(), 0);
         let crop_only = s.open("file.pdf", None, file.bytes, None).unwrap();
@@ -104,8 +112,14 @@ fn scan(sentence: &str, rotation: u16, skew: f64) -> (Session, pdfcraft_engine::
 fn unicode_ocr_survives_save_search_and_undo_without_changing_pixels() {
     let (mut s, id) = scan("Invisible text layer", 0, 0.0);
     let before = render(&s, id);
-    let words =
-        vec![PlacedWord { text: "Grüße 日本語 français español 😀".into(), origin: [50.0, 50.0], across: [300.0, 0.0], up: [0.0, 20.0] }];
+    let words = vec![PlacedWord {
+        text: "Grüße 日本語 français español 😀".into(),
+        origin: [50.0, 50.0],
+        across: [300.0, 0.0],
+        up: [0.0, 20.0],
+        confidence: None,
+        source: "ocrs".into(),
+    }];
     s.apply(id, Edit::AddOcrText { page: 0, words }).unwrap();
     assert_eq!(before, render(&s, id));
     let found = text(&s, id);
@@ -168,7 +182,7 @@ fn annotated_skewed_scan_is_recognized_without_deskew() {
         }),
     )
     .unwrap();
-    let found = s.recognize_text(id, &[], OcrSettings { auto_rotate: false, ..Default::default() }).unwrap();
+    let found = s.recognize_text(id, &[], OcrSettings { rotate_pages: false, ..Default::default() }).unwrap();
     assert!(found[0].deskew_skipped && found[0].correction.deskew == 0.0, "{found:?}");
     assert!(text(&s, id).contains("Straight"), "{:?}", text(&s, id));
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Recognize text"));
@@ -184,16 +198,17 @@ fn scan_correction_handles_all_quarter_turns_and_stale_results() {
     for rotation in [0, 90, 180, 270] {
         let (mut s, id) = scan(sentence, rotation, 0.0);
         let before = s.get(id).unwrap().bytes.clone();
-        let result = s.recognize_text(id, &[], OcrSettings { deskew: false, ..Default::default() }).unwrap();
+        let result = s.recognize_text(id, &[], OcrSettings { straighten_pages: false, ..Default::default() }).unwrap();
         assert_eq!(result[0].correction.rotation, (360 - rotation) % 360, "{result:?}");
         assert!(text(&s, id).to_lowercase().contains("orientation"), "{:?}", result);
         s.undo(id).unwrap();
         assert_eq!(s.get(id).unwrap().bytes, before);
         s.redo(id).unwrap();
         let job = s.ocr_job(id, &[], OcrSettings { skip_text_pages: false, ..Default::default() }).unwrap();
-        let found = job.run(&ocr::engine().unwrap(), |_, _| true);
+        let guard = job.guard.clone();
+        let found = job.run(&ocr::recognizers(&OcrSettings::default()).unwrap(), |_, _| true);
         s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
-        assert!(s.apply_ocr(id, &found).unwrap_err().to_string().contains("changed"));
+        assert!(s.apply_ocr_checked(id, &found, &guard).unwrap_err().contains("changed"));
     }
 }
 
@@ -206,7 +221,7 @@ fn scan_deskew_without_ocr_persists_and_is_undoable() {
     for angle in [-4.0, 3.0] {
         let (mut s, id) = scan(&sentence, 0, angle);
         let before = s.get(id).unwrap().bytes.clone();
-        let result = s.recognize_text(id, &[], OcrSettings { auto_rotate: false, recognize: false, ..Default::default() }).unwrap();
+        let result = s.recognize_text(id, &[], OcrSettings { rotate_pages: false, recognize: false, ..Default::default() }).unwrap();
         assert!((result[0].correction.deskew + angle).abs() < 0.3, "{result:?}");
         assert!(text(&s, id).trim().is_empty());
         let saved = s.save_bytes(id).unwrap();
@@ -230,8 +245,9 @@ fn scan_recognizes_accents_in_requested_languages() {
         ("es", "El español también tiene acentos y una mañana.", "español"),
     ] {
         let (mut s, id) = scan(sentence, 0, 0.0);
-        let found =
-            s.recognize_text(id, &[], OcrSettings { language: language.into(), auto_rotate: false, deskew: false, ..Default::default() }).unwrap();
+        let found = s
+            .recognize_text(id, &[], OcrSettings { language: language.into(), rotate_pages: false, straighten_pages: false, ..Default::default() })
+            .unwrap();
         assert!(text(&s, id).contains(expected), "{language}: {found:?}; extracted {:?}", text(&s, id));
     }
 }
@@ -245,7 +261,10 @@ fn skewed_lines_are_read_straightened_without_deskewing_the_page() {
 Warehouse staff confirmed every pallet before shipping.
 ";
     let (mut s, id) = scan(&sentence.repeat(6), 0, 4.0);
-    let found = s.recognize_text(id, &[], OcrSettings { auto_rotate: false, deskew: false, ..Default::default() }).unwrap();
+    // Lines are straightened by the multilingual recognizer, which reads every language but
+    // English (English is the ocrs model's); German reads this Latin text the same way.
+    let settings = OcrSettings { language: "de".into(), rotate_pages: false, straighten_pages: false, ..Default::default() };
+    let found = s.recognize_text(id, &[], settings).unwrap();
     assert_eq!(found[0].correction.deskew, 0.0, "{found:?}");
     let extracted = text(&s, id);
     // Read from their bounding boxes, these lines each take in their neighbours and nothing
@@ -263,7 +282,7 @@ fn french_ocr_preserves_capitals_cedilla_ligature_and_apostrophes_after_save() {
     }
     let (mut s, id) = scan("ÉTÉ français cœur l'été l’été à Paris.", 0, 0.0);
     let before = render(&s, id);
-    s.recognize_text(id, &[], OcrSettings { language: "fr".into(), auto_rotate: false, deskew: false, ..Default::default() }).unwrap();
+    s.recognize_text(id, &[], OcrSettings { language: "fr".into(), rotate_pages: false, straighten_pages: false, ..Default::default() }).unwrap();
     let saved = s.save_bytes(id).unwrap();
     let reopened = s.open("french.pdf", None, saved, None).unwrap();
     let extracted = text(&s, reopened);
@@ -282,7 +301,7 @@ fn italian_ocr_preserves_all_six_accents_after_save() {
     }
     let (mut s, id) = scan("Lunedì visiterò la città perché è più tranquilla.", 0, 0.0);
     let before = render(&s, id);
-    s.recognize_text(id, &[], OcrSettings { language: "it".into(), auto_rotate: false, deskew: false, ..Default::default() }).unwrap();
+    s.recognize_text(id, &[], OcrSettings { language: "it".into(), rotate_pages: false, straighten_pages: false, ..Default::default() }).unwrap();
     let saved = s.save_bytes(id).unwrap();
     let reopened = s.open("italian.pdf", None, saved, None).unwrap();
     let extracted = text(&s, reopened);
@@ -305,7 +324,15 @@ fn historical_addon_recognition_preserves_pixels_unicode_save_and_undo() {
         .recognize_text(
             id,
             &[],
-            OcrSettings { language: "de".into(), recognizer: ocr::Recognizer::Historical, auto_rotate: false, deskew: false, ..Default::default() },
+            OcrSettings {
+                language: "de".into(),
+                recognizer: ocr::RecognizerChoice::Historical,
+                auto_rotate: false,
+                deskew: false,
+                rotate_pages: false,
+                straighten_pages: false,
+                ..Default::default()
+            },
         )
         .unwrap();
     assert!(found[0].skipped.is_none(), "{found:?}");
@@ -320,12 +347,35 @@ fn historical_addon_recognition_preserves_pixels_unicode_save_and_undo() {
     assert_eq!(s.get(id).unwrap().bytes, original);
 }
 
+/// A historical choice selects the add-on as the job's only engine: never a silent fallback to
+/// the modern engines when the add-on is missing, and never Tesseract's ensemble beside it.
+#[test]
+fn historical_choice_reads_with_the_addon_alone_or_fails_named() {
+    for (choice, id) in [(ocr::RecognizerChoice::Historical, "historical"), (ocr::RecognizerChoice::HistoricalHandwriting, "historical-handwriting")]
+    {
+        for engine in [ocr::EngineChoice::Ocrs, ocr::EngineChoice::Tesseract, ocr::EngineChoice::Auto] {
+            let settings = OcrSettings { recognizer: choice, engine, ..Default::default() };
+            match ocr::recognizers(&settings) {
+                Ok(r) => {
+                    assert!(ocr::historical_engine().is_ok(), "{id}/{engine:?}: an engine without the add-on");
+                    assert_eq!(r.primary.id(), id, "{engine:?}");
+                    assert!(r.secondary.is_none(), "{id}/{engine:?}: the add-on reads alone");
+                }
+                Err(why) => assert!(
+                    ocr::historical_engine().is_err() || !ocr::available(),
+                    "{id}/{engine:?}: the installed add-on and models must load: {why}"
+                ),
+            }
+        }
+    }
+}
+
 #[test]
 fn ocr_recognizer_is_explicit_and_defaults_to_modern() {
-    assert_eq!(OcrSettings::default().recognizer, ocr::Recognizer::Modern);
-    assert_eq!(ocr::Recognizer::from_id("historical").unwrap().id(), "historical");
-    assert_eq!(ocr::Recognizer::from_id("historical-handwriting").unwrap().id(), "historical-handwriting");
-    assert!(ocr::Recognizer::from_id("unknown").is_err());
+    assert_eq!(OcrSettings::default().recognizer, ocr::RecognizerChoice::Modern);
+    assert_eq!(ocr::RecognizerChoice::from_id("historical").unwrap().id(), "historical");
+    assert_eq!(ocr::RecognizerChoice::from_id("historical-handwriting").unwrap().id(), "historical-handwriting");
+    assert!(ocr::RecognizerChoice::from_id("unknown").is_err());
 }
 
 /// Public historical scans stay external: see docs/historical-ocr.md for their
@@ -351,11 +401,13 @@ fn historical_fraktur_and_kurrent_scans_roundtrip_through_the_engine() {
                 id,
                 &[],
                 OcrSettings {
-                    recognizer: ocr::Recognizer::Historical,
+                    recognizer: ocr::RecognizerChoice::Historical,
                     language: "de".into(),
                     dpi: 150.0,
                     auto_rotate: false,
                     deskew: false,
+                    rotate_pages: false,
+                    straighten_pages: false,
                     auto_crop: false,
                     ..Default::default()
                 },
@@ -391,7 +443,15 @@ fn historical_handwriting_full_page_is_searchable_after_save_and_undo() {
         .recognize_text(
             id,
             &[],
-            OcrSettings { recognizer: ocr::Recognizer::HistoricalHandwriting, dpi: 150.0, auto_rotate: false, deskew: false, ..Default::default() },
+            OcrSettings {
+                recognizer: ocr::RecognizerChoice::HistoricalHandwriting,
+                dpi: 150.0,
+                auto_rotate: false,
+                deskew: false,
+                rotate_pages: false,
+                straighten_pages: false,
+                ..Default::default()
+            },
         )
         .unwrap();
     assert!(pages[0].skipped.is_none(), "{pages:?}");
@@ -424,7 +484,8 @@ fn additional_latin_languages_keep_accented_words_after_save() {
     for (language, sentence, expected) in samples {
         let (mut s, id) = scan(sentence, 0, 0.0);
         let before = render(&s, id);
-        s.recognize_text(id, &[], OcrSettings { language: (*language).into(), auto_rotate: false, deskew: false, ..Default::default() }).unwrap();
+        s.recognize_text(id, &[], OcrSettings { language: (*language).into(), rotate_pages: false, straighten_pages: false, ..Default::default() })
+            .unwrap();
         let saved = s.save_bytes(id).unwrap();
         let reopened = s.open("recognized.pdf", None, saved, None).unwrap();
         let extracted = text(&s, reopened);
@@ -445,7 +506,8 @@ fn scan_recognizes_japanese_with_release_fonts() {
         return;
     }
     let (mut s, id) = scan("日本語の文字を認識します。\n今日は良い天気です。", 0, 0.0);
-    let found = s.recognize_text(id, &[], OcrSettings { language: "ja".into(), auto_rotate: false, deskew: false, ..Default::default() }).unwrap();
+    let found =
+        s.recognize_text(id, &[], OcrSettings { language: "ja".into(), rotate_pages: false, straighten_pages: false, ..Default::default() }).unwrap();
     assert!(text(&s, id).contains("日本語"), "{found:?}; extracted {:?}", text(&s, id));
 }
 
@@ -507,7 +569,7 @@ fn corrected_scans_do_not_duplicate_existing_ocr() {
     let bytes = s.create_from_images(&[("framed.png".into(), png.into_inner())]).unwrap();
     let id = s.open("framed.pdf", None, bytes, None).unwrap();
     let settings = OcrSettings { skip_text_pages: false, auto_crop: true, crop_margin: 0.0, ..Default::default() };
-    let initial = s.ocr_job(id, &[], settings.clone()).unwrap().run(&ocr::engine().unwrap(), |_, _| true);
+    let initial = s.ocr_job(id, &[], settings.clone()).unwrap().run(&ocr::recognizers(&OcrSettings::default()).unwrap(), |_, _| true);
     assert!(initial[0].crop.is_some(), "{initial:?}");
     assert_ne!(initial[0].correction.rotation, 0, "{initial:?}");
     assert!(initial[0].correction.deskew.abs() > 0.5, "{initial:?}");
@@ -537,7 +599,14 @@ fn chinese_ocr_text_layer_preserves_scripts_and_punctuation_after_save() {
             id,
             Edit::AddOcrText {
                 page: 0,
-                words: vec![PlacedWord { text: sentence.into(), origin: [20.0, 20.0], across: [150.0, 0.0], up: [0.0, 20.0] }],
+                words: vec![PlacedWord {
+                    text: sentence.into(),
+                    origin: [20.0, 20.0],
+                    across: [150.0, 0.0],
+                    up: [0.0, 20.0],
+                    confidence: None,
+                    source: "ocrs".into(),
+                }],
             },
         )
         .unwrap();
@@ -558,7 +627,7 @@ fn catalan_ocr_keeps_accents_after_save() {
     }
     let (mut s, id) = scan("La llengua catalana és útil per a la ciència i la música.", 0, 0.0);
     let before = render(&s, id);
-    s.recognize_text(id, &[], OcrSettings { language: "ca".into(), auto_rotate: false, deskew: false, ..Default::default() }).unwrap();
+    s.recognize_text(id, &[], OcrSettings { language: "ca".into(), rotate_pages: false, straighten_pages: false, ..Default::default() }).unwrap();
     let saved = s.save_bytes(id).unwrap();
     let reopened = s.open("catalan.pdf", None, saved, None).unwrap();
     let extracted = text(&s, reopened);

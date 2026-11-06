@@ -7,7 +7,7 @@ fn main() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let output = args.next().ok_or("expected screenshot path")?;
     let language = args.next().unwrap_or_else(|| "en".into());
-    let recognizer = pdfcraft_engine::ocr::Recognizer::from_id(&args.next().unwrap_or_else(|| "historical".into()))?;
+    let recognizer = pdfcraft_engine::ocr::RecognizerChoice::from_id(&args.next().unwrap_or_else(|| "historical".into()))?;
     let mut harness = Harness::builder().with_size(egui::vec2(1280.0, 900.0)).build_eframe(|_| {
         let mut app = PdfCraftApp::new();
         let _ = app.set_option("language", &language);
