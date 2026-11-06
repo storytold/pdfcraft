@@ -1480,6 +1480,64 @@ fn data_ops_of_one_event_are_one_datasets_rewrite() {
     assert_eq!(crate::data_of(&doc).unwrap().text_at(&som_to_path("form[0].page1[0].qty[0]")), Some(""));
 }
 
+/// #5337: field-derived writes bind into an industry-schema wrapper, while explicit
+/// data operations continue to use their exact path. Reads must follow the field binding.
+#[test]
+fn a_field_binds_to_its_data_node_inside_a_container_the_template_lacks() {
+    let datasets = r##"<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form1><RootSub><TextField1>ab</TextField1><TextField2>bb</TextField2><TextField3>cc</TextField3></RootSub></form1></xfa:data></xfa:datasets>"##;
+    let xdp = format!(
+        r##"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form1"><field name="TextField1"><ui><textEdit/></ui></field><field name="TextField2"><ui><textEdit/></ui></field></subform></template>{datasets}</xdp:xdp>"##
+    );
+    let path = |segs: &[&str]| segs.iter().map(|s| ((*s).to_string(), 0usize)).collect::<Vec<_>>();
+    let fields =
+        vec![FieldDatum { obj: pdfcraft_cos::ObjRef::new(9000, 0), name: "form1[0].TextField1[0]".into(), data: FieldData::Text("XX".into()) }];
+
+    let mut field_doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+    assert!(write_datasets(&mut field_doc, &fields).unwrap().written);
+    let field_data = crate::data_of(&field_doc).unwrap();
+    assert_eq!(field_data.text_at(&path(&["form1", "RootSub", "TextField1"])), Some("XX"));
+    assert!(field_data.get(&path(&["form1", "TextField1"])).is_none(), "field binding does not add a flat sibling");
+    assert_eq!(field_data.text_at(&path(&["form1", "RootSub", "TextField3"])), Some("cc"));
+    assert_eq!(read_values(&field_doc, &fields), vec![(fields[0].name.clone(), FieldData::Text("XX".into()))]);
+
+    // A script's explicit DataOp path is not a field binding.
+    let mut exact_doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+    write_data_value(&mut exact_doc, &path(&["form1", "TextField1"]), "direct").unwrap();
+    let exact = crate::data_of(&exact_doc).unwrap();
+    assert_eq!(exact.text_at(&path(&["form1", "TextField1"])), Some("direct"));
+    assert_eq!(exact.text_at(&path(&["form1", "RootSub", "TextField1"])), Some("ab"));
+    assert_eq!(exact.text_at(&path(&["form1", "RootSub", "TextField3"])), Some("cc"));
+    assert_eq!(read_values(&exact_doc, &fields), vec![(fields[0].name.clone(), FieldData::Text("direct".into()))]);
+}
+
+/// Ambiguous schema-wrapped values must never be picked arbitrarily.
+#[test]
+fn data_binding_does_not_guess_between_equally_named_descendants() {
+    let path = som_to_path("form1[0].TextField1[0]");
+    let data = crate::data::DataNode {
+        name: "data".into(),
+        children: vec![crate::data::DataNode {
+            name: "form1".into(),
+            children: vec![
+                crate::data::DataNode {
+                    name: "Left".into(),
+                    children: vec![crate::data::DataNode { name: "TextField1".into(), text: "A".into(), ..Default::default() }],
+                    ..Default::default()
+                },
+                crate::data::DataNode {
+                    name: "Right".into(),
+                    children: vec![crate::data::DataNode { name: "TextField1".into(), text: "B".into(), ..Default::default() }],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    assert_eq!(data.field_value_at(&path), None);
+    assert_eq!(data.value_at(&path), None);
+}
+
 #[test]
 fn script_buttons_carry_no_javascript_action_for_other_viewers() {
     let mut doc = Document::open(Arc::new(shell(&scripted_template()))).unwrap();

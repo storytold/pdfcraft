@@ -162,8 +162,8 @@ fn password_dataset_wants(doc: &Document) -> Vec<Want> {
         candidates
             .into_iter()
             .filter_map(|(som, path, default)| {
-                let cur = data.value_at(&path)?;
-                (!cur.is_empty() && cur != default).then_some(Want { som, path, text: default, ensure: false })
+                let cur = data.field_value_at(&path)?;
+                (!cur.is_empty() && cur != default).then_some(Want { som, path, text: default, ensure: false, bind_descendant: true })
             })
             .collect()
     })

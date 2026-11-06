@@ -272,6 +272,23 @@ fn merge(text: &str, within: Within, op: Op, warnings: &mut Vec<String>) -> Merg
 }
 
 /// The edits that put `wants` into the `data` element.
+/// The one descendant value element of `node` named `name` (a node with no element children), or
+/// `None` when there is none or more than one. Used to bind a field to a data node the data wraps
+/// in extra containers (XFA data independence, #5337); ambiguity falls back to adding a node.
+fn unique_value_descendant<'a, 'input>(node: roxmltree::Node<'a, 'input>, name: &str) -> Option<roxmltree::Node<'a, 'input>> {
+    let mut found = None;
+    for d in node.descendants() {
+        if d.id() == node.id() || !d.is_element() || d.tag_name().name() != name || d.children().any(|c| c.is_element()) {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = Some(d);
+    }
+    found
+}
+
 fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Vec<Edit>, warnings: &mut Vec<String>) {
     // Element children by local name, per element visited (built once each).
     let mut index: HashMap<roxmltree::NodeId, HashMap<String, Vec<roxmltree::NodeId>>> = HashMap::new();
@@ -304,7 +321,24 @@ fn merge_values(src: &str, data: roxmltree::Node, wants: &[Want], edits: &mut Ve
                 }
             }
         }
-        if depth == w.path.len() {
+        // XFA data independence: a field whose data node the data wraps in containers the template
+        // does not have (an industry-schema group, say) still binds to that existing node rather
+        // than a fresh flat one being added beside it (#5337). The fallback is deliberately narrow:
+        // only a single unambiguous value node below the deepest matched element, and only when the
+        // leaf has no direct sibling of its name there, so a form whose data matches the template
+        // (every current case) is untouched.
+        let leaf = w.path.get(depth..).filter(|r| r.len() == 1 && r[0].1 == 0);
+        let bound = if depth == w.path.len() {
+            Some(node)
+        } else if w.bind_descendant
+            && have == 0
+            && let Some(r) = leaf
+        {
+            unique_value_descendant(node, &r[0].0)
+        } else {
+            None
+        };
+        if let Some(node) = bound {
             // The data node exists: give it the value, unless it already holds it. A node
             // only wanted to exist (a row instance) is left as it is.
             if w.ensure && w.text.is_empty() {
