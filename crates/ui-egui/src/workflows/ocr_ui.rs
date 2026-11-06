@@ -11,6 +11,8 @@ use pdfcraft_engine::ocr::{EngineChoice, LANGUAGES, MergeStrategy, OcrPage, OcrS
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
 
+mod automatic;
+
 /// Which pages to read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrPages {
@@ -408,6 +410,7 @@ impl PdfCraftApp {
     /// boxes over it do not count as text, but real page text does, and such a page (a flyer with a
     /// background picture) is left alone, and is judged again only when the document changes. It
     /// is one undoable step, "Recognize text", and is not run again for that page after Undo.
+    /// Implausible results are left unwritten, with a notice pointing to explicit recognition.
     pub(crate) fn auto_ocr_scanned_page(&mut self) {
         let Some(scan) = self.scan_to_read() else { return };
         // the engine this run will use, not always the built-in one
@@ -726,6 +729,18 @@ impl PdfCraftApp {
             self.ocr_verify.load(doc, guard, found);
             self.ocr_verify.open = true;
             self.notify_tr("Review the recognition, then Accept to write the editable document");
+            return;
+        }
+        // Automatic Edit must not write an implausible recognition into an untouched picture.
+        // The page is recorded in auto_ocr_tried before starting the run, so this notice is
+        // shown once per attempted page. No alphanumeric content means nothing to judge; the
+        // existing empty-result path stays silent. Explicit recognition keeps every result as before.
+        if automatic
+            && found.iter().any(|p| p.skipped.is_none())
+            && automatic::text_share(found.iter().filter(|p| p.skipped.is_none()).flat_map(|p| p.words.iter().map(|w| w.text.as_str())))
+                .is_some_and(|share| share < automatic::MIN_TEXT_SHARE)
+        {
+            self.notify_tr("Automatic text recognition was skipped for this page. To recognize it, use Recognize text in Scan & OCR.");
             return;
         }
         let read = found.iter().filter(|p| p.skipped.is_none()).count();

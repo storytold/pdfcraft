@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **2026-11-06, M10 / #6311:** automatic Edit OCR leaves implausible text results unwritten, with no dirty flag or undo step and a once-per-page notice for explicit recognition. The numeric-aware text-share gate is calibrated on synthetic images and scans; short-word-only, short-decimal and default sideways recognition remain limited. Empty recognition stays silent; explicit Scan & OCR recognition is unchanged. Estimates unchanged.
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
