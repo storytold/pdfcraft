@@ -163,7 +163,7 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
         let current = f.value.first().cloned().unwrap_or_default();
         let v = if let Some(js) = &f.actions.scripts.calculate {
             let r = scripts.run(FieldEvent::Calculate, js, &f, &current, &all);
-            scripting::apply_changes(doc, &r.changes, &f.name)?;
+            scripting::apply_changes(doc, &r.changes, &f.name, scripts)?;
             if !r.changes.is_empty() {
                 all = fields(doc);
             }
@@ -323,6 +323,11 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
         (FieldKind::Signature, _) => invalid(format!("{:?} is a signature field; sign it with Fill & Sign or a digital ID", f.name)),
         (kind, v) => invalid(format!("{:?} is a {kind:?} field and can't take {v:?}", f.name)),
     }
+}
+
+/// Redraw a calculated value without running input validation or calculation again.
+pub(crate) fn redraw_calculated_value(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Scripts) -> Result<(), FormError> {
+    redraw(doc, f, values, scripts)
 }
 
 /// A list box's first visible row (`/TI`) before and after scrolling so the `picked` positions of

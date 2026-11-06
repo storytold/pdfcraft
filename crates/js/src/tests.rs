@@ -24,6 +24,59 @@ fn go(script: &str, event: &Event) -> Outcome {
 }
 
 #[test]
+fn calculate_now_reports_errors_and_continues() {
+    let calculations =
+        vec![("bad".into(), "getField('price').value = 'partial'; throw new Error('broken');".into()), ("good".into(), "event.value = 'ok';".into())];
+    let state = Arc::new(vec![
+        FieldState::new("bad", FieldType::Text, vec![]),
+        FieldState::new("good", FieldType::Text, vec![]),
+        FieldState::new("price", FieldType::Text, vec![]),
+    ]);
+    let outcome = run_shared_calculations(
+        "calculateNow(); console.println('continued');",
+        &Event::doc("Console"),
+        &doc(),
+        state,
+        &[],
+        &calculations,
+        Limits::default(),
+    );
+    assert_eq!(outcome.error, None);
+    assert!(outcome.console.iter().any(|line| line.contains("calculation script for bad failed: Error: broken")), "{outcome:?}");
+    assert!(outcome.console.iter().any(|line| line == "continued"), "{outcome:?}");
+    assert_eq!(outcome.changed.iter().find(|field| field.name == "good").unwrap().value, ["ok"]);
+    assert!(outcome.changed.iter().all(|field| field.name != "price"), "{outcome:?}");
+    assert_eq!(outcome.formatted, BTreeSet::from(["good".into()]));
+}
+
+#[test]
+fn calculate_now_sets_read_only_fields_and_handles_hundreds() {
+    let mut states = Vec::new();
+    let mut calculations = Vec::new();
+    for index in 0..300 {
+        let name = format!("field{index}");
+        let mut state = FieldState::new(name.clone(), FieldType::Text, vec![]);
+        state.readonly = true;
+        states.push(state);
+        calculations.push((name, "event.value = 'calculated';".into()));
+    }
+    let state = Arc::new(states);
+    let outcome =
+        run_shared_calculations("calculateNow();", &Event::doc("Console"), &doc(), Arc::clone(&state), &[], &calculations, Limits::default());
+    assert_eq!(outcome.error, None, "{outcome:?}");
+    assert_eq!(outcome.changed.len(), 300);
+    assert!(outcome.changed.iter().all(|field| field.value == ["calculated"] && field.readonly));
+}
+
+#[test]
+fn caught_calculate_now_recursion_has_a_step_limit() {
+    let calculations: Vec<_> = (0..600).map(|index| (format!("loop{index}"), "try { calculateNow(); } catch (e) {}".into())).collect();
+    let state = Arc::new(calculations.iter().map(|(name, _)| FieldState::new(name.clone(), FieldType::Text, vec![])).collect());
+    let outcome = run_shared_calculations("calculateNow();", &Event::doc("Console"), &doc(), state, &[], &calculations, Limits::default());
+    assert!(outcome.error.as_deref().is_some_and(|error| error.contains("calculateNow evaluation limit exceeded")), "{outcome:?}");
+}
+
+#[test]
 fn calculate_scripts_read_fields_and_set_the_value() {
     let o = go("event.value = this.getField('price').value * getField('qty').value;", &Event::field("Calculate", "total", ""));
     assert_eq!(o.error, None);
@@ -357,10 +410,14 @@ fn app_alert_titles_are_clipped_and_charged() {
     let mut h = Host {
         fields: Arc::new(Vec::new()),
         changed: BTreeSet::new(),
+        formatted: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
         requests: Vec::new(),
         doc: doc(),
+        calculations: Arc::new(Vec::new()),
+        calculate_depth: 0,
+        calculate_steps: 0,
         kept: 0,
         dropped: 0,
     };

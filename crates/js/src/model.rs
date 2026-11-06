@@ -278,6 +278,8 @@ pub struct Outcome {
     pub change: String,
     /// Fields whose value or properties the script changed, as they are now.
     pub changed: Vec<FieldState>,
+    /// Fields updated by Calculate scripts; their Format script must redraw the appearance.
+    pub formatted: std::collections::BTreeSet<String>,
     /// The messages the script showed, in order.
     pub alerts: Vec<Message>,
     pub console: Vec<String>,

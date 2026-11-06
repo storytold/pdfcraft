@@ -449,6 +449,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             let title = std::path::Path::new(name).file_stem().map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned());
             let outcome = pdfcraft_organize::insert_file_pages(doc, &src, &title, &pages, *at, *field_conflicts)?;
             cx.renamed_fields = outcome.renamed_fields;
+            if let Some(js) = cx.js.as_mut() {
+                js.invalidate_calculations(doc);
+            }
         }
         Edit::AddBookmark { parent, index, title, page, left, top } => {
             pdfcraft_organize::add_bookmark_at(doc, parent, *index, title, *page, *left, *top)?;
@@ -664,25 +667,49 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::AddField { page, rect, kind, name } => {
             pdfcraft_forms::add_field(doc, *page, *rect, kind, name.as_deref())?;
+            if let Some(js) = cx.js.as_mut() {
+                js.invalidate_calculations(doc);
+            }
         }
         Edit::SetFieldProps { name, props } => {
             pdfcraft_forms::set_props(doc, name, props)?;
+            if let Some(js) = cx.js.as_mut() {
+                js.invalidate_calculations(doc);
+            }
         }
         Edit::DuplicateField { name, pages } => {
             if pdfcraft_forms::duplicate_field(doc, name, pages)? == 0 {
                 return Err(EditError::Form(pdfcraft_forms::FormError::Invalid(format!("{name} is already on those pages"))));
             }
+            if let Some(js) = cx.js.as_mut() {
+                js.invalidate_calculations(doc);
+            }
         }
-        Edit::DeleteField { name } => pdfcraft_forms::delete_field(doc, name)?,
-        Edit::DeleteWidget { name, widget } => pdfcraft_forms::delete_widget(doc, name, *widget)?,
+        Edit::DeleteField { name } => {
+            pdfcraft_forms::delete_field(doc, name)?;
+            if let Some(js) = cx.js.as_mut() {
+                js.invalidate_calculations(doc);
+            }
+        }
+        Edit::DeleteWidget { name, widget } => {
+            pdfcraft_forms::delete_widget(doc, name, *widget)?;
+            if let Some(js) = cx.js.as_mut() {
+                js.invalidate_calculations(doc);
+            }
+        }
         Edit::SetTabOrder { pages, order } => pdfcraft_forms::set_tab_order(doc, pages, *order)?,
         Edit::MoveInTabOrder { name, earlier } => pdfcraft_forms::move_in_tab_order(doc, name, *earlier)?,
         // As after a script edit: the values the new order gives show at once.
         Edit::SetCalculationOrder { names } => {
             pdfcraft_forms::set_calculation_order(doc, names)?;
             match cx.js.as_mut() {
-                Some(js) => pdfcraft_forms::recalculate_with(doc, js)?,
-                None => pdfcraft_forms::recalculate(doc)?,
+                Some(js) => {
+                    js.invalidate_calculations(doc);
+                    pdfcraft_forms::recalculate_with(doc, js)?;
+                }
+                None => {
+                    pdfcraft_forms::recalculate(doc)?;
+                }
             };
         }
         Edit::SetInitialView(v) => pdfcraft_organize::set_initial_view(doc, v)?,
@@ -708,8 +735,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::SetFieldScript { name, event, script } => {
             pdfcraft_forms::set_field_script(doc, name, event, script.as_deref())?;
             match cx.js.as_mut() {
-                Some(js) => pdfcraft_forms::recalculate_with(doc, js)?,
-                None => pdfcraft_forms::recalculate(doc)?,
+                Some(js) => {
+                    js.invalidate_calculations(doc);
+                    pdfcraft_forms::recalculate_with(doc, js)?;
+                }
+                None => {
+                    pdfcraft_forms::recalculate(doc)?;
+                }
             };
         }
         Edit::ConvertPdfA { level } => {

@@ -127,7 +127,11 @@ fn field_state_with_display(f: &Field, display: i32) -> pdfcraft_js::FieldState 
 }
 
 /// The changes a script made, against the fields as they were.
-fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]) -> Vec<FieldChange> {
+fn changes(
+    before: &[pdfcraft_js::FieldState],
+    after: &[pdfcraft_js::FieldState],
+    formatted: &std::collections::BTreeSet<String>,
+) -> Vec<FieldChange> {
     if after.is_empty() {
         return Vec::new();
     }
@@ -144,6 +148,7 @@ fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]
             let c = FieldChange {
                 name: a.name.clone(),
                 value: (a.value != b.value).then(|| a.value.clone()),
+                formatted: a.value != b.value && formatted.contains(&a.name),
                 read_only: (a.readonly != b.readonly).then_some(a.readonly),
                 required: (a.required != b.required).then_some(a.required),
                 display: (a.display != b.display).then_some(a.display),
@@ -165,6 +170,7 @@ pub struct JsRunner {
     // otherwise reparse every widget for every calculation. Values/flags still come from
     // the live `fields` snapshot on each call. A new edit gets a new runner and cache.
     displays: std::collections::HashMap<pdfcraft_cos::ObjRef, i32>,
+    calculations: Option<std::sync::Arc<Vec<(String, String)>>>,
 }
 
 impl JsRunner {
@@ -180,8 +186,61 @@ impl JsRunner {
         // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
         let xfa_active = xfa && pdfcraft_xfa::existing_layout(cos).is_some();
         let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
-        JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new() }
+        JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new(), calculations: None }
     }
+
+    fn calculations(&mut self, fields: &[Field]) -> std::sync::Arc<Vec<(String, String)>> {
+        if let Some(calculations) = &self.calculations {
+            return std::sync::Arc::clone(calculations);
+        }
+        let calculations = std::sync::Arc::new(calculation_scripts(&self.cos, fields));
+        self.calculations = Some(std::sync::Arc::clone(&calculations));
+        calculations
+    }
+
+    pub(crate) fn invalidate_calculations(&mut self, cos: &pdfcraft_cos::Document) {
+        self.cos = cos.clone();
+        self.displays.clear();
+        self.calculations = None;
+    }
+}
+
+fn calculation_scripts(cos: &pdfcraft_cos::Document, fields: &[Field]) -> Vec<(String, String)> {
+    #[cfg(test)]
+    CALCULATION_SCRIPT_BUILDS.with(|calls| calls.set(calls.get().saturating_add(1)));
+    pdfcraft_forms::calculation_order(cos, fields)
+        .fields
+        .iter()
+        .filter_map(|ordered| {
+            let field = fields.iter().find(|f| f.name == ordered.name)?;
+            let script = field.actions.scripts.calculate.clone().or_else(|| {
+                let source = pdfcraft_forms::af::calculate_js(&field.actions.calculate)?;
+                Some(match &field.actions.calculate {
+                    pdfcraft_forms::af::Calculate::Simple { .. } => format!("event.value = {source}"),
+                    _ => source,
+                })
+            })?;
+            Some((field.name.clone(), script))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CALCULATION_SCRIPT_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn calls_calculate_now(script: &str, doc_scripts: &[String]) -> bool {
+    script.contains("calculateNow") || doc_scripts.iter().any(|source| source.contains("calculateNow"))
+}
+
+fn calculations_for_script(
+    cos: &pdfcraft_cos::Document,
+    fields: &[Field],
+    script: &str,
+    doc_scripts: &[String],
+) -> std::sync::Arc<Vec<(String, String)>> {
+    if calls_calculate_now(script, doc_scripts) { std::sync::Arc::new(calculation_scripts(cos, fields)) } else { std::sync::Arc::new(Vec::new()) }
 }
 
 /// The Info dictionary as `this.info` keys (lower-case).
@@ -229,7 +288,16 @@ impl JsRunner {
             .collect();
         let states = std::sync::Arc::new(states);
         let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
-        let o = pdfcraft_js::run_shared(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default());
+        let calculations = if calls_calculate_now(script, &self.doc_scripts) { self.calculations(fields) } else { std::sync::Arc::new(Vec::new()) };
+        let o = pdfcraft_js::run_shared_calculations_shared(
+            script,
+            &ev,
+            &self.doc,
+            std::sync::Arc::clone(&states),
+            &self.doc_scripts,
+            &calculations,
+            Limits::default(),
+        );
         if log {
             self.output.absorb(&o);
         }
@@ -239,7 +307,7 @@ impl JsRunner {
         Some(ScriptResult {
             rc: o.rc,
             value: o.value.clone(),
-            changes: changes(&states, &o.changed),
+            changes: changes(&states, &o.changed, &o.formatted),
             message: (!o.rc).then(|| o.alerts.last().map(|m| m.text.clone())).flatten(),
         })
     }
@@ -310,13 +378,22 @@ impl Session {
         }
         let runner = JsRunner::new(&cos, &doc.name);
         let fields = pdfcraft_forms::fields(&cos);
-        let states: Vec<_> = fields.iter().map(|f| field_state(&cos, f)).collect();
+        let states = std::sync::Arc::new(fields.iter().map(|f| field_state(&cos, f)).collect::<Vec<_>>());
         let event = match target {
             Some(t) => pdfcraft_js::Event { will_commit: false, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
             None => pdfcraft_js::Event::doc("Console"),
         };
-        let mut o = pdfcraft_js::run(script, &event, &runner.doc, &states, &runner.doc_scripts, Limits::default());
-        let changes = changes(&states, &o.changed);
+        let calculations = calculations_for_script(&cos, &fields, script, &runner.doc_scripts);
+        let mut o = pdfcraft_js::run_shared_calculations_shared(
+            script,
+            &event,
+            &runner.doc,
+            std::sync::Arc::clone(&states),
+            &runner.doc_scripts,
+            &calculations,
+            Limits::default(),
+        );
+        let changes = changes(&states, &o.changed, &o.formatted);
         let resets: Vec<Vec<String>> = o
             .requests
             .iter()
@@ -542,8 +619,9 @@ mod review_tests {
         second.value = vec!["second".into()];
         second.display = pdfcraft_js::DISPLAY_HIDDEN;
         let before = vec![first.clone(), second.clone()];
-        assert!(changes(&before, std::slice::from_ref(&first)).is_empty());
-        let actual = changes(&before, std::slice::from_ref(&second));
+        let formatted = std::collections::BTreeSet::new();
+        assert!(changes(&before, std::slice::from_ref(&first), &formatted).is_empty());
+        let actual = changes(&before, std::slice::from_ref(&second), &formatted);
         assert_eq!(
             actual,
             vec![FieldChange {
@@ -565,12 +643,12 @@ mod review_tests {
         assert_eq!(outcome.value, "first");
         assert_eq!(outcome.changed.len(), 1);
         assert_eq!(
-            changes(&before, &outcome.changed),
+            changes(&before, &outcome.changed, &outcome.formatted),
             vec![FieldChange { name: "duplicate".into(), value: Some(vec!["updated".into()]), ..Default::default() }]
         );
-        assert!(changes(&before, &[]).is_empty());
+        assert!(changes(&before, &[], &formatted).is_empty());
         let mut missing = first;
         missing.name = "missing".into();
-        assert!(changes(&before, &[missing]).is_empty());
+        assert!(changes(&before, &[missing], &formatted).is_empty());
     }
 }
