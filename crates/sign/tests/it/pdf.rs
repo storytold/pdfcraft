@@ -3018,3 +3018,50 @@ fn signing_a_field_with_a_null_value_after_another_signature_keeps_the_first_val
         all.iter().map(|s| (&s.status, &s.modification)).collect::<Vec<_>>()
     );
 }
+/// A trusted certificate that isn't issued for time stamping proves who signed, not when. A forged
+/// copy with its name, key and dates, adding the time-stamping purpose, must not change that.
+/// (Test by tomcatt, from PR #6277 review.)
+#[test]
+fn a_forged_copy_does_not_make_a_trusted_certificate_a_timestamp_authority() {
+    const EMAIL: &str = "1.3.6.1.5.5.7.3.4";
+    let time = Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 };
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
+
+    // Control: the trusted certificate itself stamps, and its time is not trusted.
+    let plain = tsa_id_with(&[EMAIL]);
+    let trust = TrustStore { certs: vec![anchor.clone(), plain.certificate.clone()] };
+    let tsa = TestTsa { id: plain, time };
+    let signed = pdfcraft_sign::sign_with_timestamp(&open(&fixture()), &id, &opts(), &tsa).unwrap();
+    let s = signatures(&open(&signed), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.timestamp_time, None, "control, no forged copy: {:?}", s.details);
+
+    // The forgery: the same name, key and validity, with timeStamping, signed by a stranger.
+    let DigitalId { key, certificate: trusted, .. } = tsa_id_with(&[EMAIL]);
+    let nobody = pdfcraft_sign::PrivateKey::generate_p256().unwrap();
+    let alg = nobody.preferred_digest();
+    let sig_alg = nobody.signature_algorithm(alg);
+    let name = Name::build("Test TSA", "", "PdfCraft Tests", "", "US");
+    let from = Time { year: 2026, month: 10, day: 2, hour: 0, minute: 0, second: 0 };
+    let until = Time { year: 2036, ..from };
+    let eku = der::seq(&[&der::oid("2.5.29.37"), &der::boolean(true), &der::octets(&der::seq(&[&der::oid("1.3.6.1.5.5.7.3.8")]))]);
+    let tbs = der::seq(&[
+        &der::explicit(0, &der::int(2)),
+        &der::uint(&[0x32]),
+        &sig_alg,
+        &name.raw,
+        &der::seq(&[&from.encode(), &until.encode()]),
+        &name.raw,
+        &key.public_key().spki(),
+        &der::explicit(3, &der::seq(&[&eku])),
+    ]);
+    let signature = nobody.sign(alg, &tbs).unwrap();
+    let forged = Certificate::parse(&der::seq(&[&tbs, &sig_alg, &der::bit_string(&signature)])).unwrap();
+    assert_ne!(forged.raw, trusted.raw);
+
+    let trust = TrustStore { certs: vec![anchor, trusted] };
+    let tsa = TestTsa { id: DigitalId { key, certificate: forged, chain: Vec::new(), friendly_name: None }, time };
+    let signed = pdfcraft_sign::sign_with_timestamp(&open(&fixture()), &id, &opts(), &tsa).unwrap();
+    let s = signatures(&open(&signed), &signed, &trust).into_iter().find(|s| s.signed).unwrap();
+    assert_eq!(s.timestamp_time, None, "a forged copy minted trusted time: {:?}", s.details);
+}

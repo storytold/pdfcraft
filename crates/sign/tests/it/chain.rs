@@ -388,19 +388,19 @@ fn chain_end(leaf: &Certificate, pool: &[Certificate]) -> Option<Vec<u8>> {
     build_chain(leaf, pool, None).last().map(|c| c.raw.clone())
 }
 
-/// Trusting a root trusts its name and key, however the certificate carrying them arrived
-/// (RFC 5280 §6.1.1(d), issue #6221). A timestamp authority's token can carry a copy of its root
-/// that an older root cross-signed; the chain built from the document's certificates reaches that
-/// copy first, and it is still the trusted root.
+/// Issue #6221: a timestamp authority's token can carry a copy of its root that an older
+/// root cross-signed. The chain builder, given the document's certificates alone, ends at
+/// that copy — but validation pools the trust store first, so the builder reaches the
+/// trusted certificate itself and the chain anchors there, judged by its own fields.
 #[test]
-fn a_cross_signed_copy_of_a_trusted_root_is_that_root() {
+fn a_chain_through_a_cross_signed_copy_reaches_the_trusted_root() {
     let g4 = issue("Root G4", None, FOREVER, &ca_extensions());
     let older = issue("Older Root", None, FOREVER, &ca_extensions());
     let cross = certify(&g4.name, &g4.key, (&older.key, &older.name), 99, FOREVER, &ca_extensions());
     assert_ne!(cross.raw, g4.cert.raw, "another certificate: issuer, serial and signature differ");
     let i = ca("Issuing CA", &g4, None);
-    // The scenario: with the document's certificates ahead of the trust store, as validation pools
-    // them, the chain ends at the cross-signed copy, not at the trusted certificate.
+    // The builder alone, given the document's order, ends at the cross-signed copy;
+    // validation's pool order is what brings the trusted certificate itself into reach.
     let leaf = end_entity("Timestamp Signer", &i);
     let pool = [i.cert.clone(), cross.clone(), g4.cert.clone()];
     assert_eq!(chain_end(&leaf.cert, &pool), Some(cross.raw.clone()));
@@ -412,10 +412,11 @@ fn a_cross_signed_copy_of_a_trusted_root_is_that_root() {
 }
 
 /// A copy of the anchor that drops a critical extension the anchor carries (here name
-/// constraints, which PdfCraft does not process) does not stand in for the anchor: the
-/// restriction is part of what the user trusted.
+/// constraints, which PdfCraft does not process) is never judged as the anchor at all:
+/// validation pools the trust store first, so the chain ends at the trusted certificate
+/// itself, restrictions intact.
 #[test]
-fn a_copy_that_drops_the_anchors_critical_extension_is_not_the_anchor() {
+fn a_chain_ends_at_the_trusted_root_not_at_a_copy_that_dropped_its_restrictions() {
     let name_constraints = ext("2.5.29.30", &der::seq(&[]));
     let constrained = issue("Constrained Root", None, FOREVER, &[basic_constraints(true, None), key_usage(KEY_CERT_SIGN), name_constraints]);
     let i = ca("Issuing CA", &constrained, None);
@@ -424,7 +425,7 @@ fn a_copy_that_drops_the_anchors_critical_extension_is_not_the_anchor() {
     let older = issue("Older Root", None, FOREVER, &ca_extensions());
     let copy = certify(&constrained.name, &constrained.key, (&older.key, &older.name), 96, FOREVER, &ca_extensions());
     let (status, details) = verdict(end_entity("Honest Signer", &i), vec![i.cert.clone(), copy], &constrained.cert);
-    assert_eq!(status, Status::Unknown, "a copy without the anchor's name constraints: {details:?}");
+    assert_eq!(status, Status::Valid, "the chain anchors at the trusted root itself, not the copy: {details:?}");
 }
 
 /// A certificate with a trusted root's name and another key is an impostor, however it got there.
