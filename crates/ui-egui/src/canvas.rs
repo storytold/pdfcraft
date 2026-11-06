@@ -551,6 +551,8 @@ pub struct DocView {
     tiles: HashMap<(usize, u64, u32, u32), TextureHandle>,
     /// Text layers, extracted in the background on demand (selection, find, copy).
     pub(crate) texts: HashMap<usize, Arc<PageText>>,
+    /// The current page's text run, reused between accessibility tree rebuilds.
+    accessibility_text_cache: Option<(usize, String, Vec<u8>)>,
     pub(crate) text_failed: HashSet<usize>,
     pub find: Option<Find>,
     selection: Option<Selection>,
@@ -970,6 +972,7 @@ impl DocView {
             grayscale: false,
             tiles: HashMap::new(),
             texts: HashMap::new(),
+            accessibility_text_cache: None,
             text_failed: HashSet::new(),
             find: None,
             selection: None,
@@ -1870,6 +1873,7 @@ fn draw_pages(
     // The row as it is now: in continuous view the current page may have changed above.
     let row_on_screen =
         shown_row(view, env.rects).iter().filter_map(|&i| env.rects.get(i)).map(|r| r.translate(origin.to_vec2())).reduce(Rect::union);
+    expose_page_text(ui, resp.id, view);
     resp.context_menu(|ui| {
         let is_crop_over_image = tool == QuickTool::EditText
             && view.image_selection.clone().is_some_and(|sel| {
@@ -2397,7 +2401,14 @@ fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: Page
     // of the document needs no more: shown pages highlight as their text comes, and Copy reads
     // the rest, as text far away is let go to bound memory.)
     let need_text = |p: &usize| !view.texts.contains_key(p) && !view.text_failed.contains(p);
-    let mut text_pages: Vec<usize> = if hand { Vec::new() } else { visible_now.iter().copied().filter(need_text).collect() };
+    // While panning with the Hand tool only the current page's text is wanted, and only while an
+    // assistive technology is connected: a screen reader reads it.
+    let reading_aloud = ui.ctx().accesskit_node_builder(egui::accesskit_root_id(), |_| ()).is_some();
+    let mut text_pages: Vec<usize> = if hand {
+        reading_aloud.then_some(cur).filter(need_text).into_iter().collect()
+    } else {
+        visible_now.iter().copied().filter(need_text).collect()
+    };
     if view.find.as_ref().is_some_and(|f| !f.case_query.trim().is_empty()) {
         let n = info.pages.len();
         let rest: Vec<usize> = (0..n).map(|k| (cur + k) % n).filter(need_text).filter(|p| !text_pages.contains(p)).collect();
@@ -2905,6 +2916,27 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
         }
     }
     scroll
+}
+
+/// Gives the page view an accessibility node holding the current page's text, so a screen reader
+/// can read it: the page itself is only pixels. Page structure and the other pages are not exposed yet.
+fn expose_page_text(ui: &mut egui::Ui, id: egui::Id, view: &mut DocView) {
+    let page = view.current;
+    let n = view.page_count.to_string();
+    let label = crate::i18n::fmt(tl!("Page {p} of {n}"), &[("p", &page.saturating_add(1).to_string()), ("n", &n)]);
+    let Some((text, lengths)) = view.accessibility_text(page) else { return };
+    let ctx = ui.ctx().clone();
+    ctx.accesskit_node_builder(id, |node| {
+        node.set_role(egui::Role::Document);
+        node.set_label(label);
+    });
+    // A document exposes text ranges through a text run child; a value on the document is not read as text.
+    let run = ui.new_child(egui::UiBuilder::new().id_salt("page_text").accessibility_parent(id));
+    ctx.accesskit_node_builder(run.unique_id(), |node| {
+        node.set_role(egui::Role::TextRun);
+        node.set_character_lengths(lengths.to_vec());
+        node.set_value(text.to_owned());
+    });
 }
 
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
