@@ -71,6 +71,7 @@ mod recent_files;
 mod recovery;
 mod redact;
 mod reload;
+mod remove_signature;
 mod scan_clean;
 mod script_noop;
 mod scroll_prefetch;
