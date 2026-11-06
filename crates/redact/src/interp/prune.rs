@@ -1,6 +1,6 @@
 use super::{
-    CosError, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope, is_vertical, num,
-    overlaps, page_streams, res_dict,
+    CosError, Dict, Document, GlyphInk, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope,
+    is_vertical, num, overlaps, page_streams, res_dict,
 };
 
 /// Drop every `replaced` resource name whose `Do` no longer appears in the rewritten `content`,
@@ -328,16 +328,15 @@ pub(super) fn prune_form_resources(doc: &Document, res: &mut Dict, content: &[Ve
     Ok(())
 }
 
-/// The font, writing direction and size an ExtGState's `/Font [font size]` entry sets, as `Tf`
-/// would (ISO 32000-2 §8.4.5); `None` when `name` sets no font. The metrics are cached with the
-/// fonts `Tf` names, under a key no resource name can take (a name cannot hold a null byte).
-pub(super) fn extgstate_font(
-    doc: &Document,
-    scope: &mut Scope<'_>,
-    ext_gstates: &Dict,
-    name: &[u8],
-    fallback: &Rc<Metrics>,
-) -> Option<(Rc<Metrics>, bool, f64)> {
+/// What an ExtGState's `/Font` sets: the font, its ink reader, whether it writes vertically, and
+/// the size.
+pub(super) type FontSetting = (Rc<Metrics>, Option<Rc<GlyphInk>>, bool, f64);
+
+/// The font, its ink reader, writing direction and size an ExtGState's `/Font [font size]` entry
+/// sets, as `Tf` would (ISO 32000-2 §8.4.5); `None` when `name` sets no font. The metrics and
+/// reader are cached with the fonts `Tf` names, under a key no resource name can take (a name
+/// cannot hold a null byte).
+pub(super) fn extgstate_font(doc: &Document, scope: &mut Scope<'_>, ext_gstates: &Dict, name: &[u8], fallback: &Rc<Metrics>) -> Option<FontSetting> {
     let state = doc.resolve(ext_gstates.get(name)?).as_dict().cloned()?;
     let entry = doc.resolve(state.get(b"Font")?).as_array().cloned()?;
     let [font, size] = entry.as_slice() else { return None };
@@ -349,9 +348,10 @@ pub(super) fn extgstate_font(
         Some(m) => m.clone(),
         None => {
             let m = font_dict.as_ref().map(|d| Rc::new(Metrics::from_dict(doc, d))).unwrap_or_else(|| fallback.clone());
-            scope.fonts.insert(key, m.clone());
+            scope.fonts.insert(key.clone(), m.clone());
             m
         }
     };
-    Some((metrics, vertical, size))
+    let ink = scope.glyph_ink(doc, &key, font_dict.as_ref(), &metrics);
+    Some((metrics, ink, vertical, size))
 }
