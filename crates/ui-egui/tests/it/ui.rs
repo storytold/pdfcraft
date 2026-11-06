@@ -548,6 +548,20 @@ fn read_mode_in_full_screen_keeps_select_and_gives_back_the_default_tool() {
     h.state_mut().apply_full_screen(false);
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Hand, "the reading tool comes back, not the highlighter");
+
+    // Hand picked during full screen: Read mode still gives Select there, so a click turns the page.
+    h.state_mut().run_command("view.read_mode");
+    h.run_steps(2);
+    assert_eq!(h.state().mode, Mode::AllTools);
+    h.state_mut().apply_full_screen(true);
+    h.run_steps(2);
+    h.state_mut().set_option("quick", "hand").unwrap();
+    h.state_mut().run_command("view.read_mode");
+    h.run_steps(3);
+    assert_eq!((h.state().mode, h.state().quick_tool), (Mode::Read, QuickTool::Select), "Hand picked in full screen");
+    h.state_mut().apply_full_screen(false);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
 }
 
 /// A pane closed in Read mode stays closed on the way out: leaving Read mode doesn't bring back the

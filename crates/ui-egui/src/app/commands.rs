@@ -113,10 +113,12 @@ impl PdfCraftApp {
 
     /// Put the tool in use down to the default tool (Select, or Hand when the user reads by
     /// dragging the page, #6235), as Read mode does. In full screen a click turns the page, so
-    /// Select stays active there and the default tool is the one given back when it ends.
+    /// Select is the tool there, whatever was picked since full screen began, and the default
+    /// tool is the one given back when it ends.
     fn put_tool_down_for_reading(&mut self) {
         let tool = self.default_tool.quick_tool();
         if self.full_screen {
+            self.quick_tool = QuickTool::Select;
             self.full_screen_tool = Some(tool);
         } else {
             self.quick_tool = tool;
