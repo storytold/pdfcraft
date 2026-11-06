@@ -86,6 +86,10 @@ rustPlatform.buildRustPackage {
     makeWrapper
   ];
 
+  postPatch = ''
+    sed -i -E '/^(egui_demo_lib|egui_inspection|egui_system_font_provider) = /d' Cargo.toml
+  '';
+
   dontUseCmakeConfigure = true;
 
   cargoBuildFlags = [
