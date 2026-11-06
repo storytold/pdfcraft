@@ -123,6 +123,22 @@ pub struct InterpreterCache<'a> {
     /// PdfCraft patch: decoded images, shared by every render through this cache so a tile
     /// no longer decodes its page's images again.
     pub(crate) decoded_cache: DecodedImageCache,
+    /// PdfCraft patch (87): what the Type 3 fonts of this cache keep of their decoded glyph
+    /// procedures, together (see `font::type3`).
+    pub(crate) type3_procs: Rc<Type3Procs>,
+}
+
+/// PdfCraft patch (87): decoded Type 3 glyph procedure bytes all the fonts of one
+/// [`InterpreterCache`] keep together. Fonts live as long as the cache, so the bound is on the
+/// cache, not on each font: a document can have thousands of Type 3 fonts.
+pub(crate) const MAX_CACHED_TYPE3_PROCS: usize = 32 << 20;
+
+/// PdfCraft patch (87): the decoded glyph procedure bytes the Type 3 fonts of a cache keep,
+/// and how many procedures they decoded.
+#[derive(Default)]
+pub(crate) struct Type3Procs {
+    pub(crate) held: core::cell::Cell<usize>,
+    pub(crate) decodes: core::cell::Cell<usize>,
 }
 
 impl<'a> Default for InterpreterCache<'a> {
@@ -138,7 +154,15 @@ impl<'a> InterpreterCache<'a> {
             font_cache: Rc::new(RefCell::new(HashMap::new())),
             object_cache: Cache::new(),
             decoded_cache: DecodedImageCache::new(),
+            type3_procs: Rc::default(),
         }
+    }
+
+    /// PdfCraft patch (87): how many Type 3 glyph procedures the fonts of this cache decoded,
+    /// for diagnostics and tests. A procedure kept from an earlier copy of its glyph isn't
+    /// decoded again.
+    pub fn type3_proc_decodes(&self) -> usize {
+        self.type3_procs.decodes.get()
     }
 
     /// PdfCraft patch (32): how many images were decoded through this cache (its misses, not

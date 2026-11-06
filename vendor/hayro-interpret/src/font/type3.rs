@@ -1,5 +1,5 @@
 use crate::CMapResolverFn;
-use crate::context::Context;
+use crate::context::{Context, MAX_CACHED_TYPE3_PROCS, Type3Procs};
 use crate::device::Device;
 use crate::font::glyph_simulator::GlyphSimulator;
 use crate::font::true_type::{Width, read_encoding, read_widths};
@@ -19,7 +19,9 @@ use hayro_syntax::object::dict::keys::{CHAR_PROCS, FONT_BBOX, FONT_MATRIX, RESOU
 use hayro_syntax::page::Resources;
 use kurbo::{Affine, BezPath, Rect};
 use skrifa::GlyphId;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 #[derive(Debug)]
 pub(crate) struct Type3<'a> {
@@ -33,7 +35,16 @@ pub(crate) struct Type3<'a> {
     font_bbox: Rect,
     matrix: Affine,
     to_unicode: Option<CMap>,
+    /// PdfCraft patch (87): glyph procedures already decoded, by glyph name, so a glyph shown
+    /// again and again (a Type 3 font used as a fill pattern draws one glyph hundreds of
+    /// thousands of times) isn't inflated again for every copy. Only procedures of at most
+    /// [`MAX_CACHED_PROC`] bytes are kept, and the fonts of one interpreter cache keep at most
+    /// `context::MAX_CACHED_TYPE3_PROCS` bytes together.
+    decoded_procs: RefCell<HashMap<String, Rc<[u8]>>>,
 }
+
+/// PdfCraft patch (87): the largest decoded glyph procedure [`Type3`] keeps.
+const MAX_CACHED_PROC: usize = 64 << 10;
 
 impl<'a> Type3<'a> {
     pub(crate) fn new(dict: &Dict<'a>, cmap_resolver: &CMapResolverFn) -> Option<Self> {
@@ -75,7 +86,34 @@ impl<'a> Type3<'a> {
             matrix,
             dict: dict.clone(),
             to_unicode,
+            decoded_procs: RefCell::new(HashMap::new()),
         })
+    }
+
+    /// PdfCraft patch (87): the decoded procedure of glyph `name`, decoded within the page's
+    /// content budget the first time and kept, when small enough and while `procs` has room,
+    /// for the next copies.
+    fn decoded_proc(
+        &self,
+        name: &str,
+        program: &Stream<'a>,
+        procs: &Type3Procs,
+    ) -> Option<Rc<[u8]>> {
+        if let Some(bytes) = self.decoded_procs.borrow().get(name) {
+            return Some(bytes.clone());
+        }
+        // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
+        let decoded = crate::context::decode_content(program)?;
+        procs.decodes.set(procs.decodes.get().saturating_add(1));
+        let bytes: Rc<[u8]> = Rc::from(decoded.as_ref());
+        let held = procs.held.get().saturating_add(bytes.len());
+        if bytes.len() <= MAX_CACHED_PROC && held <= MAX_CACHED_TYPE3_PROCS {
+            procs.held.set(held);
+            self.decoded_procs
+                .borrow_mut()
+                .insert(name.to_string(), bytes.clone());
+        }
+        Some(bytes)
     }
 
     pub(crate) fn map_code(&self, code: u8) -> GlyphId {
@@ -144,9 +182,8 @@ impl<'a> Type3<'a> {
 
         let name = self.glyph_simulator.glyph_to_string(glyph.glyph_id)?;
         let program = self.char_procs.get(&name)?;
-        // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
-        let decoded = crate::context::decode_content(program)?;
-        let iter = TypedIter::new(decoded.as_ref());
+        let decoded = self.decoded_proc(&name, program, &glyph.cache.type3_procs)?;
+        let iter = TypedIter::new(&decoded);
 
         let is_shape_glyph = {
             let mut iter = iter.clone();
