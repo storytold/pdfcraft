@@ -160,7 +160,9 @@ impl Multilingual {
         let words = self.recognize(&crop, language)?;
         Ok(words
             .into_iter()
-            .map(|(text, start, end)| Word { text, rect: [x as f32 + start, top, (x as f32 + end).min(image.width() as f32), bottom] })
+            .map(|(text, start, end, confidence)| {
+                word(image, text, [x as f32 + start, top, (x as f32 + end).min(image.width() as f32), bottom], confidence)
+            })
             .collect())
     }
 
@@ -175,16 +177,17 @@ impl Multilingual {
         let words = self.recognize(&straight, language)?;
         Ok(words
             .into_iter()
-            .filter_map(|(text, start, end)| {
+            .filter_map(|(text, start, end, confidence)| {
                 let [l, t, r, b] = line.bounds(u0 + start, u0 + end);
                 let rect = [l.clamp(0.0, width), t.clamp(0.0, height), r.clamp(0.0, width), b.clamp(0.0, height)];
-                (rect[2] > rect[0] && rect[3] > rect[1]).then_some(Word { text, rect })
+                (rect[2] > rect[0] && rect[3] > rect[1]).then(|| word(image, text, rect, confidence))
             })
             .collect())
     }
 
-    /// The words recognized in a line image, with their horizontal extent in its pixels.
-    fn recognize(&self, crop: &RgbImage, language: &str) -> Result<Vec<(String, f32, f32)>, OcrError> {
+    /// The words recognized in a line image, with their horizontal extent in its pixels and
+    /// their mean character confidence (0–1).
+    fn recognize(&self, crop: &RgbImage, language: &str) -> Result<Vec<(String, f32, f32, f32)>, OcrError> {
         let (w, h) = crop.dimensions();
         let rw = ((48.0 * w as f64 / h as f64).ceil() as u32).clamp(1, 3200);
         let width = rw.max(320) as usize;
@@ -207,9 +210,10 @@ impl Multilingual {
         let mut words = Vec::new();
         let (mut text, mut previous, mut start, mut end, mut confidence, mut count) = (String::new(), 0, 0, 0, 0.0, 0);
         let scale = width as f32 / rw as f32 * w as f32 / steps.max(1) as f32;
-        let flush = |words: &mut Vec<(String, f32, f32)>, text: &mut String, start: usize, end: usize, confidence: f32, count: usize| {
-            if !text.is_empty() && confidence / count.max(1) as f32 >= 0.5 {
-                words.push((std::mem::take(text), start as f32 * scale, ((end + 1) as f32 * scale).min(w as f32)));
+        let flush = |words: &mut Vec<(String, f32, f32, f32)>, text: &mut String, start: usize, end: usize, confidence: f32, count: usize| {
+            let mean = confidence / count.max(1) as f32;
+            if !text.is_empty() && mean >= 0.5 {
+                words.push((std::mem::take(text), start as f32 * scale, ((end + 1) as f32 * scale).min(w as f32), mean));
             } else {
                 text.clear();
             }
@@ -246,9 +250,74 @@ impl Multilingual {
     }
 }
 
+/// A recognized word: the engine id is the recognizer's (`ocrs`), its confidence on the 0–100
+/// scale. Its box is the line's height narrowed to the word's own ink ([`ink_rows`]), as tight as
+/// the other engines' boxes: the text layer sizes a word from its letters' ink height, so a box as
+/// tall as the whole line would make "in" a far larger font than "België" beside it, and the
+/// gap between them would no longer read as a space.
+fn word(image: &RgbImage, text: String, rect: [f32; 4], confidence: f32) -> Word {
+    let [l, t, r, b] = rect;
+    let (t, b) = ink_rows(image, rect).unwrap_or((t, b));
+    Word::new(text, [l, t, r, b], "ocrs").with_confidence(confidence * 100.0)
+}
+
+/// The first and last pixel rows inside `rect` that hold ink: pixels darker than halfway between
+/// the region's lightest and darkest luminance. `None` when the region is empty or has too little
+/// contrast to tell ink from paper (the line's own height is kept then).
+fn ink_rows(image: &RgbImage, rect: [f32; 4]) -> Option<(f32, f32)> {
+    let [l, t, r, b] = rect;
+    if rect.iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+    let (w, h) = (image.width() as f32, image.height() as f32);
+    let (x0, x1) = (l.floor().clamp(0.0, w) as u32, r.ceil().clamp(0.0, w) as u32);
+    let (y0, y1) = (t.floor().clamp(0.0, h) as u32, b.ceil().clamp(0.0, h) as u32);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let luma = |x: u32, y: u32| {
+        let Rgb([red, green, blue]) = *image.get_pixel(x, y);
+        (u32::from(red) * 299 + u32::from(green) * 587 + u32::from(blue) * 114) / 1000
+    };
+    let (mut darkest, mut lightest) = (u32::MAX, 0);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let v = luma(x, y);
+            darkest = darkest.min(v);
+            lightest = lightest.max(v);
+        }
+    }
+    if lightest.saturating_sub(darkest) < 48 {
+        return None;
+    }
+    let threshold = darkest + (lightest - darkest) / 2;
+    let inked = |y: u32| (x0..x1).any(|x| luma(x, y) < threshold);
+    let top = (y0..y1).find(|&y| inked(y))?;
+    let bottom = (y0..y1).rev().find(|&y| inked(y))?;
+    Some((top as f32, (bottom + 1) as f32))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A word's box narrows from the line's height to its ink; a blank or flat region keeps the
+    /// line's height, and a box outside the image is no ink at all.
+    #[test]
+    fn word_boxes_narrow_to_their_ink() {
+        let mut image = RgbImage::from_pixel(40, 30, Rgb([250, 250, 250]));
+        for y in 12..20 {
+            for x in 5..15 {
+                image.put_pixel(x, y, Rgb([20, 20, 20]));
+            }
+        }
+        assert_eq!(ink_rows(&image, [0.0, 0.0, 20.0, 30.0]), Some((12.0, 20.0)));
+        assert_eq!(word(&image, "in".into(), [0.0, 0.0, 20.0, 30.0], 0.9).rect, [0.0, 12.0, 20.0, 20.0]);
+        assert_eq!(ink_rows(&image, [20.0, 0.0, 40.0, 30.0]), None, "no contrast: no ink");
+        assert_eq!(word(&image, "x".into(), [20.0, 0.0, 40.0, 30.0], 0.9).rect, [20.0, 0.0, 40.0, 30.0]);
+        assert_eq!(ink_rows(&image, [50.0, 0.0, 60.0, 30.0]), None);
+        assert_eq!(ink_rows(&image, [f32::NAN, 0.0, 10.0, 30.0]), None);
+    }
 
     #[test]
     fn chinese_decoder_keeps_han_and_full_width_punctuation() {

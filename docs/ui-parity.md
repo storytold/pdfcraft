@@ -9,6 +9,8 @@ interface is copied. Gaps ranked in [gaps.md](gaps.md).
 
 **UI/UX fidelity ≈ 55% ready** (estimated), **30–60 h** additional to the features total.
 
+The [PDF workflow research reference](research/pdf-workflows/README.md) collects comparative source locators, interaction evidence and evaluation criteria. It does not change this checklist.
+
 ## Measured
 
 - **184 registered commands** (`crates/engine/src/commands.rs`), every one in the menus, the
@@ -76,7 +78,8 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Print dialog with preview | yes | yes | shipped |
 | Document Properties (description, security, fonts, initial view, custom, advanced) | yes | all but Custom and XMP | partial |
 | Field Properties (General, Appearance, Position, Options, Actions, Format, Validate, Calculate, Signed) | yes | all but Signed | partial |
-| Comment properties and properties bar | yes | yes; a text box's text, border and fill and a shape's line and fill each take an opacity of their own (Acrobat: one per comment) | shipped |
+| Comment properties and properties bar | yes | yes; a text box's text, border and fill and a shape's line and fill each take an opacity of their own (Acrobat: one per comment); text boxes and typed text take an oval or a circle for their border (Acrobat: a rectangle) | shipped |
+| Select several comments; copy and paste comments between documents | yes | yes: ⌘/Ctrl-click adds, Delete, a drag, Properties and Colour act on all, ⌘C/⌘V as XFDF (also across PdfCraft processes) | shipped |
 | Preferences | ≈ 20 pages | Interface language, Documents and view, Identity, Fill & Sign, JavaScript | partial (gap 19) |
 
 ## Revision history

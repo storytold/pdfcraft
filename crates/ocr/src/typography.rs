@@ -82,7 +82,7 @@ mod tests {
     use super::*;
 
     fn line(words: &[&str], language: &str) -> Vec<String> {
-        let words = words.iter().map(|text| Word { text: (*text).into(), rect: [0.0, 0.0, 1.0, 1.0] }).collect();
+        let words = words.iter().map(|text| Word::new(*text, [0.0, 0.0, 1.0, 1.0], "ocrs")).collect();
         correct(words, language).into_iter().map(|w| w.text).collect()
     }
 
