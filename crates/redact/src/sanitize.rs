@@ -324,22 +324,40 @@ fn is_comment(subtype: &[u8]) -> bool {
     !matches!(subtype, b"FileAttachment" | b"Redact") && pdfcraft_annot::is_comment_subtype(&String::from_utf8_lossy(subtype))
 }
 
-/// The layers that are off in the default configuration.
+/// The layers that are off in the default configuration: listed off (or not listed on, under
+/// `/BaseState /OFF`), or turned off on screen by one of its usage rules (`/AS`, ISO 32000-2,
+/// 8.11.4.4): a rule for the View event in the View category hides a layer whose
+/// `/Usage /View /ViewState` is OFF. Rules that turn a layer on, or apply only when printing or
+/// exporting, leave it as the lists say.
 fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
     let Some((_, cat)) = catalog(doc) else { return Vec::new() };
     let Some(oc) = sub(doc, &cat, b"OCProperties") else { return Vec::new() };
     let Some(d) = sub(doc, &oc, b"D") else { return Vec::new() };
-    let all: Vec<ObjRef> =
-        oc.get(b"OCGs").and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default();
-    let list = |k: &[u8]| -> Vec<ObjRef> {
-        d.get(k).and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
+    let refs = |o: Option<&Object>| -> Vec<ObjRef> {
+        o.and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
     };
-    let (on, off) = (list(b"ON"), list(b"OFF"));
-    if d.name(b"BaseState") == Some(b"OFF") {
-        all.into_iter().filter(|g| !on.contains(g)).collect()
+    let all = refs(oc.get(b"OCGs"));
+    let (on, off) = (refs(d.get(b"ON")), refs(d.get(b"OFF")));
+    let mut hidden: Vec<ObjRef> = if d.name(b"BaseState") == Some(b"OFF") {
+        all.iter().copied().filter(|g| !on.contains(g)).collect()
     } else {
         off.into_iter().filter(|g| all.contains(g)).collect()
+    };
+    let rules = d.get(b"AS").and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default();
+    for rule in rules.iter().filter_map(|r| doc.resolve(r).as_dict().cloned()) {
+        let categories = rule.get(b"Category").and_then(|c| doc.resolve(c).as_array().cloned()).unwrap_or_default();
+        if rule.name(b"Event") != Some(b"View") || !categories.iter().any(|c| c.as_name() == Some(b"View")) {
+            continue;
+        }
+        for g in refs(rule.get(b"OCGs")) {
+            let usage = doc.get(g).as_dict().and_then(|layer| sub(doc, layer, b"Usage"));
+            let view_off = usage.and_then(|u| sub(doc, &u, b"View")).is_some_and(|v| v.name(b"ViewState") == Some(b"OFF"));
+            if view_off && all.contains(&g) && !hidden.contains(&g) {
+                hidden.push(g);
+            }
+        }
     }
+    hidden
 }
 
 /// Glyphs of hidden text, or content of hidden layers, on every page (`write` = remove them).
