@@ -1652,6 +1652,21 @@ fn copy_restricted_documents_refuse_extraction_unless_opened_by_the_owner() {
     assert!(s.get(plain).unwrap().check_copying().is_ok() && extracting.iter().all(|c| enabled(&s, plain, c)));
 }
 
+/// The renderer can open an encrypted file the editing parser rejects. Its permission bits are
+/// then unknown, which is not the same as none: copying and printing stay refused.
+#[test]
+fn an_encrypted_document_without_an_editor_allows_neither_copying_nor_printing() {
+    let mut s = Session::new();
+    let id = s.open("r.pdf", None, protected("", "owner", -1 ^ 0b1_0000), None).unwrap();
+    s.doc_mut(id).unwrap().editor = None;
+    let d = s.get(id).unwrap();
+    assert!(d.info.encrypted && d.permissions().is_none());
+    assert!(!d.allows_copying() && !d.allows_printing());
+    let (mut s, plain) = session_with(1);
+    s.doc_mut(plain).unwrap().editor = None;
+    assert!(s.get(plain).unwrap().allows_copying(), "an unencrypted document is not restricted");
+}
+
 /// Table 22, bit 3 (#2669): a document that forbids printing disables Print up front instead
 /// of refusing once the dialog is confirmed. Low-resolution printing (bit 3 on, bit 12 off) is
 /// still printing, and the owner password lifts the restriction.
