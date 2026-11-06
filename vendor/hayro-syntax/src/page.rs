@@ -549,14 +549,13 @@ impl<'a> Page<'a> {
         self.crop_box().intersect(self.media_box())
     }
 
-    /// Return the base dimensions of the page (same as `intersected_crop_box`, but with special
-    /// handling applied for zero-area pages).
-    pub fn base_dimensions(&self) -> (f32, f32) {
+    /// PdfCraft patch: raw width and height in user space (with the one-point floor).
+    fn raw_base_dimensions(&self) -> (f64, f64) {
         let crop_box = self.intersected_crop_box();
 
         if (crop_box.width() as f32).is_nearly_zero() || (crop_box.height() as f32).is_nearly_zero()
         {
-            (A4.width() as f32, A4.height() as f32)
+            (A4.width(), A4.height())
         } else {
             // PdfCraft patch: retain a one-point floor after UserUnit, not one raw unit.
             // The stored unit is finite and within 1..=75000. Round upward only if the
@@ -566,10 +565,39 @@ impl<'a> Page<'a> {
                 raw_floor = raw_floor.next_up();
             }
             let raw_floor = f64::from(raw_floor);
+            (crop_box.width().max(raw_floor), crop_box.height().max(raw_floor))
+        }
+    }
+
+    /// PdfCraft patch: the page dimensions in points (before rotation) and the uniform scale from
+    /// user space to page points (`user_unit`, reduced only when scaling the larger side would
+    /// overflow `f32::MAX` so aspect ratio and content coordinates stay consistent).
+    fn scaled_page_space(&self) -> (f32, f32, f64) {
+        let (raw_w, raw_h) = self.raw_base_dimensions();
+        let max_raw = raw_w.max(raw_h);
+        let unit = f64::from(self.user_unit);
+        if max_raw * unit > f64::from(f32::MAX) {
+            let eff_unit = f64::from(f32::MAX) / max_raw;
+            ((raw_w * eff_unit) as f32, (raw_h * eff_unit) as f32, eff_unit)
+        } else {
             (
-                crop_box.width().max(raw_floor) as f32,
-                crop_box.height().max(raw_floor) as f32,
+                (raw_w as f32) * self.user_unit,
+                (raw_h as f32) * self.user_unit,
+                unit,
             )
+        }
+    }
+
+    /// Return the base dimensions of the page (same as `intersected_crop_box`, but with special
+    /// handling applied for zero-area pages).
+    pub fn base_dimensions(&self) -> (f32, f32) {
+        let (raw_w, raw_h) = self.raw_base_dimensions();
+        let max_raw = raw_w.max(raw_h);
+        if max_raw > f64::from(f32::MAX) {
+            let scale = f64::from(f32::MAX) / max_raw;
+            ((raw_w * scale) as f32, (raw_h * scale) as f32)
+        } else {
+            (raw_w as f32, raw_h as f32)
         }
     }
 
@@ -578,10 +606,7 @@ impl<'a> Page<'a> {
     /// Depending on the document, it is either based on the media box or the crop box
     /// of the page. In addition to that, it also takes the rotation of the page into account.
     pub fn render_dimensions(&self) -> (f32, f32) {
-        let (base_width, base_height) = self.base_dimensions();
-        // PdfCraft patch: in points, after `/UserUnit`.
-        let (mut base_width, mut base_height) =
-            (base_width * self.user_unit, base_height * self.user_unit);
+        let (mut base_width, mut base_height, _) = self.scaled_page_space();
 
         if matches!(
             self.rotation(),
@@ -620,9 +645,7 @@ impl<'a> Page<'a> {
     /// the crop box.
     pub fn initial_transform(&self, invert_y: bool) -> Transform {
         let crop_box = self.intersected_crop_box();
-        let (_, base_height) = self.base_dimensions();
-        // PdfCraft patch: the page in points, after `/UserUnit`.
-        let base_height = base_height * self.user_unit;
+        let (_, base_height, eff_unit) = self.scaled_page_space();
         let (width, height) = self.render_dimensions();
 
         let horizontal_t = Transform::ROTATE_CW_90 * Transform::translate((0.0, -width as f64));
@@ -659,10 +682,10 @@ impl<'a> Page<'a> {
         let user_space = Transform::translate((-crop_box.x0, -crop_box.y0));
         // PdfCraft patch: user space in units of `/UserUnit` points. A page without it keeps
         // exactly the transform it had.
-        let user_space = if self.user_unit == 1.0 {
+        let user_space = if eff_unit == 1.0 {
             user_space
         } else {
-            Transform::scale(f64::from(self.user_unit)) * user_space
+            Transform::scale(eff_unit) * user_space
         };
 
         rotation_transform * inversion_transform * user_space

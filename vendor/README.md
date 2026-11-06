@@ -132,6 +132,8 @@ order the font lists them, platform ID first, so a wrong (1, 0) table (SAS 9.4's
 drew "8" as "p" and "+" as "V". Covered by `raster::tests::symbolic_truetype_cmap`, whose font
 is built in memory.
 
+Scientific-notation numbers and huge page boxes (#2670): `hayro-syntax` (`object::number::Number` and `page::Page`) and `lopdf` (`parser::real` / `integer_or_overflow_real`) accept scientific-notation exponents (`1e30`, `1e20`) and clamp overflowed `f32` reals and page dimensions to `f32::MIN..=f32::MAX`. Covered by `object::number::tests::scientific_notation_and_extreme_exponents` (`hayro-syntax`) and `inspect::tests::huge_mediabox_and_user_unit_open_with_one_page` (`pdfcraft-render`).
+
 ## KenM76 integration patches
 
 | PR | Vendored change | Regression coverage |
