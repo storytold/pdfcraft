@@ -16,6 +16,7 @@
 mod budget;
 mod bytes;
 mod document;
+pub mod numbers;
 mod object;
 pub mod page_labels;
 mod parser;
