@@ -366,7 +366,8 @@ fn explicit_search_jumps_record_history_and_keep_match_destination() {
         // Chrome refreshes the idle page box; navigation must not overwrite a draft
         // that may still be focused. DocView does not own the editor's focus state.
         assert_eq!(v.page_input, "draft in progress");
-        assert!(v.goto_point.is_none(), "an earlier link destination cannot override the search offset");
+        let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+        assert_eq!(v.goto_point, Some((3, Some(40.0 / 300.0), Some(0.675), middle)), "the match centre goes to the middle of the viewport");
         v.go_to_match(1);
         assert_eq!(v.back, vec![0], "same-page matches do not duplicate history");
         assert!(v.view_history(false));
@@ -377,6 +378,18 @@ fn explicit_search_jumps_record_history_and_keep_match_destination() {
         v.go_to_match(2);
         assert!(v.forward.is_empty(), "a new explicit jump discards Forward");
         assert_eq!(v.back, vec![0]);
+    }
+}
+
+#[test]
+fn search_centres_the_match_on_a_rotated_view() {
+    // The match's centre is 40 pt from the left and 270 pt down a 300 × 400 page.
+    for (rotation, fx, fy) in [(90, 1.0 - 0.675, 40.0 / 300.0), (180, 1.0 - 40.0 / 300.0, 1.0 - 0.675), (270, 0.675, 1.0 - 40.0 / 300.0)] {
+        let mut v = history_search_view();
+        v.rotation = rotation;
+        v.find_step(true);
+        let middle = vec2(v.viewport_w, v.viewport_h) / 2.0;
+        assert_eq!(v.goto_point, Some((3, Some(fx), Some(fy), middle)), "view rotated {rotation}°");
     }
 }
 
