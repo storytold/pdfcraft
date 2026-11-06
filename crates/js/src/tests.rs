@@ -42,7 +42,7 @@ fn calculate_now_reports_errors_and_continues() {
     assert!(outcome.console.iter().any(|line| line == "continued"), "{outcome:?}");
     assert_eq!(outcome.changed.iter().find(|field| field.name == "good").unwrap().value, ["ok"]);
     assert!(outcome.changed.iter().all(|field| field.name != "price"), "{outcome:?}");
-    assert_eq!(outcome.formatted, ["good"]);
+    assert_eq!(outcome.formatted, BTreeSet::from(["good".into()]));
 }
 
 #[test]
@@ -406,6 +406,7 @@ fn app_alert_titles_are_clipped_and_charged() {
     let mut h = Host {
         fields: Arc::new(Vec::new()),
         changed: BTreeSet::new(),
+        formatted: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
         requests: Vec::new(),
