@@ -1,6 +1,6 @@
 # UI and interaction parity
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-24 · **Change:** minor (→ / ← scroll a page wider than the window before turning it; a comment's text, border or line, and fill each at an opacity of its own) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-24 · **Change:** minor (a drag across checkboxes sets several #1662; Pages inspector thumbnail size slider and buttons #3808; full screen presents one page at a time #1459; the selected field nudges with the arrow keys in Prepare a form #2608; → / ← scroll a page wider than the window before turning it; a comment's text, border or line, and fill each at an opacity of its own) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft's tools, panels, shortcuts and feel compare with Acrobat Pro's current interface (the
 2023+ "new Acrobat": All tools pane on the left, quick-action toolbar, Home view). Behaviour is
@@ -81,11 +81,13 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Comment properties and properties bar | yes | yes; a text box's text, border and fill and a shape's line and fill each take an opacity of their own (Acrobat: one per comment); text boxes and typed text take an oval or a circle for their border (Acrobat: a rectangle) | shipped |
 | Select several comments; copy and paste comments between documents | yes | yes: ⌘/Ctrl-click adds, Delete, a drag, Properties and Colour act on all, ⌘C/⌘V as XFDF (also across PdfCraft processes) | shipped |
 | Preferences | ≈ 20 pages | Interface language, Documents and view, Identity, Fill & Sign, JavaScript | partial (gap 19) |
+| Drag across checkboxes to check or uncheck several | not checked | press on a checkbox and drag over its neighbours: each takes the first one's new state, in Preferences, dialogs and panels (the shared checkbox); boxes out of view, disabled or under a menu stay as they are; the page checkbox on Organize Pages thumbnails keeps the drag for moving the page | shipped (#1662, the Craft apps' shared behaviour) |
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | Checkboxes: press on one and drag over its neighbours to check or uncheck them all, in Preferences, dialogs and panels (#1662), the same behaviour as VectorCraft and PhotoCraft; score unchanged (estimated) |
 | 2026-10-24 | minor | → / ← scroll a page wider than the window sideways before turning it, by the current page's or spread's edges in continuous view; ⌘→ / ⌘← turn at once |
 | 2026-10-24 | minor | Comment Properties sets a text box's text, border and fill opacity and a shape's line and fill opacity each on its own (Acrobat: one per comment); Make Properties Default carries them into the tool |
 | 2026-10-21 | minor | Pages inspector thumbnail sizing (#3808), separate from page and Organize zoom; view setting retained on reload and exposed through UI control. Not persisted between sessions. |
