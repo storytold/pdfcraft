@@ -579,10 +579,16 @@ impl Automation {
         std::fs::create_dir_all(&folder).map_err(|e| failed(format!("{}: {e}", folder.display())))?;
         if tool == "doc_export_all_images" {
             let min = u32::try_from(a.opt_int("min_size")?.unwrap_or(0).max(0)).unwrap_or(u32::MAX);
+            let prefix = a.opt_str("prefix")?;
             let out = pdfcraft_engine::export::extract_images(&doc.export_source(), &pages, min).map_err(failed)?;
             let mut files = Vec::new();
             for (k, img) in out.images.iter().enumerate() {
-                let path = child(&folder, &pdfcraft_engine::export::image_file_name(&stem, img, k + 1, doc.info.pages.len()));
+                let name =
+                    pdfcraft_engine::export::image_file_name(&stem, prefix, img, k + 1, doc.info.pages.len()).map_err(ToolError::InvalidArgs)?;
+                let path = child(&folder, &name);
+                if path.exists() {
+                    return Err(failed(format!("{}: file already exists", path.display())));
+                }
                 write_atomic(&path, &img.data)?;
                 files.push(json!({ "path": path.to_string_lossy(), "page": img.page + 1, "width": img.width, "height": img.height }));
             }
