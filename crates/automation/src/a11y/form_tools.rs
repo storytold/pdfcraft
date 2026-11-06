@@ -1,4 +1,4 @@
-use super::{Args, Automation, Result, ToolError, Value, failed, json, write_atomic};
+use super::{Args, Automation, Result, ToolError, Value, failed, json, with_warnings, write_atomic};
 
 /// A script's request to the viewer as the JSON that running a script reports; a side panel
 /// goes by its fixed id.
@@ -28,10 +28,19 @@ impl Automation {
     /// messages, console lines, requests, error, the failing document scripts' errors and result.
     pub(crate) fn js_run(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
-        let o = self.session.run_javascript(id, a.str("script")?, a.opt_str("field")?).map_err(failed)?;
+        let mark = self.session.js_output_mark(id);
+        let mut o = self.session.run_javascript(id, a.str("script")?, a.opt_str("field")?).map_err(failed)?;
+        // Applying the script's field changes runs the field scripts again; their output is reported with the script's.
+        let edit = self.session.take_js_output_since(id, mark);
+        o.alerts.extend(edit.alerts);
+        o.console.extend(edit.console);
+        o.requests.extend(edit.requests);
         let reqs: Vec<Value> = o.requests.iter().map(request_json).collect();
         let alerts: Vec<Value> = o.alerts.iter().map(alert_json).collect();
-        Ok(json!({ "alerts": alerts, "console": o.console, "requests": reqs, "error": o.error, "document_errors": o.doc_errors, "result": o.result }))
+        Ok(with_warnings(
+            json!({ "alerts": alerts, "console": o.console, "requests": reqs, "error": o.error, "document_errors": o.doc_errors, "result": o.result }),
+            edit.errors,
+        ))
     }
 
     pub(crate) fn js_document_scripts(&self, a: &Args) -> Result<Value> {
@@ -42,8 +51,8 @@ impl Automation {
     pub(crate) fn js_set_document_script(&mut self, a: &Args) -> Result<Value> {
         let edit = pdfcraft_engine::Edit::SetDocumentScript { name: a.str("name")?.into(), script: a.opt_str("script")?.map(str::to_string) };
         let id = self.doc(a)?.id;
-        self.session.apply(id, edit).map_err(failed)?;
-        self.js_document_scripts(a)
+        let warnings = self.apply_with_warnings(id, edit)?;
+        Ok(with_warnings(self.js_document_scripts(a)?, warnings))
     }
 
     pub(crate) fn form_set_script(&mut self, a: &Args) -> Result<Value> {
@@ -53,8 +62,9 @@ impl Automation {
             script: a.opt_str("script")?.map(str::to_string),
         };
         let id = self.doc(a)?.id;
+        let mark = self.session.js_output_mark(id);
         self.session.apply(id, edit).map_err(failed)?;
-        let out = self.session.take_js_output(id);
+        let out = self.session.take_js_output_since(id, mark);
         Ok(json!({ "field": a.str("field")?, "event": a.str("event")?, "console": out.console, "errors": out.errors }))
     }
 
@@ -90,10 +100,12 @@ impl Automation {
                 v
             })
             .collect();
+        let mark = self.session.js_output_mark(id);
         if a.opt_bool("add")?.unwrap_or(true) && !found.is_empty() {
             self.session.auto_detect_fields(id, &pages).map_err(failed)?;
         }
-        Ok(json!({ "fields": list }))
+        let warnings = self.session.take_js_output_since(id, mark).errors;
+        Ok(with_warnings(json!({ "fields": list }), warnings))
     }
 
     pub(crate) fn form_actions(&self, a: &Args) -> Result<Value> {
@@ -157,8 +169,8 @@ impl Automation {
         let edit =
             pdfcraft_engine::Edit::SetFieldProps { name, props: Box::new(pdfcraft_engine::FieldProps { actions: Some(acts), ..Default::default() }) };
         let id = self.doc(a)?.id;
-        self.session.apply(id, edit).map_err(failed)?;
-        self.form_actions(a)
+        let warnings = self.apply_with_warnings(id, edit)?;
+        Ok(with_warnings(self.form_actions(a)?, warnings))
     }
 
     pub(crate) fn js_enabled(&mut self, a: &Args) -> Result<Value> {
