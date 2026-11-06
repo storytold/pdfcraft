@@ -6,7 +6,7 @@ use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use pdfcraft_render::DestView;
 use pdfcraft_ui_egui::canvas::Fit;
-use pdfcraft_ui_egui::{PdfCraftApp, RightPanel};
+use pdfcraft_ui_egui::{OpenOutcome, PdfCraftApp, RightPanel};
 
 /// Six Letter (612×792) pages, objects 3 to 8; `catalog` is added to the catalog dictionary.
 /// Object 9 is an outline (one bookmark, object 10) that `/Outlines 9 0 R` can use.
@@ -188,4 +188,78 @@ fn a_full_screen_document_with_an_outline_shows_it_only_when_it_asks_to() {
     // Not in full screen, a document with an outline still opens on it.
     let h = harness("/Outlines 9 0 R");
     assert_eq!(h.state().right, Some(RightPanel::Bookmarks));
+}
+
+/// Named destinations for open parameters: `intro` (page 2) in the catalog's /Dests and
+/// `Load Flow` (page 4) in the /Names /Dests tree. The document itself opens on page 3.
+const NAMED: &str = "/OpenAction [5 0 R /Fit] /Dests << /intro [4 0 R /Fit] >> /Names << /Dests << /Names [(Load Flow) [6 0 R /XYZ 0 792 0]] >> >>";
+
+/// `fixture(NAMED)` saved as `manual.pdf` in a folder of its own, whose path is returned.
+fn manual(test: &str) -> String {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-open-parameters-{test}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("manual.pdf");
+    std::fs::write(&path, fixture(NAMED)).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_file_named_with_open_parameters_opens_at_their_destination() {
+    // #3425: a help system starts PdfCraft with `manual.pdf#nameddest=…`. Files named at launch
+    // open before the first frame.
+    let path = manual("launch");
+    for (parameters, page) in [("#nameddest=Load Flow", 3), ("#nameddest=intro", 1), ("#intro", 1), ("#page=5", 4), ("#zoom=200", 2)] {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        assert_eq!(app.open_path(&format!("{path}{parameters}")), OpenOutcome::Opened, "{parameters}");
+        assert_eq!(app.views.len(), 1, "{parameters}");
+        assert_eq!(app.views[0].current, page, "{parameters}");
+        assert_eq!(app.session.get(app.views[0].id).and_then(|d| d.path.clone()).as_deref(), Some(path.as_str()), "{parameters}: the file itself");
+        assert_eq!(app.toast, None, "{parameters}");
+    }
+    // A name the file doesn't define: it opens where it would have, and says so.
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    assert_eq!(app.open_path(&format!("{path}#nameddest=Nowhere")), OpenOutcome::Opened);
+    assert_eq!(app.views[0].current, 2);
+    assert!(app.toast.as_ref().is_some_and(|(text, _)| text.contains("named destination was not applied")), "{:?}", app.toast);
+    // A path that names no file, before a `#` or as a whole, still fails as before.
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    assert_eq!(app.open_path(&format!("{path}.missing#page=2")), OpenOutcome::Failed);
+    assert!(app.views.is_empty());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn open_parameters_handed_to_the_running_app_show_their_destination() {
+    // A second launch hands `manual.pdf#…` to the running app, which opens it in the background.
+    let path = manual("running");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app
+    });
+    h.run_steps(4);
+    // Asked twice before it has opened, it opens at the place asked for last.
+    assert_eq!(h.state_mut().open_path(&format!("{path}#page=5")), OpenOutcome::Pending);
+    assert_eq!(h.state_mut().open_path(&format!("{path}#nameddest=Load Flow")), OpenOutcome::Pending);
+    crate::support::wait_until(&mut h, "the manual at Load Flow", |app| app.views.len() == 1 && app.views[0].current == 3);
+    // Asked again for a place in the open file, its tab goes there instead of opening it again.
+    assert_eq!(h.state_mut().open_path(&format!("{path}#page=2")), OpenOutcome::Focused);
+    assert_eq!((h.state().views.len(), h.state().views[0].current), (1, 1));
+    // A name is looked up off the UI thread: the tab moves once the lookup is in.
+    assert_eq!(h.state_mut().open_path(&format!("{path}#nameddest=Load Flow")), OpenOutcome::Focused);
+    assert_eq!(h.state().views[0].current, 1, "not yet");
+    crate::support::wait_until(&mut h, "Load Flow", |app| app.views[0].current == 3);
+    // A page asked for while a name is still being looked up wins: the lookup's answer is dropped.
+    assert_eq!(h.state_mut().open_path(&format!("{path}#nameddest=intro")), OpenOutcome::Focused);
+    assert_eq!(h.state_mut().open_path(&format!("{path}#page=5")), OpenOutcome::Focused);
+    for _ in 0..25 {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(h.state().views[0].current, 4);
 }

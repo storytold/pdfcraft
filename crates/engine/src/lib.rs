@@ -38,6 +38,7 @@ pub mod links;
 pub mod model3d;
 pub mod ocr;
 mod open;
+pub mod open_parameters;
 pub mod optimizer;
 mod page_filter;
 mod pictures;

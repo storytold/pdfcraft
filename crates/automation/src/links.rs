@@ -11,6 +11,26 @@ use std::path::Path;
 use crate::comments::parse_color;
 use crate::{Args, Automation, Result, ToolError, failed};
 
+/// Where `destination` puts `doc`, a document just opened from a link or with open parameters:
+/// whether it applies, the destination as reported, and a warning when it doesn't. A named
+/// destination is looked up in the document, as the app does.
+pub(crate) fn destination_report(doc: &pdfcraft_engine::Document, destination: RemoteDestination) -> (bool, Value, Option<&'static str>) {
+    let (name, page, view) = match destination {
+        RemoteDestination::Default => return (true, json!({ "kind": "default" }), None),
+        RemoteDestination::Page { page, view } => (None, page, view),
+        RemoteDestination::Named(name) => match pdfcraft_render::named_destination(doc.bytes.clone(), doc.password.as_deref(), &name) {
+            Some((page, view)) => (Some(name), page, view),
+            None => return (false, json!({ "kind": "named", "name": name }), Some("The PDF opened, but the named destination was not applied.")),
+        },
+    };
+    let mut value = json!({ "kind": "page", "page": page.saturating_add(1), "view": dest_view_value(view) });
+    if let Some(name) = name {
+        value["kind"] = json!("named");
+        value["name"] = json!(name);
+    }
+    if page < doc.info.pages.len() { (true, value, None) } else { (false, value, Some("The PDF opened, but the page destination is out of range.")) }
+}
+
 fn bad(m: impl Into<String>) -> ToolError {
     ToolError::InvalidArgs(m.into())
 }
@@ -135,20 +155,7 @@ impl Automation {
         let id =
             self.session.open(name, Some(path.to_string_lossy().into_owned()), std::sync::Arc::new(bytes), a.opt_str("password")?).map_err(failed)?;
         let opened = self.session.get(id).ok_or_else(|| failed("the linked document vanished"))?;
-        let (destination_applied, destination_value, warning) = match destination {
-            RemoteDestination::Default => (true, json!({ "kind": "default" }), None),
-            RemoteDestination::Named(name) => {
-                (false, json!({ "kind": "named", "name": name }), Some("The PDF opened, but the named destination was not applied."))
-            }
-            RemoteDestination::Page { page, view } if page < opened.info.pages.len() => {
-                (true, json!({ "kind": "page", "page": page.saturating_add(1), "view": dest_view_value(view) }), None)
-            }
-            RemoteDestination::Page { page, view } => (
-                false,
-                json!({ "kind": "page", "page": page.saturating_add(1), "view": dest_view_value(view) }),
-                Some("The PDF opened, but the link's page destination is out of range."),
-            ),
-        };
+        let (destination_applied, destination_value, warning) = destination_report(opened, destination);
         let mut display_path = path.to_string_lossy().into_owned();
         if let Some(root) = &self.root
             && let Ok(relative) = path.strip_prefix(root)
