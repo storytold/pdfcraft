@@ -1,0 +1,29 @@
+[package]
+name = "pdfcraft-collab-ws"
+description = "WebSocket transport for collaborative PDF editing: frames, JWT sessions, hub pump"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pdfcraft-collab-hub = { workspace = true }
+pdfcraft-collab-proto = { workspace = true }
+pdfcraft-collab-server = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# The server transport is native-only: the web client reaches the server through
+# the host bridge, so this crate is empty on wasm (and its crypto/socket deps are
+# not built there).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+jsonwebtoken = { version = "11.1", default-features = false, features = ["rust_crypto", "use_pem"] }
+tungstenite = "0.30"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+rand = "0.8"
+rsa = "0.9"
