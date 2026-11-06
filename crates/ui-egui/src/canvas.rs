@@ -2995,9 +2995,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let zoom_delta = crate::motion::zoom_delta(ui.ctx());
     // Exclude the previous frame's scrollbar tracks from gesture activation.
     let navigation_rect = if view.viewport_screen.is_positive() { avail.intersect(view.viewport_screen) } else { avail };
-    let navigation_enabled = app.dialog.is_none() && app.close_request.is_none() && !app.palette_open && ui.is_enabled() && ui.input(|i| i.focused);
+    // Wheel zoom works in a visible window without focus, as wheel scrolling does; the other gestures need focus.
+    let zoom_enabled = unobstructed && ui.is_enabled();
+    let navigation_enabled = zoom_enabled && ui.input(|i| i.focused);
     let present = presentation_click_state(ui, view, navigation_rect, navigation_enabled && app.quick_tool == QuickTool::Select);
-    pinch_zoom(ui, view, zoom_delta, navigation_rect, navigation_enabled);
+    pinch_zoom(ui, view, zoom_delta, navigation_rect, zoom_enabled);
     view.viewport_screen = avail;
     let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed, invert_middle);
 
