@@ -54,8 +54,9 @@ rustls-cng = { version = "0.7.1", default-features = false }
 security-framework = "3.7"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# Signing with PKCS #11 token keys — Rutoken, JaCarta and friends (Apache-2.0/MIT).
-# A safe wrapper over the C API, in the same spirit as rustls-cng and security-framework.
+# Signing with PKCS #11 token keys — Rutoken, JaCarta and friends.
+# A safe wrapper over the C API, in the same spirit as rustls-cng and security-framework
+# (Apache-2.0, from the Parsec project — not a RustCrypto crate).
 cryptoki = "0.12.1"
 # The token PIN lives in memory only as long as the identity does (Apache-2.0/MIT).
 zeroize = "1.9"

@@ -193,7 +193,7 @@ impl Automation {
         if let Some(r) = a.str("id")?.strip_prefix("pkcs11:") {
             let reference = format!("pkcs11:{r}");
             #[cfg(target_os = "linux")]
-            return sign::pkcs11::find_with_pin(&reference, a.opt_str("password")?.as_deref()).map_err(failed);
+            return sign::pkcs11::find_with_pin(&reference, a.opt_str("password")?).map_err(failed);
             #[cfg(not(target_os = "linux"))]
             return Err(failed(format!("{reference}: PKCS #11 token identities are only available on Linux")));
         }

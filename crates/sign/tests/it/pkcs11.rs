@@ -18,6 +18,10 @@ fn bench() -> Option<String> {
     }
 }
 
+/// The bench is opt-in (`PDFCRAFT_PKCS11_MODULE`), so the tests carry `#[ignore]` with the
+/// reason: a plain pass-through would read as a green run that covered the token path. The
+/// `bench()` guard stays, so `--ignored` without the bench still skips with a note.
+#[ignore = "needs the SoftHSM bench (PDFCRAFT_PKCS11_MODULE; see the file header)"]
 #[test]
 fn lists_the_token_identity() {
     let Some(_) = bench() else { return };
@@ -26,6 +30,7 @@ fn lists_the_token_identity() {
     assert_eq!(id.certificate.subject.common_name(), Some("Test Signer RSA"));
 }
 
+#[ignore = "needs the SoftHSM bench (PDFCRAFT_PKCS11_MODULE; see the file header)"]
 #[test]
 fn the_token_signs_and_the_certificate_verifies() {
     let Some(_) = bench() else { return };
@@ -39,6 +44,7 @@ fn the_token_signs_and_the_certificate_verifies() {
     assert!(ok, "the token's signature matches the certificate's public key");
 }
 
+#[ignore = "needs the SoftHSM bench (PDFCRAFT_PKCS11_MODULE; see the file header)"]
 #[test]
 fn find_by_reference_and_common_name() {
     let Some(_) = bench() else { return };

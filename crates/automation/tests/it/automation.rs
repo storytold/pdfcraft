@@ -6075,6 +6075,7 @@ fn a_dynamic_xfa_forms_signature_box_is_signed_under_its_som_path() {
 /// identity (user PIN 1234). Linux-only (the tools return an empty listing elsewhere);
 /// skipped when the bench isn't configured (CI stays green).
 #[cfg(target_os = "linux")]
+#[ignore = "needs the SoftHSM bench (PDFCRAFT_PKCS11_MODULE; see crates/sign/tests/it/pkcs11.rs)"]
 #[test]
 fn signing_with_a_pkcs11_token_through_tools() {
     if std::env::var("PDFCRAFT_PKCS11_MODULE").map(|v| v.is_empty()).unwrap_or(true) {

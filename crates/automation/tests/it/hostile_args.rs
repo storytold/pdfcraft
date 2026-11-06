@@ -173,6 +173,14 @@ fn plausible(def: &pdfcraft_automation::ToolDef) -> serde_json::Map<String, Valu
 }
 
 /// Run `call`, turning a panic into a message instead of unwinding out of the test.
+/// Whether calling `name` would load system state the hostile-argument run must not touch:
+/// `sign_token_ids` loads the p11-kit proxy and every module it's configured with, so the
+/// run skips it on Linux unless the PKCS #11 bench is set up (PDFCRAFT_PKCS11_MODULE).
+fn loads_modules(name: &str) -> bool {
+    let bench = std::env::var("PDFCRAFT_PKCS11_MODULE").map(|v| !v.is_empty()).unwrap_or(false);
+    cfg!(target_os = "linux") && name == "sign_token_ids" && !bench
+}
+
 fn guarded(a: &mut Automation, tool: &str, args: &Value) -> std::result::Result<(), String> {
     let result = catch_unwind(AssertUnwindSafe(|| a.call(tool, args)));
     match result {
@@ -247,6 +255,9 @@ fn no_tool_panics_on_hostile_arguments() {
     let mut calls = 0usize;
 
     for def in tools() {
+        if loads_modules(def.name) {
+            continue;
+        }
         empty_dir(&root);
         // The whole arguments object, not just its properties.
         for bad in [json!(null), json!([]), json!("string"), json!(7), json!(true), json!({})] {
@@ -323,6 +334,9 @@ fn no_tool_escapes_the_root() {
     let mut refused = 0usize;
 
     for def in tools() {
+        if loads_modules(def.name) {
+            continue;
+        }
         for (prop, is_list) in path_props(&def) {
             for escape in escapes(&base, linked) {
                 let mut obj = plausible_with(&def, Some(doc));
@@ -478,6 +492,9 @@ fn no_tool_panics_when_the_viewer_sees_fewer_pages_than_the_file_has() {
     let pdf = dangling_kid_pdf();
     let mut failures = Vec::new();
     for def in tools() {
+        if loads_modules(def.name) {
+            continue;
+        }
         // Written again for every tool: tools that save write to `in.pdf`, the plausible path.
         std::fs::write(root.join("in.pdf"), &pdf).expect("fixture");
         let mut a = Automation::new().with_root(&root).expect("root");

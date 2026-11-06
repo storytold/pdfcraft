@@ -18,6 +18,8 @@ craft-keymap = { workspace = true }
 # close also quits through `terminate:` (the Touch Bar crash, #1136).
 craft-quit = { workspace = true, features = ["egui"] }
 pdfcraft-fonts = { workspace = true }
+# The Protect dialog's typed password zeroes on drop, as the sign crate's token PIN does.
+zeroize = "1.9"
 pdfcraft-engine = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-render = { workspace = true }

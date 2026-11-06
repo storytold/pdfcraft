@@ -9,6 +9,7 @@ use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::control::{ControlClient, Reply};
 use serde_json::{Value, json};
+use zeroize::Zeroizing;
 
 /// The text each page shows, in order, as the app's session holds it.
 fn page_texts(app: &PdfCraftApp) -> Vec<String> {
@@ -469,8 +470,8 @@ fn lithuanian_password_dialog_translates_dynamic_labels_and_validation() {
     assert!(!h.state().protect_draft.viewing);
     h.get_by_role_and_label(egui::accesskit::Role::PasswordInput, "Įveskite slaptažodį");
     h.get_by_role_and_label(egui::accesskit::Role::PasswordInput, "Pakartokite slaptažodį");
-    h.state_mut().protect_draft.password = "abc".into();
-    h.state_mut().protect_draft.confirm = "xyz".into();
+    h.state_mut().protect_draft.password = Zeroizing::new("abc".to_owned());
+    h.state_mut().protect_draft.confirm = Zeroizing::new("xyz".to_owned());
     h.run_steps(2);
     h.get_by_label("Slaptažodžiai nesutampa.");
 }

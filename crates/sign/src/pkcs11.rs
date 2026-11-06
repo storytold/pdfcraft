@@ -26,7 +26,7 @@ use cryptoki::slot::Slot;
 use cryptoki::types::AuthPin;
 use zeroize::Zeroizing;
 
-use crate::keys::{DigestAlg, ExternalKey, PrivateKey};
+use crate::keys::{DigestAlg, ExternalKey, PrivateKey, PublicKey, Scheme};
 use crate::{Certificate, DigitalId, SignError};
 
 /// Loads a PKCS #11 module and initializes it for multi-threaded use.
@@ -50,8 +50,17 @@ fn module_paths() -> Vec<String> {
     if let Ok(list) = std::env::var("PDFCRAFT_PKCS11_MODULE") {
         return list.split(':').filter(|p| !p.is_empty()).map(String::from).collect();
     }
-    // The p11-kit proxy is the system-wide aggregate; `p11-kit list-modules` shows what it
-    // covers. Its install path varies by multiarch tuple.
+    // p11-kit's pkg-config data names the proxy module's install path (`p11-kit list-modules`
+    // shows what it covers). The query is best effort: no pkg-config, or no p11-kit .pc file,
+    // falls back to the multiarch paths the proxy lands at on the common distributions.
+    if let Ok(output) = std::process::Command::new("pkg-config").args(["--variable=proxy_module", "p11-kit-1"]).output()
+        && output.status.success()
+    {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return vec![path];
+        }
+    }
     ["/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu", "/usr/lib64", "/usr/lib"]
         .iter()
         .map(|dir| format!("{dir}/p11-kit-proxy.so"))
@@ -190,7 +199,13 @@ pub fn list() -> Result<Vec<DigitalId>, SignError> {
                 out.push(DigitalId {
                     key: PrivateKey::external(
                         certificate.public_key.clone(),
-                        std::sync::Arc::new(Pkcs11Key { module: client.clone(), slot, ckaid: id.clone(), pin: Mutex::new(None) }),
+                        std::sync::Arc::new(Pkcs11Key {
+                            module: client.clone(),
+                            slot,
+                            ckaid: id.clone(),
+                            public: certificate.public_key.clone(),
+                            pin: Mutex::new(None),
+                        }),
                     ),
                     certificate,
                     chain,
@@ -242,6 +257,7 @@ pub fn find_with_pin(reference_or_name: &str, pin: Option<&str>) -> Result<Digit
                             module: client.clone(),
                             slot,
                             ckaid: id.clone(),
+                            public: certificate.public_key.clone(),
                             pin: Mutex::new(pin.map(|p| Zeroizing::new(p.to_string()))),
                         }),
                     ),
@@ -276,6 +292,9 @@ struct Pkcs11Key {
     module: Pkcs11,
     slot: Slot,
     ckaid: Vec<u8>,
+    /// The certificate's public key, to check what the token signed with: the sign
+    /// answer is the token's word, the certificate is the identity's.
+    public: PublicKey,
     /// The PIN, when `find_with_pin` was given one; sessions opened at sign time log in
     /// with it when the token requires authentication. A `Zeroizing` copy zeroes on drop, so
     /// the PIN survives only as long as the identity that holds it.
@@ -306,26 +325,40 @@ impl Pkcs11Key {
         let session = open_session(&self.module, self.slot)?;
         if token.login_required() {
             let pin = self.pin.lock().ok().and_then(|p| p.clone());
-            if let Some(pin) = pin {
-                login(&session, &pin)?;
+            match pin {
+                // The private key is hidden (CKA_PRIVATE) until the login: without a PIN
+                // the key below would not be found and the message would blame the token
+                // for losing it, when the PIN is what the UI can ask for.
+                Some(pin) => login(&session, &pin)?,
+                None => return Err(SignError::Crypto("the token requires its PIN to sign".into())),
             }
-            // Without a PIN the sign call below refuses with a message the UI can act on.
         }
         let Some((key, rsa)) = session_key(&session, &self.ckaid) else {
             return Err(SignError::Crypto("the token lost its private key".into()));
         };
         let digest = alg.digest(&[msg]);
-        let data: Vec<u8> = if rsa { crate::rsa_pad::digest_info(alg, &digest, true) } else { digest };
+        let data: Vec<u8> = if rsa { crate::rsa_pad::digest_info(alg, &digest, true) } else { digest.clone() };
         let mechanism = if rsa { Mechanism::RsaPkcs } else { Mechanism::Ecdsa };
         let signature = session.sign(&mechanism, key, &data).map_err(|e| match e {
             Error::Pkcs11(RvError::UserNotLoggedIn, _) => SignError::Crypto("the token requires its PIN to sign".into()),
             other => SignError::Crypto(format!("the token didn't sign ({other})")),
         })?;
-        if rsa {
-            return Ok(signature);
-        }
         // ECDSA signatures come back as raw `r || s`; PdfCraft carries DER.
-        ecdsa_raw_to_der(&signature).ok_or_else(|| SignError::Crypto("the token returned a malformed ECDSA signature".into()))
+        let signature = if rsa {
+            signature
+        } else {
+            ecdsa_raw_to_der(&signature).ok_or_else(|| SignError::Crypto("the token returned a malformed ECDSA signature".into()))?
+        };
+        // What the token signed with must be the key the certificate names: a token holding
+        // a different key under the same CKA_ID (a stale import, an identity replaced on the
+        // token) would otherwise sign fine and produce a file the reader validates as Invalid.
+        let scheme = if rsa { Scheme::RsaPkcs1 } else { Scheme::Ecdsa };
+        if !matches!(self.public.verify(scheme, alg, &digest, &signature), Ok(true)) {
+            return Err(SignError::Crypto(
+                "the token's signature does not verify with the certificate's key (a different key may sit under the same ID on the token)".into(),
+            ));
+        }
+        Ok(signature)
     }
 }
 

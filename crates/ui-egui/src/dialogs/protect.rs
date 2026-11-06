@@ -4,6 +4,7 @@
 
 use egui::{Align, Color32, Layout};
 use pdfcraft_engine::{Changes, Edit, Printing, Protection};
+use zeroize::Zeroizing;
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
@@ -13,15 +14,23 @@ use crate::{PdfCraftApp, widgets};
 pub struct ProtectDraft {
     /// `true`: password required for Viewing; `false`: for Editing.
     pub viewing: bool,
-    pub password: String,
-    pub confirm: String,
+    /// A `Zeroizing` string zeroes on drop, so the typed password doesn't linger in freed
+    /// memory while the dialog is open or after it closes.
+    pub password: Zeroizing<String>,
+    pub confirm: Zeroizing<String>,
     pub advanced: bool,
     pub protection: Protection,
 }
 
 impl Default for ProtectDraft {
     fn default() -> Self {
-        Self { viewing: true, password: String::new(), confirm: String::new(), advanced: false, protection: Protection::default() }
+        Self {
+            viewing: true,
+            password: Zeroizing::new(String::new()),
+            confirm: Zeroizing::new(String::new()),
+            advanced: false,
+            protection: Protection::default(),
+        }
     }
 }
 
@@ -39,15 +48,17 @@ impl ProtectDraft {
         }
     }
 
-    /// The edit Apply makes.
+    /// The edit Apply makes. The edit carries the password into the engine, where its undo
+    /// `Keys` need it to reopen the document; that copy is the engine's `Protection` type
+    /// (its `Debug` already redacts), not the dialog's to zero.
     pub fn edit(&self) -> Edit {
         let mut p = self.protection.clone();
         if self.viewing {
-            p.open_password = Some(self.password.clone());
+            p.open_password = Some(self.password.to_string());
             p.permissions_password = None;
         } else {
             p.open_password = None;
-            p.permissions_password = Some(self.password.clone());
+            p.permissions_password = Some(self.password.to_string());
         }
         Edit::Protect(p)
     }
@@ -233,10 +244,10 @@ mod tests {
     fn drafts_validate_and_map_to_the_right_password() {
         let mut d = ProtectDraft::default();
         assert!(d.problem().is_some());
-        d.password = "abc".into();
-        d.confirm = "abd".into();
+        d.password = Zeroizing::new("abc".to_owned());
+        d.confirm = Zeroizing::new("abd".to_owned());
         assert_eq!(d.problem(), Some("The passwords don't match."));
-        d.confirm = "abc".into();
+        d.confirm = Zeroizing::new("abc".to_owned());
         assert_eq!(d.problem(), None);
         match d.edit() {
             Edit::Protect(p) => assert_eq!((p.open_password.as_deref(), p.permissions_password), (Some("abc"), None)),
