@@ -112,6 +112,35 @@ fn autotag_text_reads_content_with_parameters_given_by_reference() {
     assert!(text.contains("/F1 24 Tf") && text.contains("(Hello World) Tj"), "{text}");
 }
 
+/// Autotagging refuses a page whose content it can't read whole, and says why: content past
+/// 16 MiB, or content that doesn't decode strictly.
+#[test]
+fn autotag_text_says_why_it_cannot_read_a_page() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let reason = |content: Stream| {
+        let mut doc = pdf(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>".into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+                stream(""),
+                FONT.into(),
+            ],
+            "",
+        );
+        doc.set(ObjRef::new(4, 0), content);
+        match autotag_text(&mut doc) {
+            Err(AutoTagError::Unsupported { reason, .. }) => reason,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(reason(Stream::from_raw(Dict::new(), vec![b' '; 17 << 20])), "decoded content exceeds 16 MiB");
+    let mut corrupt = Stream::from_raw(Dict::new(), b"not zlib data".to_vec());
+    corrupt.dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+    let why = reason(corrupt);
+    assert!(why.starts_with("content cannot be decoded strictly"), "{why}");
+}
+
 #[test]
 fn autotag_text_refuses_paint_and_does_not_modify_the_document() {
     let mut doc = pdf(
