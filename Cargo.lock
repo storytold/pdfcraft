@@ -4359,6 +4359,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft-collab-hub"
+version = "0.18.1"
+dependencies = [
+ "pdfcraft-collab-proto",
+ "pdfcraft-collab-server",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "pdfcraft-collab-pdf"
 version = "0.18.1"
 dependencies = [
