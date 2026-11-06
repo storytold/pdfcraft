@@ -329,32 +329,9 @@ pub(crate) fn info(d: &Document) -> Value {
         })).collect::<Vec<_>>(),
         "links": i.links.iter().map(|l| json!({
             "page": page1(l.page), "rect": view_rect(i, l.page, l.rect),
-            "target": match &l.target {
-                pdfcraft_render::LinkTarget::Page(p, _) => json!({ "page": page1(*p) }),
-                pdfcraft_render::LinkTarget::Uri(u) => json!({ "uri": u }),
-                pdfcraft_render::LinkTarget::SetLayers { changes, preserve_rb } => json!({
-                    "layers": changes.iter().map(|(op, ocg)| json!({
-                        "layer": i.layers.iter().find(|l| l.id == *ocg).map(|l| l.name.as_str()),
-                        "state": match op {
-                            pdfcraft_render::LayerOp::On => "on",
-                            pdfcraft_render::LayerOp::Off => "off",
-                            pdfcraft_render::LayerOp::Toggle => "toggle",
-                        },
-                    })).collect::<Vec<_>>(),
-                    "preserve_rb": preserve_rb,
-                }),
-                pdfcraft_render::LinkTarget::RemoteGoTo { launch, file, destination, new_window } => json!({
-                    "action": if *launch { "Launch" } else { "GoToR" },
-                    "remote_document": file,
-                    "destination": match destination {
-                        pdfcraft_render::RemoteDestination::Default => json!({ "kind": "default" }),
-                        pdfcraft_render::RemoteDestination::Page { page, view } => json!({ "kind": "page", "page": page1(*page), "view": format!("{view:?}") }),
-                        pdfcraft_render::RemoteDestination::Named(name) => json!({ "kind": "named", "name": name }),
-                    },
-                    "new_window": new_window,
-                }),
-                pdfcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
-            },
+            "target": link_target(i, &l.target),
+            // The actions its /Next entries chain after it (ISO 32000-2 §12.6.2), in order.
+            "next": l.next.iter().map(|t| link_target(i, t)).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "layers": i.layers.iter().map(|l| json!({ "name": l.name, "visible": l.visible, "initial": l.initial })).collect::<Vec<_>>(),
         // Full-screen presentation settings a page carries (ISO 32000-2 §12.4.4): only pages with
@@ -376,6 +353,39 @@ pub(crate) fn info(d: &Document) -> Value {
         "warnings": i.warnings,
         "repairs": d.repair_log(),
     })
+}
+
+/// What a link action does, as `doc_info` lists it.
+fn link_target(i: &pdfcraft_render::DocInfo, target: &pdfcraft_render::LinkTarget) -> Value {
+    match target {
+        pdfcraft_render::LinkTarget::Page(p, _) => json!({ "page": p.saturating_add(1) }),
+        pdfcraft_render::LinkTarget::Uri(u) => json!({ "uri": u }),
+        pdfcraft_render::LinkTarget::SetLayers { changes, preserve_rb } => json!({
+            "layers": changes.iter().map(|(op, ocg)| json!({
+                "layer": i.layers.iter().find(|l| l.id == *ocg).map(|l| l.name.as_str()),
+                "state": match op {
+                    pdfcraft_render::LayerOp::On => "on",
+                    pdfcraft_render::LayerOp::Off => "off",
+                    pdfcraft_render::LayerOp::Toggle => "toggle",
+                },
+            })).collect::<Vec<_>>(),
+            "preserve_rb": preserve_rb,
+        }),
+        pdfcraft_render::LinkTarget::RemoteGoTo { launch, file, destination, new_window } => json!({
+            "action": if *launch { "Launch" } else { "GoToR" },
+            "remote_document": file,
+            "destination": match destination {
+                pdfcraft_render::RemoteDestination::Default => json!({ "kind": "default" }),
+                pdfcraft_render::RemoteDestination::Page { page, view } => json!({ "kind": "page", "page": page.saturating_add(1), "view": format!("{view:?}") }),
+                pdfcraft_render::RemoteDestination::Named(name) => json!({ "kind": "named", "name": name }),
+            },
+            "new_window": new_window,
+        }),
+        pdfcraft_render::LinkTarget::Other(o) => json!({ "other": o }),
+        pdfcraft_render::LinkTarget::Named(n) => json!({ "named": n }),
+        pdfcraft_render::LinkTarget::Hide { fields, hide } => json!({ if *hide { "hide" } else { "show" }: fields }),
+        pdfcraft_render::LinkTarget::ResetForm { fields, exclude } => json!({ "reset_form": fields, "exclude": exclude }),
+    }
 }
 
 /// A user-space rectangle on 0-based `page` in displayed-page coordinates (points from the

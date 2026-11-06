@@ -30,7 +30,7 @@ mod navigation;
 mod resources;
 
 #[cfg(test)]
-use annotations::{MAX_ANNOTATION_BYTES, MAX_LINK_ATTACHMENT_TEXT_BYTES, MAX_REMOTE_FILE_SPEC_BYTES, retained};
+use annotations::{MAX_ANNOTATION_BYTES, MAX_LINK_ACTIONS, MAX_LINK_ATTACHMENT_TEXT_BYTES, MAX_REMOTE_FILE_SPEC_BYTES, retained};
 use core::Inspector;
 pub use core::{check_pages, inspect, pretty_date};
 #[cfg(test)]

@@ -801,7 +801,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         && input.released_over
         && let Some(l) = info.links.iter().find(|l| l.page == i && l.index == index)
     {
-        frame.out.clicked_link = Some(l.target.clone());
+        frame.out.clicked_link = Some(l.clone());
     }
     // Comments say what they are with any tool, beside its cursor, as Acrobat's do.
     comments::describe(&pcx, view);
