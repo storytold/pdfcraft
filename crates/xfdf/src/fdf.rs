@@ -42,13 +42,23 @@ struct FdfCopy<'a> {
     objects: Vec<Object>,
     numbers: HashMap<ObjRef, u32>,
     pending: Vec<(ObjRef, usize)>,
+    /// The leaf pages of the source document, by identity: whatever their `/Type` says (or does not).
+    source_pages: HashSet<ObjRef>,
     nodes: usize,
     bytes: usize,
 }
 
 impl<'a> FdfCopy<'a> {
     fn new(doc: &'a Document) -> Self {
-        Self { doc, objects: Vec::new(), numbers: HashMap::new(), pending: Vec::new(), nodes: MAX_FDF_OBJECTS, bytes: MAX_FDF_BYTES }
+        Self {
+            doc,
+            objects: Vec::new(),
+            numbers: HashMap::new(),
+            pending: Vec::new(),
+            source_pages: HashSet::new(),
+            nodes: MAX_FDF_OBJECTS,
+            bytes: MAX_FDF_BYTES,
+        }
     }
 
     fn charge(&mut self, bytes: usize) -> Result<(), DataError> {
@@ -178,7 +188,7 @@ impl<'a> FdfCopy<'a> {
         while let Some((source, index)) = self.pending.get(cursor).copied() {
             // ISO 32000-2 §7.3.10: an absent or stale reference denotes null. Keep reader
             // errors distinct so damaged objects cannot be silently lost during export.
-            let value = if doc.generation(source.num) != source.generation {
+            let value = if doc.generation(source.num) != source.generation || self.source_pages.contains(&source) {
                 std::sync::Arc::new(Object::Null)
             } else {
                 match doc.try_get(source.num) {
@@ -247,6 +257,8 @@ pub fn export_fdf(doc: &Document, comments: bool, fields: bool, file: &str) -> R
         // Keep the page/array owners once. Handles retain positions, never annotation
         // bodies: the document cache can evict and reparse even a repeated source reference.
         let pages = pdfcraft_model::pages(doc);
+        // Page discovery accepts a leaf with no /Type: the export keeps these out by reference too.
+        copy.source_pages = pages.iter().map(|p| p.obj).collect();
         let mut arrays = Vec::new();
         let mut picked: Vec<(Option<ObjRef>, usize, usize)> = Vec::new();
         for (pi, page) in pages.iter().enumerate() {

@@ -1575,6 +1575,43 @@ fn xml_form_import_preserves_text_around_comments_and_instructions() {
     }
 }
 
+/// Page discovery accepts a leaf without /Type, so a comment's nested reference to one must not
+/// carry the page or its content into the export.
+#[test]
+fn fdf_export_nulls_a_nested_link_to_a_page_without_a_type() {
+    let source = {
+        let mut doc = Document::new_empty();
+        let root = doc.root().unwrap();
+        let tree = doc.get(root).as_dict().unwrap().reference(b"Pages").unwrap();
+        let contents = doc.add(pdfcraft_cos::Stream::from_raw(Dict::new(), b"% private-page-content\n".repeat(4_096)));
+        let mut page = Dict::new();
+        page.set(b"Parent".to_vec(), Object::Ref(tree));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+        page.set(b"Contents".to_vec(), Object::Ref(contents));
+        let page = doc.add(page);
+        doc.update_dict(tree, |d| {
+            d.set(b"Type".to_vec(), Object::name("Pages"));
+            d.set(b"Count".to_vec(), Object::Int(1));
+            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+        })
+        .unwrap();
+        let mut target = Dict::new();
+        target.set(b"Label".to_vec(), PdfString::text("kept"));
+        target.set(b"Target".to_vec(), Object::Ref(page));
+        fdf_note_with_data(&mut doc, Object::Array(vec![Object::Dict(target)]));
+        write_full(&doc, &SaveOptions::default()).unwrap()
+    };
+    let source = Document::open(Arc::new(source)).unwrap();
+    assert_eq!(pdfcraft_model::pages(&source).len(), 1);
+    let bytes = export_fdf(&source, true, false, "source.pdf").unwrap();
+    assert!(bytes.len() < 4_096, "the untyped page's content must stay in the PDF ({} bytes)", bytes.len());
+    let fdf = Document::open(Arc::new(bytes)).unwrap();
+    let data = exported_note_data(&fdf);
+    let target = data.as_array().unwrap()[0].as_dict().unwrap();
+    assert_eq!(target.get(b"Label").unwrap().as_string().unwrap().to_text(), "kept");
+    assert_eq!(*fdf.resolve(target.get(b"Target").unwrap()), Object::Null);
+}
+
 #[test]
 fn fdf_export_nulls_nested_page_links_without_copying_the_source_page_tree() {
     for indirect_type in [false, true] {
