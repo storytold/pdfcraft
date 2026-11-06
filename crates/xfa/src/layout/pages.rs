@@ -139,7 +139,7 @@ impl Layouter<'_> {
     }
 
     /// Whether the flow is still in the content area `m` was taken in.
-    fn on_area(&self, m: &FlowMark) -> bool {
+    pub(super) fn on_area(&self, m: &FlowMark) -> bool {
         self.pages.len() == m.page && self.cur.as_ref().is_some_and(|c| c.area == m.area && c.content == m.content)
     }
 
@@ -160,7 +160,7 @@ impl Layouter<'_> {
         let (rect, mut y, _) = self.cursor();
         let page = self.pages.len().saturating_sub(1);
         let here: Vec<bool> = self.frames.iter().map(|f| self.on_area(&f.part)).collect();
-        let filled: Vec<bool> = self.frames.iter().map(|f| self.has_items_from(page, f.part.items)).collect();
+        let filled: Vec<bool> = self.frames.iter().map(|f| f.held || self.has_items_from(page, f.part.items)).collect();
         for ((f, here), filled) in self.frames.iter_mut().zip(here).zip(filled).rev() {
             y = (y + f.margin.bottom).min(rect.bottom());
             if !here {
@@ -180,12 +180,20 @@ impl Layouter<'_> {
             let Some(mark) = self.flow_mark() else { break };
             let Some(f) = self.frames.get_mut(i) else { break };
             f.part = mark;
+            f.held = false;
             // `max` before `min`: a NaN margin counts as none and leaves `room` a number.
             let top = f.margin.top.max(0.0).min(room);
             room = (room - top).max(0.0);
             self.advance(top);
         }
         Ok(())
+    }
+
+    /// The bottom margins of the flowed subforms being laid out, which a break leaves below their
+    /// content ([`Self::break_frames`]).
+    pub(super) fn frames_bottom(&self) -> f64 {
+        // `max` first: a NaN margin counts as none.
+        self.frames.iter().map(|f| f.margin.bottom.max(0.0)).sum()
     }
 
     /// Close flowed subform `f` once its content is placed: its last part ends where the flow
@@ -204,7 +212,7 @@ impl Layouter<'_> {
         let page = self.pages.len().saturating_sub(1);
         if !self.on_area(&f.part) {
             f.lost = true;
-        } else if self.has_items_from(page, f.part.items) && end - f.part.y >= 0.01 {
+        } else if (f.held || self.has_items_from(page, f.part.items)) && end - f.part.y >= 0.01 {
             f.parts.push((page, f.part.items, Rect::new(f.x, f.part.y, f.w, end - f.part.y)));
         }
         if f.lost {
@@ -220,7 +228,7 @@ impl Layouter<'_> {
 
     /// Draw border `b` round `rect` on page `page` (an index), under what that page got from item
     /// `at` on.
-    fn insert_border(&mut self, b: &Border, rect: Rect, page: usize, at: usize) -> Result<(), XfaError> {
+    pub(super) fn insert_border(&mut self, b: &Border, rect: Rect, page: usize, at: usize) -> Result<(), XfaError> {
         let before = self.pages.last().map_or(0, |p| p.items.len());
         self.draw_border(b, rect)?;
         let drawn: Vec<Item> = match self.pages.last_mut() {
