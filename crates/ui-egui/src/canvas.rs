@@ -1279,7 +1279,7 @@ impl PageFrame<'_> {
     /// that touch (the gaps hidden) can share a row of pixels, and a right-click there is one
     /// page's, as a press is.
     fn right_click_on(&mut self, rect: Rect) -> Option<Pos2> {
-        let p = self.pointer.filter(|p| !self.right_clicked && self.resp.secondary_clicked() && rect.contains(*p))?;
+        let p = self.pointer.filter(|p| !self.right_clicked && !self.ptr.blocked_press && self.resp.secondary_clicked() && rect.contains(*p))?;
         self.right_clicked = true;
         Some(p)
     }
