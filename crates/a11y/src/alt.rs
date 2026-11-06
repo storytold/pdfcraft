@@ -102,7 +102,13 @@ pub(crate) fn elements(doc: &Document) -> Vec<Element> {
                 if !seen.insert(r) {
                     continue;
                 }
-                let Some(d) = doc.get(r).as_dict().cloned() else { continue };
+                let target = doc.get(r);
+                if matches!(&*target, Object::Array(_) | Object::Ref(_)) {
+                    // An indirect /K array is a container, not an element or a parent.
+                    stack.push(((*target).clone(), pg, parent, depth));
+                    continue;
+                }
+                let Some(d) = target.as_dict().cloned() else { continue };
                 if d.contains(b"S") {
                     let pg = d.get(b"Pg").and_then(Object::as_ref).or(pg);
                     if let Some(kids) = d.get(b"K") {
