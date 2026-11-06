@@ -26,6 +26,10 @@ pub struct Find {
     pub whole_words: bool,
     /// Shown in the Search panel (Advanced Search) instead of the find bar.
     pub in_panel: bool,
+    /// The width the find bar keeps for its status ("3 of 12"), the widest it has needed since
+    /// the bar opened. The bar is anchored on its right edge, so a status that changed width as
+    /// it counted would slide the text box sideways under the pointer (#5957).
+    pub status_width: f32,
 }
 
 /// What a text layer arriving after a search began may do with the automatic choice.
@@ -204,6 +208,17 @@ impl DocView {
     }
 }
 
+/// The status width the find bar starts with: enough for "No matches" and for "Searching… N/N"
+/// whatever the count, with `pages`' number of digits, each the font's widest. Inter's digits
+/// differ in width ("1" is about two thirds of "4"), so the count alone would change it.
+fn steady_status_width(ui: &egui::Ui, pages: usize, font: &egui::FontId) -> f32 {
+    let width = |text: String| ui.painter().layout_no_wrap(text, font.clone(), Color32::WHITE).size().x;
+    let widest = ('0'..='9').map(|d| (width(d.to_string()), d)).max_by(|a, b| a.0.total_cmp(&b.0)).map_or('0', |(_, d)| d);
+    let count = widest.to_string().repeat(pages.to_string().len());
+    let searching = crate::i18n::fmt(tl!("Searching… {s}/{p}"), &[("s", &count), ("p", &count)]);
+    width(searching).max(width(tl!("No matches").to_string()))
+}
+
 /// Acrobat-style floating find bar at the top-right of the document area.
 pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut egui::Ui, t: &Tokens) {
     let Some(find) = view.find.as_mut() else { return };
@@ -264,7 +279,20 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
                                 ],
                             )
                         };
-                        ui.label(egui::RichText::new(status).font(theme::regular(12.0)).color(t.text_muted));
+                        let font = theme::regular(12.0);
+                        let status = ui.painter().layout_no_wrap(status, font.clone(), t.text_muted);
+                        if find.status_width <= 0.0 {
+                            find.status_width = steady_status_width(ui, pages, &font);
+                        }
+                        find.status_width = find.status_width.max(status.size().x);
+                        ui.allocate_ui_with_layout(
+                            vec2(find.status_width, status.size().y),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_min_width(find.status_width);
+                                ui.label(status);
+                            },
+                        );
                         let tip = crate::commands::key_tip(ui.ctx(), tl!("Previous ({key})"), crate::commands::FIND_PREV);
                         if icons::button(ui, "chevron-up", 26.0, false, &tip).clicked() {
                             step = Some(false);
@@ -297,5 +325,32 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
     }
     if let Some(forward) = step {
         view.find_step(forward);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// #5957: the status width the find bar starts with fits every "Searching… s/p" the count can
+    /// show, in the app's own faces, whose digits differ in width, so the counting phase never
+    /// widens the bar (an integration test can't hold page text back to see that phase drawn).
+    #[test]
+    fn the_steady_width_fits_every_count_while_searching() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let mut checked = 0;
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let font = crate::theme::regular(12.0);
+            for pages in [9, 400, 1234] {
+                let steady = super::steady_status_width(ui, pages, &font);
+                for searched in 0..=pages {
+                    let text = crate::i18n::fmt(tl!("Searching… {s}/{p}"), &[("s", &searched.to_string()), ("p", &pages.to_string())]);
+                    let width = ui.painter().layout_no_wrap(text, font.clone(), egui::Color32::WHITE).size().x;
+                    assert!(width <= steady + 0.01, "{searched}/{pages} needs {width}, more than {steady}");
+                    checked += 1;
+                }
+            }
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(checked, 10 + 401 + 1235);
     }
 }
