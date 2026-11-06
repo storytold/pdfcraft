@@ -4697,6 +4697,215 @@ fn non_identity_cm_before_gs_preserves_mask_coordinates_and_rendering() {
     assert_eq!(px_after(5, 5), px_before(5, 5));
 }
 
+/// A 1×1 image XObject with one grey sample.
+fn tiny_image(doc: &mut Document, sample: u8) -> pdfcraft_cos::ObjRef {
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(1));
+    d.set(b"Height".to_vec(), Object::Int(1));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    doc.add(Object::Stream(Stream::from_raw(d, vec![sample])))
+}
+
+/// A Form with bounding box `[0 0 100 100]` that draws `content` with `xobjects` as resources.
+fn group(doc: &mut Document, content: &[u8], xobjects: &[(&str, pdfcraft_cos::ObjRef)]) -> pdfcraft_cos::ObjRef {
+    let mut xo = Dict::new();
+    for (name, r) in xobjects {
+        xo.set(name.as_bytes().to_vec(), Object::Ref(*r));
+    }
+    let mut res = Dict::new();
+    res.set(b"XObject".to_vec(), Object::Dict(xo));
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 100, 100].map(Object::Int).to_vec()));
+    form.set(b"Resources".to_vec(), Object::Dict(res));
+    doc.add(Object::Stream(Stream::flate(form, content)))
+}
+
+/// Draws `artwork` as `/Figure` on page 0 and reopens the document.
+fn draw_figure(mut doc: Document, artwork: pdfcraft_cos::ObjRef) -> Document {
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+        let mut xo = Dict::new();
+        xo.set(b"Figure".to_vec(), Object::Ref(artwork));
+        d.set(b"XObject".to_vec(), Object::Dict(xo));
+    })
+    .unwrap();
+    doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"q 1 0 0 1 40 80 cm /Figure Do Q")));
+    reopen(&doc)
+}
+
+/// The image a Form draws as `name`, following `through` nested Forms first.
+fn picture_of(doc: &Document, form: pdfcraft_cos::ObjRef, through: &[&str], name: &str) -> Option<pdfcraft_cos::ObjRef> {
+    let mut at = form;
+    for step in through.iter().chain([&name]) {
+        let obj = doc.get(at);
+        let Object::Stream(s) = &*obj else { return None };
+        let res = s.dict.get(b"Resources").map(|r| doc.resolve(r))?;
+        let xo = res.as_dict()?.get(b"XObject").map(|x| doc.resolve(x))?;
+        at = xo.as_dict()?.get(step.as_bytes())?.as_ref()?;
+    }
+    Some(at)
+}
+
+#[test]
+fn grouped_artwork_with_one_picture_is_replaced_inside_a_copy_of_the_group() {
+    // A photo in a round frame: the clip and the placement live in the group, around the picture.
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let clip = b"q 50 100 m 100 100 100 50 c 100 0 50 0 c W n 100 0 0 100 0 0 cm /Ph Do Q";
+    let artwork = group(&mut doc, clip, &[("Ph", photo)]);
+    let mut doc = draw_figure(doc, artwork);
+    let before = images::page_images(&doc, 0).unwrap();
+    assert!(before[0].is_form && before[0].replaceable);
+    let original = doc.get(artwork);
+
+    let new_photo = tiny_image(&mut doc, 200);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Replace(new_photo)).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert!(after[0].is_form, "still the group, with its frame");
+    assert!(close(after[0].rect, before[0].rect), "in the same place: {:?}", after[0].rect);
+    let copy = after[0].object.unwrap();
+    assert_ne!(copy, artwork, "a copy of the group is drawn");
+    assert_eq!(picture_of(&doc, copy, &[], "Ph"), Some(new_photo));
+    let (Object::Stream(old), Object::Stream(new)) = (&*original, &*doc.get(copy)) else { panic!("forms are streams") };
+    assert_eq!(old.decoded().unwrap(), new.decoded().unwrap(), "the clip and placement are kept");
+    assert_eq!(*doc.get(artwork), *original, "the original group, which other pages may share, is untouched");
+}
+
+#[test]
+fn a_picture_in_nested_groups_is_replaced_and_an_ambiguous_group_is_refused() {
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let inner = group(&mut doc, b"100 0 0 100 0 0 cm /Ph Do", &[("Ph", photo)]);
+    let outer = group(&mut doc, b"0 0 100 100 re W n /In Do", &[("In", inner)]);
+    let mut doc = draw_figure(doc, outer);
+    assert!(images::page_images(&doc, 0).unwrap()[0].replaceable);
+    let new_photo = tiny_image(&mut doc, 200);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Replace(new_photo)).unwrap();
+    let doc = reopen(&doc);
+    let copy = images::page_images(&doc, 0).unwrap()[0].object.unwrap();
+    assert_eq!(picture_of(&doc, copy, &["In"], "Ph"), Some(new_photo));
+    assert_eq!(picture_of(&doc, outer, &["In"], "Ph"), Some(photo), "the original groups are untouched");
+
+    // Two pictures: which one to replace is a guess, so the group is not replaceable.
+    let mut doc = fixture();
+    let (a, b) = (tiny_image(&mut doc, 40), tiny_image(&mut doc, 90));
+    let both = group(&mut doc, b"q 50 0 0 50 0 0 cm /A Do Q q 50 0 0 50 50 50 cm /B Do Q", &[("A", a), ("B", b)]);
+    let mut doc = draw_figure(doc, both);
+    assert!(!images::page_images(&doc, 0).unwrap()[0].replaceable);
+    let new_photo = tiny_image(&mut doc, 200);
+    assert!(images::change_image(&mut doc, 0, 0, &images::ImageChange::Replace(new_photo)).is_err());
+}
+
+/// `photo` drawn as `/Ph` inside `nested` Forms, inside the group returned.
+fn nested_groups(doc: &mut Document, photo: pdfcraft_cos::ObjRef, nested: usize) -> pdfcraft_cos::ObjRef {
+    let mut inner = group(doc, b"100 0 0 100 0 0 cm /Ph Do", &[("Ph", photo)]);
+    for _ in 0..nested {
+        inner = group(doc, b"/In Do", &[("In", inner)]);
+    }
+    inner
+}
+
+/// Whether the group drawn on page 0 offers Replace, and whether Replace agrees.
+fn replace_offered_and_done(mut doc: Document) -> (bool, bool) {
+    let offered = images::page_images(&doc, 0).unwrap()[0].replaceable;
+    let new_photo = tiny_image(&mut doc, 200);
+    (offered, images::change_image(&mut doc, 0, 0, &images::ImageChange::Replace(new_photo)).is_ok())
+}
+
+#[test]
+fn replace_looks_as_deep_as_its_limit_and_refuses_what_lies_beyond() {
+    // The picture eight names deep (seven Forms below the group) is found and replaced.
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let deepest = nested_groups(&mut doc, photo, 7);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, deepest)), (true, true));
+    // One Form deeper, the scan stops at the limit: what it can't see may be another picture.
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let too_deep = nested_groups(&mut doc, photo, 8);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, too_deep)), (false, false));
+    // A shallow picture beside one just past the limit (eight Forms down) is not the only one.
+    let mut doc = fixture();
+    let (shallow, hidden) = (tiny_image(&mut doc, 40), tiny_image(&mut doc, 90));
+    let deep = nested_groups(&mut doc, hidden, 7);
+    let both = group(&mut doc, b"q 50 0 0 50 0 0 cm /Ph Do Q /Deep Do", &[("Ph", shallow), ("Deep", deep)]);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, both)), (false, false));
+}
+
+#[test]
+fn replace_follows_what_a_group_draws() {
+    // A frame drawn twice around one picture: still one picture.
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let frame = group(&mut doc, b"0 0 100 100 re S", &[]);
+    let framed = group(&mut doc, b"/Fr Do q 100 0 0 100 0 0 cm /Ph Do Q /Fr Do", &[("Fr", frame), ("Ph", photo)]);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, framed)), (true, true));
+    // A picture the group lists but never draws doesn't count.
+    let mut doc = fixture();
+    let (photo, unused) = (tiny_image(&mut doc, 40), tiny_image(&mut doc, 90));
+    let listed = group(&mut doc, b"100 0 0 100 0 0 cm /Ph Do", &[("Ph", photo), ("Unused", unused)]);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, listed)), (true, true));
+    // One picture drawn twice, or inside a Form drawn twice: replacing it would change both.
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let twice = group(&mut doc, b"q 50 0 0 50 0 0 cm /Ph Do Q q 50 0 0 50 50 50 cm /Ph Do Q", &[("Ph", photo)]);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, twice)), (false, false));
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let inner = nested_groups(&mut doc, photo, 0);
+    let shared = group(&mut doc, b"/In Do /In Do", &[("In", inner)]);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, shared)), (false, false));
+    // An inline picture beside it: two pictures.
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let inline = group(&mut doc, b"q 100 0 0 100 0 0 cm /Ph Do Q q 10 0 0 10 0 0 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x80 EI Q", &[("Ph", photo)]);
+    assert_eq!(replace_offered_and_done(draw_figure(doc, inline)), (false, false));
+}
+
+#[test]
+fn a_group_that_draws_itself_is_not_replaced() {
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let looped = group(&mut doc, b"q 100 0 0 100 0 0 cm /Ph Do Q /Self Do", &[("Ph", photo)]);
+    // The group names itself: a cycle the scan must stop at, never a picture.
+    doc.update_dict(looped, |d| {
+        if let Some(Object::Dict(res)) = d.get_mut(b"Resources")
+            && let Some(Object::Dict(xo)) = res.get_mut(b"XObject")
+        {
+            xo.set(b"Self".to_vec(), Object::Ref(looped));
+        }
+    })
+    .unwrap();
+    assert_eq!(replace_offered_and_done(draw_figure(doc, looped)), (false, false));
+}
+
+#[test]
+fn a_group_drawn_many_times_is_scanned_once() {
+    // A tiled page: one group with a long content stream, drawn over and over. Scanning the
+    // group again for every draw would decode its content once per tile.
+    let mut doc = fixture();
+    let photo = tiny_image(&mut doc, 40);
+    let mut content = b"q 100 0 0 100 0 0 cm /Ph Do Q\n".to_vec();
+    content.extend(b"0 0 m\n".repeat(100_000));
+    let tile = group(&mut doc, &content, &[("Ph", photo)]);
+    let mut doc = draw_figure(doc, tile);
+    let draws = b"q 1 0 0 1 40 80 cm /Figure Do Q\n".repeat(2_000);
+    doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), &draws)));
+    let doc = reopen(&doc);
+
+    let started = std::time::Instant::now();
+    let images = page_images(&doc, 0).unwrap();
+    let took = started.elapsed();
+    assert_eq!(images.len(), 2_000);
+    assert!(images.iter().all(|i| i.is_form && i.replaceable));
+    assert!(took < std::time::Duration::from_secs(20), "page_images took {took:?}");
+}
+
 #[test]
 fn form_artwork_edits_only_the_selected_placement() {
     let mut doc = fixture(); // three pages share resources; pages 0 and 1 also share contents

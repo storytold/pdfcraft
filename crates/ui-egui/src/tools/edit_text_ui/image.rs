@@ -1099,7 +1099,8 @@ pub(crate) fn image_context_menu(
         }
     });
 
-    if item(ui, raster, tl!("Replace image")) {
+    // A raster image, or grouped artwork that wraps one picture (its frame and clip are kept).
+    if item(ui, img.replaceable, tl!("Replace image")) {
         *action = Some(ImageAction::Replace(page, hit));
     }
     if item(ui, raster, tl!("Save Image As…")) {
