@@ -380,12 +380,15 @@ pub const RECENT_FILES_DEFAULT: usize = 12;
 /// The most Preferences can ask to keep.
 pub const RECENT_FILES_MAX: usize = 50;
 
+/// A file in the Recent list, with its path, page count, byte size and whether it is pinned.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct RecentFile {
     pub name: String,
     pub path: String,
     pub pages: usize,
     pub size: usize,
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// Where in a document a request to open an address came from.

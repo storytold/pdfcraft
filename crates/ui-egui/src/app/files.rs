@@ -332,10 +332,8 @@ impl PdfCraftApp {
         if let Some(p) = path {
             #[cfg(target_os = "macos")]
             macos_association::repair(std::path::Path::new(&p));
-            self.recent.retain(|r| r.path != p);
             self.recent_check.opened(&p);
-            self.recent.insert(0, RecentFile { name: name.to_string(), path: p, pages, size });
-            self.recent.truncate(self.recent_limit);
+            self.add_recent(name, p, pages, size);
         }
         // What the form's scripts said while it opened (messages, errors) shows now, not with
         // the next edit.
@@ -346,6 +344,16 @@ impl PdfCraftApp {
             self.handle_js(id, out);
         }
         Ok(id)
+    }
+
+    /// Record `path` at the head of the Recent list, preserving its pinned state and keeping
+    /// pinned files at the top and within the recent-files cap.
+    pub(crate) fn add_recent(&mut self, name: &str, path: String, pages: usize, size: usize) {
+        let pinned = self.recent.iter().find(|r| same_file(&r.path, &path)).is_some_and(|r| r.pinned);
+        self.recent.retain(|r| !same_file(&r.path, &path));
+        self.recent.insert(0, RecentFile { name: name.to_string(), path, pages, size, pinned });
+        self.recent.sort_by_key(|r| !r.pinned);
+        self.recent.truncate(self.recent_limit);
     }
 
     /// Edit ▸ Attach a file…: choose a file, then attach it to the active document and show
