@@ -44,6 +44,7 @@ mod pictures;
 pub mod print_raster;
 pub mod printcheck;
 mod protection;
+mod rich_copy;
 pub mod scan_clean;
 mod scan_colours;
 mod scan_fields;
@@ -68,6 +69,7 @@ pub use links::{
     MAX_REMOTE_DOCUMENT_BYTES, RemoteDocumentPathError, read_remote_document, remote_document_path_is_absolute, resolve_remote_document_path,
 };
 pub use pdfcraft_edit::strip_subset_tag;
+pub use rich_copy::RichCopy;
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
 pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};
 pub use stamp_preview::{CommentLayer, StampPreview};
