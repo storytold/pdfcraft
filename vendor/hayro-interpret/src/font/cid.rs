@@ -16,6 +16,7 @@ use kurbo::{BezPath, Vec2};
 use skrifa::attribute::Style;
 use skrifa::charmap::MapVariant;
 use skrifa::raw::collections::int_set::Domain;
+use skrifa::raw::tables::post::DEFAULT_GLYPH_NAMES;
 use skrifa::{FontRef, GlyphId, MetadataProvider};
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -50,6 +51,11 @@ pub(crate) struct Type0Font {
     /// such text as the code's Unicode value; the identity CMap the name resolves to maps codes
     /// to CIDs only and gave no text at all.
     identity_to_unicode: bool,
+    /// PdfCraft patch: an Arial the PDF doesn't embed, as a TrueType CID font (`CIDFontType2`)
+    /// whose CIDs aren't of an Adobe character collection. Its CIDToGIDMap gives glyph indexes
+    /// in the author's Arial, which numbers its first 258 glyphs in the standard Macintosh order
+    /// of the TrueType `post` table (#5889).
+    mac_glyph_order: bool,
 }
 
 impl Type0Font {
@@ -153,6 +159,17 @@ impl Type0Font {
             .get::<Name<'_>>(BASE_FONT)
             .map(|n| strip_subset_prefix(n.as_str()).to_string());
 
+        // PdfCraft patch: the descendant names the font program itself; a Type 0 font's own
+        // `/BaseFont` may carry the CMap's name after it.
+        let mac_glyph_order = fallback
+            && !adobe_collection
+            && descendant_font
+                .get::<Name<'_>>(SUBTYPE)
+                .is_some_and(|s| s.deref() == CID_FONT_TYPE2)
+            && descendant_font
+                .get::<Name<'_>>(BASE_FONT)
+                .is_some_and(|n| is_arial(strip_subset_prefix(n.as_str())));
+
         // Extract font flags from descriptor
         let font_flags = font_descriptor
             .get::<u32>(FLAGS)
@@ -175,6 +192,7 @@ impl Type0Font {
             to_unicode_is_cid_indexed,
             adobe_collection,
             identity_to_unicode,
+            mac_glyph_order,
         })
     }
 
@@ -195,6 +213,15 @@ impl Type0Font {
             && let Some(glyph) = self.map_via_unicode(to_unicode_key)
         {
             // Yay, Unicode worked!
+            return glyph;
+        }
+
+        // PdfCraft patch: the CID of an Arial the PDF doesn't embed names an Arial glyph, which
+        // the substitute draws by that name. Taken as the substitute's own glyph index it drew
+        // an unrelated glyph: "Low Power" as "@ck 'Dck Yf" (#5889).
+        if self.mac_glyph_order
+            && let Some(glyph) = self.map_via_mac_glyph_name(cid)
+        {
             return glyph;
         }
 
@@ -305,6 +332,27 @@ impl Type0Font {
                 None
             }
         }
+    }
+
+    /// PdfCraft patch: the substitute's glyph for the Arial glyph that `cid` gives, found by
+    /// that glyph's name in the standard Macintosh order. `None` past the 258 glyphs the order
+    /// names, and for a substitute that isn't a name-keyed CFF font (the standard substitutes
+    /// are); .notdef for a name the substitute has no glyph for.
+    fn map_via_mac_glyph_name(&self, cid: u32) -> Option<GlyphId> {
+        let FontType::Cff(c) = &self.font_type else {
+            return None;
+        };
+        if c.is_cid() {
+            return None;
+        }
+        let gid = self.cid_to_gid_map.map(u16::try_from(cid).ok()?);
+        let name = *DEFAULT_GLYPH_NAMES.get(usize::try_from(gid.to_u32()).ok()?)?;
+        // `.null` and `nonmarkingreturn` draw nothing, and `nonbreakingspace` is a space.
+        let name = match name {
+            ".null" | "nonmarkingreturn" | "nonbreakingspace" => "space",
+            name => name,
+        };
+        Some(c.glyph_index_by_name(name).unwrap_or(GlyphId::NOTDEF))
     }
 
     fn code_to_cid(&self, code: u32) -> Option<u32> {
@@ -580,6 +628,33 @@ impl CidToGIdMap {
 /// PdfCraft patch: Variation Selectors (U+FE00–U+FE0F) and their supplement (U+E0100–U+E01EF).
 fn is_variation_selector(c: char) -> bool {
     matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
+}
+
+/// PdfCraft patch: whether `name`, a `/BaseFont` without its subset tag, is one of the four
+/// Arial faces as exporters name them: `ArialMT`, `Arial-BoldMT`, `Arial-ItalicMT`,
+/// `Arial-BoldItalicMT`, or `Arial` followed by `,Bold`, `,Italic` or `,BoldItalic`. Arial
+/// Narrow, Arial Black, Arial Unicode MS and Arial Rounded are other fonts, numbered their own
+/// way. Letter case doesn't matter, `MT` included.
+fn is_arial(name: &str) -> bool {
+    let (family, style) = name.split_once([',', '-', ' ']).unwrap_or((name, ""));
+    let style: String = style
+        .chars()
+        .filter(|c| !matches!(c, ',' | '-' | ' '))
+        .collect();
+    without_mt(family).eq_ignore_ascii_case("Arial")
+        && ["", "Regular", "Bold", "Italic", "BoldItalic"]
+            .iter()
+            .any(|s| without_mt(&style).eq_ignore_ascii_case(s))
+}
+
+/// PdfCraft patch: `name` without a trailing `MT` in any letter case (Monotype's mark in
+/// PostScript names such as `ArialMT`).
+fn without_mt(name: &str) -> &str {
+    name.len()
+        .checked_sub(2)
+        .and_then(|stem| Some((name.get(..stem)?, name.get(stem..)?)))
+        .filter(|(_, suffix)| suffix.eq_ignore_ascii_case("MT"))
+        .map_or(name, |(stem, _)| stem)
 }
 
 /// PdfCraft patch: the largest CID (ISO 32000-2 §9.7.2; CIDs are at most two bytes).
