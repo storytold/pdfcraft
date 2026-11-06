@@ -7,9 +7,13 @@ use super::{Dict, Document, FieldConflicts, HashMap, ObjRef, Object, OrganizeErr
 /// go to the copied pages.
 pub fn extract_pages(src: &Document, pages: &[usize]) -> Result<Document, OrganizeError> {
     let mut out = Document::new_empty();
+    let mut labels = Vec::new();
+    let mut has_labels = false;
+    crate::labels::collect_page_labels(src, pages, 0, &mut labels, &mut has_labels)?;
     // One source: nothing to deduplicate. Its fields keep their names (a source with two
     // same-named field roots stays one field, as it was), so Extract and Split never rename.
     let imported = import_pages_mapped(&mut out, src, pages, 0, FieldConflicts::Merge)?;
+    crate::labels::finish_page_labels(&mut out, &labels, has_labels)?;
     // The bookmarks of these pages come along, mapped to the copies (#4020).
     let outline = kept_bookmarks(source_outline(src, imported.page_map));
     if !outline.is_empty() {
@@ -118,6 +122,8 @@ pub struct Combiner {
     out: Document,
     marks: Vec<Mark>,
     attachments: Vec<(Vec<u8>, Object)>,
+    labels: Vec<crate::LabelRange>,
+    has_labels: bool,
     /// The first source's print standard, and what its pages brought along.
     standard: Option<Standard>,
     /// Whether every source so far declares the first source's print standard.
@@ -155,6 +161,8 @@ impl Combiner {
             out: Document::new_empty(),
             marks: Vec::new(),
             attachments: Vec::new(),
+            labels: Vec::new(),
+            has_labels: false,
             standard: None,
             agreed: true,
             field_conflicts,
@@ -181,7 +189,12 @@ impl Combiner {
             None => (0..n).collect(),
         };
         let at = crate::page_count(&self.out)?;
+        let mut labels = self.labels.clone();
+        let mut has_labels = self.has_labels;
+        crate::labels::collect_page_labels(src, &pages, at, &mut labels, &mut has_labels)?;
         let imported = import_pages_mapped(&mut self.out, src, &pages, at, self.field_conflicts)?;
+        self.labels = labels;
+        self.has_labels = has_labels;
         self.renamed_fields.extend(imported.renamed_fields);
         if let Some(first) = imported.pages.first() {
             let outline = source_outline(src, imported.page_map);
@@ -207,13 +220,14 @@ impl Combiner {
 
     /// [`Combiner::finish`] reporting what the combine renamed.
     pub fn finish_with_renames(self) -> Result<CombineOutcome, OrganizeError> {
-        let Combiner { mut out, marks, attachments, standard, agreed, renamed_fields, .. } = self;
+        let Combiner { mut out, marks, attachments, labels, has_labels, standard, agreed, renamed_fields, .. } = self;
         if let Some(first) = standard.filter(|_| agreed) {
             crate::pdfx::carry(&mut out, first.source.as_ref(), &first.declared, first.objects)?;
         }
         // Sources often share fonts, images and profiles (or are the same file): store them once.
         let all: Vec<ObjRef> = out.object_numbers().into_iter().map(|n| ObjRef::new(n, out.generation(n))).collect();
         crate::dedupe::dedupe_resources(&mut out, &all, false);
+        crate::labels::finish_page_labels(&mut out, &labels, has_labels)?;
         add_outline(&mut out, &marks)?;
         set_attachments(&mut out, attachments)?;
         Ok(CombineOutcome { doc: out, renamed_fields })
@@ -291,9 +305,18 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
     // The pages in the runs' order. A file's first run comes before its others, and its pages
     // were copied in run order, so its bookmark (its first copied page) is its first page shown.
     let mut order: Vec<(ObjRef, Dict)> = Vec::new();
+    let mut labels = Vec::new();
+    let mut has_labels = false;
     for (file, start, len) in slices {
-        let run = copies.get(file).and_then(|c| c.get(start..start.saturating_add(len))).unwrap_or_default();
+        let end = start.saturating_add(len);
+        let at = order.len();
+        let run = copies.get(file).and_then(|c| c.get(start..end)).unwrap_or_default();
         order.extend(run.iter().map(|r| (*r, Dict::new())));
+        if let Some((_, f)) = files.get(file)
+            && let Some(pages) = f.pages.get(start..end)
+        {
+            crate::labels::collect_page_labels(f.src, pages, at, &mut labels, &mut has_labels)?;
+        }
     }
     rebuild(&mut out, &order)?;
     if let Some((declared, src, objects)) = standard.filter(|_| agreed) {
@@ -301,6 +324,7 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
     }
     let all: Vec<ObjRef> = out.object_numbers().into_iter().map(|n| ObjRef::new(n, out.generation(n))).collect();
     crate::dedupe::dedupe_resources(&mut out, &all, false);
+    crate::labels::finish_page_labels(&mut out, &labels, has_labels)?;
     add_outline(&mut out, &marks)?;
     set_attachments(&mut out, attachments)?;
     Ok(CombineOutcome { doc: out, renamed_fields })
