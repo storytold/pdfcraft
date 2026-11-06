@@ -86,6 +86,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | minor | A thumbnail's right-click menu and the Pages panel's Page tools offer Insert blank page…: before or after the selection, in its size or on A2–A5, Letter or Legal paper, upright or on its side |
 | 2026-10-24 | minor | → / ← scroll a page wider than the window sideways before turning it, by the current page's or spread's edges in continuous view; ⌘→ / ⌘← turn at once |
 | 2026-10-24 | minor | Comment Properties sets a text box's text, border and fill opacity and a shape's line and fill opacity each on its own (Acrobat: one per comment); Make Properties Default carries them into the tool |
 | 2026-10-21 | minor | Pages inspector thumbnail sizing (#3808), separate from page and Organize zoom; view setting retained on reload and exposed through UI control. Not persisted between sessions. |

@@ -36,6 +36,7 @@ struct Pending {
     split_ready: Option<crate::SplitPlan>,
     extract_now: bool,
     rotate_now: bool,
+    insert_blank_now: bool,
     link_now: Option<Edit>,
     recover: Option<bool>,
     number_now: Option<Edit>,
@@ -224,6 +225,11 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
         }
         Dialog::RotatePages => {
             if !dialog_rotate_pages(ui, app, req) {
+                return false;
+            }
+        }
+        Dialog::InsertBlank => {
+            if !dialog_insert_blank(ui, app, req) {
                 return false;
             }
         }
@@ -1172,6 +1178,72 @@ fn dialog_rotate_pages(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendi
     false
 }
 
+/// `Dialog::InsertBlank` content: before the first selected page or after the last, in the size
+/// that page shows or on a paper, upright or on its side. Returns `false` (it has its own buttons).
+fn dialog_insert_blank(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
+    let units = app.units;
+    let targets = app.active.and_then(|i| app.views.get(i)).map(|v| v.target_pages()).unwrap_or_default();
+    // A neighbouring page's label and the size it shows, in points.
+    let page = |n: Option<&usize>| {
+        let (_, id) = app.active_ids()?;
+        let p = app.session.get(id)?.info.pages.get(*n?)?;
+        Some((p.label.clone(), f64::from(p.width), f64::from(p.height)))
+    };
+    let (Some(first), Some(last)) = (page(targets.first()), page(targets.last())) else {
+        req.close = true;
+        return false;
+    };
+    let d = &mut app.blank_draft;
+    ui.label(egui::RichText::new(tl!("Insert Blank Page")).font(theme::semibold(18.0)));
+    ui.add_space(8.0);
+    egui::Grid::new("insert-blank").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+        ui.label(tl!("Location:"));
+        ui.vertical(|ui| {
+            widgets::radio_value(ui, &mut d.before, true, crate::i18n::fmt(tl!("Before page {label}"), &[("label", &first.0)]));
+            widgets::radio_value(ui, &mut d.before, false, crate::i18n::fmt(tl!("After page {label}"), &[("label", &last.0)]));
+        });
+        ui.end_row();
+        let (label, w, h) = if d.before { &first } else { &last };
+        // The page's own size keeps its orientation, which a paper chosen next starts from.
+        if d.paper.is_none() {
+            d.landscape = w > h;
+        }
+        let same = crate::i18n::fmt(tl!("Same as page {label} ({size})"), &[("label", label), ("size", &units.size(*w, *h))]);
+        let paper = |(name, w, h): &(&str, f64, f64)| format!("{name} ({})", units.size(*w, *h));
+        let size_label = ui.label(tl!("Page size:"));
+        let combo = craft_ui::ComboBox::from_id_salt("insert-blank-size")
+            .selected_text(d.paper.and_then(|i| crate::BLANK_PAPERS.get(i)).map_or_else(|| same.clone(), paper))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut d.paper, None, same);
+                for (i, p) in crate::BLANK_PAPERS.iter().enumerate() {
+                    ui.selectable_value(&mut d.paper, Some(i), paper(p));
+                }
+            });
+        // The visible label names the combo box for assistive technology and tests.
+        combo.response.labelled_by(size_label.id);
+        ui.end_row();
+        ui.label(tl!("Orientation:"));
+        ui.add_enabled_ui(d.paper.is_some(), |ui| {
+            ui.horizontal(|ui| {
+                widgets::radio_value(ui, &mut d.landscape, false, tl!("Portrait"));
+                widgets::radio_value(ui, &mut d.landscape, true, tl!("Landscape"));
+            });
+        });
+        ui.end_row();
+    });
+    ui.add_space(12.0);
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        if widgets::pill_button(ui, tl!("OK"), true).clicked() {
+            req.insert_blank_now = true;
+            req.close = true;
+        }
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+            req.close = true;
+        }
+    });
+    false
+}
+
 /// `Dialog::DuplicateField` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_duplicate_field(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
     let n = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len());
@@ -1824,6 +1896,9 @@ fn finish_actions(app: &mut PdfCraftApp, req: &mut Pending) {
     }
     if req.rotate_now {
         app.rotate_with_draft();
+    }
+    if req.insert_blank_now {
+        app.insert_blank_with_draft();
     }
     if req.import_words {
         app.pick_files(crate::files::FilePurpose::RedactWords, false);

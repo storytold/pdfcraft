@@ -750,6 +750,8 @@ pub enum ViewAction {
     InsertFromFileAt(usize),
     /// Replace the selected pages with pages from another file.
     ReplacePages,
+    /// Insert blank page…: a blank page before or after the selection.
+    InsertBlank,
     /// Save the document as the grid shows it.
     Save,
     Extract,

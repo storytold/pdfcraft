@@ -300,6 +300,50 @@ impl Default for RotateDraft {
     }
 }
 
+/// The paper sizes Insert blank page… offers besides the size of the page it goes next to: a
+/// name and the upright width and height in points (ISO 216 A sizes, US Letter and Legal).
+pub const BLANK_PAPERS: [(&str, f64, f64); 6] = [
+    ("A2", 1190.55, 1683.78),
+    ("A3", 841.89, 1190.55),
+    ("A4", 595.28, 841.89),
+    ("A5", 419.53, 595.28),
+    ("Letter", 612.0, 792.0),
+    ("Legal", 612.0, 1008.0),
+];
+
+/// Pages ▸ Insert blank page…: where the page goes, and its size.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BlankPageDraft {
+    /// Before the first page the command acts on, rather than after the last.
+    pub before: bool,
+    /// An index into [`BLANK_PAPERS`]; `None` takes the size of the page it goes next to.
+    pub paper: Option<usize>,
+    /// The paper on its long side.
+    pub landscape: bool,
+}
+
+impl BlankPageDraft {
+    /// The page the new one goes next to, among the command's sorted `targets`.
+    pub fn next_to(&self, targets: &[usize]) -> Option<usize> {
+        if self.before { targets.first().copied() } else { targets.last().copied() }
+    }
+
+    /// Where the new page goes (0 = before the first page), for the command's sorted `targets`.
+    pub fn at(&self, targets: &[usize]) -> usize {
+        match self.next_to(targets) {
+            Some(p) if !self.before => p + 1,
+            Some(p) => p,
+            None => 0,
+        }
+    }
+
+    /// The new page's width and height in points, next to a page shown `page` wide and high.
+    pub fn size(&self, page: (f64, f64)) -> (f64, f64) {
+        let Some(&(_, w, h)) = self.paper.and_then(|i| BLANK_PAPERS.get(i)) else { return page };
+        if self.landscape { (h, w) } else { (w, h) }
+    }
+}
+
 /// A picked file's name and bytes, or its name and why it can't be read.
 #[cfg(not(target_arch = "wasm32"))]
 fn read_named(path: &std::path::Path) -> Result<(String, Vec<u8>), (String, String)> {
@@ -816,6 +860,28 @@ impl PdfCraftApp {
         self.apply_edit(pdfcraft_engine::Edit::RotatePages { pages, degrees: d.degrees });
     }
 
+    /// Pages ▸ Insert blank page…: the dialog, on the selected pages (the current page when none
+    /// is). The location and a paper chosen last time stay.
+    pub fn open_insert_blank_dialog(&mut self) {
+        if self.active_ids().is_some() {
+            self.dialog = Some(crate::Dialog::InsertBlank);
+        }
+    }
+
+    /// Insert blank page… with the dialog's choices: one blank page before the first selected
+    /// page or after the last, as large as the page shows (turned and scaled as shown), or on
+    /// the paper chosen. One undo step; the new page becomes the selection.
+    pub fn insert_blank_with_draft(&mut self) {
+        let Some((i, id)) = self.active_ids() else { return };
+        let targets = self.views[i].target_pages();
+        let d = self.blank_draft.clone();
+        let Some(p) = d.next_to(&targets).and_then(|n| self.session.get(id)?.info.pages.get(n)) else { return };
+        // A page a /UserUnit enlarges may show larger than a page box may be (ISO 32000-2 annex C).
+        let (width, height) = d.size((f64::from(p.width), f64::from(p.height)));
+        let (width, height) = (width.clamp(1.0, 14_400.0), height.clamp(1.0, 14_400.0));
+        self.apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: d.at(&targets), width, height });
+    }
+
     /// Split the active document and write the parts: into a chosen folder (desktop, written on
     /// a later frame once the user has chosen it) or as downloads (web).
     pub fn split_active(&mut self, plan: &SplitPlan) {
@@ -1108,6 +1174,31 @@ impl PdfCraftApp {
                 let _ = crate::editing::download(&format!("{stem}.xfdf"), &bytes);
             }
             Err(e) => self.notify_error(e),
+        }
+    }
+}
+
+#[cfg(test)]
+mod blank_page_tests {
+    use super::{BLANK_PAPERS, BlankPageDraft};
+
+    /// Before the first selected page or after the last; the page's own size, or a paper upright
+    /// or on its side.
+    #[test]
+    fn a_blank_page_goes_next_to_the_selection_in_the_size_chosen() {
+        let after = BlankPageDraft::default();
+        let before = BlankPageDraft { before: true, ..Default::default() };
+        assert_eq!((after.at(&[2, 4]), after.next_to(&[2, 4])), (5, Some(4)));
+        assert_eq!((before.at(&[2, 4]), before.next_to(&[2, 4])), (2, Some(2)));
+        assert_eq!(after.at(&[]), 0);
+        assert_eq!(after.size((400.0, 300.0)), (400.0, 300.0));
+        let a2 = BLANK_PAPERS.iter().position(|p| p.0 == "A2");
+        assert_eq!(BlankPageDraft { paper: a2, ..Default::default() }.size((400.0, 300.0)), (1190.55, 1683.78));
+        assert_eq!(BlankPageDraft { paper: a2, landscape: true, ..Default::default() }.size((400.0, 300.0)), (1683.78, 1190.55));
+        // A2 to A5 are each half the one before, to the millimetre ISO 216 rounds to.
+        for pair in BLANK_PAPERS[..4].windows(2) {
+            let (big, small) = (pair[0], pair[1]);
+            assert!((big.2 / 2.0 - small.1).abs() < 2.0 && (big.1 - small.2).abs() < 0.01, "{} → {}", big.0, small.0);
         }
     }
 }
