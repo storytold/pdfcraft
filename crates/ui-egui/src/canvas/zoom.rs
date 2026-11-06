@@ -278,15 +278,21 @@ impl DocView {
             (max_w, largest(|s| s.1))
         };
         let avail_w = (self.viewport_w - 2.0 * SIDE).max(100.0);
+        // A page shown on its own keeps MARGIN above and below it. Scrolling, a page gone to
+        // sits one gap below the window's top and the first page MARGIN (two gaps) below it,
+        // so a page MARGIN shorter than the window shows whole with the next page just out of
+        // sight (with page gaps hidden, the next page joins it). Fitted between two margins,
+        // 28 points of the next page showed beneath it.
+        let avail_h = if self.continuous { self.viewport_h - MARGIN } else { self.viewport_h - 2.0 * MARGIN };
         let per_row = if self.layout == PageLayout::TwoUp { 2.0 } else { 1.0 };
         match self.fit {
             Fit::Width => self.zoom = (avail_w - self.page_gap() * (per_row - 1.0)) / (w * PT * per_row),
             Fit::Page => {
                 let zw = (avail_w - self.page_gap() * (per_row - 1.0)) / (w * PT * per_row);
-                let zh = (self.viewport_h - 2.0 * MARGIN) / (h * PT);
+                let zh = avail_h / (h * PT);
                 self.zoom = zw.min(zh);
             }
-            Fit::Height => self.zoom = (self.viewport_h - 2.0 * MARGIN) / (h * PT),
+            Fit::Height => self.zoom = avail_h / (h * PT),
             Fit::None => {}
         }
         self.zoom = self.zoom.clamp(0.08, 64.0);
