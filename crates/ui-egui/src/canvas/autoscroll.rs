@@ -58,6 +58,7 @@ impl AutoScroll {
         oriented(delta, invert)
     }
 
+    /// Update middle-button auto-scroll while ignoring press origins owned by viewport chrome.
     fn update_latched(&mut self, ui: &egui::Ui, viewport: egui::Rect, blocked: &[Rect], organize: bool) -> Vec2 {
         let ctx = ui.ctx();
         let (pointer, middle_press, middle_down, middle_released, cancel, cancel_button, dt) = ctx.input(|i| {

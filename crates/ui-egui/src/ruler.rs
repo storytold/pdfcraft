@@ -434,6 +434,7 @@ impl RulerPaintStyle {
     }
 }
 
+/// Paint one tick mark and its optional major label on the selected ruler axis.
 fn paint_tick(painter: &egui::Painter, input: RulerPaintInput, tick: &RulerTick, style: RulerPaintStyle) {
     let Some(at) = screen_coordinate(tick.screen_position) else { return };
     let length = tick_length(input.rect, input.orientation, tick.kind);
@@ -486,11 +487,13 @@ fn paint_vertical_label(painter: &egui::Painter, rect: egui::Rect, at: f32, labe
     painter.add(shape);
 }
 
+/// Return whether a rotated vertical label fits fully inside the ruler band.
 fn vertical_label_fits(rect: egui::Rect, at: f32, unrotated_size: egui::Vec2) -> bool {
     // After a quarter turn, the galley's height lies across the band and its width runs downward.
     unrotated_size.y <= rect.width() - 2.0 && at >= rect.top() + 1.0 && at + unrotated_size.x <= rect.bottom() - 1.0
 }
 
+/// Compute the screen-space tick length for its orientation and visual rank.
 fn tick_length(rect: egui::Rect, orientation: RulerOrientation, kind: TickKind) -> f32 {
     let available = match orientation {
         RulerOrientation::Horizontal => (rect.height() - 1.0).max(0.0),

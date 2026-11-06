@@ -16,6 +16,7 @@ pub(super) struct VisiblePageGeometry {
 }
 
 impl VisiblePageGeometry {
+    /// Capture the ruler geometry represented by a final, snapped page transform.
     fn from_xform(page_index: usize, xf: PageXform) -> Self {
         let displayed_width_points = if xf.rot.is_multiple_of(180) { xf.pw } else { xf.ph };
         let displayed_height_points = if xf.rot.is_multiple_of(180) { xf.ph } else { xf.pw };
@@ -29,6 +30,7 @@ impl VisiblePageGeometry {
         }
     }
 
+    /// Return the page area currently visible inside the document viewport.
     fn visible_area(self, viewport: Rect) -> f32 {
         if self.page_rect.is_positive() && viewport.is_positive() {
             let visible = self.page_rect.intersect(viewport);
@@ -47,6 +49,7 @@ struct CanvasGeometry {
 }
 
 impl CanvasGeometry {
+    /// Build the ruler axes from the document view's final visible-page transforms.
     fn from_view(view: &DocView) -> Self {
         let viewport_rect = view.viewport_screen;
         let pages: Vec<_> = view.screen_xforms.iter().map(|(page, xf)| VisiblePageGeometry::from_xform(*page, *xf)).collect();
@@ -54,12 +57,14 @@ impl CanvasGeometry {
         Self { viewport_rect, pages, active_page_index }
     }
 
+    /// Select the deterministic visible page whose coordinates drive both ruler axes.
     fn active_page(&self) -> Option<&VisiblePageGeometry> {
         let active = self.active_page_index?;
         self.pages.iter().find(|page| page.page_index == active)
     }
 }
 
+/// Choose the page containing the viewport centre, or otherwise the page with greatest visible area.
 fn active_page_geometry(viewport: Rect, pages: &[VisiblePageGeometry]) -> Option<&VisiblePageGeometry> {
     if !viewport.is_positive() {
         return None;
@@ -82,6 +87,7 @@ struct RulerLayout {
 }
 
 impl RulerLayout {
+    /// Derive the horizontal band, vertical band, corner, and unobstructed page rectangle.
     fn new(outer: Rect) -> Self {
         let horizontal_height = ruler::HORIZONTAL_RULER_HEIGHT.max(0.0).min(outer.height());
         let vertical_width = ruler::VERTICAL_RULER_WIDTH.max(0.0).min(outer.width());
@@ -131,6 +137,7 @@ pub(super) fn navigation_anchor_y(enabled: bool, rel_y: f32, viewport_height: f3
     }
 }
 
+/// Paint document rulers for an eligible view without changing page layout or scroll extents.
 pub(super) fn paint(app: &PdfCraftApp, index: usize, ui: &egui::Ui) {
     let Some(view) = app.views.get(index) else { return };
     if !app.show_rulers || view.presentation.is_some() || view.organize {
@@ -157,6 +164,7 @@ struct RulerAxes {
     scale_y: f64,
 }
 
+/// Paint both ruler axes, their labels, and the optional pointer indicators.
 fn paint_rulers(ui: &egui::Ui, layout: RulerLayout, axes: RulerAxes, viewport: Rect, units: Unit, pointer: Option<Pos2>) {
     // Preserve the feature branch's deterministic ruler policy. At small rendered sizes the
     // rulers describe the viewport (a facing spread starts at its left edge). Once an axis fills
