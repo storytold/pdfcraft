@@ -180,16 +180,48 @@ impl DocView {
         self.flash_match(p);
     }
 
+    /// The centre of the current match as a fraction of its displayed page `[x, y]` (0..1 from
+    /// the top-left corner, after the view rotation, as [`Self::goto_point`] takes it).
+    fn match_centre(&self) -> Option<[f32; 2]> {
+        let f = self.find.as_ref()?;
+        let (p, r) = f.matches.get(f.current?)?;
+        let glyphs = self.texts.get(p)?.glyphs.get(r.clone())?;
+        let [x0, y0, x1, y1] = glyphs.iter().map(|g| g.rect).reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])?;
+        let &(w, h) = self.page_sizes.get(*p).filter(|(w, h)| *w > 0.0 && *h > 0.0)?;
+        let (u, v) = ((((x0 + x1) / 2.0) / w).clamp(0.0, 1.0), (((y0 + y1) / 2.0) / h).clamp(0.0, 1.0));
+        // Turned clockwise by the view rotation, as `PageInfo::dest_fraction` does.
+        Some(match self.rotation % 360 {
+            90 => [1.0 - v, u],
+            180 => [1.0 - u, 1.0 - v],
+            270 => [v, 1.0 - u],
+            _ => [u, v],
+        })
+    }
+
     fn flash_match(&mut self, page: usize) {
         let frac = self
             .find
             .as_ref()
             .and_then(|f| f.current.and_then(|c| f.matches.get(c)))
             .and_then(|(p, r)| self.texts.get(p).and_then(|t| t.glyphs.get(r.start)).map(|g| g.rect[1]))
-            .zip(self.page_heights.get(page).copied())
+            .zip(self.page_sizes.get(page).map(|&(_, h)| h))
             .map(|(y, h)| ((y - 60.0) / h).clamp(0.0, 1.0))
             .unwrap_or(0.0);
         self.goto = Some((page, frac));
+        self.find_hold = None;
+        // Then put the match's centre at the window's centre, as Acrobat does (#3530) and as a
+        // /FitR destination's rectangle is: a page wider or taller than the window no longer
+        // leaves it off to one side or near an edge.
+        // Finite only: a hostile page's glyphs can span -inf..inf, and NaN survives `clamp`.
+        if let Some([fx, fy]) = self.match_centre().filter(|c| c.iter().all(|v| v.is_finite())) {
+            self.goto_point = Some((page, Some(fx), Some(fy), vec2(self.viewport_w, self.viewport_h) / 2.0));
+            // The point alone, both axes in one frame. A pending zoom anchor would hold the old
+            // place for that frame and put `goto` off to the next, where its page-top offset
+            // undid the centring; a zoom after the step anchors on the match instead.
+            self.goto = None;
+            self.zoom_anchor = None;
+            self.find_hold = Some((page, fx, fy));
+        }
         self.current = page;
         self.reset_coarse_state();
     }
