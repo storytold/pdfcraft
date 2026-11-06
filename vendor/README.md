@@ -103,6 +103,18 @@ D50/equal-energy neutral and chromatic oracles, D65 identity, and direct/Indexed
 consistency (including an asymmetric chromatic Range), and zero/overflowing
 cone-response fallback.
 
+Annotation layer visibility (#2176): an annotation dictionary's `/OC` gates
+its normal appearance or the existing appearance-less Highlight fallback. It uses
+current layer choices and existing OCG/OCMD policies, restoring the previous visibility
+state afterward. Covered by `raster::tests::annotation_layers_follow_catalog_and_render_overrides`
+and `raster::tests::annotation_memberships_and_appearance_layers_keep_independent_visibility`.
+
+Standalone `hayro-interpret` validation applies the existing `hayro-syntax` and
+`hayro-jbig2` path patches, checking the vendored APIs and decoder used by the
+integrated renderer. Its package lock is maintained separately from the root lock.
+Type 0 and indexed-image integer literals use separated suffixes required by the
+crate's existing Clippy lint; their values and types are unchanged.
+
 ## Clipping-only text reporting (#3109 / #3116)
 
 `hayro-interpret/src/interpret/text.rs` reports mode 7 glyphs after installing their

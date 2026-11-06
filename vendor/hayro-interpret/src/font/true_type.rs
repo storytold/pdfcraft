@@ -279,8 +279,8 @@ impl EmbeddedKind {
     }
 
     /// PdfCraft patch: the glyph name text extraction reads a code as. Without a base encoding
-    /// a TrueType font's codes are read as WinAnsi, matching pdftotext's output, not as
-    /// Standard: OCR engines write the text layer of a scan with WinAnsi codes and no
+    /// a TrueType font's codes are read as `WinAnsi`, matching pdftotext's output, not as
+    /// Standard: OCR engines write the text layer of a scan with `WinAnsi` codes and no
     /// `/Encoding`, and Standard has no name for ü, ö or ß and gives é (0xE9) as Ø. Glyph
     /// selection (`code_to_name`) is unchanged.
     fn code_to_unicode_name(&self, code: u8) -> Option<&str> {

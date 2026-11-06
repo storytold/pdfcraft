@@ -137,3 +137,8 @@ unused_import_braces = "warn"
 unused_lifetimes = "warn"
 unused_macro_rules = "warn"
 unused_qualifications = "warn"
+
+# PdfCraft patch: standalone checks use the same patched syntax and decoder sources.
+[patch.crates-io]
+hayro-syntax = { path = "../hayro-syntax" }
+hayro-jbig2 = { path = "../hayro-jbig2" }

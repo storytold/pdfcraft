@@ -717,7 +717,7 @@ impl InterpolationHelpers {
             ));
         } else {
             let num_components = decode.len() / 2;
-            for (_, decode) in (0..num_components).zip(decode.chunks_exact(2)) {
+            for (_, decode) in (0..num_components).zip(decode.as_chunks::<2>().0) {
                 colors.push(self.interpolate_comp(
                     reader.read(self.bp_comp)?,
                     decode[0],
