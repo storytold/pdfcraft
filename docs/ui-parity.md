@@ -31,6 +31,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Quick-action toolbar, customisable | yes | customizable floating/docked hotbar, adjustable size, persistent multi-select picker | partial (`view.customize-quick-tools`; no shortcut reordering) |
 | Command search | "Search tools" | command palette (⌘K), matches translated and English labels | shipped |
 | Document tabs | yes | yes, with unsaved marker | shipped |
+| Undo and Redo buttons in the top bar | not checked | beside Save and Print, greyed out with nothing to undo or redo (#4050); the search field narrows in a narrow window | shipped |
 | Multiple windows, drag a tab out | yes | no | planned |
 | Split window, spreadsheet split | yes | no | planned |
 | Read mode, full screen | yes | yes; full screen is one fitted page at a time on black, click/keys turn pages (#1459) | shipped; auto-advance, loop and transitions planned |
