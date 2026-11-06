@@ -548,6 +548,7 @@ impl PdfCraftApp {
             DELETE => self.menu_input.extend(key(egui::Key::Delete, egui::Modifiers::NONE)),
             PANEL => self.choose_right_panel(panel(command)),
             ACTUAL_SIZE | PAGE_LEVEL | FIT_WIDTH | FIT_HEIGHT | ZOOM_IN | ZOOM_OUT | ROTATE_CW | ROTATE_CCW => {
+                let increment = self.zoom_increment;
                 let Some(v) = self.active.and_then(|i| self.views.get_mut(i)) else { return };
                 match command.id.as_str() {
                     ACTUAL_SIZE => v.set_zoom(1.0),
@@ -557,8 +558,8 @@ impl PdfCraftApp {
                         v.fit = Fit::Height;
                         v.goto = Some((v.current, 0.0));
                     }
-                    ZOOM_IN => v.zoom_step(true),
-                    ZOOM_OUT => v.zoom_step(false),
+                    ZOOM_IN => v.zoom_step_by(true, increment),
+                    ZOOM_OUT => v.zoom_step_by(false, increment),
                     ROTATE_CW => v.rotate_view(true),
                     _ => v.rotate_view(false),
                 }

@@ -1994,6 +1994,95 @@ fn the_invert_middle_drag_preference_is_off_by_default_and_kept_in_the_settings(
     assert!(!off.invert_middle_drag, "turned off, that is saved too");
 }
 
+#[test]
+fn the_zoom_increment_preference_is_standard_by_default_and_kept_in_the_settings() {
+    use pdfcraft_ui_egui::zoom_increment::ZoomIncrement;
+    let mut app = PdfCraftApp::new();
+    assert_eq!(app.zoom_increment, ZoomIncrement::Standard, "the standard levels unless asked");
+    app.set_option("zoom_increment", "10%").unwrap();
+    assert!(app.set_option("zoom_increment", "7").unwrap_err().contains("standard, 5, 10, or 25"));
+    assert_eq!(app.zoom_increment, ZoomIncrement::Ten, "a refused value changes nothing");
+    let mut again = PdfCraftApp::new();
+    again.restore(&app.persist());
+    assert_eq!(again.zoom_increment, ZoomIncrement::Ten, "it survives a restart");
+    again.set_option("zoom_increment", "standard").unwrap();
+    let mut back = PdfCraftApp::new();
+    back.zoom_increment = ZoomIncrement::TwentyFive;
+    back.restore(&again.persist());
+    assert_eq!(back.zoom_increment, ZoomIncrement::Standard, "going back to the standard levels is saved too");
+}
+
+/// #5884: with a fixed step in Preferences, ⌘+ / ⌘−, the rail's Zoom in and Zoom out buttons and
+/// View ▸ Zoom ▸ Zoom in all move the zoom by that many percentage points, and a fitted zoom
+/// lands on the next multiple. The standard levels stay the default, and come back.
+#[test]
+fn zoom_in_and_out_go_by_the_zoom_increment_preference() {
+    use egui::{Key, Modifiers};
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("a.pdf", None, fixture(3)).unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    let percent = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].zoom * 100.0;
+    let key = |h: &mut Harness<'static, PdfCraftApp>, k| {
+        h.key_press_modifiers(Modifiers::COMMAND, k);
+        h.run_steps(2);
+    };
+    assert!((percent(&h) - 100.0).abs() < 0.01);
+    key(&mut h, Key::Equals);
+    assert!((percent(&h) - 125.0).abs() < 0.01, "the standard levels by default: {}", percent(&h));
+    key(&mut h, Key::Minus);
+    assert!((percent(&h) - 100.0).abs() < 0.01);
+
+    h.state_mut().set_option("zoom_increment", "10").unwrap();
+    let mut seen = Vec::new();
+    for k in [Key::Equals, Key::Plus, Key::Minus, Key::Minus, Key::Minus] {
+        key(&mut h, k);
+        seen.push(percent(&h).round());
+    }
+    assert_eq!(seen, [110.0, 120.0, 110.0, 100.0, 90.0], "the keys go 10 points at a time");
+    h.get_by_label_contains("Zoom in (").click();
+    h.run_steps(2);
+    assert!((percent(&h) - 100.0).abs() < 0.01, "the rail's Zoom in: {}", percent(&h));
+    h.get_by_label_contains("Zoom out (").click();
+    h.run_steps(2);
+    assert!((percent(&h) - 90.0).abs() < 0.01, "the rail's Zoom out: {}", percent(&h));
+    crate::support::open_menu(&mut h, "View");
+    crate::support::menu_row(&h, "Zoom").hover();
+    h.run_steps(3);
+    crate::support::menu_row(&h, "Zoom in").click();
+    h.run_steps(3);
+    assert!((percent(&h) - 100.0).abs() < 0.01, "View ▸ Zoom ▸ Zoom in: {}", percent(&h));
+    crate::support::open_menu(&mut h, "View");
+    crate::support::menu_row(&h, "Zoom").hover();
+    h.run_steps(3);
+    crate::support::menu_row(&h, "Zoom out").click();
+    h.run_steps(3);
+    assert!((percent(&h) - 90.0).abs() < 0.01, "View ▸ Zoom ▸ Zoom out: {}", percent(&h));
+
+    // A fitted zoom lands on the next multiple of 10 up, and of 10 down.
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;
+    h.run_steps(3);
+    let fitted = percent(&h);
+    assert!((fitted / 10.0 - (fitted / 10.0).round()).abs() > 0.01, "the fitted zoom isn't a multiple already: {fitted}");
+    key(&mut h, Key::Equals);
+    let up = percent(&h);
+    assert!(up > fitted && up < fitted + 10.0 && (up % 10.0).abs() < 0.01, "{fitted} -> {up}");
+    key(&mut h, Key::Minus);
+    key(&mut h, Key::Minus);
+    let down = percent(&h);
+    assert!((up - down - 20.0).abs() < 0.01, "then 10 points at a time: {up} -> {down}");
+
+    h.state_mut().set_option("zoom_increment", "standard").unwrap();
+    h.state_mut().set_option("zoom", "100").unwrap();
+    h.run_steps(2);
+    key(&mut h, Key::Equals);
+    assert!((percent(&h) - 125.0).abs() < 0.01, "back on the standard levels: {}", percent(&h));
+}
+
 /// A 40 × 30 picture (one red corner) and a harness showing a PDF of it.
 fn picture_harness() -> (image::RgbaImage, Harness<'static, PdfCraftApp>) {
     picture_harness_sized(egui::vec2(1400.0, 900.0))

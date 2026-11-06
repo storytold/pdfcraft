@@ -589,6 +589,7 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         items.push(item(RightPanel::Accessibility, "accessibility", "Accessibility Checker", None));
     }
     items.push(item(RightPanel::Tags, "tag", "Tags", None));
+    let zoom_increment = app.zoom_increment;
     let view = &mut app.views[index];
     let mut page_display = None;
     let rail = Rail::new(egui::Id::unique("rail"))
@@ -631,11 +632,11 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     let side = (ui.available_width() / 2.0).floor();
                     let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom out ({key})"), crate::commands::ZOOM_OUT);
                     if icons::button(ui, "zoom-out", side, false, &tip).clicked() {
-                        view.zoom_step(false);
+                        view.zoom_step_by(false, zoom_increment);
                     }
                     let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom in ({key})"), crate::commands::ZOOM_IN);
                     if icons::button(ui, "zoom-in", side, false, &tip).clicked() {
-                        view.zoom_step(true);
+                        view.zoom_step_by(true, zoom_increment);
                     }
                 });
                 let id = egui::Id::unique("zoom-input");

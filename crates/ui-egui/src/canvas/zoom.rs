@@ -1,3 +1,4 @@
+use super::zoom_increment::ZoomIncrement;
 use super::{DocInfo, DocView, Fit, GAP, MARGIN, PT, PageLayout, Pos2, Rect, SIDE, SavedDisplay, Vec2, device_pixels, pos2, vec2};
 
 /// The page grid's zoom range and the step of its buttons and keys.
@@ -247,6 +248,16 @@ impl DocView {
         let next = if up { STEPS.iter().copied().find(|s| *s > z * 1.01) } else { STEPS.iter().rev().copied().find(|s| *s < z * 0.99) };
         if let Some(n) = next {
             self.set_zoom(n);
+        }
+    }
+
+    /// Zoom In / Zoom Out by the user's increment (Preferences): the standard levels, or the next
+    /// multiple of a fixed number of percentage points (#5884).
+    pub fn zoom_step_by(&mut self, up: bool, increment: ZoomIncrement) {
+        if increment == ZoomIncrement::Standard {
+            self.zoom_step(up);
+        } else if let Some(zoom) = increment.step(self.zoom, up) {
+            self.set_zoom(zoom);
         }
     }
 
