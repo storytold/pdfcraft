@@ -8,7 +8,7 @@
 //! read at a time, and a page's words become its text layer as soon as that page is done. It needs
 //! the recognition models, and can be turned off in Preferences.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use pdfcraft_engine::ocr::{EngineChoice, OcrPage, OcrSettings};
@@ -27,6 +27,9 @@ pub(crate) struct AutoOcr {
     /// again.
     stopped: bool,
     run: Option<Run>,
+    /// Pages read whose pictures held no words (a photo): not read again when another page's
+    /// content changes, only when their own does. Those with words are the view's `ocr_texts`.
+    read_empty: HashSet<usize>,
     /// Workers of this view's runs stopped before they finished.
     retiring: Retiring,
 }
@@ -170,10 +173,11 @@ impl AutoOcr {
         self.stopped = true;
     }
 
-    /// One page's content changed (its text, pictures or added items): a run may be reading
-    /// the old content, so it stops, and what its worker read goes with it. Recognition starts
-    /// again for the pages not recognised yet, the changed one among them, unless it was stopped.
-    pub(crate) fn content_changed(&mut self) {
+    /// `page`'s content changed (its text, pictures or added items): a run may be reading the
+    /// old content, so it stops, and what its worker read goes with it. Recognition starts again
+    /// for the pages not recognised yet, `page` among them, unless it was stopped.
+    pub(crate) fn content_changed(&mut self, page: usize) {
+        self.read_empty.remove(&page);
         self.retire();
         self.done = self.stopped;
     }
@@ -188,10 +192,15 @@ impl DocView {
             // A worker that panicked holding the lock has nothing more to give.
             Err(_) => (Vec::new(), true),
         };
-        for page in found.into_iter().filter(|p| !p.words.is_empty()) {
+        for page in found {
             let Some(info) = pages.get(page.page) else { continue };
             let text = Arc::new(page.view_text(info));
             if text.is_empty() {
+                // Read, and no words in its pictures: not read again. One skipped (it has text of
+                // its own, or could not be read) is looked at again.
+                if page.skipped.is_none() {
+                    self.auto_ocr.read_empty.insert(page.page);
+                }
                 continue;
             }
             self.ocr_texts.insert(page.page, text.clone());
@@ -279,8 +288,9 @@ impl PdfCraftApp {
                 break;
             }
             let Some(page) = run.queue.pop_front() else { break };
-            // A page recognised already, before another page's content changed, is not read again.
-            if view.ocr_texts.contains_key(&page) || doc.page_images(page).is_empty() {
+            // A page read already, before another page's content changed, is not read again.
+            let read = view.ocr_texts.contains_key(&page) || view.auto_ocr.read_empty.contains(&page);
+            if read || doc.page_images(page).is_empty() {
                 run.handled = run.handled.saturating_add(1);
             } else {
                 run.pending.push(page);
@@ -520,10 +530,10 @@ mod tests {
     #[test]
     fn a_stopped_recognition_stays_stopped_when_a_page_changes() {
         let mut ocr = AutoOcr { wanted: true, done: true, ..Default::default() };
-        ocr.content_changed();
+        ocr.content_changed(0);
         assert!(!ocr.done, "a finished recognition starts again for the changed page");
         ocr.stop();
-        ocr.content_changed();
+        ocr.content_changed(0);
         assert!(ocr.done, "one that was stopped does not");
     }
 
@@ -543,6 +553,29 @@ mod tests {
         let run = app.views[0].auto_ocr.run.as_ref().expect("reading");
         assert_eq!(run.chunk.as_ref().map(|c| c.pages), Some(1), "only the changed page is handed to the worker");
         assert_eq!(run.handled, 2, "the recognised pages are passed over");
+    }
+
+    /// Pictures read and found to hold no words (photos) are not read again whenever another
+    /// page's content changes, only when their own does; a page that could not be read is tried
+    /// again (CodeRabbit on #3860).
+    #[test]
+    fn pages_read_with_no_words_are_not_read_again() {
+        let mut app = scan(3);
+        app.run_inline = true;
+        let empty = |page| OcrPage { page, words: Vec::new(), already_on_page: 0, skipped: None, notes: Vec::new() };
+        let failed = OcrPage { skipped: Some("the page could not be drawn".into()), ..empty(1) };
+        let shared = Shared { found: vec![empty(0), failed, empty(2)], finished: true, ..Default::default() };
+        let chunk = Chunk { shared: Arc::new(Mutex::new(shared)), pages: 3 };
+        app.views[0].auto_ocr.run = Some(Run { queue: VecDeque::new(), pending: Vec::new(), total: 3, handled: 0, chunk: Some(chunk) });
+        let pages = app.session.get(app.views[0].id).unwrap().info.pages.clone();
+        app.views[0].take_recognised(&pages);
+        // Page 2's content changes: recognition starts again.
+        app.views[0].content_page_changed(2);
+        app.views[0].auto_ocr.run = Some(Run { queue: (0..3).collect(), pending: Vec::new(), total: 3, handled: 0, chunk: None });
+        app.step_auto_ocr(0);
+        let run = app.views[0].auto_ocr.run.as_ref().expect("reading");
+        assert_eq!(run.chunk.as_ref().map(|c| c.pages), Some(2), "page 2, whose content changed, and page 1, not read, are read");
+        assert_eq!(run.handled, 1, "page 0, read with no words, is passed over");
     }
 
     /// A page that crashes the renderer or the recogniser panics the worker reading it: its chunk
