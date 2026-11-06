@@ -53,6 +53,9 @@ impl PdfCraftApp {
             ("scroll_speed", _) => {
                 self.scroll_speed = scroll_speed::ScrollSpeed::parse(value).ok_or("scroll_speed must be slow, normal, or fast")?;
             }
+            ("tab_cycle", _) => {
+                self.tab_cycle = tab_cycle::TabCycle::parse(value).ok_or("tab_cycle must be tabs or recent")?;
+            }
             ("invert_middle_drag", _) => {
                 self.invert_middle_drag = value.parse::<bool>().map_err(|_| "invert_middle_drag must be true or false")?;
             }

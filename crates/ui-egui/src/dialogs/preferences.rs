@@ -638,6 +638,18 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
     });
     ui.add_space(6.0);
 
+    // The order Next tab and Previous tab follow (#2063); tab order stays the default.
+    ui.horizontal(|ui| {
+        ctx.label_primary(ui, tl!("Next tab and Previous tab"), t);
+        ctx.pill_choice(
+            ui,
+            t,
+            &mut app.tab_cycle,
+            &[(crate::tab_cycle::TabCycle::Tabs, tl!("In tab order")), (crate::tab_cycle::TabCycle::Recent, tl!("Most recently used first"))],
+        );
+    });
+    ui.add_space(6.0);
+
     ui.horizontal(|ui| {
         ctx.label_primary(ui, tl!("Animation effects"), t);
         ctx.pill_choice(
