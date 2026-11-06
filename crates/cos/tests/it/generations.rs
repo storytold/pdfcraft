@@ -484,6 +484,8 @@ fn accepted_generations_are_the_generations_get_resolves() {
         for generation in 0..8 {
             let live = !matches!(*doc.get(ObjRef::new(num, generation)), Object::Null);
             assert_eq!(live, expected.contains(&generation), "object {num} generation {generation}");
+            // The allocation-free check agrees with the list.
+            assert_eq!(doc.canonical_ref(ObjRef::new(num, generation)).is_some(), expected.contains(&generation), "canonical_ref {num} {generation}");
         }
     };
     let doc = Document::open(contradictory_entry(false)).unwrap();
@@ -507,4 +509,38 @@ fn accepted_generations_are_the_generations_get_resolves() {
     let packed = Document::open(Arc::new(write_full(&doc, &SaveOptions { object_streams: true, ..SaveOptions::default() }).unwrap())).unwrap();
     assert!(matches!(packed.xref_entry(member.num), Some(XrefEntry::InStream { .. })), "the member is in an object stream");
     agrees(&packed, member.num, &[0]);
+}
+
+/// `canonical_ref` accepts what `get` accepts, without loading: the live generation, both
+/// generations of a repaired slot, generation 0 in an object stream; it rejects stale and freed
+/// references; and it answers `Some` for an accepted literal null.
+#[test]
+fn canonical_ref_follows_reference_acceptance_within_one_snapshot() {
+    let reused = Document::open(reused_object()).unwrap();
+    assert_eq!(reused.canonical_ref(ObjRef::new(3, 1)), Some(ObjRef::new(3, 1)));
+    assert_eq!(reused.canonical_ref(ObjRef::new(3, 0)), None, "stale");
+    assert_eq!(reused.canonical_ref(ObjRef::new(99, 0)), None, "absent");
+    // A repaired slot: xref row 3 0, object header 3 1. Both are accepted, canonical at the xref one.
+    let mut repaired = Document::open(contradictory_entry(false)).unwrap();
+    for asked in [ObjRef::new(3, 0), ObjRef::new(3, 1)] {
+        assert_eq!(repaired.canonical_ref(asked), Some(ObjRef::new(3, 0)), "{asked:?}");
+    }
+    assert_eq!(repaired.canonical_ref(ObjRef::new(3, 2)), None);
+    assert_eq!(Document::open(contradictory_entry(true)).unwrap().canonical_ref(ObjRef::new(3, 1)), None, "a free slot never revives");
+    // Editing through an accepted generation keeps both accepted (RepairedSet).
+    repaired.set_existing(ObjRef::new(3, 1), Object::Int(7)).unwrap();
+    assert!(repaired.canonical_ref(ObjRef::new(3, 0)).is_some() && repaired.canonical_ref(ObjRef::new(3, 1)).is_some());
+    // An explicit `set` replaces the slot: only its generation is accepted from then on.
+    repaired.set(ObjRef::new(3, 4), Object::Int(8));
+    assert_eq!(repaired.canonical_ref(ObjRef::new(3, 4)), Some(ObjRef::new(3, 4)));
+    assert_eq!(repaired.canonical_ref(ObjRef::new(3, 1)), None);
+    // A literal null that is accepted is still a reference to something.
+    repaired.set(ObjRef::new(3, 4), Object::Null);
+    assert_eq!(repaired.canonical_ref(ObjRef::new(3, 4)), Some(ObjRef::new(3, 4)));
+    assert_eq!(*repaired.get(ObjRef::new(3, 4)), Object::Null);
+    // Object streams: generation 0 only.
+    let packed = Document::open(Arc::new(write_full(&reused, &SaveOptions::default()).unwrap())).unwrap();
+    let current = packed.get(packed.root().unwrap()).as_dict().unwrap().reference(b"Current").unwrap();
+    assert_eq!(packed.canonical_ref(current), Some(current));
+    assert_eq!(packed.canonical_ref(ObjRef::new(current.num, 1)), None);
 }
