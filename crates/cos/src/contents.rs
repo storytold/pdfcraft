@@ -159,6 +159,19 @@ mod tests {
         assert_eq!(content_entries(&doc, Some(&contents)).unwrap().as_slice(), list.as_slice());
     }
 
+    /// A chain ending in a stream is one entry, the outer reference as the page holds it, which
+    /// the caller resolves along the same chain to reach the stream.
+    #[test]
+    fn a_chain_of_references_to_a_stream_is_one_entry() {
+        let mut doc = Document::new_empty();
+        let s = stream(&mut doc, b"0 0 m");
+        let Object::Ref(inner) = s else { panic!("not a reference") };
+        let contents = Object::Ref(doc.add(Object::Ref(inner)));
+        let entries = content_entries(&doc, Some(&contents)).unwrap();
+        assert_eq!(entries.as_slice(), std::slice::from_ref(&contents));
+        assert!(matches!(&*doc.resolve(&entries.as_slice()[0]), Object::Stream(_)));
+    }
+
     /// A reference to nothing reads as `null` in its own place, for the caller to judge.
     #[test]
     fn a_reference_to_a_missing_object_is_one_entry() {
