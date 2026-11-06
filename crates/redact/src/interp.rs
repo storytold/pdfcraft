@@ -31,7 +31,7 @@ mod prune;
 
 use layers::strip_hidden_layers;
 use prune::{clip_out, extgstate_font, prune_form_resources};
-pub(crate) use prune::{prune, prune_properties, resource_ops, unlink_doomed};
+pub(crate) use prune::{prune, prune_patterns, prune_properties, resource_ops, unlink_doomed, unlink_pruned_patterns};
 
 /// How deep this pass follows form XObjects. A form past it is removed rather than walked, which
 /// is the fail-safe choice for a redaction -- marked content inside a form we cannot read would
@@ -85,6 +85,17 @@ struct Gs {
     scale: f64,
     leading: f64,
     rise: f64,
+    /// The tiling or shading pattern selected as the fill colour (`/Name scn`), and as the stroke
+    /// colour (`/Name SCN`). Part of the graphics state, so `q`/`Q` save and restore them with
+    /// everything else. A pattern's cell is a content stream of its own and this pass does not
+    /// enter it, so a pattern whose only painting was removed has to leave the page's resources
+    /// or its drawing stays in the file (#3647).
+    fill_pattern: Option<Vec<u8>>,
+    stroke_pattern: Option<Vec<u8>>,
+    /// The current font is a Type 3 font without `/Resources`: its glyph descriptions look their
+    /// names up in this scope's resources (ISO 32000-2 §9.6.4), so a shown glyph may paint with
+    /// any of this scope's patterns.
+    type3_inherits: bool,
 }
 
 /// What processing a scope produced.
@@ -102,6 +113,16 @@ pub(crate) struct Output {
     /// dictionaries may name them too (an inherited or shared /Resources, or the caller's when a
     /// form has none of its own): [`unlink_doomed`] removes those entries.
     pub doomed: Vec<ObjRef>,
+    /// Pattern resource names a painting operator that survived the rewrite still uses. A name
+    /// this scope saw selected but never painted with afterwards is pruned from the page's
+    /// `/Resources /Pattern`, so a cell whose only drawing was redacted does not stay in the
+    /// saved file (#3647).
+    pub patterns_seen: Vec<Vec<u8>>,
+    pub patterns_painted: Vec<Vec<u8>>,
+    /// A Type 3 glyph without resources of its own was shown in this scope or a nested form,
+    /// through a font set by `Tf` or an ExtGState: which of the page's patterns it paints with is
+    /// not tracked, so the page keeps them all.
+    pub keeps_all_patterns: bool,
     /// Original property values retired by this scope or a nested form. Other resource holders
     /// may still name them; unlink only entries no surviving content uses.
     pub retired_properties: Vec<Object>,
@@ -264,6 +285,22 @@ struct Glyph {
     rects: Vec<usize>,
 }
 
+/// Record the patterns an operator paints with, so [`prune_patterns`] keeps them. Only path
+/// painting knows exactly what it draws and whether the paint survived; text, images and forms
+/// are recorded as they are met, which can keep a pattern whose paint was in fact all redacted,
+/// and with it the pattern's cell. A cell that carries text or images is then refused by
+/// `pattern_guard`; a vector-only cell stays in the file though nothing shows it
+/// (`a_pattern_painted_only_by_redacted_text_keeps_its_vector_cell`). Dropping a pattern something
+/// still draws with would lose paint from the page instead.
+fn uses_patterns(out: &mut Output, gs: &Gs, fills: bool, strokes: bool) {
+    if fills && let Some(n) = &gs.fill_pattern {
+        out.patterns_painted.push(n.clone());
+    }
+    if strokes && let Some(n) = &gs.stroke_pattern {
+        out.patterns_painted.push(n.clone());
+    }
+}
+
 /// Process a scope's content streams (state flows from one stream to the next).
 pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<u8>], resources: &Dict, ctm: Matrix) -> Output {
     let gs = Gs {
@@ -277,6 +314,9 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         scale: 1.0,
         leading: 0.0,
         rise: 0.0,
+        fill_pattern: None,
+        stroke_pattern: None,
+        type3_inherits: false,
     };
     process_from(doc, scope, streams, resources, gs)
 }
@@ -377,6 +417,8 @@ struct Walk {
     fonts_res: Dict,
     ext_gstates: Dict,
     xobjects: Dict,
+    /// This scope's pattern names, which a Type 3 glyph without resources may paint with.
+    patterns: Vec<Vec<u8>>,
     fallback: Rc<Metrics>,
     /// The current path: its operators, its bounding box in user space, and whether it clips.
     path: Vec<Op>,
@@ -395,6 +437,7 @@ impl Walk {
             fonts_res: res_dict(doc, resources, b"Font"),
             ext_gstates: res_dict(doc, resources, b"ExtGState"),
             xobjects: res_dict(doc, resources, b"XObject"),
+            patterns: res_dict(doc, resources, b"Pattern").iter().map(|(n, _)| n.to_vec()).collect(),
             fallback: Rc::new(Metrics::fallback()),
             path: Vec::new(),
             path_box: None,
@@ -433,6 +476,39 @@ impl Walk {
             b"BI" => Self::inline_image(&self.gs, scope, &mut self.out, op, piece),
             b"sh" if scope.mode == Mode::Apply => Self::shading(&self.gs, scope, op, piece),
             b"Do" => self.draw_xobject(doc, scope, resources, op, piece),
+            // `/Name scn` selects a pattern as the fill colour; numbers select a plain colour
+            // and clear it. `cs` with a space other than /Pattern clears it too.
+            b"scn" | b"SCN" => {
+                let fill = o == b"scn";
+                let picked = op.operands.last().and_then(Object::as_name).map(<[u8]>::to_vec);
+                if let Some(name) = &picked {
+                    self.out.patterns_seen.push(name.clone());
+                }
+                if fill {
+                    self.gs.fill_pattern = picked;
+                } else {
+                    self.gs.stroke_pattern = picked;
+                }
+                Some(op)
+            }
+            b"cs" | b"CS" => {
+                if op.name(0) != Some(b"Pattern") {
+                    if o == b"cs" {
+                        self.gs.fill_pattern = None;
+                    } else {
+                        self.gs.stroke_pattern = None;
+                    }
+                }
+                Some(op)
+            }
+            b"g" | b"rg" | b"k" => {
+                self.gs.fill_pattern = None;
+                Some(op)
+            }
+            b"G" | b"RG" | b"K" => {
+                self.gs.stroke_pattern = None;
+                Some(op)
+            }
             _ => Some(op),
         };
         piece.ops.extend(kept);
@@ -464,6 +540,12 @@ impl Walk {
         let clips = std::mem::replace(&mut self.clip, false);
         let hit = scope.mode == Mode::Apply && op.op.as_slice() != b"n" && bbox.is_some_and(|b| scope.hits(b));
         if !hit {
+            // The paint survives, so the pattern it draws with is still in use. `n` paints
+            // nothing, so it uses none. A hit path is removed whole (F-008), pattern and all.
+            let o = op.op.as_slice();
+            let strokes = matches!(o, b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
+            let fills = matches!(o, b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*");
+            uses_patterns(&mut self.out, &self.gs, fills, strokes);
             piece.ops.extend(body);
             piece.ops.push(op);
             return;
@@ -497,6 +579,8 @@ impl Walk {
             _ => {
                 if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
+                    // As for `Tf`: a Type 3 font without /Resources paints through this scope's.
+                    self.gs.type3_inherits = op.name(0).is_some_and(|n| extgstate_type3_inherits(doc, &self.ext_gstates, n));
                 }
             }
         }
@@ -507,6 +591,7 @@ impl Walk {
         let Some(name) = op.name(0) else { return };
         let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
         self.gs.vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
+        self.gs.type3_inherits = font_dict.as_ref().is_some_and(|d| type3_without_resources(doc, d));
         self.gs.font = match scope.fonts.get(name) {
             Some(f) => f.clone(),
             None => {
@@ -555,6 +640,16 @@ impl Walk {
 
     /// `Tj`, `TJ`, `'` and `"`: glyphs under a region are cut out (or counted, when verifying).
     fn show_text(&mut self, scope: &mut Scope<'_>, op: Op, piece: &mut Piece) -> Option<Op> {
+        // Text paints with the fill pattern, and with the stroke pattern in the stroking render
+        // modes. Mode 3 paints nothing and mode 7 only clips.
+        let mode = self.gs.render_mode;
+        uses_patterns(&mut self.out, &self.gs, matches!(mode, 0 | 2 | 4 | 6), matches!(mode, 1 | 2 | 5 | 6));
+        // A Type 3 glyph without resources of its own paints through this scope's: keep every
+        // pattern it could select, as with a form that has no /Resources.
+        if self.gs.type3_inherits {
+            self.out.patterns_painted.extend(self.patterns.iter().cloned());
+            self.out.keeps_all_patterns = true;
+        }
         let o = op.op.as_slice();
         if o == b"\"" {
             self.gs.word_spacing = op.num(0).unwrap_or(self.gs.word_spacing);
@@ -608,6 +703,8 @@ impl Walk {
 
     /// An inline image under a region is removed (or counted, when verifying).
     fn inline_image(gs: &Gs, scope: &mut Scope<'_>, out: &mut Output, op: Op, piece: &mut Piece) -> Option<Op> {
+        // An image mask paints with the fill colour, pattern included.
+        uses_patterns(out, gs, true, false);
         if !scope.hits(gs.ctm.bbox([0.0, 0.0, 1.0, 1.0])) {
             return Some(op);
         }
@@ -632,6 +729,9 @@ impl Walk {
     }
 
     fn draw_xobject(&mut self, doc: &mut Document, scope: &mut Scope<'_>, resources: &Dict, op: Op, piece: &mut Piece) -> Option<Op> {
+        // An image mask paints with the fill colour, and a form's content is interpreted with a
+        // graphics state of its own, so a pattern it inherits from here is never recorded inside it.
+        uses_patterns(&mut self.out, &self.gs, true, true);
         let Some(new) = xobject(doc, scope, &op, &self.gs, resources, &mut self.xobjects, &mut self.out) else { return Some(op) };
         piece.changed = true;
         piece.ops.extend(new);
@@ -924,8 +1024,18 @@ fn xobject(
             out.ambiguous |= inner.ambiguous;
             out.doomed.extend_from_slice(&inner.doomed);
             out.retired_properties.extend(inner.retired_properties);
+            // A Type 3 glyph without resources shown inside the form may paint with the page's
+            // patterns (the renderer resolves its names there), whether or not the form has
+            // /Resources of its own.
+            out.keeps_all_patterns |= inner.keeps_all_patterns;
             out.tag_changes.extend(inner.tag_changes);
             out.error = inner.error.or(out.error.take());
+            // A form without /Resources of its own paints with its caller's patterns, so what it
+            // still paints keeps the caller's entry. Only the painted side is passed up: a name
+            // the form selected but no longer paints with is left for the caller to keep.
+            if own.is_none() {
+                out.patterns_painted.extend(inner.patterns_painted);
+            }
             if scope.mode == Mode::Verify {
                 return None;
             }
@@ -991,4 +1101,19 @@ fn xobject(
         }
         _ => None,
     }
+}
+
+/// Whether the ExtGState `name` sets a Type 3 font that has no `/Resources` of its own.
+fn extgstate_type3_inherits(doc: &Document, ext_gstates: &Dict, name: &[u8]) -> bool {
+    let Some(state) = ext_gstates.get(name).map(|s| doc.resolve(s)) else { return false };
+    let Some(font) = state.as_dict().and_then(|d| d.get(b"Font")).map(|f| doc.resolve(f)) else { return false };
+    let Some(reference) = font.as_array().and_then(|a| a.first()) else { return false };
+    let dict = doc.resolve(reference);
+    dict.as_dict().is_some_and(|d| type3_without_resources(doc, d))
+}
+
+/// A Type 3 font whose glyph descriptions use the resources of whatever shows them: no
+/// `/Resources`, or `/Resources null`, which is the same thing.
+fn type3_without_resources(doc: &Document, font: &Dict) -> bool {
+    font.name(b"Subtype") == Some(b"Type3") && font.get(b"Resources").is_none_or(|r| matches!(&*doc.resolve(r), Object::Null))
 }

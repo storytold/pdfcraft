@@ -4628,6 +4628,7 @@ dependencies = [
  "pdfcraft-fonts",
  "pdfcraft-forms",
  "pdfcraft-model",
+ "pdfcraft-render",
  "pdfcraft-testkit",
  "pdfcraft-xfa",
  "sha2 0.11.1",
