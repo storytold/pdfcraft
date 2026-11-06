@@ -375,9 +375,10 @@ pub fn move_annotation(doc: &mut Document, page: usize, index: usize, dx: f64, d
     Ok(())
 }
 
-/// Resize a rectangle, oval, text box, stamp or drawing to `rect`. Stamps keep their appearance,
-/// which PDF viewers scale from its bounding box into the new rectangle; drawings scale their
-/// strokes and get a new one.
+/// Resize a rectangle, oval, text box, stamp or drawing to `rect`. A picture stamp or a typed
+/// signature is drawn again into the new rectangle; other stamps keep their appearance, which PDF
+/// viewers scale from its bounding box into the new rectangle; drawings scale their strokes and
+/// get a new one.
 pub fn set_rect(doc: &mut Document, page: usize, index: usize, rect: [f64; 4], meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
@@ -392,6 +393,15 @@ pub fn set_rect(doc: &mut Document, page: usize, index: usize, rect: [f64; 4], m
             d.set(b"Rect".to_vec(), num_array(&rect));
             touch(d, meta);
         })?;
+        // PdfCraft draws a picture stamp or a typed signature from its own dictionary, so it is
+        // drawn again into the new rectangle: what a viewer gets by scaling the old appearance
+        // into it (ISO 32000-2 §12.5.5), for viewers that don't. macOS Preview and Quick Look
+        // showed a resized signature at its old size in the middle of the new rectangle (#5428).
+        let own = d.get(b"PCPicture").and_then(Object::as_ref).is_some() || d.get(b"PCOutline").and_then(Object::as_array).is_some();
+        if own {
+            // One that can't be drawn again keeps its appearance, which viewers scale as before.
+            let _ = draw_appearance(doc, r);
+        }
         return Ok(());
     }
     if subtype == "Ink" {

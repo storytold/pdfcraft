@@ -48,11 +48,19 @@ deterministic; the engine supplies them.
 - Replies get the parent's `/Rect` and an empty appearance: they appear in comment lists but
   never paint a second icon.
 - Resizing a stamp changes its `/Rect` and preserves its original appearance and resources;
-  viewers scale that appearance into the new rectangle. Locked stamps refuse the edit.
+  viewers scale that appearance into the new rectangle. A picture stamp or a typed signature,
+  which PdfCraft draws from its own dictionary, is drawn again into the new rectangle instead,
+  the same picture: macOS Preview and Quick Look don't scale an appearance into `/Rect`, and
+  showed a resized signature at its old size (#5428). Locked stamps refuse the edit.
 - Picture stamps (a natural-size or explicit-rectangle image, a PDF page, or an image
   signature) and PdfCraft's rubber stamps counterrotate their appearance on rotated pages, so
-  the picture or label reads upright as the page is displayed. Restyling a picture stamp keeps
-  that appearance matrix. The rotation is the page's `/Rotate` at placement.
+  the picture or label reads upright as the page is displayed. The rotation is the page's
+  `/Rotate` at placement (`/PCPictureRotate` on a picture stamp). The appearance is drawn upright
+  and its `/Matrix` turns its `/BBox` onto `/Rect` exactly, so a viewer has no scaling left to
+  do: macOS Preview and Quick Look don't scale a turned box back by different amounts across and
+  down, and drew a picture stamp whose box needed that small and squashed (#5428). A picture
+  stamp's `/Matrix` is the turn alone, without an offset, so it still holds after a move;
+  restyling keeps it.
 - Sticky notes and file attachments are not counterrotated: they carry the NoRotate flag and
   their icon is drawn in an unturned 20 × 20 box. A viewer keeps them upright on a turned page,
   about the upper-left corner of `/Rect` (ISO 32000-2 §12.5.3). PdfCraft's renderer does so

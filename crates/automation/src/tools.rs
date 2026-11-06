@@ -1009,7 +1009,7 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "sort": { "type": "string", "enum": ["page", "author", "date", "type"] }, "out": save_out, "open": open }),
                 &["doc"],
             )),
-        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity (the whole comment's, or its fill's and text's own), line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), border colour (`border_color`, text box/typewriter/callout; \"text\" gives it the text's colour again), rectangle (rectangle/oval/text box/stamp), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, or the corners of connected lines, a polygon or a cloud). Stamps keep their original appearance when resized. One undo step.").with(schema(
+        t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity (the whole comment's, or its fill's and text's own), line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), border colour (`border_color`, text box/typewriter/callout; \"text\" gives it the text's colour again), rectangle (rectangle/oval/text box/stamp), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, or the corners of connected lines, a polygon or a cloud). Stamps keep their original appearance when resized, except picture stamps (images, PDF pages, image signatures) and typed signatures, which are drawn again at the new size. One undo step.").with(schema(
             comment_ref(json!({
                 "contents": { "type": "string" },
                 "color": color(),
