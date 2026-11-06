@@ -57,13 +57,14 @@ fn content_bytes(doc: &Document, page: &pdfcraft_model::Page, index: usize) -> R
         let Object::Stream(stream) = &*value else { return Err(unsupported(index, "contents include a non-stream object")) };
         let remaining = MAX_PAGE_BYTES.saturating_sub(all.len().saturating_add(1));
         if remaining == 0 {
-            return Err(unsupported(index, "decoded content exceeds 16 MiB"));
+            return Err(unsupported(index, "decoding the content takes more than 16 MiB"));
         }
         // Strictly, and with `/DecodeParms` given by reference: the content is written back from it.
         let mut budget = DecodeBudget::new(remaining, 0);
         let decoded = budget.decode_strict(doc, stream).map_err(|e| {
+            // The allowance counts what every filter stage decodes, as a page's does.
             if budget.remaining() == 0 {
-                unsupported(index, "decoded content exceeds 16 MiB")
+                unsupported(index, "decoding the content takes more than 16 MiB")
             } else {
                 unsupported(index, format!("content cannot be decoded strictly: {e}"))
             }
