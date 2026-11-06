@@ -465,3 +465,141 @@ fn ocr_verify_screen_focus_ring_and_empty_walk() {
     assert!(moved, "Ctrl+Tab moves the focus");
     assert_eq!(h.state().ocr_verify.focus, start, "the ring returns after the four panes");
 }
+
+/// A two-page scan whose first page carries a stamp: a picture comment (the second page's picture,
+/// of the words "Invoice reference 4711") over the lower part of the page. Its lettering is drawn
+/// but is no text, so the page's text layer stays empty.
+fn scan_with_a_picture_stamp() -> Vec<u8> {
+    let picture = |words: &str| {
+        let mut s = Session::new();
+        let text = s.create_from_text("t", words).unwrap();
+        let id = s.open("text.pdf", None, text, None).unwrap();
+        export::Exporter::new(s.get(id).unwrap()).png(0, 150.0).unwrap()
+    };
+    let mut s = Session::new();
+    let pages = [("scan.png".into(), picture("Recognize these scanned words")), ("label.png".into(), picture("Invoice reference 4711"))];
+    let pdf = s.create_from_images(&pages).unwrap();
+    let id = s.open("scan.pdf", None, pdf, None).unwrap();
+    let doc = s.get(id).unwrap();
+    let (w, h) = (doc.info.pages[0].width as f64, doc.info.pages[0].height as f64);
+    let label = doc.page_images(1).into_iter().next().unwrap();
+    // Scaled to 80% from the bottom left: the label's words land below the scan's, which stay
+    // uncovered.
+    let shape = pdfcraft_engine::Shape::CustomStamp {
+        rect: [0.0, 0.0, w * 0.8, h * 0.8],
+        name: "Received".into(),
+        picture: label.object.unwrap(),
+        image: true,
+        size: (label.width as f64, label.height as f64),
+    };
+    let style = pdfcraft_engine::Style::default_for(&shape);
+    let stamp = pdfcraft_engine::NewAnnotation { page: 0, shape, style, contents: "Received".into(), author: "Test".into() };
+    s.apply(id, Edit::AddAnnotation(stamp)).unwrap();
+    s.save_bytes(id).unwrap().to_vec()
+}
+
+/// `pdf` opened in a viewer that can recognise it: steps until the view's first page has a text
+/// layer and nothing is left to render (or 30 s pass).
+fn open_scan(pdf: Vec<u8>, auto_ocr: bool) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.auto_ocr = auto_ocr;
+        app.run_inline = true;
+        app.open_bytes("scan.pdf", None, pdf).unwrap();
+        app
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while h.state().views[0].text_glyph_count(0).is_none() || h.state().render_pending() {
+        assert!(std::time::Instant::now() < deadline, "the page's text layer never loaded");
+        h.step();
+    }
+    h.run_steps(4);
+    h
+}
+
+/// A scan is recognised in the background, as browsers do, so its words can be selected and
+/// found at once. The text is the view's: the document is not changed, has nothing to undo and
+/// asks nothing on closing (Recognize text still adds it to the file).
+#[test]
+fn scanned_pages_are_recognised_in_the_background_without_changing_the_file() {
+    if pdfcraft_engine::ocr::engine_unavailable_reason(pdfcraft_engine::ocr::EngineChoice::Ocrs).is_some() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let h = open_scan(scan(), true);
+    let app = h.state();
+    let text = app.views[0].page_plain_text(0).unwrap_or_default();
+    assert!(text.contains("scanned"), "recognised text: {text:?}");
+    assert_eq!(app.views[0].auto_ocr_progress(), None, "finished");
+    let id = app.active_ids().unwrap().1;
+    let doc = app.session.get(id).unwrap();
+    assert!(!doc.dirty, "the document was changed");
+    assert_eq!(doc.can_undo(), None);
+}
+
+/// A comment over a scan is not part of it: background recognition reads the page without its
+/// comments, as Edit does. A comment edit keeps the page's recognised text, so words read from a
+/// stamp would stay selectable and findable after it was changed or deleted.
+#[test]
+fn background_recognition_does_not_read_comments() {
+    if pdfcraft_engine::ocr::engine_unavailable_reason(pdfcraft_engine::ocr::EngineChoice::Ocrs).is_some() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let h = open_scan(scan_with_a_picture_stamp(), true);
+    let text = h.state().views[0].page_plain_text(0).unwrap_or_default();
+    assert!(text.contains("scanned"), "recognised text: {text:?}");
+    assert!(!text.contains("Invoice") && !text.contains("4711"), "a comment's words were read: {text:?}");
+}
+
+#[test]
+fn background_recognition_can_be_turned_off() {
+    if pdfcraft_engine::ocr::engine_unavailable_reason(pdfcraft_engine::ocr::EngineChoice::Ocrs).is_some() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let h = open_scan(scan(), false);
+    assert_eq!(h.state().views[0].text_glyph_count(0), Some(0), "recognised although turned off");
+    assert_eq!(h.state().views[0].auto_ocr_progress(), None);
+}
+
+/// Forty pages of line art: empty text layers, no pictures. Finding the pages with pictures
+/// parses each page's content, so the pages are looked through a few at a time, frame by frame,
+/// never all at once on the UI thread; none of them is read.
+#[test]
+fn pages_are_looked_through_a_few_at_a_time() {
+    if pdfcraft_engine::ocr::engine_unavailable_reason(pdfcraft_engine::ocr::EngineChoice::Ocrs).is_some() {
+        eprintln!("skipped: OCR models not installed");
+        return;
+    }
+    let pages = 40;
+    let content = "1 w 50 50 m 500 700 l S";
+    let mut pdf = String::from("%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+    let kids: Vec<String> = (0..pages).map(|p| format!("{} 0 R", 3 + p)).collect();
+    pdf += &format!("2 0 obj << /Type /Pages /Kids [{}] /Count {pages} >> endobj\n", kids.join(" "));
+    for p in 0..pages {
+        pdf += &format!("{} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {} 0 R >> endobj\n", 3 + p, 3 + pages);
+    }
+    pdf += &format!("{} 0 obj << /Length {} >> stream\n{content}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF", 3 + pages, content.len());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.run_inline = true;
+        app.open_bytes("lines.pdf", None, pdf.into_bytes()).unwrap();
+        app
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut seen = Vec::new();
+    while seen.is_empty() || h.state().views[0].auto_ocr_progress().is_some() {
+        assert!(std::time::Instant::now() < deadline, "never finished: {seen:?}");
+        h.step();
+        if let Some((page, total)) = h.state().views[0].auto_ocr_progress() {
+            assert_eq!(total, pages);
+            seen.push(page);
+        }
+    }
+    assert!(seen.len() >= 3, "all pages looked through in too few frames: {seen:?}");
+    assert!(seen.windows(2).all(|w| w[1] >= w[0] && w[1] - w[0] <= 8), "more than a few pages in one frame: {seen:?}");
+    assert_eq!(h.state().views[0].text_glyph_count(0), Some(0), "line art has no words");
+}

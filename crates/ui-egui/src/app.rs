@@ -136,6 +136,8 @@ impl PdfCraftApp {
             update_check_at_start: true,
             show_secured_notice: true,
             always_default_view: false,
+            auto_ocr: true,
+            auto_ocr_closed: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             watch: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -623,6 +625,7 @@ impl eframe::App for PdfCraftApp {
         self.poll_export();
         self.auto_ocr_scanned_page();
         self.poll_ocr();
+        self.poll_auto_ocr();
         self.poll_optimize();
         self.poll_scan_clean();
         self.poll_action();

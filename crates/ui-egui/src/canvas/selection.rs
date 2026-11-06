@@ -42,6 +42,15 @@ impl Selection {
     }
 }
 
+/// A text selection tried where there is no text: on `page`, starting at `at` in view space, at
+/// input time `since` (a press after it closes the bar).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct NoText {
+    pub(super) page: usize,
+    pub(super) at: [f32; 2],
+    pub(super) since: f64,
+}
+
 /// The glyphs `clicks` quick clicks select around glyph `a`: two the word, three the line, more
 /// the page.
 pub(super) fn click_unit(text: &PageText, clicks: u32, a: usize) -> Option<(usize, usize)> {
@@ -79,6 +88,27 @@ impl DocView {
         let (_, xf) = self.screen_xforms.iter().find(|(p, _)| *p == page)?;
         let g = self.texts.get(&page)?.glyphs.get(glyph)?;
         Some(xf.view_rect(g.rect).center())
+    }
+
+    /// Glyphs in `page`'s text layer, once it is loaded (used by UI tests and automation).
+    pub fn text_glyph_count(&self, page: usize) -> Option<usize> {
+        self.texts.get(&page).map(|t| t.glyphs.len())
+    }
+
+    /// `page`'s text layer as plain text, once it is loaded (used by UI tests and automation).
+    pub fn page_plain_text(&self, page: usize) -> Option<String> {
+        self.texts.get(&page).map(|t| t.plain_text())
+    }
+
+    /// The page whose bar offers Recognize text, after a text selection there found no text.
+    pub fn no_text_page(&self) -> Option<usize> {
+        self.no_text.map(|n| n.page)
+    }
+
+    /// The page being recognised in the background (1-based) and the pages to read, while that
+    /// runs (used by UI tests and automation).
+    pub fn auto_ocr_progress(&self) -> Option<(usize, usize)> {
+        self.auto_ocr.progress()
     }
 
     /// Selected text, if any (⌘C).
@@ -251,4 +281,44 @@ pub(super) fn selection_actions(
         SelectionAction::Copy => {}
     }
     false
+}
+
+/// The bar shown after a text selection is tried on a page with no text: such a page is most
+/// likely a scan, whose words can be selected and found once Recognize text has added a text
+/// layer. It closes on the next press outside it, on Escape, and once the page has text. Returns
+/// the page to recognize when its button is clicked.
+pub(super) fn no_text_bar(ui: &mut egui::Ui, viewport: Rect, view: &mut DocView, can_recognize: bool) -> Option<usize> {
+    let hint = view.no_text?;
+    let id = egui::Id::unique(("no-text-actions", view.id.0));
+    let bar = ui.ctx().memory(|m| m.area_rect(id));
+    let (pressed_elsewhere, escape) = ui.input(|i| {
+        let elsewhere =
+            i.pointer.any_pressed() && i.time > hint.since && !i.pointer.press_origin().is_some_and(|p| bar.is_some_and(|r| r.contains(p)));
+        (elsewhere, i.key_pressed(egui::Key::Escape))
+    });
+    let has_text = view.texts.get(&hint.page).is_some_and(|t| !t.is_empty());
+    if pressed_elsewhere || escape || has_text {
+        view.no_text = None;
+        return None;
+    }
+    let xf = view.page_xform(hint.page)?;
+    let [x, y] = hint.at;
+    let at = xf.view_rect([x, y, x, y]).left_top();
+    if !viewport.contains(at) {
+        return None;
+    }
+    let left = at.x.clamp(viewport.left() + 8.0, (viewport.right() - 420.0).max(viewport.left() + 8.0));
+    let top = if at.y + 96.0 < viewport.bottom() { at.y + 12.0 } else { (at.y - 96.0).max(viewport.top() + 6.0) };
+    let mut recognize = false;
+    egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos2(left, top)).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            ui.set_max_width(400.0);
+            ui.label(tl!("There is no selectable text on this page. If it is a scan or a picture of text, recognize its text to select it."));
+            recognize = ui.add_enabled(can_recognize, egui::Button::new(tl!("Recognize text…"))).clicked();
+        });
+    });
+    if recognize {
+        view.no_text = None;
+    }
+    recognize.then_some(hint.page)
 }

@@ -174,6 +174,7 @@ use widgets::icon_data;
 pub use widgets::icons;
 use workflows::a11y_ui;
 use workflows::actions_ui;
+use workflows::auto_ocr;
 use workflows::combine_grid;
 use workflows::combine_ui;
 use workflows::compare_ui;
@@ -395,6 +396,11 @@ pub struct PdfCraftApp {
     /// Preferences: open every document at Default zoom and Default page display, whatever
     /// layout or zoom it asks for (#1618).
     pub always_default_view: bool,
+    /// Preferences: recognise the text of scanned pages in the background, so it can be selected
+    /// and found without changing the file ([`auto_ocr`]).
+    pub auto_ocr: bool,
+    /// Background recognition workers of closed tabs, still reading the page they were on.
+    pub(crate) auto_ocr_closed: auto_ocr::Retiring,
     /// Open documents' files, watched for changes on disk.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) watch: file_watch::FileWatch,
