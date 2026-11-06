@@ -56,16 +56,47 @@ pub(super) enum Notice {
     Close,
     /// Stop showing the secured-document notice, in every document (#4035).
     HideSecured,
+    /// Open Standards ▸ PDF/A and verify the document, which declares this PDF/A part.
+    PdfA(u8),
+    /// Stop showing the PDF/A notice, in every document (#5930).
+    HidePdfA,
+}
+
+/// What the notice bar may say and offer about a declared PDF/A part (#5930).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PdfaNotice {
+    /// Preferences: the notice is on.
+    pub show: bool,
+    /// Verify can act on this document: Standards ▸ PDF/A works on the active tab, which the old
+    /// half of a side-by-side comparison isn't.
+    pub verify: bool,
+}
+
+/// The PDF/A part and conformance `doc` declares, read from its XMP again only after an edit,
+/// which may have added or removed the declaration.
+fn declared_pdfa(view: &mut DocView, doc: &pdfcraft_engine::Document) -> Option<(u8, String)> {
+    let generation = doc.edit_generation();
+    match &view.declared_pdfa {
+        Some((g, declared)) if *g == generation => declared.clone(),
+        _ => {
+            let declared = doc.standards().pdfa;
+            view.declared_pdfa = Some((generation, declared.clone()));
+            declared
+        }
+    }
 }
 
 /// The notice bar above the pages: a file changed on disk first, then what a historical
 /// snapshot is, then the signature status bar, a form's scripts having been turned
-/// off, security, forms and warnings.
+/// off, security, forms, repairs, a declared PDF/A part (unless `pdfa_notice` turns it off) and
+/// warnings. A form's notice says what it declares too.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn notices(
     view: &mut DocView,
     doc: &pdfcraft_engine::Document,
     secured: bool,
     repaired: bool,
+    pdfa_notice: PdfaNotice,
     signed: Option<(&str, Color32, &str, String)>,
     ui: &mut egui::Ui,
     t: &Tokens,
@@ -136,6 +167,8 @@ pub(super) fn notices(
     let mut hide_secured = false;
     let mut open_repairs = false;
     let mut open_console = false;
+    let mut open_pdfa = None;
+    let mut hide_pdfa = false;
     let mut toggled = None;
     // A form whose scripts were turned off no longer calculates or answers its buttons: that
     // comes before what else there is to say about the document.
@@ -179,6 +212,17 @@ pub(super) fn notices(
     } else {
         None
     };
+    let pdfa = if pdfa_notice.show { declared_pdfa(view, doc) } else { None };
+    // Acrobat opens such a file read-only until Enable editing; here it stays editable, and the
+    // bar says what an edit can cost.
+    let pdfa_text = pdfa.as_ref().map(|(part, conformance)| {
+        crate::i18n::fmt(
+            tl!("This document declares that it conforms to {standard}. Changes can break its conformance."),
+            &[("standard", &crate::standards_ui::pdfa_name(*part, conformance))],
+        )
+    });
+    // Shown alone below security and repairs, or after a form's notice, as security is.
+    let shows_pdfa = pdfa_text.is_some() && !scripts_off && !secured && (form.is_some() || !repaired);
     let msg = if scripts_off {
         Some(("triangle-alert", crate::js_ui::scripts_off_notice(), true))
     } else if secured {
@@ -189,10 +233,16 @@ pub(super) fn notices(
             Some((icon, text, fields)) => (icon, format!("{text} {security}"), fields),
             None => ("lock", security.to_string(), false),
         })
-    } else if form.is_some() {
-        form
+    } else if let Some((icon, text, fields)) = form {
+        Some(match &pdfa_text {
+            Some(pdfa) => (icon, format!("{text} {pdfa}"), fields),
+            None => (icon, text, fields),
+        })
     } else if repaired {
         Some(("bandage", tl!("This file was damaged and has been repaired. Saving keeps the repaired version.").to_string(), false))
+    } else if let Some(pdfa) = pdfa_text {
+        // Not a check mark: the claim isn't verified.
+        Some(("info", pdfa, false))
     } else if !info.warnings.is_empty() {
         Some(("triangle-alert", info.warnings[0].clone(), false))
     } else {
@@ -226,7 +276,20 @@ pub(super) fn notices(
         if repaired && !secured && info.fields.is_empty() && crate::widgets::pill_button(ui, tl!("Details"), false).clicked() {
             open_repairs = true;
         }
+        // Right to left, as for the secured notice: Don't show again ends up leftmost.
+        if shows_pdfa && pdfa_notice.verify && crate::widgets::pill_button(ui, tl!("Verify"), false).clicked() {
+            open_pdfa = pdfa.as_ref().map(|(part, _)| *part);
+        }
+        if shows_pdfa && crate::widgets::pill_button(ui, tl!("Don't show again"), false).clicked() {
+            hide_pdfa = true;
+        }
     });
+    if let Some(part) = open_pdfa {
+        return Some(Notice::PdfA(part));
+    }
+    if hide_pdfa {
+        return Some(Notice::HidePdfA);
+    }
     if open_repairs {
         return Some(Notice::Repairs);
     }

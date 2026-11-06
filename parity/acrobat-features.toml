@@ -1840,11 +1840,11 @@ title = "Read-only view for PDF/A files with an Enable editing bar"
 area = "B"
 tier = "P2"
 milestone = "M11"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["standards.pdfa"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/compare.rs::a_document_that_declares_pdfa_says_so_above_its_pages", "crates/ui-egui/tests/it/compare.rs::the_pdfa_notice_can_be_turned_off_for_good", "crates/ui-egui/tests/it/compare.rs::a_pdfa_form_says_what_it_declares_after_its_form_notice", "crates/ui-egui/tests/it/compare.rs::the_old_half_of_a_comparison_offers_no_verify"]
+notes = "A document whose XMP declares PDF/A gets a notice bar naming the part (PDF/A-2b) and saying that changes can break it (#5930). A form's notice says it too, keeping Highlight fields. Verify opens Standards > PDF/A verified against the declared part when it is 2 or 3 (as 2b or 3b, so a declared a or u conformance is reported as not identifying the file as 2b or 3b); PDF/A-1 and -4 are verified at the level last chosen. The old half of a side-by-side comparison has no Verify, since the dialog works on the active tab. Don't show again turns it off in every document, kept in the settings and turned back on in Preferences (--pdfa-notice). Security, repair and stopped-script notices take its place. Missing: the read-only PDF/A view mode itself, the Enable editing button and Acrobat's View documents in PDF/A mode preference; the document stays editable."
 
 [[feature]]
 id = "view.show-page-boxes"

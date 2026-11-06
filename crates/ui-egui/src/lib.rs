@@ -392,6 +392,9 @@ pub struct PdfCraftApp {
     /// Preferences: tell the user, above the pages, that a document is secured (its security
     /// settings restrict changes). Off only hides that notice (#4035); kept in the settings.
     pub show_secured_notice: bool,
+    /// Preferences: tell the user, above the pages, which PDF/A part a document declares, since
+    /// an edit can break it (#5930). Off only hides that notice; kept in the settings.
+    pub show_pdfa_notice: bool,
     /// Preferences: open every document at Default zoom and Default page display, whatever
     /// layout or zoom it asks for (#1618).
     pub always_default_view: bool,
