@@ -1,9 +1,11 @@
 use super::input::delete_selected;
 use super::paint::edit_anchor;
 use super::state::{Composer, ComposerKind, Gesture};
+use pdfcraft_engine::CommentProps;
+
 use super::{
-    Annotation, Color32, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Rect, ReviewState, Rgb, SELECT_BLUE, SWATCHES, Sense, Stroke, color32,
-    defaultable, icons, theme, vec2,
+    Annotation, Color32, CommentPrefs, CommentTool, CornerRadius, DocInfo, DocView, Edit, PageCx, PagePointer, QuickTool, Rect, ReviewState, Rgb,
+    SELECT_BLUE, SWATCHES, Sense, Stroke, color32, defaultable, icons, pos2, theme, vec2,
 };
 
 /// Save attachment… and, for a PDF, Open in a new tab, first in a file attachment comment's
@@ -425,6 +427,147 @@ pub(crate) fn border_colour_button(ui: &mut egui::Ui, current: Option<Rgb>, text
         }
     });
     picked
+}
+
+/// The floating bar over the selected comment (Acrobat shows a mini toolbar on a selected
+/// comment): its colour and opacity, changed in place without opening Properties. Only for a
+/// comment whose appearance can be redrawn and that isn't locked, never while a comment is
+/// being drawn, moved or typed, and not while `off` (comments hidden, or a drawing tool on).
+/// Several selected: the choice goes to every selected comment that can take it, as one step
+/// (the context menu's Colour does the same). `props_of`: a comment's properties, the engine's
+/// `Document::comment_props`. Returns the edit to apply.
+pub(crate) fn style_bar(
+    ctx: &egui::Context,
+    view: &DocView,
+    info: &DocInfo,
+    props_of: &dyn Fn(usize, usize) -> Option<CommentProps>,
+    prefs: &CommentPrefs,
+    allowed: bool,
+    off: bool,
+) -> Option<Edit> {
+    // An opacity drag in progress. Forgotten whenever the bar isn't shown, so a drag the bar
+    // vanished under (a tool change, Escape) never reaches the next comment the bar opens for.
+    let draft = egui::Id::unique(("comment-style-bar-opacity-draft", view.id.0));
+    let Some((page, index, props, bounds)) = bar_placement(view, info, props_of, prefs, allowed && !off) else {
+        ctx.data_mut(|d| d.remove::<f64>(draft));
+        return None;
+    };
+    let takes_style = |&(p, i): &(usize, usize)| {
+        (p, i) != (page, index)
+            && info.annotations.iter().any(|a| a.page == p && a.index == i && !a.is_reply())
+            && props_of(p, i).is_some_and(|c| c.restylable && !c.locked)
+    };
+    let others: Vec<(usize, usize)> = view.comments.also.iter().filter(|k| takes_style(k)).copied().collect();
+    let viewport = view.viewport_rect();
+    let mut edit = None;
+    // Centred just above the comment; `constrain_to` keeps it inside the document area when the
+    // comment touches the top.
+    let area = egui::Area::new(egui::Id::unique(("comment-style-bar", view.id.0)))
+        .order(egui::Order::Foreground)
+        .pivot(egui::Align2::CENTER_BOTTOM)
+        .constrain_to(viewport);
+    area.fixed_pos(pos2(bounds.center().x, bounds.top() - 6.0)).show(ctx, |ui| {
+        egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(4, 2)).corner_radius(CornerRadius::same(8)).show(ui, |ui| {
+            edit = style_controls(ui, page, index, &props, draft);
+        });
+    });
+    let edit = edit?;
+    let (Edit::StyleAnnotation { color, opacity, .. }, false) = (&edit, others.is_empty()) else { return Some(edit) };
+    let (color, opacity) = (*color, *opacity);
+    let mut edits = vec![edit];
+    edits.extend(others.into_iter().map(|(page, index)| Edit::StyleAnnotation { page, index, color, opacity, width: None, endings: None }));
+    Some(Edit::Batch { label: "Change comment properties".into(), edits })
+}
+
+/// Where the bar goes: the comment with the handles (page, index), its properties and its
+/// screen bounds, when the bar is shown at all (see [`style_bar`]).
+fn bar_placement(
+    view: &DocView,
+    info: &DocInfo,
+    props_of: &dyn Fn(usize, usize) -> Option<CommentProps>,
+    prefs: &CommentPrefs,
+    allowed: bool,
+) -> Option<(usize, usize, CommentProps, Rect)> {
+    let cv = &view.comments;
+    if !allowed || cv.composer.is_some() || cv.gesture.is_some() {
+        return None;
+    }
+    let (page, index) = cv.selected?;
+    let props = props_of(page, index).filter(|p| p.restylable && !p.locked)?;
+    let a = info.annotations.iter().find(|a| a.page == page && a.index == index && !a.is_reply())?;
+    let xf = view.page_xform(page)?;
+    let cx = PageCx {
+        page,
+        xf: &xf,
+        ptr: &PagePointer::default(),
+        info,
+        tool: QuickTool::Select,
+        prefs,
+        allowed,
+        hidden: false,
+        redact_mark: ([0.89, 0.13, 0.13], 1.0),
+    };
+    let bounds = cx.screen_rects(a).reduce(|u, r| u.union(r))?;
+    view.viewport_rect().intersects(bounds).then_some((page, index, props, bounds))
+}
+
+/// How many of the palette's swatches the style bar shows (the rest stay in the context menu's
+/// Colour submenu and in Properties).
+const BAR_SWATCHES: usize = 6;
+
+/// The style bar's controls: the first [`BAR_SWATCHES`] palette swatches, applied with one click,
+/// and an opacity button opening a slider (`draft`: where its drag in progress is kept; dropped
+/// while the popup is closed). The labels differ from the quick bar's ("Colour", "Blue",
+/// "Opacity"), which can show at the same time. Returns the edit a choice makes.
+pub(super) fn style_controls(ui: &mut egui::Ui, page: usize, index: usize, props: &CommentProps, draft: egui::Id) -> Option<Edit> {
+    let mut edit = None;
+    let style = |color, opacity| Edit::StyleAnnotation { page, index, color, opacity, width: None, endings: None };
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (name, c) in SWATCHES.iter().take(BAR_SWATCHES) {
+            let on = props.color.is_some_and(|cur| same_colour(&cur, c));
+            let label = crate::i18n::fmt(tl!("Comment colour: {name}"), &[("name", tl!(name))]);
+            if swatch(ui, *c, on, &label).clicked() {
+                edit = Some(style(Some(*c), None));
+            }
+        }
+        let resp = icons::button(ui, "blend", 32.0, false, tl!("Comment opacity"));
+        let open =
+            egui::Popup::menu(&resp).align(egui::RectAlign::BOTTOM_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                ui.set_min_width(200.0);
+                if let Some(o) = opacity_slider(ui, props.opacity, draft) {
+                    edit = Some(style(None, Some(o)));
+                }
+            });
+        if open.is_none() {
+            ui.data_mut(|d| d.remove::<f64>(draft));
+        }
+    });
+    edit
+}
+
+/// A 10–100 % slider starting at `current`, or at the drag in progress kept under `draft`. The
+/// opacity to commit: on release (a click on the rail, or the end of a drag: one undo step for
+/// the whole drag), or at once for an arrow key (a step of its own). A press moves the value at
+/// once but commits nothing until it is released.
+fn opacity_slider(ui: &mut egui::Ui, current: f64, draft: egui::Id) -> Option<f64> {
+    // ponytail: no live preview while dragging; the page shows the new opacity on release. A
+    // preview would need an engine edit per frame (undo spam) or a preview path in paint.
+    let current = if current.is_finite() { current.clamp(0.1, 1.0) } else { 1.0 };
+    let dragging = ui.data(|d| d.get_temp::<f64>(draft));
+    let mut percent = dragging.unwrap_or_else(|| (current * 100.0).round());
+    let slider = ui.add(egui::Slider::new(&mut percent, 10.0..=100.0).step_by(5.0).suffix(" %").text(tl!("Opacity")));
+    let held = slider.is_pointer_button_down_on();
+    let released = (slider.drag_stopped() || slider.clicked()) && (dragging.is_some() || slider.changed());
+    let keyed = slider.changed() && !held && !slider.dragged();
+    if released || keyed {
+        ui.data_mut(|d| d.remove::<f64>(draft));
+        return Some((percent / 100.0).clamp(0.1, 1.0));
+    }
+    if slider.changed() || slider.dragged() {
+        ui.data_mut(|d| d.insert_temp(draft, percent));
+    }
+    None
 }
 
 /// The quick bar's fill button: a filled square in the fill colour, or a crossed-out outline

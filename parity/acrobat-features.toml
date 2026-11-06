@@ -3686,8 +3686,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.highlight"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/it/comments.rs::dragging_over_text_with_the_highlighter_highlights_it", "crates/ui-egui/tests/it/comments.rs::a_new_highlight_opens_its_note_for_typing", "crates/engine/src/tests.rs::highlight_multiplies_over_text"]
-notes = "drag over text, or pick the tool with text selected; a new highlight opens its note for typing in the Comments panel; agents can highlight by text search"
+evidence = ["crates/ui-egui/tests/it/comments.rs::dragging_over_text_with_the_highlighter_highlights_it", "crates/ui-egui/tests/it/comments.rs::a_new_highlight_opens_its_note_for_typing", "crates/engine/src/tests.rs::highlight_multiplies_over_text", "crates/ui-egui/src/tools/comments/tests.rs::new_highlights_start_half_transparent", "crates/ui-egui/tests/it/ui.rs::legacy_settings_move_the_default_highlight_opacity_to_half"]
+notes = "drag over text, or pick the tool with text selected; a new highlight opens its note for typing in the Comments panel; agents can highlight by text search. New highlights start at 50 % opacity (/CA 0.5, Multiply); a settings file from before moves an untouched highlight opacity of 1.0 to 0.5 once (comment_styles_version); the quick bar, Properties and the floating style bar change it"
 
 [[feature]]
 id = "comment.underline"
@@ -3998,8 +3998,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.note"]
 tools = ["comment_edit"]
-evidence = ["crates/annot/src/tests.rs::restyle_and_resize_redraw_the_appearance", "crates/ui-egui/tests/it/comments.rs::the_opacity_set_for_a_tool_goes_into_its_new_comments", "crates/ui-egui/tests/it/comments.rs::the_quick_bar_colour_changes_the_selected_comment", "crates/ui-egui/tests/it/comments.rs::the_quick_bar_colour_changes_the_selected_arrow"]
-notes = "quick-bar colour swatches immediately recolour a selected comment made with the active tool, and set the tool default; fill colour (rectangle, oval, polygon, cloud), opacity (10–100 %) and line thickness per tool; colour from the context menu"
+evidence = ["crates/annot/src/tests.rs::restyle_and_resize_redraw_the_appearance", "crates/ui-egui/tests/it/comments.rs::the_opacity_set_for_a_tool_goes_into_its_new_comments", "crates/ui-egui/tests/it/comments.rs::the_quick_bar_colour_changes_the_selected_comment", "crates/ui-egui/tests/it/comments.rs::the_quick_bar_colour_changes_the_selected_arrow", "crates/ui-egui/tests/it/comments.rs::the_style_bar_recolours_and_fades_the_selected_highlight", "crates/ui-egui/src/tools/comments/tests.rs::the_style_bar_controls_recolour_and_fade_the_comment", "crates/ui-egui/src/tools/comments/tests.rs::the_opacity_slider_commits_once_when_a_drag_ends", "crates/ui-egui/tests/it/comments.rs::an_abandoned_opacity_drag_never_reaches_the_bar_again", "crates/ui-egui/tests/it/comments.rs::the_style_bar_recolours_every_selected_comment"]
+notes = "quick-bar colour swatches immediately recolour a selected comment made with the active tool, and set the tool default; fill colour (rectangle, oval, polygon, cloud), opacity (10–100 %) and line thickness per tool; colour from the context menu. A floating bar over the selected comment (Select or a text-markup tool, as Acrobat's mini toolbar) applies one of the first six palette colours with a click and opens an opacity slider (10–100 %), in place, one undo step each, to every selected comment that can take it; hidden with hidden comments; the opacity shows on release, not while the slider drags; other colours stay in the context menu and Properties, and the bar has no delete, reply or Properties shortcuts yet"
 
 [[feature]]
 id = "comment.lock-comment"

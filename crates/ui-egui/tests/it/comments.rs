@@ -4315,3 +4315,133 @@ fn escape_with_a_fill_tool_deselects_every_comment_then_drops_the_tool() {
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
 }
+
+/// Acrobat's mini toolbar on a selected comment: the bar over a selected highlight recolours and
+/// fades it in place, one undo step each; a locked comment shows no bar.
+#[test]
+fn the_style_bar_recolours_and_fades_the_selected_highlight() {
+    let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
+    let (a, b) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
+    };
+    drag(&mut h, a, b);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the new highlight is selected");
+    let props = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).expect("document").comment_props(0, 0).expect("props")
+    };
+    assert_eq!((props(&h).color, props(&h).opacity), (Some([1.0, 0.94, 0.0]), 0.5), "a new highlight is half transparent");
+
+    h.get_by_label("Comment colour: Blue").click();
+    h.run_steps(3);
+    assert_eq!(props(&h).color, Some([0.0, 0.47, 0.84]));
+    {
+        let s = h.state();
+        assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Change comment properties"), "one undo step");
+    }
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(props(&h).color, Some([1.0, 0.94, 0.0]), "one undo restores the yellow");
+    h.state_mut().redo();
+    h.run_steps(2);
+    assert_eq!(props(&h).color, Some([0.0, 0.47, 0.84]), "redo restores the blue");
+
+    // Hide all comments: the bar goes at once, before the pages let the selection go; shown
+    // again and selected again, it is back.
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().session.set_hide_comments(id, true));
+    h.run_steps(2);
+    assert!(h.query_by_label("Comment colour: Blue").is_none(), "no bar over hidden comments");
+    assert!(h.state_mut().session.set_hide_comments(id, false));
+    h.run_steps(2);
+    // The pages let the selection go while the comments were hidden: select it again (with the
+    // Select tool; a markup tool's click marks text, it doesn't pick comments).
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    click(&mut h, a);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "selected again");
+    h.get_by_label("Comment colour: Blue");
+
+    h.get_by_label("Comment opacity").click();
+    h.run_steps(2);
+    h.get_by(|n| n.role() == Role::Slider && n.label().as_deref() == Some("Opacity")).focus();
+    h.run_steps(1);
+    h.key_press(egui::Key::ArrowLeft);
+    h.run_steps(3);
+    assert!((props(&h).opacity - 0.45).abs() < 1e-9, "one 5 % step down: {}", props(&h).opacity);
+
+    // Locked comments refuse restyling, so they get no bar.
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 0, locked: true }));
+    h.run_steps(3);
+    assert!(h.query_by_label("Comment colour: Blue").is_none(), "no bar over a locked comment");
+}
+
+/// An opacity drag the bar vanishes under (here: a drawing tool picked mid-drag) commits nothing,
+/// and the slider starts from the comment's own opacity the next time the bar opens.
+#[test]
+fn an_abandoned_opacity_drag_never_reaches_the_bar_again() {
+    let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
+    let (a, b) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
+    };
+    drag(&mut h, a, b);
+    let id = h.state().views[0].id;
+    let opacity = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).expect("document").comment_props(0, 0).expect("props").opacity;
+    assert_eq!(opacity(&h), 0.5);
+    h.get_by_label("Comment opacity").click();
+    h.run_steps(2);
+    let rail = h.get_by(|n| n.role() == Role::Slider && n.label().as_deref() == Some("Opacity")).rect();
+    let (from, to) = (rail.center(), pos2(rail.center().x + rail.width() * 0.3, rail.center().y));
+    h.drag_at(from);
+    h.run_steps(1);
+    h.hover_at(to);
+    h.run_steps(2);
+    // A shape tool takes the bar away while the pointer is still down.
+    h.state_mut().set_option("quick", "square").unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_label("Comment opacity").is_none(), "no bar with a drawing tool");
+    h.drop_at(to);
+    h.run_steps(3);
+    assert_eq!(opacity(&h), 0.5, "the abandoned drag changed nothing");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Add highlight"), "and made no undo step");
+    // Back with the Select tool, the bar's slider shows the comment's opacity, not the drag's.
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    if h.query_by_label("Comment opacity").is_none() {
+        click(&mut h, a);
+    }
+    h.get_by_label("Comment opacity").click();
+    h.run_steps(2);
+    let shown = h.get_by(|n| n.role() == Role::Slider && n.label().as_deref() == Some("Opacity")).accesskit_node().numeric_value();
+    assert_eq!(shown, Some(50.0), "{shown:?}");
+}
+
+/// With several comments selected, a swatch on the bar recolours every one of them as one step,
+/// as the context menu's Colour does.
+#[test]
+fn the_style_bar_recolours_every_selected_comment() {
+    let mut h = harness(|app| app.set_option("quick", "square").unwrap());
+    for (a, b) in [((20.0, 20.0), (60.0, 60.0)), ((100.0, 20.0), (140.0, 60.0)), ((180.0, 20.0), (220.0, 60.0))] {
+        drag_pt(&mut h, a, b);
+    }
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.run_steps(2);
+    click_pt(&mut h, (40.0, 40.0));
+    click_pt_with(&mut h, (120.0, 40.0), egui::Modifiers::COMMAND);
+    click_pt_with(&mut h, (200.0, 40.0), egui::Modifiers::COMMAND);
+    assert_eq!(h.state().views[0].comments.selection().len(), 3);
+    h.get_by_label("Comment colour: Blue").click();
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let colours = |h: &Harness<'static, PdfCraftApp>| -> Vec<Option<[f64; 3]>> {
+        let s = h.state();
+        (0..3).map(|i| s.session.get(id).unwrap().comment_props(0, i).unwrap().color).collect()
+    };
+    assert_eq!(colours(&h), vec![Some([0.0, 0.47, 0.84]); 3], "all three blue");
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Change comment properties"), "one step");
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(colours(&h), vec![Some([0.89, 0.13, 0.13]); 3], "one undo gives all three their red back");
+}

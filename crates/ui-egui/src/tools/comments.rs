@@ -8,6 +8,8 @@
 //!   text boxes), edited (double-click) and deleted (⌫ / Delete); a context menu offers Edit,
 //!   Reply, Set status, Colour and Delete.
 //! - **Composer:** the floating "Add a comment" card used for new notes, text boxes and edits.
+//! - **Style bar:** the floating bar over the selected comment (Select or a text-markup tool):
+//!   six palette swatches and an opacity slider, applied in place.
 //!
 //! Everything is turned into `pdfcraft_engine::Edit`s, queued on the view as `pending_edit` and
 //! applied by the app, so each change is one undo step.
@@ -38,8 +40,10 @@ pub use geometry::{drawn_text_box_rect, snug_text_box_rect, text_box_rect};
 #[cfg(test)]
 use input::hover_tip;
 pub(crate) use input::{anchor, context, context_hit, describe, hit, keys, moving_on, nudge_keys, page_after_text, page_input};
+#[cfg(test)]
+use menu::style_controls;
 pub use menu::{CanvasAction, fill_picker, recent_custom_colours, remember_custom_colour, status_badge, swatch_grid};
-pub(crate) use menu::{MenuRights, attachment_items, border_colour_button, context_menu, quick_bar_colour, quick_bar_controls};
+pub(crate) use menu::{MenuRights, attachment_items, border_colour_button, context_menu, quick_bar_colour, quick_bar_controls, style_bar};
 #[cfg(test)]
 use menu::{RECENT_CUSTOM, same_colour};
 pub(crate) use paint::paint_page;

@@ -19,6 +19,14 @@ fn freehand_highlight_and_draw_accept_widths_up_to_100() {
 
 /// A selected line is drawn where it is going: moved by its body (both ends follow the
 /// pointer), with an end dragged (that end alone), and as released until the page is drawn.
+/// New highlights start half transparent; the other text markup stays opaque.
+#[test]
+fn new_highlights_start_half_transparent() {
+    let prefs = CommentPrefs::default();
+    assert_eq!(prefs.style(CommentTool::Highlight).opacity, 0.5);
+    assert_eq!(prefs.style(CommentTool::Underline).opacity, 1.0);
+}
+
 #[test]
 fn a_moved_or_reshaped_line_is_drawn_at_its_new_points() {
     let line = [[10.0, 10.0], [50.0, 10.0]];
@@ -560,4 +568,117 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
     assert!(hover_outline(&cx, &cv, None).is_none(), "nor where nothing would take it");
     let selected = CommentView { selected: Some((0, 0)), ..CommentView::default() };
     assert!(hover_outline(&cx, &selected, Some(&comment)).is_none(), "the selected comment has its own frame");
+}
+
+/// The style bar over a selected comment: one of its six swatches recolours it, and an arrow key
+/// on the opacity slider fades it one step, each as its own `StyleAnnotation` edit.
+#[test]
+fn the_style_bar_controls_recolour_and_fade_the_comment() {
+    use egui_kittest::kittest::Queryable;
+    let props = pdfcraft_engine::CommentProps {
+        subtype: "Highlight".into(),
+        author: String::new(),
+        subject: String::new(),
+        color: Some([1.0, 0.94, 0.0]),
+        opacity: 1.0,
+        width: None,
+        icon: None,
+        modified: None,
+        restylable: true,
+        locked: false,
+        endings: None,
+        fillable: false,
+        fill: None,
+        font_size: None,
+        border_color: None,
+        border_shape: None,
+        fill_opacity: None,
+        text_opacity: None,
+    };
+    let mut h = egui_kittest::Harness::new_ui_state(
+        |ui, (props, edits): &mut (pdfcraft_engine::CommentProps, Vec<Edit>)| {
+            if let Some(e) = style_controls(ui, 0, 3, props, egui::Id::unique("opacity-draft")) {
+                edits.push(e);
+            }
+        },
+        (props, Vec::new()),
+    );
+    h.run();
+    assert_eq!(h.query_all_by_label_contains("Comment colour: ").count(), 6, "six swatches, no picker");
+    h.get_by_label("Comment colour: Blue").click();
+    h.run();
+    h.get_by_label("Comment opacity").click();
+    h.run();
+    // The slider and its value box share the label; the slider takes the arrow keys.
+    h.get_by(|n| n.role() == egui::accesskit::Role::Slider && n.label().as_deref() == Some("Opacity")).focus();
+    h.run();
+    h.key_press(egui::Key::ArrowLeft);
+    h.run();
+    let edits = &h.state().1;
+    match edits.as_slice() {
+        [
+            Edit::StyleAnnotation { page: 0, index: 3, color: Some(c), opacity: None, .. },
+            Edit::StyleAnnotation { page: 0, index: 3, color: None, opacity: Some(o), .. },
+        ] => {
+            assert!(same_colour(c, &[0.0, 0.47, 0.84]), "{c:?}");
+            assert!((*o - 0.95).abs() < 1e-9, "{o}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A pointer drag on the style bar's opacity slider is one edit, made when the drag ends: the
+/// press moves the value at once but commits nothing, nor do the frames in between.
+#[test]
+fn the_opacity_slider_commits_once_when_a_drag_ends() {
+    use egui_kittest::kittest::Queryable;
+    let props = pdfcraft_engine::CommentProps {
+        subtype: "Highlight".into(),
+        author: String::new(),
+        subject: String::new(),
+        color: Some([1.0, 0.94, 0.0]),
+        opacity: 1.0,
+        width: None,
+        icon: None,
+        modified: None,
+        restylable: true,
+        locked: false,
+        endings: None,
+        fillable: false,
+        fill: None,
+        font_size: None,
+        border_color: None,
+        border_shape: None,
+        fill_opacity: None,
+        text_opacity: None,
+    };
+    let mut h = egui_kittest::Harness::new_ui_state(
+        |ui, (props, edits): &mut (pdfcraft_engine::CommentProps, Vec<Edit>)| {
+            if let Some(e) = style_controls(ui, 0, 3, props, egui::Id::unique("opacity-draft")) {
+                edits.push(e);
+            }
+        },
+        (props, Vec::new()),
+    );
+    h.run();
+    h.get_by_label("Comment opacity").click();
+    h.run();
+    let rail = h.get_by(|n| n.role() == egui::accesskit::Role::Slider && n.label().as_deref() == Some("Opacity")).rect();
+    let (from, to) = (rail.center(), pos2(rail.center().x - rail.width() * 0.3, rail.center().y));
+    h.drag_at(from);
+    h.run();
+    for k in 1..=3 {
+        h.hover_at(from + (to - from) * (k as f32 / 3.0));
+        h.run();
+    }
+    assert!(h.state().1.is_empty(), "nothing commits while the pointer is down: {:?}", h.state().1);
+    h.drop_at(to);
+    h.run();
+    h.run();
+    match h.state().1.as_slice() {
+        [Edit::StyleAnnotation { page: 0, index: 3, color: None, opacity: Some(o), .. }] => {
+            assert!((0.1..0.6).contains(o), "left of the middle of a 10-100 % rail: {o}");
+        }
+        other => panic!("one edit, at the end of the drag: {other:?}"),
+    }
 }

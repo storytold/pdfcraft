@@ -733,7 +733,11 @@ impl Style {
     pub fn default_for(shape: &Shape) -> Self {
         let (color, width) = match shape {
             Shape::Note { .. } => ([1.0, 0.82, 0.0], 1.0),
-            Shape::TextMarkup { kind: Markup::Highlight, .. } => ([1.0, 0.94, 0.0], 1.0),
+            // Half transparent, so the text under a highlight stays crisp even where Multiply
+            // isn't honoured (a printed page, a flattened copy, another viewer).
+            Shape::TextMarkup { kind: Markup::Highlight, .. } => {
+                return Self { color: [1.0, 0.94, 0.0], opacity: 0.5, width: 1.0, ..Self::default() };
+            }
             Shape::TextMarkup { kind: Markup::Underline, .. } => ([0.0, 0.47, 0.84], 1.0),
             Shape::TextMarkup { kind: Markup::StrikeOut, .. } => ([0.89, 0.13, 0.13], 1.0),
             Shape::TextMarkup { kind: Markup::Squiggly, .. } => ([0.18, 0.62, 0.36], 1.0),
