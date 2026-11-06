@@ -110,3 +110,183 @@ fn a_model_outside_the_root_is_never_opened_to_be_drawn() {
     let doc = open(&mut a, "prc.pdf");
     assert!(a.call("model_render", &json!({ "doc": doc, "page": 1 })).is_ok());
 }
+
+#[test]
+fn an_orbit_frames_the_model_from_a_named_view_and_its_moves() {
+    let (_dir, mut a) = setup("orbit");
+    let doc = open(&mut a, "prc.pdf");
+    let draw = |a: &mut Automation, orbit: Value| {
+        let out = a.call("model_render", &json!({ "doc": doc, "page": 1, "width": 64, "height": 48, "perspective": false, "orbit": orbit })).unwrap();
+        let Content::Png { data, .. } = &out[0] else { panic!("expected a PNG") };
+        data.clone()
+    };
+    // The triangle lies in z = 0: the Top view looks down on its face, the Front view along its edge.
+    let top = draw(&mut a, json!({ "view": "top" }));
+    assert_eq!(rgb(&top, 32, 24), [190, 192, 200], "the top view sees the face head on");
+    let front = draw(&mut a, json!({ "view": "front" }));
+    assert!((0..48).all(|y| rgb(&front, 32, y) == [255, 255, 255]), "the front view sees only its edge");
+    let tipped = draw(&mut a, json!({ "view": "front", "turn": [0, 30] }));
+    assert_ne!(rgb(&tipped, 32, 24), [255, 255, 255], "tipped down from the front, the face is in the middle");
+    // With y up the Front view looks along -z, onto the face.
+    let y_up = draw(&mut a, json!({ "view": "front", "up": "+y" }));
+    assert_eq!(rgb(&y_up, 32, 24), [190, 192, 200]);
+    // Turning the front view down by 90° stops just short of the top view and sees the face.
+    let turned = draw(&mut a, json!({ "view": "front", "turn": [0, 90] }));
+    assert_ne!(rgb(&turned, 32, 24), [255, 255, 255]);
+    // A pan moves the target right, so the model moves left; three radii take it out of the picture.
+    let (left, right) = extent(&top, 24);
+    let (moved_left, moved_right) = extent(&draw(&mut a, json!({ "view": "top", "pan": [0.5, 0] })), 24);
+    assert!(moved_left < left && moved_right < right, "{left}..{right} moved to {moved_left}..{moved_right}");
+    let panned = draw(&mut a, json!({ "view": "top", "pan": [3, 0] }));
+    assert!((0..64).all(|x| rgb(&panned, x, 24) == [255, 255, 255]), "the model has left the picture");
+    // Zooming in about the centre keeps the face under it and leaves no background at the corner.
+    let zoomed = draw(&mut a, json!({ "view": "top", "zoom": 8 }));
+    assert_eq!(rgb(&zoomed, 32, 24), [190, 192, 200]);
+    assert_ne!(rgb(&zoomed, 0, 0), [255, 255, 255], "zoomed in, the face fills the corner too");
+}
+
+/// The first and last columns on row `y` that are not background.
+fn extent(data: &[u8], y: usize) -> (usize, usize) {
+    let drawn: Vec<usize> = (0..64).filter(|&x| rgb(data, x, y) != [255, 255, 255]).collect();
+    (*drawn.first().expect("the model is on the row"), *drawn.last().expect("the model is on the row"))
+}
+
+#[test]
+fn a_wrong_orbit_is_a_clear_error() {
+    let (_dir, mut a) = setup("orbit-bad");
+    let doc = open(&mut a, "prc.pdf");
+    for bad in [
+        json!({ "orbit": { "view": "side" } }),
+        json!({ "orbit": { "up": "z" } }),
+        json!({ "orbit": { "up": "+z", "front": "-z" } }),
+        json!({ "orbit": { "turn": [1] } }),
+        json!({ "orbit": { "zoom": 0 } }),
+        json!({ "orbit": { "zoom_at": [0.1, 0] } }),
+        json!({ "orbit": { "pan": [1, "a"] } }),
+        json!({ "orbit": { "spin": 1 } }),
+        json!({ "orbit": 1 }),
+        json!({ "orbit": {}, "direction": [0, 0, -1] }),
+    ] {
+        let mut args = json!({ "doc": doc, "page": 1, "width": 16, "height": 16 });
+        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        let err = a.call("model_render", &args).unwrap_err().to_string();
+        assert!(err.contains("orbit"), "{bad}: {err}");
+    }
+    assert!(
+        a.call("model_render", &json!({ "doc": doc, "page": 1, "width": 16, "height": 16, "orbit": {} })).is_ok(),
+        "an empty orbit is the isometric view"
+    );
+}
+
+fn json_of(mut out: Vec<Content>) -> Value {
+    match out.remove(0) {
+        Content::Json(v) => v,
+        other => panic!("expected JSON: {other:?}"),
+    }
+}
+
+#[test]
+fn a_pick_finds_the_model_exactly_where_the_picture_shows_it() {
+    let (_dir, mut a) = setup("pick");
+    let doc = open(&mut a, "prc.pdf");
+    let view = json!({ "doc": doc, "page": 1, "width": 64, "height": 48, "direction": [0, 0, -1], "perspective": false });
+    let Content::Png { data, .. } = &a.call("model_render", &view).unwrap()[0] else { panic!("expected a PNG") };
+    let mut drawn = 0;
+    for y in (0..48).step_by(3) {
+        for x in (0..64).step_by(3) {
+            let mut args = view.clone();
+            args["at"] = json!([x as f64 + 0.5, y as f64 + 0.5]);
+            let hit = json_of(a.call("model_pick", &args).unwrap());
+            let shown = rgb(data, x, y) != [255, 255, 255];
+            assert_eq!(!hit["hit"].is_null(), shown, "pixel {x}, {y}: {hit}");
+            drawn += usize::from(shown);
+        }
+    }
+    assert!(drawn > 20, "the triangle fills part of the picture");
+    let mut centre = view.clone();
+    centre["at"] = json!([32.0, 24.0]);
+    let hit = json_of(a.call("model_pick", &centre).unwrap())["hit"].clone();
+    assert_eq!((hit["mesh"].as_u64(), hit["triangle"].as_u64()), (Some(1), Some(1)), "{hit}");
+    assert!(hit["point"][2].as_f64().unwrap().abs() < 1e-9, "the triangle lies at z = 0: {hit}");
+    assert_eq!(hit["normal"], json!([0.0, 0.0, 1.0]), "it faces +z");
+    // The default perspective view meets the model too.
+    let hit = json_of(a.call("model_pick", &json!({ "doc": doc, "page": 1, "at": [256, 256] })).unwrap());
+    assert!(!hit["hit"].is_null(), "{hit}");
+}
+
+#[test]
+fn a_wrong_pick_position_is_a_clear_error() {
+    let (_dir, mut a) = setup("pick-bad");
+    let doc = open(&mut a, "prc.pdf");
+    for at in [json!(null), json!([1]), json!([1, 2, 3]), json!([-1, 0]), json!(["1", 0]), json!([65, 0]), json!([0, 48.5])] {
+        let mut args = json!({ "doc": doc, "page": 1, "width": 64, "height": 48 });
+        if !at.is_null() {
+            args["at"] = at.clone();
+        }
+        let err = a.call("model_pick", &args).unwrap_err().to_string();
+        assert!(err.contains("at must") || err.ends_with("missing argument at"), "{at}: {err}");
+    }
+    let err = a.call("model_pick", &json!({ "doc": doc, "page": 1, "at": [0, 0], "model": 2 })).unwrap_err().to_string();
+    assert!(err.contains("has 1 3D models, not 2"), "{err}");
+}
+
+/// The distance `model_pick` finds straight below a walker after `walk`, looking straight down.
+fn floor_below(a: &mut Automation, doc: u64, mut walk: Value) -> Option<f64> {
+    walk["look"] = json!([0, 0, -1]);
+    let args = json!({ "doc": doc, "page": 1, "width": 64, "height": 64, "at": [32, 32], "walk": walk });
+    json_of(a.call("model_pick", &args).unwrap())["hit"]["distance"].as_f64()
+}
+
+#[test]
+fn a_walker_falls_onto_the_model_and_stands_at_its_eye_height() {
+    let (_dir, mut a) = setup("walk");
+    let doc = open(&mut a, "prc.pdf");
+    // Above the triangle at z = 3, falling for two seconds: standing 0.5 above it.
+    let fall = json!({ "from": [0, -0.2, 3], "height": 0.5, "steps": [{ "seconds": 2 }] });
+    let stood = floor_below(&mut a, doc, fall.clone()).expect("the triangle is below");
+    assert!((stood - 0.5).abs() < 1e-3, "{stood}");
+    // A ghost does not fall, and rising lifts it.
+    let mut ghost = fall.clone();
+    ghost["ghost"] = json!(true);
+    let floated = floor_below(&mut a, doc, ghost.clone()).unwrap();
+    assert!((floated - 3.0).abs() < 1e-3, "{floated}");
+    ghost["steps"] = json!([{ "rise": 1, "seconds": 2 }]);
+    assert!(floor_below(&mut a, doc, ghost).unwrap() > 3.0);
+    // Walking forward off the triangle's edge leaves nothing below.
+    let off = json!({ "from": [0, -0.2, 3], "height": 0.5, "steps": [{ "seconds": 2 }, { "turn": [90, 0] }, { "forward": 1, "seconds": 8 }] });
+    assert_eq!(floor_below(&mut a, doc, off), None);
+    // The picture is drawn from the walker's eye: standing on the triangle and looking down shows it.
+    let out = a.call("model_render", &json!({ "doc": doc, "page": 1, "width": 64, "height": 64, "walk": { "from": [0, -0.2, 3], "look": [0, 0, -1], "steps": [{ "seconds": 2 }] } })).unwrap();
+    let Content::Png { data, .. } = &out[0] else { panic!("expected a PNG") };
+    assert_ne!(rgb(data, 32, 32), [255, 255, 255]);
+}
+
+#[test]
+fn a_wrong_walk_is_a_clear_error() {
+    let (_dir, mut a) = setup("walk-bad");
+    let doc = open(&mut a, "prc.pdf");
+    for bad in [
+        json!({ "walk": 1 }),
+        json!({ "walk": {} }),
+        json!({ "walk": { "from": [0, 0] } }),
+        json!({ "walk": { "from": [0, 0, 1], "look": [0, 0, 0] } }),
+        json!({ "walk": { "from": [0, 0, 1], "up": "z" } }),
+        json!({ "walk": { "from": [0, 0, 1], "height": 0 } }),
+        json!({ "walk": { "from": [0, 0, 1], "ghost": 1 } }),
+        json!({ "walk": { "from": [0, 0, 1], "fly": true } }),
+        json!({ "walk": { "from": [0, 0, 1], "steps": [{ "forward": 2 }] } }),
+        json!({ "walk": { "from": [0, 0, 1], "steps": [{ "seconds": -1 }] } }),
+        json!({ "walk": { "from": [0, 0, 1], "steps": [{ "seconds": 400 }, { "seconds": 400 }] } }),
+        json!({ "walk": { "from": [0, 0, 1], "steps": [{ "turn": [1] }] } }),
+        json!({ "walk": { "from": [0, 0, 1], "steps": [{ "jump": 1 }] } }),
+        json!({ "walk": { "from": [0, 0, 1] }, "orbit": {} }),
+        json!({ "walk": { "from": [0, 0, 1] }, "direction": [0, 0, -1] }),
+        json!({ "walk": { "from": [0, 0, 1] }, "perspective": false }),
+        json!({ "walk": { "from": [0, 0, 1], "steps": vec![json!({}); 1001] } }),
+    ] {
+        let mut args = json!({ "doc": doc, "page": 1, "width": 16, "height": 16 });
+        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        let err = a.call("model_render", &args).unwrap_err().to_string();
+        assert!(err.contains("walk"), "{bad}: {err}");
+    }
+}

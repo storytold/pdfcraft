@@ -32,6 +32,35 @@ fn pages(what: &str) -> Value {
     json!({ "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1, "description": format!("1-based page numbers {what}.") })
 }
 
+/// `model_render`'s and `model_pick`'s `orbit`.
+fn orbit_schema() -> Value {
+    let axis = json!({ "type": "string", "enum": ["+x", "+y", "+z", "-x", "-y", "-z"] });
+    let pair = json!({ "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 });
+    json!({ "type": "object", "properties": {
+        "view": { "type": "string", "enum": ["iso", "front", "right", "top", "back"] },
+        "up": axis, "front": axis, "turn": pair,
+        "zoom": { "type": "number", "exclusiveMinimum": 0 },
+        "zoom_at": pair, "pan": pair
+    }, "additionalProperties": false })
+}
+
+/// `model_render`'s and `model_pick`'s `walk`.
+fn walk_schema() -> Value {
+    let triple = json!({ "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 });
+    let pair = json!({ "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 });
+    let share = json!({ "type": "number", "minimum": -1, "maximum": 1 });
+    json!({ "type": "object", "properties": {
+        "from": triple, "look": triple,
+        "up": { "type": "string", "enum": ["+x", "+y", "+z", "-x", "-y", "-z"] },
+        "height": { "type": "number", "exclusiveMinimum": 0 },
+        "ghost": { "type": "boolean" }, "level": { "type": "boolean" }, "stairs": { "type": "boolean" },
+        "steps": { "type": "array", "maxItems": 1000, "items": { "type": "object", "properties": {
+            "forward": share, "right": share, "rise": share, "run": { "type": "boolean" },
+            "turn": pair, "look": pair, "seconds": { "type": "number", "minimum": 0, "maximum": 600 }
+        }, "additionalProperties": false } }
+    }, "required": ["from"], "additionalProperties": false })
+}
+
 /// The Search & Redact pattern ids, from the engine's registry, so the advertised schema cannot
 /// drift from the patterns the runtime accepts.
 fn pattern_enum() -> Value {
@@ -195,13 +224,25 @@ pub fn tools() -> Vec<ToolDef> {
                 "hide_text_block": { "type": "integer", "minimum": 1, "description": "Render an inline editor background without this paragraph (number from text_paragraphs, resolved as text_edit does: refused once an edit merged that paragraph into a neighbour). Does not modify the document." },
                 "hide_added_text": { "type": "integer", "minimum": 1, "description": "Render a retyping background without this added text item (added index from object_list). Mutually exclusive with hide_text_block. Does not modify the document." }
             }), &["doc", "page"])),
-        t("model_render", "Render a 3D model", "Draw a page's 3D model (a 3D annotation's PRC stream) to a PNG, framed to fill the image, with headlight shading on a white background. model is its 1-based position among the page's 3D models (default 1). direction is the view direction [x, y, z] from the eye towards the model (default [-1, 1, -1]); Z is up unless the view looks along Z. perspective defaults to true. U3D models can't be drawn yet and give an error. Does not modify the document.")
+        t("model_render", "Render a 3D model", "Draw a page's 3D model (a 3D annotation's PRC stream) to a PNG, framed to fill the image, with headlight shading on a white background. model is its 1-based position among the page's 3D models (default 1). direction is the view direction [x, y, z] from the eye towards the model (default [-1, 1, -1]); Z is up unless the view looks along Z. orbit, in place of direction, frames the model as a viewer's orbit control does (the same size from every side) and applies, in order: view (iso, front, right, top or back; default iso) about up (+x, +y, +z, -x, -y or -z; default +z) with the Front view looking along front (an axis perpendicular to up; default +y, or -z when y is up), then turn [yaw, pitch] in degrees (pitch looks down and stops just short of the up axis), then zoom (a factor of 0.05 to 50) about the picture point zoom_at [right, up] in picture heights from the centre (default the centre), then pan [right, up] in model radii (it moves the target, so the model moves the other way). walk, in place of direction, orbit and perspective, draws in perspective from a walker's eye: it stands at from [x, y, z] looking along look (default towards the model's centre) about up (default +z), then takes steps in order, each turning its heading by turn [yaw, pitch] and its camera alone by look [yaw, pitch], in degrees, then walking for seconds with forward, right and rise from -1 to 1 (run walks three times faster), at a quarter of the model's radius a second. Solid by default, it stops at walls and slides along them, falls onto the floor below and stands at height (model units; default 0.08 of the model's radius) above it, walks up a ramp of up to about 46 degrees (steeper is a wall), otherwise climbs only a seam, or with stairs anything under a third of that height, never rises into what is over its head, and ignores rise; ghost flies through everything, and with level false flies where it looks. perspective defaults to true. U3D models can't be drawn yet and give an error. Does not modify the document.")
             .ro()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "model": { "type": "integer", "minimum": 1 },
                 "width": { "type": "integer", "minimum": 1, "maximum": 4096 }, "height": { "type": "integer", "minimum": 1, "maximum": 4096 },
                 "direction": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
-                "perspective": { "type": "boolean" }
+                "perspective": { "type": "boolean" },
+                "orbit": orbit_schema(),
+                "walk": walk_schema()
             }), &["doc", "page"])),
+        t("model_pick", "Pick a point on a 3D model", "Find what of a page's 3D model lies under a position of the picture model_render draws with the same model, width, height, direction, perspective, orbit or walk. at is [x, y] in pixels from the picture's top left (a pixel's centre is its index plus 0.5), from 0 up to the width and height. Gives { hit: { mesh, triangle, point, normal, distance } }, mesh and triangle 1-based among the placed model's meshes and that mesh's triangles, point and normal in model coordinates, distance along the pick ray (from the eye in perspective, from the picture plane in orthographic); hit is null over the background. Does not modify the document.")
+            .ro()
+            .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "model": { "type": "integer", "minimum": 1 },
+                "at": { "type": "array", "items": { "type": "number", "minimum": 0 }, "minItems": 2, "maxItems": 2 },
+                "width": { "type": "integer", "minimum": 1, "maximum": 4096 }, "height": { "type": "integer", "minimum": 1, "maximum": 4096 },
+                "direction": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                "perspective": { "type": "boolean" },
+                "orbit": orbit_schema(),
+                "walk": walk_schema()
+            }), &["doc", "page", "at"])),
         t("object_list", "List editable objects", "List existing paragraphs, Image/Form artwork and added content once, with source kind/index references, displayed rectangles and document generation. Indexes change when content changes; use generation in object_move to reject stale references.")
             .ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1}}), &["doc","page"])),
         t("object_move", "Move objects together", "Atomically translate 1–1000 mixed references from object_list by [dx, dy] in displayed points (right/down). Preserves glyph codes, fonts, image data and relative spacing; success is one undo step. Text used as a clipping path and vertical text are refused. A bad/stale reference refuses the entire move.")
