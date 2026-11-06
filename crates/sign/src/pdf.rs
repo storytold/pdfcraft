@@ -45,6 +45,9 @@ use validate::{DssEvidence, MAX_DSS_BYTES, MAX_DSS_ENTRIES};
 #[cfg(test)]
 #[path = "pdf_discovery_tests.rs"]
 mod discovery_tests;
+#[cfg(test)]
+#[path = "pdf/revision_classification_tests.rs"]
+mod revision_classification_tests;
 
 /// One signature field.
 #[derive(Clone, Debug)]
