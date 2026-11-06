@@ -5,7 +5,7 @@
 
 use super::{
     BlockStyle, Document, EditError, LineEdit, MAX_TYPE3_GLYPHS, TextBlock, TextEditLayout, TextLine, group_blocks, layout_draft, rewrite_block_from,
-    text_lines,
+    text_lines, unchanged,
 };
 
 /// One paragraph being edited: the document as it was opened, and the page's lines then.
@@ -52,6 +52,12 @@ impl TextSession {
         layout_draft(&self.base, self.page, &self.lines, &self.source, self.block, text, style)
     }
 
+    /// Whether a draft with `text` (`None`: the paragraph's own) and `style` changes nothing, so
+    /// committing it writes nothing.
+    pub fn changes_nothing(&self, text: Option<&str>, style: &BlockStyle) -> bool {
+        unchanged(&self.source, text, style)
+    }
+
     /// Writes the draft into `doc`, which must still be the document the session was opened on.
     pub fn commit(&self, doc: &mut Document, text: Option<&str>, style: &BlockStyle) -> Result<LineEdit, EditError> {
         self.commit_with_limit(doc, text, style, MAX_TYPE3_GLYPHS)
@@ -66,6 +72,11 @@ impl TextSession {
     ) -> Result<LineEdit, EditError> {
         if !self.is_current(doc) {
             return Err(EditError::Invalid("the paragraph changed while it was being edited".into()));
+        }
+        // A draft that changes nothing leaves the paragraph as it is: a rewrite would move its
+        // glyphs wherever it can't reproduce the source's positioning (#6157).
+        if self.changes_nothing(text, style) {
+            return Ok(LineEdit { substituted: None });
         }
         rewrite_block_from(doc, self.page, self.lines.clone(), self.block, text, style, max_glyphs)
     }

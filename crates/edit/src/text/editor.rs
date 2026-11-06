@@ -75,6 +75,14 @@ pub fn text_edit_layout(doc: &Document, page: usize, block: usize, text: &str, s
     TextSession::open(doc, page, block)?.layout(text, style)
 }
 
+/// Whether a draft of paragraph `source` with `text` (`None`: its own) and `style` changes nothing:
+/// its own editor text and no formatting. Such a draft is laid out where the paragraph is and
+/// committed without rewriting it, which would lose what the rewrite can't reproduce, a `TJ`
+/// array's kerning say (#6157).
+pub(crate) fn unchanged(source: &TextBlock, text: Option<&str>, style: &BlockStyle) -> bool {
+    text.is_none_or(|t| t == source.editor_text) && *style == BlockStyle::default()
+}
+
 /// A draft of paragraph `source` (number `block` among the page's `lines`) laid out by the rewrite
 /// Apply runs, on a copy of `doc`.
 pub(crate) fn layout_draft(
@@ -86,7 +94,7 @@ pub(crate) fn layout_draft(
     text: &str,
     style: &BlockStyle,
 ) -> Result<TextEditLayout, EditError> {
-    if text == source.editor_text && *style == BlockStyle::default() {
+    if unchanged(source, Some(text), style) {
         return Ok(TextEditLayout { source_rect: source.rect, draft_rect: Some(source.rect), overflow: false });
     }
     // Subtract the untouched runs by value, rather than by operator offsets: a rewrite may

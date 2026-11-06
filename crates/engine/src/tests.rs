@@ -8809,6 +8809,33 @@ fn text_blocks_stay_cached_after_an_edit_and_follow_undo_and_redo() {
     assert!(Arc::ptr_eq(&redone, &blocks(&session)));
 }
 
+/// #6157: a paragraph edit with the paragraph's own text and no formatting is no edit: the kerned
+/// `TJ` run is not redrawn as one `Tj` (every glyph after the first adjustment moved), and the
+/// document is neither dirty nor given an undo step. A change to the text still is an edit.
+#[test]
+fn a_paragraph_edit_that_changes_nothing_is_no_edit() {
+    let kerned = "[(A)-400(V)-400(A)-400(V)-400(A)]TJ";
+    let bytes = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 200] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>")
+        .stream("", format!("BT /F1 48 Tf 0 0 0 rg 40 60 Td {kerned} ET"))
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("kern.pdf", None, Arc::new(bytes), None).unwrap();
+    let own = s.get(id).unwrap().editor.as_ref().unwrap().text_blocks(0).unwrap()[0].editor_text.clone();
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: own.clone(), style: pdfcraft_edit::BlockStyle::default() }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(!doc.dirty, "nothing was edited");
+    assert_eq!(doc.can_undo(), None);
+    let saved = s.save_bytes(id).unwrap();
+    assert!(saved.windows(kerned.len()).any(|w| w == kerned.as_bytes()), "the kerned run is saved as it was");
+    s.apply(id, Edit::EditTextBlock { page: 0, block: 0, text: format!("{own}!"), style: pdfcraft_edit::BlockStyle::default() }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(doc.dirty && doc.can_undo().is_some(), "new text is an edit");
+}
+
 /// #4199, #3797: the spaces typed into a paragraph are all there after saving and reopening.
 #[test]
 fn edited_text_keeps_every_space_typed_through_save_and_reopen() {

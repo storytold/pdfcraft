@@ -8,7 +8,8 @@ Rows a text edit doesn't reach keep their original operators, so their kerning, 
 gaps and glyph widths stay exactly as they were. Only rows whose characters changed, or that
 moved because an earlier row wrapped, are rewritten, and formatting a selection rewrites
 only the rows it covers. Changing the whole paragraph's formatting, width or position rewrites
-every row.
+every row. An edit that changes nothing (the paragraph's own text, no formatting) writes
+nothing at all and adds no undo step, whichever path the paragraph would take (#6157).
 
 Add Text also opens existing text when it is clicked; a blank-space click starts a new item.
 Both text tools retype an added text item with one click. Draft boxes grow to the page edge
