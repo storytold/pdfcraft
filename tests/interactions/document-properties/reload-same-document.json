@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "name": "Document Properties: reload-same-document",
+  "steps": [
+    {
+      "event": {"op": "open"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "type", "field": "Title", "value": "Stale"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "reload", "title": "Reloaded"},
+      "expect": {"error": null, "properties_open": false, "draft": null, "active": "A.pdf", "document": {"title": "Reloaded", "dirty": false, "undo": null, "redo": null}, "notice": "The document changed. Reopen Document Properties to edit the current version."}
+    },
+    {
+      "event": {"op": "open"},
+      "expect": {"error": null, "draft": {"title": "Reloaded"}}
+    },
+    {
+      "event": {"op": "type", "field": "Title", "value": "After reload"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "click", "label": "OK"},
+      "expect": {"error": null, "document": {"title": "After reload"}}
+    },
+    {
+      "event": {"op": "undo"},
+      "expect": {"error": null, "document": {"title": "Reloaded", "undo": null}}
+    }
+  ]
+}

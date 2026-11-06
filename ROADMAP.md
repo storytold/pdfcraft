@@ -20,6 +20,7 @@
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: reconcile current main while retaining display-only CJK fallback and upstream Japanese font selection; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M2, PR #4172: extend on-screen CJK fallback to Combine thumbnails and figure previews; recognise FangSong and subset-prefixed Founder names; estimates unchanged)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (typed small Edit font sizes and Fill & Sign text/date colour, #2444/#2496; estimates unchanged)
+> **Last reviewed:** 2026-10-25 | **Last updated:** 2026-10-25 | **Change:** minor (M4: Document Properties draft safety; estimates unchanged)
 
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** patch (M1, #1143: repaired aliases survive preflight, snapshots and normalized saves; retained materialized revisions report generation disagreements; estimates unchanged)
 
@@ -779,6 +780,10 @@ Newest first: the date, what moved, and the new overall estimate.
 
 - M13: common command, batch, inspection and bounded preview tools share the existing confined automation path. MCP tools carry complete hints and reject unknown top-level keys as invalid parameters.
 - **2026-10-10 (UI docking):** Tools and Inspector can be regrouped, split beside the PDF, or floated inside the app window. Existing toggles reopen panels at their saved locations; UI commands arrange/reset panels, and preferences retain their layout. Read/full-screen modes preserve the focused document view. No milestone percentage change.
+
+- **2026-10-25 (M4, #4594 review):** Documented the session bridge and replay adapter; the stale notice now participates in translation-gap scanning, with a regression test. The original proposal depended on a shared release exception. The revised proposal vendors the Rust source and keeps the Python replay local. Maintainer review is pending.
+
+- **2026-10-25 (M4):** Document Properties drafts now reject changed document identities/revisions, including reload and Undo/Redo, through pinned edit-session; real UI JSONL scenarios replay with interaction-check. Broader dialog invalidation remains separate (#3917); estimates unchanged.
 
 ## Revision history
 

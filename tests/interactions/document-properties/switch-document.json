@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "name": "Document Properties: switch-document",
+  "steps": [
+    {
+      "event": {"op": "open"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "type", "field": "Title", "value": "Stale"},
+      "expect": {"error": null}
+    },
+    {
+      "event": {"op": "switch", "document": 2},
+      "expect": {"error": null, "properties_open": false, "draft": null, "active": "B.pdf", "document": {"title": "Second document", "dirty": false, "undo": null, "redo": null}, "original_bytes": true, "notice": "The document changed. Reopen Document Properties to edit the current version."}
+    },
+    {
+      "event": {"op": "switch", "document": 1},
+      "expect": {"error": null, "active": "A.pdf", "document": {"title": "Original", "author": "Original author", "custom": {"Untouched": "Keep me"}, "display_title": false, "dirty": false, "undo": null, "redo": null, "pages": 2, "custom_count": 1}, "original_bytes": true}
+    },
+    {
+      "event": {"op": "open"},
+      "expect": {"error": null, "draft": {"title": "Original"}}
+    },
+    {
+      "event": {"op": "click", "label": "Close"},
+      "expect": {"error": null, "document": {"title": "Original", "author": "Original author", "custom": {"Untouched": "Keep me"}, "display_title": false, "dirty": false, "undo": null, "redo": null, "pages": 2, "custom_count": 1}}
+    }
+  ]
+}

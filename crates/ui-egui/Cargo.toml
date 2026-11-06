@@ -10,6 +10,7 @@ rust-version = "1.95"
 workspace = true
 
 [dependencies]
+edit-session = { workspace = true }
 craft-ui = { workspace = true }
 # The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
 craft-menu = { workspace = true }
