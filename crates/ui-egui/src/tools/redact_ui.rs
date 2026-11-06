@@ -324,9 +324,9 @@ fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
 }
 
 /// Redact tool input on a page. Presses on text are left to text selection (the selection is
-/// marked when it ends, see [`after_text`]); presses elsewhere draw a box. Returns `true` when
-/// the gesture is a box.
-pub(crate) fn page_input(cx: PageToolContext<'_>, over_text: impl Fn(Pos2) -> bool, view: &mut DocView) -> bool {
+/// marked when it ends, see [`after_text`]); presses nobody holds (`free`) elsewhere draw a box.
+/// Returns `true` when the gesture is a box.
+pub(crate) fn page_input(cx: PageToolContext<'_>, over_text: impl Fn(Pos2) -> bool, free: bool, view: &mut DocView) -> bool {
     let PageToolContext { resp, xf, ptr, page, info, .. } = cx;
     let pointer = ptr.pos;
     if let Some((dp, start)) = view.redact_drag
@@ -343,17 +343,17 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, over_text: impl Fn(Pos2) -> bo
         }
         return true;
     }
-    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return false };
-    if !over_text(p) {
-        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+    // The tool's own press, of the primary button: one nobody holds, which began on this page off
+    // its text. egui may see the drag only once the pointer is past the page's edge.
+    if resp.drag_started_by(egui::PointerButton::Primary)
+        && free
+        && let Some(origin) = ptr.origin.filter(|o| xf.rect.contains(*o) && !over_text(*o))
+    {
+        view.redact_drag = Some((page, origin));
+        return true;
     }
-    // The tool's own press, of the primary button: nothing drawn over the page here holds it.
-    if resp.drag_started_by(egui::PointerButton::Primary) && view.router.owner(page).is_none() {
-        let origin = ptr.origin.unwrap_or(p);
-        if !over_text(origin) {
-            view.redact_drag = Some((page, origin));
-            return true;
-        }
+    if pointer.is_some_and(|p| xf.rect.contains(p) && !over_text(p)) {
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
     }
     false
 }
