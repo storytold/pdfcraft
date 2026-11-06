@@ -32,8 +32,9 @@ pub(crate) fn prune(doc: &Document, budget: &mut DecodeBudget, xo: &mut Dict, re
 /// `None` when that cannot be told (a form that will not decode, or nesting past the limit).
 fn content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict, name: &[u8], depth: usize, seen: &mut HashSet<ObjRef>) -> Option<bool> {
     let joined = Pieces::join(content);
-    let ops = joined.parse().ops;
-    for op in ops.iter().filter(|op| op.is("Do")) {
+    // One operator at a time, since only the `Do`s matter: a stream of millions of operators is
+    // never held whole.
+    for op in pdfcraft_content::ops(joined.data()).filter(|op| op.is("Do")) {
         let Some(n) = op.last_name() else { continue };
         if n == name {
             return Some(true);
@@ -280,13 +281,17 @@ pub(super) fn clip_out(rects: &[[f64; 4]], ctm: &Matrix, around: [f64; 4]) -> Op
 /// with its `/DecodeParms` given by reference, its decoded bytes charged to `budget`, so the
 /// cleanups of one page that walk the same forms spend one allowance between them. An error
 /// when that can't all be read: the parser can't read all of `content` or of such a form, the walk
-/// passes 2,000,000 operators, or such a form doesn't decode or runs past `budget`.
+/// passes 2,000,000 operators, or such a form doesn't decode or runs past `budget`. Operators are
+/// read one at a time, so the walk stops at one past the limit rather than holding them all.
 pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict, content: &[Vec<u8>]) -> Result<Vec<Op>, CosError> {
-    let parsed = Pieces::join(content).parse();
-    if parsed.skipped > 0 || parsed.ops.len() > 2_000_000 {
+    const MAX_OPS: usize = 2_000_000;
+    let joined = Pieces::join(content);
+    let mut read = pdfcraft_content::ops(joined.data());
+    let mut ops: Vec<Op> = read.by_ref().take(MAX_OPS + 1).collect();
+    // Under the limit the reader ran to the end, so `skipped` counts all of it.
+    if read.skipped() > 0 || ops.len() > MAX_OPS {
         return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully read the content that uses these resources".into() });
     }
-    let mut ops = parsed.ops;
     let xobjects = res_dict(doc, res, b"XObject");
     let mut seen = HashSet::new();
     let mut cursor = 0;
@@ -299,11 +304,13 @@ pub(crate) fn resource_ops(doc: &Document, budget: &mut DecodeBudget, res: &Dict
             && s.dict.name(b"Subtype") == Some(b"Form")
             && s.dict.get(b"Resources").is_none_or(|r| doc.resolve(r).as_dict().is_none())
         {
-            let parsed = pdfcraft_content::parse(&budget.decode(&doc.with_direct_parms(s))?);
-            if seen.len() > 2_000_000 || ops.len().saturating_add(parsed.ops.len()) > 2_000_000 || parsed.skipped > 0 {
+            let data = budget.decode(&doc.with_direct_parms(s))?;
+            let mut read = pdfcraft_content::ops(&data);
+            ops.extend(read.by_ref().take((MAX_OPS + 1).saturating_sub(ops.len())));
+            // `seen` gains at most one form for each `Do` in `ops`, so this bounds it too.
+            if ops.len() > MAX_OPS || read.skipped() > 0 {
                 return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect inherited form resources".into() });
             }
-            ops.extend(parsed.ops);
         }
         cursor += 1;
     }
