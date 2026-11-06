@@ -383,3 +383,45 @@ fn validation_and_calculation() {
     assert_eq!(calculate(&Calculate::Notation("(a + b) * 2 - Unit\\ Price / 4".into()), &vals), Some("10".into()));
     assert_eq!(calculate(&Calculate::Notation("a +".into()), &vals), None);
 }
+
+/// Async for-of headers have the same regex-literal contexts as ordinary for-of headers.
+#[test]
+fn for_await_regex_literals_do_not_become_format_calls() {
+    for header in ["for await", "for /* gap */ await"] {
+        let js = format!("async function f() {{ {header} (const x of /AFPercent_Format(0, 0)/g) {{}} }} AFPercent_Format(2, 1);");
+        assert_eq!(parse_format(&js), Some(Format::Percent { decimals: 2, sep: 1 }));
+        let body = format!("async function f() {{ {header} (const x of xs) /AFPercent_Format(0, 0)/.test(x); }} AFPercent_Format(2, 1);");
+        assert_eq!(parse_format(&body), Some(Format::Percent { decimals: 2, sep: 1 }));
+    }
+    assert_eq!(parse_format("obj.await(x) / 2; AFPercent_Format(2, 1); var z = 1 / 2;"), Some(Format::Percent { decimals: 2, sep: 1 }));
+}
+
+#[test]
+fn identifier_of_in_conditions_keeps_division_and_real_format_calls() {
+    for header in [
+        "if (of / 2)",
+        "while (of / 2)",
+        "with (of / 2)",
+        "for (of / 2; ; )",
+        "for (var x = of / 2; ; )",
+        "for (var x = 0; of / 2; )",
+        "for (x of of / 2)",
+        "for (const x of of / 2)",
+        "for (x in of / 2)",
+        "for (var of / 2; ; )",
+        "for (obj.of / 2; ; )",
+    ] {
+        let js = format!("{header} AFPercent_Format(2, 1); var z = 1 / 2;");
+        assert_eq!(parse_format(&js), Some(Format::Percent { decimals: 2, sep: 1 }), "{header}");
+    }
+}
+
+#[test]
+fn destructured_for_of_targets_keep_regex_iterables_opaque() {
+    for header in ["for", "for await"] {
+        for target in ["const [x]", "const {x}", "(x)", "const {x = of / 2}", "obj.in", "obj.of", "const of"] {
+            let js = format!("async function f() {{ {header} ({target} of /AFPercent_Format(0, 0)/g) {{}} }} AFPercent_Format(2, 1);");
+            assert_eq!(parse_format(&js), Some(Format::Percent { decimals: 2, sep: 1 }), "{header} {target}");
+        }
+    }
+}

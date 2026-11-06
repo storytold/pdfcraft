@@ -19,12 +19,20 @@ pub(super) enum Js {
 type Token = (Range<usize>, Js);
 
 /// Words after which `/` starts a regular expression instead of dividing.
-const BEFORE_REGEX: [&str; 13] = ["return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw", "instanceof", "yield"];
+const BEFORE_REGEX: [&str; 12] = ["return", "typeof", "case", "do", "else", "in", "new", "delete", "void", "throw", "instanceof", "yield"];
 
 /// Words whose condition, in parentheses, comes before a statement, so a `/` after it starts a
 /// regular expression. The `while` that ends a `do` loop counts too: the loop ends at its `)`, so
 /// a `/` after it starts the next statement, and can't divide.
 const BEFORE_CONDITION: [&str; 4] = ["if", "while", "for", "with"];
+
+/// Context of an open delimiter. Only the left side of a for header can introduce `of`.
+#[derive(Clone, Copy)]
+enum Delimiter {
+    Group,
+    Condition,
+    For { left: bool },
+}
 
 /// Whether a line ends at `s[j]`: JavaScript ends one at `\n`, `\r`, U+2028 and U+2029.
 fn line_ends_at(s: &[u8], j: usize) -> bool {
@@ -46,10 +54,11 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
     // Where a regular expression that never ended stopped being read: every `/` before it
     // divides, so a line of them is read once, not once for each.
     let mut divides_until = 0;
-    // For each `(` still open, whether it opened the condition of `if`, `while`, `for` or
-    // `with`; and whether the last token is the `)` that closed one.
-    let mut conditions: Vec<bool> = Vec::new();
+    // Nested groups hide the surrounding for header: an `of` in a destructuring default
+    // or nested expression is an identifier, not the for-of separator.
+    let mut delimiters: Vec<(char, Delimiter)> = Vec::new();
     let mut after_condition = false;
+    let mut after_for_of = false;
     'scan: while let Some(&c) = s.get(i) {
         let start = i;
         let token = match c {
@@ -90,7 +99,12 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                 loop {
                     match s.get(j) {
                         None => break 'scan,
-                        Some(b'\\') => j += 2,
+                        Some(b'\\') => {
+                            let Some(step) = js.get(j + 1..).and_then(|r| r.chars().next()).map(char::len_utf8) else {
+                                break 'scan;
+                            };
+                            j += 1 + step;
+                        }
                         Some(b'`') => break,
                         Some(_) => j += 1,
                     }
@@ -98,7 +112,7 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                 i = j + 1;
                 Js::Other
             }
-            b'/' if i >= divides_until && regex_may_follow(js, &out, after_condition) => {
+            b'/' if i >= divides_until && regex_may_follow(js, &out, after_condition, after_for_of) => {
                 // A regular expression ends at a `/` outside a class; a line break first means it
                 // was a division after all.
                 let (mut j, mut class) = (i + 1, false);
@@ -106,7 +120,14 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                     match s.get(j) {
                         None => break None,
                         Some(_) if line_ends_at(s, j) => break None,
-                        Some(b'\\') => j += 2,
+                        Some(b'\\') => {
+                            if s.get(j + 1).is_none() || line_ends_at(s, j + 1) {
+                                j += 1;
+                                break None;
+                            }
+                            let step = js.get(j + 1..).and_then(|r| r.chars().next()).map_or(1, char::len_utf8);
+                            j += 1 + step;
+                        }
                         Some(b'/') if !class => break Some(j),
                         Some(b) => {
                             class = match b {
@@ -133,6 +154,16 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                     }
                 }
             }
+            b'+' | b'-'
+                if s.get(i + 1) == Some(&c)
+                    && !regex_may_follow(js, &out, after_condition, after_for_of)
+                    && out.last().is_some_and(|(range, _)| !(range.end..i).any(|j| line_ends_at(s, j))) =>
+            {
+                // Postfix update ends an expression: a following slash divides. A line
+                // terminator forbids postfix syntax, including one inside a comment.
+                i += 2;
+                Js::Other
+            }
             _ if c.is_ascii_digit() => {
                 while word(i) || s.get(i) == Some(&b'.') {
                     i += 1;
@@ -150,38 +181,88 @@ pub(super) fn js_tokens(js: &str) -> (Vec<Token>, Vec<Range<usize>>) {
                 Js::Punct(char::from(c))
             }
         };
-        after_condition = match token {
-            Js::Punct('(') => {
-                conditions.push(opens_condition(js, &out));
-                false
-            }
-            Js::Punct(')') => conditions.pop().unwrap_or(false),
-            _ => false,
-        };
-        out.push((start..i, token));
+        let token = (start..i, token);
+        (after_condition, after_for_of) = advance_context(js, &token, &out, &mut delimiters);
+        out.push(token);
     }
     (out, comments)
+}
+
+/// Advance only the delimiter/for-header context after a token has been classified.
+/// Returns whether it closes a statement's condition or is the for-of separator.
+fn advance_context(js: &str, token: &Token, tokens: &[Token], delimiters: &mut Vec<(char, Delimiter)>) -> (bool, bool) {
+    let mut after_for_of = false;
+    if let Some((_, Delimiter::For { left })) = delimiters.last_mut() {
+        if matches!(token.1, Js::Ident) && js.get(token.0.clone()) == Some("of") && *left && for_target_ends(js, tokens) {
+            *left = false;
+            after_for_of = true;
+        } else if matches!(token.1, Js::Punct(';' | '='))
+            || (matches!(token.1, Js::Ident) && js.get(token.0.clone()) == Some("in") && !matches!(tokens.last(), Some((_, Js::Punct('.')))))
+        {
+            *left = false;
+        }
+    }
+    let mut after_condition = false;
+    match token.1 {
+        Js::Punct('(') => delimiters.push((')', opens_condition(js, tokens))),
+        Js::Punct('[') => delimiters.push((']', Delimiter::Group)),
+        Js::Punct('{') => delimiters.push(('}', Delimiter::Group)),
+        Js::Punct(close @ (')' | ']' | '}')) if delimiters.last().is_some_and(|(end, _)| *end == close) => {
+            after_condition = matches!(delimiters.pop(), Some((_, Delimiter::Condition | Delimiter::For { .. })));
+        }
+        _ => {}
+    }
+    (after_condition, after_for_of)
 }
 
 /// Whether a `/` after `tokens` starts a regular expression: after an operator, an opening
 /// bracket, a keyword such as `return` or the condition of `if`, `while`, `for` or `with`, not
 /// after a value. `after_condition` says the last token is the `)` that ends such a condition.
-fn regex_may_follow(js: &str, tokens: &[Token], after_condition: bool) -> bool {
+fn regex_may_follow(js: &str, tokens: &[Token], after_condition: bool, after_for_of: bool) -> bool {
     match tokens.last() {
         None => true,
-        Some((range, Js::Ident)) => js.get(range.clone()).is_some_and(|w| BEFORE_REGEX.contains(&w)),
+        Some((range, Js::Ident)) => {
+            !matches!(tokens.get(tokens.len().wrapping_sub(2)), Some((_, Js::Punct('.'))))
+                && js.get(range.clone()).is_some_and(|w| BEFORE_REGEX.contains(&w) || (w == "of" && after_for_of))
+        }
         Some((_, Js::Punct(')'))) => after_condition,
         Some((_, Js::Punct(c))) => !matches!(c, ']' | '}'),
         Some((_, Js::Str(_) | Js::Other)) => false,
     }
 }
 
-/// Whether a `(` after `tokens` opens the condition of `if`, `while`, `for` or `with`, and not
+/// Whether a `(` after `tokens` opens the condition of `if`, `while`, `for` (including
+/// `for await`) or `with`, and not
 /// the arguments of a method that has one of those names (`o.if(x)`).
-fn opens_condition(js: &str, tokens: &[Token]) -> bool {
+fn opens_condition(js: &str, tokens: &[Token]) -> Delimiter {
     let mut back = tokens.iter().rev();
-    let Some((range, Js::Ident)) = back.next() else { return false };
-    js.get(range.clone()).is_some_and(|w| BEFORE_CONDITION.contains(&w)) && !matches!(back.next(), Some((_, Js::Punct('.'))))
+    let Some((range, Js::Ident)) = back.next() else { return Delimiter::Group };
+    let mut keyword = js.get(range.clone());
+    if keyword == Some("await") {
+        let Some((range, Js::Ident)) = back.next() else { return Delimiter::Group };
+        keyword = js.get(range.clone());
+        if keyword != Some("for") {
+            return Delimiter::Group;
+        }
+    }
+    if matches!(back.next(), Some((_, Js::Punct('.')))) {
+        return Delimiter::Group;
+    }
+    match keyword {
+        Some("for") => Delimiter::For { left: true },
+        Some(w) if BEFORE_CONDITION.contains(&w) => Delimiter::Condition,
+        _ => Delimiter::Group,
+    }
+}
+
+/// A binding/assignment target before the for-of separator, not a declaration keyword,
+/// expression-opening operator, or the start of the header itself.
+fn for_target_ends(js: &str, tokens: &[Token]) -> bool {
+    match tokens.last() {
+        Some((range, Js::Ident)) => !matches!(js.get(range.clone()), Some("var" | "let" | "const")),
+        Some((_, Js::Punct(']' | '}' | ')'))) => true,
+        _ => false,
+    }
 }
 
 /// Where a Calculate script keeps its simplified field notation: between `BVCALC` and the
@@ -455,10 +536,12 @@ fn splice(src: &str, edits: impl IntoIterator<Item = (Range<usize>, String)>) ->
 }
 
 /// Simplified field notation as the JavaScript Acrobat writes after its `BVCALC` comment:
-/// each field name becomes `AFMakeNumber(this.getField("name").value)`, the rest stays.
+/// Each field name becomes `AFMakeNumber(this.getField("name").value)`; adjacent signs
+/// are separated so binary plus/minus followed by a unary sign cannot become an update.
 pub fn notation_js(expr: &str) -> String {
     let names = notation_tokens(expr).into_iter().filter_map(|(range, t)| match t {
         Notation::Name(name) => Some((range, format!("AFMakeNumber(this.getField({}).value)", js_str(&name)))),
+        Notation::Op(sign @ ('+' | '-')) if expr.get(range.end..).is_some_and(|rest| rest.starts_with(sign)) => Some((range, format!("{sign} "))),
         _ => None,
     });
     splice(expr, names)
@@ -507,6 +590,10 @@ pub(super) fn eval_notation(src: &str, value_of: &dyn Fn(&str) -> f64) -> Option
                 *i += 1;
                 Some(*n)
             }
+            T::Op('+') => {
+                *i += 1;
+                factor(t, i, d + 1)
+            }
             T::Op('-') => {
                 *i += 1;
                 factor(t, i, d + 1).map(|v| -v)
@@ -552,5 +639,35 @@ pub fn calculate(c: &Calculate, values: &dyn Fn(&str) -> Vec<String>) -> Option<
             let v = eval_notation(expr, &|name| values(name).first().map(num).unwrap_or(0.0))?;
             Some(js_number(v))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn regex_scan_does_not_cross_line_break_after_backslash_or_split_utf8() {
+        let js = "x = /a\\\nthis.getField(\"price\").value / 2;";
+        assert_eq!(calculation_reads(js), vec!["price".to_owned()]);
+
+        let js_utf8 = "var r = /\\é/; event.value = this.getField(\"tax\").value;";
+        assert_eq!(calculation_reads(js_utf8), vec!["tax".to_owned()]);
+
+        let trailing_backslash = "event.value = this.getField(\"subtotal\").value + /unterminated\\";
+        assert_eq!(calculation_reads(trailing_backslash), vec!["subtotal".to_owned()]);
+        let template_trailing = "event.value = this.getField(\"shipping\").value + `unterminated\\";
+        assert_eq!(calculation_reads(template_trailing), vec!["shipping".to_owned()]);
+    }
+
+    #[test]
+    fn eval_notation_supports_unary_plus() {
+        let c = Calculate::Notation("+a + (+b)".to_owned());
+        let out = calculate(&c, &|name| match name {
+            "a" => vec!["3".to_owned()],
+            "b" => vec!["4".to_owned()],
+            _ => Vec::new(),
+        });
+        assert_eq!(out.as_deref(), Some("7"));
     }
 }

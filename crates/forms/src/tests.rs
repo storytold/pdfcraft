@@ -1536,6 +1536,43 @@ fn a_script_that_spells_the_markers_in_a_string_runs_as_a_script() {
     assert_eq!(field(&fields(&doc), "total").value, ["ran"]);
 }
 
+/// An unsupported first AF call keeps the entire script and reaches the caller's interpreter.
+#[test]
+fn unsupported_first_validation_call_preserves_custom_script_dispatch() {
+    const JS: &str = "if (event.value < 50) AFRange_Validate(true, 10 + 5, false, 0); else AFRange_Validate(false, 0, true, 100);";
+    struct RejectingInterpreter {
+        calls: usize,
+    }
+    impl Scripts for RejectingInterpreter {
+        fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, _fields: &[Field]) -> ScriptResult {
+            assert_eq!(event, FieldEvent::Validate);
+            assert_eq!(script, JS);
+            assert_eq!(target.name, "amount");
+            self.calls += 1;
+            ScriptResult { rc: false, value: value.into(), changes: Vec::new(), message: Some("custom validation ran".into()) }
+        }
+    }
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, Some("amount")).unwrap();
+    set_value(&mut doc, "amount", &FieldValue::Text("20".into())).unwrap();
+    set_field_script(&mut doc, "amount", "validate", Some(JS)).unwrap();
+    let reopened = reopen(&doc);
+    for mut doc in [doc, reopened] {
+        let all = fields(&doc);
+        let actions = &field(&all, "amount").actions;
+        assert_eq!(actions.validate, af::Validate::None);
+        assert_eq!(actions.scripts.validate.as_deref(), Some(JS));
+        assert!(actions.unsupported.contains(&"validate"));
+        let mut scripts = RejectingInterpreter { calls: 0 };
+        assert_eq!(
+            set_value_with(&mut doc, "amount", &FieldValue::Text("10".into()), &mut scripts),
+            Err(FormError::Invalid("custom validation ran".into()))
+        );
+        assert_eq!(scripts.calls, 1);
+        assert_eq!(field(&fields(&doc), "amount").value, ["20"]);
+    }
+}
+
 /// Renaming a field renames it in the calculations that read it: a sum dropped it, notation
 /// read it as 0 and a script read a field that no longer existed.
 #[test]
