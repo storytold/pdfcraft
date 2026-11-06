@@ -461,48 +461,37 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     let Applying { mut report, doomed_fields, doomed_xobjects, retired_properties, mut removed_everywhere, mut images, .. } = applying;
 
     // 2b. Replies and pop-ups of a removed annotation can be listed on another page than their
-    // parent: their `/IRT` or `/Parent` would keep the removed comment reachable.
-    loop {
-        let mut grew = false;
-        for p in pdfcraft_model::pages(doc) {
-            let annots = annots_of(doc, &p.dict);
-            let mut kept = Vec::with_capacity(annots.len());
-            for a in &annots {
-                let Some(r) = a.as_ref() else {
-                    kept.push(a.clone());
-                    continue;
-                };
-                let obj = doc.get(r);
-                let Some(d) = obj.as_dict() else {
-                    kept.push(a.clone());
-                    continue;
-                };
-                let is_reply =
-                    d.get(b"IRT").and_then(Object::as_ref).is_some_and(|x| removed_everywhere.contains(&x)) && d.name(b"Subtype") != Some(b"Widget");
-                let is_popup = d.get(b"Parent").and_then(Object::as_ref).is_some_and(|x| removed_everywhere.contains(&x));
-                if removed_everywhere.contains(&r) || is_reply || is_popup {
-                    if removed_everywhere.insert(r) {
-                        grew = true;
-                        if is_reply {
-                            report.annotations += 1;
-                        }
-                    }
-                } else {
-                    kept.push(a.clone());
-                }
+    // parent: their `/IRT` or `/Parent` would keep the removed comment reachable. What hangs off
+    // each annotation is indexed once and walked from the removed ones, so every link is followed
+    // once, however the pages order a chain of replies.
+    let pages = pdfcraft_model::pages(doc);
+    let hanging = hanging_annotations(doc, pages.iter().flat_map(|p| annots_of(doc, &p.dict)));
+    let mut todo: Vec<ObjRef> = removed_everywhere.iter().copied().collect();
+    // (a reply is counted once, by whichever link reaches it: one with both `/IRT` and `/Parent`
+    // is a reply however the walk orders them)
+    let (mut reached, mut counted) = (HashSet::new(), HashSet::new());
+    while let Some(parent) = todo.pop() {
+        for &(r, reply) in hanging.get(&parent).into_iter().flatten() {
+            if removed_everywhere.insert(r) {
+                reached.insert(r);
+                todo.push(r);
             }
-            if kept.len() != annots.len() {
-                doc.update_dict(p.obj, |d| {
-                    if kept.is_empty() {
-                        d.remove(b"Annots");
-                    } else {
-                        d.set(b"Annots".to_vec(), Object::Array(kept));
-                    }
-                })?;
+            if reply && reached.contains(&r) && counted.insert(r) {
+                report.annotations += 1;
             }
         }
-        if !grew {
-            break;
+    }
+    for p in &pages {
+        let annots = annots_of(doc, &p.dict);
+        let kept: Vec<Object> = annots.iter().filter(|a| !a.as_ref().is_some_and(|r| removed_everywhere.contains(&r))).cloned().collect();
+        if kept.len() != annots.len() {
+            doc.update_dict(p.obj, |d| {
+                if kept.is_empty() {
+                    d.remove(b"Annots");
+                } else {
+                    d.set(b"Annots".to_vec(), Object::Array(kept));
+                }
+            })?;
         }
     }
 
@@ -764,7 +753,7 @@ fn remove_page_annotations(
     let Applying { report, doomed_fields, widget_owner, removed_everywhere, .. } = applying;
     // 2. Annotations: the marks, and whatever lies under them (with their pop-ups).
     let annots = annots_of(doc, &doc.get(page.obj).as_dict().cloned().unwrap_or_default());
-    let mut removed: Vec<ObjRef> = Vec::new();
+    let mut removed: HashSet<ObjRef> = HashSet::new();
     for a in &annots {
         let Some(r) = a.as_ref() else { continue };
         let obj = doc.get(r);
@@ -772,7 +761,7 @@ fn remove_page_annotations(
         let subtype = d.name(b"Subtype").unwrap_or(b"");
         if subtype == b"Redact" {
             if page_marks.iter().any(|m| m.obj == r) {
-                removed.push(r);
+                removed.insert(r);
             }
             continue;
         }
@@ -780,7 +769,7 @@ fn remove_page_annotations(
             continue;
         }
         if rect_of(doc, d.get(b"Rect")).is_some_and(|b| rects.iter().any(|x| pdfcraft_content::overlaps(*x, b, 0.0))) {
-            removed.push(r);
+            removed.insert(r);
             if subtype == b"Widget" {
                 if let Some((_, field)) = widget_owner.iter().find(|(w, _)| *w == r)
                     && !doomed_fields.contains(field)
@@ -794,28 +783,24 @@ fn remove_page_annotations(
     }
     // Replies (`/IRT`, ISO 32000-2 §12.5.6.2) to a removed annotation go too, and replies to
     // those: a reply placed elsewhere would keep its parent — the comment and the QuadPoints
-    // of the redacted words — in the file through its `/IRT` (#2659). Each pass removes at
-    // least one more annotation of this page or stops, so it ends.
-    let replies: Vec<(ObjRef, ObjRef)> = annots
-        .iter()
-        .filter_map(Object::as_ref)
-        .filter_map(|r| {
-            let obj = doc.get(r);
-            let d = obj.as_dict()?;
-            (d.name(b"Subtype") != Some(b"Widget")).then_some(())?;
-            Some((r, d.get(b"IRT").and_then(Object::as_ref)?))
-        })
-        .collect();
-    loop {
-        let before = removed.len();
-        for (r, parent) in &replies {
-            if !removed.contains(r) && removed.contains(parent) {
-                removed.push(*r);
+    // of the redacted words — in the file through its `/IRT` (#2659). The replies are indexed by
+    // parent once and walked from the removed annotations, each reply visited once.
+    let mut replies: HashMap<ObjRef, Vec<ObjRef>> = HashMap::new();
+    for (r, parent) in annots.iter().filter_map(Object::as_ref).filter_map(|r| {
+        let obj = doc.get(r);
+        let d = obj.as_dict()?;
+        (d.name(b"Subtype") != Some(b"Widget")).then_some(())?;
+        Some((r, d.get(b"IRT").and_then(Object::as_ref)?))
+    }) {
+        replies.entry(parent).or_default().push(r);
+    }
+    let mut todo: Vec<ObjRef> = removed.iter().copied().collect();
+    while let Some(parent) = todo.pop() {
+        for &r in replies.get(&parent).into_iter().flatten() {
+            if removed.insert(r) {
                 report.annotations += 1;
+                todo.push(r);
             }
-        }
-        if removed.len() == before {
-            break;
         }
     }
     removed_everywhere.extend(removed.iter().copied());
@@ -846,6 +831,25 @@ fn remove_page_annotations(
         }
     })?;
     Ok(())
+}
+
+/// What hangs off each annotation among the listed `annots`: its replies (`/IRT`, not widgets),
+/// marked `true`, and its pop-ups (`/Parent`), marked `false`.
+fn hanging_annotations(doc: &Document, annots: impl Iterator<Item = Object>) -> HashMap<ObjRef, Vec<(ObjRef, bool)>> {
+    let mut hanging: HashMap<ObjRef, Vec<(ObjRef, bool)>> = HashMap::new();
+    for r in annots.filter_map(|a| a.as_ref()) {
+        let obj = doc.get(r);
+        let Some(d) = obj.as_dict() else { continue };
+        if d.name(b"Subtype") != Some(b"Widget")
+            && let Some(parent) = d.get(b"IRT").and_then(Object::as_ref)
+        {
+            hanging.entry(parent).or_default().push((r, true));
+        }
+        if let Some(parent) = d.get(b"Parent").and_then(Object::as_ref) {
+            hanging.entry(parent).or_default().push((r, false));
+        }
+    }
+    hanging
 }
 
 /// Remove redaction marks without applying them (`None` = all), with their replies and pop-ups as
