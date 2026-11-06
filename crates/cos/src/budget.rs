@@ -850,6 +850,17 @@ mod tests {
         dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("ASCIIHexDecode")]));
         let hex = Stream::from_raw(dict, Stream::flate(Dict::new(), b"4142zz4344>").raw.to_vec());
         assert_eq!(budget.decode_with_damage(&doc, &hex, usize::MAX).ok(), Some((b"AB".to_vec(), true)));
+        // So is an earlier stage's, though the stage after it reads all it was given: a stored
+        // block of whole hex, then a block of the reserved type (RFC 1951 §3.2.3).
+        let readable = b"4142>";
+        let len = u16::try_from(readable.len()).unwrap_or_default();
+        let mut raw = vec![0x78, 0x01, 0x00];
+        raw.extend_from_slice(&len.to_le_bytes());
+        raw.extend_from_slice(&(!len).to_le_bytes());
+        raw.extend_from_slice(readable);
+        raw.push(0x07);
+        let flate_damaged = Stream::from_raw(hex.dict.clone(), raw);
+        assert_eq!(budget.decode_with_damage(&doc, &flate_damaged, usize::MAX).ok(), Some((b"AB".to_vec(), true)));
     }
 
     /// `/DecodeParms` given by reference, or a parameter given by reference in them, is read: a
