@@ -2,17 +2,25 @@
 //! script and Preferences ▸ JavaScript.
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 /// A form with a text field and a push button whose Mouse Up script fills it in.
 fn form() -> Vec<u8> {
+    form_with("getField\\('greeting'\\).value = 'Hello from JavaScript'; app.alert\\('Filled in'\\);")
+}
+
+/// [`form`], the button's Mouse Up script being `script`, as written in a PDF literal string.
+fn form_with(script: &str) -> Vec<u8> {
+    let button = format!(
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (hello) /Rect [20 200 120 230] /P 3 0 R /F 4 /A << /S /JavaScript /JS ({script}) >> >>"
+    );
     let objs = [
         "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >> >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>",
         "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (greeting) /Rect [20 250 280 270] /P 3 0 R /F 4 >>",
-        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (hello) /Rect [20 200 120 230] /P 3 0 R /F 4 /A << /S /JavaScript /JS (getField\\('greeting'\\).value = 'Hello from JavaScript'; app.alert\\('Filled in'\\);) >> >>",
+        button.as_str(),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
@@ -31,10 +39,14 @@ fn form() -> Vec<u8> {
 }
 
 fn harness() -> Harness<'static, PdfCraftApp> {
+    harness_of(form())
+}
+
+fn harness_of(pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("form.pdf", None, form()).unwrap();
+        app.open_bytes("form.pdf", None, pdf).unwrap();
         app
     });
     h.run_steps(4);
@@ -214,4 +226,462 @@ fn prepare_a_form_detects_fields_on_a_paper_form() {
     let names: Vec<String> = app.session.get(id).unwrap().form.iter().map(|f| f.name.clone()).collect();
     assert_eq!(names, ["Name", "Phone"]);
     assert_eq!(app.toast.clone().unwrap().0, "Detected 2 form fields");
+}
+
+/// A script past the engine's limit, which only a document can hold, has a note where its box would
+/// be. Nothing the dialog does with it writes it back, and Clear script is the way to replace it.
+#[test]
+fn a_document_script_too_long_to_edit_is_left_as_it_is() {
+    let mut h = harness();
+    let id = h.state().active_ids().unwrap().1;
+    let big = "x".repeat(pdfcraft_engine::js::MAX_SCRIPT_BYTES + 1);
+    h.state_mut().session.apply(id, pdfcraft_engine::Edit::SetDocumentScript { name: "big".into(), script: Some(big.clone()) }).unwrap();
+    let bytes = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().bytes.clone();
+    let before = bytes(&h);
+    assert!(h.state_mut().execute("tools.document_js"));
+    h.run_steps(2);
+    h.get_by_label("big").click();
+    h.run_steps(2);
+    assert_eq!(h.state().doc_js.script, big);
+    assert!(h.query_by_label_contains("too long").is_some(), "the note is shown");
+    assert!(h.query_by_label("JavaScript").is_none(), "in place of the box");
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+    assert_eq!(bytes(&h), before, "saving a script it can't show writes nothing");
+    assert_eq!(h.state().doc_js.script, big);
+    h.get_by_label("Clear script").click();
+    h.run_steps(2);
+    assert_eq!(h.state().doc_js.script, "");
+    h.get_by_label("JavaScript");
+    assert_eq!(bytes(&h), before, "clearing the box is not saving it");
+}
+
+/// A field's script past the engine's limit: Edit, Update and OK change nothing.
+#[test]
+fn a_field_script_too_long_to_edit_is_left_as_it_is() {
+    let big = format!("var a = '{}';", "x".repeat(pdfcraft_engine::js::MAX_SCRIPT_BYTES));
+    let mut h = harness_of(form_with(&big));
+    let id = h.state().active_ids().unwrap().1;
+    let before = h.state().session.get(id).unwrap().bytes.clone();
+    h.state_mut().open_field_props("hello", 0);
+    h.state_mut().field_props.as_mut().unwrap().tab = pdfcraft_ui_egui::prepare::FieldTab::Actions;
+    h.run_steps(2);
+    // The last "Edit": the menu bar has one too.
+    h.get_all_by_label("Edit").last().unwrap().click();
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().new_action.text, big);
+    assert!(h.query_by_label_contains("too long").is_some(), "the note is shown");
+    assert!(h.query_by_label("JavaScript").is_none(), "in place of the box");
+    h.get_by_label("Update").click();
+    h.run_steps(2);
+    assert!(h.state().field_props.as_ref().unwrap().editing.is_none(), "Update takes it back as it was");
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert!(h.state().field_props.is_none(), "the dialog closed");
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!(doc.bytes, before, "OK writes nothing");
+    assert_eq!(doc.undo_label(), None, "and adds no undo step");
+    assert!(!doc.dirty);
+}
+
+fn key(h: &mut Harness<'static, PdfCraftApp>, key: egui::Key, modifiers: egui::Modifiers) {
+    h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+    h.run_steps(3);
+}
+
+/// Picking a script with the same text as the box holds starts that script's own undo history. It kept
+/// the other's, so Undo brought the other script back, for Save to write under this one's name.
+#[test]
+fn undo_does_not_bring_another_script_into_one_with_the_same_text() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("tools.document_js"));
+    h.run_steps(3);
+    for (name, script) in [("first-script", "xy"), ("second-script", "x")] {
+        h.state_mut().doc_js.name = name.into();
+        h.state_mut().doc_js.script = script.into();
+        h.run_steps(3);
+        h.get_by_label("Save").click();
+        h.run_steps(3);
+    }
+    h.get_by_label("first-script").click();
+    h.run_steps(3);
+    h.get_by_label("JavaScript").focus();
+    h.run_steps(3);
+    key(&mut h, egui::Key::End, egui::Modifiers::NONE);
+    key(&mut h, egui::Key::Backspace, egui::Modifiers::NONE);
+    assert_eq!(h.state().doc_js.script, "x");
+    h.get_by_label("second-script").click();
+    h.run_steps(3);
+    h.get_by_label("JavaScript").focus();
+    h.run_steps(3);
+    key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+    assert_eq!(h.state().doc_js.script, "x", "the second script as it came");
+}
+
+/// The same for a field's script: Edit puts it in the box, over the same text typed there.
+#[test]
+fn undo_does_not_bring_back_what_was_typed_before_edit() {
+    let mut h = harness_of(form_with("go\\(\\);"));
+    h.state_mut().open_field_props("hello", 0);
+    h.state_mut().field_props.as_mut().unwrap().tab = pdfcraft_ui_egui::prepare::FieldTab::Actions;
+    h.run_steps(3);
+    h.get_by_role(egui::accesskit::Role::MultilineTextInput).focus();
+    h.run_steps(3);
+    h.event(egui::Event::Text("go();y".into()));
+    h.run_steps(3);
+    key(&mut h, egui::Key::Backspace, egui::Modifiers::NONE);
+    assert_eq!(h.state().field_props.as_ref().unwrap().new_action.text, "go();");
+    h.get_all_by_label("Edit").last().unwrap().click();
+    h.run_steps(3);
+    h.get_by_role(egui::accesskit::Role::MultilineTextInput).focus();
+    h.run_steps(3);
+    key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+    assert_eq!(h.state().field_props.as_ref().unwrap().new_action.text, "go();", "the field's script as it came");
+}
+
+/// A box opened again starts afresh: Undo in an empty box brought back what was typed the last time.
+#[test]
+fn a_box_opened_again_has_no_undo_from_the_last_time() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("tools.document_js"));
+    h.run_steps(3);
+    h.get_by_label("JavaScript").focus();
+    h.run_steps(3);
+    // Long enough each for the box to keep it as an undo point.
+    h.event(egui::Event::Text("y".into()));
+    h.run_steps(10);
+    key(&mut h, egui::Key::Backspace, egui::Modifiers::NONE);
+    h.run_steps(10);
+    assert_eq!(h.state().doc_js.script, "");
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    assert!(h.state_mut().execute("tools.document_js"));
+    h.run_steps(3);
+    h.get_by_label("JavaScript").focus();
+    h.run_steps(3);
+    key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+    assert_eq!(h.state().doc_js.script, "");
+}
+
+/// Text past the limit typed for another kind of action, then turned into a script: the box says it is
+/// too long, Add is off, and neither the field's actions nor the document change.
+#[test]
+fn a_value_past_the_limit_is_not_added_as_a_script() {
+    let mut h = harness_of(form_with("go\\(\\);"));
+    let id = h.state().active_ids().unwrap().1;
+    let before = h.state().session.get(id).unwrap().bytes.clone();
+    h.state_mut().open_field_props("hello", 0);
+    let draft = h.state_mut().field_props.as_mut().unwrap();
+    draft.tab = pdfcraft_ui_egui::prepare::FieldTab::Actions;
+    let actions = draft.actions.clone();
+    draft.new_action.trigger = pdfcraft_engine::FieldTrigger::MouseDown;
+    draft.new_action.kind = 1;
+    draft.new_action.text = "x".repeat(pdfcraft_engine::js::MAX_SCRIPT_BYTES + 1);
+    h.run_steps(2);
+    assert!(!h.get_by_label("Add").accesskit_node().is_disabled(), "the limit is a script's");
+    h.state_mut().field_props.as_mut().unwrap().new_action.kind = 0;
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("too long").is_some(), "the box says so");
+    assert!(h.get_by_label("Add").accesskit_node().is_disabled());
+    h.get_by_label("Add").click();
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().actions, actions);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().bytes, before);
+}
+
+/// A paste past the limit never gets as far as the field: the box refuses it and says why, and Update
+/// and OK write what the box still holds.
+#[test]
+fn a_paste_past_the_limit_never_reaches_the_field() {
+    let mut h = harness_of(form_with("go\\(\\);"));
+    let id = h.state().active_ids().unwrap().1;
+    let before = h.state().session.get(id).unwrap().bytes.clone();
+    h.state_mut().open_field_props("hello", 0);
+    h.state_mut().field_props.as_mut().unwrap().tab = pdfcraft_ui_egui::prepare::FieldTab::Actions;
+    h.run_steps(2);
+    h.get_all_by_label("Edit").last().unwrap().click();
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().new_action.text, "go();");
+    h.get_by_role_and_label(egui::accesskit::Role::MultilineTextInput, "Script:").focus();
+    h.run_steps(2);
+    h.event(egui::Event::Paste("y".repeat(pdfcraft_engine::js::MAX_SCRIPT_BYTES)));
+    h.run_steps(2);
+    assert!(h.state().field_props.as_ref().unwrap().new_action.text == "go();", "the box still holds the script");
+    assert!(h.query_by_label_contains("Not added").is_some(), "the line under the box says why");
+    assert!(h.query_by_label_contains("too long").is_none(), "no note");
+    h.get_by_label("Update").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert!(h.state().field_props.is_none(), "the dialog closed");
+    let doc = h.state().session.get(id).unwrap();
+    assert!(doc.bytes == before, "OK writes nothing");
+    assert_eq!(doc.undo_label(), None, "and adds no undo step");
+}
+
+/// The console has no Cancel: a paste past the limit must leave what was typed, which can still be run.
+#[test]
+fn a_paste_past_the_limit_leaves_the_console_s_input() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("tools.js_console"));
+    h.run_steps(2);
+    h.get_by_label("JavaScript").focus();
+    h.run_steps(2);
+    h.event(egui::Event::Text("typed".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().js_console.input, "typed");
+    h.event(egui::Event::Paste("y".repeat(pdfcraft_engine::js::MAX_SCRIPT_BYTES)));
+    h.run_steps(2);
+    assert!(h.state().js_console.input == "typed", "still what was typed");
+    assert!(h.query_by_label_contains("Not added").is_some(), "the line under the box says why");
+    h.get_by_label("JavaScript");
+}
+
+/// The Actions tab says what PdfCraft does with an action. Only the Mouse Up of a push button runs;
+/// the rest is saved for other viewers, which the user could not otherwise tell.
+#[test]
+fn the_actions_tab_says_which_actions_pdfcraft_runs() {
+    use pdfcraft_engine::FieldTrigger;
+    let hint = "PdfCraft won't run this action, because it only runs Mouse Up actions on buttons. It's still saved in the PDF, so other PDF apps can run it.";
+    let mut h = harness_of(form_with("event.value = 1;"));
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("hello", 0);
+    h.run_steps(2);
+    h.get_by_label("Actions").click();
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().new_action.trigger, FieldTrigger::MouseUp);
+    assert!(h.query_by_label(hint).is_none(), "the Mouse Up of a push button runs");
+    h.state_mut().field_props.as_mut().unwrap().new_action.trigger = FieldTrigger::OnBlur;
+    h.run_steps(2);
+    h.get_by_label(hint);
+}
+
+/// On any other kind of field, Mouse Up is saved and doesn't run either.
+#[test]
+fn the_actions_tab_of_a_text_field_says_its_actions_do_not_run() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    h.get_by_label("Actions").click();
+    h.run_steps(2);
+    h.get_by_label("PdfCraft won't run this action, because it only runs Mouse Up actions on buttons. It's still saved in the PDF, so other PDF apps can run it.");
+    // The script box takes the dialog's whole width, under the pickers, and its label names it.
+    let script = h.get_by_role_and_label(egui::accesskit::Role::MultilineTextInput, "Script:");
+    let width = script.rect().width();
+    assert!(width > 400.0, "wider than the 340-point column it used to sit in: {width}");
+    let height = script.rect().height();
+    assert!(height > 100.0, "eight lines, not three: {height}");
+}
+
+fn sized(size: egui::Vec2) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(size).build_eframe(|_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, form_with("go\\(\\);")).unwrap();
+        app
+    });
+    h.run_steps(8);
+    h
+}
+
+/// Drag the corner of the only script box to `to`.
+fn drag_the_corner(h: &mut Harness<'static, PdfCraftApp>, to: egui::Pos2) {
+    let corner = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().right_bottom() - egui::vec2(3.0, 3.0);
+    h.hover_at(corner);
+    h.run_steps(2);
+    h.drag_at(corner);
+    h.run_steps(1);
+    for i in 1..=6 {
+        h.hover_at(corner + (to - corner) * (i as f32 / 6.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(4);
+}
+
+/// Field Properties' card stays as tall as it has been, so the tabs don't jump (see below). Going by
+/// the card, the box shrank for good: to three lines in a window with room for more, and it could not
+/// be dragged back. And a card too tall for the window once stayed so, its title off the screen.
+#[test]
+fn the_action_box_is_sized_by_the_room_the_dialog_really_has() {
+    let height = |h: &Harness<'static, PdfCraftApp>| h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().height();
+    let open = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.state_mut().open_field_props("greeting", 0);
+        h.state_mut().field_props.as_mut().unwrap().tab = pdfcraft_ui_egui::prepare::FieldTab::Actions;
+        h.run_steps(6);
+    };
+    // A window a little too short for the eight lines.
+    let mut h = sized(egui::vec2(1000.0, 700.0));
+    open(&mut h);
+    assert!(height(&h) > 110.0, "what fits, not three lines: {}", height(&h));
+    let mut h = sized(egui::vec2(1000.0, 640.0));
+    open(&mut h);
+    let title = h.get_by_label("Text Field Properties").rect();
+    assert!(title.top() >= 0.0, "the title stays on the screen: {title:?}");
+    assert!(h.get_by_label("OK").rect().bottom() <= 640.0, "and so do the buttons");
+    // Dragged as tall as it goes, shorter and taller again, it follows the corner: the card, still as
+    // tall as it was, has no room to give, but the dialog does.
+    let mut h = sized(egui::vec2(1000.0, 900.0));
+    open(&mut h);
+    let corner = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().right_bottom();
+    drag_the_corner(&mut h, egui::pos2(corner.x - 3.0, 895.0));
+    let tallest = height(&h);
+    let corner = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().right_bottom();
+    drag_the_corner(&mut h, corner - egui::vec2(3.0, 80.0));
+    let shorter = height(&h);
+    assert!(shorter < tallest - 40.0, "{tallest} then {shorter}");
+    let corner = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().right_bottom();
+    drag_the_corner(&mut h, corner + egui::vec2(-3.0, 80.0));
+    assert!(height(&h) > shorter + 40.0, "{shorter} then {}", height(&h));
+    // Dragged as short as it goes, the text area is no taller than the box: its own four rows would
+    // scroll a box this short for nothing.
+    let corner = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().right_bottom();
+    drag_the_corner(&mut h, egui::pos2(corner.x - 3.0, 100.0));
+    assert!(height(&h) < 70.0, "as short as the box: {}", height(&h));
+}
+
+/// Field Properties keeps its height as tabs are picked, so a shorter one doesn't move the tabs out
+/// from under the pointer. Sizing the card by what each tab holds moved them by 100 points a click.
+#[test]
+fn the_tabs_of_field_properties_stay_put() {
+    use pdfcraft_ui_egui::prepare::FieldTab as T;
+    let mut h = sized(egui::vec2(1200.0, 1000.0));
+    h.state_mut().open_field_props("greeting", 0);
+    h.run_steps(6);
+    let tabs_at = |h: &mut Harness<'static, PdfCraftApp>, tab: T| {
+        h.state_mut().field_props.as_mut().unwrap().tab = tab;
+        h.run_steps(6);
+        h.get_by_label("General").rect().top()
+    };
+    let tallest = tabs_at(&mut h, T::Actions);
+    let ok = h.get_by_label("OK").rect().top();
+    for tab in [T::General, T::Position, T::Format, T::Validate, T::Calculate] {
+        let y = tabs_at(&mut h, tab);
+        assert!((y - tallest).abs() < 1.0, "{tab:?}: the tabs moved from {tallest} to {y}");
+        let y = h.get_by_label("OK").rect().top();
+        assert!((y - ok).abs() < 1.0, "{tab:?}: OK moved from {ok} to {y}");
+    }
+    // In a window too short for the tallest tab they move no more than its room for the box does.
+    let mut h = sized(egui::vec2(1200.0, 600.0));
+    h.state_mut().open_field_props("greeting", 0);
+    h.run_steps(6);
+    let tallest = tabs_at(&mut h, T::Actions);
+    for tab in [T::General, T::Position, T::Format] {
+        let y = tabs_at(&mut h, tab);
+        assert!((y - tallest).abs() < 25.0, "{tab:?}: in a short window the tabs moved from {tallest} to {y}");
+    }
+}
+
+/// However short the window, a tall tab scrolls between the title and the buttons: at the app's least
+/// height the Actions tab of a text field pushed them off the screen. The script box gives up its
+/// height first, and the rest of the tab is still reachable.
+#[test]
+fn a_tab_too_tall_for_the_window_scrolls_under_the_title_and_above_the_buttons() {
+    use pdfcraft_ui_egui::prepare::FieldTab as T;
+    for height in [520.0, 560.0, 600.0, 640.0] {
+        let mut h = sized(egui::vec2(820.0, height));
+        h.state_mut().open_field_props("greeting", 0);
+        for tab in [T::Actions, T::General, T::Appearance, T::Position, T::Format, T::Validate, T::Calculate, T::Actions] {
+            h.state_mut().field_props.as_mut().unwrap().tab = tab;
+            h.run_steps(6);
+            let title = h.get_by_label("Text Field Properties").rect();
+            assert!(title.top() >= 0.0, "{height}, {tab:?}: title at {title:?}");
+            let ok = h.get_by_label("OK").rect();
+            assert!(ok.bottom() <= height, "{height}, {tab:?}: OK at {ok:?}");
+        }
+    }
+    // At the least height: the box is as short as it goes, and the wheel brings up what is under it.
+    let mut h = sized(egui::vec2(820.0, 520.0));
+    h.state_mut().open_field_props("greeting", 0);
+    h.state_mut().field_props.as_mut().unwrap().tab = T::Actions;
+    h.run_steps(6);
+    let script = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect();
+    assert!(script.height() < 70.0, "{script:?}");
+    let (ok, locked) = (h.get_by_label("OK").rect(), h.get_by_label("Locked").rect());
+    assert!(locked.bottom() > ok.top(), "off the end of the tab for now: {locked:?}, {ok:?}");
+    // What shows of a long script stays inside the box's frame, at its shortest too.
+    h.state_mut().field_props.as_mut().unwrap().new_action.text = "a;\n".repeat(50);
+    h.run_steps(6);
+    let script = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect();
+    let shapes = &h.output().shapes;
+    let frame = shapes.iter().find_map(|c| match &c.shape {
+        egui::Shape::Rect(r) if r.fill.a() > 0 && (r.rect.top() - script.top()).abs() < 1.0 && (r.rect.left() - script.left()).abs() < 1.0 => {
+            Some(r.rect)
+        }
+        _ => None,
+    });
+    let frame = frame.expect("the box's frame");
+    let shown = shapes.iter().find_map(|c| match &c.shape {
+        egui::Shape::Text(t) if t.galley.text().starts_with("a;") => Some(c.clip_rect),
+        _ => None,
+    });
+    let shown = shown.expect("the script");
+    assert!(shown.bottom() <= frame.bottom() + 4.0, "shown down to {shown:?}, in a frame of {frame:?}");
+    let over = h.get_by_label("Select Trigger:").rect().center();
+    h.hover_at(over);
+    h.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -400.0),
+        modifiers: egui::Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Wheel,
+    });
+    h.run_steps(10);
+    let locked = h.get_by_label("Locked").rect();
+    assert!(locked.bottom() <= h.get_by_label("OK").rect().top(), "scrolled up to it: {locked:?}");
+}
+
+/// A box dragged tall and reopened in a short window measures what it is, not the part still on the
+/// screen: that made it collapse, and stay small in a tall window too.
+#[test]
+fn a_tall_box_reopened_in_a_short_window_fits_it() {
+    let mut h = sized(egui::vec2(1400.0, 1000.0));
+    assert!(h.state_mut().execute("tools.document_js"));
+    h.run_steps(3);
+    h.state_mut().doc_js.script = "a\nb\nc\n".into();
+    h.run_steps(3);
+    let corner = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().right_bottom();
+    drag_the_corner(&mut h, egui::pos2(corner.x - 3.0, 990.0));
+    h.get_by_label("Close").click();
+    h.run_steps(3);
+    h.set_size(egui::vec2(1400.0, 500.0));
+    h.run_steps(3);
+    assert!(h.state_mut().execute("tools.document_js"));
+    h.run_steps(8);
+    let reopened = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect().height();
+    assert!(reopened > 150.0, "the room there is, not three lines: {reopened}");
+}
+
+/// ⌘Enter goes by the key's own modifiers. Behind typing in a slow frame the box holds the key for a
+/// frame, by when ⌘ may be up: the script then didn't run.
+#[test]
+fn cmd_enter_behind_typing_runs_the_script_even_with_cmd_up_by_then() {
+    let cmd = egui::Modifiers { alt: false, ctrl: false, shift: false, mac_cmd: true, command: true };
+    let enter = |pressed| egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat: false, modifiers: cmd };
+    let mut h = harness();
+    assert!(h.state_mut().execute("tools.js_console"));
+    h.run_steps(2);
+    h.get_by_label("JavaScript").focus();
+    h.run_steps(2);
+    h.state_mut().js_console.input = "6 * 7".into();
+    h.run_steps(2);
+    h.input_mut().events.extend([egui::Event::ModifiersChanged(cmd), egui::Event::Text("0".into()), enter(true)]);
+    h.step();
+    h.input_mut().events.extend([enter(false), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
+    h.step();
+    h.run_steps(3);
+    let console = &h.state().js_console;
+    assert_eq!(console.input, "06 * 7");
+    assert!(console.log.iter().any(|l| l.contains("42")), "it ran: {:?}", console.log);
 }

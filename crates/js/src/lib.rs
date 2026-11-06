@@ -20,6 +20,8 @@
 //! The engine is a sandbox: no file, network or timer access exists, and loops and recursion
 //! are bounded. Side effects (alerts, field changes, resets, printing, navigation) are returned
 //! in an [`Outcome`] for the caller to apply.
+//!
+//! Script editors use [`highlight`] to colour a script, without running or parsing it.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -37,6 +39,7 @@ use boa_engine::{Context, JsError, JsNativeError, JsObject, JsResult, JsString, 
 mod document;
 mod format;
 mod globals;
+mod highlight;
 mod host;
 mod model;
 mod run;
@@ -47,16 +50,17 @@ use format::{printd, printf, printx, scand};
 pub use format::{set_date_names, with_english_printd};
 pub(crate) use globals::menu_item;
 use globals::platform;
+pub use highlight::{Token, TokenKind, highlight};
 use host::{arg, as_number, error, function, s, text};
 pub use model::{
     DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, DocInfo, Event, FieldState, FieldType, Limits, Message, MessageButtons,
     MessageIcon, Outcome, Panel, Request,
 };
+pub(crate) use run::CheckedCodeFromStrings;
 #[cfg(not(target_arch = "wasm32"))]
 use run::SCRIPT_STACK;
 use run::refuse;
-pub(crate) use run::{CheckedCodeFromStrings, MAX_SCRIPT_BYTES};
-pub use run::{run, run_shared};
+pub use run::{MAX_SCRIPT_BYTES, run, run_shared};
 
 pub mod formcalc;
 pub mod xfa;

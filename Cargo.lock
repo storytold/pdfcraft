@@ -4499,6 +4499,7 @@ version = "0.18.1"
 dependencies = [
  "boa_engine",
  "chrono",
+ "proptest",
 ]
 
 [[package]]

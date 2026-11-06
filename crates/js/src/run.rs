@@ -4,7 +4,7 @@ use super::model::{DocInfo, Event, FieldState, Limits, Outcome};
 use super::{Arc, Attribute, BTreeSet, Context, HostHooks, JsNativeError, JsResult, JsString, Realm, RefCell, Source, js_string};
 
 /// Longest script, in bytes.
-pub(crate) const MAX_SCRIPT_BYTES: usize = 256 * 1024;
+pub const MAX_SCRIPT_BYTES: usize = 256 * 1024;
 
 /// Largest width or precision accepted by `util.printf`.
 pub(crate) const MAX_PRINTF_WIDTH_PRECISION: usize = 4096;

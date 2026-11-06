@@ -45,12 +45,34 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
     });
     ui.separator();
     ui.add_space(6.0);
-    let mut enter = false;
     // A locked field keeps its properties until it is unlocked (Acrobat greys them out).
     let was_locked = d.original.as_ref().as_ref().is_some_and(|o| o.locked) && d.locked;
     if was_locked {
         ui.label(egui::RichText::new(tl!("This field is locked. Unlock it to change its properties.")).small().color(t.text_muted));
     }
+    // A tab too tall for the window scrolls, so the title, the tabs, OK and Cancel stay on the screen.
+    let mut enter = false;
+    let hidden = widgets::dialog_scrolling_body(ui, "field-tab", |ui| {
+        enter = tab_body(ui, d, t, was_locked);
+        ui.add_space(8.0);
+        ui.add(widgets::checkbox(&mut d.locked, tl!("Locked")));
+    });
+    ui.add_space(6.0);
+    let (mut apply, mut cancel) = (enter, false);
+    widgets::dialog_buttons_keeping_height(ui, hidden, |ui| {
+        if widgets::pill_button(ui, tl!("OK"), true).clicked() {
+            apply = true;
+        }
+        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+            cancel = true;
+        }
+    });
+    (apply, cancel)
+}
+
+/// The tab picked, greyed out for a locked field. Returns whether Enter in a field asked to apply it.
+fn tab_body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Tokens, was_locked: bool) -> bool {
+    let mut enter = false;
     ui.scope(|ui| {
         if was_locked {
             ui.disable();
@@ -319,17 +341,5 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
             },
         }
     });
-    ui.add_space(8.0);
-    ui.add(widgets::checkbox(&mut d.locked, tl!("Locked")));
-    ui.add_space(6.0);
-    let (mut apply, mut cancel) = (enter, false);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if widgets::pill_button(ui, tl!("OK"), true).clicked() {
-            apply = true;
-        }
-        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-            cancel = true;
-        }
-    });
-    (apply, cancel)
+    enter
 }

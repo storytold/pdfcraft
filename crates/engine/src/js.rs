@@ -5,9 +5,11 @@
 //!
 //! Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript is [`Session::set_javascript`]; with it
 //! off, scripts don't run and AF calls keep working natively.
+//!
+//! Script editors colour a script with [`highlight`], which neither runs nor parses it.
 
 use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, FieldProps, ScriptResult, Scripts};
-pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Panel, Request};
+pub use pdfcraft_js::{Limits, MAX_SCRIPT_BYTES, Message, MessageButtons, MessageIcon, Outcome, Panel, Request, Token, TokenKind, highlight};
 
 use crate::{DocId, Edit, EditError, Session};
 
