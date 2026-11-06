@@ -1,4 +1,4 @@
-use super::{Arc, Face, HAlign, Rect, Span};
+use super::{Arc, Face, HAlign, Rect, Span, Sweep};
 
 /// How far below its baseline an underline is drawn, in the text's size: an underline is the
 /// level line pushed just before its span, this far below it (the PDF writer tells it apart from
@@ -7,9 +7,11 @@ pub(crate) const UNDERLINE_DROP: f64 = 0.1;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
+    /// A box filled with `color`, or with `gradient` from `color` when it has one.
     Fill {
         rect: Rect,
         color: [f64; 3],
+        gradient: Option<Gradient>,
     },
     Line {
         from: (f64, f64),
@@ -45,6 +47,17 @@ pub struct Turned {
     pub items: Vec<Item>,
 }
 
+/// A gradient fill ([`Item::Fill`], [`Rounded`]): how it sweeps, the colour it ends in (it starts
+/// in the fill's), and the box it sweeps across. That is the whole box the fill was drawn for,
+/// which a page break cutting the fill leaves as it is, so the parts on each page carry on one
+/// gradient rather than each starting it again.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Gradient {
+    pub sweep: Sweep,
+    pub to: [f64; 3],
+    pub area: Rect,
+}
+
 /// A box with rounded corners ([`Item::Rounded`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Rounded {
@@ -55,6 +68,8 @@ pub struct Rounded {
     /// Corners whose curve goes into the box rather than around it, in the same order.
     pub inverted: [bool; 4],
     pub fill: Option<[f64; 3]>,
+    /// A gradient from the fill's colour, painted inside the fill's curves in its place.
+    pub gradient: Option<Gradient>,
     /// The edge: its width, colour and whether it is dashed.
     pub edge: Option<(f64, [f64; 3], bool)>,
     /// A page break cut the box here: that side has no edge, and its corners are square.

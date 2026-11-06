@@ -7,8 +7,8 @@ use roxmltree::Node as XmlNode;
 use crate::XfaError;
 use crate::model::{
     Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Margin, Node,
-    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Rect, RichText, Run, Script, Stroke, Subform, Template, Ui, VAlign,
-    Value,
+    Occur, PageArea, PageRole, PageSet, Paint, ParaSpec, Paragraph, Placement, Presence, Rect, RichText, Run, Script, Stroke, Subform, Sweep,
+    Template, Toward, Ui, VAlign, Value,
 };
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
@@ -128,12 +128,29 @@ fn parse_edge(n: XmlNode) -> Edge {
 }
 
 /// `<fill>`: a colour, or white when the element is present without one.
-fn parse_fill(n: Option<XmlNode>) -> Option<Color> {
-    let n = n?;
+fn parse_fill(n: Option<XmlNode>) -> (Option<Color>, Option<Paint>) {
+    let Some(n) = n else { return (None, None) };
     if Presence::parse(n.attribute("presence")) != Presence::Visible {
-        return None;
+        return (None, None);
     }
-    Some(parse_color(child(n, "color")).unwrap_or(Color::WHITE))
+    (Some(parse_color(child(n, "color")).unwrap_or(Color::WHITE)), parse_paint(n))
+}
+
+/// The one of a `<fill>`'s fill-type children that paints besides the fill's own colour: the
+/// first of them in the element wins, so a `<solid>` or `<pattern>` that comes first (or no
+/// such child at all) leaves just the colour. The child's own colour is black unless it
+/// gives one.
+fn parse_paint(n: XmlNode) -> Option<Paint> {
+    let kind = n.children().find(|c| c.is_element() && matches!(c.tag_name().name(), "linear" | "radial" | "stipple" | "solid" | "pattern"))?;
+    let color = parse_color(child(kind, "color")).unwrap_or(Color::BLACK);
+    match kind.tag_name().name() {
+        "linear" => Some(Paint::Gradient { sweep: Sweep::Linear(Toward::parse(kind.attribute("type"))), color }),
+        "radial" => {
+            Some(Paint::Gradient { sweep: Sweep::Radial { to_center: kind.attribute("type").is_some_and(|t| t.trim() == "toCenter") }, color })
+        }
+        "stipple" => Some(Paint::Stipple { rate: Paint::rate(kind.attribute("rate")), color }),
+        _ => None,
+    }
 }
 
 /// `<border>`: edges in XFA order. One edge applies to all four; two: top/bottom then
@@ -150,7 +167,8 @@ fn parse_border(n: Option<XmlNode>) -> Option<Border> {
         3 => [e(0), e(1), e(2), e(1)],
         _ => [e(0), e(1), e(2), e(3)],
     };
-    Some(Border { presence: Presence::parse(n.attribute("presence")), edges: four, corners: parse_corners(n), fill: parse_fill(child(n, "fill")) })
+    let (fill, paint) = parse_fill(child(n, "fill"));
+    Some(Border { presence: Presence::parse(n.attribute("presence")), edges: four, corners: parse_corners(n), fill, paint })
 }
 
 /// The `<corner>` children of a border or rectangle, top-left, top-right, bottom-right then
@@ -419,7 +437,7 @@ fn parse_value(n: Option<XmlNode>, warnings: &mut Vec<String>) -> Value {
             }
             "rectangle" => {
                 let mut b = parse_border(Some(c)).unwrap_or_default();
-                b.fill = parse_fill(child(c, "fill"));
+                (b.fill, b.paint) = parse_fill(child(c, "fill"));
                 return Value::Rectangle(Box::new(b));
             }
             "date" | "time" | "dateTime" | "integer" | "decimal" | "float" | "boolean" => return Value::Text(text_of(c)),
