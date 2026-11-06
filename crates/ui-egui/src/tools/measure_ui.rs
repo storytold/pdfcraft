@@ -264,7 +264,9 @@ pub(crate) fn page_input(
             point = snapped_point;
             snap = Some(kind);
         }
+        // Level or plumb with the last point, which is only on this page if the measurement is.
         if ui.input(|i| i.modifiers.shift)
+            && state.page == Some(page)
             && let Some(last) = state.points.last()
         {
             point = measure::snap::constrain(*last, point);
@@ -319,7 +321,7 @@ pub(crate) fn page_input(
             }
         }
         let positions: Vec<Pos2> = points.iter().map(|&p| screen(p)).collect();
-        let stroke = Stroke::new(1.5, Color32::from_rgb(0, 120, 214));
+        let stroke = Stroke::new(1.5, MEASURE_BLUE);
         for pair in positions.windows(2) {
             if let [a, b] = pair {
                 ui.painter().line_segment([*a, *b], stroke);
@@ -333,25 +335,34 @@ pub(crate) fn page_input(
         for &p in &positions {
             ui.painter().circle_filled(p, 3.0, stroke.color);
         }
-        if let (Some(p), Some(kind)) = (hover, snap) {
-            ui.painter().circle_stroke(screen(p), 6.0, Stroke::new(1.0, Color32::from_rgb(46, 158, 92)));
-            ui.painter().text(
-                screen(p) + egui::vec2(10.0, -10.0),
-                egui::Align2::LEFT_BOTTOM,
-                tl!(match kind {
-                    measure::snap::SnapKind::Endpoint => "Endpoint",
-                    measure::snap::SnapKind::Midpoint => "Midpoint",
-                    measure::snap::SnapKind::Intersection => "Intersection",
-                    measure::snap::SnapKind::Path => "Path",
-                }),
-                crate::theme::regular(11.0),
-                stroke.color,
-            );
-        }
         if let (Some(p), Some(reading)) = (hover, &state.reading) {
-            ui.painter().text(screen(p) + egui::vec2(12.0, 12.0), egui::Align2::LEFT_TOP, &reading.label, crate::theme::semibold(12.0), stroke.color);
+            ui.painter().text(screen(p) + egui::vec2(12.0, 12.0), egui::Align2::LEFT_TOP, &reading.label, crate::theme::semibold(12.0), MEASURE_BLUE);
         }
     }
+    // Where the next point lands, the first one included (#6116): it snaps before any is placed.
+    if let (Some(p), Some(kind)) = (hover, snap) {
+        snap_marker(ui, screen(p), kind);
+    }
+}
+
+/// The measuring line, its points and readings.
+const MEASURE_BLUE: Color32 = Color32::from_rgb(0, 120, 214);
+
+/// The snap marker: a green ring on the point the pointer snapped to, named by what it is.
+fn snap_marker(ui: &egui::Ui, at: Pos2, kind: measure::snap::SnapKind) {
+    ui.painter().circle_stroke(at, 6.0, Stroke::new(1.0, Color32::from_rgb(46, 158, 92)));
+    ui.painter().text(
+        at + egui::vec2(10.0, -10.0),
+        egui::Align2::LEFT_BOTTOM,
+        tl!(match kind {
+            measure::snap::SnapKind::Endpoint => "Endpoint",
+            measure::snap::SnapKind::Midpoint => "Midpoint",
+            measure::snap::SnapKind::Intersection => "Intersection",
+            measure::snap::SnapKind::Path => "Path",
+        }),
+        crate::theme::regular(11.0),
+        MEASURE_BLUE,
+    );
 }
 fn finish(state: &mut MeasureView, pending: &mut Option<Edit>, doc: &Document, page: usize, tool: Tool, author: &str, units: crate::units::Unit) {
     if tool == Tool::Calibrate {
