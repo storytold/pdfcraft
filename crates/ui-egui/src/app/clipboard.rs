@@ -75,18 +75,8 @@ impl PdfCraftApp {
             return;
         }
         if paste {
-            let has_override_image = matches!(self.clipboard_override, Some(crate::create_ui::Clip::Image { .. }));
-            #[cfg(not(target_arch = "wasm32"))]
-            let system_has_text = if !has_override_image && self.system_clipboard { crate::os_clipboard::has_text() } else { false };
-            #[cfg(target_arch = "wasm32")]
-            let system_has_text = false;
-
-            if !has_override_image && system_has_text {
-                self.last_copied_image = None;
-                self.last_copied_file = None;
-                return;
-            }
-
+            // Native validation (including text priority) happens once in paste_image,
+            // on a worker with a bounded wait, rather than probing text on this thread.
             let page = self.views.get(i).map_or(0, |v| v.current);
             self.paste_image(page, None);
         }

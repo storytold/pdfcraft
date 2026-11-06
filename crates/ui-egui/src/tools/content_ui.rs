@@ -1074,7 +1074,8 @@ impl crate::PdfCraftApp {
         }
     }
 
-    /// Whether there is an image in the in-memory clipboard or system clipboard ready to paste.
+    /// Whether to offer image paste, without reading the native clipboard.
+    /// Native contents are unknown until an explicit Paste validates them.
     pub fn can_paste_image(&self) -> bool {
         if let Some(crate::create_ui::Clip::Image { .. }) = self.clipboard_override.as_ref() {
             return true;
@@ -1085,7 +1086,9 @@ impl crate::PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.system_clipboard {
-                return matches!(crate::os_clipboard::for_image_paste(), Some(crate::create_ui::Clip::Image { .. }));
+                // A native read can block waiting for a selection owner (including this app
+                // on Wayland). Opening a menu must never wait for the clipboard.
+                return true;
             }
         }
         self.last_copied_image.is_some() || self.last_copied_file.is_some()
@@ -1123,7 +1126,17 @@ impl crate::PdfCraftApp {
 
     fn paste_image_internal(&mut self, page: usize, rect: Option<[f64; 4]>, at: Option<[f64; 2]>) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
-        let system = if self.clipboard_override.is_none() && self.system_clipboard { crate::os_clipboard::for_image_paste() } else { None };
+        let system = if self.clipboard_override.is_none() && self.system_clipboard {
+            match crate::os_clipboard::for_image_paste() {
+                Ok(clip) => clip,
+                Err(_) => {
+                    self.notify_tr("The clipboard isn't responding");
+                    return false;
+                }
+            }
+        } else {
+            None
+        };
         #[cfg(target_arch = "wasm32")]
         let system = None;
         self.paste_image_with_system(
