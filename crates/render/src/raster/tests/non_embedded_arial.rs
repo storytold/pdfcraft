@@ -1,9 +1,10 @@
-//! An Arial the PDF doesn't embed draws the glyphs its codes name (vendored hayro-interpret
-//! patch 76, #5889). Word and PDFMaker write such a font as a Type 0 `CIDFontType2` with
-//! `Identity-H`, often without `/ToUnicode`, so each code is a glyph index in the author's Arial.
-//! Arial numbers its first 258 glyphs in the standard Macintosh order of the TrueType `post`
-//! table (`L` is 47, `o` 82, `w` 90). The standard substitute numbers its glyphs another way, and
-//! "Low Power" drew as "@ck 'Dck Yf".
+//! An Arial or a Times New Roman the PDF doesn't embed draws the glyphs its codes name (vendored
+//! hayro-interpret patches 76 and 88, #5889, #6449). Word and PDFMaker write such a font as a
+//! Type 0 `CIDFontType2` with `Identity-H`, often without `/ToUnicode`, so each code is a glyph
+//! index in the author's font. Both number their first 258 glyphs in the standard Macintosh order
+//! of the TrueType `post` table (`L` is 47, `o` 82, `w` 90). The standard substitute numbers its
+//! glyphs another way: "Low Power" drew as "@ck 'Dck Yf", and "Salarié(e) du régime général" as
+//! "Salari²*g+f w't²i lo g'ì²p²tcn".
 //!
 //! Each document is drawn twice, once as such a file has it and once with a `/ToUnicode` that
 //! names each code's character, which draws through the substitute's glyph for that character.
@@ -106,18 +107,44 @@ fn an_arial_the_pdf_does_not_embed_draws_the_glyphs_its_codes_name() {
     }
 }
 
-/// Only Arial's own faces are read in its order: Arial Narrow, Arial Black and Arial Unicode MS
-/// are other fonts, and a `CIDFontType0` font's CIDs aren't TrueType glyph indexes.
+/// Each Times New Roman face, as Windows exporters name it and as Word names a face it doesn't
+/// embed (`TimesNewRoman,Bold` in #6449), draws "Low É" from its glyph indexes.
 #[test]
-fn codes_of_other_fonts_are_not_read_in_arials_order() {
+fn a_times_new_roman_the_pdf_does_not_embed_draws_the_glyphs_its_codes_name() {
+    for base_font in [
+        "TimesNewRomanPSMT",
+        "TimesNewRomanPS-BoldMT",
+        "TimesNewRomanPS-ItalicMT",
+        "TimesNewRomanPS-BoldItalicMT",
+        "TimesNewRoman",
+        "TimesNewRoman,Bold",
+        "TimesNewRoman,Italic",
+        "TimesNewRoman,BoldItalic",
+        "WFXLUF+TimesNewRoman,Bold",
+    ] {
+        for mapped in [false, true] {
+            let (without, with) = without_and_with_unicode(Font { base_font, subtype: "CIDFontType2", mapped, to_unicode: false });
+            assert!(without == with, "{base_font} (CIDToGIDMap {}): the codes draw \"Low É\"", if mapped { "stream" } else { "/Identity" });
+        }
+    }
+}
+
+/// Only the faces of Arial and Times New Roman are read in that order: Arial Narrow, Arial Black,
+/// Arial Unicode MS, Times and Times New Roman MT Std are other fonts, and a `CIDFontType0` font's
+/// CIDs aren't TrueType glyph indexes.
+#[test]
+fn codes_of_other_fonts_are_not_read_in_the_macintosh_order() {
     for (base_font, subtype) in [
         ("ArialNarrow", "CIDFontType2"),
         ("ArialNarrow-Bold", "CIDFontType2"),
         ("Arial-Black", "CIDFontType2"),
         ("ArialUnicodeMS", "CIDFontType2"),
         ("ArialMT", "CIDFontType0"),
+        ("Times-Bold", "CIDFontType2"),
+        ("TimesNewRomanMTStd", "CIDFontType2"),
+        ("TimesNewRoman,Bold", "CIDFontType0"),
     ] {
         let (without, with) = without_and_with_unicode(Font { base_font, subtype, mapped: false, to_unicode: false });
-        assert!(without != with, "{base_font} ({subtype}) is not read as Arial");
+        assert!(without != with, "{base_font} ({subtype}) is not read in the Macintosh order");
     }
 }

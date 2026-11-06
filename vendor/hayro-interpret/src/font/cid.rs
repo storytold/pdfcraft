@@ -51,10 +51,10 @@ pub(crate) struct Type0Font {
     /// such text as the code's Unicode value; the identity CMap the name resolves to maps codes
     /// to CIDs only and gave no text at all.
     identity_to_unicode: bool,
-    /// PdfCraft patch: an Arial the PDF doesn't embed, as a TrueType CID font (`CIDFontType2`)
-    /// whose CIDs aren't of an Adobe character collection. Its CIDToGIDMap gives glyph indexes
-    /// in the author's Arial, which numbers its first 258 glyphs in the standard Macintosh order
-    /// of the TrueType `post` table (#5889).
+    /// PdfCraft patch: an Arial or a Times New Roman the PDF doesn't embed, as a TrueType CID
+    /// font (`CIDFontType2`) whose CIDs aren't of an Adobe character collection. Its CIDToGIDMap
+    /// gives glyph indexes in the author's font, which numbers its first 258 glyphs in the
+    /// standard Macintosh order of the TrueType `post` table (#5889, #6449).
     mac_glyph_order: bool,
 }
 
@@ -168,7 +168,7 @@ impl Type0Font {
                 .is_some_and(|s| s.deref() == CID_FONT_TYPE2)
             && descendant_font
                 .get::<Name<'_>>(BASE_FONT)
-                .is_some_and(|n| is_arial(strip_subset_prefix(n.as_str())));
+                .is_some_and(|n| numbers_glyphs_in_mac_order(strip_subset_prefix(n.as_str())));
 
         // Extract font flags from descriptor
         let font_flags = font_descriptor
@@ -216,9 +216,10 @@ impl Type0Font {
             return glyph;
         }
 
-        // PdfCraft patch: the CID of an Arial the PDF doesn't embed names an Arial glyph, which
-        // the substitute draws by that name. Taken as the substitute's own glyph index it drew
-        // an unrelated glyph: "Low Power" as "@ck 'Dck Yf" (#5889).
+        // PdfCraft patch: the CID of an Arial or a Times New Roman the PDF doesn't embed names
+        // one of that font's glyphs, which the substitute draws by that name. Taken as the
+        // substitute's own glyph index it drew an unrelated glyph: "Low Power" as
+        // "@ck 'Dck Yf" (#5889), "Salarié(e) du régime" as "Salari²*g+f w't²i lo" (#6449).
         if self.mac_glyph_order
             && let Some(glyph) = self.map_via_mac_glyph_name(cid)
         {
@@ -334,7 +335,7 @@ impl Type0Font {
         }
     }
 
-    /// PdfCraft patch: the substitute's glyph for the Arial glyph that `cid` gives, found by
+    /// PdfCraft patch: the substitute's glyph for the author's glyph that `cid` gives, found by
     /// that glyph's name in the standard Macintosh order. `None` past the 258 glyphs the order
     /// names, and for a substitute that isn't a name-keyed CFF font (the standard substitutes
     /// are); .notdef for a name the substitute has no glyph for.
@@ -631,17 +632,21 @@ fn is_variation_selector(c: char) -> bool {
 }
 
 /// PdfCraft patch: whether `name`, a `/BaseFont` without its subset tag, is one of the four
-/// Arial faces as exporters name them: `ArialMT`, `Arial-BoldMT`, `Arial-ItalicMT`,
-/// `Arial-BoldItalicMT`, or `Arial` followed by `,Bold`, `,Italic` or `,BoldItalic`. Arial
-/// Narrow, Arial Black, Arial Unicode MS and Arial Rounded are other fonts, numbered their own
-/// way. Letter case doesn't matter, `MT` included.
-fn is_arial(name: &str) -> bool {
+/// faces of Arial or Times New Roman as exporters name them: `ArialMT`, `Arial-BoldMT`,
+/// `Arial-ItalicMT`, `Arial-BoldItalicMT`, `TimesNewRomanPSMT`, `TimesNewRomanPS-BoldMT` and so
+/// on, or `Arial` or `TimesNewRoman` followed by `,Bold`, `,Italic` or `,BoldItalic`. Both
+/// number their first 258 glyphs in the standard Macintosh order. Arial Narrow, Arial Black,
+/// Arial Unicode MS and Arial Rounded are other fonts, numbered their own way. Letter case
+/// doesn't matter, `MT` included.
+fn numbers_glyphs_in_mac_order(name: &str) -> bool {
     let (family, style) = name.split_once([',', '-', ' ']).unwrap_or((name, ""));
     let style: String = style
         .chars()
         .filter(|c| !matches!(c, ',' | '-' | ' '))
         .collect();
-    without_mt(family).eq_ignore_ascii_case("Arial")
+    ["Arial", "TimesNewRoman", "TimesNewRomanPS"]
+        .iter()
+        .any(|f| without_mt(family).eq_ignore_ascii_case(f))
         && ["", "Regular", "Bold", "Italic", "BoldItalic"]
             .iter()
             .any(|s| without_mt(&style).eq_ignore_ascii_case(s))
