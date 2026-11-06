@@ -78,6 +78,11 @@ pub struct OptimizeRun {
 fn stage_label(stage: OptimizeStage) -> String {
     match stage {
         OptimizeStage::Discarding => tl!("Optimizing… removing user data").to_string(),
+        OptimizeStage::Reading { done: 0, .. } => tl!("Optimizing… reading the pages").to_string(),
+        OptimizeStage::Reading { done, total } => crate::i18n::fmt(
+            tl!("Optimizing… reading page {d} of {t}"),
+            &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
+        ),
         OptimizeStage::Fragments => tl!("Optimizing… merging image fragments").to_string(),
         OptimizeStage::Images { done, total } => crate::i18n::fmt(
             tl!("Optimizing… image {d} of {t}"),
@@ -411,7 +416,10 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         if self.run_inline {
             work();
-        } else if let Err(e) = std::thread::Builder::new().name("pdfcraft-optimize".into()).spawn(work) {
+        } else if let Err(e) = std::thread::Builder::new().name("pdfcraft-optimize".into()).spawn(move || {
+            pdfcraft_engine::optimize::give_way_to_other_programs();
+            work();
+        }) {
             // No worker: report the failure instead of waiting for a result that never comes.
             if let Ok(mut s) = progress.lock() {
                 s.result = Some(Err(EditError::Optimize(e.to_string())));
@@ -497,7 +505,7 @@ mod tests {
         }
         h.get_by_label("Optimizing… image 4 of 10");
         let shown = h.state().progress_notice.clone().unwrap();
-        assert!((shown.fraction - 0.275).abs() < 1e-4, "{shown:?}");
+        assert!((shown.fraction - 0.415).abs() < 1e-4, "{shown:?}");
         assert!(shown.cancellable);
 
         h.get_by_label("Cancel").click();
@@ -511,6 +519,16 @@ mod tests {
         h.run_steps(2);
         assert!(h.state().optimize_run.is_none() && h.state().progress_notice.is_none());
         assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("Optimization cancelled"));
+    }
+
+    #[test]
+    fn the_progress_card_says_what_is_happening() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        assert_eq!(stage_label(OptimizeStage::default()), "Optimizing… reading the pages");
+        assert_eq!(stage_label(OptimizeStage::Reading { done: 11, total: 51 }), "Optimizing… reading page 12 of 51");
+        assert_eq!(stage_label(OptimizeStage::Reading { done: 51, total: 51 }), "Optimizing… reading page 51 of 51");
+        assert_eq!(stage_label(OptimizeStage::Discarding), "Optimizing… removing user data");
     }
 
     #[test]

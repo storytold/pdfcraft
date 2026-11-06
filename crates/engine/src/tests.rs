@@ -3764,7 +3764,9 @@ fn an_optimize_job_reports_its_stages_and_can_be_cancelled() {
         })
         .unwrap();
     assert!(bytes.starts_with(b"%PDF-"));
-    assert_eq!(stages.first(), Some(&OptimizeStage::Discarding));
+    assert_eq!(stages.first(), Some(&OptimizeStage::Reading { done: 0, total: 2 }), "it says what it does first");
+    assert!(!stages.contains(&OptimizeStage::Discarding), "nothing was chosen to discard: {stages:?}");
+    assert!(stages.iter().any(|st| matches!(st, OptimizeStage::Images { .. })), "{stages:?}");
     assert_eq!(&stages[stages.len() - 3..], [OptimizeStage::CleaningUp, OptimizeStage::Merging, OptimizeStage::Writing]);
     let fractions: Vec<f32> = stages.iter().map(|st| st.fraction()).collect();
     assert!(fractions.windows(2).all(|w| w[0] <= w[1]), "the bar never goes back: {fractions:?}");
@@ -3774,6 +3776,20 @@ fn an_optimize_job_reports_its_stages_and_can_be_cancelled() {
         OptimizeStage::Images { done: 5, total: 5 }.fraction(),
         "no images: no division by zero"
     );
+
+    // What the bar shows before anything is reported says nothing of user data either.
+    assert_eq!(OptimizeStage::default(), OptimizeStage::Reading { done: 0, total: 0 });
+    assert_eq!(OptimizeStage::default().fraction(), 0.0);
+    assert!(OptimizeStage::Reading { done: 2, total: 4 }.fraction() > 0.0, "reading pages moves the bar");
+
+    // Discarding says so when something is. This document has no metadata, which only stops it after
+    // the stage is reported.
+    let mut with_discard = Vec::new();
+    let _ = s.optimize_job(id, &settings, &[crate::Hidden::Metadata]).unwrap().run(|st| {
+        with_discard.push(st);
+        true
+    });
+    assert_eq!(with_discard.first(), Some(&OptimizeStage::Discarding));
 
     // Cancelled at the merge: nothing is written, the open document is untouched.
     let before = s.get(id).unwrap().bytes.clone();
