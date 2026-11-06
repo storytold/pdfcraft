@@ -314,6 +314,14 @@ fn row_span(bits: &[bool], result: &RXingResult) -> Option<(usize, usize, f32)> 
             }
             continue;
         }
+        // Fit the pitch to the entire checksum-framed pattern: short start runs can be
+        // biased by pixel quantization. Retain every module/stop tolerance, and require
+        // the start width to agree within one pixel of boundary quantization.
+        let modules = groups.checked_mul(11)?.checked_add(13)?;
+        let pitch = (span.last()?.1 - x0) as f32 / modules as f32;
+        if !(1.0..=32.0).contains(&pitch) || ((start_end - x0) as f32 - 11.0 * pitch).abs() > 1.0 {
+            continue;
+        }
         let mut valid = true;
         for group in span.get(..groups * 6)?.as_chunks::<6>().0 {
             let first = group.first()?;
@@ -1083,5 +1091,40 @@ mod row_materialization_tests {
         let gray = Gray { w: 0, h: 1, pixels: Vec::new(), threshold: 127 };
         assert!(View { gray: &gray, vertical: false, reverse: false, inverted: false }.row_bits(0).is_err());
         assert!(View { gray: &gray, vertical: true, reverse: false, inverted: false }.row_bits(0).is_err());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod quantized_pitch_tests {
+    use super::*;
+    /// Recover independently rasterized half-pixel modules without relaxing run or stop tolerances.
+    #[test]
+    fn half_resolution_code128_retains_exact_ink() {
+        const BITS: &str = "1101001000010100011000100010110001100011101011";
+        for phase in [0, 1] {
+            let mut source = vec![255u8; 800 * 800];
+            for y in 200..280 {
+                for (i, bit) in BITS.bytes().enumerate() {
+                    if bit == b'1' {
+                        for x in 0..3 {
+                            source[y * 800 + 100 + i * 3 + x] = 0;
+                        }
+                    }
+                }
+            }
+            let mut rgba = vec![255; 400 * 400 * 4];
+            for y in 0..400 {
+                for x in 0..400 {
+                    rgba[(y * 400 + x) * 4..(y * 400 + x) * 4 + 3].fill(source[(2 * y + phase) * 800 + 2 * x + phase]);
+                }
+            }
+            let found = detect(400, 400, &rgba, None, &AtomicBool::new(false)).unwrap();
+            assert_eq!(found.len(), 1);
+            assert_eq!(found[0].payload, "A");
+            assert_eq!(found[0].ink, Rect { x0: 50, y0: 100, x1: 119, y1: 140 });
+            assert_eq!(found[0].pitch, 1.5);
+            assert!(found[0].quiet.contains(Rect { x0: 32, y0: 98, x1: 137, y1: 142 }));
+        }
     }
 }
