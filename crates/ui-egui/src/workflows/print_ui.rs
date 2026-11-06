@@ -15,7 +15,7 @@ mod body;
 mod draft;
 
 pub(crate) use body::body;
-pub use draft::{CUSTOM_SCALE, Handling, PrintDraft, Which};
+pub use draft::{CUSTOM_SCALE, Handling, IMAGE_DPI, PrintDraft, Which};
 
 /// The preview pane, and the paper inside it (12 pt inset on each side).
 const PREVIEW_W: f32 = 320.0;

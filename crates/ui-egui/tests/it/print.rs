@@ -916,25 +916,28 @@ fn a_booklet_decides_two_sided_itself() {
     assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::LongEdge), "back to the choice");
 }
 
+/// An app restored from `saved` settings (if any), with a form open and its Print dialog shown.
+fn print_opened_with(saved: Option<&str>) -> PdfCraftApp {
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    if let Some(saved) = saved {
+        app.restore(saved);
+    }
+    app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+    app.open_print();
+    app
+}
+
 /// The choices that describe how an office prints (two-sided, grayscale, collate, page sizing,
-/// comments & forms, a booklet's binding side) survive a restart; the ones that describe one job
-/// (copies, pages, layout, orientation) start from the defaults each time Print opens, in the same
-/// session too (ISO 32000-2 Table 147 initialises them per document). Settings are untrusted: an
-/// unknown name or a scale outside the dialog's range keeps the default (#2001).
+/// comments & forms, a booklet's binding side, Print as image and its resolution) survive a
+/// restart; the ones that describe one job (copies, pages, layout, orientation) start from the
+/// defaults each time Print opens, in the same session too (ISO 32000-2 Table 147 initialises them
+/// per document) (#2001, #6392).
 #[test]
 fn print_preferences_survive_a_restart_but_the_jobs_own_choices_reset() {
     use pdfcraft_engine::print::{Binding, BookletSubset, Content, LABEL_PAPER, Orientation, PAPERS, PageOrder, SizeMode, Subset, spool::Duplex};
     use pdfcraft_ui_egui::{PrintHandling, PrintWhich};
-    let open = |saved: Option<&str>| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        if let Some(saved) = saved {
-            app.restore(saved);
-        }
-        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
-        app.open_print();
-        app
-    };
+    let open = print_opened_with;
     let mut app = open(None);
     let d = &mut app.print_draft;
     d.duplex = Some(Duplex::LongEdge);
@@ -944,6 +947,8 @@ fn print_preferences_survive_a_restart_but_the_jobs_own_choices_reset() {
     d.custom_scale = 62.5;
     d.content = Content::Document;
     d.binding = Binding::Right;
+    d.as_image = true;
+    d.dpi = 600.0;
     d.copies = 5;
     d.which = PrintWhich::Range;
     d.range = "2-3".into();
@@ -982,12 +987,23 @@ fn print_preferences_survive_a_restart_but_the_jobs_own_choices_reset() {
     assert_eq!(d.custom_scale, 62.5);
     assert_eq!(d.content, Content::Document);
     assert_eq!(d.binding, Binding::Right, "a booklet's binding side is kept (#2707)");
+    assert!(d.as_image, "Print as image is kept, for a printer that needs pictures (#6392)");
+    assert_eq!(d.dpi, 600.0, "and its resolution");
     assert_eq!(d.copies, 1, "copies are this job's");
     assert_eq!(d.which, PrintWhich::All, "the page choice is this job's");
     assert_eq!(d.range, "");
+}
 
-    let garbage = r#"{"print": {"duplex": "sideways", "grayscale": "yes", "collate": null, "size": "custom", "custom_scale": 1e9, "comments_forms": 7, "binding": "up"}}"#;
+/// Settings are untrusted: an unknown name, a scale outside the dialog's range or a resolution it
+/// doesn't offer keeps the default (#2001, #6392).
+#[test]
+fn print_preferences_that_dont_parse_keep_the_defaults() {
+    use pdfcraft_engine::print::{Binding, Content, SizeMode, spool::Duplex};
+    let open = print_opened_with;
+    let garbage = r#"{"print": {"duplex": "sideways", "grayscale": "yes", "collate": null, "size": "custom", "custom_scale": 1e9, "comments_forms": 7, "binding": "up", "as_image": 1, "dpi": 72}}"#;
     let d = open(Some(garbage)).print_draft;
+    assert!(!d.as_image);
+    assert_eq!(d.dpi, 300.0, "a resolution the dialog doesn't offer keeps the default");
     assert_eq!(d.duplex, None, "an unknown name keeps the printer's own default");
     assert!(!d.grayscale);
     assert!(d.collate);

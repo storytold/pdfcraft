@@ -22,6 +22,9 @@ pub enum Handling {
 /// The percent a custom scale can be (the dialog's field and a saved setting).
 pub const CUSTOM_SCALE: std::ops::RangeInclusive<f64> = 1.0..=1000.0;
 
+/// The resolutions the Print dialog offers for Print as image, in dots per inch.
+pub const IMAGE_DPI: [f64; 3] = [150.0, 300.0, 600.0];
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrintDraft {
     pub printers: Vec<spool::Printer>,

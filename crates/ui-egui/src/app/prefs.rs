@@ -86,6 +86,8 @@ impl PdfCraftApp {
             "custom_scale": self.print_draft.custom_scale,
             "comments_forms": print_names::content(self.print_draft.content),
             "binding": print_names::binding(self.print_draft.binding),
+            "as_image": self.print_draft.as_image,
+            "dpi": self.print_draft.dpi,
         });
         let mut v = serde_json::json!({
             "side_panels": self.side_panels.to_json(self.left_open),
@@ -336,6 +338,14 @@ impl PdfCraftApp {
         // A booklet's binding side, as Acrobat keeps it (#2707).
         if let Some(binding) = print["binding"].as_str().and_then(print_names::parse_binding) {
             draft.binding = binding;
+        }
+        // Print as image and its resolution (#6392), so a printer that needs pictures keeps getting
+        // them; a resolution the dialog doesn't offer keeps the default.
+        if let Some(on) = print["as_image"].as_bool() {
+            draft.as_image = on;
+        }
+        if let Some(dpi) = print["dpi"].as_f64().filter(|d| print_ui::IMAGE_DPI.contains(d)) {
+            draft.dpi = dpi;
         }
         // Scan & OCR choices (language, engine, strategy, output mode, preprocessing and skip
         // flags); unknown or malformed values keep the defaults.
