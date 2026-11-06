@@ -2467,6 +2467,56 @@ fn an_unchanged_opening_destination_keeps_its_position_and_name() {
     }
 }
 
+/// A percentage is written as the `/XYZ` zoom factor (ISO 32000-2 Table 149), not the percentage:
+/// 25% as 0.25 and 100% as 1, and each survives a save.
+#[test]
+fn initial_view_percentages_are_written_as_zoom_factors() {
+    use crate::view::Magnification;
+    for (percent, factor) in [(25.0, 0.25), (100.0, 1.0), (150.0, 1.5)] {
+        let mut doc = open(fixture());
+        let v = crate::initial_view(&doc);
+        crate::set_initial_view(&mut doc, &crate::InitialView { magnification: Magnification::Percent(percent), ..v }).unwrap();
+        let doc = save_and_reopen(&doc);
+        let root = doc.root().unwrap();
+        let open_action = doc.get(root).as_dict().and_then(|c| c.get(b"OpenAction").cloned()).map(|o| doc.resolve(&o).as_ref().clone());
+        let zoom = open_action.as_ref().and_then(Object::as_array).and_then(|a| a.get(4)).and_then(Object::as_f64);
+        assert_eq!(zoom, Some(factor), "{percent}%: {open_action:?}");
+    }
+}
+
+#[test]
+fn choosing_100_percent_keeps_an_actual_size_opening_destination() {
+    use crate::view::Magnification;
+    let page2 = Object::Ref(pdfcraft_cos::ObjRef::new(5, 0));
+    let xyz = Object::Array(vec![page2.clone(), Object::name("XYZ"), Object::Int(100), Object::Int(500), Object::Int(1)]);
+    let mut named = pdfcraft_cos::Dict::new();
+    named.set(b"S".to_vec(), Object::name("GoTo"));
+    named.set(b"D".to_vec(), Object::name("there"));
+    let mut dests = pdfcraft_cos::Dict::new();
+    dests.set(b"there".to_vec(), Object::Array(vec![page2, Object::name("XYZ"), Object::Null, Object::Null, Object::Int(1)]));
+    for action in [xyz, Object::Dict(named)] {
+        let mut doc = open(fixture());
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            c.set(b"OpenAction".to_vec(), action.clone());
+            c.set(b"Dests".to_vec(), Object::Dict(dests.clone()));
+        })
+        .unwrap();
+        let v = crate::initial_view(&doc);
+        assert_eq!(v.magnification, Magnification::ActualSize);
+        // 100% is the same zoom: the action keeps its position or name.
+        crate::set_initial_view(&mut doc, &crate::InitialView { magnification: Magnification::Percent(100.0), ..v }).unwrap();
+        let catalog = doc.get(root).as_dict().cloned().unwrap();
+        assert_eq!(catalog.get(b"OpenAction"), Some(&action));
+    }
+    // Without one, 100% writes zoom 1, which reads back as Actual Size.
+    let mut doc = open(fixture());
+    let v = crate::initial_view(&doc);
+    crate::set_initial_view(&mut doc, &crate::InitialView { magnification: Magnification::Percent(100.0), ..v }).unwrap();
+    let doc = save_and_reopen(&doc);
+    assert_eq!(crate::initial_view(&doc).magnification, Magnification::ActualSize);
+}
+
 /// A document whose `/OpenAction` is `action`, with the named destination `there` (page 3 at
 /// 200%) in the catalog `/Dests` and `here` (page 1, fit) in a `/Names /Dests` tree.
 fn doc_opening_at(action: Object) -> Document {
