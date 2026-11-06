@@ -80,14 +80,117 @@ fn autotag_text_writes_marked_content_and_parent_tree_across_pages() {
 }
 
 #[test]
-fn autotag_text_refuses_paint_and_does_not_modify_the_document() {
+fn autotag_text_marks_vector_graphics_and_images_as_artifacts() {
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 7 0 R] /Count 2 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im1 6 0 R >> >> >>".into(),
+            stream("0 0 200 200 m 200 0 l 200 200 l 0 200 l h f 10 10 50 50 re B BT /F1 12 Tf 20 100 Td (Hello) Tj ET q 20 0 0 20 80 80 cm /Im1 Do Q"),
+            FONT.into(),
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 8 0 R >>".into(),
+            stream("0 0 100 100 re S"),
+        ],
+        "",
+    );
+    let result = autotag_text(&mut doc).unwrap();
+    assert_eq!(result, AutoTagResult { pages: 1, paragraphs: 1 });
+    let report = check(&doc, &Options { rules: [Rule::TaggedPdf, Rule::TaggedContent].into(), pages: None });
+    assert_eq!(status(&report, Rule::TaggedPdf), Status::Passed);
+    assert_eq!(status(&report, Rule::TaggedContent), Status::Passed);
+    let bytes = pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    let reopened = Document::open(Arc::new(bytes)).unwrap();
+    let reopened_report = check(&reopened, &Options { rules: [Rule::TaggedPdf, Rule::TaggedContent].into(), pages: None });
+    assert_eq!(status(&reopened_report, Rule::TaggedPdf), Status::Passed);
+    assert_eq!(status(&reopened_report, Rule::TaggedContent), Status::Passed);
+}
+
+#[test]
+fn autotag_artifacts_wrap_complete_paths_and_leave_unpainted_clips_outside() {
+    let content = "0 0 m 10 0 l 10 10 l h f 0 0 20 20 re W B 0 0 50 50 re W* n /Shade sh BT /F1 12 Tf (Text) Tj ET 3 3 5 5 re S";
     let mut doc = pdf(
         &[
             "<< /Type /Catalog /Pages 2 0 R >>".into(),
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
-            stream("BT /F1 12 Tf 20 100 Td (Hello) Tj ET 0 0 50 50 re f"),
+            stream(content),
             FONT.into(),
+        ],
+        "",
+    );
+    autotag_text(&mut doc).unwrap();
+    let bytes = pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let content = doc.resolve(page.dict.get(b"Contents").unwrap());
+    let Object::Stream(content) = &*content else { panic!("page stream") };
+    let ops = pdfcraft_content::parse(&content.decoded_strict().unwrap()).ops;
+    let names: Vec<&[u8]> = ops.iter().map(|op| op.op.as_slice()).collect();
+    assert_eq!(
+        names,
+        vec![
+            b"BMC".as_slice(),
+            b"m",
+            b"l",
+            b"l",
+            b"h",
+            b"f",
+            b"EMC",
+            b"BMC",
+            b"re",
+            b"W",
+            b"B",
+            b"EMC",
+            b"re",
+            b"W*",
+            b"n",
+            b"BMC",
+            b"sh",
+            b"EMC",
+            b"BDC",
+            b"BT",
+            b"Tf",
+            b"Tj",
+            b"ET",
+            b"EMC",
+            b"BMC",
+            b"re",
+            b"S",
+            b"EMC",
+        ]
+    );
+}
+
+#[test]
+fn autotag_rejects_text_interleaved_with_an_unfinished_path_atomically() {
+    for tail in ["10 10 l S", "n"] {
+        let mut doc = pdf(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>".into(),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".into(),
+                stream(&format!("0 0 m BT /F1 12 Tf (Text) Tj ET {tail}")),
+                FONT.into(),
+            ],
+            "",
+        );
+        let before = pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+        assert!(matches!(autotag_text(&mut doc), Err(AutoTagError::Unsupported { .. })));
+        assert_eq!(pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap(), before);
+    }
+}
+
+#[test]
+fn autotag_text_refuses_form_xobjects_and_does_not_modify_the_document() {
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Fm1 6 0 R >> >> >>".into(),
+            stream("BT /F1 12 Tf 20 100 Td (Hello) Tj ET /Fm1 Do"),
+            FONT.into(),
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 50 50] /Length 12 >>\nstream\n0 0 10 10 re f\nendstream".into(),
         ],
         "",
     );
