@@ -102,6 +102,8 @@ pub struct Room<A: Adapter> {
     version: u64,
     epoch: u64,
     participants: HashMap<ActorId, Participant>,
+    /// Per actor: the second the window started and operations in it.
+    op_windows: HashMap<ActorId, (u64, u32)>,
     lease: Option<LeaseState>,
     journal: VecDeque<JournalEntry>,
     applied_order: VecDeque<String>,
@@ -118,6 +120,7 @@ impl<A: Adapter> Room<A> {
             version: 0,
             epoch: 0,
             participants: HashMap::new(),
+            op_windows: HashMap::new(),
             lease: None,
             journal: VecDeque::new(),
             applied_order: VecDeque::new(),
@@ -149,6 +152,13 @@ impl<A: Adapter> Room<A> {
         if hello.doc != self.doc {
             return Err(server_error(ErrorCode::Invalid, "the session belongs to another document", false));
         }
+        // Participants are people, not connections: the same actor reconnecting
+        // or opening a second window does not take a second seat.
+        if !self.participants.contains_key(&actor)
+            && self.participants.len() >= usize::try_from(self.config.limits.max_participants).unwrap_or(usize::MAX)
+        {
+            return Err(server_error(ErrorCode::Limit, "the session has no free participant slot", false));
+        }
         let mut lease = Lease { id: format!("{}:{}", self.session_id, actor.as_str()), ttl_secs: 0 };
         if role.can_structural() && self.take_lease(&actor, now_ms) {
             lease.ttl_secs = self.config.lease_ttl_secs;
@@ -179,6 +189,22 @@ impl<A: Adapter> Room<A> {
     /// else is left untouched. Only structural writes need the lease, so a
     /// second editor may join and comment, but cannot change pages until the
     /// holder leaves or its TTL runs out (ADR-0008).
+    /// A fixed one-second window per actor. A retried `opId` returns before
+    /// this check, so de-duplication does not spend quota.
+    fn allow_op(&mut self, actor: &ActorId, now_ms: u64) -> bool {
+        let limit = self.config.limits.max_ops_per_sec.max(1);
+        let second = now_ms / 1_000;
+        let window = self.op_windows.entry(actor.clone()).or_insert((second, 0));
+        if window.0 != second {
+            *window = (second, 0);
+        }
+        if window.1 >= limit {
+            return false;
+        }
+        window.1 = window.1.saturating_add(1);
+        true
+    }
+
     fn take_lease(&mut self, actor: &ActorId, now_ms: u64) -> bool {
         let available = self.lease.as_ref().is_none_or(|l| l.holder == *actor || l.expires_ms <= now_ms);
         if !available {
@@ -204,10 +230,10 @@ impl<A: Adapter> Room<A> {
     /// de-duplication, document, lease, then `baseVersion`/`epoch`. A retried
     /// `opId` returns the stored result without touching the document.
     pub fn apply(&mut self, actor: &ActorId, op: &Op, now_ms: u64) -> Result<Applied, Rejected> {
-        let Some(participant) = self.participants.get(actor) else {
+        let Some(role) = self.participants.get(actor).map(|p| p.role) else {
             return Err(self.reject(&op.op_id, ErrorCode::Forbidden, false, "not in this session"));
         };
-        if participant.role == Role::Viewer {
+        if role == Role::Viewer {
             return Err(self.reject(&op.op_id, ErrorCode::Forbidden, false, "viewers cannot change the document"));
         }
         if let Some(applied) = self.applied.get(op.op_id.as_str()) {
@@ -216,10 +242,13 @@ impl<A: Adapter> Room<A> {
         if op.doc != self.doc {
             return Err(self.reject(&op.op_id, ErrorCode::Invalid, false, "the operation belongs to another document"));
         }
-        if op.class == ConflictClass::Structural && !participant.role.can_structural() {
+        if !self.allow_op(actor, now_ms) {
+            return Err(self.reject(&op.op_id, ErrorCode::Limit, true, "too many operations; slow down and retry"));
+        }
+        if op.class == ConflictClass::Structural && !role.can_structural() {
             return Err(self.reject(&op.op_id, ErrorCode::Forbidden, false, "this role cannot change pages"));
         }
-        if op.class == ConflictClass::Merge && !participant.role.can_annotate() {
+        if op.class == ConflictClass::Merge && !role.can_annotate() {
             return Err(self.reject(&op.op_id, ErrorCode::Forbidden, false, "this role cannot comment"));
         }
         if op.class == ConflictClass::Structural && !self.take_lease(actor, now_ms) {
@@ -322,6 +351,7 @@ impl<A: Adapter> Room<A> {
     /// A participant left: release the lease if they held it.
     pub fn disconnect(&mut self, actor: &ActorId) {
         self.participants.remove(actor);
+        self.op_windows.remove(actor);
         if self.lease.as_ref().is_some_and(|l| l.holder == *actor) {
             self.lease = None;
         }
@@ -351,8 +381,8 @@ fn server_error(code: ErrorCode, message: impl Into<String>, retryable: bool) ->
 mod tests {
     use super::{Adapter, AdapterError, ApplyOutcome, CommitOutcome, Room, RoomConfig};
     use pdfcraft_collab_proto::{
-        ActorId, BlobRef, ClientInfo, ConflictClass, DocKey, ErrorCode, Hello, Op, OpId, OpKind, PageRef, Presence, Role, Selection, SessionId,
-        Target, Viewport,
+        ActorId, BlobRef, ClientInfo, ConflictClass, DocKey, ErrorCode, Hello, Limits, Op, OpId, OpKind, PageRef, Presence, Role, Selection,
+        SessionId, Target, Viewport,
     };
     use serde_json::json;
 
@@ -417,6 +447,40 @@ mod tests {
             payload: json!({"text": "hello"}),
             preview: None,
         })
+    }
+
+    #[test]
+    fn participant_and_operation_limits_are_enforced() -> Result<(), Box<dyn std::error::Error>> {
+        let mut room = Room::new(
+            SessionId::new("session-1")?,
+            DocKey::new("file-1")?,
+            Fake { epoch: 0, applied: 0 },
+            RoomConfig { limits: Limits { max_participants: 2, max_ops_per_sec: 2, ..Limits::default() }, ..RoomConfig::default() },
+        );
+        let hello = hello()?;
+        let a = actor("a")?;
+        let b = actor("b")?;
+        let c = actor("c")?;
+        room.hello(a.clone(), Role::Editor, &hello, 0)?;
+        room.hello(b.clone(), Role::Commenter, &hello, 0)?;
+        assert_eq!(
+            room.hello(c, Role::Viewer, &hello, 0).map(|_| ()),
+            Err(super::server_error(ErrorCode::Limit, "the session has no free participant slot", false))
+        );
+        // Reconnecting the same person does not need a second seat.
+        assert!(room.hello(a.clone(), Role::Editor, &hello, 0).is_ok());
+
+        let first = op("o1", OpKind::Primitive, ConflictClass::Merge, 0, 0)?;
+        let second = op("o2", OpKind::Primitive, ConflictClass::Merge, 0, 0)?;
+        let third = op("o3", OpKind::Primitive, ConflictClass::Merge, 0, 0)?;
+        room.apply(&a, &first, 0)?;
+        room.apply(&a, &second, 0)?;
+        assert!(matches!(room.apply(&a, &third, 500), Err(e) if e.code == ErrorCode::Limit && e.retryable));
+        // A retry of an accepted opId answers from the de-duplication window
+        // and does not spend the new second's quota.
+        assert!(room.apply(&a, &first, 500).is_ok());
+        assert!(room.apply(&a, &third, 1_000).is_ok());
+        Ok(())
     }
 
     #[test]
