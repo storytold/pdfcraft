@@ -227,11 +227,13 @@ pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
 }
 
 /// [`sig_fields`], and whether the walk read the whole form. It did not when a cap stopped it, a
-/// field that is or holds a signature field was passed over for its name, a signed field had no
-/// name to be listed under, or the form or its `/Fields` was there but of the wrong type: a field
-/// it did not read may be signed, or claim one of the widgets listed.
+/// field that is or holds a signature field was passed over for its name, a signature had no named
+/// field to be listed under (a signed field without a usable /T, or a kid without one claiming a
+/// signature its field doesn't have), or the form or its `/Fields` was there but of the wrong type:
+/// a field it did not read may be signed, or claim one of the widgets listed.
 ///
-/// Kids share their parent's name instead of each copying it. A widget is listed under every field
+/// Kids share their parent's name instead of each copying it. A kid with no /T but kids of its own
+/// is a field all the same, which adds nothing to the names below it. A widget is listed under every field
 /// that lists it, so two claims on one widget stay visible, and it is copied once. A field taken
 /// by reference is taken where the walk first reaches it; one written in place in an indirect
 /// array is queued once, however many fields list that array.
@@ -304,7 +306,7 @@ pub(crate) fn walk_sig_fields(doc: &Document) -> (Vec<Field>, bool) {
         }
         let listed = sig && part.is_some();
         // Signed, but with no name to be listed under: the signature is there all the same.
-        if sig && part.is_none() && d.get(b"V").is_some_and(|v| doc.resolve(v).as_dict().is_some()) {
+        if sig && part.is_none() && holds_signature(doc, &d) {
             whole = false;
         }
         let mut ws: Vec<(Option<ObjRef>, Rc<Dict>)> = Vec::new();
@@ -329,8 +331,9 @@ pub(crate) fn walk_sig_fields(doc: &Document) -> (Vec<Field>, bool) {
             };
             let Some(kd) = kd else { continue };
             let at = slot(k, array, i);
-            // Kids with a /T are fields; others are this field's widgets.
-            if kd.contains(b"T") {
+            // Kids with a /T are fields, and so are those with kids of their own; the others are
+            // this field's widgets.
+            if kd.contains(b"T") || kd.contains(b"Kids") {
                 if at.is_some_and(|s| !seen.insert(s)) {
                     continue;
                 }
@@ -340,11 +343,19 @@ pub(crate) fn walk_sig_fields(doc: &Document) -> (Vec<Field>, bool) {
                 }
                 sub.push(k.clone());
             } else if listed {
+                // A widget signed apart from its field holds a signature nothing lists.
+                if holds_signature(doc, kd) && kd.get(b"V") != d.get(b"V") {
+                    whole = false;
+                }
                 let w = match k.as_ref().map(|r| (r, None)).or(at) {
                     Some(key) => copies.entry(key).or_insert_with(|| Rc::new(kd.clone())).clone(),
                     None => Rc::new(kd.clone()),
                 };
                 ws.push((k.as_ref(), w));
+            } else if kd.name(b"FT") == Some(b"Sig") || holds_signature(doc, kd) {
+                // A signature field and its widget in one, with no name, under a field that isn't
+                // a signature field: nothing lists it, yet it may be signed.
+                whole = false;
             }
         }
         for k in sub.into_iter().rev() {
@@ -366,6 +377,11 @@ pub(crate) fn walk_sig_fields(doc: &Document) -> (Vec<Field>, bool) {
 /// fields list that array. An entry by reference, or in a direct array (one owner), has none.
 fn slot(entry: &Object, array: Option<ObjRef>, i: usize) -> Option<(ObjRef, Option<usize>)> {
     array.filter(|_| entry.as_ref().is_none()).map(|a| (a, Some(i)))
+}
+
+/// Whether `d`'s own /V is a signature dictionary.
+fn holds_signature(doc: &Document, d: &Dict) -> bool {
+    d.get(b"V").is_some_and(|v| doc.resolve(v).as_dict().is_some())
 }
 
 /// Take one from a budget; false once it is spent.

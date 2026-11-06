@@ -9013,13 +9013,17 @@ fn a_signed_document_rebuilt_from_object_headers_refuses_edits() {
 /// A one-page document whose only signature field is signed and named with `len` bytes. The
 /// signature field walk reads names of up to 4096 bytes and passes longer ones over.
 fn signed_field_named(len: usize) -> Vec<u8> {
-    let objs = [
+    pdf_of(&[
         "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R] >>".into(),
         format!("<< /Type /Annot /Subtype /Widget /FT /Sig /T ({}) /V 5 0 R /Rect [20 20 180 60] /P 3 0 R >>", "a".repeat(len)),
         "<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 1 2 1] /Contents <00> >>".into(),
-    ];
+    ])
+}
+
+/// A PDF of `objs`, numbered from 1, with a cross-reference table.
+fn pdf_of(objs: &[String]) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -9062,6 +9066,44 @@ fn a_signature_named_one_byte_past_the_cap_still_blocks_a_full_rewrite() {
     let said = unread.map(|r| (r.signed, r.status, r.details.first().is_some_and(|d| d.message.starts_with("This form has too many fields"))));
     assert_eq!(said, Some((true, SignatureStatus::Unknown, true)), "{:?}", doc.signatures);
     assert_eq!(s.save_full_bytes(id).unwrap_err(), EditError::Signed);
+}
+
+/// A signed field behind a kid with no /T: one merged with its widget under a named field that
+/// isn't a signature field (the walk can't list it, so its row is the unread one), and one under a
+/// node with no /T (listed by its full name). Either way the document is signed, and neither a full
+/// save nor Optimize may rewrite it.
+#[test]
+fn signed_fields_behind_kids_without_a_name_block_a_full_rewrite() {
+    let page = |annot: u32| format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [{annot} 0 R] >>");
+    let head = |annot: u32| {
+        vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            page(annot),
+        ]
+    };
+    let sig = "<< /Type /Sig /SubFilter /ETSI.CAdES.detached /ByteRange [0 1 2 1] /Contents <00> >>".to_string();
+    let mut merged = head(5);
+    merged.extend([
+        "<< /T (parent) /Kids [5 0 R] >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /V 6 0 R /Parent 4 0 R /Rect [20 20 180 60] /P 3 0 R >>".into(),
+        sig.clone(),
+    ]);
+    let mut nested = head(6);
+    nested.extend([
+        "<< /T (p) /Kids [5 0 R] >>".to_string(),
+        "<< /Kids [6 0 R] /Parent 4 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Sig /T (s) /V 7 0 R /Parent 5 0 R /Rect [20 20 180 60] /P 3 0 R >>".into(),
+        sig,
+    ]);
+    for (shape, objs, row) in [("merged", merged, "UnreadFields"), ("nested", nested, "p.s")] {
+        let mut s = Session::new();
+        let id = s.open("form.pdf", None, Arc::new(pdf_of(&objs)), None).expect("opens");
+        let doc = s.get(id).unwrap();
+        assert!(doc.is_signed() && doc.signatures.iter().any(|r| r.field == row), "{shape}: {:?}", doc.signatures);
+        assert_eq!(s.save_full_bytes(id).unwrap_err(), EditError::Signed, "{shape}");
+        assert!(matches!(s.optimize_job(id, &optimize::Settings::default(), &[]), Err(EditError::Signed)), "{shape}");
+    }
 }
 
 /// The walk stops short of a signed field, so a signature may go unlisted; the document still

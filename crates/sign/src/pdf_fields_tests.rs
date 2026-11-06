@@ -388,6 +388,44 @@ fn a_form_of_the_wrong_type_cuts_the_walk_short() {
     }
 }
 
+/// A kid with no /T is not always a widget. One with kids of its own is a field node, walked and
+/// adding nothing to the names below it, so the signed field under it is listed. A signature
+/// field and widget in one, unnamed under a field that isn't a signature field, cuts the walk
+/// short: by its type alone it may hold an inherited signature.
+#[test]
+fn signed_fields_behind_kids_without_a_name_are_not_passed_over() {
+    let sig = "<< /Type /Sig >>".to_string();
+    let nested =
+        form("3 0 R", &["<< /T (p) /Kids [5 0 R] >>".into(), sig.clone(), "<< /Kids [6 0 R] >>".into(), "<< /T (s) /FT /Sig /V 4 0 R >>".into()]);
+    let (listed, whole) = walk_sig_fields(&nested);
+    let names: Vec<_> = listed.iter().map(|f| f.name.as_str()).collect();
+    assert!(whole && names == ["p.s"], "{names:?}");
+    for kid in ["<< /FT /Sig /V 4 0 R /Subtype /Widget >>", "<< /FT /Sig /Subtype /Widget >>", "<< /V 4 0 R /Subtype /Widget >>"] {
+        let merged = form("3 0 R", &["<< /T (parent) /Kids [5 0 R] >>".into(), sig.clone(), kid.into()]);
+        assert!(!walk_sig_fields(&merged).1, "{kid}");
+    }
+}
+
+/// A signature field's own widgets read whole whatever they repeat of it, its type or its very
+/// signature; a widget signed apart from its field cuts the walk short. A text field's widgets
+/// hide nothing.
+#[test]
+fn a_fields_widgets_read_whole_unless_signed_apart() {
+    let sig = "<< /Type /Sig >>".to_string();
+    for (widget, whole) in
+        [("<< /FT /Sig /Subtype /Widget >>", true), ("<< /V 4 0 R /Subtype /Widget >>", true), ("<< /V 6 0 R /Subtype /Widget >>", false)]
+    {
+        let doc = form("3 0 R", &["<< /T (Sig1) /FT /Sig /V 4 0 R /Kids [5 0 R] >>".into(), sig.clone(), widget.into(), sig.clone()]);
+        let (listed, w) = walk_sig_fields(&doc);
+        assert_eq!((w, listed.len(), listed.first().map(|f| f.widgets.len())), (whole, 1, Some(1)), "{widget}");
+    }
+    let text = form(
+        "3 0 R",
+        &["<< /T (name) /FT /Tx /V (Ada) /Kids [4 0 R 5 0 R] >>".into(), "<< /Subtype /Widget >>".into(), "<< /Subtype /Widget >>".into()],
+    );
+    assert!(walk_sig_fields(&text).1);
+}
+
 /// One rule decides whether a signature widget is on its page, for the badge and for the redrawn
 /// layers alike: a box wider and taller than half a point, in either corner order, of finite
 /// numbers, on a widget that isn't Hidden or NoView.
