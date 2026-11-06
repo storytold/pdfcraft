@@ -466,7 +466,7 @@ fn read_mode_closes_the_panes_and_leaving_it_brings_them_back() {
     h.run_steps(2);
     h.get_by_label("Page thumbnails").click();
     h.run_steps(2);
-    h.get_by_label("All tools").click();
+    read_mode_key(&mut h, egui::Key::H, egui::Modifiers::COMMAND | egui::Modifiers::CTRL);
     h.run_steps(3);
     assert_eq!(h.state().right, Some(RightPanel::Pages));
 }
@@ -522,8 +522,8 @@ fn a_pane_closed_in_read_mode_stays_closed_when_leaving_it() {
     h.run_steps(3);
     assert_eq!(h.state().right, None);
     assert!(h.state().comments_panel_closed);
-    // Leave Read mode through the toolbar.
-    h.get_by_label("All tools").click();
+    // Leave Read mode through its shortcut; the toolbar is hidden.
+    read_mode_key(&mut h, egui::Key::H, egui::Modifiers::COMMAND | egui::Modifiers::CTRL);
     h.run_steps(3);
     assert_eq!(h.state().mode, Mode::AllTools);
     assert_eq!(h.state().right, None, "the pane closed in Read mode stays closed");
@@ -1948,4 +1948,154 @@ fn full_screen_neither_is_remembered_nor_hides_the_last_view() {
     let view = &mut h.state_mut().views[0];
     view.leave_presentation();
     assert_eq!((view.fit, view.zoom, view.layout, view.continuous), (Fit::None, 0.5, PageLayout::TwoUp, false), "the remembered view");
+}
+
+fn read_mode_frame(h: &mut Harness<'static, PdfCraftApp>, events: impl IntoIterator<Item = egui::Event>) {
+    h.input_mut().events.extend(events);
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+}
+
+fn read_mode_key(h: &mut Harness<'static, PdfCraftApp>, key: egui::Key, modifiers: egui::Modifiers) {
+    read_mode_frame(
+        h,
+        [egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
+    );
+    read_mode_frame(
+        h,
+        [
+            egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers },
+            egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+        ],
+    );
+    h.run_steps(3);
+}
+
+fn read_mode_click(h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2) {
+    read_mode_frame(h, [egui::Event::PointerMoved(at)]);
+    for pressed in [true, false] {
+        read_mode_frame(h, [egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() }]);
+    }
+    h.run_steps(3);
+}
+
+fn read_mode_harness(start_in_read: bool) -> Harness<'static, PdfCraftApp> {
+    let pdf = pdfcraft_cos::Document::open(std::sync::Arc::new(FIXTURE.to_vec())).unwrap();
+    let bytes = pdfcraft_cos::write_full(&pdf, &Default::default()).unwrap();
+    let mut h = harness(move |app| {
+        if start_in_read {
+            app.set_option("default-mode", "read").unwrap();
+        }
+        app.open_bytes("read.pdf", None, bytes).unwrap();
+    });
+    support::settle(&mut h);
+    h
+}
+
+fn assert_read_mode_chrome_hidden(h: &Harness<'static, PdfCraftApp>) {
+    for label in ["File", "All tools", "Convert", "E-Sign"] {
+        assert!(h.query_all_by_label(label).next().is_none(), "Read mode hides {label}");
+    }
+    assert!(h.query_all_by_label_contains("Find tools and commands").next().is_none());
+}
+
+#[test]
+fn read_mode_hides_top_chrome_and_shortcuts_restore_the_layout() {
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::{Dialog, Mode};
+    let mut h = read_mode_harness(false);
+    let normal = h.state().views[0].viewport_rect();
+    let tab = h.get_by_label("read.pdf").rect();
+    let modifiers = Modifiers::COMMAND | Modifiers::CTRL;
+    for _ in 0..3 {
+        read_mode_key(&mut h, Key::H, modifiers);
+        assert_eq!(h.state().mode, Mode::Read);
+        assert_read_mode_chrome_hidden(&h);
+        assert_eq!(h.get_by_label("read.pdf").rect(), tab, "document tab strip stays put");
+        let read = h.state().views[0].viewport_rect();
+        assert!((normal.top() - read.top() - 48.0).abs() < 0.5, "the whole mode-bar panel height is reclaimed: {normal:?} -> {read:?}");
+        assert!((read.height() - normal.height() - 48.0).abs() < 0.5);
+        read_mode_key(&mut h, Key::F, Modifiers::COMMAND);
+        assert!(h.state().views[0].find.is_some(), "Find shortcut remains available");
+        read_mode_key(&mut h, Key::Escape, Modifiers::NONE);
+        assert!(h.state().views[0].find.is_none());
+        assert_eq!(h.state().mode, Mode::Read);
+        read_mode_key(&mut h, Key::P, Modifiers::COMMAND);
+        assert_eq!(h.state().dialog, Some(Dialog::Print), "Print shortcut still dispatches with the menu hidden");
+        let cancel = h.get_by_label("Cancel").rect().center();
+        read_mode_click(&mut h, cancel);
+        assert!(h.state().dialog.is_none());
+        assert_eq!(h.state().mode, Mode::Read);
+        read_mode_key(&mut h, Key::H, modifiers);
+        assert_eq!(h.state().mode, Mode::AllTools);
+        h.get_by_label("File");
+        h.get_by_label("Convert");
+        h.get_by_label_contains("Find tools and commands");
+        assert_eq!(h.state().views[0].viewport_rect(), normal, "no height or position drift after leaving Read mode");
+    }
+}
+
+#[test]
+fn read_mode_page_display_toggle_exits_without_keyboard_or_native_window() {
+    use pdfcraft_ui_egui::Mode;
+    // Same rail route on native and wasm; it does not need Ctrl+H (reserved by some browsers).
+    let mut h = read_mode_harness(true);
+    assert_eq!(h.state().mode, Mode::Read);
+    assert_read_mode_chrome_hidden(&h);
+    let at = h.get_by_label_contains("Page display:").rect().center();
+    read_mode_click(&mut h, at);
+    let at = h.get_by_label("Read mode").rect().center();
+    read_mode_click(&mut h, at);
+    assert_eq!(h.state().mode, Mode::AllTools);
+    h.get_by_label("File");
+    h.get_by_label_contains("Find tools and commands");
+}
+
+#[test]
+fn read_mode_keeps_craft_menu_alt_f10_and_mnemonic_dispatch() {
+    use egui::{Key, Modifiers};
+    use pdfcraft_ui_egui::Dialog;
+    // Mac uses native menus / Option typing, so craft-menu intentionally has no Alt mnemonics.
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    let mut h = read_mode_harness(true);
+    let read = h.state().views[0].viewport_rect();
+    assert_read_mode_chrome_hidden(&h);
+    read_mode_key(&mut h, Key::F, Modifiers::ALT);
+    assert!(h.query_all_by_label("Open…").next().is_some(), "Alt+F must open File in Read mode");
+    h.get_by_label("Open…");
+    assert_eq!(h.state().views[0].viewport_rect(), read, "keyboard menu overlay reserves no page height");
+    assert!(h.query_all_by_label("Convert").next().is_none());
+    // Use the mnemonic assigned by craft-menu, rather than hard-coding its letter allocation.
+    let mnemonic = h.get_by_label("Print…").accesskit_node().data().access_key().unwrap().to_owned();
+    let key = Key::from_name(&mnemonic).unwrap();
+    read_mode_frame(
+        &mut h,
+        [
+            egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+            egui::Event::Text(mnemonic.to_lowercase()),
+        ],
+    );
+    read_mode_frame(&mut h, [egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE }]);
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Print), "menu mnemonic dispatch remains intact");
+    let at = h.get_by_label("Cancel").rect().center();
+    read_mode_click(&mut h, at);
+    assert_read_mode_chrome_hidden(&h);
+    read_mode_key(&mut h, Key::F10, Modifiers::NONE);
+    assert!(craft_menu::bar::is_focused(&h.ctx), "F10 hands keyboard ownership to craft-menu");
+    h.get_by_label("File");
+    read_mode_key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    h.get_by_label("Open…");
+    read_mode_key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_read_mode_chrome_hidden(&h);
+    assert_eq!(h.state().views[0].viewport_rect(), read);
+    read_mode_key(&mut h, Key::F10, Modifiers::NONE);
+    read_mode_key(&mut h, Key::H, Modifiers::COMMAND | Modifiers::CTRL);
+    assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::AllTools, "a command shortcut leaves menu focus and still runs");
+    h.get_by_label("File");
 }
