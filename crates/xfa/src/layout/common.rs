@@ -39,9 +39,19 @@ pub(super) fn clamp_opt(v: f64, min: Option<f64>, max: Option<f64>) -> f64 {
     v.max(0.0)
 }
 
-/// Does `node` flow (may be split across pages) rather than being placed as one block?
-pub(super) fn splittable(node: &Node) -> bool {
-    matches!(node, Node::Subform(s) if matches!(s.layout, Layout::Tb | Layout::Table) && s.common.h.is_none())
+/// Does `node` flow through [`Layouter::flow_subform`] (either because it may be split across
+/// pages or because it carries a page break or page-area target of its own)?
+pub(super) fn flows_as_subform(node: &Node) -> bool {
+    matches!(
+        node,
+        Node::Subform(s)
+            if (matches!(s.layout, Layout::Tb | Layout::Table) && s.common.h.is_none())
+                || s.break_before_page
+                || s.break_after_page
+                || s.break_before_target.is_some()
+                || s.break_after_target.is_some()
+                || s.overflow_target.is_some()
+    )
 }
 
 /// Top and bottom of an item a page break must not cut (text, a picture, a field); `None`
