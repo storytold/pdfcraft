@@ -1,4 +1,4 @@
-use super::info::text_value;
+use super::info::{is_comment_subtype, text_value};
 use super::types::{FLAG_HIDDEN, FLAG_NO_ROTATE, FLAG_NO_VIEW, Shape};
 use super::{AnnotError, Dict, Document, ObjRef, Object, appearance};
 
@@ -106,16 +106,23 @@ pub fn set_annots(doc: &mut Document, page: ObjRef, list: Vec<Object>) -> Result
     Ok(())
 }
 
-/// The annotation at `(page, index)` as an indirect object (inline dictionaries are promoted).
+/// Whether the annotation dictionary `d` has a comment `/Subtype` ([`is_comment_subtype`]).
+pub(crate) fn is_comment_dict(d: &Dict) -> bool {
+    d.name(b"Subtype").is_some_and(|s| is_comment_subtype(&String::from_utf8_lossy(s)))
+}
+
+/// The comment annotation at `(page, index)` as an indirect object (inline dictionaries are promoted).
 pub(crate) fn annot_ref(doc: &mut Document, page: usize, index: usize) -> Result<(ObjRef, ObjRef), AnnotError> {
     let p = page_ref(doc, page)?;
     let mut list = annots(doc, p);
     let entry = list.get(index).cloned().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
     let r = match entry {
-        Object::Ref(r) if doc.get(r).as_dict().is_some() => r,
-        Object::Dict(d) => {
+        Object::Ref(r) if doc.get(r).as_dict().is_some_and(is_comment_dict) => r,
+        Object::Dict(d) if is_comment_dict(&d) => {
             let r = doc.add(Object::Dict(d));
-            list[index] = Object::Ref(r);
+            if let Some(slot) = list.get_mut(index) {
+                *slot = Object::Ref(r);
+            }
             set_annots(doc, p, list)?;
             r
         }
