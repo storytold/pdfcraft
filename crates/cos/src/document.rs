@@ -25,7 +25,7 @@ pub(crate) use reader::find;
 #[cfg(test)]
 use reader::rfind;
 pub(crate) use state::ObjectReader;
-use state::{ObjStm, Slot};
+use state::{ObjStm, Slot, Unreadable};
 pub use state::{ReadState, SourceIdentity};
 #[cfg(test)]
 use state::{SECTION_READS, held_bytes, objstm_member};
@@ -50,6 +50,9 @@ pub struct Document {
     repair_log: Arc<Vec<String>>,
     cache: Arc<Mutex<state::ObjectCache>>,
     objstms: Arc<Mutex<HashMap<u32, Arc<ObjStm>>>>,
+    /// See [`Self::unreadable_objects`]. Shared by clones, like the caches: it describes the
+    /// source, and is reset wherever they are.
+    unreadable: Arc<Mutex<Unreadable>>,
     /// What `/JBIG2Globals` streams of the file decode to, by object number: the images of a scan
     /// share them, and each would otherwise decode them again (see `Document::jbig2_globals`).
     jbig2_globals: Arc<Mutex<HashMap<u32, Arc<Vec<u8>>>>>,

@@ -61,6 +61,60 @@ pub(super) fn objstm_member(num: i64, offset: i64, first: Option<usize>, len: us
     (start < len).then_some((num, start))
 }
 
+/// Objects the reader could not read, each with the reason (see `Document::unreadable_objects`).
+/// Bounded: a document records past [`Unreadable::MAX`] of the objects it shows only the fact that
+/// there were more. Entries a clone has edited are hidden from it and do not count, so the whole
+/// list holds at most `MAX` plus the objects edited in clones.
+#[derive(Debug, Default)]
+pub(super) struct Unreadable {
+    pub(super) objects: BTreeMap<u32, (u16, String)>,
+    pub(super) more: bool,
+}
+
+impl Unreadable {
+    pub(super) const MAX: usize = 100;
+    /// Characters of a reason kept: a parser's message can quote the bytes it stopped at.
+    const REASON: usize = 160;
+
+    /// Whether `num` is to be recorded: not listed yet and there is room among the entries the
+    /// asking document still shows (`hidden` are the ones it has edited, as in [`Self::lines`]),
+    /// so a clone's edits never use up its own allowance. A full list notes that there were more,
+    /// so a caller asks this before building the reason.
+    pub(super) fn wants(&mut self, num: u32, hidden: impl Fn(u32) -> bool) -> bool {
+        if self.objects.contains_key(&num) {
+            return false;
+        }
+        if self.objects.keys().filter(|n| !hidden(**n)).count() >= Self::MAX {
+            self.more = true;
+            return false;
+        }
+        true
+    }
+
+    /// Record `num` once; the first reason given is kept.
+    pub(super) fn note(&mut self, num: u32, generation: u16, reason: &str, hidden: impl Fn(u32) -> bool) {
+        if self.wants(num, hidden) {
+            self.objects.insert(num, (generation, reason.chars().take(Self::REASON).collect()));
+        }
+    }
+
+    /// One line per recorded object not `hidden`, then one saying there were more, if there were.
+    pub(super) fn lines(&self, hidden: impl Fn(u32) -> bool) -> Vec<String> {
+        // Clones share the list and each hides its own edits, so the list may hold more than
+        // `MAX` entries in all; each document still shows at most `MAX`.
+        let mut shown = self.objects.iter().filter(|(num, _)| !hidden(**num));
+        let mut lines: Vec<String> = shown
+            .by_ref()
+            .take(Self::MAX)
+            .map(|(num, (generation, reason))| format!("object {num} {generation} could not be read: {reason}"))
+            .collect();
+        if self.more || shown.next().is_some() {
+            lines.push(format!("more objects could not be read; only the first {} are listed", Self::MAX));
+        }
+        lines
+    }
+}
+
 /// Where an overlay slot came from.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Slot {
