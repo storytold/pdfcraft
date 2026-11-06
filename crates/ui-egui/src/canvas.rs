@@ -9,6 +9,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2};
+use pdfcraft_engine::text_links::TextLink;
 use pdfcraft_engine::{DocId, Edit};
 use pdfcraft_render::{DestView, DocInfo, LayerOp, LinkTarget, PRINT_TAG, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
 
@@ -551,6 +552,8 @@ pub struct DocView {
     tiles: HashMap<(usize, u64, u32, u32), TextureHandle>,
     /// Text layers, extracted in the background on demand (selection, find, copy).
     pub(crate) texts: HashMap<usize, Arc<PageText>>,
+    /// Addresses written as plain text on a page (#4207), with the text layer they were found in.
+    text_links: HashMap<usize, (Arc<PageText>, Arc<[TextLink]>)>,
     pub(crate) text_failed: HashSet<usize>,
     pub find: Option<Find>,
     selection: Option<Selection>,
@@ -970,6 +973,7 @@ impl DocView {
             grayscale: false,
             tiles: HashMap::new(),
             texts: HashMap::new(),
+            text_links: HashMap::new(),
             text_failed: HashSet::new(),
             find: None,
             selection: None,
@@ -1207,6 +1211,8 @@ struct PageEnv<'a> {
     table_preview: &'a Option<crate::field_table_ui::Preview>,
     tag: u64,
     text_style: &'a pdfcraft_engine::AddedText,
+    /// Preferences: addresses written as plain page text open like links (#4207).
+    text_links: bool,
     tool: QuickTool,
     units: crate::units::Unit,
     unobstructed: bool,
@@ -1571,6 +1577,10 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     }
 
     let slot = PageSlot { i, r, xf };
+    // Addresses written as plain text are found once per text layer, before the tools hit-test them.
+    if frame.env.text_links {
+        view.refresh_text_links(i);
+    }
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
     // A cancelled press takes nothing until the button is up, though the page's menu still opens
     // where a right-click is.
@@ -3154,6 +3164,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         table_preview: &table_preview,
         tag,
         text_style: &text_style,
+        text_links: app.text_links,
         tool,
         units,
         unobstructed,

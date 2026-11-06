@@ -2,7 +2,7 @@
 //! router, the text layer, and what is drawn over the page after its text.
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
-use pdfcraft_render::{DocInfo, PageText};
+use pdfcraft_render::{DocInfo, LinkTarget, PageText};
 
 use super::{DocView, PageEnv, PageFrame, PageSlot, PageXform, Selection, Span, cached_edit_images, click_unit, signature_badges};
 use crate::page_cursor::{Layer, Subject};
@@ -57,6 +57,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         redact_mark,
         table_preview,
         text_style,
+        text_links,
         tool,
         ..
     } = frame.env;
@@ -90,6 +91,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         lines: &lines,
         images: &images,
         clip: ui.clip_rect(),
+        text_links,
     };
     if let Some(o) = ptr.pressed().filter(|o| xf.rect.contains(*o)) {
         let at = hits.at(view, o);
@@ -410,6 +412,8 @@ struct PageHits<'a> {
     images: &'a [pdfcraft_engine::PageImage],
     /// The pages' visible area (the picture's rotate knob stays inside it).
     clip: Rect,
+    /// Addresses written as plain page text open like links (#4207).
+    text_links: bool,
 }
 
 impl PageHits<'_> {
@@ -460,6 +464,7 @@ impl PageHits<'_> {
             lines,
             images,
             clip,
+            text_links,
         } = *self;
         // Crop mode owns every press on its page (`edit_text_ui::crop_hit`).
         if tool == QuickTool::EditText
@@ -504,14 +509,30 @@ impl PageHits<'_> {
         let added = (editing_content && can_modify && picks_up).then(|| crate::content_ui::hit(xf, info, page, added, view, p)).flatten();
         let corner = (!context && tool == QuickTool::EnhanceCamera && can_modify).then(|| crate::camera_ui::hit(xf, page, view, p)).flatten();
         let link = crate::link_ui::hit(xf, info, page, doc_links, tool, p);
-        let comment = if context { comments::context_hit(pcx, p) } else { comments::hit(pcx, view, p, link.is_some()) };
-        [link, comment, pictures, paragraphs, added, objects, grips, corner, fields].into_iter().flatten().collect()
+        let text_link = (text_links && link.is_none()).then(|| text_link_hit(view, info, xf, page, p)).flatten();
+        let on_link = link.is_some() || text_link.is_some();
+        let comment = if context { comments::context_hit(pcx, p) } else { comments::hit(pcx, view, p, on_link) };
+        [link, text_link, comment, pictures, paragraphs, added, objects, grips, corner, fields].into_iter().flatten().collect()
     }
+}
+
+/// The web or email address written as plain text under `p` on `page` (#4207), with no link
+/// annotation over it: the same hand and tip (its address) as a link annotation's.
+fn text_link_hit(view: &DocView, info: &DocInfo, xf: &PageXform, page: usize, p: Pos2) -> Option<crate::page_router::Hit> {
+    let (vx, vy) = xf.screen_to_view(p);
+    let (index, link) = view.text_link_at(info, page, vx, vy)?;
+    let owner = crate::page_router::Owner::TextLink { index };
+    // A drag from the address selects its text, as from any other text: only a click opens it.
+    Some(crate::page_router::Hit {
+        tip: Some(link.uri.clone()),
+        declines_drag: true,
+        ..crate::page_router::Hit::new(owner, Layer::Link, egui::CursorIcon::PointingHand)
+    })
 }
 
 /// Text layer: find matches, selection, I-beam and drag-to-select.
 pub(super) fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot, input: &PageInput) {
-    let PageEnv { info, selects_text, tool, .. } = frame.env;
+    let PageEnv { info, selects_text, text_links, tool, .. } = frame.env;
     let PageSlot { i, r, xf } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     if let Some(text) = view.texts.get(&i).cloned() {
@@ -520,7 +541,7 @@ pub(super) fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut Page
             && !input.consumed
             && let Some(p) = pointer.filter(|p| r.contains(*p))
         {
-            text_pointer_input(ui, view, &text, TextPointer { page: i, xf, rect: r, info, tool, resp, ptr: ptr.clone(), pointer: p });
+            text_pointer_input(ui, view, &text, TextPointer { page: i, xf, rect: r, info, tool, resp, ptr: ptr.clone(), pointer: p, text_links });
         }
     }
 }
@@ -570,6 +591,8 @@ struct TextPointer<'a> {
     resp: &'a egui::Response,
     ptr: PagePointer,
     pointer: Pos2,
+    /// Addresses written as plain page text open like links (#4207).
+    text_links: bool,
 }
 
 struct TextGesture<'a> {
@@ -588,10 +611,11 @@ struct TextGesture<'a> {
 }
 
 fn text_pointer_input(ui: &mut egui::Ui, view: &mut DocView, text: &PageText, pointer: TextPointer<'_>) {
-    let TextPointer { page, xf, rect, info, tool, resp, ptr, pointer: screen_pointer } = pointer;
+    let TextPointer { page, xf, rect, info, tool, resp, ptr, pointer: screen_pointer, text_links } = pointer;
     let (vx, vy) = xf.screen_to_view(screen_pointer);
     let over_text = text.glyphs.iter().any(|glyph| vx >= glyph.rect[0] && vx <= glyph.rect[2] && vy >= glyph.rect[1] && vy <= glyph.rect[3]);
-    let over_link = info.links.iter().any(|link| link.page == page && xf.user_rect(info, page, link.rect).contains(screen_pointer));
+    let over_link = info.links.iter().any(|link| link.page == page && xf.user_rect(info, page, link.rect).contains(screen_pointer))
+        || (text_links && view.text_link_at(info, page, vx, vy).is_some());
     let column = tool == QuickTool::ColumnSelect || ui.input(|input| input.modifiers.alt);
     let gesture = TextGesture { page, xf, rect, tool, ptr, resp, pointer: screen_pointer, vx, vy, over_text, over_link, column };
     update_text_cursor(view, &gesture);
@@ -802,6 +826,19 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         && let Some(l) = info.links.iter().find(|l| l.page == i && l.index == index)
     {
         frame.out.clicked_link = Some(l.target.clone());
+    }
+    // A web or email address written as plain text (#4207): the same click as a link annotation,
+    // and the same check and confirmation on opening.
+    if unobstructed
+        && resp.clicked()
+        && tool == QuickTool::Select
+        && !input.consumed
+        && frame.out.clicked_link.is_none()
+        && let Some(Owner::TextLink { index }) = view.router.owner(i)
+        && input.released_over
+        && let Some(uri) = view.text_link_uri(i, index)
+    {
+        frame.out.clicked_link = Some(LinkTarget::Uri(uri));
     }
     // Comments say what they are with any tool, beside its cursor, as Acrobat's do.
     comments::describe(&pcx, view);
