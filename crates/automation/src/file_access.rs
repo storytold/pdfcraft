@@ -21,7 +21,7 @@
 //! files it was given; they don't guard against other programs on the computer.
 
 use std::ffi::OsString;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::Arc;
 
 use pdfcraft_platform::file_names::is_windows_device_name;
@@ -141,15 +141,33 @@ fn absolute(shown: &str, path: &Path) -> Result<PathBuf, String> {
     std::path::absolute(path).map_err(|e| format!("automation path rejected: cannot resolve {shown}: {e}"))
 }
 
-/// On Windows, an error naming `shown` when a component of `path` is a device name
-/// ([`is_windows_device_name`]). Such a name reaches the device rather than a file, or, joined to
-/// a folder written as `\\?\…` (as a canonicalized `--root` is), is created as a file that other
-/// programs can neither open nor delete by its plain path.
+/// On Windows, an error naming `shown` when `path` names a device ([`is_windows_device_name`]),
+/// in a component (`out\NUL.pdf`) or in its prefix (`\\.\NUL`, `\\?\COM1`).
+///
+/// A plain name reaches the device rather than a file, or, joined to a folder written as `\\?\…`
+/// (as a canonicalized `--root` is), is created as a file that other programs can neither open
+/// nor delete by its plain path. A prefix names the device itself. Other device paths
+/// (`\\.\pipe\x`, `\\.\PhysicalDrive0`) are left to the roots, which refuse every device namespace
+/// by name; without a root nothing else is confined.
 pub(crate) fn refuse_device_names(shown: &str, path: &Path) -> Result<(), String> {
-    if cfg!(windows) && path.components().any(|c| matches!(c, Component::Normal(n) if is_windows_device_name(&n.to_string_lossy()))) {
+    if cfg!(windows) && path.components().any(names_a_device) {
         return Err(format!("automation path rejected: reserved device names are not allowed: {shown}"));
     }
     Ok(())
+}
+
+/// Whether `component` names a Windows device: a plain name (`NUL.pdf`), or the device of a
+/// `\\.\NUL` or `\\?\NUL` prefix. Prefixes only occur in Windows paths.
+fn names_a_device(component: Component<'_>) -> bool {
+    let name = match component {
+        Component::Normal(name) => name,
+        Component::Prefix(prefix) => match prefix.kind() {
+            Prefix::DeviceNS(name) | Prefix::Verbatim(name) => name,
+            _ => return false,
+        },
+        _ => return false,
+    };
+    is_windows_device_name(&name.to_string_lossy())
 }
 
 /// `absolute` with its links followed; for a path that doesn't exist (yet), its nearest existing
@@ -393,6 +411,21 @@ mod tests {
         assert!(e.contains("reserved device names"), "{e}");
         assert_eq!(roots.check(&s(base.join("out/console.txt")), Access::Write), Ok(()));
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A device named by a path's prefix is refused like one named by a component: `\\.\NUL`
+    /// and `\\?\NUL` are the device itself. Other device paths, and drives or shares written
+    /// with a prefix, are left to the roots.
+    #[cfg(windows)]
+    #[test]
+    fn devices_named_by_a_prefix_are_refused() {
+        for path in [r"\\.\NUL", r"\\.\com1", r"\\?\nul", r"\\?\LPT1", r"\\.\NUL\x.pdf"] {
+            let e = refuse_device_names(path, Path::new(path)).unwrap_err();
+            assert!(e.contains("reserved device names"), "{path}: {e}");
+        }
+        for path in [r"\\.\pipe\x", r"\\.\C:\a.pdf", r"\\?\C:\x\a.pdf", r"\\?\UNC\host\share\a.pdf", r"\\host\share\a.pdf", r"C:\x\a.pdf"] {
+            assert_eq!(refuse_device_names(path, Path::new(path)), Ok(()), "{path}");
+        }
     }
 
     /// Every file a tool reads or writes goes through `Automation::resolve`, which holds it to the

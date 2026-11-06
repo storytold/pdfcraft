@@ -389,6 +389,13 @@ fn device_names_are_refused_with_a_root_and_without() {
         refused(&mut rooted, "doc_open", json!({"path": name}), "reserved device names");
         refused(&mut free, "doc_open", json!({"path": s(&base.join("in2").join(name))}), "reserved device names");
     }
+    // A path naming the device itself, by its prefix: with a root it is outside it anyway, and
+    // without one it is refused like the names above.
+    for device in [r"\\.\NUL", r"\\?\NUL", r"\\.\COM1"] {
+        refused(&mut rooted, "doc_save", json!({"doc": 1, "path": device}), "reserved device names");
+        refused(&mut free, "doc_save", json!({"doc": 1, "path": device}), "reserved device names");
+        refused(&mut free, "doc_open", json!({"path": device}), "reserved device names");
+    }
     // Listed through `\\?\`, which shows such a file if one was made.
     let listed: Vec<String> =
         std::fs::read_dir(base.join("in2").canonicalize().unwrap()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
