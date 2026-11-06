@@ -137,6 +137,8 @@ pub struct Widget {
     pub rotation: i64,
     /// Push buttons: the normal label (`/MK /CA`), separate from the field's name.
     pub caption: Option<String>,
+    /// Text widget JavaScript to run on a mouse-up click.
+    pub mouse_up_script: Option<String>,
     /// List boxes: where the options are drawn, so a click can pick the one under the pointer.
     pub list: Option<appearance::ListRows>,
     /// Drawn round: a radio button, or a check box laid out for a round XFA check button

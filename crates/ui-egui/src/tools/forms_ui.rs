@@ -235,6 +235,15 @@ pub(crate) fn page_input(
             Some(a) => view.forms.button = Some((f.name.clone(), pdfcraft_engine::js::field_object_id(f.obj), a.clone())),
             None => view.forms.notice = Some(FormNotice::NoAction(f.name.clone())),
         },
+        FormFieldKind::Text if let Some(script) = &w.mouse_up_script => {
+            // Close the editor so the script can replace its value without a stale draft.
+            commit(view, form);
+            view.forms.button = Some((
+                f.name.clone(),
+                pdfcraft_engine::js::field_object_id(f.obj),
+                pdfcraft_engine::form_scripts::ButtonAction::Script(script.clone()),
+            ));
+        }
         FormFieldKind::Signature => view.sign.field = Some(f.name.clone()),
         FormFieldKind::CheckBox | FormFieldKind::Radio => {
             // The box takes the focus, as in Acrobat, so Tab goes on from it (#2223). The overlay

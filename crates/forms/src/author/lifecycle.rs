@@ -172,6 +172,7 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
                 read_only: false,
                 rotation: 0,
                 caption: None,
+                mouse_up_script: None,
                 list: None,
                 round: true,
             };

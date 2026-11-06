@@ -1190,6 +1190,7 @@ mod widget_budget_review_tests {
             read_only: false,
             rotation: 0,
             caption: None,
+            mouse_up_script: None,
             list: None,
             round: false,
         };

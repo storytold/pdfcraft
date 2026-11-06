@@ -7,11 +7,16 @@ use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 /// A form with a text field and a push button whose Mouse Up script fills it in.
 fn form() -> Vec<u8> {
+    form_with_text_action("")
+}
+
+fn form_with_text_action(action: &str) -> Vec<u8> {
+    let greeting = format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (greeting) /Rect [20 250 280 270] /P 3 0 R /F 4 {action} >>");
     let objs = [
         "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >> >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>",
         "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
-        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (greeting) /Rect [20 250 280 270] /P 3 0 R /F 4 >>",
+        &greeting,
         "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (hello) /Rect [20 200 120 230] /P 3 0 R /F 4 /A << /S /JavaScript /JS (getField\\('greeting'\\).value = 'Hello from JavaScript'; app.alert\\('Filled in'\\);) >> >>",
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
     ];
@@ -79,6 +84,40 @@ fn button_scripts_run_and_alert() {
     wait_for(&mut h, "Filled in");
     h.get_by_label("OK").click();
     wait_value(&mut h, "greeting", "Hello from JavaScript");
+}
+
+#[test]
+fn text_widget_mouse_up_runs_its_menu_and_keeps_the_result() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.set_option("left", "closed").unwrap();
+        let bytes = form_with_text_action(
+            r"/AA << /U << /S /JavaScript /JS (var choice = app.popUpMenuEx\({cName:'Choose test value',cReturn:'selected'}\); if \(choice\) getField\('greeting'\).value = choice;) >> >>",
+        );
+        app.open_bytes("text-action.pdf", None, bytes).unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    let point = {
+        let app = h.state();
+        let (index, id) = app.active_ids().unwrap();
+        let doc = app.session.get(id).unwrap();
+        let field = doc.form.iter().find(|field| field.name == "greeting").unwrap();
+        assert!(field.widgets[0].mouse_up_script.is_some());
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&app.views[index], &doc.info, field, 0).unwrap().center()
+    };
+    for _ in 0..2 {
+        h.hover_at(point);
+        h.run_steps(1);
+        h.drag_at(point);
+        h.run_steps(1);
+        h.drop_at(point);
+        wait_for(&mut h, "Choose test value");
+        h.get_by_label("Choose test value").click();
+        wait_value(&mut h, "greeting", "selected");
+        h.run_steps(8);
+    }
 }
 
 /// One run's messages are all shown, in order (#4294): the first takes the toast with its title
