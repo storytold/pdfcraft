@@ -331,7 +331,19 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 let scale = gap.abs().max(ngap.abs());
                 if same && ngap > tol * 0.8 && scale < tol * 4.0 && (ngap - gap).abs() <= scale * 0.08 + 0.5 { Some(gap) } else { None }
             });
-            let max_gap = own_leading.filter(|lead| *lead > tol * 0.4).or(stated).or(repeated).map_or(tol * 2.05, |lead| lead * 1.5);
+            // A lone row with none of those: the step to the row after it is the leading of the
+            // paragraph it opens, and the gap above it is a heading's or a blank line's when it
+            // is much wider (#3577).
+            let following = rows.get(row_at.saturating_add(1)).and_then(|next| {
+                let nfirst = next.first().and_then(|i| lines.get(*i))?;
+                let ngap = first.frame_origin().1 - nfirst.frame_origin().1;
+                (same_plane(first, nfirst) && ngap > tol * 0.8 && ngap < tol * 2.05).then_some(ngap)
+            });
+            let max_gap = own_leading
+                .filter(|lead| *lead > tol * 0.4)
+                .or(stated)
+                .or(repeated)
+                .map_or_else(|| following.map_or(tol * 2.05, |lead| (lead * 1.35).min(tol * 2.05)), |lead| lead * 1.5);
             // OCR lines stay apart: the scan fixes where each one is, so they never rewrap together.
             (!mixed || !(invisible(prev) || invisible(first)))
                 && (mixed || same_style(prev, first))
