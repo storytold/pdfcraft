@@ -282,7 +282,11 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                         }
                         let sa = &segs[a];
                         let gap = (sb.bbox[0] - sa.bbox[2]).max(sa.bbox[0] - sb.bbox[2]);
-                        sa.bbox[2] - sa.bbox[0] > sb.bbox[2] - sb.bbox[0] && gap < sa.h * 1.2 && is_script_on(&sa.bbox, sa.h, &sb.bbox, sb.h)
+                        sa.bbox[2] - sa.bbox[0] > sb.bbox[2] - sb.bbox[0]
+                            && gap < sa.h * 1.2
+                            && is_script_on(&sa.bbox, sa.h, &sb.bbox, sb.h)
+                            // Last, as it scans the host's glyphs: only pairs that pass the geometry checks pay for it.
+                            && sa.covered(&glyphs, sb.bbox[0], sb.bbox[2]) <= (sb.bbox[2] - sb.bbox[0]) * 0.5
                     })
                     .min_by(|&a1, &a2| (segs[a1].cy() - sb.cy()).abs().total_cmp(&(segs[a2].cy() - sb.cy()).abs()));
                 if let Some(a) = best_host {

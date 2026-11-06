@@ -1257,6 +1257,14 @@ fn page_text(ops: &str) -> String {
     extract_page(&text_page(ops), 0, &InterpreterSettings::default()).unwrap().plain_text()
 }
 
+/// Issue #5616: a smaller run drawn across a larger one is not a sub- or superscript of it, so
+/// their glyphs are not interleaved.
+#[test]
+fn overlapping_runs_of_different_sizes_stay_separate() {
+    let text = page_text("BT /F1 10 Tf 1 0 0 1 75 122 Tm (Fuel) Tj ET\nBT /F1 16 Tf 1 0 0 1 72 126.69 Tm (COPY ME) Tj ET\n");
+    assert!(text.contains("Fuel") && text.contains("COPY ME"), "{text:?}");
+}
+
 #[test]
 fn short_doubled_word_at_same_origin_does_not_interleave() {
     let ops = "BT /F1 12 Tf 50 Tz 1 0 0 1 100 200 Tm (world) Tj ET\n".repeat(2);
