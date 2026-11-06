@@ -71,6 +71,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Add stamp",
     "Add 3D model",
     "Delete comment",
+    "Paste comments",
     "Edit comment",
     "Reply",
     "Set status None",
@@ -211,6 +212,7 @@ impl Edit {
             Edit::AddCustomStamp { .. } => Label::of("Add stamp"),
             Edit::AddModel3d { .. } => Label::of("Add 3D model"),
             Edit::DeleteAnnotation { .. } => Label::of("Delete comment"),
+            Edit::PasteComments { .. } => Label::of("Paste comments"),
             Edit::SetAnnotationContents { .. } => Label::of("Edit comment"),
             Edit::ReplyToAnnotation { .. } => Label::of("Reply"),
             // The state's name is part of the wording: a language may need to agree it with the rest.
@@ -230,9 +232,13 @@ impl Edit {
             Edit::MoveAnnotation { .. } => Label::of("Move comment"),
             Edit::ReshapeAnnotation { .. } => Label::of("Reshape comment"),
             Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
-            Edit::StyleAnnotation { .. } | Edit::FillAnnotation { .. } | Edit::FontSizeAnnotation { .. } | Edit::SetAnnotationInfo { .. } => {
-                Label::of("Change comment properties")
-            }
+            Edit::StyleAnnotation { .. }
+            | Edit::FillAnnotation { .. }
+            | Edit::PartOpacity { .. }
+            | Edit::FontSizeAnnotation { .. }
+            | Edit::BorderColorAnnotation { .. }
+            | Edit::BorderShapeAnnotation { .. }
+            | Edit::SetAnnotationInfo { .. } => Label::of("Change comment properties"),
             Edit::SetFieldValue { name, .. } => Label::with("Fill in {name}", name.as_str()),
             Edit::SetFieldImage { name, .. } => Label::with("Set the image of {name}", name.as_str()),
             Edit::ResetForm { .. } => Label::of("Clear form"),
