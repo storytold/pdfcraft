@@ -1171,16 +1171,17 @@ pub fn tools() -> Vec<ToolDef> {
         t("doc_remove_marks", "Remove header & footer, watermark or background", "Remove every header and footer, watermark or background PdfCraft (or a compatible tool) added. Undoable.")
             .destructive()
             .with(schema(json!({ "doc": doc(), "kind": { "type": "string", "enum": ["header_footer", "watermark", "background"] } }), &["doc", "kind"])),
-        t("doc_export_images", "Export pages as images", "Write pages as PNG, JPEG or TIFF files (`<name>_page_<n>.png|jpg|tif`) into a folder, at a resolution (default 150 dpi). JPEG and TIFF are flattened onto white paper. A page too large for the renderer at that resolution is drawn at the most it allows, listed in `lower_dpi` ({page, dpi}). Includes unsaved edits.")
+        t("doc_export_images", "Export pages as images", "Write pages as PNG, JPEG, TIFF or SVG files (`<name>_page_<n>.png|jpg|tif|svg`) into a folder, at a resolution (default 150 dpi). JPEG and TIFF are flattened onto white paper. SVG is vector, one file per page with text as outlines, and ignores dpi and quality. A page too large for the renderer at that resolution is drawn at the most it allows, listed in `lower_dpi` ({page, dpi}). With `rect` (SVG only), each file is just that area of its page, sized in points: what lies wholly outside is left out and the rest is clipped, so an object crossing the edge keeps its hidden part (not redaction). Includes unsaved edits.")
             .cmd("export.image")
             .with(schema(
                 json!({
                     "doc": doc(),
                     "folder": { "type": "string" },
-                    "format": { "type": "string", "enum": ["png", "jpeg", "tiff"] },
+                    "format": { "type": "string", "enum": ["png", "jpeg", "tiff", "svg"] },
                     "quality": { "type": "integer", "minimum": 1, "maximum": 100, "description": "JPEG quality (default 85)." },
                     "dpi": { "type": "number", "minimum": 18, "maximum": 1200 },
                     "pages": pages("to export (default: all)"),
+                    "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "SVG only: export just this area, [x0, y0, x1, y1] in points from the top-left of the displayed page, cut to the page. An area that misses a page is an error." },
                 }),
                 &["doc", "folder"],
             )),

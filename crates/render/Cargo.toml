@@ -13,6 +13,7 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 hayro = { workspace = true }
 hayro-syntax = { workspace = true }
+hayro-svg = "0.7"
 # Picks the face of an installed font collection (the version pdfcraft-fonts already uses).
 skrifa = "0.44"
 lopdf = { workspace = true }

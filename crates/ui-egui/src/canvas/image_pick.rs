@@ -107,12 +107,17 @@ fn clipboard_dir() -> Option<std::path::PathBuf> {
     }
 }
 
-/// Whether `name` is a file Copy Image in Original Format writes: `<stem> p<page> img<index>.<ext>`
-/// with a JPEG or PNG extension. Only such files are ever removed from the clipboard folder.
+/// Whether `name` is a file Copy Image in Original Format writes, `<stem> p<page> img<index>.<ext>`
+/// with a JPEG or PNG extension, or one Take a Vector Snapshot writes, `<stem> p<page>
+/// snapshot.svg`. Only such files are ever removed from the clipboard folder.
 #[cfg(not(target_arch = "wasm32"))]
 fn is_copied_image_name(name: &str) -> bool {
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
     let Some((rest, ext)) = name.rsplit_once('.') else { return false };
+    if ext == "svg" {
+        let Some((stem, page)) = rest.strip_suffix(" snapshot").and_then(|r| r.rsplit_once(" p")) else { return false };
+        return !stem.is_empty() && digits(page);
+    }
     if !matches!(ext, "jpg" | "png") {
         return false;
     }
@@ -217,7 +222,7 @@ impl PdfCraftApp {
     /// Writes `bytes` to PdfCraft's private clipboard folder ([`clipboard_dir`]), replacing the
     /// previous copy, and puts that file on the system clipboard.
     #[cfg(not(target_arch = "wasm32"))]
-    fn put_file_on_clipboard(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+    pub(crate) fn put_file_on_clipboard(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
         if !self.system_clipboard {
             return Ok(());
         }
@@ -227,7 +232,7 @@ impl PdfCraftApp {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn put_file_on_clipboard(&self, _name: &str, _bytes: &[u8]) -> Result<(), String> {
+    pub(crate) fn put_file_on_clipboard(&self, _name: &str, _bytes: &[u8]) -> Result<(), String> {
         if self.system_clipboard {
             return Err("the web version can't put files on the clipboard yet; use Save Image As".to_string());
         }
@@ -257,6 +262,10 @@ mod tests {
         assert!(!is_copied_image_name("Report p1 img2.pdf"));
         assert!(!is_copied_image_name(" p1 img2.png"));
         assert!(!is_copied_image_name("Report px img2.png"));
+        assert!(is_copied_image_name("Report p3 snapshot.svg"));
+        assert!(!is_copied_image_name("Report p3 img1.svg"));
+        assert!(!is_copied_image_name("Report snapshot.svg"));
+        assert!(!is_copied_image_name(" p3 snapshot.svg"));
     }
 
     #[test]

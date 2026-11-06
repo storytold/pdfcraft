@@ -969,6 +969,35 @@ fn marquee_zoom_and_snapshot() {
 }
 
 #[test]
+fn vector_snapshot_copies_the_dragged_area_as_svg_in_points() {
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    // Text "Page 2 pages PAGE" sits at y 150 (of 300) from x 20.
+    let r = h.state().views[i].page_screen_rect(0).expect("on screen");
+    let at = |x: f32, y: f32| egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height());
+    h.state_mut().system_clipboard = false;
+    assert!(h.state_mut().execute("edit.snapshot_vector"));
+    drag(&mut h, at(15.0, 175.0), at(180.0, 140.0));
+    let svg = h.state().last_copied_svg.clone().expect("an SVG");
+    assert!(h.state().last_snapshot.is_none(), "no raster snapshot");
+    // The view box is the dragged area in page points (from the top-left), give or take a pixel.
+    let view_box: Vec<f32> =
+        svg.split("viewBox=\"").nth(1).and_then(|s| s.split('"').next()).unwrap().split(' ').map(|n| n.parse().unwrap()).collect();
+    for (got, want) in view_box.iter().zip([15.0, 125.0, 165.0, 35.0]) {
+        assert!((got - want).abs() < 1.5, "{view_box:?}");
+    }
+    assert!(svg.contains("pt\" height=\"") && svg.contains("<use "), "sized in points, with the text as outlines: {svg}");
+    let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    assert!(toast.starts_with("The selected area has been copied as vectors ("), "{toast}");
+    // Below the text: nothing of it is copied.
+    h.state_mut().last_copied_svg = None;
+    drag(&mut h, at(15.0, 135.0), at(180.0, 105.0));
+    let toast = h.state().toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+    let below = h.state().last_copied_svg.clone().unwrap_or_else(|| panic!("an SVG of the area below: {toast} / {:?}", h.state().quick_tool));
+    assert!(!below.contains("<use "), "{below}");
+}
+
+#[test]
 fn fit_visible_zooms_to_the_content_width() {
     let mut h = harness();
     let i = h.state().active.unwrap();

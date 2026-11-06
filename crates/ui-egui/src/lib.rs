@@ -591,6 +591,9 @@ pub struct PdfCraftApp {
     /// The last image copied in its original format (file name, bytes), also put on the
     /// system clipboard as a file when `system_clipboard` is on.
     pub last_copied_file: Option<(String, Vec<u8>)>,
+    /// The last Vector Snapshot's SVG, also put on the system clipboard when `system_clipboard`
+    /// is on.
+    pub last_copied_svg: Option<String>,
     pub system_clipboard: bool,
     /// What ⌘V reads instead of the system clipboard (tests).
     pub clipboard_override: Option<create_ui::Clip>,
