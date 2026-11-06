@@ -388,7 +388,9 @@ impl PdfCraftApp {
         let Some(view) = self.views.get_mut(i) else { return true };
         if let Some(c) = view.content.blocked() {
             view.content.hold_blocked();
-            self.notify(crate::content_ui::undrawable_message(c));
+            // The draft stays, so its own warning applies (Courier names the letters it refuses).
+            let message = view.content.blocked_message(c);
+            self.notify(message);
             return false;
         }
         if let Some(ed) = view.line_editor.take()
@@ -753,7 +755,8 @@ impl PdfCraftApp {
         });
         if let Some(c) = blocked {
             self.active = Some(i);
-            self.notify(crate::content_ui::undrawable_message(c));
+            let message = self.views.get(i).map_or_else(|| crate::content_ui::undrawable_message(c), |v| v.content.blocked_message(c));
+            self.notify(message);
             return false;
         }
         let typing = self.views.get(i).is_some_and(|v| {

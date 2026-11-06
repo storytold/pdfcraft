@@ -1,4 +1,4 @@
-use super::types::{AddedImage, AddedText};
+use super::types::{AddedImage, AddedText, Family};
 use super::{
     Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedCluster, ShapedScript, shape_arabic, shape_hebrew,
     shape_thai,
@@ -118,7 +118,8 @@ pub(super) fn is_hebrew(c: char) -> bool {
     matches!(u32::from(c), 0x0591..=0x05F4 | 0xFB1D..=0xFB4F)
 }
 
-/// The first character of `t` that would be drawn as `?`: outside WinAnsiEncoding and not drawn
+/// The first character of `t` that would be drawn as `?`: outside WinAnsiEncoding and the extra
+/// Latin letters of the standard fonts (`pdfcraft_fonts::latin_drawable`, #2098), and not drawn
 /// with the craft-fonts Arabic (#125) or Hebrew (#128) face, or Arabic or Hebrew that the face can't
 /// draw (or that has no face to draw it). Page-content tools refuse such text; the Add-text editor
 /// keeps it open.
@@ -128,6 +129,11 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
             return Some(c);
         }
         let rest = AddedText { text: t.text.chars().filter(|c| !is_thai(*c)).collect(), ..t.clone() };
+        // Text with Thai is laid out by `draw_shaped`, which writes its Latin runs in WinAnsi:
+        // the extra letters (#2098) get no codes of their own there and would come out as `?`.
+        if let Some(c) = rest.text.chars().find(|c| pdfcraft_fonts::extra_letter(*c).is_some()) {
+            return Some(c);
+        }
         return first_undrawable(&rest);
     }
     // Arabic or Hebrew that nothing can draw: there's no face, or the face lacks it.
@@ -137,9 +143,18 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
         return Some(c);
     }
     if !shaped_by_a_face(t) {
+        // A widely used viewer's stand-in for Courier has no glyphs for the extra letters (it
+        // draws boxes, review on #3076), so Courier keeps refusing them.
+        if t.family == Family::Courier
+            && let Some(c) = t.text.chars().find(|c| pdfcraft_fonts::extra_letter(*c).is_some())
+        {
+            return Some(c);
+        }
         // Drawn line by line in the item's standard font (`\n` splits lines). Without the face
         // that is also how `draw` redraws an existing item, so it's checked that way.
-        return t.text.split('\n').find_map(pdfcraft_fonts::first_non_win_ansi);
+        // The extra letters need codes of their own in one encoding for the whole item; a text
+        // that leaves too few would have the last of them written as `?` (review on #3076).
+        return t.text.split('\n').find_map(pdfcraft_fonts::first_non_latin).or_else(|| pdfcraft_fonts::LatinEncoding::first_without_code(&t.text));
     }
     // What `shaped_layout` leaves to the standard font, exactly as `draw_shaped` splits it.
     wrapped(t).into_iter().find_map(|(line, rtl, _)| {
