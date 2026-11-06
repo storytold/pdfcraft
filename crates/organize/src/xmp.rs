@@ -195,8 +195,9 @@ fn unescape(text: &str) -> String {
             _ => entity
                 .strip_prefix("#x")
                 .or_else(|| entity.strip_prefix("#X"))
+                .filter(|h| h.bytes().all(|b| b.is_ascii_hexdigit()))
                 .and_then(|h| u32::from_str_radix(h, 16).ok())
-                .or_else(|| entity.strip_prefix('#').and_then(|d| d.parse().ok()))
+                .or_else(|| entity.strip_prefix('#').filter(|d| d.bytes().all(|b| b.is_ascii_digit())).and_then(|d| d.parse().ok()))
                 .and_then(char::from_u32),
         };
         match c {
@@ -340,6 +341,13 @@ mod tests {
    <dc:creator><rdf:Seq><rdf:li>Old Author</rdf:li></rdf:Seq></dc:creator>\n\
    <dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">Old subject</rdf:li></rdf:Alt></dc:description>\n\
   </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>";
+
+    #[test]
+    fn unescape_rejects_signs_in_numeric_references() {
+        assert_eq!(unescape("a&#x+41;b&#+66;"), "a&#x+41;b&#+66;");
+        assert_eq!(unescape("&#x;&#;"), "&#x;&#;");
+        assert_eq!(unescape("&#x41;&#65;"), "AA");
+    }
 
     #[test]
     fn values_are_read_back_unescaped() {
