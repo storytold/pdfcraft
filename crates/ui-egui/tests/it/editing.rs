@@ -5279,6 +5279,30 @@ fn alt_arrows_navigate_instead_of_nudging_a_selected_image() {
     assert!((moved[0] - before[0] - 1.0).abs() < 0.01, "a plain → nudged a point: {before:?} → {moved:?}");
 }
 
+/// Leaving All tools ▸ Edit a PDF for another tool applies the paragraph still open, as leaving
+/// the Edit tab does, rather than dropping what was typed (review on #4605).
+#[test]
+fn another_tool_from_edit_a_pdf_applies_the_open_paragraph() {
+    use pdfcraft_ui_egui::{Mode, QuickTool};
+    let mut h = harness(1, |_| {});
+    h.state_mut().set_option("tool", "edit").unwrap();
+    h.run_steps(2);
+    assert_ne!(h.state().mode, Mode::Edit, "Edit a PDF from All tools, not the Edit tab");
+    assert_eq!(h.state().quick_tool, QuickTool::EditText);
+    let id = h.state().views[0].id;
+    let b = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 200.0;
+    click_at(&mut h, egui::pos2(r.left() + ((b.rect[0] + b.rect[2]) / 2.0) as f32 * k, r.top() + (300.0 - (b.rect[1] + b.rect[3]) / 2.0) as f32 * k));
+    assert_eq!(h.state().views[0].line_editor.as_ref().map(|e| e.text.as_str()), Some("Page 1"), "the paragraph is open for typing");
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Page one".into();
+    h.state_mut().set_option("tool", "organize").unwrap();
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_none());
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].text, "Page one", "the typed text was applied");
+}
+
 #[test]
 fn an_open_paragraph_moves_by_its_frame_and_by_the_arrow_keys() {
     let mut h = harness(2, |_| {});

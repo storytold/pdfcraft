@@ -61,6 +61,21 @@ impl PdfCraftApp {
     pub(crate) fn select_tool(&mut self, id: &'static str) {
         // The tool's panel shows, not the expanded All tools view over it.
         self.all_tools_full = false;
+        // Edit a PDF turns on Edit text & images at once, as the Edit tab does (`enter_mode`), so
+        // the page is editable without a second click. Leaving it for another tool from All tools
+        // puts editing down again; under the Edit tab the workspace keeps it, as before. Read mode
+        // hides the quick toolbar and keeps every tool down (`enter_mode`), so the control
+        // channel's `tool edit` there leaves editing off.
+        if id == "edit" {
+            if self.mode != Mode::Read {
+                self.quick_tool = QuickTool::EditText;
+            }
+        } else if self.mode != Mode::Edit
+            && self.left == LeftPanel::Tool("edit")
+            && matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText)
+        {
+            self.put_down_edit_text();
+        }
         self.left = LeftPanel::Tool(id);
         self.reveal_tools();
         if let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) {
