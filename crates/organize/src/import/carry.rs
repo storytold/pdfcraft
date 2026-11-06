@@ -28,14 +28,20 @@ pub(crate) fn set_attachments(dst: &mut Document, mut entries: Vec<(Vec<u8>, Obj
     }
     // Names are compared and numbered as text: a key written as UTF-16 (a name with an accent
     // or Chinese letters) must not get ASCII bytes appended to it.
+    let reserved: std::collections::HashSet<String> = entries.iter().map(|(k, _)| pdfcraft_cos::PdfString::literal(k.clone()).to_text()).collect();
     let mut seen = std::collections::HashSet::new();
     for (k, _) in entries.iter_mut() {
         let base = pdfcraft_cos::PdfString::literal(k.clone()).to_text();
         let mut text = base.clone();
         let mut n = 2;
-        while !seen.insert(text.clone()) {
-            text = format!("{base} ({n})");
-            n += 1;
+        if !seen.insert(text.clone()) {
+            loop {
+                text = format!("{base} ({n})");
+                n += 1;
+                if !reserved.contains(&text) && seen.insert(text.clone()) {
+                    break;
+                }
+            }
         }
         if text != base {
             *k = pdfcraft_cos::PdfString::text(&text).bytes;
@@ -137,10 +143,11 @@ fn outline_level(m: &Copier<'_>, first: Option<ObjRef>, depth: u8, budget: &mut 
         let target = item.get(b"Dest").cloned().or_else(|| {
             let a = m.src.resolve(item.get(b"A")?);
             let a = a.as_dict()?;
-            (a.name(b"S") == Some(b"GoTo")).then(|| a.get(b"D").cloned()).flatten()
+            let is_goto = a.get(b"S").map(|s| m.src.resolve(s)).as_deref().and_then(Object::as_name) == Some(b"GoTo");
+            is_goto.then(|| a.get(b"D").cloned()).flatten()
         });
         let dest = target.and_then(|t| m.map_dest(&t));
-        let open = item.int(b"Count").is_some_and(|c| c > 0);
+        let open = item.get(b"Count").and_then(|c| m.src.resolve(c).as_int()).is_some_and(|c| c > 0);
         let children = outline_level(m, item.reference(b"First"), depth + 1, budget);
         made.push(OutlineNode { title, colour, flags, dest, open, children });
     }
@@ -230,4 +237,59 @@ pub(super) fn add_outline(doc: &mut Document, marks: &[Mark]) -> Result<(), Orga
         c.set(b"PageMode".to_vec(), Object::name("UseOutlines"));
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::attachment_keys;
+
+    fn build(bodies: &[&str]) -> Document {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, b) in bodies.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{b}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
+        Document::open(Arc::new(out)).expect("opens")
+    }
+
+    #[test]
+    fn set_attachments_does_not_clobber_later_numbered_attachment_name() {
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+        ]);
+        let entries =
+            vec![(b"report.pdf".to_vec(), Object::Null), (b"report.pdf".to_vec(), Object::Null), (b"report.pdf (2)".to_vec(), Object::Null)];
+        set_attachments(&mut doc, entries).unwrap();
+        assert_eq!(attachment_keys(&doc), ["report.pdf", "report.pdf (2)", "report.pdf (3)"]);
+    }
+
+    #[test]
+    fn source_outline_resolves_indirect_goto_action_type_and_count() {
+        let src = build(&[
+            "<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+            "<< /Type /Outlines /First 5 0 R /Last 5 0 R /Count 1 >>",
+            "<< /Title (Parent) /Parent 4 0 R /First 6 0 R /Last 6 0 R /Count 8 0 R /A << /S 7 0 R /D [3 0 R /Fit] >> >>",
+            "<< /Title (Child) /Parent 5 0 R /Dest [3 0 R /Fit] >>",
+            "/GoTo",
+            "1",
+        ]);
+        let nodes = source_outline(&src, HashMap::from([(ObjRef::new(3, 0), ObjRef::new(3, 0))]));
+        assert_eq!(nodes.len(), 1);
+        assert!(nodes[0].dest.is_some());
+        assert!(nodes[0].open);
+    }
 }
