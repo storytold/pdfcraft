@@ -441,10 +441,11 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
                 };
                 match again.map(|e| appearance::field_appearance_drawn(doc, f, w, std::slice::from_ref(e), false)) {
                     Some(english) if english.1.is_none() => english,
-                    _ => drawn,
+                    _ if drawn.1.is_none() => drawn,
+                    _ => appearance::field_appearance_embedded(doc, f, w, std::slice::from_ref(s), false)?,
                 }
             }
-            None => appearance::field_appearance_drawn(doc, f, w, values, true),
+            None => appearance::field_appearance_embedded(doc, f, w, values, true)?,
         };
         undrawn |= missing.is_some();
         let existing_ap = in_place
