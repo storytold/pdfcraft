@@ -414,11 +414,28 @@ mod tests {
         assert!(out.contains("<d:title><r:Alt><r:li xml:lang=\"x-default\">New</r:li></r:Alt></d:title>"), "{out}");
     }
 
-    /// A packet that isn't well-formed XML is neither read nor edited, where the string reader
-    /// read `&#x+41;` as `A` (XML allows no sign in a character reference).
+    /// A character reference XML doesn't allow makes the packet not well-formed, so it gives no
+    /// value. The string reader decoded each of these as `A`: a sign (`&#x+41;`, `&#+65;`, which
+    /// `from_str_radix` and `parse` accept) and an uppercase hex marker (`&#X41;`, XML has only
+    /// `&#x`).
+    #[test]
+    fn character_references_xml_rejects_give_no_value() {
+        for reference in ["&#x+41;", "&#+65;", "&#X41;"] {
+            let bad = packet(&format!("<pdf:Keywords>{reference}</pdf:Keywords>"));
+            assert_eq!(get_property(&bad, KEYWORDS, Shape::Text), None, "{reference}");
+            assert_eq!(set_property(&bad, KEYWORDS, Shape::Text, "new"), None, "{reference}");
+        }
+        // The forms XML does allow still decode.
+        for reference in ["&#x41;", "&#65;", "&#0065;", "&#x0041;"] {
+            let good = packet(&format!("<pdf:Keywords>{reference}</pdf:Keywords>"));
+            assert_eq!(get_property(&good, KEYWORDS, Shape::Text).as_deref(), Some("A"), "{reference}");
+        }
+    }
+
+    /// A packet that isn't well-formed XML is neither read nor edited.
     #[test]
     fn packets_that_are_not_xml_are_left_alone() {
-        for bad in [packet("<pdf:Keywords>&#x+41;</pdf:Keywords>"), packet("<pdf:Keywords>a & b</pdf:Keywords>"), packet("<pdf:Keywords>open")] {
+        for bad in [packet("<pdf:Keywords>a & b</pdf:Keywords>"), packet("<pdf:Keywords>open")] {
             assert_eq!(get_property(&bad, KEYWORDS, Shape::Text), None, "{bad}");
             assert_eq!(set_property(&bad, KEYWORDS, Shape::Text, "new"), None, "{bad}");
             assert_eq!(without(&bad, &[KEYWORDS]), None, "{bad}");
