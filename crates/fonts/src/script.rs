@@ -10,6 +10,15 @@ static FONT: &[u8] = include_bytes!("../../../assets/fonts/DancingScript.ttf");
 /// the script font lacks (Dancing Script is Latin and Vietnamese only: no Cyrillic or Greek).
 pub static INTER_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 
+/// The face used for a typed Fill & Sign signature.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignatureStyle {
+    #[default]
+    Script,
+    Print,
+}
+
 /// Forward slant of fallback glyphs in a typed signature (about 12°), so they lean like the script.
 const FALLBACK_SLANT: f64 = 0.21;
 
@@ -61,6 +70,7 @@ struct Flatten {
     /// Horizontal shear applied to every point (x += slant × y), for slanted fallback glyphs.
     slant: f64,
     dx: f64,
+    dy: f64,
     points: usize,
     too_complex: bool,
     max_points: usize,
@@ -68,16 +78,16 @@ struct Flatten {
 
 impl Flatten {
     fn new(scale: f64) -> Self {
-        Self { contours: Vec::new(), cur: Vec::new(), scale, slant: 0.0, dx: 0.0, points: 0, too_complex: false, max_points: 4096 }
+        Self { contours: Vec::new(), cur: Vec::new(), scale, slant: 0.0, dx: 0.0, dy: 0.0, points: 0, too_complex: false, max_points: 4096 }
     }
 
     fn pt(&self, x: f32, y: f32) -> [f64; 2] {
         let (x, y) = (x as f64 * self.scale, y as f64 * self.scale);
-        [self.dx + x + self.slant * y, y]
+        [self.dx + x + self.slant * y, self.dy + y]
     }
 
     fn last(&self) -> [f64; 2] {
-        self.cur.last().copied().unwrap_or([self.dx, 0.0])
+        self.cur.last().copied().unwrap_or([self.dx, self.dy])
     }
 
     fn push(&mut self, p: [f64; 2]) {
@@ -214,6 +224,18 @@ pub fn script_missing(text: &str) -> Option<char> {
     text.chars().find(|c| !c.is_whitespace() && charmap.map(*c).is_none() && fallback_map.as_ref().and_then(|m| m.map(*c)).is_none())
 }
 
+/// The first non-whitespace character that the selected signature face cannot draw.
+pub fn signature_missing(text: &str, style: SignatureStyle) -> Option<char> {
+    match style {
+        SignatureStyle::Script => script_missing(text),
+        SignatureStyle::Print => {
+            let font = FontRef::new(INTER_REGULAR).ok()?;
+            let map = font.charmap();
+            text.chars().find(|c| !c.is_whitespace() && map.map(*c).is_none())
+        }
+    }
+}
+
 /// The outlines of `text` in the script font. Characters it lacks (Cyrillic, Greek, …) are drawn
 /// from Inter, slanted and scaled to the script's capital height; characters neither font has are
 /// skipped (check [`script_missing`] first where nobody sees a preview). Over-limit input returns
@@ -270,6 +292,36 @@ pub fn script_outline(text: &str) -> ScriptOutline {
     ScriptOutline { contours: pen.contours, width: pen.dx, ascent: metrics.ascent as f64 * scale, descent: metrics.descent as f64 * scale }
 }
 
+/// Outlines of a typed signature in the selected bundled face. Existing signatures use Script.
+pub fn signature_outline(text: &str, style: SignatureStyle) -> ScriptOutline {
+    if style == SignatureStyle::Script {
+        return script_outline(text);
+    }
+    if text.chars().take(MAX_SIGNATURE_CHARS + 1).count() > MAX_SIGNATURE_CHARS {
+        return ScriptOutline::default();
+    }
+    let Ok(font) = FontRef::new(INTER_REGULAR) else { return ScriptOutline::default() };
+    let loc = LocationRef::default();
+    let metrics = font.metrics(Size::unscaled(), loc);
+    let scale = 1.0 / metrics.units_per_em.max(1) as f64;
+    let Ok(shaped) = crate::source_shaping::shape(INTER_REGULAR, text) else { return ScriptOutline::default() };
+    let glyphs = font.outline_glyphs();
+    let mut pen = Flatten::new(scale);
+    pen.max_points = 262_144;
+    for glyph in shaped.glyphs {
+        (pen.dx, pen.dy) = (glyph.position[0], glyph.position[1]);
+        if let Some(g) = glyphs.get(glyph.id) {
+            let _ = g.draw(DrawSettings::unhinted(Size::unscaled(), loc), &mut pen);
+            pen.close();
+        }
+    }
+    pen.close();
+    if pen.too_complex {
+        return ScriptOutline::default();
+    }
+    ScriptOutline { contours: pen.contours, width: shaped.advance, ascent: metrics.ascent as f64 * scale, descent: metrics.descent as f64 * scale }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -317,6 +369,23 @@ mod tests {
         assert_eq!(super::script_missing("Саша Дермановић Νίκος"), None);
         assert_eq!(super::script_missing("Саша 张"), Some('张'));
         assert_eq!(super::script_missing(" \t"), None);
+    }
+
+    #[test]
+    fn signature_styles_use_distinct_faces_and_report_their_missing_glyphs() {
+        let script = super::signature_outline("Ada Lovelace", super::SignatureStyle::Script);
+        let print = super::signature_outline("Ada Lovelace", super::SignatureStyle::Print);
+        assert_ne!(script.contours, print.contours);
+        assert_eq!(super::signature_missing("Саша", super::SignatureStyle::Print), None);
+        assert_eq!(super::signature_missing("张三", super::SignatureStyle::Print), Some('张'));
+    }
+
+    #[test]
+    fn print_signatures_shape_decomposed_marks_with_their_base() {
+        let decomposed = super::signature_outline("Jose\u{301}", super::SignatureStyle::Print);
+        let composed = super::signature_outline("José", super::SignatureStyle::Print);
+        assert_eq!(decomposed.contours, composed.contours);
+        assert_eq!(decomposed.width, composed.width);
     }
 
     #[test]

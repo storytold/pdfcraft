@@ -4472,6 +4472,7 @@ version = "0.18.1"
 dependencies = [
  "harfrust",
  "pdfcraft-cos",
+ "serde",
  "skrifa 0.44.0",
  "unicode-bidi",
 ]
