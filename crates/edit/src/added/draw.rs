@@ -105,8 +105,7 @@ pub(super) fn draw_laid_shaped(
         fonts.set(name.clone().into_bytes(), Object::Ref(font));
         names.push(name);
     }
-    let [cr, cg, cb] = t.color.map(|v| v.clamp(0.0, 1.0));
-    out.extend(format!("BT {} {} {} rg\n", n(cr), n(cg), n(cb)).bytes());
+    out.extend(format!("BT {}\n", t.fill_operator()).bytes());
     if t.char_spacing != 0.0 {
         out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
     }
@@ -293,8 +292,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
             }
             res.set(b"Font".to_vec(), Object::Dict(fonts));
             let r = text_rect(t);
-            let [cr, cg, cb] = t.color.map(|v| v.clamp(0.0, 1.0));
-            out.extend(format!("BT /{name} {} Tf {} {} {} rg\n", n(t.size), n(cr), n(cg), n(cb)).bytes());
+            out.extend(format!("BT /{name} {} Tf {}\n", n(t.size), t.fill_operator()).bytes());
             if t.char_spacing != 0.0 {
                 out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
             }
@@ -355,6 +353,12 @@ pub(super) fn params(c: &Content) -> Dict {
             d.set(b"Font".to_vec(), Object::name(t.family.base_font(t.bold, t.italic)));
             d.set(b"Size".to_vec(), Object::Real(t.size));
             d.set(b"Color".to_vec(), arr(&t.color));
+            // The device colour it is painted in, read back with it (`store::parse`).
+            match t.standing_ink() {
+                Some(super::types::Ink::Gray(g)) => d.set(b"Ink".to_vec(), arr(&[g])),
+                Some(super::types::Ink::Cmyk(k)) => d.set(b"Ink".to_vec(), arr(&k)),
+                None => {}
+            }
             d.set(b"Align".to_vec(), Object::Int(align_code(t.align)));
             // Each paragraph's own alignment, or null where it follows /Align.
             let aligns = crate::paragraph_align::tidy(t.aligns.clone(), t.align);

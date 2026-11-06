@@ -101,6 +101,10 @@ pub struct AddedText {
     pub italic: bool,
     pub size: f64,
     pub color: [f64; 3],
+    /// The colour as given in DeviceGray or DeviceCMYK (a print file's 100 K black), painted
+    /// with `g` / `k`. It stands only while `color` is its RGB look ([`Ink::rgb`]): picking
+    /// another colour, which sets `color`, leaves the text in RGB.
+    pub ink: Option<Ink>,
     pub align: Align,
     /// Extra space after every character, in points: the PDF's character spacing (`Tc`).
     pub char_spacing: f64,
@@ -109,7 +113,55 @@ pub struct AddedText {
     pub aligns: Vec<Option<Align>>,
 }
 
+/// A text colour in a device colour space other than RGB (ISO 32000-2 §8.6.4.2, §8.6.4.4).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Ink {
+    /// A gray level, 0 black to 1 white.
+    Gray(f64),
+    /// Cyan, magenta, yellow and black, each 0 to 1.
+    Cmyk([f64; 4]),
+}
+
+impl Ink {
+    /// The colour clamped to 0..1, a value that isn't finite read as 0.
+    pub fn clamped(self) -> Self {
+        let c = |v: f64| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+        match self {
+            Ink::Gray(g) => Ink::Gray(c(g)),
+            Ink::Cmyk(k) => Ink::Cmyk(k.map(c)),
+        }
+    }
+
+    /// Its RGB look: gray in every component, and CMYK as ISO 32000-2 §10.4.2.5 converts it
+    /// (each colour plus black, from 1).
+    pub fn rgb(self) -> [f64; 3] {
+        match self.clamped() {
+            Ink::Gray(g) => [g; 3],
+            Ink::Cmyk([c, m, y, k]) => [1.0 - (c + k).min(1.0), 1.0 - (m + k).min(1.0), 1.0 - (y + k).min(1.0)],
+        }
+    }
+}
+
 impl AddedText {
+    /// The ink that stands: `ink`, while `color` is still its RGB look.
+    pub fn standing_ink(&self) -> Option<Ink> {
+        let ink = self.ink?.clamped();
+        ink.rgb().iter().zip(self.color).all(|(a, b)| (a - b).abs() < 1e-6).then_some(ink)
+    }
+
+    /// The fill colour operator for the text: `g`, `k` or `rg`.
+    pub(crate) fn fill_operator(&self) -> String {
+        let n = crate::n;
+        match self.standing_ink() {
+            Some(Ink::Gray(g)) => format!("{} g", n(g)),
+            Some(Ink::Cmyk([c, m, y, k])) => format!("{} {} {} {} k", n(c), n(m), n(y), n(k)),
+            None => {
+                let [r, g, b] = self.color.map(|v| v.clamp(0.0, 1.0));
+                format!("{} {} {} rg", n(r), n(g), n(b))
+            }
+        }
+    }
+
     /// Paragraph `i`'s alignment.
     pub fn paragraph_align(&self, i: usize) -> Align {
         crate::paragraph_align::align_of(&self.aligns, i, self.align)
@@ -126,6 +178,7 @@ impl Default for AddedText {
             italic: false,
             size: 12.0,
             color: [0.0; 3],
+            ink: None,
             align: Align::Left,
             aligns: Vec::new(),
             char_spacing: 0.0,

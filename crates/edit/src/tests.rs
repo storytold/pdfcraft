@@ -8863,6 +8863,32 @@ fn added_text_character_spacing_is_drawn_and_reopens() {
     assert_eq!(tc, [false, true], "{page:?}");
 }
 
+/// Added text given in DeviceGray or DeviceCMYK is painted with `g` / `k` (a print file's 100 K
+/// black stays black ink), its RGB look follows ISO 32000-2 §10.4.2.5, and it reopens with its
+/// ink (#6440). Once its colour is changed to another RGB one, it is painted in RGB.
+#[test]
+fn added_text_in_gray_or_cmyk_is_painted_in_that_space_and_reopens() {
+    let mut doc = fixture();
+    let base = AddedText { rect: [72.0, 600.0, 400.0, 700.0], size: 10.0, ..AddedText::default() };
+    let cmyk = Ink::Cmyk([0.0, 0.0, 0.0, 1.0]);
+    let gray = Ink::Gray(0.25);
+    assert_eq!(cmyk.rgb(), [0.0; 3]);
+    let mixed = Ink::Cmyk([0.25, 0.5, 0.0, 0.25]).rgb();
+    assert!(mixed.iter().zip([0.5, 0.25, 0.75]).all(|(a, b)| (a - b).abs() < 1e-9), "{mixed:?}");
+    add_content(&mut doc, 0, &Content::Text(AddedText { text: "Proof".into(), color: cmyk.rgb(), ink: Some(cmyk), ..base.clone() })).unwrap();
+    add_content(&mut doc, 0, &Content::Text(AddedText { text: "Gray".into(), color: gray.rgb(), ink: Some(gray), ..base.clone() })).unwrap();
+    // Recoloured in RGB: the ink no longer stands.
+    add_content(&mut doc, 0, &Content::Text(AddedText { text: "Red".into(), color: [1.0, 0.0, 0.0], ink: Some(cmyk), ..base })).unwrap();
+    let doc = reopen(&doc);
+    let inks: Vec<Option<Ink>> = list_added(&doc).iter().map(|a| if let Content::Text(t) = &a.content { t.standing_ink() } else { None }).collect();
+    assert_eq!(inks, [Some(cmyk), Some(gray), None]);
+    let page = streams(&doc, 0);
+    let fill = |word: &str| page.iter().find(|s| s.contains(&format!("({word}) Tj"))).cloned().unwrap_or_default();
+    assert!(fill("Proof").contains("0 0 0 1 k") && !fill("Proof").contains(" rg"), "{page:?}");
+    assert!(fill("Gray").contains("0.25 g") && !fill("Gray").contains(" rg"), "{page:?}");
+    assert!(fill("Red").contains("1 0 0 rg"), "{page:?}");
+}
+
 /// Spacing widens every measure the layout takes: the widest line and wrapping.
 #[test]
 fn added_text_character_spacing_widens_its_layout() {

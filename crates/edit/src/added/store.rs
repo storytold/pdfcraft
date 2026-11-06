@@ -29,6 +29,12 @@ fn parse(doc: &Document, d: &Dict) -> Option<Content> {
                 italic,
                 size: d.get(b"Size").and_then(Object::as_f64).unwrap_or(12.0),
                 color: if c.len() == 3 { [c[0], c[1], c[2]] } else { [0.0; 3] },
+                // Items written before inks have none; one or four numbers name the space.
+                ink: match nums(doc, d.get(b"Ink")).as_slice() {
+                    [g] => Some(super::types::Ink::Gray(*g).clamped()),
+                    [c, m, y, k] => Some(super::types::Ink::Cmyk([*c, *m, *y, *k]).clamped()),
+                    _ => None,
+                },
                 align,
                 aligns: crate::paragraph_align::tidy(aligns, align),
                 // Items written before character spacing have none.
