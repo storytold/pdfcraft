@@ -3,10 +3,11 @@
 use std::sync::Arc;
 
 use crate::{
-    AddedContent, AddedText, Background, BoxSpec, EditError, FieldProps, FieldValue, FillMark, HeaderFooter, Hidden, ImageEdit, InitialView, Label,
-    LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget, PageBox, Protection, ReviewState,
-    Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image, decode_data_file, embed_image, field_table, fit_picture,
-    image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+    AddedContent, AddedText, Background, BorderShape, BoxSpec, EditError, FieldProps, FieldValue, FillMark, HeaderFooter, Hidden, ImageEdit,
+    InitialView, Label, LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget, PageBox,
+    Protection, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image, decode_data_file, embed_image,
+    field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, open_source, strip_xfa, unrestricted,
+    xfa, xfa_after_data_change,
 };
 
 mod labels;
@@ -263,11 +264,34 @@ pub enum Edit {
         index: usize,
         fill: Option<Rgb>,
     },
+    /// Draw a rectangle's, oval's, polygon's or text box's fill, or a text box's text, at an
+    /// opacity of its own (0–1), the line or border keeping the comment's; `None` leaves that
+    /// part as it is. `StyleAnnotation`'s opacity sets the whole comment's.
+    PartOpacity {
+        page: usize,
+        index: usize,
+        fill: Option<f64>,
+        text: Option<f64>,
+    },
     /// Change the font size (pt) of a text box, typewriter text or callout.
     FontSizeAnnotation {
         page: usize,
         index: usize,
         size: f64,
+    },
+    /// Give a text box, typewriter text or callout a border colour of its own (`None`: the
+    /// text's again).
+    BorderColorAnnotation {
+        page: usize,
+        index: usize,
+        color: Option<Rgb>,
+    },
+    /// Give a text box or typewriter text an oval, a circle or a rectangle for its border: the
+    /// text box keeps its place, the oval or circle goes around it.
+    BorderShapeAnnotation {
+        page: usize,
+        index: usize,
+        shape: BorderShape,
     },
     /// Comment properties ▸ General / note icon.
     SetAnnotationInfo {
@@ -405,6 +429,13 @@ pub enum Edit {
     AddOcrText {
         page: usize,
         words: Vec<pdfcraft_ocr::PlacedWord>,
+    },
+    /// Scan & OCR ▸ Enhance ▸ Scanned document: put the scan images
+    /// [`ScanCleanJob::run`](crate::scan_clean::ScanCleanJob::run) cleaned in place of the old
+    /// ones (each object must still be an image). Built by
+    /// [`Session::apply_scan_clean`](crate::Session::apply_scan_clean).
+    EnhanceScan {
+        images: Vec<(pdfcraft_cos::ObjRef, pdfcraft_cos::Stream)>,
     },
     /// Edit a PDF ▸ Edit text: replace the text of line `line` (from `Document::text_lines`) on
     /// `page`, in its own font when it can show it, else in Helvetica.
@@ -553,6 +584,15 @@ pub enum Edit {
     ImportData {
         name: String,
         bytes: Arc<Vec<u8>>,
+    },
+    /// Paste copied comments (XFDF from [`Session::export_comments`]) onto `page` as new
+    /// comments: copies under names of their own, so nothing is replaced and pasting twice
+    /// gives two sets; replies keep their copied parent.
+    PasteComments {
+        xfdf: String,
+        page: usize,
+        /// Where the copies go: moved by (dx, dy) in user space, or at their own positions.
+        offset: Option<[f64; 2]>,
     },
     /// Remove Hidden Information: the chosen categories.
     RemoveHidden {
