@@ -5,10 +5,13 @@
 //! holds the two folders. Every path a tool reads is checked with [`Access::Read`] and every path
 //! it writes with [`Access::Write`], in `Automation::resolve`, which all of them go through:
 //!
-//! - The path is made absolute against the working directory, as the file system reads it. Its
-//!   links are followed: for a file that doesn't exist yet, the links of its nearest existing
-//!   folder, the rest of the path being plain names (`..` below a missing folder is refused, and so
-//!   is a link that leads nowhere).
+//! - The path is made absolute against the working directory, then followed the way the file
+//!   system reads it, one name at a time from the top, its links followed. A name is looked up
+//!   only while the folder it is in is the root, inside it, or one of the root's own parent
+//!   folders: a path that leaves those is refused before anything beyond is touched (looking up
+//!   `/net/<host>` mounts it), and every such refusal reads the same, so it can't tell what exists
+//!   out there. Inside the root, a name that doesn't exist yet ends the walk and the rest is taken
+//!   as plain names (`..` below a missing folder is refused, and so is a link that leads nowhere).
 //! - A path on another network share or in a device namespace (`\\host\share`, `\\.\pipe\x`)
 //!   than the root's is refused by name, before anything is resolved: resolving it would contact
 //!   the host.
@@ -20,7 +23,6 @@
 //! folders in between (swapping in a link) can still win that race. The roots keep an agent to the
 //! files it was given; they don't guard against other programs on the computer.
 
-use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -100,11 +102,10 @@ impl AutomationRoots {
                 Access::Write => Err(format!("automation filesystem access is not granted: write authority is absent: {shown}")),
             };
         };
-        let absolute = absolute(shown, target)?;
-        // Another network share or a device is refused by name, as `--root` refuses it: even
-        // resolving the path would contact the host (#4003).
-        if !foreign_share(&absolute, folder) && inside(&resolve(shown, &absolute)?, folder) {
-            return Ok(());
+        match follow(shown, &absolute(shown, target)?, folder) {
+            Toward::Inside => return Ok(()),
+            Toward::Refused(why) => return Err(why),
+            Toward::Outside => {}
         }
         let root = root_shown.display();
         match access {
@@ -141,42 +142,66 @@ fn absolute(shown: &str, path: &Path) -> Result<PathBuf, String> {
     std::path::absolute(path).map_err(|e| format!("automation path rejected: cannot resolve {shown}: {e}"))
 }
 
-/// `absolute` with its links followed; for a path that doesn't exist (yet), its nearest existing
-/// folder's links followed and the rest appended.
-fn resolve(shown: &str, absolute: &Path) -> Result<PathBuf, String> {
-    // The names below the nearest existing folder, last first.
-    let mut missing: Vec<OsString> = vec![];
-    let mut at = absolute;
-    loop {
-        match std::fs::canonicalize(at) {
-            Ok(mut found) => {
-                found.extend(missing.iter().rev());
-                return Ok(found);
+/// Where a followed path ends up.
+pub(crate) enum Toward {
+    /// Inside the root, with its links followed (a missing tail taken as names).
+    Inside,
+    /// Anywhere else. Said the same way whatever is out there.
+    Outside,
+    /// Inside the root, but it can't be followed, and why.
+    Refused(String),
+}
+
+/// Follow the absolute `path` the way the file system reads it, one name at a time from the top,
+/// looking a name up only while the folder it is in is `root`, inside it, or one of `root`'s own
+/// parent folders (all with their links followed already, so `..` means what it means to the file
+/// system).
+pub(crate) fn follow(shown: &str, path: &Path, root: &Path) -> Toward {
+    // Another network share or a device is refused by name, as `--root` refuses it: even looking
+    // it up would contact the host (#4003).
+    if foreign_share(path, root) {
+        return Toward::Outside;
+    }
+    let near = |at: &Path| inside(at, root) || inside(root, at);
+    let mut parts = path.components().peekable();
+    let top: PathBuf = std::iter::from_fn(|| parts.next_if(|c| matches!(c, Component::Prefix(_) | Component::RootDir))).collect();
+    let mut at = match std::fs::canonicalize(&top) {
+        Ok(at) if near(&at) => at,
+        _ => return Toward::Outside,
+    };
+    while let Some(part) = parts.next() {
+        let name = match part {
+            Component::Normal(name) => name,
+            Component::CurDir => continue,
+            Component::ParentDir => {
+                at.pop();
+                continue;
             }
-            Err(e) => match std::fs::symlink_metadata(at) {
-                Ok(m) if m.file_type().is_symlink() => return Err(format!("automation path rejected: a link that leads nowhere: {shown}")),
-                // There, yet its real path can't be had (no permission): nothing to compare.
-                Ok(_) => return Err(format!("automation path rejected: cannot resolve {shown}: {e}")),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(format!("automation path rejected: cannot resolve {shown}: {e}")),
-            },
-        }
-        let parent = at.parent();
-        match (at.components().next_back(), parent) {
-            (Some(Component::Normal(name)), Some(parent)) => {
-                missing.push(name.to_os_string());
-                at = parent;
-            }
-            (Some(Component::ParentDir), _) => {
-                return Err(format!("automation path rejected: parent traversal below a folder that doesn't exist: {shown}"));
-            }
-            // Down to the root (or drive) and it doesn't exist either.
-            _ => {
-                let e = std::io::Error::from(std::io::ErrorKind::NotFound);
-                return Err(format!("automation path rejected: cannot resolve {shown}: {e}"));
+            Component::Prefix(_) | Component::RootDir => return Toward::Outside,
+        };
+        let next = at.join(name);
+        match std::fs::canonicalize(&next) {
+            Ok(found) if near(&found) => at = found,
+            Ok(_) => return Toward::Outside,
+            // Not even there yet: only inside the root does it matter why.
+            Err(_) if !inside(&at, root) => return Toward::Outside,
+            Err(e) => {
+                return match std::fs::symlink_metadata(&next) {
+                    Ok(m) if m.file_type().is_symlink() => Toward::Refused(format!("automation path rejected: a link that leads nowhere: {shown}")),
+                    // There, yet its real path can't be had (no permission): nothing to compare.
+                    Ok(_) => Toward::Refused(format!("automation path rejected: cannot resolve {shown}: {e}")),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        if parts.any(|part| !matches!(part, Component::Normal(_) | Component::CurDir)) {
+                            return Toward::Refused(format!("automation path rejected: parent traversal below a folder that doesn't exist: {shown}"));
+                        }
+                        Toward::Inside
+                    }
+                    Err(e) => Toward::Refused(format!("automation path rejected: cannot resolve {shown}: {e}")),
+                };
             }
         }
     }
+    if inside(&at, root) { Toward::Inside } else { Toward::Outside }
 }
 
 /// Is `path` (resolved) `root` or inside it, component by component (without regard to case on
@@ -303,6 +328,51 @@ mod tests {
         let e = roots.check(&missing, Access::Write).unwrap_err();
         // Windows resolves `..` by name first (so does opening the file there): then it's outside.
         assert!(e.contains("parent traversal below a folder that doesn't exist") || e.contains("outside the write root"), "{e}");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// Outside the root, the refusal comes before anything out there is looked up, so it can't
+    /// tell whether a folder out there exists.
+    #[test]
+    fn paths_out_of_the_root_are_refused_alike_without_looking() {
+        let (base, roots) = folders("follow");
+        let sep = std::path::MAIN_SEPARATOR;
+        let root = s(base.join("in"));
+        let refusal = |p: &str| roots.check(p, Access::Read).unwrap_err().replace(p, "<path>");
+        // Through a folder outside that exists, and through one that doesn't.
+        let there = format!("{root}{sep}..{sep}outside{sep}..{sep}x.pdf");
+        let missing = format!("{root}{sep}..{sep}nowhere{sep}..{sep}x.pdf");
+        assert_eq!(refusal(&there), refusal(&missing));
+        assert!(refusal(&missing).starts_with("automation path rejected: outside the read root"), "{}", refusal(&missing));
+        // Out through a missing folder and back in. (Windows folds `..` by name when it makes a path
+        // absolute, as it does when it opens one: that path is `in\a.pdf` there.)
+        #[cfg(not(windows))]
+        assert!(refusal(&format!("{root}/../nowhere/../in/a.pdf")).contains("outside the read root"));
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// The root can be named as it was given or as it resolves (`/var/…` and `/private/var/…` on
+    /// macOS, where the temporary folder is reached through a link).
+    #[test]
+    fn a_root_may_be_named_as_given_or_as_resolved() {
+        let (base, roots) = folders("given");
+        let resolved = std::fs::canonicalize(base.join("in")).unwrap();
+        assert_eq!(roots.check(&s(base.join("in/a.pdf")), Access::Read), Ok(()));
+        assert_eq!(roots.check(&s(resolved.join("a.pdf")), Access::Read), Ok(()));
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A link beside the root, in one of its parent folders, is followed: to the root it leads in,
+    /// anywhere else it leads out.
+    #[cfg(unix)]
+    #[test]
+    fn links_beside_the_root_are_followed() {
+        let (base, roots) = folders("beside");
+        std::os::unix::fs::symlink(base.join("in"), base.join("to-in")).unwrap();
+        std::os::unix::fs::symlink(base.join("outside"), base.join("to-outside")).unwrap();
+        assert_eq!(roots.check(&s(base.join("to-in/a.pdf")), Access::Read), Ok(()));
+        assert_eq!(roots.check(&s(base.join("to-in/sub/new.pdf")), Access::Read), Ok(()));
+        assert!(roots.check(&s(base.join("to-outside/secret.pdf")), Access::Read).unwrap_err().contains("outside the read root"));
         let _ = std::fs::remove_dir_all(base);
     }
 

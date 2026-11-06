@@ -1,5 +1,5 @@
 use super::error::{Result, failed};
-use super::{Automation, Path, PathBuf, StagingName, file_access, foreign_share, staging_suffixes};
+use super::{Automation, Path, PathBuf, StagingName, file_access, staging_suffixes};
 
 impl Automation {
     // ---- paths -------------------------------------------------------------------------------
@@ -39,7 +39,10 @@ impl Automation {
         let Some(root) = &self.root else { return Ok(p.to_path_buf()) };
         let outside = || failed(format!("{path} is outside the allowed directory {}", root.display()));
         let joined = lexical(&root.join(p)).ok_or_else(outside)?;
-        if foreign_share(&joined, root) {
+        // Followed one name at a time first: nothing outside the root or its own parent folders is
+        // looked up, not even to see whether it exists. What can't be followed inside the root is
+        // said below.
+        if matches!(file_access::follow(path, &joined, root), file_access::Toward::Outside) {
             return Err(outside());
         }
         let mut existing = joined.as_path();
