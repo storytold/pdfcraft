@@ -11,8 +11,9 @@
 //! - each source's parent tree entries move to keys of their own (`/StructParents` of pages and
 //!   form XObjects, `/StructParent` of annotations and XObjects are renumbered to match);
 //! - role maps and class maps are merged; a name two sources map differently is renamed in the
-//!   later one, and so is an element ID another source already uses (with the table `/Headers`
-//!   that name it);
+//!   later one. Elements' `/S` and `/C` names follow their source's renamed role and class entries;
+//!   transitive role mappings follow the renamed names too, preserving each source's meaning.
+//!   An element ID another source already uses is renamed (with the table `/Headers` that name it);
 //! - the catalog gets `/MarkInfo << /Marked true >>` when every source is tagged, and the first
 //!   source's `/Lang`. A source in another language has its language set on its top-level elements.
 //!
@@ -538,11 +539,7 @@ fn within_copy_limits(src: &Document, value: &Object) -> bool {
                 return false;
             }
             match value {
-                Object::Ref(r) => {
-                    if seen.insert(r) {
-                        pending.push((src.get(r).as_ref().clone(), depth + 1));
-                    }
-                }
+                Object::Ref(r) if seen.insert(r) => pending.push((src.get(r).as_ref().clone(), depth + 1)),
                 Object::Array(a) => {
                     if a.len().saturating_add(pending.len()) > MAX_ELEMENTS {
                         return false;

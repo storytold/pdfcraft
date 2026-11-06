@@ -3500,6 +3500,29 @@ fn review_role_rename_reserves_later_source_names() {
 }
 
 #[test]
+fn combine_keeps_conflicting_class_map_meanings_on_their_own_elements() {
+    let source = |placement: &str| {
+        let mut objects = tagged_objects("en-US", "H1", "heading");
+        objects[7] = objects[7].replace("/RoleMap", &format!("/ClassMap << /HeadingClass << /O /Layout /Placement /{placement} >> >> /RoleMap"));
+        objects[9] = objects[9].replace("/ID", "/C /HeadingClass /ID");
+        open(build(&objects, "/Root 1 0 R"))
+    };
+    let (a, b) = (source("Block"), source("Inline"));
+    let out = full_roundtrip(&combine(&[("A", &a), ("B", &b)]).unwrap());
+    let root = out.get(catalog(&out).reference(b"StructTreeRoot").unwrap()).as_dict().cloned().unwrap();
+    let classes = out.resolve(root.get(b"ClassMap").unwrap()).as_dict().cloned().unwrap();
+    let documents = root.get(b"K").unwrap().as_array().unwrap();
+    for (document, expected) in documents.iter().zip([b"Block".as_slice(), b"Inline".as_slice()]) {
+        let document = out.resolve(document).as_dict().cloned().unwrap();
+        let heading = out.resolve(&document.get(b"K").unwrap().as_array().unwrap()[0]).as_dict().cloned().unwrap();
+        let class = heading.name(b"C").unwrap();
+        let attributes = out.resolve(classes.get(class).unwrap()).as_dict().cloned().unwrap();
+        assert_eq!(attributes.name(b"Placement"), Some(expected), "each heading keeps its own class meaning");
+    }
+    assert_eq!(classes.len(), 2, "conflicting classes are retained under distinct names");
+}
+
+#[test]
 fn combine_leaves_a_too_deep_class_map_untagged() {
     let mut objs = tagged_objects("en-US", "H1", "h");
     objs[7] = objs[7].replace("/RoleMap", "/ClassMap << /Deep [16 0 R] >> /RoleMap");
