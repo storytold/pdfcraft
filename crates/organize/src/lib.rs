@@ -23,12 +23,13 @@ mod outline;
 mod outline_io;
 mod pdfx;
 mod prune;
+mod split_dests;
 mod transition;
 pub mod view;
 mod xmp;
 
 pub use attachments::{add_attachment, attachment_keys, delete_attachment, mime_for_name};
-pub use boxes::{BoxSpec, PageBox, page_boxes, set_page_box};
+pub use boxes::{BoxSpec, MAX_SPLIT, MAX_SPLIT_PAGES, PageBox, page_boxes, set_page_box, split_pages};
 pub use comments::import_comments;
 pub use dedupe::dedupe_resources;
 pub use import::{

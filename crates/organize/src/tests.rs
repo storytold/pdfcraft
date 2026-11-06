@@ -3814,6 +3814,203 @@ fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
     assert_eq!(ctrl_names, [b"ImHidden".to_vec(), b"ImShown".to_vec()]);
 }
 
+#[test]
+fn split_pages_cut_each_page_into_its_cells_in_reading_order() {
+    let mut doc = open(fixture());
+    // Page 3 (500×500) is shown upright; pages 1–2 (300×400) inherit /Rotate 90 from the tree.
+    let third = walk(&doc).unwrap()[2].0;
+    doc.update_dict(third, |d| d.set(b"Rotate".to_vec(), Object::Int(0))).unwrap();
+    split_pages(&mut doc, &[2, 0], 2, 1).unwrap();
+    split_pages(&mut doc, &[4], 1, 2).unwrap();
+    let doc = open(write_incremental(&doc, &SaveOptions::default()).unwrap());
+    let b = page_boxes(&doc).unwrap();
+    assert_eq!(b.len(), 6, "two pages split in two, then one more");
+    // Turned a quarter clockwise, the page's bottom shows on the left: the left half comes first.
+    assert_eq!(b[0][1], [0.0, 0.0, 300.0, 200.0]);
+    assert_eq!(b[1][1], [0.0, 200.0, 300.0, 400.0]);
+    assert_eq!(b[2][1], [0.0, 0.0, 300.0, 400.0], "page 2 is untouched");
+    assert_eq!(b[3][1], [0.0, 0.0, 250.0, 500.0], "upright: the left half first");
+    // The right half of page 3, split again into rows: the top first.
+    assert_eq!(b[4][1], [250.0, 250.0, 500.0, 500.0]);
+    assert_eq!(b[5][1], [250.0, 0.0, 500.0, 250.0]);
+    assert!(b.iter().all(|p| p[0] == b[0][0] || p[0] == [0.0, 0.0, 500.0, 500.0]), "media boxes are kept");
+    // Every part is a page object of its own, showing the page's content.
+    let pages = walk(&doc).unwrap();
+    let mut refs: Vec<_> = pages.iter().map(|(r, _)| *r).collect();
+    refs.dedup();
+    assert_eq!(refs.len(), 6);
+    let contents = |i: usize| doc.get(pages[i].0).as_dict().and_then(|d| d.get(b"Contents").cloned()).map(|c| doc.resolve(&c).clone());
+    assert_eq!(contents(0), contents(1), "both halves show page 1");
+
+    // A crop box already set is what gets split; the order is the shown one for every turn.
+    for (rotate, first) in [(0, [10.0, 205.0, 150.0, 400.0]), (180, [150.0, 10.0, 290.0, 205.0]), (270, [150.0, 205.0, 290.0, 400.0])] {
+        let mut doc = open(fixture());
+        let first_page = walk(&doc).unwrap()[0].0;
+        doc.update_dict(first_page, |d| d.set(b"Rotate".to_vec(), Object::Int(rotate))).unwrap();
+        set_page_box(&mut doc, &[0], PageBox::Crop, BoxSpec::Rect([10.0, 10.0, 290.0, 400.0])).unwrap();
+        split_pages(&mut doc, &[0], 2, 2).unwrap();
+        assert_eq!(page_boxes(&doc).unwrap()[0][1], first, "/Rotate {rotate}");
+    }
+}
+
+#[test]
+fn split_pages_refuse_what_they_cannot_do_and_change_nothing() {
+    let mut doc = open(fixture());
+    let before = page_boxes(&doc).unwrap();
+    for (columns, rows) in [(1, 1), (0, 2), (2, 0), (MAX_SPLIT + 1, 1), (1, MAX_SPLIT + 1)] {
+        assert!(matches!(split_pages(&mut doc, &[0], columns, rows), Err(OrganizeError::Invalid(_))), "{columns} × {rows}");
+    }
+    assert_eq!(split_pages(&mut doc, &[0, 3], 2, 1), Err(OrganizeError::NoSuchPage(3)));
+    assert_eq!(page_boxes(&doc).unwrap(), before);
+    assert_eq!(walk(&doc).unwrap().len(), 3);
+    // A part under a point on page 1: nothing changes, not even on page 2, which could be split
+    // (and comes first, as pages are split from the last).
+    let first = walk(&doc).unwrap()[0].0;
+    doc.update_dict(first, |d| d.set(b"CropBox".to_vec(), Object::Array(vec![0.into(), 0.into(), Object::Real(5.0), Object::Real(400.0)]))).unwrap();
+    let before = page_boxes(&doc).unwrap();
+    assert!(matches!(split_pages(&mut doc, &[0, 1], 1, MAX_SPLIT), Err(OrganizeError::InvalidBox(_))));
+    assert_eq!(page_boxes(&doc).unwrap(), before);
+    assert_eq!(split_pages(&mut doc, &[], 2, 1), Ok(()), "no pages, nothing to do");
+    assert_eq!(page_boxes(&doc).unwrap(), before);
+}
+
+/// CodeRabbit on #5587: the parts of a split page share its layers. A layer on a part is the
+/// document's own optional content group, not a copy of it, so showing or hiding the layer
+/// shows or hides it on every part, and the layer list keeps one entry.
+#[test]
+fn every_part_of_a_split_page_shares_its_layers() {
+    let mut doc = doc_c();
+    let layer = ObjRef::new(8, 0);
+    split_pages(&mut doc, &[1], 2, 1).unwrap();
+    let ps = pages(&doc).unwrap();
+    assert_eq!(ps.len(), 3);
+    for part in [1, 2] {
+        let page = doc.get(ps[part].obj).as_dict().cloned().unwrap();
+        let resources = page.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap();
+        let properties = resources.get(b"Properties").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()).unwrap();
+        assert_eq!(properties.get(b"L1").and_then(Object::as_ref), Some(layer), "part {part} uses the document's layer");
+    }
+    let props = catalog(&doc).get(b"OCProperties").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap();
+    assert_eq!(props.get(b"OCGs").and_then(|o| o.as_array()).map(Vec::len), Some(1), "one layer, listed once");
+}
+
+/// jpeskov on #5587: a link on a page that is split leads where it did on every part. The parts
+/// are copies within the document, so a link to another page keeps that page instead of losing
+/// its destination, as a copy into another document does when the page isn't copied with it.
+#[test]
+fn every_part_of_a_split_page_keeps_its_links_destinations() {
+    let mut doc = doc_c();
+    let chapter_two = pages(&doc).unwrap()[1].obj;
+    split_pages(&mut doc, &[0], 2, 1).unwrap();
+    let ps = pages(&doc).unwrap();
+    assert_eq!((ps.len(), ps[2].obj), (3, chapter_two), "two parts, then chapter two as it was");
+    assert!(annots(&doc, 0)[0].get(b"Dest").is_some(), "the first part is the page itself, its link as it was");
+    let copy = &annots(&doc, 1)[0];
+    let dest = copy.get(b"Dest").and_then(|d| d.as_array()).expect("the second part's link keeps a destination");
+    assert_eq!(dest.first().and_then(Object::as_ref), Some(chapter_two), "and it leads to chapter two");
+}
+
+/// CodeRabbit on #5587: a destination showing a point of a split page goes to the part holding
+/// that point, wherever it is held: a bookmark, a link's /Dest or GoTo action (held directly or
+/// by reference), a named destination in the tree or the legacy dictionary, the opening view.
+/// One showing the whole page, or a point the first part holds, stays on the first part.
+#[test]
+fn a_destination_to_a_split_page_goes_to_the_part_holding_its_point() {
+    let mut doc = doc_c();
+    let page = pages(&doc).unwrap()[0].obj;
+    let dest = |rest: &str| {
+        let mut a = vec![Object::Ref(page)];
+        for t in rest.split(' ') {
+            a.push(match t.parse::<f64>() {
+                Ok(v) => Object::Real(v),
+                Err(_) if t == "null" => Object::Null,
+                Err(_) => Object::name(t),
+            });
+        }
+        Object::Array(a)
+    };
+    // The page is [0 0 200 200]: split in two columns, the right part holds x from 100 to 200.
+    let bookmark = outline::items(&doc)[0];
+    doc.update_dict(bookmark, |d| d.set(b"Dest".to_vec(), dest("XYZ 150 180 0"))).unwrap();
+    let shared = doc.add(dest("XYZ 160 null null"));
+    let mut goto = Dict::new();
+    goto.set(b"S".to_vec(), Object::name("GoTo"));
+    goto.set(b"D".to_vec(), dest("FitV 30"));
+    let mut by_ref = Dict::new();
+    by_ref.set(b"S".to_vec(), Object::name("GoTo"));
+    by_ref.set(b"D".to_vec(), dest("FitR 120 10 190 50"));
+    let by_ref = doc.add(Object::Dict(by_ref));
+    let link = |key: &str, value: Object| {
+        let mut l = Dict::new();
+        l.set(b"Type".to_vec(), Object::name("Annot"));
+        l.set(b"Subtype".to_vec(), Object::name("Link"));
+        l.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(9), Object::Int(9)]));
+        l.set(key.as_bytes().to_vec(), value);
+        l
+    };
+    let links: Vec<Object> = [link("Dest", Object::Ref(shared)), link("A", Object::Dict(goto)), link("A", Object::Ref(by_ref))]
+        .into_iter()
+        .map(|l| Object::Ref(doc.add(Object::Dict(l))))
+        .collect();
+    let other = pages(&doc).unwrap()[1].obj;
+    doc.update_dict(other, |d| d.set(b"Annots".to_vec(), Object::Array(links))).unwrap();
+    let root = doc.root().unwrap();
+    let names = doc.get(root).as_dict().and_then(|c| c.get(b"Names").cloned()).unwrap();
+    let tree = names.as_dict().and_then(|n| n.get(b"Dests")).and_then(Object::as_ref).unwrap();
+    let mut legacy = Dict::new();
+    legacy.set(b"right".to_vec(), dest("FitBV 150"));
+    legacy.set(b"whole".to_vec(), dest("Fit"));
+    legacy.set(b"top".to_vec(), dest("FitH 50"));
+    doc.update_dict(root, |c| {
+        c.set(b"OpenAction".to_vec(), dest("XYZ 190 10 0"));
+        c.set(b"Dests".to_vec(), Object::Dict(legacy));
+    })
+    .unwrap();
+    doc.update_dict(tree, |t| t.set(b"Names".to_vec(), Object::Array(vec![Object::String(PdfString::text("right")), dest("XYZ 120 null 0")])))
+        .unwrap();
+
+    split_pages(&mut doc, &[0], 2, 1).unwrap();
+    let right = pages(&doc).unwrap()[1].obj;
+    let target = |o: Option<&Object>| {
+        let o = doc.resolve(o.expect("a destination"));
+        let a = match o.as_dict() {
+            Some(d) => doc.resolve(d.get(b"D").expect("/D")),
+            None => o,
+        };
+        a.as_array().and_then(|a| a.first()).and_then(Object::as_ref)
+    };
+    let mark = doc.get(bookmark).as_dict().cloned().unwrap();
+    assert_eq!(target(mark.get(b"Dest")), Some(right), "the bookmark, to a point on the right");
+    let on_two = annots(&doc, 2);
+    assert_eq!(target(on_two[0].get(b"Dest")), Some(right), "the link to a left edge on the right, held by reference");
+    assert_eq!(target(on_two[1].get(b"A")), Some(page), "the link to a left edge on the left stays");
+    assert_eq!(target(on_two[2].get(b"A")), Some(right), "the GoTo action held by reference, to a rectangle on the right");
+    let catalog = doc.get(root).as_dict().cloned().unwrap();
+    assert_eq!(target(catalog.get(b"OpenAction")), Some(right), "the opening view");
+    let legacy = catalog.get(b"Dests").and_then(Object::as_dict).cloned().unwrap();
+    assert_eq!(target(legacy.get(b"right")), Some(right), "the legacy named destination");
+    assert_eq!(target(legacy.get(b"whole")), Some(page), "a whole-page view stays on the first part");
+    assert_eq!(target(legacy.get(b"top")), Some(page), "a top both parts hold goes to the first");
+    let pairs = doc.get(tree).as_dict().and_then(|t| t.get(b"Names").cloned()).unwrap();
+    assert_eq!(target(pairs.as_array().and_then(|p| p.get(1))), Some(right), "the name tree's destination");
+}
+
+/// CodeRabbit on #5587: page 1 can't be copied (an object nested deeper than a copy follows), and
+/// pages are split from the last, so page 2 is already split when page 1 fails. The document is
+/// left as it was, not half split.
+#[test]
+fn split_pages_that_fail_partway_change_nothing() {
+    let mut doc = open(fixture());
+    let first = walk(&doc).unwrap()[0].0;
+    let mut deep = Object::Array(Vec::new());
+    for _ in 0..400 {
+        deep = Object::Array(vec![deep]);
+    }
+    doc.update_dict(first, |d| d.set(b"PCDeep".to_vec(), deep)).unwrap();
+    let before = page_boxes(&doc).unwrap();
+    assert!(matches!(split_pages(&mut doc, &[0, 1], 2, 1), Err(OrganizeError::Invalid(_))));
+    assert_eq!(walk(&doc).unwrap().len(), 3, "no page was added");
+    assert_eq!(page_boxes(&doc).unwrap(), before, "no crop box was set");
 /// Intro (closed, red bold, at a point) > [Part (italic, FitH), Figure (FitR)], then Results.
 fn outline_source() -> Document {
     let mut d = doc_a();
