@@ -74,7 +74,8 @@ fn references_are_followed_to_the_resolve_bound() {
     // A missing target reads as null.
     let missing = Object::Ref(ObjRef { num: 9_999, generation: 0 });
     assert_eq!(NumberReader::new(&doc).finite(&missing), Err(NumberError::NotNumber));
-    // One bounded resolve per value, not one per hop.
+    // The reader asks the document once per value, however long the chain; the hop bound itself
+    // is the 34-hop case above.
     let v = chain(&mut doc, Object::Int(1), 30);
     assert_eq!(resolutions(|| NumberReader::new(&doc).finite(&v)), (Ok(1.0), 1));
 }
