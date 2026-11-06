@@ -67,7 +67,8 @@ pub(crate) fn layout(d: &Dict) -> Option<Caption> {
         ([origin[0] + along[0] * co[0] + normal[0] * co[1] - width * 0.5, origin[1] + along[1] * co[0] + normal[1] * co[1]], co)
     } else {
         let r = numbers::<4>(d, b"Rect")?;
-        let baseline = [(r[0] + r[2] - width) * 0.5, r[3] - 12.0];
+        // External edits can reverse Rect corners; use the same normalized top as the AP.
+        let baseline = [(r[0] + r[2] - width) * 0.5, r[1].max(r[3]) - 12.0];
         let centre = [baseline[0] + width * 0.5, baseline[1]];
         let delta = [centre[0] - origin[0], centre[1] - origin[1]];
         (baseline, [delta[0] * along[0] + delta[1] * along[1], delta[0] * normal[0] + delta[1] * normal[1]])

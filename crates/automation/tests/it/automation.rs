@@ -11574,3 +11574,64 @@ fn measurement_caption_move_preserves_small_vectors_at_a_large_crop_origin() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn measurement_caption_move_accepts_a_reversed_rect_without_jumping() {
+    fn pixels(a: &mut Automation, doc: u64) -> (usize, usize, Vec<u8>) {
+        let out = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":144})).unwrap();
+        let Content::Png { data, .. } = &out[0] else { panic!("page_render must return PNG") };
+        let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut pixels).unwrap();
+        pixels.truncate(info.buffer_size());
+        (info.width as usize, info.color_type.samples(), pixels)
+    }
+    let dir = workdir("caption-reversed-rect");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "measure_distance", json!({"doc":doc,"page":1,"points":[[40,220],[160,220]]}));
+    let original = a.session().get(pdfcraft_engine::DocId(doc)).unwrap();
+    let expected = original.measurement_caption_rect(0, 0).unwrap();
+    let mut pdf = pdfcraft_cos::Document::open(original.bytes.clone()).unwrap();
+    let canonical = pixels(&mut a, doc);
+    let page = &pdfcraft_model::pages(&pdf)[0];
+    let annots = pdf.resolve(page.dict.get(b"Annots").unwrap());
+    let annot = annots.as_array().unwrap()[0].as_ref().unwrap();
+    pdf.update_dict(annot, |d| {
+        assert!(!d.contains(b"CO"), "the fixture exercises the legacy caption without an offset");
+        let r = d.get(b"Rect").unwrap().as_array().unwrap().clone();
+        d.set(b"Rect".to_vec(), pdfcraft_cos::Object::Array(vec![r[2].clone(), r[3].clone(), r[0].clone(), r[1].clone()]));
+    })
+    .unwrap();
+    // An external editor can reorder the rectangle while retaining PdfCraft's marker and AP.
+    std::fs::write(dir.join("reversed.pdf"), pdfcraft_cos::write_full(&pdf, &Default::default()).unwrap()).unwrap();
+    let reopened = ok(&mut a, "doc_open", json!({"path":"reversed.pdf"}))["doc"].as_u64().unwrap();
+    assert!(pixels(&mut a, reopened) == canonical, "the retained legacy appearance stays in the same place");
+    let before = a.session().get(pdfcraft_engine::DocId(reopened)).unwrap().measurement_caption_rect(0, 0).unwrap();
+    assert_eq!(before, expected, "the reversed Rect hit target must match the visible legacy caption");
+    ok(&mut a, "comment_edit", json!({"doc":reopened,"page":1,"index":1,"caption_move":[10,-40]}));
+    let moved = a.session().get(pdfcraft_engine::DocId(reopened)).unwrap().measurement_caption_rect(0, 0).unwrap();
+    for (actual, expected) in moved.into_iter().zip([expected[0] + 10.0, expected[1] + 40.0, expected[2] + 10.0, expected[3] + 40.0]) {
+        assert!((actual - expected).abs() < 0.001, "the first move must not jump");
+    }
+    let (width, channels, image) = pixels(&mut a, reopened);
+    let mut ink = 0;
+    for y in ((300.0 - moved[3]) * 2.0).floor() as usize..((300.0 - moved[1]) * 2.0).ceil() as usize {
+        for x in (moved[0] * 2.0).floor() as usize..(moved[2] * 2.0).ceil() as usize {
+            let i = (y * width + x) * channels;
+            ink += usize::from(image[i..i + 3].iter().any(|c| *c < 180));
+        }
+    }
+    assert!(ink > 20, "the rebuilt appearance must draw the moved readout inside its BBox");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn caption_move_schema_exposes_component_bounds() {
+    let tool = tools().into_iter().find(|t| t.name == "comment_edit").unwrap();
+    let schema = &tool.input_schema["properties"]["caption_move"];
+    assert_eq!(schema["items"]["minimum"], -14400);
+    assert_eq!(schema["items"]["maximum"], 14400);
+    assert_eq!(schema["minItems"], 2);
+    assert_eq!(schema["maxItems"], 2);
+}

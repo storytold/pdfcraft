@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-06 | **Last updated:** 2026-11-06 | **Change:** patch (M5 #5741: normalize reversed measurement rectangles for caption hit/move geometry and expose existing caption component bounds in the tool schema; estimates unchanged)
+
 > **Last reviewed:** 2026-11-06 | **Last updated:** 2026-11-06 | **Change:** patch (M5 #5741: independently move PdfCraft distance readouts; retain bounds after restyling and small vector deltas; clarify relative displayed-point caption_move limits and scope; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
@@ -231,6 +233,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-06 (M5, #5741):** Caption hit testing and the first move use the normalized top of a reversed measurement rectangle, matching its retained legacy appearance and regenerated bounds. Automation/render regressions cover the hit target, relative first move and visible rebuilt readout. The caption_move schema exposes the existing inclusive -14400 to 14400 component limits; schema and handler validation stay aligned. Estimates unchanged.
 
 - **2026-11-06 (M5, #5741):** Select can move a PdfCraft distance readout independently, with undo/redo, save/reopen and headless `comment_edit.caption_move`. Endpoints, scale, value and leaders stay fixed; moved captions remain horizontal and keep their bounds after restyling. The API documents relative displayed-point deltas, one conversion into native PDF units, finite/14400-unit bounds, locked/unsupported refusals and the perimeter/area and appearance-regeneration limits. Estimates unchanged.
 
