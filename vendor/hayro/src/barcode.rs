@@ -158,6 +158,20 @@ impl View<'_> {
         let (x, y) = if self.vertical { (v, u) } else { (u, v) };
         self.gray.dark(x, y, self.inverted)
     }
+    /// Materialize one threshold row after checking its complete strided source range.
+    /// The iterator preserves axis, direction and polarity without repeating coordinate checks per pixel.
+    fn row_bits(&self, v: usize) -> Result<Vec<bool>, String> {
+        if v >= self.height() {
+            return Err("view outside source".into());
+        }
+        let last = self.width().checked_sub(1).ok_or("view outside source")?;
+        let (start, stride) = if self.vertical { (v, self.gray.w) } else { (v.checked_mul(self.gray.w).ok_or("pixel overflow")?, 1) };
+        let end = last.checked_mul(stride).and_then(|n| start.checked_add(n)).and_then(|n| n.checked_add(1)).ok_or("pixel overflow")?;
+        // The vertical stride is positive because v < height() == gray.w; horizontal stride is one.
+        let samples = self.gray.pixels.get(start..end).ok_or("short gray source")?.iter().step_by(stride);
+        let dark = |pixel: &u8| (*pixel < self.gray.threshold) ^ self.inverted;
+        Ok(if self.reverse { samples.rev().map(dark).collect() } else { samples.map(dark).collect() })
+    }
     /// Map an in-bounds view rectangle back to image-local coordinates without resampling.
     fn source_rect(&self, r: Rect) -> Rect {
         let r = if self.reverse { Rect { x0: self.width() - r.x1, x1: self.width() - r.x0, ..r } } else { r };
@@ -424,10 +438,7 @@ fn scan_bars(gray: &Gray, regions: &mut Vec<Region>, budget: &mut Budget<'_>) ->
                 let view = View { gray, vertical, reverse, inverted };
                 for y in (0..view.height()).step_by(8) {
                     budget.charge(view.width())?;
-                    let mut bits = Vec::with_capacity(view.width());
-                    for x in 0..view.width() {
-                        bits.push(view.dark(x, y)?);
-                    }
+                    let mut bits = view.row_bits(y)?;
                     // Already validated physical regions may be excluded from subsequent row searches.
                     // This removes only that location; identical payloads elsewhere remain searchable.
                     for _ in 0..16 {
@@ -1028,5 +1039,49 @@ mod gray_error_regression {
         assert_eq!(short.get(8, 0), Err("pixel outside source".into()));
         let overflow = Gray { w: usize::MAX, h: 2, pixels: Vec::new(), threshold: 128 };
         assert_eq!(overflow.get(1, 1), Err("pixel overflow".into()));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod row_materialization_tests {
+    use super::*;
+    /// Match checked single-pixel reads for every orientation/polarity and non-square scan dimension.
+    #[test]
+    fn strided_rows_match_checked_pixel_reads() {
+        for (w, h) in [(1, 1), (1, 19), (17, 1), (13, 19), (32, 7)] {
+            for threshold in [0, 1, 127, 128, 254, 255] {
+                let gray = Gray { w, h, pixels: (0..w * h).map(|i| ((i * 73 + 31) % 256) as u8).collect(), threshold };
+                for inverted in [false, true] {
+                    for vertical in [false, true] {
+                        for reverse in [false, true] {
+                            let view = View { gray: &gray, vertical, reverse, inverted };
+                            for y in 0..view.height() {
+                                let expected = (0..view.width()).map(|x| view.dark(x, y)).collect::<Result<Vec<_>, _>>().unwrap();
+                                assert_eq!(view.row_bits(y).unwrap(), expected);
+                            }
+                            assert_eq!(view.row_bits(view.height()), Err("view outside source".into()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    /// Refuse truncated backing storage and overflowing addresses without a panic or partial row.
+    #[test]
+    fn invalid_row_storage_is_rejected() {
+        for vertical in [false, true] {
+            for reverse in [false, true] {
+                let gray = Gray { w: 13, h: 7, pixels: vec![255; 90], threshold: 127 };
+                let view = View { gray: &gray, vertical, reverse, inverted: false };
+                assert_eq!(view.row_bits(view.height() - 1), Err("short gray source".into()));
+            }
+        }
+        let gray = Gray { w: usize::MAX, h: 2, pixels: Vec::new(), threshold: 127 };
+        let view = View { gray: &gray, vertical: false, reverse: false, inverted: false };
+        assert_eq!(view.row_bits(1), Err("pixel overflow".into()));
+        let gray = Gray { w: 0, h: 1, pixels: Vec::new(), threshold: 127 };
+        assert!(View { gray: &gray, vertical: false, reverse: false, inverted: false }.row_bits(0).is_err());
+        assert!(View { gray: &gray, vertical: true, reverse: false, inverted: false }.row_bits(0).is_err());
     }
 }
