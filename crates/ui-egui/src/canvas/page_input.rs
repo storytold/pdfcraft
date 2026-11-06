@@ -4,6 +4,7 @@
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
 use pdfcraft_render::{DocInfo, PageText};
 
+use super::area::{SignTab, paint_sign_tab, sign_tab_at, sign_tabs};
 use super::{DocView, PageEnv, PageFrame, PageSlot, PageXform, Selection, Span, cached_edit_images, click_unit, signature_badges};
 use crate::page_cursor::{Layer, Subject};
 use crate::page_pointer::PagePointer;
@@ -21,6 +22,8 @@ pub(super) struct PageInput {
     /// The press's click came up over what the press began on: a link's or a field's click counts
     /// only then, as a button's does.
     pub(super) released_over: bool,
+    /// The sign tabs on empty fields a click would sign, painted over the page.
+    pub(super) sign_tabs: Vec<SignTab>,
 }
 
 /// Common geometry and pointer state for a tool acting on one page.
@@ -72,6 +75,10 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     };
     // While a table is being set up, nothing else is drawn or moved.
     let prepare_allowed = can_modify && table_preview.is_none() && frame.out.open_table.is_none();
+    // An empty field a click would sign carries a small tab saying so, shown only while
+    // a click on the field signs it (the Select tool, not while preparing a form). The tab
+    // is drawn over every field, so a click on it signs its field (`forms_ui::hit`).
+    let tabs = page_sign_tabs(ui, doc, form, info, slot, can_fill, tool == QuickTool::Select && !preparing);
     let hits = PageHits {
         page: i,
         xf: &xf,
@@ -90,6 +97,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         lines: &lines,
         images: &images,
         clip: ui.clip_rect(),
+        tabs: &tabs,
     };
     if let Some(o) = ptr.pressed().filter(|o| xf.rect.contains(*o)) {
         let at = hits.at(view, o);
@@ -210,7 +218,31 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let on_comment = comments::page_input(ui, resp, &pcx, press, taken, view);
     let consumed = taken || on_comment;
     let hover = pointer.and_then(|p| claim_under(&hits, view, p, frame.env.unobstructed));
-    PageInput { consumed, area_tool, hover, released_over }
+    PageInput { consumed, area_tool, hover, released_over, sign_tabs: tabs.into_iter().map(|(_, tab)| tab).collect() }
+}
+
+/// The sign tabs on the slot's page, on empty fields a click would sign, each with the field it
+/// signs; none unless `shown`.
+fn page_sign_tabs<'a>(
+    ui: &egui::Ui,
+    doc: &'a pdfcraft_engine::Document,
+    form: &[pdfcraft_engine::FormField],
+    info: &DocInfo,
+    slot: &PageSlot,
+    can_fill: bool,
+    shown: bool,
+) -> Vec<(&'a str, SignTab)> {
+    let PageSlot { i, xf, .. } = slot;
+    let i = *i;
+    if !shown {
+        return Vec::new();
+    }
+    sign_tabs(&doc.signatures, form, i, can_fill)
+        .into_iter()
+        .filter_map(|(name, [x0, y0, x1, y1])| {
+            sign_tab_at(ui, xf.user_rect(info, i, [x0 as f32, y0 as f32, x1 as f32, y1 as f32]), xf.rect).map(|tab| (name, tab))
+        })
+        .collect()
 }
 
 /// What lies under the pointer at `p`, after the tools act: its top, what a press there would take,
@@ -410,6 +442,9 @@ struct PageHits<'a> {
     images: &'a [pdfcraft_engine::PageImage],
     /// The pages' visible area (the picture's rotate knob stays inside it).
     clip: Rect,
+    /// The sign tabs on empty signature fields, with the field each one signs: drawn over every
+    /// field, so the pointer on one is on its own field.
+    tabs: &'a [(&'a str, SignTab)],
 }
 
 impl PageHits<'_> {
@@ -460,6 +495,7 @@ impl PageHits<'_> {
             lines,
             images,
             clip,
+            tabs,
         } = *self;
         // Crop mode owns every press on its page (`edit_text_ui::crop_hit`).
         if tool == QuickTool::EditText
@@ -471,7 +507,7 @@ impl PageHits<'_> {
         let fields = if preparing {
             crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p)
         } else if tool == QuickTool::Select {
-            crate::forms_ui::hit(xf, info, page, form, can_fill, p)
+            crate::forms_ui::hit(xf, info, page, form, tabs, can_fill, p)
         } else {
             None
         };
@@ -730,6 +766,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         prefs,
         preparing,
         redact_mark,
+        t,
         table_preview,
         tool,
         unobstructed,
@@ -831,6 +868,11 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         } else {
             view.flash = None;
         }
+    }
+    // The sign tabs (above). Like the validation badges, they never enter the file,
+    // exports or printing.
+    for tab in &input.sign_tabs {
+        paint_sign_tab(ui, painter, tab, t);
     }
     // Validation is viewer chrome over the signer's original artwork, which
     // may still say "Signature Not Verified". These badges never enter document
