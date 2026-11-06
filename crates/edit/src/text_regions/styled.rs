@@ -4,7 +4,7 @@ use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
     RangeStyle, TextBlock, TextLine, Type3Glyph, coincident_ops, content_streams, fallback_face, japanese_glyph_from, needs_type3, no_fallback_font,
     no_glyph_for, page_dict, reveal_ops, rewritten_contents, source_encodes, source_family, source_program, source_show, source_space, source_width,
-    splice, type3_faces, type3_glyph, write_type3_glyphs,
+    splice, strip_subset_tag, type3_faces, type3_glyph, write_type3_glyphs,
 };
 
 // The draft is capped at 4 MiB; also bound the outline data prepared across all fallback faces.
@@ -60,6 +60,11 @@ impl FontResolver<'_> {
         {
             return self.embed_face(face.name(), face.bytes, face.family, "the full source font could not be loaded").map(Some);
         }
+        self.complete_source_font(source, text)
+    }
+
+    /// The complete program the document embeds for `source`, as a resource that encodes all of it.
+    fn complete_source_font(&mut self, source: &TextLine, text: &str) -> Result<Option<String>, EditError> {
         let Some(bytes) = self
             .programs
             .entry(source.font.clone())
@@ -75,6 +80,46 @@ impl FontResolver<'_> {
         }
         let family = pdfcraft_fonts::embedding::names(&bytes).map_or_else(|_| source.base_font.clone(), |(family, _)| family);
         self.embed_face(key, &bytes, &family, "the source font could not be loaded").map(Some)
+    }
+
+    /// The one face a contextual span goes to when its source resource can't both encode and
+    /// shape it: the document's complete program for that resource, a resource of the same family
+    /// on the page, or else an approved full face of that family. Left to
+    /// [`Self::encodable_font`] character by character, the letters a resource can encode would
+    /// stay in it and the rest go elsewhere, so the span would split into runs shaped apart (#5114).
+    /// `None` keeps the span with the source font, also when no face shapes it.
+    fn shaping_font(&mut self, source: &TextLine, span: &str) -> Result<Option<String>, EditError> {
+        use pdfcraft_fonts::{embedding, source_shaping};
+        if !source_shaping::required(span) {
+            return Ok(None);
+        }
+        let rows = || span.split(['\n', '\r']);
+        let shapes = |bytes: &[u8]| embedding::covers(bytes, span) && rows().all(|row| source_shaping::shape(bytes, row).is_ok());
+        let program = |doc: &Document, fonts: &Dict, name: &str| {
+            fonts.get(name.as_bytes()).and_then(|font| doc.dict(font)).and_then(|font| pdfcraft_fonts::pdf::embedded_sfnt(doc, &font))
+        };
+        if program(self.doc, self.fonts, &source.font).is_some_and(|bytes| shapes(&bytes)) {
+            if self.metrics.get(&source.font).is_some_and(|metrics| rows().all(|row| source_encodes(metrics, row))) {
+                return Ok(None);
+            }
+            if let Some(name) = self.complete_source_font(source, span)? {
+                return Ok(Some(name));
+            }
+        }
+        let key = embedding::face_key(&source.base_font);
+        let loaded = self.metrics.iter().find(|(name, metrics)| {
+            **name != source.font
+                && embedding::face_key(&metrics.base_font) == key
+                && rows().all(|row| source_encodes(metrics, row))
+                && program(self.doc, self.fonts, name).is_some_and(|bytes| shapes(&bytes))
+        });
+        if let Some((name, _)) = loaded {
+            return Ok(Some(name.clone()));
+        }
+        match embedding::matching_faces(&source.base_font).into_iter().find(|face| shapes(face.bytes)) {
+            Some(face) => self.embed_face(face.name(), face.bytes, face.family, "the full source font could not be loaded").map(Some),
+            None => Ok(None),
+        }
     }
 
     fn embed_face(&mut self, key: String, bytes: &[u8], family: &str, missing_message: &str) -> Result<String, EditError> {
@@ -132,7 +177,11 @@ impl CharacterPreparation<'_> {
         for (range, index) in spans {
             let source = lines.get(index).unwrap_or(first);
             let start = range.start;
-            for (offset, ch) in draft.get(range).unwrap_or_default().char_indices() {
+            let span = draft.get(range).unwrap_or_default();
+            let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
+            let shaping = if requested.is_none() { resolver.shaping_font(source, span)? } else { None };
+            let requested = requested.or(shaping.as_deref());
+            for (offset, ch) in span.char_indices() {
                 if ch == '\n' {
                     chars.push((ch, index, source.font.clone()));
                     continue;
@@ -143,7 +192,6 @@ impl CharacterPreparation<'_> {
                     continue;
                 }
                 let text = ch.to_string();
-                let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
                 let name = if let Some(name) = resolver.encodable_font(source, &text, requested)? {
                     name
                 } else if needs_type3(&text) {
@@ -606,7 +654,10 @@ fn shape_source(
             return Ok(Some((bytes, shaped, family)));
         }
     }
-    Err(EditError::Invalid("complex text needs the complete source TrueType/OpenType face; load that font before editing".into()))
+    Err(EditError::Invalid(format!(
+        "complex text needs the complete {} TrueType/OpenType face; load that font before editing",
+        strip_subset_tag(&family)
+    )))
 }
 
 /// For each output row (a range of the draft's characters), whether it is exactly the source row

@@ -18,8 +18,18 @@ pub struct ShapedRun {
 
 /// Complex scripts/marks require shaping instead of independently encoding characters.
 pub fn required(text: &str) -> bool {
-    text.chars()
-        .any(|c| matches!(u32::from(c), 0x0300..=0x036f | 0x0590..=0x0fff | 0x1780..=0x17ff | 0x200c..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069))
+    text.chars().any(|c| {
+        is_myanmar(c)
+            || matches!(u32::from(c), 0x0300..=0x036f | 0x0590..=0x0fff | 0x1780..=0x17ff | 0x200c..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069)
+    })
+}
+
+/// Myanmar and its Extended-A and Extended-B blocks. Its medial ra (U+103C) and vowel sign e
+/// (U+1031) are typed after the consonant they belong to but drawn before it, and a virama
+/// (U+1039) stacks the next consonant under the previous one: only the font's GSUB rules put
+/// them there, so one glyph per character draws them in the wrong place (#5114).
+pub fn is_myanmar(c: char) -> bool {
+    matches!(u32::from(c), 0x1000..=0x109f | 0xa9e0..=0xa9ff | 0xaa60..=0xaa7f)
 }
 
 pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
@@ -30,7 +40,9 @@ pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
         return Ok(ShapedRun { glyphs: Vec::new(), advance: 0.0 });
     }
     let face = FontRef::new(bytes).map_err(|e| e.to_string())?;
-    if text.chars().any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0750..=0x077f | 0x08a0..=0x0fff | 0x1780..=0x17ff)) && face.gsub().is_err() {
+    if text.chars().any(|c| is_myanmar(c) || matches!(u32::from(c), 0x0600..=0x06ff | 0x0750..=0x077f | 0x08a0..=0x0fff | 0x1780..=0x17ff))
+        && face.gsub().is_err()
+    {
         return Err("the source subset has no contextual substitution tables; select its full font".into());
     }
     let data = ShaperData::new(&face);
@@ -73,4 +85,55 @@ pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
         return Err("shaped row exceeds its geometry budget".into());
     }
     Ok(ShapedRun { glyphs, advance: x })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{required, shape};
+
+    const INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+
+    /// `bytes` without its `tag` table: the table directory is rebuilt without that record and
+    /// the remaining tables are copied after it. Checksums are not kept (nothing here reads them).
+    fn without_table(bytes: &[u8], tag: &[u8; 4]) -> Vec<u8> {
+        let count = usize::from(u16::from_be_bytes([bytes[4], bytes[5]]));
+        let records: Vec<&[u8]> = (0..count).map(|i| &bytes[12 + 16 * i..28 + 16 * i]).filter(|r| &r[..4] != tag).collect();
+        let mut out = bytes[..12].to_vec();
+        out[4..6].copy_from_slice(&(records.len() as u16).to_be_bytes());
+        let mut data = Vec::new();
+        let base = 12 + 16 * records.len();
+        for record in &records {
+            let offset = u32::from_be_bytes([record[8], record[9], record[10], record[11]]) as usize;
+            let length = u32::from_be_bytes([record[12], record[13], record[14], record[15]]) as usize;
+            out.extend_from_slice(&record[..8]);
+            out.extend_from_slice(&((base + data.len()) as u32).to_be_bytes());
+            out.extend_from_slice(&record[12..]);
+            data.extend_from_slice(&bytes[offset..offset + length]);
+            data.resize(data.len().next_multiple_of(4), 0);
+        }
+        out.extend_from_slice(&data);
+        out
+    }
+
+    /// #5114: Myanmar, in its main block and both extensions, is shaped before it is written, and
+    /// its neighbours (Georgian follows it) and Latin text are not made to need it.
+    #[test]
+    fn myanmar_text_is_shaped() {
+        for text in ["မြန်မာ", "ကျောင်း", "ဗုဒ္ဓ", "\u{aa60}", "\u{a9e0}", "ABC ေ"] {
+            assert!(required(text), "{text}");
+        }
+        for text in ["Stable text", "\u{10a0}", "\u{0fff}x"] {
+            assert_eq!(required(text), text.contains('\u{0fff}'), "{text}");
+        }
+    }
+
+    /// #5114: a program without GSUB can't put a Myanmar medial ra or vowel sign e before its
+    /// consonant, so it is refused (and the full face asked for) rather than drawn in typing order.
+    #[test]
+    fn myanmar_needs_the_programs_substitution_tables() {
+        let stripped = without_table(INTER, b"GSUB");
+        assert!(shape(&stripped, "Stable text").is_ok(), "the stripped program is still a usable font");
+        let refused = shape(&stripped, "မြန်မာ").unwrap_err();
+        assert!(refused.contains("no contextual substitution tables"), "{refused}");
+    }
 }

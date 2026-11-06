@@ -7609,6 +7609,222 @@ fn a_shaped_run_is_one_text_object_with_each_glyph_where_shaping_put_it() {
     assert_eq!(rise, 0.0, "the rise is reset after the run");
 }
 
+/// Issue #5114: Myanmar typed in a full face is written in the glyph order and forms the face's
+/// shaping gives it, not one glyph per character in typing order. A medial ra (U+103C) and a vowel
+/// sign e (U+1031) come after their consonant in the text but are drawn before it, and a virama
+/// (U+1039) stacks the next consonant: drawn in typing order, they land beside the wrong letter.
+/// Runs only when craft-fonts has a Myanmar (`Mymr`) face (`CRAFT_FONTS_DIR`).
+#[test]
+fn myanmar_is_drawn_in_the_order_its_face_shapes_it() {
+    let Some(face) = pdfcraft_fonts::CRAFT_FONTS.iter().find(|f| f.covers("Mymr")) else { return };
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET");
+    let resource = text::register_text_font(&mut doc, 0, face.bytes).unwrap();
+    let typed = "မြန်မာ ကျောင်း ဗုဒ္ဓ";
+    let style = text::BlockStyle { width: Some(400.0), resource: Some(resource), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some(typed), &style).unwrap();
+    assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, typed);
+    // The glyphs drawn, through each showing font's /CIDToGIDMap, in content order.
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let resources = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+    let fonts = doc.resolve(resources.get(b"Font").unwrap()).as_dict().unwrap().clone();
+    let glyph_map = |name: &[u8]| -> Option<Vec<u16>> {
+        let font = doc.resolve(fonts.get(name)?).as_dict()?.clone();
+        let descendant = doc.resolve(doc.resolve(font.get(b"DescendantFonts")?).as_array()?.first()?).as_dict()?.clone();
+        let pdfcraft_cos::Object::Stream(map) = &*doc.resolve(descendant.get(b"CIDToGIDMap")?) else { return None };
+        Some(map.decoded().ok()?.chunks(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect())
+    };
+    let (mut map, mut drawn) = (None, Vec::new());
+    for op in pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops {
+        match op.op.as_slice() {
+            b"Tf" => map = glyph_map(op.operands[0].as_name().unwrap()),
+            b"Tj" | b"TJ" => {
+                let Some(gids) = &map else { continue };
+                let strings: Vec<_> = match op.operands[0].as_array() {
+                    Some(items) => items.iter().filter_map(|i| i.as_string()).cloned().collect(),
+                    None => vec![op.operands[0].as_string().unwrap().clone()],
+                };
+                for code in strings.iter().flat_map(|s| s.bytes.chunks(2).map(|c| usize::from(u16::from_be_bytes([c[0], c[1]])))) {
+                    drawn.push(u32::from(gids[code]));
+                }
+            }
+            _ => {}
+        }
+    }
+    let shaped: Vec<u32> = pdfcraft_fonts::source_shaping::shape(face.bytes, typed).unwrap().glyphs.iter().map(|g| g.id.to_u32()).collect();
+    assert_eq!(drawn, shaped);
+    // The check can tell shaped from typing order: the medial ra is drawn first, before the
+    // consonant ma (U+1019) typed ahead of it.
+    let ma = pdfcraft_fonts::source_shaping::shape(face.bytes, "\u{1019}").unwrap().glyphs[0].id.to_u32();
+    assert_ne!(drawn.first(), Some(&ma), "{drawn:?}");
+}
+
+/// `bytes` without its `tag` table: the directory is rebuilt without that record and the other
+/// tables copied after it. Checksums are not kept (nothing here reads them).
+fn font_without_table(bytes: &[u8], tag: &[u8; 4]) -> Vec<u8> {
+    let count = usize::from(u16::from_be_bytes([bytes[4], bytes[5]]));
+    let records: Vec<&[u8]> = (0..count).map(|i| &bytes[12 + 16 * i..28 + 16 * i]).filter(|r| &r[..4] != tag).collect();
+    let mut out = bytes[..12].to_vec();
+    out[4..6].copy_from_slice(&(records.len() as u16).to_be_bytes());
+    let base = 12 + 16 * records.len();
+    let mut data = Vec::new();
+    for record in &records {
+        let offset = u32::from_be_bytes([record[8], record[9], record[10], record[11]]) as usize;
+        let length = u32::from_be_bytes([record[12], record[13], record[14], record[15]]) as usize;
+        out.extend_from_slice(&record[..8]);
+        out.extend_from_slice(&((base + data.len()) as u32).to_be_bytes());
+        out.extend_from_slice(&record[12..]);
+        data.extend_from_slice(&bytes[offset..offset + length]);
+        data.resize(data.len().next_multiple_of(4), 0);
+    }
+    out.extend_from_slice(&data);
+    out
+}
+
+/// A page showing `shown`, in a resource /F9 named `base_font` with `program` embedded and a glyph
+/// of `face` for each of `letters`, the way a producer writes a subset: code N+1 is letter N.
+fn subset_page(face: &[u8], program: &[u8], base_font: &str, letters: &str, shown: &str) -> Document {
+    let code = |c: char| letters.chars().position(|l| l == c).unwrap() + 1;
+    let hex: String = shown.chars().map(|c| format!("{:04X}", code(c))).collect();
+    let mut doc = text_page(&format!("BT /F9 12 Tf 72 700 Td <{hex}> Tj ET"));
+    let glyph = |c: char| pdfcraft_fonts::source_shaping::shape(face, &c.to_string()).unwrap().glyphs[0].id;
+    let mappings: Vec<_> = letters.chars().map(|c| (c.to_string(), glyph(c))).collect();
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let mut resources = page.dict.get(b"Resources").and_then(|o| doc.dict(o)).unwrap();
+    let mut fonts = resources.get(b"Font").and_then(|o| doc.dict(o)).unwrap();
+    let mut scratch = Dict::new();
+    let name = pdfcraft_fonts::embedding::embed_mapping(&mut doc, &mut scratch, face, "Subset", &mappings).unwrap();
+    let mut font = scratch.get(name.as_bytes()).and_then(|f| doc.dict(f)).unwrap();
+    // The cut-down program goes in after: embedding refuses one.
+    let descendant = font.get(b"DescendantFonts").and_then(|o| doc.resolve(o).as_array()?.first().cloned()).and_then(|o| doc.dict(&o)).unwrap();
+    let descriptor = descendant.get(b"FontDescriptor").and_then(|o| doc.dict(o)).unwrap();
+    let Some(Object::Ref(file)) = descriptor.get(b"FontFile2") else { panic!("no FontFile2") };
+    doc.set(*file, Object::Stream(Stream::flate(Dict::new(), program)));
+    font.set(b"BaseFont".to_vec(), Object::name(base_font));
+    fonts.set(b"F9".to_vec(), Object::Dict(font));
+    resources.set(b"Font".to_vec(), Object::Dict(fonts));
+    doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(resources))).unwrap();
+    doc
+}
+
+/// The font resource each of the page's text-showing operators draws with.
+fn fonts_shown(doc: &Document) -> Vec<Vec<u8>> {
+    let (mut font, mut shown) = (Vec::new(), Vec::new());
+    for op in pdfcraft_content::parse(&page_content_bytes(doc, 0)).ops {
+        match op.op.as_slice() {
+            b"Tf" => font = op.operands[0].as_name().unwrap().to_vec(),
+            b"Tj" | b"TJ" => shown.push(font.clone()),
+            _ => {}
+        }
+    }
+    shown
+}
+
+/// Issue #5114: "load that font" has to be enough. A subset's program can't shape, so a full face
+/// of its family takes the whole run, the letters the subset has with the ones it doesn't. Left to
+/// choose character by character they went to two fonts, and the row was refused as a mixed run.
+#[test]
+fn a_subset_that_cant_shape_gives_its_whole_run_to_a_loaded_full_face() {
+    const INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+    let no_cmap = font_without_table(INTER, b"cmap");
+    let page = || subset_page(INTER, &no_cmap, "ABCDEF+Inter-Regular", "ae", "ae");
+    // A combining mark is what makes this text need shaping.
+    for draft in ["ea\u{301}", "ae\u{301}b", "b e\u{301}", "ae\u{301}\nba"] {
+        let mut doc = page();
+        text::register_text_font(&mut doc, 0, INTER).unwrap();
+        text::rewrite_block(&mut doc, 0, 0, Some(draft), &text::BlockStyle::default()).unwrap_or_else(|e| panic!("{draft:?}: {e}"));
+        assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, draft);
+        assert!(!fonts_shown(&doc).contains(&b"F9".to_vec()), "{draft:?}");
+    }
+    // Text with nothing to shape stays in the subset.
+    let mut doc = page();
+    text::register_text_font(&mut doc, 0, INTER).unwrap();
+    text::rewrite_block(&mut doc, 0, 0, Some("ea"), &text::BlockStyle::default()).unwrap();
+    assert_eq!(fonts_shown(&doc), [b"F9".to_vec()]);
+    // Another family is never taken for the source's.
+    let mut doc = page();
+    text::register_text_font(&mut doc, 0, include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf")).unwrap();
+    let before = page_content_bytes(&doc, 0);
+    assert!(text::rewrite_block(&mut doc, 0, 0, Some("ae\u{301}"), &text::BlockStyle::default()).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+/// Issue #5114: a program that shapes a run doesn't help when its resource can't encode the run.
+/// The letters it can encode stayed in it and the rest went to another font, and the row was
+/// refused as a mixed run. A complete program stays the document's own, ahead of a loaded face.
+#[test]
+fn a_resource_that_cant_encode_its_run_gives_all_of_it_to_one_face() {
+    const INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+    let draft = "ae\u{301}b";
+    let drawn_with = |doc: &Document| -> Vec<Vec<u8>> {
+        let page = pdfcraft_model::pages(doc).remove(0);
+        let resources = page.dict.get(b"Resources").and_then(|o| doc.dict(o)).unwrap();
+        let fonts = resources.get(b"Font").and_then(|o| doc.dict(o)).unwrap();
+        fonts_shown(doc)
+            .iter()
+            .map(|name| pdfcraft_fonts::pdf::embedded_sfnt(doc, &fonts.get(name).and_then(|f| doc.dict(f)).unwrap()).unwrap())
+            .collect()
+    };
+    // A subset's program is not its source's to complete, so the loaded face takes the run.
+    let mut doc = subset_page(INTER, INTER, "ABCDEF+Inter-Regular", "ae", "ae");
+    text::register_text_font(&mut doc, 0, INTER).unwrap();
+    text::rewrite_block(&mut doc, 0, 0, Some(draft), &text::BlockStyle::default()).unwrap();
+    assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, draft);
+    assert!(!fonts_shown(&doc).contains(&b"F9".to_vec()));
+    // The document's complete program takes it, with or without a different program of that face
+    // loaded: without its kerning, so it can be told apart.
+    let other = font_without_table(INTER, b"GPOS");
+    for loaded in [true, false] {
+        let mut doc = subset_page(INTER, INTER, "Inter-Regular", "ae", "ae");
+        if loaded {
+            text::register_text_font(&mut doc, 0, &other).unwrap();
+        }
+        text::rewrite_block(&mut doc, 0, 0, Some(draft), &text::BlockStyle::default()).unwrap_or_else(|e| panic!("{loaded}: {e}"));
+        assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, draft);
+        assert!(!fonts_shown(&doc).contains(&b"F9".to_vec()), "{loaded}");
+        assert!(drawn_with(&doc).iter().all(|program| program == INTER), "{loaded}");
+    }
+    // A resource that encodes the run keeps it, with a full face on the page.
+    let mut doc = subset_page(INTER, INTER, "ABCDEF+Inter-Regular", "ae\u{301}", "ae");
+    text::register_text_font(&mut doc, 0, &other).unwrap();
+    text::rewrite_block(&mut doc, 0, 0, Some("ea\u{301}"), &text::BlockStyle::default()).unwrap();
+    assert!(drawn_with(&doc).iter().all(|program| program == INTER));
+}
+
+/// Issue #5114: a Myanmar subset without GSUB, with the full face of its family loaded or built in.
+/// Runs only when craft-fonts has a Myanmar (`Mymr`) face (`CRAFT_FONTS_DIR`).
+#[test]
+fn a_myanmar_subset_is_shaped_in_the_full_face_of_its_family() {
+    let Some(face) = pdfcraft_fonts::CRAFT_FONTS.iter().find(|f| f.covers("Mymr")) else {
+        eprintln!("skipping: built without a craft-fonts Myanmar face (set CRAFT_FONTS_DIR)");
+        return;
+    };
+    let no_gsub = font_without_table(face.bytes, b"GSUB");
+    let name = format!("ABCDEF+{}", face.name());
+    let page = || subset_page(face.bytes, &no_gsub, &name, "\u{1019}\u{1014}", "\u{1019}\u{1014}");
+    for loaded in [false, true] {
+        for draft in ["\u{1014}\u{1019}", "\u{1019}\u{1014}\u{1000}", "\u{1000} \u{1001}", "မြန်မာ"] {
+            let mut doc = page();
+            if loaded {
+                text::register_text_font(&mut doc, 0, face.bytes).unwrap();
+            }
+            text::rewrite_block(&mut doc, 0, 0, Some(draft), &text::BlockStyle::default()).unwrap_or_else(|e| panic!("{loaded} {draft:?}: {e}"));
+            assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, draft);
+            assert!(!fonts_shown(&doc).contains(&b"F9".to_vec()), "{loaded} {draft:?}");
+        }
+    }
+}
+
+/// Issue #5114: replacing a line writes one glyph per character, so Myanmar is refused there,
+/// with the page left alone, and the error says what does work.
+#[test]
+fn replacing_a_line_refuses_myanmar_and_points_at_the_paragraph() {
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET");
+    let before = page_content_bytes(&doc, 0);
+    let err = text::replace_line(&mut doc, 0, 0, "မြန်မာ").unwrap_err().to_string();
+    assert!(err.contains("edit its paragraph"), "{err}");
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
 #[test]
 fn a_subset_program_is_not_trusted_for_new_characters_and_the_error_names_the_character() {
     let mut doc = embedded_program_page("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET", "ABCDEF+Inter-Regular");
