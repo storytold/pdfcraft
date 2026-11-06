@@ -185,6 +185,7 @@ impl Automation {
         let recipe = Recipe::parse(self, args)?;
         let recursive = args.opt_bool("recursive")?.unwrap_or(false);
         let stop = args.opt_bool("stop_on_error")?.unwrap_or(false);
+        let dry_run = args.opt_bool("dry_run")?.unwrap_or(false);
         let paths = args.strs("paths")?;
         if paths.is_empty() || paths.len() > 1000 {
             return Err(Args::wrong("paths", "1 to 1000 files or folders"));
@@ -216,6 +217,16 @@ impl Automation {
                 files.push(json!({"path":path.to_string_lossy(),"status":"skipped","reason":if stopped {"stopped after error"} else {"unsupported input extension"}}));
                 continue;
             }
+            if dry_run {
+                let target = out.join(relative).with_extension("pdf");
+                let target = self.resolve(target.to_str().ok_or_else(|| failed("output path is not UTF-8"))?, true)?;
+                if !target.starts_with(&out) {
+                    files.push(json!({"path":path.to_string_lossy(),"status":"error","error":"output path leaves out_dir"}));
+                    continue;
+                }
+                files.push(json!({"path":path.to_string_lossy(),"status":"planned","output":target.to_string_lossy().replace('\\', "/")}));
+                continue;
+            }
             // Recheck confinement and links before reading a discovered file.
             let result: Result<_> = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let current = self.resolve(path.to_str().ok_or_else(|| failed("input path is not UTF-8"))?, false)?;
@@ -245,7 +256,7 @@ impl Automation {
             }
         }
         let skipped = files.len().saturating_sub(completed + failed_count);
-        Ok(json!({"completed":completed,"failed":failed_count,"skipped":skipped,"stopped":stopped,"files":files}))
+        Ok(json!({"dry_run":dry_run,"completed":completed,"failed":failed_count,"skipped":skipped,"stopped":stopped,"files":files}))
     }
 }
 
@@ -278,5 +289,21 @@ mod tests {
         assert!(discovery.walk(Path::new("absent"), Path::new(""), Path::new("output"), true, 0).unwrap_err().to_string().contains("10000"));
         discovery.visited = 0;
         assert!(discovery.walk(Path::new("absent"), Path::new(""), Path::new("output"), true, MAX_DEPTH + 1).unwrap_err().to_string().contains("64"));
+    }
+
+    #[test]
+    fn doc_batch_dry_run_lists_outputs_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("input")).unwrap();
+        let pdf = Session::new().create_from_text("Doc", "Hello").unwrap();
+        std::fs::write(dir.path().join("input/a.pdf"), &*pdf).unwrap();
+        let auto = Automation::new().with_root(dir.path()).unwrap();
+        let report = auto.doc_batch(&Args(&json!({"paths":["input"],"steps":["optimize"],"out_dir":"out","dry_run":true}))).unwrap();
+        assert_eq!(report["dry_run"], true, "{report}");
+        assert_eq!(report["completed"], 0, "{report}");
+        assert_eq!(report["failed"], 0, "{report}");
+        assert_eq!(report["files"][0]["status"], "planned", "{report}");
+        assert!(report["files"][0]["output"].as_str().unwrap().ends_with("out/a.pdf"), "{report}");
+        assert!(!dir.path().join("out").exists());
     }
 }
