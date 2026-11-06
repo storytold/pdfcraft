@@ -73,6 +73,12 @@ pub enum FormError {
     /// checked before any of the field's scripts run.
     #[error("{0}")]
     Format(String),
+    /// The field's validate action (ISO 32000-2 Table 199 `/V`: it "may check the new value
+    /// for validity") refused the value: a range it is outside, or a script that set `event.rc`
+    /// to false. The message is the script's alert, or the range's. Nothing was changed, and
+    /// the field keeps the value it had.
+    #[error("{0}")]
+    Rejected(String),
     #[error("{0}")]
     Cos(#[from] pdfcraft_cos::CosError),
 }
