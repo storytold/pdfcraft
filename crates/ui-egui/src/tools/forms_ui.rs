@@ -105,10 +105,15 @@ fn editable_combo(f: &FormField) -> bool {
 /// option it picks (a free value typed into an editable one has no option, and shows as is).
 pub(crate) fn draft_text(f: &FormField) -> String {
     let value = f.value.first().cloned().unwrap_or_default();
-    if f.kind == FormFieldKind::Combo
-        && let Some((_, shown)) = f.options.iter().find(|(export, _)| *export == value)
-    {
-        return shown.clone();
+    if f.kind == FormFieldKind::Combo {
+        if let Some((export, shown)) = f.indices.first().and_then(|&idx| f.options.get(idx))
+            && (export == &value || shown == &value || value.is_empty())
+        {
+            return shown.clone();
+        }
+        if let Some((_, shown)) = f.options.iter().find(|(export, _)| *export == value) {
+            return shown.clone();
+        }
     }
     value
 }
@@ -269,8 +274,8 @@ pub(crate) fn page_input(
             let zoom = (r.height() as f64) / height_pt;
             let y_pt = (p.y - r.min.y) as f64 / zoom;
             let rows = w.list.unwrap_or(form_appearance::ListRows { top: 0, inset: 2.0, row: 12.0 * 1.15, size: 12.0 });
-            let picked_indices: Vec<usize> = f.value.iter().filter_map(|v| f.options.iter().position(|(e, _)| e == v)).collect();
-            let top = form_appearance::ListRows::top_showing(rows.top, &picked_indices, rows.visible(height_pt), f.options.len());
+            let picked_indices: &[usize] = &f.indices;
+            let top = form_appearance::ListRows::top_showing(rows.top, picked_indices, rows.visible(height_pt), f.options.len());
             if let Some(opt_idx) = rows.option_at(top, y_pt).filter(|&i| i < f.options.len()) {
                 let export = &f.options[opt_idx].0;
                 let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
@@ -612,19 +617,19 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
             let zoom = (xf.rect.width() / unrotated_w.max(1.0)) as f64;
             let rows = w.list.unwrap_or(form_appearance::ListRows { top: 0, inset: 2.0, row: 12.0 * 1.15, size: 12.0 });
             let height_pt = if matches!(w.rotation, 90 | 270) { (w.rect[2] - w.rect[0]).max(1.0) } else { (w.rect[3] - w.rect[1]).max(1.0) };
-            let picked_indices: Vec<usize> = f.value.iter().filter_map(|v| f.options.iter().position(|(e, _)| e == v)).collect();
-            let top = form_appearance::ListRows::top_showing(rows.top, &picked_indices, rows.visible(height_pt), f.options.len());
+            let picked_indices: &[usize] = &f.indices;
+            let top = form_appearance::ListRows::top_showing(rows.top, picked_indices, rows.visible(height_pt), f.options.len());
             let font_size = (rows.size * zoom).clamp(6.0, 64.0) as f32;
             let row_h = (rows.row * zoom) as f32;
             let inset = (rows.inset * zoom) as f32;
             let p = painter.with_clip_rect(r);
             let mut y = r.min.y + inset;
-            for (export, display) in f.options.iter().skip(top) {
+            for (idx, (_, display)) in f.options.iter().enumerate().skip(top) {
                 if y + row_h > r.max.y {
                     break;
                 }
                 let row_rect = Rect::from_min_size(egui::pos2(r.min.x + 1.0, y), egui::vec2(r.width() - 2.0, row_h));
-                if f.value.contains(export) {
+                if picked_indices.contains(&idx) {
                     p.rect_filled(row_rect, CornerRadius::ZERO, Color32::from_rgb(0x99, 0xC0, 0xDC));
                 }
                 p.text(
@@ -1034,5 +1039,38 @@ mod tests {
         assert_eq!(largest.get(), MAX_SCREEN_FONT, "laid out at the bound");
         assert_eq!(bounded_line_width(10.0, measure), 30.0, "below it, at the size itself");
         assert_eq!(largest.get(), MAX_SCREEN_FONT);
+    }
+
+    #[test]
+    fn draft_text_uses_selected_index_for_combo_with_duplicate_exports() {
+        use pdfcraft_cos::ObjRef;
+        use pdfcraft_engine::{FormField, FormFieldKind};
+
+        let mut field = FormField {
+            name: "combo".into(),
+            obj: ObjRef::new(1, 0),
+            kind: FormFieldKind::Combo,
+            value: vec!["dup".into()],
+            default: Vec::new(),
+            flags: 0,
+            max_len: None,
+            options: vec![
+                ("dup".into(), "First Option".into()),
+                ("dup".into(), "Second Option".into()),
+            ],
+            indices: vec![1],
+            da: String::new(),
+            quadding: 0,
+            tooltip: None,
+            widgets: Vec::new(),
+            actions: Default::default(),
+            button: None,
+        };
+
+        assert_eq!(super::draft_text(&field), "Second Option");
+
+        field.value = vec!["Custom Free Text".into()];
+        field.indices.clear();
+        assert_eq!(super::draft_text(&field), "Custom Free Text");
     }
 }

@@ -159,6 +159,9 @@ pub struct Field {
     pub max_len: Option<usize>,
     /// Choice options: (export value, display text).
     pub options: Vec<(String, String)>,
+    /// Choice: 0-based indices in `options` of the selected items (`/I`, or the indices matching
+    /// `value`).
+    pub indices: Vec<usize>,
     /// Default appearance string (`/DA`, inherited from the form if absent).
     pub da: String,
     /// Quadding: 0 left, 1 centred, 2 right.
@@ -232,12 +235,28 @@ impl Field {
     /// The value as one string: text, the state name, or the selected display texts.
     pub fn display_value(&self) -> String {
         match self.kind {
-            FieldKind::Combo | FieldKind::List => self
-                .value
-                .iter()
-                .map(|v| self.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone()))
-                .collect::<Vec<_>>()
-                .join(", "),
+            FieldKind::Combo | FieldKind::List => {
+                let mut used = vec![false; self.indices.len()];
+                let mut texts = Vec::with_capacity(self.value.len());
+                for v in &self.value {
+                    let matched = self.indices.iter().enumerate().find_map(|(pos, &idx)| {
+                        if !used[pos] && self.options.get(idx).is_some_and(|(e, _)| e == v) {
+                            used[pos] = true;
+                            self.options.get(idx).map(|(_, d)| d.as_str())
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(d) = matched {
+                        texts.push(d);
+                    } else if let Some((_, d)) = self.options.iter().find(|(e, _)| e == v) {
+                        texts.push(d.as_str());
+                    } else {
+                        texts.push(v.as_str());
+                    }
+                }
+                texts.join(", ")
+            }
             _ => self.value.join(", "),
         }
     }

@@ -274,9 +274,37 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             }
             // Accept export values or display texts; free text only in editable combo boxes.
             let mut exports = Vec::new();
+            let mut picked_indices = Vec::new();
             for v in &vals {
-                match f.options.iter().find(|(e, d)| e == v || d == v) {
-                    Some((e, _)) => exports.push(e.clone()),
+                let first_match = f
+                    .options
+                    .iter()
+                    .enumerate()
+                    .find(|(i, (e, d))| !picked_indices.contains(i) && (e == v || d == v));
+                let matched = match first_match {
+                    Some((i, (e, _))) if e == v => {
+                        let idx = f
+                            .indices
+                            .iter()
+                            .copied()
+                            .find(|&ci| !picked_indices.contains(&ci) && f.options.get(ci).is_some_and(|(ce, _)| ce == v))
+                            .unwrap_or(i);
+                        Some((idx, &f.options[idx]))
+                    }
+                    Some((i, _)) => Some((i, &f.options[i])),
+                    None => {
+                        // When an option is repeated (e.g. multi-select list default value [(A) (A)]),
+                        // reuse the already-picked matching option instead of failing.
+                        f.options.iter().enumerate().find(|(_, (e, d))| e == v || d == v)
+                    }
+                };
+                match matched {
+                    Some((i, (e, _))) => {
+                        exports.push(e.clone());
+                        if !picked_indices.contains(&i) {
+                            picked_indices.push(i);
+                        }
+                    }
                     None if f.kind == FieldKind::Combo && f.has(flags::EDIT) => exports.push(v.clone()),
                     None if f.options.is_empty() => exports.push(v.clone()),
                     None => {
@@ -285,8 +313,7 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
                     }
                 }
             }
-            let mut indices: Vec<Object> =
-                exports.iter().filter_map(|e| f.options.iter().position(|(x, _)| x == e)).map(|i| Object::Int(i as i64)).collect();
+            let mut indices: Vec<Object> = picked_indices.iter().map(|&i| Object::Int(i as i64)).collect();
             // /I lists option indices in ascending order; /V keeps the caller's value order.
             // Every entry above is an integer, so this sorts by its numeric option index.
             indices.sort_unstable_by_key(Object::as_int);
