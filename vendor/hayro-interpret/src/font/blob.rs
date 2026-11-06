@@ -197,6 +197,10 @@ impl Debug for OpenTypeFontBlob {
 
 impl OpenTypeFontBlob {
     pub(crate) fn new(data: FontData, index: u32) -> Option<Self> {
+        // PdfCraft patch (76): a subset whose `hmtx` kept the full font's length is read through a
+        // copy with that length corrected.
+        let font = FontRef::from_index(data.as_ref().as_ref(), index).ok()?;
+        let data = repaired_horizontal_metrics(&font).unwrap_or(data);
         // Check first whether the font is valid so we can unwrap in the closure.
         let f = FontRef::from_index(data.as_ref().as_ref(), index).ok()?;
         // Reject fonts with invalid post table version, fixes pdf.js issue 9462. Not sure if there
@@ -364,6 +368,77 @@ impl OpenTypeFontBlob {
     }
 }
 
+/// PdfCraft patch (76): a TrueType subset whose `hmtx` entry in the table directory kept the
+/// length the table had in the full font runs past the end of the font, so skrifa finds no
+/// `hmtx` and, needing its advances for the phantom points, builds no outline for any glyph.
+/// OpenType's `hmtx` is four bytes for each of `hhea`'s `numberOfHMetrics` and two for each
+/// other glyph `maxp` counts. When the recorded length is longer and those bytes lie after the
+/// table directory and belong to no other table, this returns a copy of the font with only that
+/// length corrected. `None` keeps the font as it is: its `hmtx` reads, it has no `glyf`, the
+/// counts are invalid or don't fit, or it is over 64 MiB.
+fn repaired_horizontal_metrics(font: &FontRef<'_>) -> Option<FontData> {
+    let bytes = font.data().as_bytes();
+    if bytes.len() > 64 * 1024 * 1024 || font.hmtx().is_ok() || font.glyf().is_err() {
+        return None;
+    }
+    let metric_count = usize::from(font.hhea().ok()?.number_of_h_metrics());
+    let glyph_count = usize::from(font.maxp().ok()?.num_glyphs());
+    if metric_count == 0 {
+        return None;
+    }
+    let trailing_count = glyph_count.checked_sub(metric_count)?;
+    let length = metric_count
+        .checked_mul(4)?
+        .checked_add(trailing_count.checked_mul(2)?)?;
+
+    let records = font.table_directory().table_records();
+    let tag = skrifa::raw::types::Tag::new(b"hmtx");
+    let record_index = records.iter().position(|record| record.tag() == tag)?;
+    let record = records.get(record_index)?;
+    if usize::try_from(record.length()).ok()? <= length {
+        return None;
+    }
+    let offset = usize::try_from(record.offset()).ok()?;
+    let end = offset.checked_add(length)?;
+    bytes.get(offset..end)?;
+    for (index, other) in records.iter().enumerate() {
+        let start = usize::try_from(other.offset()).ok()?;
+        let other_end = start.saturating_add(usize::try_from(other.length()).ok()?);
+        if index != record_index && offset.max(start) < end.min(other_end) {
+            return None;
+        }
+    }
+
+    let directory_offset = bytes
+        .len()
+        .checked_sub(font.table_directory().offset_data().as_bytes().len())?;
+    let directory_end = directory_offset
+        .checked_add(12)?
+        .checked_add(records.len().checked_mul(16)?)?;
+    if offset < directory_end {
+        return None;
+    }
+    let length_offset = directory_offset
+        .checked_add(12)?
+        .checked_add(record_index.checked_mul(16)?)?
+        .checked_add(12)?;
+    let length_end = length_offset.checked_add(4)?;
+    bytes.get(length_offset..length_end)?;
+
+    let mut repaired = Vec::new();
+    repaired.try_reserve_exact(bytes.len()).ok()?;
+    repaired.extend_from_slice(bytes);
+    repaired
+        .get_mut(length_offset..length_end)?
+        .copy_from_slice(&u32::try_from(length).ok()?.to_be_bytes());
+    warn!(
+        "repaired overlong hmtx table length from {} to {} for rendering",
+        record.length(),
+        length
+    );
+    Some(Arc::new(repaired))
+}
+
 #[derive(Yokeable, Clone)]
 struct OTFYoke<'a> {
     font_ref: FontRef<'a>,
@@ -475,5 +550,195 @@ mod tests {
         let shared = blob.clone();
         assert!(Arc::ptr_eq(&blob.1, &shared.1), "clones share one name map");
         assert_eq!(shared.glyph_index_by_name("Alpha"), Some(GlyphId::new(1)));
+    }
+
+    fn true_type_with_horizontal_metrics() -> (Vec<u8>, usize) {
+        let mut head = vec![0; 54];
+        head[..4].copy_from_slice(&0x0001_0000_u32.to_be_bytes());
+        head[12..16].copy_from_slice(&0x5f0f_3cf5_u32.to_be_bytes());
+        head[18..20].copy_from_slice(&1000_u16.to_be_bytes());
+        head[40..42].copy_from_slice(&500_i16.to_be_bytes());
+        head[42..44].copy_from_slice(&600_i16.to_be_bytes());
+        head[50..52].copy_from_slice(&1_i16.to_be_bytes());
+
+        let mut hhea = vec![0; 36];
+        hhea[..4].copy_from_slice(&0x0001_0000_u32.to_be_bytes());
+        hhea[4..6].copy_from_slice(&600_i16.to_be_bytes());
+        hhea[34..36].copy_from_slice(&2_u16.to_be_bytes());
+
+        let mut maxp = vec![0; 32];
+        maxp[..4].copy_from_slice(&0x0001_0000_u32.to_be_bytes());
+        maxp[4..6].copy_from_slice(&2_u16.to_be_bytes());
+        maxp[6..8].copy_from_slice(&4_u16.to_be_bytes());
+        maxp[8..10].copy_from_slice(&1_u16.to_be_bytes());
+        maxp[14..16].copy_from_slice(&2_u16.to_be_bytes());
+
+        let mut glyph = Vec::new();
+        for value in [1_i16, 0, 0, 500, 600, 3, 0] {
+            glyph.extend(value.to_be_bytes());
+        }
+        glyph.extend([1_u8; 4]);
+        for value in [0_i16, 500, 0, -500, 0, 0, 600, 0] {
+            glyph.extend(value.to_be_bytes());
+        }
+        let mut loca = Vec::new();
+        for offset in [0_u32, 0, glyph.len() as u32] {
+            loca.extend(offset.to_be_bytes());
+        }
+        let mut hmtx = Vec::new();
+        for value in [500_u16, 0, 500, 0] {
+            hmtx.extend(value.to_be_bytes());
+        }
+
+        let tables = [
+            (*b"glyf", glyph),
+            (*b"head", head),
+            (*b"hhea", hhea),
+            (*b"hmtx", hmtx),
+            (*b"loca", loca),
+            (*b"maxp", maxp),
+        ];
+        let mut font = vec![0; 12 + tables.len() * 16];
+        font[..4].copy_from_slice(&0x0001_0000_u32.to_be_bytes());
+        font[4..6].copy_from_slice(&(tables.len() as u16).to_be_bytes());
+        font[6..8].copy_from_slice(&64_u16.to_be_bytes());
+        font[8..10].copy_from_slice(&2_u16.to_be_bytes());
+        font[10..12].copy_from_slice(&32_u16.to_be_bytes());
+        let mut hmtx_record = 0;
+        for (table_index, (tag, table)) in tables.into_iter().enumerate() {
+            while !font.len().is_multiple_of(4) {
+                font.push(0);
+            }
+            let record = 12 + table_index * 16;
+            let offset = font.len() as u32;
+            font[record..record + 4].copy_from_slice(&tag);
+            font[record + 8..record + 12].copy_from_slice(&offset.to_be_bytes());
+            font[record + 12..record + 16].copy_from_slice(&(table.len() as u32).to_be_bytes());
+            if tag == *b"hmtx" {
+                hmtx_record = record;
+            }
+            font.extend(table);
+        }
+        (font, hmtx_record)
+    }
+
+    #[test]
+    fn overlong_subset_hmtx_retains_glyph_outlines() {
+        let (mut font, hmtx_record) = true_type_with_horizontal_metrics();
+        let valid =
+            OpenTypeFontBlob::new(Arc::new(font.clone()), 0).expect("the synthetic font parses");
+        assert!(!valid.outline_glyph(GlyphId::new(1)).elements().is_empty());
+
+        let stale_length = font.len() as u32 + 4096;
+        font[hmtx_record + 12..hmtx_record + 16].copy_from_slice(&stale_length.to_be_bytes());
+        let subset = OpenTypeFontBlob::new(Arc::new(font), 0)
+            .expect("a stale table length must not hide the font");
+        assert!(
+            !subset.outline_glyph(GlyphId::new(1)).elements().is_empty(),
+            "the subset glyph must remain visible when hmtx retains the full font's length"
+        );
+    }
+
+    #[test]
+    fn valid_horizontal_metrics_reuse_the_original_font_bytes() {
+        let (font, _) = true_type_with_horizontal_metrics();
+        let data: FontData = Arc::new(font);
+        let blob = OpenTypeFontBlob::new(data.clone(), 0).expect("the test font parses");
+        assert!(Arc::ptr_eq(&data, &blob.font_data()));
+    }
+
+    #[test]
+    fn horizontal_metric_repair_changes_only_the_rendering_copy() {
+        let (mut font, hmtx_record) = true_type_with_horizontal_metrics();
+        let stale_length = font.len() as u32 + 4096;
+        font[hmtx_record + 12..hmtx_record + 16].copy_from_slice(&stale_length.to_be_bytes());
+        let original_bytes = font.clone();
+        let data: FontData = Arc::new(font);
+        let blob = OpenTypeFontBlob::new(data.clone(), 0).expect("the subset font parses");
+        let mut expected = original_bytes.clone();
+        expected[hmtx_record + 12..hmtx_record + 16].copy_from_slice(&8_u32.to_be_bytes());
+        assert_eq!(data.as_ref().as_ref(), original_bytes.as_slice());
+        assert_eq!(blob.font_data().as_ref().as_ref(), expected.as_slice());
+        assert!(!Arc::ptr_eq(&data, &blob.font_data()));
+    }
+
+    #[test]
+    fn horizontal_metric_repair_counts_trailing_left_side_bearings() {
+        let (mut font, hmtx_record) = true_type_with_horizontal_metrics();
+        let reference = FontRef::new(&font).expect("the test font parses");
+        let offset_of = |tag: &[u8; 4]| {
+            reference
+                .table_directory()
+                .table_records()
+                .iter()
+                .find(|record| record.tag() == skrifa::raw::types::Tag::new(tag))
+                .expect("the test font has the table")
+                .offset() as usize
+        };
+        let (hhea_offset, hmtx_offset) = (offset_of(b"hhea"), offset_of(b"hmtx"));
+        // One long metric for both glyphs: glyph 1 has only its left side bearing.
+        font[hhea_offset + 34..hhea_offset + 36].copy_from_slice(&1_u16.to_be_bytes());
+        font[hmtx_offset + 4..hmtx_offset + 6].copy_from_slice(&0_i16.to_be_bytes());
+        let stale_length = font.len() as u32 + 4096;
+        font[hmtx_record + 12..hmtx_record + 16].copy_from_slice(&stale_length.to_be_bytes());
+        let blob = OpenTypeFontBlob::new(Arc::new(font), 0).expect("the subset font parses");
+        let repaired = blob.font_data();
+        assert_eq!(
+            repaired.as_ref().as_ref()[hmtx_record + 12..hmtx_record + 16],
+            6_u32.to_be_bytes()
+        );
+        assert!(!blob.outline_glyph(GlyphId::new(1)).elements().is_empty());
+    }
+
+    #[test]
+    fn horizontal_metric_repair_refuses_invalid_counts_and_overlapping_tables() {
+        let (font, hmtx_record) = true_type_with_horizontal_metrics();
+        let reference = FontRef::new(&font).expect("the test font parses");
+        let records = reference.table_directory().table_records();
+        let hhea_offset = records
+            .iter()
+            .find(|record| record.tag() == skrifa::raw::types::Tag::new(b"hhea"))
+            .expect("the test font has hhea")
+            .offset() as usize;
+        let hhea_record = 12
+            + records
+                .iter()
+                .position(|record| record.tag() == skrifa::raw::types::Tag::new(b"hhea"))
+                .expect("the test font has hhea")
+                * 16;
+        let loca_record = 12
+            + records
+                .iter()
+                .position(|record| record.tag() == skrifa::raw::types::Tag::new(b"loca"))
+                .expect("the test font has loca")
+                * 16;
+        let hmtx_offset = records
+            .iter()
+            .find(|record| record.tag() == skrifa::raw::types::Tag::new(b"hmtx"))
+            .expect("the test font has hmtx")
+            .offset();
+        for case in 0..5 {
+            let mut malformed = font.clone();
+            let stale_length = malformed.len() as u32 + 4096;
+            malformed[hmtx_record + 12..hmtx_record + 16]
+                .copy_from_slice(&stale_length.to_be_bytes());
+            match case {
+                0 => malformed[hhea_offset + 34..hhea_offset + 36]
+                    .copy_from_slice(&0_u16.to_be_bytes()),
+                1 => malformed[hhea_offset + 34..hhea_offset + 36]
+                    .copy_from_slice(&3_u16.to_be_bytes()),
+                2 => malformed[loca_record + 8..loca_record + 12]
+                    .copy_from_slice(&(hmtx_offset + 4).to_be_bytes()),
+                3 => malformed[loca_record + 8..loca_record + 12]
+                    .copy_from_slice(&hmtx_offset.to_be_bytes()),
+                _ => malformed[hhea_record + 12..hhea_record + 16]
+                    .copy_from_slice(&(hmtx_offset - hhea_offset as u32 + 2).to_be_bytes()),
+            }
+            let data: FontData = Arc::new(malformed);
+            let blob =
+                OpenTypeFontBlob::new(data.clone(), 0).expect("the table directory still parses");
+            assert!(Arc::ptr_eq(&data, &blob.font_data()), "case {case}");
+            assert!(blob.outline_glyph(GlyphId::new(1)).elements().is_empty());
+        }
     }
 }
