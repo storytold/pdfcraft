@@ -1,4 +1,6 @@
-use super::layout::{Flow, along_baseline, arrange_flow, compatible, continues, from_upright, to_upright, unrolled};
+use super::layout::{
+    Flow, MIN_STACK, across_in_columns, along_baseline, arrange_flow, compatible, continues, from_upright, stacked_down, to_upright, unrolled,
+};
 use super::{
     Affine, BezPath, BlendMode, ClipPath, Context, Device, Glyph, GlyphDrawMode, HashMap, Image, InterpreterCache, InterpreterSettings, PageText,
     Paint, PathDrawMode, Pdf, Rect, Shape, SoftMask, TextFilter, TextGlyph, TransformExt, interpret_page,
@@ -438,6 +440,60 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
             straight.push((*u, vec![i]));
         }
     }
+    // Upright glyphs stacked down a column are vertical text written without a vertical font. The
+    // writing direction is down even though each outline is upright, so they are marked as such
+    // and laid out in the quarter turn that reads down and right to left -- where a vertical
+    // font's text already goes -- rather than as the rows their baselines would otherwise make
+    // (#3712). Marking the direction is what makes Copy keep the columns apart as well: it reads
+    // the direction to tell a column of text from a row of cells.
+    let mut glyphs = glyphs;
+    if let Some(upright_ids) = quarters.first().filter(|ids| ids.len() >= MIN_STACK).cloned() {
+        let stacked = stacked_down(&glyphs, &upright_ids);
+        if stacked.iter().any(|s| *s) {
+            let mut down: Vec<usize> = Vec::new();
+            let mut across: Vec<usize> = Vec::new();
+            for (k, &i) in upright_ids.iter().enumerate() {
+                if stacked.get(k).copied().unwrap_or(false) {
+                    if let Some(g) = glyphs.get_mut(i) {
+                        g.0 = 1;
+                        g.1 = [0.0, 1.0];
+                        g.2.direction = [0.0, 1.0];
+                    }
+                    down.push(i);
+                } else {
+                    across.push(i);
+                }
+            }
+            if let Some(q) = quarters.get_mut(0) {
+                *q = across;
+            }
+            if let Some(q) = quarters.get_mut(1) {
+                down.extend(q.iter().copied());
+                down.sort_unstable();
+                *q = down;
+            }
+        }
+    }
+    // A number set across a vertical column (縱中橫) is horizontal glyphs among vertical ones: it
+    // joins the column at its own height, with a box of its own in the column's frame (#3711).
+    // Looked up per glyph while the flows are built, so a map rather than a list: a page can hold
+    // as many of these runs as it has columns (#3812 review).
+    let mut placed: std::collections::HashMap<usize, [f32; 4]> = std::collections::HashMap::new();
+    if let (Some(across), Some(down)) = (quarters.first().cloned(), quarters.get(1).cloned())
+        && !across.is_empty()
+        && !down.is_empty()
+    {
+        placed = across_in_columns(&glyphs, &across, &down, w).into_iter().collect();
+        if !placed.is_empty() {
+            if let Some(q) = quarters.get_mut(0) {
+                q.retain(|i| !placed.contains_key(i));
+            }
+            if let Some(q) = quarters.get_mut(1) {
+                q.extend(placed.keys().copied());
+                q.sort_unstable();
+            }
+        }
+    }
     // A horizontal heading must not force a vertical body back into horizontal line grouping.
     // Group each writing direction independently, then join flows from their topmost position.
     let upright = |quarters: [Vec<usize>; 4]| {
@@ -446,7 +502,13 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
             .enumerate()
             .filter(|(_, ids)| !ids.is_empty())
             .map(|(quarter, ids)| {
-                let rects = ids.iter().map(|&i| to_upright(glyphs[i].2.rect, quarter as u8, w, h)).collect();
+                let rects = ids
+                    .iter()
+                    .map(|&i| match placed.get(&i) {
+                        Some(r) => *r,
+                        None => to_upright(glyphs[i].2.rect, quarter as u8, w, h),
+                    })
+                    .collect();
                 arrange_flow(&glyphs, ids, rects, Some(quarter as u8))
             })
             .collect();
@@ -474,7 +536,14 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
         rank = vec![usize::MAX; glyphs.len()];
         let mut nearest: [Vec<usize>; 4] = Default::default();
         for (i, g) in glyphs.iter().enumerate() {
-            if let Some(q) = nearest.get_mut(g.0) {
+            // The quarter the first grouping used, not the glyph's own. A number set across a
+            // column keeps `g.0 == 0`, and its box in `placed` is in the column's frame -- the
+            // quarter it was moved to above. Grouping it here by `g.0` put a quarter-1 box in the
+            // quarter-0 flow, so one `arrange_flow` laid out two coordinate frames together and
+            // the ranks it produced put turned or curved text in the wrong place in the reading
+            // order (noted in review).
+            let quarter = if placed.contains_key(&i) { 1 } else { g.0 };
+            if let Some(q) = nearest.get_mut(quarter) {
                 q.push(i);
             }
         }
