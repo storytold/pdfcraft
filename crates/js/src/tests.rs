@@ -27,7 +27,11 @@ fn go(script: &str, event: &Event) -> Outcome {
 fn calculate_now_reports_errors_and_continues() {
     let calculations =
         vec![("bad".into(), "getField('price').value = 'partial'; throw new Error('broken');".into()), ("good".into(), "event.value = 'ok';".into())];
-    let state = Arc::new(vec![FieldState::new("bad", FieldType::Text, vec![]), FieldState::new("good", FieldType::Text, vec![])]);
+    let state = Arc::new(vec![
+        FieldState::new("bad", FieldType::Text, vec![]),
+        FieldState::new("good", FieldType::Text, vec![]),
+        FieldState::new("price", FieldType::Text, vec![]),
+    ]);
     let outcome = run_shared_calculations(
         "calculateNow(); console.println('continued');",
         &Event::doc("Console"),
