@@ -9622,3 +9622,39 @@ fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
         }
     }
 }
+
+/// A stream with no `endstream` after it, as a producer that writes `endstrea` after every stream
+/// leaves it, is the bytes its `/Length` gives: "how many bytes of the PDF file are used for the
+/// stream's data" (ISO 32000-2 7.3.8.2). Nothing found its end, so the page's content was lost and
+/// the page drew blank, while other readers draw it. Vendored hayro-syntax patch 36.
+#[test]
+fn a_content_stream_without_endstream_is_drawn_to_its_length() {
+    use super::*;
+    let content = "1 0 0 rg 0 0 200 200 re f";
+    let centre = |end: &str| -> [u8; 4] {
+        let page = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\n{end}\nendobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+            content.len()
+        );
+        let page = PageRenderer::new(Arc::new(page.into_bytes()), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    assert_eq!(centre("endstream"), [255, 0, 0, 255]);
+    for end in ["endstrea", "", "end"] {
+        assert_eq!(centre(end), [255, 0, 0, 255], "{end:?}");
+    }
+}

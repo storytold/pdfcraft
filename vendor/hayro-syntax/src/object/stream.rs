@@ -322,6 +322,10 @@ impl<'a> Readable<'a> for Stream<'a> {
                 r.jump(offset);
                 parse_fallback(r, &dict)
             })
+            .or_else(|| {
+                r.jump(offset);
+                parse_declared(r, &dict)
+            })
             .error_none("was unable to manually parse the stream")
     }
 }
@@ -427,6 +431,23 @@ fn parse_fallback<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>>
     r.read_bytes(endstream_offset)?;
     r.skip_white_spaces();
     r.forward_tag(b"endstream")?;
+
+    Some(Stream::new(data, dict.clone()))
+}
+
+/// PdfCraft patch (36): a stream with no `endstream` after it, as a producer that writes
+/// `endstrea` leaves every stream, is the bytes its `/Length` gives, "how many bytes of the PDF
+/// file are used for the stream's data" (ISO 32000-2 7.3.8.2), as other readers take it. Neither
+/// parse above found it, so every font and page content of such a file was lost and its pages
+/// drew blank. Called only after [`parse_fallback`] found no `endstream` in the rest of the data,
+/// so it doesn't search again, and only a `/Length` the data holds is read.
+fn parse_declared<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>> {
+    let length = dict.get::<u32>(LENGTH)?;
+
+    r.skip_white_spaces_and_comments();
+    r.forward_tag(b"stream")?;
+    forward_stream_eol(r)?;
+    let data = r.read_bytes(length as usize)?;
 
     Some(Stream::new(data, dict.clone()))
 }
