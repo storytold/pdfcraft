@@ -2,7 +2,7 @@ use super::create::finite;
 use super::draw::set_appearance;
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, drawn_upright, is_fill_sign, page_ref, page_refs};
 use super::modify::{fillable, touch, unlocked};
-use super::types::{FLAG_LOCKED, LineEnding, Meta, NoteIcon, Rgb};
+use super::types::{BorderShape, FLAG_LOCKED, LineEnding, Meta, NoteIcon, Rgb};
 use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, appearance};
 
 // ── reading ─────────────────────────────────────────────────────────────────────────────────
@@ -226,6 +226,15 @@ pub struct Props {
     pub fill: Option<Rgb>,
     /// Text boxes, typewriter text and callouts: the `/DA` font size in points.
     pub font_size: Option<f64>,
+    /// Text boxes, typewriter text and callouts: the border's own colour (`None`: the text's).
+    pub border_color: Option<Rgb>,
+    /// Text boxes and typewriter text: the border's shape (callouts have none to choose).
+    pub border_shape: Option<BorderShape>,
+    /// How opaque the fill is drawn, for a comment with a fill control (`opacity` is then its
+    /// line's or border's).
+    pub fill_opacity: Option<f64>,
+    /// How opaque a text box's, typewriter text's or callout's text is drawn.
+    pub text_opacity: Option<f64>,
 }
 
 /// The current properties of the comment at `(page, index)`.
@@ -248,7 +257,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         author: text_value(doc, d, b"T").unwrap_or_default(),
         subject: text_value(doc, d, b"Subj").unwrap_or_default(),
         color,
-        opacity: d.get(b"CA").and_then(|o| o.as_f64()).unwrap_or(1.0),
+        opacity: appearance::part_opacity(d).line,
         width,
         icon: (subtype == "Text").then(|| d.name(b"Name").and_then(|n| NoteIcon::from_name(&String::from_utf8_lossy(n))).unwrap_or(NoteIcon::Note)),
         modified: text_value(doc, d, b"M"),
@@ -257,6 +266,10 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         fillable: fillable(&subtype),
         fill: fill_of(d),
         font_size: (subtype == "FreeText").then(|| appearance::parse_da(d).1),
+        border_color: (subtype == "FreeText").then(|| appearance::da_border(d)).flatten(),
+        border_shape: (subtype == "FreeText" && !d.contains(b"CL")).then(|| BorderShape::of(d)),
+        fill_opacity: fillable(&subtype).then(|| appearance::part_opacity(d).fill),
+        text_opacity: (subtype == "FreeText").then(|| appearance::part_opacity(d).text),
         subtype,
         endings: line_endings_of(d),
     })
