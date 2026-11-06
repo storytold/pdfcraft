@@ -4315,3 +4315,153 @@ fn escape_with_a_fill_tool_deselects_every_comment_then_drops_the_tool() {
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
 }
+
+fn selection_bar_frame(h: &mut Harness<'static, PdfCraftApp>, events: impl IntoIterator<Item = egui::Event>) {
+    h.input_mut().events.extend(events);
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+}
+
+fn selection_bar_click(h: &mut Harness<'static, PdfCraftApp>, at: Pos2) {
+    selection_bar_frame(h, [egui::Event::PointerMoved(at)]);
+    for pressed in [true, false] {
+        selection_bar_frame(
+            h,
+            [egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() }],
+        );
+    }
+    h.run_steps(3);
+}
+
+fn selection_bar_words() -> Harness<'static, PdfCraftApp> {
+    // Normalize the contributor-original fixture's xref and lengths, so the screenshot has no repair notice.
+    let pdf = pdfcraft_cos::Document::open(std::sync::Arc::new(TEXT_FIXTURE.to_vec())).unwrap();
+    let bytes = pdfcraft_cos::write_full(&pdf, &Default::default()).unwrap();
+    let mut h = harness_with_bytes(bytes, |_| {});
+    let (a, b) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, 4).unwrap(), v.glyph_screen_pos(0, 9).unwrap())
+    };
+    selection_bar_frame(&mut h, [egui::Event::PointerMoved(a)]);
+    selection_bar_frame(
+        &mut h,
+        [egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }],
+    );
+    for t in [0.25, 0.5, 0.75, 1.0] {
+        selection_bar_frame(&mut h, [egui::Event::PointerMoved(a.lerp(b, t))]);
+    }
+    selection_bar_frame(
+        &mut h,
+        [egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }],
+    );
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].selected_text().as_deref().map(str::trim), Some("quick"));
+    h
+}
+
+fn open_selection_highlight_colours(h: &mut Harness<'static, PdfCraftApp>) {
+    // Distinguish the bar's text button from the quick toolbar's Highlight icon.
+    let at = h.query_all_by_label("Highlight").find(|n| n.rect().width() > 40.0).unwrap().rect().center();
+    selection_bar_click(h, at);
+}
+
+#[test]
+fn selected_text_highlight_offers_palette_colours_before_marking() {
+    use pdfcraft_ui_egui::comments::{CommentTool, SWATCHES};
+    for (name, colour) in SWATCHES.iter().take(6) {
+        let mut h = selection_bar_words();
+        let id = h.state().views[0].id;
+        let initial = h.state().comment_prefs.style(CommentTool::Highlight).color;
+        let underline = h.state().comment_prefs.style(CommentTool::Underline).color;
+        open_selection_highlight_colours(&mut h);
+        assert!(comments(&h).is_empty(), "opening Highlight must wait for a colour choice");
+        assert_eq!(h.state().comment_prefs.style(CommentTool::Highlight).color, initial);
+        assert!(!h.state().session.get(id).unwrap().dirty);
+        assert!(h.state().session.get(id).unwrap().can_undo().is_none());
+        assert_eq!(h.state().views[0].selected_text().as_deref().map(str::trim), Some("quick"));
+        for (label, _) in SWATCHES.iter().take(6) {
+            h.get_by_label(label);
+        }
+        let at = h.get_by_label(name).rect().center();
+        selection_bar_click(&mut h, at);
+        let annotations = comments(&h);
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0].subtype, "Highlight");
+        assert_eq!(annotations[0].color, Some(colour.map(|v| v as f32)));
+        assert_eq!(annotations[0].quads.len(), 1);
+        assert_eq!(h.state().comment_prefs.style(CommentTool::Highlight).color, *colour, "picker also changes the tool default");
+        assert_eq!(h.state().comment_prefs.style(CommentTool::Underline).color, underline);
+        assert_eq!(h.state().quick_tool, QuickTool::Select);
+        assert!(h.state().views[0].selected_text().is_none());
+        assert!(h.query_all_by_label(name).next().is_none(), "picker closes after choosing");
+        assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Add highlight"));
+        h.state_mut().undo();
+        h.run_steps(3);
+        assert!(comments(&h).is_empty());
+        assert!(h.state().session.get(id).unwrap().can_undo().is_none(), "one edit for the colour choice");
+        h.state_mut().redo();
+        h.run_steps(3);
+        assert_eq!(comments(&h)[0].color, Some(colour.map(|v| v as f32)));
+        let saved = h.state().session.save_bytes(id).unwrap();
+        let reopened = pdfcraft_render::inspect(saved, None).unwrap();
+        assert_eq!(reopened.annotations[0].color, Some(colour.map(|v| v as f32)));
+        assert_eq!(reopened.annotations[0].quads, annotations[0].quads);
+        let prefs = h.state().persist();
+        let mut next = PdfCraftApp::new();
+        next.restore(&prefs);
+        assert_eq!(next.comment_prefs.style(CommentTool::Highlight).color, *colour);
+    }
+}
+
+#[test]
+fn dismissing_selection_highlight_colours_leaves_no_edit_or_preference_change() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    for escape in [true, false] {
+        let mut h = selection_bar_words();
+        let id = h.state().views[0].id;
+        let before = h.state().comment_prefs.style(CommentTool::Highlight).color;
+        open_selection_highlight_colours(&mut h);
+        h.get_by_label("Blue");
+        if escape {
+            selection_bar_frame(
+                &mut h,
+                [egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }],
+            );
+            selection_bar_frame(
+                &mut h,
+                [egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: false, repeat: false, modifiers: Default::default() }],
+            );
+        } else {
+            let at = at(&h, 250.0, 20.0);
+            selection_bar_click(&mut h, at);
+        }
+        h.run_steps(3);
+        assert!(comments(&h).is_empty());
+        assert_eq!(h.state().comment_prefs.style(CommentTool::Highlight).color, before);
+        assert!(!h.state().session.get(id).unwrap().dirty);
+        assert!(h.state().session.get(id).unwrap().can_undo().is_none());
+        assert!(h.query_all_by_label("Blue").next().is_none());
+    }
+}
+
+#[test]
+fn selection_highlight_picker_closes_when_comments_are_hidden() {
+    let mut h = selection_bar_words();
+    let id = h.state().views[0].id;
+    let before = h.state().comment_prefs.style(pdfcraft_ui_egui::comments::CommentTool::Highlight).color;
+    open_selection_highlight_colours(&mut h);
+    h.get_by_label("Blue");
+    assert!(h.state_mut().session.set_hide_comments(id, true));
+    h.run_steps(3);
+    assert!(h.query_all_by_label("Blue").next().is_none());
+    let button = h.query_all_by_label("Highlight").find(|n| n.rect().width() > 40.0).unwrap();
+    assert!(button.accesskit_node().is_disabled());
+    let at = button.rect().center();
+    selection_bar_click(&mut h, at);
+    assert!(comments(&h).is_empty());
+    assert_eq!(h.state().comment_prefs.style(pdfcraft_ui_egui::comments::CommentTool::Highlight).color, before);
+    assert!(!h.state().session.get(id).unwrap().dirty);
+}

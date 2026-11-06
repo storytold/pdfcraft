@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **2026-11-06, M5 / #6320:** selection-bar Highlight opens six existing comment colours; choosing one creates a single undoable mark and remembers the Highlight default. Dismissal changes neither document nor preference. Estimates unchanged.
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
