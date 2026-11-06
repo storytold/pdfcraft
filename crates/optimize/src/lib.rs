@@ -203,6 +203,13 @@ pub struct Settings {
     pub remove_invalid_links: bool,
     /// Clean Up: remove named destinations nothing refers to.
     pub remove_unreferenced_dests: bool,
+    /// Convert pure `DeviceCMYK` images to `DeviceRGB` using the uncalibrated subtractive
+    /// approximation (ISO 32000-2 §10.3.5) so they can be resampled and JPEG-recompressed.
+    ///
+    /// Off by default: the uncalibrated formula approximates ICC-managed CMYK rendering,
+    /// alters overprint behaviour, and is unsuitable for PDF/X or print-production workflows
+    /// that rely on a CMYK `/OutputIntents` profile.
+    pub convert_cmyk_to_rgb: bool,
 }
 
 impl Settings {
@@ -231,6 +238,7 @@ impl Default for Settings {
             lzw_to_flate: true,
             remove_invalid_links: true,
             remove_unreferenced_dests: true,
+            convert_cmyk_to_rgb: false,
         }
     }
 }

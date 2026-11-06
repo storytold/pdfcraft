@@ -52,7 +52,7 @@ struct Walk<'a> {
     /// Forms with their own resources already walked, by the linear part of their matrix and
     /// whether default colour spaces were in force. Drawing one again at the same scale (only
     /// moved) can't change any image's resolution.
-    walked: HashSet<(ObjRef, [u64; 4], bool)>,
+    walked: HashSet<(ObjRef, [u64; 4], bool, bool)>,
     /// Forms walked at least once.
     seen: HashSet<ObjRef>,
     rewalks: usize,
@@ -64,6 +64,8 @@ struct Walk<'a> {
     /// Images drawn or listed at least once where `/DefaultGray` or `/DefaultRGB` is in force, by
     /// object number: a reference with another generation reaches the same image.
     defaults: HashSet<u32>,
+    /// Images drawn or listed at least once where `/DefaultCMYK` is in force, by object number.
+    defaults_cmyk: HashSet<u32>,
     /// The references the walk followed to reach its images, and the pages and page-tree nodes
     /// whose resources it read.
     read: Read,
@@ -89,10 +91,12 @@ struct Read {
 impl Walk<'_> {
     /// Walk one content stream, recording each image's displayed resolution (pixels per inch, the
     /// smaller of the two axes) and descending into form XObjects. `holder` is the object holding
-    /// `resources`. `defaults`: an enclosing stream's resources remap a device colour space.
-    fn content(&mut self, data: &[u8], resources: &Dict, holder: ObjRef, ctm: Matrix, defaults: bool) {
+    /// `resources`. `defaults`: an enclosing stream's resources remap `/DefaultGray` or `/DefaultRGB`.
+    /// `defaults_cmyk`: an enclosing stream's resources remap `/DefaultCMYK`.
+    fn content(&mut self, data: &[u8], resources: &Dict, holder: ObjRef, ctm: Matrix, defaults: bool, defaults_cmyk: bool) {
         let doc = self.doc;
         let defaults = defaults || remaps_device_spaces(doc, resources);
+        let defaults_cmyk = defaults_cmyk || remaps_default_cmyk(doc, resources);
         let xobjects = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
         let xholder = match resources.get(b"XObject").and_then(Object::as_ref) {
             Some(x) => {
@@ -108,6 +112,9 @@ impl Walk<'_> {
                 self.read.entries.insert((r.num, xholder.num, Entry::Name(name.to_vec())));
                 if defaults {
                     self.defaults.insert(r.num);
+                }
+                if defaults_cmyk {
+                    self.defaults_cmyk.insert(r.num);
                 }
             }
         }
@@ -144,8 +151,11 @@ impl Walk<'_> {
                             if defaults {
                                 self.defaults.insert(r.num);
                             }
+                            if defaults_cmyk {
+                                self.defaults_cmyk.insert(r.num);
+                            }
                         }
-                        Some(b"Form") => self.form(r, s, (resources, holder), top, defaults),
+                        Some(b"Form") => self.form(r, s, (resources, holder), top, defaults, defaults_cmyk),
                         _ => {}
                     }
                 }
@@ -176,7 +186,7 @@ impl Walk<'_> {
                     }
                     None => n,
                 };
-                self.content(&[], &resources, holder, Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]), false);
+                self.content(&[], &resources, holder, Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]), false, false);
             }
             node = d.reference(b"Parent");
         }
@@ -184,7 +194,7 @@ impl Walk<'_> {
 
     /// Descend into form `r` drawn with `ctm` from a stream whose resources are `resources`, with
     /// the object holding them.
-    fn form(&mut self, r: ObjRef, s: &Stream, (resources, holder): (&Dict, ObjRef), ctm: Matrix, defaults: bool) {
+    fn form(&mut self, r: ObjRef, s: &Stream, (resources, holder): (&Dict, ObjRef), ctm: Matrix, defaults: bool, defaults_cmyk: bool) {
         if self.path.contains(&r) {
             return;
         }
@@ -199,7 +209,7 @@ impl Walk<'_> {
         // A form without resources uses its caller's, so the same form can draw other images.
         if own.is_some() {
             let [a, b, c, d, ..] = inner.0;
-            if !self.walked.insert((r, [a.to_bits(), b.to_bits(), c.to_bits(), d.to_bits()], defaults)) {
+            if !self.walked.insert((r, [a.to_bits(), b.to_bits(), c.to_bits(), d.to_bits()], defaults, defaults_cmyk)) {
                 return;
             }
         }
@@ -228,9 +238,9 @@ impl Walk<'_> {
                     }
                     None => r,
                 };
-                self.content(&data, own, own_holder, inner, defaults);
+                self.content(&data, own, own_holder, inner, defaults, defaults_cmyk);
             }
-            None => self.content(&data, resources, holder, inner, defaults),
+            None => self.content(&data, resources, holder, inner, defaults, defaults_cmyk),
         }
         self.path.pop();
     }
@@ -243,6 +253,12 @@ fn remaps_device_spaces(doc: &Document, resources: &Dict) -> bool {
     spaces.as_deref().and_then(Object::as_dict).is_some_and(|c| c.contains(b"DefaultGray") || c.contains(b"DefaultRGB"))
 }
 
+/// Whether `resources` remap DeviceCMYK: `/DefaultCMYK` (ISO 32000-2 §8.6.5.6).
+fn remaps_default_cmyk(doc: &Document, resources: &Dict) -> bool {
+    let spaces = resources.get(b"ColorSpace").map(|c| doc.resolve(c));
+    spaces.as_deref().and_then(Object::as_dict).is_some_and(|c| c.contains(b"DefaultCMYK"))
+}
+
 /// The effective resolution (ppi) of every image drawn by `pages`: the smallest over its uses.
 ///
 /// If forms nest too deeply, are drawn too many times, or a page's content doesn't decode within
@@ -253,9 +269,9 @@ pub fn effective_resolutions(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef
 }
 
 /// [`effective_resolutions`], the images drawn or listed where `/DefaultGray` or `/DefaultRGB` is
-/// in force, by object number (all of them when a use may have been missed), and the references
-/// followed to reach them.
-fn walk_pages(doc: &Document, pages: &[ObjRef]) -> (HashMap<ObjRef, f64>, HashSet<u32>, Read) {
+/// in force, by object number (all of them when a use may have been missed), the images where
+/// `/DefaultCMYK` is in force, and the references followed to reach them.
+fn walk_pages(doc: &Document, pages: &[ObjRef]) -> (HashMap<ObjRef, f64>, HashSet<u32>, HashSet<u32>, Read) {
     let mut walk = Walk {
         doc,
         path: Vec::new(),
@@ -266,6 +282,7 @@ fn walk_pages(doc: &Document, pages: &[ObjRef]) -> (HashMap<ObjRef, f64>, HashSe
         complete: true,
         out: HashMap::new(),
         defaults: HashSet::new(),
+        defaults_cmyk: HashSet::new(),
         read: Read::default(),
     };
     for p in pages {
@@ -281,13 +298,14 @@ fn walk_pages(doc: &Document, pages: &[ObjRef]) -> (HashMap<ObjRef, f64>, HashSe
         };
         // Content coordinates are in page units; image resolution is in physical inches.
         let unit = page.user_unit(doc);
-        walk.content(&data, &res, holder, Matrix([unit, 0.0, 0.0, unit, 0.0, 0.0]), false);
+        walk.content(&data, &res, holder, Matrix([unit, 0.0, 0.0, unit, 0.0, 0.0]), false, false);
     }
     if !walk.complete {
         walk.out.values_mut().for_each(|v| *v = f64::INFINITY);
         walk.defaults.extend(walk.out.keys().map(|r| r.num));
+        walk.defaults_cmyk.extend(walk.out.keys().map(|r| r.num));
     }
-    (walk.out, walk.defaults, walk.read)
+    (walk.out, walk.defaults, walk.defaults_cmyk, walk.read)
 }
 
 /// Whether image `r` is one [`one_bit`] may make grey: eight-bit `DeviceRGB`, not in an image codec.
@@ -307,6 +325,12 @@ fn indexed(doc: &Document, r: ObjRef) -> bool {
     let Object::Stream(s) = &*doc.get(r) else { return false };
     let cs = s.dict.get(b"ColorSpace").map(|cs| doc.resolve(cs));
     matches!(cs.as_deref(), Some(Object::Array(a)) if matches!(family(doc, a).as_deref().and_then(Object::as_name), Some(b"Indexed")))
+}
+
+/// Whether image `r` is in a CMYK color space.
+fn is_cmyk_image(doc: &Document, r: ObjRef) -> bool {
+    let Object::Stream(s) = &*doc.get(r) else { return false };
+    s.dict.get(b"ColorSpace").is_some_and(|cs| is_cmyk_space(doc, cs))
 }
 
 /// The first entry of colour space array `a`, its family, read through a reference.
@@ -791,6 +815,214 @@ fn process(
         });
     let after = new.raw.len() + smask.as_ref().map_or(0, |(_, m)| m.raw.len());
     (after < before).then_some((new, smask))
+}
+
+/// Convert 8-bit `DeviceCMYK` samples to `DeviceRGB` using the uncalibrated subtractive
+/// approximation (ISO 32000-2 §10.3.5), applying the `/Decode` mapping if present.
+pub(crate) fn cmyk_to_rgb(cmyk: &[u8], decode: Option<[f32; 8]>) -> Vec<u8> {
+    let dec = decode.unwrap_or([0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
+    let mut rgb = Vec::with_capacity((cmyk.len() / 4) * 3);
+
+    for chunk in cmyk.as_chunks::<4>().0 {
+        let c = apply_decode(chunk[0], dec[0], dec[1]);
+        let m = apply_decode(chunk[1], dec[2], dec[3]);
+        let y = apply_decode(chunk[2], dec[4], dec[5]);
+        let k = apply_decode(chunk[3], dec[6], dec[7]);
+
+        let kf = 1.0 - k;
+        let r = (255.0 * (1.0 - c) * kf).round().clamp(0.0, 255.0) as u8;
+        let g = (255.0 * (1.0 - m) * kf).round().clamp(0.0, 255.0) as u8;
+        let b = (255.0 * (1.0 - y) * kf).round().clamp(0.0, 255.0) as u8;
+
+        rgb.push(r);
+        rgb.push(g);
+        rgb.push(b);
+    }
+    rgb
+}
+
+/// Map an 8-bit sample `v` linearly into `[dmin, dmax]` (ISO 32000-2 §8.9.5.2), clamped to `[0.0, 1.0]`.
+fn apply_decode(v: u8, dmin: f32, dmax: f32) -> f32 {
+    let t = f32::from(v) / 255.0;
+    (dmin + t * (dmax - dmin)).clamp(0.0, 1.0)
+}
+
+/// Read and validate an optional 8-element `/Decode` array for a four-component CMYK image.
+fn read_cmyk_decode(doc: &Document, decode_obj: Option<&Object>) -> Result<Option<[f32; 8]>, ()> {
+    let Some(obj) = decode_obj else {
+        return Ok(None);
+    };
+    let resolved = doc.resolve(obj);
+    let Some(a) = resolved.as_array() else {
+        return Err(());
+    };
+    if a.len() != 8 {
+        return Err(());
+    }
+    let mut out = [0.0f32; 8];
+    for (i, item) in a.iter().enumerate() {
+        let val = doc.resolve(item).as_f64().ok_or(())?;
+        *out.get_mut(i).ok_or(())? = val as f32;
+    }
+    Ok(Some(out))
+}
+
+/// Whether colour space `cs` is direct `DeviceCMYK` (or its inline abbreviation `/CMYK`).
+fn is_cmyk_space(doc: &Document, cs: &Object) -> bool {
+    let cs = doc.resolve(cs);
+    matches!(&*cs, Object::Name(n) if matches!(n.as_slice(), b"DeviceCMYK" | b"CMYK"))
+}
+
+/// Decode a four-component JPEG's CMYK samples as stored, converting YCCK to CMYK when the
+/// Adobe APP14 marker indicates YCCK.
+fn decode_cmyk_jpeg(data: &[u8], w: usize, h: usize) -> Option<Vec<u8>> {
+    use zune_jpeg::zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
+    let options = DecoderOptions::default().set_strict_mode(false).set_max_width(usize::from(u16::MAX)).set_max_height(usize::from(u16::MAX));
+    let mut dec = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
+    dec.decode_headers().ok()?;
+    let input = dec.input_colorspace()?;
+    if !matches!(input, ColorSpace::CMYK | ColorSpace::YCCK) || dec.dimensions()? != (w, h) {
+        return None;
+    }
+    dec.set_options(options.jpeg_set_out_colorspace(input));
+    let mut px = dec.decode().ok()?;
+    if px.len() != w.checked_mul(h)?.checked_mul(4)? {
+        return None;
+    }
+    if input == ColorSpace::YCCK {
+        for p in px.as_chunks_mut::<4>().0 {
+            let (y, cb, cr) = (f32::from(p[0]), f32::from(p[1]) - 128.0, f32::from(p[2]) - 128.0);
+            let ink = |rgb: f32| (255.0 - rgb).round().clamp(0.0, 255.0) as u8;
+            p[0] = ink(y + 1.402 * cr);
+            p[1] = ink(y - 0.344_136 * cb - 0.714_136 * cr);
+            p[2] = ink(y + 1.772 * cb);
+        }
+    }
+    Some(px)
+}
+
+/// Convert an eligible 8-bit `DeviceCMYK` image to `DeviceRGB`, resampling and/or recompressing
+/// per `settings` when the resulting stream is smaller.
+fn process_cmyk(
+    doc: &Document,
+    s: &Stream,
+    ppi: f64,
+    settings: &ImageSettings,
+    budget: &mut ImageBudget,
+) -> Option<(Stream, Option<(ObjRef, Stream)>)> {
+    let d = &s.dict;
+    let cs = d.get(b"ColorSpace")?;
+    if !is_cmyk_space(doc, cs)
+        || d.get(b"Mask").is_some_and(|m| !is_stencil(doc, m))
+        || d.name(b"ImageMask").is_some()
+        || matches!(d.get(b"ImageMask"), Some(Object::Bool(true)))
+        || d.int(b"BitsPerComponent") != Some(8)
+        || d.contains(b"SMaskInData")
+        || d.contains(b"OPI")
+    {
+        return None;
+    }
+
+    // A soft mask with a /Matte has samples pre-blended in CMYK, which cannot be unblended in RGB.
+    let matte = |m: &Object| matches!(&*doc.resolve(m), Object::Stream(m) if m.dict.contains(b"Matte"));
+    if d.get(b"SMask").is_some_and(matte) {
+        return None;
+    }
+
+    let was_dct = is_dct(s)?;
+    // Validate JPEG color transform (ISO 32000-2 Table 13). Refuse contradictory transforms,
+    // unknown Adobe markers, and YCbCrK streams lacking an Adobe marker (ColorTransform 1).
+    if was_dct {
+        let ct = color_transform(doc, s)?;
+        match adobe_transform(&s.raw)? {
+            Some(0) => {
+                if ct.is_some_and(|c| c != 0) {
+                    return None;
+                }
+            }
+            Some(2) => {
+                if ct.is_some_and(|c| c == 0) {
+                    return None;
+                }
+            }
+            None => {
+                if ct.is_some_and(|c| c != 0) {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
+    if w == 0 || h == 0 || (w as u64) * (h as u64) > MAX_PIXELS {
+        return None;
+    }
+
+    let resize = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0;
+    let recompress = matches!(settings.compression, Compression::Jpeg(_)) || (matches!(settings.compression, Compression::Flate) && was_dct);
+    if !resize && !recompress {
+        return None;
+    }
+    // Tiny images (icons, rules) don't benefit and JPEG would blur them.
+    if !resize && (w as u64) * (h as u64) < 64 * 64 {
+        return None;
+    }
+
+    let wu = usize::try_from(w).ok()?;
+    let hu = usize::try_from(h).ok()?;
+    let bytes4 = wu.checked_mul(hu)?.checked_mul(4)?;
+
+    let cmyk_px = if was_dct {
+        if !budget.pay_jpeg(u64::try_from(bytes4).ok()?, &s.raw) {
+            return None;
+        }
+        let v = decode_cmyk_jpeg(&s.raw, wu, hu)?;
+        count_decoded(u64::from(w) * u64::from(h));
+        v
+    } else {
+        let v = budget.decode_filters(doc, s, allowance(bytes4, h)?).ok()?;
+        v.get(..bytes4)?.to_vec()
+    };
+
+    let decode_arr = read_cmyk_decode(doc, d.get(b"Decode")).ok()?;
+    let rgb_px = cmyk_to_rgb(&cmyk_px, decode_arr);
+
+    let (nw, nh) = if resize {
+        let k = settings.target_ppi / ppi;
+        (((f64::from(w) * k).round() as u32).max(1), ((f64::from(h) * k).round() as u32).max(1))
+    } else {
+        (w, h)
+    };
+
+    let resampled = if (nw, nh) != (w, h) { resample(&rgb_px, 3, w, h, nw, nh)? } else { rgb_px };
+
+    let mut new_dict = d.clone();
+    new_dict.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    let new_stream = image_stream(&new_dict, &resampled, 3, nw, nh, settings.compression, was_dct)?;
+
+    // A soft mask must keep the image's dimensions: resample it with the image (lossless).
+    let mut smask = None;
+    if let Some(mr) = d.reference(b"SMask") {
+        let mobj = doc.get(mr);
+        let Object::Stream(m) = &*mobj else { return None };
+        if (nw, nh) != (w, h) {
+            if m.dict.int(b"BitsPerComponent") != Some(8) || m.dict.contains(b"Matte") || m.dict.contains(b"Decode") {
+                return None;
+            }
+            let (mw, mh) = (u32::try_from(m.dict.int(b"Width")?).ok()?, u32::try_from(m.dict.int(b"Height")?).ok()?);
+            let mpx = pixels(doc, m, 1, budget)?;
+            let mpx = resample(&mpx, 1, mw, mh, nw, nh)?;
+            smask = Some((mr, image_stream(&m.dict, &mpx, 1, nw, nh, Compression::Flate, false)?));
+        }
+    }
+
+    let before = crate::stored_len(s)?
+        + smask.as_ref().map_or(0, |(r, _)| match &*doc.get(*r) {
+            Object::Stream(m) => crate::stored_len(m).unwrap_or(0),
+            _ => 0,
+        });
+    let after = crate::stored_len(&new_stream)? + smask.as_ref().and_then(|(_, m)| crate::stored_len(m)).unwrap_or(0);
+    (after < before).then_some((new_stream, smask))
 }
 
 /// Whether colour space `cs` has one colour component, so a 1-bit image in it has one bit per
@@ -1329,7 +1561,7 @@ pub(crate) fn run(
     progress: &mut dyn FnMut(Stage) -> bool,
     budget: &mut ImageBudget,
 ) -> Result<(), OptimizeError> {
-    let (ppi, mut defaults, read) = walk_pages(doc, pages);
+    let (ppi, mut defaults, mut defaults_cmyk, read) = walk_pages(doc, pages);
     // Black-and-white RGB becomes grey, which default colour spaces would draw otherwise, and an
     // indexed image's palette says which of its samples a resampled one keeps, which they may
     // change: one used where the walk didn't look may be drawn so.
@@ -1337,6 +1569,8 @@ pub(crate) fn run(
     let checked: HashSet<u32> =
         ppi.keys().filter(|r| (packs && device_rgb(doc, **r)) || (settings.mono.downsample && indexed(doc, **r))).map(|r| r.num).collect();
     defaults.extend(used_elsewhere(doc, &checked, &read));
+    let checked_cmyk: HashSet<u32> = ppi.keys().filter(|r| settings.convert_cmyk_to_rgb && is_cmyk_image(doc, **r)).map(|r| r.num).collect();
+    defaults_cmyk.extend(used_elsewhere(doc, &checked_cmyk, &read));
     // Soft masks are processed with their image, not on their own.
     let masks: HashSet<ObjRef> = ppi
         .keys()
@@ -1387,7 +1621,13 @@ pub(crate) fn run(
             continue;
         }
         let n = s.dict.get(b"ColorSpace").and_then(|cs| components(doc, cs));
-        let processed = n.and_then(|n| process(doc, s, ppi, if n == 1 { &settings.gray } else { &settings.color }, n, budget));
+        let processed = n.and_then(|n| process(doc, s, ppi, if n == 1 { &settings.gray } else { &settings.color }, n, budget)).or_else(|| {
+            if settings.convert_cmyk_to_rgb && !defaults_cmyk.contains(&r.num) && !defaults.contains(&r.num) {
+                process_cmyk(doc, s, ppi, &settings.color, budget)
+            } else {
+                None
+            }
+        });
         // A dithered scan, say, downsampled and JPEG-compressed: the smaller wins, counting a soft
         // mask resampled with it.
         let smask_len = |smask: Option<&(ObjRef, Stream)>| match smask {
@@ -2110,5 +2350,75 @@ mod pack_tests {
         for (row_len, w, n, bpc) in [(1, 0, 1, 1), (1, 1, 0, 8), (1, 1, 1, 3), (1, 1, 2, 4), (1, 9, 1, 1), (1, usize::MAX / 8, 1, 1)] {
             assert_eq!(packed_rows(&samples, row_len, w, 4, (n, bpc, WHITE_IS_1)), None, "row of {row_len} for {w} × {n} × {bpc}");
         }
+    }
+}
+
+#[cfg(test)]
+mod cmyk_tests {
+    use super::{cmyk_to_rgb, read_cmyk_decode};
+    use pdfcraft_cos::{Document, Object};
+
+    #[test]
+    fn cmyk_to_rgb_subtractive_approximation() {
+        // Uncalibrated ISO 32000-2 §10.3.5 subtractive formula: 255 * (1 - c) * (1 - k)
+        // [C, M, Y, K]
+        // White: 0 0 0 0 -> 255 255 255
+        assert_eq!(cmyk_to_rgb(&[0, 0, 0, 0], None), vec![255, 255, 255]);
+        // Black (pure K): 0 0 0 255 -> 0 0 0
+        assert_eq!(cmyk_to_rgb(&[0, 0, 0, 255], None), vec![0, 0, 0]);
+        // Cyan: 255 0 0 0 -> 0 255 255
+        assert_eq!(cmyk_to_rgb(&[255, 0, 0, 0], None), vec![0, 255, 255]);
+        // Magenta: 0 255 0 0 -> 255 0 255
+        assert_eq!(cmyk_to_rgb(&[0, 255, 0, 0], None), vec![255, 0, 255]);
+        // Yellow: 0 0 255 0 -> 255 255 0
+        assert_eq!(cmyk_to_rgb(&[0, 0, 255, 0], None), vec![255, 255, 0]);
+    }
+
+    #[test]
+    fn cmyk_to_rgb_with_inverted_decode() {
+        // Inverted decode array commonly produced by Adobe Photoshop/InDesign:
+        // [1 0 1 0 1 0 1 0]
+        let inverted_decode = Some([1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
+        // Under inverted decode, 255 maps to 0 -> so [255, 255, 255, 255] maps to [0, 0, 0, 0] = White!
+        assert_eq!(cmyk_to_rgb(&[255, 255, 255, 255], inverted_decode), vec![255, 255, 255]);
+        // Under inverted decode, 0 maps to 255 -> so [0, 0, 0, 0] maps to [255, 255, 255, 255] = Black!
+        assert_eq!(cmyk_to_rgb(&[0, 0, 0, 0], inverted_decode), vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn read_cmyk_decode_validates_structure() {
+        let doc = Document::new_empty();
+        // None -> Ok(None)
+        assert_eq!(read_cmyk_decode(&doc, None), Ok(None));
+
+        // Valid 8-element array -> Ok(Some(...))
+        let valid = Object::Array(vec![
+            Object::Real(0.0),
+            Object::Real(1.0),
+            Object::Real(0.0),
+            Object::Real(1.0),
+            Object::Real(0.0),
+            Object::Real(1.0),
+            Object::Real(0.0),
+            Object::Real(1.0),
+        ]);
+        assert_eq!(read_cmyk_decode(&doc, Some(&valid)), Ok(Some([0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0])));
+
+        // Invalid length (6 elements) -> Err(())
+        let invalid_len = Object::Array(vec![Object::Real(0.0); 6]);
+        assert_eq!(read_cmyk_decode(&doc, Some(&invalid_len)), Err(()));
+
+        // Non-number element -> Err(())
+        let non_number = Object::Array(vec![
+            Object::Real(0.0),
+            Object::name("invalid"),
+            Object::Real(0.0),
+            Object::Real(1.0),
+            Object::Real(0.0),
+            Object::Real(1.0),
+            Object::Real(0.0),
+            Object::Real(1.0),
+        ]);
+        assert_eq!(read_cmyk_decode(&doc, Some(&non_number)), Err(()));
     }
 }
