@@ -304,15 +304,17 @@ pub fn default_style() -> AddedText {
 /// The style a new text box starts with. A style set in the Format panel (anything but
 /// [`default_style`]) is used as it is. Otherwise the box takes the look Edit text shows for the
 /// paragraph nearest to it by `distance`: family, bold, italic, size and colour, so text added
-/// to a page looks like the text already there. Invisible text (an OCR layer over a scan) and
-/// empty paragraphs don't count, and a page without other text keeps the default.
-pub(crate) fn new_text_style(style: &AddedText, paragraphs: &[TextBlock], distance: impl Fn(&TextBlock) -> f32) -> AddedText {
+/// to a page looks like the text already there. Invisible text (an OCR layer over a scan), empty
+/// paragraphs and text outside `crop` (the page's crop box, in user space: what the page shows)
+/// don't count, and a page without other text keeps the default.
+pub(crate) fn new_text_style(style: &AddedText, paragraphs: &[TextBlock], crop: [f64; 4], distance: impl Fn(&TextBlock) -> f32) -> AddedText {
     if *style != default_style() {
         return style.clone();
     }
     let nearest = paragraphs
         .iter()
         .filter(|b| !b.invisible && !b.text.trim().is_empty() && b.size.is_finite() && b.color.iter().all(|c| c.is_finite()))
+        .filter(|b| meets(b.rect, crop))
         .map(|b| (distance(b), b))
         .filter(|(d, _)| d.is_finite())
         .min_by(|a, b| a.0.total_cmp(&b.0));
@@ -321,6 +323,15 @@ pub(crate) fn new_text_style(style: &AddedText, paragraphs: &[TextBlock], distan
     // Kept to what Edit::AddText accepts (1 to 500 pt), so text set at 0.5 pt in the document
     // still gives a box that can be added; a malformed colour operand can be out of range too.
     AddedText { size: look.size.clamp(1.0, 500.0), color: look.color.map(|c| c.clamp(0.0, 1.0)), ..look }
+}
+
+/// Whether user-space rectangles `a` and `b` overlap (corners in either order). Text the page
+/// lists outside its crop box is not shown, so it is not text near a click.
+fn meets(a: [f64; 4], b: [f64; 4]) -> bool {
+    let span = |lo: f64, hi: f64| (lo.min(hi), lo.max(hi));
+    let ((ax0, ax1), (ay0, ay1)) = (span(a[0], a[2]), span(a[1], a[3]));
+    let ((bx0, bx1), (by0, by1)) = (span(b[0], b[2]), span(b[1], b[3]));
+    ax0 < bx1 && bx0 < ax1 && ay0 < by1 && by0 < ay1
 }
 
 /// Display-space rect → screen.
@@ -460,7 +471,8 @@ pub(crate) fn page_input(
             // The Format panel styles the new text, not the box just kept.
             (cv.selected, cv.select_added) = (None, None);
             let at = to_display(xf, info, page, p);
-            let mut style = new_text_style(style, paragraphs, |b| xf.user_rect(info, page, b.rect.map(|v| v as f32)).distance_to_pos(p));
+            let crop = info.pages.get(page).map_or([f64::NEG_INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY], |pg| pg.crop.map(f64::from));
+            let mut style = new_text_style(style, paragraphs, crop, |b| xf.user_rect(info, page, b.rect.map(|v| v as f32)).distance_to_pos(p));
             style.text.clear();
             let page_width = info.pages.get(page).map_or(f64::INFINITY, |p| p.width as f64);
             let rect = [at[0], at[1] - style.size * 1.2, (at[0] + 200.0).min(page_width), at[1]];
@@ -1595,11 +1607,14 @@ mod tests {
         }
     }
 
+    /// A crop box no paragraph is outside of.
+    const EVERYWHERE: [f64; 4] = [f64::NEG_INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY];
+
     /// The style `new_text_style` gives with the default style, each paragraph (told apart by its
     /// text) at the distance paired with it.
     fn nearest(paragraphs: &[(TextBlock, f32)]) -> AddedText {
         let blocks: Vec<TextBlock> = paragraphs.iter().map(|(b, _)| b.clone()).collect();
-        new_text_style(&default_style(), &blocks, |b| paragraphs.iter().find(|(p, _)| p.text == b.text).map_or(f32::NAN, |(_, d)| *d))
+        new_text_style(&default_style(), &blocks, EVERYWHERE, |b| paragraphs.iter().find(|(p, _)| p.text == b.text).map_or(f32::NAN, |(_, d)| *d))
     }
 
     #[test]
@@ -1618,7 +1633,7 @@ mod tests {
     fn a_style_from_the_format_panel_or_a_page_without_visible_text_keeps_its_style() {
         let chosen = AddedText { size: 30.0, color: [0.0, 0.0, 1.0], ..default_style() };
         let blocks = [paragraph("Итоги года", "Times-Bold", 18.0, [0.6, 0.0, 0.0])];
-        assert_eq!(new_text_style(&chosen, &blocks, |_| 1.0), chosen, "the Format panel's style wins");
+        assert_eq!(new_text_style(&chosen, &blocks, EVERYWHERE, |_| 1.0), chosen, "the Format panel's style wins");
         let mut ocr = paragraph("scanned words", "GlyphLessFont", 14.0, [0.0; 3]);
         ocr.invisible = true;
         assert_eq!(nearest(&[(ocr, 1.0)]), default_style(), "only invisible text");
@@ -1643,5 +1658,21 @@ mod tests {
         assert_eq!((t.family, t.size), (FontFamily::Times, 11.0));
         let t = nearest(&[(paragraph("e", "Courier", f64::INFINITY, [0.0; 3]), 1.0)]);
         assert_eq!(t, default_style(), "an infinite size is not a size");
+    }
+
+    #[test]
+    fn text_outside_the_crop_box_is_not_near_a_click() {
+        // A page that shows [0 0 200 300]: a heading inside it, a note the page lists far outside it.
+        let crop = [0.0, 0.0, 200.0, 300.0];
+        let mut heading = paragraph("Итоги года", "Times-Bold", 18.0, [0.6, 0.0, 0.0]);
+        heading.rect = [20.0, 250.0, 180.0, 270.0];
+        let mut hidden = paragraph("Reference", "Courier", 9.0, [0.0, 0.0, 0.5]);
+        hidden.rect = [400.0, 900.0, 520.0, 912.0];
+        let both = [heading, hidden.clone()];
+        // The hidden note is nearer the click, but the page doesn't show it.
+        let t = new_text_style(&default_style(), &both, crop, |b| if b.text == "Reference" { 1.0 } else { 80.0 });
+        assert_eq!((t.family, t.size), (FontFamily::Times, 18.0), "the visible heading gives the look");
+        // A page whose only text is outside its crop box keeps the default style.
+        assert_eq!(new_text_style(&default_style(), &[hidden], crop, |_| 1.0), default_style());
     }
 }
