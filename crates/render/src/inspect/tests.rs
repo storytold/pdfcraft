@@ -786,6 +786,26 @@ fn fields_listed_only_on_the_pages_are_listed() {
     assert_eq!(listed, [("alpha", Some("one"), Some(0)), ("beta", None, Some(0))], "{:?}", info.fields);
 }
 
+/// A widget whose `/Parent` names an object the file doesn't hold, or one that isn't a dictionary,
+/// is listed as a field of its own: that parent reads as `null`, the same
+/// as none (ISO 32000-2 §7.3.9).
+#[test]
+fn a_widget_whose_parent_is_missing_is_listed() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R 6 0 R] >> endobj
+4 0 obj << /Fields [] >> endobj
+5 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (alpha) /V (one) /Parent 40 0 R /Rect [10 100 90 120] >> endobj
+6 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (beta) /Parent 7 0 R /Rect [10 60 90 80] >> endobj
+7 0 obj [1 2 3] endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let info = inspect(Arc::new(pdf.to_vec()), None).expect("opens");
+    let listed: Vec<_> = info.fields.iter().map(|f| (f.name.as_str(), f.value.as_deref(), f.page)).collect();
+    assert_eq!(listed, [("alpha", Some("one"), Some(0)), ("beta", None, Some(0))], "{:?}", info.fields);
+}
+
 /// A `Structure` that counts the objects read through it.
 struct CountingReads<'a> {
     doc: &'a Document,

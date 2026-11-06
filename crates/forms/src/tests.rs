@@ -353,6 +353,37 @@ fn fields_listed_only_on_the_pages_are_adopted() {
     assert_eq!(adopted_page_fields(&doc), 4);
 }
 
+/// A widget whose `/Parent` names an object the file doesn't hold, or one that isn't a dictionary,
+/// has no parent: the reference reads as `null`, the same as an absent entry (ISO
+/// 32000-2 §7.3.9). It is adopted as a field of its own, under its own name, and can be filled.
+#[test]
+fn a_widget_whose_parent_is_missing_is_a_field_of_its_own() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),                       // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),       // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 7 0 R 8 0 R] >>".into(),             // 3
+        "<< /Fields [] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >>".into(), // 4
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (city) /V (Oslo) /Parent 40 0 R /Rect [50 700 250 720] /P 3 0 R >>".into(), // 5 parent not in the file
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),                              // 6
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (zip) /Parent 9 0 R /Rect [50 660 250 680] /P 3 0 R >>".into(), // 7 parent is no dictionary
+        "<< /Type /Annot /Subtype /Widget /Parent 40 0 R /Rect [400 700 415 715] /P 3 0 R >>".into(),                // 8 no /FT or /T: not a field
+        "[1 2 3]".into(),                                                                                            // 9
+    ];
+    let mut doc = document(&objs);
+    assert_combined_matches_legacy(&doc, 2);
+    let all = fields(&doc);
+    let names: Vec<&str> = all.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["city", "zip"]);
+    let city = field(&all, "city");
+    assert_eq!(
+        (city.kind, city.value.as_slice(), city.widgets.len(), city.widgets[0].page),
+        (FieldKind::Text, &["Oslo".to_string()][..], 1, Some(0))
+    );
+    set_value(&mut doc, "zip", &FieldValue::Text("0150".into())).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(field(&fields(&doc), "zip").value, ["0150"]);
+}
+
 /// pdf-lib and other writers give radio groups and check boxes an `/Opt` array and name the on
 /// states by position (`/0`, `/1`): the export values select them, as in Acrobat.
 #[test]
