@@ -1201,7 +1201,11 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
         }
         patches.insert(s.op, replacement);
     }
-    if patches.len() != selected.len() {
+    // A line also lists the marked-content operators around its ActualText spans (`BDC … EMC`,
+    // as Word writes a list item's tab). They show nothing and stay where they are: only the
+    // show operations need a patch.
+    let shows = selected.iter().filter(|i| ops.get(**i).is_some_and(|op| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\""))).count();
+    if patches.len() != shows {
         return Err(EditError::Invalid("a selected text operation cannot be moved".into()));
     }
     let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), true), |v| (v, false)));
