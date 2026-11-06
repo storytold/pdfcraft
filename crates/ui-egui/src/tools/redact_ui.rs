@@ -248,7 +248,7 @@ fn take_materialised_hits() -> usize {
 /// One search hit becomes a redaction mark when it covers glyphs. Returns whether a mark was added.
 ///
 /// A hit with no geometry does not take a slot toward the match cap.
-fn mark_search_hit(
+fn mark_search_match(
     edits: &mut Vec<Edit>,
     prefs: &RedactPrefs,
     page: usize,
@@ -275,7 +275,7 @@ fn consume_literal_hits(
     case_sensitive: bool,
     whole_words: bool,
     mut room: usize,
-    mut on_hit: impl FnMut(std::ops::Range<usize>) -> bool,
+    mut on_match: impl FnMut(std::ops::Range<usize>) -> bool,
 ) -> bool {
     if room == 0 {
         return true;
@@ -294,7 +294,7 @@ fn consume_literal_hits(
             let exhausted = end < ask;
             let mut blanks = 0usize;
             for hit in found.into_iter().skip(skip) {
-                if on_hit(hit) {
+                if on_match(hit) {
                     room = room.saturating_sub(1);
                     if room == 0 {
                         return true;
@@ -416,7 +416,7 @@ impl PdfCraftApp {
             let Some(text) = out.text else { continue };
             if d.mode == SearchMode::Patterns {
                 for h in text.find_with(|c| pdfcraft_engine::find_pattern(d.pattern, c)) {
-                    if mark_search_hit(&mut edits, prefs, page, page_info, &text, &author, h) && edits.len() >= max_matches {
+                    if mark_search_match(&mut edits, prefs, page, page_info, &text, &author, h) && edits.len() >= max_matches {
                         capped = true;
                         break 'pages;
                     }
@@ -424,7 +424,7 @@ impl PdfCraftApp {
             } else {
                 let room = max_matches.saturating_sub(edits.len());
                 if consume_literal_hits(&text, &needles, d.case_sensitive, d.whole_words, room, |hit| {
-                    mark_search_hit(&mut edits, prefs, page, page_info, &text, &author, hit)
+                    mark_search_match(&mut edits, prefs, page, page_info, &text, &author, hit)
                 }) {
                     capped = true;
                     break 'pages;
