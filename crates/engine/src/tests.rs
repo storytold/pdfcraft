@@ -3301,22 +3301,8 @@ fn printing_keeps_hidden_layers_hidden() {
     assert!(red > 100, "shown again, Layer A prints again: {red} red");
 }
 
-/// ISO 32000-2 §8.11.4.4: the default configuration's auto state for the Print event sets the
-/// layers it names when the document prints. Red is on screen but `/PrintState /OFF`, green is off
-/// on screen but `/PrintState /ON`: on paper, vector or as an image, green prints and red doesn't.
-#[test]
-fn printing_applies_the_print_auto_state() {
-    let content = b"/OC /A BDC 1 0 0 rg 10 10 80 80 re f EMC /OC /B BDC 0 1 0 rg 110 10 80 80 re f EMC";
-    let objs: Vec<Vec<u8>> = vec![
-        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R] /D << /OFF [6 0 R] \
-          /AS [<< /Event /Print /OCGs [5 0 R 6 0 R] /Category [/Print] >> << /Event /View /OCGs [5 0 R 6 0 R] /Category [/View] >>] >> >> >>"
-            .to_vec(),
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Properties << /A 5 0 R /B 6 0 R >> >> >>".to_vec(),
-        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
-        b"<< /Type /OCG /Name (View only) /Usage << /View << /ViewState /ON >> /Print << /PrintState /OFF >> >> >>".to_vec(),
-        b"<< /Type /OCG /Name (Print only) /Usage << /View << /ViewState /OFF >> /Print << /PrintState /ON >> >> >>".to_vec(),
-    ];
+/// A PDF of `objs`, numbered from 1, the first being the catalog.
+fn pdf_of_objects(objs: &[Vec<u8>]) -> Vec<u8> {
     let mut pdf = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -3331,30 +3317,67 @@ fn printing_applies_the_print_auto_state() {
         pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
     pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    pdf
+}
+
+/// ISO 32000-2 §8.11.4.4: the default configuration's auto state for the Print event sets the
+/// layers it names when the document prints. Red is on screen but `/PrintState /OFF`, green is off
+/// on screen but `/PrintState /ON`: on paper, vector or as an image, green prints and red doesn't.
+/// Two blue squares are on screen and `/PrintState /OFF` too, but no Print recommendation reaches
+/// them (one is named only in the View entry, the other in a Print entry without the Print
+/// category), so they print as shown.
+#[test]
+fn printing_applies_the_print_auto_state() {
+    let content = b"/OC /A BDC 1 0 0 rg 10 10 80 80 re f EMC /OC /B BDC 0 1 0 rg 110 10 80 80 re f EMC \
+                    /OC /C BDC 0 0 1 rg 210 10 40 40 re f EMC /OC /D BDC 0 0 1 rg 210 55 40 40 re f EMC";
+    let screen_only = b"/Usage << /View << /ViewState /ON >> /Print << /PrintState /OFF >> >> >>";
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R 7 0 R 8 0 R] /D << /OFF [6 0 R] \
+          /AS [<< /Event /Print /OCGs [5 0 R 6 0 R] /Category [/Print] >> << /Event /View /OCGs [5 0 R 6 0 R 7 0 R] /Category [/View] >> \
+          << /Event /Print /OCGs [8 0 R] /Category [/Language] >>] >> >> >>"
+            .to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 100] /Contents 4 0 R \
+          /Resources << /Properties << /A 5 0 R /B 6 0 R /C 7 0 R /D 8 0 R >> >> >>"
+            .to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+        [b"<< /Type /OCG /Name (View only) ".as_slice(), screen_only].concat(),
+        b"<< /Type /OCG /Name (Print only) /Usage << /View << /ViewState /OFF >> /Print << /PrintState /ON >> >> >>".to_vec(),
+        [b"<< /Type /OCG /Name (View entry) ".as_slice(), screen_only].concat(),
+        [b"<< /Type /OCG /Name (Other category) ".as_slice(), screen_only].concat(),
+    ];
+    let pdf = pdf_of_objects(&objs);
 
     let colours = |page: &pdfcraft_render::RenderedPage| {
         let px = page.rgba.as_chunks::<4>().0;
         let red = px.iter().filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60).count();
         let green = px.iter().filter(|p| p[1] > 200 && p[0] < 60 && p[2] < 60).count();
-        (red, green)
+        let blue = px.iter().filter(|p| p[2] > 200 && p[0] < 60 && p[1] < 60).count();
+        (red, green, blue)
     };
     let mut s = Session::new();
     let id = s.open("auto-state.pdf", None, Arc::new(pdf), None).unwrap();
-    let (red, green) = colours(&render_page(&s, id));
+    let (red, green, shown_blue) = colours(&render_page(&s, id));
     assert!(red > 100 && green == 0, "on screen, red shows and green doesn't: {red} red, {green} green");
     for raster in [None, Some(print::Raster { dpi: 72.0, grayscale: false })] {
         let bytes = Arc::new(s.print_pdf(id, &print::Settings { pages: vec![0], raster, ..Default::default() }).unwrap());
         let mut out = Session::new();
         let printed = out.open("print.pdf", None, bytes.clone(), None).unwrap();
-        let (red, green) = colours(&render_page(&out, printed));
+        let (red, green, blue) = colours(&render_page(&out, printed));
         assert_eq!(red, 0, "the view-only layer doesn't print (as image: {})", raster.is_some());
         assert!(green > 100, "the print-only layer prints (as image: {}): {green} green", raster.is_some());
+        // Both blue squares print: the one shown on screen alone is half of them.
+        assert!(
+            blue * 4 > shown_blue * 3,
+            "the layers no Print recommendation reaches print as shown (as image: {}): {blue} of {shown_blue} blue",
+            raster.is_some()
+        );
         // The vector copy's states are final: nothing a reader applies when drawing is left to
         // turn them back (the auto state, or a layer's `/Usage /View /ViewState`).
         let layers = &out.get(printed).unwrap().info.layers;
         if raster.is_none() {
             let cos = pdfcraft_cos::Document::open(bytes).unwrap();
-            assert_eq!(layers.len(), 2);
+            assert_eq!(layers.len(), 4);
             for layer in layers {
                 let group = cos.get(pdfcraft_cos::ObjRef::new(layer.id.0, layer.id.1));
                 assert!(group.as_dict().is_some_and(|g| !g.contains(b"Usage")), "{} keeps its /Usage", layer.name);
@@ -3365,6 +3388,27 @@ fn printing_applies_the_print_auto_state() {
             assert!(config.as_dict().is_some_and(|d| !d.contains(b"AS")), "the print copy keeps /AS");
         }
     }
+}
+
+/// Reading the print auto state is bounded over all `/AS` entries together: 1,024 Print entries
+/// sharing one `/Category` array of 70,000 names, `/Print` last, read 65,536 names in all, find no
+/// Print category and recommend nothing, instead of reading the array 1,024 times.
+#[test]
+fn the_print_auto_state_reads_a_bounded_number_of_categories() {
+    let names = format!("[{} /Print]", "/View ".repeat(70_000));
+    let entries = "<< /Event /Print /OCGs [5 0 R] /Category 6 0 R >> ".repeat(1024);
+    let objs: Vec<Vec<u8>> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << /AS [{entries}] >> >> >>").into_bytes(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>".to_vec(),
+        b"<< /Length 0 >>\nstream\n\nendstream".to_vec(),
+        b"<< /Type /OCG /Name (Layer) /Usage << /Print << /PrintState /OFF >> >> >>".to_vec(),
+        names.into_bytes(),
+    ];
+    let cos = pdfcraft_cos::Document::open(Arc::new(pdf_of_objects(&objs))).unwrap();
+    let layer = Layer { id: (5, 0), name: "Layer".into(), visible: true, initial: true };
+    let printed = crate::print_layer_states(&cos, std::slice::from_ref(&layer)).expect("there are Print entries");
+    assert!(printed.iter().all(|l| l.visible), "past the bound nothing is read, so the layer prints as shown");
 }
 
 #[test]

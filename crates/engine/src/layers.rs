@@ -6,10 +6,11 @@ use pdfcraft_render::{Layer, LayerOp, RenderPool};
 
 use crate::{Document, display_config, render_threads};
 
-/// Most usage application dictionaries (`/AS` entries), and groups in all of them, that
-/// [`print_layer_states`] reads.
+/// Most usage application dictionaries (`/AS` entries) that [`print_layer_states`] reads, and
+/// most category names and groups it reads in all of them together (entries can share one
+/// array, so the count is over every entry, not each).
 const MAX_AUTO_STATES: usize = 1024;
-const MAX_AUTO_GROUPS: usize = 65_536;
+const MAX_AUTO_ITEMS: usize = 65_536;
 
 /// The layers as they print: `layers` as shown, then the default configuration's auto state for
 /// the Print event (ISO 32000-2 §8.11.4.4, Table 101). Each usage application dictionary
@@ -25,7 +26,7 @@ pub(crate) fn print_layer_states(cos: &pdfcraft_cos::Document, layers: &[Layer])
     let auto = config.as_dict()?.get(b"AS").map(|a| cos.resolve(a))?;
     let mut printing = false;
     let mut recommended: std::collections::HashMap<(u32, u16), bool> = std::collections::HashMap::new();
-    let mut groups_read = 0usize;
+    let mut items_left = MAX_AUTO_ITEMS;
     for entry in auto.as_array()?.iter().take(MAX_AUTO_STATES) {
         let entry = cos.resolve(entry);
         let Some(entry) = entry.as_dict() else { continue };
@@ -35,7 +36,11 @@ pub(crate) fn print_layer_states(cos: &pdfcraft_cos::Document, layers: &[Layer])
         printing = true;
         let categories = entry.get(b"Category").map(|c| cos.resolve(c));
         let for_print = match categories.as_deref() {
-            Some(Object::Array(names)) => names.iter().any(|n| cos.resolve(n).as_name() == Some(b"Print")),
+            Some(Object::Array(names)) => {
+                let read = names.len().min(items_left);
+                items_left -= read;
+                names.iter().take(read).any(|n| cos.resolve(n).as_name() == Some(b"Print"))
+            }
             Some(Object::Name(n)) => n.as_slice() == b"Print",
             _ => false,
         };
@@ -44,10 +49,8 @@ pub(crate) fn print_layer_states(cos: &pdfcraft_cos::Document, layers: &[Layer])
         }
         let Some(groups) = entry.get(b"OCGs").map(|g| cos.resolve(g)) else { continue };
         for group in groups.as_array().into_iter().flatten() {
-            groups_read = groups_read.saturating_add(1);
-            if groups_read > MAX_AUTO_GROUPS {
-                break;
-            }
+            let Some(left) = items_left.checked_sub(1) else { break };
+            items_left = left;
             let Some(id) = group.as_ref() else { continue };
             let ocg = cos.resolve(group);
             let state = ocg
