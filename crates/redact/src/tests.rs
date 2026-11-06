@@ -2547,6 +2547,36 @@ fn a_remove_hidden_copy_gets_a_new_identifier() {
     assert_ne!(ids[1], vec![0x22; 16], "the copy keeps the source's second identifier string");
 }
 
+/// Links, actions and JavaScripts takes the scripts out of bookmarks that stay: an item that runs
+/// JavaScript loses its action, a jump with a script chained after it keeps only the jump, and a
+/// plain jump is left alone.
+#[test]
+fn bookmarks_that_stay_lose_their_scripts() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+        stream("", b""),
+        b"<< /Type /Outlines /First 6 0 R /Last 8 0 R /Count 3 >>".to_vec(),
+        // 6 runs a script, 7 jumps and then runs one, 8 only jumps; 9 the script
+        b"<< /Title (Runs) /Parent 5 0 R /Next 7 0 R /A 9 0 R >>".to_vec(),
+        b"<< /Title (Jumps then runs) /Parent 5 0 R /Prev 6 0 R /Next 8 0 R /A << /S /GoTo /D [3 0 R /Fit] /Next 9 0 R >> >>".to_vec(),
+        b"<< /Title (Jumps) /Parent 5 0 R /Prev 7 0 R /A << /S /GoTo /D [3 0 R /Fit] >> >>".to_vec(),
+        b"<< /S /JavaScript /JS (app.alert('OUTLINESCRIPT')) >>".to_vec(),
+    ]);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::LinksActionsScripts), Some((Hidden::LinksActionsScripts, 2)));
+    assert_eq!(remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap(), [(Hidden::LinksActionsScripts, 2)]);
+    let item = |n: u32| doc.get(ObjRef::new(n, 0)).as_dict().cloned().unwrap();
+    assert!(!item(6).contains(b"A"), "{:?}", item(6));
+    let jump = |n: u32| item(n).get(b"A").and_then(|a| doc.resolve(a).as_dict().cloned()).unwrap();
+    assert_eq!((jump(7).name(b"S"), jump(7).contains(b"D"), jump(7).contains(b"Next")), (Some(&b"GoTo"[..]), true, false));
+    assert_eq!(jump(8).name(b"S"), Some(&b"GoTo"[..]));
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(bytes.windows(7).any(|w| w == b"(Jumps)"), "the bookmarks stay");
+    assert!(!bytes.windows(13).any(|w| w == b"OUTLINESCRIPT"), "the bookmark's script survived the save");
+}
+
 /// Issue #2447: in a tagged PDF the structure tree points at the link and the comment it tags
 /// (`/OBJR`). Removing them must drop those references too, or the full rewrite keeps the
 /// annotations, the URL and the comment text included, while the page no longer lists them.
