@@ -30,6 +30,7 @@ mod measure;
 mod model3d;
 mod model_pick;
 mod model_render;
+mod model_walk;
 mod printing;
 mod reading;
 mod redact;

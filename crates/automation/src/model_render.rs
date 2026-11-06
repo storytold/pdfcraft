@@ -10,6 +10,7 @@ use super::Automation;
 use super::dispatch::Content;
 use super::error::{Result, ToolError, failed};
 use super::json::Args;
+use super::model_walk::walk_camera;
 use super::pages::encode_png;
 
 /// Default and largest side of the image, in pixels.
@@ -52,10 +53,15 @@ impl Automation {
         let prc = PrcFile::parse(&model.data).map_err(|e| failed(format!("the 3D model could not be read: {e}")))?;
         let meshes = assemble(&prc).map_err(failed)?;
         let aspect = f64::from(width) / f64::from(height);
-        let camera = match a.get("orbit") {
-            Some(_) if a.get("direction").is_some() => return Err(Args::wrong("orbit", "left out when direction is given")),
-            Some(moves) => orbit_camera(moves, &meshes, perspective, aspect)?,
-            None => {
+        let camera = match (a.get("orbit"), a.get("walk")) {
+            (Some(_), _) if a.get("direction").is_some() => return Err(Args::wrong("orbit", "left out when direction is given")),
+            (Some(_), Some(_)) => return Err(Args::wrong("walk", "left out when orbit is given")),
+            (_, Some(_)) if a.get("direction").is_some() || a.get("perspective").is_some() => {
+                return Err(Args::wrong("walk", "left out when direction or perspective is given"));
+            }
+            (Some(moves), None) => orbit_camera(moves, &meshes, perspective, aspect)?,
+            (None, Some(walk)) => walk_camera(walk, &meshes, aspect)?,
+            (None, None) => {
                 let direction = direction(a)?;
                 Camera::fit_meshes(&meshes, direction, up_for(direction), perspective, aspect).map_err(failed)?
             }

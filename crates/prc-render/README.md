@@ -18,6 +18,9 @@ render(&[WorldMesh], &Camera, &RenderOptions) -> Result<Image, RenderError>
 nav::Orbit::named(NamedView, perspective, Upright) / nav::Orbit::looking(direction, up, perspective)
 orbit.turn(yaw, pitch) / pan_by([right, up]) / zoom_at(&Bounds, reach, aspect, factor, [right, up]) / anchor_at(&Camera, point) / centre_on / refit
 orbit.camera(&Bounds, nav::reach(&[WorldMesh], &Bounds), aspect) -> Result<Camera, RenderError>
+nav::Walk::standing(eye, look, Upright, radius) / nav::Walk::from_camera(&Camera, Upright, radius) -> Option<Walk>
+walk.step(Intent, dt, Rules, &mut |ray| index.pick(ray)) / turn(yaw, pitch) / look(yaw, pitch) / face(dir) / go_to(&Hit, from)
+walk.camera(aspect) -> Result<Camera, RenderError>
 Camera::ray_through(x, y, width, height) -> Result<Ray, RenderError>   // the ray through an image position
 pick(&[WorldMesh], &Ray) -> Option<Hit>                              // the nearest triangle on it
 PickIndex::new(&[WorldMesh]) / .pick(&Ray) / .pick_where(&Ray, max_distance, include)
@@ -27,6 +30,14 @@ PickIndex::new(&[WorldMesh]) / .pick(&Ray) / .pick_where(&Ray, max_distance, inc
   holds every drawn vertex, so turning or reshaping the picture never changes the model's size. Once `anchor_at` picks a
   model point the view turns about it, and the point keeps its place on the picture. Pitch stays 0.01 rad short of
   the up axis, zoom within 0.05–50 of the fitted view, pan within 1,000 model radii; non-finite input is ignored.
+- `nav::Walk` is a viewer's walking control without the GUI. The caller passes the model as a closure giving the nearest
+  hit along a ray. Solid (`Rules::solid`), it stops at walls and slides along them, falls under gravity onto the floor below
+  and keeps its height with no floor under it. It walks up a ramp of up to about 46 degrees (steeper is a wall) at any pace,
+  otherwise climbs only what is under 5% of its eye height, or a third with `Rules::stairs`, and never rises into what is
+  over its head. A ghost passes through everything and rises and sinks as asked. With `Rules::level` or solid, moving
+  stays horizontal whatever the pitch. The heading and the camera turn apart, like a drone and its gimbal. Distances are
+  shares of the model's radius, except an eye height from `set_height`. A step lasts at most 0.1 s, so a stalled frame
+  cannot carry the walker through a wall, and non-finite input is ignored.
 
 - With no product tree, each tessellated mesh is drawn where it lies, in the default colour.
 - A triangle's own colour wins over its mesh's, which wins over `RenderOptions::colour`.

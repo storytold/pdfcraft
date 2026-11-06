@@ -263,10 +263,22 @@ about the `up` axis (default `+z`) and the `front` axis (perpendicular to `up`);
 `[yaw, pitch]` in degrees, pitch down; `zoom` is a positive factor, at `zoom_at` `[right, up]`
 in picture heights from the centre, where the point under it stays still; `pan` `[right, up]`
 moves the target, in model radii, so the model moves the other way. Every view frames the model
-at the same size, whatever its direction. U3D models are refused
+at the same size, whatever its direction. `walk`, instead of `orbit`, `direction` or
+`perspective`, shows what a walker sees: `{from, look, up, height, ghost, level, stairs, steps}`.
+`from` `[x, y, z]` is required. `look` is a direction (default towards the model's centre), `up`
+an axis (default `+z`), `height` the eye height in model units (default 8% of the model's radius).
+A walker stops at walls, falls onto the floor below and keeps its height with no floor under it.
+It walks up a ramp of up to about 46 degrees (steeper is a wall), otherwise climbs only a seam, and
+never rises into what is over its head; with no steps the eye stays at `from`.
+`ghost` (default false) passes through everything, `stairs` (default false) also climbs anything
+under a third of the eye height, and a ghost with `level` false (default true) flies where it looks.
+`steps` is a list of at most 1000 taken in order, each `{turn, look, forward, right, rise, run,
+seconds}`, all optional: `turn` turns the body and `look` the camera alone, both `[yaw, pitch]` in
+degrees; `forward`, `right` and `rise` are from -1 to 1, and `seconds` add up to at most 600.
+U3D models are refused
 with an error, and the annotation's own views, lighting and render modes are not applied yet.
 
-`model_pick` takes the same arguments plus `at`, a pixel position `[x, y]` from the picture's
+`model_pick` takes the same arguments, including `orbit` and `walk`, plus `at`, a pixel position `[x, y]` from the picture's
 top left (pixel (i, j)'s centre is `[i + 0.5, j + 0.5]`), and says what of the model lies there:
 `{"hit": {"mesh", "triangle", "point", "normal", "distance"}}` (mesh and triangle counted from 1,
 point and normal in model coordinates), or `{"hit": null}` over the background. A position

@@ -4,6 +4,8 @@
 
 mod axes;
 mod orbit;
+mod walk;
 
 pub use axes::{Axis, Upright};
 pub use orbit::{NamedView, Orbit, PITCH_LIMIT, ZOOM_RANGE, reach};
+pub use walk::{Intent, Rules, Walk};
