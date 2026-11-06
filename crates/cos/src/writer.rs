@@ -320,6 +320,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             {
                 continue;
             }
+            Err(CosError::MissingObject(_)) => return Err(CosError::UnreadableObject(r.num)),
             Err(error) => return Err(error),
         };
         if matches!(*o, Object::Null) {

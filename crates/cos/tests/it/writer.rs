@@ -62,8 +62,8 @@ fn full_save_refuses_an_unreadable_reachable_object() {
     assert!(classic.is_err() && packed.is_err(), "full save succeeded: classic={}, object streams={}", classic.is_ok(), packed.is_ok());
     for (object_streams, result) in [(false, classic), (true, packed)] {
         let error = result.expect_err("an unreadable reachable object must not become null");
-        assert_eq!(error, CosError::MissingObject(3), "object_streams={object_streams}");
-        assert_eq!(error.to_string(), "object 3 is missing");
+        assert_eq!(error, CosError::UnreadableObject(3), "object_streams={object_streams}");
+        assert_eq!(error.to_string(), "object 3 could not be read; full save stopped instead of writing it as null");
     }
     let incremental = write_incremental(&doc, &SaveOptions::default()).expect("an incremental save preserves the original objects");
     assert!(incremental.starts_with(doc.bytes().as_slice()));
@@ -101,11 +101,9 @@ fn full_save_refuses_a_member_of_a_live_non_stream_container() {
     let packed = write_full(&doc, &SaveOptions { object_streams: true, ..SaveOptions::default() });
     assert!(classic.is_err() && packed.is_err(), "full save succeeded: classic={}, object streams={}", classic.is_ok(), packed.is_ok());
     for (object_streams, result) in [(false, classic), (true, packed)] {
-        assert_eq!(
-            result.expect_err("a live non-stream container must not hide the member"),
-            CosError::MissingObject(3),
-            "object_streams={object_streams}"
-        );
+        let error = result.expect_err("a live non-stream container must not hide the member");
+        assert_eq!(error, CosError::UnreadableObject(4), "object_streams={object_streams}");
+        assert_eq!(error.to_string(), "object 4 could not be read; full save stopped instead of writing it as null");
     }
 }
 
