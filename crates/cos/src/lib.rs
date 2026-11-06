@@ -40,6 +40,8 @@ pub enum CosError {
     Syntax { offset: usize, detail: String },
     #[error("object {0} is missing")]
     MissingObject(u32),
+    #[error("object {0} could not be read; full save stopped instead of writing it as null")]
+    UnreadableObject(u32),
     #[error("object {0} is not a dictionary")]
     NotADictionary(ObjRef),
     #[error("stream data could not be decoded: {0}")]

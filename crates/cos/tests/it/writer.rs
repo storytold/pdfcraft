@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full, write_incremental};
+use pdfcraft_cos::{CosError, Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full, write_incremental};
 use pdfcraft_testkit::Pdf;
 
 /// Four pages, a shared font, document info with a non-ASCII title.
@@ -51,6 +51,72 @@ fn full_save_packs_objects_into_object_streams() {
     assert!(classic.starts_with(b"%PDF-1.4"));
     assert!(String::from_utf8_lossy(&classic).contains("\nxref\n"));
     assert_eq!(hayro_pages(&classic), 4);
+}
+
+#[test]
+fn full_save_refuses_an_unreadable_reachable_object() {
+    let bytes = Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R /Custom 3 0 R >>").obj("<< /Type /Pages /Kids [] /Count 0 >>").obj("[").build();
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let classic = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() });
+    let packed = write_full(&doc, &SaveOptions { object_streams: true, ..SaveOptions::default() });
+    assert!(classic.is_err() && packed.is_err(), "full save succeeded: classic={}, object streams={}", classic.is_ok(), packed.is_ok());
+    for (object_streams, result) in [(false, classic), (true, packed)] {
+        let error = result.expect_err("an unreadable reachable object must not become null");
+        assert_eq!(error, CosError::UnreadableObject(3), "object_streams={object_streams}");
+        assert_eq!(error.to_string(), "object 3 could not be read; full save stopped instead of writing it as null");
+    }
+    let incremental = write_incremental(&doc, &SaveOptions::default()).expect("an incremental save preserves the original objects");
+    assert!(incremental.starts_with(doc.bytes().as_slice()));
+    let reopened = Document::open(Arc::new(incremental)).unwrap();
+    assert_eq!(reopened.root(), doc.root());
+}
+
+fn member_container_fixture(container: u32) -> Vec<u8> {
+    let mut bytes = b"%PDF-1.5\n".to_vec();
+    let at = |out: &mut Vec<u8>, num: u32, body: &str| {
+        let off = out.len();
+        out.extend_from_slice(format!("{num} 0 obj\n{body}\nendobj\n").as_bytes());
+        off as u16
+    };
+    let o1 = at(&mut bytes, 1, "<< /Type /Catalog /Pages 2 0 R /Custom 4 0 R >>");
+    let o2 = at(&mut bytes, 2, "<< /Type /Pages /Kids [] /Count 0 >>");
+    let o3 = at(&mut bytes, 3, "<< /NotAStream true >>");
+    let rows: Vec<[u8; 4]> =
+        vec![[0, 0, 0, 255], [1, 0, o1 as u8, 0], [1, 0, o2 as u8, 0], [1, 0, o3 as u8, 0], [2, (container >> 8) as u8, container as u8, 0]];
+    let mut rows: Vec<u8> = rows.concat();
+    let xref = bytes.len();
+    rows.extend_from_slice(&[1, (xref >> 8) as u8, xref as u8, 0]);
+    bytes.extend_from_slice(
+        format!("5 0 obj\n<< /Type /XRef /W [1 2 1] /Index [0 6] /Size 6 /Root 1 0 R /Length {} >>\nstream\n", rows.len()).as_bytes(),
+    );
+    bytes.extend_from_slice(&rows);
+    bytes.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    bytes
+}
+
+#[test]
+fn full_save_refuses_a_member_of_a_live_non_stream_container() {
+    let doc = Document::open(Arc::new(member_container_fixture(3))).unwrap();
+    let classic = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() });
+    let packed = write_full(&doc, &SaveOptions { object_streams: true, ..SaveOptions::default() });
+    assert!(classic.is_err() && packed.is_err(), "full save succeeded: classic={}, object streams={}", classic.is_ok(), packed.is_ok());
+    for (object_streams, result) in [(false, classic), (true, packed)] {
+        let error = result.expect_err("a live non-stream container must not hide the member");
+        assert_eq!(error, CosError::UnreadableObject(4), "object_streams={object_streams}");
+        assert_eq!(error.to_string(), "object 4 could not be read; full save stopped instead of writing it as null");
+    }
+}
+
+#[test]
+fn full_save_keeps_a_member_of_an_absent_container_dangling() {
+    let doc = Document::open(Arc::new(member_container_fixture(99))).unwrap();
+    for object_streams in [false, true] {
+        let full = write_full(&doc, &SaveOptions { object_streams, ..SaveOptions::default() }).unwrap();
+        let back = Document::open(Arc::new(full)).unwrap();
+        let catalog = back.get(back.root().unwrap());
+        let custom = catalog.as_dict().unwrap().get(b"Custom").map(|o| back.resolve(o));
+        assert!(custom.as_ref().is_none_or(|o| matches!(**o, Object::Null)), "object_streams={object_streams}: {custom:?}");
+    }
 }
 
 #[test]

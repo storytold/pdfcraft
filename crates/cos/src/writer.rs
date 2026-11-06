@@ -305,7 +305,20 @@ fn full_save_order(reader: &mut ObjectReader, trailer_in: &Dict) -> Result<SaveO
         if map.contains_key(&r) {
             continue;
         }
-        let o = reader.get(r);
+        let o = match reader.try_get(r) {
+            Ok(o) => o,
+            Err(CosError::MissingObject(_))
+                if matches!(
+                    reader.document.xref_entry(r.num),
+                    Some(XrefEntry::InStream { stream, .. })
+                        if reader.document.is_edited(stream) || reader.document.accepted_generations(stream).is_empty()
+                ) =>
+            {
+                continue;
+            }
+            Err(CosError::MissingObject(_)) => return Err(CosError::UnreadableObject(r.num)),
+            Err(error) => return Err(error),
+        };
         if matches!(*o, Object::Null) {
             continue; // dangling reference: written as null by renumbering below
         }
