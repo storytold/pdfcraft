@@ -263,25 +263,34 @@ mod launch_queue {
             if !js_sys::Array::is_array(&files) {
                 return;
             }
-            for handle in js_sys::Array::from(&files).iter() {
-                let (inbox, failed, ctx) = (inbox.clone(), failed.clone(), ctx.clone());
-                wasm_bindgen_futures::spawn_local(async move {
-                    match read(&handle).await {
-                        Ok((name, bytes)) => {
-                            if let Ok(mut q) = inbox.lock() {
-                                q.push((name, bytes));
-                            }
-                        }
+            // One launch is one batch: read the files in the order the system gave them and queue
+            // them together, so their tabs open in that order and the batch's last file is the one
+            // that ends up active, as for any startup batch. Whether a startup file takes focus at
+            // all (it doesn't once the user has started working) stays the app's decision.
+            let handles: Vec<JsValue> = js_sys::Array::from(&files).iter().collect();
+            let (inbox, failed, ctx) = (inbox.clone(), failed.clone(), ctx.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut opened = Vec::with_capacity(handles.len());
+                let mut errors = Vec::new();
+                for handle in &handles {
+                    match read(handle).await {
+                        Ok(file) => opened.push(file),
                         Err((name, e)) => {
                             eframe::web_sys::console::error_1(&format!("PdfCraft: could not open {name}: {e}").into());
-                            if let Ok(mut q) = failed.lock() {
-                                q.push((name, e));
-                            }
+                            errors.push((name, e));
                         }
                     }
-                    ctx.request_repaint();
-                });
-            }
+                }
+                if let Ok(mut q) = inbox.lock() {
+                    q.extend(opened);
+                }
+                if !errors.is_empty()
+                    && let Ok(mut q) = failed.lock()
+                {
+                    q.extend(errors);
+                }
+                ctx.request_repaint();
+            });
         });
         // The queue holds launches made before a consumer was set and delivers them now; the
         // consumer lives as long as the page.
