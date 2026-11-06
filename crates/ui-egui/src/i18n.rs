@@ -66,7 +66,7 @@ pub struct LangInfo {
 }
 
 /// How many languages [`LANGUAGES`] lists.
-const LANGUAGE_COUNT: usize = 35;
+const LANGUAGE_COUNT: usize = 36;
 
 /// The languages PdfCraft offers. English first: it is the fallback and the source language.
 pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
@@ -150,6 +150,8 @@ pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
     // Norwegian Bokmål; every `nb-*` locale resolves here, and so do general Norwegian (`no-*`) and
     // Nynorsk (`nn-*`), which have no catalog of their own (see `candidates`).
     LangInfo { code: "nb", rtl: false },
+    // Swedish; every `sv-*` locale (`sv-SE`, `sv-FI` ...) resolves here.
+    LangInfo { code: "sv", rtl: false },
 ];
 
 /// Per language of [`LANGUAGES`], the (context, source) keys of PdfCraft's own catalog as written
@@ -277,6 +279,7 @@ impl Lang {
             "lo" => "Lao",
             "hi" => "Hindi",
             "ko" => "Korean",
+            "sv" => "Swedish",
             // Only reached if a language is added to `LANGUAGES` without an English name; the
             // code still tells the reader which entry it is.
             code => code,

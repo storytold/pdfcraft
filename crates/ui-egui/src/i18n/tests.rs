@@ -1002,6 +1002,27 @@ fn norwegian_bokmal_is_registered_and_persists() {
     assert_eq!(restored.language, "nb");
 }
 
+/// Swedish is registered, normalizes case-insensitively, detects locale tags, and round-trips
+/// through preferences.
+#[test]
+fn swedish_is_registered_and_persists() {
+    needs_catalogs!();
+    let sv = Lang::from_code("sv").expect("sv registered");
+    assert_eq!(sv.name(), "Svenska");
+    assert_eq!(normalize_pref("SV"), Some("sv"));
+    for tag in ["sv", "sv-SE", "sv_SE.UTF-8", "SV-se", "sv-FI", "sv_FI.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(sv), "{tag}");
+    }
+    assert_eq!(first_supported("(\n    \"sv-SE\",\n    \"en-US\"\n)\n"), Some(sv));
+    assert_eq!(first_supported("sv-SE\r\nen-US\r\n"), Some(sv));
+    let mut app = crate::PdfCraftApp::default();
+    app.set_option("language", "SV").unwrap();
+    assert_eq!(app.language, "sv");
+    let mut restored = crate::PdfCraftApp::default();
+    restored.restore(&app.persist());
+    assert_eq!(restored.language, "sv");
+}
+
 #[test]
 fn vietnamese_is_registered_and_persists() {
     needs_catalogs!();
