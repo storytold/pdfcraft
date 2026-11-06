@@ -478,7 +478,16 @@ fn app_creator<'a>(
                 log::warn!("--{k} {v}: {e}");
             }
         }
-        Ok(Box::new(app))
+        // Windows tear-off uses native egui viewports. Other platforms retain their existing
+        // lifecycle (in particular macOS app-level Quit) until it is qualified there.
+        #[cfg(target_os = "windows")]
+        {
+            Ok(Box::new(pdfcraft_ui_egui::tab_windows::NativeWindows::new(app)))
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Ok(Box::new(app))
+        }
     })
 }
 

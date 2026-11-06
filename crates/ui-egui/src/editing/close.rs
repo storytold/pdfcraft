@@ -149,7 +149,12 @@ impl PdfCraftApp {
 
     fn quit(&mut self, ctx: &egui::Context) {
         self.allow_quit = true;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        if self.managed_windows {
+            self.window_close_ready = true;
+            ctx.request_repaint();
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
 
     /// Publish whether any document has unsaved work, for the browser's reload warning (#812).
@@ -174,13 +179,18 @@ impl PdfCraftApp {
         if !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
+        // A native multi-window host removes only this viewport after the usual save guard.
+        if self.managed_windows {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
         // `first_dirty` counts text typed into a field as an unsaved change.
         if !self.allow_quit && self.first_dirty().is_some() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.close_request = Some(CloseRequest::Quit);
         } else {
-            // A clean quit: nothing is left to recover.
+            // A clean quit: nothing is left to recover in this window.
             self.shutdown_recovery();
+            self.window_close_ready = self.managed_windows;
         }
     }
 

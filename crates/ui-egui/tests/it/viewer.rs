@@ -1377,10 +1377,11 @@ fn a_new_document_opens_at_the_top_after_a_relaunch() {
         }
         fn flush(&mut self) {}
     }
+    let prior_ids: Vec<_> = h.state().views.iter().map(|view| view.id).collect();
     let mut settings = Settings::default();
     h.ctx.memory(|m| eframe::set_value(&mut settings, "egui", m));
     let memory: egui::Memory = eframe::get_value(&settings, "egui").expect("egui's memory round-trips");
-    // Next launch: a document never seen before, which gets a.pdf's old id.
+    // A fresh session opens a document never seen before with a new process-wide id.
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
         cc.egui_ctx.memory_mut(|m| *m = memory);
         let mut app = PdfCraftApp::new();
@@ -1390,7 +1391,7 @@ fn a_new_document_opens_at_the_top_after_a_relaunch() {
         app
     });
     h.run_steps(4);
-    assert_eq!(h.state().views[0].id, pdfcraft_engine::DocId(1));
+    assert!(!prior_ids.contains(&h.state().views[0].id), "a fresh session must not reuse a prior document ID");
     assert_eq!(h.state().views[0].current, 0, "c.pdf opens on page 1");
     // It is still a scroll position of its own from then on.
     h.state_mut().views[0].goto = Some((2, 0.0));

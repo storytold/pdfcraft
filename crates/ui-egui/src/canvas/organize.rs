@@ -524,6 +524,7 @@ pub(super) fn organize_grid(
             view.org_drag = None;
         }
     });
+    crate::window_drop::grid(ui, view.id, viewport, &cells, editable && unobstructed);
     ui.spacing_mut().scroll.fade.strength = fade_strength;
     // Files dragged in from outside go to the gap under the pointer. Some platforms don't say
     // where the pointer is until the files are dropped; then the whole grid is the target.

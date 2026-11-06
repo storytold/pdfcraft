@@ -26,7 +26,6 @@ mod view;
 #[derive(Default)]
 pub struct Session {
     pub(crate) docs: Vec<Document>,
-    pub(crate) next_id: u64,
     /// Seconds since the Unix epoch, injected so saves are deterministic in tests.
     clock: Option<fn() -> i64>,
     /// Seconds to add to UTC for local time, read from whoever knows the zone (a browser, say).

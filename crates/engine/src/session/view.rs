@@ -291,6 +291,34 @@ impl Session {
         self.create_report(&format!("Summary of Comments on {}", doc.name), &text)
     }
 
+    /// Move one open document into an independent session, without saving or reparsing it.
+    /// Its identity, password, editor, Undo/Redo and autosave generations are preserved.
+    /// A missing id leaves this session unchanged.
+    pub fn detach_document(&mut self, id: DocId) -> Option<Self> {
+        let index = self.docs.iter().position(|d| d.id == id)?;
+        Some(Self {
+            docs: vec![self.docs.remove(index)],
+            clock: self.clock,
+            utc_offset: self.utc_offset,
+            trust: self.trust.clone(),
+            js_off: self.js_off,
+            date_format: self.date_format.clone(),
+            date_language: self.date_language.clone(),
+            xfa_time_scale: self.xfa_time_scale,
+        })
+    }
+
+    /// Move a live document between sessions, preserving its process-unique identity.
+    /// A missing source or an existing target identity leaves both sessions unchanged.
+    pub fn transfer_document(&mut self, id: DocId, target: &mut Self) -> Option<DocId> {
+        let index = self.docs.iter().position(|d| d.id == id)?;
+        if target.get(id).is_some() {
+            return None;
+        }
+        target.docs.push(self.docs.remove(index));
+        Some(id)
+    }
+
     pub fn close(&mut self, id: DocId) {
         self.docs.retain(|d| d.id != id);
     }

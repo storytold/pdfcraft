@@ -444,3 +444,7 @@ Estimates unchanged.
 ## Pages sidebar keyboard refresh (2026-10-30)
 
 PR #2133 retains document-local Pages sidebar focus for Ctrl/Cmd+A and Escape after the UI module split. The selection does not navigate. The focused regression is in `crates/ui-egui/tests/it/view.rs`; current-head hosted validation is pending. Feature counts and estimates are unchanged.
+
+- 2026-11-03 (PR #3753): Rebased tab tear-off, cross-window transfers and Organize insertion onto current main after module extraction. Retired local translation catalogs; strings are supplied by craft-i18n (storytold/craft-i18n#141). Existing feature estimates unchanged.
+
+- 2026-11-04: Tab windows: include Move Tab to New Window in the explicit File menu; regress menu completeness and native-host/modal guards.

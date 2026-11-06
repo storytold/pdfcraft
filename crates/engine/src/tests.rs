@@ -79,10 +79,10 @@ fn prepared_open_does_not_mutate_the_session_until_commit() {
 
     let mut session = Session::new();
     let prepared = session.prepare_open("prepared.pdf", None, Arc::new(fixture(3)), None).expect("prepares");
-    assert!(session.get(DocId(1)).is_none());
+    assert!(session.docs().is_empty());
 
     let id = session.commit_open(prepared);
-    assert_eq!(id, DocId(1));
+    assert_ne!(id, DocId(0));
     assert_eq!(session.get(id).expect("committed document").info.pages.len(), 3);
 }
 
@@ -1141,7 +1141,7 @@ fn set_layer_actions_change_what_renders() {
     // Turning Green off brings nothing back on.
     assert!(s.set_layer_state(id, &[(LayerOp::Off, (6, 0))], true));
     assert_eq!(halves(&s), (white.clone(), white));
-    assert!(!s.set_layer_state(DocId(999), &[(LayerOp::On, (5, 0))], true));
+    assert!(!s.set_layer_state(DocId(u64::MAX), &[(LayerOp::On, (5, 0))], true));
 }
 
 #[test]
@@ -1194,15 +1194,15 @@ fn reset_layers_returns_to_the_files_visibility() {
     assert!(!s.reset_layers(id), "already as the file opens");
     // What the eye sees is not an edit: Undo still undoes the insert.
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Insert pages from b.pdf"));
-    assert!(!s.reset_layers(DocId(999)));
+    assert!(!s.reset_layers(DocId(u64::MAX)));
 }
 
 #[test]
 fn edits_to_unknown_documents_are_rejected() {
     let (mut s, _) = session_with(1);
-    assert_eq!(s.apply(DocId(999), Edit::DeletePages { pages: vec![0] }), Err(EditError::NoDocument));
-    assert_eq!(s.undo(DocId(999)), Err(EditError::NoDocument));
-    assert!(s.save_bytes(DocId(999)).is_err());
+    assert_eq!(s.apply(DocId(u64::MAX), Edit::DeletePages { pages: vec![0] }), Err(EditError::NoDocument));
+    assert_eq!(s.undo(DocId(u64::MAX)), Err(EditError::NoDocument));
+    assert!(s.save_bytes(DocId(u64::MAX)).is_err());
 }
 
 #[test]
@@ -8083,7 +8083,7 @@ fn enhance_camera_page_refuses_bad_corners_and_pages() {
     assert!(e.contains("corners"), "{e}");
     let ok = [[0.0, 0.0], [200.0, 0.0], [200.0, 300.0], [0.0, 300.0]];
     assert!(s.enhance_camera_page(id, 5, ok).unwrap_err().to_string().contains("no page 6"));
-    assert!(matches!(s.enhance_camera_page(DocId(999), 0, ok), Err(EditError::NoDocument)));
+    assert!(matches!(s.enhance_camera_page(DocId(u64::MAX), 0, ok), Err(EditError::NoDocument)));
     assert_eq!(s.get(id).unwrap().can_undo(), None, "nothing changed");
 }
 
@@ -9286,6 +9286,58 @@ fn exporting_office_keeps_dotted_leader_entries_as_paragraphs() {
     let entries = ["Art.1. Scope .................... 3", "Art.2. Eligibility .................... 7", "Art.3. Application .................... 12"];
     let positions: Vec<_> = entries.iter().map(|entry| html.find(&format!("<p>{entry}</p>")).expect("one paragraph per entry")).collect();
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "reading order: {html}");
+}
+
+#[test]
+fn detach_document_moves_live_history_without_reopening_or_saving() {
+    let mut source = Session::default();
+    let id = source.open("edited.pdf", Some("original.pdf".into()), Arc::new(fixture(2)), None).unwrap();
+    source.apply(id, Edit::SetInfo { key: "Title".into(), value: "keep".into() }).unwrap();
+    let edited = source.get(id).unwrap().bytes.clone();
+    assert!(source.detach_document(DocId(u64::MAX)).is_none());
+    assert_eq!(source.docs().len(), 1);
+    let mut target = source.detach_document(id).unwrap();
+    assert!(source.docs().is_empty());
+    let document = target.get(id).unwrap();
+    assert!(Arc::ptr_eq(&edited, &document.bytes));
+    assert!(document.dirty);
+    assert_eq!(document.path.as_deref(), Some("original.pdf"));
+    target.undo(id).unwrap();
+    assert!(target.get(id).unwrap().can_redo().is_some());
+    target.redo(id).unwrap();
+    assert_eq!(target.get(id).unwrap().bytes, edited);
+    let next = target.open("second.pdf", None, Arc::new(fixture(1)), None).unwrap();
+    assert_ne!(next, id);
+}
+
+#[test]
+fn transfer_document_preserves_process_unique_ids_and_both_histories() {
+    let mut a = Session::default();
+    let mut b = Session::default();
+    let x = a.open("source.pdf", Some("source.pdf".into()), Arc::new(fixture(2)), None).unwrap();
+    let y = b.open("target.pdf", None, Arc::new(fixture(1)), None).unwrap();
+    assert_ne!(x, y);
+    a.apply(x, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let before = a.get(x).unwrap().bytes.clone();
+    let target_before = b.get(y).unwrap().bytes.clone();
+    let moved = a.transfer_document(x, &mut b).unwrap();
+    assert_ne!(moved, y);
+    assert_eq!(moved, x);
+    assert!(Arc::ptr_eq(&b.get(moved).unwrap().bytes, &before));
+    assert_eq!(b.get(y).unwrap().bytes, target_before);
+    assert_eq!(b.get(moved).unwrap().path.as_deref(), Some("source.pdf"));
+    b.undo(moved).unwrap();
+    assert_eq!(b.get(moved).unwrap().info.pages[0].rotation, 0);
+    b.redo(moved).unwrap();
+    assert_eq!(b.get(moved).unwrap().info.pages[0].rotation, 90);
+    let back = b.transfer_document(moved, &mut a).unwrap();
+    assert_eq!(a.get(back).unwrap().bytes, before);
+    assert_eq!(b.docs().len(), 1);
+    assert!(a.transfer_document(DocId(u64::MAX), &mut b).is_none());
+    // Defensively reject a corrupt/colliding destination without removing the source.
+    b.docs[0].id = back;
+    assert!(a.transfer_document(back, &mut b).is_none());
+    assert_eq!(a.get(back).unwrap().bytes, before);
 }
 
 /// A date typed in another of an XFA date field's edit patterns is kept in its first: yymmdd and

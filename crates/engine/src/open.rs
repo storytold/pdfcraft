@@ -70,8 +70,9 @@ impl Session {
 
     /// Register a prepared document. This is the only open step that mutates the session.
     pub fn commit_open(&mut self, prepared: PreparedDocument) -> DocId {
-        self.next_id += 1;
-        let id = DocId(self.next_id);
+        // egui state and native viewports share a process-wide identity namespace.
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = DocId(NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         let mut document = prepared.document;
         document.id = id;
         self.docs.push(document);
