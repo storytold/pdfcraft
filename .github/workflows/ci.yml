@@ -86,7 +86,14 @@ jobs:
       # A missing oracle fails the job instead of printing a skip notice that reads as a pass.
       linux-env: PDFCRAFT_ORACLES_REQUIRED=1
       windows-env: PDFCRAFT_REQUIRE_WINRES=1
+      # The OCR tests that read real text skip without the models, and a skip reads as a pass.
+      # `cargo xtask models` fetches them into assets/models/ (SHA-256 checked); a failed
+      # download fails the gate rather than skipping them.
+      command: |
+        cargo xtask models
+        cargo xtask ci
       # Windows checks what differs by platform: the build (with resources) and the tests.
       windows-command: |
+        cargo xtask models
         cargo clippy --workspace --all-targets --locked -- -D warnings
         cargo test --workspace --locked
