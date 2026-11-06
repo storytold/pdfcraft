@@ -7932,44 +7932,47 @@ fn test_image_context_menu_in_crop_mode_and_when_moved() {
     set_crop_box(&mut h, moved_crop);
     h.run_steps(2);
 
-    // Simulate secondary click on the moved crop box
-    let click_pos = moved_crop.center();
-    h.hover_at(click_pos);
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: click_pos, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
-    h.event(egui::Event::PointerButton { pos: click_pos, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    // The Edit-image menu remains stable as the pointer leaves its opening point (#5835/#6421).
+    crop_secondary_click(&mut h, moved_crop.center());
+    for at in [moved_crop.center(), c + egui::vec2(25.0, 0.0), r.left_top() + egui::vec2(10.0, 10.0)] {
+        crop_production_frame(&mut h, [egui::Event::PointerMoved(at)]);
+        h.run_steps(2);
+        assert!(h.query_by_label("Rotate Clockwise").is_some(), "crop mode must show the stable Edit-image menu");
+        assert!(h.query_by_label("Flip horizontal").is_some());
+        assert!(h.query_by_label("Rotate view clockwise").is_none());
+        assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_some()));
+    }
+    // Isolate the outside-image case from dismissal of the popup tested above.
+    egui::Popup::close_all(&h.ctx);
     h.run_steps(2);
-
-    // In crop mode and when moved, do not open right click window when clicked on the image (#5835)
-    assert!(h.query_all_by_label("Rotate Clockwise").next().is_none(), "image context menu must not trigger in crop mode");
-    assert!(h.query_all_by_label("Flip horizontal").next().is_none(), "image context menu must not trigger in crop mode");
-    assert!(h.query_all_by_label("Rotate view clockwise").next().is_none(), "canvas background menu must not trigger in crop mode");
-    assert!(h.query_all_by_label("Add bookmark").next().is_none(), "canvas background menu must not trigger in crop mode");
-    assert!(h.query_all_by_label("Take a snapshot").next().is_none(), "canvas background menu must not trigger in crop mode");
-    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_some()), "crop mode must remain active after right click on image");
-    // Action pills remain visible and interactive
-    assert!(h.query_by_label("Done").is_some());
-    assert!(h.query_by_label("Cancel").is_some());
-
     // Right clicking outside the image on the page exits crop mode and opens the canvas background menu
     let outside_pos = r.left_top() + egui::vec2(10.0, 10.0);
-    h.hover_at(outside_pos);
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: outside_pos, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
-    h.event(egui::Event::PointerButton { pos: outside_pos, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
-    h.run_steps(2);
+    crop_secondary_click(&mut h, outside_pos);
 
     assert!(h.state().views[0].image_selection.is_none(), "clicking outside clears image selection");
     assert!(h.query_all_by_label("Rotate view clockwise").next().is_some(), "canvas background menu triggers outside image");
 }
 
+fn crop_production_frame(h: &mut Harness<'static, PdfCraftApp>, events: impl IntoIterator<Item = egui::Event>) {
+    h.input_mut().events.extend(events);
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+}
+
 fn crop_secondary_click(h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2) {
-    assert!(h.state().views[0].viewport_rect().contains(p), "test point must be visible: {p:?}");
-    h.hover_at(p);
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    assert!(h.state().views[0].viewport_rect().contains(p));
+    crop_production_frame(h, [egui::Event::PointerMoved(p)]);
+    crop_production_frame(
+        h,
+        [egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() }],
+    );
+    crop_production_frame(
+        h,
+        [egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() }],
+    );
     h.run_steps(2);
 }
 
@@ -7977,7 +7980,9 @@ fn assert_crop_context_preserved(h: &Harness<'static, PdfCraftApp>) {
     let selection = h.state().views[0].image_selection.as_ref().expect("crop remains selected");
     assert_eq!(selection.index, 0, "an overlapping image must not steal the crop");
     assert!(selection.crop.is_some(), "crop mode remains active");
-    for label in ["Flip horizontal", "Rotate view clockwise", "Take a snapshot"] {
+    // A crop widget may consume its own secondary click; any popup must stay the Edit-image
+    // menu, never the competing page menu from #5835.
+    for label in ["Rotate view clockwise", "Take a snapshot"] {
         assert!(h.query_all_by_label(label).next().is_none(), "unexpected menu: {label}");
     }
     assert!(h.query_by_label("Done").is_some());
@@ -8012,9 +8017,15 @@ fn test_image_context_menu_crop_overlapping_image_and_handle() {
         let image_rect = pdfcraft_ui_egui::canvas::image_screen_rect(&doc.page_images(0)[0], &xf, &doc.info, 0);
         crop_secondary_click(&mut h, image_rect.center());
         assert_crop_context_preserved(&h);
+        assert!(h.query_by_label("Rotate Clockwise").is_some(), "the cropped image keeps its Edit menu on a turned page");
+        egui::Popup::close_all(&h.ctx);
+        h.run_steps(2);
         // This point is outside both images, but inside the left handle's grip.
         crop_secondary_click(&mut h, image_rect.left_center() - egui::vec2(5.0, 0.0));
         assert_crop_context_preserved(&h);
+        assert!(h.query_by_label("Rotate Clockwise").is_some(), "a crop grip outside the picture keeps the Edit menu");
+        egui::Popup::close_all(&h.ctx);
+        h.run_steps(2);
         crop_secondary_click(&mut h, image_rect.left_center() - egui::vec2(20.0, 0.0));
         assert!(h.state().views[0].image_selection.is_none());
         assert!(h.query_by_label("Rotate view clockwise").is_some());
@@ -9893,4 +9904,208 @@ fn affine_review_cropped_rotation_preview_matches_saved_corners() {
             "preview jumped after commit/save: clip={clip:?} rotation={rotation}: {preview:?} != {committed:?}"
         );
     }
+}
+
+// Contributor-original two-image PDF, with enough space for real crop-handle drags.
+fn crop_menu_harness() -> Harness<'static, PdfCraftApp> {
+    use pdfcraft_cos::{Dict, Document, Object, Stream, write_full};
+    let mut pdf = Document::open(std::sync::Arc::new(two_image_fixture())).unwrap();
+    let page = pdfcraft_model::pages(&pdf)[0].obj;
+    let stream = pdf.add(Object::Stream(Stream::flate(Dict::new(), b"q 140 0 0 140 30 80 cm /Im0 Do Q q 20 0 0 20 20 20 cm /Im0 Do Q")));
+    pdf.update_dict(page, |d| d.set(b"Contents".to_vec(), Object::Ref(stream))).unwrap();
+    let bytes = write_full(&pdf, &Default::default()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.system_clipboard = false;
+        app.open_bytes("crop-menu.pdf", None, bytes.clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Page;
+    h.run_steps(3);
+    h
+}
+
+fn crop_primary_click(h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2) {
+    crop_production_frame(h, [egui::Event::PointerMoved(p)]);
+    crop_production_frame(
+        h,
+        [egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }],
+    );
+    crop_production_frame(
+        h,
+        [egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }],
+    );
+    h.run_steps(3);
+}
+
+fn crop_drag(h: &mut Harness<'static, PdfCraftApp>, a: egui::Pos2, b: egui::Pos2) {
+    crop_production_frame(
+        h,
+        [
+            egui::Event::PointerMoved(a),
+            egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() },
+        ],
+    );
+    for t in [0.25, 0.5, 0.75, 1.0] {
+        crop_production_frame(h, [egui::Event::PointerMoved(a.lerp(b, t))]);
+    }
+    crop_production_frame(
+        h,
+        [egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }],
+    );
+    h.run_steps(3);
+}
+
+fn crop_image_rect(h: &Harness<'static, PdfCraftApp>) -> egui::Rect {
+    let v = &h.state().views[0];
+    let d = h.state().session.get(v.id).unwrap();
+    pdfcraft_ui_egui::canvas::image_screen_rect(&d.page_images(0)[0], &v.page_xform(0).unwrap(), &d.info, 0)
+}
+
+fn enter_crop_through_menu(h: &mut Harness<'static, PdfCraftApp>) {
+    crop_secondary_click(h, crop_image_rect(h).center());
+    let p = h.get_by_label("Crop").rect().center();
+    crop_primary_click(h, p);
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.index == 0 && s.crop.is_some()));
+}
+
+fn choose_crop_menu(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    let r = {
+        let v = &h.state().views[0];
+        let d = h.state().session.get(v.id).unwrap();
+        let keep = v.image_selection.as_ref().unwrap().crop.as_ref().unwrap().keep;
+        v.page_xform(0).unwrap().user_rect(&d.info, 0, keep.map(|x| x as f32))
+    };
+    crop_secondary_click(h, r.center());
+    let p = h.get_by_label(label).rect().center();
+    crop_primary_click(h, p);
+}
+
+#[test]
+fn crop_menu_finishes_then_rotates_in_separate_undo_steps() {
+    let mut h = crop_menu_harness();
+    let id = h.state().views[0].id;
+    let original = h.state().session.get(id).unwrap().page_images(0)[0].clone();
+    enter_crop_through_menu(&mut h);
+    let r = crop_image_rect(&h);
+    crop_drag(&mut h, r.left_center(), r.left_center() + egui::vec2(r.width() * 0.25, 0.0));
+    let keep = h.state().views[0].image_selection.as_ref().unwrap().crop.as_ref().unwrap().keep;
+    assert!(keep[0] > original.rect[0] + 1.0);
+    choose_crop_menu(&mut h, "Rotate Clockwise");
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_none()));
+    assert_ne!(h.state().session.get(id).unwrap().page_images(0)[0].matrix, original.matrix);
+    h.state_mut().undo();
+    h.run_steps(3);
+    let cropped = h.state().session.get(id).unwrap().page_images(0)[0].clone();
+    assert_eq!(cropped.matrix, original.matrix, "first undo removes only rotation");
+    for (actual, expected) in cropped.visible_rect.expect("crop remains").into_iter().zip(keep) {
+        assert!((actual - expected).abs() < 1e-6, "crop was its own earlier step");
+    }
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(h.state().session.get(id).unwrap().page_images(0)[0].visible_rect, original.visible_rect);
+    assert!(h.state().session.get(id).unwrap().can_undo().is_none());
+}
+
+#[test]
+fn crop_menu_copy_finishes_before_dispatch_and_stops_on_a_refused_crop() {
+    for invalid in [true, false] {
+        let mut h = crop_menu_harness();
+        let id = h.state().views[0].id;
+        enter_crop_through_menu(&mut h);
+        let r = crop_image_rect(&h);
+        crop_drag(&mut h, r.left_center(), r.left_center() + egui::vec2(r.width() * 0.25, 0.0));
+        let keep = h.state().views[0].image_selection.as_ref().unwrap().crop.as_ref().unwrap().keep;
+        if invalid {
+            h.state_mut().views[0].image_selection.as_mut().unwrap().crop.as_mut().unwrap().keep = [keep[0], keep[1], keep[0], keep[3]];
+        }
+        // Use the valid image area to open the menu even for the invalid-draft control.
+        crop_secondary_click(&mut h, r.center());
+        let p = h.get_by_label("Copy Image").rect().center();
+        crop_primary_click(&mut h, p);
+        if invalid {
+            assert!(h.state().last_copied_image.is_none(), "a failed finish must stop Copy, proving dispatch order");
+            assert!(!h.state().session.get(id).unwrap().dirty);
+        } else {
+            assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_none()));
+            for (actual, expected) in h.state().session.get(id).unwrap().page_images(0)[0].visible_rect.expect("crop committed").into_iter().zip(keep)
+            {
+                assert!((actual - expected).abs() < 1e-6);
+            }
+            assert!(h.state().session.get(id).unwrap().dirty, "Copy commits the pending crop first");
+            assert!(h.state().last_copied_image.is_some(), "the existing full-bitmap copy then runs");
+            h.state_mut().undo();
+            h.run_steps(3);
+            assert!(h.state().session.get(id).unwrap().can_undo().is_none(), "only the crop added an undo step");
+        }
+    }
+}
+
+#[test]
+fn unchanged_crop_menu_finish_adds_no_edit_for_crop_or_copy() {
+    for already_cropped in [false, true] {
+        for label in ["Crop", "Copy Image"] {
+            let mut h = crop_menu_harness();
+            let id = h.state().views[0].id;
+            if already_cropped {
+                h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage {
+                    page: 0,
+                    index: 0,
+                    change: pdfcraft_engine::ImageEdit::Crop([65.0, 80.0, 170.0, 220.0]),
+                });
+                h.run_steps(3);
+            }
+            let doc = h.state().session.get(id).unwrap();
+            let generation = doc.edit_generation();
+            let dirty = doc.dirty;
+            let undo = doc.can_undo().map(str::to_owned);
+            enter_crop_through_menu(&mut h);
+            choose_crop_menu(&mut h, label);
+            assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_none()), "{label} finishes crop mode");
+            let doc = h.state().session.get(id).unwrap();
+            assert_eq!(doc.dirty, dirty);
+            assert_eq!(doc.can_undo(), undo.as_deref());
+            assert_eq!(doc.edit_generation(), generation);
+        }
+    }
+}
+
+#[test]
+fn moved_crop_menu_outside_the_previous_visible_box_keeps_its_target() {
+    let mut h = crop_menu_harness();
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage {
+        page: 0,
+        index: 0,
+        change: pdfcraft_engine::ImageEdit::Crop([100.0, 80.0, 170.0, 220.0]),
+    });
+    h.run_steps(3);
+    let previous = crop_image_rect(&h);
+    enter_crop_through_menu(&mut h);
+    crop_drag(&mut h, previous.center(), previous.center() - egui::vec2(previous.width() * 0.5, 0.0));
+    let p = previous.center() - egui::vec2(previous.width() * 0.75, 0.0);
+    assert!(!previous.contains(p));
+    crop_secondary_click(&mut h, p);
+    assert_crop_context_preserved(&h);
+    assert!(h.query_by_label("Rotate Clockwise").is_some(), "the moved crop keeps the Edit-image menu outside its old visible box");
+}
+
+#[test]
+fn crop_menu_icon_again_commits_the_pending_crop() {
+    let mut h = crop_menu_harness();
+    let id = h.state().views[0].id;
+    enter_crop_through_menu(&mut h);
+    let r = crop_image_rect(&h);
+    crop_drag(&mut h, r.left_center(), r.left_center() + egui::vec2(r.width() * 0.25, 0.0));
+    let keep = h.state().views[0].image_selection.as_ref().unwrap().crop.as_ref().unwrap().keep;
+    choose_crop_menu(&mut h, "Crop");
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_none()));
+    for (actual, expected) in h.state().session.get(id).unwrap().page_images(0)[0].visible_rect.unwrap().into_iter().zip(keep) {
+        assert!((actual - expected).abs() < 1e-6);
+    }
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert!(h.state().session.get(id).unwrap().can_undo().is_none());
 }
