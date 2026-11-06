@@ -1,6 +1,7 @@
 # Where PdfCraft falls short of Acrobat Pro
 
-> **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
+> **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
+> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gap 12: `cargo xtask interop` opens every kind of output we write in MuPDF and Poppler; estimates unchanged; gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
@@ -248,7 +249,7 @@ update the numbers.
 - **Missing:** side-by-side comparison of rendering, text extraction, form calculation and
   signature validation against Acrobat on synthetic fixtures; an interop suite that opens every
   kind of output we write (encrypted ones above all, after #774) in pdf.js, MuPDF and Poppler as
-  oracle processes.
+  oracle processes. The MuPDF and Poppler half now exists (progress, 2026-10-25); pdf.js does not.
 - **Progress (2026-10-14):** rendering now has an oracle too. `cargo xtask render-oracle` compares
   page 1 of every corpus file against Poppler's `pdftoppm` and reports a disagreement rate: the
   share of pixels with no near match in the other renderer's 3×3 neighbourhood, which forgives
@@ -258,6 +259,16 @@ update the numbers.
   CI, and a first reading of a borrowed renderer is a baseline to improve on, not a bar to clear.
   The worst results cluster on JBIG2 `bitmap-*` files (`hayro-jbig2` carries 3 local patches) and
   on ZapfDingbats, which points the renderer work at something specific for the first time.
+- **Output interop (2026-10-25).** `cargo xtask interop` writes one small file per kind of output we
+  produce (plain save, incremental save, encrypted in each of AES-256, AES-128, RC4-128 and RC4-40,
+  signed, form-filled, annotated, page-edited) by running `pdfcraft-cli` on a script, then opens each
+  in MuPDF (`mutool`) and Poppler (`pdfinfo`, `pdftoppm`), every reader a separate process. A file
+  passes when the reader opens it, reports the page count we wrote and renders every page without
+  an error; an encrypted file must also open with the owner password and refuse a wrong password
+  and none. The result is a table and `target/interop/interop.json`. A missing reader is a declared
+  skip (a failure under `PDFCRAFT_ORACLES_REQUIRED`). The `interop` workflow runs it on
+  Ubuntu 24.04 and is not a required check. It shows that those two readers accept the files, not
+  what they draw and not that Acrobat does.
 - **Read the score as a disagreement, not a verdict (2026-10-14).** The worst file of the 250,
   `bug1552113.pdf` at 84%, turned out to be Poppler's defect: it paints the link's `/Border [0 0
   112]` as a 112-unit band over the two lines of text, and the fixture is named "this text should
@@ -294,8 +305,8 @@ update the numbers.
   checks written output on every CI run since `PDFCRAFT_ORACLES_REQUIRED`. Acrobat captures must
   stay local in `plan/acrobat/` (clean-room, `AGENTS.md` §1.1).
 - **Still missing:** Acrobat itself as the reference rather than other open renderers; form
-  calculation and signature validation; the interop suite that opens every kind of output we write
-  (encrypted ones above all, after #774) in pdf.js and MuPDF; and 15 of those 250 files could not
+  calculation and signature validation; the interop suite in pdf.js (MuPDF and Poppler are covered, on synthetic
+  output only); and 15 of those 250 files could not
   be compared at all because the two renderers round the page box to different pixel sizes.
 - **Impact:** until it is complete, quality numbers outside rendering and text are judgements.
 - **Estimate:** counted in gap 2 (≈ 20–30 h of it; roughly a third done).
@@ -417,6 +428,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | minor | Gap 12: `cargo xtask interop` opens every kind of output we write (plain, incremental, four encryption algorithms, signed, form-filled, annotated, page-edited) in MuPDF and Poppler and checks page count, rendering and password handling; pdf.js, Acrobat and real-world files remain. Estimates unchanged. |
 | 2026-10-25 | minor | Gaps 5 and 14 current state: native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Hans face; Arabic catalogs stay logical with explicit RTL label direction and mirrored stock chrome, while native/browser RTL input, IME and complex workflows remain unqualified. Estimates unchanged. |
 | 2026-10-18 | minor | Gap 3: #2517 a partial rewrite keeps a kept source row in the paragraph and leaves the next marked region closed around its text. Estimates unchanged. |
 | 2026-10-15 | minor | Gap 3: #2517 a blank line at ordinary leading stays a paragraph break. Estimates unchanged. |
