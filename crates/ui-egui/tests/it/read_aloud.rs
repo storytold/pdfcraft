@@ -49,6 +49,9 @@ impl Backend for Fake {
 #[test]
 fn read_aloud_voice_language_is_independent_of_english_or_italian_interface() {
     for (language, voice, button) in [("it", "fake", "Leggi ad alta voce"), ("en", "fake-it", "Read out loud")] {
+        if language == "it" && crate::support::skip_without_catalogs("Italian read-aloud voice case") {
+            continue;
+        }
         let log = Arc::new(Mutex::new(Vec::new()));
         let backend = log.clone();
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {

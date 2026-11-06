@@ -45,6 +45,15 @@ impl Automation {
     /// Run the tool `name` with JSON `args` (an object; `null` means no arguments).
     pub fn call(&mut self, name: &str, args: &Value) -> Result<Vec<Content>> {
         self.invalidate_speech()?;
+        let result = self.call_inner(name, args);
+        // A handler can change working bytes before a later operation fails (e.g. flatten
+        // Fill & Sign, then fail to save). Preserve its error after cancelling stale audio.
+        let invalidation = self.invalidate_speech();
+        result.and_then(|content| invalidation.map(|()| content))
+    }
+
+    /// Dispatch one validated call; the outer boundary invalidates speech on every return path.
+    fn call_inner(&mut self, name: &str, args: &Value) -> Result<Vec<Content>> {
         let empty = json!({});
         let args = if args.is_null() { &empty } else { args };
         if !args.is_object() {
@@ -881,7 +890,6 @@ impl Automation {
             "comments_paste" => self.comments_paste(&a)?,
             other => return Err(ToolError::UnknownTool(other.into())),
         };
-        self.invalidate_speech()?;
         Ok(vec![Content::Json(out)])
     }
 

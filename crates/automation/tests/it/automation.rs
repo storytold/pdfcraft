@@ -135,6 +135,28 @@ fn read_aloud_playback_tools_stop_on_edits_and_document_close() {
     wait(&mut a, "idle");
     ok(&mut a, "read_aloud_start", json!({"doc":doc}));
     wait(&mut a, "speaking");
+    ok(&mut a, "read_aloud_control", json!({"action":"stop"}));
+    wait(&mut a, "idle");
+    ok(&mut a, "fill_sign_add", json!({"doc":doc,"page":1,"type":"text","at":[20,40],"text":"Signature"}));
+    ok(&mut a, "read_aloud_start", json!({"doc":doc}));
+    wait(&mut a, "speaking");
+    let before = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes.clone();
+    let stops = log.lock().unwrap().iter().filter(|s| s.as_str() == "stop").count();
+    std::fs::create_dir_all(dir.join("save-is-directory")).unwrap();
+    let error = a.call("doc_save", &json!({"doc":doc,"path":"save-is-directory","flatten_fill_sign":true})).unwrap_err();
+    assert!(error.to_string().contains("is a folder"), "{error}");
+    assert!(
+        !Arc::ptr_eq(&before, &a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes),
+        "flattening changed the working bytes before saving failed"
+    );
+    // Calling read_aloud_status would itself invalidate stale speech and mask this regression.
+    let until = Instant::now() + Duration::from_secs(3);
+    while log.lock().unwrap().iter().filter(|s| s.as_str() == "stop").count() == stops {
+        assert!(Instant::now() < until, "a failed save must still stop speech after flattening");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    ok(&mut a, "read_aloud_start", json!({"doc":doc}));
+    wait(&mut a, "speaking");
     ok(&mut a, "doc_close", json!({"doc":doc,"discard_changes":true}));
     wait(&mut a, "idle");
     assert!(a.call("read_aloud_control", &json!({"action":"unknown"})).is_err());

@@ -105,12 +105,20 @@ enum Request {
     Stop,
 }
 
+type BackendFactory = fn() -> Result<Box<dyn Backend>, String>;
+
+/// Keep native construction repeatable without substituting a host's one-shot injected backend.
+enum BackendSource {
+    Native(BackendFactory),
+    Injected(Option<Box<dyn Backend + Send>>),
+}
+
 /// One player per frontend session. The bounded command queue prevents repeated callers from
 /// accumulating unbounded PDF text. Dropping the player disconnects and stops its worker.
 pub struct Player {
     sender: Option<mpsc::SyncSender<Request>>,
     status: Arc<Mutex<Status>>,
-    backend: Option<Box<dyn Backend + Send>>,
+    backend: BackendSource,
     available: bool,
     generation: Arc<AtomicU64>,
 }
@@ -128,7 +136,7 @@ impl Player {
         Self {
             sender: None,
             status: Arc::new(Mutex::new(Status::default())),
-            backend: None,
+            backend: BackendSource::Native(native_backend),
             available: Self::supported(),
             generation: Arc::new(AtomicU64::new(0)),
         }
@@ -136,7 +144,7 @@ impl Player {
 
     /// Inject a backend for deterministic tests and hosts with their own speech service.
     pub fn with_backend(backend: Box<dyn Backend + Send>) -> Self {
-        Self { backend: Some(backend), available: true, ..Self::new() }
+        Self { backend: BackendSource::Injected(Some(backend)), available: true, ..Self::new() }
     }
 
     /// Report whether this build targets Windows, macOS or Linux; no device/voice probe is performed.
@@ -157,31 +165,48 @@ impl Player {
         )
     }
 
-    /// Lazily start the guarded worker and enqueue a request without blocking on a full queue.
-    fn send(&mut self, request: Request) -> Result<(), String> {
+    /// Enqueue without blocking, retrying a disconnected native worker once.
+    /// An injected backend is one-shot and must never be replaced by a native audio service.
+    fn send(&mut self, mut request: Request) -> Result<(), String> {
         if !self.available {
             return Err("Read out loud requires Windows, macOS or Linux with local speech voices".into());
         }
-        if self.sender.is_none() {
-            let (tx, rx) = mpsc::sync_channel(4);
-            let status = self.status.clone();
-            let backend = self.backend.take();
-            let generation = self.generation.clone();
-            std::thread::Builder::new()
-                .name("pdfcraft-speech".into())
-                .spawn(move || {
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(rx, &status, backend, &generation)));
-                    if result.is_err() {
-                        fail(&status, "the speech worker stopped unexpectedly".into());
+        for _ in 0..2 {
+            if self.sender.is_none() {
+                let (backend, factory) = match &mut self.backend {
+                    BackendSource::Native(factory) => (None, *factory),
+                    BackendSource::Injected(backend) => (
+                        Some(backend.take().ok_or("the injected speech backend has stopped; supply a new backend")?),
+                        native_backend as BackendFactory,
+                    ),
+                };
+                let (tx, rx) = mpsc::sync_channel(4);
+                let status = self.status.clone();
+                let generation = self.generation.clone();
+                std::thread::Builder::new()
+                    .name("pdfcraft-speech".into())
+                    .spawn(move || {
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(rx, &status, backend, &generation, factory)));
+                        if result.is_err() {
+                            fail(&status, "the speech worker stopped unexpectedly".into());
+                        }
+                    })
+                    .map_err(|e| format!("could not start the speech worker: {e}"))?;
+                self.sender = Some(tx);
+            }
+            match self.sender.as_ref().ok_or("speech worker is unavailable")?.try_send(request) {
+                Ok(()) => return Ok(()),
+                Err(mpsc::TrySendError::Full(_)) => return Err("speech is busy; retry after checking read_aloud_status".into()),
+                Err(mpsc::TrySendError::Disconnected(returned)) => {
+                    if matches!(&self.backend, BackendSource::Injected(_)) {
+                        return Err("the injected speech backend has stopped; supply a new backend".into());
                     }
-                })
-                .map_err(|e| format!("could not start the speech worker: {e}"))?;
-            self.sender = Some(tx);
+                    self.sender = None;
+                    request = returned;
+                }
+            }
         }
-        self.sender.as_ref().ok_or("speech worker is unavailable")?.try_send(request).map_err(|e| match e {
-            mpsc::TrySendError::Full(_) => "speech is busy; retry after checking read_aloud_status".into(),
-            mpsc::TrySendError::Disconnected(_) => "speech worker has stopped".into(),
-        })
+        Err("speech worker has stopped; retry after checking read_aloud_status".into())
     }
 
     /// Queue installed-voice discovery; results and errors are published through `status`.
@@ -260,8 +285,14 @@ fn fail(status: &Mutex<Status>, message: String) {
 
 /// Own the backend on one worker, sequence chunks and honor generation-based cancellation.
 /// Publish asynchronous state/errors and stop the backend when the command channel disconnects.
-fn run(rx: mpsc::Receiver<Request>, status: &Mutex<Status>, injected: Option<Box<dyn Backend + Send>>, generation: &AtomicU64) {
-    let mut backend = match injected.map(|b| Ok(b as Box<dyn Backend>)).unwrap_or_else(native_backend) {
+fn run(
+    rx: mpsc::Receiver<Request>,
+    status: &Mutex<Status>,
+    injected: Option<Box<dyn Backend + Send>>,
+    generation: &AtomicU64,
+    factory: BackendFactory,
+) {
+    let mut backend = match injected.map(|b| Ok(b as Box<dyn Backend>)).unwrap_or_else(factory) {
         Ok(b) => b,
         Err(e) => {
             fail(status, e);
@@ -450,6 +481,51 @@ mod tests {
         Chunk { page, text: text.into() }
     }
 
+    /// Simulate an unavailable native engine without starting an OS speech service.
+    fn missing_native_backend() -> Result<Box<dyn Backend>, String> {
+        Err("synthetic missing local speech engine".into())
+    }
+
+    /// Simulate an installed native engine with the same silent backend used by worker tests.
+    fn restored_native_backend() -> Result<Box<dyn Backend>, String> {
+        Ok(Box::new(Fake { log: Default::default(), done: Default::default(), fail_start: false }))
+    }
+
+    /// Wait for the failed constructor's worker to actually disconnect, rather than racing status.
+    fn wait_for_disconnect(player: &Player) {
+        let until = Instant::now() + Duration::from_secs(3);
+        loop {
+            if matches!(player.sender.as_ref().unwrap().try_send(Request::Voices), Err(mpsc::TrySendError::Disconnected(_))) {
+                return;
+            }
+            assert!(Instant::now() < until, "failed worker must disconnect");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Both discovery and playback can retry after the local engine becomes available.
+    #[test]
+    fn native_worker_restarts_for_voice_and_start_requests_after_initialization_failure() {
+        for start in [false, true] {
+            let mut player = Player::new();
+            player.available = true;
+            player.backend = BackendSource::Native(missing_native_backend);
+            let _ = player.refresh_voices();
+            wait(&player, State::Error);
+            wait_for_disconnect(&player);
+            player.backend = BackendSource::Native(restored_native_backend);
+            if start {
+                player.start(vec![chunk(1, "recovered")], Options::default()).unwrap();
+                wait(&player, State::Speaking);
+            } else {
+                player.refresh_voices().unwrap();
+                wait(&player, State::Idle);
+            }
+            assert!(player.status().error.is_none());
+            assert_eq!(player.status().voices.first().unwrap().id, "fake");
+        }
+    }
+
     /// Verify lazy initialization, voice discovery, chunk sequencing and position-preserving controls.
     #[test]
     fn speech_is_opt_in_and_pause_resume_preserves_the_current_chunk() {
@@ -604,5 +680,11 @@ mod tests {
         }
         assert!(dropped.load(Ordering::Relaxed), "failed cancellation must destroy the native audio handles");
         assert!(player.status().error.unwrap().contains("Stop failure"));
+        wait_for_disconnect(&player);
+        let error = player.refresh_voices().unwrap_err();
+        assert!(error.contains("injected"), "an injected worker must not become native: {error}");
+        player.stop().unwrap();
+        let error = player.refresh_voices().unwrap_err();
+        assert!(error.contains("injected"), "Stop must preserve the backend origin: {error}");
     }
 }
