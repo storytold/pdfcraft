@@ -583,7 +583,7 @@ fn pdfcraft_plural_rule(code: &str) -> fn(u64) -> usize {
     match code {
         "ja" | "zh-hans" | "zh-hant" | "tr" | "id" | "vi" | "th" | "lo" | "hi" | "ko" => none,
         "cs" => cs,
-        "pt-br" | "fr" | "fa" => zero_one_other,
+        "pt-br" | "fr" | "fa" | "bn" => zero_one_other,
         "ru" | "uk" => ru_uk,
         "ar" => ar,
         "pl" => pl,
@@ -1176,6 +1176,46 @@ fn hindi_and_korean_are_registered_and_persist() {
 }
 
 #[test]
+fn bengali_and_urdu_are_registered_and_persist() {
+    needs_catalogs!();
+    let bn = Lang::from_code("bn").expect("bn registered");
+    let ur = Lang::from_code("ur").expect("ur registered");
+    assert_eq!(bn.name(), "বাংলা");
+    assert_eq!(ur.name(), "اردو");
+    assert!(!bn.rtl());
+    assert!(ur.rtl(), "Urdu is written right to left");
+    assert_eq!(bn.picker_name(|_| false), "Bengali", "no Bengali face: the English name");
+    assert_eq!(ur.picker_name(|_| false), "Urdu");
+    assert_eq!(normalize_pref("BN"), Some("bn"));
+    assert_eq!(normalize_pref("Ur"), Some("ur"));
+    for tag in ["bn", "bn-BD", "bn-IN", "bn_BD.UTF-8", "BN-bd"] {
+        assert_eq!(lang_from_tag(tag), Some(bn), "{tag}");
+    }
+    for tag in ["ur", "ur-PK", "ur-IN", "ur_PK.UTF-8", "UR-pk"] {
+        assert_eq!(lang_from_tag(tag), Some(ur), "{tag}");
+    }
+    assert_eq!(first_supported("bn-BD\r\nen-US"), Some(bn));
+    assert_eq!(first_supported("ur-PK\r\nen-US"), Some(ur));
+    assert_eq!(tr(bn, "File"), "ফাইল");
+    assert_eq!(tr(ur, "File"), "فائل");
+    // CLDR `bn`: "one" for 0 and 1; `ur`: "one" for 1 alone.
+    assert_eq!(trn(bn, 1, "{n} page", "{n} pages"), "1টি পৃষ্ঠা");
+    assert_eq!(trn(bn, 2, "{n} page", "{n} pages"), "2টি পৃষ্ঠা");
+    assert_eq!(trn(ur, 1, "{n} page", "{n} pages"), "1 صفحہ");
+    assert_eq!(trn(ur, 2, "{n} page", "{n} pages"), "2 صفحات");
+    for code in ["bn", "ur"] {
+        let mut app = crate::PdfCraftApp::default();
+        app.set_option("language", &code.to_uppercase()).unwrap();
+        assert_eq!(app.language, code);
+        let mut restored = crate::PdfCraftApp::default();
+        restored.restore(&app.persist());
+        assert_eq!(restored.language, code);
+        assert!(restored.set_option("language", "xx").is_err());
+        assert_eq!(restored.language, code);
+    }
+}
+
+#[test]
 fn bulgarian_is_registered() {
     needs_catalogs!();
     let bg = Lang::from_code("bg").expect("bg registered");
@@ -1258,7 +1298,7 @@ fn arabic_is_registered_and_persists() {
     assert_eq!(ar.name(), "العربية");
     assert!(ar.rtl());
     let rtl: Vec<&str> = Lang::all().filter(|l| l.rtl()).map(|l| l.code()).collect();
-    assert_eq!(rtl, ["ar", "ckb", "fa"], "Arabic, Kurdish and Persian are the right-to-left languages");
+    assert_eq!(rtl, ["ar", "ckb", "fa", "ur"], "Arabic, Kurdish, Persian and Urdu are the right-to-left languages");
     assert_eq!(normalize_pref("AR"), Some("ar"));
     for tag in ["ar", "ar-MA", "ar_EG.UTF-8", "AR-sa", "ar_DZ@variant"] {
         assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
@@ -1378,6 +1418,32 @@ fn arabic_labels_have_glyphs() {
         for id in [egui::FontId::proportional(13.0), egui::FontId::monospace(13.0), crate::theme::medium(13.0), crate::theme::semibold(17.0)] {
             let missing: std::collections::BTreeSet<char> = labels.chars().filter(|c| !fonts.has_glyphs(&id, &c.to_string())).collect();
             assert!(missing.is_empty(), "{build}: {id:?} lacks Arabic label glyphs {missing:?}");
+        }
+    }
+}
+
+/// With a craft-fonts Arabic face, every Urdu translation has glyphs: Urdu draws with the Arabic
+/// face (Naskh), with all interface faces and with that face alone (the web build).
+#[test]
+fn urdu_labels_have_glyphs() {
+    let faces: Vec<String> = pdfcraft_fonts::ui_arabic_fonts().iter().map(|f| f.name()).collect();
+    if faces.is_empty() {
+        eprintln!("skipping Urdu glyph checks: build with CRAFT_FONTS_DIR and an Arabic face to run them");
+        return;
+    }
+    needs_catalogs!();
+    let ur = Lang::from_code("ur").expect("ur registered");
+    let labels: String = translations("ur").chars().chain(ur.name().chars()).filter(|c| !c.is_control()).collect();
+    let mut arabic_only = crate::theme::font_definitions();
+    for family in arabic_only.families.values_mut() {
+        family.retain(|name| !pdfcraft_fonts::CRAFT_FONTS.iter().any(|face| face.name() == *name) || faces.contains(name));
+    }
+    use egui::epaint::text::{Fonts, TextOptions};
+    for (build, defs) in [("all faces", crate::theme::font_definitions()), ("Arabic face only", arabic_only)] {
+        let mut fonts = Fonts::new(TextOptions::default(), defs);
+        for id in [egui::FontId::proportional(13.0), egui::FontId::monospace(13.0), crate::theme::medium(13.0), crate::theme::semibold(17.0)] {
+            let missing: std::collections::BTreeSet<char> = labels.chars().filter(|c| !fonts.has_glyphs(&id, &c.to_string())).collect();
+            assert!(missing.is_empty(), "{build}: {id:?} lacks Urdu label glyphs {missing:?}");
         }
     }
 }

@@ -236,12 +236,14 @@ fn system_fallback_covers_telugu() {
     assert!(layout_widths(&mut fonts, TELUGU).iter().all(|w| w.is_finite() && *w > 0.0));
 }
 
-/// On a machine with installed Sinhala and Tamil fonts, the installed definitions include them
-/// and Sinhala and Tamil text, such as a file name, has glyphs instead of boxes (#1688). macOS
-/// always ships Sinhala Sangam MN and Tamil Sangam MN, so there the test never skips.
+/// On a machine with installed Bengali, Sinhala and Tamil fonts, the installed definitions
+/// include them and Bengali (the Bengali interface), Sinhala and Tamil text, such as a file name,
+/// has glyphs instead of boxes (#1688). macOS always ships Bangla, Sinhala and Tamil Sangam MN,
+/// so there the test never skips.
 #[test]
-fn system_fallback_covers_sinhala_and_tamil() {
-    for (name, text) in [(theme::SYSTEM_SINHALA_FALLBACK, "ශ්‍රී ලංකා ගොනුව"), (theme::SYSTEM_TAMIL_FALLBACK, "தமிழ் கோப்பு")]
+fn system_fallback_covers_bengali_sinhala_and_tamil() {
+    for (name, text) in
+        [(theme::SYSTEM_BENGALI_FALLBACK, "বাংলা ফাইল"), (theme::SYSTEM_SINHALA_FALLBACK, "ශ්‍රී ලංකා ගොනුව"), (theme::SYSTEM_TAMIL_FALLBACK, "தமிழ் கோப்பு")]
     {
         assert!(!theme::font_definitions().font_data.contains_key(name));
         let defs = theme::installed_font_definitions(theme::CjkPreference::Default);
