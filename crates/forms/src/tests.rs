@@ -2674,14 +2674,14 @@ fn rotated_fields_draw_in_their_quadrant() {
     let turned = field(&fields(&doc), "name").widgets[0].clone();
     assert_eq!(turned.rotation, 90);
     let r = turned.rect;
-    // [50 700 250 720] around its center becomes 20 wide and 200 tall.
-    assert!(close(r[0], 140.0) && close(r[1], 610.0) && close(r[2], 160.0) && close(r[3], 810.0), "{r:?}");
+    // The field stays where it was: only its content turns.
+    assert!(r.iter().zip(before).all(|(a, b)| close(*a, b)), "{r:?} moved from {before:?}");
     let widget = doc.get(turned.obj);
     let mk = widget.as_dict().unwrap().get(b"MK").unwrap().as_dict().cloned().unwrap();
     assert!(mk.contains(b"BG") && mk.contains(b"BC") && mk.int(b"R") == Some(90));
     let (_, matrix) = appearance_box(&doc, &turned);
     assert!(matrix.is_some());
-    // 270 stays on the vertical axis, so the rectangle is not swapped again.
+    // 270 keeps the rectangle too.
     set_props(&mut doc, "name", &FieldProps { rotation: Some((0, 270)), ..FieldProps::default() }).unwrap();
     let r270 = field(&fields(&doc), "name").widgets[0].rect;
     assert!(r270.iter().zip(r).all(|(a, b)| close(*a, b)), "{r270:?}");
@@ -2704,18 +2704,26 @@ fn rotated_fields_draw_in_their_quadrant() {
     assert!(text.contains("(Go) Tj") && matrix.is_some(), "{text}");
 }
 
+/// #4296: a tall field turned a quarter keeps its place, and its text is laid out along the long
+/// side (the appearance box is as wide as the field is tall) and turned onto the field.
 #[test]
-fn a_rotation_refused_as_too_small_changes_nothing_else() {
+fn a_tall_field_turned_a_quarter_keeps_its_place_and_runs_its_text_up_it() {
     let mut doc = one_page();
-    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, Some("thin")).unwrap();
-    // 200 x 3: turned a quarter it would be 3 wide, too small to use.
-    let obj = field(&fields(&doc), "thin").widgets[0].obj;
-    doc.update_dict(obj, |d| d.set(b"Rect".to_vec(), Object::Array([50.0, 700.0, 250.0, 703.0].iter().map(|v| Object::Real(*v)).collect()))).unwrap();
-    let props = FieldProps { tooltip: Some("changed".into()), rotation: Some((0, 90)), ..FieldProps::default() };
-    assert!(set_props(&mut doc, "thin", &props).is_err());
-    let f = field(&fields(&doc), "thin").clone();
-    assert_eq!(f.tooltip, None, "the tooltip was written before the rotation was refused");
-    assert_eq!(f.widgets[0].rotation, 0);
+    let rect = [50.0, 600.0, 70.0, 760.0];
+    add_field(&mut doc, 0, rect, &NewField::Text { multiline: false }, Some("tall")).unwrap();
+    set_value(&mut doc, "tall", &FieldValue::Text("Ada".into())).unwrap();
+    let props = FieldProps { tooltip: Some("Name".into()), rotation: Some((0, 90)), ..FieldProps::default() };
+    set_props(&mut doc, "tall", &props).unwrap();
+    let f = field(&fields(&doc), "tall").clone();
+    let w = &f.widgets[0];
+    assert_eq!((w.rotation, f.tooltip.as_deref()), (90, Some("Name")));
+    assert!(w.rect.iter().zip(rect).all(|(a, b)| close(*a, b)), "the field moved: {:?} -> {:?}", rect, w.rect);
+    let (bbox, matrix) = appearance_box(&doc, w);
+    assert!(close(bbox[2], 160.0) && close(bbox[3], 20.0), "the text is laid out across the field, not up it: {bbox:?}");
+    let m = matrix.unwrap();
+    // (x, y) -> (20 - y, x): the box's 160 pt run goes up the field.
+    assert!(close(m[1], 1.0) && close(m[2], -1.0) && close(m[4], 20.0), "{m:?}");
+    assert!(ap(&doc, w).contains("(Ada) Tj"));
 }
 
 #[test]
