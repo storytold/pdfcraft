@@ -36,14 +36,16 @@ pub use core::{check_pages, inspect, pretty_date};
 #[cfg(test)]
 use core::{inspect_structure, spend};
 pub use model::{
-    Annotation, Attachment, AttachmentSource, DestView, Field, FieldKind, FontInfo, Layer, LayerOp, Link, LinkTarget, OutlineItem, PageInfo,
-    PageTransition, RemoteDestination, TransitionStyle, Xfa, link_replies, thread_tops,
+    Annotation, Attachment, AttachmentSource, DestView, Field, FieldKind, FontInfo, Layer, LayerItem, LayerOp, LayerRow, Link, LinkTarget,
+    OutlineItem, PageInfo, PageTransition, RemoteDestination, TransitionStyle, Xfa, link_replies, thread_tops,
 };
 #[cfg(test)]
 use navigation::{OUTLINE_DEPTH, OUTLINE_WINDOW};
+#[cfg(test)]
+use resources::LABEL_DECODES;
 pub use resources::attachment_data;
 #[cfg(test)]
-use resources::{xfa_config_dynamic_render, xfa_packet_text};
+use resources::{MAX_LAYER_LABEL_CHARS, MAX_LAYER_ORDER_ROWS, xfa_config_dynamic_render, xfa_packet_text};
 
 #[derive(Clone, Debug, Default)]
 pub struct DocInfo {
@@ -74,6 +76,10 @@ pub struct DocInfo {
     /// Radio-button layer groups (`/OCProperties /D /RBGroups`): turning one layer of a group on
     /// turns the others off.
     pub layer_groups: Vec<Vec<(u32, u16)>>,
+    /// The Layers panel's rows: the default configuration's `/Order` (ISO 32000-2 Table 99), a
+    /// tree of layers (indices into `layers`) and labels. A layer it doesn't list isn't presented,
+    /// though it still draws in its state; no `/Order` presents none.
+    pub layer_order: Vec<LayerRow>,
     pub fonts: Vec<FontInfo>,
     pub attachments: Vec<Attachment>,
     /// Pages with a presentation transition (`/Trans`) or display time (`/Dur`), in page order.

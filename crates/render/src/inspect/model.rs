@@ -502,6 +502,23 @@ pub struct Layer {
     pub initial: bool,
 }
 
+/// One row of the Layers panel ([`DocInfo::layer_order`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayerRow {
+    /// Nesting level, 0 at the top: a nested array's entries are one deeper than the layer or
+    /// label before them.
+    pub depth: usize,
+    pub item: LayerItem,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LayerItem {
+    /// A layer, by its index in [`DocInfo::layers`].
+    Layer(usize),
+    /// A text label heading a nested array: not a layer, so it can't be selected or toggled.
+    Label(String),
+}
+
 #[derive(Clone, Debug)]
 pub struct Attachment {
     pub name: String,
