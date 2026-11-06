@@ -30,6 +30,24 @@ pub const LINKS: &[Link] = &[
     Link { command: "help.website", label: "ArtCraft website", url: WEBSITE, icon: "external-link" },
 ];
 
+/// The new-issue address for Help ▸ Report an Issue…: `version`, `environment` and `os` are the
+/// bug form's field ids and `body` fills a blank issue. The document is described by its file
+/// extension alone, never a name, path or contents. Each value is cut to 16 characters, so the
+/// address stays well under [`MAX_DOCUMENT_URL`].
+pub fn report_issue_url(version: &str, os: &str, document_ext: Option<&str>) -> String {
+    let short = |s: &str| s.chars().filter(|c| !c.is_control()).take(16).collect::<String>();
+    let ext: String = document_ext.unwrap_or("none").chars().filter(char::is_ascii_alphanumeric).take(8).collect();
+    let (version, os) = (short(version), short(os));
+    let environment = format!("{os}; document: {ext}");
+    let encode = |s: &str| {
+        let keep = |b: &u8| b.is_ascii_alphanumeric() || b"-_.~".contains(b);
+        s.bytes().map(|b| if keep(&b) { char::from(b).to_string() } else { format!("%{b:02X}") }).collect::<String>()
+    };
+    let body = format!("PdfCraft {version}\n{environment}");
+    let (v, e, o, b) = (encode(&version), encode(&environment), encode(&os), encode(&body));
+    format!("{GITHUB}/issues/new?template=bug_report.yml&version={v}&environment={e}&os={o}&body={b}")
+}
+
 pub fn for_command(id: &str) -> Option<&'static Link> {
     LINKS.iter().find(|l| l.command == id)
 }
