@@ -9,12 +9,65 @@
 //! The note icons are PdfCraft's own drawings (AGENTS.md §1). Text boxes use the standard
 //! Helvetica font with WinAnsi encoding; line breaking uses [`text_width`], an approximation of
 //! Helvetica's proportions by character class (no font program or metrics file is bundled).
+//!
+//! Characters WinAnsi cannot encode, which the document's Japanese face has — Japanese kana and
+//! kanji, and the full-width forms around them — are drawn as outlines of that face when the build
+//! has it ([`outline_glyph`]), so a text box shows the text its `/Contents` holds instead of `?`.
+//! Scripts the face lacks, and the scripts that need shaping (Arabic, Hebrew, Indic), keep the `?`
+//! the standard font writes for them and are reported by [`undrawable_text`].
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
-use pdfcraft_fonts::{first_undrawable, literal, win_ansi};
-pub use pdfcraft_fonts::{helvetica_width as text_width, wrap};
+use pdfcraft_fonts::{CraftFont, GlyphOutline, craft_glyph, face_has, first_undrawable, literal, win_ansi, win_ansi_byte};
 
 use crate::{NOTE_SIZE, Rgb, n};
+
+/// The advance of `c` at `size` points: the width of the glyph the document's face draws for it, and
+/// the standard font's measure otherwise.
+fn advance(c: char, size: f64) -> f64 {
+    if let Some(glyph) = outline_glyph(c) {
+        return glyph.width * size;
+    }
+    let mut buf = [0u8; 4];
+    pdfcraft_fonts::cjk_width(c.encode_utf8(&mut buf), size)
+}
+
+/// The advance of `s` at `size` points in a text box: Helvetica for what the standard font draws,
+/// one em for each CJK character, and the document face's own width for a glyph it draws, so a line
+/// is measured by exactly what it advances and never overflows the box it was wrapped for.
+pub fn text_width(s: &str, size: f64) -> f64 {
+    s.chars().map(|c| advance(c, size)).sum()
+}
+
+/// Greedy line breaking within `width` points, measuring with [`text_width`]: words break at
+/// spaces as before, and a run of CJK text with no spaces breaks between its characters.
+pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
+    pdfcraft_fonts::wrap_with(text, size, width, text_width)
+}
+
+/// The face new text is drawn with: the document's Japanese Gothic face, the sans one Edit text uses
+/// for new text, which is what a text box set in Helvetica should show. `None` without craft-fonts.
+fn document_face() -> Option<&'static CraftFont> {
+    pdfcraft_fonts::document_japanese_font_for_style(false, false)
+}
+
+/// Whether `c` is drawn as an outline: WinAnsiEncoding has no code for it and the document's face
+/// has the glyph.
+fn drawn_as_outline(c: char) -> bool {
+    win_ansi_byte(c).is_none() && document_face().is_some_and(|f| face_has(f.bytes, c))
+}
+
+/// The outline of `c` in the document's face, in em units.
+///
+/// Only text that needs no reordering or joining takes this path: CJK glyphs are the characters
+/// themselves. Arabic, Hebrew and the Indic scripts are shaped, and drawing them one outline at a
+/// time would show the wrong forms, so they stay `?`.
+fn outline_glyph(c: char) -> Option<GlyphOutline> {
+    if win_ansi_byte(c).is_some() {
+        return None;
+    }
+    let face = document_face().filter(|f| face_has(f.bytes, c))?;
+    craft_glyph(face, c).ok()
+}
 
 mod symbols;
 
@@ -386,7 +439,9 @@ pub(crate) fn inset(d: &Dict) -> Option<[f64; 4]> {
 pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
     let text = |key: &[u8]| d.get(key).and_then(Object::as_string).map(PdfString::to_text);
     let (what, text) = match d.name(b"Subtype")? {
-        b"FreeText" => ("the comment's text", text(b"Contents")?),
+        // A text box draws what the document's Japanese face has as outlines, so only text that
+        // face lacks is undrawable there.
+        b"FreeText" => return first_undrawable_text_box(&text(b"Contents")?).map(|c| ("the comment's text", c)),
         b"Line" if !d.contains(b"PCMeasureValue") => ("the line's caption", line_caption(d)?),
         b"Line" | b"PolyLine" | b"Polygon" => ("the measurement label", text(b"PCMeasureValue")?),
         b"Stamp" if matches!(d.get(b"PCStamp"), Some(Object::Bool(true))) => ("the stamp's \"By\" line", text(b"PCByLine")?),
@@ -395,6 +450,12 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
         _ => return None,
     };
     Some((what, first_undrawable(&text)?))
+}
+
+/// [`first_undrawable`], for a text box: characters the document's face draws as outlines are not
+/// counted, so Japanese text is no longer reported as lost.
+fn first_undrawable_text_box(text: &str) -> Option<char> {
+    text.chars().find(|c| !matches!(c, '\n' | '\r') && win_ansi_byte(*c).is_none() && !drawn_as_outline(*c))
 }
 
 /// `/Font` resources naming `/Helv`: standard Helvetica with WinAnsiEncoding.
@@ -1079,15 +1140,22 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     if parts.text != parts.fill {
         c.push_str("/GS1 gs\n");
     }
-    c.push_str(&format!(
-        "{} {} {} {} re W n\nBT\n/Helv {} Tf\n{}",
-        n(rect[0]),
-        n(rect[1]),
-        n(rect[2] - rect[0]),
-        n(rect[3] - rect[1]),
-        n(size),
-        rg(text_color)
-    ));
+    // CJK text is drawn as outlines between `/Helv` runs, which cannot sit inside one text
+    // object; text without it keeps the single text object it always had.
+    let outlines = text.chars().any(drawn_as_outline);
+    if outlines {
+        c.push_str(&format!("{} {} {} {} re W n\n{}", n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1]), rg(text_color)));
+    } else {
+        c.push_str(&format!(
+            "{} {} {} {} re W n\nBT\n/Helv {} Tf\n{}",
+            n(rect[0]),
+            n(rect[1]),
+            n(rect[2] - rect[0]),
+            n(rect[3] - rect[1]),
+            n(size),
+            rg(text_color)
+        ));
+    }
     let mut out = c.into_bytes();
     let lines = wrap(&text, size, width);
     let mut y = rect[3] - pad - size * 0.9;
@@ -1104,18 +1172,69 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
             2 => rect[2] - pad - lw,
             _ => rect[0] + pad,
         };
-        out.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
-        out.extend(literal(&win_ansi(&line)));
-        out.extend_from_slice(b" Tj\n");
+        if outlines {
+            draw_text_line(&mut out, &line, size, x, y);
+        } else {
+            out.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
+            out.extend(literal(&win_ansi(&line)));
+            out.extend_from_slice(b" Tj\n");
+        }
         y -= size * 1.2;
     }
-    out.extend_from_slice(b"ET\n");
+    if !outlines {
+        out.extend_from_slice(b"ET\n");
+    }
     res.set(b"Font".to_vec(), helvetica_resource());
     let mut stream = form(full, &out, res);
     if let Some(m) = matrix {
         stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
     }
     Some(stream)
+}
+
+/// One wrapped line of a text box at `(x, y)`: `/Helv` text runs and CJK glyph outlines, in the
+/// order the characters are written.
+fn draw_text_line(out: &mut Vec<u8>, line: &str, size: f64, mut x: f64, y: f64) {
+    let mut run = String::new();
+    for c in line.chars() {
+        if let Some(glyph) = outline_glyph(c) {
+            if !run.is_empty() {
+                x = draw_text_run(out, &run, size, x, y);
+                run.clear();
+            }
+            x = draw_glyph_run(out, &glyph, size, x, y);
+        } else {
+            // What no face has stays in the text run, where WinAnsi writes `?` for it, as before.
+            run.push(c);
+        }
+    }
+    if !run.is_empty() {
+        draw_text_run(out, &run, size, x, y);
+    }
+}
+
+/// A run the standard font draws at `(x, y)`, as its own text object; the x after it.
+fn draw_text_run(out: &mut Vec<u8>, run: &str, size: f64, x: f64, y: f64) -> f64 {
+    out.extend(format!("BT\n/Helv {} Tf\n1 0 0 1 {} {} Tm ", n(size), n(x), n(y)).bytes());
+    out.extend(literal(&win_ansi(run)));
+    out.extend_from_slice(b" Tj\nET\n");
+    x + text_width(run, size)
+}
+
+/// One glyph outline, in em units, filled at `(x, y)` and scaled to `size` points; the x after it.
+fn draw_glyph_run(out: &mut Vec<u8>, glyph: &GlyphOutline, size: f64, x: f64, y: f64) -> f64 {
+    out.extend(format!("q\n{} 0 0 {} {} {} cm\n", n(size), n(size), n(x), n(y)).bytes());
+    for contour in &glyph.contours {
+        if contour.len() < 2 {
+            continue;
+        }
+        for (i, p) in contour.iter().enumerate() {
+            out.extend(format!("{} {} {}\n", n(p[0]), n(p[1]), if i == 0 { "m" } else { "l" }).bytes());
+        }
+        out.extend_from_slice(b"h\n");
+    }
+    out.extend_from_slice(b"f\nQ\n");
+    x + glyph.width * size
 }
 
 fn draw_icon(context: &AppearanceContext<'_>, name: &str, fallback: Rgb, mut drawing: AppearanceDrawing) -> Option<Stream> {
