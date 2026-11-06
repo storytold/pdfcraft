@@ -796,6 +796,20 @@ impl Automation {
         self.apply(a, Edit::DeleteAnnotation { page, index })
     }
 
+    /// Delete all unlocked comments (comment.delete_all), or those on `pages`.
+    pub(crate) fn comments_delete(&mut self, a: &Args) -> Result<Value> {
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => Some(self.pages(a, "pages")?),
+            None => None,
+        };
+        // A deletion takes whole threads, so the comments of their own drop by those deleted.
+        let count = |doc: &pdfcraft_engine::Document| doc.info.annotations.iter().filter(|c| c.is_comment()).count();
+        let before = count(self.doc(a)?);
+        let mut out = self.apply(a, Edit::DeleteAnnotations { pages })?;
+        out["deleted"] = json!(before.saturating_sub(count(self.doc(a)?)));
+        Ok(out)
+    }
+
     /// The XFDF of the listed comments and their replies (`comments`: 1-based [page, index] pairs).
     pub(crate) fn comments_copy(&self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
