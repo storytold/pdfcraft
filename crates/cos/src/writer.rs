@@ -133,11 +133,12 @@ fn write_stream(s: &Stream, out: &mut Vec<u8>) {
 
 /// The object as written: encrypted with its (output) number when the document is encrypted,
 /// except the `/Encrypt` dictionary itself (`source_num` is its number in the source document).
+/// `o` has the document's numbers in its references ([`crate::security::transform`]).
 fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &'a Object) -> Cow<'a, Object> {
     match doc.output_security() {
-        (Some(h), encrypt_num) if Some(source_num) != encrypt_num => {
+        (Some(h), encrypt_num) if Some(source_num) != encrypt_num && !doc.stored_as_is(source_num) => {
             let pass = if doc.encryption_changed() { crate::security::Pass::EncryptReplacing } else { crate::security::Pass::Encrypt };
-            Cow::Owned(crate::security::transform(h, o, num, generation, pass))
+            Cow::Owned(crate::security::transform(doc, h, o, num, generation, pass))
         }
         _ => Cow::Borrowed(o),
     }
@@ -166,11 +167,17 @@ pub struct SaveOptions {
     /// before adding it, with [`Document::free_unlinked_additions`]. Full saves always leave
     /// these out.
     pub drop_unlinked: bool,
+    /// Entropy for the file identifier of a rewrite that asks for a new one (see
+    /// [`Document::require_full_save_with_new_id`]). Given, the identifier depends only on this and
+    /// on the written bytes, so the same save gives the same file; tests use it to pin output.
+    /// Without it, fresh entropy from the host (the operating system on native targets, the
+    /// browser on WebAssembly) is mixed in.
+    pub id_entropy: Option<[u8; 16]>,
 }
 
 impl Default for SaveOptions {
     fn default() -> Self {
-        Self { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, drop_unlinked: false }
+        Self { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, drop_unlinked: false, id_entropy: None }
     }
 }
 
@@ -245,7 +252,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     if let Some(p) = prev {
         trailer.set(b"Prev".to_vec(), Object::Int(p as i64));
     }
-    let size = doc.next_num().max(trailer.int(b"Size").unwrap_or(0) as u32);
+    let size = doc.next_num().max(trailer.int(b"Size").map_or(0, |n| n.clamp(0, i64::from(u32::MAX)) as u32));
     if as_stream {
         let rows = offsets.iter().map(|(n, (o, g, used))| (*n, if *used { Row::InFile(*o, *g) } else { Row::Free(*g) })).collect();
         write_xref_stream(&mut out, base, &mut trailer, rows, size);
@@ -287,6 +294,10 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             queue.push_back(r);
         }
     }
+    // A direct /Encrypt can refer to objects, /CF or /StmF, say.
+    if let Some(encrypt @ Object::Dict(_)) = trailer_in.get(b"Encrypt") {
+        visit_refs(encrypt, &mut queue);
+    }
     // Unknown trailer entries are document data. Objects they alone reference must be written
     // too, or a full rewrite would keep the key and drop its value.
     for (key, value) in trailer_in.iter() {
@@ -302,8 +313,17 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         if matches!(*o, Object::Null) {
             continue; // dangling reference: written as null by renumbering below
         }
-        map.insert(r, output_number(order.len())?);
-        order.push((r, matches!(*o, Object::Stream(_))));
+        // Accepted xref/header aliases denote one slot, including page-tree cycles.
+        // Check for null first: an unrelated or freed generation must remain dangling.
+        let canonical = ObjRef::new(r.num, reader.document.generation(r.num));
+        if let Some(&num) = map.get(&canonical) {
+            map.insert(r, num);
+            continue;
+        }
+        let num = output_number(order.len())?;
+        map.insert(r, num);
+        map.insert(canonical, num);
+        order.push((canonical, matches!(*o, Object::Stream(_))));
         visit_refs(&o, &mut queue);
     }
     let version = reader.document.version().chars().take(3).collect::<String>();
@@ -314,10 +334,15 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     out.extend_from_slice(&[b'%', 0xE2, 0xE3, 0xCF, 0xD3, b'\n']);
     // The /Encrypt dictionary and everything it references (e.g. indirect /CF crypt-filter
     // dictionaries) are needed before anything can be decrypted: never inside object streams.
-    let mut encryption_objects: std::collections::HashSet<ObjRef> = std::collections::HashSet::new();
-    let mut pending: Vec<ObjRef> = trailer_in.reference(b"Encrypt").into_iter().collect();
+    let mut encryption_objects: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut pending: Vec<ObjRef> = Vec::new();
+    if let Some(encrypt) = trailer_in.get(b"Encrypt") {
+        collect_refs(encrypt, &mut |r| pending.push(r));
+    }
     while let Some(r) = pending.pop() {
-        if encryption_objects.insert(r) {
+        if let Some(&num) = map.get(&r)
+            && encryption_objects.insert(num)
+        {
             collect_refs(&reader.get(r), &mut |x| pending.push(x));
         }
     }
@@ -325,20 +350,22 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     // damaged and could not be repaired", before it even asks for the password), while other
     // readers accept it. qpdf keeps the catalog out of object streams too. Verified with
     // Acrobat DC on macOS (#774).
-    let root_outside = if reader.document.output_security().0.is_some() { trailer_in.reference(b"Root") } else { None };
+    let root_outside =
+        if reader.document.output_security().0.is_some() { trailer_in.reference(b"Root").and_then(|r| map.get(&r)).copied() } else { None };
     let mut rows: BTreeMap<u32, Row> = BTreeMap::new();
     // Keep only references, not renamed copies of the entire object graph. Standalone
     // objects still precede object streams, preserving the established output order.
     let mut packed: Vec<(u32, ObjRef)> = Vec::new();
     for (i, (r, is_stream)) in order.iter().enumerate() {
         let num = output_number(i)?;
-        let in_stream = opts.object_streams && !is_stream && !encryption_objects.contains(r) && root_outside != Some(*r);
+        let in_stream = opts.object_streams && !is_stream && !encryption_objects.contains(&num) && root_outside != Some(num);
         if in_stream {
             packed.push((num, *r));
         } else {
-            let o = renumber(&*reread(&mut reader, *r, *is_stream)?, &map);
+            let o = reread(&mut reader, *r, *is_stream)?;
+            let o = renumber(&prepared(&reader.document, r.num, num, 0, &o), &map);
             rows.insert(num, Row::InFile(out.len() as u64, 0));
-            write_indirect(num, 0, &prepared(&reader.document, r.num, num, 0, &o), &mut out);
+            write_indirect(num, 0, &o, &mut out);
         }
     }
     // Object streams take the numbers after the last object. Their contents are not encrypted
@@ -362,26 +389,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         }
     }
     batch.flush(&reader.document, &mut next, &mut rows, &mut out)?;
-    let mut trailer = Dict::new();
-    for key in [&b"Root"[..], b"Info", b"Encrypt"] {
-        if let Some(r) = trailer_in.reference(key).and_then(|r| map.get(&r)) {
-            trailer.set(key.to_vec(), Object::Ref(ObjRef::new(*r, 0)));
-        }
-    }
-    if let Some(Object::Dict(d)) = trailer_in.get(b"Encrypt") {
-        trailer.set(b"Encrypt".to_vec(), Object::Dict(d.clone()));
-    }
-    if let Some(id) = trailer_in.get(b"ID") {
-        trailer.set(b"ID".to_vec(), id.clone());
-    }
-    for (key, value) in trailer_in.iter() {
-        if !trailer_key_rewritten(key) {
-            trailer.set(key.clone(), renumber(value, &map));
-        }
-    }
-    if reader.document.output_security().0.is_none() {
-        ensure_id(&mut trailer, opts, reader.document.bytes());
-    }
+    let mut trailer = full_save_trailer(&reader.document, &trailer_in, &map, opts, &out);
     if opts.object_streams {
         write_xref_stream(&mut out, 0, &mut trailer, rows, next);
     } else {
@@ -398,6 +406,34 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     // kept as a document's working bytes for as long as it's open: drop the unused capacity.
     out.shrink_to_fit();
     Ok(out)
+}
+
+/// Assemble the full rewrite's trailer and apply its identifier policy.
+fn full_save_trailer(doc: &Document, trailer_in: &Dict, map: &HashMap<ObjRef, u32>, opts: &SaveOptions, out: &[u8]) -> Dict {
+    let mut trailer = Dict::new();
+    for key in [&b"Root"[..], b"Info", b"Encrypt"] {
+        if let Some(r) = trailer_in.reference(key).and_then(|r| map.get(&r)) {
+            trailer.set(key.to_vec(), Object::Ref(ObjRef::new(*r, 0)));
+        }
+    }
+    if let Some(encrypt @ Object::Dict(_)) = trailer_in.get(b"Encrypt") {
+        trailer.set(b"Encrypt".to_vec(), renumber(encrypt, map));
+    }
+    if let Some(id) = trailer_in.get(b"ID") {
+        trailer.set(b"ID".to_vec(), direct_id(doc, id));
+    }
+    for (key, value) in trailer_in.iter() {
+        if !trailer_key_rewritten(key) {
+            trailer.set(key.clone(), renumber(value, map));
+        }
+    }
+    if doc.output_security().0.is_none() {
+        ensure_id(&mut trailer, opts, doc.bytes());
+    }
+    if doc.new_id_required() {
+        regenerate_id(&mut trailer, opts, out, doc.output_security().0.is_some());
+    }
+    trailer
 }
 
 /// Object `r` read again for writing. The traversal read it once and only kept its number, so
@@ -440,6 +476,22 @@ impl ObjectStreamBatch {
         *next = following;
         Ok(())
     }
+}
+
+/// `/ID` for the trailer, direct, as it has to be with `/Encrypt`: nothing else in the file holds
+/// what it refers to now. Given by reference it is two entries at most, however many references a
+/// file gave, so that one large string isn't copied for each. An entry that isn't a string stays in
+/// its place as an empty one, which is how the key read it.
+fn direct_id(doc: &Document, id: &Object) -> Object {
+    if matches!(id, Object::Array(a) if !a.iter().any(|s| matches!(s, Object::Ref(_)))) {
+        return id.clone();
+    }
+    let entry = |s: &Object| match &*doc.resolve(s) {
+        s @ Object::String(_) => s.clone(),
+        _ => Object::String(crate::PdfString { bytes: Vec::new(), hex: true }),
+    };
+    let held = doc.resolve(id);
+    Object::Array(held.as_array().into_iter().flatten().take(2).map(entry).collect())
 }
 
 /// Trailer keys a full rewrite generates itself. Everything else is copied, with references
@@ -486,7 +538,7 @@ pub(crate) fn unlinked_additions(doc: &Document) -> HashSet<u32> {
     pending.into_keys().collect()
 }
 
-fn collect_refs(o: &Object, f: &mut impl FnMut(ObjRef)) {
+pub(crate) fn collect_refs(o: &Object, f: &mut impl FnMut(ObjRef)) {
     match o {
         Object::Ref(r) => f(*r),
         Object::Array(a) => a.iter().for_each(|x| collect_refs(x, f)),
@@ -632,6 +684,136 @@ fn ensure_id(trailer: &mut Dict, opts: &SaveOptions, content: &[u8]) {
     trailer.set(b"ID".to_vec(), Object::Array(vec![s.clone(), s]));
 }
 
+/// Give a rewritten file a new identifier (§14.4), so that a redacted or sanitized copy does not
+/// claim to be its source. An encrypted file keeps the first string, which its key is derived from,
+/// and gets a new second one. When there is no such string (no `/ID`, one entry, or a first entry
+/// that is not a string) the reader takes the empty string as the key input (`Document::first_id`),
+/// so the empty string is written first and the key stays valid.
+fn regenerate_id(trailer: &mut Dict, opts: &SaveOptions, written: &[u8], encrypted: bool) {
+    let fresh = Object::String(PdfString { bytes: new_id_bytes(opts, written), hex: true });
+    let pair = if encrypted {
+        let first = match trailer.get(b"ID") {
+            Some(Object::Array(a)) => match a.first() {
+                Some(Object::String(s)) => Object::String(s.clone()),
+                _ => Object::String(PdfString { bytes: Vec::new(), hex: true }),
+            },
+            _ => Object::String(PdfString { bytes: Vec::new(), hex: true }),
+        };
+        vec![first, fresh]
+    } else {
+        vec![fresh.clone(), fresh]
+    };
+    trailer.set(b"ID".to_vec(), Object::Array(pair));
+}
+
+/// FNV-1a over 64 bits, with its published offset basis and prime. The identifier is built from it
+/// rather than from `std`'s `DefaultHasher`, whose algorithm the standard library does not specify.
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+fn fnv1a(state: u64, bytes: &[u8]) -> u64 {
+    bytes.iter().fold(state, |h, b| (h ^ u64::from(*b)).wrapping_mul(FNV_PRIME))
+}
+
+/// Sixteen bytes for a file identifier, one 8-byte half per lane. The bytes are a pure function of
+/// `SaveOptions::id_entropy`, `id_seed` and the written file: the hash is FNV-1a (above) and every
+/// integer is written as a fixed-width big-endian value, so the same input gives the same identifier
+/// on every platform and toolchain. Without entropy only the salt changes (see `id_salt`). FNV is
+/// not collision-resistant against chosen content; the identifier only has to be unique, not secret.
+/// Every written byte is hashed, once, in a single traversal of the output.
+fn new_id_bytes(opts: &SaveOptions, written: &[u8]) -> Vec<u8> {
+    let salt = id_salt(opts);
+    let length = u64::try_from(written.len()).unwrap_or(u64::MAX);
+    let mut halves = [0u8, 1].map(|lane| {
+        let mut h = fnv1a(FNV_OFFSET, &salt.to_be_bytes());
+        h = fnv1a(h, &[lane]);
+        h = fnv1a(h, &opts.id_seed.to_be_bytes());
+        fnv1a(h, &length.to_be_bytes())
+    });
+    for chunk in written.chunks(4096) {
+        for h in &mut halves {
+            *h = fnv1a(*h, chunk);
+        }
+    }
+    halves.iter().flat_map(|h| h.to_be_bytes()).collect()
+}
+
+/// The salt of an identifier. With caller entropy it is a fixed hash of that entropy (deterministic,
+/// for tests and callers who pin output). Without it the salt is fresh: on WebAssembly from the
+/// browser ([`browser_salt`], so two fresh web apps that write the same bytes cannot share an
+/// identifier), and elsewhere from the standard library's random hash keys — seeded by the operating
+/// system, so separate processes differ — mixed with a process-wide counter, which separates
+/// successive calls in one process.
+fn id_salt(opts: &SaveOptions) -> u64 {
+    use std::hash::BuildHasher;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    match &opts.id_entropy {
+        Some(entropy) => fnv1a(FNV_OFFSET, entropy),
+        None => {
+            #[cfg(target_arch = "wasm32")]
+            if let Some(salt) = browser_salt() {
+                return salt;
+            }
+            std::collections::hash_map::RandomState::new().hash_one(COUNTER.fetch_add(1, Ordering::Relaxed))
+        }
+    }
+}
+
+/// One byte from one `Math.random` draw: the draw (in [0, 1)) scaled to [0, 256), integer part
+/// taken. The quotient is in [0, 256), so a saturating cast never wraps; a NaN or infinite draw
+/// (which a conforming engine never returns) folds in as 0. No input can panic here.
+#[cfg(any(target_arch = "wasm32", test))]
+fn draw_byte(random: f64) -> u8 {
+    (random * 256.0).floor().rem_euclid(256.0) as u8
+}
+
+/// The `Math.random` fallback's mixing: one salt byte per draw (see [`draw_byte`]), folded through
+/// FNV-1a exactly like the Web Crypto bytes, so all sixteen bytes of the fold carry entropy from
+/// the draws. Pure and platform-independent, so the native test target can exercise it; on wasm
+/// each draw comes from `Math.random`.
+#[cfg(any(target_arch = "wasm32", test))]
+fn salt_from_draws(draws: &[f64; 16]) -> u64 {
+    let mut bytes = [0u8; 16];
+    for (byte, draw) in bytes.iter_mut().zip(draws) {
+        *byte = draw_byte(*draw);
+    }
+    fnv1a(FNV_OFFSET, &bytes)
+}
+
+/// Fresh salt entropy from the browser, on WebAssembly. `crypto.getRandomValues` (Web Crypto, the
+/// browser's secure generator, available in windows and workers alike) gives sixteen bytes, folded
+/// into one salt. When that API is missing or refuses the call, `Math.random` is mixed instead
+/// ([`salt_from_draws`]: sixteen draws, so the salt's full width carries entropy) — browsers seed
+/// it afresh for every document, so a fresh instance still cannot reproduce another's salt. Only
+/// where neither is reachable does the caller fall back to its `RandomState` salt, whose keys are
+/// fixed at compile time on `wasm32-unknown-unknown` — the state before browser entropy was wired
+/// in.
+#[cfg(target_arch = "wasm32")]
+fn browser_salt() -> Option<u64> {
+    use wasm_bindgen::JsCast;
+    let crypto = js_sys::Reflect::get(&js_sys::global(), &wasm_bindgen::JsValue::from_str("crypto"))
+        .ok()
+        .filter(|crypto| !crypto.is_undefined() && !crypto.is_null());
+    if let Some(crypto) = crypto {
+        let fill = js_sys::Reflect::get(&crypto, &wasm_bindgen::JsValue::from_str("getRandomValues"))
+            .ok()
+            .and_then(|fill| fill.dyn_into::<js_sys::Function>().ok());
+        if let Some(fill) = fill {
+            let bytes = js_sys::Uint8Array::new_with_length(16);
+            if fill.call1(&crypto, &bytes).is_ok() {
+                return Some(fnv1a(FNV_OFFSET, &bytes.to_vec()));
+            }
+        }
+    }
+    // Web Crypto is missing or refused the call: degrade to `Math.random` rather than giving up.
+    let mut draws = [0.0; 16];
+    for draw in &mut draws {
+        *draw = js_sys::Math::random();
+    }
+    Some(salt_from_draws(&draws))
+}
+
 /// A PDF date string for "now" given seconds since the Unix epoch (UTC).
 pub fn pdf_date(unix_secs: i64) -> String {
     let (days, secs) = (unix_secs.div_euclid(86_400), unix_secs.rem_euclid(86_400));
@@ -663,7 +845,66 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 #[cfg(test)]
 mod tests {
+    /// `/ID` by reference comes out direct, each entry where it was: the key is made from the first.
+    #[test]
+    fn a_file_identifier_keeps_its_entries_in_their_places() {
+        let doc = Document::new_empty();
+        let string = |bytes: &[u8]| Object::String(crate::PdfString { bytes: bytes.to_vec(), hex: true });
+        let nowhere = Object::Ref(ObjRef::new(9_999, 0));
+        assert_eq!(super::direct_id(&doc, &Object::Array(vec![nowhere, string(b"ab")])), Object::Array(vec![string(b""), string(b"ab")]));
+    }
+
     use proptest::prelude::*;
+
+    #[test]
+    fn the_same_entropy_and_bytes_give_the_same_identifier_on_every_platform() {
+        // Computed from the formula outside this crate: fixed-width big-endian fields and FNV-1a.
+        let opts = super::SaveOptions { id_entropy: Some([0x42; 16]), id_seed: 7, ..super::SaveOptions::default() };
+        let want = [0x96, 0xf8, 0xcb, 0x7d, 0x5b, 0xb0, 0x09, 0xc8, 0x92, 0xc9, 0xb7, 0x51, 0xdf, 0xe6, 0xab, 0xd1];
+        assert_eq!(super::new_id_bytes(&opts, b"%PDF-1.7\n"), want);
+    }
+
+    #[test]
+    fn fnv1a_is_the_published_64_bit_algorithm() {
+        // Published FNV-1a (64 bit) test vectors, so the identifier can be reproduced outside this crate.
+        assert_eq!(super::fnv1a(super::FNV_OFFSET, b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(super::fnv1a(super::FNV_OFFSET, b"a"), 0xaf63_dc4c_8601_ec8c);
+        assert_eq!(super::fnv1a(super::FNV_OFFSET, b"foobar"), 0x8594_4171_f739_67e8);
+    }
+
+    #[test]
+    fn math_random_draws_fill_the_whole_salt_width() {
+        // Draw i = (i + 1/2)/256 scales to the integer i, so the fold's byte i proves draw i landed
+        // there: all sixteen bytes carry their own draw's entropy (the fallback once shifted four
+        // draws into one word, leaving the other four bytes of the fold constant).
+        let draws: [f64; 16] = std::array::from_fn(|i| (i as f64 + 0.5) / 256.0);
+        let bytes: Vec<u8> = (0..16).collect();
+        assert_eq!(super::salt_from_draws(&draws), super::fnv1a(super::FNV_OFFSET, &bytes));
+    }
+
+    #[test]
+    fn every_math_random_draw_reaches_the_salt() {
+        let base = [0.5; 16];
+        let baseline = super::salt_from_draws(&base);
+        for i in 0..16 {
+            let mut draws = base;
+            draws[i] = 0.75;
+            assert_ne!(super::salt_from_draws(&draws), baseline, "draw {i} did not reach the salt");
+        }
+    }
+
+    #[test]
+    fn a_math_random_draw_outside_its_range_still_mixes_without_panicking() {
+        // A conforming `Math.random` stays in [0, 1), but the mixing must not panic outside it.
+        assert_eq!(super::draw_byte(0.0), 0);
+        assert_eq!(super::draw_byte(0.5), 128);
+        assert_eq!(super::draw_byte(255.5 / 256.0), 255);
+        assert_eq!(super::draw_byte(-0.5 / 256.0), 255);
+        assert_eq!(super::draw_byte(-1.0), 0);
+        assert_eq!(super::draw_byte(2.0), 0);
+        assert_eq!(super::draw_byte(f64::NAN), 0);
+        assert_eq!(super::draw_byte(f64::INFINITY), 0);
+    }
 
     use super::*;
     use crate::Lexer;

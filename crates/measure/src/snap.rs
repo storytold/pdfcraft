@@ -189,6 +189,12 @@ pub fn constrain(last: Point, point: Point) -> Point {
     let angle = (v[1].atan2(v[0]) / std::f64::consts::FRAC_PI_4).round() * std::f64::consts::FRAC_PI_4;
     [last[0] + length * angle.cos(), last[1] + length * angle.sin()]
 }
+/// Hold a proposed vertex level or plumb with the last vertex, whichever is nearer (a CAD
+/// drawing's ortho mode): the vertex slides onto that axis rather than turning onto it.
+pub fn ortho(last: Point, point: Point) -> Point {
+    let v = sub(point, last);
+    if v[0].abs() >= v[1].abs() { [point[0], last[1]] } else { [last[0], point[1]] }
+}
 struct Walker<'a> {
     doc: &'a Document,
     geometry: Geometry,
