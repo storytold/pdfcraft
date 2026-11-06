@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-06 | **Last updated:** 2026-11-06 | **Change:** patch (M5 #6236: list the completed Edit highlight/context and draft-selection fixes under Done since rather than Missing; estimates unchanged)
+
 > **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M5 #6236 review: releasing image-only keyboard bookkeeping preserves live text drafts and their text selections, in both comment-context and leave-Edit paths; estimates unchanged)
 
 > **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M5 #6236: Edit right-clicks honor the highlight above an image, exposing its Properties/Delete without moving artwork; estimates unchanged)
@@ -233,6 +235,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-06 (M5, #6236):** Correct the milestone table so the completed Edit context-menu routing and live-draft image-selection cleanup appear under Done since, before the remaining gaps. Existing feature/review log entries are retained; behavior and estimates unchanged.
 
 - **2026-11-05 (M5, #6236 review):** Image selection cleanup checks the selected item's Image type even while a text draft is open. Right-clicking a comment then committing that draft cannot leave a hidden image target for Delete. The shared leave-Edit caller also clears image bookkeeping while preserving the draft, its source text and a draft's own Text-typed selection. Two real-event regressions cover typed content retention and both callers; the comment case verifies the image survives Delete. Estimates unchanged.
 
