@@ -20,8 +20,12 @@ pub struct Page {
 
 fn rect(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
     let o = doc.resolve(o?);
-    let v: Vec<f64> = o.as_array()?.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
-    (v.len() == 4 && v.iter().all(|x| x.is_finite())).then(|| [v[0].min(v[2]), v[1].min(v[3]), v[0].max(v[2]), v[1].max(v[3])])
+    // Four entries, or not a rectangle: a longer array (one shared by many pages, say) is not
+    // resolved entry by entry only to be discarded.
+    let [a, b, c, d] = o.as_array()?.as_slice() else { return None };
+    let v = [a, b, c, d].map(|x| doc.resolve(x).as_f64());
+    let [Some(x0), Some(y0), Some(x1), Some(y1)] = v else { return None };
+    [x0, y0, x1, y1].iter().all(|x| x.is_finite()).then(|| [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)])
 }
 
 impl Page {
