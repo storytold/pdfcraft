@@ -303,7 +303,7 @@ impl PdfCraftApp {
             }
             ("notice", Some(v)) => v.notice_dismissed = value == "off",
             ("quick", _) => {
-                // `--quick select|hand|note|freetext|highlight|underline|strikeout|ink|line|arrow|square|circle`
+                // Custom stamps accept explicit ID/index forms; `custom-stamp-N` remains a legacy index.
                 self.quick_tool = match value {
                     "select" => QuickTool::Select,
                     measure if measure.starts_with("measure-") => QuickTool::Measure(
@@ -321,12 +321,28 @@ impl PdfCraftApp {
                     "snapshot" => QuickTool::Snapshot,
                     "column-select" => QuickTool::ColumnSelect,
                     "certify" => QuickTool::SignArea { certify: true },
+                    custom if custom.starts_with("custom-stamp-id-") => {
+                        let key = custom.strip_prefix("custom-stamp-id-").unwrap_or_default();
+                        let id = key
+                            .parse::<u64>()
+                            .ok()
+                            .filter(|id| self.custom_stamps.iter().any(|stamp| stamp.id == *id))
+                            .ok_or_else(|| format!("unknown custom stamp ID {key}"))?;
+                        QuickTool::CustomStamp(id)
+                    }
+                    custom if custom.starts_with("custom-stamp-index-") => {
+                        let key = custom.strip_prefix("custom-stamp-index-").unwrap_or_default();
+                        let id = key.parse::<usize>().ok().and_then(|index| self.custom_stamps.get(index).map(|stamp| stamp.id));
+                        QuickTool::CustomStamp(
+                            id.ok_or_else(|| format!("unknown custom stamp index {key}; there are {} custom stamps", self.custom_stamps.len()))?,
+                        )
+                    }
                     custom if custom.starts_with("custom-stamp-") => {
-                        let i: usize = custom[13..].parse().map_err(|_| format!("bad stamp {custom}"))?;
-                        if i >= self.custom_stamps.len() {
-                            return Err(format!("there are {} custom stamps", self.custom_stamps.len()));
-                        }
-                        QuickTool::CustomStamp(i)
+                        let key = custom.strip_prefix("custom-stamp-").unwrap_or_default();
+                        let id = key.parse::<usize>().ok().and_then(|index| self.custom_stamps.get(index).map(|stamp| stamp.id));
+                        QuickTool::CustomStamp(
+                            id.ok_or_else(|| format!("unknown custom stamp index {key}; there are {} custom stamps", self.custom_stamps.len()))?,
+                        )
                     }
                     stamp if stamp.starts_with("stamp-") => QuickTool::Stamp(
                         pdfcraft_engine::StampKind::ALL
@@ -434,5 +450,34 @@ impl PdfCraftApp {
             (other, _) => return Err(format!("unknown option {other}")),
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stamp(id: u64, name: &str) -> crate::tools::stamps_ui::CustomStamp {
+        crate::tools::stamps_ui::CustomStamp {
+            id,
+            category: "Test".into(),
+            name: name.into(),
+            file: "test.png".into(),
+            page: 0,
+            data: std::sync::Arc::new(Vec::new()),
+        }
+    }
+
+    #[test]
+    fn custom_stamp_quick_keys_distinguish_ids_from_indexes() {
+        let mut app = PdfCraftApp::new();
+        app.custom_stamps = vec![stamp(1, "First"), stamp(77, "Second")];
+
+        app.set_option("quick", "custom-stamp-1").expect("legacy index is accepted");
+        assert_eq!(app.quick_tool, QuickTool::CustomStamp(77));
+        app.set_option("quick", "custom-stamp-index-1").expect("explicit index is accepted");
+        assert_eq!(app.quick_tool, QuickTool::CustomStamp(77));
+        app.set_option("quick", "custom-stamp-id-1").expect("explicit ID is accepted");
+        assert_eq!(app.quick_tool, QuickTool::CustomStamp(1));
     }
 }

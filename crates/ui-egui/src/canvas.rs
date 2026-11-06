@@ -3075,8 +3075,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // In Preferences ▸ Date format, or why it can't be stamped into the PDF.
     let date_text = crate::date_text_for_pdf(&app.session);
     let by_line = app.session.stamp_by_line(&author);
-    let custom_stamp = match tool {
-        QuickTool::CustomStamp(i) => app.custom_stamps.get(i).cloned(),
+    let custom_stamp = match app.quick_tool {
+        QuickTool::CustomStamp(id) => app.custom_stamps.iter().find(|stamp| stamp.id == id).cloned(),
         _ => None,
     };
     let mut open_props: Option<(usize, usize)> = None;

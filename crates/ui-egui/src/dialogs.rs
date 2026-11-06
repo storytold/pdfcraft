@@ -358,6 +358,17 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.close = save || cancel;
             return false;
         }
+        Dialog::EditStamp => {
+            let (save, cancel) = crate::stamps_ui::edit_body(ui, app, &t);
+            if save
+                && let Some(edit) = app.stamp_edit.take()
+                && let Err(error) = app.edit_custom_stamp(edit.id, &edit.name, &edit.category)
+            {
+                app.notify(error);
+            }
+            req.close = save || cancel;
+            return false;
+        }
         Dialog::PdfA => {
             req.close = crate::standards_ui::body(ui, app, &t);
             return false;

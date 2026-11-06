@@ -110,9 +110,15 @@ fn creating_placing_and_keeping_custom_stamps() {
     h.run_steps(1);
     h.get_by_label("OK").click();
     h.run_steps(2);
-    assert_eq!(h.state().quick_tool, QuickTool::CustomStamp(0));
+    assert_eq!(h.state().quick_tool, QuickTool::CustomStamp(h.state().custom_stamps[0].id));
     h.get_by_label("Company");
     h.get_by_label("logo");
+    let stamp_id = h.state().custom_stamps[0].id;
+    let stamp_data = h.state().custom_stamps[0].data.clone();
+    assert_eq!(h.state().custom_stamps[0].id, stamp_id);
+    assert_eq!(h.state().custom_stamps[0].name, "logo");
+    assert_eq!(h.state().custom_stamps[0].category, "Company");
+    assert_eq!(h.state().custom_stamps[0].data, stamp_data);
     // Place it.
     let p = {
         let r = h.state().views[0].page_screen_rect(0).unwrap();
@@ -131,12 +137,15 @@ fn creating_placing_and_keeping_custom_stamps() {
     let r = stamps[0].rect;
     assert!(((r[2] - r[0]) / (r[3] - r[1]) - 3.0).abs() < 0.05, "keeps the picture's shape: {r:?}");
     assert_eq!(doc.can_undo(), Some("Add stamp"));
-    // The library is kept with the app's settings.
-    let saved = s.persist();
+    // The edited library is kept with the app's settings.
+    let saved = h.state().persist();
     let mut again = PdfCraftApp::new();
     again.set_option("language", "en").unwrap();
     again.restore(&saved);
     assert_eq!(again.custom_stamps.len(), 1);
-    assert_eq!((again.custom_stamps[0].category.as_str(), again.custom_stamps[0].name.as_str()), ("Company", "logo"));
-    assert_eq!(again.custom_stamps[0].data, s.custom_stamps[0].data);
+    assert_eq!(
+        (again.custom_stamps[0].id, again.custom_stamps[0].category.as_str(), again.custom_stamps[0].name.as_str()),
+        (stamp_id, "Company", "logo")
+    );
+    assert_eq!(again.custom_stamps[0].data, stamp_data);
 }
