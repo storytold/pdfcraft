@@ -1849,6 +1849,40 @@ fn an_image_a_surviving_form_with_parameters_by_reference_draws_is_kept() {
     assert!(surviving_references::full_save_holds(&doc, b"IMAGESECRET"), "the image the form still draws outside the mark");
 }
 
+/// A form without resources of its own that the redaction rewrites gets a new name. It keeps none
+/// of its own either when its copy of the page's loses nothing, which takes a form drawing itself
+/// (here off the page, so outside the mark), and then goes on drawing through the page's: itself
+/// and, through a form it draws unchanged, the image under the mark again outside it. The page's
+/// check of what it still draws follows the rewritten form under its new name, so the page keeps
+/// both names for it.
+#[test]
+fn an_image_a_rewritten_form_draws_again_through_the_pages_resources_is_kept() {
+    let mut doc = one_page(
+        b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do",
+        "/XObject << /FmBare 7 0 R /Inner 8 0 R /Im1 9 0 R >>",
+        vec![
+            stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 300 300]",
+                b"BT /F1 10 Tf 20 250 Td (SECRET) Tj ET /Inner Do q 1 0 0 1 0 -1000 cm /FmBare Do Q",
+            ),
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100]", b"q 50 0 0 50 20 20 cm /Im1 Do Q"),
+            stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBIMGSHOWNAGAIN"),
+        ],
+    );
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.images_removed, r.forms_rewritten), (1, 1), "{r:?}");
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let page = content(&saved, 0);
+    let drawn: Vec<Vec<u8>> =
+        pdfcraft_content::parse(page.as_bytes()).ops.iter().filter(|op| op.is("Do")).filter_map(|op| op.last_name().map(<[u8]>::to_vec)).collect();
+    assert!(drawn.len() == 1 && drawn[0] != b"FmBare", "the form is drawn under its new name: {page}");
+    let rewritten = named_stream(&saved, 0, &drawn[0]).unwrap();
+    assert!(!rewritten.dict.contains(b"Resources"), "the rewritten form keeps no resources of its own");
+    assert!(named_stream(&saved, 0, b"FmBare").is_some(), "the rewritten form still draws the original");
+    assert_eq!(named_image(&saved, 0, b"Im1").as_deref(), Some(&b"PUBIMGSHOWNAGAIN"[..]), "the unchanged form still draws it");
+}
+
 /// The walk of what content draws through its resources charges the forms it reads to the
 /// allowance it is given: a form decoding to more than is left is refused, one within it read.
 #[test]

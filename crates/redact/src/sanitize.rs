@@ -417,12 +417,14 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
             let mut res = resources.clone();
             if !out.xobjects.is_empty() || !out.replaced.is_empty() {
                 let mut xo = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
-                // A full save keeps whatever is still referenced: unlink the originals this page no
-                // longer draws so the removed form or image bytes cannot survive in the saved file.
-                crate::interp::prune(doc, &mut budget, &mut xo, &out.replaced, &page_content)?;
+                // The rewritten XObjects first, as on Apply Redactions' pages: `prune` follows a
+                // rewritten form left without resources of its own only under a name it can find.
                 for (n, r) in &out.xobjects {
                     xo.set(n.clone(), Object::Ref(*r));
                 }
+                // A full save keeps whatever is still referenced: unlink the originals this page no
+                // longer draws so the removed form or image bytes cannot survive in the saved file.
+                crate::interp::prune(doc, &mut budget, &mut xo, &out.replaced, &page_content)?;
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
             retired_properties.extend(crate::interp::prune_properties(doc, &mut budget, &mut res, &page_content)?);

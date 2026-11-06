@@ -818,6 +818,11 @@ fn redact_page_content(
         let mut res = resources.clone();
         if !out.xobjects.is_empty() || !out.replaced.is_empty() {
             let mut xo = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
+            // The rewritten XObjects first, as for a rewritten form: one left without resources of
+            // its own draws through these, and `prune` follows it only under a name it can find.
+            for (n, r) in &out.xobjects {
+                xo.set(n.clone(), Object::Ref(*r));
+            }
             // A full save keeps whatever is still referenced: unlink the originals this page no
             // longer draws so the removed image or form bytes cannot survive in the saved file.
             let page_content: Vec<Vec<u8>> = new_list
@@ -828,9 +833,6 @@ fn redact_page_content(
                 })
                 .collect();
             interp::prune(doc, &mut budget, &mut xo, &out.replaced, &page_content)?;
-            for (n, r) in &out.xobjects {
-                xo.set(n.clone(), Object::Ref(*r));
-            }
             res.set(b"XObject".to_vec(), Object::Dict(xo));
         }
         let (_, cleaned_data) = page_streams(
