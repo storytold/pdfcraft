@@ -328,6 +328,31 @@ fn page_keys_still_work_with_a_check_box_or_radio_button_focused() {
 }
 
 #[test]
+fn ruler_clicks_preserve_checkbox_and_radio_keyboard_focus() {
+    let mut h = check_box_harness();
+    h.state_mut().show_rulers = true;
+    h.run_steps(3);
+    let viewport = h.state().views[0].viewport_rect();
+    let ruler = egui::pos2(viewport.center().x, viewport.top() + pdfcraft_ui_egui::ruler::HORIZONTAL_RULER_HEIGHT / 2.0);
+
+    click_field(&mut h, "agree", 0);
+    let before = value(&h, "agree");
+    click_at(&mut h, ruler);
+    assert_eq!(focused(&h), Some(("agree".into(), 0)), "the ruler keeps the checkbox focused");
+    h.key_press(egui::Key::Space);
+    h.run_steps(3);
+    assert_ne!(value(&h, "agree"), before, "Space still toggles the checkbox after the ruler click");
+
+    click_field(&mut h, "pick", 0);
+    click_at(&mut h, ruler);
+    assert_eq!(focused(&h), Some(("pick".into(), 0)), "the ruler keeps the radio group focused");
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("pick".into(), 1)), "an arrow still moves within the radio group after the ruler click");
+    assert_eq!(value(&h, "pick"), ["B"]);
+}
+
+#[test]
 fn radio_buttons_take_tab_space_and_arrows() {
     let mut h = harness();
     click_field(&mut h, "agree", 0);

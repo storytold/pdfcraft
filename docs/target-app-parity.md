@@ -89,8 +89,7 @@ Adobe publishes no usage data): view 16%, comment 12%, edit 12%, organize 10%, f
 create/export 9%, sign 7%, protect 5%, print 5%, OCR 4%, core 3%, optimize/standards 3%,
 accessibility 2%, automation/preferences 2%. That gives the Features dimension, ≈ 49%.
 
-The **full ready-for-real-work number is an additive weighted sum over the dimensions** (standard
-method; weights by what decides whether a professional can switch): features 40%, file formats and
+The **full ready-for-real-work number is an additive weighted sum over the dimensions** (standard method; weights by what decides whether a professional can switch): features 40%, file formats and
 conversion 12%, UI/UX 10%, PDF specification 8%, stability 8%, performance 6%, localization 5%,
 platforms 5%, hardware 4%, ecosystem 1%, AI 1%:
 0.40 × 49 + 0.12 × 40 + 0.10 × 55 + 0.08 × 60 + 0.08 × 50 + 0.06 × 40 + 0.05 × 68 + 0.05 × 70 +
@@ -184,7 +183,7 @@ features total and are shown for orientation; the others add to it.
 | Dimension | Ready | Weight | Remaining (h) | Counted | Evidence | Doc |
 |---|---|---|---|---|---|---|
 | Features (14 areas) | ≈ 49% depth; 67% breadth | 40% | 610–1,100 | base | Area table below | this file |
-| UI/UX fidelity | ≈ 55% | 10% | 30–60 | additional | Acrobat-style shell, All tools, Home, command palette; missing single-key accelerators, rulers/guides, multiple windows, popups; user reports #739, #744, #746, #789 (#759 and #844 fixed) | [ui-parity.md](ui-parity.md) |
+| UI/UX fidelity | ≈ 55% | 10% | 30–60 | additional | Acrobat-style shell, All tools, Home, command palette; read-only document rulers; missing single-key accelerators, draggable ruler origins, grids, guides and snapping, multiple windows, popups; user reports #739, #744, #746, #789 (#759 and #844 fixed) | [ui-parity.md](ui-parity.md) |
 | File formats and conversion | ≈ 40% | 12% | 120–220 | within features | PDF read/write strong, encrypted output included (#774 fixed); export Word is layout-poor (#773); no Excel/PowerPoint export, no Office/HTML/PostScript import | [file-format-parity.md](file-format-parity.md) |
 | PDF specification and standards | ≈ 60% | 8% | 150–260 | within features | ISO 32000 syntax, encryption, annotations and AcroForm strong; rendering and fonts borrowed from `hayro`; PDF 2.0 extras, linearization, public-key security absent; PDF/A partial, PDF/X/UA none | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | Hardware | ≈ 35% | 4% | 25–50 | additional | Page raster is CPU only (Acrobat has GPU rendering); Windows CNG and macOS Keychain keys sign, no PKCS #11; no scanners; web printing goes through the browser's print dialog as pictures, not vectors | [hardware-parity.md](hardware-parity.md) |
@@ -204,7 +203,7 @@ full parity in that area.
 | Area | Features | Shipped | Partial | Breadth | Ready | Remaining (h) | What's strong / what's missing |
 |---|---|---|---|---|---|---|---|
 | A Core model and fidelity | 56 | 42 | 2 | 76.8% | 70% | 25–45 | Parser, repair, R2–R6 encryption, incremental and atomic saves, undo, autosave, crash recovery, revisions. Encrypted output opens in Acrobat (#774). Missing: lazy loading of GB files, linearization, PDF 2.0 extras, Arlington validation, public-key security, own image codecs |
-| B View and navigation | 92 | 52 | 11 | 62.5% | 55% | 110–190 | Shell, layouts, zoom, find, panels, tiles, web build, 500-page scrolling. **Pages are drawn by the vendored `hayro`** (22 + 9 local patches): all 7 rendering P0s are partial. Missing: own renderer or a decided replacement (#841), multiple windows, split view, rulers/guides, loupe, reflow, search across files |
+| B View and navigation | 95 | 55 | 15 | 65.8% | 55% | 110–190 | Shell, layouts, zoom, find, panels, tiles, web build, 500-page scrolling. **Pages are drawn by the vendored `hayro`** (22 + 9 local patches): all 7 rendering P0s are partial. Missing: own renderer or a decided replacement (#841), multiple windows, split view, draggable ruler origins, grids, guides and snapping, loupe, reflow, search across files |
 | C Content editing | 61 | 29 | 7 | 53.3% | 30% | 100–180 | Edit existing paragraphs (font reused or Helvetica substituted, rewrapped), added text and images stay editable, header/footer, watermarks, backgrounds, Bates, links. Missing: robust editing of real-world text (subset fonts, CJK, RTL #766, rotated), lists, vector/object editing, arrange/align, spell check, multi-select move across pages (same-page shipped, #844) |
 | D Organize pages | 76 | 45 | 3 | 61.2% | 70% | 12–25 | Organize grid, insert/extract/replace/split/combine with links, fields, layers and bookmarks carried over; page labels, boxes, bookmarks from structure. Missing: transitions, attachments editing, portfolios, struct-tree merge, field-name conflicts (destination and annotation fixes #817, #818, #821 shipped) |
 | E Comments and review | 65 | 46 | 9 | 77.7% | 70% | 12–25 | Every markup type with appearances, replies, status, filters, stamps (custom, dynamic), XFDF/FDF, summaries, flatten, 2D measuring. Missing: rich-text runs, popup windows, summary layouts with pages, per-type hiding (XFDF fidelity fixes #807, #809, #819 shipped) |

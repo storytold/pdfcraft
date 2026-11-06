@@ -1587,7 +1587,7 @@ fn left_and_right_follow_the_current_pages_width_in_continuous_view() {
 fn right_scrolls_to_a_spreads_second_page_off_screen_before_turning() {
     use egui::Key;
     // The page gap (points on screen).
-    const GAP: f32 = 14.0;
+    const GAP: f32 = 2.0;
     let build = |zoom: f32| {
         let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
             let mut app = PdfCraftApp::new();

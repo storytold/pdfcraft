@@ -2159,6 +2159,17 @@ fn destinations_set_the_zoom_mode_and_the_point_to_show() {
     // A zoom beyond the view's range is clamped to it.
     v.go_to_dest(0, DestView::Xyz { left: None, top: None, zoom: Some(1e30) }, &info);
     assert_eq!((v.zoom, v.goto_point), (64.0, None));
+    v.go_to_dest(0, DestView::Xyz { left: None, top: None, zoom: Some(0.001) }, &info);
+    assert_eq!(v.zoom, 0.01);
+    v.go_to_dest(0, DestView::Xyz { left: None, top: None, zoom: Some(0.04) }, &info);
+    assert_eq!(v.zoom, 0.04);
+    for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -1.0] {
+        v.fit = Fit::Width;
+        v.zoom = 2.5;
+        v.go_to_dest(0, DestView::Xyz { left: None, top: None, zoom: Some(invalid) }, &info);
+        assert_eq!((v.fit, v.zoom), (Fit::Width, 2.5), "invalid zoom {invalid:?} preserves the view");
+        assert!(v.zoom.is_finite());
+    }
     v.go_to_dest(0, DestView::Fit, &info);
     assert_eq!((v.fit, v.goto_point), (Fit::Page, None));
     v.go_to_dest(0, DestView::FitH { top: Some(100.0) }, &info);
@@ -2416,4 +2427,19 @@ fn enhancing_a_scan_re_renders_the_page_shown() {
     app.poll_scan_clean();
     assert!(app.scan_clean_run.is_none());
     assert_eq!(app.views[i].pages.get(&0).unwrap().tag, STALE_TAG, "the old raster is re-rendered");
+}
+
+/// Closing the page context menu must not disturb another popup held by the same egui context.
+#[test]
+fn closing_page_context_menu_keeps_an_unrelated_popup_open() {
+    let ctx = egui::Context::default();
+    let page_menu = egui::Id::unique("page-context-menu-test");
+    let unrelated = egui::Id::unique("unrelated-popup-test");
+    egui::Popup::open_id(&ctx, page_menu);
+    close_page_context_menu(&ctx, page_menu);
+    assert!(!egui::Popup::is_id_open(&ctx, page_menu), "the page menu closes");
+
+    egui::Popup::open_id(&ctx, unrelated);
+    close_page_context_menu(&ctx, page_menu);
+    assert!(egui::Popup::is_id_open(&ctx, unrelated), "an unrelated popup remains open");
 }

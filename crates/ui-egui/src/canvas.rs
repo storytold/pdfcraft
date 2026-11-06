@@ -31,6 +31,7 @@ pub(super) mod page_cursor;
 mod page_input;
 pub(super) mod page_pointer;
 pub(super) mod page_router;
+mod rulers;
 pub mod scroll_speed;
 mod selection;
 pub(super) mod signature_drag;
@@ -73,7 +74,8 @@ pub use zoom::{GRID_ZOOM_RANGE, THUMBNAIL_ZOOM_RANGE};
 
 /// Logical pixels per PDF point at 100% (96 dpi, like browsers).
 pub const PT: f32 = 96.0 / 72.0;
-const GAP: f32 = 14.0;
+const PAGE_ROW_GAP: f32 = 8.0;
+const TWO_UP_COLUMN_GAP: f32 = 2.0;
 const MARGIN: f32 = 28.0;
 /// Horizontal gutter that keeps pages clear of the floating quick-action bar.
 const SIDE: f32 = 70.0;
@@ -399,7 +401,7 @@ impl ViewDefaults {
     }
 
     /// These defaults with the zoom a [`zoom_name`](Self::zoom_name) names, in any case. `None`
-    /// for anything else, including a percentage outside the 8–6400% the view can show.
+    /// for anything else, including a percentage outside the 1–6400% the view can show.
     pub fn with_zoom(self, name: &str) -> Option<Self> {
         let name = name.trim();
         let (fit, zoom) = if name.eq_ignore_ascii_case("fit-width") {
@@ -407,7 +409,7 @@ impl ViewDefaults {
         } else if name.eq_ignore_ascii_case("fit-page") {
             (Fit::Page, self.zoom)
         } else {
-            let percent = name.strip_suffix('%').unwrap_or(name).trim().parse::<f32>().ok().filter(|p| (8.0..=6400.0).contains(p))?;
+            let percent = name.strip_suffix('%').unwrap_or(name).trim().parse::<f32>().ok().filter(|p| (1.0..=6400.0).contains(p))?;
             (Fit::None, percent / 100.0)
         };
         Some(Self { fit, zoom, ..self })
@@ -1236,6 +1238,7 @@ struct PageOut {
     open_initials: bool,
     open_signature: bool,
     open_table: Option<(usize, [f64; 4])>,
+    ruler_interaction: bool,
     page_action: Option<PageMenuAction>,
     paste_comments_at: Option<(usize, [f64; 2])>,
     primary_down: bool,
@@ -1276,7 +1279,7 @@ impl PageFrame<'_> {
     /// that touch (the gaps hidden) can share a row of pixels, and a right-click there is one
     /// page's, as a press is.
     fn right_click_on(&mut self, rect: Rect) -> Option<Pos2> {
-        let p = self.pointer.filter(|p| !self.right_clicked && self.resp.secondary_clicked() && rect.contains(*p))?;
+        let p = self.pointer.filter(|p| !self.right_clicked && !self.ptr.blocked_press && self.resp.secondary_clicked() && rect.contains(*p))?;
         self.right_clicked = true;
         Some(p)
     }
@@ -1602,6 +1605,14 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     page_overlays(ui, view, frame, &slot, &input);
 }
 
+/// Close only the page context menu retained by the document response.
+///
+/// Keeping the operation in one narrow helper makes its popup-isolation contract directly
+/// testable without relying on the lifetime of an unrelated rendered popup.
+fn close_page_context_menu(ctx: &egui::Context, page_context_menu_id: egui::Id) {
+    egui::Popup::close_id(ctx, page_context_menu_id);
+}
+
 #[allow(clippy::cognitive_complexity)]
 fn draw_pages(
     ui: &mut egui::Ui,
@@ -1610,6 +1621,7 @@ fn draw_pages(
     env: &PageEnv<'_>,
     out: &mut PageOut,
     signature_preview: &mut Option<(crate::fill_sign::SavedSig, egui::TextureHandle)>,
+    rulers_enabled: bool,
 ) -> PageRenders {
     let PageEnv {
         allowed,
@@ -1684,8 +1696,11 @@ fn draw_pages(
     view.screen_ppp = ui.ctx().pixels_per_point();
     view.screen_xforms.clear();
     // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
-    // or a press they hold. The page modules read it rather than egui's raw pointer state.
-    let ptr = PagePointer::read(ui, &resp, modal);
+    // or a press they hold. Ruler chrome can acquire no page gesture, while a gesture that
+    // began on a page remains held when it crosses a ruler.
+    let blocked = rulers::blocked_rects(rulers_enabled, view.presentation.is_some(), view.organize, visible);
+    let ptr = PagePointer::read_excluding(ui, &resp, modal, &blocked);
+    out.ruler_interaction = ptr.blocked_interaction.is_some();
     cancel_on_escape(ui.ctx(), view, &ptr);
     view.router.settle(ptr.any_down, !ptr.edges.is_empty());
     // A new press is no longer the last one's, wherever it lands (the page it is on gives it
@@ -1703,7 +1718,7 @@ fn draw_pages(
     // no selection (Rotate, Delete) acts on the page the reader pointed at, not on a page
     // gone to earlier that still shows whole beside it.
     let pressed = unobstructed && ptr.pressed().is_some();
-    if resp.secondary_clicked() {
+    if resp.secondary_clicked() && !ptr.blocked_press {
         // Set again below when the right-click lands on a link.
         view.links.context = None;
         // Set again below by the page right-clicked: a right-click off the pages (between them,
@@ -1794,7 +1809,7 @@ fn draw_pages(
         ..
     } = frame;
     // A right-click no page took deselects the comment, so the page's menu opens, not the comment's.
-    if resp.secondary_clicked() && !right_clicked {
+    if resp.secondary_clicked() && !ptr.blocked_press && !right_clicked {
         view.comments.selected = None;
     }
     let PageOut {
@@ -1810,6 +1825,7 @@ fn draw_pages(
         open_initials,
         open_signature,
         open_table,
+        ruler_interaction,
         page_action: _,
         primary_down: _,
         refused,
@@ -1870,174 +1886,182 @@ fn draw_pages(
     // The row as it is now: in continuous view the current page may have changed above.
     let row_on_screen =
         shown_row(view, env.rects).iter().filter_map(|&i| env.rects.get(i)).map(|r| r.translate(origin.to_vec2())).reduce(Rect::union);
-    resp.context_menu(|ui| {
-        let is_crop_over_image = tool == QuickTool::EditText
-            && view.image_selection.clone().is_some_and(|sel| {
-                let Some(ref crop) = sel.crop else { return false };
-                let pointer_pos = ptr.pos;
-                let Some(p) = pointer_pos else { return false };
-                let Some((_, xf)) = view.screen_xforms.iter().find(|(page_idx, _)| *page_idx == sel.page).cloned() else { return false };
-                let images = cached_edit_images(view, doc, sel.page).to_vec();
-                let Some(img) = images.get(sel.index) else { return false };
-                crop_contains_point(img, crop, &xf, info, sel.page, p)
-            });
-        if is_crop_over_image {
-            ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
-            egui::Popup::close_all(ui.ctx());
-            ui.close();
-            return;
-        }
-        // Preparing a form: the selected field's menu.
-        if preparing && let Some((name, wi)) = view.prepare.selected.clone() {
-            // Several fields: Align, Center, Distribute, Set Fields to Same Size.
-            if !view.prepare.also.is_empty() {
-                use crate::prepare::Arrange as A;
-                let others = view.prepare.also.clone();
-                let anchor = (name.clone(), wi);
-                let mut pick = |ui: &mut egui::Ui, op: A, label: &str| {
-                    if ui.add_enabled(can_modify, egui::Button::new(tl!(label))).clicked() {
-                        view.pending_edit = crate::prepare::arrange(form, &anchor, &others, op);
-                        ui.close();
-                    }
-                };
-                ui.menu_button(tl!("Align"), |ui| {
-                    pick(ui, A::AlignLeft, "Left");
-                    pick(ui, A::AlignRight, "Right");
-                    pick(ui, A::AlignTop, "Top");
-                    pick(ui, A::AlignBottom, "Bottom");
-                    pick(ui, A::AlignCenterV, "Center vertically");
-                    pick(ui, A::AlignCenterH, "Center horizontally");
-                });
-                ui.menu_button(tl!("Distribute"), |ui| {
-                    pick(ui, A::DistributeH, "Horizontally");
-                    pick(ui, A::DistributeV, "Vertically");
-                });
-                ui.menu_button(tl!("Set Fields to Same Size"), |ui| {
-                    pick(ui, A::SameHeight, "Height");
-                    pick(ui, A::SameWidth, "Width");
-                    pick(ui, A::SameSize, "Both");
-                });
-                ui.separator();
-            }
-            if ui.button(tl!("Properties…")).clicked() {
-                field_menu = Some(FieldMenu::Properties);
-                ui.close();
-            }
-            if ui.add_enabled(can_modify, egui::Button::new(tl!("Duplicate…"))).clicked() {
-                field_menu = Some(FieldMenu::Duplicate(name.clone()));
-                ui.close();
-            }
-            ui.separator();
-            let delete = if view.prepare.also.is_empty() { "Delete" } else { "Delete selected fields" };
-            if ui.add_enabled(can_modify, egui::Button::new(tl!(delete))).clicked() {
-                view.pending_edit = crate::prepare::delete_selected(view);
-                ui.close();
-            }
-            return;
-        }
-        if let Some((page, index)) = view.links.context {
-            if ui.button(tl!("Properties…")).clicked() {
-                view.links.open_existing = Some((page, index));
-                ui.close();
-            }
-            if ui.add_enabled(can_modify, egui::Button::new(tl!("Delete"))).clicked() {
-                view.pending_edit = Some(Edit::DeleteLink { page, index });
-                view.links.selected = None;
-                view.links.context = None;
-                ui.close();
-            }
-            ui.separator();
-            if ui.add_enabled(can_modify, egui::Button::new(tl!("Remove all links"))).clicked() {
-                view.pending_edit = Some(Edit::RemoveLinks { pages: None });
-                view.links.selected = None;
-                view.links.context = None;
-                ui.close();
-            }
-            return;
-        }
-        let can_paste_image = env.can_paste_image;
-        let is_image_menu = tool == QuickTool::EditText
-            && (ui.ctx().data_mut(|d| d.get_temp::<bool>(crate::edit_text_ui::image_menu_id())).unwrap_or(false)
-                || view.image_selection.clone().is_some_and(|sel| {
+    let page_context_menu_id = resp.id.with("page-context-menu");
+    if ptr.blocked_press {
+        // A ruler-owned press dismisses only the page menu. Other document popups keep their own
+        // state and are not collateral damage from a global popup close.
+        close_page_context_menu(ui.ctx(), page_context_menu_id);
+    }
+    if !ptr.blocked_press {
+        egui::Popup::context_menu(&resp).id(page_context_menu_id).show(|ui| {
+            let is_crop_over_image = tool == QuickTool::EditText
+                && view.image_selection.clone().is_some_and(|sel| {
+                    let Some(ref crop) = sel.crop else { return false };
                     let pointer_pos = ptr.pos;
                     let Some(p) = pointer_pos else { return false };
                     let Some((_, xf)) = view.screen_xforms.iter().find(|(page_idx, _)| *page_idx == sel.page).cloned() else { return false };
                     let images = cached_edit_images(view, doc, sel.page).to_vec();
                     let Some(img) = images.get(sel.index) else { return false };
-                    let obb = ImageObb::from_image(img, &xf, info, sel.page);
-                    let b = image_screen_rect(img, &xf, info, sel.page);
-                    obb.contains(b, p)
-                }));
-        if is_image_menu && let Some(sel) = view.image_selection.clone() {
-            let images = cached_edit_images(view, doc, sel.page).to_vec();
-            // Paste lands where the menu opened only on the picture's page: where pages touch, the
-            // first page takes the right-click, and its point means nothing on the second.
-            let at = view.comments.context_at.filter(|(page, _)| *page == sel.page).map(|(_, at)| at);
-            let rotation = (view.rotation % 360 + info.pages.get(sel.page).map_or(0, |p| p.rotation % 360)) % 360;
-            crate::edit_text_ui::image_context_menu(ui, view, &images, sel.page, sel.index, can_paste_image, &mut image_action, at, rotation);
-            return;
-        }
-        // A selected comment, or connected lines being drawn (Complete, Undo last point): the
-        // comment menu.
-        let drawing_points = matches!(&view.comments.gesture, Some(comments::Gesture::Draw { tool, .. }) if tool.clicks_points());
-        if view.comments.selected.is_some() || drawing_points {
-            canvas_action = comments::context_menu(
-                ui,
-                view,
-                info,
-                &|page, index| doc.annotation_deletable(page, index),
-                prefs,
-                comments::MenuRights { allowed, can_paste: can_paste_comments, can_modify },
-            );
-            return;
-        }
-        // Over a picture (and no comment): Copy Image, as in Acrobat's page menu.
-        let mut copy_image = None;
-        if let Some((page, at)) = view.comments.context_at {
-            // The page's content is parsed once per right-click, not on every frame the menu is open.
-            let key = egui::Id::unique("copy-image-under-menu");
-            let cached = ui.data(|d| d.get_temp::<(usize, [f64; 2], Option<usize>)>(key)).filter(|c| c.0 == page && c.1 == at);
-            let hit = match cached {
-                Some(c) => c.2,
-                None => {
-                    let hit = doc.page_image_at(page, at);
-                    ui.data_mut(|d| d.insert_temp(key, (page, at, hit)));
-                    hit
+                    crop_contains_point(img, crop, &xf, info, sel.page, p)
+                });
+            if is_crop_over_image {
+                ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
+                egui::Popup::close_all(ui.ctx());
+                ui.close();
+                return;
+            }
+            // Preparing a form: the selected field's menu.
+            if preparing && let Some((name, wi)) = view.prepare.selected.clone() {
+                // Several fields: Align, Center, Distribute, Set Fields to Same Size.
+                if !view.prepare.also.is_empty() {
+                    use crate::prepare::Arrange as A;
+                    let others = view.prepare.also.clone();
+                    let anchor = (name.clone(), wi);
+                    let mut pick = |ui: &mut egui::Ui, op: A, label: &str| {
+                        if ui.add_enabled(can_modify, egui::Button::new(tl!(label))).clicked() {
+                            view.pending_edit = crate::prepare::arrange(form, &anchor, &others, op);
+                            ui.close();
+                        }
+                    };
+                    ui.menu_button(tl!("Align"), |ui| {
+                        pick(ui, A::AlignLeft, "Left");
+                        pick(ui, A::AlignRight, "Right");
+                        pick(ui, A::AlignTop, "Top");
+                        pick(ui, A::AlignBottom, "Bottom");
+                        pick(ui, A::AlignCenterV, "Center vertically");
+                        pick(ui, A::AlignCenterH, "Center horizontally");
+                    });
+                    ui.menu_button(tl!("Distribute"), |ui| {
+                        pick(ui, A::DistributeH, "Horizontally");
+                        pick(ui, A::DistributeV, "Vertically");
+                    });
+                    ui.menu_button(tl!("Set Fields to Same Size"), |ui| {
+                        pick(ui, A::SameHeight, "Height");
+                        pick(ui, A::SameWidth, "Width");
+                        pick(ui, A::SameSize, "Both");
+                    });
+                    ui.separator();
                 }
-            };
-            if let Some(image) = hit {
-                if ui.button(tl!("Copy Image")).clicked() {
-                    copy_image = Some(comments::CanvasAction::CopyImage(page, image));
+                if ui.button(tl!("Properties…")).clicked() {
+                    field_menu = Some(FieldMenu::Properties);
                     ui.close();
                 }
-                if ui.button(tl!("Copy Image in Original Format")).clicked() {
-                    copy_image = Some(comments::CanvasAction::CopyImageFile(page, image));
+                if ui.add_enabled(can_modify, egui::Button::new(tl!("Duplicate…"))).clicked() {
+                    field_menu = Some(FieldMenu::Duplicate(name.clone()));
                     ui.close();
                 }
                 ui.separator();
+                let delete = if view.prepare.also.is_empty() { "Delete" } else { "Delete selected fields" };
+                if ui.add_enabled(can_modify, egui::Button::new(tl!(delete))).clicked() {
+                    view.pending_edit = crate::prepare::delete_selected(view);
+                    ui.close();
+                }
+                return;
             }
-        }
-        let has_copy_image = copy_image.is_some();
-        if copy_image.is_some() {
-            canvas_action = copy_image;
-        }
-        let (page, at) = view.comments.context_at.unwrap_or((view.current, [0.0, 0.0]));
-        let can_copy_items = can_copy && (view.image_selection.is_some() || view.selected_text().is_some() || has_copy_image);
-        let can_paste = can_paste_image && can_modify;
-        let perms = PageMenuPerms {
-            can_modify,
-            can_assemble: doc.allows_assembly(),
-            can_annotate: allowed,
-            can_print: doc.allows_printing(),
-            can_copy,
-            can_copy_items,
-            can_paste,
-            can_paste_comments: allowed && can_paste_comments,
-            has_annotations: !info.annotations.is_empty(),
-        };
-        default_page_context_menu(ui, page, at, perms, &mut page_action);
-    });
-    if !resp.context_menu_opened() {
+            if let Some((page, index)) = view.links.context {
+                if ui.button(tl!("Properties…")).clicked() {
+                    view.links.open_existing = Some((page, index));
+                    ui.close();
+                }
+                if ui.add_enabled(can_modify, egui::Button::new(tl!("Delete"))).clicked() {
+                    view.pending_edit = Some(Edit::DeleteLink { page, index });
+                    view.links.selected = None;
+                    view.links.context = None;
+                    ui.close();
+                }
+                ui.separator();
+                if ui.add_enabled(can_modify, egui::Button::new(tl!("Remove all links"))).clicked() {
+                    view.pending_edit = Some(Edit::RemoveLinks { pages: None });
+                    view.links.selected = None;
+                    view.links.context = None;
+                    ui.close();
+                }
+                return;
+            }
+            let can_paste_image = env.can_paste_image;
+            let is_image_menu = tool == QuickTool::EditText
+                && (ui.ctx().data_mut(|d| d.get_temp::<bool>(crate::edit_text_ui::image_menu_id())).unwrap_or(false)
+                    || view.image_selection.clone().is_some_and(|sel| {
+                        let pointer_pos = ptr.pos;
+                        let Some(p) = pointer_pos else { return false };
+                        let Some((_, xf)) = view.screen_xforms.iter().find(|(page_idx, _)| *page_idx == sel.page).cloned() else { return false };
+                        let images = cached_edit_images(view, doc, sel.page).to_vec();
+                        let Some(img) = images.get(sel.index) else { return false };
+                        let obb = ImageObb::from_image(img, &xf, info, sel.page);
+                        let b = image_screen_rect(img, &xf, info, sel.page);
+                        obb.contains(b, p)
+                    }));
+            if is_image_menu && let Some(sel) = view.image_selection.clone() {
+                let images = cached_edit_images(view, doc, sel.page).to_vec();
+                // Paste lands where the menu opened only on the picture's page: where pages touch, the
+                // first page takes the right-click, and its point means nothing on the second.
+                let at = view.comments.context_at.filter(|(page, _)| *page == sel.page).map(|(_, at)| at);
+                let rotation = (view.rotation % 360 + info.pages.get(sel.page).map_or(0, |p| p.rotation % 360)) % 360;
+                crate::edit_text_ui::image_context_menu(ui, view, &images, sel.page, sel.index, can_paste_image, &mut image_action, at, rotation);
+                return;
+            }
+            // A selected comment, or connected lines being drawn (Complete, Undo last point): the
+            // comment menu.
+            let drawing_points = matches!(&view.comments.gesture, Some(comments::Gesture::Draw { tool, .. }) if tool.clicks_points());
+            if view.comments.selected.is_some() || drawing_points {
+                canvas_action = comments::context_menu(
+                    ui,
+                    view,
+                    info,
+                    &|page, index| doc.annotation_deletable(page, index),
+                    prefs,
+                    comments::MenuRights { allowed, can_paste: can_paste_comments, can_modify },
+                );
+                return;
+            }
+            // Over a picture (and no comment): Copy Image, as in Acrobat's page menu.
+            let mut copy_image = None;
+            if let Some((page, at)) = view.comments.context_at {
+                // The page's content is parsed once per right-click, not on every frame the menu is open.
+                let key = egui::Id::unique("copy-image-under-menu");
+                let cached = ui.data(|d| d.get_temp::<(usize, [f64; 2], Option<usize>)>(key)).filter(|c| c.0 == page && c.1 == at);
+                let hit = match cached {
+                    Some(c) => c.2,
+                    None => {
+                        let hit = doc.page_image_at(page, at);
+                        ui.data_mut(|d| d.insert_temp(key, (page, at, hit)));
+                        hit
+                    }
+                };
+                if let Some(image) = hit {
+                    if ui.button(tl!("Copy Image")).clicked() {
+                        copy_image = Some(comments::CanvasAction::CopyImage(page, image));
+                        ui.close();
+                    }
+                    if ui.button(tl!("Copy Image in Original Format")).clicked() {
+                        copy_image = Some(comments::CanvasAction::CopyImageFile(page, image));
+                        ui.close();
+                    }
+                    ui.separator();
+                }
+            }
+            let has_copy_image = copy_image.is_some();
+            if copy_image.is_some() {
+                canvas_action = copy_image;
+            }
+            let (page, at) = view.comments.context_at.unwrap_or((view.current, [0.0, 0.0]));
+            let can_copy_items = can_copy && (view.image_selection.is_some() || view.selected_text().is_some() || has_copy_image);
+            let can_paste = can_paste_image && can_modify;
+            let perms = PageMenuPerms {
+                can_modify,
+                can_assemble: doc.allows_assembly(),
+                can_annotate: allowed,
+                can_print: doc.allows_printing(),
+                can_copy,
+                can_copy_items,
+                can_paste,
+                can_paste_comments: allowed && can_paste_comments,
+                has_annotations: !info.annotations.is_empty(),
+            };
+            default_page_context_menu(ui, page, at, perms, &mut page_action);
+        });
+    }
+    if !egui::Popup::is_id_open(ui.ctx(), page_context_menu_id) {
         ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
     }
     // Copy comments / Paste comments from the page's menu or a Comments panel card.
@@ -2059,6 +2083,7 @@ fn draw_pages(
         open_initials,
         open_signature,
         open_table,
+        ruler_interaction,
         page_action,
         paste_comments_at,
         primary_down: ptr.primary_down,
@@ -2464,6 +2489,7 @@ fn close_requested_tab(app: &mut PdfCraftApp, index: usize) -> bool {
 #[derive(Clone, Copy)]
 struct ScrollGeometry<'a> {
     rects: &'a [Rect],
+    blocked: &'a [Rect],
     y_shift: f32,
     content_w: f32,
     content_h: f32,
@@ -2474,7 +2500,7 @@ struct ScrollGeometry<'a> {
 
 /// The page view's scroll area, with the offset this frame's jumps, drags and zoom anchor ask for.
 fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry<'_>) -> egui::ScrollArea {
-    let ScrollGeometry { rects, y_shift, content_w, content_h, avail, middle_gesture, hand } = *geometry;
+    let ScrollGeometry { rects, blocked, y_shift, content_w, content_h, avail, middle_gesture, hand } = *geometry;
     let mut scroll = egui::ScrollArea::both().auto_shrink([false, false]).scroll_source(egui::scroll_area::ScrollSource {
         drag: if middle_gesture {
             egui::scroll_area::DragScroll::Never
@@ -2503,6 +2529,7 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
     // below still wins.
     if hand
         && !middle_gesture
+        && PagePointer::unblocked_press_origin(ui, blocked).is_some()
         && let Some(id) = view.page_widget.filter(|id| ui.ctx().is_being_dragged(*id))
     {
         let moved = if ui.ctx().drag_started_id() == Some(id) {
@@ -2533,7 +2560,8 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
         // too high for a frame and then hopped into place. (`avail` is the viewport, as the
         // scroll bars float.)
         let max_y = (content_h - avail.height()).max(0.0);
-        scroll = scroll.vertical_scroll_offset((r.top() - y_shift - view.page_gap() + frac * r.height()).max(0.0).min(max_y));
+        let ruler_top = rulers::navigation_top_inset(!blocked.is_empty(), avail.height());
+        scroll = scroll.vertical_scroll_offset((r.top() - y_shift - view.page_gap() + frac * r.height() - ruler_top).max(0.0).min(max_y));
         // Horizontally too, as Acrobat does (#2665): beside a much wider page the others sit off
         // to one side. A page already shown whole, or one filling the window's width, keeps the
         // scroll, so paging through a zoomed-in document stays on the same column. Otherwise a
@@ -2620,7 +2648,15 @@ fn scroll_direction(dir: i8, dy: f32, resized: bool) -> i8 {
 
 /// The hover tip, find bar, size hint and the in-place editors drawn over the pages. Whether the
 /// text editor was finished.
-fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, primary_down: bool, hover_text: Option<(Pos2, String)>) -> bool {
+fn frame_overlays(
+    ui: &mut egui::Ui,
+    view: &mut DocView,
+    env: &PageEnv<'_>,
+    primary_down: bool,
+    ruler_interaction: bool,
+    hover_text: Option<(Pos2, String)>,
+    rulers_enabled: bool,
+) -> bool {
     let PageEnv { added, author, avail, can_modify, doc, form, info, prefs, t, today, tool, units, unobstructed, .. } = *env;
     if let Some((pos, text)) = hover_text {
         // Click-through, as a tooltip is: the pages lose the pointer under anything that isn't.
@@ -2640,17 +2676,24 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
     if let Some(e) = comments::composer(ui.ctx(), view, info, prefs) {
         view.pending_edit = Some(e);
     }
-    if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {
+    let editor_interaction = rulers::page_interaction_rect(rulers_enabled, view.presentation.is_some(), view.organize, view.viewport_rect());
+    if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info, editor_interaction, ruler_interaction) {
         view.pending_edit = Some(e);
     }
     let text_box = crate::forms_ui::text_box(doc, view, form);
-    if let Some(e) = crate::forms_ui::overlay(ui.ctx(), view, info, form, primary_down, text_box.as_ref(), today) {
+    if let Some(e) = crate::forms_ui::overlay(
+        ui.ctx(),
+        view,
+        info,
+        form,
+        crate::forms_ui::OverlayInput { primary_down, text_box: text_box.as_ref(), today, interaction_rect: editor_interaction, ruler_interaction },
+    ) {
         view.pending_edit = Some(e);
     }
-    if let Some(e) = crate::fill_sign::type_box(ui.ctx(), view, info, author) {
+    if let Some(e) = crate::fill_sign::type_box(ui.ctx(), view, info, author, editor_interaction, ruler_interaction) {
         view.pending_edit = Some(e);
     }
-    let (typed, text_done) = crate::content_ui::editor(ui.ctx(), view, info, added);
+    let (typed, text_done) = crate::content_ui::editor(ui.ctx(), view, info, added, editor_interaction, ruler_interaction);
     if typed.is_some() {
         view.pending_edit = typed;
     }
@@ -2781,12 +2824,16 @@ fn pinch_zoom(ui: &egui::Ui, view: &mut DocView, zoom_delta: f32, navigation_rec
     }
 }
 
+/// Whether a gesture began in viewport chrome that must not acquire page input.
+fn press_origin_is_blocked(origin: Pos2, blocked: &[Rect]) -> bool {
+    blocked.iter().any(|rect| rect.contains(origin))
+}
 /// The middle-button auto-scroll's delta, and the edge scroll a drawing in progress asks for: the
 /// pointer in a band along any edge (or just past it) scrolls the view that way, so a point
 /// beyond what is shown can be reached without letting go of the tool.
-fn auto_scroll_deltas(ui: &egui::Ui, view: &mut DocView, avail: Rect, unobstructed: bool, invert: bool) -> (Vec2, Vec2) {
+fn auto_scroll_deltas(ui: &egui::Ui, view: &mut DocView, avail: Rect, blocked: &[Rect], unobstructed: bool, invert: bool) -> (Vec2, Vec2) {
     let auto_delta = if unobstructed {
-        view.auto_scroll.update(ui, avail, false, invert)
+        view.auto_scroll.update(ui, avail, blocked, false, invert)
     } else {
         view.auto_scroll.cancel();
         Vec2::ZERO
@@ -2901,7 +2948,8 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
             scroll = scroll.horizontal_scroll_offset((r.left() + fx * r.width() - rel.x).clamp(0.0, max_x));
         }
         if let Some(fy) = fy {
-            scroll = scroll.vertical_scroll_offset((r.top() - y_shift + fy * r.height() - rel.y).clamp(0.0, max_y));
+            let rel_y = rulers::navigation_anchor_y(!geometry.blocked.is_empty(), rel.y, avail.height());
+            scroll = scroll.vertical_scroll_offset((r.top() - y_shift + fy * r.height() - rel_y).clamp(0.0, max_y));
         }
     }
     scroll
@@ -2960,6 +3008,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
     let text_style = app.text_style.clone();
     let show_secured_notice = app.show_secured_notice;
+    let rulers_enabled = app.show_rulers && app.views[index].presentation.is_none() && !app.views[index].organize;
     let view = &mut app.views[index];
     // Opened without the owner password and something is restricted. The notice says so unless
     // the user turned it off (#4035): the restrictions themselves, and Document Properties ▸
@@ -2999,7 +3048,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let present = presentation_click_state(ui, view, navigation_rect, navigation_enabled && app.quick_tool == QuickTool::Select);
     pinch_zoom(ui, view, zoom_delta, navigation_rect, navigation_enabled);
     view.viewport_screen = avail;
-    let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed, invert_middle);
+    let blocked = rulers::blocked_rects(rulers_enabled, false, false, avail);
+    let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, &blocked, unobstructed, invert_middle);
 
     let content_w = view.content_width(info, avail.width());
     let rects = view.layout(info, content_w, ui.ctx().pixels_per_point());
@@ -3041,7 +3091,16 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut scroll = page_scroll_area(
         ui,
         view,
-        &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand: app.quick_tool == QuickTool::Hand },
+        &ScrollGeometry {
+            rects: &rects,
+            blocked: &blocked,
+            y_shift,
+            content_w,
+            content_h,
+            avail,
+            middle_gesture,
+            hand: app.quick_tool == QuickTool::Hand,
+        },
     );
     let ppp = ui.ctx().pixels_per_point();
     let scale = view.render_scale(ppp);
@@ -3100,7 +3159,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     view.move_background.prepare(ui.ctx(), doc, &view.content, scale);
 
-    scroll = refine_goto_point(scroll, view, &ScrollGeometry { rects: &rects, y_shift, content_w, content_h, avail, middle_gesture, hand });
+    scroll = refine_goto_point(
+        scroll,
+        view,
+        &ScrollGeometry { rects: &rects, blocked: &blocked, y_shift, content_w, content_h, avail, middle_gesture, hand },
+    );
     let selection_wheel = view.selection_drag && navigation_enabled && unobstructed && !single_paging && ui.rect_contains_pointer(avail);
     let env = PageEnv {
         added: &added,
@@ -3171,7 +3234,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     };
     let mut page_out = PageOut::default();
     let out = page_scroll(ui, scroll, egui::Id::unique(("page-view-scope", view.id)), app.show_page_edge_shadows, |ui, viewport| {
-        draw_pages(ui, viewport, view, &env, &mut page_out, &mut app.signature_preview)
+        draw_pages(ui, viewport, view, &env, &mut page_out, &mut app.signature_preview, rulers_enabled)
     });
     let PageOut {
         canvas_action,
@@ -3188,6 +3251,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         open_initials,
         open_signature,
         open_table,
+        ruler_interaction,
         page_action,
         paste_comments_at,
         primary_down,
@@ -3227,7 +3291,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let pan_held = track_scroll(ui, view, &out, glide);
     plan_renders(ui, view, info, out.inner, &RenderPlan { visible_pages: &visible_pages, tag, scale, sharp_held, pan_held, hand });
 
-    let text_done = frame_overlays(ui, view, &env, primary_down, hover_text);
+    let text_done = frame_overlays(ui, view, &env, primary_down, ruler_interaction, hover_text, rulers_enabled);
     if let Some(why) = view.objects.notice.take() {
         refused = Some(why);
     }
@@ -3577,6 +3641,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     if let Some((source, file, destination)) = remote_open {
         app.open_remote_link(source, file, destination);
     }
+    // Rulers overlay the final document viewport and consume the same snapped transforms that
+    // painted the visible pages. They never participate in page layout or scroll sizing.
+    rulers::paint(app, index, ui);
 }
 
 /// The prepare-mode field menu's choices.

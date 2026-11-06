@@ -3,7 +3,8 @@
 //! because egui's drag responses accept every pointer button. Also the edge scrolling of a
 //! text-selection drag.
 
-use egui::{Context, CursorIcon, Event, Key, PointerButton, Pos2, Stroke, Vec2, vec2};
+use super::press_origin_is_blocked;
+use egui::{Context, CursorIcon, Event, Key, PointerButton, Pos2, Rect, Stroke, Vec2, vec2};
 
 const DEAD_ZONE: f32 = 15.0;
 // Chromium's autoscroll_controller.cc uses distance^2.2 * 0.000008; its
@@ -48,16 +49,17 @@ impl AutoScroll {
     /// Run before the document's widgets. Starting is restricted to the unobstructed viewport;
     /// once started, moving outside that viewport still controls the speed. `invert` is
     /// Preferences ▸ Invert middle-button drag: the returned delta scrolls the other way.
-    pub(crate) fn update(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, invert: bool) -> Vec2 {
-        self.update_for_platform(ui, viewport, organize, cfg!(target_os = "linux"), invert)
+    pub(crate) fn update(&mut self, ui: &egui::Ui, viewport: egui::Rect, blocked: &[Rect], organize: bool, invert: bool) -> Vec2 {
+        self.update_for_platform(ui, viewport, blocked, organize, cfg!(target_os = "linux"), invert)
     }
 
-    fn update_for_platform(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, supported: bool, invert: bool) -> Vec2 {
-        let delta = if supported { self.update_latched(ui, viewport, organize) } else { self.update_drag(ui, viewport) };
+    fn update_for_platform(&mut self, ui: &egui::Ui, viewport: egui::Rect, blocked: &[Rect], organize: bool, supported: bool, invert: bool) -> Vec2 {
+        let delta = if supported { self.update_latched(ui, viewport, blocked, organize) } else { self.update_drag(ui, viewport, blocked) };
         oriented(delta, invert)
     }
 
-    fn update_latched(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool) -> Vec2 {
+    /// Update middle-button auto-scroll while ignoring press origins owned by viewport chrome.
+    fn update_latched(&mut self, ui: &egui::Ui, viewport: egui::Rect, blocked: &[Rect], organize: bool) -> Vec2 {
         let ctx = ui.ctx();
         let (pointer, middle_press, middle_down, middle_released, cancel, cancel_button, dt) = ctx.input(|i| {
             let cancel_button = [PointerButton::Primary, PointerButton::Secondary, PointerButton::Extra1, PointerButton::Extra2]
@@ -102,6 +104,7 @@ impl AutoScroll {
             } else if !cancel
                 && !ctx.egui_wants_keyboard_input()
                 && viewport.intersect(ui.clip_rect()).contains(pressed_at)
+                && !press_origin_is_blocked(pressed_at, blocked)
                 && ctx.layer_id_at(pressed_at) == Some(ui.layer_id())
             {
                 self.anchor = Some(pressed_at);
@@ -122,7 +125,7 @@ impl AutoScroll {
 
     /// Without auto-scroll, a middle-button drag pans the view 1:1, like the Hand tool. Input is
     /// blocked from the press through the release, so the drag cannot also draw, select or move.
-    fn update_drag(&mut self, ui: &egui::Ui, viewport: egui::Rect) -> Vec2 {
+    fn update_drag(&mut self, ui: &egui::Ui, viewport: egui::Rect, blocked: &[Rect]) -> Vec2 {
         self.anchor = None;
         self.cancel_button = None;
         let ctx = ui.ctx();
@@ -148,6 +151,7 @@ impl AutoScroll {
             && self.drag.is_none()
             && !ctx.egui_wants_keyboard_input()
             && viewport.intersect(ui.clip_rect()).contains(pressed_at)
+            && !press_origin_is_blocked(pressed_at, blocked)
             && ctx.layer_id_at(pressed_at) == Some(ui.layer_id())
         {
             self.drag = Some(pressed_at);
@@ -277,7 +281,7 @@ mod tests {
         let mut output = ctx.run_ui(
             egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))), events, focused, ..Default::default() },
             |ui| {
-                let delta = scroll.update_for_platform(ui, ui.max_rect(), false, mode.0, mode.1);
+                let delta = scroll.update_for_platform(ui, ui.max_rect(), &[], false, mode.0, mode.1);
                 check(scroll, delta);
             },
         );

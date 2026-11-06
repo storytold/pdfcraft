@@ -18,7 +18,7 @@ The [PDF workflow research reference](research/pdf-workflows/README.md) collects
   (`view.menus-from-registry`).
 - **141 automation tools** (`crates/automation/src/tools.rs`), so every UI action can be checked
   headlessly.
-- **View area of the checklist: 62.5% breadth** (52 shipped, 11 partial of 92).
+- **View area of the checklist: 65.8% breadth** (55 shipped, 15 partial of 95).
 
 No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24).
 
@@ -86,6 +86,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | Read-only document rulers with a persisted View toggle, adaptive units and pointer indicators; draggable origins, grids, guides and snapping remain planned. |
 | 2026-10-24 | minor | → / ← scroll a page wider than the window sideways before turning it, by the current page's or spread's edges in continuous view; ⌘→ / ⌘← turn at once |
 | 2026-10-24 | minor | Comment Properties sets a text box's text, border and fill opacity and a shape's line and fill opacity each on its own (Acrobat: one per comment); Make Properties Default carries them into the tool |
 | 2026-10-21 | minor | Pages inspector thumbnail sizing (#3808), separate from page and Organize zoom; view setting retained on reload and exposed through UI control. Not persisted between sessions. |
