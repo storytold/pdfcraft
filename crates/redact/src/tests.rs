@@ -4207,3 +4207,24 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
 }
+
+/// A layer the default configuration lists on but a View usage rule turns off is hidden on screen
+/// (ISO 32000-2, 8.11.4.4): Hidden layers removes it. A Print rule leaves its layer as it is.
+#[test]
+fn a_layer_a_view_rule_turns_off_is_hidden() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R 7 0 R] /D << /AS [<< /Event /View /OCGs [6 0 R] /Category [/View] >> << /Event /Print /OCGs [7 0 R] /Category [/Print] >>] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /Properties << /L1 6 0 R /L2 7 0 R >> >> >>".to_vec(),
+        stream("", b"/OC /L1 BDC BT /F1 10 Tf 10 50 Td (ScreenOff) Tj ET EMC /OC /L2 BDC BT /F1 10 Tf 10 100 Td (PrintOff) Tj ET EMC"),
+        FONT.replace("95 0 R", "8 0 R").into_bytes(),
+        b"<< /Type /OCG /Name (Screen) /Usage << /View << /ViewState /OFF >> >> >>".to_vec(),
+        b"<< /Type /OCG /Name (Print) /Usage << /Print << /PrintState /OFF >> >> >>".to_vec(),
+        widths(),
+    ]);
+    assert!(scan(&doc).into_iter().any(|(h, n)| h == Hidden::HiddenLayers && n > 0));
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    let c = content(&doc, 0);
+    assert!(!c.contains("ScreenOff") && c.contains("(PrintOff)"), "{c}");
+}
