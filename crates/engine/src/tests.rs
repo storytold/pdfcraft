@@ -8491,6 +8491,7 @@ fn a_signed_document_rebuilt_from_object_headers_refuses_edits() {
     let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
     let mut s = Session::new().with_clock(|| 1_800_000_000);
     let id = s.open("fixture.pdf", None, Arc::new(fixture(2)), None).unwrap();
+    s.apply(id, rect_comment(0, [80.0, 80.0, 120.0, 120.0])).unwrap();
     let opts = SignOptions { page: 1, rect: Some([20.0, 20.0, 180.0, 60.0]), ..SignOptions::default() };
     let signed = s.sign(id, &digital_id, opts).unwrap();
     s.mark_signed(id, signed, None).unwrap();
@@ -8505,6 +8506,14 @@ fn a_signed_document_rebuilt_from_object_headers_refuses_edits() {
     assert!(s.get(id).unwrap().editor.as_ref().unwrap().cos.revisions().is_empty(), "the fixture must be rebuilt");
     assert!(matches!(s.apply(id, rect_comment(0, [80.0, 80.0, 120.0, 120.0])), Err(EditError::SignedRewrite(_))));
     assert!(!s.get(id).unwrap().dirty);
+    let before = s.get(id).unwrap().bytes.clone();
+    for keep_signature_fields in [false, true] {
+        let edit = Edit::Flatten { comments: true, fields: true, keep_signature_fields };
+        assert!(matches!(s.apply(id, edit), Err(EditError::SignedRewrite(_))), "signature retention must not bypass the rewrite guard");
+        let document = s.get(id).unwrap();
+        assert_eq!(document.bytes, before);
+        assert!(!document.dirty && document.can_undo().is_none());
+    }
 }
 
 /// #1324: marking a figure decorative rewrites that figure only. The header, added text and an

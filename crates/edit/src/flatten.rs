@@ -446,7 +446,9 @@ fn prune_fields(doc: &mut Document, widgets: &HashSet<ObjRef>, on_page: Option<&
         if survivors.len() != kids.len() {
             let _ = doc.update_dict(r, |d| d.set(b"Kids".to_vec(), Object::Array(survivors.clone())));
         }
-        let survives = !survivors.is_empty() || (keep_signatures && is_signature_field(doc, &d));
+        // A parent whose last child was flattened must not become a new terminal signature.
+        // Only a signature that was terminal before pruning can survive without children.
+        let survives = !survivors.is_empty() || (kids.is_empty() && keep_signatures && is_signature_field(doc, &d));
         known.insert(r, (survives, cut.then_some(depth)));
         (survives, cut)
     }
