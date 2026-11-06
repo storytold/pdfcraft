@@ -90,10 +90,19 @@ impl WindowState {
     /// from settings stored while it was minimized (before this fix), so give it a usable size. A
     /// shown window larger than its monitor (not maximized or full screen, which fit by
     /// definition) is fitted to it ([`fit_to_monitor`]), at start and on coming back from either.
+    ///
+    /// Call this from a drawn pass (`App::ui`), not `App::logic`. On Wayland a resize the app asks
+    /// for brings no resize event, and eframe only tells the painter about one after a drawn pass.
+    /// From a logic-only pass (a compositor holding back frame callbacks) the window would shrink
+    /// and keep drawing at its old size. A logic-only pass also leaves the ui input alone, so the
+    /// size it could read is the one from the last drawn pass.
     pub fn repair(&mut self, ctx: &egui::Context) {
+        // Wayland gives a window no position, and egui has no inner rectangle without one. The size
+        // the window reports this frame stands in for it; egui's own rectangle would not do, as it
+        // keeps a default size when a frame reports none.
         let (rect, outer, minimized, maximized, fullscreen, monitor) = ctx.input(|i| {
             let v = i.viewport();
-            (v.inner_rect, v.outer_rect, v.minimized, v.maximized, v.fullscreen, v.monitor_size)
+            (v.inner_rect.or(i.raw.screen_rect), v.outer_rect, v.minimized, v.maximized, v.fullscreen, v.monitor_size)
         });
         let Some(rect) = rect else { return };
         if minimized == Some(true) {
@@ -334,6 +343,42 @@ mod tests {
         let (size, place) = fit_to_monitor(inner, inner, LAPTOP).expect("it does not fit");
         assert!(place.is_some(), "the corner alone would have it moved");
         assert_eq!(commands, [egui::ViewportCommand::InnerSize(size)]);
+    }
+
+    /// The commands from one frame of a window with no position, as on Wayland, and the given size.
+    fn without_a_position(size: Option<egui::Vec2>, minimized: bool) -> Vec<egui::ViewportCommand> {
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput { screen_rect: size.map(|s| egui::Rect::from_min_size(egui::Pos2::ZERO, s)), ..Default::default() };
+        let info = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+        info.outer_rect = None;
+        info.inner_rect = None;
+        info.minimized = Some(minimized);
+        info.maximized = Some(false);
+        info.monitor_size = Some(LAPTOP);
+        let mut state = WindowState::default();
+        // A drawn pass, as in the app: a logic-only pass does not get the reported size.
+        let mut out = ctx.run_ui(input, |ui| state.repair(ui.ctx()));
+        out.textures_delta.clear();
+        let is_fit = |c: &egui::ViewportCommand| matches!(c, egui::ViewportCommand::InnerSize(_) | egui::ViewportCommand::OuterPosition(_));
+        out.viewport_output.get(&egui::ViewportId::ROOT).map_or_else(Vec::new, |o| o.commands.iter().filter(|c| is_fit(c)).cloned().collect())
+    }
+
+    /// Wayland gives a window no position, so egui has no inner rectangle: the window is fitted
+    /// from its reported size, and not moved.
+    #[test]
+    fn a_window_with_no_position_is_fitted_and_not_moved() {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, USABLE);
+        let (size, _) = fit_to_monitor(rect, rect, LAPTOP).expect("it does not fit");
+        assert_eq!(without_a_position(Some(USABLE), false), [egui::ViewportCommand::InnerSize(size)]);
+        assert!(without_a_position(Some(LAPTOP), false).is_empty(), "it fits");
+    }
+
+    /// egui keeps a default-sized rectangle for a frame that reports no size, which must not be
+    /// taken for the window; and a minimized window is left alone whatever it reports.
+    #[test]
+    fn a_window_with_no_size_or_minimized_is_left_alone() {
+        assert!(without_a_position(None, false).is_empty());
+        assert!(without_a_position(Some(USABLE), true).is_empty());
     }
 
     /// A window whose monitor is not known yet cannot be fitted, and must not lose its only check.

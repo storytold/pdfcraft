@@ -1087,6 +1087,28 @@ fn a_document_opened_while_hidden_names_the_titles() {
     assert_eq!(s.window_title, "arrived.pdf — PdfCraft");
 }
 
+/// On Wayland eframe tells the painter about a resize the app asked for only after a drawn pass. A
+/// fit asked for in a logic-only pass shrank the window and left it drawing at the old size.
+#[test]
+fn a_window_too_big_for_its_monitor_is_fitted_in_a_drawn_pass_only() {
+    let mut h = harness();
+    h.run_steps(2);
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 920.0));
+    let mut input = egui::RawInput { screen_rect: Some(rect), ..Default::default() };
+    // The inner rectangle reaches a logic-only pass too, so that pass could see the window is too big.
+    let info = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+    info.inner_rect = Some(rect);
+    info.monitor_size = Some(egui::vec2(1366.0, 768.0));
+    let is_fit = |c: &egui::ViewportCommand| matches!(c, egui::ViewportCommand::InnerSize(_));
+    let ctx = h.ctx.clone();
+    let mut frame = eframe::Frame::_new_kittest();
+    let logic = ctx.run_logic(&input, |ctx| eframe::App::logic(h.state_mut(), ctx, &mut frame));
+    assert!(!logic.viewport_commands.get(&egui::ViewportId::ROOT).is_some_and(|c| c.iter().any(is_fit)), "not fitted in a logic-only pass");
+    let mut drawn = ctx.run_ui(input, |ui| eframe::App::ui(h.state_mut(), ui, &mut frame));
+    drawn.textures_delta.clear();
+    assert!(drawn.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|o| o.commands.iter().any(is_fit)), "fitted in the drawn pass");
+}
+
 /// #3640: a document that asks to show its own title shows it in the window, but the web page's
 /// title, which an embedding host reads to tell which file opened, keeps the file's name.
 #[test]
