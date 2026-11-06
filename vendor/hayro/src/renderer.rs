@@ -930,7 +930,7 @@ impl Renderer {
         is_text: bool,
         path: &BezPath,
     ) -> f64 {
-        let threshold = if is_text { 0.25 } else { 1.0 };
+        let threshold = thinnest_stroke(is_text);
 
         // Best-effort attempt to ensure a line width of at least 1.0, as required by the PDF
         // specification. If we are stroking text, we reduce the threshold as it will otherwise
@@ -1986,12 +1986,67 @@ impl Renderer {
         stroke_props: &StrokeProps,
         is_text: bool,
     ) {
+        // PdfCraft patch (29): a stroke under a matrix that shrinks one direction more than
+        // another is drawn with a pen at least one device pixel across in every direction (see
+        // `thin_stroke_pen`). The path, dashed where it is dashed, is drawn in the pen's space.
+        let pen = if self.inside_pattern || self.in_type3_glyph {
+            None
+        } else {
+            thin_stroke_pen(transform, stroke_props.line_width, thinnest_stroke(is_text))
+        };
+        let (user_path, user_props) = (path, stroke_props);
+        // The pen's route dashes in user space, where the pattern is measured, and strokes the
+        // dashes solid in the pen's.
+        let dashes = match pen {
+            Some(_) => usable_dash_pattern(user_path, &user_props.dash_array),
+            None => Vec::new(),
+        };
+        let (pen_path, mut solid);
+        let (path, transform, stroke_props) = match pen {
+            Some((pen, to_pen)) => {
+                pen_path = to_pen * user_path.clone();
+                // Undashed, the path's own limit. Dashed, a bound on the dashes' limit for the
+                // canvas check, as only the joins inside the dashes are drawn and they aren't
+                // laid out yet.
+                let miter_limit = if dashes.is_empty() {
+                    pen_miter_limit(user_path, to_pen, user_props)
+                } else {
+                    pen_miter_bound(user_path, to_pen, user_props)
+                };
+                solid = StrokeProps { dash_array: Default::default(), miter_limit, ..user_props.clone() };
+                (&pen_path, transform * pen, &solid)
+            }
+            None => (user_path, transform, user_props),
+        };
+
         self.ctx.set_transform(transform);
         let reach = self.set_stroke_properties(stroke_props, is_text, path);
-        // PdfCraft patch: see `may_paint_canvas`.
+        // PdfCraft patch: see `may_paint_canvas`. A dashed stroke lies within its undashed path,
+        // so the pen's route is checked before it dashes: a tile of a large page doesn't cut
+        // every dashed stroke off the canvas into up to `MAX_DASHES_PER_STROKE` pieces.
         if !may_paint_canvas(path, transform, reach, self.ctx.width(), self.ctx.height()) {
             return;
         }
+        let dashed;
+        let path = match pen {
+            Some((_, to_pen)) if !dashes.is_empty() => {
+                let offset = if user_props.dash_offset.is_finite() {
+                    f64::from(user_props.dash_offset)
+                } else {
+                    0.0
+                };
+                let laid: BezPath = kurbo::dash(user_path.iter(), offset, &dashes).collect();
+                solid = StrokeProps {
+                    miter_limit: pen_miter_limit(&laid, to_pen, user_props),
+                    dash_array: Default::default(),
+                    ..user_props.clone()
+                };
+                dashed = to_pen * laid;
+                self.set_stroke_properties(&solid, is_text, &dashed);
+                &dashed
+            }
+            _ => path,
+        };
 
         // PdfCraft patch: apply the reading-colours mapping before painting.
         let paint = self.replaced(paint, is_text);
@@ -2820,6 +2875,217 @@ pub(crate) fn max_factor(transform: &Affine) -> f32 {
         .max(y_advance.to_vec2().length()) as f32
 }
 
+/// PdfCraft patch (29): the device width, in pixels, below which a stroke is widened, shared by
+/// `set_stroke_properties` (which had it inline) and `thin_stroke_pen`: one pixel, as ISO
+/// 32000-2 §8.4.3.2 asks of a zero-width line, and a quarter of one for stroked text, which
+/// would otherwise look very bold at low resolutions.
+fn thinnest_stroke(is_text: bool) -> f32 {
+    if is_text { 0.25 } else { 1.0 }
+}
+
+/// PdfCraft patch (29): the pen a stroke of `line_width` under `transform` is drawn with when it
+/// would be thinner than `threshold` device pixels in some direction, but not in all by the same
+/// factor; `None` when it needs no widening or the same widening in every direction, which
+/// `set_stroke_properties` does by scaling the line width.
+///
+/// The pen is a matrix `A` of user space, returned with its inverse: drawing `A⁻¹ × path` with
+/// `transform × A` at the same line width puts the stroke along the same device curve, with a
+/// round pen that `transform × A` maps to an ellipse no axis of which is under `threshold`. `A`
+/// stretches each principal direction of `transform` (its right singular vectors) by what that
+/// direction needs, so a direction that is already wide enough keeps its width. Widening by the
+/// larger scale alone left a line that ran along the shrunk direction too thin (a quarter of a
+/// pixel under `1 0 0 0.25 cm`), and by the smaller one, every other line too wide.
+fn thin_stroke_pen(transform: Affine, line_width: f32, threshold: f32) -> Option<(Affine, Affine)> {
+    let [a, b, c, d, _, _] = transform.as_coeffs();
+    // `transformᵀ × transform`, whose eigenvalues are the squared singular values.
+    let (p, q, r) = (a * a + b * b, a * c + b * d, c * c + d * d);
+    let mean = (p + r) / 2.0;
+    let spread = ((p - r) / 2.0).hypot(q);
+    let wide = (mean + spread).max(0.0).sqrt();
+    // `wide × narrow = |det|`. `mean - spread` would cancel to 0 for a nearly singular matrix
+    // (`diag(1, 3e-9)`), which then needed no pen it could have had.
+    let narrow = if wide > 0.0 { (a * d - b * c).abs() / wide } else { 0.0 };
+    // The principal direction of the larger scale; the other is perpendicular to it.
+    let angle = 0.5 * (2.0 * q).atan2(p - r);
+    let width = f64::from(line_width.max(0.01));
+    let threshold = f64::from(threshold);
+    let stretch = |scale: f64| (threshold / (width * scale)).max(1.0);
+    let (along, across) = (stretch(wide), stretch(narrow));
+    // A singular matrix, or one that shrinks one direction over a billion times more than the
+    // other, is drawn as before. The pen's matrix composed with `transform` is off by about
+    // `wide / narrow` rounding errors in its narrow direction (1e-7 of it here); how small the
+    // matrix is overall doesn't matter, so `diag(1e-6, 1e-8)` gets a pen.
+    const MAX_ANISOTROPY: f64 = 1e9;
+    if !(narrow > 0.0 && wide <= MAX_ANISOTROPY * narrow)
+        || ![angle, along, across].iter().all(|v| v.is_finite())
+    {
+        return None;
+    }
+    // `across >= along`, as `narrow <= wide`. Nothing to widen, or the same in every direction.
+    if across <= 1.0 || across - along <= 1e-9 * across {
+        return None;
+    }
+    let turn = Affine::rotate(angle);
+    let pen = turn * Affine::scale_non_uniform(along, across) * turn.inverse();
+    let to_pen = turn * Affine::scale_non_uniform(1.0 / along, 1.0 / across) * turn.inverse();
+    Some((pen, to_pen))
+}
+
+/// PdfCraft patch (29): the miter limit that strokes `to_pen × path` with the joins `props`
+/// gives `path`. ISO 32000-2 §8.4.3.5 decides between a miter and a bevel from the angle between
+/// the segments in user space, but a pen that stretches one direction more than another changes
+/// the angles, so the limit unchanged could miter a join the user-space path bevels, or the
+/// reverse. The limit returned is the one nearest the user's that every join's angle in the pen's
+/// space falls on the same side of as its user-space angle falls of the user's limit, which is
+/// the user's limit itself when no join changes sides. When no limit can keep every decision, it
+/// keeps every bevel and bevels the mitered joins it must: a missing miter tip shows less than
+/// one the path never had. `path` is the one stroked, dashed where it is dashed, as the joins in
+/// a dash's gaps aren't drawn.
+fn pen_miter_limit(path: &BezPath, to_pen: Affine, props: &StrokeProps) -> f32 {
+    let Some(joins) = PenJoins::of(path, to_pen, props) else { return props.miter_limit };
+    let (limit_sq, mitered, bevelled) = (joins.limit_sq, joins.mitered, joins.bevelled);
+    if mitered < limit_sq && limit_sq <= bevelled {
+        return props.miter_limit;
+    }
+    let pen_sq = if mitered * (1.0 + PenJoins::MARGIN) >= bevelled * (1.0 - PenJoins::MARGIN) {
+        // No limit separates them: bevel every join at or past the smallest bevelled one.
+        bevelled * (1.0 - PenJoins::MARGIN)
+    } else {
+        // The user's limit moved into the gap between them, `mitered < bevelled` (not `clamp`,
+        // which panics on bounds it can't order).
+        limit_sq.max(mitered * (1.0 + PenJoins::MARGIN)).min(bevelled * (1.0 - PenJoins::MARGIN))
+    };
+    PenJoins::as_limit(pen_sq)
+}
+
+/// PdfCraft patch (29): a limit no smaller than `pen_miter_limit` gives `path` or any path made
+/// of some of its joins, such as its dashes: the user's limit or just past the largest ratio in
+/// the pen's space of a join mitered in user space, whichever is larger. A stroke's reach under
+/// it bounds the reach of its dashes, so a stroke can be found to miss the canvas before it is
+/// dashed.
+fn pen_miter_bound(path: &BezPath, to_pen: Affine, props: &StrokeProps) -> f32 {
+    let Some(joins) = PenJoins::of(path, to_pen, props) else { return props.miter_limit };
+    PenJoins::as_limit(joins.limit_sq.max(joins.mitered * (1.0 + PenJoins::MARGIN)))
+}
+
+/// PdfCraft patch (29): a path's mitered joins under a thin-stroke pen, for `pen_miter_limit`
+/// and `pen_miter_bound`.
+struct PenJoins {
+    /// The square of the user's miter limit.
+    limit_sq: f64,
+    /// The largest squared miter ratio (`1 / sin²(φ / 2)`) in the pen's space of a join mitered
+    /// in user space (0 without one), and the smallest of a join bevelled there (infinite without
+    /// one).
+    mitered: f64,
+    bevelled: f64,
+}
+
+impl PenJoins {
+    /// A relative margin, so that the side a ratio falls on survives rounding in kurbo's own test.
+    const MARGIN: f64 = 1e-6;
+
+    /// `None` when the joins aren't mitered or kurbo would refuse the limit, which then stays.
+    fn of(path: &BezPath, to_pen: Affine, props: &StrokeProps) -> Option<Self> {
+        let limit = props.miter_limit;
+        if props.line_join != kurbo::Join::Miter || !limit.is_finite() || limit <= 0.0 {
+            return None;
+        }
+        let limit_sq = f64::from(limit) * f64::from(limit);
+        let (mut mitered, mut bevelled) = (0.0_f64, f64::INFINITY);
+        // `to_pen` has no translation, so it maps a direction as it maps a point.
+        let in_pen = |v: Vec2| (to_pen * v.to_point()).to_vec2();
+        for_each_join(path, |incoming, outgoing| {
+            let pen_ratio = miter_ratio_sq(in_pen(incoming), in_pen(outgoing));
+            // kurbo mitres when the ratio is under the limit.
+            if miter_ratio_sq(incoming, outgoing) < limit_sq {
+                mitered = mitered.max(pen_ratio);
+            } else {
+                bevelled = bevelled.min(pen_ratio);
+            }
+        });
+        Some(PenJoins { limit_sq, mitered, bevelled })
+    }
+
+    /// The limit whose square is `limit_sq`. A square here is a finite user's limit squared, a
+    /// ratio (at least 1, or infinite when a join mitered in user space turns back in the pen's
+    /// space) or 0, never NaN; the largest f32 stands for an infinite one and mitres every join
+    /// that doesn't turn back. Rounding to f32 keeps the order of two squares, so the bound stays
+    /// at least the limit.
+    fn as_limit(limit_sq: f64) -> f32 {
+        limit_sq.sqrt().min(f64::from(f32::MAX)) as f32
+    }
+}
+
+/// PdfCraft patch (29): the square of the miter ratio (the miter's length over the line's width,
+/// `1 / sin(φ / 2)` for an angle φ between the segments) of a join from a segment leaving in
+/// `incoming`'s direction to one leaving in `outgoing`'s, as kurbo's stroker computes it.
+/// Infinite for a join that turns back on itself.
+fn miter_ratio_sq(incoming: Vec2, outgoing: Vec2) -> f64 {
+    let hypot = incoming.cross(outgoing).hypot(incoming.dot(outgoing));
+    let sum = hypot + incoming.dot(outgoing);
+    if sum > 0.0 { 2.0 * hypot / sum } else { f64::INFINITY }
+}
+
+/// PdfCraft patch (29): calls `join` with the tangents at each join of `path`: the direction the
+/// path arrives in and the one it leaves in, at every vertex inside a subpath and where a closed
+/// subpath meets its start. A segment of zero length makes no join.
+fn for_each_join(path: &BezPath, mut join: impl FnMut(Vec2, Vec2)) {
+    let nonzero = |v: Vec2| (v.hypot2() > 0.0).then_some(v);
+    let (mut start, mut last) = (Point::ORIGIN, Point::ORIGIN);
+    // The subpath's first tangent, and the tangent it arrives at its current point in.
+    let (mut first, mut arriving): (Option<Vec2>, Option<Vec2>) = (None, None);
+    for el in path.elements() {
+        let (starting, ending) = match *el {
+            kurbo::PathEl::MoveTo(p) => {
+                (start, last) = (p, p);
+                (first, arriving) = (None, None);
+                continue;
+            }
+            kurbo::PathEl::LineTo(p) => {
+                let t = nonzero(p - last);
+                last = p;
+                (t, t)
+            }
+            kurbo::PathEl::QuadTo(c, p) => {
+                let starting = nonzero(c - last).or(nonzero(p - last));
+                let ending = nonzero(p - c).or(nonzero(p - last));
+                last = p;
+                (starting, ending)
+            }
+            kurbo::PathEl::CurveTo(c1, c2, p) => {
+                let starting = nonzero(c1 - last).or(nonzero(c2 - last)).or(nonzero(p - last));
+                let ending = nonzero(p - c2).or(nonzero(p - c1)).or(nonzero(p - last));
+                last = p;
+                (starting, ending)
+            }
+            kurbo::PathEl::ClosePath => {
+                let t = nonzero(start - last);
+                if let Some(t) = t {
+                    if let Some(previous) = arriving {
+                        join(previous, t);
+                    } else {
+                        first = Some(t);
+                    }
+                    arriving = Some(t);
+                }
+                if let (Some(previous), Some(first)) = (arriving, first) {
+                    join(previous, first);
+                }
+                last = start;
+                (first, arriving) = (None, None);
+                continue;
+            }
+        };
+        let (Some(starting), Some(ending)) = (starting, ending) else { continue };
+        if let Some(previous) = arriving {
+            join(previous, starting);
+        } else {
+            first = Some(starting);
+        }
+        arriving = Some(ending);
+    }
+}
+
 pub(crate) fn x_y_advances(transform: &Affine) -> (Vec2, Vec2) {
     let scale_skew_transform = {
         let c = transform.as_coeffs();
@@ -3213,5 +3479,207 @@ mod area_shrink_tests {
         assert_eq!(area_shrink::<1>(&data, (4, 4), (0, 2)), None, "an empty side");
         assert_eq!(area_shrink::<1>(&data[1..], (4, 4), (2, 2)), None, "data shorter than the source");
         assert_eq!(area_shrink::<3>(&data, (4, 4), (2, 2)), None, "data of another channel count");
+    }
+}
+
+#[cfg(test)]
+mod thin_stroke_pen_tests {
+    use super::{StrokeProps, pen_miter_bound, pen_miter_limit, thin_stroke_pen};
+    use kurbo::{Affine, BezPath, Join, Vec2};
+
+    /// The larger and smaller singular values of `m`'s linear part, from its Frobenius norm and
+    /// determinant (`s1² + s2²` and `s1 × s2`), independently of how `thin_stroke_pen` finds them.
+    /// Equal values lose about half their digits to the square root, hence the 1e-6 tolerances.
+    /// The smaller is the determinant over the larger, as their difference cancels to 0 for a
+    /// nearly singular matrix.
+    fn scales(m: Affine) -> (f64, f64) {
+        let [a, b, c, d, _, _] = m.as_coeffs();
+        let (sum, product) = (a * a + b * b + c * c + d * d, (a * d - b * c).abs());
+        let root = (sum * sum / 4.0 - product * product).max(0.0).sqrt();
+        let wide = (sum / 2.0 + root).sqrt();
+        (wide, if wide > 0.0 { product / wide } else { 0.0 })
+    }
+
+    /// Patch (29): under matrices that shrink one direction more than another (scaled, turned,
+    /// skewed, mirrored), the pen's matrix and its inverse undo each other, and the stroke's
+    /// device pen is at least the threshold across in every direction, and no wider than the
+    /// threshold where the matrix alone made it thinner: a direction already wide enough keeps
+    /// its width.
+    #[test]
+    fn the_pen_is_wide_enough_every_way_and_no_wider() {
+        let matrices = [
+            Affine::new([1.0, 0.0, 0.0, 0.25, 5.0, 7.0]),
+            Affine::new([0.5, 0.0, 0.0, 0.25, 0.0, 0.0]),
+            Affine::new([4.0, 0.0, 0.0, 0.02, 0.0, 0.0]),
+            Affine::new([-3.0, 0.0, 0.0, 0.1, 0.0, 0.0]),
+            Affine::rotate(0.7) * Affine::new([2.0, 0.0, 0.0, 0.05, 0.0, 0.0]) * Affine::rotate(-1.9),
+            Affine::new([1.0, 0.0, 0.9, 0.2, 0.0, 0.0]),
+            Affine::new([0.0, 0.3, -2.0, 0.0, 0.0, 0.0]),
+            // Nearly singular: `mean - spread` cancelled its smaller scale to 0 (#5643 review).
+            Affine::new([1.0, 0.0, 0.0, 3e-9, 0.0, 0.0]),
+            // Small overall but not very uneven: once past a cap on the stretch (#5643 review).
+            Affine::new([1e-6, 0.0, 0.0, 1e-8, 0.0, 0.0]),
+        ];
+        for m in matrices {
+            for (width, threshold) in [(0.3_f32, 1.0_f32), (0.0, 1.0), (1.0, 1.0), (0.5, 0.25)] {
+                let (wide, narrow) = scales(m);
+                let w = f64::from(width.max(0.01));
+                let t = f64::from(threshold);
+                let Some((pen, to_pen)) = thin_stroke_pen(m, width, threshold) else {
+                    assert!(narrow * w >= t - 1e-9, "{m:?} at {width}: {narrow} needs a pen");
+                    continue;
+                };
+                let identity = (pen * to_pen).as_coeffs();
+                for (got, want) in identity.iter().zip([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]) {
+                    assert!((got - want).abs() < 1e-9, "{m:?}: {identity:?}");
+                }
+                let (pen_wide, pen_narrow) = scales(m * pen);
+                assert!(pen_narrow * w >= t * (1.0 - 1e-6), "{m:?} at {width}: {pen_narrow}");
+                let want = (wide * w).max(t);
+                assert!((pen_wide * w - want).abs() <= 1e-6 * want, "{m:?} at {width}: {pen_wide} × {w} for {want}");
+            }
+        }
+    }
+
+    /// Patch (29): no pen when nothing needs widening or every direction needs the same (which
+    /// `set_stroke_properties` does by scaling the width), or when the matrix has no usable size.
+    #[test]
+    fn no_pen_when_uniform_or_unusable() {
+        for m in [Affine::IDENTITY, Affine::scale(0.2), Affine::rotate(1.1) * Affine::scale(0.3), Affine::new([0.0, 0.5, -0.5, 0.0, 0.0, 0.0])] {
+            assert!(thin_stroke_pen(m, 0.1, 1.0).is_none(), "{m:?}");
+        }
+        assert!(thin_stroke_pen(Affine::new([1.0, 0.0, 0.0, 0.25, 0.0, 0.0]), 8.0, 1.0).is_none());
+        for m in [Affine::new([1.0, 0.0, 0.0, 0.0, 0.0, 0.0]), Affine::new([1.0, 2.0, 2.0, 4.0, 0.0, 0.0]), Affine::new([f64::NAN, 0.0, 0.0, 1.0, 0.0, 0.0]), Affine::new([f64::INFINITY, 0.0, 0.0, 1.0, 0.0, 0.0]), Affine::new([1.0, 0.0, 0.0, 1e-300, 0.0, 0.0])] {
+            assert!(thin_stroke_pen(m, 0.3, 1.0).is_none(), "{m:?}");
+        }
+        assert!(thin_stroke_pen(Affine::new([1.0, 0.0, 0.0, 0.25, 0.0, 0.0]), f32::NAN, 1.0).is_some());
+        // One direction shrunk over a billion times more than the other.
+        assert!(thin_stroke_pen(Affine::new([1.0, 0.0, 0.0, 1e-10, 0.0, 0.0]), 1.0, 1.0).is_none());
+        assert!(thin_stroke_pen(Affine::new([1e-6, 0.0, 0.0, 1e-16, 0.0, 0.0]), 1.0, 1.0).is_none());
+    }
+
+    /// Patch (29), #5643 review: a nearly singular matrix turned off the axes gets a pen as wide
+    /// as the threshold across, though its scales are far apart.
+    #[test]
+    fn a_nearly_singular_turned_matrix_gets_a_pen() {
+        let m = Affine::rotate(0.7) * Affine::new([1.0, 0.0, 0.0, 3e-9, 0.0, 0.0]) * Affine::rotate(-1.9);
+        let Some((pen, _)) = thin_stroke_pen(m, 1.0, 1.0) else { panic!("{m:?} needs a pen") };
+        let (pen_wide, pen_narrow) = scales(m * pen);
+        assert!((pen_narrow - 1.0).abs() < 1e-6 && (pen_wide - 1.0).abs() < 1e-6, "{pen_wide} {pen_narrow}");
+    }
+
+    /// The miter ratio `1 / sin(θ / 2)` of a join between a segment arriving in `incoming`'s
+    /// direction and one leaving in `outgoing`'s, from the angle θ between the segments, as ISO
+    /// 32000-2 §8.4.3.5 defines it (independently of `miter_ratio_sq`).
+    fn ratio(incoming: Vec2, outgoing: Vec2) -> f64 {
+        let turn = incoming.cross(outgoing).atan2(incoming.dot(outgoing)).abs();
+        1.0 / ((std::f64::consts::PI - turn) / 2.0).sin()
+    }
+
+    fn polyline(points: &[(f64, f64)], closed: bool) -> BezPath {
+        let mut path = BezPath::new();
+        for (i, &(x, y)) in points.iter().enumerate() {
+            if i == 0 { path.move_to((x, y)) } else { path.line_to((x, y)) }
+        }
+        if closed {
+            path.close_path();
+        }
+        path
+    }
+
+    fn miter(limit: f32) -> StrokeProps {
+        StrokeProps { line_join: Join::Miter, miter_limit: limit, ..StrokeProps::default() }
+    }
+
+    /// Whether a join with these user-space tangents is mitered in user space under `limit` and in
+    /// the pen's space under `pen_limit`, with no ratio within 1e-7 of either limit.
+    fn decisions(incoming: Vec2, outgoing: Vec2, to_pen: Affine, limit: f32, pen_limit: f32) -> (bool, bool) {
+        let in_pen = |v: Vec2| (to_pen * v.to_point()).to_vec2();
+        let (user, pen) = (ratio(incoming, outgoing), ratio(in_pen(incoming), in_pen(outgoing)));
+        for (r, l) in [(user, f64::from(limit)), (pen, f64::from(pen_limit))] {
+            assert!((r - l).abs() > 1e-7 * l, "{r} is too close to the limit {l}");
+        }
+        (user < f64::from(limit), pen < f64::from(pen_limit))
+    }
+
+    /// Patch (29), #5643 review: under a pen that squeezes one direction, a join keeps the miter or
+    /// bevel its user-space angle gives it. A spike bevelled in user space would be mitered in the
+    /// pen's space, where it is blunter, and a right angle mitered in user space would be bevelled
+    /// in the pen's space, where it is sharper.
+    #[test]
+    fn a_pen_keeps_each_joins_miter_or_bevel() {
+        // A spike, 10.05 in user space and 5.10 in the pen's, under a limit of 8.
+        let squeeze_y = Affine::scale_non_uniform(1.0, 0.5);
+        let spike = polyline(&[(0.0, 0.0), (1.0, 10.0), (2.0, 0.0)], false);
+        let limit = pen_miter_limit(&spike, squeeze_y, &miter(8.0));
+        assert_eq!(decisions(Vec2::new(1.0, 10.0), Vec2::new(1.0, -10.0), squeeze_y, 8.0, limit), (false, false));
+        // A right angle, 1.41 in user space and 5.10 in the pen's, under a limit of 2.
+        let squeeze_x = Affine::scale_non_uniform(0.2, 1.0);
+        let corner = polyline(&[(0.0, 0.0), (1.0, 1.0), (2.0, 0.0)], false);
+        let limit = pen_miter_limit(&corner, squeeze_x, &miter(2.0));
+        assert_eq!(decisions(Vec2::new(1.0, 1.0), Vec2::new(1.0, -1.0), squeeze_x, 2.0, limit), (true, true));
+        // The spike next to a join mitered in both spaces (2.33 in user space, 1.65 in the pen's):
+        // a limit between them keeps both.
+        let two = polyline(&[(0.0, 0.0), (1.0, 10.0), (2.0, 0.0), (3.0, 1.0)], false);
+        let limit = pen_miter_limit(&two, squeeze_y, &miter(8.0));
+        let joins = [(Vec2::new(1.0, 10.0), Vec2::new(1.0, -10.0)), (Vec2::new(1.0, -10.0), Vec2::new(1.0, 1.0))];
+        for ((incoming, outgoing), mitered) in joins.into_iter().zip([false, true]) {
+            let kept = (mitered, mitered);
+            assert_eq!(decisions(incoming, outgoing, squeeze_y, 8.0, limit), kept, "{incoming:?} to {outgoing:?} under {limit}");
+        }
+        // The spike as the join where a closed path meets its start.
+        let closed = polyline(&[(1.0, 10.0), (0.0, 0.0), (2.0, 0.0)], true);
+        let limit = pen_miter_limit(&closed, squeeze_y, &miter(8.0));
+        assert_eq!(decisions(Vec2::new(-1.0, 10.0), Vec2::new(-1.0, -10.0), squeeze_y, 8.0, limit), (false, false));
+        assert_eq!(decisions(Vec2::new(-1.0, -10.0), Vec2::new(2.0, 0.0), squeeze_y, 8.0, limit), (true, true));
+    }
+
+    /// Patch (29), #5643 review: when no limit keeps every join's decision, every bevel is kept
+    /// and the mitered joins that must change are bevelled, as a missing tip shows less than an
+    /// extra one. The limit is the user's when no join changes sides, and isn't touched for
+    /// joins that aren't mitered or a limit kurbo would refuse.
+    #[test]
+    fn a_pen_bevels_rather_than_adds_a_miter() {
+        // Under `diag(0.1, 1)`, a right angle pointing up, mitered in user space (ratio 1.41), is
+        // 10.05 in the pen's, and a spike along x, bevelled in user space (10.05), is 1.41 there:
+        // no limit splits them.
+        let to_pen = Affine::scale_non_uniform(0.1, 1.0);
+        let path = polyline(&[(0.0, 0.0), (1.0, 1.0), (2.0, 0.0), (12.0, 1.0), (2.0, 2.0)], false);
+        let limit = pen_miter_limit(&path, to_pen, &miter(5.0));
+        let spike = decisions(Vec2::new(10.0, 1.0), Vec2::new(-10.0, 1.0), to_pen, 5.0, limit);
+        assert_eq!(spike, (false, false), "the bevelled spike stays bevelled under {limit}");
+        let right_angle = decisions(Vec2::new(1.0, 1.0), Vec2::new(1.0, -1.0), to_pen, 5.0, limit);
+        assert_eq!(right_angle, (true, false), "the mitered right angle is bevelled under {limit}");
+        // A path whose joins all keep their sides keeps the limit.
+        let gentle = polyline(&[(0.0, 0.0), (1.0, 0.1), (2.0, 0.0)], false);
+        assert_eq!(pen_miter_limit(&gentle, to_pen, &miter(5.0)), 5.0);
+        assert_eq!(pen_miter_limit(&BezPath::new(), to_pen, &miter(5.0)), 5.0);
+        for props in [
+            StrokeProps { line_join: Join::Round, ..miter(5.0) },
+            StrokeProps { line_join: Join::Bevel, ..miter(5.0) },
+        ] {
+            assert_eq!(pen_miter_limit(&path, to_pen, &props), 5.0);
+        }
+        assert!(pen_miter_limit(&path, to_pen, &miter(f32::NAN)).is_nan());
+        assert_eq!(pen_miter_limit(&path, to_pen, &miter(f32::INFINITY)), f32::INFINITY);
+    }
+
+    /// Patch (29), #5643 review: a dashed stroke's limit comes from the joins its dashes draw. The
+    /// spike of `a_pen_bevels_rather_than_adds_a_miter` falls in a gap here, so the right angle,
+    /// drawn, keeps its miter; with the spike counted it was bevelled. The bound the canvas check
+    /// uses before dashing is at least the limit of the dashes, and of the whole path.
+    #[test]
+    fn a_dashed_pen_keeps_the_miters_its_dashes_draw() {
+        let to_pen = Affine::scale_non_uniform(0.1, 1.0);
+        let path = polyline(&[(0.0, 0.0), (1.0, 1.0), (2.0, 0.0), (12.0, 1.0), (2.0, 2.0)], false);
+        // On for 12, off from 12 to 14 around the spike at 12.88, on from 14 past the end at 22.9.
+        let dashes: BezPath = kurbo::dash(path.iter(), 0.0, &[12.0, 2.0, 50.0, 1.0]).collect();
+        let props = miter(5.0);
+        let limit = pen_miter_limit(&dashes, to_pen, &props);
+        let right_angle = decisions(Vec2::new(1.0, 1.0), Vec2::new(1.0, -1.0), to_pen, 5.0, limit);
+        assert_eq!(right_angle, (true, true), "the drawn right angle stays mitered under {limit}");
+        let bound = pen_miter_bound(&path, to_pen, &props);
+        assert!(bound >= limit && bound >= pen_miter_limit(&path, to_pen, &props), "{bound} {limit}");
+        assert!(bound >= 5.0);
     }
 }
