@@ -13,6 +13,7 @@ pub const MAX_USER_UNIT: f64 = 75_000.0;
 /// A leaf page and its effective (inherited) attributes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Page {
+    /// The page object at its canonical reference (see [`PageNode::obj`]).
     pub obj: ObjRef,
     /// The page dictionary with inherited attributes filled in.
     pub dict: Dict,
@@ -138,7 +139,8 @@ pub const MAX_PAGE_TREE_NODES: usize = 1_000_000;
 /// object stream can give many numbers the same bytes, so the node cap alone doesn't bound this.
 pub const MAX_KIDS_ENTRIES: usize = 4_000_000;
 
-/// The limits a walk applies: the constants above, unless [`with_limits`] lowered them.
+/// The limits a walk applies: the constants above, unless `with_limits` (the `test-support`
+/// feature) lowered them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
     pub nodes: usize,
@@ -228,6 +230,16 @@ fn weight(o: &Object, depth: usize) -> usize {
     }
 }
 
+/// `o` is null, or a reference that resolves to null. Only a reference is resolved, so a large
+/// direct value isn't copied to look at it.
+fn is_null(doc: &Document, o: &Object) -> bool {
+    match o {
+        Object::Null => true,
+        Object::Ref(_) => matches!(*doc.resolve(o), Object::Null),
+        _ => false,
+    }
+}
+
 /// The nearest node (the node itself included) that sets one of [`INHERITABLE`], shared rather
 /// than copied, and the value's weight.
 #[derive(Clone)]
@@ -259,7 +271,9 @@ impl Children {
 pub struct PageNode {
     /// The reference cos accepts as the object's own (its number at the generation the document
     /// holds it at: [`Document::canonical_ref`] of the reference), whichever accepted generation `/Kids`
-    /// names.
+    /// names. `/Kids` may still name a repaired page by its other generation, so write the page
+    /// through [`Document::update_dict`] or [`Document::set_existing`], which keep both generations
+    /// accepted; [`Document::set`] keeps only this one and leaves that `/Kids` entry stale.
     pub obj: ObjRef,
     node: std::sync::Arc<Object>,
     inherited: Inherited,
@@ -293,13 +307,17 @@ impl PageNode {
     }
 
     /// Copy into `into` each of [`INHERITABLE`] the node has and `into` lacks, charging a value
-    /// from an ancestor its weight against `budget` first.
+    /// from an ancestor its weight against `budget` first. `into` is usually a copy of the node's
+    /// own dictionary: an entry there that the walk read as null (absent, ISO 32000-2 §7.3.9) is
+    /// replaced by the inherited value.
     pub fn fill_inherited(&self, into: &mut Dict, budget: &mut usize) -> Result<(), PageTreeLimit> {
         for (key, owner) in INHERITABLE.iter().zip(&self.inherited) {
-            if into.contains(key) {
+            let Some(owner) = owner else { continue };
+            // The node's own entry supplies the value unless the walk read it as null.
+            let own_null = owner.node.num != self.obj.num && self.dict().and_then(|d| d.get(key)).is_some_and(|own| into.get(key) == Some(own));
+            if into.contains(key) && !own_null {
                 continue;
             }
-            let Some(owner) = owner else { continue };
             let Some(value) = owner.obj.as_dict().and_then(|d| d.get(key)) else { continue };
             if owner.node.num != self.obj.num {
                 *budget = budget.checked_sub(owner.weight).ok_or(PageTreeLimit::InheritedCopies)?;
@@ -405,7 +423,8 @@ impl Iterator for PageNodes<'_> {
             self.seen.insert(node.num);
             let mut inherited = parent.inherited.clone();
             for (key, owner) in INHERITABLE.iter().zip(&mut inherited) {
-                if let Some(value) = d.get(key) {
+                // A null entry is absent (ISO 32000-2 §7.3.9): it doesn't hide an ancestor's value.
+                if let Some(value) = d.get(key).filter(|v| !is_null(self.doc, v)) {
                     *owner = Some(Owner { node, obj: obj.clone(), weight: weight(value, 0) });
                 }
             }
@@ -440,8 +459,10 @@ impl<'a> PageLeaves<'a> {
         Self(PageNodes::new(doc))
     }
 
-    /// The leaves of the tree under the node `top`.
-    pub fn under(doc: &'a Document, top: ObjRef) -> Self {
+    /// The leaves of the tree under the node `top`, inheriting nothing from above it. Test-only:
+    /// a caller would need the ancestors' inherited values too.
+    #[cfg(test)]
+    fn under(doc: &'a Document, top: ObjRef) -> Self {
         Self(PageNodes::from(doc, Some(top)))
     }
 
@@ -814,7 +835,23 @@ mod tests {
         assert!(leaf.dict().is_some_and(|dict| !dict.contains(b"Rotate")), "the page's own dictionary is untouched");
     }
 
-    /// The seam only lowers the limits, and puts them back afterwards.
+    /// A page's own `/Rotate` that is null, directly or through a reference to a missing object,
+    /// is absent (ISO 32000-2 §7.3.9), so the tree node's value is inherited.
+    #[test]
+    fn a_null_inherited_entry_is_absent() {
+        let leaf = ObjRef { num: 3, generation: 0 };
+        let direct = doc_with(90, "", "/Rotate null");
+        let mut indirect = doc(90);
+        indirect.update_dict(leaf, |p| p.set(b"Rotate".to_vec(), Object::Ref(ObjRef { num: 99, generation: 0 }))).unwrap();
+        for d in [direct, indirect] {
+            assert_eq!(pages(&d)[0].rotation(&d), 90);
+            assert_eq!(page(&d, 0).unwrap().unwrap().rotation(&d), 90);
+            let node = PageLeaves::new(&d).next().unwrap().unwrap();
+            assert_eq!(node.inherited_from(b"Rotate"), Some(ObjRef { num: 2, generation: 0 }));
+            assert_eq!(node.inherited(b"Rotate").and_then(Object::as_int), Some(90));
+        }
+    }
+
     /// The seam only lowers the limits, never below an outer scope's, and puts them back on return
     /// and on unwind; another thread keeps the defaults.
     #[test]
@@ -886,6 +923,18 @@ mod tests {
         })
         .unwrap();
         assert_eq!(page_refs(&d), Ok(vec![ObjRef { num: 3, generation: 9 }]));
+    }
+
+    /// A repaired page listed as `3 5 R` is given at `3 0 R`; written back through that reference
+    /// with `update_dict` (as every caller does), `/Kids`' `3 5 R` still names it.
+    #[test]
+    fn a_page_written_through_its_canonical_reference_stays_listed() {
+        let mut d = repaired("[3 5 R]");
+        let page = pages(&d)[0].obj;
+        assert_eq!(page, ObjRef { num: 3, generation: 0 });
+        d.update_dict(page, |p| p.set(b"Rotate".to_vec(), Object::Int(180))).unwrap();
+        assert_eq!(page_refs(&d), Ok(vec![page]));
+        assert_eq!(pages(&d)[0].rotation(&d), 180);
     }
 
     /// Pages stored in an object stream have generation 0, and only that generation names them.
