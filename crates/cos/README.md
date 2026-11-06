@@ -62,7 +62,9 @@ another. Edits never touch the original bytes.
   not expand compact xref ranges; the winning xref entry remains authoritative for free
   slots. Compressed objects require generation zero. Explicit `set` overlays accept only the
   supplied generation; `set_existing` and `update_dict` retain both accepted generations of a
-  damaged live slot, including through snapshots, and require full rewrite. Headers beyond
+  damaged live slot, including through snapshots, and require full rewrite.
+  `accepted_generations(num)` lists the generations a slot accepts, so code comparing two
+  revisions can tell whether a reference still reaches the same slot. Headers beyond
   this bounded probe are not additionally recovered. Materialized primary and hybrid rows are
   diagnosed before folding, so a newer row does not hide a retained disagreement.
 - **Tolerant, never fatal.** The lexer works on a byte slice and a position; it allocates nothing
