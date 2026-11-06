@@ -328,6 +328,99 @@ fn move_shifts_all_geometry_and_the_popup() {
     assert_eq!(rect(popup)[0], 140.0);
 }
 
+fn inline_style_fixture(subtype: &str, flags: i64) -> Document {
+    let mut doc = fixture();
+    let page = page_ref(&doc, 0).unwrap();
+    let mut annotation = list(&doc, 0)[0].clone();
+    annotation.set(b"Subtype".to_vec(), Object::name(subtype));
+    annotation.set(b"F".to_vec(), flags);
+    if subtype == "FreeText" {
+        annotation.set(b"Contents".to_vec(), PdfString::text("欢迎"));
+        annotation.set(b"DA".to_vec(), PdfString::literal(b"0 g /Helv 12 Tf".to_vec()));
+        let mut form = Dict::new();
+        form.set(b"Type".to_vec(), Object::name("XObject"));
+        form.set(b"Subtype".to_vec(), Object::name("Form"));
+        form.set(b"BBox".to_vec(), num_array(&[0.0, 0.0, 40.0, 40.0]));
+        let normal = doc.add(Object::Stream(Stream::from_raw(form, b"0 g 0 0 10 10 re f".to_vec())));
+        let mut appearance = Dict::new();
+        appearance.set(b"N".to_vec(), Object::Ref(normal));
+        annotation.set(b"AP".to_vec(), Object::Dict(appearance));
+    }
+    set_annots(&mut doc, page, vec![Object::Dict(annotation)]).unwrap();
+    reopen(&doc)
+}
+
+fn assert_inline_style_refusal(mut doc: Document, change: StyleChange, expected: fn(&AnnotError) -> bool) {
+    let page = page_ref(&doc, 0).unwrap();
+    let before = annots(&doc, page);
+    assert!(matches!(before.as_slice(), [Object::Dict(_)]));
+    assert!(!doc.is_modified());
+    let error = set_style(&mut doc, 0, 0, change, &meta("refused")).unwrap_err();
+    assert!(expected(&error), "unexpected refusal: {error:?}");
+    assert_eq!(annots(&doc, page), before, "a refusal must preserve the exact inline entry");
+    assert!(!doc.is_modified(), "a refusal must not add unsaved document edits");
+}
+
+#[test]
+fn unsupported_inline_style_does_not_promote_the_annotation() {
+    assert_inline_style_refusal(
+        inline_style_fixture("Stamp", 0),
+        StyleChange::new(Some([1.0, 0.0, 0.0]), Some(0.5), Some(2.0), None),
+        |e| matches!(e, AnnotError::Unsupported(s) if s == "Stamp"),
+    );
+}
+
+#[test]
+fn locked_inline_style_keeps_its_refusal_precedence_and_document() {
+    assert_inline_style_refusal(
+        inline_style_fixture("Stamp", super::types::FLAG_LOCKED),
+        StyleChange::new(Some([1.0, 0.0, 0.0]), Some(0.5), Some(2.0), None),
+        |e| matches!(e, AnnotError::Invalid(s) if s == "the comment is locked"),
+    );
+}
+
+#[test]
+fn foreign_text_inline_style_does_not_promote_the_annotation() {
+    assert_inline_style_refusal(
+        inline_style_fixture("FreeText", 0),
+        StyleChange::new(Some([1.0, 0.0, 0.0]), Some(0.5), Some(2.0), None),
+        |e| matches!(e, AnnotError::Undrawable(s) if s.contains("U+6B22")),
+    );
+}
+
+#[test]
+fn invalid_inline_style_does_not_promote_the_annotation() {
+    assert_inline_style_refusal(
+        inline_style_fixture("Square", 0),
+        StyleChange::new(Some([f64::NAN, 0.0, 0.0]), None, None, None),
+        |e| matches!(e, AnnotError::Invalid(s) if s == "invalid style"),
+    );
+}
+
+#[test]
+fn invalid_inline_line_endings_do_not_promote_the_annotation() {
+    assert_inline_style_refusal(
+        inline_style_fixture("Square", 0),
+        StyleChange::new(None, None, None, Some(vec![LineEnding::None, LineEnding::Square])),
+        |e| matches!(e, AnnotError::Invalid(s) if s == "this comment has no line endings to change"),
+    );
+}
+
+#[test]
+fn supported_inline_style_still_promotes_and_redraws_the_annotation() {
+    let mut doc = inline_style_fixture("Square", 0);
+    let page = page_ref(&doc, 0).unwrap();
+    assert!(matches!(annots(&doc, page).as_slice(), [Object::Dict(_)]));
+    assert!(!doc.is_modified());
+    assert_eq!(props(&doc, 0, 0).unwrap().color, Some([1.0, 0.0, 0.0]));
+    set_style(&mut doc, 0, 0, StyleChange::new(Some([0.0, 0.0, 1.0]), None, None, None), &meta("accepted")).unwrap();
+    assert!(matches!(annots(&doc, page).as_slice(), [Object::Ref(_)]));
+    assert!(doc.is_modified());
+    let reopened = reopen(&doc);
+    assert_eq!(props(&reopened, 0, 0).unwrap().color, Some([0.0, 0.0, 1.0]));
+    assert!(ap_content(&reopened, &list(&reopened, 0)[0]).contains("0 0 1 RG"));
+}
+
 #[test]
 fn restyle_and_resize_redraw_the_appearance() {
     let mut doc = fixture();
