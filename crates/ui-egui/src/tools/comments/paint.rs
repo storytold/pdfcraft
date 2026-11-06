@@ -2,7 +2,7 @@ use super::geometry::{HANDLES, handle_pos, held, is_markup, reaches_points, resh
 use super::state::{CommentView, Gesture, PageCx, SETTLE_SECS};
 use super::{
     Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Shape,
-    Stroke, color32, pos2, vec2,
+    Stroke, color32, icons, pos2, vec2,
 };
 use crate::page_router::{CommentPart, Hit, Owner};
 
@@ -20,6 +20,19 @@ pub(super) fn hover_outline<'c>(cx: &'c PageCx<'_>, cv: &CommentView, hover: Opt
 /// pointer.
 pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, hover: Option<&Hit>) {
     let cv = &view.comments;
+    // All commented text markup, including imported markup, gets a viewer-only
+    // marker. Plain markup has none; comment_marker_rect owns that distinction.
+    for a in cx.comments() {
+        if let Some(marker) = cx.comment_marker_rect(a)
+            && let Some(target) = cx.screen_rects(a).last()
+        {
+            painter.line_segment(
+                [marker.left_bottom(), pos2(target.right(), target.top())],
+                Stroke::new(1.0, Color32::from_rgba_unmultiplied(0xD4, 0x8A, 0x00, 150)),
+            );
+            icons::paint(ui, marker, "message-square", 12.0, Color32::from_rgb(0xD4, 0x8A, 0x00));
+        }
+    }
     let pointer = cx.ptr.pos;
     // A redaction mark shows its fill while the pointer is over it, as Acrobat's does, so the
     // marked area reads before anything is applied.
