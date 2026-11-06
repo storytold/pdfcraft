@@ -230,6 +230,13 @@ mod host {
     }
 }
 
+/// The name a file opened from the system shows under: the name the browser gave, or
+/// `document.pdf` when it gave none (or only blanks).
+#[cfg(any(target_arch = "wasm32", test))]
+fn file_name(name: Option<String>) -> String {
+    name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "document.pdf".to_string())
+}
+
 /// File Handling: an installed copy of the page (a PWA) is registered by `manifest.webmanifest`'s
 /// `file_handlers` as a PDF handler, so the system can open PDFs with it. The browser passes the
 /// files through `window.launchQueue` as `FileSystemFileHandle`s; each opens in a tab, like a
@@ -239,9 +246,6 @@ mod host {
 #[cfg(target_arch = "wasm32")]
 mod launch_queue {
     use eframe::wasm_bindgen::{JsCast, JsValue, closure::Closure};
-
-    /// The name a file gets when the browser gives none.
-    const DEFAULT_NAME: &str = "document.pdf";
 
     pub fn listen(inbox: pdfcraft_ui_egui::Inbox, failed: pdfcraft_ui_egui::FailedInbox, ctx: egui::Context) {
         let Some(window) = web_sys::window() else { return };
@@ -289,22 +293,25 @@ mod launch_queue {
     /// The file behind one handle, `(name, bytes)`, or `(name, error)`. A file from the system is
     /// untrusted input: an oversized one is refused before it is read into memory.
     async fn read(handle: &JsValue) -> Result<(String, Vec<u8>), (String, String)> {
-        let unnamed = || DEFAULT_NAME.to_string();
+        // The handle's name is known before `getFile()` runs, so errors on the way still name the
+        // file the user opened (the file's own name, read later, is normally the same).
+        let handle_name = super::file_name(js_sys::Reflect::get(handle, &JsValue::from_str("name")).ok().and_then(|n| n.as_string()));
+        let named = |e: &str| (handle_name.clone(), e.to_string());
         let get_file = js_sys::Reflect::get(handle, &JsValue::from_str("getFile"))
             .ok()
             .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
-            .ok_or_else(|| (unnamed(), "not a file (a folder?)".to_string()))?;
+            .ok_or_else(|| named("not a file (a folder?)"))?;
         let promise = get_file
             .call0(handle)
             .ok()
             .and_then(|p| p.dyn_into::<js_sys::Promise>().ok())
-            .ok_or_else(|| (unnamed(), "the browser did not return the file".to_string()))?;
+            .ok_or_else(|| named("the browser did not return the file"))?;
         let file: web_sys::File = wasm_bindgen_futures::JsFuture::from(promise)
             .await
             .ok()
             .and_then(|f| f.dyn_into().ok())
-            .ok_or_else(|| (unnamed(), "the file could not be read (moved, or no permission?)".to_string()))?;
-        let name = Some(file.name()).filter(|n| !n.trim().is_empty()).unwrap_or_else(unnamed);
+            .ok_or_else(|| named("the file could not be read (moved, or no permission?)"))?;
+        let name = Some(file.name()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| handle_name.clone());
         if file.size() > super::host::MAX_OPEN_BYTES as f64 {
             return Err((name, format!("{} bytes, over the {} MiB limit", file.size(), super::host::MAX_OPEN_BYTES >> 20)));
         }
@@ -359,5 +366,12 @@ mod tests {
             let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/app-icon/hicolor").join(rel);
             assert!(file.is_file(), "{src}: no {}", file.display());
         }
+    }
+
+    #[test]
+    fn launched_file_keeps_its_name() {
+        assert_eq!(super::file_name(Some("Invoice 42.pdf".into())), "Invoice 42.pdf");
+        assert_eq!(super::file_name(Some("   ".into())), "document.pdf");
+        assert_eq!(super::file_name(None), "document.pdf");
     }
 }
