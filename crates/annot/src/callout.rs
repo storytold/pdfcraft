@@ -7,8 +7,8 @@
 use super::create::{bounds, finite, grow, normalize, num_array};
 use super::draw::{draw_appearance, redraw_or_restore};
 use super::lookup::annot_dict;
-use super::modify::{border_width_of, refuse_foreign_text, touch};
-use super::{AnnotError, Dict, Document, Meta, ObjRef, Object, appearance};
+use super::modify::{border_width_of, refuse_foreign_text, shape_text_box, touch};
+use super::{AnnotError, BorderShape, Dict, Document, Meta, ObjRef, Object, appearance};
 
 /// A side of a callout's text box.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,7 +206,15 @@ pub(crate) fn place_text_box(
                 d.set(b"RD".to_vec(), num_array(&[rect[0] - outer[0], rect[1] - outer[1], outer[2] - rect[2], outer[3] - rect[3]]));
             }
             None => {
-                d.remove(b"RD");
+                // A text box or typewriter line with an oval or a circle keeps that shape around
+                // the text. A rectangle drops the inset.
+                if d.name(b"Subtype") == Some(b"FreeText") {
+                    let shape = BorderShape::of(d);
+                    let width = border_width_of(d);
+                    shape_text_box(d, rect, shape, width);
+                } else {
+                    d.remove(b"RD");
+                }
             }
         }
         touch(d, meta);
