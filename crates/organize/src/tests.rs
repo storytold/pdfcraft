@@ -3768,6 +3768,22 @@ fn bookmark_style_and_colour_are_set_as_the_table_says() {
     assert_eq!(got, [(Some([0.0, 0.0, 1.0]), true, true), (None, false, false)]);
 }
 
+#[test]
+fn bookmark_titles_follow_the_document_version() {
+    let mut doc = doc_a();
+    doc.set_version("2.0");
+    add_bookmark(&mut doc, &[], 0, "Caf\u{e9}", 0).unwrap();
+    let raw = |d: &Document| {
+        d.get(bookmarks(d)[0].obj).as_dict().and_then(|m| m.get(b"Title").and_then(|t| t.as_string()).map(|s| s.bytes.clone())).unwrap()
+    };
+    assert_eq!(raw(&doc)[..3], [0xEF, 0xBB, 0xBF]);
+    assert_eq!(titles(&bookmarks(&doc)), ["Caf\u{e9}"]);
+    let mut old = doc_a();
+    old.set_version("1.7");
+    add_bookmark(&mut old, &[], 0, "Caf\u{e9}", 0).unwrap();
+    assert_eq!(raw(&old)[..2], [0xFE, 0xFF]);
+}
+
 /// #3502: a `/Contents` array's pieces are joined with a space, as the renderer joins them, so a
 /// `%` comment at the end of a piece without a line break continues through the first line of the
 /// next piece in both resource pruning (`extract_pages`) and `page_as_form`.
