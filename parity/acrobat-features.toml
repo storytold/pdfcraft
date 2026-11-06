@@ -8003,8 +8003,8 @@ milestone = "M11"
 status = "partial"
 commands = ["standards.pdfa"]
 tools = ["pdfa_verify"]
-evidence = ["crates/preflight/src/tests.rs::verify_reports_what_breaks_pdfa", "crates/preflight/src/tests.rs::standards_identification_uses_namespace_not_prefix", "crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::verify_reports_an_output_intent_that_does_not_match_device_colour", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts"]
-notes = "PDF/A-2b/3b structural rules: identification, encryption, output intent (present, and RGB/CMYK to match DeviceRGB/DeviceCMYK use), fonts embedded, annotations, actions, images, embedded files. Not yet: content-stream operator checks, transparency details, PDF/A-1 and -4, a veraPDF comparison."
+evidence = ["crates/preflight/src/tests.rs::verify_reports_what_breaks_pdfa", "crates/preflight/src/tests.rs::standards_identification_uses_namespace_not_prefix", "crates/preflight/src/tests.rs::convert_fixes_all_but_fonts", "crates/preflight/src/tests.rs::verify_reports_an_output_intent_that_does_not_match_device_colour", "crates/automation/tests/it/automation.rs::pdfa_through_tools", "crates/ui-egui/tests/it/compare.rs::pdfa_dialog_verifies_and_converts", "crates/preflight/src/tests.rs::implementation_limits_are_reported", "crates/preflight/src/tests.rs::implementation_limits_reach_the_trailer_split_content_deep_values_and_huge_boxes", "crates/preflight/src/tests.rs::implementation_limits_cover_reals_and_cids"]
+notes = "PDF/A-2b/3b structural rules: identification, encryption, output intent (present, and RGB/CMYK to match DeviceRGB/DeviceCMYK use), fonts embedded, annotations, actions, images, embedded files, and the implementation limits of 6.1.13 (integers, reals, strings, names, CIDs and page boundaries, ISO 32000-1 Annex C). Not yet: content-stream operator checks, transparency details, PDF/A-1 and -4, a veraPDF comparison."
 
 [[feature]]
 id = "optimize.pdfa-convert"

@@ -488,3 +488,134 @@ fn an_output_intent_profile_header_is_read_within_a_size_cap() {
         assert_eq!(pdfa_intent_profile(&doc), Some(n), "a {size}-byte profile");
     }
 }
+
+/// PDF/A-2 6.1.13 holds a file to the implementation limits of ISO 32000-1 Annex C (Table C.1):
+/// an integer past 32 bits, a string over 32767 bytes or a name over 127 bytes (decoded: a name
+/// written with `#xx` escapes counts its bytes once read), in an object or in content; and a page
+/// boundary under 3 or over 14400 units, read after inheritance, so a page that overrides its
+/// parent's box is judged by its own.
+#[test]
+fn implementation_limits_are_reported() {
+    let limits =
+        |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.13").map(|i| i.message).collect() };
+    let doc = |extra: &str, content: &str, parent_box: &str, page_box: &str| {
+        let objects = [
+            format!("<< /Type /Catalog /Pages 2 0 R {extra} >>"),
+            format!("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox {parent_box} >>"),
+            format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R {page_box} >>"),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        ];
+        let refs: Vec<&str> = objects.iter().map(String::as_str).collect();
+        build(&refs, "")
+    };
+    let ok = "[0 0 200 200]";
+    assert!(limits(&doc("", "", ok, "")).is_empty(), "{:?}", limits(&doc("", "", ok, "")));
+    assert_eq!(limits(&doc("/Big 2147483648", "", ok, "")), ["An integer is outside the 32-bit range"]);
+    assert_eq!(limits(&doc("/Small -2147483649", "", ok, "")), ["An integer is outside the 32-bit range"]);
+    assert!(limits(&doc("/Edge -2147483648 /Top 2147483647", "", ok, "")).is_empty());
+    assert_eq!(limits(&doc("", "2147483648 0 Td", ok, "")), ["An integer is outside the 32-bit range"]);
+    let long = "x".repeat(32768);
+    assert_eq!(limits(&doc(&format!("/S ({long})"), "", ok, "")), ["A string is longer than 32767 bytes"]);
+    assert_eq!(limits(&doc("", &format!("BT ({long}) Tj ET"), ok, "")), ["A string is longer than 32767 bytes"]);
+    assert!(limits(&doc(&format!("/S ({})", "x".repeat(32767)), "", ok, "")).is_empty());
+    let name = "n".repeat(128);
+    assert_eq!(limits(&doc(&format!("/V /{name}"), "", ok, "")), ["A name is longer than 127 bytes"]);
+    assert_eq!(limits(&doc(&format!("/{name} 1"), "", ok, "")), ["A name is longer than 127 bytes"]);
+    assert_eq!(limits(&doc("", &format!("/{name} Do"), ok, "")), ["A name is longer than 127 bytes"]);
+    // 200 bytes as written, 66 once the escapes are read.
+    let escaped = format!("A{}", "#41".repeat(65) + &"B".repeat(4));
+    assert!(limits(&doc(&format!("/V /{escaped}"), "", ok, "")).is_empty());
+    assert_eq!(limits(&doc("", "", "[0 0 2 200]", "")), ["Page 1 has a boundary smaller than 3 or larger than 14400 units"]);
+    assert_eq!(limits(&doc("", "", ok, "/CropBox [0 0 14401 200]")), ["Page 1 has a boundary smaller than 3 or larger than 14400 units"]);
+    assert!(limits(&doc("", "", "[0 0 2 2]", "/MediaBox [0 0 3 14400]")).is_empty(), "the page's own box overrides its parent's");
+}
+
+/// 6.1.13 also reads the trailer, a page's `/Contents` streams joined (operands may end one
+/// stream and their operator start the next, ISO 32000-1 7.8.2), values nested as deep as the
+/// parser allows, and a page box whose size overflows to infinity.
+#[test]
+fn implementation_limits_reach_the_trailer_split_content_deep_values_and_huge_boxes() {
+    let limits =
+        |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.13").map(|i| i.message).collect() };
+    let stream = |data: &str| {
+        format!(
+            "<< /Length {} >>
+stream
+{data}
+endstream",
+            data.len()
+        )
+    };
+    let page = |contents: &str, catalog_extra: &str, media: &str, trailer: &str| {
+        let (first, second) = contents.split_once('|').unwrap_or((contents, ""));
+        build(
+            &[
+                &format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} >>"),
+                &format!("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox {media} >>"),
+                "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] >>",
+                &stream(first),
+                &stream(second),
+            ],
+            trailer,
+        )
+    };
+    let ok = "[0 0 200 200]";
+    assert!(limits(&page("|", "", ok, "")).is_empty());
+    assert_eq!(limits(&page("|", "", ok, "/Custom 2147483648")), ["An integer is outside the 32-bit range"]);
+    let long = "x".repeat(32768);
+    assert_eq!(limits(&page(&format!("BT ({long})|Tj ET"), "", ok, "")), ["A string is longer than 32767 bytes"]);
+    let deep = format!("/Deep {}2147483648{}", "[".repeat(40), "]".repeat(40));
+    assert_eq!(limits(&page("|", &deep, ok, "")), ["An integer is outside the 32-bit range"]);
+    // Corners near ±1e308 are reals past the limit too, and the width overflows to infinity.
+    assert_eq!(
+        limits(&page("|", "", "[-1e308 0 1e308 200]", "")),
+        [
+            "A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸",
+            "Page 1 has a boundary smaller than 3 or larger than 14400 units"
+        ]
+    );
+}
+
+/// 6.1.13's two remaining limits of ISO 32000-1 Annex C: a real number beyond ±3.403 × 10³⁸ (or
+/// nonzero and nearer zero than ±1.175 × 10⁻³⁸), and
+/// a CID above 65535 that an embedded CMap of a Type 0 font maps to (a `begincidrange` reaching
+/// past it, a `begincidchar` naming one, or a CMap it uses through `/UseCMap`).
+#[test]
+fn implementation_limits_cover_reals_and_cids() {
+    let limits =
+        |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.13").map(|i| i.message).collect() };
+    let stream = |dict: &str, data: &str| format!("<< {dict} /Length {} >>\nstream\n{data}\nendstream", data.len());
+    let doc = |catalog_extra: &str, cmap: &str, used: &str| {
+        let first = stream("/Type /CMap /CMapName /Test-A /UseCMap 6 0 R", cmap);
+        let second = stream("/Type /CMap /CMapName /Test-B", used);
+        build(
+            &[
+                &format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} >>"),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F 4 0 R >> >> >>",
+                "<< /Type /Font /Subtype /Type0 /BaseFont /Test /Encoding 5 0 R /DescendantFonts [] >>",
+                &first,
+                &second,
+            ],
+            "",
+        )
+    };
+    let range = |low: &str, high: &str, cid: u32| format!("1 begincidrange <{low}> <{high}> {cid} endcidrange");
+    let near = format!("34{}.0", "0".repeat(37));
+    let far = format!("4{}.0", "0".repeat(38));
+    assert!(limits(&doc(&format!("/R {near} /S -{near}"), &range("0000", "00ff", 65280), "")).is_empty(), "both at their limits");
+    assert_eq!(limits(&doc(&format!("/R {far}"), "", "")), ["A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸"]);
+    assert_eq!(limits(&doc(&format!("/R -{far}"), "", "")), ["A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸"]);
+    // A nonzero real nearer zero than ±1.175 × 10⁻³⁸ is not allowed either; zero and the
+    // smallest allowed magnitude are.
+    let tiny = format!("0.{}1", "0".repeat(39));
+    let smallest = format!("0.{}1175", "0".repeat(37));
+    assert!(limits(&doc(&format!("/Z 0.0 /M -0.0 /S {smallest} /T -{smallest}"), "", "")).is_empty(), "zero and the smallest real");
+    assert_eq!(limits(&doc(&format!("/R {tiny}"), "", "")), ["A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸"]);
+    assert_eq!(limits(&doc(&format!("/R -{tiny}"), "", "")), ["A real number is outside ±3.403 × 10³⁸, or nonzero but within ±1.175 × 10⁻³⁸"]);
+    let cid = ["A CMap maps a character code to a CID above 65535"];
+    assert_eq!(limits(&doc("", &range("3f00", "3fff", 65536), "")), cid);
+    assert_eq!(limits(&doc("", &range("0000", "0100", 65280), "")), cid, "the range reaches 65536");
+    assert_eq!(limits(&doc("", "1 begincidchar <01> 70000 endcidchar", "")), cid);
+    assert_eq!(limits(&doc("", &range("0000", "00ff", 0), &range("3f00", "3fff", 65536))), cid, "through /UseCMap");
+}
