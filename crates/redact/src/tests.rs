@@ -4207,3 +4207,27 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
 }
+
+/// A removed off layer leaves every list that names it, or its dictionary, name included, stays in
+/// the file: a sub-list of the default `/Order`, a radio-button group, a usage rule, and the
+/// alternate configurations in `/Configs`.
+#[test]
+fn a_removed_layer_leaves_every_configuration() {
+    use crate::sanitize::{Hidden, remove_hidden};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R 7 0 R] /D << /OFF [6 0 R] /Order [7 0 R [(Group) 6 0 R]] /RBGroups [[6 0 R 7 0 R]] /AS [<< /Event /Print /OCGs [6 0 R] /Category [/Print] >>] >> /Configs [8 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /Properties << /L1 6 0 R >> >> >>".to_vec(),
+        stream("", b"/OC /L1 BDC BT /F1 10 Tf 10 50 Td (Gone) Tj ET EMC BT /F1 10 Tf 10 100 Td (Kept) Tj ET"),
+        FONT.replace("95 0 R", "9 0 R").into_bytes(),
+        b"<< /Type /OCG /Name (SECRETLAYERNAME) >>".to_vec(),
+        b"<< /Type /OCG /Name (Shown layer) >>".to_vec(),
+        b"<< /Name (Other view) /OFF [7 0 R] /ON [6 0 R] /Order [6 0 R 7 0 R] >>".to_vec(),
+        widths(),
+    ]);
+    remove_hidden(&mut doc, &[Hidden::HiddenLayers]).unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"(Shown layer)") && has(b"(Other view)"), "the layer that stays and the configuration stay");
+    assert!(!has(b"SECRETLAYERNAME"), "the removed layer survived the save");
+}
