@@ -177,7 +177,7 @@ impl Scale {
     pub fn read(doc: &Document, object: &Object) -> Result<Self> {
         let o = doc.resolve(object);
         let d = o.as_dict().ok_or_else(|| invalid("invalid measure dictionary"))?;
-        if d.name(b"Subtype").is_some_and(|n| n != b"RL") {
+        if d.get(b"Subtype").map(|o| doc.resolve(o)).is_some_and(|o| !matches!(*o, Object::Null) && o.as_name() != Some(b"RL")) {
             return Err(invalid("only rectilinear measurement scales are supported"));
         }
         let format = |key: &[u8]| -> Result<(String, f64, u8)> {
@@ -188,20 +188,25 @@ impl Scale {
             }
             let o = doc.resolve(a.first().ok_or_else(|| invalid("empty number format"))?);
             let f = o.as_dict().ok_or_else(|| invalid("invalid number format dictionary"))?;
-            let precision = match f.name(b"F") {
+            let fmt = f.get(b"F").map(|o| doc.resolve(o));
+            let precision = match fmt.as_deref().and_then(Object::as_name) {
                 Some(b"R") => 0,
                 None | Some(b"D") => {
-                    let denom = f.int(b"D").unwrap_or(100);
+                    let denom = f.get(b"D").and_then(|o| doc.resolve(o).as_int()).unwrap_or(100);
                     (0..=6).find(|p| 10_i64.pow(*p) == denom).ok_or_else(|| invalid("unsupported measurement precision"))?
                 }
                 _ => return Err(invalid("fractional measurement formats are not supported yet")),
             };
-            Ok((text(f, b"U"), f.get(b"C").and_then(Object::as_f64).ok_or_else(|| invalid("missing conversion factor"))?, precision as u8))
+            Ok((
+                text(doc, f, b"U"),
+                f.get(b"C").and_then(|o| doc.resolve(o).as_f64()).ok_or_else(|| invalid("missing conversion factor"))?,
+                precision as u8,
+            ))
         };
         let (unit, x, _) = format(b"X")?;
         let y = if d.contains(b"Y") {
             let (_, y, _) = format(b"Y")?;
-            y * d.get(b"CYX").and_then(Object::as_f64).ok_or_else(|| invalid("Y scale requires CYX for lengths and areas"))?
+            y * d.get(b"CYX").and_then(|o| doc.resolve(o).as_f64()).ok_or_else(|| invalid("Y scale requires CYX for lengths and areas"))?
         } else {
             x
         };
@@ -210,7 +215,7 @@ impl Scale {
             return Err(invalid("different coordinate and distance units are not supported yet"));
         }
         let (area_unit, area_factor, _) = format(b"A")?;
-        let out = Self { x, y, unit, distance_factor, area_factor, area_unit, precision, ratio: text(d, b"R") };
+        let out = Self { x, y, unit, distance_factor, area_factor, area_unit, precision, ratio: text(doc, d, b"R") };
         out.validate()?;
         Ok(out)
     }
@@ -279,11 +284,18 @@ pub struct Reading {
 pub fn reading(kind: Kind, points: &[Point], scale: &Scale) -> Result<Reading> {
     check_points(points)?;
     scale.validate()?;
+    let points = if kind == Kind::Area { open_polygon(points) } else { points };
     let mut length = 0.0;
     for w in points.windows(2) {
         if let [a, b] = w {
             length += ((b[0] - a[0]) * scale.x).hypot((b[1] - a[1]) * scale.y);
         }
+    }
+    if kind == Kind::Area
+        && points.len() >= 3
+        && let (Some(a), Some(b)) = (points.last(), points.first())
+    {
+        length += ((b[0] - a[0]) * scale.x).hypot((b[1] - a[1]) * scale.y);
     }
     let area = if points.len() >= 3 {
         let origin = points.first().copied().unwrap_or_default();
@@ -340,7 +352,9 @@ fn validate_geometry(kind: Kind, points: &[Point]) -> Result<()> {
         Kind::Area if points.len() < 3 => return Err(invalid("area needs at least three points")),
         _ => {}
     }
-    if points.windows(2).any(|p| matches!(p,[a,b] if distance(*a,*b)<1e-6)) {
+    if points.windows(2).any(|p| matches!(p, [a, b] if distance(*a, *b) < 1e-6))
+        || (kind == Kind::Area && matches!((points.first(), points.last()), (Some(a), Some(b)) if distance(*a, *b) < 1e-6))
+    {
         return Err(invalid("adjacent measurement vertices must be distinct"));
     }
     if kind == Kind::Area {
@@ -357,8 +371,8 @@ fn validate_geometry(kind: Kind, points: &[Point]) -> Result<()> {
     }
     Ok(())
 }
-fn text(d: &Dict, k: &[u8]) -> String {
-    d.get(k).and_then(Object::as_string).map(PdfString::to_text).unwrap_or_default()
+fn text(doc: &Document, d: &Dict, k: &[u8]) -> String {
+    d.get(k).and_then(|o| doc.resolve(o).as_string().map(PdfString::to_text)).unwrap_or_default()
 }
 fn nums(v: impl IntoIterator<Item = f64>) -> Object {
     Object::Array(v.into_iter().map(Object::Real).collect())
@@ -474,7 +488,16 @@ fn read_measurement(doc: &Document, d: &Dict, kind: Kind, page: usize, index: us
     let points: Vec<Point> = v.as_chunks::<2>().0.to_vec();
     validate_geometry(kind, &points)?;
     let reading = reading(kind, &points, &scale)?;
-    Ok(Measurement { page, index, id: text(d, b"NM"), author: text(d, b"T"), label: text(d, b"PCMeasureLabel"), points, scale, reading })
+    Ok(Measurement {
+        page,
+        index,
+        id: text(doc, d, b"NM"),
+        author: text(doc, d, b"T"),
+        label: text(doc, d, b"PCMeasureLabel"),
+        points,
+        scale,
+        reading,
+    })
 }
 /// Every measurement annotation. One that can't be read is reported in `unsupported`
 /// rather than failing the whole list.
@@ -501,7 +524,8 @@ pub fn list(doc: &Document) -> Listing {
             }
             let o = doc.resolve(a);
             let Some(d) = o.as_dict() else { continue };
-            let kind = match d.name(b"IT") {
+            let it = d.get(b"IT").map(|o| doc.resolve(o));
+            let kind = match it.as_deref().and_then(Object::as_name) {
                 Some(b"LineDimension") => Kind::Distance,
                 Some(b"PolyLineDimension") => Kind::Perimeter,
                 Some(b"PolygonDimension") => Kind::Area,
