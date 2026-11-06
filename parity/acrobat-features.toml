@@ -1082,8 +1082,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/view.rs::the_hand_tool_pans_by_dragging", "crates/ui-egui/tests/it/view.rs::the_hand_tool_moves_the_page_with_the_pointer", "crates/ui-egui/tests/it/viewer.rs::v_h_and_space_pick_the_quick_tools"]
-notes = "drag to pan: the page follows the pointer point for point in the frame it moves, and stops where it is let go (no fling); Grab/Grabbing cursors; H picks it, V goes back to Select, Space held pans temporarily. Checked with kittest pointer events, not yet on a desktop"
+evidence = ["crates/ui-egui/tests/it/view.rs::the_hand_tool_pans_by_dragging", "crates/ui-egui/tests/it/view.rs::the_hand_tool_moves_the_page_with_the_pointer", "crates/ui-egui/tests/it/viewer.rs::v_h_and_space_pick_the_quick_tools", "crates/ui-egui/tests/it/ui.rs::read_mode_puts_the_tool_down_to_the_default_tool", "crates/ui-egui/tests/it/ui.rs::the_default_tool_is_saved_and_starts_the_app", "crates/ui-egui/tests/it/ui.rs::read_mode_in_full_screen_keeps_select_and_gives_back_the_default_tool"]
+notes = "drag to pan: the page follows the pointer point for point in the frame it moves, and stops where it is let go (no fling); Grab/Grabbing cursors; H picks it, V goes back to Select, Space held pans temporarily. Preferences ▸ Documents and view ▸ Default tool (Select or Hand, #6235) is the tool PdfCraft starts with and the one Read mode leaves active, so a reader who drags the page gets the Hand tool there (in full screen, where a click turns the page, Select stays and the default tool comes back when it ends); control `ui.set default-tool`. Checked with kittest pointer events, not yet on a desktop"
 
 [[feature]]
 id = "view.rotate-view"

@@ -1501,6 +1501,16 @@ fn loopback_transport_requires_the_token() {
 }
 
 #[test]
+fn control_sets_and_reports_the_default_tool() {
+    let (mut h, c) = harness();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["default_tool"], "select");
+    ok(&mut h, &c, "ui.set", json!({"key": "default-tool", "value": "hand"}));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["default_tool"], "hand");
+    assert!(call(&mut h, &c, "ui.set", json!({"key": "default-tool", "value": "highlight"})).is_err());
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["default_tool"], "hand");
+}
+
+#[test]
 fn control_default_workspace_and_session_override() {
     let (mut h, c) = harness();
     ok(&mut h, &c, "ui.set", json!({"key": "default-mode", "value": "edit"}));
