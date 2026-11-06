@@ -35,7 +35,22 @@ pub fn modal(ctx: &egui::Context, id: impl std::hash::Hash + std::fmt::Debug) ->
 
 /// Show [`modal`], outline its controls, and remember the card rect for layout checks.
 pub fn show_modal<R>(ctx: &egui::Context, id: &str, content: impl FnOnce(&mut egui::Ui) -> R) -> egui::ModalResponse<R> {
+    show_modal_sized(ctx, id, false, content)
+}
+
+/// [`show_modal`], growing from its contents' own height when `remeasure` is set rather than
+/// from the height it had last frame: one modal id that shows different contents would
+/// otherwise keep the height of the previous ones, since rows that fill the height offered to
+/// them take all of it (#5118). The width stays, and the contents stay visible (no hidden
+/// sizing frame), so the control channel can inspect a dialog the frame it opens.
+pub fn show_modal_sized<R>(ctx: &egui::Context, id: &str, remeasure: bool, content: impl FnOnce(&mut egui::Ui) -> R) -> egui::ModalResponse<R> {
     let stored = egui::Id::unique(id);
+    if remeasure && let Some(mut state) = egui::AreaState::load(ctx, stored) {
+        state.size = state.size.map(|s| egui::vec2(s.x, 0.0));
+        ctx.memory_mut(|m| m.areas_mut().set_state(egui::Modal::default_area(stored).layer(), state));
+        // The card is centred on the height it ends with: draw once more at that height.
+        ctx.request_repaint();
+    }
     modal(ctx, id).show(ctx, |ui| {
         begin_dialog(ui);
         let inner = content(ui);
