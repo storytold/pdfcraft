@@ -248,7 +248,8 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
                 painter.rect_stroke(Rect::from_two_pos(pts[0], pts[1]), CornerRadius::ZERO, stroke, egui::StrokeKind::Inside);
             }
             CommentTool::Oval if pts.len() == 2 => {
-                let r = Rect::from_two_pos(pts[0], pts[1]);
+                // Inside the dragged box, like the saved appearance and the rectangle's preview.
+                let r = Rect::from_two_pos(pts[0], pts[1]).shrink(stroke.width / 2.0);
                 painter.add(egui::Shape::ellipse_stroke(r.center(), r.size() / 2.0, stroke));
             }
             CommentTool::Polygon | CommentTool::PolyLine | CommentTool::Cloud => {
