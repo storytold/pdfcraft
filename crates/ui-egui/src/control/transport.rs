@@ -165,6 +165,12 @@ fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint
                 let _ = writeln!(write, "{e}").and_then(|_| write.flush());
                 continue;
             };
+            static NEXT_CONNECTION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            let Ok(connection) =
+                NEXT_CONNECTION.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |id| id.checked_add(1))
+            else {
+                continue;
+            };
             let client = client.clone();
             let expected = expected.clone();
             let lingering = lingering.clone();
@@ -229,7 +235,7 @@ fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint
                                     (rpc_error(id, -32001, "authenticate first: auth {token}"), true)
                                 }
                             } else {
-                                let rx = client.send(method, params);
+                                let rx = client.send_from_connection(connection, method, params);
                                 match rx.recv_timeout(std::time::Duration::from_secs(30)) {
                                     Ok(Ok(v)) => (json!({ "jsonrpc": "2.0", "id": id, "result": v }), false),
                                     Ok(Err(e)) => (rpc_error(id, -32000, &e), false),

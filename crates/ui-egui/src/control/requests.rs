@@ -40,7 +40,7 @@ impl Control {
                     Some(Value::String(r)) => Some(r.as_str()),
                     Some(_) => return Err("tool.call: root must be a folder path".into()),
                 };
-                Ok(Handled::Now(host.tool(str_param("name")?, p.get("arguments").unwrap_or(&Value::Null), root)))
+                Ok(Handled::Now(host.connected_tool(self.connection, str_param("name")?, p.get("arguments").unwrap_or(&Value::Null), root)))
             }
             "ui.inspect" | "tool.inspect" => Ok(Handled::Now(Ok(self.inspect(p)))),
             "ui.click" => self.click(p, since),

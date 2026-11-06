@@ -2057,7 +2057,7 @@ fn control_tool_call_runs_on_the_windows_documents_and_shows_the_change() {
     type ToolCalls = Arc<Mutex<Vec<(String, Value, Option<String>)>>>;
     let seen: ToolCalls = Arc::default();
     let log = seen.clone();
-    h.state_mut().tool_runner = Some(Box::new(move |session, name, args, root| {
+    h.state_mut().tool_runner = Some(Box::new(move |session, _connection, name, args, root| {
         log.lock().unwrap().push((name.to_string(), args.clone(), root.map(|r| r.display().to_string())));
         let doc = session.docs().first().map(|d| d.id).ok_or("no document")?;
         match name {
@@ -2101,7 +2101,7 @@ fn control_tool_call_runs_on_the_windows_documents_and_shows_the_change() {
 #[test]
 fn control_tool_call_refused_while_modal_open() {
     let (mut h, c) = harness();
-    h.state_mut().tool_runner = Some(Box::new(|_, _, _, _| Ok(json!({}))));
+    h.state_mut().tool_runner = Some(Box::new(|_, _, _, _, _| Ok(json!({}))));
     h.state_mut().close_request = Some(pdfcraft_ui_egui::CloseRequest::Quit);
     let e = call(&mut h, &c, "tool.call", json!({ "name": "doc_list" })).unwrap_err();
     assert!(e.contains("close the open dialog in the window before running a document tool"), "{e}");

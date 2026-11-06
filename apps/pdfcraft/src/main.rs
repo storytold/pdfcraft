@@ -433,7 +433,8 @@ fn app_creator<'a>(
         }
         if let Some(file) = &control_file {
             // `tool.call`: the automation tools, on the window's own documents.
-            app.tool_runner = Some(Box::new(|session, name, args, root| pdfcraft_automation::window::call_for_window(session, root, name, args)));
+            let mut tools = pdfcraft_automation::window::WindowTools::default();
+            app.tool_runner = Some(Box::new(move |session, connection, name, args, root| tools.call(connection, session, root, name, args)));
             let client = app.attach_control(&cc.egui_ctx);
             open_control_channel(file, pdfcraft_ui_egui::control::serve(client))?;
         }
