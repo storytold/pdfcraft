@@ -63,7 +63,7 @@ define_class!(
             let list: Option<Retained<NSAppleEventDescriptor>> = unsafe {
                 msg_send![event, paramDescriptorForKeyword: u32::from_be_bytes(*b"----")]
             };
-            let Some(list) = list else { return };
+            let Some(list) = list else { return; };
             // PdfCraft patch (#6324): odoc items arrive as 'bmrk' binary bookmarks
             // whose embedded full-path string is NFD-normalized while the on-disk
             // names may be NFC; fileURLValue() then returns nil and the published
