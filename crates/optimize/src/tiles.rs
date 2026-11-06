@@ -87,18 +87,22 @@ fn size(s: &Stream) -> Option<(u32, u32)> {
 }
 
 /// An image's samples, decoded: rows of `bits_per_pixel` × width bits each, padded to a byte.
-struct Samples {
+/// Kept as the image stores them, in its own colour space and depth (CMYK, indexed, 16-bit, a
+/// stencil mask), so each tile redraws exactly the picture it replaces. That is why this is not
+/// the crate's [`crate::Samples`], which turns an image into 8-bit grey or RGB for tools that
+/// repaint it and refuses the rest.
+struct StoredSamples {
     data: Vec<u8>,
     bits_per_pixel: usize,
     /// Bits per colour component as stored: 8 for a decoded JPEG.
     bits_per_component: i64,
 }
 
-impl Samples {
+impl StoredSamples {
     /// Image `s`, `w` × `h`, decoded. A JPEG gives eight-bit grey or RGB ([`images::pixels`]),
     /// anything else its samples as they are stored ([`ImageBudget::decode`]). A soft mask is grey
     /// whether or not it says so: ISO 32000-2 requires `/ColorSpace /DeviceGray` of one.
-    fn decode(doc: &Document, s: &Stream, (w, h): (u32, u32), soft_mask: bool, budget: &mut ImageBudget) -> Option<Samples> {
+    fn decode(doc: &Document, s: &Stream, (w, h): (u32, u32), soft_mask: bool, budget: &mut ImageBudget) -> Option<StoredSamples> {
         if u64::from(w) * u64::from(h) > MAX_PIXELS {
             return None;
         }
@@ -112,7 +116,7 @@ impl Samples {
             Some(Filter::Dct) if !stencil => {
                 let components = components(images::components)?;
                 let data = images::pixels(doc, s, components, budget)?;
-                Some(Samples { data, bits_per_pixel: components.checked_mul(8)?, bits_per_component: 8 })
+                Some(StoredSamples { data, bits_per_pixel: components.checked_mul(8)?, bits_per_component: 8 })
             }
             Some(Filter::Dct) => None,
             _ => {
@@ -129,7 +133,7 @@ impl Samples {
                     return None;
                 }
                 data.truncate(len);
-                Some(Samples { data, bits_per_pixel, bits_per_component })
+                Some(StoredSamples { data, bits_per_pixel, bits_per_component })
             }
         }
     }
@@ -207,14 +211,14 @@ struct Tiles {
 /// Image `image` cut into tiles, or `None` when it can't be read faithfully.
 fn tiles(doc: &Document, image: &Stream, budget: &mut ImageBudget) -> Option<Tiles> {
     let dims = size(image)?;
-    let samples = Samples::decode(doc, image, dims, false, budget)?;
+    let samples = StoredSamples::decode(doc, image, dims, false, budget)?;
     // A soft mask overrides `/Mask` (ISO 32000-2, the image dictionary's `/SMask`). A mask stream
     // goes into the same tiles, so it has to have the image's size.
     let soft = image.dict.contains(b"SMask");
     let mask_key: &'static [u8] = if soft { b"SMask" } else { b"Mask" };
     let mask_object = image.dict.get(mask_key).map(|m| doc.resolve(m));
     let mask = match mask_object.as_deref() {
-        Some(Object::Stream(m)) if size(m) == Some(dims) => Some((m, Samples::decode(doc, m, dims, soft, budget)?)),
+        Some(Object::Stream(m)) if size(m) == Some(dims) => Some((m, StoredSamples::decode(doc, m, dims, soft, budget)?)),
         // A colour key mask goes on each tile as it is (`tile_dict`).
         Some(Object::Array(_)) if !soft => None,
         None | Some(Object::Null) => None,
@@ -225,7 +229,7 @@ fn tiles(doc: &Document, image: &Stream, budget: &mut ImageBudget) -> Option<Til
     let overlap = if soft { 0 } else { OVERLAP };
     for y in spans(dims.1, overlap) {
         for x in spans(dims.0, overlap) {
-            let tile = |s: &Stream, samples: &Samples| -> Option<Stream> {
+            let tile = |s: &Stream, samples: &StoredSamples| -> Option<Stream> {
                 let dict = tile_dict(doc, &s.dict, (x.1.saturating_sub(x.0), y.1.saturating_sub(y.0)), samples.bits_per_component);
                 Some(Stream::flate(dict, &samples.cut(dims.0, x, y)?))
             };
@@ -329,14 +333,14 @@ mod tests {
     fn a_tile_takes_whole_bytes_of_each_row_at_any_bit_depth() {
         // Two rows of 4004 one-bit pixels: 501 bytes each, the last holding 4 pixels.
         let row: Vec<u8> = (0..501).map(|i| i as u8).collect();
-        let samples = Samples { data: [row.clone(), row.iter().map(|b| !b).collect()].concat(), bits_per_pixel: 1, bits_per_component: 1 };
+        let samples = StoredSamples { data: [row.clone(), row.iter().map(|b| !b).collect()].concat(), bits_per_pixel: 1, bits_per_component: 1 };
         let tile = samples.cut(4004, (4000, 4004), (0, 2)).unwrap();
         assert_eq!(tile, [row[500], !row[500]]);
         let first = samples.cut(4004, (0, 2001), (1, 2)).unwrap();
         assert_eq!(first.len(), 251);
         assert_eq!(first[0], !row[0]);
         // Sixteen-bit RGB: six bytes a pixel.
-        let rgb16 = Samples { data: (0..=255u8).cycle().take(6 * 2002).collect(), bits_per_pixel: 48, bits_per_component: 16 };
+        let rgb16 = StoredSamples { data: (0..=255u8).cycle().take(6 * 2002).collect(), bits_per_pixel: 48, bits_per_component: 16 };
         assert_eq!(rgb16.cut(2002, (2000, 2002), (0, 1)).unwrap(), rgb16.data[12_000..12_012]);
         // Rows past the data are no tile, not a panic.
         assert_eq!(samples.cut(4004, (0, 8), (1, 3)), None);
