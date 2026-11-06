@@ -203,16 +203,24 @@ fn note_once(app: &mut PdfCraftApp, s: &Snapshot) {
         })
         .unwrap_or([36.0, 36.0]);
     let doc_id = open.doc_id;
-    let depth = app.session.get(doc_id).map_or(0, |d| d.undo_depth());
+    let before = app.session.get(doc_id).map(|d| (d.undo_depth(), d.edit_generation()));
     let contents = format!("Instruction: {}\n\nAgent response: {}", open.asked, answer);
     let args = json!({"doc":doc_id.0,"page":page,"type":"note","at":at,"contents":contents,"author":author});
     if app.run_tool("comment_add", &args, None).is_ok() {
         let after = app.session.get(doc_id);
         if let Some(open) = app.ask_agent.open.as_mut() {
             open.commented = true;
-            open.edits_count = open.edits_count.saturating_add(after.map_or(0, |d| d.undo_depth()).saturating_sub(depth));
-            if let Some(after) = after {
+            // A note is one edit even when the engine evicts an older history entry.
+            // Do not advance a supposedly safe checkpoint if that step cannot be counted.
+            if let (Some((depth, generation)), Some(after)) = (before, after) {
+                let created = after.undo_depth().saturating_sub(depth);
+                open.edits_count = open.edits_count.saturating_add(created);
+                if created != 1 || generation.checked_add(1) != Some(after.edit_generation()) {
+                    open.undo_safe = false;
+                }
                 open.expected_generation = after.edit_generation();
+            } else {
+                open.undo_safe = false;
             }
         }
     }

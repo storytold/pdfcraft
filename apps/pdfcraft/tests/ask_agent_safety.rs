@@ -3,7 +3,7 @@
 #[path = "../../../crates/automation/tests/connected_support/mod.rs"]
 mod connected_support;
 
-use egui_kittest::Harness;
+use egui_kittest::{Harness, kittest::Queryable};
 use pdfcraft_ui_egui::{PdfCraftApp, control::ControlClient};
 use serde_json::{Value, json};
 use std::{
@@ -237,4 +237,72 @@ fn failed_tool_work_keeps_a_literal_error_note_and_one_person_owned_undo_group()
     app.session.undo(doc).unwrap();
     assert_eq!(app.session.get(doc).unwrap().info.pages[0].rotation, 0);
     assert_eq!(app.session.get(doc).unwrap().undo_depth(), 0);
+}
+
+/// Real edits reach the engine's bounded history without manufacturing a large document.
+fn fill_history(owner: &mut Owner, count: usize) {
+    for _ in 0..count {
+        let result = owner.tool("page_rotate", json!({"doc":1,"pages":[1],"degrees":90}));
+        assert!(result.get("error").is_none(), "{result}");
+    }
+    assert_eq!(owner.app.state().session.docs()[0].undo_depth(), count);
+    owner.app.state_mut().set_option("select", "1").unwrap();
+}
+
+/// Adding the response note at the history cap must never undo only that note.
+#[test]
+fn bounded_history_response_note_refuses_partial_agent_undo() {
+    let mut owner = Owner::new();
+    fill_history(&mut owner, 99);
+    let id = owner.ask();
+    let result = owner.tool("page_rotate", json!({"doc":1,"pages":[1],"degrees":90}));
+    assert!(result.get("error").is_none(), "{result}");
+    assert_eq!(owner.app.state().session.docs()[0].undo_depth(), 100);
+    let reply = owner.wire("agent.reply", json!({"id":id,"text":"The rotation is complete."}));
+    assert!(reply.get("error").is_none(), "{reply}");
+    owner.app.run_steps(3);
+    let notes = owner.tool("comment_list", json!({"doc":1}));
+    assert!(notes.to_string().contains("The rotation is complete."), "{notes}");
+    let before = owner.app.state().session.docs()[0].bytes.clone();
+    let rotation = owner.app.state().session.docs()[0].info.pages[0].rotation;
+    owner.app.get_by_label("Undo").click();
+    owner.app.run_steps(3);
+    assert!(owner.app.state().session.docs()[0].bytes == before, "an unprovable checkpoint must refuse the whole Undo");
+    assert_eq!(owner.app.state().session.docs()[0].info.pages[0].rotation, rotation);
+    assert_eq!(owner.app.state().session.docs()[0].undo_depth(), 100);
+    assert!(owner.client.agent_hub().snapshot(id).is_none(), "the person's choice was actually handled");
+}
+
+/// A batch beginning with Save is not a standalone, history-free Save.
+#[test]
+fn bounded_history_save_then_rotation_batch_cannot_borrow_the_save_exception() {
+    let mut owner = Owner::new();
+    fill_history(&mut owner, 100);
+    let initial_rotation = owner.app.state().session.docs()[0].info.pages[0].rotation;
+    let id = owner.ask();
+    let path = std::env::temp_dir().join(format!("pdfcraft-ask-bounded-batch-{}.pdf", std::process::id()));
+    let result = owner.tool(
+        "command_batch",
+        json!({"steps":[
+            {"id":"file.save","params":{"doc":1,"path":path}},
+            {"id":"page.rotate","params":{"doc":1,"pages":[1],"degrees":90}}
+        ]}),
+    );
+    assert!(result.get("error").is_none(), "the actual captured page batch must still run: {result}");
+    assert!(path.exists(), "the first step really saved the document");
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(owner.app.state().session.docs()[0].info.pages[0].rotation, (initial_rotation + 90) % 360);
+    assert_eq!(owner.app.state().session.docs()[0].undo_depth(), 100);
+    let reply = owner.wire("agent.reply", json!({"id":id,"text":"The save and rotation completed."}));
+    assert!(reply.get("error").is_none(), "{reply}");
+    owner.app.run_steps(3);
+    let notes = owner.tool("comment_list", json!({"doc":1}));
+    assert!(!notes.to_string().contains("The save and rotation completed."), "do not append a note to an unprovable transaction: {notes}");
+    assert!(owner.local("ui.askAgent", json!({"instruction":"continue"})).unwrap_err().contains("STALE_TARGET"));
+    let before = owner.app.state().session.docs()[0].bytes.clone();
+    owner.app.get_by_label("Undo").click();
+    owner.app.run_steps(3);
+    assert!(owner.app.state().session.docs()[0].bytes == before, "refusal must preserve the entire edited state");
+    assert_eq!(owner.app.state().session.docs()[0].undo_depth(), 100);
+    assert!(owner.client.agent_hub().snapshot(id).is_none());
 }

@@ -43,7 +43,11 @@ impl WindowTools {
                     target = Some(proof);
                 }
             }
-            return target.ok_or_else(unsupported);
+            let mut target = target.ok_or_else(unsupported)?;
+            // The first step proves scope, not the transaction's history behavior. Even a
+            // one-step batch must not inherit the standalone Save exception.
+            target["tool"] = json!("command_batch");
+            return Ok(target);
         }
         let id = DocId(args["doc"].as_u64().ok_or_else(unsupported)?);
         let document = session.get(id).ok_or("STALE_TARGET: the document was closed")?;

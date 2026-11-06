@@ -86,7 +86,13 @@ impl PdfCraftApp {
             open.edits_count = open.edits_count.saturating_add(created);
             if before.revision != open.expected_generation
                 || after_depth < depth
-                || (after.as_ref().is_some_and(|after| after.revision != before.revision) && created == 0 && proof["tool"] != "doc_save")
+                // History is bounded: a changed revision need not grow its depth. A batch
+                // may also add some steps while evicting others, so require every revision
+                // to be accounted for. Only a genuinely standalone Save adds no undo step.
+                || after.as_ref().is_none_or(|after| {
+                    after.revision.checked_sub(before.revision) != u64::try_from(created).ok()
+                        && !(proof["tool"] == "doc_save" && created == 0 && after.revision >= before.revision)
+                })
             {
                 open.undo_safe = false;
             }
