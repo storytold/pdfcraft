@@ -22,9 +22,10 @@ const INDENT_KEY: &str = "script-indent";
 /// The tallest the box can be dragged, in points.
 const MAX_HEIGHT: f32 = 900.0;
 
-/// Most tokens coloured; the rest of a longer script is plain. Code doesn't get there: a form script
-/// at the 256 KiB limit is some 13,000 tokens, and minified some 30,000. A long table of values can
-/// (`"abc",` at the limit is some 44,000). A script of `1,1,1,…` is 131,072, with as many plain
+/// Most tokens coloured; the rest of a longer script is plain. An ordinary form script doesn't get
+/// there: at the 256 KiB limit it is some 13,000 tokens, and minified some 30,000. Code packed with
+/// keywords and numbers can (`var x=1;` at the limit is some 65,000), and so can a long table of
+/// values (`"abc",` at the limit is some 44,000). A script of `1,1,1,…` is 131,072, with as many plain
 /// pieces between them, and each is a section the layout shapes on its own: its first layout took
 /// 1.6 s, and every keystroke most of a second. This bounds that to about a quarter of a second.
 const MAX_COLOURED_TOKENS: usize = 40_000;
@@ -230,7 +231,8 @@ fn editor(ui: &mut egui::Ui, text: &mut String, id: egui::Id, rows: usize, width
         .show(ui, |ui| {
             outer = ui.max_rect();
             ui.painter().rect_filled(outer, corner, fill);
-            egui::ScrollArea::vertical().id_salt(id.with("scroll")).auto_shrink([false, false]).show(ui, |ui| {
+            // With no height of its own to keep: it would stand past a box dragged as short as it goes.
+            egui::ScrollArea::vertical().id_salt(id.with("scroll")).auto_shrink([false, false]).min_scrolled_height(0.0).show(ui, |ui| {
                 viewport = ui.clip_rect();
                 height = ui.available_height();
                 let margin = egui::Margin { left: (10.0 + gutter).round().clamp(0.0, 120.0) as i8, right: 10, top: 6, bottom: 6 };

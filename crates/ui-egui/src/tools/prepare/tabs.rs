@@ -267,8 +267,11 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
     }
     let mut error = None;
     let (mut commit, mut discard) = (false, false);
+    // Text typed for another kind of action can be past the script's limit, as the box then says, and
+    // isn't added. Editing, it can only be the script as stored, which Update leaves as it is.
+    let too_long = !editing && d.new_action.kind == 0 && d.new_action.text.len() > pdfcraft_engine::js::MAX_SCRIPT_BYTES;
     ui.horizontal(|ui| {
-        commit = ui.button(if editing { tl!("Update") } else { tl!("Add") }).clicked();
+        commit = ui.add_enabled(!too_long, egui::Button::new(if editing { tl!("Update") } else { tl!("Add") })).clicked();
         discard = editing && ui.button(tl!("Discard")).clicked();
     });
     if commit {

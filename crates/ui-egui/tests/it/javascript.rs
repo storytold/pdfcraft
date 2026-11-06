@@ -2,7 +2,7 @@
 //! script and Preferences ▸ JavaScript.
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 /// A form with a text field and a push button whose Mouse Up script fills it in.
@@ -274,6 +274,7 @@ fn a_field_script_too_long_to_edit_is_left_as_it_is() {
     assert!(h.query_by_label("JavaScript").is_none(), "in place of the box");
     h.get_by_label("Update").click();
     h.run_steps(2);
+    assert!(h.state().field_props.as_ref().unwrap().editing.is_none(), "Update takes it back as it was");
     h.get_by_label("OK").click();
     h.run_steps(2);
     assert!(h.state().field_props.is_none(), "the dialog closed");
@@ -281,6 +282,34 @@ fn a_field_script_too_long_to_edit_is_left_as_it_is() {
     assert_eq!(doc.bytes, before, "OK writes nothing");
     assert_eq!(doc.undo_label(), None, "and adds no undo step");
     assert!(!doc.dirty);
+}
+
+/// Text past the limit typed for another kind of action, then turned into a script: the box says it is
+/// too long, Add is off, and neither the field's actions nor the document change.
+#[test]
+fn a_value_past_the_limit_is_not_added_as_a_script() {
+    let mut h = harness_of(form_with("go\\(\\);"));
+    let id = h.state().active_ids().unwrap().1;
+    let before = h.state().session.get(id).unwrap().bytes.clone();
+    h.state_mut().open_field_props("hello", 0);
+    let draft = h.state_mut().field_props.as_mut().unwrap();
+    draft.tab = pdfcraft_ui_egui::prepare::FieldTab::Actions;
+    let actions = draft.actions.clone();
+    draft.new_action.trigger = pdfcraft_engine::FieldTrigger::MouseDown;
+    draft.new_action.kind = 1;
+    draft.new_action.text = "x".repeat(pdfcraft_engine::js::MAX_SCRIPT_BYTES + 1);
+    h.run_steps(2);
+    assert!(!h.get_by_label("Add").accesskit_node().is_disabled(), "the limit is a script's");
+    h.state_mut().field_props.as_mut().unwrap().new_action.kind = 0;
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("too long").is_some(), "the box says so");
+    assert!(h.get_by_label("Add").accesskit_node().is_disabled());
+    h.get_by_label("Add").click();
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().actions, actions);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().bytes, before);
 }
 
 /// A paste past the limit never gets as far as the field: the box refuses it and says why, and Update
@@ -473,6 +502,65 @@ fn the_tabs_of_field_properties_stay_put() {
         let y = tabs_at(&mut h, tab);
         assert!((y - tallest).abs() < 25.0, "{tab:?}: in a short window the tabs moved from {tallest} to {y}");
     }
+}
+
+/// However short the window, a tall tab scrolls between the title and the buttons: at the app's least
+/// height the Actions tab of a text field pushed them off the screen. The script box gives up its
+/// height first, and the rest of the tab is still reachable.
+#[test]
+fn a_tab_too_tall_for_the_window_scrolls_under_the_title_and_above_the_buttons() {
+    use pdfcraft_ui_egui::prepare::FieldTab as T;
+    for height in [520.0, 560.0, 600.0, 640.0] {
+        let mut h = sized(egui::vec2(820.0, height));
+        h.state_mut().open_field_props("greeting", 0);
+        for tab in [T::Actions, T::General, T::Appearance, T::Position, T::Format, T::Validate, T::Calculate, T::Actions] {
+            h.state_mut().field_props.as_mut().unwrap().tab = tab;
+            h.run_steps(6);
+            let title = h.get_by_label("Text Field Properties").rect();
+            assert!(title.top() >= 0.0, "{height}, {tab:?}: title at {title:?}");
+            let ok = h.get_by_label("OK").rect();
+            assert!(ok.bottom() <= height, "{height}, {tab:?}: OK at {ok:?}");
+        }
+    }
+    // At the least height: the box is as short as it goes, and the wheel brings up what is under it.
+    let mut h = sized(egui::vec2(820.0, 520.0));
+    h.state_mut().open_field_props("greeting", 0);
+    h.state_mut().field_props.as_mut().unwrap().tab = T::Actions;
+    h.run_steps(6);
+    let script = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect();
+    assert!(script.height() < 70.0, "{script:?}");
+    let (ok, locked) = (h.get_by_label("OK").rect(), h.get_by_label("Locked").rect());
+    assert!(locked.bottom() > ok.top(), "off the end of the tab for now: {locked:?}, {ok:?}");
+    // What shows of a long script stays inside the box's frame, at its shortest too.
+    h.state_mut().field_props.as_mut().unwrap().new_action.text = "a;\n".repeat(50);
+    h.run_steps(6);
+    let script = h.get_by_role(egui::accesskit::Role::MultilineTextInput).rect();
+    let shapes = &h.output().shapes;
+    let frame = shapes.iter().find_map(|c| match &c.shape {
+        egui::Shape::Rect(r) if r.fill.a() > 0 && (r.rect.top() - script.top()).abs() < 1.0 && (r.rect.left() - script.left()).abs() < 1.0 => {
+            Some(r.rect)
+        }
+        _ => None,
+    });
+    let frame = frame.expect("the box's frame");
+    let shown = shapes.iter().find_map(|c| match &c.shape {
+        egui::Shape::Text(t) if t.galley.text().starts_with("a;") => Some(c.clip_rect),
+        _ => None,
+    });
+    let shown = shown.expect("the script");
+    assert!(shown.bottom() <= frame.bottom() + 4.0, "shown down to {shown:?}, in a frame of {frame:?}");
+    let over = h.get_by_label("Select Trigger:").rect().center();
+    h.hover_at(over);
+    h.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -400.0),
+        modifiers: egui::Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Wheel,
+    });
+    h.run_steps(10);
+    let locked = h.get_by_label("Locked").rect();
+    assert!(locked.bottom() <= h.get_by_label("OK").rect().top(), "scrolled up to it: {locked:?}");
 }
 
 /// A box dragged tall and reopened in a short window measures what it is, not the part still on the

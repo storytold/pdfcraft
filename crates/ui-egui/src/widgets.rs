@@ -55,6 +55,9 @@ const DIALOG_EDGE: f32 = 16.0;
 /// How tall a dialog's row of pill buttons is.
 const DIALOG_BUTTONS: f32 = 30.0;
 
+/// The least of a dialog's scrolling body that shows, in a window too short for more.
+const MIN_DIALOG_BODY: f32 = 80.0;
+
 /// How much taller the dialog `ui` is in can grow and still fit in the window with
 /// [`DIALOG_EDGE`] to spare above and below (negative when it is already too tall), by what it held
 /// last frame: its card as [`show_modal`] stored it, or less where [`dialog_buttons_keeping_height`]
@@ -73,14 +76,30 @@ fn window_room(ui: &egui::Ui) -> f32 {
     ui.ctx().content_rect().height() - 2.0 * DIALOG_EDGE
 }
 
+/// The part of a dialog with tabs that scrolls when it is too tall for the window, with a space and
+/// [`dialog_buttons_keeping_height`] under it. Returns how many points of it are out of sight.
+///
+/// A modal only lets its content grow a little a frame, so the least height is what has a taller tab
+/// whole at once. It has a point more than [`dialog_room`] gives a script box, so a box at its tallest
+/// doesn't make the tab scroll, and bring a scrollbar over the box's corner.
+pub(crate) fn dialog_scrolling_body(ui: &mut egui::Ui, id_salt: &str, add: impl FnOnce(&mut egui::Ui)) -> f32 {
+    let above = ui.cursor().top() - ui.min_rect().top();
+    let below = 6.0 + ui.spacing().item_spacing.y + DIALOG_BUTTONS + 2.0 * f32::from(DIALOG_PAD_Y);
+    let room = (window_room(ui) - above - below + 1.0).max(MIN_DIALOG_BODY);
+    let body = egui::ScrollArea::vertical().id_salt(id_salt).max_height(room).min_scrolled_height(room).auto_shrink([false, true]).show(ui, add);
+    (body.content_size.y - body.inner_rect.height()).max(0.0)
+}
+
 /// The row of buttons at the bottom of a dialog with tabs. Laid out right to left it takes all the
 /// height left, so the card never shrinks and the tabs above it stay put when a shorter tab is picked,
 /// and the buttons, at the bottom of that height, do too.
-/// So the card says nothing of what the dialog holds, and this tells [`dialog_room`] instead. A card
-/// too tall for the window does shrink, as the row then takes only its own height.
-pub(crate) fn dialog_buttons_keeping_height(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+/// So the card says nothing of what the dialog holds, and this tells [`dialog_room`] instead, counting
+/// the `hidden` points of its body scrolled out of sight: a script box gives up its height before
+/// the tab has to scroll. A card too tall for the window does shrink, as the row then takes only its
+/// own height.
+pub(crate) fn dialog_buttons_keeping_height(ui: &mut egui::Ui, hidden: f32, add: impl FnOnce(&mut egui::Ui)) {
     let layer = ui.layer_id().id;
-    let held = ui.cursor().top() - ui.min_rect().top() + DIALOG_BUTTONS + 2.0 * f32::from(DIALOG_PAD_Y);
+    let held = ui.cursor().top() - ui.min_rect().top() + hidden + DIALOG_BUTTONS + 2.0 * f32::from(DIALOG_PAD_Y);
     let frame = ui.ctx().cumulative_frame_nr();
     ui.ctx().data_mut(|d| d.insert_temp(layer.with("held"), (frame, held)));
     let card: Option<Rect> = ui.ctx().data(|d| d.get_temp(layer.with("card")));
