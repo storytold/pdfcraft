@@ -662,6 +662,14 @@ pub(crate) fn display_bytes(editor: Option<&mut Editor>, bytes: &Arc<Vec<u8>>) -
     }
 }
 
+/// `doc` as the reader shows it: comments without an appearance stream drawn
+/// (`pdfcraft_annot::with_missing_appearances`) and form fields drawn from their values where the
+/// file leaves that to the viewer. `None` when `doc` needs neither. The vector print draws from
+/// this copy too, so what prints is what the page shows (#371, #3475 draw them for display only).
+pub(crate) fn as_displayed(doc: &pdfcraft_cos::Document) -> Option<pdfcraft_cos::Document> {
+    with_field_appearances(pdfcraft_annot::with_missing_appearances(doc), doc)
+}
+
 /// `comments` (the display copy with comment appearances, if it needed any; else the document
 /// itself) with its form fields drawn from their values where the file leaves that to the viewer.
 fn with_field_appearances(comments: Option<pdfcraft_cos::Document>, doc: &pdfcraft_cos::Document) -> Option<pdfcraft_cos::Document> {
