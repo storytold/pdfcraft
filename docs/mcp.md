@@ -103,8 +103,10 @@ config works across the suite) keep the agent to the folders you give it:
 - `--root DIR` still works and can be combined with these flags. Both then apply: a path must be
   inside `--root` and inside the matching automation root.
 
-`pdfcraft-cli mcp` always runs the session in its own process (there is no flag to connect it to a
-running app), so the roots cover every server it starts. The desktop app is not confined by them.
+Without `--connect`, `pdfcraft-cli mcp` runs the session in its own process, so the roots cover
+every server it starts. In connected mode (`--connect FILE`), `--root DIR` is forwarded to the
+window, but `--automation-read-root` and `--automation-write-root` are not supported yet and are
+refused at start.
 
 What the roots do not cover: tools that take no path still read and change the open documents, and
 `text_extract` and the other inspection tools return their content. Keychain and Windows
@@ -158,3 +160,108 @@ resources and their templates are preserved.
 Unknown top-level argument keys are refused with JSON-RPC `-32602` (invalid params) instead of
 being ignored, so a misspelled argument is reported rather than silently dropped. Clients that
 sent extra keys before get an error now.
+
+## Connected mode: the open window
+
+`pdfcraft-cli mcp --connect FILE [--root DIR] [--compact]` works on the desktop app started with
+`pdfcraft --control FILE` instead of a session of its own:
+
+- **Every tool and resource acts on the window's documents.** Each call goes to the window's
+  control method `tool.call {name, arguments, root?}`, which runs the same tool table on the
+  window's session between frames, like a menu command, and draws what changed. `doc` ids are the
+  window's (`doc_list`, `ui_state`); a document a tool opens or makes gets a tab behind the
+  person's. Each authenticated connection keeps its own paragraph listings and OCR review
+  context. List a page with `text_paragraphs` before editing/rendering by paragraph number.
+  Another connection's listing cannot renumber your targets; an outside edit or bounded-state
+  eviction requires a fresh listing/review. `--root` confines paths, including a save destination
+  inherited from an already-open document, as it does headless; `--automation-read-root` and
+  `--automation-write-root` are not supported yet with `--connect`.
+- **Read-only window inspection**: `ui_state`, `ui_inspect` and `ui_screenshot` (an image) are
+  listed in normal and compact mode. MCP inspection uses the protected `tool.inspect` boundary
+  rather than the existing trusted UI driver's `ui.inspect`. MCP does not expose UI input or menu commands: those could
+  bypass path confinement or make a signature without the person's click. Use document tools
+  for edits. Inspection and captures are refused while a signing or password dialog is open.
+- **Left to the person**: all `sign_*` calls, `fill_sign_add` with a signature or initials,
+  embedded signature-image export (`comment_image_preview`), `redact_apply`, `doc_close`,
+  `edit_undo` and `edit_redo` are
+  refused in the window, including through `command_run` and `command_batch`. An agent may add
+  a signature field, text and dates, or redaction marks; the person reviews and signs/applies in
+  the app. No signing credentials are accepted by these connected tools. Headless mode keeps
+  its existing signing and history behavior. Connected history is refused because its snapshots
+  may belong to the person and may restore a signature; no agent-specific history provenance
+  has been established. Use Undo/Redo in the window yourself.
+- **Security**: the control file is checked as `pdfcraft-cli ui` checks it (a regular file of
+  yours, owner-only permissions on Unix, no link) and read again at each reconnection. The
+  token goes only to `127.0.0.1`. No port is opened by the CLI. A lost, malformed or timed-out
+  reply is never automatically replayed: it may already have changed the document. Inspect
+  `ui_state`/`doc_info` before deciding whether to retry; a later call reconnects.
+  On Windows this check does not validate file ACLs: keep the control file in a directory only
+  your account can write. Once connected, tools run with the desktop process's permissions;
+  permitted file operations do not ask for a separate confirmation on every call. Configure
+  `--root` to restrict file access; edits to already-open documents are a separate capability.
+- **Typing is preserved**: if a window editor has uncommitted text (comments included), a queued edit or an open dialog, document
+  tools refuse with guidance to finish typing and close the dialog first. A tool never saves an older field value
+  behind the editor or overwrites the person's draft. Changed documents invalidate cached
+  rendering and stale object/field selections; the active tab and reader's place are kept.
+- **When the window isn't there**, the server still starts (a missing control file is reported
+  on stderr) and each tool answers how to start the app; a control file others can read is
+  refused at start.
+- **Limits**: a tool runs on the window's thread, so a long one (OCR, optimizing) holds the window
+  up, and the control channel gives up after 30 s (the tool may still finish). A hidden,
+  minimized or locked window may draw no frames: screenshots then fail after 5 s, and
+  requests can wait until it is drawn again.
+
+Ask Agent exposes `wait_for_request` and `reply_to_request` through this bridge.
+Requests are session-only, connection-owned, and capture the original document identity,
+revision and selection. A response or progress note is accepted on the document owner's
+thread against its current revision. Changing tabs never retargets Send; return to the
+original tab before sending. An empty listen clears the connection's previous request tag.
+
+A claimed request uses scoped document tools. Paragraph replacements require that the same
+connection listed the page and that every source word matches rendered glyphs entirely inside the
+captured text quads. Selecting a few words does not authorize replacing their entire
+paragraph. After a replacement, the held selection follows the edited paragraph's actual
+new ink and narrows to that paragraph. `text_edit` accepts only document, page, paragraph
+and text in this mode; layout/style changes, line-index edits and unprovable mutations are
+refused with `UNPROVEN_TARGET`. Target proofs have a bounded glyph-matching budget and refuse ambiguous/missing glyphs.
+Page rotation and ordinary Save (`doc`, optional `path`) require the complete affected pages
+in the captured selection. Rectangular comments use normalized PDF coordinates, including
+rotated pages and offset crop boxes. Multi-step region edits are refused; page-scoped
+batches are checked before execution. Other connected tool calls retain their ordinary
+capabilities when there is no claimed request. Signing remains person-only.
+
+A connection carrying a request cannot use synthetic UI input or `ui.command` to bypass
+these tool checks. The general UI control channel is still privileged: its token grants
+control of the desktop session and is not a sandbox separating clients who share that
+token. Requests never silently run in a separate headless document.
+
+`text`, `proposal`, `format` and `comment` responses are bounded plain text. A proposal-only
+response is retained, displayed as “Proposal (not applied)”, and copied into the native
+agent-authored review note. `format` is descriptive metadata and never selects a parser or
+executor. Keep retains already executed tool edits and notes; it never applies a proposal.
+The note is attached to the original document, with its PDF coordinates converted to the
+tool's view coordinates. The obsolete local translation catalogs were dropped after their
+migration to craft-i18n #141, retaining that migration's translator credit; new labels here
+are English source strings.
+
+Keep and Undo remain the person's actions. They count the actual undo steps a tool added,
+including steps before a failed call; a Save adding no history contributes zero. Keep groups
+only a contiguous run whose revision and undo depth still match. If another edit intervened,
+its history is left alone and the person uses the ordinary Edit menu. Connected Undo/Redo
+remain refused until typed history provenance can distinguish human and agent work.
+
+If a connection is lost after a tool edit but before its request advances, the app keeps the
+actual review checkpoint and invalidates the old request. Keep/Undo remain available with
+the same revision/history guards; the old selection is never silently reused for a new Send.
+If the new selection cannot be proved, keep or close the request and select again. The last
+validated editor's identity is retained for an interrupted request's plain-text failure note.
+Native listeners may omit their display name on later polls without losing their registered
+identity; an explicit valid name replaces it, and an invalid name changes nothing.
+
+Field detection is a read only with explicit `add:false`: the ordinary default creates fields,
+so a claimed request must not treat it as inspection. Automatic additions without a provable
+scope are refused; unclaimed ordinary detection retains its existing behavior. Request tags
+are checked for an exact unsigned-integer match on the authenticated connection before action.
+Remote `ui.askAgent {close:true}` cannot close an active request, even after failure or an empty
+listen, because closing would retain tool edits. The person closes/reviews it in the window;
+a draft bubble that has not sent a request can still be closed through that method.

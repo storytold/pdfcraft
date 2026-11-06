@@ -5,6 +5,11 @@
 //! configuration), and stops when its input closes. It opens no network port; the transport is
 //! newline-delimited JSON-RPC 2.0 over stdin/stdout.
 //!
+//! **Connected mode** ([`McpServer::with_window`], `pdfcraft-cli mcp --connect FILE`): the tools and
+//! resources act on the documents of the open PdfCraft window instead of a session of the
+//! server's own, through the window's authenticated control channel, and `ui_*` tools see and
+//! drive the window itself. See [`crate::window`].
+//!
 //! Implemented: `initialize`, `ping`, `tools/list`, `tools/call`, `resources/list`,
 //! `resources/templates/list`, `resources/read`, and the `notifications/*` the client sends.
 //! Resources expose the open documents read-only: `pdfcraft://doc/{doc}/info` (JSON),
@@ -16,6 +21,7 @@ use std::io::{BufRead, Write};
 use base64::Engine as _;
 use serde_json::{Value, json};
 
+use crate::window::{self, Window};
 use crate::{Automation, Content, ToolError};
 
 /// Protocol revisions we speak, newest first.
@@ -36,6 +42,12 @@ const INSTRUCTIONS: &str = "PdfCraft edits PDFs. Open a file with doc_open to ge
 resources: pdfcraft://doc/{doc}/info, /text, /page/{page}/text and /page/{page}/image. \
 command_list discovers command ids and tool schemas; command_run executes one, command_batch runs several. \
 doc_inspect returns open document state; render_preview returns a bounded PNG.";
+
+/// Appended to the instructions in connected mode.
+const WINDOW_INSTRUCTIONS: &str = " Connected to the open PdfCraft window: every tool works on the window's own documents \
+(doc ids as in ui_state and doc_list), and the person sees each change. ui_state, ui_screenshot and \
+ui_inspect see the window read-only. UI input is not exposed through MCP; use the document tools to edit. Signing, creating digital IDs, trusting \
+certificates and closing tabs stay with the person.";
 
 /// Appended to the instructions in compact mode.
 const COMPACT_INSTRUCTIONS: &str = " Only a core set of tools is listed. Every other tool is still available: find it with \
@@ -67,11 +79,23 @@ const TOOL_CALL: &str = "tool_call";
 pub struct McpServer {
     automation: Automation,
     compact: bool,
+    /// Connected mode: tools go to this window. The automation then only holds the root.
+    window: Option<Box<dyn Window>>,
+    client_name: Option<String>,
+    /// Latest claim is tagged automatically; the application still validates connection ownership.
+    claimed_request: Option<u64>,
 }
 
 impl McpServer {
     pub fn new(automation: Automation) -> Self {
-        Self { automation, compact: false }
+        Self { automation, compact: false, window: None, client_name: None, claimed_request: None }
+    }
+
+    /// Connected mode: run every tool and serve every resource in `window` (the open app, on
+    /// its own documents), with `automation`'s root, and add the `ui_*` tools.
+    pub fn with_window(mut self, window: Box<dyn Window>) -> Self {
+        self.window = Some(window);
+        self
     }
 
     /// In compact mode `tools/list` returns only [`COMPACT_CORE_TOOLS`] plus `tool_search` and
@@ -148,20 +172,25 @@ impl McpServer {
     fn dispatch(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {
         match method {
             "initialize" => {
+                self.client_name = params.get("clientInfo").and_then(|info| info.get("name")).and_then(Value::as_str).map(str::to_owned);
                 let asked = params.get("protocolVersion").and_then(Value::as_str);
                 let version = asked.filter(|v| PROTOCOL_VERSIONS.contains(v)).unwrap_or(PROTOCOL_VERSIONS[0]);
                 Ok(json!({
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": false }, "resources": { "listChanged": false, "subscribe": false } },
                     "serverInfo": { "name": "pdfcraft", "title": "PdfCraft", "version": env!("CARGO_PKG_VERSION"), "websiteUrl": pdfcraft_engine::links::APP_PAGE },
-                    "instructions": if self.compact { format!("{INSTRUCTIONS}{COMPACT_INSTRUCTIONS}") } else { INSTRUCTIONS.to_string() },
+                    "instructions": format!(
+                        "{INSTRUCTIONS}{}{}",
+                        if self.compact { COMPACT_INSTRUCTIONS } else { "" },
+                        if self.window.is_some() { WINDOW_INSTRUCTIONS } else { "" }
+                    ),
                 }))
             }
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({ "tools": self.tool_list() })),
             "tools/call" => {
                 let name = params.get("name").and_then(Value::as_str).ok_or((INVALID_PARAMS, "tools/call needs a tool name".to_string()))?;
-                let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+                let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
                 if self.compact && name == TOOL_SEARCH {
                     check_keys(name, &args, &["query", "category", "name"]).map_err(|e| (INVALID_PARAMS, e))?;
                     return Ok(match search_tools(&args) {
@@ -173,13 +202,33 @@ impl McpServer {
                     check_keys(name, &args, &["name", "arguments"]).map_err(|e| (INVALID_PARAMS, e))?;
                     let (inner, inner_args) = match unwrap_tool_call(&args) {
                         Ok(pair) => pair,
-                        Err(message) => return Ok(tool_error(&message)),
+                        Err(message) => return Err((INVALID_PARAMS, message)),
                     };
-                    return Ok(match self.automation.call(&inner, &inner_args) {
+                    if matches!(inner.as_str(), "wait_for_request" | "reply_to_request") {
+                        return self.agent_call(&inner, &inner_args);
+                    }
+                    if self.window.is_some()
+                        && let Some((_, keys)) = window::ui_method(&inner)
+                    {
+                        let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+                        check_keys(&inner, &inner_args, &keys).map_err(|e| (INVALID_PARAMS, e))?;
+                        return Ok(self.ui_call(&inner, &inner_args));
+                    }
+                    return Ok(match self.run(&inner, &inner_args) {
                         Ok(content) => tool_content(&inner, content),
                         Err(ToolError::UnknownTool(t)) => tool_error(&format!("unknown tool {t:?}; use tool_search to find the right name")),
                         Err(e) => tool_error(&e.to_string()),
                     });
+                }
+                if matches!(name, "wait_for_request" | "reply_to_request") {
+                    return self.agent_call(name, &args);
+                }
+                if self.window.is_some()
+                    && let Some((_, keys)) = window::ui_method(name)
+                {
+                    let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+                    check_keys(name, &args, &keys).map_err(|e| (INVALID_PARAMS, e))?;
+                    return Ok(self.ui_call(name, &args));
                 }
                 if let Some(def) = crate::tools::find(name) {
                     let keys: Vec<&str> = def
@@ -190,7 +239,7 @@ impl McpServer {
                         .unwrap_or_default();
                     check_keys(name, &args, &keys).map_err(|e| (INVALID_PARAMS, e))?;
                 }
-                match self.automation.call(name, &args) {
+                match self.run(name, &args) {
                     Ok(content) => Ok(tool_content(name, content)),
                     Err(ToolError::UnknownTool(t)) => Err((INVALID_PARAMS, format!("unknown tool {t:?}"))),
                     Err(e) => Ok(tool_error(&e.to_string())),
@@ -208,15 +257,92 @@ impl McpServer {
 }
 
 impl McpServer {
-    /// What `tools/list` returns: every tool, or in compact mode the core set and the meta tools.
+    /// What `tools/list` returns: every tool, or in compact mode the core set and the meta tools;
+    /// in connected mode, the `ui_*` tools too.
     fn tool_list(&self) -> Vec<Value> {
         let all = crate::tools();
-        if !self.compact {
-            return all.iter().map(tool_json).collect();
+        let mut out: Vec<Value> = if self.compact {
+            let mut core: Vec<Value> = COMPACT_CORE_TOOLS.iter().filter_map(|n| all.iter().find(|t| t.name == *n)).map(tool_json).collect();
+            core.extend(meta_tools());
+            core
+        } else {
+            all.iter().map(tool_json).collect()
+        };
+        out.extend(window::agent_tools());
+        if self.window.is_some() {
+            out.extend(window::ui_tools());
         }
-        let mut out: Vec<Value> = COMPACT_CORE_TOOLS.iter().filter_map(|n| all.iter().find(|t| t.name == *n)).map(tool_json).collect();
-        out.extend(meta_tools());
         out
+    }
+
+    /// Run a table tool: here, or in the window in connected mode (on its documents, with this
+    /// server's root).
+    fn run(&mut self, name: &str, args: &Value) -> Result<Vec<Content>, ToolError> {
+        let Some(w) = self.window.as_mut() else { return self.automation.call(name, args) };
+        if let Some(why) = window::refused_relay(name, args) {
+            return Err(ToolError::Failed(why));
+        }
+        if crate::tools::find(name).is_none() {
+            return Err(ToolError::UnknownTool(name.into()));
+        }
+        let mut params = json!({ "name": name, "arguments": args });
+        if let Some(request_id) = self.claimed_request {
+            params["requestId"] = json!(request_id);
+        }
+        if let Some(root) = self.automation.root() {
+            let root = root
+                .to_str()
+                .ok_or_else(|| ToolError::Failed(format!("--root {} is not valid UTF-8, which the window can't be sent", root.display())))?;
+            params["root"] = json!(root);
+        }
+        let v = w.call(window::TOOL_METHOD, params).map_err(ToolError::Failed)?;
+        window::from_wire(&v).map_err(ToolError::Failed)
+    }
+
+    fn agent_call(&mut self, name: &str, args: &Value) -> Result<Value, (i64, String)> {
+        let (method, params) = match window::agent_params(name, args, self.client_name.as_deref()) {
+            Ok(call) => call,
+            Err(reason) if reason.starts_with("INVALID_PARAMS:") => return Err((INVALID_PARAMS, reason)),
+            Err(reason) => return Ok(tool_error(&reason)),
+        };
+        let Some(window) = self.window.as_mut() else {
+            return Ok(tool_error(
+                "NO_UI: Ask Agent requires an open PdfCraft window launched with --control FILE; start this MCP server with --connect FILE",
+            ));
+        };
+        Ok(match window.call(method, params) {
+            Ok(value) => {
+                if method == "agent.listen" {
+                    self.claimed_request = value.get("id").and_then(Value::as_u64).filter(|id| *id <= 9_007_199_254_740_991);
+                }
+                call_result(vec![Content::Json(value)])
+            }
+            Err(reason) => tool_error(&reason),
+        })
+    }
+
+    /// Relay `ui_*` tool `name` to the window's `ui.*` method; a screenshot comes back as an image.
+    fn ui_call(&mut self, name: &str, args: &Value) -> Value {
+        let (Some((method, _)), Some(w)) = (window::ui_method(name), self.window.as_mut()) else {
+            return tool_error(&format!("{name} needs the open PdfCraft window: start the server with --connect FILE"));
+        };
+        let params = if args.is_null() { json!({}) } else { args.clone() };
+        match w.call(method, params) {
+            Ok(mut v) => {
+                let png = v.get("png_base64").and_then(Value::as_str).and_then(|d| base64::engine::general_purpose::STANDARD.decode(d).ok());
+                let mut content = Vec::new();
+                if let Some(data) = png {
+                    let dim = |k: &str| v.get(k).and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0);
+                    content.push(Content::Png { data, width: dim("width"), height: dim("height") });
+                    if let Some(o) = v.as_object_mut() {
+                        o.remove("png_base64");
+                    }
+                }
+                content.push(Content::Json(v));
+                call_result(content)
+            }
+            Err(e) => tool_error(&e),
+        }
     }
 }
 
@@ -302,6 +428,11 @@ fn search_tools(args: &Value) -> Result<Value, String> {
     let (query, category, name) = (text("query")?, text("category")?, text("name")?);
     let all = crate::tools();
     if let Some(name) = name {
+        if let Some(tool) = window::agent_tools().into_iter().find(|tool| tool["name"].as_str() == Some(name)) {
+            return Ok(
+                json!({"tool":{"name":name,"title":tool["title"],"category":category_of(name),"description":tool["description"],"read_only":tool["annotations"]["readOnlyHint"],"destructive":false,"input_schema":tool["inputSchema"]}}),
+            );
+        }
         let t =
             all.iter().find(|t| t.name == name).ok_or_else(|| format!("unknown tool {name:?}; call {TOOL_SEARCH} without name to list the tools"))?;
         return Ok(json!({ "tool": {
@@ -312,9 +443,10 @@ fn search_tools(args: &Value) -> Result<Value, String> {
     let category = category.map(|c| c.trim_end_matches('_').to_lowercase()).filter(|c| !c.is_empty());
     let words: Vec<String> = query.map(|q| q.to_lowercase().split_whitespace().map(str::to_owned).collect()).unwrap_or_default();
     let mut categories: Vec<&str> = all.iter().map(|t| category_of(t.name)).collect();
+    categories.extend(["wait", "reply"]);
     categories.sort_unstable();
     categories.dedup();
-    let found: Vec<Value> = all
+    let mut found: Vec<Value> = all
         .iter()
         .filter(|t| category.as_deref().is_none_or(|c| category_of(t.name) == c))
         .filter(|t| {
@@ -323,6 +455,14 @@ fn search_tools(args: &Value) -> Result<Value, String> {
         })
         .map(|t| json!({ "name": t.name, "category": category_of(t.name), "description": first_sentence(t.description), "read_only": t.read_only }))
         .collect();
+    for tool in window::agent_tools() {
+        let Some(name) = tool["name"].as_str() else { continue };
+        let description = tool["description"].as_str().unwrap_or_default();
+        let haystack = format!("{name} {} {description}", tool["title"]).to_lowercase();
+        if category.as_deref().is_none_or(|c| category_of(name) == c) && words.iter().all(|word| haystack.contains(word.as_str())) {
+            found.push(json!({"name":name,"category":category_of(name),"description":first_sentence(description),"read_only":tool["annotations"]["readOnlyHint"]}));
+        }
+    }
     Ok(json!({ "count": found.len(), "tools": found, "categories": categories }))
 }
 
@@ -338,7 +478,8 @@ fn unwrap_tool_call(args: &Value) -> Result<(String, Value), String> {
         return Err(format!("{TOOL_SEARCH} and {TOOL_CALL} are called directly, not through {TOOL_CALL}"));
     }
     let inner = match obj.get("arguments") {
-        None | Some(Value::Null) => Value::Null,
+        None => json!({}),
+        Some(Value::Null) => Value::Null,
         Some(v @ Value::Object(_)) => v.clone(),
         Some(_) => return Err(format!("{TOOL_CALL}: arguments must be an object")),
     };
@@ -421,7 +562,13 @@ fn tool_content(name: &str, content: Vec<Content>) -> Value {
 
 /// A failed tool call, as the agent should read it.
 fn tool_error(message: &str) -> Value {
-    json!({ "content": [{ "type": "text", "text": message }], "isError": true })
+    let (code, reason) = message
+        .split_once(':')
+        .filter(|(code, _)| !code.is_empty() && code.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_'))
+        .map(|(code, reason)| (code, reason.trim_start()))
+        .unwrap_or(("INVALID_PARAMS", message));
+    let failure = json!({"errorCode":code,"error":reason});
+    json!({ "content": [{ "type": "text", "text": failure.to_string() }], "isError": true })
 }
 
 /// The resource behind a `pdfcraft://` URI.
@@ -463,7 +610,7 @@ fn resource_templates() -> Value {
 
 impl McpServer {
     fn resource_list(&mut self) -> Vec<Value> {
-        let docs = self.automation.call("doc_list", &json!({})).ok().and_then(|c| match c.into_iter().next() {
+        let docs = self.run("doc_list", &json!({})).ok().and_then(|c| match c.into_iter().next() {
             Some(Content::Json(v)) => v["documents"].as_array().cloned(),
             _ => None,
         });
@@ -495,7 +642,7 @@ impl McpServer {
             "pdfcraft://commands" => Some("command_list"),
             _ => None,
         } {
-            let content = self.automation.call(tool, &json!({})).map_err(|e| (INVALID_PARAMS, e.to_string()))?;
+            let content = self.run(tool, &json!({})).map_err(|e| (INVALID_PARAMS, e.to_string()))?;
             let value = content
                 .into_iter()
                 .find_map(|c| match c {
@@ -506,7 +653,7 @@ impl McpServer {
             return Ok(json!({"uri":uri,"mimeType":"application/json","text":value.to_string()}));
         }
         let r = parse_uri(uri).ok_or((INVALID_PARAMS, format!("unknown resource {uri:?}")))?;
-        let call = |a: &mut Automation, tool: &str, args: Value| a.call(tool, &args).map_err(|e| (INVALID_PARAMS, e.to_string()));
+        let call = |s: &mut Self, tool: &str, args: Value| s.run(tool, &args).map_err(|e| (INVALID_PARAMS, e.to_string()));
         let json_of = |c: Vec<Content>| c.into_iter().find_map(|c| if let Content::Json(v) = c { Some(v) } else { None }).unwrap_or(Value::Null);
         let text_of = |v: &Value, headings: bool| {
             let pages = v["pages"].as_array().cloned().unwrap_or_default();
@@ -521,15 +668,15 @@ impl McpServer {
         };
         Ok(match r {
             Resource::Info(doc) => {
-                let v = json_of(call(&mut self.automation, "doc_info", json!({ "doc": doc }))?);
+                let v = json_of(call(self, "doc_info", json!({ "doc": doc }))?);
                 json!({ "uri": uri, "mimeType": "application/json", "text": serde_json::to_string_pretty(&v).unwrap_or_default() })
             }
             Resource::Text(doc) => {
-                let v = json_of(call(&mut self.automation, "text_extract", json!({ "doc": doc }))?);
+                let v = json_of(call(self, "text_extract", json!({ "doc": doc }))?);
                 json!({ "uri": uri, "mimeType": "text/plain", "text": text_of(&v, true) })
             }
             Resource::PageText(doc, page) => {
-                let v = json_of(call(&mut self.automation, "text_extract", json!({ "doc": doc, "pages": [page] }))?);
+                let v = json_of(call(self, "text_extract", json!({ "doc": doc, "pages": [page] }))?);
                 json!({ "uri": uri, "mimeType": "text/plain", "text": text_of(&v, false) })
             }
             Resource::PageImage(doc, page, dpi) => {
@@ -537,9 +684,8 @@ impl McpServer {
                 if let Some(d) = dpi {
                     args["dpi"] = json!(d);
                 }
-                let png = call(&mut self.automation, "page_render", args)?
-                    .into_iter()
-                    .find_map(|c| if let Content::Png { data, .. } = c { Some(data) } else { None });
+                let png =
+                    call(self, "page_render", args)?.into_iter().find_map(|c| if let Content::Png { data, .. } = c { Some(data) } else { None });
                 let png = png.ok_or((INVALID_PARAMS, "the page could not be rendered".to_string()))?;
                 json!({ "uri": uri, "mimeType": "image/png", "blob": base64::engine::general_purpose::STANDARD.encode(png) })
             }
@@ -593,6 +739,20 @@ mod tests {
 
     use super::{McpServer, Resource, first_sentence, parse_uri};
     use crate::Automation;
+
+    #[test]
+    fn domain_errors_are_serialized_as_common_json() {
+        let result = super::tool_error("NOT_OWNER: another connection owns this request");
+        assert_eq!(result["isError"], true);
+        let failure: serde_json::Value = serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(failure, serde_json::json!({"errorCode":"NOT_OWNER","error":"another connection owns this request"}));
+        let generic = super::tool_error("synthetic failure");
+        let failure: serde_json::Value = serde_json::from_str(generic["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(failure, serde_json::json!({"errorCode":"INVALID_PARAMS","error":"synthetic failure"}));
+        let tools = crate::window::agent_tools();
+        assert_eq!(tools[0]["annotations"]["readOnlyHint"], true);
+        assert_eq!(tools[1]["annotations"]["readOnlyHint"], false);
+    }
 
     #[test]
     fn conventions_panic_is_a_tool_error() {
@@ -668,6 +828,258 @@ mod tests {
         assert_eq!(first_sentence("Zażółć gęślą, i.e. jaźń. Dalej."), "Zażółć gęślą, i.e. jaźń.");
     }
 
+    /// A stand-in window that records what it is asked and answers like the real one.
+    struct FakeWindow(std::rc::Rc<std::cell::RefCell<Vec<(String, serde_json::Value)>>>);
+
+    impl crate::window::Window for FakeWindow {
+        fn call(&mut self, method: &str, params: serde_json::Value) -> Result<serde_json::Value, String> {
+            use base64::Engine as _;
+            self.0.borrow_mut().push((method.to_string(), params.clone()));
+            match (method, params["name"].as_str()) {
+                ("tool.call", Some("doc_list")) => Ok(crate::window::to_wire(vec![crate::Content::Json(
+                    serde_json::json!({ "documents": [{ "doc": 7, "name": "seen-in-window.pdf", "pages": 1 }] }),
+                )])),
+                ("tool.call", Some("page_rotate")) => Err("page_rotate: no page 9".into()),
+                ("tool.call", _) => Ok(crate::window::to_wire(vec![crate::Content::Json(serde_json::json!({ "ok": true }))])),
+                ("ui.screenshot", _) => {
+                    Ok(serde_json::json!({ "png_base64": base64::engine::general_purpose::STANDARD.encode(b"PNG"), "width": 2, "height": 3 }))
+                }
+                ("ui.state", _) => Ok(serde_json::json!({ "documents": [] })),
+                ("agent.listen", _) if params["agent"] == "synthetic claimant" => Ok(serde_json::json!({"id":42,"status":"working"})),
+                ("agent.listen", _) => Ok(serde_json::json!({"none":true})),
+                ("agent.reply", _) => Ok(serde_json::json!({"id":params["id"],"shown":true,"done":params["done"],"status":"ready"})),
+                _ => Err("the PdfCraft window is not running".into()),
+            }
+        }
+        fn describe(&self) -> String {
+            "a fake window".into()
+        }
+    }
+
+    fn rpc(s: &mut super::McpServer, method: &str, params: serde_json::Value) -> serde_json::Value {
+        s.handle(&serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })).unwrap()
+    }
+
+    fn tool_names(s: &mut super::McpServer) -> Vec<String> {
+        rpc(s, "tools/list", serde_json::json!({}))["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn connected_mode_runs_tools_in_the_window_and_adds_ui_tools() {
+        use serde_json::json;
+        let root = std::env::temp_dir().join(format!("pdfcraft-mcp-window-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let seen = std::rc::Rc::default();
+        let automation = crate::Automation::new().with_root(&root).unwrap();
+        let canonical = automation.root().unwrap().to_str().unwrap().to_string();
+        let mut s = super::McpServer::new(automation).with_window(Box::new(FakeWindow(std::rc::Rc::clone(&seen))));
+        let init = rpc(&mut s, "initialize", json!({}));
+        assert!(init["result"]["instructions"].as_str().unwrap().contains("open PdfCraft window"), "{init}");
+        let names = tool_names(&mut s);
+        assert!(names.iter().any(|n| n == "ui_state") && names.iter().any(|n| n == "doc_list"), "{names:?}");
+        // A table tool runs in the window, with the server's root.
+        let r = rpc(&mut s, "tools/call", json!({ "name": "doc_list", "arguments": {} }));
+        assert_eq!(r["result"]["structuredContent"]["documents"][0]["name"], "seen-in-window.pdf", "{r}");
+        assert_eq!(seen.borrow().last().unwrap(), &("tool.call".to_string(), json!({ "name": "doc_list", "arguments": {}, "root": canonical })));
+        // The window's refusal or failure is the agent's to read.
+        let r = rpc(&mut s, "tools/call", json!({ "name": "page_rotate", "arguments": { "doc": 7, "pages": [9], "degrees": 90 } }));
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("no page 9"), "{r}");
+        // Resources too.
+        let r = rpc(&mut s, "resources/read", json!({ "uri": "pdfcraft://doc/7/info" }));
+        assert!(r["result"]["contents"][0]["text"].as_str().unwrap().contains("ok"), "{r}");
+        assert_eq!(seen.borrow().last().unwrap().1["name"], "doc_info");
+        // ui_* tools relay the window's own methods; a screenshot is an image.
+        let r = rpc(&mut s, "tools/call", json!({ "name": "ui_screenshot", "arguments": {} }));
+        assert_eq!(r["result"]["content"][0]["type"], "image", "{r}");
+        assert_eq!(seen.borrow().last().unwrap().0, "ui.screenshot");
+        let r = rpc(&mut s, "tools/call", json!({ "name": "ui_inspect", "arguments": { "what": 1 } }));
+        assert_eq!(r["error"]["code"], -32602, "{r}");
+        let r = rpc(&mut s, "tools/call", json!({ "name": "ui_key", "arguments": { "key": "Escape" } }));
+        assert_eq!(r["error"]["code"], -32602, "UI input must not be available: {r}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn signing_arguments_never_reach_the_control_channel() {
+        use serde_json::json;
+        let seen = std::rc::Rc::default();
+        let mut s = super::McpServer::new(crate::Automation::new()).with_window(Box::new(FakeWindow(std::rc::Rc::clone(&seen))));
+        for (name, args) in [
+            ("sign_document", json!({"doc":7,"password":"synthetic","id":"synthetic.p12"})),
+            ("command_run", json!({"id":"sign.fill.text","params":{"doc":7,"type":"signature","path":"synthetic.png"}})),
+            ("command_batch", json!({"steps":[{"id":"sign.fill.text","params":{"doc":7,"type":"initials","path":"synthetic.png"}}]})),
+        ] {
+            let r = rpc(&mut s, "tools/call", json!({"name":name,"arguments":args}));
+            assert_eq!(r["result"]["isError"], true, "{r}");
+            assert!(r.to_string().contains("HUMAN_SIGNATURE_REQUIRED"), "{r}");
+            assert!(seen.borrow().is_empty(), "nothing, including credentials, is sent to the window");
+        }
+        s.compact = true;
+        let r = rpc(
+            &mut s,
+            "tools/call",
+            json!({"name":"tool_call","arguments":{"name":"fill_sign_add","arguments":{"doc":7,"type":"signature","path":"synthetic.png"}}}),
+        );
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        assert!(seen.borrow().is_empty(), "compact dispatch does not send credentials either");
+    }
+
+    #[test]
+    fn claimed_requests_tag_native_tools_and_resources_until_the_next_listen() {
+        use serde_json::json;
+        let seen = std::rc::Rc::default();
+        let mut server = super::McpServer::new(crate::Automation::new()).with_window(Box::new(FakeWindow(std::rc::Rc::clone(&seen))));
+        let claimed = rpc(&mut server, "tools/call", json!({"name":"wait_for_request","arguments":{"agent":"synthetic claimant","timeout_s":0}}));
+        assert_eq!(claimed["result"]["structuredContent"]["id"], 42);
+        rpc(&mut server, "tools/call", json!({"name":"doc_list","arguments":{}}));
+        assert_eq!(seen.borrow().last().unwrap().1["requestId"], 42);
+        rpc(&mut server, "resources/read", json!({"uri":"pdfcraft://doc/7/info"}));
+        assert_eq!(seen.borrow().last().unwrap().1["requestId"], 42);
+        rpc(&mut server, "tools/call", json!({"name":"reply_to_request","arguments":{"id":42,"text":"done"}}));
+        rpc(&mut server, "tools/call", json!({"name":"doc_list","arguments":{}}));
+        assert_eq!(seen.borrow().last().unwrap().1["requestId"], 42, "completion retains claim context for native refusal");
+        let before = seen.borrow().len();
+        let refused = rpc(&mut server, "tools/call", json!({"name":"sign_document","arguments":{"doc":7,"password":"synthetic"}}));
+        assert_eq!(refused["result"]["isError"], true);
+        assert_eq!(seen.borrow().len(), before, "signing preflight still precedes native tagging");
+        rpc(&mut server, "tools/call", json!({"name":"wait_for_request","arguments":{"timeout_s":0}}));
+        rpc(&mut server, "tools/call", json!({"name":"doc_list","arguments":{}}));
+        assert!(seen.borrow().last().unwrap().1.get("requestId").is_none(), "a subsequent empty listen clears the bridge claim");
+    }
+
+    #[test]
+    fn signing_proposals_never_cross_the_control_channel() {
+        use serde_json::json;
+        for compact in [false, true] {
+            let seen = std::rc::Rc::default();
+            let mut server =
+                super::McpServer::new(crate::Automation::new()).with_compact(compact).with_window(Box::new(FakeWindow(std::rc::Rc::clone(&seen))));
+            let call = |server: &mut super::McpServer, proposal: String| {
+                let arguments = json!({"id":1,"proposal":proposal});
+                let params = if compact {
+                    json!({"name":"tool_call","arguments":{"name":"reply_to_request","arguments":arguments}})
+                } else {
+                    json!({"name":"reply_to_request","arguments":arguments})
+                };
+                rpc(server, "tools/call", params)
+            };
+            for operation in [
+                json!({"name":"sign_document","arguments":{"doc":7,"password":"synthetic","id":"synthetic.p12"}}),
+                json!({"name":"fill_sign_add","arguments":{"doc":7,"type":"signature","path":"synthetic.png"}}),
+                json!({"name":"command_batch","arguments":{"steps":[{"id":"sign.fill.text","params":{"type":"initials","path":"synthetic.png"}}]}}),
+                json!({"name":"tool_call","arguments":{"name":"sign_document","arguments":{"password":"synthetic"}}}),
+            ] {
+                for proposal in [operation.to_string(), json!([operation]).to_string()] {
+                    let reply = call(&mut server, proposal);
+                    assert_eq!(reply["result"]["isError"], true, "{reply}");
+                    let failure: serde_json::Value = serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+                    assert_eq!(failure["errorCode"], "HUMAN_SIGNATURE_REQUIRED");
+                    assert!(seen.borrow().is_empty(), "no signing proposal, credential or image crosses the channel");
+                }
+            }
+            for proposal in [
+                "The person signs using their own certificate.".to_string(),
+                json!([{"name":"form_add_field","arguments":{"doc":7,"type":"signature","name":"Signature","page":1}}]).to_string(),
+                json!({"text":"Explain sign_document without executing it."}).to_string(),
+            ] {
+                assert_eq!(call(&mut server, proposal)["result"]["isError"], false);
+            }
+            assert_eq!(seen.borrow().len(), 3, "signature preparation and ordinary text still pass");
+        }
+    }
+
+    #[test]
+    fn without_a_window_there_are_no_ui_tools() {
+        let mut s = super::McpServer::new(crate::Automation::new());
+        assert!(!tool_names(&mut s).iter().any(|n| n.starts_with("ui_")));
+        let r = rpc(&mut s, "tools/call", serde_json::json!({ "name": "ui_state", "arguments": {} }));
+        assert_eq!(r["error"]["code"], -32602, "{r}");
+        let mut compact =
+            super::McpServer::new(crate::Automation::new()).with_compact(true).with_window(Box::new(FakeWindow(std::rc::Rc::default())));
+        assert!(tool_names(&mut compact).iter().any(|n| n == "ui_screenshot"), "compact mode lists the ui tools too");
+        let r = rpc(
+            &mut compact,
+            "tools/call",
+            serde_json::json!({ "name": "tool_call", "arguments": { "name": "ui_state", "arguments": { "invalid": true } } }),
+        );
+        assert_eq!(r["error"]["code"], -32602, "{r}");
+    }
+
+    #[test]
+    fn ask_agent_normal_and_compact_calls_share_strict_validation() {
+        use serde_json::json;
+        for compact in [false, true] {
+            let seen = std::rc::Rc::default();
+            let mut server =
+                super::McpServer::new(crate::Automation::new()).with_compact(compact).with_window(Box::new(FakeWindow(std::rc::Rc::clone(&seen))));
+            rpc(&mut server, "initialize", json!({"clientInfo":{"name":"synthetic editor"}}));
+            assert!(tool_names(&mut server).contains(&"wait_for_request".to_string()));
+            let call = |server: &mut super::McpServer, name: &str, arguments: serde_json::Value| {
+                let args = if compact {
+                    json!({"name":"tool_call","arguments":{"name":name,"arguments":arguments}})
+                } else {
+                    json!({"name":name,"arguments":arguments})
+                };
+                rpc(server, "tools/call", args)
+            };
+            let result = call(&mut server, "wait_for_request", json!({"timeout_s":60.5}));
+            assert_eq!(result["result"]["structuredContent"]["none"], true);
+            assert_eq!(seen.borrow().last().unwrap(), &("agent.listen".to_string(), json!({"timeoutMs":60000,"agent":"synthetic editor"})));
+            call(&mut server, "wait_for_request", json!({"timeout_s":0.0019,"agent":"override"}));
+            assert_eq!(seen.borrow().last().unwrap().1, json!({"timeoutMs":1,"agent":"override"}));
+            for bad in [json!({"timeoutMs":30}), json!({"timeout_s":-1}), json!({"timeout_s":"30"}), json!({"agent":null}), json!([])] {
+                let result = call(&mut server, "wait_for_request", bad);
+                assert_eq!(result["error"]["code"], -32602, "{result}");
+            }
+            for bad in [
+                json!({"id":1}),
+                json!({"id":-1,"text":"x"}),
+                json!({"id":1.5,"text":"x"}),
+                json!({"id":9007199254740992u64,"text":"x"}),
+                json!({"id":1,"text":false}),
+                json!({"id":1,"text":"x","done":1}),
+                json!({"id":1,"proposal":"x","format":"html"}),
+                json!({"id":1,"error":" "}),
+                json!({"id":1,"error":"failure","proposal":"x"}),
+                json!({"id":1,"error":"failure","done":false}),
+                json!({"id":1,"text":"x","comment":"summary","done":false}),
+                json!({"id":1,"text":"x","message":"wrong dialect"}),
+                json!({"id":1,"text":"界".repeat(4001)}),
+                json!({"id":1,"text":"x","comment":"x".repeat(2001)}),
+                json!({"id":1,"proposal":"x".repeat(200001)}),
+            ] {
+                let result = call(&mut server, "reply_to_request", bad);
+                assert_eq!(result["error"]["code"], -32602, "{result}");
+            }
+            let before = seen.borrow().len();
+            for good in [
+                json!({"id":1,"proposal":""}),
+                json!({"id":1,"text":"progress","done":false}),
+                json!({"id":1,"text":"done","comment":"summary"}),
+                json!({"id":1,"error":"failed"}),
+            ] {
+                assert_eq!(call(&mut server, "reply_to_request", good)["result"]["isError"], false);
+            }
+            assert_eq!(seen.borrow().len(), before + 4);
+        }
+    }
+
+    #[test]
+    fn ask_agent_headless_refuses_instead_of_editing_another_document() {
+        let mut server = super::McpServer::new(crate::Automation::new());
+        let result = rpc(&mut server, "tools/call", serde_json::json!({"name":"wait_for_request","arguments":{}}));
+        assert_eq!(result["result"]["isError"], true);
+        let failure: serde_json::Value = serde_json::from_str(result["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(failure["errorCode"], "NO_UI");
+        assert!(failure["error"].as_str().unwrap().contains("--connect FILE"));
+    }
+
     #[test]
     fn resource_uris_parse() {
         assert_eq!(parse_uri("pdfcraft://doc/3/info"), Some(Resource::Info(3)));
@@ -675,5 +1087,18 @@ mod tests {
         assert_eq!(parse_uri("pdfcraft://doc/3/page/2/text"), Some(Resource::PageText(3, 2)));
         assert_eq!(parse_uri("pdfcraft://doc/x/info"), None);
         assert_eq!(parse_uri("file:///etc/passwd"), None);
+    }
+}
+
+#[cfg(test)]
+mod agent_contract_regression {
+    #[test]
+    fn ask_agent_common_tools_are_discoverable() {
+        let mut server = super::McpServer::new(crate::Automation::new());
+        let result = server.handle(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}})).unwrap();
+        let tools = result["result"]["tools"].as_array().unwrap();
+        for name in ["wait_for_request", "reply_to_request"] {
+            assert!(tools.iter().any(|t| t["name"] == name), "missing {name}");
+        }
     }
 }
