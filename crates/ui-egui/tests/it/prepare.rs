@@ -55,6 +55,119 @@ fn rect_of(h: &Harness<'static, PdfCraftApp>, name: &str) -> [f64; 4] {
     s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().widgets[0].rect
 }
 
+/// Counts the blue selection outline and name tag in a rendered widget rectangle.
+fn blue_pixels(image: &image::RgbaImage, rect: egui::Rect) -> usize {
+    let left = rect.left().max(0.0) as u32;
+    let top = rect.top().max(0.0) as u32;
+    let right = (rect.right().ceil() as u32).min(image.width());
+    let bottom = (rect.bottom().ceil() as u32).min(image.height());
+    (top..bottom)
+        .flat_map(|y| (left..right).map(move |x| (x, y)))
+        .filter(|(x, y)| {
+            let [r, g, b, _] = image.get_pixel(*x, *y).0;
+            r < 60 && (g > 70 && g < 150) && b > 180
+        })
+        .count()
+}
+
+/// Counts selection-blue pixels outside a widget, where the original inside stroke cannot reach.
+fn outside_blue_pixels(image: &image::RgbaImage, rect: egui::Rect) -> usize {
+    let outer = rect.expand(4.0);
+    let left = outer.left().max(0.0) as u32;
+    let top = outer.top().max(0.0) as u32;
+    let right = (outer.right().ceil() as u32).min(image.width());
+    let bottom = (outer.bottom().ceil() as u32).min(image.height());
+    (top..bottom)
+        .flat_map(|y| (left..right).map(move |x| (x, y)))
+        .filter(|(x, y)| {
+            let point = egui::pos2(*x as f32 + 0.5, *y as f32 + 0.5);
+            if rect.contains(point) {
+                return false;
+            }
+            let [r, g, b, _] = image.get_pixel(*x, *y).0;
+            r < 60 && (g > 70 && g < 150) && b > 180
+        })
+        .count()
+}
+
+/// Confirms the rendered name tags and outlines use the selection color for both selected fields.
+#[test]
+fn every_selected_widget_has_a_visible_blue_indicator() {
+    let _gpu = crate::gpu();
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    let form = h.state().session.get(h.state().views[0].id).unwrap().form.as_ref().clone();
+    let selected = form.iter().find(|f| f.name == "name").unwrap();
+    let secondary = form.iter().find(|f| f.name == "city").unwrap();
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let page_height = h.state().session.get(h.state().views[0].id).unwrap().info.pages[0].height;
+    let scale = page.width() / 300.0;
+    let screen = |r: [f64; 4]| {
+        let p = |x: f64, y: f64| page.min + egui::vec2(x as f32 * scale, (page_height - y as f32) * scale);
+        egui::Rect::from_two_pos(p(r[0], r[1]), p(r[2], r[3]))
+    };
+    {
+        let prep = &mut h.state_mut().views[0].prepare;
+        prep.selected = Some(("name".into(), 0));
+        prep.also = vec![("city".into(), 0)];
+    }
+    h.run_steps(2);
+    let rendered = h.render().unwrap();
+    assert!(outside_blue_pixels(&rendered, screen(selected.widgets[0].rect)) > 5);
+    assert!(outside_blue_pixels(&rendered, screen(secondary.widgets[0].rect)) > 5, "secondary selection must paint outside its border");
+    assert_eq!(
+        blue_pixels(&rendered, screen(form.iter().find(|f| f.name == "agree").unwrap().widgets[0].rect)),
+        0,
+        "unselected control remains unselected"
+    );
+}
+
+/// Confirms secondary 14-point radios and a checkbox retain visible blue selection marks.
+#[test]
+fn tiny_secondary_radio_and_checkbox_keep_visible_blue_outlines() {
+    let _gpu = crate::gpu();
+    let mut h = radio_group_harness();
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
+        page: 0,
+        rect: [150.0, 300.0, 164.0, 314.0],
+        kind: pdfcraft_engine::NewField::CheckBox,
+        name: Some("tiny check".into()),
+    });
+    let checkbox = rect_of(&h, "tiny check");
+    let radios = h
+        .state()
+        .session
+        .get(h.state().views[0].id)
+        .unwrap()
+        .form
+        .iter()
+        .find(|f| f.name == "shirt")
+        .unwrap()
+        .widgets
+        .iter()
+        .map(|w| w.rect)
+        .collect::<Vec<_>>();
+    {
+        let prep = &mut h.state_mut().views[0].prepare;
+        prep.selected = Some(("shirt".into(), 0));
+        prep.also = vec![("shirt".into(), 1), ("shirt".into(), 2), ("tiny check".into(), 0)];
+    }
+    h.run_steps(2);
+    let rendered = h.render().unwrap();
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let page_height = h.state().session.get(h.state().views[0].id).unwrap().info.pages[0].height;
+    let scale = page.width() / 300.0;
+    let screen = |r: [f64; 4]| {
+        let p = |x: f64, y: f64| page.min + egui::vec2(x as f32 * scale, (page_height - y as f32) * scale);
+        egui::Rect::from_two_pos(p(r[0], r[1]), p(r[2], r[3]))
+    };
+    assert!(outside_blue_pixels(&rendered, screen(radios[0])) > 1, "primary radio has an outside blue outline");
+    for rect in radios.into_iter().skip(1).chain([checkbox]) {
+        assert!(outside_blue_pixels(&rendered, screen(rect)) > 1, "tiny secondary widget has an outside blue outline: {rect:?}");
+    }
+}
+
 #[test]
 fn placing_moving_editing_and_deleting_a_field() {
     let mut h = harness();
