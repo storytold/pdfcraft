@@ -245,6 +245,61 @@ pub(crate) fn part(zip: &[u8], name: &str) -> String {
     panic!("{name} missing")
 }
 
+/// The PDF's language (`/Lang`) is the default language of the Word document's text, in the
+/// attribute Word keeps for its script, and the HTML page's. No language, or one that is not a
+/// well formed tag, leaves both files as they were.
+#[test]
+fn word_and_html_take_the_documents_language() {
+    let pages = [page()];
+    let styles = |lang| part(&docx_with_language(&pages, "Report", lang), "word/styles.xml");
+    let defaults = |lang: &str| format!("<w:docDefaults><w:rPrDefault><w:rPr>{lang}</w:rPr></w:rPrDefault></w:docDefaults>");
+    assert!(styles(Some("bg-BG")).contains(&defaults("<w:lang w:val=\"bg-BG\"/>")), "{}", styles(Some("bg-BG")));
+    assert!(styles(Some(" en-GB ")).contains("<w:lang w:val=\"en-GB\"/>"), "the tag is trimmed");
+    assert!(styles(Some("zh-Hant-TW")).contains(&defaults("<w:lang w:eastAsia=\"zh-Hant-TW\"/>")), "East Asian text");
+    assert!(styles(Some("ja")).contains("<w:lang w:eastAsia=\"ja\"/>"), "East Asian text");
+    assert!(styles(Some("ar-EG")).contains(&defaults("<w:lang w:bidi=\"ar-EG\"/>")), "right-to-left text");
+    assert!(styles(Some("HE")).contains("<w:lang w:bidi=\"HE\"/>"), "right-to-left text");
+    // A script subtag decides over the language; private use names no script.
+    assert!(styles(Some("pa-Arab-PK")).contains("<w:lang w:bidi=\"pa-Arab-PK\"/>"), "Punjabi in Arabic script");
+    assert!(styles(Some("sr-Latn")).contains("<w:lang w:val=\"sr-Latn\"/>"), "Serbian in Latin script");
+    assert!(styles(Some("zh-Latn")).contains("<w:lang w:val=\"zh-Latn\"/>"), "Chinese in Latin script");
+    assert!(styles(Some("en-x-arab")).contains("<w:lang w:val=\"en-x-arab\"/>"), "private use");
+    assert!(styles(Some("az-Latn-x-arab")).contains("<w:lang w:val=\"az-Latn-x-arab\"/>"), "private use");
+    assert!(html_with_language(&pages, "Report", Some("bg-BG")).starts_with("<!DOCTYPE html>\n<html lang=\"bg-BG\">\n"));
+    // A tag longer than 35 characters is still a tag.
+    let long = "en-US-u-ca-gregory-nu-latn-co-phonebk";
+    assert!(styles(Some(long)).contains(&format!("<w:lang w:val=\"{long}\"/>")), "{long}");
+    assert!(html_with_language(&pages, "Report", Some(long)).contains(&format!("<html lang=\"{long}\">")), "{long}");
+    let too_long = format!("en{}", "-abcdefgh".repeat(29));
+    // Private use takes one-character subtags.
+    assert!(html_with_language(&pages, "Report", Some("en-x-a-b")).contains("<html lang=\"en-x-a-b\">"));
+    for lang in [
+        None,
+        Some(""),
+        Some("  "),
+        Some("bg_BG"),
+        Some("b"),
+        Some("bulg-BG"),
+        Some("bg--BG"),
+        Some("bg-"),
+        Some("en-x"),
+        Some("en-a"),
+        Some("en-a-x-private"),
+        Some("en-US-u-ca-x"),
+        Some("en-US-abcdefghi"),
+        Some(too_long.as_str()),
+        Some("en-\"x\""),
+        Some("1a-BG"),
+        Some("\u{431}\u{433}-BG"),
+    ] {
+        assert!(docx_with_language(&pages, "Report", lang) == docx(&pages, "Report"), "{lang:?}");
+        assert_eq!(html_with_language(&pages, "Report", lang), html(&pages, "Report"), "{lang:?}");
+        assert_eq!(html_simple_with_language(&pages, "Report", lang), html_simple(&pages, "Report"), "{lang:?}");
+    }
+    // The simple export leaves out styling, not the language.
+    assert!(html_simple_with_language(&pages, "Report", Some("bg-BG")).starts_with("<!DOCTYPE html>\n<html lang=\"bg-BG\">\n"));
+}
+
 #[test]
 fn word_opens_text_with_control_characters_and_long_pages() {
     // #72: text extracted without a usable /ToUnicode holds C0 controls, which XML forbids;
