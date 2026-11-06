@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use pdfcraft_cos::{Document, SaveOptions, write_full};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, SaveOptions, write_full};
 use pdfcraft_edit::{FlattenOptions, flatten_with};
 
 /// A synthetic PDF with a signature-typed parent, a text child with an appearance, and an
@@ -46,4 +46,53 @@ fn flattening_does_not_turn_an_empty_signature_parent_into_a_terminal_field() {
         .map(|field| doc.resolve(field).as_dict().unwrap().get(b"T").unwrap().as_string().unwrap().to_text())
         .collect();
     assert_eq!(names, ["terminal"], "keep the original terminal signature, not a pruned parent");
+}
+
+#[test]
+fn a_filled_signature_and_appearance_follow_the_keep_option_after_save() {
+    for keep in [false, true] {
+        let mut doc = fixture();
+        let appearance = doc.get(ObjRef::new(7, 0));
+        let Object::Stream(appearance) = &*appearance else { panic!("fixture appearance") };
+        doc.set(ObjRef::new(7, 0), Object::Stream(pdfcraft_cos::Stream::from_raw(appearance.dict.clone(), b"0 0 140 30 re S".to_vec())));
+        // This is a structural fixture, not a cryptographically valid digital signature.
+        let mut signature = Dict::new();
+        signature.set(b"Type".to_vec(), Object::name("Sig"));
+        signature.set(b"Contents".to_vec(), Object::String(PdfString::literal(b"synthetic-value".to_vec())));
+        doc.update_dict(ObjRef::new(8, 0), |field| {
+            field.set(b"Type".to_vec(), Object::name("Annot"));
+            field.set(b"Subtype".to_vec(), Object::name("Widget"));
+            field.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(10), Object::Int(50), Object::Int(150), Object::Int(80)]));
+            field.set(b"V".to_vec(), Object::Dict(signature));
+            let mut appearance = Dict::new();
+            appearance.set(b"N".to_vec(), Object::Ref(ObjRef::new(7, 0)));
+            field.set(b"AP".to_vec(), Object::Dict(appearance));
+        })
+        .unwrap();
+        doc.update_dict(ObjRef::new(3, 0), |page| {
+            page.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(6, 0)), Object::Ref(ObjRef::new(8, 0))]));
+        })
+        .unwrap();
+        let drawn = flatten_with(&mut doc, &[0], FlattenOptions { comments: false, fields: true, keep_signature_fields: keep }).unwrap();
+        assert_eq!(drawn, if keep { 1 } else { 2 });
+        let out = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let catalog = out.get(out.root().unwrap());
+        let acroform = out.resolve(catalog.as_dict().unwrap().get(b"AcroForm").unwrap());
+        let fields = out.resolve(acroform.as_dict().unwrap().get(b"Fields").unwrap_or(&Object::Null));
+        let fields = fields.as_array().unwrap();
+        if keep {
+            assert_eq!(fields.len(), 1);
+            let field = out.resolve(&fields[0]);
+            let field = field.as_dict().unwrap();
+            assert_eq!(field.name(b"FT"), Some(b"Sig".as_slice()));
+            let value = out.resolve(field.get(b"V").unwrap());
+            assert_eq!(value.as_dict().unwrap().get(b"Contents").unwrap().as_string().unwrap().bytes, b"synthetic-value");
+            let appearance = out.resolve(field.get(b"AP").unwrap());
+            let appearance = out.resolve(appearance.as_dict().unwrap().get(b"N").unwrap());
+            let Object::Stream(appearance) = &*appearance else { panic!("kept appearance") };
+            assert_eq!(appearance.decoded().unwrap(), b"0 0 140 30 re S");
+        } else {
+            assert!(fields.is_empty(), "both appearances were flattened and the fields removed");
+        }
+    }
 }
