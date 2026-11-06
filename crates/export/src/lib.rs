@@ -2,9 +2,9 @@
 //!
 //! The engine reduces each page to [`Page`]: paragraphs (text, box, size, bold/italic) and
 //! images (encoded bytes and box), in reading order. The writers turn that into a flowing
-//! document: headings are the paragraphs set larger than the body text, and a block that
-//! continues another on its line (an italic word, a link) is a run of that block's paragraph.
-//! Word keeps pages with
+//! document: headings are the paragraphs set larger than the body text; a block that
+//! continues another on its line (an italic word, a link) is a run of that block's paragraph, and
+//! a paragraph that wraps onto the next line runs on there. Word keeps pages with
 //! rotated text, or text overlapped by artwork or watermark-sized text, as positioned, editable
 //! shapes to avoid reflowing overlays; other pages flow with images inline.
 
@@ -20,6 +20,7 @@ mod as_docx;
 mod as_html;
 mod as_markdown;
 mod as_rtf;
+mod flow;
 mod layout;
 
 pub use as_docx::docx;
@@ -34,10 +35,12 @@ pub use as_markdown::markdown;
 #[cfg(test)]
 use as_markdown::{emphasis, paragraph};
 pub use as_rtf::rtf;
+#[cfg(test)]
+use flow::list_item;
 pub use layout::{Block, Cell, Image, Page, Table};
 #[cfg(test)]
 use layout::{LOOKUP_STEPS, MAX_COLS, body_size};
-pub(crate) use layout::{Run, paragraphs, tables};
+pub(crate) use layout::{Run, flowing_paragraphs, tables};
 
 #[cfg(test)]
 mod tests;

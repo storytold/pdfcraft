@@ -138,19 +138,31 @@ const INLINE_GAP: f64 = 0.5;
 /// page laid out so that many end at the same place stays quick.
 const CONTINUATION_PROBE: usize = 64;
 
+/// How far (as a fraction of the font size) the block before may end past where a block starts
+/// and still be the one it continues: a slanted italic's box leans into the next word by about a
+/// quarter of its size.
+const OVERHANG: f64 = 0.3;
+
+/// [`OVERHANG`] in points for a block of `size`: at least a point (rounding), at most six.
+fn overhang(size: f64) -> f64 {
+    if size.is_finite() { (OVERHANG * size).clamp(1.0, 6.0) } else { 1.0 }
+}
+
 /// Per block, whether it continues another on the same line: it starts where that one ends (up to
-/// [`INLINE_GAP`] later, or a point earlier for rounding), so it is the same line of text running
-/// on (a link inside a sentence, a superscript), not a cell of its own.
+/// [`INLINE_GAP`] later, or up to [`overhang`] earlier, as a slanted italic leans into the word
+/// after it), so it is the same line of text running on (a link inside a sentence, a
+/// superscript), not a cell of its own.
 fn continuations(blocks: &[Block]) -> Vec<bool> {
     continued_from(blocks).into_iter().map(|from| from.is_some()).collect()
 }
 
 /// Per block, the block it continues on the same line (see [`continuations`]): of those it could
-/// continue, the one that ends nearest to where it starts.
+/// continue, the one that ends nearest to where it starts. A list item's text continues its
+/// bullet, a tab stop before it (`flow::bullet_items`).
 fn continued_from(blocks: &[Block]) -> Vec<Option<usize>> {
     let mut by_end: Vec<(f64, usize)> = blocks.iter().enumerate().map(|(i, b)| (b.rect[2], i)).collect();
     by_end.sort_by(|a, b| a.0.total_cmp(&b.0));
-    blocks
+    let mut from: Vec<Option<usize>> = blocks
         .iter()
         .enumerate()
         .map(|(bi, b)| {
@@ -159,14 +171,20 @@ fn continued_from(blocks: &[Block]) -> Vec<Option<usize>> {
                 .get(k..)
                 .unwrap_or_default()
                 .iter()
-                .take_while(|(end, _)| *end <= b.rect[0] + 1.0)
+                .take_while(|(end, _)| *end <= b.rect[0] + overhang(b.size))
                 .take(CONTINUATION_PROBE)
                 .filter_map(|(_, ai)| blocks.get(*ai).filter(|_| *ai != bi).map(|a| (*ai, a)))
                 .filter(|(_, a)| a.rect[3].min(b.rect[3]) - a.rect[1].max(b.rect[1]) > 0.5 * (a.rect[3] - a.rect[1]).min(b.rect[3] - b.rect[1]))
                 .min_by(|(_, a), (_, c)| (a.rect[2] - b.rect[0]).abs().total_cmp(&(c.rect[2] - b.rect[0]).abs()))
                 .map(|(ai, _)| ai)
         })
-        .collect()
+        .collect();
+    for (bullet, text) in super::flow::bullet_items(blocks) {
+        if let Some(slot @ None) = from.get_mut(text) {
+            *slot = Some(bullet);
+        }
+    }
+    from
 }
 
 /// A gap between two runs wider than this (as a fraction of the font size) is a word space the
@@ -234,6 +252,12 @@ pub(crate) fn paragraphs<'a>(blocks: &'a [Block], skip: &[bool]) -> Vec<Vec<Run<
         .collect()
 }
 
+/// [`paragraphs`] as the flowing writers lay them out, top to bottom: a paragraph that wraps onto
+/// the next line is joined to it (`flow::join_wrapped`). `body` is the body text size.
+pub(crate) fn flowing_paragraphs<'a>(blocks: &'a [Block], skip: &[bool], body: f64) -> Vec<Vec<Run<'a>>> {
+    super::flow::join_wrapped(paragraphs(blocks, skip), |runs| para_level(runs, body))
+}
+
 /// A paragraph's heading level: the lowest of its runs', so body text that runs on after a bold
 /// lead-in on the same line keeps the paragraph body text. A marker set smaller than the first run
 /// (a footnote number, "st" in "1st") does not count, so a heading keeps its footnote marker.
@@ -253,8 +277,16 @@ fn is_cell_like(b: &Block) -> bool {
 /// per block, whether a table consumed it (so `items` can drop it from the paragraph flow).
 pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
     let mut consumed = vec![false; blocks.len()];
+    // A list's bullets are not cells: beside their items' text they read as a two-column table.
+    let mut bullet = vec![false; blocks.len()];
+    for (i, _) in super::flow::bullet_items(blocks) {
+        if let Some(b) = bullet.get_mut(i) {
+            *b = true;
+        }
+    }
+    let cell_like = |i: usize, b: &Block| is_cell_like(b) && !bullet.get(i).copied().unwrap_or(false);
     // Candidate columns: cluster the left edges of cell-like blocks.
-    let mut xs: Vec<(f64, usize)> = blocks.iter().enumerate().filter(|(_, b)| is_cell_like(b)).map(|(i, b)| (b.rect[0], i)).collect();
+    let mut xs: Vec<(f64, usize)> = blocks.iter().enumerate().filter(|(i, b)| cell_like(*i, b)).map(|(i, b)| (b.rect[0], i)).collect();
     xs.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut cols: Vec<(f64, Vec<usize>)> = Vec::new(); // (left edge, member block indices)
     for (x, i) in xs {
@@ -290,7 +322,7 @@ pub(crate) fn tables(blocks: &[Block]) -> (Vec<Table>, Vec<bool>) {
     order.sort_by(|a, b| blocks[*b].rect[3].total_cmp(&blocks[*a].rect[3]).then(blocks[*a].rect[0].total_cmp(&blocks[*b].rect[0])));
     for &bi in &order {
         let b = &blocks[bi];
-        if !is_cell_like(b) {
+        if !cell_like(bi, b) {
             continue;
         }
         let Some(ci) = column_at(b.rect[0]) else { continue };
@@ -450,8 +482,9 @@ pub(crate) fn items(pages: &[Page]) -> Vec<Item<'_>> {
         }
         let (tables, consumed) = tables(&p.blocks);
         // Blocks and images by their top edge, top to bottom.
-        // A paragraph sits where its first run does: its other runs follow along the same line.
-        let mut parts: Vec<(f64, f64, Item)> = paragraphs(&p.blocks, &consumed)
+        // A paragraph sits where its first run does: its other runs follow along its line and the
+        // lines it wraps onto.
+        let mut parts: Vec<(f64, f64, Item)> = flowing_paragraphs(&p.blocks, &consumed, body)
             .into_iter()
             .filter_map(|runs| {
                 let first = runs.first()?.block;
