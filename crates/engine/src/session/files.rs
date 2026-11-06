@@ -56,6 +56,19 @@ impl Session {
         Ok((kind, created?))
     }
 
+    /// A file for Insert Pages into `dest`, as PDF bytes and its page count: an image or text
+    /// file is converted, and a PDF is checked as the insert itself checks it, so a file under
+    /// `dest`'s own protection that withholds only page extraction is accepted, as pasted pages
+    /// are (#5081).
+    pub fn insert_source(&self, dest: DocId, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(usize, Arc<Vec<u8>>), EditError> {
+        if !matches!(source_kind(name, bytes), Some(SourceKind::Pdf)) {
+            let (_, pdf) = self.convert_to_pdf(name, bytes)?;
+            return Ok((self.page_count_of(name, &pdf)?, pdf));
+        }
+        let src = crate::sources::open_source_into(name, bytes, self.cos(dest)?)?;
+        Ok((pdfcraft_organize::page_count(&src)?, bytes.clone()))
+    }
+
     /// A file for Combine as PDF bytes: an image or text file is converted; a PDF is returned as
     /// it is, unchecked (Combine reads it itself, with its password), as is a file named .pdf
     /// without a `%PDF-` header, which the reader may still open.
@@ -345,7 +358,7 @@ impl Session {
     /// New PDF bytes containing copies of `pages` of the document (Extract Pages).
     pub fn extract(&self, id: DocId, pages: &[usize]) -> Result<Arc<Vec<u8>>, EditError> {
         let src = self.cos(id)?;
-        if src.permissions().is_some_and(|p| !p.assemble()) {
+        if src.permissions().is_some_and(|p| !p.extract_pages()) {
             return Err(EditError::NotPermitted("extracting pages"));
         }
         let out = pdfcraft_organize::extract_pages(src, pages)?;
@@ -355,7 +368,7 @@ impl Session {
     /// Split the document into several new PDFs.
     pub fn split(&self, id: DocId, by: &pdfcraft_organize::SplitBy) -> Result<Vec<SplitPart>, EditError> {
         let src = self.cos(id)?;
-        if src.permissions().is_some_and(|p| !p.assemble()) {
+        if src.permissions().is_some_and(|p| !p.extract_pages()) {
             return Err(EditError::NotPermitted("splitting the document"));
         }
         let n = pdfcraft_organize::page_count(src)?;
@@ -373,7 +386,7 @@ impl Session {
     /// images count once per part) fits; a page larger than the limit is a part of its own.
     pub fn split_by_size(&self, id: DocId, max_bytes: usize) -> Result<Vec<SplitPart>, EditError> {
         let src = self.cos(id)?;
-        if src.permissions().is_some_and(|p| !p.assemble()) {
+        if src.permissions().is_some_and(|p| !p.extract_pages()) {
             return Err(EditError::NotPermitted("splitting the document"));
         }
         let n = pdfcraft_organize::page_count(src)?;
