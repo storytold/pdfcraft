@@ -398,10 +398,69 @@ pub(crate) fn script_preview(text: &str, w: usize, h: usize) -> egui::ColorImage
     img
 }
 
+/// How many further signatures are kept beside the current one (settings stay small: an image
+/// signature is at most 4 MiB, stored as text).
+pub const MAX_OTHER_SIGNATURES: usize = 8;
+
+/// A saved signature that is safe to use: strokes with finite points, or non-blank text.
+pub(crate) fn usable_signature(sig: &SavedSig) -> bool {
+    match sig {
+        SavedSig::Drawn(strokes) => strokes.iter().all(|s| s.iter().all(|p| p.iter().all(|x| x.is_finite()))),
+        SavedSig::Typed(text) => !text.trim().is_empty(),
+        SavedSig::Image(_) => true,
+    }
+}
+
+impl crate::PdfCraftApp {
+    /// Make `new` the current signature and keep the one it replaces beside it.
+    pub(crate) fn add_signature(&mut self, new: SavedSig) {
+        if let Some(old) = self.signature.replace(new) {
+            self.keep_other_signature(old);
+        }
+    }
+
+    /// Put `old` first among the other saved signatures, unless it is already saved. The oldest
+    /// falls off past `MAX_OTHER_SIGNATURES`.
+    fn keep_other_signature(&mut self, old: SavedSig) {
+        if self.signature.as_ref() == Some(&old) || self.other_signatures.contains(&old) {
+            return;
+        }
+        self.other_signatures.insert(0, old);
+        self.other_signatures.truncate(MAX_OTHER_SIGNATURES);
+        self.other_signature_previews.clear();
+    }
+
+    /// Remove the current signature; the most recent of the others takes its place.
+    pub(crate) fn remove_current_signature(&mut self) {
+        self.signature = if self.other_signatures.is_empty() { None } else { Some(self.other_signatures.remove(0)) };
+        self.other_signature_previews.clear();
+    }
+
+    /// Swap another saved signature with the current one. `false` when there is no such entry.
+    pub(crate) fn use_other_signature(&mut self, index: usize) -> bool {
+        let (Some(current), Some(other)) = (self.signature.as_mut(), self.other_signatures.get_mut(index)) else {
+            return false;
+        };
+        std::mem::swap(current, other);
+        self.other_signature_previews.clear();
+        true
+    }
+
+    /// Forget one of the other saved signatures.
+    pub(crate) fn remove_other_signature(&mut self, index: usize) {
+        if index < self.other_signatures.len() {
+            self.other_signatures.remove(index);
+            self.other_signature_previews.clear();
+        }
+    }
+}
+
 /// Saved previews and add/remove controls, shared by the left panel and quick-tool picker.
 pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp, t: &Tokens) -> Option<&'static str> {
     ui.set_width(ui.available_width().clamp(240.0, 248.0));
     let mut command = None;
+    // What the other saved signatures asked for; applied after the loop, which borrows `app`.
+    let (mut use_other, mut remove_other, mut add_another) = (None, None, false);
     for (i, (saved, what, use_id, change_id, remove_id)) in [
         (app.signature.as_ref(), "signature", "sign.fill.signature", "sign.fill.signature.change", "sign.fill.signature.remove"),
         (app.initials.as_ref(), "initials", "sign.fill.initials", "sign.fill.initials.change", "sign.fill.initials.remove"),
@@ -445,6 +504,50 @@ pub(crate) fn signature_entries(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp,
             ui.painter().set(wash, egui::Shape::rect_filled(row.response.rect.expand(3.0), CornerRadius::same(6), t.accent_soft));
         }
         ui.add_space(4.0);
+        if i == 0 {
+            // The other saved signatures: click one to make it the current one and place it.
+            let others = &app.other_signatures;
+            let previews = &mut app.other_signature_previews;
+            previews.resize_with(others.len(), || None);
+            for (n, (other, cache)) in others.iter().zip(previews.iter_mut()).enumerate() {
+                ui.horizontal(|ui| {
+                    let (rect, response) = ui.allocate_exact_size(vec2((ui.available_width() - 42.0).max(140.0), 44.0), Sense::click());
+                    let use_label = label("Use {what}");
+                    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, false, use_label.clone()));
+                    let painter = ui.painter_at(rect);
+                    painter.rect_filled(rect, CornerRadius::same(4), Color32::WHITE);
+                    painter.rect_stroke(
+                        rect,
+                        CornerRadius::same(4),
+                        Stroke::new(1.0, if response.hovered() { t.accent } else { t.border }),
+                        egui::StrokeKind::Inside,
+                    );
+                    paint_saved(ui, rect.shrink(6.0), other, cache, &format!("saved-{what}-{n}"));
+                    if crate::theme::hand(response).on_hover_text(label("Place saved {what}")).clicked() {
+                        use_other = Some(n);
+                    }
+                    if crate::icons::button(ui, "x", 26.0, false, &label("Remove saved {what}")).clicked() {
+                        remove_other = Some(n);
+                    }
+                });
+                ui.add_space(4.0);
+            }
+            if others.len() < MAX_OTHER_SIGNATURES && crate::widgets::ghost_button(ui, "plus", &label("Add {what}")).clicked() {
+                add_another = true;
+            }
+        }
+    }
+    if let Some(n) = remove_other {
+        app.remove_other_signature(n);
+    }
+    if let Some(n) = use_other
+        && app.use_other_signature(n)
+    {
+        command = Some("sign.fill.signature");
+    }
+    if add_another {
+        app.signature_draft = SigDraft::new(false, &app.comment_prefs.author);
+        app.dialog = Some(crate::Dialog::Signature);
     }
     command
 }

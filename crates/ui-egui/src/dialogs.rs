@@ -1356,7 +1356,11 @@ fn dialog_signature(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending)
             app.initials = d.saved();
             crate::fill_sign::FillTool::Initials
         } else {
-            app.signature = d.saved();
+            // A new signature keeps the one it replaces; editing one replaces it in place.
+            match (d.editing, d.saved()) {
+                (false, Some(new)) => app.add_signature(new),
+                (_, saved) => app.signature = saved,
+            }
             crate::fill_sign::FillTool::Signature
         };
         app.fill_tool = tool;

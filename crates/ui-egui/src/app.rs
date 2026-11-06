@@ -286,6 +286,8 @@ impl PdfCraftApp {
             export_status: None,
             signature: None,
             initials: None,
+            other_signatures: Vec::new(),
+            other_signature_previews: Vec::new(),
             signature_draft: Default::default(),
             signature_preview: None,
             signature_photo: None,

@@ -2534,3 +2534,64 @@ fn fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels() {
     assert!(h.state().views[0].fill_text.is_none());
     assert_eq!(h.state().session.save_bytes(id).unwrap(), saved, "Escape cancels without writing");
 }
+
+/// Several signatures are kept: a new one keeps the one it replaces, another can be made
+/// current, the current one can be removed, and all of it survives a settings restore.
+#[test]
+fn several_saved_signatures_are_kept_swapped_and_remembered() {
+    use pdfcraft_ui_egui::fill_sign::SigDraft;
+    let ada = SavedSig::Typed("Ada Lovelace".into());
+    let grace = SavedSig::Typed("Grace Hopper".into());
+    let mut h = harness();
+    h.state_mut().comment_prefs.author = "Ada Lovelace".into();
+    assert!(h.state_mut().execute("sign.fill.signature"));
+    h.run_steps(2);
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    assert_eq!(h.state().signature, Some(ada.clone()));
+    assert!(h.state().other_signatures.is_empty());
+    // A second signature is added, not substituted: the first moves beside it.
+    h.state_mut().signature_draft = SigDraft::new(false, "Grace Hopper");
+    h.state_mut().dialog = Some(Dialog::Signature);
+    h.run_steps(2);
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    assert_eq!(h.state().signature, Some(grace.clone()));
+    assert_eq!(h.state().other_signatures, vec![ada.clone()]);
+    // Saved together, and restored together.
+    let saved = h.state().persist();
+    let mut again = PdfCraftApp::new();
+    again.restore(&saved);
+    assert_eq!(again.signature, Some(grace.clone()));
+    assert_eq!(again.other_signatures, vec![ada.clone()]);
+    // Removing the current signature brings the other one back.
+    assert!(h.state_mut().execute("sign.fill.signature.remove"));
+    assert_eq!(h.state().signature, Some(ada.clone()));
+    assert!(h.state().other_signatures.is_empty());
+    assert!(h.state_mut().execute("sign.fill.signature.remove"));
+    assert_eq!(h.state().signature, None);
+}
+
+/// Older settings have one signature and no list; a damaged entry in the list is skipped
+/// without losing the others; a list with no current signature gives it its first entry.
+#[test]
+fn saved_signature_lists_restore_leniently() {
+    let mut old = PdfCraftApp::new();
+    old.restore(r#"{"signature_text":"Ada Lovelace"}"#);
+    assert_eq!(old.signature, Some(SavedSig::Typed("Ada Lovelace".into())));
+    assert!(old.other_signatures.is_empty());
+
+    let mut damaged = PdfCraftApp::new();
+    damaged.restore(r#"{"signature_text":"Ada","signatures_more":[{"Typed":"Grace"},{"Image":"not base64!"},{"Typed":"  "},7]}"#);
+    assert_eq!(damaged.other_signatures, vec![SavedSig::Typed("Grace".into())]);
+
+    let mut headless = PdfCraftApp::new();
+    headless.restore(r#"{"signatures_more":[{"Typed":"Grace"},{"Typed":"Linus"}]}"#);
+    assert_eq!(headless.signature, Some(SavedSig::Typed("Grace".into())));
+    assert_eq!(headless.other_signatures, vec![SavedSig::Typed("Linus".into())]);
+
+    let many: Vec<_> = (0..20).map(|n| serde_json::json!({ "Typed": format!("Name {n}") })).collect();
+    let mut capped = PdfCraftApp::new();
+    capped.restore(&serde_json::json!({ "signature_text": "Ada", "signatures_more": many }).to_string());
+    assert_eq!(capped.other_signatures.len(), pdfcraft_ui_egui::fill_sign::MAX_OTHER_SIGNATURES);
+}

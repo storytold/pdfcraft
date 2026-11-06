@@ -132,6 +132,8 @@ impl PdfCraftApp {
             "signature_text": match &self.signature { Some(fill_sign::SavedSig::Typed(t)) => Some(t), _ => None },
             "signature_image": match &self.signature { Some(s @ fill_sign::SavedSig::Image(_)) => Some(s), _ => None },
             "initials": self.initials,
+            // The other saved signatures (absent in older settings, which keep a single one).
+            "signatures_more": self.other_signatures,
             "sign_graphic": self.sign_graphic,
             // macOS Keychain and Windows store identities are read from their OS key stores each time.
             "digital_ids": self.digital_ids.iter().filter(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")).collect::<Vec<_>>(),
@@ -437,6 +439,20 @@ impl PdfCraftApp {
         }
         if let Ok(i) = serde_json::from_value::<fill_sign::SavedSig>(v["initials"].clone()) {
             self.initials = Some(i);
+        }
+        // One unreadable entry (a damaged image) is skipped, not the rest; a list without a
+        // current signature gives it its first entry.
+        if let Some(list) = v["signatures_more"].as_array() {
+            self.other_signatures = list
+                .iter()
+                .filter_map(|e| serde_json::from_value::<fill_sign::SavedSig>(e.clone()).ok())
+                .filter(fill_sign::usable_signature)
+                .take(fill_sign::MAX_OTHER_SIGNATURES)
+                .collect();
+            self.other_signature_previews.clear();
+            if self.signature.is_none() && !self.other_signatures.is_empty() {
+                self.signature = Some(self.other_signatures.remove(0));
+            }
         }
         // An unreadable choice (a damaged image) falls back to the name.
         self.sign_graphic = serde_json::from_value(v["sign_graphic"].clone()).unwrap_or_default();
