@@ -611,6 +611,7 @@ fn os_store_identities_are_not_persisted() {
             issuer: "Test issuer".into(),
             email: String::new(),
             expires: "2030.01.01".into(),
+            expires_at: None,
             unusable: None,
         });
     }
@@ -636,6 +637,7 @@ fn windows_store_identity_does_not_ask_for_a_file_password() {
         issuer: "Test issuer".into(),
         email: String::new(),
         expires: "2030.01.01".into(),
+        expires_at: None,
         unusable: None,
     });
     let draft = h.state_mut().sign_draft.as_mut().unwrap();
@@ -665,6 +667,7 @@ fn typing_a_letter_moves_the_picker_selection() {
             issuer: "Test issuer".into(),
             email: String::new(),
             expires: "2030.01.01".into(),
+            expires_at: None,
             unusable: None,
         });
     }
@@ -700,6 +703,7 @@ fn typing_a_letter_scrolls_to_the_selected_id() {
             issuer: "Test issuer".into(),
             email: String::new(),
             expires: "2030.01.01".into(),
+            expires_at: None,
             unusable: None,
         });
     }
@@ -727,6 +731,7 @@ fn long_digital_id_names_stay_inside_the_picker() {
         issuer: long,
         email: String::new(),
         expires: "2030.01.01".into(),
+        expires_at: None,
         unusable: None,
     });
     h.state_mut().sign_draft.as_mut().unwrap().step = SignStep::Choose;
@@ -764,6 +769,7 @@ fn an_unusable_id_is_shown_with_its_reason_and_cannot_be_chosen() {
         issuer: String::new(),
         email: String::new(),
         expires: String::new(),
+        expires_at: None,
         unusable: Some("its private key can't be opened: the key is missing from its key store (Windows error 0x80090016)".into()),
     });
     h.state_mut().start_signing(0, None, None, None);
@@ -784,6 +790,7 @@ fn an_unusable_id_is_shown_with_its_reason_and_cannot_be_chosen() {
         issuer: "Test issuer".into(),
         email: String::new(),
         expires: "2030.01.01".into(),
+        expires_at: None,
         unusable: None,
     });
     h.state_mut().start_signing(0, None, None, None);

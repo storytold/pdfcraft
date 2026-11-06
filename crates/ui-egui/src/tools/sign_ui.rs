@@ -35,6 +35,10 @@ pub struct DigitalIdEntry {
     pub issuer: String,
     pub email: String,
     pub expires: String,
+    /// The moment it expires, in Unix seconds. `expires` is only the date, for showing; settings
+    /// saved before this field have just that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
     /// Why the ID can't sign (a Windows store certificate whose key PdfCraft can't use): shown
     /// greyed with the reason, and never selectable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -265,6 +269,7 @@ pub fn entry_for(path: &str, c: &Certificate) -> DigitalIdEntry {
         issuer: c.issuer.common_name().map(str::to_string).unwrap_or_else(|| c.issuer.display()),
         email: c.subject.email().unwrap_or("").to_string(),
         expires: expiry_stamp(c.not_after),
+        expires_at: Some(c.not_after.unix()),
         unusable: None,
     }
 }
@@ -280,21 +285,24 @@ fn expiry_stamp(t: sign::Time) -> String {
     format!("{:04}.{:02}.{:02}", t.year, t.month, t.day)
 }
 
-/// Whether `entry` expired before the day `today` (an `expiry_stamp`). An entry with no date,
-/// such as a greyed Windows certificate, isn't known to have expired.
-fn has_expired(entry: &DigitalIdEntry, today: &str) -> bool {
-    !entry.expires.is_empty() && entry.expires.as_str() < today
+/// Whether `entry` has expired by `now`. An entry with only a date lasts through that day, and
+/// one with no date, such as a greyed Windows certificate, isn't known to have expired.
+fn has_expired(entry: &DigitalIdEntry, now: sign::Time) -> bool {
+    match entry.expires_at {
+        Some(at) => at < now.unix(),
+        None => !entry.expires.is_empty() && entry.expires < expiry_stamp(now),
+    }
 }
 
 /// Remove the expired IDs of an OS key store listing and say how many went.
-fn drop_expired(listed: &mut Vec<DigitalIdEntry>, today: &str) -> usize {
+fn drop_expired(listed: &mut Vec<DigitalIdEntry>, now: sign::Time) -> usize {
     let before = listed.len();
-    listed.retain(|e| !has_expired(e, today));
+    listed.retain(|e| !has_expired(e, now));
     before - listed.len()
 }
 
-/// Refuse a certificate past its end. The picker works by the day and from what it saved, so
-/// this is what stops an ID that expired while the dialog was open.
+/// Refuse a certificate past its end. The picker works from what it last listed, so this is what
+/// stops an ID that expired while the dialog or the save panel was open.
 fn refuse_expired(c: &Certificate, now: sign::Time) -> Result<(), String> {
     if c.not_after < now { Err(tl!("This digital ID has expired.").to_string()) } else { Ok(()) }
 }
@@ -335,6 +343,7 @@ fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
         issuer: String::new(),
         email: String::new(),
         expires: String::new(),
+        expires_at: None,
         unusable: Some(u.reason.clone()),
     }
 }
@@ -365,12 +374,12 @@ impl PdfCraftApp {
     /// the entries already listed. Expired OS IDs aren't listed; an expired ID file stays,
     /// greyed, because the picker is where it can be removed.
     fn refresh_os_key_store_ids(&mut self) {
-        let today = expiry_stamp(time_now());
-        for e in self.digital_ids.iter_mut().filter(|e| e.unusable.is_none() && has_expired(e, &today)) {
+        let now = time_now();
+        for e in self.digital_ids.iter_mut().filter(|e| e.unusable.is_none() && has_expired(e, now)) {
             e.unusable = Some(tl!("This digital ID has expired.").to_string());
         }
         let Some(mut listed) = self.list_os_key_store_ids() else { return };
-        let dropped = drop_expired(&mut listed, &today);
+        let dropped = drop_expired(&mut listed, now);
         self.digital_ids.retain(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:"));
         self.digital_ids.extend(listed);
         if dropped > 0 && first_usable(&self.digital_ids).is_none() {
@@ -575,6 +584,7 @@ impl PdfCraftApp {
             if !app.commit_typing_in(doc_id) {
                 return Err(String::new());
             }
+            refuse_expired(&id.certificate, time_now())?;
             let signed = app.session.sign(doc_id, &id, opts).map_err(|e| e.to_string())?;
             crate::editing::write_atomically(&path.to_string_lossy(), signed.as_slice()).map_err(|e| format!("Could not save: {e}"))?;
             // Our own write is not a change on disk to reload (#431).
@@ -831,11 +841,21 @@ mod tests {
 
     #[test]
     fn an_expired_os_id_is_not_listed() {
-        let dated = |path, expires: &str| DigitalIdEntry { expires: expires.into(), ..listed(path, path) };
-        let mut ids = vec![dated("windows:old", "2026.11.04"), dated("windows:today", "2026.11.05"), unusable_id("windows:nokey", "No key")];
-        assert_eq!(drop_expired(&mut ids, "2026.11.05"), 1);
+        let now = sign::Time::from_unix(1_800_000_000);
+        let at = |path, at: i64| DigitalIdEntry { expires: expiry_stamp(sign::Time::from_unix(at)), expires_at: Some(at), ..listed(path, path) };
+        let mut ids = vec![at("windows:gone", 1_800_000_000 - 1), at("windows:now", 1_800_000_000), unusable_id("windows:nokey", "No key")];
+        assert_eq!(ids[0].expires, expiry_stamp(now), "it ended earlier the same day");
+        assert_eq!(drop_expired(&mut ids, now), 1);
         let left: Vec<_> = ids.iter().map(|e| e.path.as_str()).collect();
-        assert_eq!(left, ["windows:today", "windows:nokey"], "it lasts through its last day, and no date isn't expired");
+        assert_eq!(left, ["windows:now", "windows:nokey"], "it lasts to its last second, and no date isn't expired");
+    }
+
+    #[test]
+    fn an_id_saved_with_only_a_date_lasts_through_that_day() {
+        let dated = |path, expires: &str| DigitalIdEntry { expires: expires.into(), ..listed(path, path) };
+        let now = sign::Time::from_unix(1_800_000_000);
+        assert!(!has_expired(&dated("/today.p12", &expiry_stamp(now)), now));
+        assert!(has_expired(&dated("/old.p12", "2000.01.01"), now));
     }
 
     #[test]
@@ -948,7 +968,15 @@ mod tests {
     }
 
     fn listed(path: &str, name: &str) -> DigitalIdEntry {
-        DigitalIdEntry { path: path.into(), name: name.into(), issuer: String::new(), email: String::new(), expires: String::new(), unusable: None }
+        DigitalIdEntry {
+            path: path.into(),
+            name: name.into(),
+            issuer: String::new(),
+            email: String::new(),
+            expires: String::new(),
+            expires_at: None,
+            unusable: None,
+        }
     }
 
     /// Issue #1396: an imported ID can be taken off the list (its file stays), the dialog's
