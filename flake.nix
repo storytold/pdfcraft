@@ -1,5 +1,5 @@
 {
-  description = "storytold *craft dev shell";
+  description = "PdfCraft: package, Home Manager module and dev shell";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
