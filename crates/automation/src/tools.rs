@@ -130,7 +130,9 @@ impl T {
     }
 }
 
-/// Every tool, in a stable order.
+/// Discovery names, argument schemas and hints shared by automation and MCP, in a stable
+/// order. Optional flags such as signature retention remain explicit so existing callers keep
+/// the documented defaults when they omit them.
 pub fn tools() -> Vec<ToolDef> {
     let save_out = json!({ "type": "string", "description": "File to write. Omit to open the result as a new unsaved document instead." });
     let open = json!({ "type": "boolean", "description": "Also open the result as a new document (default: only when out is omitted)." });
@@ -1653,9 +1655,17 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "path"],
             )),
-        t("doc_flatten", "Flatten", "Merge comment and/or form field appearances into the page content, so they print and display everywhere but can no longer be edited. Flattening the fields of an XFA form also takes the XFA out (its template, data and scripts), so Adobe's viewers show the baked pages rather than laying the form out again. Undoable until saved.")
+        t("doc_flatten", "Flatten", "Merge comment and/or form field appearances into the page content, so they print and display everywhere but can no longer be edited. Flattening the fields of an XFA form also takes the XFA out (its template, data and scripts), so Adobe's viewers show the baked pages rather than laying the form out again. keep_signature_fields leaves signature fields (signed or not) as fields, so a form can be filled, flattened, then signed in its prepared field with sign_document. Undoable until saved.")
             .destructive()
-            .with(schema(json!({ "doc": doc(), "comments": { "type": "boolean", "description": "Default true." }, "fields": { "type": "boolean", "description": "Default true." } }), &["doc"])),
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "comments": { "type": "boolean", "description": "Default true." },
+                    "fields": { "type": "boolean", "description": "Default true." },
+                    "keep_signature_fields": { "type": "boolean", "description": "Leave signature fields unflattened. Default false." }
+                }),
+                &["doc"],
+            )),
         t(
             "xfa_to_static",
             "Convert an XFA form to a static form",

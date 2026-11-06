@@ -264,7 +264,7 @@ fn add_background_in_place(doc: &mut Document, pages: &[usize], bg: &Background,
 /// nothing after them go too, restoring the original content list; a wrapper that content
 /// after it still relies on (another tool's appended stream) stays. Removing backgrounds also
 /// turns a backdrop [`add_background`] replaced back on where that is still safe; the pages where
-/// it isn't are [`backdrops_left_off`].
+/// it isn't are [`crate::backdrops_left_off`].
 pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Result<usize, EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;

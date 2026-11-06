@@ -166,7 +166,9 @@ pub const BATCH_LABELS: &[&str] =
     &["Set document title", "Mark differences", "Detect form fields", "Run JavaScript", "Recognize text", field_table::LABEL, "Style"];
 
 impl Edit {
-    /// Label for the Edit menu and history ("Undo Rotate pages").
+    /// Label for the Edit menu and history ("Undo Rotate pages"). Preservation flags select
+    /// which objects an operation retains; they do not create a different history action, so
+    /// both signature-retaining and ordinary field flattening share the same label.
     pub fn label(&self) -> Label {
         match self {
             Edit::RotatePages { pages, .. } => plural("Rotate page", "Rotate pages", pages.len()),
@@ -313,8 +315,8 @@ impl Edit {
             Edit::AddLinks { links, .. } => plural("Create link", "Create links", links.len()),
             Edit::Sanitize => Label::of("Sanitize document"),
             Edit::XfaToStatic => Label::of("Convert to a static form"),
-            Edit::Flatten { comments: true, fields: false } => Label::of("Flatten comments"),
-            Edit::Flatten { comments: false, fields: true } => Label::of("Flatten form fields"),
+            Edit::Flatten { comments: true, fields: false, .. } => Label::of("Flatten comments"),
+            Edit::Flatten { comments: false, fields: true, .. } => Label::of("Flatten form fields"),
             Edit::Flatten { .. } => Label::of("Flatten"),
             Edit::FlattenFillSign => Label::of("Flatten Fill & Sign"),
             Edit::Protect(_) => Label::of("Protect with password"),
