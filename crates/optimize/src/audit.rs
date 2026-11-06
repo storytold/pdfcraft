@@ -246,7 +246,7 @@ pub fn audit_space(doc: &Document, file_len: u64) -> Vec<SpaceUse> {
         a.claim(o, SpaceCategory::Bookmarks);
     }
     let names = a.resolve_dict(cat.get(b"Names"));
-    if let Some(d) = names.get(b"Dests").or_else(|| cat.get(b"Dests")) {
+    for d in [names.get(b"Dests"), cat.get(b"Dests")].into_iter().flatten() {
         a.claim(d, SpaceCategory::NamedDestinations);
     }
     if let Some(e) = names.get(b"EmbeddedFiles") {
