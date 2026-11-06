@@ -759,6 +759,48 @@ impl Automation {
                 let edit = Edit::DeleteAttachment { key: a.str("name")?.into() };
                 self.apply(&a, edit)?
             }
+            "attachment_edit" => {
+                let key = a.opt_str("key")?;
+                let name = a.opt_str("name")?;
+                if key.is_some() == name.is_some() {
+                    return Err(ToolError::InvalidArgs("provide exactly one of key or name".into()));
+                }
+                let keys: Vec<String> = self
+                    .doc(&a)?
+                    .info
+                    .attachments
+                    .iter()
+                    .filter_map(|attachment| match &attachment.source {
+                        pdfcraft_render::AttachmentSource::Document { key: attachment_key }
+                            if key.is_some_and(|key| key == attachment_key) || name.is_some_and(|name| name == attachment.name) =>
+                        {
+                            Some(attachment_key.clone())
+                        }
+                        pdfcraft_render::AttachmentSource::Document { .. } => None,
+                        pdfcraft_render::AttachmentSource::Annotation { .. } => None,
+                    })
+                    .collect();
+                let key = match keys.as_slice() {
+                    [key] => key.clone(),
+                    [] if key.is_some() => {
+                        return Err(ToolError::InvalidArgs(format!("there is no document attachment with key {:?}", key.unwrap_or_default())));
+                    }
+                    [] => {
+                        return Err(ToolError::InvalidArgs(format!(
+                            "there is no document attachment named {:?}; use a name from doc_info",
+                            name.unwrap_or_default()
+                        )));
+                    }
+                    _ => {
+                        return Err(ToolError::InvalidArgs(format!(
+                            "more than one document attachment is named {:?}; provide its key from doc_info",
+                            name.unwrap_or_default()
+                        )));
+                    }
+                };
+                let edit = Edit::EditAttachmentDescription { key, description: Some(a.str("description")?.into()) };
+                self.apply(&a, edit)?
+            }
             "doc_remove_hidden" => self.doc_remove_hidden(&a)?,
             "doc_audit_redactions" => self.doc_audit_redactions(&a)?,
             "fill_sign_add" => self.fill_sign_add(&a)?,

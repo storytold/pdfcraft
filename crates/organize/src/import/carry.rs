@@ -23,29 +23,41 @@ pub(super) fn collect_attachments(dst: &mut Document, src: &Document, out: &mut 
 
 /// Write attachments as a flat, sorted `/EmbeddedFiles` name tree; duplicate names get " (2)"…
 pub(crate) fn set_attachments(dst: &mut Document, mut entries: Vec<(Vec<u8>, Object)>) -> Result<(), OrganizeError> {
+    write_attachments(dst, &mut entries, true)
+}
+
+/// Rewrite the name tree without changing attachment keys (used when editing one file spec).
+pub(crate) fn set_attachments_exact(dst: &mut Document, mut entries: Vec<(Vec<u8>, Object)>) -> Result<(), OrganizeError> {
+    write_attachments(dst, &mut entries, false)
+}
+
+/// Write a flat, sorted `/EmbeddedFiles` name tree, optionally renaming duplicate keys.
+fn write_attachments(dst: &mut Document, entries: &mut [(Vec<u8>, Object)], uniquify: bool) -> Result<(), OrganizeError> {
     if entries.is_empty() {
         return Ok(());
     }
     // Names are compared and numbered as text: a key written as UTF-16 (a name with an accent
     // or Chinese letters) must not get ASCII bytes appended to it.
-    let mut seen = std::collections::HashSet::new();
-    for (k, _) in entries.iter_mut() {
-        let base = pdfcraft_cos::PdfString::literal(k.clone()).to_text();
-        let mut text = base.clone();
-        let mut n = 2;
-        while !seen.insert(text.clone()) {
-            text = format!("{base} ({n})");
-            n += 1;
-        }
-        if text != base {
-            *k = pdfcraft_cos::PdfString::text(&text).bytes;
+    if uniquify {
+        let mut seen = std::collections::HashSet::new();
+        for (k, _) in entries.iter_mut() {
+            let base = pdfcraft_cos::PdfString::literal(k.clone()).to_text();
+            let mut text = base.clone();
+            let mut n = 2;
+            while !seen.insert(text.clone()) {
+                text = format!("{base} ({n})");
+                n += 1;
+            }
+            if text != base {
+                *k = pdfcraft_cos::PdfString::text(&text).bytes;
+            }
         }
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     let mut names = Vec::new();
-    for (k, v) in entries {
-        names.push(Object::String(pdfcraft_cos::PdfString::literal(k)));
-        names.push(v);
+    for (k, v) in entries.iter() {
+        names.push(Object::String(pdfcraft_cos::PdfString::literal(k.clone())));
+        names.push(v.clone());
     }
     let mut tree = Dict::new();
     tree.set(b"Names".to_vec(), Object::Array(names));
