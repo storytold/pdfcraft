@@ -5855,13 +5855,87 @@ fn comparing_two_versions_of_a_document() {
     let vis = s.compare_visual(old, new, 72.0).unwrap();
     assert!(!vis.is_empty() && vis.iter().all(|(p, r)| *p == 0 && r[3] > 600.0), "{vis:?}");
     assert!(s.compare_visual(old, old, 72.0).unwrap().is_empty());
+    // Plain text drawing is neither a comment nor a picture, until a comment sits on it.
+    assert!(vis.iter().all(|(p, r)| s.visual_kind(old, new, *p, *r).unwrap() == compare::VisualKind::Other));
+    assert_eq!(s.visual_kinds(old, new, &vis).unwrap(), vec![compare::VisualKind::Other; vis.len()]);
 
     assert_eq!(s.mark_differences(old, new).unwrap(), 2);
+    assert!(vis.iter().any(|(p, r)| s.visual_kind(old, new, *p, *r).unwrap() == compare::VisualKind::Annotation));
     let d = s.get(new).unwrap();
     assert_eq!(d.can_undo(), Some("Mark differences"));
     let marks: Vec<_> = d.info.annotations.iter().filter(|a| a.author.as_deref() == Some("Compare")).collect();
     assert_eq!(marks.len(), 2);
     assert!(marks[0].contents.as_deref().unwrap().starts_with("Replaced: \"Monday.\""));
+}
+
+#[test]
+fn visual_difference_kind_includes_raster_images_and_widgets() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let blank = s.create_blank(200.0, 300.0, 1).unwrap();
+    let old = s.open("old.pdf", None, blank.clone(), None).unwrap();
+    let new = s.open("new.pdf", None, blank, None).unwrap();
+    let image = image::RgbImage::from_pixel(12, 8, image::Rgb([240, 20, 20]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    s.apply(new, Edit::AddImage { page: 0, rect: Some([40.0, 40.0, 80.0, 70.0]), name: "red.png".into(), bytes: Arc::new(png.into_inner()) })
+        .unwrap();
+    let regions = s.compare_visual(old, new, 72.0).unwrap();
+    assert!(!regions.is_empty());
+    let kinds = s.visual_kinds(old, new, &regions).unwrap();
+    assert!(kinds.iter().all(|kind| *kind == compare::VisualKind::Image), "{kinds:?}");
+    assert_eq!(kinds, regions.iter().map(|(page, rect)| s.visual_kind(old, new, *page, *rect).unwrap()).collect::<Vec<_>>());
+
+    let widget = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /Annots [4 0 R] >> endobj\n4 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (Field) /Rect [40 40 80 80] /F 4 /P 3 0 R >> endobj\n5 0 obj << /Fields [4 0 R] /NeedAppearances true >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
+    let with_widget = s.open("widget.pdf", None, Arc::new(widget.to_vec()), None).unwrap();
+    assert!(!s.get(with_widget).unwrap().info.annotations.iter().any(|a| a.subtype == "Widget"));
+    assert_eq!(s.visual_kind(old, with_widget, 0, [40.0, 40.0, 80.0, 80.0]).unwrap(), compare::VisualKind::Annotation);
+    assert_eq!(s.visual_kind(with_widget, old, 0, [40.0, 40.0, 80.0, 80.0]).unwrap(), compare::VisualKind::Annotation);
+}
+
+#[test]
+fn visual_difference_kind_includes_inline_images() {
+    let mut s = Session::new();
+    let blank = s.create_blank(200.0, 300.0, 1).unwrap();
+    let old = s.open("old.pdf", None, blank, None).unwrap();
+    let content = "q 40 0 0 30 40 40 cm BI /W 1 /H 1 /CS /RGB /BPC 8 /F /AHx ID F01414> EI Q";
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Resources << >> /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        content.len(),
+        content
+    );
+    let new = s.open("inline-image.pdf", None, Arc::new(pdf.into_bytes()), None).unwrap();
+
+    assert_eq!(s.visual_kind(old, new, 0, [50.0, 50.0, 60.0, 60.0]).unwrap(), compare::VisualKind::Image);
+    assert_eq!(s.visual_kinds(old, new, &[(0, [50.0, 50.0, 60.0, 60.0])]).unwrap(), [compare::VisualKind::Image]);
+
+    let clipped_content = "q 45 45 5 5 re W n 40 0 0 30 40 40 cm BI /W 1 /H 1 /CS /RGB /BPC 8 /F /AHx ID F01414> EI Q";
+    let clipped_pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Resources << >> /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        clipped_content.len(),
+        clipped_content
+    );
+    let clipped = s.open("clipped-inline-image.pdf", None, Arc::new(clipped_pdf.into_bytes()), None).unwrap();
+    assert_eq!(s.visual_kind(old, clipped, 0, [46.0, 46.0, 49.0, 49.0]).unwrap(), compare::VisualKind::Image);
+    assert_eq!(s.visual_kind(old, clipped, 0, [70.0, 60.0, 75.0, 65.0]).unwrap(), compare::VisualKind::Other);
+    assert_eq!(s.visual_kinds(old, clipped, &[(0, [70.0, 60.0, 75.0, 65.0])]).unwrap(), [compare::VisualKind::Other]);
+    assert_eq!(
+        s.visual_kinds(old, clipped, &[(0, [46.0, 46.0, 49.0, 49.0]), (0, [70.0, 60.0, 75.0, 65.0])]).unwrap(),
+        [compare::VisualKind::Image, compare::VisualKind::Other]
+    );
+
+    let form_content = "q 1 0 0 1 100 0 cm /Fm Do Q";
+    let form_pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Resources << /XObject << /Fm 5 0 R >> >> /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{}\nendstream endobj\n5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 300] /Resources << >> /Length {} >> stream\n{}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        form_content.len(),
+        form_content,
+        content.len(),
+        content
+    );
+    let in_form = s.open("form-inline-image.pdf", None, Arc::new(form_pdf.into_bytes()), None).unwrap();
+    assert_eq!(s.visual_kind(old, in_form, 0, [150.0, 50.0, 160.0, 60.0]).unwrap(), compare::VisualKind::Image);
+    assert_eq!(s.visual_kind(old, in_form, 0, [50.0, 50.0, 60.0, 60.0]).unwrap(), compare::VisualKind::Other);
+    assert_eq!(s.visual_kind(old, in_form, 0, [190.0, 200.0, 195.0, 205.0]).unwrap(), compare::VisualKind::Other);
+    assert_eq!(s.visual_kinds(old, in_form, &[(0, [150.0, 50.0, 160.0, 60.0])]).unwrap(), [compare::VisualKind::Image]);
 }
 
 #[test]
