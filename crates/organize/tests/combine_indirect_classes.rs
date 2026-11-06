@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use pdfcraft_cos::{Document, SaveOptions, write_full};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, write_full};
 use pdfcraft_organize::{combine, page_count};
 
 /// One tagged page with a class whose meaning differs between the two source documents.
@@ -72,4 +72,92 @@ fn conflicting_indirect_class_names_keep_each_sources_meaning() {
 fn a_cyclic_class_reference_is_bounded_and_keeps_both_pages() {
     let out = saved_combination(&source("Block", None), &source("Inline", Some("10 0 R")));
     assert_eq!(page_count(&out).unwrap(), 2);
+}
+
+fn role_source(standard: &str, indirect: bool) -> Document {
+    let mut doc = source("Block", None);
+    let mut roles = Dict::new();
+    roles.set(b"CustomRole".to_vec(), Object::name(standard));
+    doc.update_dict(ObjRef::new(6, 0), |d| d.set(b"RoleMap".to_vec(), Object::Dict(roles))).unwrap();
+    doc.update_dict(ObjRef::new(8, 0), |d| {
+        d.set(b"S".to_vec(), if indirect { Object::Ref(ObjRef::new(11, 0)) } else { Object::name("CustomRole") });
+    })
+    .unwrap();
+    doc.set(ObjRef::new(11, 0), Object::name("CustomRole"));
+    doc
+}
+
+#[test]
+fn conflicting_indirect_roles_keep_each_sources_standard_role() {
+    let out = saved_combination(&role_source("H1", false), &role_source("P", true));
+    let catalog = out.get(out.root().unwrap());
+    let root = out.resolve(catalog.as_dict().unwrap().get(b"StructTreeRoot").unwrap());
+    let root = root.as_dict().unwrap();
+    let roles = out.resolve(root.get(b"RoleMap").unwrap());
+    let roles = roles.as_dict().unwrap();
+    for (document, expected) in root.get(b"K").unwrap().as_array().unwrap().iter().zip([b"H1".as_slice(), b"P".as_slice()]) {
+        let document = out.resolve(document);
+        let children = document.as_dict().unwrap().get(b"K").unwrap();
+        let element = out.resolve(children.as_array().and_then(|children| children.first()).unwrap_or(children));
+        let role = out.resolve(element.as_dict().unwrap().get(b"S").unwrap());
+        assert_eq!(out.resolve(roles.get(role.as_name().unwrap()).unwrap()).as_name(), Some(expected));
+    }
+}
+
+#[test]
+fn a_cyclic_role_reference_is_bounded_and_keeps_both_pages() {
+    let mut second = role_source("P", true);
+    second.set(ObjRef::new(11, 0), Object::Ref(ObjRef::new(11, 0)));
+    assert_eq!(page_count(&saved_combination(&role_source("H1", false), &second)).unwrap(), 2);
+}
+
+fn header_source(indirect_array: bool) -> Document {
+    let mut doc = source("Block", None);
+    doc.update_dict(ObjRef::new(7, 0), |d| {
+        d.set(b"K".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(8, 0)), Object::Ref(ObjRef::new(12, 0))]))
+    })
+    .unwrap();
+    doc.update_dict(ObjRef::new(8, 0), |d| d.set(b"ID".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"shared".to_vec())))).unwrap();
+    let mut cell = Dict::new();
+    cell.set(b"Type".to_vec(), Object::name("StructElem"));
+    cell.set(b"S".to_vec(), Object::name("TD"));
+    cell.set(b"P".to_vec(), Object::Ref(ObjRef::new(7, 0)));
+    cell.set(b"Pg".to_vec(), Object::Ref(ObjRef::new(3, 0)));
+    cell.set(b"A".to_vec(), Object::Ref(ObjRef::new(if indirect_array { 16 } else { 13 }, 0)));
+    doc.set(ObjRef::new(12, 0), Object::Dict(cell));
+    let mut attributes = Dict::new();
+    attributes.set(b"O".to_vec(), Object::name("Table"));
+    attributes.set(b"Headers".to_vec(), Object::Ref(ObjRef::new(14, 0)));
+    doc.set(ObjRef::new(13, 0), Object::Dict(attributes));
+    doc.set(ObjRef::new(14, 0), Object::Array(vec![Object::Ref(ObjRef::new(15, 0))]));
+    doc.set(ObjRef::new(15, 0), Object::String(pdfcraft_cos::PdfString::literal(b"shared".to_vec())));
+    doc.set(ObjRef::new(16, 0), Object::Array(vec![Object::Ref(ObjRef::new(13, 0)), Object::Int(3)]));
+    doc
+}
+
+#[test]
+fn indirect_header_ids_follow_their_own_renamed_header() {
+    for indirect_array in [false, true] {
+        let out = saved_combination(&header_source(false), &header_source(indirect_array));
+        let catalog = out.get(out.root().unwrap());
+        let root = out.resolve(catalog.as_dict().unwrap().get(b"StructTreeRoot").unwrap());
+        for document in root.as_dict().unwrap().get(b"K").unwrap().as_array().unwrap() {
+            let document = out.resolve(document);
+            let children = document.as_dict().unwrap().get(b"K").unwrap().as_array().unwrap();
+            let header = out.resolve(&children[0]);
+            let id = out.resolve(header.as_dict().unwrap().get(b"ID").unwrap());
+            let cell = out.resolve(&children[1]);
+            let attributes = out.resolve(cell.as_dict().unwrap().get(b"A").unwrap());
+            let attributes = match attributes.as_array() {
+                Some(items) => {
+                    assert_eq!(items[1].as_int(), Some(3));
+                    out.resolve(&items[0])
+                }
+                None => attributes,
+            };
+            let headers = out.resolve(attributes.as_dict().unwrap().get(b"Headers").unwrap());
+            let actual = out.resolve(&headers.as_array().unwrap()[0]);
+            assert_eq!(actual.as_string().unwrap().bytes, id.as_string().unwrap().bytes);
+        }
+    }
 }

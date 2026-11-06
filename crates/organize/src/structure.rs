@@ -162,7 +162,7 @@ impl Merged {
                         };
                         kids(src, &mut copier, dst, v, e.page, pages, objects, &child, &direct)
                     }
-                    b"S" => Some(rename(v, &roles).unwrap_or_else(|| copier.copy_val(dst, v, None))),
+                    b"S" => Some(rename(&src.resolve(v), &roles).unwrap_or_else(|| copier.copy_val(dst, v, None))),
                     b"C" => Some(renamed_classes(src, &mut copier, dst, v, &classes)),
                     b"ID" => Some(match src.resolve(v).as_string() {
                         Some(s) => {
@@ -647,38 +647,27 @@ fn with_headers_renamed(a: &Object, dst: &mut Document, renamed: &HashMap<Vec<u8
     if renamed.is_empty() {
         return a.clone();
     }
-    let fix = |d: &mut Dict| {
-        if let Some(Object::Array(h)) = d.get(b"Headers") {
-            let h: Vec<Object> = h
+    let fix_one = |o: &Object| -> Object {
+        let value = dst.resolve(o);
+        let Some(mut d) = value.as_dict().cloned() else { return o.clone() };
+        if let Some(headers) = d.get(b"Headers")
+            && let Some(h) = dst.resolve(headers).as_array()
+        {
+            let h = h
                 .iter()
-                .map(|x| match x.as_string().and_then(|s| renamed.get(&s.bytes)) {
+                .map(|x| match dst.resolve(x).as_string().and_then(|s| renamed.get(&s.bytes)) {
                     Some(new) => Object::String(pdfcraft_cos::PdfString::literal(new.clone())),
                     None => x.clone(),
                 })
                 .collect();
             d.set(b"Headers".to_vec(), Object::Array(h));
         }
+        Object::Dict(d)
     };
-    let fix_one = |o: &Object, dst: &mut Document| -> Object {
-        match o {
-            Object::Dict(d) => {
-                let mut d = d.clone();
-                fix(&mut d);
-                Object::Dict(d)
-            }
-            // Attribute objects are often indirect: the copy is this source's own, so fix it there.
-            Object::Ref(r) => {
-                if let Some(mut d) = dst.get(*r).as_dict().cloned() {
-                    fix(&mut d);
-                    dst.set(*r, Object::Dict(d));
-                }
-                o.clone()
-            }
-            other => other.clone(),
-        }
-    };
-    match a {
-        Object::Array(items) => Object::Array(items.iter().map(|o| fix_one(o, dst)).collect()),
-        other => fix_one(other, dst),
+    // Both the attribute container and its table-header strings may be indirect. Resolve with
+    // Document's bounded resolver and inline only the rewritten attributes, not shared objects.
+    match &*dst.resolve(a) {
+        Object::Array(items) => Object::Array(items.iter().map(fix_one).collect()),
+        _ => fix_one(a),
     }
 }
