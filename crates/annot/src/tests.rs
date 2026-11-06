@@ -2817,8 +2817,89 @@ fn text_markup_whose_quads_reach_past_its_rect_is_drawn_over_them() {
     assert_eq!(bbox(&shown[3]), rect(&shown[3]));
     assert_eq!(rect(&shown[4]), [10.0, 10.0, 200.0, 320.0], "a squiggly's too");
     assert_eq!(bbox(&shown[4]), rect(&shown[4]));
-    assert_eq!(rect(&shown[5]), [10.0, 10.0, 20.0, 20.0], "quads too far apart for a width keep the /Rect");
+    assert_eq!(rect(&shown[5]), [0.0, 10.0, 612.0, 20.0], "quads far past the page reach only as far as it shows");
     assert_eq!(rect(&list(&doc, 0)[0]), [335.1, 370.83, 324.6, 471.78], "the source document is unchanged");
+}
+
+/// `n` copies of the quadrilateral `[100 120 200 120 100 100 200 100]`, as `/QuadPoints`.
+fn repeated_quads(n: usize) -> String {
+    format!("[{}]", vec!["100 120 200 120 100 100 200 100"; n].join(" "))
+}
+
+/// The `/BBox` of `d`'s normal appearance in `doc`.
+fn ap_bbox(doc: &Document, d: &Dict) -> Vec<f64> {
+    let n = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.reference(b"N"))).expect("has /AP /N");
+    let obj = doc.get(n);
+    let Object::Stream(s) = &*obj else { panic!("AP is not a stream") };
+    nums_of(&s.dict, b"BBox")
+}
+
+/// The widened box stops at the page's visible region (its crop box, ISO 32000-2 §14.11.2), and
+/// quadrilaterals wholly outside it widen nothing. A markup with more than
+/// `appearance::MAX_MARKUP_QUADS` quadrilaterals keeps its `/Rect`. An annotation with an
+/// appearance of its own, and one that isn't text markup, keep theirs whatever `/QuadPoints` say.
+#[test]
+fn text_markup_reach_stops_at_the_page_and_the_quad_cap() {
+    let cap = appearance::MAX_MARKUP_QUADS;
+    let at_cap = format!("<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints {} >>", repeated_quads(cap));
+    let past_cap = format!("<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints {} >>", repeated_quads(cap + 1));
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /CropBox [0 0 300 400] /Annots [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints [100 380 500 380 100 360 500 360] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints [400 500 450 500 400 480 450 480] >>",
+        at_cap.as_bytes(),
+        past_cap.as_bytes(),
+        b"<< /Type /Annot /Subtype /Highlight /Rect [10 10 20 20] /C [1 1 0] /QuadPoints [100 120 200 120 100 100 200 100] /AP << /N 10 0 R >> >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [10 10 20 20] /C [0 0 1] /QuadPoints [100 120 200 120 100 100 200 100] >>",
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    let display = with_missing_appearances(&doc).expect("the markups need an appearance");
+    let shown = list(&display, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    assert_eq!(rect(&shown[0]), [10.0, 10.0, 300.0, 380.0], "the box stops at the crop box");
+    assert_eq!(ap_bbox(&display, &shown[0]), rect(&shown[0]));
+    assert_eq!(rect(&shown[1]), [10.0, 10.0, 20.0, 20.0], "quads off the page widen nothing");
+    assert_eq!(rect(&shown[2]), [10.0, 10.0, 200.0, 120.0], "as many quads as the cap widen the box");
+    assert_eq!(rect(&shown[3]), [10.0, 10.0, 20.0, 20.0], "more quads than the cap keep the /Rect");
+    assert_eq!(ap_bbox(&display, &shown[3]), rect(&shown[3]));
+    assert_eq!(rect(&shown[4]), [10.0, 10.0, 20.0, 20.0], "a markup with an appearance of its own keeps its /Rect");
+    assert_eq!(
+        shown[4].get(b"AP").map(|a| display.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.reference(b"N"))),
+        Some(ObjRef::new(10, 0)),
+        "and its appearance"
+    );
+    assert_eq!(rect(&shown[5]), [10.0, 10.0, 20.0, 20.0], "a square is not text markup");
+    assert_eq!(ap_bbox(&display, &shown[5]), rect(&shown[5]));
+}
+
+/// A restyle (the edit path, `set_appearance`) redraws a text markup over its quadrilaterals and
+/// saves the `/Rect` its appearance covers, as far as the page shows, since the appearance is
+/// mapped onto `/Rect` (ISO 32000-2 §12.5.5). A markup whose `/Rect` already holds its quads keeps
+/// that `/Rect` as written, swapped corners and all.
+#[test]
+fn restyled_text_markup_saves_the_rect_its_appearance_covers() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [335.1 370.83 324.6 471.78] /C [1 1 0] /QuadPoints [370 287 471 287 370 277 471 277] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [150 70 50 50] /C [1 1 0] /QuadPoints [60 68 140 68 60 52 140 52] >>",
+        b"<< /Type /Annot /Subtype /Underline /Rect [10 10 20 20] /C [0 0 1] /QuadPoints [500 120 700 120 500 100 700 100] >>",
+    ]);
+    for index in 0..3 {
+        set_style(&mut doc, 0, index, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
+    }
+    let saved = reopen(&doc);
+    let shown = list(&saved, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    assert_eq!(rect(&shown[0]), [324.6, 277.0, 471.0, 471.78], "the saved /Rect takes in the highlighted text");
+    assert_eq!(ap_bbox(&saved, &shown[0]), rect(&shown[0]));
+    assert!(ap_content(&saved, &shown[0]).contains("370 287 m 471 287 l 471 277 l 370 277 l h f"), "the quad is filled");
+    assert_eq!(rect(&shown[1]), [150.0, 70.0, 50.0, 50.0], "a /Rect that holds the quads is kept as written");
+    assert_eq!(rect(&shown[2]), [10.0, 10.0, 612.0, 120.0], "the saved /Rect stops at the page");
+    assert_eq!(ap_bbox(&saved, &shown[2]), rect(&shown[2]));
 }
 
 fn nums_of(d: &Dict, key: &[u8]) -> Vec<f64> {
