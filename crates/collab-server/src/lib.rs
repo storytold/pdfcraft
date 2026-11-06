@@ -150,15 +150,7 @@ impl<A: Adapter> Room<A> {
             return Err(server_error(ErrorCode::Invalid, "the session belongs to another document", false));
         }
         let mut lease = Lease { id: format!("{}:{}", self.session_id, actor.as_str()), ttl_secs: 0 };
-        if role.can_structural() {
-            if let Some(current) = &self.lease
-                && current.holder != actor
-                && current.expires_ms > now_ms
-            {
-                return Err(server_error(ErrorCode::Lease, "another editor holds the document lease", true));
-            }
-            let expires_ms = now_ms.saturating_add(self.config.lease_ttl_secs.saturating_mul(1_000));
-            self.lease = Some(LeaseState { holder: actor.clone(), expires_ms });
+        if role.can_structural() && self.take_lease(&actor, now_ms) {
             lease.ttl_secs = self.config.lease_ttl_secs;
         }
         self.participants.entry(actor.clone()).and_modify(|p| p.role = role).or_insert(Participant { role, last_presence_ms: None, color: None });
@@ -182,10 +174,36 @@ impl<A: Adapter> Room<A> {
         })
     }
 
+    /// Take or renew the writing lease for `actor`. Succeeds when the lease is
+    /// free, expired or already held by `actor`; a live lease held by someone
+    /// else is left untouched. Only structural writes need the lease, so a
+    /// second editor may join and comment, but cannot change pages until the
+    /// holder leaves or its TTL runs out (ADR-0008).
+    fn take_lease(&mut self, actor: &ActorId, now_ms: u64) -> bool {
+        let available = self.lease.as_ref().is_none_or(|l| l.holder == *actor || l.expires_ms <= now_ms);
+        if !available {
+            return false;
+        }
+        let expires_ms = now_ms.saturating_add(self.config.lease_ttl_secs.saturating_mul(1_000));
+        self.lease = Some(LeaseState { holder: actor.clone(), expires_ms });
+        true
+    }
+
+    /// A heartbeat from the lease holder extends it. Everyone else is ignored:
+    /// a ping is not a write and must not move the lease.
+    pub fn heartbeat(&mut self, actor: &ActorId, now_ms: u64) -> bool {
+        let Some(lease) = self.lease.as_mut() else { return false };
+        if lease.holder != *actor {
+            return false;
+        }
+        lease.expires_ms = now_ms.saturating_add(self.config.lease_ttl_secs.saturating_mul(1_000));
+        true
+    }
+
     /// Apply one operation. The checks run in this order: membership, role,
-    /// de-duplication, document, then `baseVersion`/`epoch`. A retried `opId`
-    /// returns the stored result without touching the document.
-    pub fn apply(&mut self, actor: &ActorId, op: &Op, _now_ms: u64) -> Result<Applied, Rejected> {
+    /// de-duplication, document, lease, then `baseVersion`/`epoch`. A retried
+    /// `opId` returns the stored result without touching the document.
+    pub fn apply(&mut self, actor: &ActorId, op: &Op, now_ms: u64) -> Result<Applied, Rejected> {
         let Some(participant) = self.participants.get(actor) else {
             return Err(self.reject(&op.op_id, ErrorCode::Forbidden, false, "not in this session"));
         };
@@ -203,6 +221,9 @@ impl<A: Adapter> Room<A> {
         }
         if op.class == ConflictClass::Merge && !participant.role.can_annotate() {
             return Err(self.reject(&op.op_id, ErrorCode::Forbidden, false, "this role cannot comment"));
+        }
+        if op.class == ConflictClass::Structural && !self.take_lease(actor, now_ms) {
+            return Err(self.reject(&op.op_id, ErrorCode::Lease, true, "another editor holds the document lease"));
         }
         if op.class == ConflictClass::Structural && op.base_version != self.version {
             return Err(self.reject(&op.op_id, ErrorCode::Stale, true, "the document changed; resync and retry"));
@@ -399,18 +420,43 @@ mod tests {
     }
 
     #[test]
-    fn lease_is_exclusive_and_expires() -> Result<(), Box<dyn std::error::Error>> {
+    fn the_lease_is_granted_to_one_editor_and_expires() -> Result<(), Box<dyn std::error::Error>> {
         let mut room = room()?;
         let a = actor("a")?;
         let b = actor("b")?;
         let hello = hello()?;
-        assert!(room.hello(a.clone(), Role::Editor, &hello, 1_000).is_ok());
-        assert_eq!(
-            room.hello(b.clone(), Role::Editor, &hello, 1_000).map(|_| ()),
-            Err(super::server_error(ErrorCode::Lease, "another editor holds the document lease", true))
-        );
+        let first = room.hello(a.clone(), Role::Editor, &hello, 1_000)?;
+        assert_eq!(first.lease.ttl_secs, RoomConfig::default().lease_ttl_secs);
+        // A second editor joins read-only for pages: the lease is what a writer
+        // needs, not a condition for entering the room.
+        let second = room.hello(b.clone(), Role::Editor, &hello, 1_000)?;
+        assert_eq!(second.lease.ttl_secs, 0);
+        assert_eq!(room.participants(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn structural_writes_need_the_lease_and_a_heartbeat_keeps_it() -> Result<(), Box<dyn std::error::Error>> {
+        let mut room = room()?;
+        let a = actor("a")?;
+        let b = actor("b")?;
+        let hello = hello()?;
         let ttl = RoomConfig::default().lease_ttl_secs * 1_000;
-        assert!(room.hello(b, Role::Editor, &hello, 1_000 + ttl + 1).is_ok());
+        room.hello(a.clone(), Role::Editor, &hello, 1_000)?;
+        room.hello(b.clone(), Role::Editor, &hello, 1_000)?;
+
+        let first = op("s1", OpKind::Structural, ConflictClass::Structural, 0, 0)?;
+        assert!(matches!(room.apply(&b, &first, 1_000), Err(e) if e.code == ErrorCode::Lease && e.retryable));
+
+        // The holder renews without writing; the lease survives past its old expiry.
+        assert!(room.heartbeat(&a, 1_000 + ttl / 2));
+        assert!(matches!(room.apply(&b, &first, 1_000 + ttl / 2 + 1), Err(e) if e.code == ErrorCode::Lease));
+
+        // Without another heartbeat the lease expires and the next writer takes it.
+        let after = 1_000 + ttl + ttl / 2 + 2;
+        assert!(room.apply(&b, &first, after).is_ok());
+        assert_eq!(room.epoch(), 1);
+        assert!(matches!(room.lease_holder(after), Some(holder) if holder == &b));
         Ok(())
     }
 
@@ -527,9 +573,11 @@ mod tests {
         let a = actor("a")?;
         let b = actor("b")?;
         room.hello(a.clone(), Role::Editor, &hello, 0)?;
-        assert!(room.hello(b.clone(), Role::Editor, &hello, 0).is_err());
+        room.hello(b.clone(), Role::Editor, &hello, 0)?;
+        let structural = op("s1", OpKind::Structural, ConflictClass::Structural, 0, 0)?;
+        assert!(matches!(room.apply(&b, &structural, 0), Err(e) if e.code == ErrorCode::Lease));
         room.disconnect(&a);
-        assert!(room.hello(b, Role::Editor, &hello, 0).is_ok());
+        assert!(room.apply(&b, &structural, 0).is_ok());
         Ok(())
     }
 }

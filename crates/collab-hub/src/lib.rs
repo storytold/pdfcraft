@@ -105,7 +105,11 @@ impl<A: Adapter> Hub<A> {
                 Ok(result) => deliver(&mut self.clients, id, ServerMessage::CommitResult(result)),
                 Err(e) => deliver(&mut self.clients, id, ServerMessage::Error(e)),
             },
-            ClientMessage::Ping(ping) => deliver(&mut self.clients, id, ServerMessage::Pong(ping)),
+            ClientMessage::Ping(ping) => {
+                // A ping is the heartbeat that keeps the writing lease alive.
+                entry.room.heartbeat(&actor, now_ms);
+                deliver(&mut self.clients, id, ServerMessage::Pong(ping))
+            }
             ClientMessage::Hello(_) => {
                 deliver(&mut self.clients, id, ServerMessage::Error(error(ErrorCode::Invalid, "this connection is already joined", false)))
             }
@@ -276,6 +280,27 @@ mod tests {
         hub.send(commenter, ClientMessage::Presence(presence), 1_000)?;
         assert!(matches!(hub.receive(editor).as_slice(), [ServerMessage::Presence(_)]));
         assert!(hub.receive(commenter).is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn a_second_editor_comments_but_waits_for_the_lease() -> Result<(), Box<dyn std::error::Error>> {
+        let (mut hub, doc) = hub()?;
+        let first = join(&mut hub, &doc, "first", Role::Editor)?;
+        let second = join(&mut hub, &doc, "second", Role::Editor)?;
+
+        let rotate = op("rot", ConflictClass::Structural, Target::Page(PageRef { index: 0, epoch: 0 }), 0, 0)?;
+        hub.send(second, ClientMessage::Op(rotate.clone()), 0)?;
+        assert!(matches!(hub.receive(second).as_slice(), [ServerMessage::Rejected(e)] if e.code == ErrorCode::Lease && e.retryable));
+
+        let comment = op("c1", ConflictClass::Merge, Target::Page(PageRef { index: 0, epoch: 0 }), 0, 0)?;
+        hub.send(second, ClientMessage::Op(comment), 0)?;
+        assert!(matches!(hub.receive(second).as_slice(), [ServerMessage::Applied(_)]));
+        let _ = hub.receive(first);
+
+        let rotate_now = op("rot-now", ConflictClass::Structural, Target::Page(PageRef { index: 0, epoch: 0 }), 1, 0)?;
+        hub.send(first, ClientMessage::Op(rotate_now), 0)?;
+        assert!(matches!(hub.receive(first).as_slice(), [ServerMessage::Applied(a)] if a.epoch == 1));
         Ok(())
     }
 
