@@ -61,16 +61,21 @@ impl<'a> Scanner<'a> {
     }
 
     /// PdfCraft patch (2): parse the next object; when it can't be read, read on from where
-    /// the failed read stopped, or, when it read nothing, from one byte past where it started,
-    /// so a caller can read on past a token it can't parse (a stray `>` in a name, a CMap name
-    /// with spaces in it) instead of stopping there. Every failure moves forward, and what a
-    /// failed read went through (an unclosed string, to the end of the data) is not read
-    /// again, so a loop over this ends and reads the data about once.
+    /// the failed read stopped, or, when it read nothing, from one byte past where its token
+    /// starts, so a caller can read on past a token it can't parse (a stray `>` in a name, a
+    /// CMap name with spaces in it) instead of stopping there. Every failure moves forward, one
+    /// failure per unreadable token, and what a failed read went through (an unclosed string,
+    /// to the end of the data) is not read again, so a loop over this ends and reads the data
+    /// about once.
     pub fn parse_object_or_skip(&mut self) -> Result<Object<'a>> {
+        // The whitespace and comments before the token are not the token: skipped first, they
+        // don't count as progress, so a token after a space fails once, not twice.
+        object::skip_whitespace_and_comments(&mut self.reader);
         let start = self.reader.offset();
         let read = object::read(&mut self.reader);
         if read.is_err() && self.reader.offset() <= start {
-            self.reader.jump(start.saturating_add(1).min(self.reader.data.len()));
+            self.reader
+                .jump(start.saturating_add(1).min(self.reader.data.len()));
         }
         read
     }
@@ -190,5 +195,55 @@ endcmap"#;
     fn wrong_type_is_error() {
         let mut scanner = Scanner::new(b"42 ");
         assert!(scanner.parse_name().is_err());
+    }
+
+    /// PdfCraft patch (2) test: a token that can't be read fails once and is stepped over,
+    /// whether or not whitespace or a comment comes before it, and the objects after it read.
+    #[test]
+    fn parse_object_or_skip_steps_over_an_unreadable_token() {
+        let mut s = Scanner::new(b"/A> /B % note\n > /C");
+        assert_eq!(
+            s.parse_object_or_skip(),
+            Ok(Object::Name(Name::new(b"A", true)))
+        );
+        assert!(s.parse_object_or_skip().is_err());
+        assert_eq!(
+            s.parse_object_or_skip(),
+            Ok(Object::Name(Name::new(b"B", true)))
+        );
+        assert!(s.parse_object_or_skip().is_err());
+        assert_eq!(
+            s.parse_object_or_skip(),
+            Ok(Object::Name(Name::new(b"C", true)))
+        );
+        assert!(s.at_end());
+    }
+
+    /// PdfCraft patch (2) test: what a failed read went through is not read again. An unclosed
+    /// string reads to the end of the data, so one failure leaves nothing to read; the nested
+    /// `(` inside it are not each read to the end once more.
+    #[test]
+    fn parse_object_or_skip_does_not_read_a_failed_read_again() {
+        let mut s = Scanner::new(b"/A (((( x");
+        assert_eq!(
+            s.parse_object_or_skip(),
+            Ok(Object::Name(Name::new(b"A", true)))
+        );
+        assert!(s.parse_object_or_skip().is_err());
+        assert!(s.at_end());
+    }
+
+    /// PdfCraft patch (2) test: at the end of the data a read fails and the scanner stays at
+    /// the end; it never steps past the data.
+    #[test]
+    fn parse_object_or_skip_stays_at_the_end() {
+        for input in [&b""[..], b"  ", b">"] {
+            let mut s = Scanner::new(input);
+            for _ in 0..3 {
+                assert!(s.parse_object_or_skip().is_err());
+                assert!(s.reader.offset() <= input.len());
+            }
+            assert!(s.at_end());
+        }
     }
 }

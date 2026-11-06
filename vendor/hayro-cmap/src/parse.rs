@@ -16,7 +16,7 @@ struct Context<F> {
 }
 
 /// PdfCraft patch (3): most unreadable tokens one CMap may step over before its scan stops.
-const MAX_SKIPPED: usize = 1024;
+pub(crate) const MAX_SKIPPED: usize = 1024;
 
 pub(crate) fn parse_inner<'a>(
     data: &[u8],

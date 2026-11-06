@@ -9630,7 +9630,7 @@ fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
 #[test]
 fn a_to_unicode_cmap_reads_its_mappings_past_a_token_it_cannot_parse() {
     use hayro::hayro_interpret::hayro_cmap::{BfString, CMap};
-    let body = "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n2 beginbfchar\n<002B> <0048>\n<0048> <0065>\nendbfchar\nendcmap\n";
+    let body = "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n2 beginbfchar\n<002B> <0048>\n<0048> <0065>\nendbfchar\n1 beginbfrange\n<0050> <0052> <0061>\nendbfrange\nendcmap\n";
     let stray = format!(
         "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n/CIDSystemInfo <</Registry (Adobe) /Ordering (UC>) /Supplement 0>> def\n/CMapName /Adobe-Identity-UC> def\n/CMapType 2 def\n{body}"
     );
@@ -9641,15 +9641,20 @@ fn a_to_unicode_cmap_reads_its_mappings_past_a_token_it_cannot_parse() {
         let cmap = CMap::parse(data.as_bytes(), |_| None).unwrap_or_else(|| panic!("{what}: parsed"));
         assert_eq!(cmap.lookup_bf_string(0x2B), Some(BfString::Char('H')), "{what}");
         assert_eq!(cmap.lookup_bf_string(0x48), Some(BfString::Char('e')), "{what}");
+        assert_eq!(cmap.lookup_bf_string(0x51), Some(BfString::Char('b')), "{what}: bfrange");
     }
-    // Unreadable tokens are stepped over a bounded number of times: a long run of them ends
-    // the scan rather than costing its length squared, and what came before is kept.
+    // Unreadable tokens are stepped over a bounded number of times (1,024 per CMap): a long run
+    // of them ends the scan, and the mappings read before it are kept.
     let flood = format!("{body}{}", "-".repeat(1 << 16));
     assert!(CMap::parse(flood.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x2B).is_some()));
-    // What a failed read went through is not read again: unclosed strings, each of which reads
-    // to the end of the data, cost one pass over it, not one pass each.
-    let unclosed = format!("{body}{}{}", "(".repeat(4096), "x".repeat(1 << 23));
-    let started = std::time::Instant::now();
+    // A run past the limit before the mappings ends the scan before them, and a CMap that read
+    // no mappings, like one of unreadable tokens only, reports failure.
+    let flood_first = format!("{}\n{body}", "-".repeat(1025));
+    assert!(CMap::parse(flood_first.as_bytes(), |_| None).is_none());
+    assert!(CMap::parse("-".repeat(1 << 16).as_bytes(), |_| None).is_none());
+    // Unclosed strings after the mappings: the scan ends and keeps them. (That the first one,
+    // which reads to the end of the data, is not read again for each `(` inside it is
+    // hayro-postscript's `parse_object_or_skip_does_not_read_a_failed_read_again`.)
+    let unclosed = format!("{body}{}{}", "(".repeat(4096), "x".repeat(1 << 16));
     assert!(CMap::parse(unclosed.as_bytes(), |_| None).is_some_and(|c| c.lookup_bf_string(0x48).is_some()));
-    assert!(started.elapsed() < std::time::Duration::from_secs(3), "{:?}", started.elapsed());
 }
