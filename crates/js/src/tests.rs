@@ -792,6 +792,19 @@ mod xfa_model {
         assert_eq!(o.result.as_deref(), Some("7"));
     }
 
+    /// On screen every page is a sheet of its own: `xfa.layout.sheet` counts it from 0, as
+    /// `absPage` does (forms show `sheet(this) + 1`), and `sheetCount` is the page count.
+    #[test]
+    fn the_sheet_is_the_page_on_screen() {
+        let o = go(
+            "[xfa.layout.sheet(this) + 1, xfa.layout.sheetCount(), xfa.layout.absPage(this)].join(',')",
+            "form1[0].page1[0].total[0]",
+            "calculate",
+        );
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2,3,1"));
+    }
+
     #[test]
     fn field_names_never_shadow_javascript_builtins() {
         let mut f = form();
@@ -1009,6 +1022,23 @@ mod formcalc {
         let ev = XfaEvent { activity: activity.into(), target: target.into(), ..Default::default() };
         let doc = XfaDoc { file_name: "f.pdf".into(), page: 1, page_count: 3 };
         run_formcalc(script, &ev, &doc, &form(), Limits::default())
+    }
+
+    /// `xfa.layout.sheet` and `sheetCount` give what the JavaScript ones give.
+    #[test]
+    fn the_sheet_is_the_page_on_screen() {
+        assert_eq!(calc("xfa.layout.sheet($) + 1"), "2");
+        assert_eq!(calc("xfa.layout.sheetCount()"), "3");
+    }
+
+    /// A layout method's arguments are evaluated, once each, for what they do: a message box
+    /// in one still shows.
+    #[test]
+    fn layout_method_arguments_are_evaluated_once() {
+        let o = go("xfa.layout.sheet($host.messageBox(\"Hi\"), $host.messageBox(\"Yo\")) + 1", "form1[0].page1[0].total[0]", "calculate");
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("2"));
+        assert_eq!(o.effects.iter().filter(|e| matches!(e, XfaEffect::MessageBox(_))).count(), 2, "each argument once: {:?}", o.effects);
     }
 
     /// The value of a script run as a calculate on `total`.

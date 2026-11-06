@@ -9332,6 +9332,159 @@ fn a_date_its_validate_script_refuses_is_not_tried_again() {
     assert!(value(&s, "name").is_empty(), "nothing the refused run changed is kept: {:?}", value(&s, "name"));
 }
 
+/// Floating fields (XFA 3.3 p. 1222): text that embeds a hidden field shows the value its
+/// initialize script gives it, the value a button's script gives it later and the value a
+/// calculation gives one, as it does the sheet number and count; the fields sit in an unnamed
+/// subform, as forms place them (#6160).
+#[test]
+fn text_shows_the_values_scripts_give_its_floating_fields() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform w="7in" h="9in">
+  <field name="Viewer" id="floatViewer" presence="hidden" access="readOnly" w="1in" h="0.3in"><ui><textEdit/></ui>
+   <event activity="initialize"><script contentType="application/x-javascript">this.rawValue = "Opened";</script></event><bind match="none"/></field>
+  <field name="Sheet" id="floatSheet" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui>
+   <event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.sheet(this)+1</script></event><bind match="none"/></field>
+  <field name="Sheets" id="floatSheets" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui>
+   <event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.sheetCount()</script></event><bind match="none"/></field>
+  <field name="Shout" id="floatShout" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui>
+   <calculate><script contentType="application/x-javascript">Viewer.rawValue + "!"</script></calculate><bind match="none"/></field>
+  <field name="set" y="1in" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">Viewer.rawValue = "Clicked";</script></event></field>
+  <draw name="line" y="2in" w="6in" h="1in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Viewer: <span xfa:embedType="uri" xfa:embedMode="raw" xfa:embed="#floatViewer"/><br/>Sheet <span xfa:embed="#floatSheet"/> of <span xfa:embed="#floatSheets"/><br/>Calculated: <span xfa:embed="#floatShout"/></p></body></exData></value></draw>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("float.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let text = page_texts(&s, id).join(
+        "
+",
+    );
+    assert!(text.contains("Viewer: Opened"), "{text}");
+    assert!(text.contains("Sheet 1 of 1"), "{text}");
+    assert!(text.contains("Calculated: Opened!"), "{text}");
+    let o = s.run_javascript(id, "", Some("set")).expect("clicks");
+    assert_eq!(o.error, None, "{o:?}");
+    let text = page_texts(&s, id).join(
+        "
+",
+    );
+    assert!(text.contains("Viewer: Clicked"), "{text}");
+    assert!(text.contains("Calculated: Clicked!"), "{text}");
+}
+
+/// Text that embeds a field follows its data whoever writes it (XFA 3.3 pp. 221–222): a
+/// script writing another field bound to the same data, a script writing a page area's field,
+/// a typed value in a plain one-line field, a pick in a drop-down list, and a reset (of a
+/// drop-down list, and of a page area's field that has no widget).
+#[test]
+fn floating_fields_follow_their_data_whoever_writes_it() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="1in" w="7.5in" h="9in"/><medium short="8.5in" long="11in"/>
+  <field name="Stamp" id="floatStamp" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+  <draw x="0.5in" y="0.2in" w="5in" h="0.4in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Stamp: <span xfa:embed="#floatStamp"/></p></body></exData></value></draw>
+ </pageArea></pageSet>
+ <subform w="7in" h="8in">
+  <field name="Note" id="floatNote" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui></field>
+  <area name="box" y="0.5in"><field name="Note" w="2in" h="0.3in"><ui><textEdit/></ui></field></area>
+  <field name="Edit" id="floatEdit" y="1in" w="2in" h="0.3in"><ui><textEdit/></ui><value><text>start</text></value></field>
+  <field name="Pick" id="floatPick" y="4.5in" w="2in" h="0.3in"><ui><choiceList/></ui><items><text>A</text><text>B</text></items><value><text>A</text></value></field>
+  <field name="pickB" y="5in" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">Pick.rawValue = "B";</script></event></field>
+  <field name="clearPick" y="5.5in" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">xfa.host.resetData("Pick");</script></event></field>
+  <field name="share" y="1.5in" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">box.Note.rawValue = "Shared";</script></event></field>
+  <field name="stamp" y="2in" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">front.Stamp.rawValue = "Paid";</script></event></field>
+  <field name="clear" y="2.5in" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">xfa.host.resetData();</script></event></field>
+  <draw y="3in" w="6in" h="1in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Note: <span xfa:embed="#floatNote"/><br/>Edit: <span xfa:embed="#floatEdit"/><br/>Pick: <span xfa:embed="#floatPick"/></p></body></exData></value></draw>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("follow.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let text = |s: &Session| {
+        page_texts(s, id).join(
+            "
+",
+        )
+    };
+    let click = |s: &mut Session, button: &str| {
+        let o = s.run_javascript(id, "", Some(button)).expect("clicks");
+        assert_eq!(o.error, None, "{button}: {o:?}");
+    };
+    assert!(text(&s).contains("Edit: start"), "{}", text(&s));
+    click(&mut s, "share");
+    assert!(text(&s).contains("Note: Shared"), "the field bound to the same data: {}", text(&s));
+    click(&mut s, "stamp");
+    assert!(text(&s).contains("Stamp: Paid"), "a page area's field: {}", text(&s));
+    let edit = s.get(id).unwrap().form.iter().find(|f| f.name.ends_with("Edit")).map(|f| f.name.clone()).expect("the Edit field");
+    s.apply(id, Edit::SetFieldValue { name: edit, value: FieldValue::Text("typed".into()) }).unwrap();
+    assert!(text(&s).contains("Edit: typed"), "a typed value in a one-line field: {}", text(&s));
+    click(&mut s, "pickB");
+    assert!(text(&s).contains("Pick: B"), "{}", text(&s));
+    click(&mut s, "clearPick");
+    assert!(text(&s).contains("Pick: A"), "a reset drop-down list: {}", text(&s));
+    let pick = s.get(id).unwrap().form.iter().find(|f| f.name.ends_with("Pick")).map(|f| f.name.clone()).expect("the Pick field");
+    s.apply(id, Edit::SetFieldValue { name: pick, value: FieldValue::Choice(vec!["B".into()]) }).unwrap();
+    assert!(text(&s).contains("Pick: B"), "a picked value: {}", text(&s));
+    click(&mut s, "pickB");
+    click(&mut s, "clear");
+    let after = text(&s);
+    assert!(after.contains("Edit: start") && !after.contains("Shared"), "reset: {after}");
+    assert!(after.contains("Pick: A"), "a reset drop-down list: {after}");
+    assert!(after.contains("Stamp:") && !after.contains("Paid"), "a reset page-area field with no widget: {after}");
+}
+
+/// A reset gives a hidden floating field its default in every row of a repeating subform, not
+/// only the first, and each row's text shows it.
+#[test]
+fn a_reset_clears_a_floating_field_in_every_row() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="row" layout="tb"><occur min="1" max="-1"/>
+  <field name="amount" id="floatAmount" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui><value><text>none</text></value></field>
+  <draw w="5in" h="0.4in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Amount: <span xfa:embed="#floatAmount"/></p></body></exData></value></draw>
+ </subform>
+ <field name="clear" w="2in" h="0.3in"><ui><button/></ui>
+  <event activity="click"><script contentType="application/x-javascript">xfa.host.resetData();</script></event></field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><row><amount>10</amount></row><row><amount>20</amount></row></form></xfa:data></xfa:datasets>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("rows.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let text = page_texts(&s, id).join(
+        "
+",
+    );
+    assert!(text.contains("Amount: 10") && text.contains("Amount: 20"), "{text}");
+    let o = s.run_javascript(id, "", Some("clear")).expect("clicks");
+    assert_eq!(o.error, None, "{o:?}");
+    let text = page_texts(&s, id).join(
+        "
+",
+    );
+    assert_eq!(text.matches("Amount: none").count(), 2, "both rows reset: {text}");
+}
+
 /// An XFA button's click script may show the attachments panel; a text field's exit script
 /// asking the same is noted on the console and ignored.
 #[test]

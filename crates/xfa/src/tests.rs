@@ -147,6 +147,171 @@ fn horizontally_scaled_text_is_written_with_tz_inside_its_own_graphics_state() {
 /// The sample template parses without warnings into what the layout uses: its page areas,
 /// page-number draws, rich-text title, field font, caption and widget border, check box,
 /// date field, radio group, table columns and page break all come through.
+/// Floating fields (XFA 3.3 p. 1222): the template knows which field ids rich text embeds,
+/// whether in a draw, a field's value or its caption; and a field that shows the sheet number
+/// (`sheet(this)+1`, however spaced) or the sheet count plays the page role, as every page is a
+/// sheet of its own on screen. A script that reads `sheet(this)` alone plays none.
+#[test]
+fn the_template_knows_its_floating_fields_and_sheet_roles() {
+    let span = |id: &str| format!(r##"<span xfa:embed="#{id}" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"##);
+    let rich =
+        |id: &str| format!(r#"<exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>x {}</p></body></exData>"#, span(id));
+    let ready = |id: &str, script: &str| {
+        format!(
+            r#"<field id="{id}" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">{script}</script></event></field>"#
+        )
+    };
+    let tpl = format!(
+        r#"<template><subform name="form" layout="tb"><subform>
+{}{}{}
+<draw w="2in" h="0.3in"><value>{}</value></draw>
+<field name="f" w="2in" h="0.3in"><ui><textEdit/></ui><caption><value>{}</value></caption><value>{}</value></field>
+</subform></subform></template>"#,
+        ready("sheet", "this.rawValue = xfa.layout.sheet(this) + 1"),
+        ready("sheets", "this.rawValue = xfa.layout.sheetCount()"),
+        ready("bare", "this.rawValue = xfa.layout.sheet(this)"),
+        rich("inDraw"),
+        rich("inCaption"),
+        rich("inValue"),
+    );
+    let (tpl, _) = parse(&tpl).unwrap();
+    assert_eq!(tpl.embedded.iter().map(String::as_str).collect::<Vec<_>>(), ["inCaption", "inDraw", "inValue"]);
+    assert_eq!(tpl.page_roles, vec![("sheet".to_string(), PageRole::Number), ("sheets".to_string(), PageRole::Count)]);
+}
+
+/// An embedded sheet number is the page's own on every page, not a constant 1, and the sheet
+/// count is the number of pages.
+#[test]
+fn an_embedded_sheet_number_counts_the_pages() {
+    let span = |id: &str| format!(r##"<span xfa:embed="#{id}" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"##);
+    let ready = |id: &str, script: &str| {
+        format!(
+            r#"<field id="{id}" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">{script}</script></event></field>"#
+        )
+    };
+    let tpl = format!(
+        r#"<template><subform name="form" layout="tb">
+<pageSet><pageArea name="front"><contentArea x="0.5in" y="1in" w="7.5in" h="9in"/><medium short="8.5in" long="11in"/>
+ {}{}
+ <draw x="0.5in" y="0.2in" w="4in" h="0.3in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>Sheet {} of {}</p></body></exData></value></draw>
+</pageArea></pageSet>
+<subform name="one" w="7in" h="6in"><draw w="2in" h="0.3in"><value><text>first</text></value></draw></subform>
+<subform name="two" w="7in" h="6in"><draw w="2in" h="0.3in"><value><text>second</text></value></draw></subform>
+</subform></template>"#,
+        ready("sheet", "this.rawValue = xfa.layout.sheet(this)+1"),
+        ready("sheets", "this.rawValue = xfa.layout.sheetCount()"),
+        span("sheet"),
+        span("sheets")
+    );
+    let form = layout_xml(&tpl).unwrap();
+    assert_eq!(form.pages.len(), 2);
+    for (i, page) in form.pages.iter().enumerate() {
+        let shown = texts(page).join(" ");
+        assert!(shown.contains(&format!("Sheet {} of 2", i + 1)), "page {}: {shown}", i + 1);
+    }
+}
+
+/// A FormCalc script names the field `$`, and a field may have a ready script that does
+/// something else before the one that gives the sheet number: both still play the role.
+#[test]
+fn sheet_roles_are_read_from_formcalc_and_from_any_ready_script() {
+    let tpl = r#"<template><subform name="form" layout="tb">
+<field id="fc" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script>$.rawValue = xfa.layout.sheet($) + 1</script></event></field>
+<field id="fcCase" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script>$.rawValue = xfa.layout.Sheet($) + 1</script></event></field>
+<field id="jsCase" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.Sheet(this)+1</script></event></field>
+<field id="fcCount" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script>$.rawValue = xfa.layout.SheetCount()</script></event></field>
+<field id="jsCount" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.SheetCount()</script></event></field>
+<field id="second" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui>
+ <event activity="ready" ref="$form"><script contentType="application/x-javascript">this.rawValue = 0;</script></event>
+ <event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.sheet(this)+1</script></event></field>
+</subform></template>"#;
+    let (tpl, _) = parse(tpl).unwrap();
+    // FormCalc names methods case-insensitively, JavaScript does not.
+    assert_eq!(
+        tpl.page_roles,
+        vec![
+            ("fc".to_string(), PageRole::Number),
+            ("fcCase".to_string(), PageRole::Number),
+            ("fcCount".to_string(), PageRole::Count),
+            ("second".to_string(), PageRole::Number)
+        ]
+    );
+}
+
+/// The data paths of embedded fields are the ones scripts write: a page area's field under the
+/// area, as master pages lay it out; a field in a repeating row by name, whatever its instance.
+#[test]
+fn embedded_fields_are_known_by_the_data_paths_scripts_write() {
+    let span = |id: &str| format!(r##"<span xfa:embed="#{id}" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"##);
+    let tpl = format!(
+        r#"<template><subform name="form" layout="tb">
+<pageSet><pageArea name="front"><contentArea w="8in" h="10in"/><medium short="8.5in" long="11in"/>
+ <field name="stamp" id="stamp" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui></field>
+ <draw w="3in" h="0.3in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>Stamp {}</p></body></exData></value></draw>
+</pageArea></pageSet>
+<subform name="row" layout="tb"><occur min="1" max="-1"/>
+ <field name="amount" id="amount" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui></field>
+ <draw w="3in" h="0.3in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>Amount {}</p></body></exData></value></draw>
+</subform>
+<field name="plain" w="1in" h="0.2in"><ui><textEdit/></ui></field>
+</subform></template>"#,
+        span("stamp"),
+        span("amount")
+    );
+    let (tpl, _) = parse(&tpl).unwrap();
+    let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(tpl.embedded_paths.iter().cloned().collect::<Vec<_>>(), [names(&["form", "row", "amount"]), names(&["front", "stamp"])]);
+    assert!(crate::script::field_is_embedded(&tpl, "front[0].stamp[0]"), "a page area's field");
+    assert!(crate::script::field_is_embedded(&tpl, "form[0].row[3].amount[0]"), "any row");
+    assert!(!crate::script::field_is_embedded(&tpl, "form[0].plain[0]"));
+}
+
+/// Text embedding a field shows the value the data gives it: each row of a repeating subform
+/// its own row's, a page area's field the value scripts write under the area, a multi-select
+/// list its picks, a date in its display picture (XFA 3.3 p. 221) in every row; a row without
+/// data shows the template's default, not the first row's value.
+#[test]
+fn embedded_text_shows_each_instances_data() {
+    let span = |id: &str| format!(r##"<span xfa:embed="#{id}" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"##);
+    let rich = |label: &str, id: &str| {
+        format!(r#"<exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>{label} {}</p></body></exData>"#, span(id))
+    };
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="front"><contentArea x="0.5in" y="1in" w="7.5in" h="9in"/><medium short="8.5in" long="11in"/>
+ <field name="stamp" id="stamp" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui></field>
+ <draw x="0.5in" y="0.2in" w="4in" h="0.3in"><value>{}</value></draw>
+</pageArea></pageSet>
+<subform name="row" layout="tb"><occur min="1" max="-1" initial="3"/>
+ <field name="amount" id="amount" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><value><text>none</text></value></field>
+ <field name="due" id="due" presence="hidden" w="1in" h="0.2in"><ui><dateTimeEdit/></ui><format><picture>date{{MM/DD/YYYY}}</picture></format></field>
+ <draw w="4in" h="0.3in"><value>{}</value></draw>
+ <draw w="4in" h="0.3in"><value>{}</value></draw>
+</subform>
+<field name="picks" id="picks" presence="hidden" w="1in" h="0.6in"><ui><choiceList open="multiSelect"/></ui><items><text>A</text><text>B</text></items></field>
+<draw w="4in" h="0.6in"><value>{}</value></draw>
+</subform></template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data>
+<form><row><amount>10</amount><due>2026-11-04</due></row><row><amount>20</amount><due>2026-12-25</due></row><row/><picks><value>A</value><value>B</value></picks></form>
+<front><stamp>Paid</stamp></front>
+</xfa:data></xfa:datasets></xdp:xdp>"#,
+        rich("Stamp", "stamp"),
+        rich("Amount", "amount"),
+        rich("Due", "due"),
+        rich("Picks", "picks")
+    );
+    let (tpl, _) = parse(&xml).unwrap();
+    let data = parse_datasets(&xml).unwrap();
+    let form = crate::layout::layout(&tpl, Some(&data)).unwrap();
+    let all: Vec<String> = form.pages.iter().flat_map(texts).collect();
+    let joined = all.join(" | ");
+    for want in ["Stamp Paid", "Amount 10", "Amount 20", "Amount none", "Due 11/04/2026", "Due 12/25/2026", "Picks A"] {
+        assert!(joined.contains(want), "{want} in {joined}");
+    }
+    assert!(joined.contains('B'), "both picks: {joined}");
+}
+
 #[test]
 fn the_template_parses_with_fonts_captions_and_rich_text() {
     let (tpl, warnings) = parse(&template(2)).unwrap();

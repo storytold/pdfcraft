@@ -690,15 +690,63 @@ fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<No
     })
 }
 
-/// Which page-number role a field with a layout:ready script plays, if any.
+/// Which page-number role a field with a layout:ready script plays, if any. On screen every
+/// page is a sheet of its own, so the sheet count is the page count, and the sheet number a form
+/// shows (`sheet(this) + 1`, the sheet counted from 0) is the page number.
 fn page_role(f: &Field) -> Option<PageRole> {
-    let script = f.scripts.iter().find(|s| s.activity == "ready" || s.activity == "layoutReady")?;
-    if script.text.contains("pageCount") {
-        Some(PageRole::Count)
-    } else if script.text.contains("layout.page(") || script.text.contains("layout.absPage(") {
-        Some(PageRole::Number)
-    } else {
-        None
+    // Any of its ready scripts: a field may have one that does something else first.
+    f.scripts.iter().filter(|s| s.activity == "ready" || s.activity == "layoutReady").find_map(|script| {
+        // FormCalc names methods case-insensitively; JavaScript does not.
+        let text: std::borrow::Cow<str> =
+            if script.formcalc { std::borrow::Cow::Owned(script.text.to_ascii_lowercase()) } else { std::borrow::Cow::Borrowed(&script.text) };
+        let has = |name: &str| if script.formcalc { text.contains(&name.to_ascii_lowercase()) } else { text.contains(name) };
+        // `this` in JavaScript, `$` in FormCalc.
+        let sheet_number = || {
+            let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+            compact.contains("layout.sheet(this)+1") || compact.contains("layout.sheet($)+1")
+        };
+        if has("pageCount") || has("sheetCount") {
+            Some(PageRole::Count)
+        } else if has("layout.page(") || has("layout.absPage(") || sheet_number() {
+            Some(PageRole::Number)
+        } else {
+            None
+        }
+    })
+}
+
+/// The ids rich text in `nodes` embeds (draws' values, fields' values and captions), down to
+/// [`MAX_DEPTH`].
+fn collect_embedded(nodes: &[Node], out: &mut std::collections::BTreeSet<String>, depth: usize) {
+    fn of(value: &Value, out: &mut std::collections::BTreeSet<String>) {
+        if let Value::Rich(r) = value {
+            out.extend(r.paragraphs.iter().flat_map(|p| p.runs.iter()).filter_map(|r| r.embed.clone()));
+        }
+    }
+    fn field(f: &Field, out: &mut std::collections::BTreeSet<String>) {
+        of(&f.value, out);
+        if let Some(c) = &f.caption {
+            of(&c.value, out);
+        }
+    }
+    if depth > MAX_DEPTH {
+        return;
+    }
+    for n in nodes {
+        match n {
+            Node::Draw(d) => of(&d.value, out),
+            Node::Field(f) => field(f, out),
+            Node::ExclGroup(g) => g.fields.iter().for_each(|f| field(f, out)),
+            Node::Subform(s) => {
+                collect_embedded(&s.children, out, depth + 1);
+                if let Some(ps) = &s.page_set {
+                    for a in &ps.areas {
+                        collect_embedded(&a.items, out, depth + 1);
+                    }
+                }
+            }
+            Node::Area(a) => collect_embedded(&a.children, out, depth + 1),
+        }
     }
 }
 
@@ -771,8 +819,18 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
         apply_saved_state(&mut root_sf.children, saved_root, 0);
     }
     let mut page_roles = Vec::new();
-    collect_page_roles(&[Node::Subform(Box::new(root_sf.clone()))], &mut page_roles, 0);
-    Ok((Template { root: root_sf, page_roles }, warnings))
+    let root_node = [Node::Subform(Box::new(root_sf.clone()))];
+    collect_page_roles(&root_node, &mut page_roles, 0);
+    let mut embedded = std::collections::BTreeSet::new();
+    collect_embedded(&root_node, &mut embedded, 0);
+    let mut tpl = Template { root: root_sf, page_roles, embedded, embedded_paths: Default::default() };
+    let paths = crate::data::fields_with_ids(&tpl)
+        .into_iter()
+        .filter(|(id, _, _)| tpl.embedded.contains(*id))
+        .map(|(_, som, _)| crate::data::data_path(&tpl, &som).into_iter().map(|(name, _)| name).collect())
+        .collect();
+    tpl.embedded_paths = paths;
+    Ok((tpl, warnings))
 }
 
 fn parse_access(a: Option<&str>) -> Option<Access> {
