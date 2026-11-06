@@ -741,6 +741,9 @@ mod tests {
 
     #[test]
     fn a_language_change_leaves_documents_without_a_drawn_state_alone() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let mut app = PdfCraftApp::new();
         let plain = app.session.create_from_text("t", "No signatures here.").unwrap();
         app.open_bytes("plain.pdf", None, plain.as_ref().clone()).unwrap();
