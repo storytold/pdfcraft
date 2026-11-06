@@ -91,8 +91,11 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         images: &images,
         clip: ui.clip_rect(),
     };
-    if let Some(at) = hits.for_press(view, ptr.pressed()) {
-        view.router.press(i, at, tool);
+    if let Some(o) = ptr.pressed() {
+        let at = hits.at(view, o);
+        if xf.rect.contains(o) || !at.is_empty() {
+            view.router.press(i, at, tool);
+        }
     }
     // What this page has to do with the press: its owner's, the active tool's, or another page's.
     let press = view.router.press_for(i);
@@ -412,14 +415,6 @@ struct PageHits<'a> {
 }
 
 impl PageHits<'_> {
-    /// Hits for one press, allowing an out-of-page handle but not empty page margin.
-    /// The central page input path remains the only place that captures the press.
-    fn for_press(&self, view: &DocView, press: Option<Pos2>) -> Option<Vec<crate::page_router::Hit>> {
-        let point = press?;
-        let at = self.at(view, point);
-        (self.xf.rect.contains(point) || !at.is_empty()).then_some(at)
-    }
-
     /// The hits at `p`, bottom up ([`Self::hits`]).
     fn at(&self, view: &DocView, p: Pos2) -> Vec<crate::page_router::Hit> {
         self.hits(view, p, false)
