@@ -217,6 +217,10 @@ changes `Q²2` to `Q²²`, then to `Q22`. A second toggle does not reconstruct t
 mixture. Each call is one undoable text edit: `edit_undo` restores the exact prior text,
 including its original mixture. Save/reopen preserves the resulting normalized characters.
 
+## Read out loud
+
+Read-aloud preparation is read-only assistive extraction. Playback through local Windows, macOS and Linux voices is explicit and asynchronous; status, voices, pause/resume/stop and a bounded CLI wait are available through the shared tool table. Playback ends with the session. See [Read out loud](../../docs/read-aloud.md) for limits and an executable CLI script example.
+
 ## Opening local GoToR links
 
 `link_open {doc, page, index, password?}` follows a local PDF link using `link_list`

@@ -51,6 +51,7 @@ mod session;
 pub mod signature_image;
 pub mod signature_scan;
 mod sources;
+pub mod speech;
 mod stamp_preview;
 #[cfg(test)]
 mod test_hooks;

@@ -7,6 +7,139 @@ use pdfcraft_automation::mcp::McpServer;
 use pdfcraft_automation::{Automation, Content, ToolError, tools};
 use serde_json::{Value, json};
 
+/// Verify read-only text preparation, page/input limits and cancellation without initializing audio.
+#[test]
+fn read_aloud_prepares_bounded_text_without_changing_or_speaking_the_pdf() {
+    let dir = workdir("read-aloud-prepare");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let bytes = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes.clone();
+    let before = ok(&mut a, "doc_info", json!({"doc":doc}));
+    let plan = ok(&mut a, "read_aloud_prepare", json!({"doc":doc,"pages":[1,3]}));
+    assert_eq!(plan["audio_started"], false);
+    assert_eq!(plan["chunks"], json!([{"page":1,"text":"Page 1"},{"page":3,"text":"Page 3"}]));
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc})), before);
+    assert!(std::sync::Arc::ptr_eq(&bytes, &a.session().get(pdfcraft_engine::DocId(doc)).unwrap().bytes));
+    assert_eq!(ok(&mut a, "read_aloud_status", json!({}))["playback"]["state"], "idle");
+    for args in [
+        json!({"doc":doc,"pages":[3,1]}),
+        json!({"doc":doc,"pages":[1,1]}),
+        json!({"doc":doc,"pages":[4]}),
+        json!({"doc":doc,"pages":[]}),
+        json!({"doc":999}),
+    ] {
+        assert!(a.call("read_aloud_prepare", &args).is_err());
+    }
+    assert!(a.call("read_aloud_start", &json!({"doc":doc,"rate":3})).is_err());
+    assert!(a.call("read_aloud_start", &json!({"doc":doc,"typo":true})).is_err());
+    assert!(tools().iter().any(|t| t.name == "read_aloud_prepare" && t.read_only));
+    let blank = ok(&mut a, "doc_create", json!({"from":"blank","pages":65}))["doc"].as_u64().unwrap();
+    assert!(a.call("read_aloud_prepare", &json!({"doc":blank,"pages":(1..=65).collect::<Vec<_>>()})).unwrap_err().to_string().contains("64"));
+    assert!(a.call("read_aloud_prepare", &json!({"doc":blank})).unwrap_err().to_string().contains("OCR"));
+    let source = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().read_aloud_source(&[0]).unwrap();
+    assert!(source.extract_cancellable(&std::sync::atomic::AtomicBool::new(true)).unwrap_err().contains("cancelled"));
+}
+
+/// Verify assistive reading remains available on a protected PDF that disallows text copying.
+#[test]
+fn read_aloud_accessibility_reading_is_allowed_when_copying_is_forbidden() {
+    let dir = workdir("read-aloud-protected");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_protect", json!({"doc":doc,"open_password":"open","permissions_password":"owner","changes":"none"}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"protected.pdf"}));
+    let mut b = auto(&dir);
+    let re = ok(&mut b, "doc_open", json!({"path":"protected.pdf","password":"open"}))["doc"].as_u64().unwrap();
+    assert!(b.call("text_extract", &json!({"doc":re})).is_err());
+    assert_eq!(ok(&mut b, "read_aloud_prepare", json!({"doc":re}))["chunks"][0]["text"], "Page 1");
+    assert!(!b.session().get(pdfcraft_engine::DocId(re)).unwrap().dirty);
+}
+
+/// Exercise voice/rate forwarding, pause/resume and source invalidation through silent tool calls.
+#[test]
+fn read_aloud_playback_tools_stop_on_edits_and_document_close() {
+    use pdfcraft_platform::speech::{Backend, Options, Player, Voice};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+    struct Fake(Arc<Mutex<Vec<String>>>);
+    impl Backend for Fake {
+        /// Expose deterministic English and Italian test voices without querying the operating system.
+        fn voices(&mut self) -> std::result::Result<Vec<Voice>, String> {
+            Ok(vec![
+                Voice { id: "fake".into(), name: "Test English".into(), language: "en-US".into() },
+                Voice { id: "fake-it".into(), name: "Test Italian".into(), language: "it-IT".into() },
+            ])
+        }
+        /// Record the requested chunk, voice and rate instead of synthesizing or playing audio.
+        fn start(&mut self, text: &str, options: &Options) -> std::result::Result<(), String> {
+            self.0.lock().unwrap().push(text.into());
+            self.0.lock().unwrap().push(format!("voice={:?}, rate={}", options.voice, options.rate));
+            Ok(())
+        }
+        /// Record a pause request for later assertions.
+        fn pause(&mut self) -> std::result::Result<(), String> {
+            self.0.lock().unwrap().push("pause".into());
+            Ok(())
+        }
+        /// Record a resume request without restarting the current test chunk.
+        fn resume(&mut self) -> std::result::Result<(), String> {
+            self.0.lock().unwrap().push("resume".into());
+            Ok(())
+        }
+        /// Record cancellation without accessing an audio device.
+        fn stop(&mut self) -> std::result::Result<(), String> {
+            self.0.lock().unwrap().push("stop".into());
+            Ok(())
+        }
+        /// Keep the fake chunk active until a control request or document change stops it.
+        fn finished(&mut self) -> std::result::Result<bool, String> {
+            Ok(false)
+        }
+    }
+    /// Poll tool status for at most three seconds until the expected worker state is visible.
+    fn wait(a: &mut Automation, state: &str) {
+        let until = Instant::now() + Duration::from_secs(3);
+        loop {
+            let s = ok(a, "read_aloud_status", json!({}));
+            if s["playback"]["state"] == state {
+                break;
+            }
+            assert!(Instant::now() < until, "{s}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    let dir = workdir("read-aloud-playback");
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let mut a = auto(&dir).with_speech_player(Player::with_backend(Box::new(Fake(log.clone()))));
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    for (voice, rate) in [("fake", 0.5), ("fake-it", 2.0)] {
+        ok(&mut a, "read_aloud_start", json!({"doc":doc,"pages":[1],"voice":voice,"rate":rate}));
+        wait(&mut a, "speaking");
+        assert!(log.lock().unwrap().contains(&format!("voice={:?}, rate={rate}", Some(voice))));
+        let status = ok(&mut a, "read_aloud_status", json!({}));
+        assert_eq!(status["playback"]["voices"][0]["language"], "en-US");
+        assert_eq!(status["playback"]["voices"][1]["language"], "it-IT");
+        ok(&mut a, "read_aloud_control", json!({"action":"stop"}));
+        wait(&mut a, "idle");
+    }
+    ok(&mut a, "read_aloud_start", json!({"doc":doc,"pages":[2,3],"voice":"fake","rate":1.2}));
+    wait(&mut a, "speaking");
+    assert!(log.lock().unwrap().contains(&"Page 2".into()));
+    assert!(!a.session().get(pdfcraft_engine::DocId(doc)).unwrap().dirty);
+    ok(&mut a, "read_aloud_control", json!({"action":"pause"}));
+    wait(&mut a, "paused");
+    ok(&mut a, "read_aloud_control", json!({"action":"resume"}));
+    wait(&mut a, "speaking");
+    assert_eq!(log.lock().unwrap().iter().filter(|s| s.as_str() == "Page 2").count(), 1);
+    ok(&mut a, "page_rotate", json!({"doc":doc,"pages":[1],"degrees":90}));
+    wait(&mut a, "idle");
+    ok(&mut a, "read_aloud_start", json!({"doc":doc}));
+    wait(&mut a, "speaking");
+    ok(&mut a, "doc_close", json!({"doc":doc,"discard_changes":true}));
+    wait(&mut a, "idle");
+    assert!(a.call("read_aloud_control", &json!({"action":"unknown"})).is_err());
+}
+
 /// A PDF with `n` 200×300 pt pages reading "Page 1", "Page 2", …
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];

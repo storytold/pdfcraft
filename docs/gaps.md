@@ -1,5 +1,7 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-11-06 | **Last updated:** 2026-11-06 | **Change:** patch (M12 #1476: rebase local Read out loud onto current main, use craft-i18n catalogs, and release the speech backend when native Stop fails; platform validation remains partial. Estimates unchanged.)
+
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -230,11 +232,11 @@ update the numbers.
 
 ### 11. Accessibility: only text-only automatic structure creation
 
-- **Missing:** apply auto-tag proposals to marked content and a valid parent tree, tag fields
+- **Missing:** mixed-content auto-tagging, tagging fields
   into structure trees with unusual layouts (only a direct Document root with a direct
   ParentTree Nums array is extended),
-  visual Tags, Order and Content panels, Reading Order tool, table editor, Make Accessible action,
-  Read Out Loud; full keyboard operation of PdfCraft itself and a screen-reader audit.
+  Order and Content panels, Reading Order tool, table editor, Make Accessible action,
+  Read Out Loud on FreeBSD/web and physical macOS playback validation; full keyboard operation of PdfCraft itself and a screen-reader audit.
 - **Evidence:** all 32 checker rules, figure alt text, tag property and sibling order edits, and
   a bounded auto-tag preview exist. Apply writes valid structure and parent-tree links for
   text-only files; it refuses mixed content and existing tags;
@@ -378,7 +380,7 @@ update the numbers.
 ### 20. Scanners, GPU page rendering, pen pressure, Read Out Loud
 
 - **Missing:** TWAIN/WIA/ICA/SANE scanning; GPU-accelerated page rendering (pages are rasterized on
-  the CPU and uploaded); pressure-sensitive ink; platform text-to-speech.
+  the CPU and uploaded); pressure-sensitive ink; text-to-speech on FreeBSD/web and physical macOS playback validation. Windows WinRT, macOS say and Linux espeak-ng provide local bounded page/range reading and controls; physical Linux English/Italian playback was verified, with poor voice naturalness reported. Semantic tag-tree ordering and richer reading controls remain open.
 - **Estimate:** 25–50 h; scanners need hardware. **Doc:** [hardware-parity.md](hardware-parity.md).
 
 ### 21. Compare: filters by Acrobat's finer kinds of change, page ranges, scanned documents
@@ -417,6 +419,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | patch | M12 #1476: rebase local Read out loud onto current main, use craft-i18n catalogs, and release the speech backend when native Stop fails; platform validation remains partial. Estimates unchanged. |
 | 2026-10-25 | minor | Gaps 5 and 14 current state: native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Hans face; Arabic catalogs stay logical with explicit RTL label direction and mirrored stock chrome, while native/browser RTL input, IME and complex workflows remain unqualified. Estimates unchanged. |
 | 2026-10-18 | minor | Gap 3: #2517 a partial rewrite keeps a kept source row in the paragraph and leaves the next marked region closed around its text. Estimates unchanged. |
 | 2026-10-15 | minor | Gap 3: #2517 a blank line at ordinary leading stays a paragraph break. Estimates unchanged. |

@@ -44,6 +44,7 @@ fn view_transform_to_user(info: &pdfcraft_render::PageInfo, m: [f64; 6]) -> Resu
 impl Automation {
     /// Run the tool `name` with JSON `args` (an object; `null` means no arguments).
     pub fn call(&mut self, name: &str, args: &Value) -> Result<Vec<Content>> {
+        self.invalidate_speech()?;
         let empty = json!({});
         let args = if args.is_null() { &empty } else { args };
         if !args.is_object() {
@@ -778,6 +779,12 @@ impl Automation {
             "comment_reply" => self.comment_reply(&a)?,
             "comment_set_status" => self.comment_set_status(&a)?,
             "sign_list" => self.sign_list(&a)?,
+            "read_aloud_prepare" => self.read_aloud_prepare(&a)?,
+            "read_aloud_start" => self.read_aloud_start(&a)?,
+            "read_aloud_control" => self.read_aloud_control(&a)?,
+            "read_aloud_status" => self.read_aloud_status()?,
+            "read_aloud_voices" => self.read_aloud_voices()?,
+            "read_aloud_wait" => self.read_aloud_wait(&a)?,
             "accessibility_check" => self.a11y_check(&a)?,
             "accessibility_find_untagged" => self.a11y_find_untagged(&a)?,
             "accessibility_autotag_preview" => self.accessibility_autotag_preview(&a)?,
@@ -874,6 +881,7 @@ impl Automation {
             "comments_paste" => self.comments_paste(&a)?,
             other => return Err(ToolError::UnknownTool(other.into())),
         };
+        self.invalidate_speech()?;
         Ok(vec![Content::Json(out)])
     }
 

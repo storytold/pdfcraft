@@ -66,6 +66,7 @@ mod preferences_layout;
 mod prepare;
 mod print;
 mod protect;
+mod read_aloud;
 mod reading_colors;
 mod recent_files;
 mod recovery;
