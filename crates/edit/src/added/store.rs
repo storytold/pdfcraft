@@ -8,13 +8,24 @@ use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Ob
 /// text paints in its RGB `/Color`.
 fn ink(doc: &Document, d: &Dict) -> Option<Ink> {
     let ink = if let Some(g) = d.get(b"Gray") {
-        Ink::Gray(doc.resolve(g).as_f64()?)
+        Ink::Gray(read_value(doc, g, Object::as_f64)?)
     } else {
-        let cmyk = doc.resolve(d.get(b"CMYK")?);
-        let parts: Vec<f64> = cmyk.as_array()?.iter().map(Object::as_f64).collect::<Option<_>>()?;
-        Ink::Cmyk(parts.try_into().ok()?)
+        // Four entries or none: a longer array is never copied or read through.
+        read_value(doc, d.get(b"CMYK")?, |cmyk| {
+            let [c, m, y, k] = cmyk.as_array()?.as_slice() else { return None };
+            Some(Ink::Cmyk([c.as_f64()?, m.as_f64()?, y.as_f64()?, k.as_f64()?]))
+        })?
     };
     Some(ink).filter(|i| i.valid())
+}
+
+/// `f` of `o`, a reference followed. A direct value is read where it is, never copied, so a
+/// large one a file puts there costs nothing to look at.
+fn read_value<T>(doc: &Document, o: &Object, f: impl FnOnce(&Object) -> T) -> T {
+    match o {
+        Object::Ref(_) => f(&doc.resolve(o)),
+        direct => f(direct),
+    }
 }
 
 fn parse(doc: &Document, d: &Dict) -> Option<Content> {

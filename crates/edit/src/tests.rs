@@ -1120,6 +1120,10 @@ fn a_hand_edited_ink_reads_back_only_when_it_is_the_stored_colours_look() {
     add_content(&mut doc, 0, &Content::Text(AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Proof".into(), ..AddedText::default() })).unwrap();
     let obj = list_added(&doc)[0].obj;
     let real = |v: &[f64]| Object::Array(v.iter().map(|x| Object::Real(*x)).collect());
+    // A `/CMYK` far longer than four numbers, as a hostile file might store it: an ink first.
+    let long = real(&[0.0, 0.0, 0.0, 1.0].repeat(50_000));
+    let long_ref = Object::Ref(doc.add(long.clone()));
+    let ink_ref = Object::Ref(doc.add(real(&[0.0, 0.0, 0.0, 1.0])));
     let read_text = |entries: &[(&[u8], Object)]| {
         let mut edited = doc.clone();
         let Object::Stream(mut s) = (*edited.get(obj)).clone() else { panic!("an item is a stream") };
@@ -1136,6 +1140,7 @@ fn a_hand_edited_ink_reads_back_only_when_it_is_the_stored_colours_look() {
     // As PDFCraft writes it: the ink stands.
     assert_eq!(read(&[(b"Color", real(&[0.5; 3])), (b"Gray", Object::Real(0.5))]), Some(Ink::Gray(0.5)));
     assert_eq!(read(&[(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0]))]), Some(Ink::Cmyk([0.0, 0.0, 0.0, 1.0])));
+    assert_eq!(read(&[(b"Color", real(&[0.0; 3])), (b"CMYK", ink_ref)]), Some(Ink::Cmyk([0.0, 0.0, 0.0, 1.0])), "by reference");
     // Finer than it paints, it reads back as painted (`0.5 g`), its look with it.
     let fine = read_text(&[(b"Color", real(&[0.50049; 3])), (b"Gray", Object::Real(0.50049))]);
     assert_eq!((fine.ink, fine.color), (Some(Ink::Gray(0.5)), [0.5; 3]));
@@ -1143,6 +1148,9 @@ fn a_hand_edited_ink_reads_back_only_when_it_is_the_stored_colours_look() {
         ("a colour the ink isn't the look of", vec![(&b"Color"[..], real(&[1.0, 0.0, 0.0])), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0]))]),
         ("three CMYK numbers", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 1.0]))]),
         ("five CMYK numbers", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0, 0.0]))]),
+        ("a long CMYK", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", long.clone())]),
+        ("a long CMYK by reference", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", long_ref.clone())]),
+        ("gray a long array", vec![(b"Color", real(&[0.0; 3])), (b"Gray", long.clone())]),
         ("CMYK not an array", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", Object::Real(1.0))]),
         ("gray out of range", vec![(b"Color", real(&[1.0; 3])), (b"Gray", Object::Real(2.0))]),
         ("gray not a number", vec![(b"Color", real(&[0.0; 3])), (b"Gray", Object::name("Black"))]),
