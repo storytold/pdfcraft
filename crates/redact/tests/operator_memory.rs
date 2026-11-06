@@ -44,14 +44,44 @@ fn peak_growth<T>(f: impl FnOnce() -> T) -> Option<(T, u64)> {
     Some((out, peak_kib()?.saturating_sub(before) >> 10))
 }
 
-/// Two reads of a form of 16 million operators:
+/// A page that draws an image under the mark, a form `form` with resources of its own outside it,
+/// and a glyph of a Type 3 font outside it, whose program is `glyph`: the Type 3 cleanup reads
+/// every page and form, and the programs of the glyphs it keeps.
+fn type3_page(form: &[u8], glyph: &[u8]) -> Document {
+    let mut doc = Document::open(Arc::new(
+        Pdf::new()
+            .objs(vec![
+                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /T3 7 0 R >> /XObject << /Im1 5 0 R /Fm 6 0 R >> >> >>"
+                    .to_vec(),
+                stream_obj("", b"q 50 0 0 50 20 230 cm /Im1 Do Q /Fm Do BT /T3 10 Tf 10 10 Td (a) Tj ET"),
+                stream_obj(IMAGE, b"o"),
+                stream_obj("/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << >>", b""),
+                b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 8 0 R >> /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] /Resources << >> >>"
+                    .to_vec(),
+                stream_obj("", b""),
+            ])
+            .build(),
+    ))
+    .unwrap();
+    compress(&mut doc, ObjRef::new(6, 0), form);
+    compress(&mut doc, ObjRef::new(8, 0), glyph);
+    mark(&mut doc);
+    doc
+}
+
+/// Four reads of a stream of 16 million operators:
 /// - the page's check of what it still draws walks a form without resources of its own outside
 ///   the mark, and refuses at 2,000,001 operators;
 /// - the unlinking check of a page nobody marked, which shares the marked page's resources,
-///   looks through such a form for the image the marked page removed, and finds no `Do`.
+///   looks through such a form for the image the marked page removed, and finds no `Do`;
+/// - the Type 3 cleanup scans a form with resources of its own that nothing else reads, for the
+///   glyphs it shows;
+/// - the Type 3 cleanup reads the program of a glyph it keeps, for the resources it uses.
 ///
-/// Each parsed every operator first: the peak grew by 4,415 and 2,527 MiB. Now the first holds at
-/// most one operator past the walk's limit, and the second none.
+/// Each parsed every operator first: the peak grew by 4,415 and 2,527 MiB in the first two. Now
+/// the first holds at most one operator past the walk's limit, and the others none.
 #[test]
 fn the_forms_followed_through_resources_are_read_one_operator_at_a_time() {
     // The page's check: an image under the mark, and the form outside it.
@@ -96,4 +126,16 @@ fn the_forms_followed_through_resources_are_read_one_operator_at_a_time() {
     let Some((result, grew)) = peak_growth(|| apply(&mut doc, Some(&[0]))) else { return };
     assert_eq!(result.map(|r| r.images_removed).ok(), Some(1), "the marked page's image goes");
     assert!(grew < 1024, "the unlinking check grew the peak by {grew} MiB");
+
+    let mut doc = type3_page(&operators(), b"1000 0 d0");
+    let Some((result, grew)) = peak_growth(|| apply(&mut doc, None)) else { return };
+    assert_eq!(result.map(|r| r.images_removed).ok(), Some(1), "the Type 3 scan: the image goes");
+    assert!(grew < 1024, "the Type 3 cleanup's scan grew the peak by {grew} MiB");
+
+    let mut glyph = b"1000 0 d0\n".to_vec();
+    glyph.extend(operators());
+    let mut doc = type3_page(b"", &glyph);
+    let Some((result, grew)) = peak_growth(|| apply(&mut doc, None)) else { return };
+    assert_eq!(result.map(|r| r.images_removed).ok(), Some(1), "the glyph program: the image goes");
+    assert!(grew < 1024, "the Type 3 cleanup's read of a glyph program grew the peak by {grew} MiB");
 }

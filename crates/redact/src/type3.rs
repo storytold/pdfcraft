@@ -131,11 +131,10 @@ struct UsedInGlyphs {
 }
 
 fn collect_used_resources_in_stream(data: &[u8], used: &mut UsedInGlyphs) -> Result<(), CosError> {
-    let parsed = pdfcraft_content::parse(data);
-    if parsed.skipped > 0 {
-        return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect glyph stream syntax".into() });
-    }
-    for op in parsed.ops {
+    // One operator at a time, so a glyph program of millions of them is never held whole. A byte
+    // that can't be read anywhere in it still refuses, once the loop has read it all.
+    let mut read = pdfcraft_content::ops(data);
+    for op in read.by_ref() {
         match op.op.as_slice() {
             b"Do" => {
                 if let Some(n) = op.last_name() {
@@ -174,6 +173,9 @@ fn collect_used_resources_in_stream(data: &[u8], used: &mut UsedInGlyphs) -> Res
             }
             _ => {}
         }
+    }
+    if read.skipped() > 0 {
+        return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect glyph stream syntax".into() });
     }
     Ok(())
 }
@@ -233,15 +235,14 @@ fn scan_content_stream(
         return Err(CosError::Syntax { offset: 0, detail: "redaction exceeded max depth inspecting Type 3 font content".into() });
     }
     let joined = Pieces::join(content);
-    let parsed = joined.parse();
-    if parsed.skipped > 0 {
-        return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect content stream syntax".into() });
-    }
+    // One operator at a time, so content of millions of them is never held whole. The scan only
+    // reads, and a byte that can't be read anywhere still refuses, once the loop has read it all.
+    let mut read = pdfcraft_content::ops(joined.data());
 
     let mut stack: Vec<Option<FontKey>> = Vec::new();
     let mut current_font = initial_font;
 
-    for op in parsed.ops {
+    for op in read.by_ref() {
         match op.op.as_slice() {
             b"q" => stack.push(current_font),
             b"Q" => {
@@ -256,6 +257,9 @@ fn scan_content_stream(
             }
             _ => apply_text_op(ctx, res, &op, &mut current_font),
         }
+    }
+    if read.skipped() > 0 {
+        return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect content stream syntax".into() });
     }
     Ok(())
 }
