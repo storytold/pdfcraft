@@ -18,11 +18,12 @@
 //! launch showing nothing. An item is dropped only when NSURL has nothing either
 //! and its bytes decode to no path: a bookmark in which no chain joins
 //! (`join_components`: two or more component records, each non-empty and
-//! NUL-free), a `'furl'` that is not a `file://` URL with an absolute path, or a
-//! descriptor of any other type. Every parse is total: malformed or truncated data
-//! returns `None`. The bookmark component layout (`[length u32 LE][01 01 00 00]
-//! [utf-8 bytes][NUL padding to a 4-byte boundary]`, records contiguous) was
-//! reverse-engineered from Ventura captures; see the pinned evidence on #6324.
+//! NUL-free), a `'furl'` that is not a `file://` URL or has no `/` after the
+//! prefix, or a descriptor of any other type. Every parse is total: malformed or
+//! truncated data returns `None`. The bookmark component layout
+//! (`[length u32 LE][01 01 00 00][utf-8 bytes][NUL padding to a 4-byte boundary]`,
+//! records contiguous) was reverse-engineered from Ventura captures; see the
+//! pinned evidence on #6324.
 
 use std::path::PathBuf;
 
@@ -42,21 +43,24 @@ const MAX_COMPONENT_BYTES: usize = 1024;
 /// The path of one odoc item, best-effort and never silent. In order:
 ///
 /// 1. the item's raw bytes, verified — a `'bmrk'` chain of byte-exact components
-///    that names an existing file, or a `'furl'` percent-decode (already gated to
-///    an absolute path by [`file_url_path`]);
+///    that names an existing file, or a `'furl'` percent-decode (the URL's path,
+///    from the first `/` after `file://`; [`file_url_path`] yields none when the
+///    bytes are not a `file://` URL or have no `/` after it);
 /// 2. whatever `nsurl_path` returns (the `fileURLValue` / `NSURL.path` chain of
 ///    the published crate);
-/// 3. the item's raw bytes again, now unverified: the first plausible chain
-///    string, delivered rather than dropping the item silently.
+/// 3. for a `'bmrk'` item only, its raw bytes again, now unverified: the first
+///    plausible chain string in scan order, delivered rather than dropping the
+///    item silently.
 ///
-/// Step 3 is the never-drop rule (review on #6334): an open in which an item
+/// Step 3 is the never-drop rule (review on #6334): an open in which a bookmark
 /// fails every other way still queues a path, and the app's existing open error
 /// reports the file it names — a wrong name surfaced beats a silent no-op, and a
 /// partial multi-file open reports each failed item the same way. The unverified
 /// string has no gate of its own: it passes only the one every chain passes to
 /// exist at all, [`join_components`] — two or more component records, each
-/// non-empty and NUL-free, joined lossily as UTF-8 under a leading `/`. Bytes in
-/// which no chain joins are dropped, as before.
+/// non-empty and NUL-free, joined lossily as UTF-8 under a leading `/`. A
+/// bookmark in which no chain joins is dropped, as before, and so is any other
+/// item that steps 1 and 2 leave without a path.
 pub(crate) fn item_path(
     descriptor_type: u32,
     data: &[u8],
@@ -91,7 +95,8 @@ pub(crate) fn file_url_path(data: &[u8]) -> Option<PathBuf> {
     }
     let bytes = data.get(..end)?;
     let after_prefix = bytes.strip_prefix(b"file://")?;
-    // Skip the authority (empty for local files); the path starts at its first '/'.
+    // Skip the authority (empty for local files); the path starts at its first '/',
+    // and a URL without one has no path.
     let slash = after_prefix.iter().position(|&byte| byte == b'/')?;
     let path_bytes = &after_prefix[slash..];
     // Cut at an unescaped '?' or '#': as NSURL.path does, deliver the URL's path
@@ -102,7 +107,8 @@ pub(crate) fn file_url_path(data: &[u8]) -> Option<PathBuf> {
         path_bytes.iter().position(|&byte| byte == b'?' || byte == b'#').unwrap_or(path_bytes.len());
     let decoded = percent_decode(&path_bytes[..delimiter]);
     let path = String::from_utf8_lossy(&decoded).into_owned();
-    if path.starts_with('/') { Some(PathBuf::from(path)) } else { None }
+    // Absolute by construction: it starts with the '/' found above, which decoding keeps.
+    Some(PathBuf::from(path))
 }
 
 /// `%XX` escapes decoded to bytes. A malformed escape passes through untouched, as
@@ -448,7 +454,8 @@ mod tests {
     /// existing file, with nothing from NSURL either, is still delivered — its
     /// decoded string, unverified — so the app's own open error reports the
     /// failure instead of the launch showing nothing. A NSURL answer still
-    /// outranks the unverified chain.
+    /// outranks the unverified chain, and of several unverifiable chains the
+    /// first in scan order is the one delivered.
     #[test]
     fn item_path_delivers_an_unverifiable_chain_rather_than_drop_it() {
         let missing = "/definitely/missing/nowhere.pdf";
@@ -462,6 +469,14 @@ mod tests {
             item_path(bookmark, &data, || Some("/from/nsurl".to_owned())),
             Some(PathBuf::from("/from/nsurl"))
         );
+        // Two separate chains, neither naming a file: the first is delivered. They
+        // cannot merge — `blob` ends the first with its 0x0105 full-path record,
+        // and `next_record` finds no 0x0101 record there at any of its paddings.
+        let mut two = blob(&["definitely", "missing", "first.pdf"], "/definitely/missing/first.pdf");
+        for name in ["definitely", "missing", "second.pdf"] {
+            push_record(&mut two, 0x0101, name.as_bytes());
+        }
+        assert_eq!(item_path(bookmark, &two, || None), Some(PathBuf::from("/definitely/missing/first.pdf")));
     }
 
     /// A partial multi-file open reports every item: the handler collects one
@@ -491,12 +506,13 @@ mod tests {
         std::fs::remove_dir_all(&directory).expect("clean up");
     }
 
-    /// Only bytes in which no chain joins are dropped. The never-drop step has no
-    /// gate of its own, so this pins `join_components` — two or more components,
-    /// each non-empty and NUL-free — at the `item_path` level, where no existence
-    /// check can mask it (`bookmark_chain` alone refuses these chains for naming
-    /// no file, gate or not). Garbage still yields `None` and the item is skipped,
-    /// as before.
+    /// With nothing from NSURL, a bookmark in which no chain joins is dropped. The
+    /// never-drop step has no gate of its own, so this pins `join_components` — two
+    /// or more components, each non-empty and NUL-free — at the `item_path` level,
+    /// where no existence check can mask it (`bookmark_chain` alone refuses these
+    /// chains for naming no file, gate or not). It also pins that the never-drop
+    /// scan is for bookmarks only. Garbage still yields `None` and the item is
+    /// skipped, as before.
     #[test]
     fn garbage_that_decodes_to_no_path_is_still_dropped() {
         let bookmark = u32::from_be_bytes(*b"bmrk");
@@ -515,11 +531,17 @@ mod tests {
         push_record(&mut with_nul, 0x0101, b"a\x00b");
         push_record(&mut with_nul, 0x0101, b"y.pdf");
         assert_eq!(item_path(bookmark, &with_nul, || None), None);
-        // A 'furl' that names no rooted path...
+        // A 'furl' with no '/' after `file://`, or no `file://` at all...
         assert_eq!(item_path(furl, b"file://host", || None), None);
         assert_eq!(item_path(furl, b"http://tmp/x", || None), None);
         assert_eq!(item_path(furl, b"", || None), None);
         // ...and an unknown descriptor type with nothing to fall back to.
         assert_eq!(item_path(u32::from_be_bytes(*b"utf8"), b"some text", || None), None);
+        // The never-drop scan is for bookmarks only: the joinable chain a 'bmrk'
+        // item delivers unverified (see the never-drop test) is dropped under
+        // any other descriptor type.
+        let chain = blob(&["definitely", "missing", "nowhere.pdf"], "/definitely/missing/nowhere.pdf");
+        assert_eq!(item_path(furl, &chain, || None), None);
+        assert_eq!(item_path(u32::from_be_bytes(*b"utf8"), &chain, || None), None);
     }
 }
