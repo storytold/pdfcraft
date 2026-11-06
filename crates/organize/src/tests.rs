@@ -2732,6 +2732,34 @@ fn extract_keeps_images_forms_drawn_around_damage_draw_through_shared_resources(
     assert_eq!(xobject_names(&part, 1), [b"ImB".to_vec()]);
 }
 
+/// Forms are read 8 deep (`prune.rs`'s `MAX_FORM_DEPTH`). A damaged form that deep still has
+/// every form it names read as drawn, and one drawing through resources another page shares keeps
+/// what it draws from them.
+#[test]
+fn a_damaged_form_at_the_depth_limit_has_its_forms_read() {
+    use pdfcraft_cos::ObjRef;
+    let whole = |content: &[u8]| pdfcraft_cos::Stream::from_raw(Dict::new(), content.to_vec());
+    let mut src = doc_shared_form_resources(whole(b"/C Do"), damaged_flate(b"0 g\n", b"/Nested Do"), whole(b"/ImA Do"));
+    // Seven forms between the page and `/Fm`, each drawing the next as `/C`: `/Fm` is 8 deep.
+    let mut next = ObjRef::new(7, 0);
+    for _ in 1..8 {
+        let mut form = whole(b"/C Do");
+        form.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+        form.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+        let names: Dict = [(b"C".to_vec(), Object::Ref(next))].into_iter().collect();
+        form.dict.set(b"Resources".to_vec(), Object::Dict([(b"XObject".to_vec(), Object::Dict(names))].into_iter().collect()));
+        next = src.add(Object::Stream(form));
+    }
+    let names: Dict = [(b"C".to_vec(), Object::Ref(next))].into_iter().collect();
+    src.update_dict(ObjRef::new(3, 0), |p| {
+        p.set(b"Resources".to_vec(), Object::Dict([(b"XObject".to_vec(), Object::Dict(names))].into_iter().collect()))
+    })
+    .unwrap();
+    let part = full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap());
+    let names = xobject_names(&part, 1);
+    assert!(names.iter().any(|n| n.as_slice() == b"ImA"), "{names:?}");
+}
+
 /// A form whose `/DecodeParms` is given by reference is read through it: the image it draws is
 /// kept, not lost to content read with the predictor's tag bytes left in it.
 #[test]
