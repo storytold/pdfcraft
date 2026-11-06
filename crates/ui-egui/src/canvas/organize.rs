@@ -161,10 +161,17 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: b
                 i.consume_key(Modifiers::NONE, Key::Escape),
             )
         });
-        // ⌘C / ⌘X / ⌘V copy, cut and paste pages (egui delivers them as clipboard events).
+        // ⌘C / ⌘X / ⌘V copy, cut and paste pages (egui delivers them as clipboard events). ⌘V
+        // comes as Paste when the system clipboard holds text and PasteImage when it holds only a
+        // picture; the pages are on PdfCraft's own clipboard either way (#5406). With neither on
+        // the system clipboard, egui-winit swallows ⌘V and sends nothing.
         let (copy, cut, paste) = ui.input(|i| {
             let any = |f: &dyn Fn(&egui::Event) -> bool| i.events.iter().any(f);
-            (any(&|e| matches!(e, egui::Event::Copy)), any(&|e| matches!(e, egui::Event::Cut)), any(&|e| matches!(e, egui::Event::Paste(_))))
+            (
+                any(&|e| matches!(e, egui::Event::Copy)),
+                any(&|e| matches!(e, egui::Event::Cut)),
+                any(&|e| matches!(e, egui::Event::Paste(_) | egui::Event::PasteImage(_))),
+            )
         });
         if copy || cut {
             view.pending_action = Some(ViewAction::CopyPages { cut });
