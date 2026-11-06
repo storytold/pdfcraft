@@ -282,12 +282,16 @@ proptest::proptest! {
 
 /// A `/V 4` RC4 crypt filter with a 40- or 48-bit key, as Acrobat writes it (pdf.js issue 19484):
 /// the file key is extended to 16 bytes with zeros before Algorithm 1, so each object's key is
-/// all 16 bytes of MD5(key, zeros, object, generation). A `/V 2` file with the same short key
-/// keeps Algorithm 1 as the standard has it, n + 5 bytes of MD5(key, object, generation).
+/// all 16 bytes of MD5(key, zeros, object, generation). Everything else keeps Algorithm 1 as the
+/// standard has it, n + 5 bytes (at most 16) of MD5(key, object, generation[, "sAlT"]): a `/V 2`
+/// file with the same short key, a full 128-bit `/V 4` RC4 key, and AESV2, short (88 bits) or
+/// full. Each object key is computed here by hand; data written with it must decrypt.
 #[test]
 fn a_v4_rc4_key_shorter_than_16_bytes_is_extended_with_zeros() {
     let text = b"Page tree in an object stream".to_vec();
-    for (v, bits) in [(4, 40), (4, 48), (2, 40)] {
+    let cases =
+        [(4, 40, Method::Rc4), (4, 48, Method::Rc4), (2, 40, Method::Rc4), (4, 128, Method::Rc4), (4, 88, Method::Aes128), (4, 128, Method::Aes128)];
+    for (v, bits, method) in cases {
         let mut d = EncryptDict {
             filter: b"Standard".to_vec(),
             v,
@@ -299,7 +303,7 @@ fn a_v4_rc4_key_shorter_than_16_bytes_is_extended_with_zeros() {
             ..Default::default()
         };
         if v == 4 {
-            d.crypt_filters = vec![(b"StdCF".to_vec(), Method::Rc4)];
+            d.crypt_filters = vec![(b"StdCF".to_vec(), method)];
             d.stm_f = b"StdCF".to_vec();
             d.str_f = b"StdCF".to_vec();
         }
@@ -308,19 +312,34 @@ fn a_v4_rc4_key_shorter_than_16_bytes_is_extended_with_zeros() {
         d.u = u_value_r4(&d, ID, &key);
         let h = SecurityHandler::open(d, ID, None).unwrap();
         let (num, generation) = (13u32, 0u16);
+        let extended = v == 4 && method == Method::Rc4 && key.len() < 16;
         let mut md5 = Md5::new();
         md5.update(&key);
-        if v == 4 {
+        if extended {
             md5.update(vec![0u8; 16 - key.len()]);
         }
         md5.update(&num.to_le_bytes()[..3]);
         md5.update(generation.to_le_bytes());
+        if method == Method::Aes128 {
+            md5.update(b"sAlT");
+        }
         let digest = md5.finalize();
-        let object_key = if v == 4 { digest.to_vec() } else { digest[..key.len() + 5].to_vec() };
-        let written = rc4(&object_key, &text);
-        assert_eq!(h.decrypt_string(num, generation, &written), text, "V{v}, {bits}-bit key");
-        assert_eq!(h.decrypt_stream(num, generation, &written, StreamKind::Normal), text, "V{v}, {bits}-bit key");
-        assert_eq!(h.encrypt_stream(num, generation, &text, StreamKind::Normal), written, "saved as it was read: V{v}, {bits}-bit key");
+        let n = if extended { 16 } else { key.len() };
+        let object_key = digest[..(n + 5).min(16)].to_vec();
+        let case = format!("V{v}, {bits}-bit key, {method:?}");
+        let written = if method == Method::Rc4 {
+            rc4(&object_key, &text)
+        } else {
+            let iv = [3u8; 16];
+            [iv.to_vec(), aes_cbc_encrypt(&object_key, &iv, &text, true)].concat()
+        };
+        assert_eq!(h.decrypt_string(num, generation, &written), text, "{case}");
+        assert_eq!(h.decrypt_stream(num, generation, &written, StreamKind::Normal), text, "{case}");
+        let saved = h.encrypt_stream(num, generation, &text, StreamKind::Normal);
+        if method == Method::Rc4 {
+            assert_eq!(saved, written, "saved as it was read: {case}");
+        }
+        assert_eq!(h.decrypt_stream(num, generation, &saved, StreamKind::Normal), text, "{case}");
     }
 }
 

@@ -305,18 +305,19 @@ impl SecurityHandler {
     /// Algorithm 1 (§7.6.3.2): the key for one object. AES-256 uses the file key directly
     /// (Algorithm 1.A, §7.6.3.3).
     ///
-    /// With `/V 4`, a file key shorter than 16 bytes is first extended to 16 bytes with zeros.
-    /// The standard doesn't say so (Algorithm 1 takes the n-byte key as it is), but that is how
-    /// Acrobat writes and reads such files: a `/V 4` RC4 crypt filter with a 40- or 48-bit key
-    /// (pdf.js issue 19484). The renderer's `hayro-syntax` reads them the same way, so a page it
-    /// shows is one this crate can read and save. Every key PdfCraft writes under `/V 4` is 16
-    /// bytes already.
+    /// For an RC4 crypt filter under `/V 4`, a file key shorter than 16 bytes is first extended
+    /// to 16 bytes with zeros. The standard doesn't say so (Algorithm 1 takes the n-byte key as
+    /// it is), but that is how Acrobat writes and reads such files: a `/V 4` RC4 crypt filter
+    /// with a 40- or 48-bit key (pdf.js issue 19484). The renderer's `hayro-syntax` reads them
+    /// the same way, so a page it shows is one this crate can read and save. AES-128 keys are
+    /// left as they are: `AESV2` takes a 128-bit key (Table 25), and Acrobat's extension is only
+    /// seen with RC4. Every key PdfCraft writes under `/V 4` is 16 bytes already.
     fn object_key(&self, method: Method, num: u32, generation: u16) -> Vec<u8> {
         if method == Method::Aes256 {
             return self.key.clone();
         }
         let mut key = self.key.clone();
-        if self.dict.v == 4 && key.len() < 16 {
+        if method == Method::Rc4 && self.dict.v == 4 && key.len() < 16 {
             key.resize(16, 0);
         }
         let mut h = Md5::new();
