@@ -805,6 +805,27 @@ impl Structure for CountingReads<'_> {
     }
 }
 
+/// A font (or any dictionary whose `/Type` isn't `/Annot`) a page lists in `/Annots` isn't an
+/// annotation (ISO 32000-2 §12.5.2, Table 166) and isn't listed as a comment; the real ones around
+/// it keep their place in the array.
+#[test]
+fn dictionaries_of_another_type_in_annots_are_not_annotations() {
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >> endobj
+4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [10 10 30 30] /Contents (typed) >> endobj
+6 0 obj << /Type /Font /Subtype /TrueType /BaseFont /Arial >> endobj
+7 0 obj << /Subtype /Square /Rect [40 40 60 60] /Contents (untyped) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let info = inspect(Arc::new(pdf.to_vec()), None).expect("opens");
+    let mut listed: Vec<_> = info.annotations.iter().map(|a| (a.subtype.as_str(), a.index, a.contents.as_deref())).collect();
+    listed.sort_by_key(|a| a.1);
+    assert_eq!(listed, [("Text", 1, Some("typed")), ("Square", 3, Some("untyped"))], "{:?}", info.annotations);
+}
+
 /// One comment referenced many times, or a page-shared `/Annots` array, is listed once, and many
 /// small comments sharing one large `/Contents` string stop at the retained-bytes budget.
 #[test]

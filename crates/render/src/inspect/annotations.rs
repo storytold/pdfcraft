@@ -93,6 +93,11 @@ impl<'a> Inspector<'a> {
         let mut comments_full = false;
         for (page, index, a) in entries {
             let Some(d) = self.dict(a) else { continue };
+            // An annotation's `/Type`, when present, is `/Annot` (ISO 32000-2 §12.5.2, Table 166):
+            // a font or other dictionary a page lists among its annotations isn't one.
+            if self.name(d, b"Type").is_some_and(|t| t != "Annot") {
+                continue;
+            }
             let Some(subtype) = self.name(d, b"Subtype") else { continue };
             if subtype == "FileAttachment"
                 && let Ok(fs) = d.get(b"FS")
