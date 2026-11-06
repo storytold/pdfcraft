@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-04 | **Last updated:** 2026-11-04 | **Change:** patch (M5: XFDF annotation contents retain text around XML comments and processing instructions; estimates unchanged)
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
@@ -229,6 +231,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-04 (M5, comment exchange fidelity):** XFDF annotation contents retain all direct text around XML comments and processing instructions, including CDATA and character references, with the existing PDF line-break normalization. A synthetic import regression checks complete contents after both full and incremental save/reopen. Estimates unchanged.
 
 - **2026-10-28 (M10, #4119 partial):** Scan & OCR ▸ Enhance scanned file cleans scanned pages in place: background removal (level 0–100, as the camera clean-up), edge shadow removal (book gutters, copier borders) and despeckle. Each scan image is decoded, cleaned and written back into its own object at the same size and colour space (JPEG stays JPEG, others lossless, 1-bit stays 1-bit), so the OCR text layer, comments and links stay; one undo step, shared images once, unsupported images (CMYK, indexed, JPEG 2000, JBIG2, CCITT, broken data) reported. `page_enhance_scan` drives it headlessly. Not yet an option of Recognize text. Estimates unchanged.
 - **2026-11-03 (M11, shared JBIG2 dictionary):** With Monochrome Images set to JBIG2, Optimize has up to 16 JBIG2 images share one symbol dictionary (`/JBIG2Globals`), the letters found on more than one page stored once, when that is smaller (`pdfcraft_filters::encode_jbig2_shared`). Eight pages of 10 pt text rendered at 300 dpi take 41% less in Helvetica and 42% in Times than coded alone, 10% in Courier; groups of 16 save 45%, of 32 only 47%. Only images redaction can store again without the dictionary share one (image masks and DeviceGray named directly, at most 64 Mi pixels), and redacting one stores the rest of its group so, which the group bounds to 15.

@@ -13,7 +13,8 @@ let report = import(&mut doc, &bytes)?;                 // XFDF, FDF, XML, CSV o
   circle, polygon, polyline, markup, stamp, caret, ink, attachments, sound, redact) with rect,
   name, author, subject, dates, flags, colours, opacity, width, icon, quads, line ends, ink,
   default appearance, callouts (`callout`, `fringe`, `intent`, `head`), pop-ups and reply threads
-  (`inreplyto`); field values nested by name, with text preserved across XML comments and processing instructions.
+  (`inreplyto`); field values nested by name. Annotation contents and field values retain text
+  across XML comments and processing instructions, including CDATA and character references.
 - **FDF**: fields (with `/Kids` hierarchies) and indirect comments. Nested annotation values
   are copied under FDF object numbers; shared references and cycles remain shared. Document
   links and appearances are excluded. Source `/Page` and `/Pages` dictionaries become null
