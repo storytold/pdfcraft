@@ -8,6 +8,7 @@ static site in `pdfcraft-web-<version>/`:
 | `index.html` | The page. It loads everything through relative URLs. |
 | `pdfcraft-web-<hash>.js` | wasm-bindgen glue (generated, ES module) |
 | `pdfcraft-web-<hash>_bg.wasm` | The app, about 13 MB, or 5 MB with compression |
+| `manifest.webmanifest`, `icons/` | Install-as-app manifest (also registers PdfCraft for `.pdf` files) and its icons |
 | `_headers`, `.htaccess` | Sample header rules for Netlify/Cloudflare Pages and Apache |
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.
@@ -54,6 +55,20 @@ location /pdfcraft/ {
 ```
 
 Local test: `python3 -m http.server 8765` inside the folder, then open http://localhost:8765/.
+
+## Installing as an app and opening PDFs from the system
+
+The site ships `manifest.webmanifest`, so Chrome and Edge on Windows, macOS, Linux and ChromeOS
+offer to install it (the install icon in the address bar, or the menu's "Install page as app").
+Installing needs HTTPS or `http://localhost`. The installed app runs in its own window.
+
+The manifest also declares PdfCraft as a handler for `.pdf` files (`file_handlers`). Once it is
+installed, PdfCraft appears in the system's "Open with" list for PDFs and can be made the default
+PDF app. A PDF opened that way opens in a tab of the PdfCraft window that is already open, or in
+a new window when none is. The browser asks once, the first time, whether PdfCraft may open the
+file. Firefox and Safari don't support File Handling; there the site works as before.
+
+Serve `.webmanifest` as `application/manifest+json`. Most hosts already do.
 
 ## Embedding in a page (iframe)
 

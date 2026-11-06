@@ -44,6 +44,9 @@ fn main() {
                             ctx.request_repaint();
                         });
                     }
+                    // Files the system hands an installed copy ("Open with", double-click), through
+                    // the manifest's `file_handlers`; a no-op in browsers without File Handling.
+                    launch_queue::listen(app.startup_inbox.clone(), app.failed_inbox.clone(), cc.egui_ctx.clone());
                     // eframe never raises a close request on a browser reload or tab close, so `guard_quit` never
                     // prompts; ask the browser to confirm instead while a document has unsaved work (#812).
                     warn_before_unload(app.unsaved_flag.clone());
@@ -152,7 +155,7 @@ mod host {
     const DEFAULT_NAME: &str = "document.pdf";
 
     /// The largest file the host may hand over to open, checked before it is copied (the app's own readers have their own limits).
-    const MAX_OPEN_BYTES: u64 = 512 << 20;
+    pub(super) const MAX_OPEN_BYTES: u64 = 512 << 20;
 
     #[derive(Clone)]
     pub struct Bridge {
@@ -227,7 +230,134 @@ mod host {
     }
 }
 
+/// File Handling: an installed copy of the page (a PWA) is registered by `manifest.webmanifest`'s
+/// `file_handlers` as a PDF handler, so the system can open PDFs with it. The browser passes the
+/// files through `window.launchQueue` as `FileSystemFileHandle`s; each opens in a tab, like a
+/// `?file=` download. `web-sys` has no stable binding for the queue, so it is reached through
+/// `Reflect`. Browsers without the API (Firefox, Safari, an uninstalled tab) have no
+/// `launchQueue`, and then this does nothing.
+#[cfg(target_arch = "wasm32")]
+mod launch_queue {
+    use eframe::wasm_bindgen::{JsCast, JsValue, closure::Closure};
+
+    /// The name a file gets when the browser gives none.
+    const DEFAULT_NAME: &str = "document.pdf";
+
+    pub fn listen(inbox: pdfcraft_ui_egui::Inbox, failed: pdfcraft_ui_egui::FailedInbox, ctx: egui::Context) {
+        let Some(window) = web_sys::window() else { return };
+        let Ok(queue) = js_sys::Reflect::get(&window, &JsValue::from_str("launchQueue")) else { return };
+        if queue.is_undefined() || queue.is_null() {
+            return;
+        }
+        let Some(set_consumer) =
+            js_sys::Reflect::get(&queue, &JsValue::from_str("setConsumer")).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+        else {
+            return;
+        };
+        let consumer = Closure::<dyn FnMut(JsValue)>::new(move |params: JsValue| {
+            let Ok(files) = js_sys::Reflect::get(&params, &JsValue::from_str("files")) else { return };
+            if !js_sys::Array::is_array(&files) {
+                return;
+            }
+            for handle in js_sys::Array::from(&files).iter() {
+                let (inbox, failed, ctx) = (inbox.clone(), failed.clone(), ctx.clone());
+                wasm_bindgen_futures::spawn_local(async move {
+                    match read(&handle).await {
+                        Ok((name, bytes)) => {
+                            if let Ok(mut q) = inbox.lock() {
+                                q.push((name, bytes));
+                            }
+                        }
+                        Err((name, e)) => {
+                            eframe::web_sys::console::error_1(&format!("PdfCraft: could not open {name}: {e}").into());
+                            if let Ok(mut q) = failed.lock() {
+                                q.push((name, e));
+                            }
+                        }
+                    }
+                    ctx.request_repaint();
+                });
+            }
+        });
+        // The queue holds launches made before a consumer was set and delivers them now; the
+        // consumer lives as long as the page.
+        if set_consumer.call1(&queue, consumer.as_ref()).is_ok() {
+            consumer.forget();
+        }
+    }
+
+    /// The file behind one handle, `(name, bytes)`, or `(name, error)`. A file from the system is
+    /// untrusted input: an oversized one is refused before it is read into memory.
+    async fn read(handle: &JsValue) -> Result<(String, Vec<u8>), (String, String)> {
+        let unnamed = || DEFAULT_NAME.to_string();
+        let get_file = js_sys::Reflect::get(handle, &JsValue::from_str("getFile"))
+            .ok()
+            .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+            .ok_or_else(|| (unnamed(), "not a file (a folder?)".to_string()))?;
+        let promise = get_file
+            .call0(handle)
+            .ok()
+            .and_then(|p| p.dyn_into::<js_sys::Promise>().ok())
+            .ok_or_else(|| (unnamed(), "the browser did not return the file".to_string()))?;
+        let file: web_sys::File = wasm_bindgen_futures::JsFuture::from(promise)
+            .await
+            .ok()
+            .and_then(|f| f.dyn_into().ok())
+            .ok_or_else(|| (unnamed(), "the file could not be read (moved, or no permission?)".to_string()))?;
+        let name = Some(file.name()).filter(|n| !n.trim().is_empty()).unwrap_or_else(unnamed);
+        if file.size() > super::host::MAX_OPEN_BYTES as f64 {
+            return Err((name, format!("{} bytes, over the {} MiB limit", file.size(), super::host::MAX_OPEN_BYTES >> 20)));
+        }
+        let buf =
+            wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await.map_err(|e| (name.clone(), format!("could not read the file: {e:?}")))?;
+        Ok((name, js_sys::Uint8Array::new(&buf).to_vec()))
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     eprintln!("pdfcraft-web targets wasm32: run `trunk serve` or `trunk build --release` in apps/pdfcraft-web");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    fn read(rel: &str) -> String {
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
+    }
+
+    /// The installed app is offered for PDFs only if the page links a manifest that Trunk copies
+    /// into the site, and that manifest declares a PDF file handler inside the app's scope.
+    #[test]
+    fn manifest_registers_pdf_file_handler() {
+        let html = read("index.html");
+        assert!(html.contains(r#"<link rel="manifest" href="manifest.webmanifest" />"#), "index.html must link the manifest");
+        assert!(html.contains(r#"<link data-trunk rel="copy-file" href="manifest.webmanifest" />"#), "Trunk must copy the manifest");
+
+        let m: serde_json::Value = serde_json::from_str(&read("manifest.webmanifest")).expect("manifest is JSON");
+        assert_eq!(m["scope"], "./");
+        let handlers = m["file_handlers"].as_array().expect("file_handlers");
+        let pdf = handlers.iter().find(|h| h["accept"]["application/pdf"].is_array()).expect("a handler for application/pdf");
+        assert!(pdf["accept"]["application/pdf"].as_array().into_iter().flatten().any(|e| e == ".pdf"));
+        // Relative to the manifest, so the site works under any path (packaging/web/package.sh).
+        assert_eq!(pdf["action"], "./", "the action must stay inside the scope");
+    }
+
+    /// Every manifest icon is a file the `copy-dir` of `assets/app-icon/hicolor` into `icons/`
+    /// puts in the site; a missing icon makes the browser refuse to install the app.
+    #[test]
+    fn manifest_icons_exist() {
+        let html = read("index.html");
+        assert!(html.contains(r#"href="../../assets/app-icon/hicolor" data-target-path="icons""#));
+        let m: serde_json::Value = serde_json::from_str(&read("manifest.webmanifest")).expect("manifest is JSON");
+        let icons = m["icons"].as_array().expect("icons");
+        assert!(icons.iter().any(|i| i["sizes"] == "512x512"), "browsers want a 512 px icon to install");
+        for icon in icons {
+            let src = icon["src"].as_str().expect("icon src");
+            let rel = src.strip_prefix("icons/").expect("icons live under icons/");
+            let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/app-icon/hicolor").join(rel);
+            assert!(file.is_file(), "{src}: no {}", file.display());
+        }
+    }
 }
