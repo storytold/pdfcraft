@@ -47,10 +47,15 @@ fn pdf(order: &str) -> Vec<u8> {
 
 /// The colour at the page's centre.
 fn centre(order: &str) -> [u8; 3] {
+    at(order, 100, 100)
+}
+
+/// The colour at (`x`, `y`) px from the top left.
+fn at(order: &str, x: usize, y: usize) -> [u8; 3] {
     let mut renderer = PageRenderer::new(Arc::new(pdf(order)), RenderConfig::default());
     let out = renderer.render(RenderRequest { page: 0, scale: 1.0, ..Default::default() });
     assert!(out.error.is_none(), "{:?}", out.error);
-    let at = (100 * out.width as usize + 100) * 4;
+    let at = (y * out.width as usize + x) * 4;
     let px = out.rgba.get(at..at + 3).expect("the centre lies on the page");
     [px[0], px[1], px[2]]
 }
@@ -62,4 +67,8 @@ fn a_widget_is_drawn_above_the_comments_on_its_page() {
     // Comments keep their `/Annots` order among themselves.
     assert_eq!(centre("RS"), [0, 0, 0], "the black square listed last is on top");
     assert_eq!(centre("SR"), [255, 0, 0], "the red square listed last is on top");
+    // And with a widget among them: (45, 45) is inside both squares, outside the check box.
+    assert_eq!(at("WRS", 45, 45), [0, 0, 0], "a widget first: the black square listed last is on top");
+    assert_eq!(at("WSR", 45, 45), [255, 0, 0], "a widget first: the red square listed last is on top");
+    assert_eq!(centre("WSR"), [0, 255, 0], "and the check box above both");
 }
