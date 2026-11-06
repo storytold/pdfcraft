@@ -162,7 +162,7 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
         };
         let current = f.value.first().cloned().unwrap_or_default();
         let v = if let Some(js) = &f.actions.scripts.calculate {
-            let r = scripts.run(FieldEvent::Calculate, js, &f, &current, &all);
+            let r = scripts.run(FieldEvent::Calculate, js, &f, &current, &all, doc);
             scripting::apply_changes(doc, &r.changes, &f.name)?;
             if !r.changes.is_empty() {
                 all = fields(doc);
@@ -177,7 +177,8 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
         };
         if current != v && matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
             doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), PdfString::text(&v)))?;
-            redraw(doc, &f, std::slice::from_ref(&v), scripts)?;
+            let fresh = all.iter().find(|field| field.obj == obj).cloned().unwrap_or_else(|| f.clone());
+            redraw(doc, &fresh, std::slice::from_ref(&v), scripts)?;
             if let Some(target) = all.iter_mut().find(|x| x.obj == obj) {
                 target.value = vec![v];
             }
@@ -209,17 +210,19 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             // Keystroke (on commit) and Validate, as Acrobat runs them before accepting a value.
             let t = &af::keystroke(&f.actions.format, &f.name, t).map_err(FormError::Format)?;
             af::validate(&f.actions.validate, t).map_err(FormError::Invalid)?;
-            let t = &scripting::accept(doc, f, t, scripts)?;
+            let (t, refresh_field) = scripting::accept(doc, f, t, scripts)?;
             let shadow = t.is_empty() && crate::author::ancestor_sets(doc, f.obj, b"V");
             doc.update_dict(f.obj, |d| {
                 if t.is_empty() && !shadow {
                     d.remove(b"V");
                 } else {
-                    d.set(b"V".to_vec(), PdfString::text(t));
+                    d.set(b"V".to_vec(), PdfString::text(&t));
                 }
                 d.remove(b"RV");
             })?;
-            redraw(doc, f, std::slice::from_ref(t), scripts)
+            let current =
+                if refresh_field { fields(doc).into_iter().find(|current| current.obj == f.obj).unwrap_or_else(|| f.clone()) } else { f.clone() };
+            redraw(doc, &current, std::slice::from_ref(&t), scripts)
         }
         (FieldKind::CheckBox, v) => {
             let state = f.widgets.iter().find_map(|w| w.on_state.clone()).unwrap_or_else(|| "Yes".into());

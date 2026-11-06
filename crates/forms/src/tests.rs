@@ -1518,7 +1518,7 @@ fn formats_validation_and_calculations_run_like_acrobat() {
 fn a_script_that_spells_the_markers_in_a_string_runs_as_a_script() {
     struct Ran;
     impl Scripts for Ran {
-        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
             ScriptResult { rc: true, value: "ran".into(), changes: Vec::new(), message: None }
         }
     }
@@ -2928,7 +2928,7 @@ fn check_box_redraw_keeps_down_states_it_still_draws() {
 fn recalc_chain_where_script_changes_checkbox() {
     struct TestScripts;
     impl Scripts for TestScripts {
-        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, fields: &[Field]) -> ScriptResult {
+        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, fields: &[Field], _doc: &Document) -> ScriptResult {
             if script == "set_box" {
                 ScriptResult {
                     rc: true,
@@ -2939,6 +2939,7 @@ fn recalc_chain_where_script_changes_checkbox() {
                         read_only: None,
                         required: None,
                         display: None,
+                        ..Default::default()
                     }],
                     message: None,
                 }
@@ -2965,6 +2966,63 @@ fn recalc_chain_where_script_changes_checkbox() {
     let all = fields(&doc);
     assert_eq!(field(&all, "agree").value, ["Yes"], "checkbox was set by script in recalc chain");
     assert_eq!(field(&all, "result").value, ["box_was_Yes"], "second recalc saw the normalized checkbox value");
+}
+
+#[test]
+fn validation_script_colour_is_used_when_the_field_redraws() {
+    struct TestScripts;
+    impl Scripts for TestScripts {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
+            ScriptResult {
+                rc: true,
+                value: value.into(),
+                changes: vec![FieldChange {
+                    name: "name".into(),
+                    text_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]),
+                    ..Default::default()
+                }],
+                message: None,
+            }
+        }
+    }
+
+    let mut doc = fixture();
+    set_field_script(&mut doc, "name", "validate", Some("set_red")).unwrap();
+    set_value_with(&mut doc, "name", &FieldValue::Text("Grace".into()), &mut TestScripts).unwrap();
+
+    let all = fields(&doc);
+    let f = field(&all, "name");
+    assert!(f.da.contains("1 0 0 rg"));
+    assert!(ap(&doc, &f.widgets[0]).contains("1 0 0 rg"), "redraw uses the Validate script's updated appearance");
+}
+
+#[test]
+fn calculation_script_colour_is_used_when_the_field_redraws() {
+    struct TestScripts;
+    impl Scripts for TestScripts {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
+            ScriptResult {
+                rc: true,
+                value: "Grace".into(),
+                changes: vec![FieldChange {
+                    name: "name".into(),
+                    text_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]),
+                    ..Default::default()
+                }],
+                message: None,
+            }
+        }
+    }
+
+    let mut doc = fixture();
+    set_field_script(&mut doc, "name", "calculate", Some("set_red")).unwrap();
+    recalculate_with(&mut doc, &mut TestScripts).unwrap();
+
+    let all = fields(&doc);
+    let f = field(&all, "name");
+    assert_eq!(f.value, ["Grace"]);
+    assert!(f.da.contains("1 0 0 rg"));
+    assert!(ap(&doc, &f.widgets[0]).contains("1 0 0 rg"), "redraw uses the Calculate script's updated appearance");
 }
 
 #[test]
