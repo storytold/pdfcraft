@@ -55,6 +55,9 @@ skrifa = "0.44"
 craft-update = { workspace = true }
 # Control-channel tokens.
 getrandom = "0.4"
+# NFC and NFD forms of a file name, for OS-delivered paths whose normalization form differs from
+# the stored one (macOS 'odoc' opens). Already in the tree through pdfcraft-crypt's stringprep.
+unicode-normalization = "0.1"
 # Create ▸ Clipboard (images; already in the tree through egui-winit).
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
 # Waits for native file pickers off the UI thread (already in the tree through wgpu).

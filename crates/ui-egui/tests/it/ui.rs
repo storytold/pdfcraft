@@ -1198,6 +1198,36 @@ fn files_and_quit_from_the_operating_system() {
     assert!(closing);
 }
 
+/// A file the operating system names in one Unicode normalization form but is stored in the
+/// other still opens: an `OsEvent::Open` delivered in NFD reaches the app's open path
+/// resolved to the NFC-stored name. A delivered name no form of matches is opened as sent,
+/// so its read failure reaches the user instead of vanishing.
+#[test]
+fn an_os_delivered_path_opens_across_normalization_forms() {
+    // macOS decodes the 'odoc' event's file URL in NFD, while APFS keeps the name as it was
+    // written, often NFC (a name imported from Windows): "Área.pdf" either way, and byte-exact
+    // lookup would miss.
+    use pdfcraft_ui_egui::OsEvent;
+    let nfc = "\u{00c1}rea.pdf";
+    let nfd = "A\u{0301}rea.pdf";
+    let dir = std::env::temp_dir().join(format!("pdfcraft-os-open-unicode-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(nfc), FIXTURE).unwrap();
+    let queue = std::rc::Rc::new(std::cell::RefCell::new(vec![OsEvent::Open(vec![dir.join(nfd).to_string_lossy().into_owned()])]));
+    let q = queue.clone();
+    let mut h = harness(move |app| app.os_events = Some(Box::new(move || q.borrow_mut().drain(..).collect())));
+    support::wait_until(&mut h, "the NFD-delivered, NFC-stored file opens", |app| !app.views.is_empty());
+    assert_eq!(h.state().views.len(), 1, "the file opens in a tab");
+    // A delivered name that no normalization form of matches stays as sent, and the read
+    // failure is said aloud instead of silently doing nothing.
+    queue.borrow_mut().push(OsEvent::Open(vec![dir.join("B\u{0300}se.pdf").to_string_lossy().into_owned()]));
+    support::wait_until(&mut h, "the read error for a name that matches nothing", |app| {
+        app.toast.as_ref().is_some_and(|(m, _)| m.starts_with("Couldn't read"))
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn default_workspace_mode_persists_and_tolerates_invalid_settings() {
     use pdfcraft_ui_egui::Mode;
