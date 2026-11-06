@@ -3,10 +3,11 @@
 use std::sync::Arc;
 
 use crate::{
-    AddedContent, AddedText, Background, BoxSpec, EditError, FieldProps, FieldValue, FillMark, HeaderFooter, Hidden, ImageEdit, InitialView, Label,
-    LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget, PageBox, Protection, ReviewState,
-    Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image, decode_data_file, embed_image, field_table, fit_picture,
-    image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
+    AddedContent, AddedText, Background, BoxSpec, ColorTarget, EditError, FieldProps, FieldValue, FillMark, HeaderFooter, Hidden, ImageEdit,
+    InitialView, Label, LineEnding, LinkAction, LinkStyle, MarkFile, MarkKind, Markup, NewAnnotation, NewField, NoteIcon, ObjectTarget, PageBox,
+    PrinterMarks, Protection, ReviewState, Rgb, Shape, Standard, Style, TabOrder, TransitionSpec, Watermark, a11y, copy_image, decode_data_file,
+    embed_image, field_table, fit_picture, image_content_type, is_xfa_data_file, js, mark_source, measure, model_poster, open_source, strip_xfa,
+    unrestricted, xfa, xfa_after_data_change,
 };
 
 mod labels;
@@ -384,6 +385,24 @@ pub enum Edit {
     /// forbidden actions, annotation flags, …).
     ConvertPdfA {
         level: pdfcraft_preflight::Level,
+    },
+    /// Print production ▸ Convert colors on `pages`: device colours and RGB images to `target`.
+    ConvertColors {
+        pages: Vec<usize>,
+        target: ColorTarget,
+    },
+    /// Print production ▸ Fix hairlines on `pages`: line widths under `threshold` points (or 0)
+    /// become `replace` points.
+    FixHairlines {
+        pages: Vec<usize>,
+        threshold: f64,
+        replace: f64,
+    },
+    /// Print production ▸ Add printer marks on `pages`; `title` starts each page information line.
+    AddPrinterMarks {
+        pages: Vec<usize>,
+        marks: PrinterMarks,
+        title: String,
     },
     /// Remove what identifies the document as meeting `standard` (PDF/A or PDF/X).
     RemoveStandardId {

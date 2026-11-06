@@ -29,12 +29,14 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod audit;
+mod colors;
 pub mod fragments;
 mod images;
 mod links;
 mod unused;
 
 pub use audit::{SpaceCategory, SpaceUse, audit_space};
+pub use colors::convert_page_images;
 
 use pdfcraft_cos::{Dict, Document, ImageBudget, MAX_PAGE_DECODED, ObjRef, Object, Stream, serialize};
 use pdfcraft_filters::{Filter, Params};

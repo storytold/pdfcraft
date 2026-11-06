@@ -45,6 +45,54 @@ impl PdfCraftApp {
     }
 }
 
+impl PdfCraftApp {
+    /// Preflight: the print-readiness report of the active document (it is not changed).
+    pub fn preflight_check(&mut self) {
+        self.preflight_report = self.active_ids().and_then(|(_, id)| self.session.get(id)).map(|d| d.print_readiness().text()).unwrap_or_default();
+    }
+}
+
+/// Preflight: what a press looks at (image resolution where drawn, page boxes and bleed, output
+/// intent, fonts not embedded, PDF/A-2b), verification only. Returns `true` to close.
+pub(crate) fn preflight_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
+    ui.label(egui::RichText::new(tl!("Preflight")).font(theme::semibold(18.0)));
+    ui.add_space(6.0);
+    egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+            ui.set_min_height(160.0);
+            for line in app.preflight_report.lines() {
+                // Findings that stop a print run stand out from the measurements.
+                let color = if line.contains("[fail]") {
+                    egui::Color32::from_rgb(0xD7, 0x37, 0x3F)
+                } else if line.contains("[warn]") {
+                    egui::Color32::from_rgb(0xD9, 0x8E, 0x04)
+                } else {
+                    t.text
+                };
+                ui.label(egui::RichText::new(line).monospace().color(color));
+            }
+        });
+    });
+    ui.add_space(10.0);
+    let mut close = false;
+    let mut again = false;
+    ui.horizontal(|ui| {
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if widgets::pill_button(ui, tl!("Close"), true).clicked() {
+                close = true;
+            }
+            if widgets::pill_button(ui, tl!("Verify"), false).clicked() {
+                again = true;
+            }
+        });
+    });
+    if again {
+        app.preflight_check();
+    }
+    close
+}
+
 /// Returns `true` to close.
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new("PDF/A").font(theme::semibold(18.0)));

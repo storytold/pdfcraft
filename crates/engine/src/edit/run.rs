@@ -140,6 +140,9 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddOcrText { .. }
         | Edit::SetDocumentScript { .. }
         | Edit::SetFieldScript { .. }
+        | Edit::AddPrinterMarks { .. }
+        | Edit::FixHairlines { .. }
+        | Edit::ConvertColors { .. }
         | Edit::RemoveStandardId { .. }
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
@@ -695,6 +698,34 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 Some(js) => pdfcraft_forms::recalculate_with(doc, js)?,
                 None => pdfcraft_forms::recalculate(doc)?,
             };
+        }
+        Edit::ConvertColors { pages, target } => {
+            let colours = pdfcraft_edit::convert_colors(doc, pages, *target)?;
+            let images = pdfcraft_optimize::convert_page_images(doc, pages, *target == crate::ColorTarget::Gray)
+                .map_err(|e| EditError::Invalid(e.to_string()))?;
+            if colours == 0 && images == 0 {
+                return Err(EditError::Invalid(
+                    "nothing to convert: the chosen pages have no device colours or RGB images outside the target".into(),
+                ));
+            }
+        }
+        Edit::FixHairlines { pages, threshold, replace } => {
+            if pdfcraft_edit::fix_hairlines(doc, pages, *threshold, *replace)? == 0 {
+                return Err(EditError::Invalid(format!("no lines thinner than {threshold} pt were found on the chosen pages")));
+            }
+        }
+        Edit::AddPrinterMarks { pages, marks, title } => {
+            // "D:20261019103000…" reads as "2026-10-19 10:30" on the page information line.
+            let when = cx
+                .date
+                .as_deref()
+                .and_then(|d| d.strip_prefix("D:"))
+                .and_then(|d| Some(format!("{}-{}-{} {}:{}", d.get(0..4)?, d.get(4..6)?, d.get(6..8)?, d.get(8..10)?, d.get(10..12)?)));
+            let info = |p: usize| match &when {
+                Some(w) => format!("{title}    Page {}    {w}", p.saturating_add(1)),
+                None => format!("{title}    Page {}", p.saturating_add(1)),
+            };
+            crate::printmarks::add_printer_marks(doc, pages, marks, &info)?;
         }
         Edit::ConvertPdfA { level } => {
             pdfcraft_preflight::convert(doc, *level).map_err(|e| EditError::Invalid(e.to_string()))?;

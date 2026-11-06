@@ -4355,6 +4355,56 @@ fn inserting_a_file_brings_its_bookmarks() {
     assert_eq!(kids, [("Annex intro", json!(2)), ("Annex table", json!(3))], "{list}");
 }
 
+/// Print production ▸ Add printer marks through tools: the chosen pages grow around their trim box.
+#[test]
+fn printer_marks_through_tools() {
+    let dir = workdir("printer-marks");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_printer_marks", json!({ "doc": doc, "pages": [2], "color_bars": false, "line_width": 0.5 }));
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    let width = |p: usize| info["pages"][p]["width"].as_f64().unwrap();
+    assert!(width(1) > width(0) + 40.0, "page 2 grew to hold the marks: {}", info["pages"]);
+    assert_eq!(width(0), width(2), "pages 1 and 3 untouched");
+    assert!(
+        a.call(
+            "page_printer_marks",
+            &json!({ "doc": doc, "crop": false, "bleed": false, "registration": false, "color_bars": false, "page_info": false })
+        )
+        .is_err()
+    );
+    assert!(a.call("page_printer_marks", &json!({ "doc": doc, "line_width": 0 })).is_err());
+}
+
+/// Print production ▸ Fix hairlines through tools: a text-only page has none; the 0.25 pt printer
+/// marks count as hairlines under a 0.5 pt threshold and are thickened, undoably.
+#[test]
+fn fixing_hairlines_through_tools() {
+    let dir = workdir("hairlines");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    assert!(a.call("page_fix_hairlines", &json!({ "doc": doc })).is_err(), "text only: nothing to fix");
+    ok(&mut a, "page_printer_marks", json!({ "doc": doc, "pages": [1] }));
+    assert!(a.call("page_fix_hairlines", &json!({ "doc": doc, "threshold": 0.2 })).is_err(), "0.25 pt is not under 0.2");
+    let r = ok(&mut a, "page_fix_hairlines", json!({ "doc": doc, "threshold": 0.5, "width": 0.75 }));
+    assert_eq!(r["undo"], "Fix hairlines", "{r}");
+    assert!(a.call("page_fix_hairlines", &json!({ "doc": doc, "threshold": 0.5, "width": 0.25 })).is_err(), "width under the threshold");
+}
+
+/// Print production ▸ Convert colors through tools: a text-only page has nothing to convert; the
+/// CMYK printer marks become grey; an unknown target is refused.
+#[test]
+fn converting_colors_through_tools() {
+    let dir = workdir("convert-colors");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    assert!(a.call("page_convert_colors", &json!({ "doc": doc, "to": "gray" })).is_err(), "nothing to convert");
+    ok(&mut a, "page_printer_marks", json!({ "doc": doc, "pages": [1] }));
+    let r = ok(&mut a, "page_convert_colors", json!({ "doc": doc, "to": "gray", "pages": [1] }));
+    assert_eq!(r["undo"], "Convert colors", "{r}");
+    assert!(a.call("page_convert_colors", &json!({ "doc": doc, "to": "lab" })).is_err());
+}
+
 #[test]
 fn replacing_pages_through_tools() {
     let dir = workdir("replace");

@@ -314,6 +314,9 @@ impl Automation {
                 self.apply(&a, Edit::DuplicatePages { pages, at })?
             }
             "page_set_box" => self.page_set_box(&a)?,
+            "page_printer_marks" => self.page_printer_marks(&a)?,
+            "page_convert_colors" => self.page_convert_colors(&a)?,
+            "page_fix_hairlines" => self.page_fix_hairlines(&a)?,
             "page_transition_set" => self.page_transition_set(&a)?,
             "doc_create" => self.doc_create(&a)?,
             "xfa_to_static" => self.apply(&a, Edit::XfaToStatic)?,

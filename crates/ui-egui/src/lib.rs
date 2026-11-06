@@ -61,6 +61,7 @@ mod panels;
 pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
+mod printmarks_ui;
 pub mod theme;
 mod widgets;
 
@@ -520,6 +521,8 @@ pub struct PdfCraftApp {
     pub cert_viewer: Option<sign_ui::CertViewer>,
     /// The last space audit.
     pub space_audit: Vec<pdfcraft_engine::optimize::SpaceUse>,
+    /// The last Preflight report (print readiness, verification only).
+    pub preflight_report: String,
     /// The document and edit generation `space_audit` was measured from.
     pub(crate) space_audit_of: Option<(DocId, u64)>,
     /// Combine files: the files staged so far.
@@ -624,6 +627,12 @@ pub struct PdfCraftApp {
     pub text_style_draft: bookmark_styles_ui::TextStyleDraft,
     /// Set Page Boxes dialog state.
     pub boxes_draft: pageboxes::BoxesDraft,
+    /// Print production ▸ Add printer marks: the dialog's choices.
+    pub printer_marks_draft: printmarks_ui::MarksDraft,
+    /// Print production ▸ Fix hairlines: the dialog's choices.
+    pub hairlines_draft: printmarks_ui::HairlinesDraft,
+    /// Print production ▸ Convert colors: the dialog's choices.
+    pub colors_draft: printmarks_ui::ColorsDraft,
     /// Header & footer / watermark / background dialog state.
     pub marks_draft: marks_ui::MarksDraft,
     /// The Update dialogs' preview page without the marks they replace.

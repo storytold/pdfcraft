@@ -182,8 +182,16 @@ pub enum Dialog {
     CreateStamp,
     /// Prepare for accessibility ▸ Add alternate text.
     AltText,
-    /// PDF Optimizer ▸ Audit space usage (then back to the optimizer).
-    AuditSpace,
+    /// Audit space usage: from the PDF Optimizer (`true`, back to it after) or All tools.
+    AuditSpace(bool),
+    /// Print production ▸ Preflight: the print-readiness report.
+    Preflight,
+    /// Print production ▸ Add printer marks.
+    PrinterMarks,
+    /// Print production ▸ Fix hairlines.
+    FixHairlines,
+    /// Print production ▸ Convert colors.
+    ConvertColors,
     /// Signatures ▸ Show certificate.
     CertificateViewer,
     /// Pin tools to Home: selection modal.

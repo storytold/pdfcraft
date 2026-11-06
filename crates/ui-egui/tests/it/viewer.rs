@@ -1295,6 +1295,40 @@ fn optimizer_audits_space_usage() {
     assert_eq!(h.state().dialog, Some(Dialog::Optimize), "back to the optimizer");
 }
 
+/// All tools ▸ Compress a PDF ▸ Audit space usage opens the audit on its own, and OK closes it
+/// instead of opening the optimizer.
+#[test]
+fn audit_space_usage_from_all_tools_closes_on_ok() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("optimize.audit"));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::AuditSpace(false)));
+    h.get_by_label("Space Audit");
+    h.get_by_label("Content Streams");
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None, "closed, not the optimizer");
+}
+
+/// Print production ▸ Preflight shows the print-readiness report of the open document, and
+/// Verify runs it again.
+#[test]
+fn preflight_shows_the_print_readiness_report() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("preflight.run"));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::Preflight));
+    let report = h.state().preflight_report.clone();
+    assert!(report.starts_with("Print readiness"), "{report}");
+    assert!(report.contains("Page 1: media"), "{report}");
+    h.get_by_label("Verify").click();
+    h.run_steps(2);
+    assert_eq!(h.state().preflight_report, report, "the same document gives the same report");
+    h.get_by_label("Close").click();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, None);
+}
+
 #[test]
 fn space_audit_numbers_line_up_under_their_headers() {
     // The percentages were drawn at the dialog's far edge, away from their header and the

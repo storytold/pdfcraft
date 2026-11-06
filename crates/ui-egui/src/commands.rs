@@ -223,6 +223,17 @@ impl PdfCraftApp {
             "protect.remove_hidden" => self.open_remove_hidden(),
             "print.dialog" => self.open_print(),
             "optimize.advanced" => self.dialog = Some(Dialog::Optimize),
+            "prepress.marks" => self.dialog = Some(Dialog::PrinterMarks),
+            "prepress.hairlines" => self.dialog = Some(Dialog::FixHairlines),
+            "prepress.convert_colors" => self.dialog = Some(Dialog::ConvertColors),
+            "optimize.audit" => {
+                self.space_audit = self.active_ids().and_then(|(_, id)| self.session.get(id)).map(|d| d.audit_space()).unwrap_or_default();
+                self.dialog = Some(Dialog::AuditSpace(false));
+            }
+            "preflight.run" => {
+                self.preflight_check();
+                self.dialog = Some(Dialog::Preflight);
+            }
             "doc.compare" => self.dialog = Some(Dialog::CompareFiles),
             "standards.pdfa" => {
                 self.pdfa.issues = None;

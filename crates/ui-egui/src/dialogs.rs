@@ -43,6 +43,9 @@ struct Pending {
     link_command: Option<&'static str>,
     protect_now: bool,
     boxes_now: bool,
+    printer_marks_now: bool,
+    hairlines_now: bool,
+    colors_now: bool,
     marks_now: bool,
     export_now: bool,
     props_now: bool,
@@ -253,7 +256,7 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.close = ok || cancel;
             if std::mem::take(&mut app.optimize_draft.audit) {
                 app.refresh_space_audit();
-                req.next = Some(Dialog::AuditSpace);
+                req.next = Some(Dialog::AuditSpace(true));
             }
             return false;
         }
@@ -262,10 +265,19 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
                 return false;
             }
         }
-        Dialog::AuditSpace => {
+        Dialog::AuditSpace(back) => {
             if crate::optimize_ui::audit_body(ui, &app.space_audit, &t) {
-                req.next = Some(Dialog::Optimize);
+                if back {
+                    req.next = Some(Dialog::Optimize);
+                } else {
+                    req.close = true;
+                }
             }
+            return false;
+        }
+        Dialog::Preflight => {
+            ui.set_width(640.0);
+            req.close = crate::standards_ui::preflight_body(ui, app, &t);
             return false;
         }
         Dialog::Sign => {
@@ -412,6 +424,27 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.apply = go;
             req.marks_now = req.apply;
             req.close = req.apply || cancel;
+            return false;
+        }
+        Dialog::ConvertColors => {
+            ui.set_width(380.0);
+            let (apply, cancel) = crate::printmarks_ui::colors_body(ui, app, &t);
+            req.colors_now = apply;
+            req.close = apply || cancel;
+            return false;
+        }
+        Dialog::FixHairlines => {
+            ui.set_width(380.0);
+            let (apply, cancel) = crate::printmarks_ui::hairlines_body(ui, app, &t);
+            req.hairlines_now = apply;
+            req.close = apply || cancel;
+            return false;
+        }
+        Dialog::PrinterMarks => {
+            ui.set_width(380.0);
+            let (apply, cancel) = crate::printmarks_ui::body(ui, app, &t);
+            req.printer_marks_now = apply;
+            req.close = apply || cancel;
             return false;
         }
         Dialog::PageBoxes => {
@@ -1931,6 +1964,15 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
         let count = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
         let edit = crate::marks_ui::edit(&app.marks_draft, kind, count);
         app.apply_edit(edit);
+    }
+    if req.printer_marks_now {
+        app.apply_printer_marks();
+    }
+    if req.hairlines_now {
+        app.apply_fix_hairlines();
+    }
+    if req.colors_now {
+        app.apply_convert_colors();
     }
     if req.boxes_now
         && let Some((i, id)) = app.active_ids()

@@ -1047,6 +1047,54 @@ pub fn tools() -> Vec<ToolDef> {
             &["doc"],
         )),
         t(
+            "page_printer_marks",
+            "Add printer marks",
+            "Print production ▸ Add printer marks: crop marks at the trim corners, bleed marks, registration targets, CMYK colour bars and a page information line (file name, page, date), drawn in all process inks outside the trim box. The media and crop boxes grow around the trim box to hold them; the trim and bleed boxes stay. Every kind is on unless set to false. Undoable.",
+        )
+        .cmd("prepress.marks")
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "pages": pages("to mark (default: all)"),
+                "crop": { "type": "boolean" },
+                "bleed": { "type": "boolean" },
+                "registration": { "type": "boolean" },
+                "color_bars": { "type": "boolean" },
+                "page_info": { "type": "boolean" },
+                "line_width": { "type": "number", "exclusiveMinimum": 0, "maximum": 4, "description": "Points (default 0.25)." },
+            }),
+            &["doc"],
+        )),
+        t(
+            "page_convert_colors",
+            "Convert colors",
+            "Print production ▸ Convert colors: the page colours set with device colour operators (grey, RGB, CMYK) and the RGB images drawn on the pages become grayscale (`to`: \"gray\") or CMYK (\"cmyk\"), with simple device formulas (luminance 0.3/0.59/0.11; CMYK with full grey-component replacement), not an ICC conversion. ICC-based and spot colour spaces, shadings, forms, patterns and annotations are not changed. Fails when nothing was converted. Undoable.",
+        )
+        .cmd("prepress.convert_colors")
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "pages": pages("to convert (default: all)"),
+                "to": { "type": "string", "enum": ["gray", "cmyk"] },
+            }),
+            &["doc", "to"],
+        )),
+        t(
+            "page_fix_hairlines",
+            "Fix hairlines",
+            "Print production ▸ Fix hairlines: every line width that lands on the page under `threshold` points (default 0.25), or is 0 (the device's thinnest line), becomes `width` points (default: the threshold). Widths are measured after the page's transformations. Line widths in graphics state dictionaries, form XObjects, patterns and Type 3 glyphs are not changed. Fails when nothing was thinner. Undoable.",
+        )
+        .cmd("prepress.hairlines")
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "pages": pages("to fix (default: all)"),
+                "threshold": { "type": "number", "exclusiveMinimum": 0, "maximum": 72 },
+                "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 72 },
+            }),
+            &["doc"],
+        )),
+        t(
             "page_set_box",
             "Set page boxes / crop",
             "Set a page box (crop by default; also trim, bleed, art, media) on pages: either margins in points from the media box [left, bottom, right, top], or an absolute rect in points from the top-left of the displayed page. Omit both to reset the box to its default. Undoable.",
@@ -1276,6 +1324,7 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc(), "level": { "type": "string", "enum": ["2b", "3b"], "description": "Default 2b." } }), &["doc"])),
         t("print_readiness", "Print readiness", "Verification only. Reports effective image resolution where each image is drawn (not against the page size), page boxes and bleed past the trim, output intents, fonts that are not embedded, and the PDF/A-2b structural result. Does not modify the document, embed fonts, invent a press profile, or check PDF/X.")
             .ro()
+            .cmd("preflight.run")
             .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("pdfa_convert", "Save as PDF/A", "Standards ▸ Save as PDF/A: fix what can be fixed for PDF/A-2b or 3b (XMP identification and metadata, an sRGB output intent, forbidden actions and JavaScript, annotation print flags, image interpolation, encryption). Returns what was fixed and what remains (e.g. fonts that aren't embedded). Undoable; save the document to keep it.")
             .cmd("standards.pdfa")
@@ -1437,7 +1486,7 @@ pub fn tools() -> Vec<ToolDef> {
         )),
         t("doc_audit_space", "Audit space usage", "How many bytes each kind of content takes and its share of the file (PDF Optimizer ▸ Audit space usage): images, content streams, fonts, forms, comments, structure, bookmarks, … and document overhead.")
             .ro()
-            .cmd("optimize.advanced")
+            .cmd("optimize.audit")
             .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("text_lines", "List text lines", "The lines of existing text on a page (Edit a PDF ▸ Edit text): number, text, box (top-left-origin points), font and size. Use the number with text_edit.")
             .ro()

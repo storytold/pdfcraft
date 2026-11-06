@@ -162,7 +162,7 @@ fn space_audit_tab_measures_the_file_and_stays_in_the_card() {
     // in the tab and in the Optimizer's own Audit Space Usage dialog.
     let tab = card(&h, "dialog");
     assert!((tab.width() - fonts.width()).abs() < 0.5, "space audit card {tab:?}, fonts card {fonts:?}");
-    for h in [h, open(Dialog::AuditSpace)] {
+    for h in [h, open(Dialog::AuditSpace(true))] {
         let card = card(&h, "dialog");
         let pct = h.get_by_label("Percentage").rect();
         assert!(pct.right() <= card.right() - 16.0, "Percentage {pct:?} in {card:?}");

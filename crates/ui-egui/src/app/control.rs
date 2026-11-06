@@ -110,6 +110,9 @@ impl PdfCraftApp {
                     "split" => Some(Dialog::Split),
                     "protect" => Some(Dialog::Protect),
                     "page-boxes" => Some(Dialog::PageBoxes),
+                    "printer-marks" => Some(Dialog::PrinterMarks),
+                    "fix-hairlines" => Some(Dialog::FixHairlines),
+                    "convert-colors" => Some(Dialog::ConvertColors),
                     "header-footer" => Some(Dialog::Marks(pdfcraft_engine::MarkKind::HeaderFooter)),
                     "watermark" => Some(Dialog::Marks(pdfcraft_engine::MarkKind::Watermark)),
                     "background" => Some(Dialog::Marks(pdfcraft_engine::MarkKind::Background)),
@@ -125,6 +128,10 @@ impl PdfCraftApp {
                     "compare-files" => Some(Dialog::CompareFiles),
                     "action-wizard" => Some(Dialog::ActionWizard),
                     "pdfa" => Some(Dialog::PdfA),
+                    "preflight" => {
+                        self.preflight_check();
+                        Some(Dialog::Preflight)
+                    }
                     "signature" => Some(Dialog::Signature),
                     "optimize" => Some(Dialog::Optimize),
                     "sign" | "certify" => {

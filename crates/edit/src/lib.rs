@@ -38,6 +38,10 @@ pub enum EditError {
 
 pub type Rgb = [f64; 3];
 
+mod colors;
+pub use colors::{ColorTarget, cmyk_to_gray, convert_colors, rgb_to_cmyk, rgb_to_gray};
+mod hairlines;
+pub use hairlines::fix_hairlines;
 pub mod backdrop;
 pub use backdrop::{Backdrop, backdrops_left_off, page_backdrop, page_backdrops};
 pub use text::strip_subset_tag;

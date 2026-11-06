@@ -102,6 +102,52 @@ impl Automation {
         let display = a.opt_num("display")?.map(|s| s as f32);
         self.apply(a, Edit::SetTransition { pages, spec: TransitionSpec { transition, display } })
     }
+    /// Print production ▸ Add printer marks (every kind unless turned off).
+    pub(crate) fn page_printer_marks(&mut self, a: &Args) -> Result<Value> {
+        let doc = self.doc(a)?;
+        let (n, title) = (doc.info.pages.len(), doc.name.clone());
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..n).collect(),
+        };
+        let on = |key: &str| -> Result<bool> { Ok(a.opt_bool(key)?.unwrap_or(true)) };
+        let line_width = a.opt_num("line_width")?.unwrap_or(0.25);
+        if !(line_width.is_finite() && line_width > 0.0 && line_width <= 4.0) {
+            return Err(ToolError::InvalidArgs("line_width must be more than 0 and at most 4 points".into()));
+        }
+        let marks = pdfcraft_engine::PrinterMarks {
+            crop: on("crop")?,
+            bleed: on("bleed")?,
+            registration: on("registration")?,
+            color_bars: on("color_bars")?,
+            page_info: on("page_info")?,
+            line_width,
+        };
+        self.apply(a, Edit::AddPrinterMarks { pages, marks, title })
+    }
+    /// Print production ▸ Convert colors (gray or CMYK).
+    pub(crate) fn page_convert_colors(&mut self, a: &Args) -> Result<Value> {
+        let n = self.doc(a)?.info.pages.len();
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..n).collect(),
+        };
+        let target = a.str("to")?;
+        let target = pdfcraft_engine::ColorTarget::from_key(target)
+            .ok_or_else(|| ToolError::InvalidArgs(format!("to must be \"gray\" or \"cmyk\", not {target:?}")))?;
+        self.apply(a, Edit::ConvertColors { pages, target })
+    }
+    /// Print production ▸ Fix hairlines (widen lines thinner than `threshold`).
+    pub(crate) fn page_fix_hairlines(&mut self, a: &Args) -> Result<Value> {
+        let n = self.doc(a)?.info.pages.len();
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..n).collect(),
+        };
+        let threshold = a.opt_num("threshold")?.unwrap_or(0.25);
+        let replace = a.opt_num("width")?.unwrap_or(threshold);
+        self.apply(a, Edit::FixHairlines { pages, threshold, replace })
+    }
 
     pub(crate) fn page_set_box(&mut self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::{BoxSpec, PageBox};

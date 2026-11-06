@@ -3281,6 +3281,31 @@ fn images_are_not_resampled_when_some_uses_could_not_be_measured() {
     assert_eq!(effective_resolutions(&doc, &refs)[&img], f64::INFINITY);
 }
 
+/// Print production ▸ Convert colors on images: RGB images (Flate and JPEG) drawn on the chosen
+/// page become grey or CMYK; grey images and other pages are left alone.
+#[test]
+fn convert_colors_turns_rgb_images_grey_or_cmyk() {
+    let mut doc = Document::new_empty();
+    let rgb = image(&mut doc, 20, 10, 3, false, None);
+    let photo = image(&mut doc, 16, 16, 3, true, None);
+    let grey = image(&mut doc, 8, 8, 1, false, None);
+    let other = image(&mut doc, 8, 8, 3, false, None);
+    page(&mut doc, &[("Im1", rgb), ("Im2", photo), ("Im3", grey)], "q 100 0 0 100 0 0 cm /Im1 Do Q");
+    page(&mut doc, &[("Im4", other)], "q 100 0 0 100 0 0 cm /Im4 Do Q");
+    assert_eq!(pdfcraft_optimize::convert_page_images(&mut doc, &[0], true).unwrap(), 2);
+    let s = stream(&doc, rgb);
+    assert_eq!(s.dict.get(b"ColorSpace").and_then(Object::as_name), Some(b"DeviceGray".as_slice()));
+    assert_eq!(s.decoded().unwrap().len(), 20 * 10);
+    assert_eq!(stream(&doc, photo).dict.get(b"Filter").and_then(Object::as_name), Some(b"FlateDecode".as_slice()));
+    assert_eq!(stream(&doc, grey).dict.get(b"ColorSpace").and_then(Object::as_name), Some(b"DeviceGray".as_slice()));
+    assert_eq!(stream(&doc, other).dict.get(b"ColorSpace").and_then(Object::as_name), Some(b"DeviceRGB".as_slice()), "page 2 untouched");
+    assert_eq!(pdfcraft_optimize::convert_page_images(&mut doc, &[1], false).unwrap(), 1);
+    let s = stream(&doc, other);
+    assert_eq!(s.dict.get(b"ColorSpace").and_then(Object::as_name), Some(b"DeviceCMYK".as_slice()));
+    assert_eq!(s.decoded().unwrap().len(), 8 * 8 * 4);
+    assert_eq!(pdfcraft_optimize::convert_page_images(&mut doc, &[0], true).unwrap(), 0, "nothing left to convert");
+}
+
 /// Each form entry counts against the page's form allowance, even for a form that decodes to
 /// nothing and so costs no decoded bytes.
 #[test]
