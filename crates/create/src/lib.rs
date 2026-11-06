@@ -520,147 +520,123 @@ fn le16(b: &[u8], at: usize) -> Option<u16> {
     b.get(at..at + 2).map(|x| u16::from_le_bytes([x[0], x[1]]))
 }
 
-/// A PCX image. The 128-byte header fixes the picture: width and height are `Xmax-Xmin+1`
-/// and `Ymax-Ymin+1` (bytes 4-11), resolution at 12 and 14, plane count at 65 and bytes
-/// per line at 66-67. With 8 bits per plane, one plane per colour (a 24-bit image, as the
-/// test's 4×2 image), or a palette image of one-bit planes; the bytes in the body are
-/// run-length coded, plane by plane, row by row.
+/// How a PCX image holds its pixels: bits per plane and planes.
+#[derive(Clone, Copy, PartialEq)]
+enum PcxLayout {
+    /// One byte per pixel per colour: each scanline has a red, a green and a blue row.
+    Rgb,
+    /// One byte per pixel, an index into the palette after the image (grey without one).
+    Indexed,
+    /// One bit per pixel in each of 1 to 4 planes, an index into the header's palette.
+    Bits(usize),
+}
+
+impl PcxLayout {
+    fn of(bits: u8, planes: usize) -> Option<PcxLayout> {
+        match (bits, planes) {
+            (8, 3) => Some(PcxLayout::Rgb),
+            (8, 1) => Some(PcxLayout::Indexed),
+            (1, 1..=4) => Some(PcxLayout::Bits(planes)),
+            _ => None,
+        }
+    }
+}
+
+/// The palette of a PCX image, and where its run-length coded scanlines end. An 8-bit image ends
+/// with a 0x0C byte and 256 colours; a one-plane bit image is black and white whatever its header
+/// holds; other bit images use the 16 colours at byte 16.
+fn pcx_palette(bytes: &[u8], layout: PcxLayout) -> (Vec<u8>, usize) {
+    match layout {
+        PcxLayout::Rgb => (Vec::new(), bytes.len()),
+        PcxLayout::Indexed => match bytes.len().checked_sub(769).filter(|at| *at >= 128 && bytes.get(*at) == Some(&0x0C)) {
+            Some(at) => (bytes.get(at + 1..).unwrap_or_default().to_vec(), at),
+            None => ((0..=255u8).flat_map(|v| [v, v, v]).collect(), bytes.len()),
+        },
+        PcxLayout::Bits(1) => (vec![0, 0, 0, 255, 255, 255], bytes.len()),
+        PcxLayout::Bits(_) => (bytes.get(16..64).unwrap_or_default().to_vec(), bytes.len()),
+    }
+}
+
+/// The `rows` scanlines of `line` bytes each, decoded. A run may cross from one plane's row into the
+/// next, but not out of its scanline.
+fn pcx_scanlines(mut body: &[u8], rows: usize, line: usize) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(rows.checked_mul(line)?).ok()?;
+    for row in 1..=rows {
+        let end = row * line;
+        while out.len() < end {
+            let (&c, rest) = body.split_first()?;
+            body = rest;
+            if c < 0xC0 {
+                out.push(c);
+                continue;
+            }
+            let (&value, rest) = body.split_first()?;
+            body = rest;
+            let count = usize::from(c & 0x3F);
+            if count > end - out.len() {
+                return None;
+            }
+            out.resize(out.len() + count, value);
+        }
+    }
+    Some(out)
+}
+
+/// The RGB samples of the `w` pixels of scanline `row` (planes `stride` bytes apart).
+fn pcx_row(out: &mut Vec<u8>, row: &[u8], w: usize, stride: usize, layout: PcxLayout, palette: &[u8]) {
+    let at = |i: usize| row.get(i).copied().unwrap_or(0);
+    for x in 0..w {
+        let index = match layout {
+            PcxLayout::Rgb => {
+                out.extend([at(x), at(stride + x), at(2 * stride + x)]);
+                continue;
+            }
+            PcxLayout::Indexed => usize::from(at(x)),
+            PcxLayout::Bits(planes) => (0..planes).fold(0, |index, k| index | (usize::from(at(k * stride + x / 8) >> (7 - x % 8) & 1) << k)),
+        };
+        out.extend((0..3).map(|c| palette.get(index * 3 + c).copied().unwrap_or(0)));
+    }
+}
+
+/// A PCX image: a 128-byte header (size at 4-11, resolution at 12 and 14, plane count at 65, bytes
+/// per plane row at 66), then run-length coded scanlines, each holding one row of every plane.
 fn pcx(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     let bad = |m: &str| CreateError::Image(name.into(), m.into());
-    if bytes.len() < 128 {
+    let header = bytes.get(..128).ok_or_else(|| bad("a damaged PCX header"))?;
+    let word = |at: usize| le16(header, at).unwrap_or(0);
+    let byte = |at: usize| header.get(at).copied().unwrap_or(0);
+    let (bits, planes, stride) = (byte(3), usize::from(byte(65)), usize::from(word(66)));
+    let (Some(w), Some(h)) = (word(8).checked_sub(word(4)), word(10).checked_sub(word(6))) else {
         return Err(bad("a damaged PCX header"));
-    }
-    let bits = bytes.get(3).copied().unwrap_or(0);
-    let xmin = le16(bytes, 4).unwrap_or(0);
-    let ymin = le16(bytes, 6).unwrap_or(0);
-    let xmax = le16(bytes, 8).unwrap_or(0);
-    let ymax = le16(bytes, 10).unwrap_or(0);
-    let (w, h) = if xmax >= xmin && ymax >= ymin { (u32::from(xmax - xmin) + 1, u32::from(ymax - ymin) + 1) } else { (0, 0) };
-    let header_planes = bytes.get(65).copied().unwrap_or(0);
-    let header_bpl = le16(bytes, 66).unwrap_or(0);
-    // The preserved test fixture writes planes/stride at the old palette offsets
-    // (bytes 18, 20-21) and leaves the real header fields at zero. Prefer the real
-    // fields; fall back to the fixture offsets only when those are absent.
-    let (planes, bytes_per_line_raw) = if header_planes != 0 && header_bpl != 0 {
-        (u16::from(header_planes), header_bpl)
-    } else {
-        (u16::from(bytes.get(18).copied().unwrap_or(0)), le16(bytes, 20).unwrap_or(0))
     };
-    let (dpi_x, dpi_y) = (le16(bytes, 12).unwrap_or(0), le16(bytes, 14).unwrap_or(0));
-    let bytes_per_line = usize::try_from(bytes_per_line_raw).unwrap_or(0);
-    let dpi = (f64::from(dpi_x), f64::from(dpi_y));
-    let dpi = if dpi.0 > 0.0 && dpi.1 > 0.0 { dpi } else { (72.0, 72.0) };
-    if w == 0 || h == 0 || planes == 0 || bytes_per_line == 0 {
+    let (w, h) = (usize::from(w) + 1, usize::from(h) + 1);
+    if planes == 0 || stride == 0 {
         return Err(bad("a damaged PCX header"));
     }
-    let (n, palette) = match (bits, planes) {
-        (8, 3) => (3usize, None),
-        (1, p) if (1..=4).contains(&p) => (1usize, Some(p as usize)),
-        _ => return Err(bad("this PCX plane layout is not supported")),
-    };
-    // One-bit planes are bit-packed: each row holds ceil(w/8) bytes, not w bytes. The
-    // decoded body is therefore bytes_per_line bytes per row per plane, which may include
-    // padding at the end of each row.
-    if u64::try_from(bytes_per_line).unwrap_or(u64::MAX) < (u64::from(w) * u64::from(bits) + 7) / 8 {
+    let layout = PcxLayout::of(bits, planes).ok_or_else(|| bad("this PCX plane layout is not supported"))?;
+    if stride < (w * usize::from(bits)).div_ceil(8) {
         return Err(bad("a damaged PCX header"));
     }
-    let px = u64::from(planes) * u64::try_from(bytes_per_line).unwrap_or(u64::MAX) * u64::from(h);
-    let out_px = u64::from(w) * u64::from(h) * 3;
-    if px == 0 || w > 100_000 || h > 100_000 || px > MAX_DECODED_BYTES as u64 || out_px > MAX_DECODED_BYTES as u64 {
+    let line = planes * stride;
+    if line.saturating_mul(h) > MAX_DECODED_BYTES || w.saturating_mul(h).saturating_mul(3) > MAX_DECODED_BYTES {
         return Err(bad("unusual PCX image size"));
     }
-    // De-RLE the whole body. Each plane in turn, row by row, so a run never crosses a plane.
-    let header = 128usize;
-    let mut body = &bytes[header..];
-    let mut plane = Vec::new();
-    plane.try_reserve_exact(usize::try_from(px).unwrap_or(0)).map_err(|_| bad("not enough memory for this image"))?;
-    let mut total = 0usize;
-    'planes: for _ in 0..planes {
-        for _ in 0..h {
-            let mut line = 0usize;
-            while line < bytes_per_line {
-                let Some(&c) = body.first() else { break 'planes };
-                body = &body[1..];
-                if c >= 0xC0 {
-                    let Some(&b) = body.first() else { break 'planes };
-                    body = &body[1..];
-                    let count = usize::from(c & 0x3F);
-                    total = total.saturating_add(count);
-                    if total > usize::try_from(px).unwrap_or(usize::MAX) || bytes_per_line - line < count {
-                        return Err(bad("a damaged PCX body"));
-                    }
-                    for _ in 0..count {
-                        plane.push(b);
-                    }
-                    line += count;
-                } else {
-                    total = total.saturating_add(1);
-                    if total > usize::try_from(px).unwrap_or(usize::MAX) {
-                        return Err(bad("a damaged PCX body"));
-                    }
-                    plane.push(c);
-                    line += 1;
-                }
-            }
-        }
+    let (palette, end) = pcx_palette(bytes, layout);
+    let body = bytes.get(128..end).unwrap_or_default();
+    let scanlines = pcx_scanlines(body, h, line).ok_or_else(|| bad("a damaged PCX body"))?;
+    let mut data = Vec::new();
+    data.try_reserve_exact(w * h * 3).map_err(|_| bad("not enough memory for this image"))?;
+    for row in scanlines.chunks_exact(line) {
+        pcx_row(&mut data, row, w, stride, layout, &palette);
     }
-    if total != usize::try_from(px).unwrap_or(usize::MAX) {
-        return Err(bad("a damaged PCX body"));
-    }
+    let dpi = (f64::from(word(12)), f64::from(word(14)));
+    let dpi = if dpi.0 > 0.0 && dpi.1 > 0.0 { dpi } else { (72.0, 72.0) };
     let mut d = Dict::new();
-    let data = {
-        if n == 3 {
-            let (wus, hus) = (usize::try_from(w).unwrap_or(0), usize::try_from(h).unwrap_or(0));
-            let plane_len = bytes_per_line * hus;
-            let mut out = Vec::new();
-            out.try_reserve_exact(wus * hus * 3).map_err(|_| bad("not enough memory for this image"))?;
-            for row in 0..hus {
-                for col in 0..wus {
-                    for k in 0..3 {
-                        let pos = k * plane_len + row * bytes_per_line + col;
-                        out.push(plane.get(pos).copied().unwrap_or(0));
-                    }
-                }
-            }
-            out
-        } else {
-            let (wus, hus) = (usize::try_from(w).unwrap_or(0), usize::try_from(h).unwrap_or(0));
-            // One-bit planes are bit-packed MSB-first, bytes_per_line bytes per row for each
-            // plane. Unpack those rows into palette indices; the header holds the palette
-            // at bytes 16 onward (3 bytes per colour, 48 bytes for 4 planes). A
-            // monochrome file whose header palette is all zero falls back to black/white.
-            let planes = palette.unwrap_or(0);
-            let pal_len = (1usize << planes) * 3;
-            let mut palette_vec = bytes.get(16..16 + pal_len).unwrap_or(&[]).to_vec();
-            if planes == 1 && palette_vec.iter().all(|&v| v == 0) {
-                palette_vec = vec![0, 0, 0, 255, 255, 255];
-            }
-            let palette_bytes = palette_vec.as_slice();
-            let plane_len = bytes_per_line * hus;
-            let mut out = Vec::new();
-            out.try_reserve_exact(wus * hus * 3).map_err(|_| bad("not enough memory for this image"))?;
-            for row in 0..hus {
-                for col in 0..wus {
-                    let byte_pos = col / 8;
-                    let bit_pos = 7 - (col % 8);
-                    let mut idx = 0u8;
-                    for k in 0..planes {
-                        let row_base = k * plane_len + row * bytes_per_line;
-                        let byte = plane.get(row_base + byte_pos).copied().unwrap_or(0);
-                        idx |= ((byte >> bit_pos) & 1) << k;
-                    }
-                    let base = usize::from(idx) * 3;
-                    for col in 0..3 {
-                        out.push(palette_bytes.get(base + col).copied().unwrap_or(0));
-                    }
-                }
-            }
-            out
-        }
-    };
     d.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
     d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
-    Ok(Embedded { dict: d, data, filtered: false, smask: None, icc: None, px: (w, h), dpi })
+    let px = (u32::try_from(w).unwrap_or(0), u32::try_from(h).unwrap_or(0));
+    Ok(Embedded { dict: d, data, filtered: false, smask: None, icc: None, px, dpi })
 }
 
 /// Largest GIF logical screen, in pixels (4096×4096).
@@ -772,13 +748,10 @@ pub enum SourceKind {
 /// File extensions Create converts to PDF (images and plain text).
 pub const CONVERTIBLE: [&str; 13] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "pcx", "txt", "text"];
 
-/// A PCX file's manufacturer (byte 0), version (byte 1), encoding (byte 2) and bits per
-/// plane (byte 3); it is only an image when its body is RLE data, which `pcx` checks.
+/// A PCX file: its manufacturer byte, a version (1 was never used), run-length coding and 1 or 8
+/// bits per plane. `pcx` says when the rest of the header isn't one it can read.
 fn is_pcx(bytes: &[u8]) -> bool {
-    matches!(bytes.first(), Some(0x0A) | Some(0x0C) | Some(0x0D))
-        && bytes.get(1).is_some_and(|v| (4..=5).contains(v))
-        && bytes.get(2) == Some(&1)
-        && matches!(bytes.get(3), Some(1 | 8))
+    bytes.first() == Some(&0x0A) && matches!(bytes.get(1), Some(0 | 2..=5)) && bytes.get(2) == Some(&1) && matches!(bytes.get(3), Some(1 | 8))
 }
 
 /// A classic TIFF or a BigTIFF (version 43), in either byte order.
