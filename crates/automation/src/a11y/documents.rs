@@ -22,7 +22,7 @@ impl Automation {
         if !export.truncated_pages.is_empty() {
             use pdfcraft_engine::compare::{MAX_FORM_DEPTH, MAX_FORM_VISITS};
             out["warnings"] = json!([format!(
-                "pictures past what one export may hold or decode, forms nested more than {MAX_FORM_DEPTH} deep or past the first {MAX_FORM_VISITS} forms of a page (forms the page draws itself count too), or (Word, where it keeps a page's layout) lines and boxes, fields or list items past what a Word page holds, were left out on the pages in truncated_pages: what was left out (for those forms, their text and images) is missing from the export, although the viewer may still show it"
+                "content past what one page may decode, pictures past what one export may hold or decode, forms nested more than {MAX_FORM_DEPTH} deep or past the first {MAX_FORM_VISITS} forms of a page (forms the page draws itself count too), or (Word, where it keeps a page's layout) lines and boxes, fields or list items past what a Word page holds, were left out on the pages in truncated_pages: what was left out (for that content, its text; for those forms, their text and images) is missing from the export, although the viewer may still show it"
             )]);
         }
         Ok(out)

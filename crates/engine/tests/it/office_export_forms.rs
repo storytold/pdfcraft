@@ -379,3 +379,27 @@ fn a_page_of_more_fields_than_word_holds_prepares_only_those() {
     assert_eq!(d.export_pages()[0].fields.len(), limit);
     assert_eq!(d.export_office_checked(OfficeFormat::Docx).truncated_pages, [0]);
 }
+
+/// A page whose text can't be read at all, its content being past the page's decode budget, is
+/// listed as cut short in every format, flowing or not: the reader's error left the export
+/// without the page's text and without a word.
+#[test]
+fn every_format_reports_a_page_whose_text_it_cannot_read() {
+    // One 1 MiB content stream drawn 300 times is more than the page's decode budget.
+    let refs = "5 0 R ".repeat(300);
+    let doc = pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents [4 0 R {refs}] /Resources << /Font << /F1 6 0 R >> >> >>"),
+        stream("", "BT /F1 12 Tf 10 100 Td (Lost) Tj ET"),
+        stream("", &" ".repeat(1 << 20)),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+    ]);
+    const { assert!(300 << 20 > pdfcraft_cos::MAX_PAGE_DECODED) };
+    let mut s = Session::new();
+    let id = s.open("unreadable.pdf", None, Arc::new(doc), None).unwrap();
+    let d = s.get(id).unwrap();
+    for format in [OfficeFormat::Html, OfficeFormat::Rtf, OfficeFormat::Docx] {
+        assert_eq!(d.export_office_checked(format).truncated_pages, [0], "{format:?}");
+    }
+}

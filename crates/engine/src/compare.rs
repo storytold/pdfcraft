@@ -194,9 +194,10 @@ impl OfficeFormat {
 pub struct OfficeExport {
     /// The exported file.
     pub bytes: Vec<u8>,
-    /// Pages (0-based) the export left something out of to stay bounded on hostile files: forms
-    /// nested deeper than [`MAX_FORM_DEPTH`] or more of them than [`MAX_FORM_VISITS`] (their text
-    /// and images are missing from `bytes`), pictures past [`MAX_EXPORT_IMAGE_BYTES`] or past what
+    /// Pages (0-based) the export left something out of to stay bounded on hostile files: content
+    /// past what one page may decode (its text is missing from `bytes`), forms nested deeper than
+    /// [`MAX_FORM_DEPTH`] or more of them than [`MAX_FORM_VISITS`] (their text and images are
+    /// missing), pictures past [`MAX_EXPORT_IMAGE_BYTES`] or past what
     /// one export may decode (those pictures are missing), or, on a page whose layout Word keeps,
     /// paths past [`pdfcraft_edit::MAX_PAGE_SHAPES`] or that couldn't be read, and shapes, points,
     /// fields or list items past what a Word page holds ([`pdfcraft_export::docx_checked`]: only
@@ -461,11 +462,13 @@ impl crate::Document {
                 let crop_width = f64::from(info.crop[2] - info.crop[0]);
                 let display_width = f64::from(if info.rotation % 180 == 0 { info.width } else { info.height });
                 let unit = if crop_width > 0.0 && crop_width.is_finite() && display_width.is_finite() { display_width / crop_width } else { 1.0 };
-                // Word also places a positioned page's text line by line.
+                // Word also places a positioned page's text line by line. A page whose text can't be
+                // read at all (its content is past the decode budget) lost it, and is listed.
+                let unread = || pdfcraft_edit::ReadingBlocks { truncated: true, ..Default::default() };
                 let (reading, lines) = if art {
-                    pdfcraft_edit::reading_blocks_and_lines_checked(cos, i).unwrap_or_default()
+                    pdfcraft_edit::reading_blocks_and_lines_checked(cos, i).unwrap_or_else(|_| (unread(), Vec::new()))
                 } else {
-                    (pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_default(), Vec::new())
+                    (pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_else(|_| unread()), Vec::new())
                 };
                 let forms_unread = reading.truncated;
                 let to_block = |b: pdfcraft_edit::TextBlock| {
