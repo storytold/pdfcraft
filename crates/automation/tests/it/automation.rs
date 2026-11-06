@@ -5214,6 +5214,59 @@ fn adding_content_through_tools() {
     assert!(matches!(a.call("content_delete", &json!({ "doc": doc, "page": 1, "index": 5 })), Err(ToolError::Failed(_))));
 }
 
+/// #6440: `page_add_text` paints text in CMYK or gray for a print file, so its black is 100 K
+/// (`0 0 0 1 k`) rather than DeviceRGB; `content_update` restyles it either way.
+#[test]
+fn added_text_takes_a_cmyk_or_gray_ink_through_tools() {
+    let dir = workdir("content-ink");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "PROOF", "at": [20, 20], "cmyk": [0, 0, 0, 1] }));
+    ok(&mut a, "page_add_text", json!({ "doc": doc, "page": 1, "text": "Note", "at": [20, 80], "gray": 0.5 }));
+    let items = ok(&mut a, "content_list", json!({ "doc": doc }))["items"].clone();
+    assert_eq!((&items[0]["cmyk"], &items[1]["gray"]), (&json!([0.0, 0.0, 0.0, 1.0]), &json!(0.5)));
+    // The item streams of the saved file.
+    let saved_items = |a: &mut Automation, name: &str| -> Vec<String> {
+        ok(a, "doc_save", json!({ "doc": doc, "path": name }));
+        let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join(name)).unwrap())).unwrap();
+        let page = &pdfcraft_model::pages(&saved)[0];
+        let list = saved.resolve(page.dict.get(b"Contents").unwrap()).as_array().cloned().unwrap();
+        list.iter()
+            .filter_map(|c| match &*saved.resolve(c) {
+                pdfcraft_cos::Object::Stream(s) if s.dict.name(b"PCMark") == Some(&b"Added"[..]) => {
+                    Some(String::from_utf8_lossy(&s.decoded().unwrap()).into_owned())
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let streams = saved_items(&mut a, "ink.pdf");
+    assert!(streams[0].contains("0 0 0 1 k") && !streams[0].contains("rg"), "{}", streams[0]);
+    assert!(streams[1].contains("0.5 g") && !streams[1].contains("rg"), "{}", streams[1]);
+    // Restyled: to RGB with color, and back to CMYK.
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 2, "color": "#000000" }));
+    ok(&mut a, "content_update", json!({ "doc": doc, "page": 1, "index": 1, "cmyk": [1, 0, 0, 0] }));
+    let items = ok(&mut a, "content_list", json!({ "doc": doc }))["items"].clone();
+    assert_eq!((&items[0]["cmyk"], items[1].get("gray")), (&json!([1.0, 0.0, 0.0, 0.0]), None));
+    let streams = saved_items(&mut a, "restyled.pdf");
+    assert!(streams[0].contains("1 0 0 0 k") && streams[1].contains("0 0 0 rg"), "{streams:?}");
+    // One colour at a time, four numbers from 0 to 1.
+    for bad in [
+        json!({ "color": "red", "cmyk": [0, 0, 0, 1] }),
+        json!({ "gray": 0.5, "cmyk": [0, 0, 0, 1] }),
+        json!({ "gray": 1.5 }),
+        json!({ "cmyk": [0, 0, 1] }),
+        json!({ "cmyk": [0, 0, 0, 1, 0] }),
+        json!({ "cmyk": [0, "x", 0, 1] }),
+        json!({ "cmyk": [0, 0, 0, -0.1] }),
+    ] {
+        let mut args = json!({ "doc": doc, "page": 1, "text": "x", "at": [20, 200] });
+        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        assert!(matches!(a.call("page_add_text", &args), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert_eq!(ok(&mut a, "content_list", json!({ "doc": doc }))["count"], 2, "nothing refused was added");
+}
+
 /// Edit ▸ Copy and Paste headlessly (#2636): an added text box or image, as it is, onto its own
 /// page beside it, onto a point, and into another document.
 #[test]

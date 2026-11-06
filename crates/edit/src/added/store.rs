@@ -1,7 +1,18 @@
 use super::draw::{draw, params};
 use super::layout::{first_undrawable, is_thai, nums, shaped_arabic, thai_error};
-use super::types::{Added, AddedImage, AddedText, CHAR_SPACING_LIMIT, Family, MarkerScan, TAG};
+use super::types::{Added, AddedImage, AddedText, CHAR_SPACING_LIMIT, Family, Ink, MarkerScan, TAG};
 use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, align_from, check, contents, page_list, place_tagged};
+
+/// A text item's gray or CMYK ink. Items written before inks, and an ink out of range, have none:
+/// the text paints in its RGB `/Color`.
+fn ink(doc: &Document, d: &Dict) -> Option<Ink> {
+    let ink = match (d.get(b"Gray").map(|g| doc.resolve(g)).and_then(|g| g.as_f64()), d.get(b"CMYK")) {
+        (Some(g), _) => Ink::Gray(g),
+        (None, Some(c)) => Ink::Cmyk(nums(doc, Some(c)).try_into().ok()?),
+        (None, None) => return None,
+    };
+    Some(ink).filter(|i| i.valid())
+}
 
 fn parse(doc: &Document, d: &Dict) -> Option<Content> {
     let r = nums(doc, d.get(b"Rect"));
@@ -21,7 +32,7 @@ fn parse(doc: &Document, d: &Dict) -> Option<Content> {
                         .map(|a| a.iter().take(crate::paragraph_align::count(&text)).map(|v| v.as_int().map(|c| align_from(Some(c)))).collect())
                 })
                 .unwrap_or_default();
-            Some(Content::Text(AddedText {
+            let mut t = AddedText {
                 rect,
                 text,
                 family,
@@ -29,11 +40,15 @@ fn parse(doc: &Document, d: &Dict) -> Option<Content> {
                 italic,
                 size: d.get(b"Size").and_then(Object::as_f64).unwrap_or(12.0),
                 color: if c.len() == 3 { [c[0], c[1], c[2]] } else { [0.0; 3] },
+                ink: ink(doc, d),
                 align,
                 aligns: crate::paragraph_align::tidy(aligns, align),
                 // Items written before character spacing have none.
                 char_spacing: d.get(b"CharSpacing").and_then(Object::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0),
-            }))
+            };
+            // An ink whose look isn't the stored colour (a file edited by hand) is none.
+            t.drop_stale_ink();
+            Some(Content::Text(t))
         }
         b"Image" => {
             let crop = nums(doc, d.get(b"Crop"));
@@ -137,6 +152,9 @@ fn validate(c: &Content) -> Result<(), EditError> {
                 return Err(EditError::Invalid(format!(
                     "the character spacing must be between -{CHAR_SPACING_LIMIT} and {CHAR_SPACING_LIMIT} points"
                 )));
+            }
+            if t.ink.is_some_and(|i| !i.valid()) {
+                return Err(EditError::Invalid("a gray level and each CMYK value must be from 0 to 1".into()));
             }
             if (r[2] - r[0]).abs() < 1.0 {
                 return Err(EditError::Invalid("the text box is too narrow".into()));
