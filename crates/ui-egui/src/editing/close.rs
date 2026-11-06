@@ -51,6 +51,9 @@ impl PdfCraftApp {
                     // Revert discards this source's uncommitted typing as well as model edits.
                     // Otherwise a later Save could write a rejected draft back into the file.
                     view.forms.focus = None;
+                    // The focus goes with them, running no exit: a script changing the document
+                    // just reverted would only make it unsaved again.
+                    view.forms.focused = None;
                     view.forms.committed = None;
                     view.forms.unbaked.clear();
                     view.pending_edit = None;

@@ -39,6 +39,8 @@ impl Automation {
         Ok(json!({ "scripts": list }))
     }
 
+    /// `js_set_document_script`: set the document-level script `name` to `script`, or remove it
+    /// when `script` is left out, as one undoable edit; returns the document's scripts.
     pub(crate) fn js_set_document_script(&mut self, a: &Args) -> Result<Value> {
         let edit = pdfcraft_engine::Edit::SetDocumentScript { name: a.str("name")?.into(), script: a.opt_str("script")?.map(str::to_string) };
         let id = self.doc(a)?.id;
@@ -46,6 +48,8 @@ impl Automation {
         self.js_document_scripts(a)
     }
 
+    /// `form_set_script`: set field `field`'s JavaScript for `event` to `script`, or remove it when
+    /// `script` is left out, as one undoable edit; returns the console output and errors.
     pub(crate) fn form_set_script(&mut self, a: &Args) -> Result<Value> {
         let edit = pdfcraft_engine::Edit::SetFieldScript {
             name: a.str("field")?.into(),
@@ -58,6 +62,37 @@ impl Automation {
         Ok(json!({ "field": a.str("field")?, "event": a.str("event")?, "console": out.console, "errors": out.errors }))
     }
 
+    /// `form_focus`: field `field` (its 1-based `widget`) gains (`enter`) or loses (`exit`)
+    /// focus, running its XFA scripts for that event; returns whether the form changed and what
+    /// the scripts showed or asked for.
+    pub(crate) fn form_focus(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::js::FieldFocus;
+        let focus = match a.str("event")? {
+            "enter" => FieldFocus::Enter,
+            "exit" => FieldFocus::Exit,
+            other => return Err(ToolError::InvalidArgs(format!("event must be enter or exit, not {other:?}"))),
+        };
+        let name = a.str("field")?;
+        let doc = self.doc(a)?;
+        let field = doc.form.iter().find(|f| f.name == name).ok_or_else(|| failed(format!("there is no field named {name:?} (see form_fields)")))?;
+        // A field with no widget (one only scripts or calculations use) has nothing to focus.
+        let widgets = field.widgets.len();
+        let widget = a.opt_int("widget")?.unwrap_or(1);
+        let widget = usize::try_from(widget).ok().and_then(|w| w.checked_sub(1)).filter(|w| *w < widgets).ok_or_else(|| match widgets {
+            0 => ToolError::InvalidArgs(format!("{name:?} has no widget to focus")),
+            n => ToolError::InvalidArgs(format!("widget must be 1 to {n} for {name:?}")),
+        })?;
+        let id = doc.id;
+        let changed = self.session.field_focus(id, name, widget, focus).map_err(failed)?;
+        let out = self.session.take_js_output(id);
+        let reqs: Vec<Value> = out.requests.iter().map(request_json).collect();
+        Ok(
+            json!({ "changed": changed, "alerts": out.alerts.iter().map(alert_json).collect::<Vec<_>>(), "console": out.console, "requests": reqs, "errors": out.errors }),
+        )
+    }
+
+    /// `form_merge_data`: merge the form data files at `paths` into one CSV at `path`, a row per
+    /// file; returns the path and the row and column counts.
     pub(crate) fn form_merge_data(&mut self, a: &Args) -> Result<Value> {
         let mut files = Vec::new();
         for p in a.strs("paths")? {
