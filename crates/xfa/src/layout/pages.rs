@@ -2,8 +2,8 @@
 use super::EMBED_COPIED;
 use super::items::{Item, Page, UNDERLINE_DROP};
 use super::{
-    Block, Border, Ctx, Cursor, FlowMark, Font, Frame, Layouter, MAX_ITEMS, MAX_MEASURES, MAX_PAGES, PAGE_COUNT_MARK, PageRole, Para, Rc, Rect,
-    SomIndices, XfaError, text,
+    Block, Border, Common, Ctx, Cursor, FlowMark, Font, Frame, Layouter, MAX_ITEMS, MAX_MEASURES, MAX_PAGES, PAGE_COUNT_MARK, PageRole, Para, Rc,
+    Rect, SomIndices, Views, XfaError, text,
 };
 
 impl Layouter<'_> {
@@ -11,6 +11,14 @@ impl Layouter<'_> {
         let m = msg.into();
         if self.warned.insert(m.clone()) && self.warnings.len() < 100 {
             self.warnings.push(m);
+        }
+    }
+
+    /// Say once when `c`'s `relevant` names a view other than print, which is drawn as if it
+    /// didn't: for drawn objects, flowed subforms and table rows alike.
+    pub(super) fn warn_other_views(&mut self, c: &Common) {
+        if let Some(other) = &c.relevant_other {
+            self.warn_once(format!("the form limits some objects to views other than print (relevant \"{other}\"); they are drawn as if it didn't"));
         }
     }
 
@@ -39,12 +47,25 @@ impl Layouter<'_> {
         Ok(())
     }
 
+    /// Put `item` on the last page, shown where what it is inside is shown ([`Self::views`]): a
+    /// field's widget carries that itself, anything else drawn only on screen or only in print
+    /// goes in an [`Item::Only`], and what shows nowhere isn't put at all.
     pub(super) fn push(&mut self, item: Item) -> Result<(), XfaError> {
         self.check_measures()?;
         self.items += 1;
         if self.items > MAX_ITEMS {
             return Err(XfaError::TooLarge("the form has too many objects to lay out".into()));
         }
+        let views = self.views;
+        let item = match item {
+            Item::Widget(mut w) => {
+                w.views = views;
+                Item::Widget(w)
+            }
+            other if views == Views::ALL => other,
+            _ if !views.any() => return Ok(()),
+            other => Item::Only { views, item: Box::new(other) },
+        };
         if let Some(p) = self.pages.last_mut() {
             p.items.push(item);
         }
@@ -104,10 +125,12 @@ impl Layouter<'_> {
         let ctx = Ctx { font: Font::default(), para: Para::default(), som: area.name.clone().map(|n| format!("{n}[0]")).unwrap_or_default() };
         let page_rect = Rect::new(0.0, 0.0, area.width, area.height);
         let sibs = SomIndices::of(&area.items);
-        for (i, item) in area.items.iter().enumerate() {
-            self.draw_positioned_child(item, page_rect, &ctx, 1, sibs.at(i))?;
-        }
-        Ok(())
+        // The master page's own objects: shown where they say, whatever the body was drawing
+        // when it needed this page.
+        let body = std::mem::replace(&mut self.views, Views::ALL);
+        let drawn = area.items.iter().enumerate().try_for_each(|(i, item)| self.draw_positioned_child(item, page_rect, &ctx, 1, sibs.at(i)));
+        self.views = body;
+        drawn
     }
 
     /// Move to the next content area, or the next page.
