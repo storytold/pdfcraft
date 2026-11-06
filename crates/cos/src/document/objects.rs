@@ -208,6 +208,30 @@ impl Document {
         }
     }
 
+    /// The generations a reference to `num` may carry and still resolve (see [`Self::get`]),
+    /// sorted: none for a free or unknown slot, else the slot's generation, and for a damaged
+    /// file slot (or a repair-aware edit of one) also the generation its object header carries.
+    /// Code comparing revisions (signature validation) uses it to tell whether the references
+    /// that reached an object in one revision still reach the same slot in another.
+    pub fn accepted_generations(&self, num: u32) -> Vec<u16> {
+        // Mirrors `reference_matches`, which stays allocation-free for every lookup.
+        let mut generations = match self.overlay.get(&num) {
+            Some(Slot::Set(generation, _)) => vec![*generation],
+            Some(Slot::RepairedSet(generation, alias, _)) => vec![*generation, *alias],
+            Some(Slot::Freed(_)) => Vec::new(),
+            None => match self.entries.lookup(num, &self.data) {
+                Some(XrefEntry::InFile { offset, generation }) => {
+                    std::iter::once(generation).chain(self.indexed_header_reference(num, offset).map(|h| h.generation)).collect()
+                }
+                Some(XrefEntry::InStream { .. }) => vec![0],
+                None | Some(XrefEntry::Free { .. }) => Vec::new(),
+            },
+        };
+        generations.sort_unstable();
+        generations.dedup();
+        generations
+    }
+
     pub(super) fn try_get_reference(&self, r: ObjRef) -> Result<Arc<Object>, CosError> {
         if !self.reference_matches(r) {
             return Ok(Arc::new(Object::Null));
