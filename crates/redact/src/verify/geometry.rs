@@ -470,7 +470,10 @@ pub(super) fn image_cleared(doc: &Document, ctx: &Ctx, s: &Stream, ctm: &Matrix,
     if data.len() < row.checked_mul(h).ok_or(())? {
         return Err(());
     }
-    let inverted = s.dict.get(b"Decode").and_then(Object::as_array).and_then(|d| d.first()).and_then(Object::as_f64) == Some(1.0);
+    let inverted = s.dict.get(b"Decode").is_some_and(|d| {
+        let d = doc.resolve(d);
+        d.as_array().and_then(|a| a.first()).is_some_and(|first| doc.resolve(first).as_f64() == Some(1.0))
+    });
     let want = u8::from(mask && !inverted);
     for j in 0..h {
         let v = 1.0 - (j as f64 + 0.5) / h as f64;

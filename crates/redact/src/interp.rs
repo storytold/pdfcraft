@@ -64,6 +64,10 @@ pub(crate) struct Removed {
     pub(crate) text: String,
     /// How many character codes the run holds (a composite font's codes are several bytes).
     pub(crate) codes: usize,
+    /// Which text operator showed it, counted from the start of the page.
+    pub(crate) op: usize,
+    /// Where in that operator it starts: the operand's place in a `TJ` array, and the byte in it.
+    pub(crate) at: (usize, usize),
 }
 
 #[derive(Clone)]
@@ -141,6 +145,8 @@ pub(crate) struct Scope<'a> {
     /// The redaction proof's snapshot is what sets it: it must know what applying is about to
     /// remove, by the interpreter's own judgement, without trusting anything else to it.
     pub removed: Option<Vec<Removed>>,
+    /// How many text operators have been shown, for [`Removed::op`].
+    shown: usize,
     fonts: HashMap<Vec<u8>, Rc<Metrics>>,
     used_names: Vec<Vec<u8>>,
     depth: usize,
@@ -167,6 +173,7 @@ impl<'a> Scope<'a> {
             xobject_oc_cache: HashMap::new(),
             layer_blocks: 0,
             removed: None,
+            shown: 0,
             fonts: HashMap::new(),
             used_names: Vec::new(),
             depth: 0,
@@ -682,6 +689,8 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
     let size = gs.size;
     let mut out: Vec<Object> = Vec::new();
     let mut removed = 0;
+    scope.shown += 1;
+    let op = scope.shown;
     let push_num = |out: &mut Vec<Object>, v: f64| {
         if v == 0.0 {
             return;
@@ -694,7 +703,7 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
         }
         out.push(num(v));
     };
-    for item in items {
+    for (place, item) in items.iter().enumerate() {
         match item {
             Object::String(s) => {
                 let bytes = &s.bytes;
@@ -744,8 +753,9 @@ fn show(scope: &mut Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (V
                                 end += 1;
                             }
                             let span = g.bytes.start..glyphs.get(end).map_or(g.bytes.end, |l| l.bytes.end);
+                            let at = (place, span.start);
                             let raw = bytes.get(span).unwrap_or_default().to_vec();
-                            sink.push(Removed { rect: r, text: f.decode(&raw), raw, codes: end - k + 1 });
+                            sink.push(Removed { rect: r, text: f.decode(&raw), raw, codes: end - k + 1, op, at });
                             k = end + 1;
                         }
                     }

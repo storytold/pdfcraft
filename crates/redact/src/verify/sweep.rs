@@ -254,7 +254,13 @@ fn pattern_matches<'a>(
 
 /// Count normalized text keys in one pass, with the same non-overlap rule as `str::matches`.
 pub(super) fn key_counts(needles: &[Needle], hay: &str, raw: bool, ctx: &Ctx) -> Option<Vec<(usize, usize)>> {
-    let patterns = needles.iter().enumerate().filter(|(_, n)| n.raw_view == raw).map(|(i, n)| (i, n.key.as_bytes()));
+    key_counts_from(needles, hay, raw, ctx, 0)
+}
+
+/// [`key_counts`] of the needles at least `min` long, so a one-letter needle can't use up the match
+/// limits of a search it takes no part in.
+fn key_counts_from(needles: &[Needle], hay: &str, raw: bool, ctx: &Ctx, min: usize) -> Option<Vec<(usize, usize)>> {
+    let patterns = needles.iter().enumerate().filter(|(_, n)| n.raw_view == raw && n.at_least(min)).map(|(i, n)| (i, n.key.as_bytes()));
     let mut spans: BTreeMap<usize, Vec<(usize, usize)>> = BTreeMap::new();
     pattern_matches(patterns, hay.as_bytes(), ctx, |i, a, b| {
         let hits = spans.entry(i).or_default();
@@ -496,7 +502,7 @@ fn sweep_objects(needles: &[Needle], doc: &Document, depth: usize, tag: &str, ac
                             in_streams.add(n, &loc, c);
                         }
                     }
-                    Err(()) if matches!(s.dict.name(b"Type"), Some(b"XRef" | b"ObjStm")) => {
+                    Err(()) if acc.ctx.decode_spent() || matches!(s.dict.name(b"Type"), Some(b"XRef" | b"ObjStm")) => {
                         acc.problem(Surface::DecodedStreams, format!("{loc} can't be decoded in full"));
                     }
                     Err(()) => acc.raw_only(Surface::DecodedStreams),
@@ -512,7 +518,7 @@ fn sweep_objects(needles: &[Needle], doc: &Document, depth: usize, tag: &str, ac
                         }
                     }
                     // Colour-space lookup data and function samples are data tables, not content.
-                    Err(()) if lookup.contains(&num) || s.dict.contains(b"FunctionType") => {
+                    Err(()) if !acc.ctx.decode_spent() && (lookup.contains(&num) || s.dict.contains(b"FunctionType")) => {
                         acc.raw_only(Surface::DecodedStreams);
                         for n in acc.bytes(Surface::DecodedStreams, needles, &s.raw, MIN_STRUCTURED_NEEDLE) {
                             acc.survivor(Surface::DecodedStreams, format!("{loc} (raw)"), Some(n));
@@ -660,10 +666,10 @@ pub(super) fn sweep_payload(needles: &[Needle], payload: &[u8], depth: usize, lo
     }
     if !image {
         let key = squash(&decode_text(payload));
-        match key_counts(needles, &key, false, &acc.ctx) {
+        match key_counts_from(needles, &key, false, &acc.ctx, MIN_NEEDLE) {
             Some(counts) => {
                 for (i, count) in counts {
-                    if count > 0 && needles.get(i).is_some_and(|n| n.at_least(MIN_NEEDLE)) {
+                    if count > 0 {
                         acc.survivor(Surface::EmbeddedFiles, loc.to_string(), Some(i));
                     }
                 }

@@ -46,6 +46,12 @@ impl Ctx {
         result.map_err(|_| ())
     }
 
+    /// Is the cumulative decode allowance used up? A decode refused then says nothing about the
+    /// stream, so it must not pass for a stream that can't be decoded.
+    pub(super) fn decode_spent(&self) -> bool {
+        self.decoded.get() >= MAX_TOTAL_DECODED
+    }
+
     /// Spend `n` units of search work; false once [`MAX_WORK`] is used up.
     pub(super) fn charge(&self, n: usize) -> bool {
         let used = self.work.get().saturating_add(n as u64);

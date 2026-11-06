@@ -20,6 +20,9 @@ pub(super) struct RegionSnap {
     pub(super) region: [f64; 4],
     pub(super) mark: ObjRef,
     pub(super) runs: Vec<(Vec<u8>, String)>,
+    /// The runs of one text operator joined, where it split them: `[(sec) (ret)] TJ` reads as
+    /// `secret`, which a copy elsewhere in the file holds whole.
+    pub(super) joined: Vec<(Vec<u8>, String)>,
     /// The character codes the runs hold (a composite font's codes are several bytes).
     pub(super) codes: usize,
 }
@@ -76,6 +79,9 @@ impl Snapshot {
         let mut regions: Vec<RegionSnap> = Vec::new();
         let mut pages = BTreeMap::new();
         let mut images = pdfcraft_cos::ImageBudget::new(doc);
+        // What was cut, each copy once, however many overlapping marks it lay under: the allowance
+        // for what stays is what the source holds less this.
+        let (mut cut_text, mut cut_raw) = (String::new(), String::new());
         for &pi in &by_page {
             let page = page_list.get(pi).ok_or(RedactError::Unreadable(pi + 1))?;
             let page_marks: Vec<&&Mark> = chosen.iter().filter(|m| m.page == pi).collect();
@@ -92,6 +98,14 @@ impl Snapshot {
                 process(&mut scratch, &mut scope, &data, &resources, Matrix::IDENTITY);
                 scope.removed.take().unwrap_or_default()
             };
+            let lines = joined(&removed);
+            let mut seen = HashSet::new();
+            for line in lines.iter().filter(|l| seen.insert((l.op, l.at, l.raw.clone()))) {
+                cut_text.push('\u{1}');
+                cut_text.push_str(&squash(&line.text));
+                cut_raw.push('\u{1}');
+                cut_raw.push_str(&squash(&latin1(&line.raw)));
+            }
             let before = extract_page(doc, &page.dict, &ctx, &[]);
             pages.insert(
                 pi,
@@ -107,7 +121,8 @@ impl Snapshot {
                     let hits: Vec<&Removed> = removed.iter().filter(|x| x.rect == k).collect();
                     let runs = hits.iter().map(|x| (x.raw.clone(), x.text.clone())).collect();
                     let codes = hits.iter().map(|x| x.codes).sum();
-                    regions.push(RegionSnap { page: pi, region: *r, mark: m.obj, runs, codes });
+                    let joined = lines.iter().filter(|l| l.rect == k && l.pieces > 1).map(|l| (l.raw.clone(), l.text.clone())).collect();
+                    regions.push(RegionSnap { page: pi, region: *r, mark: m.obj, runs, joined, codes });
                     k += 1;
                 }
             }
@@ -128,13 +143,8 @@ impl Snapshot {
             }
         }
         let mut needles: Vec<Needle> = Vec::new();
-        let (mut cut_text, mut cut_raw) = (String::new(), String::new());
         for (ri, r) in regions.iter().enumerate() {
-            for (raw, text) in &r.runs {
-                cut_text.push('\u{1}');
-                cut_text.push_str(&squash(text));
-                cut_raw.push('\u{1}');
-                cut_raw.push_str(&squash(&latin1(raw)));
+            for (raw, text) in r.runs.iter().chain(&r.joined) {
                 let raw_s = latin1(raw);
                 for (raw_view, whole) in [(false, text.trim().to_string()), (true, raw_s)] {
                     let mut shown: Vec<String> = Vec::new();
@@ -454,4 +464,69 @@ pub(super) fn page_after(doc: &Document, page: &Dict, ctx: &Ctx, regions: &[[f64
     let sha = page_streams(doc, page, 0).ok().map(|(_, d)| sha256(&d));
     let e = extract_page(doc, page, ctx, regions).ok();
     (sha, e.as_ref().map(|e| e.glyph_ops), e.map(|e| e.shown_in))
+}
+
+/// One text operator's removed runs under one region, as a reader takes them: joined.
+struct Line {
+    rect: usize,
+    op: usize,
+    at: (usize, usize),
+    raw: Vec<u8>,
+    text: String,
+    pieces: usize,
+}
+
+/// The runs of `removed` joined by text operator and region, in the order they were shown.
+fn joined(removed: &[Removed]) -> Vec<Line> {
+    let mut lines: Vec<Line> = Vec::new();
+    let mut found: HashMap<(usize, usize), usize> = HashMap::new();
+    for r in removed {
+        let line = found.get(&(r.op, r.rect)).copied().and_then(|i| lines.get_mut(i));
+        match line {
+            Some(l) => {
+                l.raw.extend_from_slice(&r.raw);
+                l.text.push_str(&r.text);
+                l.pieces += 1;
+            }
+            None => {
+                found.insert((r.op, r.rect), lines.len());
+                lines.push(Line { rect: r.rect, op: r.op, at: r.at, raw: r.raw.clone(), text: r.text.clone(), pieces: 1 });
+            }
+        }
+    }
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(rect: usize, op: usize, place: usize, text: &str) -> Removed {
+        Removed { rect, raw: text.as_bytes().to_vec(), text: text.to_string(), codes: text.len(), op, at: (place, 0) }
+    }
+
+    #[test]
+    fn a_word_split_across_a_tj_array_is_one_line_for_each_region() {
+        let lines = joined(&[run(0, 1, 0, "sec"), run(1, 1, 0, "sec"), run(0, 1, 1, "ret"), run(1, 1, 1, "ret"), run(0, 2, 0, "other")]);
+        let shown: Vec<(usize, usize, &str, usize)> = lines.iter().map(|l| (l.rect, l.op, l.text.as_str(), l.pieces)).collect();
+        assert_eq!(shown, [(0, 1, "secret", 2), (1, 1, "secret", 2), (0, 2, "other", 1)]);
+    }
+
+    #[test]
+    fn overlapping_marks_are_one_copy_and_two_copies_stay_two() {
+        // Under two marks at once: the same operator, place and bytes, so one copy was cut.
+        let both = joined(&[run(0, 1, 0, "word"), run(1, 1, 0, "word")]);
+        let mut seen = HashSet::new();
+        assert_eq!(both.iter().filter(|l| seen.insert((l.op, l.at, l.raw.clone()))).count(), 1);
+        // The same word twice in one array, one under each mark: two copies were cut.
+        let apart = joined(&[run(0, 1, 0, "word"), run(1, 1, 2, "word")]);
+        let mut seen = HashSet::new();
+        assert_eq!(apart.iter().filter(|l| seen.insert((l.op, l.at, l.raw.clone()))).count(), 2);
+    }
+
+    #[test]
+    fn a_spent_decode_budget_is_told_apart() {
+        assert!(!Ctx::new(HashSet::new()).decode_spent());
+        assert!(Ctx::with_decode_left(0).decode_spent());
+    }
 }
