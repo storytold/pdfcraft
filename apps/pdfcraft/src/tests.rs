@@ -663,6 +663,19 @@ fn the_desktop_entry_names_the_window_class() {
     assert_eq!(class, Some(super::APP_ID));
 }
 
+/// The file manager's "Combine files" entry (#585): a desktop action that hands the selected
+/// files to `--combine`, URIs and all (`%U`, as the main entry).
+#[test]
+fn the_desktop_entry_offers_combine_files() {
+    let entry = include_str!("../../../packaging/linux/ai.storyteller.pdfcraft.desktop");
+    let actions = entry.lines().find_map(|line| line.strip_prefix("Actions=")).unwrap_or_default();
+    assert!(actions.split(';').any(|a| a == "Combine"), "Actions={actions}");
+    let section = entry.split("[Desktop Action Combine]").nth(1).expect("a [Desktop Action Combine] group");
+    let section = section.split("\n[").next().unwrap_or_default();
+    assert!(section.lines().any(|line| line.starts_with("Name=")), "{section}");
+    assert_eq!(section.lines().find_map(|line| line.strip_prefix("Exec=")), Some("pdfcraft --combine %U"));
+}
+
 /// Both flatpak manifests build with the craft-i18n commit `craft-i18n.rev` pins: CI and
 /// releases read the file, and the manifests have to name the commit themselves. The pin may
 /// have a trailing newline or CRLF (a Windows checkout), so it is trimmed, as every reader does.
