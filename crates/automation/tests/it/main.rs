@@ -17,3 +17,4 @@ mod optimize_content_boundaries;
 mod redact_after_stray_q_form;
 mod redact_text_after_q;
 mod render_warnings;
+mod xfa_packet_declarations;
