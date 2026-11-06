@@ -571,9 +571,16 @@ impl Automation {
         let mut ex = pdfcraft_engine::export::Exporter::new(doc);
         if tool == "doc_export_text" {
             let path = self.resolve(a.str("path")?, true)?;
-            let text = ex.text_of(&pages).map_err(failed)?;
+            let (text, warnings) = match a.opt_str("order")?.unwrap_or("visual") {
+                "visual" => (ex.text_of(&pages).map_err(failed)?, Vec::new()),
+                "tagged" => {
+                    let tagged = ex.tagged_text_of(&pages).map_err(failed)?;
+                    (tagged.text, tagged.warnings)
+                }
+                other => return Err(ToolError::InvalidArgs(format!("unknown text order {other:?} (visual, tagged)"))),
+            };
             write_atomic(&path, text.as_bytes())?;
-            return Ok(json!({ "path": path.to_string_lossy(), "pages": pages.len(), "bytes": text.len() }));
+            return Ok(json!({ "path": path.to_string_lossy(), "pages": pages.len(), "bytes": text.len(), "warnings": warnings }));
         }
         let folder = self.resolve(a.str("folder")?, true)?;
         std::fs::create_dir_all(&folder).map_err(|e| failed(format!("{}: {e}", folder.display())))?;

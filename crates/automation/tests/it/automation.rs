@@ -35,6 +35,34 @@ fn fixture(n: usize) -> Vec<u8> {
     out
 }
 
+fn tagged_reading_order_fixture() -> Vec<u8> {
+    let content = "BT /F1 12 Tf 1 0 0 1 40 240 Tm /P << /MCID 0 >> BDC (LEFT COLUMN) Tj EMC 1 0 0 1 230 240 Tm /P << /MCID 1 >> BDC (RIGHT COLUMN) Tj EMC 1 0 0 1 40 20 Tm /Artifact << /MCID 2 >> BDC (ARTIFACT FOOTER) Tj EMC /P << /MCID 3 >> BDC (UNSTRUCTURED) Tj EMC ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        "<< /Type /StructTreeRoot /K 7 0 R >>".to_string(),
+        "<< /S /Document /K [8 0 R 9 0 R 99 0 R] >>".to_string(),
+        "<< /S /P /P 7 0 R /Pg 3 0 R /K << /Type /MCR /Pg 3 0 R /MCID 1 >> >>".to_string(),
+        "<< /S /P /P 7 0 R /Pg 3 0 R /K 0 >>".to_string(),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    bytes
+}
+
 fn remote_link_pdf(file: &str, destination: Option<&str>) -> Vec<u8> {
     // canonicalize() uses a Windows device prefix; a PDF file specification uses the ordinary drive path.
     #[cfg(windows)]
@@ -3116,6 +3144,28 @@ fn exporting_images_and_text_through_tools() {
     ok(&mut a, "doc_export_text", json!({ "doc": doc, "path": "a.txt" }));
     assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "Page 1\n\u{c}Page 2\n\u{c}Page 3\n");
     assert!(a.call("doc_export_text", &json!({ "doc": doc, "path": "/etc/x.txt" })).is_err(), "confined to the root");
+}
+
+#[test]
+fn tagged_text_export_follows_structure_and_reports_omissions() {
+    let dir = workdir("tagged-text-export");
+    std::fs::write(dir.join("tagged.pdf"), tagged_reading_order_fixture()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "tagged.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_text", json!({ "doc": doc, "path": "visual.txt" }));
+    let visual = std::fs::read_to_string(dir.join("visual.txt")).unwrap();
+    assert!(visual.contains("LEFT COLUMN") && visual.contains("RIGHT COLUMN") && visual.contains("ARTIFACT FOOTER"), "{visual:?}");
+    let result = ok(&mut a, "doc_export_text", json!({ "doc": doc, "path": "tagged.txt", "order": "tagged" }));
+    assert_eq!(std::fs::read_to_string(dir.join("tagged.txt")).unwrap(), "RIGHT COLUMN\nLEFT COLUMN");
+    assert_eq!(result["warnings"].as_array().unwrap().len(), 2);
+    assert!(result["warnings"].to_string().contains("missing structure reference 99"));
+    assert!(result["warnings"].to_string().contains("outside the structure tree"));
+
+    std::fs::write(dir.join("untagged.pdf"), fixture(1)).unwrap();
+    let untagged_doc = ok(&mut a, "doc_open", json!({ "path": "untagged.pdf" }))["doc"].as_u64().unwrap();
+    let untagged = ok(&mut a, "doc_export_text", json!({ "doc": untagged_doc, "path": "untagged.txt", "order": "tagged" }));
+    assert_eq!(untagged["warnings"], json!(["the document has no structure tree"]));
+    assert_eq!(std::fs::read_to_string(dir.join("untagged.txt")).unwrap(), "");
 }
 
 #[test]

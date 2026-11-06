@@ -7336,11 +7336,11 @@ title = "Export accessible text (from tags)"
 area = "J"
 tier = "P1"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["export.text"]
+tools = ["doc_export_text"]
+evidence = ["crates/a11y/src/tests.rs::tagged_text_uses_tree_order_and_omits_artifact_content", "crates/a11y/src/tests.rs::tagged_text_reports_repeated_and_missing_structure_references", "crates/automation/tests/it/automation.rs::tagged_text_export_follows_structure_and_reports_omissions", "crates/ui-egui/tests/it/export.rs::text_export_dialog_can_use_tag_tree_order"]
+notes = "Opt-in tagged text follows reachable structure order, substitutes ActualText and Figure Alt, omits artifacts, and reports missing or incomplete structure. Plain visual extraction remains the default."
 
 [[feature]]
 id = "create.export-xml"

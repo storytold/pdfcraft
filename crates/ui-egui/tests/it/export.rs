@@ -12,6 +12,34 @@ const FIXTURE: &[u8] = b"%PDF-1.7
 trailer << /Root 1 0 R >>
 %%EOF";
 
+fn tagged_fixture() -> Vec<u8> {
+    let content = "BT /F1 12 Tf /P << /MCID 0 >> BDC (LEFT COLUMN) Tj EMC /P << /MCID 1 >> BDC (RIGHT COLUMN) Tj EMC /Artifact << /MCID 2 >> BDC (ARTIFACT FOOTER) Tj EMC /P << /MCID 3 >> BDC (UNSTRUCTURED) Tj EMC ET";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        "<< /Type /StructTreeRoot /K 7 0 R >>".to_string(),
+        "<< /S /Document /K [8 0 R 9 0 R 99 0 R] >>".to_string(),
+        "<< /S /P /P 7 0 R /Pg 3 0 R /K << /Type /MCR /Pg 3 0 R /MCID 1 >> >>".to_string(),
+        "<< /S /P /P 7 0 R /Pg 3 0 R /K 0 >>".to_string(),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", index + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for offset in offsets {
+        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    bytes
+}
+
 #[test]
 fn export_dialogs_write_images_and_text() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-export-ui-{}", std::process::id()));
@@ -45,4 +73,28 @@ fn export_dialogs_write_images_and_text() {
     h.get_by_label("Export").click();
     h.run_steps(4);
     h.get_by_label_contains("Exported 0 images");
+}
+
+#[test]
+fn text_export_dialog_can_use_tag_tree_order() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-tagged-export-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.clone();
+    let fixture = tagged_fixture();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("tagged.pdf", None, fixture).unwrap();
+        app.export_dir_override = Some(d.to_string_lossy().into_owned());
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("export.text"));
+    h.run_steps(2);
+    h.get_by_label("Use tag-tree order").click();
+    h.get_by_label("Export").click();
+    h.run_steps(4);
+    assert_eq!(std::fs::read_to_string(dir.join("tagged.txt")).unwrap(), "RIGHT COLUMN\nLEFT COLUMN");
+    h.get_by_label_contains("1 more warning");
 }
