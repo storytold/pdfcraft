@@ -1849,6 +1849,45 @@ fn an_image_a_surviving_form_with_parameters_by_reference_draws_is_kept() {
     assert!(surviving_references::full_save_holds(&doc, b"IMAGESECRET"), "the image the form still draws outside the mark");
 }
 
+/// A form without resources of its own crosses the mark and draws an image, or text, under it,
+/// its content behind a predictor whose `/DecodeParms` are given by reference. The walk reads it
+/// through them and removes what lies under the mark: the image, whether the page draws it under
+/// the mark too or only the form does, and the text's glyphs. Read without them, the form looked
+/// empty and was left as it was, still drawing them, and the page's check, which reads it with
+/// them, kept the image's name for it.
+#[test]
+fn what_a_form_with_parameters_by_reference_draws_under_the_mark_is_removed() {
+    let mut doc = one_page(b"/FmBare Do", "/XObject << /FmBare 7 0 R >>", vec![stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100]", b"")]);
+    let mut entries = form_entries([0, 0, 100, 100]);
+    // Its drawing moved up by 210: the text lands at y 250, under the mark.
+    entries.push(("Matrix", Object::Array([1, 0, 0, 1, 0, 210].into_iter().map(Object::Int).collect())));
+    let form = behind_parms_by_reference(&mut doc, &entries, b"BT /F1 10 Tf 20 40 Td (SECRETVALUE) Tj ET");
+    doc.set(ObjRef::new(7, 0), form);
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.forms_rewritten), (11, 1), "the text the form draws under the mark: {r:?}");
+    for page in [&b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do"[..], b"/FmBare Do"] {
+        let mut doc = one_page(
+            page,
+            "/XObject << /FmBare 7 0 R /Im1 8 0 R >>",
+            vec![
+                stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100]", b""),
+                stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"REDIMGONECOVERED"),
+            ],
+        );
+        let mut entries = form_entries([0, 0, 100, 100]);
+        // Its drawing moved up by 210: the image lands at y 230 to 280, under the mark.
+        entries.push(("Matrix", Object::Array([1, 0, 0, 1, 0, 210].into_iter().map(Object::Int).collect())));
+        let form = behind_parms_by_reference(&mut doc, &entries, b"q 50 0 0 50 20 20 cm /Im1 Do Q");
+        doc.set(ObjRef::new(7, 0), form);
+        mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.forms_rewritten, 1, "{}: {r:?}", String::from_utf8_lossy(page));
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        assert!(!bytes.windows(16).any(|w| w == b"REDIMGONECOVERED"), "{}: the image the form drew under the mark", String::from_utf8_lossy(page));
+    }
+}
+
 /// A form without resources of its own that the redaction rewrites gets a new name. It keeps none
 /// of its own either when its copy of the page's loses nothing, which takes a form drawing itself
 /// (here off the page, so outside the mark), and then goes on drawing through the page's: itself

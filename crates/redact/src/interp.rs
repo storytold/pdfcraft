@@ -983,9 +983,11 @@ fn xobject(
                 out.doomed.push(r);
                 return Some(None);
             }
-            // Strict, like page content: a Form read only in part counts as undecodable.
+            // Strict, like page content: a Form read only in part counts as undecodable. With its
+            // `/DecodeParms` given by reference too, as the cleanups after the walk read it: read
+            // without them, it looks empty and is left as it was, drawing whatever lies under a mark.
             let data = if scope.budget.enter_form() {
-                scope.budget.decode_strict(s)
+                scope.budget.decode_strict(&doc.with_direct_parms(s))
             } else {
                 Err(CosError::Filter(format!("the page draws more than {MAX_PAGE_FORMS} form XObjects")))
             };
