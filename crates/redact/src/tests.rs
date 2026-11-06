@@ -4207,3 +4207,27 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
 }
+
+/// 2 000 elements share one indirect `/K` array that lists one leaf element 2 000 times: the walk
+/// queued and recorded every listing, four million, for a few thousand objects. Its work is now
+/// bounded by the references it may visit, and past that the cleanup is refused.
+#[test]
+fn a_shared_kids_array_of_repeats_is_refused_not_expanded() {
+    const N: usize = 2_000;
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (SECRET) Tj ET", "", vec![]);
+    let leaf = doc.add(Object::Dict(Dict::from_iter([(b"S".to_vec(), Object::name("Span"))])));
+    let shared = doc.add(Object::Array(vec![Object::Ref(leaf); N]));
+    let elements: Vec<Object> = (0..N)
+        .map(|_| Object::Ref(doc.add(Object::Dict(Dict::from_iter([(b"S".to_vec(), Object::name("P")), (b"K".to_vec(), Object::Ref(shared))])))))
+        .collect();
+    let root = doc.add(Object::Dict(Dict::from_iter([(b"Type".to_vec(), Object::name("StructTreeRoot")), (b"K".to_vec(), Object::Array(elements))])));
+    let catalog = doc.root().unwrap();
+    doc.update_dict(catalog, |d| d.set(b"StructTreeRoot".to_vec(), Object::Ref(root))).unwrap();
+    let gone: HashSet<ObjRef> = [ObjRef::new(999_999, 0)].into_iter().collect();
+    let started = std::time::Instant::now();
+    assert!(matches!(crate::tags::drop_object_refs_within(&mut doc, &gone, 10_000), Err(RedactError::Tags)));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    let changed: HashSet<i64> = [0].into_iter().collect();
+    assert!(matches!(crate::tags::clean_within(&mut doc, page, None, &changed, &Default::default(), 10_000), Err(RedactError::Tags)));
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+}
