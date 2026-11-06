@@ -184,8 +184,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
             ptr,
             page: i,
             info,
-            allow_interaction: !others_own_pointer
-                && (cropping || matches!(view.router.owner(i), Some(crate::page_router::Owner::Picture { .. })) || !text_used),
+            allow_interaction: !others_own_pointer && (matches!(view.router.owner(i), Some(crate::page_router::Owner::Picture { .. })) || !text_used),
         };
         let image_used = crate::edit_text_ui::image_input(&image_cx, &images, view);
         !others_own_pointer && (text_used || image_used)
