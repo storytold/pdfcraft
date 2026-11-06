@@ -136,6 +136,18 @@ The messages and both transports are the shared contract of [`craft-web-host`](h
 - **Files from the host are untrusted input.** An opened file goes through the same reading as one picked with File ▸ Open or dropped on the window, with the same format limits; before it is copied into the app's memory, its size is checked against the host open limit (512 MiB) and a larger file is refused, and a name is cut to 255 characters.
 - **The event and message names are the interface.** `pdfcraft:ready`, `pdfcraft:open`, `pdfcraft:save`, `pdfcraft:dirty` and `pdfcraft:failed`, and the fields they carry (the same as the `?host=parent` messages), stay stable; changing one is a breaking change.
 
+### Driving it from the page (`window.pdfcraft`)
+
+`?control` on the page's URL puts `window.pdfcraft` on the page, from [`craft-web-api`](https://github.com/storytold/craft-libs/tree/main/crates/web-api) (storytold/craft-libs#413), the same shape in every Craft app (`index.html?control`, which can be combined with other flags). It is opt-in because the control channel keeps the accessibility tree of every frame. The browser already exposes PdfCraft's canvas (`id="pdfcraft"`) as `window.pdfcraft`, so the functions are added to that element. `pdfcraft.request(method, params)` calls any method of the UI control channel the desktop app serves with `--control` (`ui.state`, `ui.inspect`, `ui.click`, `ui.key`, `ui.set`, `ui.open`…), and `execute(command, params)` (`ui.command`: a registry command id), `commands()` (`ui.commands`), `docInspect(params)` (`ui.state`), `uiInspect(params)` (`ui.inspect`) and `screenshot(params)` are shortcuts for the common ones. Each returns a Promise that resolves with the method's result and rejects with an `Error`; a call the app does not answer within 30 seconds rejects, and the app still runs it when it reaches it, as it does for a desktop client that timed out.
+
+```js
+const state = await pdfcraft.docInspect();               // open documents, page, zoom, panels, dialog
+await pdfcraft.request("ui.set", { key: "show_page_edge_shadows", value: "false" });
+const { data } = await pdfcraft.screenshot();           // the window as PNG (base64)
+```
+
+Opening a PDF, handing a saved or exported file to the page, the file name and the unsaved flag stay with the host messages above.
+
 ## Renderer selection and fallback flags
 
 PdfCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls back to
