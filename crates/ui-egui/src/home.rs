@@ -83,7 +83,8 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     .font(theme::regular(14.0)),
             );
             ui.add_space(14.0);
-            if !app.community_card_closed {
+            // Preferences can hide it for good; its x closes it for this run only.
+            if app.show_discord_button && !app.community_card_closed {
                 egui::Frame::NONE
                     .fill(t.card)
                     .stroke(Stroke::new(1.0, t.border))

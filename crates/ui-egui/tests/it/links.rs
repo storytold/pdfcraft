@@ -56,6 +56,32 @@ fn home_community_card_closes_for_this_run() {
 }
 
 #[test]
+fn discord_button_and_home_card_are_shown_by_default() {
+    let h = harness(|_| {});
+    assert!(h.state().show_discord_button);
+    assert!(h.query_by_label("Discord").is_some(), "the Discord button in the title bar");
+    assert!(h.query_by_label("Join the ArtCraft community").is_some(), "the community card on Home");
+}
+
+#[test]
+fn discord_button_and_home_card_are_hidden_when_the_preference_is_off() {
+    let h = harness(|app| app.set_option("discord-button", "false").unwrap());
+    assert!(!h.state().show_discord_button);
+    assert!(h.query_by_label("Discord").is_none(), "no Discord button in the title bar");
+    assert!(h.query_by_label("Join the ArtCraft community").is_none(), "no community card on Home");
+}
+
+#[test]
+fn discord_button_preference_is_remembered() {
+    let mut app = PdfCraftApp::new();
+    app.show_discord_button = false;
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&app.persist());
+    assert!(!restored.show_discord_button);
+    assert_eq!(restored.set_option("discord-button", "maybe"), Err("discord-button must be true or false".into()));
+}
+
+#[test]
 fn about_dialog_shows_the_brand_and_links() {
     let pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF";
     // With a document open, so the home screen's own links are not on screen.

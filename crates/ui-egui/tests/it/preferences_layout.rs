@@ -251,3 +251,14 @@ fn search_scrolls_option_only_and_theme_card_matches_into_visible_viewport() {
         "Dark theme card scrolled into visible viewport: {dark_card:?} between title {title:?} and OK {ok:?}"
     );
 }
+
+#[test]
+fn search_settings_finds_the_discord_preference() {
+    let mut h = harness(900.0);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").click();
+    h.run_steps(1);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").type_text("Discord");
+    h.run_steps(4);
+    assert!(h.query_by_label("Show the Discord button in the title bar and the community card on Home").is_some());
+    assert!(h.query_by_label("1 match").is_some());
+}
