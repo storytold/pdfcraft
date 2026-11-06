@@ -80,6 +80,18 @@ pub(crate) fn layout(d: &Dict) -> Option<Caption> {
     })
 }
 
+/// Rebuilt bounds for a moved PdfCraft distance readout. All appearance rebuilds and caption
+/// moves share this, so restyling cannot clip the caption or retain a vacated frame. An absent
+/// or malformed /CO keeps the existing legacy drawing path unchanged.
+pub(crate) fn bounds(d: &Dict) -> Option<[f64; 4]> {
+    if !d.contains(b"CO") {
+        return None;
+    }
+    let rect = layout(d)?.rect();
+    let line = appearance::measurement_line_bounds(d, numbers::<4>(d, b"L")?)?;
+    Some([line[0].min(rect[0] - 1.0), line[1].min(rect[1] - 1.0), line[2].max(rect[2] + 1.0), line[3].max(rect[3] + 1.0)])
+}
+
 /// The horizontal numeric readout's user-space bounds, only for a PdfCraft distance measurement.
 pub fn measurement_caption_rect(doc: &Document, page: usize, index: usize) -> Option<[f64; 4]> {
     let p = doc.get(page_ref(doc, page).ok()?);
@@ -105,16 +117,8 @@ pub fn move_measurement_caption(doc: &mut Document, page: usize, index: usize, d
     }
     let mut next = before.clone();
     next.set(b"CO".to_vec(), num_array(&co));
-    let rect = layout(&next).ok_or_else(|| AnnotError::Invalid("invalid caption geometry".into()))?.rect();
-    let line = numbers::<4>(&next, b"L")
-        .and_then(|l| appearance::measurement_line_bounds(&next, l))
-        .ok_or_else(|| AnnotError::Invalid("invalid measurement path bounds".into()))?;
-    // Rebuild from the current path and caption only. /CO already preserves the first move's
-    // baseline, so no part of a previously enlarged Rect needs to survive.
-    next.set(
-        b"Rect".to_vec(),
-        num_array(&[line[0].min(rect[0] - 1.0), line[1].min(rect[1] - 1.0), line[2].max(rect[2] + 1.0), line[3].max(rect[3] + 1.0)]),
-    );
+    let rect = bounds(&next).ok_or_else(|| AnnotError::Invalid("invalid measurement caption bounds".into()))?;
+    next.set(b"Rect".to_vec(), num_array(&rect));
     touch(&mut next, meta);
     doc.update_dict(r, |d| *d = next)?;
     redraw_or_restore(doc, r, before)

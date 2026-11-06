@@ -1,5 +1,7 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-11-06 | **Last updated:** 2026-11-06 | **Change:** patch (M5 #5741 review: restyling retains moved-caption bounds and appearances; linear caption vectors preserve small crop-origin deltas; no-CO behavior unchanged; estimates unchanged)
+
 > **Last reviewed:** 2026-11-06 | **Last updated:** 2026-11-06 | **Change:** patch (M5 #5741: Select drags a PdfCraft distance readout independently through standard caption offsets; endpoints, scale and value stay fixed; current path/caption bounds replace vacated space; undo, save/reopen and headless caption_move; estimates unchanged)
 
 > **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)

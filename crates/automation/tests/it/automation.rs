@@ -11442,6 +11442,7 @@ fn measurement_caption_move_keeps_the_reading_and_renders_after_reopen() {
         let pdfcraft_cos::Object::Stream(stream) = normal.as_ref() else {
             panic!("normal appearance must be a stream");
         };
+        assert_eq!(stream.dict.get(b"BBox"), d.get(b"Rect"), "the generated appearance box and annotation Rect must agree");
         (d, stream.decoded().unwrap())
     }
     fn ink(a: &mut Automation, doc: u64, r: [f64; 4]) -> usize {
@@ -11474,6 +11475,21 @@ fn measurement_caption_move_keeps_the_reading_and_renders_after_reopen() {
         let old = a.session().get(id).unwrap().measurement_caption_rect(0, 0).unwrap();
         let (old_dict, _) = annotation(a.session().get(id).unwrap().bytes.clone());
         assert!(ink(&mut a, doc, old) > 20, "the original readout is visible");
+        // No /CO: preserve main's legacy union with the new width-12 ending margin (49 pt),
+        // and its Rect-top caption baseline. Restyling must not convert this to an offset.
+        let original_rect = a.session().get(id).unwrap().info.annotations[0].rect;
+        ok(&mut a, "comment_edit", json!({"doc":doc,"page":1,"index":1,"width":12}));
+        let legacy_rect = a.session().get(id).unwrap().info.annotations[0].rect;
+        let expected =
+            [original_rect[0].min(-9.0), original_rect[1].min(31.0), original_rect[2].max(209.0), original_rect[3].max(300.0 - end_y as f32 + 49.0)];
+        assert_eq!(legacy_rect, expected, "no-CO restyle keeps main's rectangle behavior");
+        let legacy_caption = a.session().get(id).unwrap().measurement_caption_rect(0, 0).unwrap();
+        assert!((legacy_caption[1] + 2.5 - f64::from(expected[3]) + 12.0).abs() < 0.001, "no-CO caption keeps the old Rect-top baseline");
+        let (legacy_dict, _) = annotation(a.session().get(id).unwrap().bytes.clone());
+        assert!(!legacy_dict.contains(b"CO"), "restyling must not create CO");
+        ok(&mut a, "edit_undo", json!({"doc":doc}));
+        assert_eq!(a.session().get(id).unwrap().measurement_caption_rect(0, 0).unwrap(), old);
+
         ok(&mut a, "comment_edit", json!({"doc":doc,"page":1,"index":1,"caption_move":[20,-45]}));
         let moved = a.session().get(id).unwrap().measurement_caption_rect(0, 0).unwrap();
         for (actual, expected) in moved.into_iter().zip([old[0] + 20.0, old[1] + 45.0, old[2] + 20.0, old[3] + 45.0]) {
@@ -11510,10 +11526,51 @@ fn measurement_caption_move_keeps_the_reading_and_renders_after_reopen() {
             assert!((actual - expected).abs() < 0.01, "caption round trip must shrink the frame: {original_rect:?} -> {returned_rect:?}");
         }
 
+        let (before_restyle, _) = annotation(a.session().get(reopened_id).unwrap().bytes.clone());
+        ok(&mut a, "comment_edit", json!({"doc":reopened,"page":1,"index":1,"width":12}));
+        let restyled_caption = a.session().get(reopened_id).unwrap().measurement_caption_rect(0, 0).unwrap();
+        let restyled_rect = a.session().get(reopened_id).unwrap().info.annotations[0].rect;
+        assert!(
+            f64::from(restyled_rect[0]) <= restyled_caption[0]
+                && f64::from(restyled_rect[1]) <= restyled_caption[1]
+                && f64::from(restyled_rect[2]) >= restyled_caption[2]
+                && f64::from(restyled_rect[3]) >= restyled_caption[3],
+            "restyling must keep the moved caption inside Rect: {restyled_rect:?} vs {restyled_caption:?}"
+        );
+        assert!(ink(&mut a, reopened, restyled_caption) > 20, "the restyled readout still draws");
+        let (restyled_dict, _) = annotation(a.session().get(reopened_id).unwrap().bytes.clone());
+        assert_eq!(restyled_dict.get(b"CO"), before_restyle.get(b"CO"));
         assert!(a.call("doc_save", &json!({"doc":reopened,"path":"../escaped-caption.pdf"})).is_err(), "saving stays confined to --root");
         assert!(a.call("comment_edit", &json!({"doc":doc,"page":1,"index":1,"caption_move":[1e100,0]})).is_err());
         ok(&mut a, "comment_lock", json!({"doc":doc,"page":1,"index":1,"locked":true}));
         assert!(a.call("comment_edit", &json!({"doc":doc,"page":1,"index":1,"caption_move":[1,0]})).is_err(), "locked measurements cannot move");
         let _ = std::fs::remove_dir_all(dir);
     }
+}
+
+#[test]
+fn measurement_caption_move_preserves_small_vectors_at_a_large_crop_origin() {
+    let dir = workdir("caption-large-crop");
+    let mut pdf = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&pdf)[0].obj;
+    pdf.update_dict(page, |d| {
+        d.set(
+            b"MediaBox".to_vec(),
+            pdfcraft_cos::Object::Array([9000000.0, 9000000.0, 9000200.0, 9000304.0].into_iter().map(pdfcraft_cos::Object::Real).collect()),
+        )
+    })
+    .unwrap();
+    std::fs::write(dir.join("large-crop.pdf"), pdfcraft_cos::write_full(&pdf, &Default::default()).unwrap()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"large-crop.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "measure_distance", json!({"doc":doc,"page":1,"points":[[40,220],[160,220]]}));
+    let id = pdfcraft_engine::DocId(doc);
+    let before = a.session().get(id).unwrap().measurement_caption_rect(0, 0).unwrap();
+    ok(&mut a, "comment_edit", json!({"doc":doc,"page":1,"index":1,"caption_move":[0.25,-0.5]}));
+    let after = a.session().get(id).unwrap().measurement_caption_rect(0, 0).unwrap();
+    assert!(
+        (after[0] - before[0] - 0.25).abs() < 1e-6 && (after[1] - before[1] - 0.5).abs() < 1e-6,
+        "small caption motion must survive a large crop origin: {before:?} -> {after:?}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }

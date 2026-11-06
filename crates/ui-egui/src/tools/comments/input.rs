@@ -336,8 +336,10 @@ fn finish_select_gesture(ui: &egui::Ui, cx: &PageCx<'_>, view: &mut DocView, p: 
         Some(Gesture::Caption { page, index, from }) if page == cx.page => {
             view.comments.gesture = None;
             if from.distance(p) >= 2.0 {
-                let (a, b) = (cx.to_user(from), cx.to_user(p));
-                view.pending_edit = Some(Edit::MoveMeasurementCaption { page, index, dx: b[0] - a[0], dy: b[1] - a[1] });
+                let (a, b) = (cx.xf.screen_to_view(from), cx.xf.screen_to_view(p));
+                if let Some([dx, dy]) = cx.doc.and_then(|doc| doc.object_move_offset(page, [f64::from(b.0 - a.0), f64::from(b.1 - a.1)]).ok()) {
+                    view.pending_edit = Some(Edit::MoveMeasurementCaption { page, index, dx, dy });
+                }
             }
         }
         Some(Gesture::Move { page, index, from }) if page == cx.page => {

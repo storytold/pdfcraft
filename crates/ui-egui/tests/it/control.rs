@@ -2224,6 +2224,8 @@ fn distance_caption_drag_keeps_geometry_and_survives_undo_and_reopen() {
             "moving the readout must not move endpoints, change the value or the scale"
         );
         assert!(moved[0] > old[0] + 10.0 && moved[1] > old[1] + 20.0, "readout moved: {old:?} -> {moved:?}");
+        assert!((moved[0] - old[0] - f64::from((target.x - start.x) * 200.0 / r.width())).abs() < 0.001);
+        assert!((moved[1] - old[1] + f64::from((target.y - start.y) * 300.0 / r.height())).abs() < 0.001);
         assert!((moved[2] - moved[0] - (old[2] - old[0])).abs() < 1e-6);
         assert!((moved[3] - moved[1] - (old[3] - old[1])).abs() < 1e-6, "angled captions stay horizontal");
         ok(&mut h, &c, "ui.command", json!({"id":"edit.undo"}));

@@ -548,6 +548,7 @@ fn appearance_context(d: &Dict) -> Option<AppearanceContext<'_>> {
     let subtype = d.name(b"Subtype")?;
     let rect = nums(d, b"Rect").filter(|r| r.len() == 4)?;
     let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+    let rect = crate::measurement_caption::bounds(d).unwrap_or(rect);
     // Cloudy borders (§12.5.4) are drawn for polygons only.
     let cloudy = d.get(b"BE").and_then(|b| b.as_dict()).is_some_and(|b| b.name(b"S") == Some(b"C"));
     if cloudy && subtype != b"Polygon" {
