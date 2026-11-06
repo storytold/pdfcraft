@@ -5172,8 +5172,10 @@ fn damaged_page() -> (Document, pdfcraft_cos::Stream) {
 }
 
 /// An edit that would rewrite a content stream damaged partway is refused: written from what
-/// decoded, it would lose what follows the damage, which other readers may still read. An edit
-/// in the page's other stream goes on, and leaves the damaged one as it is stored.
+/// decoded, it would lose what follows the damage, which other readers may still read. So is an
+/// edit in a later stream: what the damage hides can change how that stream reads, a string or
+/// comment it leaves open, or the graphics state. An edit in a stream before the damage goes on,
+/// and leaves the damaged one as it is stored.
 #[test]
 fn an_edit_never_rewrites_a_content_stream_damaged_partway() {
     let (mut doc, damaged) = damaged_page();
@@ -5183,19 +5185,62 @@ fn an_edit_never_rewrites_a_content_stream_damaged_partway() {
     let listed = contents(&doc);
 
     let refused = text::replace_line(&mut doc, 0, 0, "Edited").unwrap_err();
-    assert!(refused.to_string().contains("damaged partway"), "{refused}");
+    assert!(refused.to_string().contains("is damaged partway"), "{refused}");
     assert_eq!(contents(&doc), listed);
     let refused = text::rewrite_block(&mut doc, 0, 0, Some("Edited"), &text::BlockStyle::default()).unwrap_err();
-    assert!(refused.to_string().contains("damaged partway"), "{refused}");
+    assert!(refused.to_string().contains("is damaged partway"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+    let refused = text::replace_line(&mut doc, 0, 1, "Edited").unwrap_err();
+    assert!(refused.to_string().contains("comes after a content stream that is damaged partway"), "{refused}");
     assert_eq!(contents(&doc), listed);
 
-    text::replace_line(&mut doc, 0, 1, "Edited").unwrap();
+    let mut doc = split_page("BT /F1 12 Tf 72 600 Td (Whole) Tj ET", "");
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), damaged.clone());
+    text::replace_line(&mut doc, 0, 0, "Edited").unwrap();
     let doc = reopen(&doc);
-    assert_eq!(texts(&doc), ["Damaged", "Edited"]);
+    assert_eq!(texts(&doc), ["Edited", "Damaged"]);
     let Some(Object::Array(list)) = contents(&doc) else { panic!("contents {:?}", contents(&doc)) };
-    assert_eq!(list.first(), Some(&Object::Ref(pdfcraft_cos::ObjRef::new(4, 0))));
-    let Object::Stream(kept) = &*doc.get(pdfcraft_cos::ObjRef::new(4, 0)) else { panic!("not a stream") };
+    assert_eq!(list.get(1), Some(&Object::Ref(pdfcraft_cos::ObjRef::new(5, 0))));
+    let Object::Stream(kept) = &*doc.get(pdfcraft_cos::ObjRef::new(5, 0)) else { panic!("not a stream") };
     assert_eq!(kept.raw, damaged.raw, "stored as it was");
+}
+
+/// A comment the damage leaves open runs on into the next stream, up to its first end of line,
+/// so a string starting there reads as operators: a line of text inside it. That line is in a
+/// stream after the damage, and isn't edited.
+#[test]
+fn text_a_damaged_stream_runs_on_into_is_not_edited() {
+    let mut doc = split_page("", "(note\nBT /F1 12 Tf 72 600 Td (Inside a string) Tj ET\n) pop");
+    doc.set(pdfcraft_cos::ObjRef::new(4, 0), damaged_flate(b"0 g % a comment", b"\n"));
+    let texts = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>();
+    assert_eq!(texts(&doc), ["Inside a string"], "the comment runs on into the next stream");
+    let listed = pdfcraft_model::pages(&doc)[0].dict.get(b"Contents").cloned();
+    let refused = text::replace_line(&mut doc, 0, 0, "Edited").unwrap_err();
+    assert!(refused.to_string().contains("comes after"), "{refused}");
+    assert_eq!(pdfcraft_model::pages(&doc)[0].dict.get(b"Contents").cloned(), listed);
+}
+
+/// A content stream that doesn't decode is never written over. A partial rewrite of the page's
+/// last paragraph closes its marker past the last operator read, in the page's last stream, here
+/// one that doesn't decode: the rewrite is refused, not that stream replaced by the close. An
+/// empty stream there takes the close.
+#[test]
+fn a_content_stream_that_does_not_decode_is_never_written_over() {
+    let src = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha first row.) Tj T* (Alpha next row.) Tj ET";
+    let mut doc = split_page(src, "");
+    let mut dict = pdfcraft_cos::Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), pdfcraft_cos::Stream::from_raw(dict, b"0 0 1 rg 0 0 10 10 re f".to_vec()));
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+    let listed = contents(&doc);
+    let refused = text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap_err();
+    assert!(refused.to_string().contains("can't be decoded"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+
+    let mut doc = split_page(src, "");
+    text::replace_block(&mut doc, 0, 0, "One.\nAlpha next row.").unwrap();
+    let texts: Vec<_> = text::text_blocks(&reopen(&doc), 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(texts, ["One. Alpha next row."]);
 }
 
 /// A content stream that doesn't decode at all is no damage to write over: it is kept as stored,
@@ -5308,6 +5353,52 @@ fn arrange_and_crop_image_in_second_content_stream_succeeds() {
     assert!(close(after_crop[0].visible_rect.unwrap(), [210.0, 210.0, 290.0, 290.0]));
     assert_eq!(after_crop[1].name, "Im0");
     assert_eq!(after_crop[1].visible_rect, Some(after_crop[1].rect));
+}
+
+/// What follows the damage in a content stream is unknown, the graphics state the later streams
+/// draw in too: here it hides a `cm` that doubles them. An image after the damage isn't moved, as
+/// the move is worked out without that `cm`, and one before it isn't arranged to after it, beside
+/// an added item there. An image before the damage is moved.
+#[test]
+fn images_after_a_content_stream_damaged_partway_are_not_moved() {
+    use pdfcraft_cos::{Dict, ObjRef, Stream};
+    let image = "q 100 0 0 100 200 200 cm /Im1 Do Q";
+    let hidden_scale = || damaged_flate(b"0 g\n", b"2 0 0 2 0 0 cm");
+    let shift = images::ImageChange::Transform([1.0, 0.0, 0.0, 1.0, 10.0, 0.0]);
+    let contents = |doc: &Document| pdfcraft_model::pages(doc)[0].dict.get(b"Contents").cloned();
+
+    let mut doc = two_stream_image_page("", image);
+    doc.set(ObjRef::new(4, 0), hidden_scale());
+    let listed = contents(&doc);
+    let refused = images::change_image(&mut doc, 0, 0, &shift).unwrap_err();
+    assert!(refused.to_string().contains("comes after"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+
+    let mut doc = two_stream_image_page(image, "");
+    let damaged = doc.add(hidden_scale());
+    let mut added = Dict::new();
+    added.set(b"PCAdded".to_vec(), Object::Dict(Dict::new()));
+    let added = doc.add(Object::Stream(Stream::from_raw(added, b"q 0 0 1 rg 0 0 10 10 re f Q".to_vec())));
+    doc.update_dict(ObjRef::new(3, 0), |p| {
+        p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(damaged), Object::Ref(added)]))
+    })
+    .unwrap();
+    let listed = contents(&doc);
+    let refused = images::change_image(&mut doc, 0, 0, &images::ImageChange::Arrange(images::ArrangeOrder::BringToFront)).unwrap_err();
+    assert!(refused.to_string().contains("comes after"), "{refused}");
+    assert_eq!(contents(&doc), listed);
+    // Arranged within the content before the damage, it goes on.
+    doc.update_dict(ObjRef::new(3, 0), |p| {
+        p.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(ObjRef::new(4, 0)), Object::Ref(added), Object::Ref(damaged)]))
+    })
+    .unwrap();
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Arrange(images::ArrangeOrder::BringToFront)).unwrap();
+
+    let mut doc = two_stream_image_page(image, "");
+    doc.set(ObjRef::new(5, 0), hidden_scale());
+    images::change_image(&mut doc, 0, 0, &shift).unwrap();
+    let moved = images::page_images(&reopen(&doc), 0).unwrap();
+    assert!(close(moved[0].rect, [210.0, 200.0, 310.0, 300.0]), "{:?}", moved[0].rect);
 }
 
 /// One page whose font draws a few Hebrew letters (ToUnicode): A ב, B ד, C י, D ו, E ק, F ש,

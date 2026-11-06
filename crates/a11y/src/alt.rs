@@ -26,7 +26,7 @@ pub enum AltError {
     #[error("the page has more content than can be edited")]
     TooLarge,
     #[error(
-        "the figure's content is, or may be, in a content stream damaged partway, which can't be rewritten without losing what follows the damage"
+        "the figure's content is, or may be, in a content stream that is damaged partway or doesn't decode, or after the damage, where it can't be rewritten without losing or misreading what wasn't read"
     )]
     Damaged,
     #[error("{0}")]
@@ -57,7 +57,7 @@ pub enum ArtifactError {
     #[error("the page has more content than can be edited")]
     TooLarge,
     #[error(
-        "the tag's marked content is, or may be, in a content stream damaged partway, which can't be rewritten without losing what follows the damage"
+        "the tag's marked content is, or may be, in a content stream that is damaged partway or doesn't decode, or after the damage, where it can't be rewritten without losing or misreading what wasn't read"
     )]
     Damaged,
     #[error(transparent)]
@@ -380,9 +380,19 @@ fn content_entries(doc: &Document, page: &Dict) -> Vec<Object> {
     }
 }
 
-/// A `/Contents` entry and, for a stream, the stream, its decoded data and whether it is damaged
-/// partway (the data is then what decoded before the damage).
-type DecodedStream = (Object, Option<(Stream, Vec<u8>, bool)>);
+/// How much of a content stream decoded.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Read {
+    Whole,
+    /// Damaged partway: the data is what decoded before the damage. What follows it is unknown,
+    /// the syntax the later streams start in too.
+    Damaged,
+    /// Not at all (a filter this reader lacks, say): the data is empty.
+    Unread,
+}
+
+/// A `/Contents` entry and, for a stream, the stream, its decoded data and how much of it decoded.
+type DecodedStream = (Object, Option<(Stream, Vec<u8>, Read)>);
 
 /// Decode the page's content streams within the page decode budget. `None` when a stream is
 /// rejected because the budget is exhausted.
@@ -393,14 +403,14 @@ fn decode_page_streams(doc: &Document, page: &Dict) -> Option<Vec<DecodedStream>
     for entry in entries {
         let decoded = match &*doc.resolve(&entry) {
             Object::Stream(s) => {
-                let (data, damaged) = match budget.decode_with_damage(doc, s, usize::MAX) {
-                    Ok(read) => read,
+                let (data, read) = match budget.decode_with_damage(doc, s, usize::MAX) {
+                    Ok((data, damaged)) => (data, if damaged { Read::Damaged } else { Read::Whole }),
                     // Content past the budget may hold more of the tag: editing the rest
                     // would leave that part marked as a tag the tree no longer has.
                     Err(_) if budget.exhausted() => return None,
-                    Err(_) => (Vec::new(), false),
+                    Err(_) => (Vec::new(), Read::Unread),
                 };
-                Some((s.clone(), data, damaged))
+                Some((s.clone(), data, read))
             }
             _ => None,
         };
@@ -420,8 +430,8 @@ enum Marked {
     Done,
     /// None of the content is on the page, or with `require_all` not all of it: nothing changed.
     NotFound,
-    /// Some of it is in a stream damaged partway, which can't be rewritten without losing what
-    /// follows the damage, or may be past the damage: nothing changed.
+    /// Some of it is, or may be, in a stream damaged partway or one that doesn't decode, neither of
+    /// which can be rewritten without losing what wasn't read, or after the damage: nothing changed.
     Damaged,
 }
 
@@ -436,27 +446,34 @@ fn artifact_marked_content(
     require_all: bool,
 ) -> Result<Marked, pdfcraft_cos::CosError> {
     let props = page_properties(doc, &page.dict);
+    // The pieces are the streams, in order.
     let decoded: Vec<&[u8]> = streams.iter().filter_map(|(_, s)| s.as_ref().map(|(_, bytes, _)| bytes.as_slice())).collect();
+    let read: Vec<Read> = streams.iter().filter_map(|(_, s)| s.as_ref().map(|(_, _, read)| *read)).collect();
+    let damage = read.iter().position(|r| *r == Read::Damaged);
     let pieces = pdfcraft_content::Pieces::join(&decoded);
     let mut found = HashSet::new();
     let mut edits = Vec::new();
     for op in pieces.parse().ops {
         if let Some(id) = marked_id(doc, &props, &op, ids) {
+            // What follows the damage is unknown: a string or comment the damage left open runs
+            // on into the next stream, so what reads as an operator after it may not be one.
+            if damage.is_some_and(|d| pieces.piece_of(op.span.start) > d) {
+                return Ok(Marked::Damaged);
+            }
             found.insert(id);
             edits.push((op.span, b"/Artifact BMC".to_vec()));
         }
     }
-    // Content not found may be past the damage in a damaged stream: whether it is on the page
-    // isn't known.
-    if found != *ids && streams.iter().any(|(_, s)| s.as_ref().is_some_and(|(_, _, damaged)| *damaged)) {
+    // Content not found may be past the damage, or in a stream that doesn't decode: whether it
+    // is on the page isn't known.
+    if found != *ids && read.iter().any(|r| *r != Read::Whole) {
         return Ok(Marked::Damaged);
     }
     if if require_all { found != *ids } else { found.is_empty() } {
         return Ok(Marked::NotFound);
     }
     let spliced = pieces.splice(edits);
-    // The pieces are the streams that decoded, in order.
-    if streams.iter().filter_map(|(_, s)| s.as_ref()).zip(&spliced).any(|((_, old, damaged), new)| *damaged && old != new) {
+    if read.iter().zip(&decoded).zip(&spliced).any(|((read, old), new)| *read != Read::Whole && *old != new.as_slice()) {
         return Ok(Marked::Damaged);
     }
     let mut spliced = spliced.into_iter();

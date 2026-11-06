@@ -67,9 +67,19 @@ pub(crate) struct ContentStream {
     pub(crate) entry: Object,
     /// Its decoded data, empty when it doesn't decode.
     pub(crate) data: Vec<u8>,
-    /// The stream is damaged partway: `data` is what decoded before the damage, so the stream
-    /// can't be written again from it without losing the rest ([`rewritten_contents`]).
-    pub(crate) damaged: bool,
+    /// How much of it decoded.
+    pub(crate) read: Read,
+}
+
+/// How much of a content stream decoded ([`rewritten_contents`] says what each allows).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Read {
+    Whole,
+    /// Damaged partway: the data is what decoded before the damage. What follows it is unknown,
+    /// the graphics state and syntax the later streams start in too.
+    Damaged,
+    /// Not at all (a filter this reader lacks, say): the data is empty.
+    Unread,
 }
 
 /// The page's content streams as listed, each with its decoded data, within one page's
@@ -91,15 +101,16 @@ pub(crate) fn content_streams_within(doc: &Document, page: &Dict, budget: &mut D
     };
     let mut out = Vec::with_capacity(list.len());
     for entry in list {
-        let (data, damaged) = match &*doc.resolve(&entry) {
+        let (data, read) = match &*doc.resolve(&entry) {
             Object::Stream(s) => match budget.decode_with_damage(doc, s, usize::MAX) {
-                Ok(read) => read,
+                Ok((data, damaged)) => (data, if damaged { Read::Damaged } else { Read::Whole }),
                 Err(e) if budget.remaining() == 0 => return Err(EditError::Invalid(format!("the page content is too large to read: {e}"))),
-                Err(_) => (Vec::new(), false),
+                Err(_) => (Vec::new(), Read::Unread),
             },
-            _ => (Vec::new(), false),
+            // Nothing to lose: a null or missing entry draws nothing.
+            _ => (Vec::new(), Read::Whole),
         };
-        out.push(ContentStream { entry, data, damaged });
+        out.push(ContentStream { entry, data, read });
     }
     Ok(out)
 }
@@ -136,15 +147,50 @@ pub(crate) fn splice(pieces: &Pieces, ops: &[Op], mut edit: impl FnMut(usize) ->
     pieces.splice(edits)
 }
 
+/// An error when content at `/Contents` index `at` (a stream there, or one inserted there) is drawn
+/// after a stream damaged partway: what the damage hides can change how it reads.
+pub(crate) fn drawn_before_damage(streams: &[ContentStream], at: usize) -> Result<(), EditError> {
+    if at > first_damaged(streams) {
+        return Err(EditError::Invalid(
+            "this change comes after a content stream that is damaged partway, and what the damage hides can change how the rest of the page reads"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// The index of the first stream damaged partway, or the number of streams.
+fn first_damaged(streams: &[ContentStream]) -> usize {
+    streams.iter().position(|s| s.read == Read::Damaged).unwrap_or(streams.len())
+}
+
 /// The page's `/Contents` after a [`splice`]: pieces whose bytes changed become new streams
 /// (keeping their dictionaries), the others stay as they were. An error, before anything is
-/// added, when a piece that changed is a damaged stream: written from what decoded, it would
-/// lose everything after the damage.
+/// added, when a piece that changed is a stream that didn't decode whole, or comes after one
+/// damaged partway. Written from what decoded, a damaged stream would lose everything after the
+/// damage, and one that doesn't decode all of it. What follows the damage is unknown, so a later
+/// stream may not read as it seems: a string or comment the damage left open runs on into it, and
+/// operators the damage hides can change the graphics state it draws in.
 pub(crate) fn rewritten_contents(doc: &mut Document, streams: &[ContentStream], new: Vec<Vec<u8>>) -> Result<Object, EditError> {
-    if streams.iter().zip(&new).any(|(s, data)| s.damaged && s.data != *data) {
-        return Err(EditError::Invalid(
-            "this change is in a content stream that is damaged partway, and rewriting it would lose what follows the damage".into(),
-        ));
+    // The last stream that changed: when it is drawn before the damage, so are the others.
+    if let Some(i) = streams.iter().zip(&new).rposition(|(s, data)| s.data != *data) {
+        drawn_before_damage(streams, i)?;
+    }
+    for (s, data) in streams.iter().zip(&new) {
+        if s.data == *data {
+            continue;
+        }
+        match s.read {
+            Read::Whole => {}
+            Read::Damaged => {
+                return Err(EditError::Invalid(
+                    "this change is in a content stream that is damaged partway, and rewriting it would lose what follows the damage".into(),
+                ));
+            }
+            Read::Unread => {
+                return Err(EditError::Invalid("this change is in a content stream that can't be decoded, and rewriting it would lose it".into()));
+            }
+        }
     }
     let mut contents: Vec<Object> = Vec::with_capacity(streams.len());
     for (s, data) in streams.iter().zip(new) {

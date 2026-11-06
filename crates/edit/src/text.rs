@@ -56,7 +56,8 @@ pub(crate) use fallback::{glyph_path, type3_font_dict, unique_font_name};
 use interp::{Origin, Paint, union};
 use lines::page_dict;
 pub(crate) use lines::{
-    ContentStream, FormBudget, content_streams, content_streams_within, dict_in_place, form_call, joined, resource_dict, rewritten_contents, splice,
+    ContentStream, FormBudget, Read, content_streams, content_streams_within, dict_in_place, drawn_before_damage, form_call, joined, resource_dict,
+    rewritten_contents, splice,
 };
 pub use lines::{MAX_FORM_DEPTH, MAX_FORM_VISITS, glyph_text_lines, text_lines};
 pub use rewrite::{LineEdit, replace_line, rewrite_block};
