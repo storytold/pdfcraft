@@ -305,6 +305,48 @@ fn field_flags_reject_values_outside_the_unsigned_32_bit_domain() {
     }
 }
 
+/// A `/Kids` entry that loops back (the field itself, or a field it descends from), or names a root
+/// field that doesn't name this one as its `/Parent`, is not a child (ISO 32000-2 §12.7.3,
+/// Table 224; §12.7.4.1, Table 226). The field keeps its other kids: here its radio buttons.
+#[test]
+fn kids_that_loop_back_or_are_roots_are_not_children() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),                   // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),   // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 9 0 R 12 0 R 15 0 R] >>".into(), // 3
+        "<< /Fields [5 0 R 7 0 R 8 0 R 10 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),       // 4
+        "<< /FT /Btn /Ff 49152 /T (size) /V /Off /Kids [5 0 R 6 0 R] >>".into(),      // 5 lists itself
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [50 700 65 715] /P 3 0 R /AP << /N << /S 11 0 R /Off 11 0 R >> >> >>".into(), // 6
+        "<< /FT /Btn /Ff 49152 /T (left) /V /Off /Kids [8 0 R 9 0 R] >>".into(),      // 7 lists the root 8
+        "<< /FT /Btn /Ff 49152 /T (right) /V /Off /Kids [7 0 R 12 0 R] >>".into(),    // 8 lists the root 7
+        "<< /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [50 650 65 665] /P 3 0 R /AP << /N << /A 11 0 R /Off 11 0 R >> >> >>".into(), // 9
+        "<< /T (group) /Kids [13 0 R] >>".into(),                                     // 10
+        "<< /Length 0 >>
+stream
+
+endstream"
+            .into(),                          // 11
+        "<< /Type /Annot /Subtype /Widget /Parent 8 0 R /Rect [50 600 65 615] /P 3 0 R /AP << /N << /B 11 0 R /Off 11 0 R >> >> >>".into(), // 12
+        "<< /FT /Tx /T (inner) /Parent 10 0 R /Kids [14 0 R] >>".into(),              // 13
+        "<< /FT /Tx /T (deep) /Parent 13 0 R /Kids [13 0 R 15 0 R] >>".into(),        // 14 lists its parent
+        "<< /Type /Annot /Subtype /Widget /Parent 14 0 R /Rect [50 550 250 570] /P 3 0 R >>".into(), // 15
+    ];
+    let doc = document(&objs);
+    let all = fields(&doc);
+    let listed: Vec<(&str, FieldKind, Vec<ObjRef>)> =
+        all.iter().map(|f| (f.name.as_str(), f.kind, f.widgets.iter().map(|w| w.obj).collect())).collect();
+    let r = |num| ObjRef::new(num, 0);
+    assert_eq!(
+        listed,
+        [
+            ("size", FieldKind::Radio, vec![r(6)]),
+            ("left", FieldKind::Radio, vec![r(9)]),
+            ("right", FieldKind::Radio, vec![r(12)]),
+            ("group.inner.deep", FieldKind::Text, vec![r(15)]),
+        ]
+    );
+}
+
 /// Some writers leave every field out of `/Fields` and put the widgets only in the page
 /// annotations: the tree walk alone finds nothing, and Acrobat and the browsers fill them anyway.
 /// The pages' widgets are adopted as fields, after the listed tree fields.

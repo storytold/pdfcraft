@@ -338,14 +338,14 @@ impl<'a> Inspector<'a> {
         o: &'a Object,
         parent: Option<(&str, Option<String>, Option<i64>)>,
         out: &mut Vec<Field>,
-        seen: &mut HashSet<ObjectId>,
+        walk: &mut FieldWalk,
         depth: u32,
     ) {
         if depth > 32 {
             return;
         }
         if let Object::Reference(id) = o
-            && !seen.insert(*id)
+            && !walk.seen.insert(*id)
         {
             return;
         }
@@ -364,10 +364,16 @@ impl<'a> Inspector<'a> {
             Ok(Object::Array(k)) => k.as_slice(),
             _ => &[],
         };
-        let field_kids: Vec<_> = kids.iter().filter(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok())).collect();
+        let (field_kids, widget_kids): (Vec<&Object>, Vec<&Object>) = kids.iter().partition(|k| self.dict(k).is_some_and(|kd| kd.get(b"T").is_ok()));
+        let field_kids: Vec<_> = field_kids.into_iter().filter(|k| !self.not_a_child(walk, o, k)).collect();
         if !field_kids.is_empty() {
+            let id = if let Object::Reference(id) = o { Some(*id) } else { None };
+            walk.path.extend(id);
             for k in field_kids {
-                self.field(k, Some((&full, ft.clone(), ff)), out, seen, depth + 1);
+                self.field(k, Some((&full, ft.clone(), ff)), out, walk, depth + 1);
+            }
+            if id.is_some() {
+                walk.path.pop();
             }
             return;
         }
@@ -398,11 +404,25 @@ impl<'a> Inspector<'a> {
             _ => None,
         };
         // The widget is either this dict (merged field/widget) or its first kid.
-        let widget = if d.get(b"Rect").is_ok() { Some(d) } else { kids.first().and_then(|k| self.dict(k)) };
+        let widget = if d.get(b"Rect").is_ok() { Some(d) } else { widget_kids.first().and_then(|k| self.dict(k)) };
         let page = widget.and_then(|w| w.get(b"P").ok()).and_then(|p| self.page_of(p)).or_else(|| self.find_widget_page(o, kids));
         let has_actions = d.get(b"AA").is_ok() || widget.is_some_and(|w| w.get(b"AA").is_ok() || w.get(b"A").is_ok());
         let rect = widget.and_then(|w| w.get(b"Rect").ok()).map(|r| rect4(self.resolve(r)));
         out.push(Field { name: full, kind, value, page, tooltip: self.text(d, b"TU"), has_actions, rect });
+    }
+
+    /// Whether `k`, listed in the `/Kids` of field `o`, is not a child of `o` after all: `o` itself
+    /// or a field `o` descends from (a loop), or a root field (one `/Fields` lists) that doesn't
+    /// name `o` as its `/Parent`. Root fields have no ancestors (ISO 32000-2 §12.7.3, Table 224),
+    /// and a child names its parent (§12.7.4.1, Table 226).
+    fn not_a_child(&self, walk: &FieldWalk, o: &Object, k: &Object) -> bool {
+        let Object::Reference(k) = k else { return false };
+        let parent = self.dict(&Object::Reference(*k)).and_then(|d| match d.get(b"Parent") {
+            Ok(Object::Reference(p)) => Some(*p),
+            _ => None,
+        });
+        let o = if let Object::Reference(o) = o { Some(*o) } else { None };
+        o == Some(*k) || walk.path.contains(k) || (walk.roots.contains(k) && (o.is_none() || parent != o))
     }
 
     /// The first page whose `/Annots` lists the field or one of its kids.
@@ -450,6 +470,15 @@ impl<'a> Inspector<'a> {
             top = p;
         }
     }
+}
+
+/// What one reading of the form's fields keeps: the fields read, the root fields `/Fields` lists,
+/// and the fields whose `/Kids` are being read, outermost first.
+#[derive(Default)]
+pub(super) struct FieldWalk {
+    pub(super) seen: HashSet<ObjectId>,
+    pub(super) roots: HashSet<ObjectId>,
+    path: Vec<ObjectId>,
 }
 
 /// An annotation's `/F` as the renderer reads it: a real is truncated, and a value that isn't a

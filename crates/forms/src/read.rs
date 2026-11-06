@@ -351,18 +351,23 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
         None => Inherited::default(),
     };
     let mut out = Vec::new();
+    let listed_roots: Vec<ObjRef> = af
+        .as_ref()
+        .and_then(|af| af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(Object::as_ref)
+        .collect();
     let mut seen = Seen {
         fields: std::collections::HashSet::new(),
         widgets: std::collections::HashSet::new(),
+        roots: listed_roots.iter().copied().collect(),
+        path: Vec::new(),
         scripts: script_budget(),
         values: DecodeBudget::new(MAX_VALUE_BYTES, 0),
     };
-    if let Some(af) = &af {
-        for f in af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default() {
-            if let Some(r) = f.as_ref() {
-                walk(doc, r, &base, &page_of, &mut seen, &mut out, 0);
-            }
-        }
+    for r in listed_roots {
+        walk(doc, r, &base, &page_of, &mut seen, &mut out, 0);
     }
     let listed = out.len();
     adopt_page_fields(doc, &pages, &base, &page_of, &mut seen, &mut out);
@@ -433,8 +438,21 @@ struct Seen {
     fields: std::collections::HashSet<ObjRef>,
     /// A widget belongs to the first field that lists it, however often it is listed.
     widgets: std::collections::HashSet<ObjRef>,
+    /// The fields `/Fields` lists: root fields, with no ancestors (ISO 32000-2 §12.7.3, Table 224).
+    roots: std::collections::HashSet<ObjRef>,
+    /// The fields being walked, outermost first, whose `/Kids` are being read.
+    path: Vec<ObjRef>,
     scripts: DecodeBudget,
     values: DecodeBudget,
+}
+
+/// Whether `k`, listed in the `/Kids` of field `r`, is not a child of `r` after all: `r` itself or
+/// a field `r` descends from (a loop), or a root field (one `/Fields` lists) that doesn't name `r`
+/// as its `/Parent`. Root fields have no ancestors (ISO 32000-2 §12.7.3, Table 224), and a
+/// child names its parent (§12.7.4.1, Table 226): only the `/Kids` entry says otherwise, so the
+/// field is read as the root it is, and `r` keeps its other kids.
+fn not_a_child(doc: &Document, seen: &Seen, r: ObjRef, k: ObjRef) -> bool {
+    k == r || seen.path.contains(&k) || (seen.roots.contains(&k) && doc.get(k).as_dict().and_then(|d| d.reference(b"Parent")) != Some(r))
 }
 
 /// Read the field at `r` and the fields under it into `out`, with what they inherit from
@@ -483,11 +501,14 @@ fn walk(
     let kids: Vec<ObjRef> =
         d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default().iter().filter_map(|k| k.as_ref()).collect();
     // Kids with /T are fields; kids without are this field's widgets.
-    let field_kids: Vec<ObjRef> = kids.iter().copied().filter(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T"))).collect();
+    let (field_kids, kids): (Vec<ObjRef>, Vec<ObjRef>) = kids.into_iter().partition(|k| doc.get(*k).as_dict().is_some_and(|kd| kd.contains(b"T")));
+    let field_kids: Vec<ObjRef> = field_kids.into_iter().filter(|k| !not_a_child(doc, seen, r, *k)).collect();
     if !field_kids.is_empty() {
+        seen.path.push(r);
         for k in field_kids {
             walk(doc, k, &inh, page_of, seen, out, depth + 1);
         }
+        seen.path.pop();
         return;
     }
     // A field of no kind this reads is skipped before it claims widgets or scripts, which a later
