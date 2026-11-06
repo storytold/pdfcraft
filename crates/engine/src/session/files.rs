@@ -68,13 +68,15 @@ impl Session {
         if pdf { Ok(bytes.clone()) } else { self.convert_to_pdf(name, bytes).map(|(_, pdf)| pdf) }
     }
 
-    /// Reduce File Size: Acrobat's defaults (images above 225 ppi to 150 ppi, JPEG medium
-    /// quality; thumbnails dropped), identical resources merged, unused objects dropped, objects
-    /// packed into compressed object streams. Returns the bytes and how many objects were
-    /// merged. The open document is not changed (Acrobat saves the reduced copy as a new file).
-    pub fn reduced_bytes(&self, id: DocId) -> Result<(Arc<Vec<u8>>, usize), EditError> {
+    /// Reduce File Size: Acrobat's defaults (colour and grey images above 225 ppi to 150 ppi,
+    /// JPEG medium quality; black-and-white averaged down to 300 ppi above 450 ppi, and stored as
+    /// CCITT Group 4 whenever smaller; thumbnails dropped), identical resources merged, unused
+    /// objects dropped, objects packed into compressed object streams. Returns the bytes, how
+    /// many objects were merged and how many images stayed as they were, past what one run may
+    /// decode. The open document is not changed (Acrobat saves the reduced copy as a new file).
+    pub fn reduced_bytes(&self, id: DocId) -> Result<(Arc<Vec<u8>>, usize, usize), EditError> {
         let (bytes, report) = self.optimized_bytes(id, &optimize::Settings::default(), &[])?;
-        Ok((bytes, report.merged))
+        Ok((bytes, report.merged, report.optimize.images_refused))
     }
 
     /// Optimize PDF ▸ Advanced optimization: `settings` for images and objects, plus Remove
@@ -110,6 +112,19 @@ impl Session {
         })
         .map_err(EditError::Write)?
         .map_err(EditError::Write)
+    }
+
+    /// XFDF with these comments (0-based page, position in the page's `/Annots`) and their
+    /// replies: what Copy puts on the clipboard; [`Edit::PasteComments`] takes it back in.
+    pub fn export_comments(&self, id: DocId, which: &[(usize, usize)]) -> Result<String, EditError> {
+        let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        let cos = match doc.editor.as_ref() {
+            Some(e) => e.cos.clone(),
+            None => {
+                pdfcraft_cos::Document::open_with_password(doc.bytes.clone(), doc.password.as_deref()).map_err(|e| EditError::Write(e.to_string()))?
+            }
+        };
+        guard(|| pdfcraft_xfdf::export_xfdf_comments(&cos, which, &doc.name)).map_err(EditError::Write)
     }
 
     /// The print-ready PDF for `settings` (sheets laid out for the paper; see `pdfcraft-print`).
@@ -382,7 +397,7 @@ impl Session {
 
     /// A new file (Combine, Extract, Split, Create) as bytes, checked like a save before anyone
     /// writes it (#1698, #2166): it reopens, and shows the pages it was built from.
-    fn write_new(&self, doc: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
+    pub(crate) fn write_new(&self, doc: &pdfcraft_cos::Document) -> Result<Arc<Vec<u8>>, EditError> {
         let bytes = self.write_unchecked(doc)?;
         let expected = pdfcraft_organize::page_count(doc)?;
         pdfcraft_cos::Document::open(bytes.clone()).map_err(|e| EditError::Reopen(e.to_string()))?;
