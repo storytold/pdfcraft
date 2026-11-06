@@ -14,12 +14,18 @@ L3/L4 crates need:
   `view_matrix_for(rotation, rect)` is the same matrix for any rectangle, e.g. to draw a
   comment's picture upright inside its user-space `/Rect` on a turned page.
 
-The page-tree walk keeps one cursor per ancestor and shares inherited attribute owners.
-Repeated child references are skipped before copying attributes, with first depth-first
-occurrence order preserved. Returned page dictionaries still own their effective attributes.
-A walk copies at most `MAX_INHERITED_COPIES` (1 GiB, approximate heap bytes) of inherited
-values into the leaves; past it the walk stops, as it does past its leaf cap, and the pages
-after that point are not listed.
+The page-tree walk is `PageNodes` (every node, in document order) and `PageLeaves` (its leaves).
+`pages`, `try_pages`, `page`, `page_refs`, forms, annot, organize and redact's resource holders
+all use it; its doc comment gives the rules (leaf rule, object identity by number, a shared
+`/Kids` array read once). Each `/Kids` entry is resolved as cos resolves references (#1143): a
+stale generation is null and lists nothing, a repaired alias is the object. Each `PageNode` is
+given at its canonical reference (`Document::canonical_ref`; destinations are compared the same
+way, after cos accepts them), and reads its inherited attributes without copying them (`inherited`,
+`inherited_from`).
 
-`organize`, `annot` and `forms` still carry their own small walkers; they move here as the model
-grows (ADR-0004).
+Its limits are `MAX_PAGE_TREE_NODES`, `MAX_KIDS_ENTRIES` and `MAX_INHERITED_COPIES` (the
+inherited copies of one walk; leaf dictionaries themselves are cloned uncharged, so this is not a
+bound on all allocation). Exceeding one yields `Err(PageTreeLimit)`, never a shorter walk that looks
+whole. `page_refs`, `try_pages` and `page` return it; `pages` stays lenient and gives the pages
+before the limit. `page` and `page_by_ref` copy one page. `with_limits` (the `test-support` feature,
+for other crates' tests) lowers the limits on one thread.
