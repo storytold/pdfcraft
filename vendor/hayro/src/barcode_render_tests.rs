@@ -4,15 +4,20 @@ use std::time::Instant;
 const W: usize = 700;
 const H: usize = 1000;
 const BITS: &str = "1101001000010100011000100010110001100011101011";
+/// Build the default synthetic multi-image page in the requested paint order.
 fn pdf(order: &[usize]) -> Vec<u8> {
     pdf_sized(order, W, H)
 }
+/// Build ordered synthetic image occurrences with explicitly controlled source dimensions.
 fn pdf_sized(order: &[usize], width: usize, height: usize) -> Vec<u8> {
     pdf_layered(order, width, height, false)
 }
+/// Build the sized fixture with optional-content wrapping for admission visibility checks.
 fn pdf_layered(order: &[usize], width: usize, height: usize, layered: bool) -> Vec<u8> {
     pdf_content(order, width, height, layered, false)
 }
+/// Serialize bounded synthetic image occurrences, optional visibility and a cancellation-triggering text run.
+/// Each source has a distinct exact key and independently placed Code128 bars.
 fn pdf_content(order: &[usize], width: usize, height: usize, layered: bool, text: bool) -> Vec<u8> {
     let mut objects = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(), b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec()];
     if layered {
@@ -79,6 +84,7 @@ fn pdf_content(order: &[usize], width: usize, height: usize, layered: bool, text
     out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len()).bytes());
     out
 }
+/// Render the fixture at 0.4x, optionally selecting a fixed device-space tile with its own offset.
 fn draw<'a>(p: &'a hayro::hayro_syntax::Pdf, c: &hayro::RenderCache<'a>, tile: Option<(usize, usize)>) -> Vec<u8> {
     let t = tile.unwrap_or((0, 0));
     hayro::render(
@@ -98,12 +104,14 @@ fn draw<'a>(p: &'a hayro::hayro_syntax::Pdf, c: &hayro::RenderCache<'a>, tile: O
     .data_as_u8_slice()
     .to_vec()
 }
+/// Exercise admitted page counts across reordered painting, cache priming/eviction and stitched tiles.
 #[test]
 fn image_order_cache_history_eviction_and_tiles_agree() {
     for count in [7, 11, 12, 13] {
         check(count);
     }
 }
+/// Compare cold/warm, reordered, primed and evicted renders plus tile assembly for one image count.
 fn check(count: usize) {
     println!("images={count}");
     let all = (0..count).collect::<Vec<_>>();
@@ -154,6 +162,7 @@ fn check(count: usize) {
     assert_eq!(order_diff + cache_diff + tile_diff + warm_diff, 0);
 }
 
+/// Count repeated image occurrences toward admission even when all draws share one cached source.
 #[test]
 fn image_occurrence_cap_is_independent_of_reusing_one_cached_image() {
     // Both pages fit the pixel cap. One more occurrence crosses only the 16-image cap.
@@ -168,6 +177,7 @@ fn image_occurrence_cap_is_independent_of_reusing_one_cached_image() {
     assert_eq!(draw(&declined, &cache, Some((0, 0))), draw(&declined, &hayro::RenderCache::new(), Some((0, 0))));
 }
 
+/// Ensure a warm metadata decision avoids another interpreter pass for the same page/settings.
 #[test]
 fn repeated_admission_does_not_interpret_the_same_page_again() {
     let pdf = hayro::hayro_syntax::Pdf::new(pdf(&[0])).unwrap();
@@ -179,6 +189,7 @@ fn repeated_admission_does_not_interpret_the_same_page_again() {
     assert_eq!(cache.barcode_admission_passes.get(), 1);
 }
 
+/// Verify visibility/settings change admission identity, cancelled passes are not cached and large keys bypass memoization.
 #[test]
 fn admission_cache_tracks_visibility_cancellation_and_large_keys() {
     use std::sync::{Arc, atomic::AtomicBool};
@@ -218,6 +229,7 @@ fn admission_cache_tracks_visibility_cancellation_and_large_keys() {
     assert_eq!(cache.barcode_admission.borrow().len(), 6);
 }
 
+/// Exercise the sixteen-entry admission FIFO with distinct pages whose content bytes happen to match.
 #[test]
 fn admission_cache_eviction_is_bounded_and_keeps_page_identity() {
     let pages = (0..18).map(|_| hayro::hayro_syntax::Pdf::new(pdf(&[0])).unwrap()).collect::<Vec<_>>();
@@ -232,6 +244,7 @@ fn admission_cache_eviction_is_bounded_and_keeps_page_identity() {
     assert_eq!(cache.barcode_admission.borrow().len(), 16);
 }
 
+/// Cancel during text interpretation and verify partial image counts cannot enter the admission cache.
 #[test]
 fn interruption_during_admission_never_caches_a_partial_count() {
     use std::sync::{
@@ -257,6 +270,7 @@ fn interruption_during_admission_never_caches_a_partial_count() {
     assert_eq!(cache.barcode_admission_passes.get(), 2);
 }
 
+/// Require identical pixels after cold/warm admission on nested forms near the shared paint limit.
 #[test]
 fn admission_miss_and_hit_leave_the_renderers_nested_paint_budget_equal() {
     let commands = (0..30_000).map(|i| format!("q 1 0 0 1 {} {} cm /A Do Q\n", i % 200 * 3, i / 200 * 5)).collect::<String>();
@@ -290,6 +304,7 @@ fn admission_miss_and_hit_leave_the_renderers_nested_paint_budget_equal() {
     assert_eq!(cold.iter().zip(&warm).filter(|(a, b)| a != b).count(), 0);
 }
 
+/// Verify the actual viewer token reaches detection and a cancelled scan remains retryable.
 #[test]
 fn viewer_cancellation_reaches_decoder_without_poisoning_source_cache() {
     use std::{
@@ -328,6 +343,7 @@ fn viewer_cancellation_reaches_decoder_without_poisoning_source_cache() {
     );
 }
 
+/// Compare errors, deadlines and caught panics with ordinary smoothing, including warm negative-cache reuse.
 #[test]
 fn decoder_faults_keep_smoothed_fallback_and_are_cached() {
     use std::{cell::Cell, rc::Rc};
@@ -479,6 +495,7 @@ fn raster_pdf(data: &[u8], width: usize, height: usize, filter: &str, placement:
     out
 }
 
+/// Validate QR/EAN/UPC regions and protected render samples against independently generated fixture bounds.
 #[test]
 fn positive_qr_and_retail_regions_and_rendering_match_independent_truth() {
     use std::sync::atomic::AtomicBool;
@@ -538,12 +555,14 @@ fn objects_pdf(objects: &[Vec<u8>]) -> Vec<u8> {
     out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len()).bytes());
     out
 }
+/// Wrap contributor-original bytes in a PDF stream with an exact Length and supplied dictionary entries.
 fn fixture_stream(dict: &str, data: &[u8]) -> Vec<u8> {
     let mut out = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
     out.extend(data);
     out.extend(b"\nendstream");
     out
 }
+/// Build sixteen small, distinct synthetic image sources without crossing the declared-pixel cap.
 fn budget_pdf(order: &[usize]) -> Vec<u8> {
     let resources = (0..16).map(|i| format!("/I{i} {} 0 R ", i + 5)).collect::<String>();
     let commands = order.iter().map(|i| format!("q 64 0 0 64 {} 0 cm /I{i} Do Q\n", i * 64)).collect::<String>();
@@ -560,6 +579,7 @@ fn budget_pdf(order: &[usize]) -> Vec<u8> {
     }
     objects_pdf(&objects)
 }
+/// Verify per-image deadline shares remain page-bounded across order, tile and warm-cache histories.
 #[test]
 fn multi_image_deadlines_are_page_bounded_independent_of_order_tiles_and_history() {
     use std::{cell::RefCell, rc::Rc};
@@ -606,6 +626,7 @@ fn multi_image_deadlines_are_page_bounded_independent_of_order_tiles_and_history
         },
     );
 }
+/// Force nested-paint truncation before later images and refuse incomplete admission metadata.
 #[test]
 fn incomplete_nested_paint_traversal_is_declined_and_never_cached() {
     let busy = "/A Do\n".repeat(30_000);
@@ -774,6 +795,7 @@ fn jpx_fixture() -> Vec<u8> {
         })
         .collect()
 }
+/// Require a visible JPX source to select the same detection raster and protected pixels in page/tile renders.
 #[test]
 fn jpx_detection_raster_and_protected_pixels_are_tile_independent() {
     let pdf =
@@ -909,6 +931,7 @@ pub(crate) fn call_limit_fixture(tag: u8, kind: u8) -> (Vec<u8>, crate::barcode:
     }
     (pixels, ink, quiet)
 }
+/// Build four distinct 1400-square active sources in fixed positions with caller-controlled painting order.
 fn call_limit_pdf(order: &[usize]) -> Vec<u8> {
     let mut objects = vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
@@ -925,6 +948,7 @@ fn call_limit_pdf(order: &[usize]) -> Vec<u8> {
     }
     objects_pdf(&objects)
 }
+/// Render the call-limit fixture at 0.4x as a full page or one 560-square device tile.
 fn draw_call_limit<'a>(p: &'a hayro::hayro_syntax::Pdf, cache: &hayro::RenderCache<'a>, tile: Option<(usize, usize)>) -> Vec<u8> {
     let (x, y) = tile.unwrap_or((0, 0));
     hayro::render(
@@ -944,6 +968,8 @@ fn draw_call_limit<'a>(p: &'a hayro::hayro_syntax::Pdf, cache: &hayro::RenderCac
     .data_as_u8_slice()
     .to_vec()
 }
+/// Exercise the real cache/render path at 4096 calls with complete region and independent pixel assertions.
+/// Disable only the test clock; require order, warm-cache and whole/tile byte equivalence.
 #[test]
 fn call_exhaustion_four_image_render_cache_and_tiles() {
     use crate::barcode::{take_native_calls, with_test_decoder, without_test_deadline};
@@ -1035,10 +1061,12 @@ fn call_exhaustion_four_image_render_cache_and_tiles() {
     assert!(tile_calls <= 4096);
     assert_eq!(actual, tiled);
 }
+/// Return fixed source and quiet-zone truth from the generator, independently of decoder points.
 fn call_limit_bounds() -> (usize, crate::barcode::Rect, crate::barcode::Rect) {
     use crate::barcode::Rect;
     (1400, Rect { x0: 100, y0: 64, x1: 100 + BITS.len() * 3, y1: 144 }, Rect { x0: 64, y0: 60, x1: 136 + BITS.len() * 3, y1: 148 })
 }
+/// Record three bounded cold/warm observations using the production clock; never assert a timing speedup.
 #[test]
 #[ignore = "bounded real-clock observations, run explicitly"]
 fn call_exhaustion_real_clock_probe() {

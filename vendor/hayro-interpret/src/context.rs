@@ -492,6 +492,8 @@ impl<'a> Context<'a> {
         self.nesting_depth
     }
 
+    /// Enter only when both nesting-depth and shared nested-paint limits permit interpretation.
+    /// Refusal records truncated content for admission callers; depth advances only on success.
     pub(crate) fn begin_nested_interpretation(&mut self) -> bool {
         if self.nesting_depth >= MAX_NESTED_INTERPRETATION_DEPTH {
             CONTENT_TRUNCATED.with(|truncated| truncated.set(true));

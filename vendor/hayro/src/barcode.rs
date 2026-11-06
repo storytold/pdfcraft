@@ -21,12 +21,15 @@ pub(crate) struct Rect {
     pub(crate) y1: usize,
 }
 impl Rect {
+    /// Return the area of a validated half-open source rectangle; reversed sides contribute zero.
     pub(crate) fn area(self) -> usize {
         self.x1.saturating_sub(self.x0) * self.y1.saturating_sub(self.y0)
     }
+    /// Return the intersection area of two bounded, half-open source rectangles.
     pub(crate) fn overlap(self, b: Self) -> usize {
         self.x1.min(b.x1).saturating_sub(self.x0.max(b.x0)) * self.y1.min(b.y1).saturating_sub(self.y0.max(b.y0))
     }
+    /// Check complete half-open containment, allowing coincident outer edges.
     #[cfg(test)]
     pub(crate) fn contains(self, b: Self) -> bool {
         self.x0 <= b.x0 && self.y0 <= b.y0 && self.x1 >= b.x1 && self.y1 >= b.y1
@@ -112,12 +115,19 @@ struct Gray {
     threshold: u8,
 }
 impl Gray {
+    /// Read a source sample with coordinate, checked-offset and storage validation.
+    /// Valid reads allocate no error text; malformed storage retains its specific error.
     fn get(&self, x: usize, y: usize) -> Result<u8, String> {
         if x >= self.w || y >= self.h {
             return Err("pixel outside source".into());
         }
-        self.pixels.get(y.checked_mul(self.w).and_then(|v| v.checked_add(x)).ok_or("pixel overflow")?).copied().ok_or("short gray source".into())
+        self.pixels.get(y.checked_mul(self.w).and_then(|v| v.checked_add(x)).ok_or("pixel overflow")?).copied().ok_or_else(|| {
+            #[cfg(test)]
+            TEST_GRAY_ERROR_CONSTRUCTIONS.with(|v| v.set(v.get() + 1));
+            "short gray source".into()
+        })
     }
+    /// Threshold a checked source sample and optionally invert polarity, propagating address errors.
     fn dark(&self, x: usize, y: usize, inverted: bool) -> Result<bool, String> {
         Ok((self.get(x, y)? < self.threshold) ^ inverted)
     }
@@ -131,12 +141,15 @@ struct View<'a> {
     inverted: bool,
 }
 impl View<'_> {
+    /// Return the scan width after choosing the original or transposed source axes.
     fn width(&self) -> usize {
         if self.vertical { self.gray.h } else { self.gray.w }
     }
+    /// Return the scan height after choosing the original or transposed source axes.
     fn height(&self) -> usize {
         if self.vertical { self.gray.w } else { self.gray.h }
     }
+    /// Map a checked oriented scan coordinate to the source and apply the selected polarity.
     fn dark(&self, u: usize, v: usize) -> Result<bool, String> {
         if u >= self.width() || v >= self.height() {
             return Err("view outside source".into());
@@ -145,14 +158,18 @@ impl View<'_> {
         let (x, y) = if self.vertical { (v, u) } else { (u, v) };
         self.gray.dark(x, y, self.inverted)
     }
+    /// Map an in-bounds view rectangle back to image-local coordinates without resampling.
     fn source_rect(&self, r: Rect) -> Rect {
         let r = if self.reverse { Rect { x0: self.width() - r.x1, x1: self.width() - r.x0, ..r } } else { r };
         if self.vertical { Rect { x0: r.y0, y0: r.x0, x1: r.y1, y1: r.x1 } } else { r }
     }
+    /// Map a bounded image-local rectangle into this transposed/reversed scan view.
     fn view_rect(&self, r: Rect) -> Rect {
         let r = if self.vertical { Rect { x0: r.y0, y0: r.x0, x1: r.y1, y1: r.x1 } } else { r };
         if self.reverse { Rect { x0: self.width() - r.x1, x1: self.width() - r.x0, ..r } } else { r }
     }
+    /// Validate the quiet ring outside the ink rectangle, allowing at most 0.2% dark speckle.
+    /// Charge each inspected row and propagate cancellation, deadline and visit-limit failures.
     fn ring_clear(&self, ink: Rect, quiet: Rect, budget: &mut Budget<'_>) -> Result<bool, String> {
         let mut dark = 0usize;
         let mut count = 0usize;
@@ -171,6 +188,8 @@ impl View<'_> {
     }
 }
 
+/// Deduplicate overlapping same-format/payload regions while preserving separate locations.
+/// Refuse a seventeenth distinct region so the caller can retain conservative smoothing.
 fn insert(regions: &mut Vec<Region>, region: Region) -> Result<(), String> {
     if regions
         .iter()
@@ -220,6 +239,7 @@ fn valid_code128_framing(result: &RXingResult) -> bool {
     sum % 103 == usize::from(check)
 }
 
+/// Validate ASCII UPC-A/EAN-13 digits and their alternating-weight check digit.
 fn valid_ean(text: &str) -> bool {
     if !matches!(text.len(), 12 | 13) || !text.bytes().all(|c| c.is_ascii_digit()) {
         return false;
@@ -309,6 +329,8 @@ fn row_span(bits: &[bool], result: &RXingResult) -> Option<(usize, usize, f32)> 
     None
 }
 
+/// Compare one complete bar pattern with a neighboring source row under the pixel-work budget.
+/// Propagate invalid addresses or exhausted/cancelled work rather than extending uncertain ink.
 fn same_row(view: &View<'_>, y: usize, x0: usize, pattern: &[bool], budget: &mut Budget<'_>) -> Result<bool, String> {
     budget.charge(pattern.len())?;
     let mut errors = 0usize;
@@ -468,6 +490,7 @@ fn finder(view: &View<'_>, ink: Rect, pitch: usize, right: bool, bottom: bool) -
     Ok(errors <= 1)
 }
 
+/// Count pixels that disagree with their fitted QR module center, charging every inspected row.
 fn grid_error(view: &View<'_>, ink: Rect, pitch: usize, budget: &mut Budget<'_>) -> Result<usize, String> {
     let mut errors = 0;
     for y in ink.y0..ink.y1 {
@@ -481,6 +504,9 @@ fn grid_error(view: &View<'_>, ink: Rect, pitch: usize, budget: &mut Budget<'_>)
     Ok(errors)
 }
 
+/// Fit a bounded QR module grid around native seed points; never use the point box as protection.
+/// Require three finders, a consistent pixel grid and a complete four-module quiet zone.
+/// Return None for uncertain geometry/payloads and propagate cancellation or exhausted work.
 fn reconstruct_qr(gray: &Gray, result: &RXingResult, budget: &mut Budget<'_>) -> Result<Option<Region>, String> {
     let points = result.getPoints();
     if points.len() != 4 || result.getText().is_empty() || result.getText().len() > 256 {
@@ -560,6 +586,7 @@ fn reconstruct_qr(gray: &Gray, result: &RXingResult, budget: &mut Budget<'_>) ->
 
 // std::time::Instant has no clock on bare wasm32-unknown-unknown. Keep the established
 // renderer behavior there until a supported cancellable clock is supplied.
+/// Decline detection on bare wasm, preserving ordinary smoothing without an unsupported clock.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn detect_with_divisor(_: usize, _: usize, _: &[u8], _: Option<&[u8]>, _: &AtomicBool, _: usize) -> Result<Vec<Region>, String> {
     Err("barcode regions unavailable on this target".into())
@@ -655,6 +682,7 @@ pub(crate) fn detect(width: usize, height: usize, rgba: &[u8], mask: Option<&[u8
     detect_with_divisor(width, height, rgba, mask, cancel, 1)
 }
 
+/// Validate nonzero sides up to 4096 and an area at most 4,194,304 using checked multiplication.
 fn checked_pixels(w: usize, h: usize) -> Result<usize, String> {
     if w == 0 || h == 0 || w > 4096 || h > 4096 {
         return Err("dimensions".into());
@@ -671,9 +699,11 @@ mod tests {
     // Code128-B "A": start 104, data 33, checksum 34, stop 106. Contributor-original
     // test raster generated from the standard's symbol bits, with independently known bounds.
     const SYMBOL: &str = "1101001000010100011000100010110001100011101011";
+    /// Allocate the white synthetic source used by independent Code128 geometry tests.
     fn image() -> Vec<u8> {
         vec![255; W * H * 4]
     }
+    /// Paint contributor-original Code128-B A at known coordinates and return its independent ink bounds.
     fn bars(data: &mut [u8], x: usize, y: usize) -> Rect {
         for row in y..y + 80 {
             for (column, bit) in SYMBOL.bytes().enumerate() {
@@ -687,6 +717,7 @@ mod tests {
         }
         Rect { x0: x, y0: y, x1: x + SYMBOL.len() * 3, y1: y + 80 }
     }
+    /// Verify identical payloads retain both complete physical regions through axis/direction changes.
     #[test]
     fn identical_payloads_keep_two_complete_locations_in_both_axes() {
         let mut data = image();
@@ -713,6 +744,7 @@ mod tests {
             assert!(found.iter().any(|r| r.ink == Rect { x0: H - ink.y1, y0: ink.x0, x1: H - ink.y0, y1: ink.x1 }));
         }
     }
+    /// Ensure obstructed quiet zones and nonopaque masks never acquire barcode protection.
     #[test]
     fn quiet_zone_obstruction_and_mask_ambiguity_are_declined() {
         let mut data = image();
@@ -727,6 +759,7 @@ mod tests {
         assert!(detect(W, H, &data, Some(&vec![128; W * H]), &AtomicBool::new(false)).is_err());
         assert!(detect(W, H, &data, None, &AtomicBool::new(true)).is_err());
     }
+    /// Reject a synthetic Code128 checksum mutation instead of protecting a plausible bar pattern.
     #[test]
     fn corrupt_check_digit_does_not_create_a_region() {
         let mut data = image();
@@ -749,6 +782,7 @@ mod tests {
 #[allow(clippy::unwrap_used)]
 mod review_regressions {
     use super::*;
+    /// Verify EAN/UPC guard extensions and their full quiet rectangles against independent bounds.
     #[test]
     fn extended_retail_guards_are_inside_complete_regions() {
         for upc in [false, true] {
@@ -760,6 +794,7 @@ mod review_regressions {
             assert!(regions[0].quiet.contains(quiet));
         }
     }
+    /// Check bounded row searching continues past rejected outer regions to a complete middle symbol.
     #[test]
     fn rejected_outer_symbols_do_not_hide_a_valid_middle_symbol() {
         const W: usize = 1000;
@@ -796,10 +831,12 @@ std::thread_local! {
     static TEST_DECODER: std::cell::RefCell<Option<TestDecoder>> = const { std::cell::RefCell::new(None) };
 }
 
+/// Install a thread-local decoder fault hook for a test and restore the prior hook on unwind.
 #[cfg(test)]
 pub(crate) fn with_test_decoder<T>(hook: impl FnMut(&AtomicBool) -> Option<Result<Vec<Region>, String>> + 'static, run: impl FnOnce() -> T) -> T {
     struct Restore(Option<TestDecoder>);
     impl Drop for Restore {
+        /// Restore the previous thread-local fault hook even when the test body unwinds.
         fn drop(&mut self) {
             TEST_DECODER.with(|hook| {
                 hook.replace(self.0.take());
@@ -815,14 +852,17 @@ std::thread_local! {
     static TEST_SCAN_MILLIS: std::cell::Cell<u64> = const { std::cell::Cell::new(1500) };
     static TEST_RASTERS: std::cell::RefCell<Vec<(u32,u32)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
+/// Expose the most recent test scan allowance without changing production time limits.
 #[cfg(test)]
 pub(crate) fn test_scan_millis() -> u64 {
     TEST_SCAN_MILLIS.with(std::cell::Cell::get)
 }
+/// Record a test detection raster size to compare whole-page and tile decode resolution.
 #[cfg(test)]
 pub(crate) fn observe_raster(width: u32, height: u32) {
     TEST_RASTERS.with(|v| v.borrow_mut().push((width, height)));
 }
+/// Drain thread-local raster observations so neighboring tests cannot inherit stale evidence.
 #[cfg(test)]
 pub(crate) fn take_rasters() -> Vec<(u32, u32)> {
     TEST_RASTERS.with(|v| std::mem::take(&mut *v.borrow_mut()))
@@ -832,6 +872,7 @@ pub(crate) fn take_rasters() -> Vec<(u32, u32)> {
 #[allow(clippy::unwrap_used)]
 mod page_limit_tests {
     use super::*;
+    /// Verify a maximum-size source retains geometry work after its charged grayscale conversion.
     #[test]
     fn maximum_raster_keeps_work_after_preprocessing() {
         let stop = AtomicBool::new(false);
@@ -840,6 +881,7 @@ mod page_limit_tests {
         b.charge(4 * 1024 * 1024).unwrap();
         assert!(b.charge(1).is_ok(), "preprocessing cannot consume all geometry work");
     }
+    /// Assert deterministic page shares and exact time/work/call refusals without timing-dependent sleeps.
     #[test]
     fn shared_page_time_visits_and_calls_are_enforced_without_sleeping() {
         let stop = AtomicBool::new(false);
@@ -860,6 +902,7 @@ mod page_limit_tests {
 #[allow(clippy::unwrap_used)]
 mod rejected_payload_regression {
     use super::*;
+    /// Verify checksum-valid but unsupported outer payloads do not hide a supported middle location.
     #[test]
     fn unsupported_outer_payloads_do_not_hide_a_supported_middle() {
         const W: usize = 1000;
@@ -891,14 +934,18 @@ std::thread_local! {
     static TEST_DEADLINE: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     static TEST_NATIVE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
+/// Drain the test native-call counter, excluding reservations that failed before decoder entry.
 #[cfg(test)]
 pub(crate) fn take_native_calls() -> usize {
     TEST_NATIVE_CALLS.with(|n| n.replace(0))
 }
+/// Temporarily disable only the test deadline to isolate deterministic call exhaustion.
+/// Restore the prior override on unwind; cancellation and count/visit limits stay active.
 #[cfg(test)]
 pub(crate) fn without_test_deadline<T>(run: impl FnOnce() -> T) -> T {
     struct Restore(Option<u64>);
     impl Drop for Restore {
+        /// Restore the prior test clock override without weakening subsequent tests' production limits.
         fn drop(&mut self) {
             TEST_DEADLINE.with(|v| v.set(self.0));
         }
@@ -911,6 +958,7 @@ pub(crate) fn without_test_deadline<T>(run: impl FnOnce() -> T) -> T {
 mod call_exhaustion_tests {
     use super::*;
     use crate::barcode_render_tests::call_limit_fixture;
+    /// Retain complete regions at the call cap while rejecting invalid candidates and other work failures.
     #[test]
     fn call_exhaustion_retains_only_fully_validated_regions() {
         let stop = AtomicBool::new(false);
@@ -952,5 +1000,33 @@ mod call_exhaustion_tests {
                 assert_eq!(result, Err("native call budget".into()));
             }
         }
+    }
+}
+
+#[cfg(test)]
+std::thread_local! { static TEST_GRAY_ERROR_CONSTRUCTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod gray_error_regression {
+    use super::*;
+    /// Valid pixel reads must not build failure strings; malformed storage retains exact checked errors.
+    #[test]
+    fn successful_gray_reads_do_not_construct_errors() {
+        TEST_GRAY_ERROR_CONSTRUCTIONS.with(|v| v.set(0));
+        let gray = Gray { w: 8, h: 8, pixels: vec![123; 64], threshold: 128 };
+        for y in 0..8 {
+            for x in 0..8 {
+                assert_eq!(gray.get(x, y).unwrap(), 123);
+            }
+        }
+        let count = TEST_GRAY_ERROR_CONSTRUCTIONS.with(|v| v.get());
+        println!("successful_reads=64 error_string_constructions={count}");
+        assert_eq!(count, 0, "valid pixel reads eagerly construct and drop an error String");
+        let short = Gray { pixels: vec![123; 63], ..gray };
+        assert_eq!(short.get(7, 7), Err("short gray source".into()));
+        assert_eq!(TEST_GRAY_ERROR_CONSTRUCTIONS.with(|v| v.get()), 1);
+        assert_eq!(short.get(8, 0), Err("pixel outside source".into()));
+        let overflow = Gray { w: usize::MAX, h: 2, pixels: Vec::new(), threshold: 128 };
+        assert_eq!(overflow.get(1, 1), Err("pixel overflow".into()));
     }
 }

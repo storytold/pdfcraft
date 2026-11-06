@@ -969,6 +969,8 @@ impl Renderer {
         true
     }
 
+    /// Create a fresh render context backed by the supplied document/worker-local caches.
+    /// Nested callers propagate their barcode admission, divisor and cancellation before painting.
     pub(crate) fn new(
         width: u16,
         height: u16,
@@ -1051,6 +1053,8 @@ impl Renderer {
         reach
     }
 
+    /// Composite an image through a device-space alpha-mask raster.
+    /// The auxiliary renderer inherits barcode admission, allowance and cancellation from this render.
     fn draw_image_with_alpha_mask(&mut self, image_data: ImageData, mut alpha_data: LumaData) {
         // PdfCraft patch: mismatched masks need a dummy RGB staging image. Validate and
         // reserve it before creating/pushing any mask, so failure skips the whole image.
@@ -1542,6 +1546,8 @@ impl Renderer {
         );
     }
 
+    /// Apply image sampling and composition, then repaint only validated barcode/quiet regions.
+    /// Retain the existing mask, transform, interpolation and conservative-fallback decisions elsewhere.
     fn draw_image(&mut self, image_data: ImageData, alpha_data: Option<LumaData>) {
         let cur_transform = *self.ctx.transform();
         let (x_scale, y_scale) = {
@@ -2471,6 +2477,8 @@ impl Renderer {
 }
 
 impl<'a> Device<'a> for Renderer {
+    /// Decode and dispatch a PDF image with current transform, stencil and knockout semantics.
+    /// Propagate the current barcode decision/cancellation into auxiliary image renderers.
     fn draw_image(&mut self, image: hayro_interpret::Image<'a, '_>, mut transform: Affine) {
         // PdfCraft patch (27): an image's pixels are converted to RGB before they reach the
         // device, so an ink pass has no tints for them; the group is drawn as before.
@@ -3094,6 +3102,8 @@ fn render_shading_texture(
     )
 }
 
+/// Rasterize a PDF soft mask to device-space coverage.
+/// Disable barcode detection in this auxiliary raster: mask pixels are not page barcode sources.
 fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, height: u16, preview: bool) -> Mask {
     let mut renderer = Renderer {
         ctx: RenderContext::new_with(width, height, derive_settings(&settings)),
@@ -3582,6 +3592,7 @@ mod area_shrink_tests {
 mod barcode_cache_tests {
     use super::*;
 
+    /// Refuse the same oversized transformed protection region on both small and large viewports.
     #[test]
     fn a_large_protected_region_is_declined_in_every_viewport() {
         let cache = RenderCache::new();
@@ -3596,6 +3607,7 @@ mod barcode_cache_tests {
         }
     }
 
+    /// Verify repeat declines reuse negative entries and FIFO retention never exceeds sixteen sources.
     #[test]
     fn declined_scan_is_cached_and_negative_entries_are_bounded() {
         let cache = RenderCache::new();
@@ -3722,23 +3734,33 @@ struct BarcodeAdmission {
 }
 
 impl<'a> Device<'a> for BarcodeAdmission {
+    /// Ignore mask painting state while conservatively counting declared image occurrences.
     fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
+    /// Ignore blend state because the admission count is independent of final compositing.
     fn set_blend_mode(&mut self, _: BlendMode) {}
+    /// Skip vector paint; admission gathers only image counts and declared dimensions.
     fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'a>, _: &PathDrawMode) {}
+    /// Ignore clipping so viewport-dependent culling cannot alter the page-wide image allowance.
     fn push_clip_path(&mut self, _: &ClipPath) {}
+    /// Leave group rasterization to the real renderer while counting nested image occurrences.
     fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
+    /// Skip glyph painting and font work in this metadata-only admission device.
     fn draw_glyph(&mut self, _: &Glyph<'a>, _: Affine, _: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {}
+    /// Saturating-count every image occurrence and its declared pixels without decoding or viewport culling.
     fn draw_image(&mut self, image: hayro_interpret::Image<'a, '_>, _: Affine) {
         self.images = self.images.saturating_add(1);
         self.pixels = self.pixels.saturating_add(u64::from(image.width()).saturating_mul(u64::from(image.height())));
     }
+    /// Ignore clip restoration because admission never narrows its count to a clipped viewport.
     fn pop_clip_path(&mut self) {}
+    /// Keep the shared image count across group boundaries instead of granting a fresh allowance.
     fn pop_transparency_group(&mut self) {}
 }
 
 #[cfg(test)]
 mod barcode_diagnostic_tests {
     use super::*;
+    /// Check fixed diagnostic labels and one-message-per-category retention without exposing decoder payloads.
     #[test]
     fn failure_categories_are_non_sensitive_and_log_retention_is_bounded() {
         assert!(matches!(ScanFailure::from_error("deadline"), ScanFailure::Deadline));
@@ -3758,6 +3780,7 @@ mod barcode_diagnostic_tests {
 #[cfg(test)]
 mod barcode_diagnostic_path_tests {
     use super::*;
+    /// Keep failed and successful-empty scan diagnostics distinct while avoiding repeat decoding.
     #[test]
     fn negative_cache_distinguishes_failures_from_successful_empty_scans() {
         for failure in [false, true] {
@@ -3791,6 +3814,7 @@ pub(crate) fn test_cached_region_count(cache: &RenderCache<'_>) -> usize {
 std::thread_local! {
     static TEST_BARCODE_RGBA_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
+/// Drain this path's test RGBA reservation counter; this is not an allocator-wide memory measurement.
 #[cfg(test)]
 pub(crate) fn take_barcode_rgba_bytes() -> usize {
     TEST_BARCODE_RGBA_BYTES.with(|n| n.replace(0))
@@ -3798,6 +3822,7 @@ pub(crate) fn take_barcode_rgba_bytes() -> usize {
 #[cfg(test)]
 mod barcode_warm_cache_tests {
     use super::*;
+    /// Require zero RGBA expansion on exact warm Luma/RGB hits; changed channels/divisors must miss and respect FIFO bounds.
     #[test]
     fn warm_cache_reuses_exact_pixels_without_materializing_rgba() {
         let cache = RenderCache::new();
