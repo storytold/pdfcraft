@@ -4,8 +4,9 @@
 /// numeric characters. Calibrated for #6311 with the attributed ocrs models: 34 synthetic non-text
 /// images and 12 text scans. The largest negative Q was 0.50; the mixed paragraph scored 0.745,
 /// and a single HELLO or 2024 scored 1.0. This is a heuristic, not a text classifier: a lone false
-/// three-letter token also scores 1.0. Short-word-only scans and short decimals need explicit OCR;
-/// sideways scans also failed the existing model without orientation preprocessing.
+/// three-letter token also scores 1.0. Short-word-only scans, short decimals and codes-only pages
+/// (e.g. A1B2C3, 3rd) can need explicit OCR; sideways scans also failed the existing model without
+/// orientation preprocessing.
 pub(super) const MIN_TEXT_SHARE: f64 = 0.60;
 
 /// Q: the share of all alphanumeric characters belonging to OCR words with an alphabetic or
