@@ -63,6 +63,15 @@ impl Session {
         Ok(pdfcraft_compare::compare(&a.words(), &b.words()))
     }
 
+    /// [`Session::compare`], keeping the changes on `pages` of `new` (0-based; empty: every page).
+    pub fn compare_pages(&self, old: DocId, new: DocId, pages: &[usize]) -> Result<Comparison, EditError> {
+        let mut c = self.compare(old, new)?;
+        if !pages.is_empty() {
+            c.changes.retain(|ch| pages.iter().any(|page| (ch.new.page..=ch.new.last_page).contains(page)));
+        }
+        Ok(c)
+    }
+
     /// Visual compare: regions where page n of `new` looks different from page n of `old`
     /// (rendered at `dpi`), as (page, user-space box in `new`).
     pub fn compare_visual(&self, old: DocId, new: DocId, dpi: f32) -> Result<Vec<(usize, [f64; 4])>, EditError> {
@@ -95,7 +104,12 @@ impl Session {
 
     /// The compare report as a new PDF (not opened).
     pub fn compare_report(&self, old: DocId, new: DocId) -> Result<Arc<Vec<u8>>, EditError> {
-        let c = self.compare(old, new)?;
+        self.compare_report_of(old, new, &[])
+    }
+
+    /// [`Session::compare_report`] of the changes on `pages` ([`Session::compare_pages`]).
+    pub fn compare_report_of(&self, old: DocId, new: DocId, pages: &[usize]) -> Result<Arc<Vec<u8>>, EditError> {
+        let c = self.compare_pages(old, new, pages)?;
         let name = |id| self.get(id).map(|d| d.name.clone()).unwrap_or_default();
         self.create_report("Compare Report", &pdfcraft_compare::report(&c, &name(old), &name(new)))
     }
@@ -104,7 +118,12 @@ impl Session {
     /// (blue, green) and a note where text was deleted (red), authored "Compare". One undoable
     /// step; returns how many comments were added.
     pub fn mark_differences(&mut self, old: DocId, new: DocId) -> Result<usize, EditError> {
-        let c = self.compare(old, new)?;
+        self.mark_differences_of(old, new, &[])
+    }
+
+    /// [`Session::mark_differences`] of the changes on `pages` ([`Session::compare_pages`]).
+    pub fn mark_differences_of(&mut self, old: DocId, new: DocId, pages: &[usize]) -> Result<usize, EditError> {
+        let c = self.compare_pages(old, new, pages)?;
         let mut edits = Vec::new();
         for ch in &c.changes {
             let color = colour(ch.kind);
@@ -140,6 +159,8 @@ pub enum OfficeFormat {
     Docx,
     Pptx,
     Html,
+    /// CSS-free HTML that preserves text and inline images but drops colours and layout styling.
+    HtmlSimple,
     Rtf,
     Markdown,
 }
@@ -150,6 +171,7 @@ impl OfficeFormat {
             OfficeFormat::Docx => "docx",
             OfficeFormat::Pptx => "pptx",
             OfficeFormat::Html => "html",
+            OfficeFormat::HtmlSimple => "html",
             OfficeFormat::Rtf => "rtf",
             OfficeFormat::Markdown => "md",
         }
@@ -301,6 +323,7 @@ impl crate::Document {
             OfficeFormat::Docx => pdfcraft_export::docx(&pages, &title),
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
             OfficeFormat::Html => pdfcraft_export::html(&pages, &title).into_bytes(),
+            OfficeFormat::HtmlSimple => pdfcraft_export::html_simple(&pages, &title).into_bytes(),
             OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
             OfficeFormat::Markdown => pdfcraft_export::markdown(&pages).into_bytes(),
         };
