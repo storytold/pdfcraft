@@ -309,7 +309,11 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         if map.contains_key(&r) {
             continue;
         }
-        let o = reader.get(r);
+        let o = match reader.try_get(r) {
+            Ok(o) => o,
+            Err(CosError::MissingObject(num)) if num != r.num && reader.document.try_get(num).is_ok() => continue,
+            Err(error) => return Err(error),
+        };
         if matches!(*o, Object::Null) {
             continue; // dangling reference: written as null by renumbering below
         }

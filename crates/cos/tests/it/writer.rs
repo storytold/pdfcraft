@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full, write_incremental};
+use pdfcraft_cos::{CosError, Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full, write_incremental};
 use pdfcraft_testkit::Pdf;
 
 /// Four pages, a shared font, document info with a non-ASCII title.
@@ -51,6 +51,24 @@ fn full_save_packs_objects_into_object_streams() {
     assert!(classic.starts_with(b"%PDF-1.4"));
     assert!(String::from_utf8_lossy(&classic).contains("\nxref\n"));
     assert_eq!(hayro_pages(&classic), 4);
+}
+
+#[test]
+fn full_save_refuses_an_unreadable_reachable_object() {
+    let bytes = Pdf::new().obj("<< /Type /Catalog /Pages 2 0 R /Custom 3 0 R >>").obj("<< /Type /Pages /Kids [] /Count 0 >>").obj("[").build();
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let classic = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() });
+    let packed = write_full(&doc, &SaveOptions { object_streams: true, ..SaveOptions::default() });
+    assert!(classic.is_err() && packed.is_err(), "full save succeeded: classic={}, object streams={}", classic.is_ok(), packed.is_ok());
+    for (object_streams, result) in [(false, classic), (true, packed)] {
+        let error = result.expect_err("an unreadable reachable object must not become null");
+        assert_eq!(error, CosError::MissingObject(3), "object_streams={object_streams}");
+        assert_eq!(error.to_string(), "object 3 is missing");
+    }
+    let incremental = write_incremental(&doc, &SaveOptions::default()).expect("an incremental save preserves the original objects");
+    assert!(incremental.starts_with(doc.bytes().as_slice()));
+    let reopened = Document::open(Arc::new(incremental)).unwrap();
+    assert_eq!(reopened.root(), doc.root());
 }
 
 #[test]
