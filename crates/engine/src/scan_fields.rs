@@ -186,7 +186,10 @@ impl Session {
         if !ocr::available() {
             return Vec::new();
         }
-        let settings = ocr::OcrSettings::default();
+        // Field detection reads the original raster's boxes and labels, without applying
+        // document cleanup. Deskew resampling can join a checkbox to its adjacent label
+        // ("□Haupt"), making it look like text inside an already-filled field.
+        let settings = ocr::OcrSettings { rotate_pages: false, straighten_pages: false, auto_crop: false, ..Default::default() };
         let Some(job) = self.ocr_job(id, &[page], settings.clone()) else {
             return Vec::new();
         };

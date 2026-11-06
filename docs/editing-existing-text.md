@@ -90,7 +90,8 @@ text groups it into phrases: words joined by a word space, with a table cell, a 
 scanned line kept apart. Applying an edit draws the new text visibly in the scan's ink colour (or
 the one chosen) and first covers the old words with the paper colour sampled around them. Each
 word keeps its position and width, and a longer phrase grows rightwards rather than wrapping. The
-cover is one flat colour, and the text uses the layer's Helvetica, not the scanned typeface.
+cover is one flat colour. Empty OCR glyphs are replaced with a visible fallback face whose advances
+are calibrated to the source word's measured width; the scanned typeface is not reconstructed.
 This applies to any invisible text (rendering mode 3), not just a PdfCraft OCR layer: editing
 invisible text, such as another OCR tool's layer, makes the rewritten paragraph visible over a
 painted cover in the sampled paper colour. Edit text also groups invisible text differently: its lines never

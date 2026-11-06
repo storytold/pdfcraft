@@ -741,6 +741,9 @@ impl OcrVerify {
                 page: p.page,
                 skipped: p.skipped.clone(),
                 notes: p.notes.clone(),
+                correction: p.correction,
+                crop: p.crop,
+                deskew_skipped: p.deskew_skipped,
                 words: p
                     .words
                     .iter()
@@ -2101,7 +2104,14 @@ mod tests {
         let text = session.create_from_text("t", "Recognize these scanned words").expect("fixture");
         let id = session.open("t.pdf", None, text, None).expect("fixture");
         let job = session.ocr_job(id, &[0], OcrSettings::default()).expect("fixture");
-        let page = OcrPage { already_on_page: 0, page: 0, words: confs.iter().map(|c| word("w", *c)).collect(), skipped: None, notes: Vec::new() };
+        let page = OcrPage {
+            already_on_page: 0,
+            page: 0,
+            words: confs.iter().map(|c| word("w", *c)).collect(),
+            skipped: None,
+            notes: Vec::new(),
+            ..Default::default()
+        };
         let mut v = OcrVerify::default();
         v.load(id, job.guard.clone(), vec![page]);
         (id, v)
@@ -2112,7 +2122,7 @@ mod tests {
     #[test]
     fn finished_states_keep_the_spec_wording() {
         let mut v = OcrVerify::default();
-        v.finished(vec![OcrPage { already_on_page: 0, page: 0, words: vec![], skipped: None, notes: Vec::new() }], false);
+        v.finished(vec![OcrPage { already_on_page: 0, page: 0, words: vec![], skipped: None, notes: Vec::new(), ..Default::default() }], false);
         assert_eq!(v.phase, Phase::ReviewReady);
         assert_eq!(v.message, "OCR complete — no text recognized on this page.");
         v.finished(
@@ -2122,6 +2132,7 @@ mod tests {
                 words: vec![word("Hi", Some(95.0)), word("there", Some(40.0))],
                 skipped: None,
                 notes: Vec::new(),
+                ..Default::default()
             }],
             true,
         );
@@ -2224,7 +2235,7 @@ mod tests {
         v2.load(
             id,
             job.guard.clone(),
-            vec![OcrPage { already_on_page: 0, page: 0, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() }],
+            vec![OcrPage { already_on_page: 0, page: 0, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new(), ..Default::default() }],
         );
         v2.set_removed((0, 0), true);
         assert!(v2.accept(&mut s).is_err());
@@ -2257,6 +2268,7 @@ mod tests {
             words: vec![word("one", Some(95.0)), word("two", Some(95.0))],
             skipped: None,
             notes: Vec::new(),
+            ..Default::default()
         }];
         let n = v.accept_page(&mut s, 0).expect("the page applies");
         assert_eq!(n, 2);
@@ -2288,7 +2300,7 @@ mod tests {
         let pages = words
             .into_iter()
             .enumerate()
-            .map(|(page, words)| OcrPage { already_on_page: 0, page, words, skipped: None, notes: Vec::new() })
+            .map(|(page, words)| OcrPage { already_on_page: 0, page, words, skipped: None, notes: Vec::new(), ..Default::default() })
             .collect();
         let mut v = OcrVerify::default();
         v.load(id, job.guard.clone(), pages);
@@ -2392,7 +2404,7 @@ mod tests {
         let pages = words
             .into_iter()
             .enumerate()
-            .map(|(page, words)| OcrPage { already_on_page: 0, page, words, skipped: None, notes: Vec::new() })
+            .map(|(page, words)| OcrPage { already_on_page: 0, page, words, skipped: None, notes: Vec::new(), ..Default::default() })
             .collect();
         app.ocr_verify.load(id, job.guard.clone(), pages);
         (app, id)
@@ -2568,7 +2580,7 @@ mod tests {
         app.ocr_verify.load(
             id,
             job.guard.clone(),
-            vec![OcrPage { already_on_page: 0, page: 0, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() }],
+            vec![OcrPage { already_on_page: 0, page: 0, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new(), ..Default::default() }],
         );
         assert!(app.ocr_verify.correct((0, 0), "Edited"), "the correction commits");
         app.ocr_draft.output_mode = OutputMode::EditableText;

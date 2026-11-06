@@ -1,6 +1,7 @@
 # Where PdfCraft falls short of Acrobat Pro
 
-> **Last reviewed:** 2026-10-28 | **Last updated:** 2026-10-28 | **Change:** minor (M10, #4119 partial: Enhance scanned file cleans scanned pages in place: background removal, edge shadow removal, despeckle; estimates unchanged)
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** minor (gap 7: skewed lines are read straightened, OCR typography repairs, apostrophe forms match in search; estimates unchanged)
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** minor (gap 7: Catalan and horizontal Chinese listed, vertical Chinese missing; annotated skewed pages are recognized without deskew; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
@@ -171,21 +172,28 @@ update the numbers.
   (`AGENTS.md` §4).
 - **Estimate:** 45–80 h (≈ 0.2–0.4 h per issue). **Doc:** this file.
 
-### 7. OCR reads only unaccented Latin
+### 7. OCR still has language and scan-cleanup gaps
 
-- **Missing:** every other script and accented Latin; editable-text output; deskew, rotation,
-  despeckle and background clean-up as options of Recognize text (Enhance scanned file removes
-  the background and edge shadows on grey and RGB scans and despeckles those and 1-bit ones; it
-  reports CMYK, indexed, JPEG 2000, JBIG2 and CCITT scans and scans drawn inside Form XObjects
-  and leaves them as they are); MRC compression;
-  pluggable engines; OCR in the
-  browser; scanner input.
-- **Evidence:** `ocr.ocr-languages` partial ("the models read only the Latin alphabet without
-  accents"); 19 of 26 OCR features planned; [#744](https://github.com/storytold/pdfcraft/issues/744)
-  (Dutch). Acrobat ships on-device recognition for dozens of languages.
-- **Impact:** scanned documents are a core Pro workflow outside English.
-- **Estimate:** 40–75 h, partly blocked on openly licensed models. **Doc:**
-  [file-format-parity.md](file-format-parity.md).
+- **Now available:** English, German, French, Spanish, Catalan, Italian, Dutch, Danish, Norwegian
+  Bokmål, Swedish, Finnish, Portuguese, horizontal Japanese and horizontal traditional/simplified
+  Chinese (Chinese scan accuracy not yet measured), Unicode search/copy,
+  automatic quarter-turn correction and deskew up to 12 degrees, including correction without OCR.
+  A skewed page with annotations is recognized but left unstraightened; lines skewed up to 20 degrees
+  are read straightened even without deskew. OCR repairs a few reliably confused characters per language
+  (dashes, German quotes, French/Italian/Catalan `l'`, Catalan `l·l`), and search matches `'` and `’`.
+  Clear paper edges can now define an automatic crop with safety padding; ambiguous white borders
+  stay unchanged, and original image pixels remain in the PDF. Enhance scanned file removes the
+  background and edge shadows on grey and RGB scans and despeckles those and 1-bit ones; it reports
+  CMYK, indexed, JPEG 2000, JBIG2 and CCITT scans and scans drawn inside Form XObjects and leaves
+  them as they are.
+- **Missing:** additional language choices, vertical Japanese and Chinese, reliable reading order and word spacing
+  across complex layouts, editable-text output, deskew on pages with annotations, cleanup of the scan types
+  Enhance scanned file skips, MRC compression, pluggable engines, browser OCR and scanner input. Camera perspective
+  and colour cleanup use the separate Enhance camera image command; broader photo fidelity remains open.
+- **Evidence:** `crates/engine/tests/scan_ocr.rs` and the OCR automation/UI tests; model tests require
+  `cargo xtask models`, Japanese fixture generation requires the release `CRAFT_FONTS_DIR` input.
+- **Impact:** scanned documents remain a core Pro workflow with wider language and layout demands.
+- **Estimate:** previous 40–75 h estimate needs reassessment after this narrower feature slice.
 
 ### 8. Office export weak, Office import absent
 
@@ -437,6 +445,7 @@ update the numbers.
 | 2026-10-11 | minor | Contributor fork: mixed-style visual regions, source-font space reuse and a read-only textless background. Embedded sfnt source faces and Mac subset Unicode mappings keep edit baselines stable; live frames follow Apply/Save geometry as text grows or shrinks. Engine/tool/UI regressions and private all-page checks cover the changes; full matching font import, CFF, range styles, shaping and private Chinese typing checks added; legacy programs and general fidelity remain open; estimates unchanged |
 | 2026-10-11 | patch | Gap 2: 23 hayro-interpret and 10 hayro patches after axial and radial shadings became native gradients (backport of hayro 0.8) |
 | 2026-10-11 | minor | Closed gap 1 (#774, fixed by #836; numbers kept, its interop suite moved to gap 12); gap 6 lists the fixed #799–#821 batch; gap 3 and 16 updated for #844 (same-page move), #740 (column select) and #759 (1:1 touchpad scrolling) |
+| 2026-10-11 | minor | M10: multilingual OCR, orientation/deskew, and conservative scanner-border crop with padding. Ambiguous edges and camera cleanup remain open. |
 | 2026-10-10 | minor | Removed the alpha markers: with the cross-app gate rule, gaps 1 and 8 are partial sub-cases, not blockers; stage alpha |
 | 2026-10-10 | minor | Marked the alpha blockers (gap 1 and the Office part of gap 8) after the core-workflow gate put the stage at pre-alpha |
 | 2026-10-10 | major | Created. Ranked 24 gaps from the 2026-10-10 re-measure, the open GitHub issues and the former ROADMAP.md §Where we're lacking and where we're going (renderer, hardening, fidelity, editing, Pro workflows, 1.0 polish), which this file replaces |

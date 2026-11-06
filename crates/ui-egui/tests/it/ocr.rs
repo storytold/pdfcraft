@@ -18,7 +18,7 @@ fn scan() -> Vec<u8> {
 
 #[test]
 fn recognize_text_dialog_adds_searchable_text() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1300.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("scan.pdf", None, scan()).unwrap();
@@ -30,6 +30,50 @@ fn recognize_text_dialog_adds_searchable_text() {
     h.run_steps(2);
     h.get_by_label("Document language");
     h.get_by_label("Output");
+    h.get_by_label("Automatically rotate sideways and upside-down pages");
+    h.get_by_label("Straighten skewed scans");
+    assert!(h.state().ocr_draft.rotate_pages && h.state().ocr_draft.straighten_pages);
+    let expected = pdfcraft_engine::ocr::language_for_locale(sys_locale::get_locale().as_deref());
+    assert_eq!(h.state().ocr_draft.language, expected, "OCR follows the system even when the interface is English");
+    // A Japanese or Chinese name shows in English where no face can draw it (an English-only
+    // build on a machine without such a face installed).
+    fn english(native: &'static str) -> &'static str {
+        match native {
+            "日本語" => "Japanese",
+            "繁體中文" => "Traditional Chinese",
+            "简体中文" => "Simplified Chinese",
+            other => other,
+        }
+    }
+    let label = pdfcraft_engine::ocr::LANGUAGES.iter().find(|(code, _)| *code == expected).unwrap().1;
+    let label = if h.query_by_value(label).is_some() { label } else { english(label) };
+    h.get_by_value(label).click();
+    h.run_steps(2);
+    let shown = |h: &Harness<'_, PdfCraftApp>, native: &'static str| if h.query_by_label(native).is_some() { native } else { english(native) };
+    let (hant, hans) = (shown(&h, "繁體中文"), shown(&h, "简体中文"));
+    for label in ["Nederlands", "Dansk", "Norsk bokmål", "Svenska", "Suomi", "Português", "Català", hant, hans] {
+        h.get_by_label(label);
+    }
+    // The expanded language list scrolls when the popup reaches the window edge.
+    h.get_by_label(hans).scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label(hans).click();
+    h.run_steps(2);
+    assert_eq!(h.state().ocr_draft.language, "zh-Hans", "the last language in the list can be chosen");
+    h.get_by_value(hans).click();
+    h.run_steps(2);
+    h.get_by_label("Català").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label("Català").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ocr_draft.language, "ca");
+    h.get_by_value("Català").click();
+    h.run_steps(2);
+    h.get_by_label("Italiano").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_label("Italiano").click();
+    h.run_steps(2);
+    assert_eq!(h.state().ocr_draft.language, "it");
     if !pdfcraft_engine::ocr::available() {
         eprintln!("skipped: OCR models not installed");
         return;
@@ -42,6 +86,52 @@ fn recognize_text_dialog_adds_searchable_text() {
     let app = h.state();
     let id = app.active_ids().unwrap().1;
     assert_eq!(app.session.get(id).unwrap().can_undo(), Some("Recognize text"));
+}
+
+#[test]
+fn scan_settings_preserve_corrections_and_existing_text_choice() {
+    let mut draft = PdfCraftApp::new().ocr_draft;
+    assert!(draft.settings().skip_text_pages);
+    draft.text_pages = true;
+    draft.language = "fr".into();
+    draft.rotate_pages = false;
+    draft.straighten_pages = false;
+    draft.auto_crop = true;
+    draft.crop_margin = 7.0;
+    let settings = draft.settings();
+    assert!(!settings.skip_text_pages);
+    assert_eq!(settings.language, "fr");
+    assert!(!settings.rotate_pages && !settings.straighten_pages);
+    assert!(settings.auto_crop);
+    assert_eq!(settings.crop_margin, 7.0);
+    draft.text_pages = false;
+    draft.recognize = false;
+    assert!(!draft.settings().skip_text_pages, "enhancement retains existing OCR pages");
+    assert!(!draft.settings().recognize);
+}
+
+#[test]
+fn correct_scanned_pages_offers_correction_without_recognition() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1300.0)).build_eframe(|_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("scan.pdf", None, scan()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("ocr.correct_scan"));
+    h.run_steps(2);
+    h.get_by_label("Correct scans");
+    assert!(!h.state().ocr_draft.recognize);
+    assert!(h.state().ocr_draft.auto_crop);
+    assert_eq!(h.state().ocr_draft.language, pdfcraft_engine::ocr::language_for_locale(sys_locale::get_locale().as_deref()));
+    h.get_by_label("Safety margin (pt)");
+    h.get_by_label("Crop scanner borders to the paper edge").click();
+    h.run_steps(2);
+    assert!(!h.state().ocr_draft.auto_crop);
+    h.get_by_label("Add searchable text").click();
+    h.run_steps(2);
+    assert!(h.state().ocr_draft.recognize);
 }
 
 #[test]
@@ -83,7 +173,7 @@ fn recognize_text_can_read_pictures_on_pages_with_text() {
         s.apply(id, Edit::AddText { page: 0, text: note }).unwrap();
         s.save_bytes(id).unwrap().to_vec()
     };
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1300.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("hybrid.pdf", None, hybrid).unwrap();
@@ -122,7 +212,7 @@ fn recognize_text_can_read_pictures_on_pages_with_text() {
 #[test]
 fn an_ocr_word_opens_for_editing_and_stays_open() {
     use pdfcraft_engine::ocr::PlacedWord;
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1300.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("scan.pdf", None, scan()).unwrap();
@@ -172,7 +262,7 @@ fn text_page() -> Vec<u8> {
 }
 
 fn edit_harness(pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1300.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, pdf).unwrap();
@@ -368,7 +458,7 @@ fn placed(text: &str, confidence: f32) -> PlacedWord {
 /// loaded directly, so this runs without the OCR models.
 #[test]
 fn ocr_verify_screen_controls_keyboard_and_accept() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1300.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.open_bytes("scan.pdf", None, scan()).unwrap();
         app.run_inline = true;
@@ -395,8 +485,14 @@ fn ocr_verify_screen_controls_keyboard_and_accept() {
         let app = h.state_mut();
         let id = app.active_ids().unwrap().1;
         let job = app.session.ocr_job(id, &[0], OcrSettings::default()).unwrap();
-        let page =
-            OcrPage { already_on_page: 0, page: 0, words: vec![placed("Helo", 40.0), placed("wrold", 95.0)], skipped: None, notes: Vec::new() };
+        let page = OcrPage {
+            already_on_page: 0,
+            page: 0,
+            words: vec![placed("Helo", 40.0), placed("wrold", 95.0)],
+            skipped: None,
+            notes: Vec::new(),
+            ..Default::default()
+        };
         app.ocr_verify.load(id, job.guard.clone(), vec![page]);
     }
     h.run_steps(3);
@@ -433,7 +529,7 @@ fn ocr_verify_screen_controls_keyboard_and_accept() {
 /// never invents a selection. The recognition is loaded directly (no models needed).
 #[test]
 fn ocr_verify_screen_focus_ring_and_empty_walk() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1300.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.open_bytes("scan.pdf", None, scan()).unwrap();
         app.run_inline = true;
@@ -446,7 +542,7 @@ fn ocr_verify_screen_focus_ring_and_empty_walk() {
         let app = h.state_mut();
         let id = app.active_ids().unwrap().1;
         let job = app.session.ocr_job(id, &[0], OcrSettings::default()).unwrap();
-        let page = OcrPage { already_on_page: 0, page: 0, words: vec![placed("Fine", 95.0)], skipped: None, notes: Vec::new() };
+        let page = OcrPage { already_on_page: 0, page: 0, words: vec![placed("Fine", 95.0)], skipped: None, notes: Vec::new(), ..Default::default() };
         app.ocr_verify.load(id, job.guard.clone(), vec![page]);
     }
     h.run_steps(3);
