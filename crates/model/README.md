@@ -23,3 +23,12 @@ after that point are not listed.
 
 `organize`, `annot` and `forms` still carry their own small walkers; they move here as the model
 grows (ADR-0004).
+
+`numeric` says what numeric arrays mean, read through `pdfcraft_cos::numbers` so no bad entry
+shifts the others: `rect` (exactly four finite numbers, ordered; no area policy), `quad_groups`
+(`/QuadPoints` as groups of eight, each valid or with its first bad corner, plus the count of
+entries left after the last whole group) and `device_color` (gray, RGB or CMYK by length, checked
+before any entry is read; `DeviceColor::rgb` converts without clamping). They interpret and never
+choose a fallback: whether a bad `/QuadPoints` brings in `/Rect`, or `[]` is transparent, stays
+with each caller. `Page::crop` still uses its own reader; moving it is held for the page-box
+length policy (#5363, #5941).

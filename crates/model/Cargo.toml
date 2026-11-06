@@ -10,3 +10,4 @@ workspace = true
 
 [dependencies]
 pdfcraft-cos = { workspace = true }
+thiserror = { workspace = true }
