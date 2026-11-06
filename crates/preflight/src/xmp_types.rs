@@ -589,11 +589,12 @@ const SCHEMAS: &[Schema] = &[
 ];
 
 /// The properties of predefined schemas whose values don't have their type, in every metadata
-/// stream among the indirect objects `objs` (ISO 32000-1 14.3.2), as `prefix:name` in name order.
-pub(crate) fn mistyped_in(objs: &[(ObjRef, std::sync::Arc<Object>)]) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
+/// stream among the indirect objects `objs` (ISO 32000-1 14.3.2): the stream and the property as
+/// `prefix:name`, by stream in the order of `objs` and by name within one.
+pub(crate) fn mistyped_in(objs: &[(ObjRef, std::sync::Arc<Object>)]) -> Vec<(ObjRef, String)> {
+    let mut out = Vec::new();
     let mut budget = DecodeBudget::new(MAX_METADATA_BYTES, 0);
-    for (_, o) in objs {
+    for (r, o) in objs {
         let Object::Stream(s) = &**o else { continue };
         if s.dict.name(b"Type") != Some(b"Metadata") {
             continue;
@@ -604,7 +605,7 @@ pub(crate) fn mistyped_in(objs: &[(ObjRef, std::sync::Arc<Object>)]) -> BTreeSet
         let Ok(bytes) = budget.decode_within(s, crate::xmp::MAX_XMP_BYTES) else { continue };
         let text = unicode(&bytes);
         if let Some(parsed) = crate::xmp::parse(&text) {
-            out.extend(mistyped(&parsed));
+            out.extend(mistyped(&parsed).into_iter().map(|name| (*r, name)));
         }
     }
     out

@@ -64,18 +64,25 @@ impl Level {
 /// another language says it from [`pattern`](Issue::pattern) and [`value`](Issue::value) instead:
 /// the pattern is wording of ours, listed in [`WORDINGS`], and the value — when there is one — is
 /// the document's own name for something, a PDF keyword that reads the same in every language.
+/// A wording that names more than one thing has a named hole, such as `{object}`, for each, so a
+/// language can put them in its own order; [`values`](Issue::values) fills those.
 /// [`Issue::said`] does that.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Issue {
     /// The ISO 19005-2 clause.
     pub clause: &'static str,
     pub message: String,
-    /// The problem as it is worded here, with `{}` where the document's own name goes.
+    /// The problem as it is worded here, with `{}` or a named hole where the document's own name goes.
     pub pattern: &'static str,
     /// What goes in the pattern's `{}`: an annotation subtype, an action, a font, a page number.
     pub value: Option<String>,
+    /// What goes in each of the pattern's named holes, by the hole's name (`"{object}"`, braces
+    /// included).
+    pub values: Vec<(&'static str, String)>,
     /// 0-based page, when the problem is on a page.
     pub page: Option<usize>,
+    /// The indirect object the problem is in, when that is what locates it: a metadata stream.
+    pub object: Option<ObjRef>,
     /// Whether [`convert`] can fix it.
     pub fixable: bool,
 }
@@ -87,12 +94,41 @@ impl Issue {
     /// font called `{}` cannot turn into anything else. With [`in_english`] this is
     /// [`message`](Issue::message).
     pub fn said(&self, words: Words) -> String {
-        let said = words(self.pattern);
-        match &self.value {
-            Some(v) => said.replacen("{}", v, 1),
-            None => said,
-        }
+        fill(&words(self.pattern), self.value.as_deref(), &self.values)
     }
+}
+
+/// `wording` with its holes filled: the first `{}` with `value`, and each named hole, such as
+/// `{object}`, with its entry in `values`. A hole with nothing for it stays as it is written.
+///
+/// The values go in during one pass over the wording, so a value with braces in it is never read
+/// as a hole.
+fn fill(wording: &str, value: Option<&str>, values: &[(&str, String)]) -> String {
+    let mut out = String::with_capacity(wording.len().saturating_add(16));
+    let mut value = value;
+    let mut rest = wording;
+    while let Some(open) = rest.find('{') {
+        let (before, from_brace) = rest.split_at(open);
+        out.push_str(before);
+        // A brace with nothing closing it is just text. `}` is one byte, so the end of the hole is a
+        // char boundary; `get` rather than slicing all the same.
+        let Some(hole) = from_brace.find('}').and_then(|close| from_brace.get(..=close)) else {
+            out.push_str(from_brace);
+            return out;
+        };
+        if hole == "{}"
+            && let Some(v) = value.take()
+        {
+            out.push_str(v);
+        } else if let Some((_, v)) = values.iter().find(|(name, _)| *name == hole) {
+            out.push_str(v);
+        } else {
+            out.push_str(hole);
+        }
+        rest = from_brace.get(hole.len()..).unwrap_or_default();
+    }
+    out.push_str(rest);
+    out
 }
 
 /// How an interface says one of our wordings in its own language: given the English in [`WORDINGS`],
@@ -104,7 +140,8 @@ pub fn in_english(wording: &str) -> String {
     wording.to_owned()
 }
 
-/// Every problem [`verify`] can report, in English, with `{}` where the document's own name goes.
+/// Every problem [`verify`] can report, in English, with `{}` or a named hole, such as `{object}`,
+/// where the document's own name goes.
 ///
 /// An interface that shows them in another language translates these, which is the whole reason they
 /// are gathered here; `wordings_are_complete` fails if a rule says something that is not on the
@@ -114,7 +151,7 @@ pub const WORDINGS: &[&str] = &[
     "The document has no XMP metadata",
     "The metadata doesn't identify the file as {}",
     "The title in the metadata and the document information differ",
-    "The XMP property {} doesn't have the value type the XMP Specification gives it",
+    "The XMP property {property} in metadata stream {object} doesn't have the value type the XMP Specification gives it",
     // The document as a whole.
     "The document is encrypted",
     "Device colour is used, but there is no PDF/A output intent",
@@ -429,15 +466,24 @@ thread_local! {
 
 /// Check `doc` against `level`.
 pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
-    let mut out = Vec::new();
+    // Shared by `issue` and `located_issue`, each of which takes the list out, adds one issue and
+    // puts it back.
+    let out = std::cell::Cell::new(Vec::new());
+    let push = |i: Issue| {
+        let mut list = out.take();
+        list.push(i);
+        out.set(list);
+    };
     // Each problem is worded here and named by the document there: the wording goes on the list in
     // `WORDINGS` for an interface to translate, and the name goes in its `{}` as it stands.
     let mut issue = |clause: &'static str, pattern: &'static str, value: Option<String>, page: Option<usize>, fixable: bool| {
-        let message = match &value {
-            Some(v) => pattern.replacen("{}", v, 1),
-            None => pattern.to_owned(),
-        };
-        out.push(Issue { clause, message, pattern, value, page, fixable });
+        let message = fill(pattern, value.as_deref(), &[]);
+        push(Issue { clause, message, pattern, value, values: Vec::new(), page, object: None, fixable });
+    };
+    // A problem in one indirect object, worded with named holes.
+    let located_issue = |clause: &'static str, pattern: &'static str, values: Vec<(&'static str, String)>, object: ObjRef, fixable: bool| {
+        let message = fill(pattern, None, &values);
+        push(Issue { clause, message, pattern, value: None, values, page: None, object: Some(object), fixable });
     };
     let cat = catalog(doc);
     // 6.1.3 / 6.6: identification and metadata.
@@ -463,8 +509,15 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     // 6.2.2: output intent when device colour is used.
     let objs = objects(doc);
     // 6.6.2.3.1: the value types of predefined XMP properties, in every metadata stream.
-    for name in xmp_types::mistyped_in(&objs) {
-        issue("6.6.2.3.1", "The XMP property {} doesn't have the value type the XMP Specification gives it", Some(name), None, false);
+    for (object, name) in xmp_types::mistyped_in(&objs) {
+        let values = vec![("{property}", name), ("{object}", object.to_string())];
+        located_issue(
+            "6.6.2.3.1",
+            "The XMP property {property} in metadata stream {object} doesn't have the value type the XMP Specification gives it",
+            values,
+            object,
+            false,
+        );
     }
     let used = uses_device_colour(doc, &objs);
     match pdfa_intent_profile(doc) {
@@ -522,6 +575,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     check_objects(doc, level, &objs, &page_of, &mut issue);
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
+    let mut out = out.into_inner();
     let mut seen = std::collections::HashSet::new();
     out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));
     out
