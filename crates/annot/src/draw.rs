@@ -78,9 +78,11 @@ fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> 
             let (x, top) = (q[0].min(q[2]), q[1].max(q[3]));
             [x, top - NOTE_SIZE, x + NOTE_SIZE, top]
         });
+    // Text markup whose /QuadPoints reach past /Rect: its appearance covers them, so /Rect does too.
+    let markup_rect = appearance::markup_reach(d);
     doc.update_dict(r, |d| {
         d.set(b"AP".to_vec(), Object::Dict(apd));
-        if let Some(rect) = icon_rect {
+        if let Some(rect) = icon_rect.or(markup_rect) {
             d.set(b"Rect".to_vec(), num_array(&rect));
         }
         d.remove(b"AS");

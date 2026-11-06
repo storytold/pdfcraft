@@ -2779,3 +2779,40 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     check(&doc);
     check(&reopen(&doc));
 }
+
+/// A text markup annotation is drawn over its `/QuadPoints` (ISO 32000-2 Table 182), and an
+/// appearance is mapped onto `/Rect` (§12.5.5). A highlight whose `/Rect` lies beside its text
+/// (here written with its corners swapped, as a real file has it) got an appearance cut to that
+/// `/Rect`, so nothing showed. The display copy's appearance and `/Rect` now take in the
+/// quadrilaterals; a markup whose `/Rect` already holds them keeps it.
+#[test]
+fn text_markup_whose_quads_reach_past_its_rect_is_drawn_over_them() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [335.1 370.83 324.6 471.78] /C [1 1 0] /QuadPoints [370 287 471 287 370 277 471 277] >>",
+        b"<< /Type /Annot /Subtype /Underline /Rect [10 10 20 20] /C [0 0 1] /QuadPoints [100 120 200 120 100 100 200 100] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [50 50 150 70] /C [1 1 0] /QuadPoints [60 68 140 68 60 52 140 52] >>",
+    ]);
+    let display = with_missing_appearances(&doc).expect("three markups need an appearance");
+    let shown = list(&display, 0);
+    let rect = |d: &Dict| nums_of(d, b"Rect");
+    let bbox = |d: &Dict| {
+        let n = d.get(b"AP").map(|a| display.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.reference(b"N"))).unwrap();
+        let obj = display.get(n);
+        let Object::Stream(s) = &*obj else { panic!("AP is not a stream") };
+        nums_of(&s.dict, b"BBox")
+    };
+    assert_eq!(rect(&shown[0]), [324.6, 277.0, 471.0, 471.78], "the highlight's /Rect takes in its text");
+    assert_eq!(bbox(&shown[0]), rect(&shown[0]));
+    assert!(ap_content(&display, &shown[0]).contains("370 287 m 471 287 l 471 277 l 370 277 l h f"), "the quad is filled");
+    assert_eq!(rect(&shown[1]), [10.0, 10.0, 200.0, 120.0], "an underline's too");
+    assert_eq!(bbox(&shown[1]), rect(&shown[1]));
+    assert_eq!(rect(&shown[2]), [50.0, 50.0, 150.0, 70.0], "a /Rect that holds the quads stays as it is");
+    assert_eq!(rect(&list(&doc, 0)[0]), [335.1, 370.83, 324.6, 471.78], "the source document is unchanged");
+}
+
+fn nums_of(d: &Dict, key: &[u8]) -> Vec<f64> {
+    d.get(key).and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|o| o.as_f64()).collect()).unwrap_or_default()
+}

@@ -508,6 +508,7 @@ fn appearance_context(d: &Dict) -> Option<AppearanceContext<'_>> {
     let subtype = d.name(b"Subtype")?;
     let rect = nums(d, b"Rect").filter(|r| r.len() == 4)?;
     let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+    let rect = markup_reach(d).unwrap_or(rect);
     // Cloudy borders (§12.5.4) are drawn for polygons only.
     let cloudy = d.get(b"BE").and_then(|b| b.as_dict()).is_some_and(|b| b.name(b"S") == Some(b"C"));
     if cloudy && subtype != b"Polygon" {
@@ -523,6 +524,25 @@ fn appearance_context(d: &Dict) -> Option<AppearanceContext<'_>> {
         stroke: color(d, b"C")?,
         width: border_width(d),
     })
+}
+
+/// A text markup annotation's `/Rect` grown to take in its `/QuadPoints`, where they reach past
+/// it; `None` when they don't (or aren't usable), and for every other subtype. The quadrilaterals
+/// are what the markup marks (ISO 32000-2 Table 182), and the appearance is mapped onto `/Rect`
+/// (§12.5.5), so a `/Rect` that leaves them out would cut off what is drawn: a highlight whose
+/// `/Rect` lies beside its text drew nothing.
+pub(crate) fn markup_reach(d: &Dict) -> Option<[f64; 4]> {
+    if !matches!(d.name(b"Subtype"), Some(b"Highlight" | b"Underline" | b"StrikeOut" | b"Squiggly")) {
+        return None;
+    }
+    let rect = nums(d, b"Rect").filter(|r| r.len() == 4 && r.iter().all(|v| v.is_finite()))?;
+    let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+    let q = nums(d, b"QuadPoints").filter(|q| !q.is_empty() && q.len() % 8 == 0 && q.iter().all(|v| v.is_finite()))?;
+    let mut out = rect;
+    for p in q.as_chunks::<2>().0 {
+        out = [out[0].min(p[0]), out[1].min(p[1]), out[2].max(p[0]), out[3].max(p[1])];
+    }
+    (out != rect).then_some(out)
 }
 
 fn draw_body(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -> Option<()> {
