@@ -62,7 +62,7 @@ pub const ROUND_KEY: &[u8] = b"PCXfaRound";
 const IMAGE_SHA_KEY: &[u8] = b"PCXfaSHA256";
 /// Most pages searched for earlier pictures.
 const MAX_PAGES_SEARCHED: usize = 10_000;
-/// Most pictures remembered.
+/// Most pictures remembered from earlier passes.
 const MAX_REMEMBERED_IMAGES: usize = 1000;
 
 struct Emitter<'a> {
@@ -488,9 +488,9 @@ impl Emitter<'_> {
             return Some(r);
         }
         let r = self.new_image_xobject(data, content_type, &hash)?;
-        if self.images.len() < MAX_REMEMBERED_IMAGES {
-            self.images.insert(hash, r);
-        }
+        // Always remembered: each entry is a hash and a reference to an object this pass wrote
+        // anyway, and a picture past a cap would be decoded and embedded again at every use.
+        self.images.insert(hash, r);
         Some(r)
     }
 
@@ -1036,7 +1036,7 @@ pub fn pdf_rect(r: Rect, page_height: f64) -> [f64; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_hex32;
+    use super::*;
 
     #[test]
     fn parse_hex32_rejects_non_hex_digits() {
@@ -1048,5 +1048,32 @@ mod tests {
         let mut ok = b"Ff".to_vec();
         ok.resize(64, b'0');
         assert_eq!(parse_hex32(&ok).map(|h| h[0]), Some(0xff));
+    }
+
+    #[test]
+    fn a_picture_past_the_earlier_pass_cap_is_still_embedded_once() {
+        let mut doc = Document::new_empty();
+        let mut em = Emitter {
+            doc: &mut doc,
+            images: HashMap::new(),
+            fields: Vec::new(),
+            radio_groups: HashMap::new(),
+            radio_selected: HashMap::new(),
+            field_count: 0,
+            warnings: Vec::new(),
+            signed: Default::default(),
+            taken: Default::default(),
+            nodes: HashMap::new(),
+        };
+        let png = crate::fixtures::tiny_png();
+        let picture = |i: u32| [png.clone(), i.to_be_bytes().to_vec()].concat();
+        let last = MAX_REMEMBERED_IMAGES as u32 + 10;
+        for i in 0..=last {
+            em.image_xobject(&picture(i), "image/png").expect("decodes");
+        }
+        let before = em.doc.object_numbers().len();
+        let again = em.image_xobject(&picture(last), "image/png").expect("decodes");
+        assert_eq!(em.doc.object_numbers().len(), before, "no new object for a repeated picture");
+        assert_eq!(em.image_xobject(&picture(last), "image/png"), Some(again));
     }
 }
