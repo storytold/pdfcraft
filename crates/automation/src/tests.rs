@@ -219,6 +219,7 @@ fn names_from_documents_become_one_plain_file_name() {
 #[cfg(windows)]
 #[test]
 fn other_shares_and_device_paths_are_refused_by_name() {
+    use crate::file_access::foreign_share;
     let local = Path::new(r"\\?\C:\work\root");
     for p in [
         r"\\host\share\x.pdf",
