@@ -527,9 +527,13 @@ fn canonical_ref_follows_reference_acceptance_within_one_snapshot() {
     }
     assert_eq!(repaired.canonical_ref(ObjRef::new(3, 2)), None);
     assert_eq!(Document::open(contradictory_entry(true)).unwrap().canonical_ref(ObjRef::new(3, 1)), None, "a free slot never revives");
-    // Editing through an accepted generation keeps both accepted (RepairedSet).
+    // Editing through an accepted generation keeps both accepted (RepairedSet), and the canonical
+    // one becomes the generation edited through: the same object, another canonical reference
+    // than before the edit (why canonical references never cross snapshots).
     repaired.set_existing(ObjRef::new(3, 1), Object::Int(7)).unwrap();
-    assert!(repaired.canonical_ref(ObjRef::new(3, 0)).is_some() && repaired.canonical_ref(ObjRef::new(3, 1)).is_some());
+    for asked in [ObjRef::new(3, 0), ObjRef::new(3, 1)] {
+        assert_eq!(repaired.canonical_ref(asked), Some(ObjRef::new(3, 1)), "after the edit, {asked:?}");
+    }
     // An explicit `set` replaces the slot: only its generation is accepted from then on.
     repaired.set(ObjRef::new(3, 4), Object::Int(8));
     assert_eq!(repaired.canonical_ref(ObjRef::new(3, 4)), Some(ObjRef::new(3, 4)));
