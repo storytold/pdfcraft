@@ -113,6 +113,40 @@ pub(super) fn union(a: &mut [f32; 4], b: &[f32; 4]) {
     a[3] = a[3].max(b[3]);
 }
 
+/// A stack of upright CJK glyphs drawn one per baseline (a horizontal font placing each character
+/// on its own, the way OCR text layers and some converters write vertical Chinese and Japanese)
+/// reads as one vertical line when consecutive boxes overlap this much horizontally and drop no
+/// more than this fraction of their height (#3712).
+const VERTICAL_COLUMN_OVERLAP: f32 = 0.6;
+const VERTICAL_COLUMN_DROP: f32 = 0.6;
+/// How much taller or shorter a glyph may be than the one above it in a vertical column.
+const VERTICAL_COLUMN_HEIGHT: f32 = 0.35;
+
+/// Whether `lower` continues the vertical column `upper` starts: both upright CJK glyphs (kana,
+/// kanji and their punctuation) of similar height, `lower`'s box overlapping `upper`'s horizontally
+/// and touching it, or nearly touching, from below. A horizontal font placing one character per
+/// baseline (OCR text layers and some converters write vertical text this way) makes such stacks,
+/// and nothing else does (#3712).
+pub(super) fn stacks_vertically(upper: &TextGlyph, lower: &TextGlyph) -> bool {
+    let cjk = |g: &TextGlyph| g.text.chars().any(is_cjk);
+    if !cjk(upper) || !cjk(lower) {
+        return false;
+    }
+    let (hu, hl) = ((upper.rect[3] - upper.rect[1]).max(0.1), (lower.rect[3] - lower.rect[1]).max(0.1));
+    let (wu, wl) = (upper.rect[2] - upper.rect[0], lower.rect[2] - lower.rect[0]);
+    if wu <= 0.0 || wl <= 0.0 || (hu / hl - 1.0).abs() > VERTICAL_COLUMN_HEIGHT {
+        return false;
+    }
+    let overlap = upper.rect[2].min(lower.rect[2]) - upper.rect[0].max(lower.rect[0]);
+    if overlap < VERTICAL_COLUMN_OVERLAP * wu.min(wl) {
+        return false;
+    }
+    // y grows downward: `lower`'s top is below `upper`'s bottom.
+    let drop = lower.rect[1] - upper.rect[3];
+    let h = hu.min(hl);
+    drop <= VERTICAL_COLUMN_DROP * h && drop >= -0.5 * h
+}
+
 /// Reading-order layout. Glyphs are reordered so that `glyphs` is in reading order, lines are
 /// numbered in that order, and word gaps are inferred per line.
 ///
@@ -171,14 +205,55 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     let height = |i: usize| (glyphs[i].rect[3] - glyphs[i].rect[1]).max(0.1);
     let cy = |i: usize| (glyphs[i].rect[1] + glyphs[i].rect[3]) / 2.0;
 
-    // 1. Segments in content order. Every run is a range of consecutive glyphs.
+    // Vertical columns of upright CJK glyphs drawn one per baseline: each stack of two or more
+    // consecutive glyphs that continues downward with the same x is one vertical line, so the
+    // horizontal segments and their same-baseline merge below cannot join the rows the columns
+    // make across the page (#3712).
+    let mut stacks: Vec<Option<usize>> = vec![None; n];
+    {
+        let mut start: Option<usize> = None;
+        for i in 1..n {
+            if stacks_vertically(glyphs[i - 1], glyphs[i]) {
+                start.get_or_insert(i - 1);
+            } else if let Some(s) = start.take()
+                && i - s >= 2
+            {
+                stacks[s] = Some(i);
+            }
+        }
+        if let Some(s) = start
+            && n - s >= 2
+        {
+            stacks[s] = Some(n);
+        }
+    }
+
+    // 1. Segments in content order. Every run is a range of consecutive glyphs; a vertical column
+    // is one segment over its stack.
     let mut segs: Vec<Seg> = Vec::new();
     let mut run_start_x = 0.0;
     let mut furthest_progress = 0.0;
-    for i in 0..n {
+    let mut i = 0;
+    while i < n {
+        if let Some(end) = stacks[i] {
+            let mut bbox = glyphs[i].rect;
+            let mut h = 0.0f32;
+            for glyph in &glyphs[i..end] {
+                union(&mut bbox, &glyph.rect);
+                h = h.max((glyph.rect[3] - glyph.rect[1]).max(0.1));
+            }
+            segs.push(Seg::vertical(Run { start: i, end }, bbox, h));
+            run_start_x = bbox[0];
+            furthest_progress = 0.0;
+            i = end;
+            continue;
+        }
         let g = glyphs[i].rect;
         let hi = height(i);
         let cont = segs.last().is_some_and(|s| {
+            if s.vertical {
+                return false;
+            }
             let Some(p) = s.first.end.checked_sub(1) else { return false };
             let ph = height(p).min(hi);
             let sh = s.h.min(hi);
@@ -204,6 +279,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             run_start_x = g[0];
             furthest_progress = 0.0;
         }
+        i += 1;
     }
     // A run that redraws an earlier run at the same place (doubled or shadowed text) is dropped, as a doubled glyph is
     // above. Runs are keyed by a fingerprint of their glyph texts and a grid cell a fifth of a line high. A key leads to
@@ -260,6 +336,9 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                     continue;
                 }
                 let (sa, sb) = (&segs[a], &segs[b]);
+                if sa.vertical || sb.vertical {
+                    continue;
+                }
                 let h = sa.h.min(sb.h);
                 let gap = (sb.bbox[0] - sa.bbox[2]).max(sa.bbox[0] - sb.bbox[2]);
                 if (sa.cy() - sb.cy()).abs() < h * 0.3 && (sa.h / sb.h - 1.0).abs() < 0.35 && gap < h * 1.2 {
@@ -332,58 +411,98 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     // The box of a block's first line. Every block is created with one segment, so the block's own box is a fallback
     // that is never used.
     let first_line = |b: usize| blocks[b].0.first().and_then(|&s| segs.get(s)).map_or(blocks[b].1, |s| s.bbox);
-    while let Some(&top) = remaining.iter().min_by(|a, b| blocks[**a].1[1].total_cmp(&blocks[**b].1[1])) {
-        // A column goes on past a paragraph gap (#3658): the nearest block below the one just read that overlaps it
-        // horizontally comes next, if the gap above it is at most two and a half heights of the last line read (a
-        // footer, a footnote or a caption under a figure is further) and no other unread block
+    // While walking a group of vertical columns right to left, the next column is chosen from the
+    // one just taken, not from the top of the page again (#3712).
+    let mut focus: Option<usize> = None;
+    // The block a walk starts from: the topmost remaining block, or the rightmost column of the
+    // group of vertical columns that starts at that height (#3712).
+    let top_block = |remaining: &[usize]| -> Option<usize> {
+        let top = remaining.iter().copied().min_by(|a, b| blocks[*a].1[1].total_cmp(&blocks[*b].1[1]))?;
+        if blocks[top].0.len() == 1 && segs[blocks[top].0[0]].vertical {
+            let top_of = blocks[top].1[1];
+            remaining
+                .iter()
+                .copied()
+                .filter(|c| blocks[*c].0.len() == 1 && segs[blocks[*c].0[0]].vertical && (blocks[*c].1[1] - top_of).abs() <= 1.0)
+                .max_by(|a, b| blocks[*a].1[0].total_cmp(&blocks[*b].1[0]))
+                .or(Some(top))
+        } else {
+            Some(top)
+        }
+    };
+    while !remaining.is_empty() {
+        // A focused column has already been taken, so it only anchors the next pick: the column
+        // nearest on its left that shares vertical space with it. When no column is left of it,
+        // its group has ended and selection resumes from the remaining blocks; taking the
+        // finished column again would leave `remaining` unchanged, so it would be pushed into
+        // `block_order` forever.
+        let next = focus.and_then(|f| {
+            let fb = blocks[f].1;
+            remaining.iter().copied().filter(|c| beside_left(&fb, &blocks[*c].1)).max_by(|a, b| blocks[*a].1[0].total_cmp(&blocks[*b].1[0]))
+        });
+        let continuing = next.is_some();
+        let Some(top) = next.or_else(|| top_block(&remaining)) else { break };
+        let tb = blocks[top].1;
+        let vertical_top = blocks[top].0.len() == 1 && segs[blocks[top].0[0]].vertical;
+        // The first column of a vertical group is taken as it is (its rightmost); then each next
+        // one is its nearest column on the left (#3712). Any other block goes on past a paragraph
+        // gap (#3658): the nearest block below the one just read that overlaps it horizontally comes next, if the gap
+        // above it is at most two and a half heights of the last line read (a footer, a footnote or a caption under a
+        // figure is further) and no other unread block
         // - sits above it in its own horizontal span (the rest of a column above a full-width heading or footnote),
         // - is beside it on its left, or
         // - shares its first line: their first lines overlap by at least 30% of the taller one (a table or form row,
         //   which reads across, even with labels and values in different sizes or on shifted baselines; a line that
         //   only touches it, or a small superscript or footnote marker, is not a row).
-        let next_in_column = block_order.last().and_then(|&prev| {
-            let pb = blocks[prev].1;
-            // The gap is measured in the height of the block's last line, which borders it.
-            let pl = blocks[prev].0.last().and_then(|&s| segs.get(s)).map_or(pb, |s| s.bbox);
-            let tol = (pl[3] - pl[1]).max(0.1) * 0.5;
-            let c = remaining
-                .iter()
-                .copied()
-                .filter(|&c| {
-                    let cb = blocks[c].1;
-                    let overlap = cb[2].min(pb[2]) - cb[0].max(pb[0]);
-                    let minw = (cb[2] - cb[0]).min(pb[2] - pb[0]).max(1.0);
-                    cb[1] >= pb[3] - tol && overlap > minw * 0.3
-                })
-                .min_by(|a, b| blocks[*a].1[1].total_cmp(&blocks[*b].1[1]))?;
-            let cb = blocks[c].1;
-            if cb[1] - pb[3] >= tol * 5.0 {
-                return None;
-            }
-            let cl = first_line(c);
-            let blocked = remaining.iter().any(|&r| {
-                if r == c {
-                    return false;
+        let pick = if continuing || vertical_top {
+            top
+        } else {
+            let next_in_column = block_order.last().and_then(|&prev| {
+                let pb = blocks[prev].1;
+                // The gap is measured in the height of the block's last line, which borders it.
+                let pl = blocks[prev].0.last().and_then(|&s| segs.get(s)).map_or(pb, |s| s.bbox);
+                let tol = (pl[3] - pl[1]).max(0.1) * 0.5;
+                let c = remaining
+                    .iter()
+                    .copied()
+                    .filter(|&c| {
+                        let cb = blocks[c].1;
+                        let overlap = cb[2].min(pb[2]) - cb[0].max(pb[0]);
+                        let minw = (cb[2] - cb[0]).min(pb[2] - pb[0]).max(1.0);
+                        cb[1] >= pb[3] - tol && overlap > minw * 0.3
+                    })
+                    .min_by(|a, b| blocks[*a].1[1].total_cmp(&blocks[*b].1[1]))?;
+                let cb = blocks[c].1;
+                if cb[1] - pb[3] >= tol * 5.0 {
+                    return None;
                 }
-                let rb = blocks[r].1;
-                let rl = first_line(r);
-                let shared = rl[3].min(cl[3]) - rl[1].max(cl[1]);
-                let row = shared > 0.3 * (rl[3] - rl[1]).max(cl[3] - cl[1]);
-                (rb[1] < cb[1] && rb[2].min(cb[2]) > rb[0].max(cb[0])) || beside_left(&cb, &rb) || row
+                let cl = first_line(c);
+                let blocked = remaining.iter().any(|&r| {
+                    if r == c {
+                        return false;
+                    }
+                    let rb = blocks[r].1;
+                    let rl = first_line(r);
+                    let shared = rl[3].min(cl[3]) - rl[1].max(cl[1]);
+                    let row = shared > 0.3 * (rl[3] - rl[1]).max(cl[3] - cl[1]);
+                    (rb[1] < cb[1] && rb[2].min(cb[2]) > rb[0].max(cb[0])) || beside_left(&cb, &rb) || row
+                });
+                (!blocked).then_some(c)
             });
-            (!blocked).then_some(c)
-        });
-        let pick = next_in_column.unwrap_or_else(|| {
-            let tb = blocks[top].1;
-            remaining
-                .iter()
-                .copied()
-                .filter(|c| beside_left(&tb, &blocks[*c].1))
-                .min_by(|a, b| blocks[*a].1[0].total_cmp(&blocks[*b].1[0]))
-                .unwrap_or(top)
-        });
+            next_in_column.unwrap_or_else(|| {
+                remaining
+                    .iter()
+                    .copied()
+                    .filter(|c| beside_left(&tb, &blocks[*c].1))
+                    .min_by(|a, b| blocks[*a].1[0].total_cmp(&blocks[*b].1[0]))
+                    .unwrap_or(top)
+            })
+        };
         remaining.retain(|r| *r != pick);
         block_order.push(pick);
+        // A column anchors the next pick whether or not it continued a walk, so a column that
+        // starts lower than the ones to its right is still read in its turn, not after them.
+        focus = vertical_top.then_some(pick);
     }
 
     // 4. Emit each segment in block order. Its glyphs are placed here, into scratch that every segment reuses, and
