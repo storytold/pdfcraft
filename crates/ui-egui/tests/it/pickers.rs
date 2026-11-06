@@ -78,6 +78,98 @@ fn file_open_returns_at_once_and_opens_the_pick_when_preparation_finishes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #6241: exercise both in-app entry points through the asynchronous native picker flow.
+#[test]
+fn picker_open_records_pdf_in_recent_from_home_and_file_menu() {
+    let dir = scratch("recent-open");
+    for from_menu in [false, true] {
+        let name = if from_menu { "from-menu.pdf" } else { "from-home.pdf" };
+        let file = dir.join(name);
+        let bytes = fixture(2);
+        std::fs::write(&file, &bytes).unwrap();
+        let path = file.to_string_lossy().into_owned();
+        let mut h = harness(&[]);
+        h.state_mut().pick_override = Some(vec![path.clone()]);
+        if from_menu {
+            support::open_menu(&mut h, "File");
+            support::menu_row(&h, "Open…").click();
+        } else {
+            h.get_by_label("Open file").click();
+        }
+        support::wait_until(&mut h, "picked PDF", |app| app.views.len() == 1);
+        let app = h.state();
+        assert_eq!(app.recent.len(), 1, "{name}: successful in-app open records the file");
+        let recent = app.recent.first().unwrap();
+        assert_eq!(recent.path, path);
+        assert_eq!(recent.name, name);
+        assert_eq!(recent.pages, 2);
+        assert_eq!(recent.size, bytes.len());
+        let saved: serde_json::Value = serde_json::from_str(&app.persist()).unwrap();
+        assert_eq!(saved["recent"][0]["path"], path);
+        let mut restored = PdfCraftApp::new();
+        restored.restore(&app.persist());
+        assert_eq!(restored.recent.first().unwrap().path, path, "{name}: survives settings restore");
+        println!("{name}: recorded and persisted in Recent");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Selecting a file that already has a tab must still refresh its recent-file entry.
+#[test]
+fn repicking_an_open_pdf_restores_its_cleared_recent_entry() {
+    let dir = scratch("recent-repick");
+    let file = dir.join("open-again.pdf");
+    std::fs::write(&file, fixture(2)).unwrap();
+    let path = file.to_string_lossy().into_owned();
+    let mut h = harness(&[]);
+    h.state_mut().pick_override = Some(vec![path.clone()]);
+    assert!(h.state_mut().execute("file.open"));
+    support::wait_until(&mut h, "first open", |app| app.views.len() == 1);
+    let id = h.state().views.first().unwrap().id;
+    rotate_first_page(h.state_mut());
+    let before = h.state().session.get(id).unwrap().bytes.clone();
+    assert!(h.state().session.get(id).unwrap().dirty);
+    assert_eq!(h.state().recent.first().unwrap().path, path);
+    assert!(h.state_mut().execute("file.clear_recent"));
+    assert!(h.state().recent.is_empty());
+    assert!(h.state_mut().execute("file.open"));
+    h.run_steps(3);
+    assert_eq!(h.state().views.len(), 1, "reuse the existing tab");
+    assert_eq!(h.state().views.first().unwrap().id, id);
+    assert!(h.state().session.get(id).unwrap().dirty, "keep unsaved edits");
+    assert_eq!(h.state().session.get(id).unwrap().bytes, before, "do not reread the disk copy");
+    assert_eq!(h.state().recent.first().map(|recent| recent.path.as_str()), Some(path.as_str()), "a successful open restores the recent entry");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn opening_an_existing_tab_promotes_it_in_recent_without_a_second_tab() {
+    let dir = scratch("recent-promote");
+    let first = dir.join("first.pdf").to_string_lossy().into_owned();
+    let second = dir.join("second.pdf").to_string_lossy().into_owned();
+    for path in [&first, &second] {
+        std::fs::write(path, fixture(1)).unwrap();
+    }
+    for from_recent in [false, true] {
+        let mut app = PdfCraftApp::new();
+        app.open_path(&first);
+        app.open_path(&second);
+        assert_eq!(app.recent.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(), [second.as_str(), first.as_str()]);
+        if from_recent {
+            app.open_recent(&first);
+        } else {
+            app.open_path(&first);
+        }
+        assert_eq!(app.views.len(), 2);
+        assert_eq!(app.active, Some(0));
+        assert_eq!(app.recent.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(), [first.as_str(), second.as_str()]);
+        app.set_option("recent-files", "0").unwrap();
+        app.open_path(&second);
+        assert!(app.recent.is_empty(), "reusing a tab honors disabled history");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn insert_from_file_uses_the_pick_on_the_next_frame() {
     let dir = std::env::temp_dir().join(format!("printcraft-pickers-insert-{}", std::process::id()));
