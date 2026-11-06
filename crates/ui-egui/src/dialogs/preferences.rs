@@ -794,6 +794,9 @@ fn card_identity(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut
 /// Content for Card 5: Fill & Sign
 fn card_fill_and_sign(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
     ctx.checkbox(ui, &mut app.flatten_fill_sign_on_save, tl!("Flatten Fill & Sign when saving"), t);
+    ui.add_enabled_ui(!app.flatten_fill_sign_on_save, |ui| {
+        ctx.checkbox(ui, &mut app.ask_to_lock_signatures, tl!("Otherwise, ask on the first save after a signature is placed"), t);
+    });
     ctx.label_secondary(ui, tl!("Text, marks and signatures become part of the page. Other comments stay editable."), t);
     ui.add_space(8.0);
     date_format(ui, app, t, ctx);
