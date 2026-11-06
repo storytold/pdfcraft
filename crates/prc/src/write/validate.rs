@@ -41,7 +41,8 @@ impl Plan {
     pub(super) fn style_of(&self, scene: &MeshScene, p: &ScenePrimitive) -> Option<u32> {
         let m = p.material?;
         if self.is_textured(scene, p) {
-            let j = self.textured.iter().position(|&t| t == m)?;
+            // `textured` is in material order.
+            let j = self.textured.binary_search(&m).ok()?;
             return Some((scene.materials.len() + j) as u32);
         }
         Some(m as u32)

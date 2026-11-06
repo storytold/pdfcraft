@@ -137,7 +137,10 @@ impl View3d {
             return None;
         }
         let centre: [f64; 3] = std::array::from_fn(|i| lo.get(i).zip(hi.get(i)).map_or(0.0, |(l, h)| l / 2.0 + h / 2.0));
-        let radius = lo.iter().zip(&hi).map(|(l, h)| ((h - l) / 2.0).powi(2)).sum::<f64>().sqrt();
+        // Half-extents scaled by the largest, so neither a huge nor a tiny box over- or underflows.
+        let halves: [f64; 3] = std::array::from_fn(|i| lo.get(i).zip(hi.get(i)).map_or(0.0, |(l, h)| h / 2.0 - l / 2.0));
+        let big = halves.iter().fold(0.0f64, |m, e| m.max(*e));
+        let radius = if big > 0.0 { big * halves.iter().map(|e| (e / big).powi(2)).sum::<f64>().sqrt() } else { 0.0 };
         let half = (Self::FIT_FOV / 2.0).to_radians();
         // The narrower of the two angles must hold the box's bounding sphere.
         let narrow = half.min((half.tan() / aspect).atan());
@@ -150,6 +153,9 @@ impl View3d {
         // views CAD tools write carry, though §13.6.4 describes the camera's x as pointing right.
         let (x, y, z) = ([-a, -a, 0.0], [-b, b, 2.0 * b], [-c, c, -c]);
         let at: [f64; 3] = std::array::from_fn(|i| centre.get(i).zip(z.get(i)).map_or(0.0, |(p, d)| p - orbit * d));
+        if !at.iter().all(|v| v.is_finite()) {
+            return None;
+        }
         let mut camera_to_world = [0.0; 12];
         for (slot, v) in camera_to_world.iter_mut().zip(x.iter().chain(&y).chain(&z).chain(&at)) {
             *slot = *v;

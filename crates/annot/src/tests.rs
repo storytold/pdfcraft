@@ -2644,8 +2644,15 @@ fn a_fitted_3d_view_is_the_streams_lit_default_view() {
         ([[0.0; 3], [f64::INFINITY, 1.0, 1.0]], 1.0),
         ([[0.0; 3], [1.0; 3]], -1.0),
         ([[0.0; 3], [1.0; 3]], f64::NAN),
+        // The orbit is finite but the camera would stand past f64::MAX.
+        ([[f64::MAX, 0.0, 0.0], [f64::MAX, 1.0, 1.0]], 1e307),
     ] {
         assert_eq!(View3d::fitted(bounds, aspect), None, "{bounds:?} {aspect}");
+    }
+    // Boxes too large or too small to square their extents still fit.
+    for scale in [1e200, 1e-200] {
+        let view = View3d::fitted([[-scale; 3], [scale; 3]], 1.0);
+        assert!(view.is_some_and(|v| v.orbit.is_finite() && v.orbit > 0.0), "{scale}: {view:?}");
     }
 
     let mut doc = fixture();

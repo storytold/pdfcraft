@@ -263,3 +263,41 @@ fn model_add_refuses_a_broken_gltf_and_adds_nothing() {
     tool(&mut a, "doc_save", json!({ "doc": doc, "path": "out.pdf" }));
     assert!(saved_3d(dir.path()).1.is_empty());
 }
+
+/// A scene that is a single point has nothing to fit a view to: the report says so.
+#[test]
+fn model_add_reports_no_view_for_a_scene_that_is_a_point() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, json) = triangle_gltf(None);
+    let json = json.replace("\"max\":[1,1,0]", "\"max\":[0,0,0]");
+    std::fs::write(dir.path().join("dot.glb"), glb(&json, &[0u8; 36])).unwrap();
+    let mut a = Automation::new().with_root(dir.path()).unwrap();
+    let doc = tool(&mut a, "doc_create", json!({ "from": "blank", "width": 600, "height": 800 }))["doc"].as_u64().unwrap();
+    let out = tool(&mut a, "model_add", json!({ "doc": doc, "page": 1, "path": "dot.glb", "rect": [100, 100, 400, 400] }));
+    assert_eq!(out["converted"]["view"], false, "{out}");
+}
+
+/// A link beside the scene that leads out of its folder is not followed, even inside the root.
+#[test]
+fn model_add_does_not_follow_a_link_out_of_the_scenes_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("parts")).unwrap();
+    let (bin, json) = triangle_gltf(Some("link.bin"));
+    std::fs::write(root.join("elsewhere.bin"), &bin).unwrap();
+    std::fs::write(root.join("parts/tri.gltf"), json).unwrap();
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_file(root.join("elsewhere.bin"), root.join("parts/link.bin"));
+    #[cfg(unix)]
+    let linked = std::os::unix::fs::symlink(root.join("elsewhere.bin"), root.join("parts/link.bin"));
+    #[cfg(not(any(windows, unix)))]
+    let linked: std::io::Result<()> = Err(std::io::ErrorKind::Unsupported.into());
+    if linked.is_err() {
+        eprintln!("skipped: this account cannot make a symbolic link");
+        return;
+    }
+    let mut a = Automation::new().with_root(&root).unwrap();
+    let doc = tool(&mut a, "doc_create", json!({ "from": "blank", "width": 600, "height": 800 }))["doc"].as_u64().unwrap();
+    let refused = a.call("model_add", &json!({ "doc": doc, "page": 1, "path": "parts/tri.gltf", "rect": [10, 10, 200, 200] }));
+    assert!(matches!(&refused, Err(ToolError::Failed(m)) if m.contains("buffer 0")), "{refused:?}");
+}

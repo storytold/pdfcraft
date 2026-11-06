@@ -132,6 +132,10 @@ pub(super) fn read(doc: &Json, buffers: &Buffers, index: usize, want: usize) -> 
             out.push(component(b, kind, normalized));
         }
     }
+    // Refused here, so only the primitive that reads it is lost.
+    if out.iter().any(|v| !v.is_finite()) {
+        return Err(format!("accessor {index} holds a number that is not finite"));
+    }
     Ok(out)
 }
 

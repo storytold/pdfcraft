@@ -30,13 +30,16 @@ const FUNCTION_MODULATE: i32 = 1;
 const APPLY_LIGHTING: u8 = 0x01;
 
 /// A picture's format, width and height, read from its file header; `None`
-/// when it is neither a PNG nor a JPEG with a frame header.
+/// when it is neither a PNG nor a JPEG with a frame header, or it has no pixels.
 pub(crate) fn picture_info(image: &[u8]) -> Option<(u32, u32, u32)> {
-    if image.starts_with(b"\x89PNG\r\n\x1a\n") && image.get(12..16) == Some(b"IHDR") {
+    let info = if image.starts_with(b"\x89PNG\r\n\x1a\n") && image.get(12..16) == Some(b"IHDR") {
         let be = |at: usize| Some(u32::from_be_bytes(image.get(at..at + 4)?.try_into().ok()?));
-        return Some((FORMAT_PNG, be(16)?, be(20)?));
-    }
-    jpeg_size(image).map(|(w, h)| (FORMAT_JPEG, w, h))
+        (FORMAT_PNG, be(16)?, be(20)?)
+    } else {
+        let (w, h) = jpeg_size(image)?;
+        (FORMAT_JPEG, w, h)
+    };
+    (info.1 > 0 && info.2 > 0).then_some(info)
 }
 
 /// The width and height in a JPEG's first frame header (SOFn, ITU-T T.81
@@ -161,5 +164,10 @@ mod tests {
         assert_eq!(picture_info(&no_frame), None);
         assert_eq!(picture_info(b"RIFF....WEBP"), None);
         assert_eq!(picture_info(&png[..20]), None, "a cut IHDR");
+        let mut empty = png.clone();
+        empty[16..20].copy_from_slice(&[0; 4]);
+        assert_eq!(picture_info(&empty), None, "a PNG no pixels wide");
+        let flat = [0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, 0, 0, 0, 7];
+        assert_eq!(picture_info(&flat), None, "a JPEG no lines high");
     }
 }

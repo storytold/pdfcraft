@@ -153,7 +153,9 @@ fn part(w: &mut BitWriter, scene: &MeshScene, plan: &Plan, m: usize, tess: &mut 
     graphics(w, mesh.and_then(|m| m.name.as_deref()), ids.next(), None);
     let mut lo = [f64::INFINITY; 3];
     let mut hi = [f64::NEG_INFINITY; 3];
-    let prims: Vec<_> = plan.tessellations.iter().filter(|t| t.0 == m).filter_map(|&(_, p)| mesh?.primitives.get(p)).collect();
+    // A part's tessellations follow the previous parts', in part order.
+    let ours = plan.tessellations.get(*tess as usize..).unwrap_or(&[]).iter().take_while(|t| t.0 == m);
+    let prims: Vec<_> = ours.filter_map(|&(_, p)| mesh?.primitives.get(p)).collect();
     for v in prims.iter().flat_map(|p| &p.positions) {
         for ((l, h), c) in lo.iter_mut().zip(hi.iter_mut()).zip(v) {
             *l = l.min(*c);

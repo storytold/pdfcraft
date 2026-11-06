@@ -40,8 +40,8 @@ impl Automation {
         let (model, converted, view) = match read_model(&path, MAX_3D_MODEL_BYTES)? {
             ModelFile::Native(bytes) => (bytes, None, None),
             ModelFile::Gltf(bytes) => {
-                let (prc, report, bounds) = self.gltf_to_prc(&path, &bytes)?;
-                (prc, Some(report), bounds.and_then(|b| View3d::fitted(b, aspect(user))))
+                let (prc, report, view) = self.gltf_to_prc(&path, &bytes, aspect(user))?;
+                (prc, Some(report), view)
             }
         };
         let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -65,11 +65,12 @@ impl Automation {
     }
 
     /// The glTF file at `path` (its bytes `data`) written as PRC, what the conversion reports, and
-    /// the box the scene fills.
-    /// External buffers and images are read only from relative paths below the file's folder,
-    /// through the automation roots, at most [`MAX_3D_MODEL_BYTES`] in all.
-    fn gltf_to_prc(&self, path: &Path, data: &[u8]) -> Result<(Vec<u8>, Value, Option<Bounds>)> {
-        let folder = path.parent().unwrap_or(Path::new(""));
+    /// a view fitted to the scene in an annotation `aspect` times as wide as it is high.
+    /// External buffers and images are read only from relative paths below the file's folder, links
+    /// included, through the automation roots, at most [`MAX_3D_MODEL_BYTES`] in all.
+    fn gltf_to_prc(&self, path: &Path, data: &[u8], aspect: f64) -> Result<(Vec<u8>, Value, Option<View3d>)> {
+        let folder = path.parent().filter(|f| !f.as_os_str().is_empty()).unwrap_or(Path::new("."));
+        let real_folder = folder.canonicalize().ok();
         let mut left = MAX_3D_MODEL_BYTES;
         let mut resolve = |uri: &str| -> Option<Vec<u8>> {
             let mut joined = folder.to_path_buf();
@@ -80,7 +81,10 @@ impl Automation {
                     _ => return None,
                 }
             }
-            let target = self.resolve(joined.to_str()?, false).ok()?;
+            let target = self.resolve(joined.to_str()?, false).ok()?.canonicalize().ok()?;
+            if !real_folder.as_ref().is_some_and(|f| target.starts_with(f)) {
+                return None;
+            }
             let bytes = read_at_most(&target, left)?;
             left = left.saturating_sub(bytes.len());
             Some(bytes)
@@ -91,16 +95,16 @@ impl Automation {
         if report.prc.len() > MAX_3D_MODEL_BYTES {
             return Err(failed(format!("{shown}: the converted model is more than {MAX_3D_MODEL_BYTES} bytes, the largest accepted")));
         }
-        let bounds = import.scene.bounds();
+        let view = import.scene.bounds().and_then(|b| View3d::fitted(b, aspect));
         let summary = json!({
             "from": "glTF",
-            "view": bounds.is_some(),
+            "view": view.is_some(),
             "triangles": report.triangles,
             "textured_primitives": report.textured,
             "notes": import.notes,
             "inferred": import.inferred,
         });
-        Ok((report.prc, summary, bounds))
+        Ok((report.prc, summary, view))
     }
 }
 
@@ -109,9 +113,6 @@ impl Automation {
 fn aspect([x0, y0, x1, y1]: [f64; 4]) -> f64 {
     (x1 - x0).abs() / (y1 - y0).abs()
 }
-
-/// An axis-aligned box `[min, max]` in model space.
-type Bounds = [[f64; 3]; 2];
 
 /// A model file as read: embedded as it is (U3D, PRC), or a glTF scene to convert.
 #[derive(Debug)]

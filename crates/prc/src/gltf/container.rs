@@ -78,10 +78,11 @@ where
     Ok(out)
 }
 
-/// A `data:` URI's payload; only base64 payloads carry binary [§3.6.1.2].
+/// A `data:` URI's payload; only base64 payloads carry binary [§3.6.1.2]. Its `%XX` escapes are
+/// resolved first (RFC 2397 §3).
 pub(super) fn data_uri(uri: &str) -> Option<Vec<u8>> {
     let (head, body) = uri.split_once(',')?;
-    head.ends_with(";base64").then(|| base64(body)).flatten()
+    head.ends_with(";base64").then(|| base64(&percent_decode(body))).flatten()
 }
 
 /// RFC 4648 §4 base64, padding optional; the URL-safe alphabet (§5) is
@@ -142,6 +143,12 @@ mod tests {
         }
         assert_eq!(base64("Zm9vYg").unwrap(), b"foob");
         assert!(base64("Zm9v!").is_none());
+    }
+
+    #[test]
+    fn a_data_uri_may_escape_its_base64() {
+        assert_eq!(data_uri("data:application/octet-stream;base64,Pz8%2B").unwrap(), b"??>");
+        assert_eq!(data_uri("data:application/octet-stream;base64,Zg%3D%3D").unwrap(), b"f");
     }
 
     #[test]

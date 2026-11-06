@@ -59,7 +59,7 @@ pub(super) struct TextureUse {
 /// alpha) pair a material uses.
 #[derive(Debug, Default)]
 pub(super) struct Textures {
-    seen: Vec<((usize, bool), usize)>,
+    seen: std::collections::HashMap<(usize, bool), usize>,
     /// Image bytes copied into the scene so far.
     copied: usize,
 }
@@ -100,8 +100,8 @@ impl Textures {
                 return None;
             }
         };
-        let k = match self.seen.iter().find(|(key, _)| *key == (t, alpha)) {
-            Some(&(_, k)) => k,
+        let k = match self.seen.get(&(t, alpha)) {
+            Some(&k) => k,
             None => {
                 match self.copied.checked_add(image.len()) {
                     Some(n) if n <= MAX_IMAGE_BYTES => self.copied = n,
@@ -112,7 +112,7 @@ impl Textures {
                 }
                 let k = out.scene.textures.len();
                 out.scene.textures.push(SceneTexture { image: image.clone(), wrap: wraps(doc, tex), alpha });
-                self.seen.push(((t, alpha), k));
+                self.seen.insert((t, alpha), k);
                 k
             }
         };
@@ -200,6 +200,21 @@ mod tests {
         let plain = uses(&crate::gltf::json::parse(br#"{"index":0}"#).unwrap());
         assert_eq!(plain.set, 0);
         assert_eq!(plain.matrix, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]);
+    }
+
+    #[test]
+    fn the_extensions_own_example_draws_the_lower_left_quadrant() {
+        // The KHR_texture_transform README's example (offset (0, 1), a quarter turn, half scale),
+        // which its caption says draws only the image's lower-left quadrant; v runs down.
+        let info = crate::gltf::json::parse(
+            br#"{"index":0,"extensions":{"KHR_texture_transform":{"offset":[0,1],"rotation":1.57079632679,"scale":[0.5,0.5]}}}"#,
+        )
+        .unwrap();
+        let [m0, m1] = uses(&info).matrix;
+        for [u, v] in [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]] {
+            let (tu, tv) = (m0[0] * u + m0[1] * v + m0[2], m1[0] * u + m1[1] * v + m1[2]);
+            assert!((-1e-9..=0.5 + 1e-9).contains(&tu) && (0.5 - 1e-9..=1.0 + 1e-9).contains(&tv), "({u}, {v}) to ({tu}, {tv})");
+        }
     }
 
     #[test]
