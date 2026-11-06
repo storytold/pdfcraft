@@ -12,7 +12,14 @@ const WORD: [u32; 4] = [40, 40, 100, 60];
 
 /// A 200 × 100 pt "scan" on tinted paper, with OCR text over its word.
 fn scanned() -> (Session, pdfcraft_engine::DocId) {
-    scanned_with(vec![PlacedWord { text: "John".into(), origin: [40.0, 40.0], across: [60.0, 0.0], up: [0.0, 20.0] }])
+    scanned_with(vec![PlacedWord {
+        text: "John".into(),
+        origin: [40.0, 40.0],
+        across: [60.0, 0.0],
+        up: [0.0, 20.0],
+        confidence: None,
+        source: "ocrs".into(),
+    }])
 }
 
 fn scanned_with(words: Vec<PlacedWord>) -> (Session, pdfcraft_engine::DocId) {
@@ -86,11 +93,18 @@ fn an_explicit_colour_is_kept_for_the_new_text() {
 /// descender line when it has descenders, up to the cap height.
 fn scanned_word(text: &str, x0: f64, x1: f64, baseline: f64, size: f64) -> PlacedWord {
     let low = if text.chars().any(|c| "gjpqy".contains(c)) { 0.21 * size } else { 0.0 };
-    PlacedWord { text: text.into(), origin: [x0, baseline - low], across: [x1 - x0, 0.0], up: [0.0, 0.718 * size + low] }
+    PlacedWord {
+        text: text.into(),
+        origin: [x0, baseline - low],
+        across: [x1 - x0, 0.0],
+        up: [0.0, 0.718 * size + low],
+        confidence: None,
+        source: "ocrs".into(),
+    }
 }
 
 fn word(text: &str, x0: f64, x1: f64, baseline: f64) -> PlacedWord {
-    PlacedWord { text: text.into(), origin: [x0, baseline], across: [x1 - x0, 0.0], up: [0.0, 10.0] }
+    PlacedWord { text: text.into(), origin: [x0, baseline], across: [x1 - x0, 0.0], up: [0.0, 10.0], confidence: None, source: "ocrs".into() }
 }
 
 /// OCR words keep the scan's layout: a phrase is one paragraph, a value in the next table cell and
@@ -206,4 +220,193 @@ fn visible_stretched_text_rewrites_unchanged() {
     let (x, y) = ((r[0] - 1.0).max(0.0) as u32, (120.0 - (r[1] + r[3]) / 2.0) as u32);
     let i = ((y * out.width + x) * 4) as usize;
     assert_eq!(&out.rgba[i..i + 3], &[255, 255, 255]);
+}
+
+/// A scan whose OCR layer is drawn first and the opaque page image over it, as some OCR tools
+/// write it (#3973): invisible Helvetica `text` on the scanned word, then the image.
+fn ocr_under_scan(text: &str) -> std::sync::Arc<Vec<u8>> {
+    under_scan(&format!("BT /F1 20 Tf 3 Tr 42 44 Td ({text}) Tj ET"))
+}
+
+/// A page whose `text` content is followed by the opaque 200 × 100 scan image.
+fn under_scan(text: &str) -> std::sync::Arc<Vec<u8>> {
+    under_scan_with(text, |_| pdfcraft_cos::Dict::new())
+}
+
+/// As [`under_scan`], with the page's ExtGState resources made by `ext_gstates`.
+fn under_scan_with(text: &str, ext_gstates: impl FnOnce(&mut pdfcraft_cos::Document) -> pdfcraft_cos::Dict) -> std::sync::Arc<Vec<u8>> {
+    use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream};
+    let (w, h) = (200u32, 100u32);
+    let mut rgb = Vec::new();
+    for y in 0..h {
+        for x in 0..w {
+            let ink = (WORD[0]..WORD[2]).contains(&x) && (WORD[1]..WORD[3]).contains(&y);
+            rgb.extend(if ink { INK } else { PAPER });
+        }
+    }
+    let mut d = Document::new_empty();
+    let pages = d.add(Object::Dict(Dict::new()));
+    let content = format!("{text} q 200 0 0 100 0 0 cm /Im Do Q");
+    let contents = d.add(Object::Stream(Stream::flate(Dict::new(), content.as_bytes())));
+    let mut image = Dict::new();
+    image.set(b"Type".to_vec(), Object::name("XObject"));
+    image.set(b"Subtype".to_vec(), Object::name("Image"));
+    image.set(b"Width".to_vec(), Object::Int(i64::from(w)));
+    image.set(b"Height".to_vec(), Object::Int(i64::from(h)));
+    image.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    let image = d.add(Object::Stream(Stream::flate(image, &rgb)));
+    let mut font = Dict::new();
+    font.set(b"Type".to_vec(), Object::name("Font"));
+    font.set(b"Subtype".to_vec(), Object::name("Type1"));
+    font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
+    let mut fonts = Dict::new();
+    fonts.set(b"F1".to_vec(), Object::Dict(font));
+    let mut xobjects = Dict::new();
+    xobjects.set(b"Im".to_vec(), Object::Ref(image));
+    let mut res = Dict::new();
+    res.set(b"Font".to_vec(), Object::Dict(fonts));
+    res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+    res.set(b"ExtGState".to_vec(), Object::Dict(ext_gstates(&mut d)));
+    let mut p = Dict::new();
+    p.set(b"Type".to_vec(), Object::name("Page"));
+    p.set(b"Parent".to_vec(), Object::Ref(pages));
+    p.set(b"Contents".to_vec(), Object::Ref(contents));
+    p.set(b"Resources".to_vec(), Object::Dict(res));
+    p.set(b"MediaBox".to_vec(), Object::Array([0, 0, 200, 100].map(Object::Int).to_vec()));
+    let page = d.add(Object::Dict(p));
+    d.update_dict(pages, |p| {
+        p.set(b"Type".to_vec(), Object::name("Pages"));
+        p.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+        p.set(b"Count".to_vec(), Object::Int(1));
+    })
+    .unwrap();
+    let mut root = Dict::new();
+    root.set(b"Type".to_vec(), Object::name("Catalog"));
+    root.set(b"Pages".to_vec(), Object::Ref(pages));
+    let root = d.add(Object::Dict(root));
+    d.trailer_mut().set(b"Root".to_vec(), Object::Ref(root));
+    std::sync::Arc::new(pdfcraft_cos::write_full(&d, &SaveOptions::default()).unwrap())
+}
+
+/// The scanned word's box shows the cover and new ink, not the scan.
+fn assert_edit_shows(s: &Session, id: pdfcraft_engine::DocId, label: &str) {
+    let px = word_pixels(s, id);
+    let paper = px.iter().filter(|p| near(**p, PAPER)).count();
+    let ink = px.iter().filter(|p| near(**p, INK)).count();
+    assert!(paper * 10 > px.len() * 4, "{label}: the cover is drawn over the scan: {paper} of {} paper", px.len());
+    assert!(ink * 100 > px.len() * 3, "{label}: the new text shows: {ink} of {} ink", px.len());
+}
+
+fn texts(s: &Session, id: pdfcraft_engine::DocId) -> Vec<String> {
+    s.get(id).unwrap().text_blocks(0).iter().map(|b| b.text.replace('\n', " ")).collect()
+}
+
+fn edit_block(s: &mut Session, id: pdfcraft_engine::DocId, block: usize, text: &str) {
+    s.apply(id, Edit::EditTextBlock { page: 0, block, text: text.into(), style: Default::default() }).unwrap();
+}
+
+/// The OCR layer is under the scan image: the rewritten paragraph is drawn on top of the image,
+/// not in the OCR text's place where the image would hide it (#3973). One line takes the
+/// single-style rewrite, a typed line break the styled one. Undo restores the hidden layer, and
+/// the edit survives redo, a save and reopen, and being edited again.
+#[test]
+fn an_ocr_layer_under_the_scan_image_shows_its_edit() {
+    for edit in ["Jane", "Jane\nDoe"] {
+        let mut s = Session::new();
+        let id = s.open("ocr-under-scan.pdf", None, ocr_under_scan("John"), None).unwrap();
+        let blocks = s.get(id).unwrap().text_blocks(0);
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].invisible, "the OCR layer is invisible text");
+        assert!(word_pixels(&s, id).iter().all(|p| near(*p, INK)), "the scanned word fills its box");
+
+        edit_block(&mut s, id, 0, edit);
+        assert_eq!(texts(&s, id), [edit.replace('\n', " ")], "{edit:?}");
+        assert_edit_shows(&s, id, edit);
+
+        s.undo(id).unwrap();
+        assert_eq!(texts(&s, id), ["John"], "{edit:?}: undo");
+        assert!(s.get(id).unwrap().text_blocks(0)[0].invisible, "{edit:?}: undo hides the layer again");
+        assert!(word_pixels(&s, id).iter().all(|p| near(*p, INK)), "{edit:?}: undo shows the scan again");
+        s.redo(id).unwrap();
+        assert_edit_shows(&s, id, &format!("{edit:?} redo"));
+
+        let saved = s.save_bytes(id).unwrap();
+        let mut reopened = Session::new();
+        let id = reopened.open("saved.pdf", None, saved, None).unwrap();
+        assert_eq!(texts(&reopened, id), [edit.replace('\n', " ")], "{edit:?}: reopened");
+        assert_edit_shows(&reopened, id, &format!("{edit:?} reopened"));
+
+        edit_block(&mut reopened, id, 0, "Ann");
+        assert_eq!(texts(&reopened, id), ["Ann"], "{edit:?}: edited again");
+        assert_edit_shows(&reopened, id, &format!("{edit:?} edited again"));
+    }
+}
+
+/// Visible text earlier in the same text object makes the rewrite split it; the OCR phrase still
+/// goes on top of the scan, and the visible text stays.
+#[test]
+fn an_ocr_phrase_split_from_visible_text_under_the_scan_shows_its_edit() {
+    for edit in ["Jane", "Jane\nDoe"] {
+        let mut s = Session::new();
+        let page = under_scan("BT /F1 20 Tf 10 80 Td (Head) Tj 3 Tr 32 -36 Td (John) Tj ET");
+        let id = s.open("split.pdf", None, page, None).unwrap();
+        let blocks = s.get(id).unwrap().text_blocks(0);
+        let john = blocks.iter().position(|b| b.text == "John").unwrap();
+        assert!(blocks[john].invisible && blocks.iter().any(|b| b.text == "Head" && !b.invisible), "{blocks:?}");
+        edit_block(&mut s, id, john, edit);
+        let mut after = texts(&s, id);
+        after.sort();
+        let mut want = vec!["Head".to_string(), edit.replace('\n', " ")];
+        want.sort();
+        assert_eq!(after, want, "{edit:?}");
+        assert_edit_shows(&s, id, &format!("{edit:?} split"));
+    }
+}
+
+/// `/SM`: a luminosity soft mask that is white over 30..110 × 30..70 in the space it is selected
+/// in, black elsewhere.
+fn soft_mask_state(d: &mut pdfcraft_cos::Document) -> pdfcraft_cos::Dict {
+    use pdfcraft_cos::{Dict, Object, Stream};
+    let mut group = Dict::new();
+    group.set(b"S".to_vec(), Object::name("Transparency"));
+    group.set(b"CS".to_vec(), Object::name("DeviceRGB"));
+    let mut form = Dict::new();
+    form.set(b"Type".to_vec(), Object::name("XObject"));
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 200, 100].map(Object::Int).to_vec()));
+    form.set(b"Group".to_vec(), Object::Dict(group));
+    let mut mask = Dict::new();
+    mask.set(b"Type".to_vec(), Object::name("Mask"));
+    mask.set(b"S".to_vec(), Object::name("Luminosity"));
+    mask.set(b"G".to_vec(), Object::Ref(d.add(Object::Stream(Stream::flate(form, b"1 g 30 30 80 40 re f")))));
+    let mut state = Dict::new();
+    state.set(b"Type".to_vec(), Object::name("ExtGState"));
+    state.set(b"SMask".to_vec(), Object::Dict(mask));
+    let mut states = Dict::new();
+    states.set(b"SM".to_vec(), Object::Dict(state));
+    states
+}
+
+/// The soft mask is selected before a translation, so it is placed by the CTM before it. The
+/// paragraph lifted over the scan selects it again after its own `cm`: there it must be placed
+/// as it was, not 100 pt to the right where it would hide the new text, so the edit renders
+/// exactly as the same edit on the page without the mask. Both rewrite paths.
+#[test]
+fn a_soft_mask_selected_before_a_cm_stays_put_when_the_edit_is_lifted() {
+    for edit in ["Jane", "Jane\nDoe"] {
+        let mut plain = Session::new();
+        let page = under_scan("q 1 0 0 1 100 0 cm BT /F1 20 Tf 3 Tr -58 44 Td (John) Tj ET Q");
+        let plain_id = plain.open("plain.pdf", None, page, None).unwrap();
+        edit_block(&mut plain, plain_id, 0, edit);
+        let mut s = Session::new();
+        let page = under_scan_with("q /SM gs 1 0 0 1 100 0 cm BT /F1 20 Tf 3 Tr -58 44 Td (John) Tj ET Q", soft_mask_state);
+        let id = s.open("masked.pdf", None, page, None).unwrap();
+        assert_eq!(texts(&s, id), ["John"]);
+        edit_block(&mut s, id, 0, edit);
+        assert_eq!(texts(&s, id), [edit.replace('\n', " ")], "{edit:?}");
+        assert_edit_shows(&s, id, &format!("{edit:?} masked"));
+        let ink = |s: &Session, id| word_pixels(s, id).iter().filter(|p| near(**p, INK)).count();
+        assert_eq!(ink(&s, id), ink(&plain, plain_id), "{edit:?}: the mask does not hide the new text");
+    }
 }

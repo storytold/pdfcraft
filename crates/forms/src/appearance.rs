@@ -752,20 +752,38 @@ pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow>
     field_appearance_fit(doc, f, w, &f.value, true).2
 }
 
+/// Whether `text` draws in widget `wd` of `f` with no `?`: in the field's `/DR` font when that
+/// holds it, as [`field_appearance_fit`] picks, or else in the Helvetica (WinAnsi) stand-in.
+fn draws(doc: &Document, f: &Field, wd: &Dict, text: &str) -> bool {
+    let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
+    let enc = dr_font(doc, &da.font).map(|(_, enc)| enc).filter(|enc| enc.can_encode(text)).unwrap_or(FontText::WinAnsi);
+    enc.first_unencodable(text).is_none()
+}
+
 /// [`field_appearance_drawn`], and whether the text drawn is cut off by the box.
 fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>, Option<Overflow>) {
     field_appearance_using(doc, f, w, values, format, None)
 }
 
 /// Apply the field's Format action only when values have not already been formatted.
-fn formatted_values<'a>(f: &Field, values: &'a [String], format: bool) -> std::borrow::Cow<'a, [String]> {
+fn formatted_values<'a>(doc: &Document, f: &Field, w: &Widget, values: &'a [String], format: bool) -> std::borrow::Cow<'a, [String]> {
     // The Format event: what is shown, not what is stored.
     if format
         && matches!(f.kind, crate::FieldKind::Text | crate::FieldKind::Combo)
         && values.len() == 1
         && f.actions.format != crate::af::Format::None
     {
-        std::borrow::Cow::Owned(vec![crate::af::format_value(&f.actions.format, &values[0])])
+        let shown = crate::af::format_value(&f.actions.format, &values[0]);
+        // Keep the date-language fallback from #5303 before considering an embedded font.
+        let dated = matches!(f.actions.format, crate::af::Format::Date(_) | crate::af::Format::Time(_));
+        let wobj = doc.get(w.obj);
+        let wd = wobj.as_dict().cloned().unwrap_or_default();
+        let shown = if !dated || draws(doc, f, &wd, &shown) {
+            shown
+        } else {
+            crate::af::format_value_in(&f.actions.format, &values[0], &crate::af::ENGLISH_DATE_NAMES)
+        };
+        std::borrow::Cow::Owned(vec![shown])
     } else {
         std::borrow::Cow::Borrowed(values)
     }
@@ -812,7 +830,7 @@ pub(crate) fn field_appearance_embedded(
     if original.1.is_none() {
         return Ok(original);
     }
-    let shown = formatted_values(f, values, format);
+    let shown = formatted_values(doc, f, w, values, format);
     let covers = |s: &str| pdfcraft_fonts::embedding::covers(pdfcraft_fonts::INTER_REGULAR, &s.replace('\t', " "));
     let covered = if f.kind == FieldKind::List {
         let wobj = doc.get(w.obj);
@@ -850,7 +868,7 @@ fn field_appearance_using(
     format: bool,
     fallback: Option<(String, Object, FontText)>,
 ) -> (Stream, Option<char>, Option<Overflow>) {
-    let values = formatted_values(f, values, format);
+    let values = formatted_values(doc, f, w, values, format);
     let wobj = doc.get(w.obj);
     let wd = wobj.as_dict().cloned().unwrap_or_default();
     let place = widget_placement(doc, w, &wd);
