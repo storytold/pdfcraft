@@ -1902,11 +1902,14 @@ fn the_object_cache_keeps_its_total_as_objects_come_and_go() {
 #[test]
 fn the_editor_cache_charges_a_dictionary_for_the_values_it_holds() {
     let entries: String = (0..2000).map(|i| format!("/{i}[{i} 141 3 116.22 -375.993 1.0]")).collect();
-    let dict = format!("<< /PieceInfo << /InDesign << /Map << {entries} >> >> >> >>");
+    // Each page's own data, as InDesign writes it (its last change at least differs). Copies
+    // byte for byte the same would be parsed once and shared (`SharedDicts`): one tree held,
+    // whatever the number of objects, and nothing for the budget to evict.
+    let dict = |page: usize| format!("<< /PieceInfo << /InDesign << /Map << /Page {page} {entries} >> >> >> >>");
     let count = 300;
     let refs: String = (0..count).map(|i| format!("{} 0 R ", i + 2)).collect();
     let mut bodies = vec![format!("<< /Type /Catalog /Extension [{refs}] >>")];
-    bodies.extend((0..count).map(|_| dict.clone()));
+    bodies.extend((0..count).map(dict));
     let bodies: Vec<&str> = bodies.iter().map(String::as_str).collect();
     let doc = Document::open(Arc::new(build(&bodies, "/Root 1 0 R"))).unwrap();
     let one = doc.get(crate::ObjRef::new(2, 0));
@@ -1920,4 +1923,43 @@ fn the_editor_cache_charges_a_dictionary_for_the_values_it_holds() {
     assert!(cache.len() < count, "the byte budget evicted some, below the count cap: {} kept", cache.len());
     let sum = cache.values().fold(0usize, |n, o| n.saturating_add(held_bytes(o, &doc.data, 0)));
     assert_eq!(cache.owned(), sum, "the kept total is the cache's own");
+}
+
+#[test]
+fn pages_repeating_one_large_resource_list_share_it() {
+    // A plot rewritten by a header-and-footer tool: each page lists every shading of the plot
+    // in its own direct /Resources, next to the XObject that holds its new footer.
+    let big = format!("<< {}>>", (0..1000).map(|i| format!("/Sh{i} {i} 0 R /T{i} (shading {i}) ")).collect::<String>());
+    let page = |fm: usize| format!("<< /Type /Page /Parent 2 0 R /Resources << /Shading {big} /XObject << /Fm1 {fm} 0 R >> >> >>");
+    let bodies =
+        ["<< /Type /Catalog /Pages 2 0 R >>".into(), "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>".into(), page(6), page(7), page(8)];
+    let plain = build(&bodies.iter().map(String::as_str).collect::<Vec<_>>(), "/Root 1 0 R");
+    let packed =
+        crate::write_full(&Document::open(Arc::new(plain.clone())).unwrap(), &crate::SaveOptions { object_streams: true, ..Default::default() })
+            .unwrap();
+    for bytes in [plain, packed] {
+        let doc = Document::open(Arc::new(bytes)).unwrap();
+        let tree = doc.get(doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap());
+        // What the cache stored, not a recount: the first page is charged the list, which it alone
+        // held when it went in; the two after it share that parse and are charged their own entries.
+        let kids = tree.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap().clone();
+        let stored = || doc.cache.lock().unwrap().owned();
+        let (mut pages, mut charged): (Vec<Arc<Object>>, Vec<usize>) = (Vec::new(), Vec::new());
+        for k in &kids {
+            let before = stored();
+            pages.push(doc.get(k.as_ref().unwrap()));
+            charged.push(stored().saturating_sub(before));
+        }
+        assert!(charged[0] > 2000 * std::mem::size_of::<Object>(), "the first page holds the list: {charged:?}");
+        assert!(charged[1] < 4000 && charged[2] < 4000, "the others share it: {charged:?}");
+        let shading =
+            |p: &Object| p.as_dict().unwrap().get(b"Resources").unwrap().as_dict().unwrap().get(b"Shading").unwrap().as_dict().unwrap().clone();
+        assert_eq!(pages.len(), 3);
+        assert!(pages.windows(2).all(|w| shading(&w[0]).shares(&shading(&w[1]))), "one parse for all copies");
+        assert_eq!(shading(&pages[2]).len(), 2000);
+        // The shared list is not counted as each page's own: the page weighs its own few entries,
+        // where the list's 2000 would weigh well over 100 kB.
+        let held = held_bytes(&pages[0], doc.bytes(), 0);
+        assert!(held < 4000, "{held}");
+    }
 }
