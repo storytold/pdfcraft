@@ -488,3 +488,91 @@ fn an_output_intent_profile_header_is_read_within_a_size_cap() {
         assert_eq!(pdfa_intent_profile(&doc), Some(n), "a {size}-byte profile");
     }
 }
+
+/// PDF/A-2 6.2.5: a graphics state has no transfer function, halftones of type 1 or 5 without a
+/// name, and a standard rendering intent, wherever it is kept.
+#[test]
+fn extended_graphics_states_are_checked() {
+    let gs = |states: &str| -> Vec<String> {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Resources << /ExtGState << {states} >> >> >>");
+        let doc = build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                &page,
+                "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>",
+                "<< /HalftoneType 1 /Frequency 60 /Angle 45 /SpotFunction /Round >>",
+                "<< /TR 4 0 R >>",
+                "<< /Type /Halftone /HalftoneType 6 /Width 2 /Height 2 /Length 4 >>\nstream\nabcd\nendstream",
+                "<< /Resources << /ExtGState << /X << /TR 4 0 R >> >> >> >>",
+            ],
+            "",
+        );
+        let issues = verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.5");
+        issues.inspect(|i| assert!(!i.fixable, "{}", i.message)).map(|i| i.message).collect()
+    };
+    let tr = "A graphics state has a transfer function (TR)";
+    let tr2 = "A graphics state has a transfer function (TR2) other than Default";
+    let name = "A halftone has a HalftoneName";
+    // What 6.2.5 allows.
+    assert!(gs("/A << /TR2 /Default /HT 5 0 R /RI /Perceptual >> /B << /HT /Default /RI /AbsoluteColorimetric >>").is_empty());
+    assert!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Cyan 5 0 R >> /RI /Saturation >> /B << /TR null >>").is_empty());
+    // Transfer functions.
+    assert_eq!(gs("/A << /TR 4 0 R >>"), [tr]);
+    assert_eq!(gs("/A << /TR /Identity >>"), [tr]);
+    assert_eq!(gs("/A 6 0 R"), [tr]);
+    assert_eq!(gs("/A << /TR2 4 0 R >>"), [tr2]);
+    assert_eq!(gs("/A << /TR2 /Identity >>"), [tr2]);
+    assert_eq!(gs("/A << /HTP [0 1] >>"), ["A graphics state has a halftone phase (HTP)"]);
+    // Halftones: the type, also of a type 5 halftone's colorants and of a stream, and the name.
+    assert_eq!(gs("/A << /HT << /HalftoneType 6 >> >>"), ["A halftone has type 6: only types 1 and 5 are allowed"]);
+    assert_eq!(gs("/A << /HT 7 0 R >>"), ["A halftone has type 6: only types 1 and 5 are allowed"]);
+    assert_eq!(
+        gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Magenta << /HalftoneType 10 >> >> >>"),
+        ["A halftone has type 10: only types 1 and 5 are allowed"]
+    );
+    assert_eq!(gs("/A << /HT << /HalftoneType 1 /HalftoneName (Screen) >> >>"), [name]);
+    assert_eq!(gs("/A << /HT << /HalftoneType 5 /Default << /HalftoneType 1 /HalftoneName (S) >> >> >>"), [name]);
+    // Rendering intents.
+    assert_eq!(gs("/A << /RI /Custom >>"), ["A graphics state has the rendering intent Custom, which isn't a standard one"]);
+    assert_eq!(gs("/A << /RI (Perceptual) >>"), ["A graphics state has a rendering intent that isn't a name"]);
+    // A halftone's type is required; a null name is no name.
+    let untyped = ["A halftone's HalftoneType is missing or isn't an integer"];
+    assert_eq!(gs("/A << /HT << /Frequency 60 >> >>"), untyped);
+    assert_eq!(gs("/A << /HT << /HalftoneType 1.0 >> >>"), untyped);
+    assert!(gs("/A << /HT << /HalftoneType 1 /HalftoneName null >> >>").is_empty());
+    // Transfer functions in halftones: only, and always, for a non-primary colorant.
+    let in_halftone = "A halftone has a transfer function, which only a non-primary colorant's halftone may have";
+    assert_eq!(gs("/A << /HT << /HalftoneType 1 /TransferFunction 4 0 R >> >>"), [in_halftone]);
+    assert_eq!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Cyan << /HalftoneType 1 /TransferFunction /Identity >> >> >>"), [in_halftone]);
+    // The primary components are those of DeviceGray, DeviceRGB and DeviceCMYK (ISO 32000-1 10.5.5.6).
+    assert_eq!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Gray << /HalftoneType 1 /TransferFunction /Identity >> >> >>"), [in_halftone]);
+    assert_eq!(
+        gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Spot 5 0 R /Red 5 0 R /Gray 5 0 R >> >>"),
+        ["The halftone for the colorant Spot has no transfer function"]
+    );
+    assert!(gs("/A << /HT << /HalftoneType 5 /Default 5 0 R /Black 5 0 R /Spot << /HalftoneType 1 /TransferFunction 4 0 R >> >> >>").is_empty());
+    // Private application data isn't graphics resources.
+    assert!(
+        gs("/A << /RI /Perceptual >> >> /PieceInfo << /App << /Private << /Resources << /ExtGState << /X << /TR 4 0 R >> >> >> >> >>").is_empty()
+    );
+    // Nor is an object (8) only private data refers to; one the page refers to is read.
+    assert!(gs("/A << /RI /Perceptual >> >> /PieceInfo << /App << /Private 8 0 R >> >> /Z <<").is_empty());
+    assert_eq!(gs("/A << /RI /Perceptual >> >> /Other 8 0 R /Z <<"), [tr]);
+    // A shading pattern holds one graphics state, not a dictionary of them.
+    let pattern = |gs: &str| format!("/A << /RI /Perceptual >> >> /Pattern << /P << /PatternType 2 /Shading << /ShadingType 2 >> /ExtGState {gs} >>");
+    assert_eq!(gs(&pattern("<< /TR 4 0 R >>")), [tr]);
+    assert!(gs(&pattern("<< /HT << /HalftoneType 1 >> >>")).is_empty());
+}
+
+/// From the review of the 6.2.5 check: references that differ only in generation reach the same
+/// object, which is read once.
+#[test]
+fn graphics_state_scan_reads_each_object_once_whatever_the_generation() {
+    let gens: String = (0..10).map(|g| format!("4 {g} R ")).collect();
+    let page = format!("<< /Type /Page /Parent 2 0 R /Same [{gens}] >>");
+    let doc =
+        build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>", &page, "[1 2 3]"], "");
+    // The catalog, the page tree, the page and object 4.
+    assert_eq!(gstate::reached(&doc), 4);
+}
