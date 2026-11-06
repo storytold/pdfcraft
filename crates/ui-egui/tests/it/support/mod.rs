@@ -81,10 +81,9 @@ pub fn outside_menus<'h>(h: &'h Harness<'static, PdfCraftApp>, label: &str) -> e
 /// switch to Chinese installs its fonts for the next frame, so the first frame in Chinese draws
 /// with the fonts of the language before it.
 ///
-/// A build that requires craft-fonts (`CRAFT_FONTS_REQUIRED=1`, as the CI gate sets) never skips:
-/// a missing glyph there is a failure.
+/// A build that requires craft-fonts or oracles never skips: a missing glyph there is a failure.
 pub fn skip_without_glyphs(name: &str, language: &str, text: &str) -> bool {
-    if std::env::var("CRAFT_FONTS_REQUIRED").as_deref() == Ok("1") {
+    if fonts_are_required(std::env::var_os("CRAFT_FONTS_REQUIRED"), std::env::var_os("PDFCRAFT_ORACLES_REQUIRED")) {
         return false;
     }
     let catalogs: Vec<&str> = i18n::Lang::from_code(language).into_iter().flat_map(i18n::Lang::catalog_texts).collect();
@@ -102,6 +101,24 @@ pub fn skip_without_glyphs(name: &str, language: &str, text: &str) -> bool {
     };
     eprintln!("skipping {name}: no interface font draws {missing:?} (set CRAFT_FONTS_DIR to a craft-fonts checkout with a face for it)");
     true
+}
+
+/// Whether either CI requirement flag is set, regardless of its value.
+fn fonts_are_required(craft_fonts: Option<std::ffi::OsString>, oracles: Option<std::ffi::OsString>) -> bool {
+    craft_fonts.is_some() || oracles.is_some()
+}
+
+/// No interface font draws a private-use plane-16 character, so the skip path is taken without
+/// craft-fonts or system faces; plain Latin text is always drawn and never skips.
+#[test]
+fn skip_without_glyphs_skips_only_for_undrawable_text() {
+    let craft_fonts_required = std::env::var_os("CRAFT_FONTS_REQUIRED");
+    let oracles_required = std::env::var_os("PDFCRAFT_ORACLES_REQUIRED");
+    let required = fonts_are_required(craft_fonts_required, oracles_required);
+    assert_eq!(skip_without_glyphs("test", "en", "\u{10FFFD}"), !required);
+    assert!(!skip_without_glyphs("test", "en", "Hello"));
+    assert!(fonts_are_required(Some("0".into()), None));
+    assert!(fonts_are_required(None, Some("0".into())));
 }
 
 /// Whether `name` is skipped because the build embeds no craft-i18n catalogs (English only).
