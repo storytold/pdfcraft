@@ -8196,6 +8196,9 @@ fn decoded_images_serve_every_size_they_are_drawn_at() {
 // ICC profiles whose stream dictionaries are the same (vendored hayro-interpret patch 48).
 mod icc_profile_cache;
 
+// A Type 3 glyph shown again decodes its procedure once (vendored hayro-interpret patch 87).
+mod type3_proc_cache;
+
 // A symbolic TrueType font draws through its (3, 0) cmap subtable first (#4156).
 mod symbolic_truetype_cmap;
 

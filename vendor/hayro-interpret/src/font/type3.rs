@@ -1,5 +1,7 @@
 use crate::CMapResolverFn;
-use crate::context::Context;
+use crate::context::{
+    Context, HeldContent, MAX_CACHED_TYPE3_PROCS, Type3Procs, content_left, hold_content,
+};
 use crate::device::Device;
 use crate::font::glyph_simulator::GlyphSimulator;
 use crate::font::true_type::{Width, read_encoding, read_widths};
@@ -19,7 +21,9 @@ use hayro_syntax::object::dict::keys::{CHAR_PROCS, FONT_BBOX, FONT_MATRIX, RESOU
 use hayro_syntax::page::Resources;
 use kurbo::{Affine, BezPath, Rect};
 use skrifa::GlyphId;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 #[derive(Debug)]
 pub(crate) struct Type3<'a> {
@@ -33,7 +37,19 @@ pub(crate) struct Type3<'a> {
     font_bbox: Rect,
     matrix: Affine,
     to_unicode: Option<CMap>,
+    /// PdfCraft patch (87): glyph procedures already decoded, by glyph name, so a glyph shown
+    /// again and again (a Type 3 font used as a fill pattern draws one glyph hundreds of
+    /// thousands of times) isn't inflated again for every copy. Only procedures of at most
+    /// [`MAX_CACHED_PROC`] bytes are kept, and the fonts of one interpreter cache keep at most
+    /// `context::MAX_CACHED_TYPE3_PROCS` bytes together.
+    decoded_procs: RefCell<HashMap<String, Rc<[u8]>>>,
 }
+
+/// PdfCraft patch (87): the largest decoded glyph procedure [`Type3`] keeps.
+const MAX_CACHED_PROC: usize = 64 << 10;
+/// PdfCraft patch (87): what a kept procedure costs the cache besides its bytes and its glyph
+/// name (the map entry and the shared allocation's counts), so many empty procedures count too.
+const CACHED_PROC_OVERHEAD: usize = 64;
 
 impl<'a> Type3<'a> {
     pub(crate) fn new(dict: &Dict<'a>, cmap_resolver: &CMapResolverFn) -> Option<Self> {
@@ -75,7 +91,49 @@ impl<'a> Type3<'a> {
             matrix,
             dict: dict.clone(),
             to_unicode,
+            decoded_procs: RefCell::new(HashMap::new()),
         })
+    }
+
+    /// PdfCraft patch (87): the decoded procedure of glyph `name`, held within the page's
+    /// content budget while the glyph is painted, whether it was decoded now or kept from an
+    /// earlier copy, so a page skips the same glyphs either way once the budget is spent. It is
+    /// decoded the first time and kept, when small enough and while `procs` has room, for the
+    /// next copies. Only a procedure decoded with more budget left than [`MAX_CACHED_PROC`] is
+    /// kept, so one the budget may have cut short isn't.
+    fn decoded_proc(
+        &self,
+        name: &str,
+        program: &Stream<'a>,
+        procs: &Type3Procs,
+    ) -> Option<(Rc<[u8]>, HeldContent)> {
+        let kept = self.decoded_procs.borrow().get(name).cloned();
+        if let Some(bytes) = kept {
+            let held = hold_content(bytes.len())?;
+            return Some((bytes, held));
+        }
+        let left = content_left();
+        // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
+        let decoded = crate::context::decode_content(program)?;
+        procs.decodes.set(procs.decodes.get().saturating_add(1));
+        let bytes: Rc<[u8]> = Rc::from(decoded.as_ref());
+        drop(decoded);
+        let held = hold_content(bytes.len())?;
+        let cost = bytes
+            .len()
+            .saturating_add(name.len())
+            .saturating_add(CACHED_PROC_OVERHEAD);
+        let total = procs.held.get().saturating_add(cost);
+        if left > MAX_CACHED_PROC
+            && bytes.len() <= MAX_CACHED_PROC
+            && total <= MAX_CACHED_TYPE3_PROCS
+        {
+            procs.held.set(total);
+            self.decoded_procs
+                .borrow_mut()
+                .insert(name.to_string(), bytes.clone());
+        }
+        Some((bytes, held))
     }
 
     pub(crate) fn map_code(&self, code: u8) -> GlyphId {
@@ -144,9 +202,8 @@ impl<'a> Type3<'a> {
 
         let name = self.glyph_simulator.glyph_to_string(glyph.glyph_id)?;
         let program = self.char_procs.get(&name)?;
-        // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
-        let decoded = crate::context::decode_content(program)?;
-        let iter = TypedIter::new(decoded.as_ref());
+        let (decoded, _held) = self.decoded_proc(&name, program, &glyph.cache.type3_procs)?;
+        let iter = TypedIter::new(&decoded);
 
         let is_shape_glyph = {
             let mut iter = iter.clone();
