@@ -134,7 +134,7 @@ fn autotag_text_says_why_it_cannot_read_a_page() {
             other => panic!("{other:?}"),
         }
     };
-    assert_eq!(reason(Stream::from_raw(Dict::new(), vec![b' '; 17 << 20])), "decoded content exceeds 16 MiB");
+    assert_eq!(reason(Stream::from_raw(Dict::new(), vec![b' '; 17 << 20])), "decoding the content takes more than 16 MiB");
     let mut corrupt = Stream::from_raw(Dict::new(), b"not zlib data".to_vec());
     corrupt.dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
     let why = reason(corrupt);
