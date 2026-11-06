@@ -3782,8 +3782,8 @@ milestone = "M5"
 status = "partial"
 commands = ["comment.freetext"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/it/comments.rs::sticky_note_composer_posts_and_returns_to_select", "crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn"]
-notes = "Helvetica text with colour, size and alignment; /RC (XHTML) and /DS are written and kept in step with edits; per-run formatting (bold/italic spans) is not yet"
+evidence = ["crates/ui-egui/tests/it/comments.rs::sticky_note_composer_posts_and_returns_to_select", "crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn", "crates/annot/src/tests.rs::a_text_box_draws_cjk_text_as_outlines"]
+notes = "Helvetica text with colour, size and alignment; /RC (XHTML) and /DS are written and kept in step with edits; characters the standard font cannot encode and the document's Japanese face has are drawn as outlines of that face, so Japanese, and the full-width forms and Han it covers, stay text instead of becoming ?; per-run formatting (bold/italic spans) is not yet"
 
 [[feature]]
 id = "comment.callout"
@@ -5508,7 +5508,7 @@ status = "shipped"
 commands = ["sign.fill.date"]
 tools = ["fill_sign_add", "fill_sign_date_format"]
 evidence = ["crates/ui-egui/tests/it/fill_sign.rs::text_marks_and_date", "crates/automation/tests/it/automation.rs::fill_and_sign_through_tools", "crates/ui-egui/tests/it/date_format.rs::fill_and_sign_dates_follow_the_date_format_preference_and_it_is_remembered", "crates/engine/src/dates.rs::presets_write_the_day_in_their_own_order", "crates/engine/src/dates.rs::names_follow_the_date_language", "crates/ui-egui/tests/it/date_format.rs::month_names_follow_the_date_language_or_else_the_interface_language", "crates/ui-egui/tests/it/date_format.rs::a_date_the_pdf_cannot_hold_is_refused_with_a_warning_first", "crates/automation/tests/it/automation.rs::fill_sign_text_and_date_colours_are_saved_and_validated"]
-notes = "local date in Preferences ▸ Date format (default m/d/yyyy; 14 presets, year-first slash forms included, or any pattern in Acrobat date letters with \\ escapes, checked and previewed as typed, remembered; only whole date codes accepted; month and weekday names in the interface languages, Czech months in the genitive after a day, following the interface language unless one is picked; fill_sign_add takes a one-off format and language). Beyond Acrobat: its Fill & Sign has no format setting (only Acrobat Sign accounts do). Missing: Fill & Sign text is Helvetica/WinAnsi, so a date with letters outside Western European (Czech ř, Japanese, Chinese names) is refused with a warning instead of being saved as ?; the OS locale's format isn't offered as a preset; names in languages without an interface translation; typed fractional font sizes commit once; Fill & Sign text/date colour is remembered and preserved in preview and saved appearances (#2444)"
+notes = "local date in Preferences ▸ Date format (default m/d/yyyy; 14 presets, year-first slash forms included, or any pattern in Acrobat date letters with \\ escapes, checked and previewed as typed, remembered; only whole date codes accepted; month and weekday names in the interface languages, Czech months in the genitive after a day, following the interface language unless one is picked; fill_sign_add takes a one-off format and language). Beyond Acrobat: its Fill & Sign has no format setting (only Acrobat Sign accounts do). Missing: text neither the standard font nor the document's Japanese face can draw (some Latin letters with diacritics, most other scripts) is still written as ? and reported; the OS locale's format isn't offered as a preset; names in languages without an interface translation; typed fractional font sizes commit once; Fill & Sign text/date colour is remembered and preserved in preview and saved appearances (#2444)"
 
 [[feature]]
 id = "form.fill-sign-signature"

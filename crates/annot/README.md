@@ -12,9 +12,12 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`,
   A line's leader lines (`/LL`, `/LLE`, `/LLO`) and caption (`/Cap`, `/CP`, `/CO`) are drawn as
   ISO 32000-2 Table 178 places them, the caption in black Helvetica 10.
   Note icons are PdfCraft's own drawings. Text boxes use standard Helvetica (WinAnsi), with
-  line breaking by approximate Helvetica proportions (no font program is bundled). Text it can't
-  draw (in a text box, callout, Fill & Sign text, line caption, measurement label or dynamic
-  stamp's by-line; `appearance::undrawable_text`) is kept as typed and drawn as `?`, and the comment is marked with
+  line breaking by approximate Helvetica proportions (no font program is bundled). Characters
+  WinAnsi cannot encode that the document's Japanese Gothic face has are drawn as outlines of
+  that face, so Japanese kana and kanji in a text box, callout or Fill & Sign text stay text
+  instead of `?`. Text neither can draw (in a text box, callout, Fill & Sign text, line caption,
+  measurement label or dynamic stamp's by-line; `appearance::undrawable_text`) is kept as typed
+  and drawn as `?`, and the comment is marked with
   the first such character (`pdfcraft_fonts::UNDRAWN_MARK`) so the engine reports the edit and
   flattening refuses to make it permanent. Two refusals (`AnnotError::Undrawable`): a redaction
   mark's overlay text, which becomes page content when applied; and a restyle or resize of a
