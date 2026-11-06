@@ -977,6 +977,7 @@ const MAX_REFERENCE_HOPS: usize = 32;
 
 /// An object read in place, or the object a reference names as the document holds it: either way
 /// nothing is copied ([`Document::held`]).
+#[derive(Debug)]
 pub(crate) enum Held<'o> {
     Direct(&'o Object),
     Resolved(Arc<Object>),

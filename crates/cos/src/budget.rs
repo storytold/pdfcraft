@@ -336,6 +336,8 @@ impl DecodeBudget {
     /// page's `/Contents`: one stream, or an array whose non-stream entries are left out.
     /// A stream that fails to decode, or arrives after the allowance is spent, is an `Err` in its
     /// place, so the caller chooses between skipping it and giving up.
+    /// Positions are lost and its length is not capped; a caller that needs each entry beside
+    /// what it decoded, or a bounded list, reads [`crate::content_entries`] instead.
     pub fn decode_contents(&mut self, doc: &Document, contents: &Object) -> Vec<Result<Vec<u8>, CosError>> {
         match &*doc.resolve(contents) {
             Object::Stream(s) => vec![self.decode(s)],
