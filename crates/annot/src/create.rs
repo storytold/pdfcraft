@@ -392,14 +392,17 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             }
             border(&mut d);
             rich_text(&mut d);
+            // The text is laid out for the page as displayed, like a stamp's label.
+            // A callout gets the same turn: its leader stays in user space and is mapped
+            // into that frame when the appearance is drawn.
+            let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
+            if matches!(turn, 90 | 180 | 270) {
+                d.set(b"PCTextRotate".to_vec(), Object::Int(turn));
+            }
+            // An oval or a circle goes around the text box, its text wrapped as displayed:
+            // after `/PCTextRotate`, which swaps the box's sides on a quarter-turned page.
+            // A callout already stores its own /RD for the leader, so it keeps a rectangular box.
             if !matches!(new.shape, Shape::Callout { .. }) {
-                // The text is laid out for the page as displayed, like a stamp's label.
-                let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
-                if matches!(turn, 90 | 180 | 270) {
-                    d.set(b"PCTextRotate".to_vec(), Object::Int(turn));
-                }
-                // An oval or a circle goes around the text box, its text wrapped as displayed:
-                // after `/PCTextRotate`, which swaps the box's sides on a quarter-turned page.
                 shape_text_box(&mut d, rect, style.border_shape, style.width);
             }
         }
