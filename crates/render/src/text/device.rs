@@ -1,4 +1,4 @@
-use super::layout::{Flow, along_baseline, arrange_flow, compatible, continues, from_upright, to_upright, unrolled};
+use super::layout::{Flow, along_baseline, arrange_flow, compatible, continues, from_upright, to_upright, union, unrolled};
 use super::{
     Affine, BezPath, BlendMode, ClipPath, Context, Device, Glyph, GlyphDrawMode, HashMap, Image, InterpreterCache, InterpreterSettings, PageText,
     Paint, PathDrawMode, Pdf, Rect, Shape, SoftMask, TextFilter, TextGlyph, TransformExt, interpret_page,
@@ -12,6 +12,10 @@ pub(super) const DIRECTION_TOLERANCE: f64 = WORD_GAP as f64;
 
 /// A word gap is wider than the line's typical letter gap by this fraction of the line height.
 pub(super) const WORD_GAP: f32 = 0.15;
+
+/// A gap of this many heights between two glyphs of a line is wider than one run of text holds (`arrange` continues
+/// a run across less than three heights), so it separates cells that share a baseline.
+pub(super) const CELL_GAP: f32 = 3.0;
 
 /// A glyph with its writing direction to the nearest quarter turn (right, down, left, up) and as
 /// a unit vector.
@@ -249,6 +253,35 @@ impl TextDevice {
     }
 }
 
+/// `text` with each Latin compatibility ligature (U+FB00–U+FB06: ff, fi, fl, ffi, ffl, long s t,
+/// st) written as the letters it stands for, their compatibility decomposition. A font whose
+/// encoding names a ligature glyph (`/fi`) reads as the ligature character, and copied or searched
+/// text wants the letters, as a ToUnicode map gives them (ISO 32000-2 §9.10.3 maps the ff, fi and
+/// ffl glyphs to "LATIN SMALL LETTER F … I"). Nothing else is normalised. The glyph keeps its one
+/// box: the PDF gives no position for the letters inside it.
+pub(super) fn ligature_letters(text: String) -> String {
+    let letters = |c: char| match c {
+        '\u{FB00}' => Some("ff"),
+        '\u{FB01}' => Some("fi"),
+        '\u{FB02}' => Some("fl"),
+        '\u{FB03}' => Some("ffi"),
+        '\u{FB04}' => Some("ffl"),
+        '\u{FB05}' | '\u{FB06}' => Some("st"),
+        _ => None,
+    };
+    if !text.chars().any(|c| letters(c).is_some()) {
+        return text;
+    }
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match letters(c) {
+            Some(s) => out.push_str(s),
+            None => out.push(c),
+        }
+    }
+    out
+}
+
 /// Whether `PDFCRAFT_TEXT_DEBUG` is set. `draw_glyph` runs once per glyph and `getenv` scans the
 /// whole environment under a lock, so read it once.
 fn text_debug() -> bool {
@@ -287,6 +320,7 @@ impl<'a> Device<'a> for TextDevice {
         if !replaced && text.chars().all(char::is_control) {
             return;
         }
+        let text = ligature_letters(text);
         // Glyph space → view space. Glyph space uses 1000 units per em for outline glyphs; the em
         // box spans descender (−200) to ascender (800), the advance gives the width.
         let t = transform * glyph_transform;
@@ -453,7 +487,8 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
         flows.sort_by(|a, b| a.top.total_cmp(&b.top));
         flows
     };
-    let flows = upright(quarters);
+    let mut flows = upright(quarters);
+    let (main, mut inline, place) = turned_lines_in_place(&glyphs, &mut flows);
     let mut extra: Vec<Flow> = curves
         .into_iter()
         .map(|ids| (None, ids))
@@ -499,7 +534,8 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
             text.space_before.push(space);
         }
     };
-    for flow in flows {
+    let placed = |ids: &[usize]| ids.iter().filter_map(|&i| place.get(i).copied()).min().unwrap_or(usize::MAX);
+    for (fi, flow) in flows.into_iter().enumerate() {
         let mut k = 0;
         while k < flow.ids.len() {
             let line = flow.line_of[k];
@@ -508,12 +544,98 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
             while let Some(f) = extra.next_if(|f| first(&f.ids) < before) {
                 emit(&mut text, &f.ids, &f.line_of, &f.space_before, None);
             }
+            if Some(fi) == main {
+                let at = placed(&flow.ids[k..end]);
+                while let Some(l) = inline.next_if(|l| l.at < at) {
+                    emit(&mut text, &l.ids, &vec![0; l.ids.len()], &l.space_before, l.quarter);
+                }
+            }
             emit(&mut text, &flow.ids[k..end], &vec![0; end - k], &flow.space_before[k..end], flow.quarter);
             k = end;
+        }
+        if Some(fi) == main {
+            for l in inline.by_ref() {
+                emit(&mut text, &l.ids, &vec![0; l.ids.len()], &l.space_before, l.quarter);
+            }
         }
     }
     for f in extra {
         emit(&mut text, &f.ids, &f.line_of, &f.space_before, None);
     }
     Ok(text)
+}
+
+/// A line turned a quarter from the page's main text, read in place among it.
+struct InPlace {
+    /// Where laying it out with the main text puts its first glyph.
+    at: usize,
+    ids: Vec<usize>,
+    space_before: Vec<bool>,
+    /// The quarter turn of the flow it came from.
+    quarter: Option<u8>,
+}
+
+/// Takes out of `flows` the lines that are turned a quarter from the page's main text (the unturned flow, when it
+/// holds more glyphs than any other) and sit inside that text's area: a label set upwards beside a row, a turned
+/// table heading. Each is placed where laying it out among the main text, by its box on the page, puts its first
+/// glyph, rather than after all the main text. Lines outside the area (a stamp in the margin) and every other flow
+/// keep their place, as does a page whose main text is vertical.
+///
+/// Returns the main flow's index, the lines in place order, and each glyph's place in that layout.
+fn turned_lines_in_place(glyphs: &[Drawn], flows: &mut [Flow]) -> (Option<usize>, std::iter::Peekable<std::vec::IntoIter<InPlace>>, Vec<usize>) {
+    let nothing = || (None, Vec::new().into_iter().peekable(), Vec::new());
+    let Some((main, size)) = flows.iter().enumerate().find(|(_, f)| f.quarter == Some(0)).map(|(i, f)| (i, f.ids.len())) else { return nothing() };
+    if flows.iter().enumerate().any(|(i, f)| i != main && f.ids.len() >= size) {
+        return nothing();
+    }
+    let rect = |i: usize| glyphs.get(i).map_or([0.0; 4], |g| g.2.rect);
+    let bounds = |ids: &[usize]| {
+        let mut b = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+        for &i in ids {
+            union(&mut b, &rect(i));
+        }
+        b
+    };
+    let Some(area) = flows.get(main).map(|f| bounds(&f.ids)) else { return nothing() };
+    let mut lines = Vec::new();
+    for (fi, flow) in flows.iter_mut().enumerate() {
+        // Upside-down text (a half turn) is not turned a quarter, and keeps its own flow.
+        if fi == main || !matches!(flow.quarter, Some(1 | 3)) {
+            continue;
+        }
+        let (mut ids, mut line_of, mut space_before) = (Vec::new(), Vec::new(), Vec::new());
+        let mut k = 0;
+        while let Some(&line) = flow.line_of.get(k) {
+            let end = flow.line_of.get(k..).and_then(|rest| rest.iter().position(|l| *l != line)).map_or(flow.line_of.len(), |n| k + n);
+            let (Some(line_ids), Some(line_spaces)) = (flow.ids.get(k..end), flow.space_before.get(k..end)) else { break };
+            let b = bounds(line_ids);
+            let (cx, cy) = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+            if (area[0]..=area[2]).contains(&cx) && (area[1]..=area[3]).contains(&cy) {
+                lines.push(InPlace { at: usize::MAX, ids: line_ids.to_vec(), space_before: line_spaces.to_vec(), quarter: flow.quarter });
+            } else {
+                ids.extend_from_slice(line_ids);
+                line_of.extend(std::iter::repeat_n(line, line_ids.len()));
+                space_before.extend_from_slice(line_spaces);
+            }
+            k = end;
+        }
+        (flow.ids, flow.line_of, flow.space_before) = (ids, line_of, space_before);
+    }
+    if lines.is_empty() {
+        return nothing();
+    }
+    let ids: Vec<usize> =
+        flows.get(main).map_or(&[][..], |f| &f.ids[..]).iter().copied().chain(lines.iter().flat_map(|l| l.ids.iter().copied())).collect();
+    let rects = ids.iter().map(|&i| rect(i)).collect();
+    let mut place = vec![usize::MAX; glyphs.len()];
+    for (r, i) in arrange_flow(glyphs, ids, rects, Some(0)).ids.into_iter().enumerate() {
+        if let Some(p) = place.get_mut(i) {
+            *p = r;
+        }
+    }
+    for l in &mut lines {
+        l.at = l.ids.iter().filter_map(|&i| place.get(i).copied()).min().unwrap_or(usize::MAX);
+    }
+    lines.sort_by_key(|l| l.at);
+    (Some(main), lines.into_iter().peekable(), place)
 }
