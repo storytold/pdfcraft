@@ -1,5 +1,7 @@
 use super::core::{limited_pdf_string, pretty_date, spend};
-use super::model::{Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, link_replies};
+use super::model::{
+    Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, fill_group_text, link_replies,
+};
 use super::navigation::text_string;
 use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
 
@@ -190,6 +192,7 @@ impl<'a> Inspector<'a> {
         }
         info.annotations.sort_by(|a, b| a.page.cmp(&b.page).then(b.rect[3].total_cmp(&a.rect[3])));
         link_replies(&mut info.annotations);
+        fill_group_text(&mut info.annotations);
     }
 
     fn link(&self, page: usize, index: usize, d: &Dictionary, text_budget: &mut usize) -> Option<Link> {

@@ -720,7 +720,7 @@ impl PdfCraftApp {
                     .session
                     .get(view.id)
                     .and_then(|d| d.info.annotations.iter().filter(|a| a.page == page && !a.is_reply()).map(|a| a.index).max());
-                view.comments.selected = newest.map(|index| (page, index));
+                view.comments.select(newest.map(|index| (page, index)));
                 view.comments.reveal = true;
                 self.quick_tool = crate::QuickTool::Select;
             }

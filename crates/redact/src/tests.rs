@@ -2172,6 +2172,34 @@ fn clearing_marks_leaves_the_annotation_list_as_it_was() {
     assert_eq!((doc.get(page), doc.get(list)), before, "the page points at its array, which lists the link alone");
 }
 
+/// A group subordinate (`/RT /Group`) of a mark stays when the marks are cleared, as one stays
+/// when its primary comment is deleted, and loses its `/IRT`: nothing then refers to the mark,
+/// so a full save leaves the mark's text out.
+#[test]
+fn clearing_marks_releases_a_group_member_of_a_mark() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[0.0, 0.0, 50.0, 50.0]], "");
+    let m = marks(&doc)[0].obj;
+    doc.update_dict(m, |d| d.set(b"Contents".to_vec(), pdfcraft_cos::PdfString::text("MARK_SECRET_TEXT"))).unwrap();
+    let mut member = Dict::new();
+    member.set(b"Type".to_vec(), Object::name("Annot"));
+    member.set(b"Subtype".to_vec(), Object::name("Square"));
+    member.set(b"Rect".to_vec(), Object::Array([60, 60, 90, 90].map(Object::Int).to_vec()));
+    member.set(b"IRT".to_vec(), Object::Ref(m));
+    member.set(b"RT".to_vec(), Object::name("Group"));
+    let member = doc.add(Object::Dict(member));
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    let mut listed = annots_of(&doc, doc.get(page).as_dict().unwrap());
+    listed.push(Object::Ref(member));
+    doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(listed))).unwrap();
+    assert_eq!(clear_marks(&mut doc, None), Ok(1));
+    assert_eq!(annots_of(&doc, doc.get(page).as_dict().unwrap()), [Object::Ref(member)], "the member stays");
+    let d = doc.get(member).as_dict().cloned().unwrap();
+    assert!(d.get(b"IRT").is_none() && d.name(b"RT") == Some(b"Group".as_slice()), "{d:?}");
+    let full = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!full.windows(16).any(|w| w == b"MARK_SECRET_TEXT"), "the cleared mark is not in a full save");
+}
+
 #[test]
 fn unreadable_content_fails_closed() {
     let mut doc = one_page(b"", "", vec![]);

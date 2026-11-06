@@ -315,8 +315,9 @@ pub struct Annotation {
     /// names the first comment on every page `fitz-A0`. `None` when `/IRT` leads to no listed
     /// comment ([`link_replies`]).
     pub parent: Option<(usize, usize)>,
-    /// `/RT /Group`: grouped with the annotation `/IRT` points at (Replace Text's caret with its
-    /// strikeout) rather than a reply to it.
+    /// `/RT /Group` (ISO 32000-2 §12.5.6.2, Table 172): with a `parent`, a subordinate of the
+    /// group whose primary `/IRT` points at, not a reply ([`Self::is_group_member`]). Its own
+    /// text, author, colour and dates are ignored; see [`group_primaries`].
     pub grouped: bool,
     /// Rect in PDF user space: [x0, y0, x1, y1].
     pub rect: [f32; 4],
@@ -343,6 +344,66 @@ pub struct Annotation {
     pub points: Vec<[f32; 2]>,
 }
 
+/// How far [`group_primaries`] follows `/IRT` from a group subordinate to its primary.
+pub const MAX_GROUP_DEPTH: usize = 64;
+
+/// For each annotation of `all`, the position in `all` of the primary of the group it is a
+/// subordinate of ([`Annotation::is_group_member`], ISO 32000-2 §12.5.6.2), or `None` when it is
+/// not one. The group's attributes, its comment and its replies are the primary's. A subordinate
+/// of a subordinate leads to the first non-subordinate up the `/IRT` chain. Expects links
+/// [`link_replies`] settled: a subordinate whose chain loops or names nothing listed has lost its
+/// `parent` there and is a comment of its own, as such a reply is. One still on a subordinate
+/// after [`MAX_GROUP_DEPTH`] steps has no primary (`None`) and is listed under no comment.
+pub fn group_primaries(all: &[Annotation]) -> Vec<Option<usize>> {
+    let mut at: HashMap<(usize, usize), usize> = HashMap::new();
+    for (i, a) in all.iter().enumerate() {
+        at.entry((a.page, a.index)).or_insert(i);
+    }
+    let primary = |start: usize| -> Option<usize> {
+        let mut i = start;
+        for _ in 0..MAX_GROUP_DEPTH {
+            let a = all.get(i)?;
+            if !a.is_group_member() {
+                return Some(i);
+            }
+            i = *at.get(&a.parent?)?;
+        }
+        None
+    };
+    all.iter().enumerate().map(|(i, a)| if a.is_group_member() { primary(i) } else { None }).collect()
+}
+
+/// Give a group's StrikeOut primary with no text of its own (`/Contents` missing or empty) the
+/// text of its first Caret subordinate that has some. A reader ignores a subordinate's
+/// `/Contents` (ISO 32000-2 §12.5.6.2), but Replace Text groups written by earlier PdfCraft builds
+/// made the strikeout the primary, with no text, and kept the replacement only on the caret:
+/// without this they would list as a comment with no text. A primary's own text always wins, no
+/// other subordinate lends its text, and no other kind of primary borrows one. Only the listing
+/// changes, not the file.
+pub fn fill_group_text(all: &mut [Annotation]) {
+    if !all.iter().any(Annotation::is_group_member) {
+        return;
+    }
+    let primaries = group_primaries(all);
+    let lacks_text = |p: usize| all.get(p).is_some_and(|a| a.subtype == "StrikeOut" && a.contents.as_deref().is_none_or(str::is_empty));
+    // Keyed by the primary's position: the first caret with text per primary wins (an empty one
+    // lends nothing), and each primary is written once, so the order of the map does not matter.
+    let mut texts: HashMap<usize, String> = HashMap::new();
+    for (a, p) in all.iter().zip(&primaries) {
+        if let (Some(p), Some(text), "Caret") = (*p, a.contents.as_ref(), a.subtype.as_str())
+            && !text.is_empty()
+            && lacks_text(p)
+        {
+            texts.entry(p).or_insert_with(|| text.clone());
+        }
+    }
+    for (p, text) in texts {
+        if let Some(primary) = all.get_mut(p) {
+            primary.contents = Some(text);
+        }
+    }
+}
+
 impl Annotation {
     /// A checkmark reply (`/StateModel /Marked`): "Marked" or "Unmarked" rather than a review status.
     pub fn is_mark(&self) -> bool {
@@ -359,6 +420,13 @@ impl Annotation {
     /// nowhere: not as a card, on the page or in a count.
     pub fn is_comment(&self) -> bool {
         !self.is_reply() && self.state.is_none()
+    }
+
+    /// A subordinate of a group (`/RT /Group` with an `/IRT` that leads to a listed comment, ISO
+    /// 32000-2 §12.5.6.2): part of its primary's comment ([`group_primaries`]), neither a comment
+    /// of its own nor one of its replies. Expects links [`link_replies`] settled.
+    pub fn is_group_member(&self) -> bool {
+        self.grouped && self.is_reply()
     }
 
     /// Whether this annotation's `/IRT` points at `other`.
@@ -447,6 +515,18 @@ pub fn link_replies(annotations: &mut [Annotation]) {
         }
         if !settled {
             a.parent = None;
+        }
+    }
+    // A group is one page's (Acrobat reads it so): a subordinate whose primary is on another page
+    // is a comment of its own, with its own author and text, rather than part of that group or a
+    // reply to it. ISO 32000-2 §12.5.6.2 doesn't limit a group to a page, but Acrobat (desktop and
+    // iPad) and PDF-XChange all delete the primary without such a subordinate, and Acrobat desktop
+    // lists it on its own. Keep in step with
+    // `pdfcraft_annot::summaries`.
+    for a in annotations.iter_mut() {
+        if a.grouped && a.parent.is_some_and(|(page, _)| page != a.page) {
+            a.parent = None;
+            a.in_reply_to = None;
         }
     }
 }
