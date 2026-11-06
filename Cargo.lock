@@ -4529,6 +4529,7 @@ dependencies = [
  "pdfcraft-fonts",
  "png 0.18.1",
  "rten",
+ "rten-imageproc",
  "tempfile",
  "thiserror 2.0.21",
 ]
