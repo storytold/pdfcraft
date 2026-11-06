@@ -7,4 +7,5 @@ mod cms;
 mod crypto;
 mod encrypted_signing;
 mod pdf;
+mod revision_classification;
 mod store_keys;
