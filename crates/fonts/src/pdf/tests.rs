@@ -1,4 +1,4 @@
-use pdfcraft_cos::{Dict, Document, Object, Stream};
+use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 
 use super::*;
 
@@ -308,6 +308,144 @@ fn subset_fonts_only_encode_the_glyphs_they_have() {
     assert!(m.subset);
     assert_eq!(m.encode("ab").as_deref(), Some(&b"ab"[..]));
     assert_eq!(m.encode("abc"), None);
+}
+
+fn type1_subset(doc: &mut Document, charset: Object) -> Dict {
+    let descriptor = doc.add(Object::Dict(Dict::from_iter([(b"CharSet".to_vec(), charset)])));
+    let unicode = doc.add(Object::Stream(Stream::flate(Dict::new(), b"1 beginbfrange <20> <7E> <0020> endbfrange")));
+    font(
+        doc,
+        vec![
+            ("Subtype", Object::name("Type1")),
+            ("BaseFont", Object::name("ABCDEF+Example")),
+            ("FirstChar", Object::Int(32)),
+            ("Widths", Object::Array(vec![Object::Int(600); 95])),
+            ("Encoding", Object::name("StandardEncoding")),
+            ("FontDescriptor", Object::Ref(descriptor)),
+            ("ToUnicode", Object::Ref(unicode)),
+        ],
+    )
+}
+
+#[test]
+fn type1_subset_charset_rejects_letters_that_only_have_widths_and_unicode() {
+    let mut doc = Document::new_empty();
+    // Like a TeX subset: the width table and ToUnicode describe more than the embedded glyphs.
+    let f = type1_subset(&mut doc, PdfString::literal(b"/Q/u/e/s/t/i/o/n/r/l/m").into());
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!(m.encode("Questions").as_deref(), Some(b"Questions".as_slice()));
+    assert_eq!(m.encode("P"), None, "a nonzero width is not an embedded P outline");
+    assert_eq!(m.encode("b"), None, "the lowercase b outline is absent too");
+    assert_eq!(m.decode(b"Problems"), "Problems", "extraction still follows ToUnicode");
+    assert_eq!(m.width(80), 0.6, "reading source text keeps the declared advances");
+    let f = type1_subset(&mut doc, PdfString::literal(b"/P/r/o/b/l/e/m/s").into());
+    assert_eq!(Metrics::from_dict(&doc, &f).encode("Problems").as_deref(), Some(b"Problems".as_slice()));
+}
+
+#[test]
+fn type1_charset_checks_exact_encoding_names_instead_of_unicode_text() {
+    let mut doc = Document::new_empty();
+    let mut f = type1_subset(&mut doc, PdfString::literal(b"/custom#2Dglyph/A.alt").into());
+    // These glyphs have arbitrary names, while ToUnicode calls them A, B and C.
+    let diffs = vec![32.into(), Object::name("A"), 65.into(), Object::name("custom-glyph"), Object::name("A"), Object::name("A.alt")];
+    f.set(b"Encoding".to_vec(), Object::Dict(Dict::from_iter([(b"Differences".to_vec(), Object::Array(diffs))])));
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!(m.encode("A").as_deref(), Some(b"A".as_slice()), "the escaped custom glyph is present");
+    assert_eq!(m.encode("B"), None, "A.alt does not supply the distinct glyph A");
+    assert_eq!(m.encode("C").as_deref(), Some(b"C".as_slice()));
+    assert_eq!(m.encode(" "), None, "code 32 is not implicitly present when it names an absent glyph");
+}
+
+#[test]
+fn type1_differences_entries_may_be_indirect() {
+    let mut doc = Document::new_empty();
+    let mut f = type1_subset(&mut doc, PdfString::literal(b"/custom").into());
+    let code = doc.add(Object::Int(65));
+    let name = doc.add(Object::name("custom"));
+    let diffs = vec![Object::Ref(code), Object::Ref(name)];
+    let encoding = Dict::from_iter([(b"BaseEncoding".to_vec(), Object::name("StandardEncoding")), (b"Differences".to_vec(), Object::Array(diffs))]);
+    f.set(b"Encoding".to_vec(), Object::Dict(encoding));
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!(m.encode("A").as_deref(), Some(b"A".as_slice()), "the referenced code 65 names the present glyph");
+    assert_eq!(m.encode("B"), None, "later codes are not shifted onto the wrong glyphs");
+}
+
+#[test]
+fn type1_charset_name_limit_is_inclusive() {
+    let names = |n: usize| -> Object { PdfString::literal((0..n).map(|i| format!("/n{i}")).collect::<String>().into_bytes()).into() };
+    let mut doc = Document::new_empty();
+    // A usable list restricts the font, so the letter missing from it has no glyph.
+    let at_cap = type1_subset(&mut doc, names(4096));
+    assert_eq!(Metrics::from_dict(&doc, &at_cap).encode("P"), None);
+    // One name past the cap is ignored as a whole and keeps the lenient behaviour.
+    let past_cap = type1_subset(&mut doc, names(4097));
+    assert_eq!(Metrics::from_dict(&doc, &past_cap).encode("P").as_deref(), Some(b"P".as_slice()));
+}
+
+#[test]
+fn type1_charset_uses_the_base_encoding_glyph_names() {
+    // Annex D's code and name tables must agree without consulting ToUnicode.
+    let mut seen = HashSet::new();
+    for (name, unicode) in crate::encodings::NAMES {
+        assert!(seen.insert(unicode), "ambiguous canonical glyph name for {name}");
+    }
+    for base in ["StandardEncoding", "WinAnsiEncoding", "MacRomanEncoding"] {
+        let mut doc = Document::new_empty();
+        let mut f = type1_subset(&mut doc, PdfString::literal(b"/P/period/zero").into());
+        f.set(b"Encoding".to_vec(), Object::name(base));
+        let m = Metrics::from_dict(&doc, &f);
+        assert_eq!(m.encode("P.0").as_deref(), Some(b"P.0".as_slice()), "{base}");
+        assert_eq!(m.encode("b"), None, "{base}");
+        assert_eq!(m.encode("1"), None, "{base}");
+    }
+}
+
+#[test]
+fn unusable_type1_charset_keeps_the_previous_lenient_encoding() {
+    for charset in [
+        Object::Null,
+        Object::name("P"),
+        PdfString::literal(b"").into(),
+        PdfString::literal(b"/P 1").into(),
+        PdfString::literal(b"/P/").into(),
+        PdfString::literal(vec![b'/'; 65_537]).into(),
+        PdfString::literal("/P ".repeat(4097).into_bytes()).into(),
+    ] {
+        let mut doc = Document::new_empty();
+        let f = type1_subset(&mut doc, charset);
+        assert_eq!(Metrics::from_dict(&doc, &f).encode("Problems").as_deref(), Some(b"Problems".as_slice()));
+    }
+    let mut doc = Document::new_empty();
+    for subtype in ["TrueType", "Type3"] {
+        let mut f = type1_subset(&mut doc, PdfString::literal(b"/Q").into());
+        f.set(b"Subtype".to_vec(), Object::name(subtype));
+        assert_eq!(Metrics::from_dict(&doc, &f).encode("P").as_deref(), Some(b"P".as_slice()), "{subtype}");
+    }
+    let mut f = type1_subset(&mut doc, PdfString::literal(b"/Q").into());
+    f.set(b"Encoding".to_vec(), Object::name("UnknownEncoding"));
+    assert_eq!(Metrics::from_dict(&doc, &f).encode("P").as_deref(), Some(b"P".as_slice()), "unknown glyph identity stays lenient");
+}
+
+#[test]
+fn type1_charset_does_not_guess_an_unavailable_builtin_encoding() {
+    let mut doc = Document::new_empty();
+    let mut f = type1_subset(&mut doc, PdfString::literal(b"/custom-glyph").into());
+    f.remove(b"Encoding");
+    assert_eq!(
+        Metrics::from_dict(&doc, &f).encode("P").as_deref(),
+        Some(b"P".as_slice()),
+        "a custom built-in encoding may give code 80 any glyph name"
+    );
+    for bytes in [b"broken font".to_vec(), vec![b' '; 4 * 1024 * 1024 + 1]] {
+        let program = doc.add(Object::Stream(Stream::flate(Dict::new(), &bytes)));
+        let descriptor = f.reference(b"FontDescriptor").unwrap();
+        doc.update_dict(descriptor, |d| d.set(b"FontFile".to_vec(), Object::Ref(program))).unwrap();
+        assert_eq!(
+            Metrics::from_dict(&doc, &f).encode("P").as_deref(),
+            Some(b"P".as_slice()),
+            "unusable or oversized programs keep the unknown encoding"
+        );
+    }
 }
 
 #[test]
