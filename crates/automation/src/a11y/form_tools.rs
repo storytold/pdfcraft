@@ -19,7 +19,7 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
 
 /// A message a script showed, as `js_run` reports it: its text, title (null when it gave none),
 /// icon and buttons.
-fn alert_json(m: &pdfcraft_engine::js::Message) -> Value {
+pub(crate) fn alert_json(m: &pdfcraft_engine::js::Message) -> Value {
     json!({ "message": m.text, "title": m.title, "icon": m.icon.name(), "buttons": m.buttons.name() })
 }
 
