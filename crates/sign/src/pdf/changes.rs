@@ -858,19 +858,32 @@ fn change_kind(doc: &Document, old: &Document, d: &Dict, before: Option<&Dict>) 
         Some(b"Pages") => return if before.is_some() { kind::PAGES } else { kind::STRUCTURE },
         _ => {}
     }
-    match d.name(b"Subtype") {
+    // The role an existing object plays (annotation, form field, the form) is the one it had when
+    // signed: keys its new version carries are written by whoever changed it. An indirect
+    // /OCProperties rewritten with an added /FT still decides which layers show (#1787 judges a
+    // signed page's resources this way; this applies it to every other object).
+    let role = before.unwrap_or(d);
+    // Nor does an existing annotation or widget turned into another kind of annotation edit the
+    // one it was: an empty signature widget rewritten as a /Square that covers signed text is no
+    // signature change, and no comment either.
+    if before.is_some_and(|b| b.name(b"Subtype") != d.name(b"Subtype")) {
+        return kind::OTHER;
+    }
+    // The new version's /FT still decides whether this is a signature: a signed widget relabelled
+    // as a text field is not a signature change, whatever it was when signed.
+    match role.name(b"Subtype") {
         Some(b"Widget") => return if d.name(b"FT") == Some(b"Sig") && signature_ok { kind::SIGNATURE } else { kind::FORM_FILL },
         Some(b"Link") => return kind::LINKS,
-        Some(_) if ty == Some(b"Annot") || d.contains(b"Rect") => return kind::COMMENTS,
+        Some(_) if role.name(b"Type") == Some(b"Annot") || role.contains(b"Rect") => return kind::COMMENTS,
         _ => {}
     }
-    if d.name(b"FT") == Some(b"Sig") && signature_ok {
+    if role.name(b"FT") == Some(b"Sig") && signature_ok {
         return kind::SIGNATURE;
     }
-    if d.contains(b"Fields") {
+    if role.contains(b"Fields") {
         return acroform_kind(doc, old, d, before);
     }
-    if d.contains(b"FT") || (d.contains(b"T") && d.contains(b"Kids")) || d.contains(b"DR") {
+    if role.contains(b"FT") || (role.contains(b"T") && role.contains(b"Kids")) || role.contains(b"DR") {
         return kind::FORM_FILL;
     }
     if before.is_none() {
