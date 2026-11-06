@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::font_names::{distinct, distinct_within, renamed_sfnt};
-use crate::spool::spooled;
+use crate::spool::spooled_pdf;
 use pdfcraft_cos::DecodeBudget;
 use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind};
 use skrifa::raw::TableProvider as _;
@@ -107,7 +107,7 @@ fn windows_gets_embedded_subsets_under_names_no_installed_font_has() {
     let before = true_type_fonts(&pdf);
     assert_eq!(before.iter().map(|f| f.0.as_str()).collect::<Vec<_>>(), ["AAAAAA+Arial-BoldMT", "AAAAAA+ArialMT"]);
 
-    let spooled = spooled(&pdf, true);
+    let spooled = spooled_pdf(&pdf, true);
     let after = true_type_fonts(&spooled);
 
     // Each program has a name of its own, in the PDF and in its `name` table; the subset tag stays.
@@ -149,12 +149,12 @@ fn windows_gets_embedded_subsets_under_names_no_installed_font_has() {
 #[test]
 fn other_platforms_and_pdfs_without_embedded_programs_spool_as_they_are() {
     let pdf = print_ready();
-    assert!(matches!(spooled(&pdf, false), std::borrow::Cow::Borrowed(p) if p == pdf.as_slice()));
+    assert!(matches!(spooled_pdf(&pdf, false), std::borrow::Cow::Borrowed(p) if p == pdf.as_slice()));
     let helvetica = impose(&fixture(1), &Settings { pages: vec![0], paper: (200.0, 300.0), ..Settings::default() }).unwrap();
     assert_eq!(distinct(&helvetica).unwrap(), None);
-    assert!(matches!(spooled(&helvetica, true), std::borrow::Cow::Borrowed(_)));
+    assert!(matches!(spooled_pdf(&helvetica, true), std::borrow::Cow::Borrowed(_)));
     // Not a PDF: it goes as it is, and the spooler reports what it makes of it.
-    assert!(matches!(spooled(b"not a pdf", true), std::borrow::Cow::Borrowed(b"not a pdf")));
+    assert!(matches!(spooled_pdf(b"not a pdf", true), std::borrow::Cow::Borrowed(b"not a pdf")));
 }
 
 #[test]
@@ -177,7 +177,7 @@ fn a_program_that_cannot_be_rewritten_keeps_its_name_in_the_pdf_too() {
     doc.update_dict(page, |d| d.set(b"Resources".to_vec(), Object::Dict(resources))).unwrap();
     let pdf = write_full(&doc, &SaveOptions::default()).unwrap();
 
-    let names: Vec<_> = true_type_fonts(&spooled(&pdf, true)).into_iter().map(|f| (f.0, f.1, f.2 == b"not a font")).collect();
+    let names: Vec<_> = true_type_fonts(&spooled_pdf(&pdf, true)).into_iter().map(|f| (f.0, f.1, f.2 == b"not a font")).collect();
     assert_eq!(
         names,
         [

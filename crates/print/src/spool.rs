@@ -143,23 +143,71 @@ pub(crate) fn printer_options_via_within(
     options
 }
 
+/// The keys the macOS print dialog names a job's title and owner under.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const JOB_NAME_KEY: &str = "com.apple.print.JobInfo.PMJobName";
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const JOB_OWNER_KEY: &str = "com.apple.print.JobInfo.PMJobOwner";
+
+/// `text` as a job option's value: `lp_args` passes on only printable ASCII, up to 64 bytes,
+/// without `/ : = "`, and CUPS would take `'` and `\` as quoting and `{` as the start of a
+/// collection, so all of these become `_`. Text with nothing left of it, such as a title in
+/// another script, takes `fallback`: the job must still name something. So does a bare `true` or
+/// `false`, which CUPS would send as a boolean, not the name a filter reads.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn job_option_value(text: &str, fallback: &str) -> String {
+    let kept = |c: char| c.is_ascii_graphic() && !matches!(c, '/' | ':' | '=' | '"' | '\'' | '\\' | '{');
+    let value: String = text.chars().take(64).map(|c| if kept(c) { c } else { '_' }).collect();
+    if !text.chars().any(kept) || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false") {
+        return fallback.to_string();
+    }
+    value
+}
+
+/// `job` naming its title and `owner` as a job from the macOS print dialog does. `lp` sends
+/// neither, and a driver's filter can depend on them: Kyocera's crashes without them, so nothing
+/// prints, while the same file sent with both does (#5743). A value the caller set stands: the
+/// last of a repeated option wins in CUPS, which compares their names without case.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn with_job_info(job: &Job, owner: Option<&str>) -> Job {
+    let mut named = job.clone();
+    for (key, value) in [(JOB_NAME_KEY, job.title.as_str()), (JOB_OWNER_KEY, owner.unwrap_or_default())] {
+        if !job.options.iter().any(|(k, _)| k.eq_ignore_ascii_case(key)) {
+            named.options.push((key.to_string(), job_option_value(value, "PdfCraft")));
+        }
+    }
+    named
+}
+
+/// The job as the system spooler takes it.
+fn spooled(job: &Job) -> Job {
+    #[cfg(target_os = "macos")]
+    {
+        with_job_info(job, std::env::var("USER").ok().as_deref())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        job.clone()
+    }
+}
+
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, crate::PrintError> {
-    let pdf = spooled(pdf, crate::font_names::RENAME_FOR_SPOOLER);
-    craft_print::submit(&pdf, job).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    let pdf = spooled_pdf(pdf, crate::font_names::RENAME_FOR_SPOOLER);
+    craft_print::submit(&pdf, &spooled(job)).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
 /// [`submit`], told `(sent, sheets)` as each sheet reaches the spooler (Windows; CUPS takes the
 /// whole PDF at once and reports nothing).
 pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, crate::PrintError> {
-    let pdf = spooled(pdf, crate::font_names::RENAME_FOR_SPOOLER);
-    craft_print::submit_with_progress(&pdf, job, progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    let pdf = spooled_pdf(pdf, crate::font_names::RENAME_FOR_SPOOLER);
+    craft_print::submit_with_progress(&pdf, &spooled(job), progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
-/// What goes to the spooler: with `rename` (Windows), the PDF with its embedded TrueType and
+/// The PDF as the system spooler takes it: with `rename` (Windows), its embedded TrueType and
 /// OpenType programs renamed, so Windows can't draw a subset's glyph numbers with an installed
 /// font of the same name (#3132, [`crate::font_names`]). A PDF that can't be read back goes as it
 /// is: the renaming only protects the text from Windows, and the job shouldn't fail over it.
-pub(crate) fn spooled(pdf: &[u8], rename: bool) -> std::borrow::Cow<'_, [u8]> {
+pub(crate) fn spooled_pdf(pdf: &[u8], rename: bool) -> std::borrow::Cow<'_, [u8]> {
     if !rename {
         return std::borrow::Cow::Borrowed(pdf);
     }
