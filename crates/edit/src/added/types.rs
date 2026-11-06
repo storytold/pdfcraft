@@ -106,6 +106,16 @@ impl Ink {
         self.components().iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
     }
 
+    /// The ink as its operator paints it: each component to the thousandth that `g` and `k` are
+    /// written with (as RGB's `rg`), so the item, what it reads back as and the page agree.
+    pub fn painted(self) -> Ink {
+        let round = |v: f64| (v * 1000.0).round() / 1000.0;
+        match self {
+            Ink::Gray(g) => Ink::Gray(round(g)),
+            Ink::Cmyk(c) => Ink::Cmyk(c.map(round)),
+        }
+    }
+
     fn components(&self) -> &[f64] {
         match self {
             Ink::Gray(g) => std::slice::from_ref(g),
@@ -166,8 +176,11 @@ impl AddedText {
         crate::paragraph_align::align_of(&self.aligns, i, self.align)
     }
 
-    /// Paint the text in `ink` (its look becomes [`AddedText::color`]), or in RGB with `None`.
+    /// Paint the text in `ink` (its look becomes [`AddedText::color`]), or in RGB with `None`. An
+    /// ink in range is kept as painted ([`Ink::painted`]); one out of range stays as given, for
+    /// saving to refuse.
     pub fn set_ink(&mut self, ink: Option<Ink>) {
+        let ink = ink.map(|i| if i.valid() { i.painted() } else { i });
         if let Some(i) = ink {
             self.color = i.rgb();
         }

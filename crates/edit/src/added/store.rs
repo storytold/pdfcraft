@@ -3,13 +3,16 @@ use super::layout::{first_undrawable, is_thai, nums, shaped_arabic, thai_error};
 use super::types::{Added, AddedImage, AddedText, CHAR_SPACING_LIMIT, Family, Ink, MarkerScan, TAG};
 use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, align_from, check, contents, page_list, place_tagged};
 
-/// A text item's gray or CMYK ink. Items written before inks, and an ink out of range, have none:
-/// the text paints in its RGB `/Color`.
+/// A text item's gray or CMYK ink. Items written before inks, and an ink out of range or not
+/// made only of numbers (a `/Gray` name, a `/CMYK` entry that isn't a number), have none: the
+/// text paints in its RGB `/Color`.
 fn ink(doc: &Document, d: &Dict) -> Option<Ink> {
-    let ink = match (d.get(b"Gray").map(|g| doc.resolve(g)).and_then(|g| g.as_f64()), d.get(b"CMYK")) {
-        (Some(g), _) => Ink::Gray(g),
-        (None, Some(c)) => Ink::Cmyk(nums(doc, Some(c)).try_into().ok()?),
-        (None, None) => return None,
+    let ink = if let Some(g) = d.get(b"Gray") {
+        Ink::Gray(doc.resolve(g).as_f64()?)
+    } else {
+        let cmyk = doc.resolve(d.get(b"CMYK")?);
+        let parts: Vec<f64> = cmyk.as_array()?.iter().map(Object::as_f64).collect::<Option<_>>()?;
+        Ink::Cmyk(parts.try_into().ok()?)
     };
     Some(ink).filter(|i| i.valid())
 }
@@ -48,6 +51,10 @@ fn parse(doc: &Document, d: &Dict) -> Option<Content> {
             };
             // An ink whose look isn't the stored colour (a file edited by hand) is none.
             t.drop_stale_ink();
+            // One that stands is the ink as painted, finer digits dropped, and its look.
+            if let Some(i) = t.ink {
+                t.set_ink(Some(i));
+            }
             Some(Content::Text(t))
         }
         b"Image" => {

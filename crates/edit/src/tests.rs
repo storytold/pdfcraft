@@ -1120,7 +1120,7 @@ fn a_hand_edited_ink_reads_back_only_when_it_is_the_stored_colours_look() {
     add_content(&mut doc, 0, &Content::Text(AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Proof".into(), ..AddedText::default() })).unwrap();
     let obj = list_added(&doc)[0].obj;
     let real = |v: &[f64]| Object::Array(v.iter().map(|x| Object::Real(*x)).collect());
-    let read = |entries: &[(&[u8], Object)]| {
+    let read_text = |entries: &[(&[u8], Object)]| {
         let mut edited = doc.clone();
         let Object::Stream(mut s) = (*edited.get(obj)).clone() else { panic!("an item is a stream") };
         let mut params = s.dict.get(b"PCAdded").and_then(|p| p.as_dict().cloned()).unwrap();
@@ -1130,11 +1130,15 @@ fn a_hand_edited_ink_reads_back_only_when_it_is_the_stored_colours_look() {
         s.dict.set(b"PCAdded".to_vec(), Object::Dict(params));
         edited.set(obj, Object::Stream(s));
         let Content::Text(t) = list_added(&edited)[0].content.clone() else { panic!() };
-        t.ink
+        t
     };
+    let read = |entries: &[(&[u8], Object)]| read_text(entries).ink;
     // As PDFCraft writes it: the ink stands.
     assert_eq!(read(&[(b"Color", real(&[0.5; 3])), (b"Gray", Object::Real(0.5))]), Some(Ink::Gray(0.5)));
     assert_eq!(read(&[(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0]))]), Some(Ink::Cmyk([0.0, 0.0, 0.0, 1.0])));
+    // Finer than it paints, it reads back as painted (`0.5 g`), its look with it.
+    let fine = read_text(&[(b"Color", real(&[0.50049; 3])), (b"Gray", Object::Real(0.50049))]);
+    assert_eq!((fine.ink, fine.color), (Some(Ink::Gray(0.5)), [0.5; 3]));
     for (what, entries) in [
         ("a colour the ink isn't the look of", vec![(&b"Color"[..], real(&[1.0, 0.0, 0.0])), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0]))]),
         ("three CMYK numbers", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 1.0]))]),
@@ -1142,11 +1146,56 @@ fn a_hand_edited_ink_reads_back_only_when_it_is_the_stored_colours_look() {
         ("CMYK not an array", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", Object::Real(1.0))]),
         ("gray out of range", vec![(b"Color", real(&[1.0; 3])), (b"Gray", Object::Real(2.0))]),
         ("gray not a number", vec![(b"Color", real(&[0.0; 3])), (b"Gray", Object::name("Black"))]),
+        (
+            "a CMYK entry not a number",
+            vec![
+                (b"Color", real(&[0.0; 3])),
+                (b"CMYK", Object::Array(vec![Object::Real(0.0), Object::name("Bad"), Object::Real(0.0), Object::Real(0.0), Object::Real(1.0)])),
+            ],
+        ),
+        (
+            "gray not a number beside a CMYK",
+            vec![(b"Color", real(&[0.0; 3])), (b"Gray", Object::name("Black")), (b"CMYK", real(&[0.0, 0.0, 0.0, 1.0]))],
+        ),
         ("gray NaN", vec![(b"Color", real(&[0.0; 3])), (b"Gray", Object::Real(f64::NAN))]),
         ("CMYK infinite", vec![(b"Color", real(&[0.0; 3])), (b"CMYK", real(&[0.0, 0.0, 0.0, f64::INFINITY]))]),
     ] {
         assert_eq!(read(&entries), None, "{what}");
     }
+}
+
+/// #6440: an ink finer than the thousandth `g` and `k` are written to is kept as painted, so the
+/// item, its stored `/CMYK` and what it reads back as are what the page shows.
+#[test]
+fn an_ink_is_kept_as_it_is_painted() {
+    use crate::added::Ink;
+    let mut doc = fixture();
+    let mut t = AddedText { rect: [72.0, 600.0, 300.0, 700.0], text: "Proof".into(), size: 14.0, ..AddedText::default() };
+    t.set_ink(Some(Ink::Cmyk([0.12345, 0.00049, 0.0, 0.99951])));
+    let painted = Ink::Cmyk([0.123, 0.0, 0.0, 1.0]);
+    assert_eq!((t.ink, t.color), (Some(painted), painted.rgb()));
+    add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+    let doc = reopen(&doc);
+    let item = &list_added(&doc)[0];
+    let Object::Stream(s) = &*doc.get(item.obj) else { panic!("an item is a stream") };
+    let stream = String::from_utf8_lossy(&s.decoded().unwrap()).into_owned();
+    assert!(
+        stream.contains(
+            "/PCFHelvetica 14 Tf 0.123 0 0 1 k
+"
+        ),
+        "{stream}"
+    );
+    let stored = s
+        .dict
+        .get(b"PCAdded")
+        .and_then(|p| p.as_dict())
+        .and_then(|p| p.get(b"CMYK"))
+        .and_then(Object::as_array)
+        .map(|a| a.iter().filter_map(Object::as_f64).collect::<Vec<_>>());
+    assert_eq!(stored, Some(vec![0.123, 0.0, 0.0, 1.0]));
+    let Content::Text(back) = &item.content else { panic!() };
+    assert_eq!(back.painted_ink(), Some(painted));
 }
 
 /// #4464: a page left with one added item draws that item and nothing else.
