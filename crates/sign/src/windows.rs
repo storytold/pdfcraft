@@ -296,10 +296,8 @@ mod tests {
     #[test]
     fn key_group_matches_trusts_when_group_unreadable() {
         // Certisign's desktopID KSP reports the algorithm-group property as a character
-        // count (3 for "RSA") instead of a byte count (8), so `algorithm_group` fails and
-        // every key from that provider is wrongly rejected as "Unsupported key algorithm
-        // group". Until `matches_key` tolerates an unreadable group, an unreadable group
-        // must not make a usable key look unusable.
+        // count (3 for "RSA") instead of a byte count (8), so `algorithm_group` fails. An
+        // unreadable group must not make a usable key look unusable.
         let key = NCryptKey::new_owned(0);
         assert_eq!(matches_key(&key, StoreKey::Rsa), Ok(()));
     }
