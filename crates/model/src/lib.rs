@@ -307,9 +307,10 @@ impl PageNode {
     }
 
     /// Copy into `into` each of [`INHERITABLE`] the node has and `into` lacks, charging a value
-    /// from an ancestor its weight against `budget` first. `into` is usually a copy of the node's
-    /// own dictionary: an entry there that the walk read as null (absent, ISO 32000-2 §7.3.9) is
-    /// replaced by the inherited value.
+    /// from an ancestor its weight against `budget` first. `into` is meant to be a copy of the
+    /// node's own dictionary: an entry there equal to the node's own entry, which the walk read as
+    /// null (absent, ISO 32000-2 §7.3.9), is replaced by the inherited value. Any other entry in
+    /// `into`, null or not, is kept.
     pub fn fill_inherited(&self, into: &mut Dict, budget: &mut usize) -> Result<(), PageTreeLimit> {
         for (key, owner) in INHERITABLE.iter().zip(&self.inherited) {
             let Some(owner) = owner else { continue };
