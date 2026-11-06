@@ -249,6 +249,8 @@ fn object_stream_member_extents_bound_owned_strings() {
     assert!(!parsed.objects.contains_key(&(201, 0)));
 }
 
+/// Members are read at their indexed offsets, in any order and with any whitespace around
+/// them; a number listed twice keeps its last entry.
 #[test]
 fn object_stream_member_extents_preserve_index_order_and_whitespace() {
     let members = b" \n42\n /Name \n[true 7]\n << /Key (value) >>\n (last)";
@@ -260,6 +262,170 @@ fn object_stream_member_extents_preserve_index_order_and_whitespace() {
     assert_eq!(parsed.objects.get(&(10, 0)).unwrap().as_name().unwrap(), b"Name");
     assert_eq!(parsed.objects.get(&(11, 0)).unwrap().as_array().unwrap(), &[Object::Boolean(true), Object::Integer(7)]);
     assert_eq!(parsed.objects.get(&(12, 0)).unwrap().as_dict().unwrap().get(b"Key").unwrap().as_str().unwrap(), b"value");
+}
+
+/// lopdf patch (7), #5083: a decoded object-stream member could build any number of objects
+/// (`0 0 0 ...` inside the decompression limit built ~120M and aborted). A member now builds at
+/// most the per-object node cap (1 << 22), so one array with more elements than that is skipped
+/// while a small member is kept. Without the node charge in the vendored parser the oversize
+/// array builds in full, so object 11 is present and the last assertion fails.
+#[test]
+fn object_stream_members_over_the_node_cap_are_skipped() {
+    let small = b"[ 1 2 3 ]";
+    let mut big = vec![b'['];
+    for _ in 0..4_300_000 {
+        big.extend_from_slice(b"0 ");
+    }
+    big.push(b']');
+    let mut members = small.to_vec();
+    let big_off = members.len();
+    members.extend_from_slice(&big);
+    let stream = indexed_object_stream(&[(10, 0), (11, big_off)], &members);
+    let parsed = lopdf::ObjectStream::new_with_limit(&stream, Some(16 << 20)).unwrap();
+    assert!(parsed.objects.contains_key(&(10, 0)), "the small member is kept");
+    assert!(!parsed.objects.contains_key(&(11, 0)), "the oversize member is skipped");
+}
+
+/// lopdf patch (7), #5083: an object stream reads at most 1,000,000 index entries (cos's `/N`
+/// clamp), so a huge index can't allocate an entry list or parse a member per entry. Of
+/// 1,000,001 distinct one-byte members, the last is never built.
+#[test]
+fn object_stream_index_entries_past_the_clamp_are_ignored() {
+    let count = 1_000_001_u32;
+    let mut members = Vec::with_capacity(2 * count as usize);
+    let pairs: Vec<(u32, usize)> = (1..=count)
+        .map(|id| {
+            let at = members.len();
+            members.extend_from_slice(b"0 ");
+            (id, at)
+        })
+        .collect();
+    let parsed = lopdf::ObjectStream::new_with_limit(&indexed_object_stream(&pairs, &members), None).unwrap();
+    assert_eq!(parsed.objects.len(), 1_000_000);
+    assert!(parsed.objects.contains_key(&(1_000_000, 0)));
+    assert!(!parsed.objects.contains_key(&(count, 0)), "the entry past the clamp is ignored");
+}
+
+/// Six object streams, each holding one nested member of seven objects.
+fn nested_object_streams() -> Vec<lopdf::Stream> {
+    (0..6).map(|i| indexed_object_stream(&[(100 + i, 0)], b"<< /A [1 [2]] /B << /C 3 >> >>")).collect()
+}
+
+/// lopdf patch (7), #5083: one load's object streams share a single node budget (the load-wide
+/// `MAX_LOAD_NODES`, here 12 nodes so the test stays small), so later streams are skipped once
+/// earlier ones spent it. A stream given a budget of its own would load all six.
+#[test]
+fn object_streams_of_one_load_share_their_node_budget() {
+    let streams = nested_object_streams();
+    let budget = lopdf::NodeBudget::new(12);
+    let loaded: usize = streams.iter().map(|s| lopdf::ObjectStream::new_within(s, None, &budget).unwrap().objects.len()).sum();
+    assert!(loaded > 0);
+    assert!(loaded < streams.len(), "the budget is shared by all streams");
+    assert!(budget.spent());
+}
+
+/// The shared budget holds across threads too, as rayon's workers load object streams in
+/// parallel: members reserve their share before parsing, so together they can't overshoot.
+#[test]
+fn object_streams_loaded_in_parallel_share_their_node_budget() {
+    let streams = nested_object_streams();
+    let budget = &lopdf::NodeBudget::new(12);
+    let loaded: usize = std::thread::scope(|scope| {
+        let workers: Vec<_> =
+            streams.iter().map(|s| scope.spawn(move || lopdf::ObjectStream::new_within(s, None, budget).unwrap().objects.len())).collect();
+        workers.into_iter().map(|w| w.join().unwrap()).sum()
+    });
+    assert!(loaded > 0);
+    assert!(loaded < streams.len(), "the budget is shared by all streams");
+}
+
+/// A member that fails to parse gives back the nodes it reserved and did not build, so a
+/// malformed member doesn't use up the budget of the members after it.
+#[test]
+fn a_malformed_object_stream_member_refunds_its_reservation() {
+    let stream = indexed_object_stream(&[(10, 0), (11, 3)], b"[1 [2]");
+    let budget = lopdf::NodeBudget::new(5);
+    let parsed = lopdf::ObjectStream::new_within(&stream, None, &budget).unwrap();
+    assert!(!parsed.objects.contains_key(&(10, 0)));
+    assert!(parsed.objects.contains_key(&(11, 0)));
+    assert!(!budget.spent(), "unused reservation from the malformed member is refunded");
+}
+
+/// A budget too small for every member builds them in index order, so the members a spent
+/// budget skips are the same on every load. Here the first member takes four of the five
+/// nodes, the second the last one, and the third is skipped. Parsed in parallel from the shared
+/// budget, the second and third could find it held by the first and be skipped as well.
+#[test]
+fn a_tight_budget_builds_object_stream_members_in_index_order() {
+    let stream = indexed_object_stream(&[(10, 0), (11, 8), (12, 10)], b"[1 2 3] 7 8");
+    let budget = lopdf::NodeBudget::new(5);
+    let parsed = lopdf::ObjectStream::new_within(&stream, None, &budget).unwrap();
+    assert!(parsed.objects.contains_key(&(10, 0)));
+    assert!(parsed.objects.contains_key(&(11, 0)), "the second member is built from what the first left");
+    assert!(!parsed.objects.contains_key(&(12, 0)), "the third member finds the budget spent");
+    assert!(budget.spent());
+}
+
+/// A PDF with a cross-reference stream whose Info dictionary (object 4) sits in object stream 3
+/// after `first`, a member listed before it.
+fn info_in_object_stream_pdf(first: &[u8]) -> Vec<u8> {
+    let info = b"<< /Title (Kept) >>";
+    let index = format!("5 0 4 {} ", first.len() + 1);
+    let mut data = index.clone().into_bytes();
+    data.extend_from_slice(first);
+    data.push(b' ');
+    data.extend_from_slice(info);
+    let mut pdf = b"%PDF-1.5\n".to_vec();
+    let mut offsets = [0_u32; 7];
+    let mut append = |pdf: &mut Vec<u8>, id: usize, head: &[u8], body: &[u8], tail: &[u8]| {
+        offsets[id] = pdf.len() as u32;
+        pdf.extend_from_slice(format!("{id} 0 obj\n").as_bytes());
+        pdf.extend_from_slice(head);
+        pdf.extend_from_slice(body);
+        pdf.extend_from_slice(tail);
+        pdf.extend_from_slice(b"\nendobj\n");
+    };
+    append(&mut pdf, 1, b"<< /Type /Catalog /Pages 2 0 R >>", b"", b"");
+    append(&mut pdf, 2, b"<< /Type /Pages /Kids [] /Count 0 >>", b"", b"");
+    let head = format!("<< /Type /ObjStm /N 2 /First {} /Length {} >>\nstream\n", index.len(), data.len());
+    append(&mut pdf, 3, head.as_bytes(), &data, b"\nendstream");
+    let xref_offset = pdf.len() as u32;
+    offsets[6] = xref_offset;
+    let mut records = Vec::new();
+    for id in 0..7_usize {
+        let (kind, field, index) = match id {
+            0 => (0_u8, 0_u32, 0xffff_u16),
+            4 => (2, 3, 1),
+            5 => (2, 3, 0),
+            _ => (1, offsets[id], 0),
+        };
+        records.push(kind);
+        records.extend_from_slice(&field.to_be_bytes());
+        records.extend_from_slice(&index.to_be_bytes());
+    }
+    let head = format!("<< /Type /XRef /Size 7 /Root 1 0 R /Info 4 0 R /W [1 4 2] /Length {} >>\nstream\n", records.len());
+    pdf.extend_from_slice(format!("6 0 obj\n{head}").as_bytes());
+    pdf.extend_from_slice(&records);
+    pdf.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes());
+    pdf
+}
+
+/// lopdf patch (7), #5083: a lookup in an object stream (lopdf's metadata reader, or an indirect
+/// `/Length` read while loading) parses only the member it wants. It used to parse every member
+/// from one object's budget, so a member before it of more than `MAX_OBJECT_NODES` objects spent
+/// that budget and the wanted member was skipped: the Info dictionary read as missing.
+#[test]
+fn a_lookup_in_an_object_stream_parses_only_the_member_it_wants() {
+    let mut big = vec![b'['];
+    for _ in 0..4_300_000 {
+        big.extend_from_slice(b"0 ");
+    }
+    big.push(b']');
+    let metadata = Document::load_metadata_mem(&info_in_object_stream_pdf(&big)).unwrap();
+    assert_eq!(metadata.title.as_deref(), Some("Kept"));
+    // The fixture itself reads: with a small member before it, the Info dictionary was read before too.
+    let metadata = Document::load_metadata_mem(&info_in_object_stream_pdf(b"[1 2 3]")).unwrap();
+    assert_eq!(metadata.title.as_deref(), Some("Kept"));
 }
 
 #[test]
