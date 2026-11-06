@@ -424,6 +424,7 @@ mod tests {
             let bad = packet(&format!("<pdf:Keywords>{reference}</pdf:Keywords>"));
             assert_eq!(get_property(&bad, KEYWORDS, Shape::Text), None, "{reference}");
             assert_eq!(set_property(&bad, KEYWORDS, Shape::Text, "new"), None, "{reference}");
+            assert_eq!(without(&bad, &[KEYWORDS]), None, "{reference}");
         }
         // The forms XML does allow still decode.
         for reference in ["&#x41;", "&#65;", "&#0065;", "&#x0041;"] {
