@@ -74,6 +74,7 @@ use theme::{ThemeKind, ThemePreference};
 pub use workflows::ocr_verify::{OcrVerify, Phase};
 
 mod app;
+mod frame_guard;
 mod hooks;
 mod persist;
 mod platform;
@@ -516,6 +517,16 @@ pub struct PdfCraftApp {
     pub ocr_verify: ocr_verify::OcrVerify,
     /// Background jobs (OCR, actions, listing pinned folders) run inline instead (tests).
     pub run_inline: bool,
+    /// Frames in a row whose logic or drawing panicked, and whether this frame's did
+    /// (`frame_guard`, #3914).
+    panicking_frames: u32,
+    frame_panicked: bool,
+    /// The last `logic` ran without a `ui` after it yet (eframe skips `ui` while the window is
+    /// hidden).
+    logic_without_ui: bool,
+    /// Tests: the part of the next frame that panics on purpose.
+    #[cfg(test)]
+    panic_next: Option<frame_guard::FramePart>,
     /// Action Wizard: the user's actions, the dialog state, the running action and (tests) the
     /// files to use instead of a picker.
     pub custom_actions: Vec<pdfcraft_engine::actions::Action>,
