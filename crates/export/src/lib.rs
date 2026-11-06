@@ -37,7 +37,7 @@ pub use as_rtf::rtf;
 pub use layout::{Block, Cell, Image, Page, Table};
 #[cfg(test)]
 use layout::{LOOKUP_STEPS, MAX_COLS, body_size};
-pub(crate) use layout::{Run, paragraphs, tables};
+pub(crate) use layout::{Run, paragraphs, reading_order, tables};
 
 #[cfg(test)]
 mod tests;

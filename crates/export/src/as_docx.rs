@@ -1,6 +1,6 @@
 use super::Zip;
 use super::as_html::esc;
-use super::layout::{Image, Item, Page, Table, body_size, items};
+use super::layout::{Image, Item, Page, Table, body_size, items, reading_order};
 
 /// A colour's 8-bit sRGB components (NaN and out-of-range values clamp; NaN reads as 0).
 pub(crate) fn rgb8(c: [f64; 3]) -> [u8; 3] {
@@ -148,7 +148,10 @@ fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, sha
     // page-sized watermark cannot push the invoice footer onto another page.
     let mut s = String::from("<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/></w:pPr>");
     let body = body_size(std::slice::from_ref(page)).max(1.0);
-    for b in &page.blocks {
+    // Rotated pages are positioned shapes, so paragraph flow never orders them. Emit the
+    // text boxes in reading order; the file's block order is not the reading order.
+    let blocks = reading_order(page, page.blocks.iter().map(|b| (b.rect, b.size, b)).collect());
+    for b in blocks {
         *shape_id = shape_id.saturating_add(1);
         let rotation = layout_number(-b.rotation).rem_euclid(360.0);
         let (sin, cos) = rotation.to_radians().sin_cos();
