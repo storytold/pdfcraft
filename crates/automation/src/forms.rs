@@ -297,6 +297,9 @@ impl Automation {
                     }
                     FormFieldKind::Combo | FormFieldKind::List => {
                         o.insert("options".into(), f.options.iter().map(|(e, d)| json!({ "value": e, "label": d })).collect());
+                        // The selected options as 1-based positions in `options`: two options can share
+                        // an export value, and `value` alone does not tell them apart.
+                        o.insert("selected".into(), json!(f.selected.iter().map(|i| i.saturating_add(1)).collect::<Vec<_>>()));
                         o.insert("multi_select".into(), json!(f.has(field_flags::MULTI_SELECT)));
                         o.insert("editable".into(), json!(f.has(field_flags::EDIT)));
                     }
