@@ -560,6 +560,7 @@ pub struct DocView {
     /// The selection whose action bar was closed by its Copy button: the bar stays hidden
     /// until the selection changes, as it does once a markup button consumes the selection.
     actions_dismissed: Option<Selection>,
+    pub(crate) translation_popup: Option<crate::translate::TranslationPopup>,
     /// The drag in progress started a text selection: the wheel scrolls the page during it
     /// (#721), which egui's scroll area refuses while anything is dragged.
     selection_drag: bool,
@@ -975,6 +976,7 @@ impl DocView {
             selection: None,
             all_text: false,
             actions_dismissed: None,
+            translation_popup: None,
             selection_drag: false,
             clicks: 0,
             last_press_time: 0.0,
@@ -3216,6 +3218,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.auto_scroll.paint(ui, avail);
     if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
         copy_selected |= selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden, can_copy);
+    }
+    if let Some(popup) = &mut view.translation_popup
+        && !popup.show(ui, avail)
+    {
+        view.translation_popup = None;
     }
 
     // Collect all main-page demand, including cached surfaces, for byte admission later.
