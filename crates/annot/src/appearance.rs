@@ -542,7 +542,9 @@ pub(crate) fn markup_reach(d: &Dict) -> Option<[f64; 4]> {
     for p in q.as_chunks::<2>().0 {
         out = [out[0].min(p[0]), out[1].min(p[1]), out[2].max(p[0]), out[3].max(p[1])];
     }
-    (out != rect).then_some(out)
+    // Finite corners can still be too far apart for a width or height (`-1e308` to `1e308`).
+    let usable = (out[2] - out[0]).is_finite() && (out[3] - out[1]).is_finite();
+    (usable && out != rect).then_some(out)
 }
 
 fn draw_body(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -> Option<()> {
