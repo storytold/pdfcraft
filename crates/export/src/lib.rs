@@ -2,9 +2,9 @@
 //!
 //! The engine reduces each page to [`Page`]: paragraphs (text, box, size, bold/italic) and
 //! images (encoded bytes and box), in reading order. The writers turn that into a flowing
-//! document: headings are the paragraphs set larger than the body text, and a block that
-//! continues another on its line (an italic word, a link) is a run of that block's paragraph.
-//! Word keeps pages with
+//! document: explicit H1–H6/P structure levels take precedence over font-size inference,
+//! and a block that continues another on its line (an italic word, a link) is a run
+//! of that block's paragraph. Word keeps pages with
 //! rotated text, or text overlapped by artwork or watermark-sized text, as positioned, editable
 //! shapes to avoid reflowing overlays; other pages flow with images inline.
 

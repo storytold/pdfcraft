@@ -76,6 +76,7 @@ impl Walker<'_> {
         d.contains(b"S").then(|| (k.as_ref(), d))
     }
 
+    /// Collect headings with inherited pages and section depth while enforcing traversal limits.
     fn walk(&mut self, k: &Object, pg: Option<ObjRef>, sections: u8, depth: usize) {
         if !self.enter(k, depth) {
             return;
@@ -86,8 +87,9 @@ impl Walker<'_> {
         }
         let Some((obj, d)) = self.element_of(k) else { return };
         let pg = d.get(b"Pg").and_then(Object::as_ref).or(pg);
-        let ty = d.name(b"S").map(|s| standard(self.doc, &self.role_map, s)).unwrap_or_default();
-        let level = match ty.as_slice() {
+        let ty = d.name(b"S").map(|s| standard(self.doc, &self.role_map, s));
+        let ty: &[u8] = ty.as_ref().map(AsRef::as_ref).unwrap_or_default();
+        let level = match ty {
             [b'H', n @ b'1'..=b'6'] => Some(n - b'0'),
             b"H" => Some(sections.max(1)),
             _ => None,
@@ -96,7 +98,7 @@ impl Walker<'_> {
             self.heading(obj, &d, pg, level, depth);
             return;
         }
-        let sections = if matches!(ty.as_slice(), b"Sect" | b"Part" | b"Art") { sections.saturating_add(1) } else { sections };
+        let sections = if matches!(ty, b"Sect" | b"Part" | b"Art") { sections.saturating_add(1) } else { sections };
         if let Some(kids) = d.get(b"K") {
             self.walk(kids, pg, sections, depth + 1);
         }
