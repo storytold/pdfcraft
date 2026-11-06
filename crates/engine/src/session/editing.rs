@@ -510,6 +510,9 @@ impl Session {
             }
         }
         note_warnings(&mut info.warnings, &doc.xfa_warnings);
+        if doc.acroform_open_notice && !info.warnings.iter().any(|w| w == js::OPEN_SCRIPTS_SKIPPED) {
+            info.warnings.push(js::OPEN_SCRIPTS_SKIPPED.into());
+        }
         // As in `build_document`: the inspection reads only `/Info`, so fields stated only in XMP
         // are filled in again after every full refresh.
         for (field, value) in info_fields(&mut info, &editor.cos) {

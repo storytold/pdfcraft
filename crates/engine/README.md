@@ -24,6 +24,10 @@ field actions and XFA events can still show messages; ordinary PDFs, static XFA 
 without an active layout keep their document scripts. Converting XFA to a static form and
 undoing that conversion switches the context with the document state.
 
+Automatic AcroForm initialization follows the [open-script policy](../../docs/acroform-open-scripts.md):
+automatic scripts are skipped, saved values are preserved and the form banner explains why.
+Explicit scripting keeps its existing behavior and resource limitations.
+
 ## The editing model
 
 Each open document holds a `pdfcraft_cos::Document`: the object graph plus a copy-on-write overlay.
