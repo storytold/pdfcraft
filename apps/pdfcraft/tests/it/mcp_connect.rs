@@ -65,7 +65,7 @@ fn call(s: &mut McpServer, name: &str, args: Value) -> Value {
 }
 
 #[test]
-fn connected_form_fill_uses_the_windows_fields_and_one_undo_step() {
+fn connected_form_fill_uses_window_fields_and_reserves_history_for_the_person() {
     let mut s = server();
     let state = call(&mut s, "ui_state", json!({}));
     let doc = state["structuredContent"]["documents"][0]["doc"].as_u64().unwrap();
@@ -75,10 +75,11 @@ fn connected_form_fill_uses_the_windows_fields_and_one_undo_step() {
     let text = fields.to_string();
     assert!(text.contains("Synthetic") && text.contains("Example"), "{fields}");
     let undo = call(&mut s, "edit_undo", json!({"doc":doc}));
-    assert_ne!(undo["isError"], true, "{undo}");
+    assert_eq!(undo["isError"], true, "{undo}");
+    assert!(undo.to_string().contains("HUMAN_HISTORY_REQUIRED"));
     let fields = call(&mut s, "form_fields", json!({"doc":doc}));
     let text = fields.to_string();
-    assert!(!text.contains("Synthetic") && !text.contains("Example"), "one Undo removes both values: {fields}");
+    assert!(text.contains("Synthetic") && text.contains("Example"), "a refused Undo preserves both values: {fields}");
     for (name, args) in [
         ("sign_document", json!({"doc":doc})),
         ("fill_sign_add", json!({"doc":doc,"page":1,"type":"signature","text":"Synthetic","at":[10,10]})),
