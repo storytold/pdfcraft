@@ -7,7 +7,17 @@ use super::{DecodeBudget, Dict, Document, Matrix, Object};
 /// sideways on a letter or A4 sheet), counting each text-showing operator once; form XObjects
 /// are followed a few levels deep.
 pub fn text_reads_up(doc: &Document, index: usize) -> bool {
-    let Some(page) = pdfcraft_model::pages(doc).into_iter().nth(index) else { return false };
+    texts_read_up(doc, &[index]).first().copied().unwrap_or(false)
+}
+
+/// [`text_reads_up`] for each of `indices`, reading the page tree once: once per page, the
+/// whole tree would be walked for every page asked about.
+pub fn texts_read_up(doc: &Document, indices: &[usize]) -> Vec<bool> {
+    let pages = pdfcraft_model::pages(doc);
+    indices.iter().map(|&i| pages.get(i).is_some_and(|page| page_reads_up(doc, page))).collect()
+}
+
+fn page_reads_up(doc: &Document, page: &pdfcraft_model::Page) -> bool {
     let to_display = Matrix(page.view_matrix(doc)).invert().unwrap_or_default();
     let res = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let mut score = 0i64;
