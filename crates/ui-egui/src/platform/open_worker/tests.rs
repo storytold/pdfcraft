@@ -147,7 +147,7 @@ fn choose_export_tool(harness: &mut Harness<'static, PdfCraftApp>, file: &ToolOp
 /// Picking a file for a tool must carry the tool through native preparation; another file
 /// opened while it is pending must not become the tool's source.
 #[allow(clippy::expect_used)]
-fn chosen_tool_runs_after_preparation(extension: &str, bytes: Vec<u8>) {
+fn chosen_tool_runs_after_preparation(extension: &str, bytes: Vec<u8>, expected_text: &str) {
     let mut harness = tool_open_harness();
     let held = HeldToolOpen::install(&mut harness);
     let file = tool_open_file("pending", extension, &bytes);
@@ -175,7 +175,7 @@ fn chosen_tool_runs_after_preparation(extension: &str, bytes: Vec<u8>) {
         let mut renderer = pdfcraft_render::PageRenderer::new(chosen.bytes.clone(), Default::default());
         let output = renderer.render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Text, ..Default::default() });
         let text = output.text.expect("read the converted text").plain_text();
-        assert_eq!(text.split_whitespace().collect::<Vec<_>>().join(" "), std::str::from_utf8(&bytes).expect("synthetic input is UTF-8"));
+        assert_eq!(text.split_whitespace().collect::<Vec<_>>().join(" "), expected_text);
     }
     assert!(matches!(app.dialog, Some(crate::Dialog::Export(_))), "the chosen Export tool runs after its source commits");
     assert!(app.pending_opens.is_empty());
@@ -183,12 +183,31 @@ fn chosen_tool_runs_after_preparation(extension: &str, bytes: Vec<u8>) {
 
 #[test]
 fn a_chosen_tool_runs_on_its_file_only_after_native_preparation_commits() {
-    chosen_tool_runs_after_preparation("pdf", fixture(2));
+    chosen_tool_runs_after_preparation("pdf", fixture(2), "");
 }
 
 #[test]
 fn a_chosen_tool_runs_on_converted_text_only_after_native_preparation_commits() {
-    chosen_tool_runs_after_preparation("txt", b"Synthetic text input for the selected export tool".to_vec());
+    chosen_tool_runs_after_preparation(
+        "txt",
+        b"Synthetic text input for the selected export tool".to_vec(),
+        "Synthetic text input for the selected export tool",
+    );
+}
+
+/// A Word file is converted natively in the open worker, off the UI thread, and opens as a new
+/// unsaved PDF before the chosen tool runs on it. The .docx is made here by PdfCraft's own Word
+/// export, so no Office file is committed.
+#[test]
+#[allow(clippy::expect_used)]
+fn a_chosen_tool_runs_on_a_converted_word_file_only_after_native_preparation_commits() {
+    let text = "Synthetic Word input for the selected export tool";
+    let mut session = pdfcraft_engine::Session::new();
+    let pdf = session.create_from_text("word", text).expect("a text PDF");
+    let id = session.open("word.pdf", None, pdf, None).expect("open the text PDF");
+    let docx = session.get(id).expect("the text PDF").export_office(pdfcraft_engine::compare::OfficeFormat::Docx);
+    assert!(docx.starts_with(b"PK"), "a Word package");
+    chosen_tool_runs_after_preparation("docx", docx, text);
 }
 
 #[allow(clippy::expect_used)]

@@ -31,6 +31,13 @@ impl Session {
         self.write_new(&pdfcraft_create::from_text(title, text, pdfcraft_create::LETTER, 11.0)?)
     }
 
+    /// A new document from a Word, PowerPoint or Excel file (Office Open XML), converted natively.
+    /// The report says what could not be carried over exactly (characters the standard fonts
+    /// can't draw, charts, unsupported images…); the source bytes are only read.
+    pub fn create_from_office(&self, name: &str, bytes: &[u8]) -> Result<(Arc<Vec<u8>>, crate::OfficeReport), EditError> {
+        crate::open::office_pdf(self.now(), name, bytes)
+    }
+
     /// [`Self::create_from_text`] for a report PdfCraft writes from documents (comment summaries,
     /// compare reports), which can quote any language: characters Helvetica can't draw are written
     /// as `[U+XXXX]`, and the report's first line says so, rather than the report being refused.
@@ -39,21 +46,32 @@ impl Session {
         self.write_new(&doc)
     }
 
-    /// Convert a file Create understands (an image or plain text) to PDF bytes; a PDF is checked
-    /// (it must open and allow copying pages) and returned as it is.
+    /// Convert a file Create understands (an image, plain text or a Word, PowerPoint or Excel
+    /// document) to PDF bytes; a PDF is checked (it must open and allow copying pages) and
+    /// returned as it is.
     pub fn convert_to_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<(SourceKind, Arc<Vec<u8>>), EditError> {
+        self.convert_to_pdf_reported(name, bytes).map(|(kind, pdf, _)| (kind, pdf))
+    }
+
+    /// [`Self::convert_to_pdf`], with the report of a Word, PowerPoint or Excel conversion (what
+    /// was approximated), for the caller to show.
+    pub fn convert_to_pdf_reported(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<crate::Converted, EditError> {
         let Some(kind) = source_kind(name, bytes) else {
-            return Err(EditError::Source(format!("{name}: this file type can't be converted; use a PDF, an image or a .txt file")));
+            return Err(EditError::Source(format!(
+                "{name}: this file type can't be converted; use a PDF, an image, a .txt file or a Word, PowerPoint or Excel file (.docx, .pptx, .xlsx)"
+            )));
         };
         let title = name.rsplit_once('.').map_or(name, |(s, _)| s);
         // Image decoders read untrusted bytes: a panic in one must not take the app down.
         let created = guard(|| match kind {
-            SourceKind::Pdf => open_source(name, bytes).map(|_| bytes.clone()),
-            SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]),
-            SourceKind::Text => self.create_from_text(title, &decode_text(bytes)),
+            SourceKind::Pdf => open_source(name, bytes).map(|_| (bytes.clone(), None)),
+            SourceKind::Image => self.create_from_images(&[(name.to_string(), bytes.to_vec())]).map(|pdf| (pdf, None)),
+            SourceKind::Text => self.create_from_text(title, &decode_text(bytes)).map(|pdf| (pdf, None)),
+            SourceKind::Office => self.create_from_office(name, bytes).map(|(pdf, report)| (pdf, Some(report))),
         })
         .map_err(|_| EditError::Source(format!("{name}: the file could not be read")))?;
-        Ok((kind, created?))
+        let (pdf, report) = created?;
+        Ok((kind, pdf, report))
     }
 
     /// A file for Combine as PDF bytes: an image or text file is converted; a PDF is returned as
@@ -62,7 +80,7 @@ impl Session {
     pub fn as_pdf(&self, name: &str, bytes: &Arc<Vec<u8>>) -> Result<Arc<Vec<u8>>, EditError> {
         let pdf = match source_kind(name, bytes) {
             Some(SourceKind::Pdf) => true,
-            Some(SourceKind::Image | SourceKind::Text) => false,
+            Some(SourceKind::Image | SourceKind::Text | SourceKind::Office) => false,
             None => name.to_ascii_lowercase().ends_with(".pdf"),
         };
         if pdf { Ok(bytes.clone()) } else { self.convert_to_pdf(name, bytes).map(|(_, pdf)| pdf) }
