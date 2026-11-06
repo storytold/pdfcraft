@@ -28,6 +28,7 @@ const COMMANDS: &[(&str, &str, Command)] = &[
         "fmt --check, clippy -D warnings, the CLI without default features, test, i18n-report, layers, wasm, license-check, deny, parity (stops at first failure)",
         gates::ci,
     ),
+    ("cover", "Line coverage for one crate (cargo llvm-cov); fails under 80% unless --fail-under-lines N", gates::cover),
     ("test", "Workspace tests: cargo nextest (cargo test when it is missing), then doctests", gates::test),
     ("i18n-report", "Print the strings each interface language lacks (counts and a few keys); never fails", gates::i18n_report),
     ("license-check", "Offline source licence documents, attribution and metadata", license_check::run),

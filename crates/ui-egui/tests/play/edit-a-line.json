@@ -1,0 +1,14 @@
+{
+  "name": "edit a line",
+  "content": "BT /F1 12 Tf 72 700 Td (Hello) Tj ET",
+  "steps": [
+    {"command": {"id": "edit.edit_text"}},
+    {"click_page": {"x": 90, "y": 704}},
+    {"type": {"text": "Hello there"}},
+    {"key": {"key": "Enter", "modifiers": ["command"]}},
+    {"expect_paragraph": {"text": "Hello there"}},
+    {"click_page": {"x": 90, "y": 704}},
+    {"expect_editor": {"contains": "Hello there", "text": "Hello there"}},
+    {"shot": {"name": "edit-a-line"}}
+  ]
+}
