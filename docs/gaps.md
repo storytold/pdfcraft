@@ -173,7 +173,7 @@ update the numbers.
 
 ### 7. OCR reads only unaccented Latin
 
-- **Missing:** every other script and accented Latin; editable-text output; deskew, rotation,
+- **Missing:** every other script (Thai reads through an installed Tesseract) and accented Latin; editable-text output; deskew, rotation,
   despeckle and background clean-up as options of Recognize text (Enhance scanned file removes
   the background and edge shadows on grey and RGB scans and despeckles those and 1-bit ones; it
   reports CMYK, indexed, JPEG 2000, JBIG2 and CCITT scans and scans drawn inside Form XObjects
@@ -417,6 +417,7 @@ update the numbers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | patch | Gap 7: Thai OCR through an installed Tesseract, tested on synthetic pages; estimates unchanged |
 | 2026-10-25 | minor | Gaps 5 and 14 current state: native release builds embed LXGW WenKai Lite for Simplified Chinese, while the web build has no Hans face; Arabic catalogs stay logical with explicit RTL label direction and mirrored stock chrome, while native/browser RTL input, IME and complex workflows remain unqualified. Estimates unchanged. |
 | 2026-10-18 | minor | Gap 3: #2517 a partial rewrite keeps a kept source row in the paragraph and leaves the next marked region closed around its text. Estimates unchanged. |
 | 2026-10-15 | minor | Gap 3: #2517 a blank line at ordinary leading stays a paragraph break. Estimates unchanged. |
