@@ -15,10 +15,10 @@ pub fn is_indic_consonant(c: char) -> bool {
     matches!(
         c,
         '\u{0915}'..='\u{0939}' | '\u{0958}'..='\u{095F}' | '\u{0978}'..='\u{097F}' // Devanagari
-        | '\u{0995}'..='\u{09B9}' | '\u{09DC}'..='\u{09DF}' // Bengali
+        | '\u{0995}'..='\u{09B9}' | '\u{09DC}'..='\u{09DF}' | '\u{09F0}'..='\u{09F1}' // Bengali / Assamese
         | '\u{0A15}'..='\u{0A39}' | '\u{0A59}'..='\u{0A5E}' // Gurmukhi
-        | '\u{0A95}'..='\u{0AB9}' // Gujarati
-        | '\u{0B15}'..='\u{0B39}' | '\u{0B5C}'..='\u{0B5F}' // Oriya
+        | '\u{0A95}'..='\u{0AB9}' | '\u{0AF9}' // Gujarati
+        | '\u{0B15}'..='\u{0B39}' | '\u{0B5C}'..='\u{0B5F}' | '\u{0B71}' // Oriya
         | '\u{0B95}'..='\u{0BB9}' // Tamil
         | '\u{0C15}'..='\u{0C39}' | '\u{0C58}'..='\u{0C5A}' // Telugu
         | '\u{0C95}'..='\u{0CB9}' | '\u{0CDE}' // Kannada
@@ -35,6 +35,7 @@ pub fn is_indic_nukta(c: char) -> bool {
         | '\u{0A3C}' // Gurmukhi
         | '\u{0ABC}' // Gujarati
         | '\u{0B3C}' // Oriya
+        | '\u{0CBC}' // Kannada
     )
 }
 
@@ -72,11 +73,15 @@ pub fn is_indic_pre_base_vowel(c: char) -> bool {
 fn is_indic_vowel_modifier(c: char) -> bool {
     matches!(
         c,
-        '\u{0901}'..='\u{0903}' // Devanagari candrabindu, anusvara, visarga
+        '\u{0900}'..='\u{0903}' // Devanagari candrabindu, anusvara, visarga
         | '\u{0981}'..='\u{0983}' // Bengali
-        | '\u{0A01}'..='\u{0A03}' // Gurmukhi
+        | '\u{0A01}'..='\u{0A03}' | '\u{0A70}'..='\u{0A71}' // Gurmukhi (including tippi, addak)
         | '\u{0A81}'..='\u{0A83}' // Gujarati
         | '\u{0B01}'..='\u{0B03}' // Oriya
+        | '\u{0B82}'..='\u{0B83}' // Tamil
+        | '\u{0C00}'..='\u{0C04}' // Telugu
+        | '\u{0C80}'..='\u{0C83}' // Kannada
+        | '\u{0D00}'..='\u{0D03}' // Malayalam
     )
 }
 
@@ -254,5 +259,50 @@ mod tests {
             assert_eq!(to_logical(s), s);
             assert_eq!(to_visual(s), s);
         }
+    }
+
+    #[test]
+    fn gurmukhi_tippi_addak_and_southern_vowel_modifiers_reorder_with_pre_base_vowel() {
+        // Gurmukhi ਸਿੰਘ (Singh): SA (U+0A38) + I (U+0A3F) + TIPPI (U+0A70) + GHA (U+0A18)
+        let singh_logical = "\u{0A38}\u{0A3F}\u{0A70}\u{0A18}";
+        let singh_visual = "\u{0A3F}\u{0A70}\u{0A38}\u{0A18}";
+        assert_eq!(to_logical(singh_visual), singh_logical);
+        assert_eq!(to_visual(singh_logical), singh_visual);
+
+        // Gurmukhi ਇੱਕ / ਸਿੱਖ with Addak (U+0A71): SA (U+0A38) + I (U+0A3F) + ADDAK (U+0A71) + KHA (U+0A16)
+        let sikh_logical = "\u{0A38}\u{0A3F}\u{0A71}\u{0A16}";
+        let sikh_visual = "\u{0A3F}\u{0A71}\u{0A38}\u{0A16}";
+        assert_eq!(to_logical(sikh_visual), sikh_logical);
+        assert_eq!(to_visual(sikh_logical), sikh_visual);
+
+        // Tamil and Malayalam pre-base vowel with vowel modifier (U+0B82, U+0D02)
+        let tamil_logical = "\u{0B95}\u{0BC6}\u{0B82}";
+        let tamil_visual = "\u{0BC6}\u{0B82}\u{0B95}";
+        assert_eq!(to_logical(tamil_visual), tamil_logical);
+        assert_eq!(to_visual(tamil_logical), tamil_visual);
+
+        let malayalam_logical = "\u{0D15}\u{0D46}\u{0D02}";
+        let malayalam_visual = "\u{0D46}\u{0D02}\u{0D15}";
+        assert_eq!(to_logical(malayalam_visual), malayalam_logical);
+        assert_eq!(to_visual(malayalam_logical), malayalam_visual);
+    }
+
+    #[test]
+    fn assamese_oriya_gujarati_consonants_and_kannada_nukta_are_recognized() {
+        // Assamese ৰি (ri) and ৱি (wi): U+09F0 / U+09F1 + U+09BF
+        for cons in ['\u{09F0}', '\u{09F1}'] {
+            let logical = format!("{cons}\u{09BF}");
+            let visual = format!("\u{09BF}{cons}");
+            assert_eq!(to_logical(&visual), logical);
+            assert_eq!(to_visual(&logical), visual);
+        }
+
+        // Oriya ୱি (wi): U+0B71 + U+0B3F, Gujarati ૹિ (zhi): U+0AF9 + U+0ABF
+        assert_eq!(to_logical("\u{0B3F}\u{0B71}"), "\u{0B71}\u{0B3F}");
+        assert_eq!(to_visual("\u{0B71}\u{0B3F}"), "\u{0B3F}\u{0B71}");
+        assert_eq!(to_logical("\u{0ABF}\u{0AF9}"), "\u{0AF9}\u{0ABF}");
+        assert_eq!(to_visual("\u{0AF9}\u{0ABF}"), "\u{0ABF}\u{0AF9}");
+
+        assert!(is_indic_nukta('\u{0CBC}'));
     }
 }
