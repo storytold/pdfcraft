@@ -280,6 +280,50 @@ proptest::proptest! {
     }
 }
 
+/// A `/V 4` RC4 crypt filter with a 40- or 48-bit key, as Acrobat writes it (pdf.js issue 19484):
+/// the file key is extended to 16 bytes with zeros before Algorithm 1, so each object's key is
+/// all 16 bytes of MD5(key, zeros, object, generation). A `/V 2` file with the same short key
+/// keeps Algorithm 1 as the standard has it, n + 5 bytes of MD5(key, object, generation).
+#[test]
+fn a_v4_rc4_key_shorter_than_16_bytes_is_extended_with_zeros() {
+    let text = b"Page tree in an object stream".to_vec();
+    for (v, bits) in [(4, 40), (4, 48), (2, 40)] {
+        let mut d = EncryptDict {
+            filter: b"Standard".to_vec(),
+            v,
+            r: if v == 4 { 4 } else { 3 },
+            length_bits: bits,
+            o: vec![7; 32],
+            p: -3392,
+            encrypt_metadata: v != 4,
+            ..Default::default()
+        };
+        if v == 4 {
+            d.crypt_filters = vec![(b"StdCF".to_vec(), Method::Rc4)];
+            d.stm_f = b"StdCF".to_vec();
+            d.str_f = b"StdCF".to_vec();
+        }
+        let key = file_key_r4(&d, ID, b"");
+        assert_eq!(key.len(), (bits / 8) as usize);
+        d.u = u_value_r4(&d, ID, &key);
+        let h = SecurityHandler::open(d, ID, None).unwrap();
+        let (num, generation) = (13u32, 0u16);
+        let mut md5 = Md5::new();
+        md5.update(&key);
+        if v == 4 {
+            md5.update(vec![0u8; 16 - key.len()]);
+        }
+        md5.update(&num.to_le_bytes()[..3]);
+        md5.update(generation.to_le_bytes());
+        let digest = md5.finalize();
+        let object_key = if v == 4 { digest.to_vec() } else { digest[..key.len() + 5].to_vec() };
+        let written = rc4(&object_key, &text);
+        assert_eq!(h.decrypt_string(num, generation, &written), text, "V{v}, {bits}-bit key");
+        assert_eq!(h.decrypt_stream(num, generation, &written, StreamKind::Normal), text, "V{v}, {bits}-bit key");
+        assert_eq!(h.encrypt_stream(num, generation, &text, StreamKind::Normal), written, "saved as it was read: V{v}, {bits}-bit key");
+    }
+}
+
 #[test]
 fn owner_authentication_recovers_the_user_password() {
     for alg in [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128] {
