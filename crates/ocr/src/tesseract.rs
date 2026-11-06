@@ -42,6 +42,7 @@ pub const LANGUAGE_CODES: &[(&str, &str)] = &[
     ("ko", "kor"),
     ("ar", "ara"),
     ("nl", "nld"),
+    ("th", "tha"),
 ];
 
 /// English names for [`LANGUAGE_CODES`] (dropdowns show code + name).
@@ -58,6 +59,7 @@ pub const LANGUAGE_NAMES: &[(&str, &str)] = &[
     ("ko", "Korean"),
     ("ar", "Arabic"),
     ("nl", "Dutch"),
+    ("th", "Thai"),
 ];
 
 /// Map a settings language code to a Tesseract one: trimmed, case-insensitive, allow-listed;
@@ -473,12 +475,88 @@ impl Recognizer for TesseractCli {
         }
         // Fixed argv, no shell: tesseract <png> stdout -l <lang> tsv.
         let tsv = self.run(&[&png_path.to_string_lossy(), "stdout", "-l", lang, "tsv"], self.timeout, self.max_output)?;
-        let (lines, truncated) = parse_tsv_bounded(&tsv);
+        let (mut lines, truncated) = parse_tsv_bounded(&tsv);
         if truncated {
             return Err(OcrError::Recognize(format!("the {MAX_WORDS}-word limit was exceeded; the incomplete reading was rejected")));
         }
+        if lang == "tha" {
+            lines.iter_mut().for_each(join_thai_words);
+        }
         Ok(lines)
     }
+}
+
+/// A Thai line's gap between two letters that ends a word, as a part of the line's median letter
+/// width: wider than the spacing inside a word, narrower than the space Thai writes between words.
+const THAI_WORD_GAP: f32 = 0.65;
+
+/// Rejoin a Thai line into words. Thai is not written with spaces, so the `tha` data reports nearly
+/// every letter and mark as a "word" of its own: left alone, the marks of one word land in separate
+/// words of the text layer, and sara am stays in two pieces.
+fn join_thai_words(line: &mut Line) {
+    let mut widths: Vec<f32> = line.words.iter().map(|w| w.rect[2] - w.rect[0]).collect();
+    widths.sort_by(f32::total_cmp);
+    let gap = widths.get(widths.len() / 2).copied().unwrap_or(0.0) * THAI_WORD_GAP;
+    let mut joined: Vec<Word> = Vec::with_capacity(line.words.len());
+    for word in line.words.drain(..) {
+        match joined.last_mut() {
+            Some(last) if continues_thai_word(last, &word, gap) => absorb(last, &word),
+            _ => joined.push(word),
+        }
+    }
+    for word in &mut joined {
+        word.text = compose_sara_am(&word.text);
+    }
+    line.words = joined;
+}
+
+/// Whether `next` carries on the Thai word `word`: Thai on both sides, with no word gap between.
+fn continues_thai_word(word: &Word, next: &Word, gap: f32) -> bool {
+    let is_thai = |c: Option<char>| c.is_some_and(|c| ('\u{0E00}'..='\u{0E7F}').contains(&c));
+    is_thai(word.text.chars().next_back()) && is_thai(next.text.chars().next()) && next.rect[0] - word.rect[2] <= gap
+}
+
+/// Add `next` to the end of `word`. The lower confidence stands, so one doubtful letter still
+/// sends the word to review.
+fn absorb(word: &mut Word, next: &Word) {
+    word.text.push_str(&next.text);
+    word.rect = [word.rect[0].min(next.rect[0]), word.rect[1].min(next.rect[1]), word.rect[2].max(next.rect[2]), word.rect[3].max(next.rect[3])];
+    word.confidence = match (word.confidence, next.confidence) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+}
+
+/// Join Thai sara am the way it is typed. The `tha` data reads U+0E33 as NIKHAHIT then SARA AA, a
+/// tone mark possibly between or before them, and that text looks right but is never found by a
+/// search for the word as typed.
+fn compose_sara_am(text: &str) -> String {
+    const NIKHAHIT: char = '\u{0E4D}';
+    const SARA_AA: char = '\u{0E32}';
+    const SARA_AM: char = '\u{0E33}';
+    let is_tone = |c: char| ('\u{0E48}'..='\u{0E4B}').contains(&c);
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut rest = chars.as_slice();
+    while let Some(&first) = rest.first() {
+        rest = match *rest {
+            [NIKHAHIT, SARA_AA, ref tail @ ..] => {
+                out.push(SARA_AM);
+                tail
+            }
+            [NIKHAHIT, tone, SARA_AA, ref tail @ ..] | [tone, NIKHAHIT, SARA_AA, ref tail @ ..] if is_tone(tone) => {
+                out.push(tone);
+                out.push(SARA_AM);
+                tail
+            }
+            [_, ref tail @ ..] => {
+                out.push(first);
+                tail
+            }
+            [] => break,
+        };
+    }
+    out
 }
 
 /// Encode an RGBA raster as PNG (the interchange format Tesseract reads best).
@@ -676,6 +754,7 @@ mod tests {
         assert_eq!(language_code("ja"), "jpn");
         assert_eq!(language_code("ko"), "kor");
         assert_eq!(language_code("nl"), "nld");
+        assert_eq!(language_code("th"), "tha");
         assert_eq!(language_code("klingon"), "eng", "unknown → eng");
         assert_eq!(language_code(""), "eng");
         // The security property: whatever the settings say, only allow-listed codes reach a
@@ -684,6 +763,50 @@ mod tests {
             let mapped = language_code(code);
             assert!(LANGUAGE_CODES.iter().any(|(_, v)| *v == mapped), "{code:?} → {mapped:?} is not allow-listed");
         }
+    }
+
+    /// The letters of a Thai line become words: marks stay with their word, sara am composes, the
+    /// box covers the word and the lowest confidence stands. A wide gap and Latin text still divide.
+    #[test]
+    fn thai_letters_are_joined_into_words() {
+        let letter =
+            |text: &str, left: f32, width: f32, conf: f32| Word::new(text, [left, 0.0, left + width, 40.0], "tesseract").with_confidence(conf);
+        let mut line = Line {
+            words: vec![
+                letter("จ", 0.0, 30.0, 96.0),
+                letter("\u{0E4D}", 30.0, 30.0, 91.0),
+                letter("า", 62.0, 30.0, 95.0),
+                letter("น", 100.0, 30.0, 97.0),
+                letter("เง", 170.0, 50.0, 96.0),
+                letter("ิ", 220.0, 30.0, 96.0),
+                letter("น", 252.0, 30.0, 96.0),
+                letter("4,500", 290.0, 90.0, 99.0),
+            ],
+        };
+        join_thai_words(&mut line);
+        let texts: Vec<&str> = line.words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(texts, ["จำน", "เงิน", "4,500"]);
+        assert_eq!(line.words[0].rect, [0.0, 0.0, 130.0, 40.0]);
+        assert_eq!(line.words[0].confidence, Some(91.0));
+    }
+
+    /// An empty line stays empty.
+    #[test]
+    fn an_empty_thai_line_stays_empty() {
+        let mut line = Line { words: Vec::new() };
+        join_thai_words(&mut line);
+        assert!(line.words.is_empty());
+    }
+
+    /// Sara am comes back composed, tone mark first, wherever the engine put the tone; the
+    /// same letters elsewhere and other text stay as they are.
+    #[test]
+    fn thai_sara_am_is_composed() {
+        assert_eq!(compose_sara_am("\u{0E08}\u{0E4D}\u{0E32}\u{0E19}\u{0E27}\u{0E19}"), "จำนวน");
+        assert_eq!(compose_sara_am("\u{0E19}\u{0E49}\u{0E4D}\u{0E32}"), "น้ำ", "tone first");
+        assert_eq!(compose_sara_am("\u{0E19}\u{0E4D}\u{0E49}\u{0E32}"), "น้ำ", "tone between");
+        assert_eq!(compose_sara_am("ใบกำกับ มา 4,500 baht"), "ใบกำกับ มา 4,500 baht");
+        assert_eq!(compose_sara_am("\u{0E4D}"), "\u{0E4D}", "a lone mark stays");
     }
 
     #[test]

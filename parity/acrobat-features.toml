@@ -6719,8 +6719,8 @@ milestone = "M10"
 status = "partial"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text", "crates/ocr/src/tesseract.rs::language_table_maps_and_falls_back"]
-notes = "The choice feeds both engines: ocrs reads only unaccented Latin (its model table holds English); tesseract maps 12 allow-listed codes (the language enum comes from the engine's own table) but only as far as the installed language packs cover. Recognition quality beyond the tested English set is unproven."
+evidence = ["crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text", "crates/ocr/src/tesseract.rs::language_table_maps_and_falls_back", "crates/engine/src/ocr.rs::thai_uses_tesseract_alone_and_names_missing_data", "crates/ocr/src/tesseract.rs::thai_letters_are_joined_into_words"]
+notes = "The dialog and tools offer English and Thai. ocrs reads only unaccented Latin (its model table holds English); Thai goes to an installed Tesseract alone, needs its tha data and is refused with the cause otherwise. tesseract maps 13 allow-listed codes, but the other eleven are not offered yet. Thai words are rebuilt from Tesseract's letter-sized rows by a gap heuristic, tested on synthetic pages only: real scans are unproven, and accuracy is Tesseract's (it drops some tone marks). Editable-text output in Thai needs craft-fonts and is unverified."
 
 [[feature]]
 id = "ocr.searchable-image"

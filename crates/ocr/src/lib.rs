@@ -185,7 +185,7 @@ impl Line {
 /// What a recogniser needs to know beyond the pixels.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecognizeOptions {
-    /// Language code from [`LANGUAGES`] (`"en"`, `"de"`, …). Engines map it to their own codes
+    /// Language code (`"en"`, `"th"`, …): [`LANGUAGES`] lists what ocrs reads. Engines map it to their own codes
     /// (Tesseract: `tesseract::language_code`, allow-listed before anything reaches a process);
     /// unknown codes fall back to the engine's default.
     pub language: String,
