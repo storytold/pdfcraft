@@ -298,3 +298,32 @@ fn type3_font_used_in_a_form_xobject_has_its_redacted_glyph_removed() {
     assert_eq!(report.glyphs, 1);
     assert!(!full_save_holds(&doc, b"SECRET_FORM_GLYPH_PAYLOAD"), "redacted glyph program survived");
 }
+
+/// Type 3 cleanup decoded a glyph program again for every font listing it: 2 000 fonts sharing
+/// one large program read it 2 000 times. It is read once now, and the cleanup still keeps the
+/// glyph every font shows.
+#[test]
+fn a_glyph_program_many_type3_fonts_share_is_read_once() {
+    const FONTS: usize = 2_000;
+    let names: String = (0..FONTS).map(|i| format!("/T{i} {} 0 R ", 6 + i)).collect();
+    let shows: String = (0..FONTS).map(|i| format!("/T{i} 10 Tf (A) Tj ")).collect();
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << {names}>> >> >>").into_bytes(),
+        stream("", format!("BT 10 100 Td {shows}ET").as_bytes()),
+        stream("", [b"SHARED_GLYPH ".as_slice(), &b"0 0 m 1 1 l S ".repeat(50_000)].concat()),
+    ];
+    objs.extend((0..FONTS).map(|_| {
+        b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 65 /Widths [0] /Encoding << /Differences [65 /A] >> /CharProcs << /A 5 0 R >> >>".to_vec()
+    }));
+    let mut doc = pdf(objs);
+    // The glyphs are drawn at x 10 with no width, so a mark away from them leaves them all.
+    mark(&mut doc, 0, &[[200.0, 200.0, 250.0, 250.0]], "");
+    let started = std::time::Instant::now();
+    apply(&mut doc, None).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
+    let font = doc.get(ObjRef::new(6, 0));
+    let procs = doc.resolve(font.as_dict().unwrap().get(b"CharProcs").unwrap());
+    assert!(procs.as_dict().unwrap().contains(b"A"), "the glyph every font shows was unlinked");
+}
