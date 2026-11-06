@@ -5,6 +5,16 @@ fn hex(s: &str) -> Vec<u8> {
 }
 
 #[test]
+fn file_id_is_a_one_way_16_byte_identifier() {
+    let seed = [7u8; 32];
+    let id = file_id(&seed);
+    assert_eq!(id.len(), 16);
+    assert_eq!(id, file_id(&seed));
+    assert_ne!(id, seed[..16]);
+    assert_ne!(id, file_id(&[8u8; 32]));
+}
+
+#[test]
 fn rc4_reference_vectors() {
     assert_eq!(rc4(b"Key", b"Plaintext"), hex("bbf316e8d940af0ad3"));
     assert_eq!(rc4(b"Wiki", b"pedia"), hex("1021bf0420"));
@@ -230,11 +240,11 @@ fn unsupported_handlers_are_reported() {
 
 #[test]
 fn permission_bits_follow_table_22() {
-    let p = Permissions { bits: -3904, owner: false }; // 0xFFFFF0C0: only reserved bits set
+    let p = Permissions { bits: -3904, owner: false, revision: 3 }; // 0xFFFFF0C0: only reserved bits set
     assert!(!p.print() && !p.modify() && !p.copy() && !p.annotate() && !p.assemble());
-    let p = Permissions { bits: -1, owner: false };
+    let p = Permissions { bits: -1, owner: false, revision: 3 };
     assert!(p.print() && p.modify() && p.copy() && p.annotate() && p.assemble() && p.fill_forms());
-    let p = Permissions { bits: 0, owner: true };
+    let p = Permissions { bits: 0, owner: true, revision: 3 };
     assert!(p.modify(), "owners ignore /P");
 }
 

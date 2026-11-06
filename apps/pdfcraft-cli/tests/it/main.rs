@@ -3,6 +3,7 @@
 mod audit;
 mod automation_roots;
 mod batch;
+mod batch_exit;
 mod check;
 mod edit;
 mod extract;

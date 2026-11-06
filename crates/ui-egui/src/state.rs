@@ -166,6 +166,8 @@ pub enum Dialog {
     AccessibilityOptions,
     /// Scan & OCR ▸ Recognize text.
     RecognizeText,
+    /// Scan & OCR ▸ Enhance scanned file.
+    EnhanceScan,
     /// The JavaScript console (⌘J).
     JsConsole,
     /// Document JavaScripts.
@@ -186,6 +188,8 @@ pub enum Dialog {
     AuditSpace,
     /// Signatures ▸ Show certificate.
     CertificateViewer,
+    /// Pin tools to Home: selection modal.
+    PinTool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,6 +231,14 @@ pub struct PagePropsDraft {
     pub pages: Vec<usize>,
     pub before: Option<pdfcraft_engine::TabOrder>,
     pub tab_order: Option<pdfcraft_engine::TabOrder>,
+}
+
+/// Copied comments: their XFDF (each with its replies), for `Edit::PasteComments`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommentClip {
+    pub xfdf: String,
+    /// How many comments (replies not counted) were copied.
+    pub count: usize,
 }
 
 /// Copied pages: their document's name and bytes (as it was when copied) and the pages.
@@ -329,6 +341,8 @@ pub struct PasswordPrompt {
     pub(crate) then: Option<&'static str>,
     /// A link destination to apply after the linked PDF is unlocked.
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
+    /// A launch-time display override, applied only after this PDF is unlocked.
+    pub(crate) display_override: Option<(canvas::PageLayout, bool)>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -360,6 +374,11 @@ impl UnlockPrompt {
         Self { doc: doc.id, name: doc.name.clone(), input: String::new(), error: None, then }
     }
 }
+
+/// How many recent files are kept until Preferences says otherwise.
+pub const RECENT_FILES_DEFAULT: usize = 12;
+/// The most Preferences can ask to keep.
+pub const RECENT_FILES_MAX: usize = 50;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct RecentFile {

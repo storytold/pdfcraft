@@ -144,6 +144,144 @@ fn backgrounds_and_watermarks_from_a_file() {
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Add background"));
 }
 
+/// Three pages: a white backdrop of its own (as browsers write), a page-sized picture (a scan)
+/// and bare paper.
+fn backdrop_fixture() -> Vec<u8> {
+    let stream = |data: &str| format!("<< /Length {} >> stream\n{data}\nendstream", data.len());
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] /Resources << /XObject << /Im0 9 0 R >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 8 0 R >>".into(),
+        stream("q 1 1 1 rg 0 0 300 400 re f Q 0 g 20 20 50 50 re f"),
+        stream("q 300 0 0 400 0 0 cm /Im0 Do Q"),
+        stream("0 g 20 20 50 50 re f"),
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >> stream\n\u{80}\nendstream"
+            .into(),
+    ];
+    let mut out = String::from("%PDF-1.7\n");
+    for (i, o) in objs.iter().enumerate() {
+        out.push_str(&format!("{} 0 obj {o} endobj\n", i + 1));
+    }
+    out.push_str("trailer << /Root 1 0 R >>\n%%EOF");
+    out.into_bytes()
+}
+
+#[test]
+fn the_background_dialog_offers_to_replace_a_white_backdrop_and_warns_about_scans() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("doc.pdf", None, backdrop_fixture()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    let backdrop = |h: &Harness<'static, PdfCraftApp>, page| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().page_backdrop(page)
+    };
+    assert_eq!(backdrop(&h, 0), Some(pdfcraft_engine::Backdrop::Fill));
+    h.state_mut().execute("edit.background");
+    h.run_steps(3);
+    let replace = "Page 1 paints its own white backdrop, which would hide the background. Replace it";
+    h.get_by_label("A picture covers page 2 (a scan?), so the background won't show there.");
+    assert!(h.state().marks_draft.bg.replace_backdrop, "on by default");
+    // Left unticked, the backdrop stays and still hides the background.
+    h.get_by_label(replace).click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(backdrop(&h, 0), Some(pdfcraft_engine::Backdrop::Fill));
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    // Reopened, the choice starts on again; ticked, the backdrop is replaced and the scan is
+    // reported, not touched.
+    h.state_mut().execute("edit.background");
+    h.run_steps(3);
+    h.get_by_label(replace);
+    assert!(h.state().marks_draft.bg.replace_backdrop, "on again when the dialog opens");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(backdrop(&h, 0), None);
+    assert_eq!(backdrop(&h, 1), Some(pdfcraft_engine::Backdrop::Image));
+    // Nothing left to replace: the offer is gone. A choice left off from an earlier dialog
+    // doesn't carry into Update, which restores the backdrop first and would otherwise keep it
+    // with no checkbox shown.
+    h.state_mut().marks_draft.bg.replace_backdrop = false;
+    h.state_mut().execute("edit.background.update");
+    h.run_steps(3);
+    assert!(h.query_by_label(replace).is_none());
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(backdrop(&h, 0), None, "Update keeps the backdrop replaced");
+}
+
+/// The preview shows what OK will do to each page: the colour on bare paper and on a page whose
+/// white backdrop is replaced, none on a scan, and none on that page with Replace unticked.
+#[test]
+fn the_background_preview_follows_the_replace_checkbox() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("doc.pdf", None, backdrop_fixture()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.background"));
+    h.run_steps(3);
+    let replace = "Page 1 paints its own white backdrop, which would hide the background. Replace it";
+    h.get_by_label(replace);
+    let [red, green, blue] = pdfcraft_engine::Background::default().color.map(|c| (c * 255.0).round() as u8);
+    let colour = egui::Color32::from_rgb(red, green, blue);
+    let tint = |h: &mut Harness<'static, PdfCraftApp>, page: usize| {
+        h.state_mut().marks_draft.preview = Some(page);
+        h.run_steps(2);
+        wait_for_picture(h, page).2
+    };
+    assert_eq!(tint(&mut h, 0), colour, "page 1's backdrop is replaced, so the colour shows");
+    assert_eq!(tint(&mut h, 1), egui::Color32::WHITE, "a picture covers page 2");
+    assert_eq!(tint(&mut h, 2), colour, "page 3 is bare paper");
+    h.get_by_label(replace).click();
+    h.run_steps(2);
+    assert!(!h.state().marks_draft.bg.replace_backdrop);
+    assert_eq!(tint(&mut h, 0), egui::Color32::WHITE, "unticked, page 1 keeps its backdrop, which hides the colour");
+    assert_eq!(tint(&mut h, 2), colour, "page 3 has no backdrop to keep");
+}
+
+/// Remove background says which pages keep their own white backdrop off: here one whose
+/// backdrop copy changed before the fill since the background replaced it.
+#[test]
+fn remove_background_says_which_pages_keep_their_own_backdrop_off() {
+    let copy = "1 1 1 rg 0 0 300 400 re n 0 g 20 20 50 50 re f";
+    let bg = "q 1 0 0 rg 0 0 300 400 re f Q";
+    let fixture = format!(
+        "%PDF-1.7\n\
+         1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] >> endobj\n\
+         4 0 obj << /PCMark /Background /Length {} >> stream\n{bg}\nendstream endobj\n\
+         5 0 obj << /PCBackdrop << /Index 2 /Op (f) /Before <{}> >> /Length {} >> stream\n{copy}\nendstream endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF",
+        bg.len(),
+        "00".repeat(32),
+        copy.len()
+    );
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("doc.pdf", None, fixture.into_bytes()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert_eq!(marks(&h), [MarkKind::Background]);
+    h.state_mut().execute("edit.background.remove");
+    h.run_steps(2);
+    assert!(marks(&h).is_empty());
+    let toast = h.state().toast.as_ref().map(|(t, _)| t.clone()).unwrap_or_default();
+    assert_eq!(toast, "Page 1 changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.");
+}
+
 /// Two 300 × 400 pages with content (a dark bar), the second turned a quarter (/Rotate 90), so it
 /// is shown landscape, 400 × 300.
 fn content_fixture() -> Vec<u8> {
@@ -263,7 +401,8 @@ fn the_preview_shows_the_page_the_range_selects_under_the_marks() {
     assert!(h.state_mut().execute("edit.background"));
     h.run_steps(2);
     let (_, _, tint) = wait_for_picture(&mut h, 1);
-    assert_eq!(tint, egui::Color32::from_rgb(255, 255, 217), "the default pale yellow, opaque");
+    let [red, green, blue] = pdfcraft_engine::Background::default().color.map(|c| (c * 255.0).round() as u8);
+    assert_eq!(tint, egui::Color32::from_rgb(red, green, blue), "the default background colour, opaque");
 }
 
 /// The preview's page stepper, beside its "page N of M" label: the dialog's own button, not the
@@ -480,13 +619,14 @@ fn page_range_from_one_to_one_selects_only_the_first_page() {
     let s = h.state();
     let doc = s.session.get(s.views[0].id).unwrap();
     assert_eq!(doc.marks(), [MarkKind::Background]);
-    // Rendered: page 1 has the (default cream) background, page 2 is still blank.
+    // Rendered: page 1 has the default background colour, page 2 is still blank.
     let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), pdfcraft_render::RenderConfig::default());
     let corner = |r: &mut pdfcraft_render::PageRenderer, page: usize| {
         let p = r.render(pdfcraft_render::RenderRequest { page, scale: 1.0, ..Default::default() });
         assert!(p.error.is_none(), "{:?}", p.error);
         p.rgba[..4].to_vec()
     };
-    assert_eq!(corner(&mut r, 0), vec![255, 255, 217, 255], "page 1 has the background");
+    let [red, green, blue] = pdfcraft_engine::Background::default().color.map(|c| (c * 255.0).round() as u8);
+    assert_eq!(corner(&mut r, 0), vec![red, green, blue, 255], "page 1 has the background");
     assert_eq!(corner(&mut r, 1), vec![255, 255, 255, 255], "page 2 does not");
 }

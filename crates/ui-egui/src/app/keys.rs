@@ -3,7 +3,6 @@ use super::*;
 impl PdfCraftApp {
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
         use egui::Key;
-        let pasted = self.paste_key_released(ctx);
         // "Save changes?" is modal: its keys are its own (⌘D is Don't save there, not Document
         // properties; Escape cancels it rather than clearing a selection), and nothing may run
         // underneath it. They are read here, before the canvas can consume them.
@@ -44,12 +43,16 @@ impl PdfCraftApp {
         if let Some(i) = self.active {
             // Select all belongs to the document or page grid, unless a text field or
             // overlay owns the keyboard. Other canvas shortcuts keep their own handling.
+            let pages_owns_keyboard =
+                self.right == Some(RightPanel::Pages) && self.views[i].pages_focus_id.is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
             if self.dialog.is_none()
                 && !self.palette_open
-                && !ctx.egui_wants_keyboard_input()
+                && (pages_owns_keyboard || !ctx.egui_wants_keyboard_input())
                 && ctx.input_mut(|input| input.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, Key::A)))
             {
-                if self.is_preparing() {
+                if pages_owns_keyboard {
+                    self.views[i].select_all_pages();
+                } else if self.is_preparing() {
                     if let Some(doc) = self.session.get(self.views[i].id) {
                         prepare::select_all(&mut self.views[i], &doc.form);
                     }
@@ -74,8 +77,7 @@ impl PdfCraftApp {
                 prepare::nudge_keys(ctx, &mut self.views[i], doc);
             }
             canvas::shortcuts(&mut self.views[i], ctx, self.scroll_speed);
-            self.copy_key(i, ctx);
-            self.paste_image_key(i, ctx, pasted);
+            self.clipboard_keys(i, ctx);
             self.image_pick_keys(i, ctx);
         }
     }

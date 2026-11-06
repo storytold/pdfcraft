@@ -28,6 +28,8 @@
 //!   comments, selecting text, moving comments). `ui.state` reports `pages_on_screen` to aim at.
 //! - `ui.type {text}`, `ui.key {key, modifiers?}`: keyboard input to the focused widget / app.
 //! - `ui.command {id}`: run a registry command (as the menu would). `ui.commands` lists them.
+//! - `ui.set {key: "show_page_edge_shadows", value: "true"|"false"}` controls page
+//!   decoration app-wide; `ui.state.show_page_edge_shadows` reports the saved preference.
 //! - `ui.set {key, value}`: view options (`--page`, `--zoom`, …), plus persistent preferences.
 //!   `select` accepts physical page numbers and ranges such as `1,12,16-18`; blank clears the
 //!   explicit selection. This is the same bounded parser as the Organize Pages field; invalid
@@ -37,6 +39,11 @@
 //!   `theme=light|dark|system` changes the saved theme preference; `ui.state.theme_preference`
 //!   reports the choice and `ui.state.theme` reports the resolved light/dark colours.
 //!   `comment-tool-pinned=true|false` remembers the annotation quick bar's pin across restarts;
+//!   `hotbar-tools` accepts comma-separated command IDs (empty clears the bar), and
+//!   `hotbar-side=float|left|right|top|bottom` floats or docks the customizable hotbar;
+//!   `hotbar-full-side=true|false` extends a docked bar along the entire side.
+//!   `hotbar-size=24..64` controls its button size in logical pixels; `ui.state.hotbar`
+//!   reports its tools, relative position, orientation and strip preference. These options persist across restarts.
 //!   `ui.state.comment_tool_pinned` reports the same preference.
 //! - `ui.open {path}`: open a file. A file whose tab is already open focuses it
 //!   (`"focused": true`) instead of adding a tab; native opens report `pending: true` until
