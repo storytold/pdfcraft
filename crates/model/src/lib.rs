@@ -242,7 +242,7 @@ fn is_null(doc: &Document, o: &Object) -> bool {
 
 /// The nearest node (the node itself included) that sets one of [`INHERITABLE`], shared rather
 /// than copied, and the value's weight.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Owner {
     node: ObjRef,
     obj: std::sync::Arc<Object>,
@@ -268,6 +268,7 @@ impl Children {
 }
 
 /// A node of the page tree, before anything is copied.
+#[derive(Debug)]
 pub struct PageNode {
     /// The reference cos accepts as the object's own (its number at the generation the document
     /// holds it at: [`Document::canonical_ref`] of the reference), whichever accepted generation `/Kids`

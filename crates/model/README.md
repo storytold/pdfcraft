@@ -18,11 +18,12 @@ The page-tree walk is `PageNodes` (every node, in document order) and `PageLeave
 `pages`, `try_pages`, `page`, `page_by_ref` and `page_refs` use it; its doc comment gives the
 rules (leaf rule, object identity by number, a shared `/Kids` array read once). annot, forms,
 organize, sign, redact and engine still carry their own walkers, each with its own leaf rule and
-limits; they move onto `PageNodes`/`PageLeaves` one crate at a time (ADR-0004). Each `/Kids` entry is resolved as cos resolves references (#1143): a
-stale generation is null and lists nothing, a repaired alias is the object. Each `PageNode` is
-given at its canonical reference (`Document::canonical_ref`; destinations are compared the same
-way, after cos accepts them), and reads its inherited attributes without copying them (`inherited`,
-`inherited_from`).
+limits; they move onto `PageNodes`/`PageLeaves` one crate at a time (ADR-0004).
+
+Each `/Kids` entry is resolved as cos resolves references (#1143): a stale generation is null and
+lists nothing, a repaired alias is the object. Each `PageNode` is given at its canonical reference
+(`Document::canonical_ref`), and reads its inherited attributes without copying them
+(`inherited`, `inherited_from`).
 
 Its limits are `MAX_PAGE_TREE_NODES`, `MAX_KIDS_ENTRIES` and `MAX_INHERITED_COPIES` (the
 inherited copies of one walk; leaf dictionaries themselves are cloned uncharged, so this is not a
