@@ -173,7 +173,7 @@ const DISPLAY: &[&str] = &[
 const THEMES: &[&str] = &["view.theme.system", "view.theme.light", "view.theme.dark"];
 const PANES: &[&str] = &["view.side_panel", "view.tools_pane"];
 const PANE_COMMANDS: &[&str] = &["comment.list", "form.fields", "ui.dock.reset"];
-const MODES: &[&str] = &["view.full_screen", "view.read_mode"];
+const MODES: &[&str] = &["view.full_screen", "view.read_mode", "view.invert_colors"];
 const PAGES: &[&str] = &[
     "page.organize",
     SEP,
@@ -502,6 +502,7 @@ impl PdfCraftApp {
             "view.layout.cover" => Some(view.is_some_and(|v| v.cover)),
             "view.full_screen" => Some(self.full_screen),
             "view.read_mode" => Some(self.mode == crate::Mode::Read),
+            "view.invert_colors" => Some(self.invert_colors),
             "view.side_panel" => Some(self.right.is_some()),
             "view.tools_pane" => Some(self.left_open),
             "view.theme.system" => Some(self.theme_preference == ThemePreference::System),

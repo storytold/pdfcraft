@@ -93,6 +93,9 @@ impl PdfCraftApp {
             // A fresh install follows the desktop's appearance (#1248); saved settings override.
             theme_preference: ThemePreference::System,
             reading_colors: Default::default(),
+            invert_colors: false,
+            invert_palette: pdfcraft_render::InvertPalette::default(),
+            invert_keep_images: true,
             show_page_edge_shadows: true,
             #[cfg(target_os = "linux")]
             desktop_theme: None,
@@ -711,7 +714,9 @@ impl eframe::App for PdfCraftApp {
         }
         side_panels::show(self, ui);
         let t = theme::Tokens::get(&ctx);
-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| {
+        // Around an inverted (dark) page the light theme's pale pasteboard would glare.
+        let pasteboard = if self.invert_colors && !t.dark() { egui::Color32::from_gray(32) } else { t.pasteboard };
+        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(pasteboard)).show(ui, |ui| {
             if self.mode == Mode::AllTools && self.all_tools_full {
                 all_tools_ui::show(self, ui);
             } else {

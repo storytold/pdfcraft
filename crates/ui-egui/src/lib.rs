@@ -307,6 +307,14 @@ pub struct PdfCraftApp {
     /// The reading-colours preference (Preferences ▸ Reading colours): applied to every open
     /// document, and documents open with it (Acrobat's Replace Document Colors).
     pub reading_colors: pdfcraft_render::ReadingColors,
+    /// The inverted view for night reading (View ▸ Invert colors), app-wide like the preference
+    /// above. While it is on the engine draws with it instead of the reading colours.
+    pub invert_colors: bool,
+    /// The paper and ink colours of the inverted view.
+    pub invert_palette: pdfcraft_render::InvertPalette,
+    /// The inverted view keeps pictures as they are (text and line art take the palette); off it
+    /// inverts every pixel of the page.
+    pub invert_keep_images: bool,
     /// App-wide page decoration only; never part of a PDF edit or render request.
     pub show_page_edge_shadows: bool,
     /// The Linux portal is enabled only by the native host, and starts on the first System choice.

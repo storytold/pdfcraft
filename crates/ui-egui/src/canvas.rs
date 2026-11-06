@@ -2907,6 +2907,17 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
     scroll
 }
 
+/// A page's colour before its raster arrives: the inverted view's paper (both its modes clear
+/// white to it), else the reading-colours background, else white.
+fn page_paper(app: &PdfCraftApp, id: pdfcraft_engine::DocId) -> Color32 {
+    let [r, g, b] = if app.invert_colors {
+        app.invert_palette.paper
+    } else {
+        app.session.reading_colors(id).and_then(|c| c.params).map_or([255, 255, 255], |p| p.background)
+    };
+    Color32::from_rgb(r, g, b)
+}
+
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
 /// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
@@ -2938,10 +2949,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     let Some(doc) = app.session.get(app.views[index].id) else { return };
     let info = &doc.info;
-    let paper = app.session.reading_colors(app.views[index].id).and_then(|c| c.params).map_or(Color32::WHITE, |p| {
-        let [r, g, b] = p.background;
-        Color32::from_rgb(r, g, b)
-    });
+    let paper = page_paper(app, app.views[index].id);
     if info.pages.is_empty() {
         app.views[index].auto_scroll.cancel();
         ui.centered_and_justified(|ui| ui.label(tl!("This document has no pages.")));

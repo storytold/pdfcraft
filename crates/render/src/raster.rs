@@ -31,7 +31,7 @@ use hayro::vello_cpu::color::AlphaColor;
 use hayro::vello_cpu::color::palette::css::{TRANSPARENT, WHITE};
 use hayro::{RenderCache, RenderSettings, render_into, render_size};
 
-use crate::{Pixels, ReadingColors};
+use crate::{InvertPalette, Pixels, ReadingColors, ReadingParams};
 
 mod pool;
 
@@ -75,6 +75,14 @@ pub struct RenderConfig {
     /// View ▸ Reading colours: solid text and line-art paints are remapped for readability and
     /// the page clears to the setting's background. Display only; the document never changes.
     pub reading_colors: ReadingColors,
+    /// View ▸ Invert colours: the page is drawn in the inverted view's palette. While it is on it
+    /// replaces `reading_colors`, and the two never stack (see [`request_reading`]).
+    pub invert_colors: bool,
+    /// The colours of the inverted page: what white paper and black ink become.
+    pub invert_palette: InvertPalette,
+    /// With inversion on, keep pictures as they are: text and line art take the palette through
+    /// the reading-colours mapping. Off inverts every pixel of the page, pictures included.
+    pub invert_keep_images: bool,
     /// The page clears to transparent instead of white (or the reading background): for a page
     /// holding only what is laid over another raster, such as a comment while it is dragged.
     pub transparent: bool,
@@ -221,9 +229,29 @@ pub struct RenderRequest {
 pub const PRINT_TAG: u64 = 1 << 60;
 
 /// The reading colours a request renders with: print previews ([`PRINT_TAG`]) ignore the
-/// document's setting and render with reading colours off.
+/// document's setting and render with reading colours off. While the inverted view is on it
+/// replaces the setting, so the two never stack (stacked, white on black turned the dark page light
+/// again): keeping images maps text and line art to the palette's ink and paper, and inverting
+/// everything draws with reading colours off.
 fn request_reading(config: &RenderConfig, req: &RenderRequest) -> ReadingColors {
-    if req.tag & PRINT_TAG != 0 { ReadingColors::default() } else { config.reading_colors }
+    if req.tag & PRINT_TAG != 0 {
+        ReadingColors::default()
+    } else if config.invert_colors {
+        if config.invert_keep_images {
+            let (text, background) = (config.invert_palette.ink, config.invert_palette.paper);
+            ReadingColors { params: Some(ReadingParams { text, background, only_black: false, line_art: true }) }
+        } else {
+            ReadingColors::default()
+        }
+    } else {
+        config.reading_colors
+    }
+}
+
+/// The palette that every pixel of a request is recoloured with: only for the inverted view that
+/// does not keep images, and never for print previews ([`PRINT_TAG`]).
+fn request_invert(config: &RenderConfig, req: &RenderRequest) -> Option<InvertPalette> {
+    (req.tag & PRINT_TAG == 0 && config.invert_colors && !config.invert_keep_images).then_some(config.invert_palette)
 }
 
 /// What a render that panicked or overran the watchdog is remembered by: its page and kind. Not
@@ -373,6 +401,7 @@ fn render_page<'a>(
         (settings, cache)
     };
     let reading = request_reading(config, &req);
+    let invert = request_invert(config, &req);
     if req.kind == RequestKind::Text {
         return match catch_unwind(AssertUnwindSafe(|| crate::text::extract_page(pdf, req.page, settings))) {
             Ok(Some(t)) => Ok((0, 0, Pixels::default(), Some(Arc::new(t)))),
@@ -443,6 +472,9 @@ fn render_page<'a>(
         let mut preview_settings = settings.clone();
         preview_settings.preview = req.preview;
         render_into(page, cache, &preview_settings, &rs, pixels.bytes_mut());
+        if let Some(palette) = invert {
+            pixels.recolor(palette);
+        }
         Ok((w.into(), h.into(), pixels, None))
     }));
     match result {

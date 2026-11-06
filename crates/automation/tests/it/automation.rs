@@ -9595,7 +9595,13 @@ fn reading_colors_fixture() -> Vec<u8> {
 
 /// A fresh directory whose `a.pdf` is `reading_colors_fixture()`.
 fn reading_colors_workdir() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("pdfcraft-automation-reading-colors-{}", std::process::id()));
+    reading_colors_workdir_named("reading-colors")
+}
+
+/// [`reading_colors_workdir`] in a directory of its own: tests run in parallel threads of one
+/// process and each call deletes and recreates its directory, so two tests must not share one.
+fn reading_colors_workdir_named(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-automation-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("a.pdf"), reading_colors_fixture()).unwrap();
@@ -9761,6 +9767,87 @@ fn reading_colors_through_tools() {
         json!({ "mode": "off", "text": null, "background": null, "only_black": false, "line_art": false })
     );
     assert_eq!(render(&mut a, 1), page1_off);
+}
+
+/// `view_invert_colors` reaches both modes and every palette headlessly: keep_images maps text and
+/// line art and leaves pictures alone, everything inverts every pixel, and the errors name what
+/// is wrong. A view setting: the file never changes, and toggling off restores the render.
+#[test]
+fn invert_colors_through_tools() {
+    let dir = reading_colors_workdir_named("invert-colors");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let render = |a: &mut Automation, page: u64| png_pixels(&a.call("page_render", &json!({ "doc": doc, "page": page, "dpi": 72 })).unwrap()[0]);
+    let page1_off = render(&mut a, 1);
+    let page2_off = render(&mut a, 2);
+    assert_eq!(pixel(&page1_off, 10, 290), [255, 255, 255, 255]);
+
+    // Every pixel, with the default black-and-white palette: the page, the text and the picture invert.
+    let echo = ok(&mut a, "view_invert_colors", json!({ "doc": doc, "invert": true, "mode": "everything" }));
+    assert_eq!(echo, json!({ "doc": doc, "invert": true, "mode": "everything", "palette": "black_and_white", "paper": "#000000", "ink": "#ffffff" }));
+    let page1_all = render(&mut a, 1);
+    assert_eq!(pixel(&page1_all, 10, 290), [0, 0, 0, 255], "the white page turns black");
+    let (original, inverted) = (pixel(&page2_off, 140, 80), pixel(&render(&mut a, 2), 140, 80));
+    assert_eq!([255 - original[0], 255 - original[1], 255 - original[2]], [inverted[0], inverted[1], inverted[2]], "the picture inverts too");
+
+    // Keep images: the page and text take the palette, the picture is byte-identical to the plain render.
+    let echo = ok(&mut a, "view_invert_colors", json!({ "doc": doc, "mode": "keep_images", "palette": "soft_dark" }));
+    assert_eq!(echo, json!({ "doc": doc, "invert": true, "mode": "keep_images", "palette": "soft_dark", "paper": "#222226", "ink": "#dcdcdc" }));
+    assert_eq!(pixel(&render(&mut a, 1), 10, 290), [0x22, 0x22, 0x26, 255], "the page clears to the palette's paper");
+    assert_eq!(
+        render(&mut a, 2)[((80 * 200 + 140) * 4) as usize..][..4],
+        page2_off[((80 * 200 + 140) * 4) as usize..][..4],
+        "the picture keeps its colour"
+    );
+
+    // A custom palette; the arguments are checked.
+    let echo = ok(&mut a, "view_invert_colors", json!({ "doc": doc, "palette": "custom", "paper": "#102030", "ink": "#a0b0c0" }));
+    assert_eq!((echo["palette"].as_str(), echo["paper"].as_str(), echo["ink"].as_str()), (Some("custom"), Some("#102030"), Some("#a0b0c0")));
+    assert_eq!(pixel(&render(&mut a, 1), 10, 290), [0x10, 0x20, 0x30, 255]);
+    for bad in [
+        json!({ "doc": doc, "mode": "nope" }),
+        json!({ "doc": doc, "palette": "neon" }),
+        json!({ "doc": doc, "palette": "sepia", "paper": "#000000" }),
+        json!({ "doc": doc, "palette": "custom", "paper": "#000000" }),
+        json!({ "doc": doc, "paper": "#000000" }),
+    ] {
+        assert!(matches!(a.call("view_invert_colors", &bad), Err(ToolError::InvalidArgs(_))), "{bad}");
+    }
+
+    // Toggling (invert omitted) turns it off; the render is the original again. The command toggles it back on.
+    assert_eq!(ok(&mut a, "view_invert_colors", json!({ "doc": doc }))["invert"], false);
+    assert_eq!(render(&mut a, 1), page1_off, "toggling back recovers the original render");
+    let cmd = ok(&mut a, "command_run", json!({ "id": "view.invert_colors", "params": { "doc": doc } }));
+    assert_eq!(cmd["invert"], true, "command_run toggled the view on");
+}
+
+/// The inverted view and the reading colours never stack, whichever tool is called first: with the
+/// view on, `page_render` draws what it draws with reading colours off, and turning the view off
+/// brings the reading colours back.
+#[test]
+fn invert_colors_and_reading_colors_do_not_stack_through_tools() {
+    let dir = reading_colors_workdir_named("invert-no-stack");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let render = |a: &mut Automation| png_pixels(&a.call("page_render", &json!({ "doc": doc, "page": 1, "dpi": 72 })).unwrap()[0]);
+    for mode in ["everything", "keep_images"] {
+        ok(&mut a, "view_invert_colors", json!({ "doc": doc, "invert": false }));
+        ok(&mut a, "view_reading_colors", json!({ "doc": doc, "mode": "off" }));
+        ok(&mut a, "view_invert_colors", json!({ "doc": doc, "invert": true, "mode": mode }));
+        let alone = render(&mut a);
+
+        // The reading colours are set first, then the view is turned on.
+        ok(&mut a, "view_invert_colors", json!({ "doc": doc, "invert": false }));
+        ok(&mut a, "view_reading_colors", json!({ "doc": doc, "mode": "white-on-black" }));
+        let reading_only = render(&mut a);
+        assert_eq!(pixel(&reading_only, 10, 290), [0, 0, 0, 255]);
+        ok(&mut a, "view_invert_colors", json!({ "doc": doc, "invert": true, "mode": mode }));
+        assert_eq!(render(&mut a), alone, "{mode}: white on black does not stack on the inverted view");
+
+        // Turning the view off brings the reading colours back.
+        ok(&mut a, "view_invert_colors", json!({ "doc": doc, "invert": false }));
+        assert_eq!(render(&mut a), reading_only, "{mode}: the reading colours are back");
+    }
 }
 
 #[test]
