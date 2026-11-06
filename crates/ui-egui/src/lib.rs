@@ -360,6 +360,8 @@ pub struct PdfCraftApp {
     pub recent_limit: usize,
     /// Preferences: reopen the files that were open when PdfCraft last closed (#442).
     pub reopen_last_session: bool,
+    /// Preferences: save compressed extracted text and search indexes for faster subsequent searches.
+    pub save_search_cache: bool,
     /// Restore last view settings when reopening documents (Preferences ▸ Documents and view;
     /// #1767): the page, zoom and page display a file was last shown with. On by default.
     pub restore_last_view: bool,

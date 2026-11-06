@@ -950,7 +950,7 @@ fn text_layers_evict_far_pages_but_keep_visible_and_matches() {
     v.text_failed.insert(0);
     v.text_failed.insert(99);
     v.find = Some(Find { matches: vec![(0, 0..1)], ..Default::default() });
-    let _ = v.prepare_render_queue(&info, 1.0);
+    let _ = v.prepare_render_queue(&info, 1.0, false);
     assert!(v.texts.contains_key(&50) && v.texts.contains_key(&51), "visible pages stay");
     assert!(v.texts.contains_key(&0), "matched pages stay");
     assert!(v.texts.contains_key(&49), "nearest prefetch window stays");
@@ -1187,7 +1187,7 @@ fn text_layers_keep_the_selection_page() {
     v.select_text(0, 0, 0);
     v.current = 90;
     v.frame_visible = HashSet::from([90, 91]);
-    let _ = v.prepare_render_queue(&info, 1.0);
+    let _ = v.prepare_render_queue(&info, 1.0, false);
     assert_eq!(v.selected_text().as_deref(), Some("x"), "stale selections still copy");
 }
 
@@ -1201,7 +1201,7 @@ fn text_layers_stay_while_a_search_is_active() {
         v.texts.insert(p, Arc::new(PageText::default()));
     }
     v.find = Some(Find { query: "dup".into(), case_query: "dup".into(), matches: vec![(0, 0..1)], ..Default::default() });
-    let _ = v.prepare_render_queue(&info, 1.0);
+    let _ = v.prepare_render_queue(&info, 1.0, false);
     assert_eq!(v.texts.len(), 100, "evicting mid-search would churn the workers");
 }
 
@@ -1234,7 +1234,7 @@ fn ten_thousand_pages_only_demand_viewport_and_prefetch_at_both_densities() {
             for p in range.start * cols..(range.end * cols).min(info.pages.len()) {
                 v.need_thumbnail(p, p / cols == row);
             }
-            let queue = v.prepare_render_queue(&info, ppp);
+            let queue = v.prepare_render_queue(&info, ppp, false);
             assert!(queue.len() <= 5 * cols, "only three visible rows and two prefetch rows");
             assert_eq!(queue.first().unwrap().page / cols, row, "visible cells precede prefetch");
             let bytes: usize = queue
@@ -1248,7 +1248,7 @@ fn ten_thousand_pages_only_demand_viewport_and_prefetch_at_both_densities() {
                 })
                 .sum();
             assert!(bytes <= THUMB_BYTES);
-            assert_eq!(queue, v.prepare_render_queue(&info, ppp), "unchanged demand reconstructs the same work");
+            assert_eq!(queue, v.prepare_render_queue(&info, ppp, false), "unchanged demand reconstructs the same work");
         }
     }
 }
@@ -1260,7 +1260,7 @@ fn oversized_thumbnail_viewport_scales_all_admitted_cells_to_one_budget() {
     for page in 0..MAX_THUMB_DEMAND {
         v.need_thumbnail(page, true);
     }
-    let queue = v.prepare_render_queue(&info, 2.0);
+    let queue = v.prepare_render_queue(&info, 2.0, false);
     assert_eq!(queue.len(), MAX_THUMB_DEMAND);
     let bytes: usize = queue
         .iter()
@@ -1385,19 +1385,19 @@ fn thumbnails_release_on_scroll_panel_close_and_request_again_after_eviction() {
     let info = thumbnail_info(10_000);
     let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
     v.need_thumbnail(0, true);
-    let first = v.prepare_render_queue(&info, 1.0);
+    let first = v.prepare_render_queue(&info, 1.0, false);
     v.last_queue = first.clone();
     assert_eq!(v.receive_result(&ctx, solid_result(first[0], 132, 171)), 132 * 171 * 4);
-    assert!(v.prepare_render_queue(&info, 1.0).is_empty());
+    assert!(v.prepare_render_queue(&info, 1.0, false).is_empty());
     v.begin_render_frame();
     v.need_thumbnail(9999, true);
-    v.prepare_render_queue(&info, 1.0);
+    v.prepare_render_queue(&info, 1.0, false);
     assert!(v.thumbs.is_empty(), "jump releases old handles");
     v.begin_render_frame();
     v.need_thumbnail(0, true);
-    assert_eq!(v.prepare_render_queue(&info, 1.0), first, "an evicted result must be requested again");
+    assert_eq!(v.prepare_render_queue(&info, 1.0, false), first, "an evicted result must be requested again");
     v.begin_render_frame();
-    assert!(v.prepare_render_queue(&info, 1.0).is_empty(), "closing consumers cancels thumbnail work");
+    assert!(v.prepare_render_queue(&info, 1.0, false).is_empty(), "closing consumers cancels thumbnail work");
 }
 
 #[test]
@@ -1406,8 +1406,8 @@ fn stale_results_are_rejected_before_conversion_after_dpi_invalidation_and_suspe
     let info = thumbnail_info(1);
     let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
     v.need_thumbnail(0, true);
-    let first = v.prepare_render_queue(&info, 1.0)[0];
-    v.last_queue = v.prepare_render_queue(&info, 2.0);
+    let first = v.prepare_render_queue(&info, 1.0, false)[0];
+    v.last_queue = v.prepare_render_queue(&info, 2.0, false);
     // Valid pixels: only the request gate can keep these out (a size check can't).
     let obsolete = || solid_result(first, 132, 171);
     assert_eq!(v.receive_result(&ctx, obsolete()), 0);
@@ -1436,7 +1436,7 @@ fn editing_after_layout_preserves_stale_page_until_replacement() {
     v.receive_result(&ctx, solid_result(req, 10, 10));
     v.frame_queue = vec![req];
     v.page_changed(0);
-    assert_eq!(v.prepare_render_queue(&info, 1.0), vec![req]);
+    assert_eq!(v.prepare_render_queue(&info, 1.0, false), vec![req]);
     assert_eq!(v.pages.get(&0).unwrap().tag, STALE_TAG);
 }
 
@@ -1473,12 +1473,12 @@ fn page_and_tile_admission_accounts_for_bytes_before_count_limits() {
     }
     let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
     v.frame_queue = (0..40).map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }).collect();
-    let queue = v.prepare_render_queue(&info, 1.0);
+    let queue = v.prepare_render_queue(&info, 1.0, false);
     assert_eq!(queue.len(), 2, "128 MiB admits two 4000-square pages, not 24");
     v.frame_queue = (0..40)
         .map(|page| RenderRequest { page, scale: 1.0, tag: 1000, tile: Some(Tile { x: 0, y: 0, w: 1024, h: 1024 }), ..Default::default() })
         .collect();
-    assert_eq!(v.prepare_render_queue(&info, 1.0).len(), 32);
+    assert_eq!(v.prepare_render_queue(&info, 1.0, false).len(), 32);
     assert!(!v.admit_texture(RenderRequest::default(), PAGE_BYTES + 1));
 }
 
@@ -1521,11 +1521,11 @@ fn scrolling_the_other_way_drops_the_prefetch_from_the_queue() {
     v.scroll_dir = 1;
     v.frame_visible = [9, 10].into();
     v.frame_queue = scroll_demand(&v, &[9, 10]);
-    let down: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+    let down: Vec<usize> = v.prepare_render_queue(&info, 1.0, false).iter().map(|r| r.page).collect();
     assert_eq!(down, [10, 9, 11, 12], "on-screen pages first, then the pages below");
     v.scroll_dir = -1;
     v.frame_queue = scroll_demand(&v, &[9, 10]);
-    let up: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+    let up: Vec<usize> = v.prepare_render_queue(&info, 1.0, false).iter().map(|r| r.page).collect();
     assert_eq!(up, [10, 9, 8, 7], "the pages below leave the queue, which cancels their renders");
 }
 
@@ -1560,7 +1560,7 @@ fn the_prefetch_ahead_stays_within_the_page_allowance() {
     v.frame_visible = shown.iter().copied().collect();
     v.frame_queue = scroll_demand(&v, &shown);
     assert!(v.frame_queue.iter().any(|r| r.page == 8), "the prefetch asks for the next page");
-    let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+    let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0, false).iter().map(|r| r.page).collect();
     assert_eq!(pages.iter().copied().max(), Some(7), "no prefetch past the allowance: {pages:?}");
 }
 
@@ -1629,7 +1629,7 @@ fn on_screen_pages_and_tiles_are_admitted_beyond_the_prefetch_allowance() {
     // Ten 16 MB pages on screen (a zoomed-out HiDPI view) exceed the 128 MiB allowance.
     v.frame_visible = (0..10).collect();
     v.frame_queue = (0..40).map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }).collect();
-    let queue = v.prepare_render_queue(&info, 1.0);
+    let queue = v.prepare_render_queue(&info, 1.0, false);
     let pages: Vec<usize> = queue.iter().map(|r| r.page).collect();
     assert_eq!(pages, (0..10).collect::<Vec<_>>(), "every on-screen page, and no prefetch past the allowance");
     v.last_queue = queue.clone();
@@ -1641,7 +1641,7 @@ fn on_screen_pages_and_tiles_are_admitted_beyond_the_prefetch_allowance() {
     v.frame_queue = (0..40)
         .map(|x| RenderRequest { page: 0, scale: 1.0, tag: 1000, tile: Some(Tile { x: x * TILE, y: 0, w: 1024, h: 1024 }), ..Default::default() })
         .collect();
-    assert_eq!(v.prepare_render_queue(&info, 1.0).len(), 40);
+    assert_eq!(v.prepare_render_queue(&info, 1.0, false).len(), 40);
 }
 
 /// `count` pages that each make a 2,980 x 3,850 raster (about 43.8 MiB, a Letter page at fit
@@ -1663,7 +1663,7 @@ fn large_pages_on_screen_widen_the_allowance_for_the_pages_around_them() {
         let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
         v.frame_visible = HashSet::from([3, 4]);
         v.frame_queue = (0..5).map(|page| RenderRequest { page, scale, tag: 1000, ..Default::default() }).collect();
-        let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+        let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0, false).iter().map(|r| r.page).collect();
         assert_eq!(pages, (0..5).collect::<Vec<_>>(), "two pages on screen and three off screen at scale {scale}");
     }
 }
@@ -1685,7 +1685,7 @@ fn tiled_pages_on_screen_keep_the_128_mib_page_allowance() {
         .collect();
     queue.extend([2, 5, 1, 6, 0, 7].map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }));
     v.frame_queue = queue;
-    let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().filter(|r| r.tile.is_none()).map(|r| r.page).collect();
+    let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0, false).iter().filter(|r| r.tile.is_none()).map(|r| r.page).collect();
     assert_eq!(pages, vec![3, 4, 2, 5], "two backdrops and two whole pages fit in 128 MiB");
 }
 
@@ -1720,7 +1720,7 @@ fn a_raster_held_on_screen_without_a_request_sizes_the_allowance() {
     assert!(v.receive_result(&ctx, solid_result(req, 2980, 3850)) > 0);
     // A zoom hold leaves page 3's request out while its raster stays on screen.
     v.frame_queue = [2, 4, 1].map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }).to_vec();
-    let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+    let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0, false).iter().map(|r| r.page).collect();
     assert_eq!(pages, vec![2, 4, 1]);
     assert!(v.pages.contains_key(&3), "the held raster is kept beside the prefetch");
     ctx.end_pass().textures_delta.clear();
@@ -1745,21 +1745,21 @@ fn a_page_turned_back_to_is_still_cached() {
     let req = |page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() };
     v.frame_visible = [0].into();
     v.frame_queue = vec![req(0)];
-    v.last_queue = v.prepare_render_queue(&info, 1.0);
+    v.last_queue = v.prepare_render_queue(&info, 1.0, false);
     v.receive_result(&ctx, solid_result(req(0), 100, 130));
     // Single-page view moves on to page 1: page 0 is no longer demanded.
     v.begin_render_frame();
     v.current = 1;
     v.frame_visible = [1].into();
     v.frame_queue = vec![req(1)];
-    assert_eq!(v.prepare_render_queue(&info, 1.0), vec![req(1)]);
+    assert_eq!(v.prepare_render_queue(&info, 1.0, false), vec![req(1)]);
     assert!(v.pages.contains_key(&0), "kept while the allowance has room");
     // And back: nothing to render.
     v.begin_render_frame();
     v.current = 0;
     v.frame_visible = [0].into();
     v.frame_queue = vec![req(0)];
-    assert!(v.prepare_render_queue(&info, 1.0).is_empty());
+    assert!(v.prepare_render_queue(&info, 1.0, false).is_empty());
 }
 
 #[test]
@@ -1776,7 +1776,7 @@ fn visible_pages_render_before_thumbnails_and_text() {
     for p in 1..4 {
         v.need_thumbnail(p, true);
     }
-    let queue = v.prepare_render_queue(&info, 1.0);
+    let queue = v.prepare_render_queue(&info, 1.0, false);
     assert_eq!(queue, vec![main], "visible pixels first: no thumbnails or text yet");
     // Once the visible raster arrives, background work is admitted.
     v.last_queue = queue;
@@ -1787,7 +1787,7 @@ fn visible_pages_render_before_thumbnails_and_text() {
     for p in 1..4 {
         v.need_thumbnail(p, true);
     }
-    let queue = v.prepare_render_queue(&info, 1.0);
+    let queue = v.prepare_render_queue(&info, 1.0, false);
     assert!(queue.iter().any(|r| r.kind == RequestKind::Text), "text admitted after pixels");
     assert!(queue.iter().any(|r| r.tag & THUMB_TAG != 0), "thumbnails admitted after pixels");
     assert!(!queue.iter().any(|r| r.kind == RequestKind::Pixels && r.tag & THUMB_TAG == 0), "no main pixels re-requested");
@@ -1799,7 +1799,7 @@ fn visible_pages_render_before_thumbnails_and_text() {
     for p in 1..4 {
         v.need_thumbnail(p, true);
     }
-    let queue = v.prepare_render_queue(&info, 1.0);
+    let queue = v.prepare_render_queue(&info, 1.0, false);
     assert!(queue.iter().any(|r| r.kind == RequestKind::Text), "text admitted despite the error");
     assert!(queue.iter().any(|r| r.tag & THUMB_TAG != 0), "thumbnails still admitted");
 }
@@ -1871,7 +1871,7 @@ fn many_open_documents_share_one_raster_allowance_and_close_releases_handles() {
 
         view.begin_render_frame();
         view.need_thumbnail(0, true);
-        let queue = view.prepare_render_queue(&info, ctx.pixels_per_point());
+        let queue = view.prepare_render_queue(&info, ctx.pixels_per_point(), false);
         assert!(queue.is_empty(), "the synthetic thumbnail satisfies current demand");
         view.last_queue = queue;
         expected.push((request, dimensions));
@@ -2064,7 +2064,7 @@ fn thumbnails_cover_the_panel_on_a_high_dpi_screen() {
     let info = thumbnail_info(1);
     let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
     v.need_thumbnail(0, true);
-    let queue = v.prepare_render_queue(&info, 2.0);
+    let queue = v.prepare_render_queue(&info, 2.0, false);
     let scale = queue.first().expect("one thumbnail").scale;
     assert!(612.0 * scale >= 150.0 * 2.0, "{scale}");
 }

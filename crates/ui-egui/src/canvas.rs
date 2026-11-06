@@ -2215,12 +2215,11 @@ fn filter_search_text_requests(
 fn text_pages_for_frame(view: &DocView, visible_now: &[usize], current: usize, page_count: usize) -> Vec<usize> {
     let need_text = |page: &usize| !view.texts.contains_key(page) && !view.text_failed.contains(page);
     let mut pages: Vec<usize> = visible_now.iter().copied().filter(need_text).collect();
-    let search_active = view.find.as_ref().is_some_and(|find| !find.case_query.trim().is_empty());
     if page_count > 0 {
         let rest: Vec<usize> = (0..page_count)
             .map(|offset| (current + offset) % page_count)
             .filter(need_text)
-            .filter(|page| search_active || !view.text_preloaded.contains(page))
+            .filter(|page| !view.text_preloaded.contains(page))
             .filter(|page| !pages.contains(page))
             .collect();
         pages.extend(rest);

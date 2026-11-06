@@ -266,20 +266,46 @@ impl RenderPool {
         Self::with_mode(bytes, threads, config, false, source_path)
     }
 
-    /// Cached pages whose case-insensitive search text can contain `query`. `None` means the
-    /// persistent index is incomplete or the query is too short to filter safely.
-    pub fn text_candidate_pages(&self, query: &str, page_count: usize, case_sensitive: bool) -> Option<Vec<usize>> {
-        if case_sensitive {
-            return None;
-        }
+    /// Cached pages whose case-folded search text can contain `query`. This is a safe superset
+    /// for case-sensitive and whole-word searches too; the final matcher applies those options.
+    /// `None` means the persistent index is incomplete or the query is too short to filter safely.
+    pub fn text_candidate_pages(&self, query: &str, page_count: usize, _case_sensitive: bool) -> Option<Vec<usize>> {
         self.shared.text_cache.as_ref()?.candidate_pages(query, page_count)
+    }
+
+    /// Persist text that was already extracted by the UI before caching was enabled.
+    pub fn store_search_text(&self, page: usize, text: &crate::PageText) {
+        if let Some(cache) = &self.shared.text_cache {
+            cache.store(page, text);
+        }
+    }
+
+    /// Whether this renderer is persisting text layers in its binary cache.
+    pub fn has_search_cache(&self) -> bool {
+        self.shared.text_cache.is_some()
+    }
+
+    /// Keep unchanged page sections when an in-app edit changes the source bytes. The caller
+    /// invalidates or remaps affected page indexes before another render frame is queued.
+    pub fn adopt_search_cache_content(&self, bytes: &[u8]) {
+        if let Some(cache) = &self.shared.text_cache {
+            cache.adopt_content(bytes);
+        }
+    }
+
+    /// Reindex cached sections after page insertion, deletion, movement or an edit to a page.
+    /// Each source page maps to zero, one or several destination page indexes.
+    pub fn remap_search_cache_pages(&self, mapping: &[Vec<usize>]) {
+        if let Some(cache) = &self.shared.text_cache {
+            cache.remap_pages(mapping);
+        }
     }
 
     fn with_mode(bytes: Arc<Vec<u8>>, threads: usize, config: RenderConfig, inline: bool, cache_path: Option<&Path>) -> Self {
         let threads = if inline || cfg!(target_arch = "wasm32") { 0 } else { threads.max(1) };
         let cache_path = cache_path.map(Path::to_path_buf);
         #[cfg(not(test))]
-        let text_cache = TextDiskCache::new(&bytes, &config, cache_path.as_deref());
+        let text_cache = config.save_search_cache.then(|| TextDiskCache::new(&bytes, &config, cache_path.as_deref())).flatten();
         #[cfg(test)]
         let text_cache = None;
         #[cfg(test)]

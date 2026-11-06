@@ -80,6 +80,7 @@ impl PdfCraftApp {
             "docking_right": self.right,
             "recent": self.recent.iter().take(self.recent_limit).collect::<Vec<_>>(),
             "reopen_last_session": self.reopen_last_session,
+            "save_search_cache": self.save_search_cache,
             "restore_last_view": self.restore_last_view,
             "last_views": self.last_views_to_save(),
             // Kept only while the preference is on.
@@ -210,6 +211,9 @@ impl PdfCraftApp {
     fn restore_layout_prefs(&mut self, v: &serde_json::Value) {
         if let Some(on) = v["reopen_last_session"].as_bool() {
             self.reopen_last_session = on;
+        }
+        if let Some(on) = v["save_search_cache"].as_bool() {
+            self.save_search_cache = on;
         }
         if let Some(on) = v["restore_last_view"].as_bool() {
             self.restore_last_view = on;
@@ -405,5 +409,21 @@ impl PdfCraftApp {
             let certs = pems.iter().filter_map(|p| pdfcraft_engine::sign::x509::load_certificates(p.as_bytes()).ok()).flatten().collect();
             self.apply_trusted_certificates(certs);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_cache_defaults_on_and_persists() {
+        let mut app = PdfCraftApp::default();
+        assert!(app.save_search_cache);
+        app.save_search_cache = false;
+
+        let mut restored = PdfCraftApp::default();
+        restored.restore(&app.persist());
+        assert!(!restored.save_search_cache);
     }
 }

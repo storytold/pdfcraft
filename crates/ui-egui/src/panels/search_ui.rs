@@ -44,18 +44,13 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
     ui.add_space(6.0);
     let status = if find.query.trim().is_empty() {
         String::new()
-    } else if find.matches.is_empty() && searched < pages {
-        crate::i18n::fmt(tl!("Searching… {s} of {p} pages"), &[("s", &searched.to_string()), ("p", &pages.to_string())])
+    } else if searched < pages {
+        tl!("Searching…").to_string()
     } else {
         let n = find.matches.len();
-        let more = if searched < pages {
-            crate::i18n::fmt(tl!(" (searching… {s} of {p} pages)"), &[("s", &searched.to_string()), ("p", &pages.to_string())])
-        } else {
-            String::new()
-        };
         // English keeps its singular; Chinese has no plural.
         let count = if n == 1 { crate::i18n::fmt(tl!("1 instance"), &[]) } else { crate::i18n::fmt(tl!("{n} instances"), &[("n", &n.to_string())]) };
-        format!("{count}{more}")
+        count
     };
     ui.label(egui::RichText::new(status).font(theme::semibold(12.5)));
     ui.add_space(4.0);

@@ -89,6 +89,8 @@ pub struct RenderConfig {
     /// `hayro_syntax::MAX_PAGE_JBIG2_WORK`. Those past it aren't drawn, like an image that can't
     /// be decoded.
     pub jbig2_work: Option<u64>,
+    /// Preferences opt-in: persist extracted text and page search data beside the PDF when possible.
+    pub save_search_cache: bool,
 }
 
 impl RenderConfig {
@@ -515,7 +517,7 @@ impl PageRenderer {
         let pdf = parse(&bytes, config.password.as_deref());
         let settings = config.settings();
         #[cfg(not(test))]
-        let text_cache = TextDiskCache::new(&bytes, &config, cache_path);
+        let text_cache = config.save_search_cache.then(|| TextDiskCache::new(&bytes, &config, cache_path)).flatten();
         #[cfg(test)]
         let text_cache = None;
         #[cfg(test)]

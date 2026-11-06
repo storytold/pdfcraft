@@ -259,6 +259,18 @@ impl Session {
         true
     }
 
+    /// Enable or disable persistent search caches for every open document. Rebuilding each
+    /// renderer applies the preference immediately to every tab; cache files are retained when
+    /// the setting is disabled.
+    pub fn set_search_cache_enabled(&mut self, enabled: bool) {
+        for doc in &mut self.docs {
+            if doc.config.save_search_cache != enabled {
+                doc.config.save_search_cache = enabled;
+                doc.rebuild_renderer();
+            }
+        }
+    }
+
     /// Set the document's reading colours (Acrobat's Replace Document Colors). Returns whether
     /// anything changed; callers must drop cached rasters and text for the document.
     pub fn set_reading_colors(&mut self, id: DocId, colors: ReadingColors) -> bool {

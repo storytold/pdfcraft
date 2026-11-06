@@ -105,8 +105,14 @@ impl PdfCraftApp {
         if let Some(ctx) = &self.ctx {
             worker.set_context(ctx);
         }
-        let receiver =
-            worker.submit(token, self.session.open_context(), request.name.clone(), request.path.clone(), request.password, request.input)?;
+        let receiver = worker.submit(
+            token,
+            self.session.open_context().with_search_cache(self.save_search_cache),
+            request.name.clone(),
+            request.path.clone(),
+            request.password,
+            request.input,
+        )?;
         self.next_open_token = token;
         self.pending_opens.push(PendingOpen {
             token,

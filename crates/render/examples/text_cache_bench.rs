@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let page_count = inspect(bytes.clone(), None)?.pages.len();
     let threads = std::thread::available_parallelism().map(std::num::NonZeroUsize::get).unwrap_or(4).clamp(2, 8) - 1;
     let cache_open_started = Instant::now();
-    let pool = RenderPool::new_with_cache_path(bytes, threads, RenderConfig::default(), Some(&path));
+    let pool = RenderPool::new_with_cache_path(bytes, threads, RenderConfig { save_search_cache: true, ..Default::default() }, Some(&path));
     let cache_open_ms = cache_open_started.elapsed().as_secs_f64() * 1000.0;
     pool.set_queue((0..page_count).map(|page| RenderRequest { page, kind: RequestKind::Text, ..RenderRequest::default() }).collect());
 

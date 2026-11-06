@@ -658,6 +658,15 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
     #[cfg(not(target_arch = "wasm32"))]
     ctx.checkbox(ui, &mut app.restore_last_view, tl!("Restore the last view (page, zoom and page display) when a document is opened again"), t);
     #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut save_search_cache = app.save_search_cache;
+        if ctx.checkbox(ui, &mut save_search_cache, tl!("Save search cache for faster search"), t).on_hover_text(tl!(
+            "Enabled by default. PdfCraft immediately applies compressed text caching to every open PDF and PDFs opened later. Cache files are stored next to PDFs when possible; existing files are not deleted when disabled."
+        )).changed() {
+            app.set_search_cache_preference(save_search_cache);
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
     ctx.checkbox(ui, &mut app.reload_changed_files, tl!("Reload documents when their files change on disk"), t);
     #[cfg(not(target_arch = "wasm32"))]
     ctx.checkbox(ui, &mut app.update_check_at_start, tl!("Check for updates when PdfCraft starts"), t);

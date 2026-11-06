@@ -1,4 +1,3 @@
-use super::find::Follow;
 use super::{
     Arc, Color32, DocInfo, DocView, HashSet, PRINT_TAG, PT, PageText, Range, RenderPool, RenderRequest, RequestKind, TextureHandle, TextureOptions,
     device_pixels,
@@ -59,6 +58,10 @@ pub(super) const TILE_BYTES: usize = 128 * 1024 * 1024;
 const UPLOAD_BYTES_PER_FRAME: usize = 16 * 1024 * 1024;
 
 const RESULTS_PER_FRAME: usize = 8;
+
+// Only active find requests get a higher polling ceiling. The wall-time and upload-byte limits
+// still bound each frame; ordinary rendering keeps RESULTS_PER_FRAME.
+const FIND_TEXT_RESULTS_PER_FRAME: usize = 256;
 
 /// A defensive ceiling for unusually large viewports / n-up previews.
 pub(super) const MAX_THUMB_DEMAND: usize = 256;
@@ -127,6 +130,15 @@ pub(super) fn page_budget(largest: usize) -> usize {
 }
 
 impl DocView {
+    /// Make outstanding work eligible for the newly configured renderer and refresh its
+    /// candidate-page index. Already extracted text stays in memory and is persisted by the app.
+    pub(crate) fn reset_search_text_cache(&mut self) {
+        self.last_queue.clear();
+        if let Some(find) = self.find.as_mut() {
+            find.search_candidate_pages = None;
+        }
+    }
+
     pub fn raster_memory(&self) -> RasterMemory {
         RasterMemory {
             thumbnail_count: self.thumbs.len(),
@@ -379,7 +391,7 @@ impl DocView {
 
     /// Admit current demand within explicit byte limits. Cached and pending surfaces share
     /// the allowance, so an evicted page can be requested again without a permanent done set.
-    pub(super) fn prepare_render_queue(&mut self, info: &DocInfo, ppp: f32) -> Vec<RenderRequest> {
+    pub(super) fn prepare_render_queue(&mut self, info: &DocInfo, ppp: f32, persistent_cache: bool) -> Vec<RenderRequest> {
         let requests = std::mem::take(&mut self.frame_queue);
         let mut queue = Vec::new();
         let mut pages = HashSet::new();
@@ -496,7 +508,7 @@ impl DocView {
         }
         self.thumbs.retain(|p, _| admitted.contains(p));
         self.stale_thumbs.retain(|p| admitted.contains(p));
-        self.retain_text_layers();
+        self.retain_text_layers(persistent_cache);
         // Page text warms the persistent cache ahead of thumbnails; visible main rasters above
         // still take priority, so opening remains responsive while the document is preloaded.
         let text: Vec<_> = requests.into_iter().filter(|r| r.kind == RequestKind::Text).collect();
@@ -514,12 +526,12 @@ impl DocView {
     /// demand still wants every page, so evicting would re-request evicted pages each
     /// frame and churn the workers. Failures are never evicted either: they cost nothing
     /// to remember, and evicting one would re-request and re-fail it every frame.
-    fn retain_text_layers(&mut self) {
+    fn retain_text_layers(&mut self, persistent_cache: bool) {
         let search_cache_len = self.search_texts.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len();
         if self.texts.len() <= MAX_CACHED_TEXT_PAGES && search_cache_len <= MAX_CACHED_TEXT_PAGES * 2 {
             return;
         }
-        if self.find.as_ref().is_some_and(|f| !f.case_query.trim().is_empty()) {
+        if !persistent_cache && self.find.as_ref().is_some_and(|f| !f.case_query.trim().is_empty()) {
             return;
         }
         if self.texts.len() <= MAX_CACHED_TEXT_PAGES {
@@ -531,7 +543,7 @@ impl DocView {
         if let Some(s) = self.selection {
             keep.insert(s.page);
         }
-        if let Some(f) = self.find.as_ref() {
+        if !persistent_cache && let Some(f) = self.find.as_ref() {
             keep.extend(f.matches.iter().map(|(p, _)| *p));
         }
         let mut rest: Vec<usize> = self.texts.keys().filter(|p| !keep.contains(*p)).copied().collect();
@@ -551,7 +563,7 @@ impl DocView {
             ctx.request_repaint();
             return;
         }
-        let mut queue = self.prepare_render_queue(info, ctx.pixels_per_point());
+        let mut queue = self.prepare_render_queue(info, ctx.pixels_per_point(), pool.has_search_cache());
         if !self.all_text
             && let Some(find) = self.find.as_ref().filter(|find| !find.case_query.trim().is_empty())
             && let Some(candidates) = pool.text_candidate_pages(&find.case_query, info.pages.len(), find.case_sensitive)
@@ -597,13 +609,30 @@ impl DocView {
     /// Pull a bounded batch of current results into textures. Demand is committed first, so
     /// offscreen results and obsolete scale/configuration tags never allocate a ColorImage.
     pub fn receive(&mut self, ctx: &egui::Context, pool: &RenderPool) {
-        let budget = if pool.is_inline() { 1 } else { RESULTS_PER_FRAME };
+        let find_needs_text = self.find.as_ref().is_some_and(|find| {
+            !find.case_query.trim().is_empty()
+                && self.last_queue.iter().any(|request| {
+                    request.kind == RequestKind::Text && !self.texts.contains_key(&request.page) && !self.text_failed.contains(&request.page)
+                })
+        });
+        let budget = if pool.is_inline() {
+            1
+        } else if find_needs_text {
+            FIND_TEXT_RESULTS_PER_FRAME
+        } else {
+            RESULTS_PER_FRAME
+        };
         let mut uploaded = 0usize;
+        let mut text_pages = Vec::new();
         #[cfg(not(target_arch = "wasm32"))]
         let started = std::time::Instant::now();
         for _ in 0..budget {
             let Some(r) = pool.try_recv() else { break };
+            let text_page = (r.request.kind == RequestKind::Text && self.last_queue.contains(&r.request)).then_some(r.request.page);
             uploaded = uploaded.saturating_add(self.receive_result(ctx, r));
+            if let Some(page) = text_page {
+                text_pages.push(page);
+            }
             // One whole-page upload may exceed the frame allowance; it must still progress.
             if uploaded >= UPLOAD_BYTES_PER_FRAME {
                 break;
@@ -612,6 +641,9 @@ impl DocView {
             if started.elapsed() >= std::time::Duration::from_millis(4) {
                 break;
             }
+        }
+        if !text_pages.is_empty() {
+            self.refresh_find_pages(text_pages);
         }
     }
 
@@ -625,25 +657,10 @@ impl DocView {
                 Some(t) => {
                     self.text_preloaded.insert(r.request.page);
                     self.texts.insert(r.request.page, t);
-                    self.refresh_find_page(r.request.page);
                 }
                 None => {
                     log::warn!("page {} text: {}", r.request.page + 1, r.error.unwrap_or_default());
                     self.text_failed.insert(r.request.page);
-                    if let Some(f) = self.find.as_mut() {
-                        let previous = f.current.and_then(|c| f.matches.get(c).cloned());
-                        let follow = f.follow_page(self.current);
-                        f.matches.retain(|(p, _)| *p != r.request.page);
-                        match follow {
-                            // An automatic choice keeps following its anchor; a failure never
-                            // flashes, so the view stays exactly where it was.
-                            Follow::Active(from) => f.current = f.first_at_or_after(from),
-                            Follow::Ended | Follow::Never => {
-                                let preserved = previous.as_ref().and_then(|k| f.matches.iter().position(|m| m == k));
-                                f.current = preserved.or_else(|| f.first_at_or_after(self.current));
-                            }
-                        }
-                    }
                 }
             }
             return 0;

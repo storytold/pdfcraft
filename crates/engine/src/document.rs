@@ -181,6 +181,9 @@ pub(crate) fn undrawn_notices(prev: &pdfcraft_cos::Document, next: &pdfcraft_cos
 
 impl Document {
     pub(crate) fn rebuild_renderer(&mut self) {
+        // Preserve unchanged per-page cache sections across an in-app edit. The UI invalidates
+        // or remaps the pages affected by that edit before the next render frame is submitted.
+        self.renderer.adopt_search_cache_content(&self.display);
         self.renderer = RenderPool::new_with_cache_path(
             self.display.clone(),
             crate::render_threads(),

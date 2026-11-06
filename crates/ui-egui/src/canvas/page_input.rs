@@ -526,10 +526,11 @@ fn paint_text_marks(ui: &egui::Ui, view: &DocView, text: &PageText, page: usize,
     let painter = ui.painter();
     let to_screen = |g: [f32; 4]| xf.view_rect(g);
     if let Some(find) = &view.find {
-        for (index, (match_page, range)) in find.matches.iter().enumerate() {
-            if *match_page != page {
-                continue;
-            }
+        // Matches are page-sorted when search results are merged; paint only this page's
+        // contiguous range instead of scanning every document match on each visible page.
+        let first = find.matches.partition_point(|(match_page, _)| *match_page < page);
+        let end = find.matches.partition_point(|(match_page, _)| *match_page <= page);
+        for (index, (_, range)) in find.matches.iter().enumerate().take(end).skip(first) {
             let fill = if find.current == Some(index) {
                 Color32::from_rgba_unmultiplied(255, 140, 0, 110)
             } else {

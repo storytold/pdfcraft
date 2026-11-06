@@ -149,6 +149,20 @@ impl PdfCraftApp {
             Ok(()) => {
                 let Some(doc) = self.session.get(id) else { return true };
                 let info = &doc.info;
+                let changed_page = comment_page(&edit).or_else(|| content_page(&edit));
+                let form_edit = form_before.as_ref().filter(|_| {
+                    doc.info.pages.len() == page_count_before && doc.xfa.is_some() == had_xfa && doc.xfa.is_none() && is_form_edit(&edit)
+                });
+                let form_pages = form_edit.map(|before| form_edit_pages(before, &doc.form));
+                let cache_mapping = page_cache_mapping(&edit, page_count_before, doc.info.pages.len()).unwrap_or_else(|| {
+                    if changed_page.is_some() || form_pages.is_some() {
+                        let invalid = changed_page.into_iter().chain(form_pages.iter().flat_map(|(pages, _)| pages.iter().copied()));
+                        identity_page_mapping(page_count_before, invalid)
+                    } else {
+                        vec![Vec::new(); page_count_before]
+                    }
+                });
+                doc.renderer.remap_search_cache_pages(&cache_mapping);
                 let view = &mut self.views[i];
                 view.applied_editor = None;
                 // A picture picked with the Select tool may be the one this edit removed or moved:
@@ -167,16 +181,10 @@ impl PdfCraftApp {
                 view.signature_drag.committed(&edit, doc.edit_generation());
                 view.move_background.committed(&edit, doc.edit_generation());
                 view.text_background.committed(&edit);
-                if let Some(page) = comment_page(&edit).or_else(|| content_page(&edit)) {
+                if let Some(page) = changed_page {
                     // Comment and content edits change one page: keep every other raster.
                     view.page_changed(page);
-                } else if let Some(form_before) = form_before
-                    && doc.info.pages.len() == page_count_before
-                    && doc.xfa.is_some() == had_xfa
-                    && doc.xfa.is_none()
-                    && is_form_edit(&edit)
-                {
-                    let (changed_pages, unbaked) = form_edit_pages(&form_before, &doc.form);
+                } else if let Some((changed_pages, unbaked)) = form_pages {
                     view.forms.unbaked.extend(unbaked);
                     for page in changed_pages {
                         view.page_changed(page);
@@ -888,6 +896,73 @@ fn content_page(edit: &Edit) -> Option<usize> {
         | Edit::UpdateContent { page, .. }
         | Edit::DeleteContent { page, .. }
         | Edit::ReplaceImage { page, .. } => Some(*page),
+        _ => None,
+    }
+}
+
+fn identity_page_mapping(count: usize, invalid: impl IntoIterator<Item = usize>) -> Vec<Vec<usize>> {
+    let invalid: std::collections::HashSet<_> = invalid.into_iter().collect();
+    (0..count).map(|page| (!invalid.contains(&page)).then_some(vec![page]).unwrap_or_default()).collect()
+}
+
+/// Map the old page sections to their new page indexes. Page payloads stay in the same bin;
+/// only the index snapshot changes for insertions, deletions, moves and duplicates.
+fn page_cache_mapping(edit: &Edit, old_count: usize, new_count: usize) -> Option<Vec<Vec<usize>>> {
+    match edit {
+        Edit::DeletePages { pages } => {
+            let deleted: std::collections::BTreeSet<_> = pages.iter().copied().collect();
+            let mut next = 0usize;
+            let mapping: Vec<_> = (0..old_count)
+                .map(|old| {
+                    if deleted.contains(&old) {
+                        Vec::new()
+                    } else {
+                        let page = next;
+                        next += 1;
+                        vec![page]
+                    }
+                })
+                .collect();
+            (next == new_count).then_some(mapping)
+        }
+        Edit::InsertBlankPage { at, .. } => {
+            if old_count.saturating_add(1) != new_count {
+                return None;
+            }
+            Some((0..old_count).map(|old| vec![old + if old >= *at { 1 } else { 0 }]).collect())
+        }
+        Edit::MovePages { pages, to } => {
+            let moved: Vec<_> = pages.iter().copied().collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+            let selected: std::collections::HashSet<_> = moved.iter().copied().collect();
+            let mut order: Vec<_> = (0..old_count).filter(|page| !selected.contains(page)).collect();
+            if moved.is_empty() || new_count != old_count || moved.iter().any(|page| *page >= old_count) {
+                return None;
+            }
+            let at = (*to).min(order.len());
+            order.splice(at..at, moved);
+            let mut mapping = vec![Vec::new(); old_count];
+            for (new, old) in order.into_iter().enumerate() {
+                mapping[old] = vec![new];
+            }
+            Some(mapping)
+        }
+        Edit::DuplicatePages { pages, at: Some(at) } => {
+            let selected: Vec<_> = pages.iter().copied().collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+            let added = selected.len();
+            if added == 0 || old_count.saturating_add(added) != new_count || selected.iter().any(|page| *page >= old_count) {
+                return None;
+            }
+            let at = (*at).min(old_count);
+            let mut mapping = vec![Vec::new(); old_count];
+            for old in 0..old_count {
+                let original = old + if old >= at { added } else { 0 };
+                mapping[old].push(original);
+                if let Some(duplicate) = selected.iter().position(|page| *page == old) {
+                    mapping[old].push(at + duplicate);
+                }
+            }
+            Some(mapping)
+        }
         _ => None,
     }
 }

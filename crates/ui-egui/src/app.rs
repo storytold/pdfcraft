@@ -31,6 +31,24 @@ impl Default for PdfCraftApp {
 }
 
 impl PdfCraftApp {
+    /// Apply the search-cache preference to every open document and restart any in-memory text
+    /// requests so the new renderers read/write the persistent cache immediately.
+    pub(crate) fn set_search_cache_preference(&mut self, enabled: bool) {
+        if self.save_search_cache == enabled {
+            return;
+        }
+        self.save_search_cache = enabled;
+        self.session.set_search_cache_enabled(enabled);
+        for view in &mut self.views {
+            view.reset_search_text_cache();
+            if let Some(doc) = self.session.get(view.id) {
+                for (&page, text) in &view.texts {
+                    doc.renderer.store_search_text(page, text);
+                }
+            }
+        }
+    }
+
     /// The window's title and, on the web, the page's, from the active document (#3640). Done in
     /// `logic` too, which also runs while the window or browser tab is hidden: a document opened
     /// then (a `?file=` download finishing) still names the page an embedding host reads.
@@ -124,6 +142,7 @@ impl PdfCraftApp {
             recent: Vec::new(),
             recent_limit: crate::RECENT_FILES_DEFAULT,
             reopen_last_session: false,
+            save_search_cache: true,
             restore_last_view: true,
             last_views: Vec::new(),
             last_session: Default::default(),

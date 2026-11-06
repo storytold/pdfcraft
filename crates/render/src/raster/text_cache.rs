@@ -48,41 +48,84 @@ struct PageIndex {
 pub(crate) struct TextDiskCache {
     path: PathBuf,
     index: Mutex<PageIndex>,
+    fingerprint: Mutex<[u8; 32]>,
 }
 
 impl TextDiskCache {
     pub(crate) fn new(bytes: &[u8], config: &RenderConfig, source_path: Option<&Path>) -> Option<Self> {
-        let mut hash = Sha256::new();
-        hash.update(b"pdfcraft-text-cache-v2\0");
-        hash.update(env!("CARGO_PKG_VERSION").as_bytes());
-        hash.update(bytes);
-        hash.update([u8::from(config.hide_comments)]);
-        if let Some(password) = &config.password {
-            hash.update((password.len() as u64).to_le_bytes());
-            hash.update(password.as_bytes());
+        let fingerprint = content_fingerprint(bytes);
+        let legacy_digest = legacy_digest(bytes, config);
+        let settings_digest = settings_digest(config);
+        let (path, migrated) = if let Some(source) = source_path {
+            let adjacent = adjacent_cache_path(source, &settings_digest)?;
+            let legacy = adjacent_cache_path(source, &legacy_digest)?;
+            let fallback = cache_directory().map(|base| base.join(format!("{}-{settings_digest}.bin", path_digest(source))));
+            choose_cache_path(adjacent, &legacy, fallback.as_deref())
         } else {
-            hash.update(0u64.to_le_bytes());
+            let fallback = cache_directory().map(|base| base.join(format!("{legacy_digest}.bin")));
+            (fallback?, false)
+        };
+
+        let mut index = PageIndex::default();
+        if path.exists() {
+            let known = read_fingerprint(&path);
+            if known == Some(fingerprint) || migrated && known.is_none() {
+                index = read_index(&path).unwrap_or_default();
+                if migrated && known.is_none() {
+                    let _ = write_fingerprint(&path, fingerprint);
+                }
+            } else {
+                let _ = OpenOptions::new().write(true).create(true).truncate(true).open(&path);
+                let _ = remove_fingerprint(&path);
+            }
         }
-        hash.update((config.layers.len() as u64).to_le_bytes());
-        for (object, generation, visible) in config.layers.iter() {
-            hash.update(object.to_le_bytes());
-            hash.update(generation.to_le_bytes());
-            hash.update([u8::from(*visible)]);
-        }
-        let digest = hex(&hash.finalize());
-        let fallback = cache_directory().map(|base| base.join(format!("{digest}.bin")));
-        let path = source_path
-            .and_then(|source| adjacent_cache_path(source, &digest))
-            .map(|adjacent| choose_cache_path(adjacent, fallback.as_deref()))
-            .or_else(|| fallback.clone())?;
-        let index = read_index(&path).unwrap_or_default();
-        Some(Self { path, index: Mutex::new(index) })
+        Some(Self { path, index: Mutex::new(index), fingerprint: Mutex::new(fingerprint) })
     }
 
     #[cfg(test)]
     fn from_path(path: PathBuf) -> Self {
         let index = read_index(&path).unwrap_or_default();
-        Self { path, index: Mutex::new(index) }
+        Self { path, index: Mutex::new(index), fingerprint: Mutex::new([0; 32]) }
+    }
+
+    pub(crate) fn adopt_content(&self, bytes: &[u8]) {
+        let fingerprint = content_fingerprint(bytes);
+        *lock(&self.fingerprint) = fingerprint;
+        if self.path.exists() {
+            let _ = write_fingerprint(&self.path, fingerprint);
+        }
+    }
+
+    pub(crate) fn remap_pages(&self, mapping: &[Vec<usize>]) {
+        let mut index = lock(&self.index);
+        let Some(parent) = self.path.parent() else { return };
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+        let Ok(mut file) = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&self.path) else { return };
+        if file.lock().is_err() {
+            return;
+        }
+        let disk_generation = read_generation(&mut file).unwrap_or_default();
+        if disk_generation > index.generation {
+            *index = read_index_from(&mut file).unwrap_or_default();
+        }
+        if !ensure_header(&mut file) {
+            return;
+        }
+        let mut pages = BTreeMap::new();
+        for (old, sections) in &index.pages {
+            for &new in mapping.get(*old).into_iter().flatten() {
+                pages.insert(new, *sections);
+            }
+        }
+        let mut page_grams = HashMap::new();
+        for (old, grams) in &index.page_grams {
+            for &new in mapping.get(*old).into_iter().flatten() {
+                page_grams.insert(new, grams.clone());
+            }
+        }
+        publish_index(&mut file, &mut index, pages, page_grams);
     }
 
     pub(crate) fn load(&self, page: usize) -> Option<Arc<PageText>> {
@@ -131,6 +174,15 @@ impl TextDiskCache {
     }
 
     pub(crate) fn store(&self, page: usize, text: &PageText) {
+        // The cache identity includes the PDF bytes and text-affecting render settings, so a
+        // committed page is already the correct value for this document generation.
+        let has_cached_grams = {
+            let index = lock(&self.index);
+            index.pages.get(&page).is_some_and(|sections| sections.grams.is_some())
+        };
+        if has_cached_grams {
+            return;
+        }
         let Some(raw) = encode(text) else { return };
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
         if encoder.write_all(&raw).is_err() {
@@ -199,6 +251,8 @@ impl TextDiskCache {
             index.gram_posting_count = index.gram_posting_count.saturating_add(grams.len());
             index.page_grams.insert(page, grams);
         }
+        let fingerprint = *lock(&self.fingerprint);
+        let _ = write_fingerprint(&self.path, fingerprint);
     }
 }
 
@@ -208,21 +262,123 @@ fn adjacent_cache_path(source: &Path, digest: &str) -> Option<PathBuf> {
     Some(parent.join(format!("{filename}.{digest}.pdfcraft-text.bin")))
 }
 
-fn choose_cache_path(adjacent: PathBuf, fallback: Option<&Path>) -> PathBuf {
+fn choose_cache_path(adjacent: PathBuf, legacy: &Path, fallback: Option<&Path>) -> (PathBuf, bool) {
     if adjacent.exists() {
-        return adjacent;
+        return (adjacent, false);
+    }
+    if legacy.exists() && std::fs::rename(legacy, &adjacent).is_ok() {
+        return (adjacent, true);
     }
     if let Some(fallback) = fallback.filter(|path| path.exists()) {
         if std::fs::rename(fallback, &adjacent).is_ok() {
-            return adjacent;
+            return (adjacent, false);
         }
         if std::fs::copy(fallback, &adjacent).is_ok() || (!fallback.exists() && adjacent.exists()) {
-            return adjacent;
+            return (adjacent, false);
         }
         let _ = std::fs::remove_file(&adjacent);
-        return fallback.to_path_buf();
+        return (fallback.to_path_buf(), false);
     }
-    if OpenOptions::new().append(true).create(true).open(&adjacent).is_ok() { adjacent } else { fallback.map(Path::to_path_buf).unwrap_or(adjacent) }
+    if OpenOptions::new().append(true).create(true).open(&adjacent).is_ok() {
+        (adjacent, false)
+    } else {
+        (fallback.map(Path::to_path_buf).unwrap_or(adjacent), false)
+    }
+}
+
+fn legacy_digest(bytes: &[u8], config: &RenderConfig) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"pdfcraft-text-cache-v2\0");
+    hash.update(env!("CARGO_PKG_VERSION").as_bytes());
+    hash.update(bytes);
+    hash.update([u8::from(config.hide_comments)]);
+    hash.update(config.password.as_ref().map_or(0, |password| password.len() as u64).to_le_bytes());
+    if let Some(password) = &config.password {
+        hash.update(password.as_bytes());
+    }
+    hash.update((config.layers.len() as u64).to_le_bytes());
+    for (object, generation, visible) in config.layers.iter() {
+        hash.update(object.to_le_bytes());
+        hash.update(generation.to_le_bytes());
+        hash.update([u8::from(*visible)]);
+    }
+    hex(&hash.finalize())
+}
+
+fn settings_digest(config: &RenderConfig) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"pdfcraft-text-cache-settings-v3\0");
+    hash.update(env!("CARGO_PKG_VERSION").as_bytes());
+    hash.update([u8::from(config.hide_comments)]);
+    hash.update(config.password.as_ref().map_or(0, |password| password.len() as u64).to_le_bytes());
+    if let Some(password) = &config.password {
+        hash.update(password.as_bytes());
+    }
+    hash.update((config.layers.len() as u64).to_le_bytes());
+    for (object, generation, visible) in config.layers.iter() {
+        hash.update(object.to_le_bytes());
+        hash.update(generation.to_le_bytes());
+        hash.update([u8::from(*visible)]);
+    }
+    hex(&hash.finalize())
+}
+
+fn content_fingerprint(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
+fn path_digest(path: &Path) -> String {
+    hex(&Sha256::digest(path.to_string_lossy().as_bytes()))
+}
+
+fn fingerprint_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".state");
+    PathBuf::from(name)
+}
+
+fn read_fingerprint(path: &Path) -> Option<[u8; 32]> {
+    let mut bytes = [0u8; 32];
+    File::open(fingerprint_path(path)).ok()?.read_exact(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+fn write_fingerprint(path: &Path, fingerprint: [u8; 32]) -> std::io::Result<()> {
+    let mut file = File::create(fingerprint_path(path))?;
+    file.write_all(&fingerprint)?;
+    file.flush()
+}
+
+fn remove_fingerprint(path: &Path) -> std::io::Result<()> {
+    std::fs::remove_file(fingerprint_path(path))
+}
+
+fn publish_index(file: &mut File, index: &mut PageIndex, pages: BTreeMap<usize, PageSections>, page_grams: HashMap<usize, Vec<[u8; 3]>>) {
+    let Some(index_bytes) = encode_index(&pages) else { return };
+    let Ok(index_offset) = file.seek(SeekFrom::End(0)) else { return };
+    if file.write_all(&index_bytes).is_err() || file.flush().is_err() {
+        return;
+    }
+    let generation = index.generation.saturating_add(1).max(1);
+    let slot = index.slot.map_or(0, |active| 1 - active);
+    let slot_bytes = encode_slot(generation, index_offset, index_bytes.len() as u64, &index_bytes);
+    if file.seek(SeekFrom::Start(8 + (slot * SLOT_LEN) as u64)).is_err() || file.write_all(&slot_bytes).is_err() || file.flush().is_err() {
+        return;
+    }
+    let mut postings = HashMap::<[u8; 3], BTreeSet<usize>>::new();
+    let mut gram_posting_count = 0usize;
+    for (&page, grams) in &page_grams {
+        gram_posting_count = gram_posting_count.saturating_add(grams.len());
+        for gram in grams {
+            postings.entry(*gram).or_default().insert(page);
+        }
+    }
+    index.generation = generation;
+    index.slot = Some(slot);
+    index.pages = pages;
+    index.page_grams = page_grams;
+    index.postings = postings;
+    index.gram_posting_count = gram_posting_count;
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

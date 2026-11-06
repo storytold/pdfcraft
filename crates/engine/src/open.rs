@@ -18,6 +18,7 @@ pub struct OpenContext {
     js_off: bool,
     trust: Arc<TrustStore>,
     xfa_time_scale: u32,
+    save_search_cache: bool,
 }
 
 /// A fully prepared document that has not yet been registered in a session.
@@ -34,9 +35,16 @@ struct DocumentOpenData<'a> {
     render_password: Option<String>,
     password: Option<&'a str>,
     xfa: Option<XfaLayout>,
+    save_search_cache: bool,
 }
 
 impl OpenContext {
+    /// Persist extracted text and search data for PDFs opened with this context.
+    pub fn with_search_cache(mut self, enabled: bool) -> Self {
+        self.save_search_cache = enabled;
+        self
+    }
+
     /// Prepare a document without mutating the session that supplied this context.
     pub fn prepare_open(
         &self,
@@ -54,7 +62,13 @@ impl OpenContext {
 impl Session {
     /// Snapshot the session state that affects open-time scripts, dates and signature trust.
     pub fn open_context(&self) -> OpenContext {
-        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone(), xfa_time_scale: self.xfa_time_scale.unwrap_or(1) }
+        OpenContext {
+            now: self.now(),
+            js_off: self.js_off,
+            trust: self.trust.clone(),
+            xfa_time_scale: self.xfa_time_scale.unwrap_or(1),
+            save_search_cache: false,
+        }
     }
 
     /// Prepare a document without adding it to this session.
@@ -252,8 +266,20 @@ impl Session {
         };
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
-        let mut document =
-            Self::build_document(&context.trust, DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa });
+        let mut document = Self::build_document(
+            &context.trust,
+            DocumentOpenData {
+                name,
+                path,
+                bytes,
+                info,
+                structure: cos,
+                render_password,
+                password,
+                xfa,
+                save_search_cache: context.save_search_cache,
+            },
+        );
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
@@ -267,8 +293,8 @@ impl Session {
 
     /// The last step of opening: build the document record and register it.
     fn build_document(trust: &Arc<TrustStore>, data: DocumentOpenData<'_>) -> Document {
-        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa } = data;
-        let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
+        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa, save_search_cache } = data;
+        let config = RenderConfig { password: render_password.as_deref().map(Arc::from), save_search_cache, ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
                 let keys = Keys { render: render_password.clone(), reopen: password.map(str::to_owned) };
