@@ -2669,6 +2669,69 @@ fn extract_keeps_images_content_damaged_partway_might_draw() {
     }
 }
 
+/// Two pages: the first draws `/Fm` through resources of its own, `/Fm` draws `/Nested` through
+/// resources of its own too, and `/Nested` draws `/ImA` through resources it shares with the second
+/// page, which draws `/ImB` through them. The three streams are the first page's content, `/Fm`
+/// and `/Nested`.
+fn doc_shared_form_resources(page: pdfcraft_cos::Stream, fm: pdfcraft_cos::Stream, nested: pdfcraft_cos::Stream) -> Document {
+    use pdfcraft_cos::ObjRef;
+    let b: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /XObject << /Fm 7 0 R >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources 8 0 R >>".into(),
+        raw(""),
+        raw("/ImB Do"),
+        raw(""),
+        "<< /XObject << /ImA 9 0 R /ImB 10 0 R >> >>".into(),
+        image(1, 1, 1),
+        image(1, 1, 2000),
+        raw(""),
+    ];
+    let mut doc = open(build(&b, "/Root 1 0 R"));
+    doc.set(ObjRef::new(5, 0), page);
+    let nested_res: Dict =
+        [(b"XObject".to_vec(), Object::Dict([(b"Nested".to_vec(), Object::Ref(ObjRef::new(11, 0)))].into_iter().collect()))].into_iter().collect();
+    for (num, mut form, resources) in [(7, fm, Object::Dict(nested_res)), (11, nested, Object::Ref(ObjRef::new(8, 0)))] {
+        form.dict.set(b"Subtype".to_vec(), Object::name("Form"));
+        form.dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 1.into(), 1.into()]));
+        form.dict.set(b"Resources".to_vec(), resources);
+        doc.set(ObjRef::new(num, 0), form);
+    }
+    doc
+}
+
+/// Every form the resources of a page or form damaged partway name may be drawn, before the
+/// damage or past it, so each is read: one whose resources another page shares keeps what it draws
+/// from them. So is each one content that doesn't decode may draw.
+#[test]
+fn extract_keeps_images_forms_drawn_around_damage_draw_through_shared_resources() {
+    let whole = |content: &[u8]| pdfcraft_cos::Stream::from_raw(Dict::new(), content.to_vec());
+    let undecodable = |content: &[u8]| {
+        let mut s = whole(content);
+        s.dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+        s
+    };
+    let cases = [
+        ("page, before the damage", damaged_flate(b"/Fm Do\n", b"0 g"), whole(b"/Nested Do")),
+        ("page, past the damage", damaged_flate(b"0 g\n", b"/Fm Do"), whole(b"/Nested Do")),
+        ("page that doesn't decode", undecodable(b"/Fm Do"), whole(b"/Nested Do")),
+        ("form, before the damage", whole(b"/Fm Do"), damaged_flate(b"/Nested Do\n", b"0 g")),
+        ("form, past the damage", whole(b"/Fm Do"), damaged_flate(b"0 g\n", b"/Nested Do")),
+        ("form that doesn't decode", whole(b"/Fm Do"), undecodable(b"/Nested Do")),
+    ];
+    for (what, page, fm) in cases {
+        let part = full_roundtrip(&extract_pages(&doc_shared_form_resources(page, fm, whole(b"/ImA Do")), &[0, 1]).unwrap());
+        let names = xobject_names(&part, 1);
+        assert!(names.iter().any(|n| n.as_slice() == b"ImA"), "{what}: {names:?}");
+        assert!(names.iter().any(|n| n.as_slice() == b"ImB"), "{what}: {names:?}");
+    }
+    // What nothing draws still goes.
+    let src = doc_shared_form_resources(whole(b"0 g"), whole(b"/Nested Do"), whole(b"/ImA Do"));
+    let part = full_roundtrip(&extract_pages(&src, &[0, 1]).unwrap());
+    assert_eq!(xobject_names(&part, 1), [b"ImB".to_vec()]);
+}
+
 /// A form whose `/DecodeParms` is given by reference is read through it: the image it draws is
 /// kept, not lost to content read with the predictor's tag bytes left in it.
 #[test]
