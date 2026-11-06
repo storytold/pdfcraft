@@ -422,6 +422,35 @@ fn a_document_timestamp_keeps_a_no_changes_certification_valid() {
     assert!(matches!(&s.modification, Modification::Allowed(k) if k.contains(&kind::SIGNATURE)), "{:?}", s.modification);
 }
 
+/// Signature field "Approval" whose value, object 4, asks for DocMDP P 1 in its `/Reference`;
+/// object 5 is another signature dictionary. `perms` goes into the catalog. The signature itself
+/// is a dummy: which signature certifies is decided before its bytes are checked.
+fn certification_of(perms: &str) -> pdfcraft_sign::SignatureInfo {
+    let catalog = format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [3 0 R] >> {perms} >>");
+    let bytes = write_pdf(&[
+        catalog.as_bytes(),
+        b"<< /Type /Pages /Kids [] /Count 0 >>",
+        b"<< /FT /Sig /T (Approval) /V 4 0 R >>",
+        b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /Reference [<< /Type /SigRef /TransformMethod /DocMDP /TransformParams << /Type /TransformParams /P 1 /V /1.2 >> >>] >>",
+        b"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached >>",
+    ]);
+    signatures(&open(&bytes), &bytes, &TrustStore { certs: Vec::new() }).into_iter().find(|s| s.field == "Approval").unwrap()
+}
+
+/// Only the signature the catalog's `/Perms /DocMDP` names certifies the document: a DocMDP
+/// reference in any other signature dictionary leaves it an approval signature, with a note.
+#[test]
+fn only_the_signature_the_catalog_names_certifies() {
+    let note = "This signature carries certification permissions, but the document does not name it as its certification, so it is checked as an approval signature.";
+    let noted = |s: &pdfcraft_sign::SignatureInfo| s.details.iter().filter(|d| d.message == note).count();
+    let named = certification_of("/Perms << /DocMDP 4 0 R >>");
+    assert_eq!((named.certify, noted(&named)), (Some(1), 0), "{:?}", named.details);
+    for perms in ["", "/Perms << /DocMDP 5 0 R >>", "/Perms << /UR3 4 0 R >>"] {
+        let s = certification_of(perms);
+        assert_eq!((s.certify, noted(&s)), (None, 1), "{perms:?}: {:?}", s.details);
+    }
+}
+
 #[test]
 fn invisible_signatures_and_refusals() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
