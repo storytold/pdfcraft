@@ -60,6 +60,13 @@ sign before an amount: the line-start and line-end rules of JIS X 4051, as in Un
 breaking (UAX #14). Latin words inside such text are not split. Korean and Thai still break only
 at spaces.
 
+Text pasted from a browser or a word processor often carries an invisible break instead of a
+newline. Every Unicode row break starts a new row: U+2028 LINE SEPARATOR, U+2029 PARAGRAPH
+SEPARATOR, U+0085 NEXT LINE, the vertical tab, the form feed and the information separators
+(U+001C to U+001E), alongside the carriage return and the newline. These move the text down a
+row rather than being looked up in a font, so a paste no longer fails because no face has an
+outline for them. Other white space is still written as one space.
+
 Select text within the editor before changing size, colour, font, underline or spacing to
 format that selection. Automation supports up to 1024 disjoint UTF-8 byte ranges with the
 same properties; invalid or overlapping ranges fail atomically. Untouched source formatting

@@ -337,6 +337,15 @@ pub(crate) fn paragraph_separator(c: char) -> bool {
     c.is_whitespace() && c != '\u{3000}'
 }
 
+/// Characters that end a row rather than draw a glyph: the Unicode mandatory breaks (UAX #14
+/// class BK: vertical tab, form feed, U+2028 LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR), the
+/// next line (U+0085), the information separators (bidi class B) and CR/LF. Text pasted from a
+/// browser or Word carries these, so a rewrite moves to the next row instead of asking a font
+/// for an outline no face has (#6272).
+pub(crate) fn row_break(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{001C}'..='\u{001E}' | '\u{2028}' | '\u{2029}')
+}
+
 /// Greedy word wrapping to `width` with `advance` giving a string's width. Each `\n` starts a
 /// new line. A row may also end inside a word of Chinese or Japanese text ([`crate::linebreak`]);
 /// those pieces join without a space. Every white-space character is written as one space, so
