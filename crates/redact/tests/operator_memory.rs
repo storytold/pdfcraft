@@ -1,6 +1,7 @@
-//! Memory regressions for reading the forms a redaction follows through resources: their
-//! operators are read one at a time, so a form of millions of them is never held whole. A test
-//! binary of its own, so that the one test is all the process runs while its peak is measured.
+//! Memory regressions for the streams a redaction reads besides its walk: the forms it follows
+//! through resources, and what the Type 3 cleanup scans and reads. Their operators are read one
+//! at a time, so a stream of millions of them is never held whole. A test binary of its own, so
+//! that the one test is all the process runs while its peak is measured.
 
 use std::sync::Arc;
 
@@ -80,7 +81,7 @@ fn type3_page(form: &[u8], glyph: &[u8]) -> Document {
 ///   glyphs it shows;
 /// - the Type 3 cleanup reads the program of a glyph it keeps, for the resources it uses.
 ///
-/// Each parsed every operator first: the peak grew by 4,415 and 2,527 MiB in the first two. Now
+/// Each parsed every operator first: the peak grew by 4,415, 2,526, 2,526 and 2,494 MiB. Now
 /// the first holds at most one operator past the walk's limit, and the others none.
 #[test]
 fn the_forms_followed_through_resources_are_read_one_operator_at_a_time() {

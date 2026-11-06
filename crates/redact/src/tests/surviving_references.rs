@@ -382,3 +382,52 @@ fn an_image_a_type3_glyph_with_parameters_by_reference_draws_is_kept() {
     assert!(!full_save_holds(&doc, b"SECRET_IMG_A"), "the image only the redacted glyph drew survived");
     assert!(full_save_holds(&doc, b"PUBLIC_IMG_B"), "glyph B still draws its image");
 }
+
+/// Whether `out` is the redaction refused with a syntax error whose detail holds `detail`.
+fn refused_for(out: &Result<Report, RedactError>, detail: &str) -> bool {
+    matches!(out, Err(RedactError::Cos(pdfcraft_cos::CosError::Syntax { detail: d, .. })) if d.contains(detail))
+}
+
+/// The font's cleanup scans every page and form for the glyphs they show. A string left open in a
+/// form nothing else reads (resources of its own, outside the mark) runs to the end of the
+/// stream, hiding the glyph the form shows after it, so the redaction is refused: with the check
+/// off, that glyph loses its program.
+#[test]
+fn unreadable_bytes_in_a_form_the_type3_cleanup_scans_refuse_the_redaction() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (A) Tj ET /Fm Do"),
+        b"<< /Font << /T3 6 0 R >> /XObject << /Fm 9 0 R >> >>".to_vec(),
+        TYPE3.as_bytes().to_vec(),
+        stream("", b"% SECRET_TYPE3_GLYPH_A"),
+        stream("", b"% PUBLIC_TYPE3_GLYPH_B"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 50] /Resources << /Font << /T3 6 0 R >> >>", b"BT /T3 10 Tf 10 20 Td ( (B) Tj ET"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
+    let out = apply(&mut doc, None);
+    assert!(refused_for(&out, "content stream syntax"), "{out:?}");
+}
+
+/// The font's cleanup reads the program of each glyph it keeps, for the resources it uses. A
+/// string left open there runs to the end of the program, hiding the image it draws after it, so
+/// the redaction is refused: with the check off, the font's resources lose that image.
+#[test]
+fn unreadable_bytes_in_a_kept_type3_glyph_program_refuse_the_redaction() {
+    let font = TYPE3.replace("/CharProcs", "/Resources << /XObject << /ImB 9 0 R >> >> /CharProcs");
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (A) Tj 0 100 Td (B) Tj ET"),
+        b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+        font.into_bytes(),
+        stream("", b"% SECRET_TYPE3_GLYPH_A"),
+        stream("", b"500 0 d0 ( /ImB Do"),
+        stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"o"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
+    let out = apply(&mut doc, None);
+    assert!(refused_for(&out, "glyph stream syntax"), "{out:?}");
+}
