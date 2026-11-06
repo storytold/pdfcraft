@@ -48,7 +48,9 @@ fn fit_to_monitor(outer: egui::Rect, inner: egui::Rect, monitor: egui::Vec2) -> 
     let room = monitor * FIT - frame;
     // Never grow it, and never ask for less than a point (the app's minimum size still applies).
     let size = inner.size().min(room).max(egui::Vec2::splat(1.0));
-    let on_main = outer.min.x >= 0.0 && outer.min.y >= 0.0 && outer.min.x < monitor.x && outer.min.y < monitor.y;
+    // Windows' outer rectangle includes its invisible resize borders, so a window against the
+    // monitor's left or top edge has its corner a few points past the desktop's origin.
+    let on_main = outer.min.x >= -SLACK && outer.min.y >= -SLACK && outer.min.x < monitor.x && outer.min.y < monitor.y;
     let place = on_main.then(|| ((monitor - (size + frame)) * 0.5).max(egui::Vec2::ZERO).to_pos2());
     Some((size, place))
 }
@@ -119,10 +121,9 @@ impl WindowState {
                 return;
             };
             // Without the outer rectangle (Wayland) the size is checked and the window not moved.
-            let outer = outer.unwrap_or(egui::Rect::from_min_size(egui::pos2(-1.0, -1.0), rect.size()));
-            if let Some((size, place)) = fit_to_monitor(outer, rect, monitor) {
+            if let Some((size, place)) = fit_to_monitor(outer.unwrap_or(rect), rect, monitor) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
-                if let Some(place) = place {
+                if let Some(place) = place.filter(|_| outer.is_some()) {
                     ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(place));
                 }
             }
@@ -251,6 +252,19 @@ mod tests {
         assert_eq!(fit_to_monitor(outer, inner, LAPTOP).map(|f| f.1), Some(None));
     }
 
+    /// Windows' outer rectangle includes its invisible resize borders: a window against the left
+    /// edge of the main monitor has its corner at x = -7, and was taken for one on another monitor.
+    #[test]
+    fn a_window_against_the_monitors_edge_is_on_it() {
+        for at in [egui::pos2(-7.0, 300.0), egui::pos2(300.0, -7.0), egui::pos2(-7.0, -7.0), egui::pos2(-SLACK, -SLACK)] {
+            let (outer, inner) = window(at, USABLE);
+            let (_, place) = fit_to_monitor(outer, inner, LAPTOP).expect("it does not fit");
+            assert!(place.is_some(), "{at:?}");
+        }
+        let (outer, inner) = window(egui::pos2(-SLACK - 1.0, 300.0), USABLE);
+        assert_eq!(fit_to_monitor(outer, inner, LAPTOP).map(|f| f.1), Some(None), "further past it is another monitor");
+    }
+
     #[test]
     fn a_monitor_size_that_makes_no_sense_changes_nothing() {
         let (outer, inner) = window(egui::pos2(0.0, 0.0), USABLE);
@@ -300,6 +314,26 @@ mod tests {
         info.monitor_size = Some(LAPTOP);
         let out = ctx.run_logic(&input, |ctx| state.repair(ctx));
         out.viewport_commands.get(&egui::ViewportId::ROOT).cloned().unwrap_or_default()
+    }
+
+    /// With no outer rectangle (Wayland) a window cannot be placed, wherever its inner corner is.
+    #[test]
+    fn a_window_with_no_outer_rectangle_is_sized_and_not_moved() {
+        let inner = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), USABLE);
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        let info = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+        info.outer_rect = None;
+        info.inner_rect = Some(inner);
+        info.minimized = Some(false);
+        info.maximized = Some(false);
+        info.monitor_size = Some(LAPTOP);
+        let mut state = WindowState::default();
+        let out = ctx.run_logic(&input, |ctx| state.repair(ctx));
+        let commands = out.viewport_commands.get(&egui::ViewportId::ROOT).cloned().unwrap_or_default();
+        let (size, place) = fit_to_monitor(inner, inner, LAPTOP).expect("it does not fit");
+        assert!(place.is_some(), "the corner alone would have it moved");
+        assert_eq!(commands, [egui::ViewportCommand::InnerSize(size)]);
     }
 
     /// A window whose monitor is not known yet cannot be fitted, and must not lose its only check.
