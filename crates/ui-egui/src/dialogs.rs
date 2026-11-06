@@ -23,7 +23,7 @@ pub(super) mod word_count_ui;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use prompts::{PromptButton, save_prompt_key};
+pub(crate) use prompts::{PromptButton, save_prompt_key, show_save_prompt_modal};
 use prompts::{full_screen_prompt, link_prompt, password, remote_link_prompt, save_prompt, unlock};
 
 const INFO_KEYS: [&str; 4] = ["Title", "Author", "Subject", "Keywords"];
