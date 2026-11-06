@@ -1652,12 +1652,21 @@ fn a_freed_object_stream_is_not_found_by_its_header() {
     assert!(doc.get(ObjRef::new(4, 0)).as_dict().is_some());
     let mut edited = doc.clone();
     edited.free(ObjRef::new(3, 0));
-    let fresh = edited.object_reader().document;
-    assert!(matches!(*fresh.get(ObjRef::new(4, 0)), Object::Null), "{:?}", fresh.get(ObjRef::new(4, 0)));
     let mut replaced = doc.clone();
     replaced.set(ObjRef::new(3, 0), Object::Int(0));
-    let fresh = replaced.object_reader().document;
-    assert!(matches!(*fresh.get(ObjRef::new(4, 0)), Object::Null), "{:?}", fresh.get(ObjRef::new(4, 0)));
+    let mut replaced_with_stream = doc.clone();
+    replaced_with_stream.set(ObjRef::new(3, 0), Object::Stream(Stream::from_raw(Dict::new(), Vec::new())));
+    for changed in [edited, replaced, replaced_with_stream] {
+        let fresh = changed.object_reader().document;
+        assert!(matches!(*fresh.get(ObjRef::new(4, 0)), Object::Null), "{:?}", fresh.get(ObjRef::new(4, 0)));
+        for object_streams in [true, false] {
+            let full = crate::write_full(&changed, &crate::SaveOptions { object_streams, ..Default::default() }).unwrap();
+            let back = Document::open(Arc::new(full)).unwrap();
+            let catalog = back.get(back.root().unwrap());
+            let outlines = catalog.as_dict().unwrap().get(b"Outlines").map(|o| back.resolve(o));
+            assert!(outlines.as_ref().is_none_or(|o| matches!(**o, Object::Null)), "object_streams={object_streams}: {outlines:?}");
+        }
+    }
 }
 
 /// The same once the free is saved: the revision's table says the stream is free, and

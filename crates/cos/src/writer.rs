@@ -311,7 +311,15 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         }
         let o = match reader.try_get(r) {
             Ok(o) => o,
-            Err(CosError::MissingObject(num)) if num != r.num && reader.document.try_get(num).is_ok() => continue,
+            Err(CosError::MissingObject(_))
+                if matches!(
+                    reader.document.xref_entry(r.num),
+                    Some(XrefEntry::InStream { stream, .. })
+                        if reader.document.is_edited(stream) || reader.document.accepted_generations(stream).is_empty()
+                ) =>
+            {
+                continue;
+            }
             Err(error) => return Err(error),
         };
         if matches!(*o, Object::Null) {
