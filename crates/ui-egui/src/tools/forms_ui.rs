@@ -326,9 +326,15 @@ impl Focus {
     }
 }
 
-/// The field `focus` is on: the twin with its field object, or else the first field with its name.
+/// The field `focus` is on: the twin with its field object, and without one the first field with
+/// its name. `None` once the form no longer has that object, though another field may have the
+/// name: a duplicated page's field keeps its name, and when Undo took the copy away, what was
+/// typed in it went on in the original, where it was committed.
 pub(crate) fn focused_field<'a>(focus: &Focus, form: &'a [FormField]) -> Option<&'a FormField> {
-    focus.obj.and_then(|o| form.iter().find(|f| f.obj == o && f.name == focus.name)).or_else(|| form.iter().find(|f| f.name == focus.name))
+    match focus.obj {
+        Some(o) => form.iter().find(|f| f.obj == o && f.name == focus.name),
+        None => form.iter().find(|f| f.name == focus.name),
+    }
 }
 
 /// The edit picking the options at `picked` (positions in `f`'s options) in the list box `f`.
