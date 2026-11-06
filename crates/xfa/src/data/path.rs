@@ -50,7 +50,11 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
     // The template children the next segment is looked up in; `None` until the root matched,
     // and again once a segment is not a container the template has.
     let mut level: Option<&[Node]> = None;
-    for (i, (name, index)) in som_to_path(som).into_iter().enumerate() {
+    let segments = som_to_path(som);
+    let page_area_index = page_area_index(tpl, &segments);
+    for (i, (name, index)) in segments.into_iter().enumerate() {
+        // A page area's SOM index is the page made from it; see [`page_area_index`].
+        let index = if i == 0 { page_area_index.unwrap_or(index) } else { index };
         let found = match level {
             None if i == 0 && tpl.root.common.name.as_deref() == Some(name.as_str()) => Some(Container::Children(&tpl.root.children)),
             None => None,
@@ -73,6 +77,36 @@ pub fn data_path(tpl: &Template, som: &str) -> DataPath {
         }
     }
     out
+}
+
+/// For a SOM path that starts at a page area (`Area[n].…`), the index its first segment takes in
+/// the data path, `None` for any other path. Each page made from a page area has its own SOM
+/// index, so the master content repeated on each page (a page number, an office-use box) binds
+/// apart on every page. A field whose bind shares one data node (`match="global"`, or an
+/// explicit data reference) binds as instance 0 on each page instead, so it shows the same value
+/// on all of them (XFA 3.3, "Page Background": a page-background field binds only through an
+/// explicit data reference).
+fn page_area_index(tpl: &Template, segments: &[(String, usize)]) -> Option<usize> {
+    let ((first, instance), rest) = segments.split_first()?;
+    if tpl.root.common.name.as_deref() == Some(first.as_str()) {
+        return None;
+    }
+    let areas = tpl.root.page_set.as_ref()?;
+    let area = areas.areas.iter().find(|a| a.name.as_deref() == Some(first.as_str()))?;
+    // The object the rest of the path names, inside the page area's own content.
+    let mut nodes: &[Node] = &area.items;
+    let mut target = None;
+    for (name, index) in rest {
+        let found = named_at(nodes, name, *index, 0)?;
+        target = Some(found);
+        nodes = match found {
+            Node::Subform(sf) => &sf.children,
+            Node::Area(a) => &a.children,
+            _ => &[],
+        };
+    }
+    let shared = matches!(target, Some(Node::Field(f)) if f.data_shared);
+    Some(if shared { 0 } else { *instance })
 }
 
 enum Container<'a> {

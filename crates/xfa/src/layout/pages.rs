@@ -2,7 +2,7 @@
 use super::EMBED_COPIED;
 use super::items::{Item, Page, UNDERLINE_DROP};
 use super::{
-    Block, Border, Ctx, Cursor, FlowMark, Font, Frame, Layouter, MAX_ITEMS, MAX_MEASURES, MAX_PAGES, PAGE_COUNT_MARK, PageRole, Para, Rc, Rect,
+    Block, Border, Ctx, Cursor, FlowMark, Font, Frame, Layouter, MAX_ITEMS, MAX_MEASURES, MAX_PAGES, Node, PAGE_COUNT_MARK, PageRole, Para, Rc, Rect,
     SomIndices, XfaError, text,
 };
 
@@ -97,14 +97,30 @@ impl Layouter<'_> {
         if let Some(u) = self.uses.get_mut(idx) {
             *u += 1;
         }
-        self.pages.push(Page { width: area.width, height: area.height, items: Vec::new() });
+        self.pages.push(Page { width: area.width, height: area.height, items: Vec::new(), area: area.name.clone() });
         let content = area.content.first().copied().unwrap_or(Rect::new(0.0, 0.0, area.width, area.height));
         self.cur = Some(Cursor { area: idx, content: 0, rect: content, y: content.y, placed: false });
-        // Master page content: positioned draws and fields.
-        let ctx = Ctx { font: Font::default(), para: Para::default(), som: area.name.clone().map(|n| format!("{n}[0]")).unwrap_or_default() };
+        // Master page content: positioned draws and fields. The page area's own SOM index counts
+        // the pages made from it, so a field repeated on each page (a page number, an office-use
+        // box) has a path of its own per page rather than every page sharing `[0]`.
+        let instance = self.uses.get(idx).map_or(0, |u| u.saturating_sub(1));
+        let ctx =
+            Ctx { font: Font::default(), para: Para::default(), som: area.name.clone().map(|n| format!("{n}[{instance}]")).unwrap_or_default() };
         let page_rect = Rect::new(0.0, 0.0, area.width, area.height);
-        let sibs = SomIndices::of(&area.items);
-        for (i, item) in area.items.iter().enumerate() {
+        // What scripts set on this page's master content (a button hidden on this page only) goes
+        // on a copy of it for this page; other pages keep the template's.
+        let prefix = format!("{}.", ctx.som);
+        let copy =
+            self.overrides.filter(|ov| !ctx.som.is_empty() && ov.presence.keys().chain(ov.access.keys()).any(|k| k.starts_with(&prefix))).map(|ov| {
+                let mut copy = area.items.clone();
+                crate::script::apply_overrides_to(&mut copy, &ctx.som, ov, 1);
+                let copy = Rc::new(copy);
+                self.master_copies.push(Rc::clone(&copy));
+                copy
+            });
+        let items: &[Node] = copy.as_deref().map_or(&area.items, Vec::as_slice);
+        let sibs = SomIndices::of(items);
+        for (i, item) in items.iter().enumerate() {
             self.draw_positioned_child(item, page_rect, &ctx, 1, sibs.at(i))?;
         }
         Ok(())

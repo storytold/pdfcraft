@@ -169,6 +169,10 @@ fn find_container<'a>(n: &'a FormNode, som: &str, depth: usize) -> Option<&'a Fo
     n.children.iter().find_map(|c| find_container(c, som, depth + 1))
 }
 
+fn has_node(n: &FormNode, som: &str, depth: usize) -> bool {
+    depth <= 64 && (n.som == som || n.children.iter().any(|c| has_node(c, som, depth + 1)))
+}
+
 fn count_instances(root: &FormNode, parent_som: &str, name: &str) -> usize {
     let parent = if parent_som.is_empty() { Some(root) } else { find_container(root, parent_som, 0) };
     parent.map_or(0, |p| p.children.iter().filter(|c| c.name == name).count())
@@ -338,7 +342,8 @@ impl<'a, 'b> Runner<'a, 'b> {
 
     fn live(&mut self) -> &LiveForm {
         if self.cached.is_none() {
-            let live = pdfcraft_xfa::form_tree(self.tpl, self.data.as_ref(), &self.ov);
+            let uses = pdfcraft_xfa::page_area_uses(self.doc, self.tpl);
+            let live = pdfcraft_xfa::form_tree_paged(self.tpl, self.data.as_ref(), &self.ov, &uses);
             if live.truncated && !self.truncated_warned {
                 self.truncated_warned = true;
                 self.error(format!(
@@ -658,6 +663,12 @@ impl<'a, 'b> Runner<'a, 'b> {
             self.skipped += 1;
             return Ok(None);
         }
+        // An event listed before a script relaid the form out can name an object that is gone
+        // (a page the form no longer fills, a row removed): it isn't run, rather than run with
+        // `this` at some other object.
+        if !has_node(&self.live().root, &ev.som, 0) {
+            return Ok(None);
+        }
         self.runs += 1;
         #[cfg(test)]
         self.check_live();
@@ -752,7 +763,8 @@ impl Runner<'_, '_> {
     #[cfg(test)]
     fn check_live(&mut self) {
         let Some(live) = self.cached.as_ref() else { return };
-        let fresh = pdfcraft_xfa::form_tree(self.tpl, self.data.as_ref(), &self.ov);
+        let uses = pdfcraft_xfa::page_area_uses(self.doc, self.tpl);
+        let fresh = pdfcraft_xfa::form_tree_paged(self.tpl, self.data.as_ref(), &self.ov, &uses);
         let (mut have, mut want) = (Vec::new(), Vec::new());
         collect_fields(&live.root, &mut have, 0);
         collect_fields(&fresh.root, &mut want, 0);
@@ -908,11 +920,11 @@ pub(crate) fn on_event(doc: &mut pdfcraft_cos::Document, tpl: &Template, som: &s
 
 /// The SOM path of a generated field whose template has a click script.
 pub(crate) fn clickable_som(doc: &pdfcraft_cos::Document, tpl: &Template, field: &pdfcraft_forms::Field) -> Option<String> {
-    // Page-master copies have distinct PDF field names but share a SOM path. Reversing
-    // fields_by_som would lose every copy except the last: use the clicked field itself.
+    // The clicked field's own SOM path: each page-master copy has one of its own (`master[1]…`).
     let object = doc.get(field.obj);
     let som = object.as_dict()?.get(pdfcraft_xfa::SOM_KEY).map(|s| doc.resolve(s))?.as_string()?.to_text();
-    let live = pdfcraft_xfa::form_tree(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc));
+    let uses = pdfcraft_xfa::page_area_uses(doc, tpl);
+    let live = pdfcraft_xfa::form_tree_paged(tpl, pdfcraft_xfa::data_of(doc).as_ref(), &pdfcraft_xfa::overrides(doc), &uses);
     live.events.iter().any(|e| e.som == som && e.activity == "click").then_some(som)
 }
 
