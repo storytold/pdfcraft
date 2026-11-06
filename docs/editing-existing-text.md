@@ -96,6 +96,11 @@ invisible text, such as another OCR tool's layer, makes the rewritten paragraph 
 painted cover in the sampled paper colour. Edit text also groups invisible text differently: its lines never
 merge into multi-line paragraphs, and words split at gaps of 0.6 em or more.
 
+Only text drawn directly in the page's content streams can be edited. Text drawn inside a
+Form XObject (`/Fm1 Do`), as pages placed by LaTeX `pdfpages`, n-up and imposition tools
+are, is extracted, searched and rendered but not listed for editing: the form is offered as
+one artwork item that can be moved, not retyped (#2964).
+
 Explicit marked paragraph/heading scopes prevent unrelated tagged regions from merging.
 Compatible geometry groups untagged content, including runs split across content streams
 or equivalent graphics transforms. Geometry cannot infer author intent in every untagged
