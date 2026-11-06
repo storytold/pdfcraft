@@ -455,11 +455,22 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
     let reset_clicked = allow_interaction
         && reset
             .is_some_and(|r| reset_resp.as_ref().is_some_and(|res| res.clicked()) || (resp.clicked() && hover_pos.is_some_and(|p| r.contains(p))));
+    // A click away from the picture, its crop box, its handles and the pills applies the crop and
+    // lets the picture go, as Done and then that click would (#6422).
+    let away_clicked = allow_interaction
+        && resp.clicked()
+        && hover_pos.is_some_and(|p| {
+            !b.contains(p)
+                && !crop_controls_contain(image, mode, xf, info, page, p)
+                && !done.contains(p)
+                && !cancel.contains(p)
+                && !reset.is_some_and(|r| r.contains(p))
+        });
 
     if reset_clicked {
         mode.keep = if image.has_editor_crop() { image.rect } else { initial_keep };
         mode.drag = None;
-    } else if done_clicked || keys(egui::Key::Enter) {
+    } else if done_clicked || away_clicked || keys(egui::Key::Enter) {
         let keep = mode.keep;
         if let Some(s) = view.image_selection.as_mut() {
             s.crop = None;
@@ -471,6 +482,9 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
             }
         } else if image.visible_rect != Some(keep) {
             view.pending_edit = Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Crop(keep) });
+        }
+        if away_clicked {
+            view.image_selection = None;
         }
     } else if (cancel_clicked || keys(egui::Key::Escape))
         && let Some(s) = view.image_selection.as_mut()
