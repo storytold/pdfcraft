@@ -9428,11 +9428,11 @@ title = "Compare page ranges"
 area = "N"
 tier = "P2"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["doc.compare"]
+tools = ["doc_compare"]
+evidence = ["crates/engine/src/tests.rs::comparing_a_page_range_of_each_document", "crates/automation/tests/it/automation.rs::comparing_page_ranges_through_tools"]
+notes = "The engine and headless tool compare independently selected ranges of the older and newer documents, report original 1-based page numbers, and reject invalid ranges; visual comparison still pairs matching page numbers. The Compare panel has no page-range controls yet."
 
 [[feature]]
 id = "misc.compare-scanned"
