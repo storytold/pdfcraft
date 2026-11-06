@@ -136,8 +136,26 @@ fn filters(s: &Stream) -> Vec<Vec<u8>> {
 /// through its decoder too, behind other filters as well, a JBIG2 image with its `/JBIG2Globals`.
 /// A JBIG2 page has to be the image's size, which the caller checked against the export's limit,
 /// before the page is decoded.
-fn decoded(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<Vec<u8>, String> {
-    budget.decode(doc, s, MAX_DECODED).map_err(|e| e.to_string())
+///
+/// No stage may produce more than [`allowance`] gives for an image of `w` × `h` with `n`
+/// components of `bpc` bits: what is past the samples is never read, so a few KB of Flate can't
+/// ask for a gigabyte for an image of one pixel.
+fn decoded(doc: &Document, s: &Stream, (w, h, n, bpc): (usize, usize, usize, usize), budget: &mut ImageBudget) -> Result<Vec<u8>, String> {
+    let max = allowance(s, w, h, n, bpc).ok_or("the image is too large to export")?;
+    budget.decode(doc, s, max).map_err(|e| e.to_string())
+}
+
+/// How far image `s` of `w` × `h` with `n` components of `bpc` bits is decoded, as Optimize and
+/// redaction allow: up to three bytes a sample byte and a PNG predictor's byte a row (ASCIIHex text
+/// under Flate, its digits spaced), or, for a fax image, the code its decoder reads, at most about a
+/// byte a pixel and each row's end. More can only be a decompression bomb. Never less than the
+/// stream's own bytes, which are in memory already, nor more than [`MAX_DECODED`].
+fn allowance(s: &Stream, w: usize, h: usize, n: usize, bpc: usize) -> Option<usize> {
+    let max = match s.filters().last() {
+        Some((pdfcraft_filters::Filter::CcittFax, _)) => w.checked_mul(h)?.checked_add(h.checked_mul(4)?)?,
+        _ => w.checked_mul(n)?.checked_mul(bpc)?.div_ceil(8).checked_mul(h)?.checked_add(h)?.checked_mul(3)?,
+    };
+    Some(max.checked_add(4096)?.max(s.raw.len()).min(MAX_DECODED))
 }
 
 /// The file for one image: its JPEG data as is, or a PNG. An image with transparency (a soft
@@ -199,7 +217,6 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
         space = decoded;
         (samples, 8)
     } else {
-        let data = decoded(doc, s, budget)?;
         let bpc = if mask { 1 } else { s.dict.int(b"BitsPerComponent").unwrap_or(8) };
         let bpc = match bpc {
             1 => 1,
@@ -209,6 +226,7 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
             16 => 16,
             other => return Err(format!("{other} bits per component isn't supported")),
         };
+        let data = decoded(doc, s, (w, h, space.components(), bpc), budget)?;
         (unpack(&data, w, h, space.components(), bpc).ok_or("the image data is shorter than its size says")?, bpc)
     };
     let n = space.components();
@@ -567,7 +585,7 @@ fn gray_plane(doc: &Document, m: &Stream, w: usize, h: usize, budget: &mut Image
                 _ => return None,
             };
             let max = (1u32 << bpc.min(8)) - 1;
-            unpack(&decoded(doc, m, budget).ok()?, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
+            unpack(&decoded(doc, m, (mw, mh, 1, bpc), budget).ok()?, mw, mh, 1, bpc)?.into_iter().map(|v| (v as u32 * 255 / max) as u8).collect()
         }
     };
     if let Some([lo, hi]) = decode(doc, m, 1).and_then(|pairs| pairs.first().copied()) {

@@ -866,6 +866,32 @@ fn damaged_masks_and_sizes_never_panic() {
 }
 
 #[test]
+fn image_data_far_past_its_samples_is_not_decoded() {
+    // A grey image of one pixel whose Flate stream inflates to 64 MiB: only the first byte is a
+    // sample, so the export stops decoding long before the rest and leaves the image out.
+    let bomb = |w: i64, h: i64, len: usize| {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        with_image(&mut doc, |_| Stream::flate(image_dict(w, h, "DeviceGray", 8), &vec![7u8; len]));
+        doc
+    };
+    let out = extract_images(&bomb(1, 1, 64 << 20), &[0], 0);
+    assert!(out.images.is_empty() && out.skipped.len() == 1, "{out:?}");
+    // Data a little past the samples, as encoders leave, still exports.
+    let (ext, rgba) = exported_rgba(&bomb(4, 2, 4 * 2 + 64));
+    assert_eq!((ext, rgba), ("png", [7, 7, 7, 255].repeat(8)));
+
+    // The same for a soft mask: it is not decoded, and the image exports without it.
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    with_image(&mut doc, |doc| {
+        let m = doc.add(Object::Stream(Stream::flate(image_dict(1, 1, "DeviceGray", 8), &vec![0u8; 64 << 20])));
+        let mut d = image_dict(4, 2, "DeviceRGB", 8);
+        d.set(b"SMask".to_vec(), Object::Ref(m));
+        Stream::from_raw(d, vec![10; 24])
+    });
+    assert_eq!(alphas(&exported_rgba(&doc).1), [255; 8]);
+}
+
+#[test]
 fn indexed_image_export_clamps_samples_to_hival() {
     for palette in [vec![255, 0, 0, 0, 0, 255], vec![255, 0, 0, 0, 0, 255, 0, 255, 0, 255, 255, 255]] {
         let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
