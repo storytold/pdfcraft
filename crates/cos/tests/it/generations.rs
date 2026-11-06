@@ -545,6 +545,7 @@ fn canonical_ref_follows_reference_acceptance_within_one_snapshot() {
     // Object streams: generation 0 only.
     let packed = Document::open(Arc::new(write_full(&reused, &SaveOptions::default()).unwrap())).unwrap();
     let current = packed.get(packed.root().unwrap()).as_dict().unwrap().reference(b"Current").unwrap();
+    assert!(matches!(packed.xref_entry(current.num), Some(XrefEntry::InStream { .. })), "the object is in an object stream");
     assert_eq!(packed.canonical_ref(current), Some(current));
     assert_eq!(packed.canonical_ref(ObjRef::new(current.num, 1)), None);
 }
