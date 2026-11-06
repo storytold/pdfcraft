@@ -9983,8 +9983,8 @@ milestone = "M12"
 status = "partial"
 commands = []
 tools = ["model_render"]
-evidence = ["crates/automation/tests/it/model_render.rs::a_prc_model_is_drawn_over_the_background", "crates/annot/src/model3d/tests.rs::a_3dref_leads_to_the_stream_it_names", "crates/prc-render/tests/model.rs::a_synthetic_prc_renders_its_nearer_triangle_over_the_farther"]
-notes = "headless only: model_render draws a page's PRC model (through a /3DRef too) to a PNG, framed from a chosen direction, with headlight shading. Missing: the 3D view in the app (no activation, no navigation), U3D (an error), the annotation's /3DV views, lighting schemes and /RM render modes, materials and textures, compressed tessellation, picking, cross sections, the model tree, and measurements"
+evidence = ["crates/automation/tests/it/model_render.rs::a_prc_model_is_drawn_over_the_background", "crates/automation/tests/it/model_render.rs::an_orbit_frames_the_model_from_a_named_view_and_its_moves", "crates/prc-render/src/nav/orbit_tests.rs::a_pressed_point_off_centre_keeps_its_place_as_the_view_turns", "crates/annot/src/model3d/tests.rs::a_3dref_leads_to_the_stream_it_names", "crates/prc-render/tests/model.rs::a_synthetic_prc_renders_its_nearer_triangle_over_the_farther"]
+notes = "headless only: model_render draws a page's PRC model (through a /3DRef too) to a PNG, framed from a chosen direction, or by orbit navigation (named views about a chosen up axis, turn, zoom about a picture point, pan) from prc-render's GUI-free nav module, with headlight shading. Missing: the 3D view in the app (no activation, no on-screen navigation; nav is not wired to a viewer yet), walk and fly navigation, U3D (an error), the annotation's /3DV views, lighting schemes and /RM render modes, materials and textures, compressed tessellation, picking, cross sections, the model tree, and measurements"
 
 [[feature]]
 id = "misc.3d-add"

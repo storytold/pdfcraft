@@ -2,7 +2,9 @@
 
 use pdfcraft_engine::model3d::Model3dKind;
 use pdfcraft_prc::PrcFile;
-use pdfcraft_prc_render::{Camera, RenderOptions, assemble, render};
+use pdfcraft_prc_render::nav::{Axis, NamedView, Orbit, Upright, reach};
+use pdfcraft_prc_render::{Bounds, Camera, RenderOptions, WorldMesh, assemble, render};
+use serde_json::Value;
 
 use super::Automation;
 use super::dispatch::Content;
@@ -22,7 +24,6 @@ impl Automation {
         let page = self.page(a)?;
         let width = side(a, "width")?;
         let height = side(a, "height")?;
-        let direction = direction(a)?;
         let perspective = a.opt_bool("perspective")?.unwrap_or(true);
         let doc = self.doc(a)?;
         let found = doc.model_3d_annotations(page).map_err(failed)?;
@@ -42,7 +43,14 @@ impl Automation {
         let prc = PrcFile::parse(&model.data).map_err(|e| failed(format!("the 3D model could not be read: {e}")))?;
         let meshes = assemble(&prc).map_err(failed)?;
         let aspect = f64::from(width) / f64::from(height);
-        let camera = Camera::fit_meshes(&meshes, direction, up_for(direction), perspective, aspect).map_err(failed)?;
+        let camera = match a.get("orbit") {
+            Some(_) if a.get("direction").is_some() => return Err(Args::wrong("orbit", "left out when direction is given")),
+            Some(moves) => orbit_camera(moves, &meshes, perspective, aspect)?,
+            None => {
+                let direction = direction(a)?;
+                Camera::fit_meshes(&meshes, direction, up_for(direction), perspective, aspect).map_err(failed)?
+            }
+        };
         let image = render(&meshes, &camera, &RenderOptions { width, height, ..RenderOptions::default() }).map_err(failed)?;
         let data = encode_png(image.width, image.height, &premultiplied(image.rgba))?;
         Ok(vec![Content::Png { data, width: image.width, height: image.height }])
@@ -69,6 +77,63 @@ fn direction(a: &Args) -> Result<[f64; 3]> {
         return Err(wrong());
     }
     Ok(out)
+}
+
+/// The keys `orbit` takes.
+const ORBIT_KEYS: [&str; 7] = ["view", "up", "front", "turn", "zoom", "zoom_at", "pan"];
+
+/// The camera `orbit` names: a named view about an up axis, then a turn, a zoom and a pan, as a
+/// viewer's orbit control would apply them.
+fn orbit_camera(moves: &Value, meshes: &[WorldMesh], perspective: bool, aspect: f64) -> Result<Camera> {
+    let wrong = |what: &str| Args::wrong("orbit", what);
+    let moves = moves.as_object().ok_or_else(|| wrong("an object"))?;
+    if let Some(key) = moves.keys().find(|k| !ORBIT_KEYS.contains(&k.as_str())) {
+        return Err(wrong(&format!("an object without {key}; its keys are {}", ORBIT_KEYS.join(", "))));
+    }
+    let token = |key: &str| moves.get(key).map(|v| v.as_str().ok_or_else(|| wrong(&format!("{key} as a string"))));
+    let axis = |key: &str| token(key).map(|t| Axis::from_token(t?).ok_or_else(|| wrong(&format!("{key} as one of +x, +y, +z, -x, -y, -z"))));
+    let mut upright = Upright::default();
+    if let Some(up) = axis("up") {
+        upright = upright.with_up(up?);
+    }
+    if let Some(front) = axis("front") {
+        let front = front?;
+        if !upright.up().perpendicular(front) {
+            return Err(wrong("front perpendicular to up"));
+        }
+        upright = upright.with_front(front);
+    }
+    let view = match token("view") {
+        None => NamedView::Isometric,
+        Some(t) => NamedView::from_token(t?).ok_or_else(|| wrong("view as one of iso, front, right, top, back"))?,
+    };
+    let mut orbit = Orbit::named(view, perspective, upright);
+    let bounds = Bounds::of(meshes).ok_or_else(|| failed("the model has no vertex"))?;
+    let reach = reach(meshes, &bounds);
+    if let Some(v) = moves.get("turn") {
+        let [yaw, pitch] = pair(v).ok_or_else(|| wrong("turn as [yaw, pitch] in degrees"))?;
+        orbit.turn(yaw.to_radians(), pitch.to_radians());
+    }
+    if let Some(v) = moves.get("zoom") {
+        let factor = v.as_f64().filter(|f| f.is_finite() && *f > 0.0).ok_or_else(|| wrong("zoom as a positive number"))?;
+        let at = match moves.get("zoom_at") {
+            None => [0.0, 0.0],
+            Some(v) => pair(v).ok_or_else(|| wrong("zoom_at as [right, up] in picture heights"))?,
+        };
+        orbit.zoom_at(&bounds, reach, aspect, factor, at);
+    }
+    if let Some(v) = moves.get("pan") {
+        orbit.pan_by(pair(v).ok_or_else(|| wrong("pan as [right, up] in model radii"))?);
+    }
+    orbit.camera(&bounds, reach, aspect).map_err(failed)
+}
+
+/// Two finite numbers.
+fn pair(v: &Value) -> Option<[f64; 2]> {
+    match v.as_array()?.as_slice() {
+        [a, b] => Some([a.as_f64().filter(|f| f.is_finite())?, b.as_f64().filter(|f| f.is_finite())?]),
+        _ => None,
+    }
 }
 
 /// Z is up, as CAD models are drawn, unless the view looks along it.

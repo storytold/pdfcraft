@@ -110,3 +110,58 @@ fn a_model_outside_the_root_is_never_opened_to_be_drawn() {
     let doc = open(&mut a, "prc.pdf");
     assert!(a.call("model_render", &json!({ "doc": doc, "page": 1 })).is_ok());
 }
+
+#[test]
+fn an_orbit_frames_the_model_from_a_named_view_and_its_moves() {
+    let (_dir, mut a) = setup("orbit");
+    let doc = open(&mut a, "prc.pdf");
+    let draw = |a: &mut Automation, orbit: Value| {
+        let out = a.call("model_render", &json!({ "doc": doc, "page": 1, "width": 64, "height": 48, "perspective": false, "orbit": orbit })).unwrap();
+        let Content::Png { data, .. } = &out[0] else { panic!("expected a PNG") };
+        data.clone()
+    };
+    // The triangle lies in z = 0: the Top view looks down on its face, the Front view along its edge.
+    let top = draw(&mut a, json!({ "view": "top" }));
+    assert_eq!(rgb(&top, 32, 24), [190, 192, 200], "the top view sees the face head on");
+    let front = draw(&mut a, json!({ "view": "front" }));
+    assert_eq!(rgb(&front, 32, 18), [255, 255, 255], "the front view sees only its edge");
+    // With y up the Front view looks along -z, onto the face.
+    let y_up = draw(&mut a, json!({ "view": "front", "up": "+y" }));
+    assert_eq!(rgb(&y_up, 32, 24), [190, 192, 200]);
+    // Turning the front view down by 90° stops just short of the top view and sees the face.
+    let turned = draw(&mut a, json!({ "view": "front", "turn": [0, 90] }));
+    assert_ne!(rgb(&turned, 32, 24), [255, 255, 255]);
+    // A pan of three model radii to the right moves the model out of the picture.
+    let panned = draw(&mut a, json!({ "view": "top", "pan": [3, 0] }));
+    assert!((0..64).all(|x| rgb(&panned, x, 24) == [255, 255, 255]), "the model has left the picture");
+    // Zooming in about the centre keeps the face under it and leaves no background at the corner.
+    let zoomed = draw(&mut a, json!({ "view": "top", "zoom": 8 }));
+    assert_eq!(rgb(&zoomed, 32, 24), [190, 192, 200]);
+    assert_ne!(rgb(&zoomed, 0, 0), [255, 255, 255], "zoomed in, the face fills the corner too");
+}
+
+#[test]
+fn a_wrong_orbit_is_a_clear_error() {
+    let (_dir, mut a) = setup("orbit-bad");
+    let doc = open(&mut a, "prc.pdf");
+    for bad in [
+        json!({ "orbit": { "view": "side" } }),
+        json!({ "orbit": { "up": "z" } }),
+        json!({ "orbit": { "up": "+z", "front": "-z" } }),
+        json!({ "orbit": { "turn": [1] } }),
+        json!({ "orbit": { "zoom": 0 } }),
+        json!({ "orbit": { "pan": [1, "a"] } }),
+        json!({ "orbit": { "spin": 1 } }),
+        json!({ "orbit": 1 }),
+        json!({ "orbit": {}, "direction": [0, 0, -1] }),
+    ] {
+        let mut args = json!({ "doc": doc, "page": 1, "width": 16, "height": 16 });
+        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        let err = a.call("model_render", &args).unwrap_err().to_string();
+        assert!(err.contains("orbit"), "{bad}: {err}");
+    }
+    assert!(
+        a.call("model_render", &json!({ "doc": doc, "page": 1, "width": 16, "height": 16, "orbit": {} })).is_ok(),
+        "an empty orbit is the isometric view"
+    );
+}
