@@ -244,7 +244,7 @@ pub fn render_into<'a>(
     }
     // A metadata pass uses interpreter thread-local work budgets too. Finish it before
     // creating the real context, which resets those budgets for both cache hits and misses.
-    let barcode_enabled = renderer::barcode_page_admitted(page, cache, interpreter_settings);
+    let barcode_images = renderer::barcode_page_image_count(page, cache, interpreter_settings);
     let mut state = Context::new(
         initial_transform,
         Rect::new(0.0, 0.0, pix_width as f64, pix_height as f64),
@@ -268,7 +268,8 @@ pub fn render_into<'a>(
         interpreter_settings.preview,
     );
 
-    device.barcode_enabled = barcode_enabled;
+    device.barcode_enabled = barcode_images.is_some();
+    device.barcode_divisor = barcode_images.unwrap_or(1);
     device.barcode_cancel = interpreter_settings.cancelled.clone();
 
     // PdfCraft patch (18): the page renders as one transparency group (the page group). Its

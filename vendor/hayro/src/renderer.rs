@@ -791,11 +791,62 @@ struct BarcodeEntry {
     height: u32,
     rgba: Vec<u8>,
     overlays: Vec<BarcodeOverlay>,
+    divisor: usize,
 }
 #[derive(Default)]
 pub(crate) struct BarcodeCache {
     entries: std::collections::VecDeque<BarcodeEntry>,
     pixels: usize,
+    outcomes: [u32; 6],
+    reported: u8,
+}
+
+/// Static, non-sensitive categories: decoder messages can contain input text and are never logged.
+#[derive(Clone, Copy)]
+enum ScanFailure {
+    Deadline,
+    WorkLimit,
+    Decoder,
+    Panic,
+    Declined,
+}
+impl ScanFailure {
+    /// Classify our bounded error channel without exposing arbitrary native error text.
+    fn from_error(error: &str) -> Self {
+        if error == "deadline" {
+            Self::Deadline
+        } else if error.contains("budget") || error == "work overflow" {
+            Self::WorkLimit
+        } else if error.starts_with("native ") {
+            Self::Decoder
+        } else {
+            Self::Declined
+        }
+    }
+    /// Public log text is a fixed label, never a decoded payload or source content.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Deadline => "deadline",
+            Self::WorkLimit => "work limit",
+            Self::Decoder => "decoder error",
+            Self::Panic => "decoder panic",
+            Self::Declined => "source declined",
+        }
+    }
+}
+impl BarcodeCache {
+    /// At most one message per category for this worker/document cache, even across FIFO evictions.
+    fn record_failure(&mut self, failure: ScanFailure) {
+        let index = failure as usize;
+        if let Some(count) = self.outcomes.get_mut(index) {
+            *count = count.saturating_add(1);
+        }
+        let bit = 1u8 << index;
+        if self.reported & bit == 0 {
+            self.reported |= bit;
+            log::warn!("barcode protection fallback: {}", failure.label());
+        }
+    }
 }
 
 pub(crate) struct Renderer {
@@ -824,6 +875,7 @@ pub(crate) struct Renderer {
     pub(crate) outline_cache: Rc<std::cell::RefCell<HashMap<u128, Rc<BezPath>>>>,
     barcode_cache: Rc<std::cell::RefCell<BarcodeCache>>,
     pub(crate) barcode_enabled: bool,
+    pub(crate) barcode_divisor: usize,
     pub(crate) barcode_cancel: Option<Arc<AtomicBool>>,
     pub(crate) cur_mask: Option<Mask>,
     pub(crate) in_type3_glyph: bool,
@@ -938,6 +990,7 @@ impl Renderer {
             outline_cache: cache.outline_cache.clone(),
             barcode_cache: cache.barcode_cache.clone(),
             barcode_enabled: true,
+            barcode_divisor: 1,
             barcode_cancel: None,
             cur_mask: None,
             in_type3_glyph: false,
@@ -1047,6 +1100,7 @@ impl Renderer {
                 outline_cache: self.outline_cache.clone(),
                 barcode_cache: self.barcode_cache.clone(),
                 barcode_enabled: false,
+                barcode_divisor: self.barcode_divisor,
                 barcode_cancel: self.barcode_cancel.clone(),
                 cur_mask: None,
                 in_type3_glyph: false,
@@ -1214,25 +1268,15 @@ impl Renderer {
     /// `transform`, or `None` if `draw_image` skips it: off the canvas (PdfCraft patch: see
     /// `may_paint_rect`; checked before decoding, so a tile no longer decodes every image on its
     /// page), or, in a preview, covering only a few device pixels (PdfCraft patch; final renders
-    /// always draw them). The tiny-image test measures axis lengths: the size returned maps a
-    /// point, so it includes the translation and only suits the decode hint.
+    /// always draw them). Both the decode hint and tiny-image test measure axis lengths;
+    /// translations and tile offsets never change the selected JPX resolution.
     fn image_draw_size(&self, width: u32, height: u32, transform: Affine) -> Option<(u32, u32)> {
-        if !may_paint_rect(
-            Rect::new(0.0, 0.0, f64::from(width), f64::from(height)),
-            transform,
-            self.ctx.width(),
-            self.ctx.height(),
-        ) {
+        if !may_paint_rect(Rect::new(0.0, 0.0, f64::from(width), f64::from(height)), transform, self.ctx.width(), self.ctx.height()) {
             return None;
         }
-        let target_width = (transform * Point::new(width as f64, 0.0))
-            .to_vec2()
-            .length()
-            .ceil() as u32;
-        let target_height = (transform * Point::new(0.0, height as f64))
-            .to_vec2()
-            .length()
-            .ceil() as u32;
+        let [a, b, c, d, _, _] = transform.as_coeffs();
+        let target_width = (f64::from(width) * a.hypot(b)).ceil() as u32;
+        let target_height = (f64::from(height) * c.hypot(d)).ceil() as u32;
         if self.preview {
             let c = transform.as_coeffs();
             let tiny_w = (f64::from(width) * (c[0] * c[0] + c[1] * c[1]).sqrt()).ceil() as u32;
@@ -1244,11 +1288,8 @@ impl Renderer {
         Some((target_width, target_height))
     }
 
-    fn barcode_overlays(
-        &mut self,
-        image: &ImageData,
-        alpha: Option<&LumaData>,
-    ) -> Vec<BarcodeOverlay> {
+    /// Protect only validated source-local regions; failures are bounded, classified and cached by work allowance.
+    fn barcode_overlays(&mut self, image: &ImageData, alpha: Option<&LumaData>) -> Vec<BarcodeOverlay> {
         let not_cancelled = AtomicBool::new(false);
         let cancel = self.barcode_cancel.as_deref().unwrap_or(&not_cancelled);
         if cancel.load(Ordering::Relaxed)
@@ -1260,6 +1301,8 @@ impl Renderer {
             return Vec::new();
         }
         let (width, height) = (image.width(), image.height());
+        #[cfg(test)]
+        crate::barcode::observe_raster(width, height);
         let Some(pixels) = (width as usize).checked_mul(height as usize) else {
             return Vec::new();
         };
@@ -1267,10 +1310,7 @@ impl Renderer {
             return Vec::new();
         }
         if let Some(a) = alpha
-            && (a.width != width
-                || a.height != height
-                || a.data.len() != pixels
-                || a.data.iter().any(|v| *v != 255))
+            && (a.width != width || a.height != height || a.data.len() != pixels || a.data.iter().any(|v| *v != 255))
         {
             return Vec::new();
         }
@@ -1283,7 +1323,7 @@ impl Renderer {
         }
         match image {
             ImageData::Luma(a) => rgba.extend(a.data.iter().flat_map(|v| [*v, *v, *v, 255])),
-            ImageData::Rgb(a) => rgba.extend(a.data.as_chunks::<3>().0.iter().flat_map(|[r,g,b]| [*r,*g,*b,255])),
+            ImageData::Rgb(a) => rgba.extend(a.data.as_chunks::<3>().0.iter().flat_map(|[r, g, b]| [*r, *g, *b, 255])),
         }
         if rgba.len() != bytes || cancel.load(Ordering::Relaxed) {
             return Vec::new();
@@ -1291,38 +1331,42 @@ impl Renderer {
         let Ok(mut cache) = self.barcode_cache.try_borrow_mut() else {
             return Vec::new();
         };
-        if let Some(entry) = cache
-            .entries
-            .iter()
-            .find(|e| e.width == width && e.height == height && e.rgba == rgba)
+        if let Some(entry) = cache.entries.iter().find(|e| e.divisor == self.barcode_divisor && e.width == width && e.height == height && e.rgba == rgba)
         {
             return if cancel.load(Ordering::Relaxed) { Vec::new() } else { entry.overlays.clone() };
         }
-        let detected = std::panic::catch_unwind(|| {
-            crate::barcode::detect(
-                width as usize,
-                height as usize,
-                &rgba,
-                None,
-                cancel,
-            )
-        });
+        let detected =
+            std::panic::catch_unwind(|| crate::barcode::detect_with_divisor(width as usize, height as usize, &rgba, None, cancel, self.barcode_divisor));
         // An interrupted scan is not a negative result for these source bytes. A later
         // uncancelled render must be able to decode them, even when this scan returned an error.
         if cancel.load(Ordering::Relaxed) {
             return Vec::new();
         }
         let regions = match detected {
-            Ok(Ok(regions)) => regions,
+            Ok(Ok(regions)) => {
+                if regions.is_empty() {
+                    cache.outcomes[5] = cache.outcomes[5].saturating_add(1);
+                }
+                regions
+            }
             // A declined or panicked scan is a negative result for these exact source bytes.
             // Keep it until FIFO eviction (at most sixteen entries / eight million source pixels),
             // including deadline/work-limit failures. Resource admission never enters this cache.
-            _ => Vec::new(),
+            Ok(Err(error)) => {
+                cache.record_failure(ScanFailure::from_error(&error));
+                Vec::new()
+            }
+            Err(_) => {
+                cache.record_failure(ScanFailure::Panic);
+                Vec::new()
+            }
         };
         let mut overlays = Vec::new();
         let mut crop_pixels = 0usize;
         for region in regions {
-            if !region.pitch.is_finite() || region.pitch < 1.0 { return Vec::new(); }
+            if !region.pitch.is_finite() || region.pitch < 1.0 {
+                return Vec::new();
+            }
             let r = region.quiet;
             let Some(total) = crop_pixels.checked_add(r.area()) else {
                 return Vec::new();
@@ -1343,17 +1387,8 @@ impl Renderer {
                 };
                 crop.extend_from_slice(row);
             }
-            let pixmap = Pixmap::from_parts_with_opacity(
-                bytemuck::cast_vec(crop),
-                w as u16,
-                h as u16,
-                false,
-            );
-            overlays.push(BarcodeOverlay {
-                x: r.x0,
-                y: r.y0,
-                pixmap: Arc::new(pixmap),
-            });
+            let pixmap = Pixmap::from_parts_with_opacity(bytemuck::cast_vec(crop), w as u16, h as u16, false);
+            overlays.push(BarcodeOverlay { x: r.x0, y: r.y0, pixmap: Arc::new(pixmap) });
         }
         if cancel.load(Ordering::Relaxed) {
             return Vec::new();
@@ -1366,12 +1401,7 @@ impl Renderer {
             cache.pixels = cache.pixels.saturating_sub(old.rgba.len() / 4);
         }
         cache.pixels += pixels;
-        cache.entries.push_back(BarcodeEntry {
-            width,
-            height,
-            rgba,
-            overlays: overlays.clone(),
-        });
+        cache.entries.push_back(BarcodeEntry { width, height, rgba, overlays: overlays.clone(), divisor: self.barcode_divisor });
         overlays
     }
 
@@ -1882,6 +1912,7 @@ impl Renderer {
             outline_cache: self.outline_cache.clone(),
             barcode_cache: self.barcode_cache.clone(),
             barcode_enabled: false,
+            barcode_divisor: self.barcode_divisor,
             barcode_cancel: self.barcode_cancel.clone(),
             cur_mask: None,
             in_type3_glyph: false,
@@ -2163,6 +2194,7 @@ impl Renderer {
                                 outline_cache: self.outline_cache.clone(),
                                 barcode_cache: self.barcode_cache.clone(),
                                 barcode_enabled: false,
+                                barcode_divisor: self.barcode_divisor,
                                 barcode_cancel: self.barcode_cancel.clone(),
                                 in_type3_glyph: false,
                                 scaler: self.scaler,
@@ -2230,6 +2262,7 @@ impl Renderer {
                             outline_cache: self.outline_cache.clone(),
                             barcode_cache: self.barcode_cache.clone(),
                             barcode_enabled: false,
+                            barcode_divisor: self.barcode_divisor,
                             barcode_cancel: self.barcode_cancel.clone(),
                             in_type3_glyph: false,
                             scaler: self.scaler,
@@ -2538,6 +2571,7 @@ impl<'a> Device<'a> for Renderer {
                                         outline_cache: self.outline_cache.clone(),
                                         barcode_cache: self.barcode_cache.clone(),
                                         barcode_enabled: false,
+                                        barcode_divisor: self.barcode_divisor,
                                         barcode_cancel: self.barcode_cancel.clone(),
                                         cur_mask: None,
                                         in_type3_glyph: false,
@@ -3059,6 +3093,7 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         outline_cache: Rc::new(std::cell::RefCell::new(HashMap::new())),
         barcode_cache: Rc::new(std::cell::RefCell::new(BarcodeCache::default())),
         barcode_enabled: false,
+        barcode_divisor: 1,
         barcode_cancel: None,
         in_type3_glyph: false,
         scaler: Scaler::new(ResamplingFunction::CatmullRom),
@@ -3563,12 +3598,13 @@ mod barcode_cache_tests {
 }
 
 /// Count image occurrences without decoding, independently of viewport and cache residency.
-/// Over-budget pages retain ordinary smoothing throughout, including every requested tile.
-pub(crate) fn barcode_page_admitted<'a>(
+/// Over-budget or incompletely traversed pages retain ordinary smoothing in every tile.
+/// A successful count assigns every occurrence a fixed share of the page decoder budget.
+pub(crate) fn barcode_page_image_count<'a>(
     page: &'a hayro_interpret::hayro_syntax::page::Page<'a>,
     cache: &RenderCache<'a>,
     settings: &hayro_interpret::InterpreterSettings,
-) -> bool {
+) -> Option<usize> {
     use hayro_interpret::util::{RectExt, TransformExt};
     // Only visibility changes this metadata-only device's image count. It never paints
     // glyphs or decodes images, so font/CMap resolvers, warning sinks and decode budgets
@@ -3576,7 +3612,7 @@ pub(crate) fn barcode_page_admitted<'a>(
     // one-way token (InterpreterSettings' contract); never retain an interrupted pass.
     let cancelled = || settings.cancelled.as_ref().is_some_and(|stop| stop.load(Ordering::Relaxed));
     if cancelled() {
-        return false;
+        return None;
     }
     let cacheable = settings.ocg_overrides.len() <= 256;
     if cacheable
@@ -3589,21 +3625,31 @@ pub(crate) fn barcode_page_admitted<'a>(
                 && entry.ocg == *settings.ocg_overrides
         })
     {
-        return entry.admitted;
+        return entry.admitted.then_some(entry.images);
     }
     #[cfg(test)]
     cache.barcode_admission_passes.set(cache.barcode_admission_passes.get() + 1);
+    let incomplete = Arc::new(AtomicBool::new(false));
+    let observed = incomplete.clone();
+    let sink = settings.warning_sink.clone();
+    let mut admission_settings = settings.clone();
+    admission_settings.warning_sink = Arc::new(move |warning| {
+        if matches!(warning, hayro_interpret::InterpreterWarning::ContentTruncated) {
+            observed.store(true, Ordering::Relaxed);
+        }
+        sink(warning);
+    });
     let mut device = BarcodeAdmission::default();
     let mut state = hayro_interpret::Context::new(
         page.initial_transform(true).to_kurbo(),
         page.intersected_crop_box().to_kurbo(),
         &cache.interpreter_cache,
         page.xref(),
-        settings.clone(),
+        admission_settings,
     );
     hayro_interpret::interpret_page(page, &mut state, &mut device);
-    if cancelled() {
-        return false;
+    if cancelled() || incomplete.load(Ordering::Relaxed) {
+        return None;
     }
     let admitted = device.images <= 16 && device.pixels <= 8 * 1024 * 1024;
     let mut ocg = Vec::new();
@@ -3624,9 +3670,20 @@ pub(crate) fn barcode_page_admitted<'a>(
             preview: settings.preview,
             ocg,
             admitted,
+            images: (device.images as usize).max(1),
         });
     }
-    admitted
+    admitted.then_some((device.images as usize).max(1))
+}
+
+/// Whether a complete, uncancelled metadata traversal admits automatic protection (test compatibility helper).
+#[cfg(test)]
+pub(crate) fn barcode_page_admitted<'a>(
+    page: &'a hayro_interpret::hayro_syntax::page::Page<'a>,
+    cache: &RenderCache<'a>,
+    settings: &hayro_interpret::InterpreterSettings,
+) -> bool {
+    barcode_page_image_count(page, cache, settings).is_some()
 }
 
 // The borrowed page keeps its identity alive; an address reused by a later PDF cannot hit.
@@ -3638,6 +3695,7 @@ pub(crate) struct BarcodeAdmissionEntry<'a> {
     preview: bool,
     ocg: Vec<(i32, i32, bool)>,
     admitted: bool,
+    images: usize,
 }
 #[derive(Default)]
 struct BarcodeAdmission {
@@ -3658,4 +3716,54 @@ impl<'a> Device<'a> for BarcodeAdmission {
     }
     fn pop_clip_path(&mut self) {}
     fn pop_transparency_group(&mut self) {}
+}
+
+#[cfg(test)]
+mod barcode_diagnostic_tests {
+    use super::*;
+    #[test]
+    fn failure_categories_are_non_sensitive_and_log_retention_is_bounded() {
+        assert!(matches!(ScanFailure::from_error("deadline"), ScanFailure::Deadline));
+        assert!(matches!(ScanFailure::from_error("native QR error: private-payload"), ScanFailure::Decoder));
+        assert!(matches!(ScanFailure::from_error("pixel visit budget"), ScanFailure::WorkLimit));
+        let mut cache = BarcodeCache::default();
+        for _ in 0..100 {
+            for kind in [ScanFailure::Deadline, ScanFailure::WorkLimit, ScanFailure::Decoder, ScanFailure::Panic, ScanFailure::Declined] {
+                cache.record_failure(kind);
+            }
+        }
+        assert_eq!(cache.outcomes, [100, 100, 100, 100, 100, 0]);
+        assert_eq!(cache.reported, 31);
+    }
+}
+
+#[cfg(test)]
+mod barcode_diagnostic_path_tests {
+    use super::*;
+    #[test]
+    fn negative_cache_distinguishes_failures_from_successful_empty_scans() {
+        for failure in [false, true] {
+            let cache = RenderCache::new();
+            let mut renderer = Renderer::new(64, 64, RenderSettings::default(), &cache, None, false);
+            let image = ImageData::Luma(LumaData { width: 64, height: 64, data: vec![255; 4096], interpolate: false, scale_factors: (1.0, 1.0) });
+            crate::barcode::with_test_decoder(
+                move |_| Some(if failure { Err("deadline".into()) } else { Ok(Vec::new()) }),
+                || {
+                    assert!(renderer.barcode_overlays(&image, None).is_empty());
+                    assert!(renderer.barcode_overlays(&image, None).is_empty());
+                },
+            );
+            let stats = cache.barcode_cache.borrow();
+            assert_eq!(stats.outcomes[0], u32::from(failure));
+            assert_eq!(stats.outcomes[5], u32::from(!failure));
+            assert_eq!(stats.reported, u8::from(failure));
+        }
+    }
+}
+
+
+/// Inspect actual retained protection in synthetic tests, without exposing document data in production.
+#[cfg(test)]
+pub(crate) fn test_cached_region_count(cache: &RenderCache<'_>) -> usize {
+    cache.barcode_cache.borrow().entries.iter().map(|entry|entry.overlays.len()).sum()
 }

@@ -41,36 +41,67 @@ pub(crate) struct Region {
     pub(crate) pitch: f32,
 }
 
+/// Static per-occurrence share of one page's barcode allowance. No remaining-time pool:
+/// the same source on a tile, reordered page or cold cache receives the same share.
+#[derive(Clone, Copy)]
+struct ScanLimits {
+    millis: u64,
+    visits: usize,
+    calls: usize,
+}
+impl ScanLimits {
+    /// Admission fixes time/call shares before drawing. Source-sized headroom avoids spending
+    /// the entire share converting a large raster. Base visits sum to 64 Mi; headroom is twice
+    /// decoded source pixels (normally at most 16 Mi from page admission), each image <=64 Mi.
+    /// Even inconsistent source dimensions cannot exceed 192 Mi visits: sixteen images <=4 Mi.
+    fn for_images(images: usize, pixels: usize) -> Result<Self, String> {
+        if !(1..=16).contains(&images) || !(1..=4_194_304).contains(&pixels) {
+            return Err("page image budget".into());
+        }
+        Ok(Self {
+            millis: 1500 / images as u64,
+            visits: (64usize * 1024 * 1024 / images).saturating_add(pixels.saturating_mul(2)).min(64 * 1024 * 1024),
+            calls: 4096 / images,
+        })
+    }
+}
+
 struct Budget<'a> {
     cancel: &'a AtomicBool,
     start: Instant,
+    limits: ScanLimits,
     visits: usize,
     calls: usize,
 }
 impl Budget<'_> {
+    /// Check cooperative cancellation/deadline between bounded operations; a native call is not preemptible.
     fn poll(&self) -> Result<(), String> {
         if self.cancel.load(Ordering::Relaxed) {
             return Err("cancelled".into());
         }
-        if self.start.elapsed() > Duration::from_millis(1500) {
+        if self.start.elapsed() > Duration::from_millis(self.limits.millis) {
             return Err("deadline".into());
         }
         Ok(())
     }
+    /// Charge inspected source pixels against this occurrence's fixed page share.
     fn charge(&mut self, n: usize) -> Result<(), String> {
         self.poll()?;
         self.visits = self.visits.checked_add(n).ok_or("work overflow")?;
-        if self.visits > 64 * 1024 * 1024 {
+        if self.visits > self.limits.visits {
             return Err("pixel visit budget".into());
         }
         Ok(())
     }
+    /// Reserve one native decoder invocation before entering it.
     fn call(&mut self) -> Result<(), String> {
         self.poll()?;
         self.calls += 1;
-        if self.calls > 4096 {
+        if self.calls > self.limits.calls {
             return Err("native call budget".into());
         }
+        #[cfg(test)]
+        TEST_NATIVE_CALLS.with(|n| n.set(n.get() + 1));
         Ok(())
     }
 }
@@ -154,11 +185,16 @@ fn insert(regions: &mut Vec<Region>, region: Region) -> Result<(), String> {
     Ok(())
 }
 
-/// Revalidate native Code128 framing/checksum for all three start code sets.
+/// Require a supported printable payload as well as a valid native Code128 frame.
 fn valid_code128(result: &RXingResult) -> bool {
-    let raw = result.getRawBytes();
     let text = result.getText();
-    if raw.len() < 4 || raw.len() > 259 || text.is_empty() || text.len() > 256 || !text.bytes().all(|c| (32..127).contains(&c)) {
+    !text.is_empty() && text.len() <= 256 && text.bytes().all(|c| (32..127).contains(&c)) && valid_code128_framing(result)
+}
+
+/// Validate bounded framing/checksum independently of payload policy, so rejected payloads can be skipped safely.
+fn valid_code128_framing(result: &RXingResult) -> bool {
+    let raw = result.getRawBytes();
+    if raw.len() < 4 || raw.len() > 259 {
         return false;
     }
     let Some((&start, tail)) = raw.split_first() else {
@@ -198,7 +234,7 @@ fn valid_ean(text: &str) -> bool {
 /// Locate the complete first/last bar from measured runs, not scanline point-box padding.
 fn row_span(bits: &[bool], result: &RXingResult) -> Option<(usize, usize, f32)> {
     let ean = matches!(result.getBarcodeFormat(), BarcodeFormat::EAN_13 | BarcodeFormat::UPC_A);
-    if !(if ean { valid_ean(result.getText()) } else { valid_code128(result) }) {
+    if !(if ean { valid_ean(result.getText()) } else { valid_code128_framing(result) }) {
         return None;
     }
     let point = result.getPoints().first()?;
@@ -285,7 +321,11 @@ fn same_row(view: &View<'_>, y: usize, x0: usize, pattern: &[bool], budget: &mut
     Ok(true)
 }
 
+/// Extend a checksum-valid scanline through the actual bar pixels, then validate a complete quiet ring.
 fn reconstruct_bar(view: &View<'_>, y: usize, bits: &[bool], result: &RXingResult, budget: &mut Budget<'_>) -> Result<Option<Region>, String> {
+    if matches!(result.getBarcodeFormat(), BarcodeFormat::CODE_128) && !valid_code128(result) {
+        return Ok(None);
+    }
     let Some((x0, x1, pitch)) = row_span(bits, result) else {
         return Ok(None);
     };
@@ -300,6 +340,32 @@ fn reconstruct_bar(view: &View<'_>, y: usize, bits: &[bool], result: &RXingResul
     }
     if y1 - y0 < 8 {
         return Ok(None);
+    }
+    if matches!(result.getBarcodeFormat(), BarcodeFormat::EAN_13 | BarcodeFormat::UPC_A) {
+        // Retail guards can extend below the data band (UPC also extends its outside digits).
+        // Accept only that measured sub-pattern, never arbitrary ink in the surrounding ring.
+        let upc = *result.getBarcodeFormat() == BarcodeFormat::UPC_A || result.getText().starts_with('0');
+        let extension: Vec<bool> = pattern
+            .iter()
+            .enumerate()
+            .map(|(x, black)| {
+                let module = (x as f32 / pitch).floor() as usize;
+                *black && (module < 3 || (45..50).contains(&module) || module >= 92 || (upc && !(10..85).contains(&module)))
+            })
+            .collect();
+        let limit = (8.0 * pitch).ceil() as usize;
+        for _ in 0..limit {
+            if y0 == 0 || !same_row(view, y0 - 1, x0, &extension, budget)? {
+                break;
+            }
+            y0 -= 1;
+        }
+        for _ in 0..limit {
+            if y1 >= view.height() || !same_row(view, y1, x0, &extension, budget)? {
+                break;
+            }
+            y1 += 1;
+        }
     }
     let margin = (12.0 * pitch).ceil() as usize;
     let guard = (pitch.ceil() as usize + 1).max(4);
@@ -323,6 +389,8 @@ fn reconstruct_bar(view: &View<'_>, y: usize, bits: &[bool], result: &RXingResul
     Ok(Some(Region { format: format.into(), payload: payload.into(), ink: view.source_rect(ink), quiet: view.source_rect(quiet), pitch }))
 }
 
+/// Search both axes, directions and polarities with bounded calls, excluding accepted and rejected physical row spans.
+/// At the native-call cap, return the fully validated subset; cancellation and other failures remain errors.
 fn scan_bars(gray: &Gray, regions: &mut Vec<Region>, budget: &mut Budget<'_>) -> Result<(), String> {
     let hints = DecodeHints {
         PossibleFormats: Some(HashSet::from([BarcodeFormat::CODE_128, BarcodeFormat::EAN_13, BarcodeFormat::UPC_A])),
@@ -356,15 +424,28 @@ fn scan_bars(gray: &Gray, regions: &mut Vec<Region>, budget: &mut Budget<'_>) ->
                                 row.set(x);
                             }
                         }
+                        // Only complete, checksum/geometry/quiet-zone-validated regions enter this list.
+                        // Exhausting further search calls must not erase that validated subset. Other
+                        // failures (including cancellation/deadline) still discard the image's result.
+                        if budget.calls >= budget.limits.calls && !regions.is_empty() {
+                            budget.poll()?;
+                            return Ok(());
+                        }
                         budget.call()?;
                         let result = MultiFormatOneDReader::new(&hints).decode_row(y as u32, &row, &hints);
                         let Ok(result) = result else {
                             break;
                         };
-                        let Some(region) = reconstruct_bar(&view, y, &bits, &result, budget)? else {
+                        if let Some(region) = reconstruct_bar(&view, y, &bits, &result, budget)? {
+                            insert(regions, region)?;
+                        } else if let Some((x0, x1, _)) = row_span(&bits, &result) {
+                            // A checksum-valid row may fail complete-region/quiet-zone validation.
+                            // Exclude only its measured bar span from this row's bounded search;
+                            // it is never inserted as a protected region.
+                            bits.get_mut(x0..x1).ok_or("rejected bar span")?.fill(false);
+                        } else {
                             break;
-                        };
-                        insert(regions, region)?;
+                        }
                     }
                 }
             }
@@ -480,19 +561,32 @@ fn reconstruct_qr(gray: &Gray, result: &RXingResult, budget: &mut Budget<'_>) ->
 // std::time::Instant has no clock on bare wasm32-unknown-unknown. Keep the established
 // renderer behavior there until a supported cancellable clock is supplied.
 #[cfg(target_arch = "wasm32")]
-pub(crate) fn detect(_: usize, _: usize, _: &[u8], _: Option<&[u8]>, _: &AtomicBool) -> Result<Vec<Region>, String> {
+pub(crate) fn detect_with_divisor(_: usize, _: usize, _: &[u8], _: Option<&[u8]>, _: &AtomicBool, _: usize) -> Result<Vec<Region>, String> {
     Err("barcode regions unavailable on this target".into())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn detect(width: usize, height: usize, rgba: &[u8], mask: Option<&[u8]>, cancel: &AtomicBool) -> Result<Vec<Region>, String> {
+/// Decode one image within its deterministic share of the page's cooperative time/work limits.
+pub(crate) fn detect_with_divisor(
+    width: usize,
+    height: usize,
+    rgba: &[u8],
+    mask: Option<&[u8]>,
+    cancel: &AtomicBool,
+    divisor: usize,
+) -> Result<Vec<Region>, String> {
+    let count = checked_pixels(width, height)?;
+    let limits = ScanLimits::for_images(divisor, count)?;
+    #[cfg(test)]
+    let limits = ScanLimits { millis: TEST_DEADLINE.with(|v| v.get()).unwrap_or(limits.millis), ..limits };
+    #[cfg(test)]
+    TEST_SCAN_MILLIS.with(|v| v.set(limits.millis));
     #[cfg(test)]
     if let Some(result) = TEST_DECODER.with(|hook| hook.borrow_mut().as_mut().and_then(|hook| hook(cancel))) {
         return result;
     }
-    let mut budget = Budget { cancel, start: Instant::now(), visits: 0, calls: 0 };
+    let mut budget = Budget { cancel, start: Instant::now(), limits, visits: 0, calls: 0 };
     budget.poll()?;
-    let count = checked_pixels(width, height)?;
     if rgba.len() != count.checked_mul(4).ok_or("RGBA overflow")? {
         return Err("RGBA length".into());
     }
@@ -553,6 +647,12 @@ pub(crate) fn detect(width: usize, height: usize, rgba: &[u8], mask: Option<&[u8
     scan_bars(&gray, &mut regions, &mut budget)?;
     budget.poll()?;
     Ok(regions)
+}
+
+/// Standalone geometry tests use the single-image page allowance.
+#[cfg(test)]
+pub(crate) fn detect(width: usize, height: usize, rgba: &[u8], mask: Option<&[u8]>, cancel: &AtomicBool) -> Result<Vec<Region>, String> {
+    detect_with_divisor(width, height, rgba, mask, cancel, 1)
 }
 
 fn checked_pixels(w: usize, h: usize) -> Result<usize, String> {
@@ -646,6 +746,49 @@ mod tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod review_regressions {
+    use super::*;
+    #[test]
+    fn extended_retail_guards_are_inside_complete_regions() {
+        for upc in [false, true] {
+            let (data, ink, quiet) = crate::barcode_render_tests::retail_fixture(upc, true);
+            let rgba = data.iter().flat_map(|v| [*v, *v, *v, 255]).collect::<Vec<_>>();
+            let regions = detect(700, 1000, &rgba, None, &AtomicBool::new(false)).unwrap();
+            assert_eq!(regions.len(), 1, "upc={upc}: {regions:?}");
+            assert_eq!(regions[0].ink, ink);
+            assert!(regions[0].quiet.contains(quiet));
+        }
+    }
+    #[test]
+    fn rejected_outer_symbols_do_not_hide_a_valid_middle_symbol() {
+        const W: usize = 1000;
+        const H: usize = 400;
+        let bits = b"1101001000010100011000100010110001100011101011";
+        let mut data = vec![255u8; W * H * 4];
+        for x0 in [50, 350, 650] {
+            for y in 200..280 {
+                for (i, b) in bits.iter().enumerate() {
+                    if *b == b'1' {
+                        for x in x0 + i * 3..x0 + i * 3 + 3 {
+                            data[(y * W + x) * 4..(y * W + x) * 4 + 3].fill(0);
+                        }
+                    }
+                }
+            }
+        }
+        for y in 200..280 {
+            for x in [25, 810] {
+                data[(y * W + x) * 4..(y * W + x) * 4 + 3].fill(0);
+            }
+        }
+        let regions = detect(W, H, &data, None, &AtomicBool::new(false)).unwrap();
+        assert_eq!(regions.len(), 1, "{regions:?}");
+        assert_eq!(regions[0].ink.x0, 350);
+    }
+}
+
+#[cfg(test)]
 type TestDecoder = Box<dyn FnMut(&AtomicBool) -> Option<Result<Vec<Region>, String>>>;
 
 #[cfg(test)]
@@ -665,4 +808,149 @@ pub(crate) fn with_test_decoder<T>(hook: impl FnMut(&AtomicBool) -> Option<Resul
     }
     let _restore = Restore(TEST_DECODER.with(|slot| slot.replace(Some(Box::new(hook)))));
     run()
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static TEST_SCAN_MILLIS: std::cell::Cell<u64> = const { std::cell::Cell::new(1500) };
+    static TEST_RASTERS: std::cell::RefCell<Vec<(u32,u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+#[cfg(test)]
+pub(crate) fn test_scan_millis() -> u64 {
+    TEST_SCAN_MILLIS.with(std::cell::Cell::get)
+}
+#[cfg(test)]
+pub(crate) fn observe_raster(width: u32, height: u32) {
+    TEST_RASTERS.with(|v| v.borrow_mut().push((width, height)));
+}
+#[cfg(test)]
+pub(crate) fn take_rasters() -> Vec<(u32, u32)> {
+    TEST_RASTERS.with(|v| std::mem::take(&mut *v.borrow_mut()))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod page_limit_tests {
+    use super::*;
+    #[test]
+    fn maximum_raster_keeps_work_after_preprocessing() {
+        let stop = AtomicBool::new(false);
+        let limits = ScanLimits::for_images(16, 4 * 1024 * 1024).unwrap();
+        let mut b = Budget { cancel: &stop, start: Instant::now(), limits, visits: 0, calls: 0 };
+        b.charge(4 * 1024 * 1024).unwrap();
+        assert!(b.charge(1).is_ok(), "preprocessing cannot consume all geometry work");
+    }
+    #[test]
+    fn shared_page_time_visits_and_calls_are_enforced_without_sleeping() {
+        let stop = AtomicBool::new(false);
+        let limits = ScanLimits::for_images(16, 512 * 1024).unwrap();
+        assert!(limits.millis * 16 <= 1500);
+        assert!(limits.visits * 16 <= 80 * 1024 * 1024);
+        assert!(limits.calls * 16 <= 4096);
+        let mut b = Budget { cancel: &stop, start: Instant::now() - Duration::from_millis(limits.millis + 1), limits, visits: 0, calls: 0 };
+        assert_eq!(b.poll(), Err("deadline".into()));
+        b.start = Instant::now();
+        assert_eq!(b.charge(limits.visits + 1), Err("pixel visit budget".into()));
+        b.calls = limits.calls;
+        assert_eq!(b.call(), Err("native call budget".into()));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod rejected_payload_regression {
+    use super::*;
+    #[test]
+    fn unsupported_outer_payloads_do_not_hide_a_supported_middle() {
+        const W: usize = 1000;
+        const H: usize = 400;
+        let outer = b"1101001000010111101000101111000101100011101011";
+        let middle = b"1101001000010100011000100010110001100011101011";
+        let mut rgba = vec![255; W * H * 4];
+        for (x0, bits) in [(50, outer), (350, middle), (650, outer)] {
+            for y in 200..280 {
+                for (i, bit) in bits.iter().enumerate() {
+                    if *bit == b'1' {
+                        for x in x0 + i * 3..x0 + i * 3 + 3 {
+                            rgba[(y * W + x) * 4..(y * W + x) * 4 + 3].fill(0);
+                        }
+                    }
+                }
+            }
+        }
+        let found = detect(W, H, &rgba, None, &AtomicBool::new(false)).unwrap();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].ink.x0, 350);
+    }
+}
+
+// These thread-local probes isolate deterministic call exhaustion from machine speed.
+// Production limits and cancellation remain unchanged.
+#[cfg(test)]
+std::thread_local! {
+    static TEST_DEADLINE: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    static TEST_NATIVE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(crate) fn take_native_calls() -> usize {
+    TEST_NATIVE_CALLS.with(|n| n.replace(0))
+}
+#[cfg(test)]
+pub(crate) fn without_test_deadline<T>(run: impl FnOnce() -> T) -> T {
+    struct Restore(Option<u64>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_DEADLINE.with(|v| v.set(self.0));
+        }
+    }
+    let _restore = Restore(TEST_DEADLINE.with(|v| v.replace(Some(u64::MAX))));
+    run()
+}
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod call_exhaustion_tests {
+    use super::*;
+    use crate::barcode_render_tests::call_limit_fixture;
+    #[test]
+    fn call_exhaustion_retains_only_fully_validated_regions() {
+        let stop = AtomicBool::new(false);
+        for kind in [0, 1, 2, 3] {
+            let (pixels, ink, quiet) = call_limit_fixture(0, kind);
+            let gray = Gray { w: 1400, h: 1400, pixels, threshold: 127 };
+            let limits = ScanLimits { millis: u64::MAX, ..ScanLimits::for_images(4, 1400 * 1400).unwrap() };
+            let mut b = Budget { cancel: &stop, start: Instant::now(), limits, visits: 0, calls: 1 };
+            let mut regions = Vec::new();
+            take_native_calls();
+            let result = scan_bars(&gray, &mut regions, &mut b);
+            let calls = take_native_calls();
+            println!("kind={kind} result={result:?} validated={} calls={calls} quota={} visits={}", regions.len(), limits.calls, b.visits);
+            assert!(calls <= 1023);
+            if kind == 0 {
+                assert_eq!(regions.len(), 1);
+                assert_eq!(regions[0].ink, ink);
+                assert_eq!(regions[0].quiet, quiet);
+                assert!(result.is_ok(), "later call exhaustion discarded a complete region: {result:?}");
+                // A validated prefix never bypasses cancellation, deadline or pixel limits.
+                for failure in 0..3 {
+                    let mut prefix = regions.clone();
+                    let mut b = Budget { cancel: &stop, start: Instant::now(), limits, visits: 0, calls: limits.calls };
+                    if failure == 0 {
+                        stop.store(true, Ordering::Relaxed);
+                    }
+                    if failure == 1 {
+                        b.limits.millis = 0;
+                        b.start -= Duration::from_millis(1);
+                    }
+                    if failure == 2 {
+                        b.visits = limits.visits;
+                    }
+                    assert!(scan_bars(&gray, &mut prefix, &mut b).is_err());
+                    stop.store(false, Ordering::Relaxed);
+                }
+            } else {
+                assert!(regions.is_empty(), "invalid candidate was protected: {regions:?}");
+                assert_eq!(result, Err("native call budget".into()));
+            }
+        }
+    }
 }

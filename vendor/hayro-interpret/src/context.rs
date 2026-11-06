@@ -97,7 +97,7 @@ pub(crate) fn content_was_truncated() -> bool {
 }
 
 /// PdfCraft patch: count a paint at `depth` (top-level ones are free); `false` once this
-/// page's budget is spent, and the paint is skipped.
+/// page's budget is spent, and the paint is skipped and reported as truncated content.
 pub(crate) fn take_nested_paint(depth: u32) -> bool {
     if depth < 2 {
         return true;
@@ -105,6 +105,7 @@ pub(crate) fn take_nested_paint(depth: u32) -> bool {
     NESTED_PAINTS.with(|n| {
         let used = n.get();
         if used >= MAX_NESTED_PAINTS {
+            CONTENT_TRUNCATED.with(|truncated| truncated.set(true));
             return false;
         }
         n.set(used + 1);
@@ -493,6 +494,7 @@ impl<'a> Context<'a> {
 
     pub(crate) fn begin_nested_interpretation(&mut self) -> bool {
         if self.nesting_depth >= MAX_NESTED_INTERPRETATION_DEPTH {
+            CONTENT_TRUNCATED.with(|truncated| truncated.set(true));
             warn!("interpreter nesting depth exceeded");
 
             return false;
