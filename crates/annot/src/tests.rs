@@ -2779,3 +2779,31 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     check(&doc);
     check(&reopen(&doc));
 }
+
+/// Pages sharing one indirect `/Annots` array have it copied once by the consumers that visit each
+/// annotation once, not once per page.
+#[test]
+fn document_wide_scans_copy_a_shared_annots_array_once() {
+    let mut doc = fixture();
+    let root = ObjRef { num: 2, generation: 0 };
+    let mut note = Dict::new();
+    note.set(b"Type".to_vec(), Object::name("Annot"));
+    note.set(b"Subtype".to_vec(), Object::name("Text"));
+    note.set(b"Rect".to_vec(), Object::Array([10, 10, 30, 30].map(Object::Int).to_vec()));
+    let note = doc.add(note);
+    let shared = doc.add(Object::Array(std::iter::repeat_n(Object::Ref(note), 100).collect()));
+    let pages: Vec<Object> = (0..500)
+        .map(|_| {
+            let mut d = Dict::new();
+            d.set(b"Type".to_vec(), Object::name("Page"));
+            d.set(b"Annots".to_vec(), Object::Ref(shared));
+            Object::Ref(doc.add(d))
+        })
+        .collect();
+    doc.update_dict(root, |d| d.set(b"Kids".to_vec(), Object::Array(pages))).unwrap();
+    ANNOTS_ENTRIES_COPIED.with(|c| c.set(0));
+    assert!(!has_visible_fill_sign(&doc));
+    assert!(with_missing_appearances(&doc).is_some());
+    let copied = ANNOTS_ENTRIES_COPIED.with(std::cell::Cell::get);
+    assert!(copied <= 200, "{copied} annotation entries copied");
+}

@@ -1,5 +1,5 @@
 use super::create::{finite, num_array};
-use super::lookup::{annot_dict, annots, page_refs};
+use super::lookup::{annot_dict, annots, page_refs, with_distinct_annots};
 use super::modify::refuse_foreign_text;
 use super::types::NOTE_SIZE;
 use super::{AnnotError, Dict, Document, ObjRef, Object, Stream, appearance};
@@ -163,7 +163,7 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
     // reads `doc`, which never gets the appearance, so every repeat used to add another stream to
     // the copy, and the display bytes grew with the number of listings.
     let mut seen = std::collections::HashSet::new();
-    for page in page_refs(doc).ok()? {
+    for page in with_distinct_annots(doc, page_refs(doc).ok()?) {
         for r in annots(doc, page).iter().filter_map(Object::as_ref) {
             if !seen.insert(r) {
                 continue;

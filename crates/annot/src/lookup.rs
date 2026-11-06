@@ -73,6 +73,14 @@ pub(crate) fn page_ref(doc: &Document, page: usize) -> Result<ObjRef, AnnotError
     page_refs(doc)?.get(page).copied().ok_or(AnnotError::NoSuchPage(page))
 }
 
+/// `pages` without those whose `/Annots` is an indirect array an earlier page already lists. For a
+/// consumer that visits each annotation once however often it is listed: a shared array is then
+/// copied and scanned once, not once per page that names it.
+pub(crate) fn with_distinct_annots(doc: &Document, pages: Vec<ObjRef>) -> Vec<ObjRef> {
+    let mut seen = std::collections::HashSet::new();
+    pages.into_iter().filter(|p| doc.get(*p).as_dict().and_then(|d| d.reference(b"Annots")).is_none_or(|r| seen.insert(r))).collect()
+}
+
 /// The entries of a page's `/Annots` (references or inline dictionaries).
 pub(crate) fn annots(doc: &Document, page: ObjRef) -> Vec<Object> {
     let obj = doc.get(page);
@@ -172,7 +180,7 @@ pub(crate) fn drawn_upright(doc: &Document, d: &Dict) -> bool {
 /// Whether any page has a Fill & Sign annotation that flatten would bake in (not hidden).
 pub fn has_visible_fill_sign(doc: &Document) -> bool {
     let Ok(pages) = page_refs(doc) else { return false };
-    for page in pages {
+    for page in with_distinct_annots(doc, pages) {
         for entry in annots(doc, page) {
             let obj = doc.resolve(&entry);
             let Some(d) = obj.as_dict() else { continue };
