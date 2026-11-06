@@ -31,7 +31,7 @@ enum Node {
 
 /// A picking index over a model's meshes: the same answers as [`crate::pick`], faster when one
 /// model is picked many times. It copies the triangles' corners, so it does not borrow the
-/// meshes; rebuild it when they change.
+/// meshes; rebuild it when they change. It holds about 130 bytes per drawn triangle.
 #[derive(Debug, Clone, Default)]
 pub struct PickIndex {
     prims: Vec<Prim>,

@@ -32,5 +32,5 @@ PickIndex::new(&[WorldMesh]) / .pick(&Ray) / .pick_where(&Ray, max_distance, inc
 - Picking inverts the render's projection: a pick at a pixel centre hits exactly where `render` paints, both faces count,
   fully transparent triangles are passed through, and a tie goes to the lower (mesh, triangle). `Hit::normal` is the
   face normal from the winding. `PickIndex` is a bounding-volume hierarchy giving the same answers as `pick`, for many
-  picks on one model.
+  picks on one model. It holds about 130 bytes per drawn triangle, about 2 GB at the `assemble` cap.
 - Not yet: shadows, ambient occlusion, specular light, scene lights, textures, wires and markups.

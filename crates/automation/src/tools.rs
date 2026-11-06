@@ -202,7 +202,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "direction": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
                 "perspective": { "type": "boolean" }
             }), &["doc", "page"])),
-        t("model_pick", "Pick a point on a 3D model", "Find what of a page's 3D model lies under a position of the picture model_render draws with the same model, width, height, direction and perspective. at is [x, y] in pixels from the picture's top left (a pixel's centre is its index plus 0.5). Gives { hit: { mesh, triangle, point, normal, distance } }, mesh and triangle 1-based among the placed model's meshes and that mesh's triangles, point and normal in model coordinates, distance from the eye; hit is null over the background. Does not modify the document.")
+        t("model_pick", "Pick a point on a 3D model", "Find what of a page's 3D model lies under a position of the picture model_render draws with the same model, width, height, direction and perspective. at is [x, y] in pixels from the picture's top left (a pixel's centre is its index plus 0.5), from 0 up to the width and height. Gives { hit: { mesh, triangle, point, normal, distance } }, mesh and triangle 1-based among the placed model's meshes and that mesh's triangles, point and normal in model coordinates, distance along the pick ray (from the eye in perspective, from the picture plane in orthographic); hit is null over the background. Does not modify the document.")
             .ro()
             .with(schema(json!({ "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "model": { "type": "integer", "minimum": 1 },
                 "at": { "type": "array", "items": { "type": "number", "minimum": 0 }, "minItems": 2, "maxItems": 2 },

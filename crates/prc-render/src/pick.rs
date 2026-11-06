@@ -102,6 +102,8 @@ pub(crate) fn intersect(&[a, b, c]: &[[f64; 3]; 3], ray: &Ray) -> Option<Hit> {
     let normal = unit_cross(e1, e2)?;
     let p = cross(ray.direction, e2);
     let det = dot(e1, p);
+    // A ray within rounding of the triangle's plane meets it nowhere useful; the scale keeps the
+    // test independent of the model's size.
     if det.abs() < f64::EPSILON * dot(e1, e1).max(dot(e2, e2)) {
         return None;
     }

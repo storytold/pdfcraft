@@ -136,8 +136,7 @@ fn a_fully_transparent_or_broken_triangle_is_left_out() {
     assert!(rays().iter().all(|r| index.pick(r).is_none()));
 }
 
-/// A model of the most triangles the renderer places builds a shallow tree: median splits halve
-/// each range.
+/// The worst split still builds a shallow tree: median splits halve each range.
 #[test]
 fn the_tree_stays_shallow() {
     fn depth(index: &PickIndex, n: usize) -> usize {
