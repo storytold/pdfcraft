@@ -1,4 +1,4 @@
-use super::listing::{mk_rotation, nums, sig_fields};
+use super::listing::{DigestCache, mk_rotation, nums, sig_fields};
 use super::{Certificate, Dict, DigestAlg, DigitalId, Document, HashSet, Object, PdfString, SaveOptions, SignError, SignedData, Stream};
 
 // ── signing ─────────────────────────────────────────────────────────────────────────────────
@@ -89,6 +89,67 @@ pub struct SignOptions {
     pub graphic: Option<crate::graphic::Graphic>,
 }
 
+/// A document certified "no changes" (DocMDP `/P 1`, ISO 32000-2 §12.8.2.2, Table 257) permits no
+/// further signature, so signing it would make a document that reads as modified. The level is
+/// the certification signature's own, read from the revision that signature covers as the
+/// validator does: the catalog's `/Perms /DocMDP` link is not needed, and a later revision that
+/// rewrites `/P` or the link does not relax it (#1788).
+fn check_certification(doc: &Document) -> Result<(), SignError> {
+    let bytes = doc.bytes();
+    let cache = DigestCache::default();
+    let fields = sig_fields(doc);
+    let ends = doc.revision_ends();
+    let mut historical_scan = None;
+    let certified = fields.iter().filter_map(|field| field.signature(doc).map(|signature| (field, signature))).any(|(field, signature)| {
+        let range = nums(doc, &signature, b"ByteRange").filter(|b| b.len() == 4 && b.iter().all(|x| x.is_finite() && *x >= 0.0));
+        let signed = range.as_ref().and_then(|b| {
+            let covered = b[2] + b[3];
+            if !covered.is_finite() || covered <= 0.0 || covered > bytes.len() as f64 {
+                return None;
+            }
+            let covered = covered as usize;
+            let old = cache.revision(doc, bytes, covered)?;
+            let old_fields = sig_fields(&old);
+            old_fields.iter().find_map(|old_field| {
+                if old_field.name != field.name {
+                    return None;
+                }
+                let old_signature = old_field.signature(&old)?;
+                let matches_revision = nums(&old, &old_signature, b"ByteRange").is_some_and(|r| r.len() == 4 && r[2] + r[3] == covered as f64);
+                matches_revision.then(|| super::validate::docmdp(&old, &old_signature))
+            })
+        });
+        // A signature whose signed revision is unreadable keeps the level it states now.
+        if let Some(level) = signed {
+            return level == Some(1);
+        }
+        if super::validate::docmdp(doc, &signature) == Some(1) {
+            return true;
+        }
+        // A rewritten range or removed field can hide the signature in the current file.
+        // Scan earlier revisions once, and reuse the result for every signature field.
+        *historical_scan.get_or_insert_with(|| {
+            ends.iter().copied().any(|end| {
+                if end > bytes.len() {
+                    return false;
+                }
+                let Some(old) = cache.revision(doc, bytes, end) else { return false };
+                sig_fields(&old).iter().filter_map(|f| f.signature(&old)).any(|s| {
+                    nums(&old, &s, b"ByteRange")
+                        .is_some_and(|r| r.len() == 4 && r.iter().all(|n| n.is_finite() && *n >= 0.0) && r[2] + r[3] == end as f64)
+                        && super::validate::docmdp(&old, &s) == Some(1)
+                })
+            })
+        })
+    });
+    if certified {
+        return Err(SignError::Pdf(
+            "the document was certified with no changes allowed, so it can't be signed again; ask its author for an uncertified copy".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// What an encrypted document's permissions (ISO 32000-2 §7.6.4.2, Table 22) allow when it was
 /// opened with the user password (the owner may do anything): signing an existing, empty
 /// signature field is filling in a form field (bit 9, or bit 6); creating a new signature
@@ -151,6 +212,7 @@ fn sign_inner(
     if doc.encryption_changed() {
         return Err(SignError::Pdf("save the document's new security settings before signing it".into()));
     }
+    check_certification(doc)?;
     check_signing_permissions(doc, opts)?;
     let mut doc = doc.clone();
     let root = doc.root().ok_or_else(|| SignError::Pdf("the document has no catalog".into()))?;
