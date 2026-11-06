@@ -494,8 +494,14 @@ pub(crate) fn prune_type3_from_resources(doc: &Document, res: &mut Dict, content
     // other files are not refused over them.
     if fonts.iter().any(|(_, f)| doc.resolve(f).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Type3"))) {
         if let Some(page) = page {
+            // One total for all of them, as for the content: each appearance under the cap could
+            // still add up to far more than it.
             for data in resourceless_appearances(doc, page)? {
-                ops.extend(crate::interp::resource_ops(doc, res, std::slice::from_ref(&data))?);
+                let more = crate::interp::resource_ops(doc, res, std::slice::from_ref(&data))?;
+                if ops.len().saturating_add(more.len()) > 2_000_000 {
+                    return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect annotation appearances".into() });
+                }
+                ops.extend(more);
             }
         }
         let known = ops.len();
