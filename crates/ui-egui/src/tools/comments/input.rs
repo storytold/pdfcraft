@@ -173,13 +173,18 @@ pub(crate) fn context(cx: &PageCx<'_>, index: Option<usize>, view: &mut DocView)
     view.comments.selected = index.map(|i| (cx.page, i));
 }
 
+/// Whether the page shows a tip for what lies under the pointer (a comment, a signature's badge)
+/// with `tool`: not with Fill & Sign, whose placement stays clear; not while drawing freehand,
+/// where it would cover the next stroke (#429); and not while a comment is moved, resized or drawn.
+pub(crate) fn tips_shown(tool: QuickTool, view: &DocView) -> bool {
+    let freehand = matches!(tool, QuickTool::Comment(CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Eraser));
+    !(matches!(tool, QuickTool::Fill(_)) || freehand || view.comments.gesture.is_some())
+}
+
 /// The tip for the comment under the pointer, with any tool, beside that tool's own cursor: Acrobat
-/// shows a comment's tooltip whatever tool is active. Not with Fill & Sign, whose placement stays
-/// clear; not while drawing freehand, where it would cover the next stroke (#429); and not while a
-/// comment is moved, resized or drawn.
+/// shows a comment's tooltip whatever tool is active. Not where [`tips_shown`] says no.
 pub(crate) fn describe(cx: &PageCx<'_>, view: &mut DocView) {
-    let freehand = matches!(cx.tool, QuickTool::Comment(CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Eraser));
-    if matches!(cx.tool, QuickTool::Fill(_)) || freehand || view.comments.gesture.is_some() {
+    if !tips_shown(cx.tool, view) {
         return;
     }
     let Some(p) = cx.ptr.pos else { return };

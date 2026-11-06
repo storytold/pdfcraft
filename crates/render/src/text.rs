@@ -23,6 +23,9 @@ pub struct TextFilter {
     pub code: bool,
     /// Exclude Figure-marked text and invisible text layers, including OCR.
     pub images: bool,
+    /// Exclude `/ActualText` that marks no glyph, whose words are drawn as outlines or pictures:
+    /// a page's own text, for deciding whether it still needs reading from its pixels.
+    pub painted: bool,
     /// Page-local MCIDs whose structure ancestors match the selected exclusions.
     pub mcids: HashSet<i32>,
 }
