@@ -311,4 +311,36 @@ mod tests {
         other.set(b"Name".to_vec(), Object::name("PCHebrewX"));
         assert!(!is_type3_fallback(&other));
     }
+
+    /// A 宋体 line must keep a serif stand-in; 黑体 is a sans design and stays sans (#2095).
+    #[test]
+    fn a_cjk_source_font_names_its_own_style() {
+        for name in ["LNUHNF+SimSun", "NSimSun", "ABCDEF+STSong-Light", "Songti SC", "KaiTi", "FangSong"] {
+            assert_eq!(fallback::source_family(name), crate::added::Family::Times, "{name}");
+        }
+        for name in ["ABCDEF+SimHei", "ABCDEF+MicrosoftYaHei", "Helvetica", "ABCDEF+DengXian"] {
+            assert_eq!(fallback::source_family(name), crate::added::Family::Helvetica, "{name}");
+        }
+        assert_eq!(fallback::source_family("ABCDEF+Times-Roman"), crate::added::Family::Times);
+    }
+
+    /// Han text no Japanese face can draw in full leads with a Chinese face when the build has one;
+    /// kanji the Japanese faces do carry, and kana, stay in a Japanese face (#2095).
+    #[test]
+    fn han_text_the_japanese_faces_cannot_draw_leads_with_a_chinese_face() {
+        let lead = |text: &str| fallback::type3_faces(text, crate::added::Family::Times, false).unwrap().0[0];
+        let has_hans = pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.covers("Hans"));
+        let japanese = lead("見本商会　御中");
+        let kana = lead("関連イベント");
+        let han = lead("关联事件");
+        if !has_hans {
+            // A build with no Chinese face, so nothing moves (#2095 stays open).
+            assert!(!japanese.scripts.contains(&"Hans") && !kana.scripts.contains(&"Hans") && !han.scripts.contains(&"Hans"));
+            return;
+        }
+        assert!(!japanese.covers("Hans"), "kanji the Japanese faces carry moved to {}", japanese.name());
+        assert!(!kana.covers("Hans"), "kana must keep a Japanese face, got {}", kana.name());
+        // 联 U+8054 is Simplified-only: no Japanese face has it, so the line is drawn in Chinese.
+        assert!(han.covers("Hans"), "Han text with 联 kept {}", han.name());
+    }
 }

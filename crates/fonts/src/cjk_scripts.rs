@@ -10,7 +10,10 @@ pub const MAX_OTHER_CJK_BYTES: u64 = 4 << 20;
 
 /// Reviewed native-only UI fallback from the separate Chinese manifest.
 /// It is never included in the browser payload. Other CJK families keep the 4 MiB cap.
-pub const NATIVE_UI_CJK_FAMILIES: [&str; 1] = ["LXGW WenKai Lite"];
+///
+/// Local fork: the Noto Sans/Serif SC subsets (fonts/simplified-chinese-manifest.txt) are the
+/// Simplified Chinese faces this build ships with, so they take the same native-only cap.
+pub const NATIVE_UI_CJK_FAMILIES: [&str; 3] = ["LXGW WenKai Lite", "Noto Sans SC", "Noto Serif SC"];
 pub const MAX_NATIVE_UI_CJK_BYTES: u64 = 16 << 20;
 
 /// ISO 15924 codes of the Han, Japanese and Korean scripts, Hangul on its own included.

@@ -174,7 +174,25 @@ pub(crate) fn source_family(base_font: &str) -> crate::added::Family {
     if ["courier", "mono", "consolas", "menlo", "monaco", "lucida console"].iter().any(|s| name.contains(s)) {
         crate::added::Family::Courier
     } else if !name.contains("sans")
-        && ["times", "serif", "roman", "mincho", "cambria", "georgia", "palatino", "garamond"].iter().any(|s| name.contains(s))
+        && [
+            "times",
+            "serif",
+            "roman",
+            "mincho",
+            "cambria",
+            "georgia",
+            "palatino",
+            "garamond",
+            // The serif CJK designs: 宋体/Songti sources must keep a serif stand-in, not Mincho's
+            // Gothic counterpart. "song" also covers the 宋体 transliterations (SimSun, STSong).
+            "simsun",
+            "songti",
+            "song",
+            "kai",
+            "fangsong",
+        ]
+        .iter()
+        .any(|s| name.contains(s))
     {
         crate::added::Family::Times
     } else {
@@ -334,16 +352,44 @@ fn no_hebrew_font() -> EditError {
     )
 }
 
+/// Hiragana and katakana, including the half-width katakana: text with any of them is Japanese
+/// rather than Chinese, whatever else it holds.
+fn is_kana(c: char) -> bool {
+    matches!(c, '\u{3040}'..='\u{30ff}' | '\u{31f0}'..='\u{31ff}' | '\u{ff66}'..='\u{ff9d}')
+}
+
+/// CJK unified and compatibility ideographs: the characters a Chinese and a Japanese face disagree
+/// about, and the only ones worth moving to another CJK face for.
+fn is_han(c: char) -> bool {
+    matches!(c, '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{faff}' | '\u{20000}'..='\u{3fffd}')
+}
+
 /// The faces a Type 3 replacement may draw `text` with, best first. Text with Hebrew takes the
-/// Hebrew face first (its Latin and digits too, so a line keeps one look), then the Japanese faces
-/// and the bundled Latin one for anything it lacks; other text takes the Japanese faces, and the
-/// bundled Latin face behind them, which covers the Latin, Greek and Cyrillic letters they lack
-/// (#2593: the Japanese faces have no қ, ғ, ҳ, ә, ө, ү, ұ or һ).
+/// Hebrew face first (its Latin and digits too, so a line keeps one look), then the CJK faces and
+/// the bundled Latin one for anything they lack.
+///
+/// Chinese faces lead only for Han text the Japanese faces cannot draw in full: the Japanese faces
+/// have no glyph for the Simplified-only characters (联 U+8054, 频 U+9891, 专 U+4E13 …), which used
+/// to fail the edit with "the … fallback font has no glyph for U+…" (#2095), and a line drawn half
+/// in a Japanese and half in a Chinese face mixes two sets of vertical metrics. Kana makes the text
+/// Japanese, and text the Japanese faces do cover keeps them, so Japanese and Cyrillic text is
+/// drawn exactly as before. Builds whose craft-fonts has no `Hans` face get the Japanese faces alone.
+///
+/// The bundled Latin face is last: it carries the Latin, Greek and Cyrillic letters the CJK faces
+/// lack (#2593: the Japanese faces have no қ, ғ, ҳ, ә, ө, ү, ұ or һ).
 pub(crate) fn type3_faces(text: &str, family: crate::added::Family, bold: bool) -> Result<(Vec<&'static CraftFont>, bool), EditError> {
-    let japanese = pdfcraft_fonts::document_japanese_fonts_for_style(family == crate::added::Family::Times, bold);
+    let serif = family == crate::added::Family::Times;
+    let japanese = pdfcraft_fonts::document_japanese_fonts_for_style(serif, bold);
+    let chinese = pdfcraft_fonts::document_chinese_fonts_for_style(serif, bold);
+    let chinese_first = !chinese.is_empty()
+        && !text.chars().any(is_kana)
+        && text.chars().any(is_han)
+        && !japanese.iter().any(|face| pdfcraft_fonts::covers_text(face, text));
+    let cjk: Vec<&'static CraftFont> =
+        if chinese_first { chinese.into_iter().chain(japanese).collect() } else { japanese.into_iter().chain(chinese).collect() };
     let latin = pdfcraft_fonts::document_latin_fonts(bold);
     if !text.chars().any(crate::bidi::is_hebrew) {
-        return Ok((japanese.into_iter().chain(latin).collect(), false));
+        return Ok((cjk.into_iter().chain(latin).collect(), false));
     }
     // Points are drawn on their letter with the font's positioning, which a one-glyph-per-
     // character Type 3 font can't do; refuse rather than print them beside the letter.
@@ -351,7 +397,7 @@ pub(crate) fn type3_faces(text: &str, family: crate::added::Family, bold: bool) 
         return Err(EditError::Invalid("Hebrew points (niqqud) can't be written into a PDF yet; type the text without them".into()));
     }
     let hebrew = pdfcraft_fonts::document_hebrew_font(bold).ok_or_else(no_hebrew_font)?;
-    Ok((std::iter::once(hebrew).chain(japanese).chain(latin).collect(), true))
+    Ok((std::iter::once(hebrew).chain(cjk).chain(latin).collect(), true))
 }
 
 pub(super) fn type3_font(
