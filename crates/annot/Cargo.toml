@@ -16,3 +16,8 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 hayro-syntax = { workspace = true }
+# Property tests over generated annotation geometry and metadata (`tests/properties.rs`). Same
+# workspace dependency the sibling test suites already carry: `crates/cos/Cargo.toml` declares it as
+# `proptest = { workspace = true }`, and `crates/crypt`/`crates/filters` use the dotted form
+# `proptest.workspace = true`. Nothing new enters the dependency graph.
+proptest = { workspace = true }
