@@ -144,6 +144,9 @@ pub struct Widget {
     pub items: Vec<String>,
     /// A text field that doesn't scroll: it takes no more text than it shows (`DoNotScroll`).
     pub no_scroll: bool,
+    /// Date fields: the date letters of the display picture (`<format><picture>`), how the value
+    /// shows when it isn't being typed in. `None`: as the edit pattern writes it.
+    pub display_date: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

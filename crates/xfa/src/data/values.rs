@@ -70,17 +70,21 @@ fn items_of(doc: &Document, f: &FieldDatum) -> (String, String) {
     (on, off)
 }
 
-/// The Acrobat date pattern a field's format action names (`AFDate_FormatEx("yyyy-mm-dd")`).
+/// The Acrobat date pattern a field's value is kept in: what its keystroke action names
+/// (`AFDate_KeystrokeEx("yyyy-mm-dd")`, the edit picture's), else its format action (a field laid
+/// out before the format action took the display picture names the same pattern in both).
 fn date_pattern_of(doc: &Document, f: &FieldDatum) -> Option<String> {
     let d = doc.get(f.obj);
     let aa = doc.resolve(d.as_dict()?.get(b"AA")?);
-    let fa = doc.resolve(aa.as_dict()?.get(b"F")?);
-    let js = text_of(doc, fa.as_dict()?, b"JS")?;
-    let i = js.find("AFDate_FormatEx(")?;
-    let rest = &js[i + "AFDate_FormatEx(".len()..];
-    let q = rest.find('"')?;
-    let body = &rest[q + 1..];
-    Some(body[..body.find('"')?].to_string())
+    let aa = aa.as_dict()?;
+    let named = |key: &[u8], call: &str| -> Option<String> {
+        let action = doc.resolve(aa.get(key)?);
+        let js = text_of(doc, action.as_dict()?, b"JS")?;
+        let rest = js.get(js.find(call)? + call.len()..)?;
+        let body = rest.get(rest.find('"')? + 1..)?;
+        Some(body.get(..body.find('"')?)?.to_string())
+    };
+    named(b"K", "AFDate_KeystrokeEx(").or_else(|| named(b"F", "AFDate_FormatEx("))
 }
 
 /// A value to write: where (the field's SOM path, and the data path it binds to) and what.
