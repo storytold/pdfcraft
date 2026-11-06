@@ -20,19 +20,29 @@ fn deletes_pages(edit: &Edit) -> bool {
 impl Session {
     /// Apply an edit. On success the previous state is undoable and the view data is refreshed.
     pub fn apply(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
-        self.apply_reporting(id, edit).map(|_| ())
+        self.apply_reporting(id, edit, true).map(|_| ())
+    }
+
+    /// Apply an edit that belongs to a collaborative session: a local optimistic
+    /// one or another participant's. The authoritative document is the server's,
+    /// so undo is an inverse operation there (ADR-0010) and the local snapshot
+    /// history is dropped: replaying it would revert other people's edits.
+    /// Validation, refresh, repair notes and the dirty flag are the same as
+    /// [`Self::apply`].
+    pub fn apply_remote(&mut self, id: DocId, edit: Edit) -> Result<(), EditError> {
+        self.apply_reporting(id, edit, false).map(|_| ())
     }
 
     /// Edit a PDF ▸ Edit text: make the grouped text on `page` (0-based) editable, as one undoable
     /// [`Edit::PrepareText`], and say what it prepared, which fonts' maps it repaired and which
     /// groups it left as they were (and why). The counts are this edit's own, not a preview's.
     pub fn prepare_text(&mut self, id: DocId, page: usize) -> Result<pdfcraft_edit::text::forms::Preparation, EditError> {
-        self.apply_reporting(id, Edit::PrepareText { page })?
+        self.apply_reporting(id, Edit::PrepareText { page }, true)?
             .ok_or_else(|| EditError::Invalid("preparing grouped text gave no result; the document was not changed".into()))
     }
 
     /// [`Session::apply`], giving back what an [`Edit::PrepareText`] did (`None` for other edits).
-    fn apply_reporting(&mut self, id: DocId, edit: Edit) -> Result<Option<pdfcraft_edit::text::forms::Preparation>, EditError> {
+    fn apply_reporting(&mut self, id: DocId, edit: Edit, record_undo: bool) -> Result<Option<pdfcraft_edit::text::forms::Preparation>, EditError> {
         let now = self.now();
         let today = self.today();
         let js_off = self.js_off;
@@ -228,17 +238,24 @@ impl Session {
         let previous = std::mem::replace(&mut editor.cos, next);
         let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
-        editor.undo.push((label, previous, previous_keys, scope));
-        if editor.undo.len() > MAX_UNDO {
-            editor.undo.remove(0);
+        if record_undo {
+            editor.undo.push((label, previous, previous_keys, scope));
+            if editor.undo.len() > MAX_UNDO {
+                editor.undo.remove(0);
+            }
+            editor.redo.clear();
+        } else {
+            // A snapshot taken before someone else's edit would undo that edit too.
+            editor.undo.clear();
+            editor.redo.clear();
         }
-        editor.redo.clear();
         Self::adopt_keys(doc);
         let refreshed = guard(|| if scope == Scope::Content { Self::refresh_content(doc, Some(&edit)) } else { Self::refresh_scoped(doc, scope) })
             .unwrap_or_else(|m| Err(EditError::Reopen(m)));
         if let Err(e) = refreshed {
             // Roll back: the edit produced something we cannot display.
-            if let Some(ed) = doc.editor.as_mut()
+            if record_undo
+                && let Some(ed) = doc.editor.as_mut()
                 && let Some((_, prev, keys, _)) = ed.undo.pop()
             {
                 ed.cos = prev;

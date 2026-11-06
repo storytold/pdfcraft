@@ -13436,3 +13436,29 @@ fn page_and_comment_references_survive_comment_edits() {
     assert_eq!(doc.annotation_ref(0, 0), Some(annot), "editing a comment keeps its reference");
     assert_eq!(doc.page_ref(0), Some(refs[0]), "a comment edit does not touch the page tree");
 }
+
+#[test]
+fn remote_edits_drop_the_local_snapshot_history() {
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let blank = session.create_blank(200.0, 300.0, 1).unwrap();
+    let id = session.open_new("remote.pdf", blank).unwrap();
+    let note = || {
+        let shape = Shape::Note { at: [100.0, 150.0], icon: NoteIcon::Comment };
+        Edit::AddAnnotation(NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: "local".into(), author: "Ada".into() })
+    };
+
+    // The ordinary path keeps the snapshot history.
+    session.apply(id, note()).unwrap();
+    assert_eq!(session.get(id).unwrap().info.annotations.len(), 1);
+    session.undo(id).unwrap();
+    assert!(session.get(id).unwrap().info.annotations.is_empty());
+
+    // A collaborative edit keeps the change but drops the history: a snapshot
+    // taken before another participant's edit would undo that edit too.
+    session.apply(id, note()).unwrap();
+    session.apply_remote(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let doc = session.get(id).unwrap();
+    assert_eq!(doc.info.annotations.len(), 1);
+    assert_eq!(doc.info.pages[0].rotation, 90);
+    assert!(session.undo(id).is_err(), "collaboration undoes with an inverse operation, not a local snapshot");
+}
