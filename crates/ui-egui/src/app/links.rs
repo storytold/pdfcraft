@@ -82,11 +82,25 @@ impl PdfCraftApp {
         }
     }
 
-    /// Open a web link in the system browser (a new tab on the web). Only for PdfCraft's own
-    /// links; an address that came from a document goes through [`Self::request_document_url`].
+    /// Open a web link in the system browser (a new `noopener` tab on the web). Only for
+    /// PdfCraft's own links; an address that came from a document goes through
+    /// [`Self::request_document_url`].
     pub fn open_url(&mut self, url: &str) {
-        if let Some(ctx) = &self.ctx {
-            ctx.open_url(egui::OpenUrl::new_tab(url));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Some(ctx) = &self.ctx {
+                ctx.open_url(egui::OpenUrl::new_tab(url));
+            }
+        }
+        // eframe's web runner opens new tabs with `window.open(url, "_blank")` and no features,
+        // which hands the opened page `window.opener` and lets it navigate this tab (#5084).
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(window) = web_sys::window() {
+                // With `noopener` the browser answers `null` instead of the new window, and a
+                // blocked pop-up is `null` or an error: there is nothing to keep or retry.
+                let _ = window.open_with_url_and_target_and_features(url, "_blank", "noopener,noreferrer");
+            }
         }
         self.last_opened_url = Some(url.to_string());
     }
