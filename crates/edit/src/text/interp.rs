@@ -342,6 +342,9 @@ pub(super) struct Shown {
     pub(super) extra_ops: Vec<usize>,
     /// Encoded glyphs, not bytes or Unicode characters (a ligature can represent several).
     pub(super) glyph_count: usize,
+    /// Unicode mapped by the actual glyph codes, without spaces inferred from TJ gaps.
+    /// The same page-wide text budget bounds this as the extracted text.
+    glyph_text: String,
     /// At least one glyph has nonzero font advance, independent of TJ positioning.
     has_advance: bool,
     /// Advance in text space, including spacing and TJ adjustments.
@@ -648,7 +651,7 @@ fn paint_binding(logical: &str, paints: &[(std::ops::Range<usize>, [f64; 3])], s
         if glyphs.iter().any(|(_, range)| {
             let index = paints.partition_point(|(paint, _)| paint.end <= range.start);
             !paints.get(index).is_some_and(|(paint, expected)| paint.start <= range.start && paint.end >= range.end && *expected == color)
-        }) || glyphs.iter().map(|(text, _)| text.as_str()).collect::<String>() != item.text
+        }) || glyphs.iter().map(|(text, _)| text.as_str()).collect::<String>() != item.glyph_text
         {
             return false;
         }
@@ -838,6 +841,7 @@ impl MarkedContent {
                     }
                     first.has_advance |= item.has_advance;
                     first.glyph_count = first.glyph_count.saturating_add(item.glyph_count);
+                    first.glyph_text.push_str(&item.glyph_text);
                     first.extra_ops.push(item.op);
                     first.extra_ops.extend(item.extra_ops);
                     first.rect = [
@@ -940,6 +944,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     let trm0 = tm.then(&ts.ctm);
     let start = trm0.apply(0.0, ts.rise);
     let mut text = String::new();
+    let mut glyph_text = String::new();
     let mut decodable = true;
     let mut x_text = 0.0;
     // Vertical text (§9.4.4): the pen moves along y instead, and each glyph is centred
@@ -968,6 +973,9 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
                                 .checked_sub(t.len())
                                 .ok_or_else(|| EditError::Invalid("the page's text is too large to read".into()))?;
                             text.push_str(&t);
+                            // Kerning/mark positioning can look like a word gap to extraction.
+                            // Private paint hints bind glyph Unicode, not those inferred spaces.
+                            glyph_text.push_str(&t);
                         }
                         None => decodable = false,
                     }
@@ -1068,6 +1076,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         op: i,
         extra_ops: Vec::new(),
         glyph_count,
+        glyph_text,
         has_advance,
         // Vertical text: the TJ adjustment that undoes the run is n = -1000 y / size; the
         // preview divides by size × `Tz`, so `Tz` is put back here.

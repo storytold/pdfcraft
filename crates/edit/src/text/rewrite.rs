@@ -328,8 +328,10 @@ fn choose_rewrite_path(
             "Syriac paragraph editing needs upright Unicode source text; turned and legacy visual-order text are not supported".into(),
         ));
     }
+    // A move retaining source rows is not a fresh multiline draft: routing it through
+    // styled rewriting would add a paragraph boundary and prevent geometry regrouping.
     let has_special_text = text.is_some_and(|draft| {
-        draft.contains(['\n', '\r'])
+        (!style.preserve_source_breaks && draft.contains(['\n', '\r']))
             || pdfcraft_fonts::source_shaping::required(draft)
             || !pdfcraft_fonts::embedding::matching_faces(&block.base_font).is_empty()
     });

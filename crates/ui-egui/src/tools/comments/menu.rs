@@ -1,8 +1,9 @@
+use super::input::delete_selected;
 use super::paint::edit_anchor;
-use super::state::{Composer, ComposerKind};
+use super::state::{Composer, ComposerKind, Gesture};
 use super::{
     Annotation, Color32, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Rect, ReviewState, Rgb, SELECT_BLUE, SWATCHES, Sense, Stroke, color32,
-    icons, theme, tool_for, vec2,
+    defaultable, icons, theme, vec2,
 };
 
 /// Save attachment… and, for a PDF, Open in a new tab, first in a file attachment comment's
@@ -22,8 +23,18 @@ pub(crate) fn attachment_items(ui: &mut egui::Ui, view: &mut DocView, info: &Doc
     ui.separator();
 }
 
+/// What the canvas context menu may offer.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MenuRights {
+    /// Comments may be added and changed.
+    pub(crate) allowed: bool,
+    /// Copied comments wait to be pasted.
+    pub(crate) can_paste: bool,
+    /// The document's pages may change (Flatten comments draws into them).
+    pub(crate) can_modify: bool,
+}
+
 /// Items of the canvas context menu for the selected comment (or the page).
-/// `can_modify`: the document's pages may change (Flatten comments draws into them).
 /// `deletable`: whether Delete would delete the comment at (page, index) (the engine's
 /// `Document::annotation_deletable`: unlocked, and no locked reply to it).
 pub(crate) fn context_menu(
@@ -32,11 +43,32 @@ pub(crate) fn context_menu(
     info: &DocInfo,
     deletable: &dyn Fn(usize, usize) -> bool,
     prefs: &CommentPrefs,
-    allowed: bool,
-    can_modify: bool,
+    rights: MenuRights,
 ) -> Option<CanvasAction> {
+    let MenuRights { allowed, can_paste, can_modify } = rights;
     let mut action = None;
+    // Connected lines, a polygon or a cloud being drawn: finish it from the menu, as other
+    // editors do (Enter and a double-click finish it too), take the last point back, or stop.
+    if let Some(Gesture::Draw { tool, points, .. }) = &view.comments.gesture
+        && tool.clicks_points()
+    {
+        let enough = points.len() >= if *tool == CommentTool::PolyLine { 2 } else { 3 };
+        if ui.add_enabled(enough, egui::Button::new(tl!("Complete"))).clicked() {
+            view.comments.finish_request = true;
+            ui.close();
+        }
+        if ui.button(tl!("Undo last point")).clicked() {
+            view.comments.undo_point();
+            ui.close();
+        }
+        if ui.button(tl!("Cancel drawing")).clicked() {
+            view.comments.gesture = None;
+            ui.close();
+        }
+        return None;
+    }
     let selected = view.comments.selected.and_then(|(p, i)| info.annotations.iter().find(|a| a.page == p && a.index == i && !a.is_reply()));
+    let several = view.comments.also.len();
     match selected {
         Some(a) => {
             let (page, index) = (a.page, a.index);
@@ -69,15 +101,20 @@ pub(crate) fn context_menu(
                 let keep_open = egui::containers::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
                 let _ = egui::containers::menu::SubMenuButton::new(tl!("Colour")).config(keep_open).ui(ui, |ui| {
                     if let Some(c) = swatch_grid(ui, a.color.map(|c| c.map(f64::from))) {
-                        action = Some(CanvasAction::Edit(Box::new(Edit::StyleAnnotation {
-                            page,
-                            index,
-                            color: Some(c),
-                            opacity: None,
-                            width: None,
-                            endings: None,
-                            syriac_family: None,
-                        })));
+                        // Several selected: the app gives each of them the colour.
+                        action = Some(if several > 0 {
+                            CanvasAction::Colour(c)
+                        } else {
+                            CanvasAction::Edit(Box::new(Edit::StyleAnnotation {
+                                page,
+                                index,
+                                color: Some(c),
+                                opacity: None,
+                                width: None,
+                                endings: None,
+                                syriac_family: None,
+                            }))
+                        });
                         ui.close();
                     }
                 });
@@ -93,17 +130,31 @@ pub(crate) fn context_menu(
                 ui.close();
             }
             ui.separator();
-            // The engine's own check: a locked comment, or one with a locked reply, stays.
-            if ui.add_enabled(allowed && deletable(page, index), egui::Button::new(tl!("Delete"))).clicked() {
-                view.comments.selected = None;
-                action = Some(CanvasAction::Edit(Box::new(Edit::DeleteAnnotation { page, index })));
+            // The comments themselves, to paste into this or another document (⌘C / ⌘V too).
+            let copy_key = crate::commands::shortcut_label(ui.ctx(), crate::commands::COPY);
+            if ui.add(egui::Button::new(tl!(if several > 0 { "Copy comments" } else { "Copy comment" })).shortcut_text(copy_key)).clicked() {
+                view.comments.copy_request = true;
+                ui.close();
+            }
+            let paste_key = crate::commands::shortcut_label(ui.ctx(), crate::commands::PASTE);
+            if ui.add_enabled(allowed && can_paste, egui::Button::new(tl!("Paste comments")).shortcut_text(paste_key)).clicked() {
+                let at = view.comments.context_at.unwrap_or((page, [f64::from(a.rect[0]), f64::from(a.rect[1])]));
+                view.comments.paste_request = Some(at);
+                ui.close();
+            }
+            ui.separator();
+            // The engine's own check, for each selected comment: a locked comment, or one with a
+            // locked reply, stays.
+            let deletes = deletable(page, index) && view.comments.also.iter().all(|&(p, i)| deletable(p, i));
+            if ui.add_enabled(allowed && deletes, egui::Button::new(tl!(if several > 0 { "Delete comments" } else { "Delete" }))).clicked() {
+                action = delete_selected(&mut view.comments).map(|e| CanvasAction::Edit(Box::new(e)));
                 ui.close();
             }
             if ui.add_enabled(allowed, egui::Button::new(tl!("Properties…"))).clicked() {
                 action = Some(CanvasAction::Properties(page, index));
                 ui.close();
             }
-            if ui.add_enabled(tool_for(a).is_some(), egui::Button::new(tl!("Make Current Properties Default"))).clicked() {
+            if ui.add_enabled(defaultable(a), egui::Button::new(tl!("Make Current Properties Default"))).clicked() {
                 view.comments.default_request = Some((page, index));
                 ui.close();
             }
@@ -141,6 +192,8 @@ pub enum CanvasAction {
     OpenComments,
     /// Comment Properties for (page, index).
     Properties(usize, usize),
+    /// Give every selected comment this colour.
+    Colour(Rgb),
     /// Copy Image: image (page, index in `page_images`) to the clipboard.
     CopyImage(usize, usize),
     /// Copy Image in Original Format: the same image as a file (JPEG as stored, else PNG).
@@ -328,8 +381,10 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
         ui.set_min_width(180.0);
         let mut percent = (style.opacity * 100.0).round();
         ui.label(egui::RichText::new(tl!("Opacity")).font(theme::semibold(12.0)));
+        // The whole comment's: its fill and text take it too.
         if ui.add(egui::Slider::new(&mut percent, 10.0..=100.0).step_by(5.0).suffix(" %")).changed() {
             prefs.set_opacity(tool, percent / 100.0);
+            prefs.set_part_opacity(tool, None, None);
         }
     });
     if tool.has_width() {
@@ -344,6 +399,33 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
         });
     }
     selected_color
+}
+
+/// A border-colour button: a hollow square in the border's colour (`current`, else the text's,
+/// `text`), with a menu of "Same as text" and the swatches. Returns the choice (`Some(None)`:
+/// the text's colour again).
+pub(crate) fn border_colour_button(ui: &mut egui::Ui, current: Option<Rgb>, text: Rgb) -> Option<Option<Rgb>> {
+    let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
+    let sq = Rect::from_center_size(r.center(), vec2(15.0, 15.0));
+    ui.painter().rect_stroke(sq, 1.0, Stroke::new(3.0, color32(current.unwrap_or(text))), egui::StrokeKind::Inside);
+    if resp.hovered() {
+        ui.painter().rect_stroke(r.shrink(2.0), 4.0, Stroke::new(1.0, Color32::from_black_alpha(40)), egui::StrokeKind::Inside);
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Border colour")));
+    let resp = resp.on_hover_text(tl!("Border colour"));
+    let mut picked = None;
+    egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).show(|ui| {
+        ui.label(egui::RichText::new(tl!("Border colour")).font(theme::semibold(12.0)));
+        if ui.add(egui::Button::new(tl!("Same as text")).selected(current.is_none())).clicked() {
+            picked = Some(None);
+            ui.close();
+        }
+        if let Some(c) = swatch_grid(ui, current) {
+            picked = Some(Some(c));
+            ui.close();
+        }
+    });
+    picked
 }
 
 /// The quick bar's fill button: a filled square in the fill colour, or a crossed-out outline

@@ -2487,3 +2487,40 @@ fn a_camera_corner_at_the_page_edge_is_hit_on_the_page_only() {
     assert!(crate::camera_ui::hit(&xf, 0, &v, pos2(14.0, 24.0)).is_some(), "on the page");
     assert!(crate::camera_ui::hit(&xf, 0, &v, pos2(6.0, 16.0)).is_none(), "just off it");
 }
+
+/// #5125: after Enhance scanned file, the page shown is re-rendered, not the raster of the
+/// scan before it was cleaned (same scale, so nothing else would replace it).
+#[test]
+fn enhancing_a_scan_re_renders_the_page_shown() {
+    let (w, h) = (64usize, 64usize);
+    let px: Vec<u8> = (0..w * h).map(|i| if i % w < 4 { 30 } else { 198 }).collect();
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n4 0 obj\n<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Length {} >>\nstream\n",
+        px.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(&px);
+    let content = format!("q {w} 0 0 {h} 0 0 cm /Im0 Do Q");
+    pdf.extend_from_slice(
+        format!(
+            "\nendstream\nendobj\n5 0 obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n",
+            content.len()
+        )
+        .as_bytes(),
+    );
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("scan.pdf", None, pdf).unwrap();
+    let (i, doc) = app.active_ids().unwrap();
+    let ctx = egui::Context::default();
+    let tex = ctx.load_texture("before", egui::ColorImage::filled([1, 1], Color32::WHITE), TextureOptions::LINEAR);
+    app.views[i].pages.insert(0, PageTex { tag: 1000, tex });
+    let job = app.session.scan_clean_job(doc, &[], pdfcraft_engine::scan_clean::ScanCleanSettings::default()).unwrap();
+    let cleaned = job.run(|_, _| true).unwrap();
+    assert_eq!(cleaned.report.pages, vec![0], "the page is a scan and gets cleaned");
+    let progress =
+        std::sync::Arc::new(std::sync::Mutex::new(crate::scan_clean_ui::ScanCleanProgress { result: Some(Ok(cleaned)), ..Default::default() }));
+    app.scan_clean_run = Some(crate::scan_clean_ui::ScanCleanRun { doc, progress });
+    app.poll_scan_clean();
+    assert!(app.scan_clean_run.is_none());
+    assert_eq!(app.views[i].pages.get(&0).unwrap().tag, STALE_TAG, "the old raster is re-rendered");
+}

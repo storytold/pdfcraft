@@ -947,6 +947,13 @@ pub(crate) fn displayed_text(f: &Field, values: &[String], format: bool) -> Stri
     if f.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text }
 }
 
+/// Whether the selected appearance font can encode a formatted date without placeholders.
+fn draws(doc: &Document, f: &Field, wd: &Dict, text: &str) -> bool {
+    let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
+    let enc = dr_font(doc, &da.font).map(|(_, enc)| enc).filter(|enc| enc.can_encode(text)).unwrap_or(FontText::WinAnsi);
+    enc.first_unencodable(text).is_none()
+}
+
 /// [`field_appearance_drawn`], and whether the text drawn is cut off by the box.
 fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>, Option<Overflow>) {
     let wobj = doc.get(w.obj);
@@ -955,7 +962,20 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     let place = placement(mk_rotation(doc, &wd), page_w, page_h);
     let (width, height) = (place.layout_w, place.layout_h);
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
-    let text = displayed_text(f, values, format);
+    let mut text = displayed_text(f, values, format);
+    // Preserve main's English fallback for date names the available font cannot draw.
+    // Arabic/Syriac use their shaped appearances when available instead of placeholders.
+    let shaped =
+        (arabic::requested(f, &text) && pdfcraft_fonts::appearance_text::can_shape(&text)) || needs_syriac_display(doc, f, w, values, format);
+    if format
+        && matches!(f.actions.format, crate::af::Format::Date(_) | crate::af::Format::Time(_))
+        && !f.has(flags::PASSWORD)
+        && !draws(doc, f, &wd, &text)
+        && !shaped
+        && let [value] = values
+    {
+        text = crate::af::format_value_in(&f.actions.format, value, &crate::af::ENGLISH_DATE_NAMES);
+    }
     if let Some((stream, missing)) = arabic_list::field(doc, f, values, &wd, &da, place) {
         return (stream, missing, None);
     }
