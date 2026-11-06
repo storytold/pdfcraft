@@ -67,6 +67,25 @@ impl DocView {
         self.actions_dismissed = None;
     }
 
+    /// A click beside the pages, or between them (#6133): what is selected on them is let go, as
+    /// Escape lets go of it. The text selection, Select All of the document, the picked picture, a
+    /// comment, Edit's objects, added item, link and image (one being cropped keeps its crop), and
+    /// Prepare's fields. Text being typed and a gesture under way are not selections: they stay.
+    pub(crate) fn deselect_beside_pages(&mut self) {
+        self.clear_selection();
+        self.all_text = false;
+        self.picked_image = None;
+        self.comments.selected = None;
+        self.objects.deselect();
+        self.content.selected = None;
+        self.links.selected = None;
+        self.prepare.selected = None;
+        self.prepare.also.clear();
+        if self.image_selection.as_ref().is_some_and(|s| s.crop.is_none()) {
+            self.image_selection = None;
+        }
+    }
+
     /// Select text on `page` from glyph `from` to glyph `to` (tests and automation).
     pub fn select_text(&mut self, page: usize, from: usize, to: usize) {
         self.all_text = false;

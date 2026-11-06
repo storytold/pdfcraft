@@ -1664,7 +1664,10 @@ fn draw_pages(
     if delta != Vec2::ZERO && delta.is_finite() {
         ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
     }
-    let (resp_rect, resp) = ui.allocate_exact_size(vec2(content_w, content_h), Sense::click_and_drag());
+    // Below a document shorter than the view the pages' widget still reaches the view's bottom, so
+    // a click there is beside the pages as one in the gutter is (#6133). The content that scrolls
+    // is no larger for it: it fits the view either way.
+    let (resp_rect, resp) = ui.allocate_exact_size(vec2(content_w, content_h.max(viewport.height())), Sense::click_and_drag());
     view.page_widget = Some(resp.id);
     // A drag lasts only while egui reports it, so the mark can't outlive one.
     if !resp.dragged_by(egui::PointerButton::Primary) {
@@ -1796,6 +1799,14 @@ fn draw_pages(
     // A right-click no page took deselects the comment, so the page's menu opens, not the comment's.
     if resp.secondary_clicked() && !right_clicked {
         view.comments.selected = None;
+    }
+    // A click beside the pages is none of theirs, so no page module lets go of its selection for
+    // it, as each does for a click on its page's empty part: it is let go of here (#6133). Only one
+    // released beside them too: a click that slipped onto a page from beside it keeps what it had,
+    // as page modules keep theirs for it.
+    let released_off = pointer.is_some_and(|p| !view.screen_rects.iter().any(|(_, r)| r.contains(p)));
+    if resp.clicked() && view.router.began_off_the_pages() && released_off {
+        view.deselect_beside_pages();
     }
     let PageOut {
         mut canvas_action,
