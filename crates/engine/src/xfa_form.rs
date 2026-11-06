@@ -217,12 +217,19 @@ pub(crate) fn image_content_type(bytes: &[u8]) -> Option<&'static str> {
 /// fields take the data's values.
 pub(crate) fn xfa_after_data_change(doc: &mut pdfcraft_cos::Document, cx: &mut EditCtx, calculate: bool) -> Result<(), EditError> {
     if let Some(tpl) = cx.xfa.clone() {
-        let mut run =
-            xfa::XfaRun { page_count: cx.pages, out: &mut cx.xfa_out, datasets: cx.xfa_datasets, ran_away: false, time_scale: cx.xfa_time_scale };
+        let mut run = xfa::XfaRun {
+            page_count: cx.pages,
+            out: &mut cx.xfa_out,
+            datasets: cx.xfa_datasets,
+            ran_away: false,
+            time_scale: cx.xfa_time_scale,
+            relaid: false,
+        };
         let r = guard(|| xfa::on_data_replaced(doc, &tpl, calculate, &mut run))
             .unwrap_or_else(|m| Err(format!("laying the form out again failed unexpectedly ({m})")));
         cx.xfa_datasets = run.datasets;
         cx.xfa_ran_away |= run.ran_away;
+        cx.xfa_relaid |= run.relaid;
         if let Err(e) = r {
             cx.xfa_out.errors.push(e);
         }
