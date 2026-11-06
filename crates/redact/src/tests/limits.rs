@@ -53,3 +53,25 @@ fn a_change_inside_nested_marked_content_touches_every_enclosing_mcid() {
     assert_eq!(changed, HashSet::from([0, 1]));
     assert_eq!(empty, HashSet::from([1]));
 }
+
+/// Every changed operator marked every open marked-content span again, so nesting times changed
+/// operators was the work. A change now marks the innermost span, which passes it up as it
+/// closes: 5 000 nested spans (below the overlay's nesting cap) around 50 000 redacted strings, a
+/// quarter of a billion steps before, still lose every description.
+#[test]
+fn deeply_nested_spans_around_many_changes_are_cleaned_in_linear_work() {
+    const DEPTH: usize = 5_000;
+    const SHOWN: usize = 50_000;
+    let mut src = b"BT /F1 10 Tf 10 100 Td ".to_vec();
+    src.extend(b"/Span <</ActualText (LEAK)>> BDC ".repeat(DEPTH));
+    src.extend(b"(S) Tj 0 0 Td ".repeat(SHOWN));
+    src.extend(b"EMC ".repeat(DEPTH));
+    src.extend(b"ET");
+    let mut doc = one_page(&src, "", vec![]);
+    mark(&mut doc, 0, &[[5.0, 95.0, 20.0, 110.0]], "");
+    let started = std::time::Instant::now();
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.replacement_text), (SHOWN, DEPTH), "{:?}", (r.glyphs, r.replacement_text));
+    assert!(!content(&doc, 0).contains("LEAK"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
+}

@@ -643,17 +643,34 @@ fn clean_replacements(doc: &Document, resources: &Dict, original: &[Op], process
     let originals: HashMap<usize, &Op> = original.iter().map(|op| (op.span.start, op)).collect();
     let unchanged: HashSet<usize> =
         processed.iter().flat_map(|(ops, _)| ops).filter(|op| originals.get(&op.span.start) == Some(op)).map(|op| op.span.start).collect();
-    let mut stack = Vec::new();
+    // Open spans, each with whether something inside it changed. A change marks only the
+    // innermost span; a span passes that on to its parent when it closes, so every operator costs
+    // the same however deeply spans nest.
+    let mut stack: Vec<(usize, bool)> = Vec::new();
     let mut affected = HashSet::new();
+    let close = |stack: &mut Vec<(usize, bool)>, affected: &mut HashSet<usize>| {
+        if let Some((start, true)) = stack.pop() {
+            affected.insert(start);
+            if let Some(parent) = stack.last_mut() {
+                parent.1 = true;
+            }
+        }
+    };
     for op in original {
         match op.op.as_slice() {
-            b"BDC" | b"BMC" => stack.push(op.span.start),
-            b"EMC" => {
-                stack.pop();
+            b"BDC" | b"BMC" => stack.push((op.span.start, false)),
+            b"EMC" => close(&mut stack, &mut affected),
+            _ if !unchanged.contains(&op.span.start) => {
+                if let Some(top) = stack.last_mut() {
+                    top.1 = true;
+                }
             }
-            _ if !unchanged.contains(&op.span.start) => affected.extend(stack.iter().copied()),
             _ => {}
         }
+    }
+    // Spans the stream leaves open run to its end.
+    while !stack.is_empty() {
+        close(&mut stack, &mut affected);
     }
     let properties = res_dict(doc, resources, b"Properties");
     for (ops, changed) in processed {
