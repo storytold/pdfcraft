@@ -1016,6 +1016,51 @@ fn the_wheel_zooms_a_whole_step_at_once_with_animation_effects_off() {
     }
 }
 
+/// A touch gesture begun with ⌘/Ctrl zooms to its end after the keys are let go, as egui reads
+/// it: its later motion neither scrolls the page as well nor turns the rest of it into scrolling.
+#[test]
+fn a_zoom_gesture_zooms_to_its_end_after_its_keys_are_let_go() {
+    /// The view's zoom and page 1 on screen, settled, after a gesture of six 5-point motions,
+    /// the keys let go after the second one or held throughout.
+    fn zoom_gesture(effects: &'static str, let_go: bool) -> (f32, f32, egui::Rect) {
+        let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300")]);
+        h.state_mut().set_option("animation_effects", effects).unwrap();
+        let at = h.state().views[0].viewport_rect().center();
+        h.hover_at(at);
+        h.run_steps(2);
+        let before = h.state().views[0].zoom;
+        let touch = |phase, dy, modifiers| egui::Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, dy),
+            phase,
+            modifiers,
+            source: egui::MouseWheelSource::Unknown,
+        };
+        h.event(touch(TouchPhase::Start, 0.0, Modifiers::COMMAND));
+        h.step();
+        for k in 0..6 {
+            let modifiers = if let_go && k >= 2 { Modifiers::NONE } else { Modifiers::COMMAND };
+            h.event(touch(TouchPhase::Move, 5.0, modifiers));
+            h.step();
+        }
+        h.event(touch(TouchPhase::End, 0.0, Modifiers::NONE));
+        h.run_steps(40);
+        (before, h.state().views[0].zoom, rect(&h, 0).expect("page 1 on screen"))
+    }
+    for effects in ["off", "on"] {
+        let (before, held, held_page) = zoom_gesture(effects, false);
+        assert!(held > before, "{effects}: the gesture zoomed in: {before} to {held}");
+        let (_, let_go, let_go_page) = zoom_gesture(effects, true);
+        assert!((let_go / held - 1.0).abs() < 1e-4, "{effects}: the whole gesture zooms: {let_go}, held throughout {held}");
+        assert!(
+            (let_go_page.min - held_page.min).length() < 0.5,
+            "{effects}: and nothing scrolls: page 1 at {:?}, held throughout {:?}",
+            let_go_page.min,
+            held_page.min
+        );
+    }
+}
+
 #[test]
 fn page_display_commands_switch_layouts() {
     let mut h = harness(&[]);
