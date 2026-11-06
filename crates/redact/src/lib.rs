@@ -89,6 +89,18 @@ pub enum RedactError {
         "{0} JBIG2 image(s) share their symbol data with a redacted image and can't be decoded to be stored without it, so that data, which can show what is under the marks, would stay in the file; nothing was redacted"
     )]
     SharedJbig2Globals(usize),
+    /// Fields whose text is past what one reading of the form takes are left out of it, and a
+    /// widget under a mark belongs to no field read: it may be one of theirs, whose value would
+    /// stay in the file.
+    #[error(
+        "{0} form field(s) hold more text than PdfCraft reads at once, and a widget under the marks may belong to one, so its value could stay in the file; nothing was redacted"
+    )]
+    FormPastAllowance(usize),
+    /// A widget under a mark belongs to a form field the form's reading doesn't have (its type
+    /// given by reference, nested too deep, or missing from its parent's `/Kids`): removing the
+    /// widget would keep the field and its value.
+    #[error("a form field under the marks can't be read, so its value would stay in the file; nothing was redacted")]
+    FieldNotRead,
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),
     #[error(transparent)]
@@ -435,10 +447,12 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         .iter()
         .map(|&(pi, page_marks)| overlay::content(page_marks, &mut remaining).map(|content| (pi, content)))
         .collect::<Result<Vec<_>, _>>()?;
+    let form = pdfcraft_forms::fields_with_adopted(doc);
+    let form_tree = form_tree(doc);
     report.pages = by_page.len();
     localize_resources(doc, &by_page)?;
     let widget_owner: Vec<(ObjRef, ObjRef)> =
-        pdfcraft_forms::fields(doc).into_iter().flat_map(|f| f.widgets.iter().map(|w| (w.obj, f.obj)).collect::<Vec<_>>()).collect();
+        form.items.into_iter().flat_map(|f| f.widgets.iter().map(|w| (w.obj, f.obj)).collect::<Vec<_>>()).collect();
     let listed_before = listed_annotations(doc);
     let mut applying = Applying {
         report,
@@ -446,6 +460,8 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         doomed_xobjects: Vec::new(),
         retired_properties: Vec::new(),
         widget_owner,
+        left_out: form.left_out,
+        form_tree,
         removed_everywhere: HashSet::new(),
         images,
     };
@@ -647,6 +663,11 @@ struct Applying {
     doomed_xobjects: Vec<ObjRef>,
     retired_properties: Vec<Object>,
     widget_owner: Vec<(ObjRef, ObjRef)>,
+    /// Fields the form's reading left out, their text past its allowances
+    /// ([`pdfcraft_forms::Fields::left_out`]).
+    left_out: usize,
+    /// What the form's `/Fields` tree reaches ([`form_tree`]).
+    form_tree: HashSet<ObjRef>,
     removed_everywhere: HashSet<ObjRef>,
     /// What clearing images may spend, across the run's pages.
     images: pdfcraft_cos::ImageBudget,
@@ -753,6 +774,71 @@ fn redact_page_content(
     Ok(())
 }
 
+/// Every object the form's `/Fields` tree reaches through `/Kids`, fields and widgets alike, each
+/// once and however deep, its text unread: a widget it reaches belongs to a field, whether or not
+/// the form's reading has that field (one whose `/FT` is given by reference, or nested past what
+/// the reading follows, whose only widget needn't name it).
+fn form_tree(doc: &Document) -> HashSet<ObjRef> {
+    let refs = |o: &Object| -> Vec<ObjRef> { doc.resolve(o).as_array().into_iter().flatten().filter_map(Object::as_ref).collect() };
+    let fields = doc.root().map(|root| doc.get(root)).and_then(|catalog| {
+        let form = doc.resolve(catalog.as_dict()?.get(b"AcroForm")?);
+        Some(refs(form.as_dict()?.get(b"Fields")?))
+    });
+    let mut stack = fields.unwrap_or_default();
+    let mut tree: HashSet<ObjRef> = stack.iter().copied().collect();
+    // A `/Kids` array given by reference is read once: the references on the way to it, followed
+    // as far as `Document::resolve` follows them, are noted once the walk reaches it, and a node
+    // naming one of them loads nothing. A chain that ends nowhere notes only its first.
+    let mut reached = HashSet::new();
+    while let Some(n) = stack.pop() {
+        let node = doc.get(n);
+        let Some(kids) = node.as_dict().and_then(|d| d.get(b"Kids")) else { continue };
+        let kids = match kids {
+            Object::Ref(first) => {
+                let (mut r, mut hops, mut list) = (*first, Vec::new(), None);
+                for _ in 0..=32 {
+                    if reached.contains(&r) {
+                        break;
+                    }
+                    hops.push(r);
+                    let o = doc.get(r);
+                    #[cfg(test)]
+                    TREE_LOADS.with(|c| c.set(c.get() + 1));
+                    match &*o {
+                        Object::Ref(next) => r = *next,
+                        _ => {
+                            list = Some(o);
+                            break;
+                        }
+                    }
+                }
+                match &list {
+                    Some(_) => reached.extend(hops),
+                    None => reached.extend(hops.first().copied()),
+                }
+                list.map(|o| o.as_array().into_iter().flatten().filter_map(Object::as_ref).collect()).unwrap_or_default()
+            }
+            direct => refs(direct),
+        };
+        #[cfg(test)]
+        TREE_ENTRIES.with(|c| c.set(c.get() + kids.len()));
+        for k in kids {
+            if tree.insert(k) {
+                stack.push(k);
+            }
+        }
+    }
+    tree
+}
+
+#[cfg(test)]
+thread_local! {
+    /// `/Kids` entries [`form_tree`] read on this thread.
+    pub(crate) static TREE_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Objects [`form_tree`] loaded on the way to a `/Kids` array on this thread.
+    pub(crate) static TREE_LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Step 2 for one page: the marks, and whatever lies under them (with their pop-ups).
 fn remove_page_annotations(
     doc: &mut Document,
@@ -761,7 +847,7 @@ fn remove_page_annotations(
     rects: &[[f64; 4]],
     page_marks: &[&Mark],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_fields, widget_owner, removed_everywhere, .. } = applying;
+    let Applying { report, doomed_fields, widget_owner, left_out, form_tree, removed_everywhere, .. } = applying;
     // 2. Annotations: the marks, and whatever lies under them (with their pop-ups).
     let annots = annots_of(doc, &doc.get(page.obj).as_dict().cloned().unwrap_or_default());
     let mut removed: Vec<ObjRef> = Vec::new();
@@ -782,10 +868,20 @@ fn remove_page_annotations(
         if rect_of(doc, d.get(b"Rect")).is_some_and(|b| rects.iter().any(|x| pdfcraft_content::overlaps(*x, b, 0.0))) {
             removed.push(r);
             if subtype == b"Widget" {
-                if let Some((_, field)) = widget_owner.iter().find(|(w, _)| *w == r)
-                    && !doomed_fields.contains(field)
-                {
-                    doomed_fields.push(*field);
+                match widget_owner.iter().find(|(w, _)| *w == r) {
+                    Some((_, field)) => {
+                        if !doomed_fields.contains(field) {
+                            doomed_fields.push(*field);
+                        }
+                    }
+                    // A widget of a field the form's reading doesn't have would go and leave the
+                    // field and its value: one the form's tree reaches or that names a field, or
+                    // any while the reading left fields out.
+                    None if *left_out > 0 => return Err(RedactError::FormPastAllowance(*left_out)),
+                    None if form_tree.contains(&r) || d.contains(b"Parent") || d.contains(b"T") || d.contains(b"FT") => {
+                        return Err(RedactError::FieldNotRead);
+                    }
+                    None => {}
                 }
             } else {
                 report.annotations += 1;

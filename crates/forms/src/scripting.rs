@@ -219,13 +219,16 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
         if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
             stack.extend(kids);
         }
-        if let Some(pairs) = d.get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_array().cloned()) {
+        // Read where it is: a `/Names` array many nodes share isn't copied for each.
+        let pairs = d.get(b"Names").map(|n| crate::read::held(doc, n));
+        if let Some(pairs) = pairs.as_deref().and_then(Object::as_array) {
             for pair in pairs.chunks(2) {
+                // Names count with the scripts: a name many entries share is copied for each.
+                if !scripts.entry() {
+                    break;
+                }
                 let [k, v] = pair else { continue };
-                let key = match &*doc.resolve(k) {
-                    Object::String(s) => s.to_text(),
-                    _ => continue,
-                };
+                let Some(key) = scripts.string(doc, k) else { continue };
                 if let Some(js) = crate::script(doc, v, &mut scripts) {
                     out.push((key, js));
                 }

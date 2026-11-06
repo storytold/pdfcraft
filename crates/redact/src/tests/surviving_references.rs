@@ -27,6 +27,170 @@ fn a_redacted_field_listed_in_the_calculation_order_leaves_the_saved_file() {
     assert!(!full_save_holds(&doc, b"SSN-078-05-1120"), "the field's value is still reachable");
 }
 
+/// A field the form's reading leaves out, its text past the reading's allowance, can't be matched
+/// to its widget under a mark: redaction refuses rather than remove the widget and keep the value.
+#[test]
+fn a_field_the_form_reading_leaves_out_refuses_the_redaction() {
+    let mut doc = one_page(b"", "", vec![]);
+    pdfcraft_forms::add_field(&mut doc, 0, [10.0, 50.0, 100.0, 70.0], &pdfcraft_forms::NewField::Text { multiline: false }, Some("ssn")).unwrap();
+    pdfcraft_forms::set_value(&mut doc, "ssn", &pdfcraft_forms::FieldValue::Text("SSN-078-05-1120".into())).unwrap();
+    let field = pdfcraft_forms::fields(&doc).swap_remove(0).obj;
+    mark(&mut doc, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    let mut past = doc.clone();
+    let tooltip = Object::String(pdfcraft_cos::PdfString::literal(vec![b' '; 256 << 20]));
+    past.update_dict(field, |d| d.set(b"TU".to_vec(), tooltip)).unwrap();
+    assert!(matches!(apply(&mut past, None), Err(RedactError::FormPastAllowance(1))));
+    assert!(past.get(field).as_dict().is_some_and(|d| d.contains(b"V")) && marks(&past).len() == 1, "nothing changed");
+    // A mark over page text alone, away from every widget, still applies.
+    let mut text_only = past.clone();
+    clear_marks(&mut text_only, None).unwrap();
+    mark(&mut text_only, 0, &[[150.0, 150.0, 200.0, 200.0]], "");
+    assert!(apply(&mut text_only, None).is_ok());
+    assert_eq!(apply(&mut doc, None).unwrap().fields, 1, "read whole, the field goes");
+}
+
+/// A widget under a mark whose field the form's reading doesn't have, its type given by reference
+/// or the widget missing from its parent's `/Kids`, refuses the redaction: removing the widget
+/// would keep the field and its value. A widget that names no field just goes.
+#[test]
+fn a_widget_of_a_field_the_form_reading_lacks_refuses_the_redaction() {
+    let filled = || {
+        let mut doc = one_page(b"", "", vec![]);
+        pdfcraft_forms::add_field(&mut doc, 0, [10.0, 50.0, 100.0, 70.0], &pdfcraft_forms::NewField::Text { multiline: false }, Some("ssn")).unwrap();
+        pdfcraft_forms::set_value(&mut doc, "ssn", &pdfcraft_forms::FieldValue::Text("SSN-078-05-1120".into())).unwrap();
+        let field = pdfcraft_forms::fields(&doc).swap_remove(0).obj;
+        (doc, field)
+    };
+    let (mut by_reference, field) = filled();
+    let tx = by_reference.add(Object::Name(b"Tx".to_vec()));
+    by_reference.update_dict(field, |d| d.set(b"FT".to_vec(), Object::Ref(tx))).unwrap();
+    mark(&mut by_reference, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    assert!(matches!(apply(&mut by_reference, None), Err(RedactError::FieldNotRead)));
+    // A second widget of the field, on the page but not in the field's /Kids.
+    let page = pdfcraft_model::pages(&filled().0).swap_remove(0).obj;
+    let widget = |doc: &mut Document, parent: Option<ObjRef>, name: Option<&str>| {
+        let mut w: Dict =
+            [(b"Type".to_vec(), Object::Name(b"Annot".to_vec())), (b"Subtype".to_vec(), Object::Name(b"Widget".to_vec()))].into_iter().collect();
+        w.set(b"Rect".to_vec(), Object::Array([200, 50, 280, 70].map(Object::Int).to_vec()));
+        if let Some(p) = parent {
+            w.set(b"Parent".to_vec(), Object::Ref(p));
+        }
+        if let Some(n) = name {
+            w.set(b"T".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(n.as_bytes().to_vec())));
+            w.set(b"V".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"UNTYPED-SECRET".to_vec())));
+        }
+        let w = doc.add(Object::Dict(w));
+        doc.update_dict(page, |d| {
+            let mut annots = d.get(b"Annots").and_then(Object::as_array).cloned().unwrap_or_default();
+            annots.push(Object::Ref(w));
+            d.set(b"Annots".to_vec(), Object::Array(annots));
+        })
+        .unwrap();
+        w
+    };
+    let (mut unlisted, field) = filled();
+    let _ = widget(&mut unlisted, Some(field), None);
+    mark(&mut unlisted, 0, &[[190.0, 40.0, 290.0, 80.0]], "");
+    assert!(matches!(apply(&mut unlisted, None), Err(RedactError::FieldNotRead)));
+    // A field of no type, which the reading skips, named and with a value.
+    let (mut untyped, _) = filled();
+    let _ = widget(&mut untyped, None, Some("untyped"));
+    mark(&mut untyped, 0, &[[190.0, 40.0, 290.0, 80.0]], "");
+    assert!(matches!(apply(&mut untyped, None), Err(RedactError::FieldNotRead)));
+    // A field whose /FT is given by reference, or nested past what the reading follows, and whose
+    // only widget names nothing: the form's tree reaches the widget.
+    for depth in [0, 70] {
+        let (mut lone, _) = filled();
+        let w = widget(&mut lone, None, None);
+        let tx = lone.add(Object::Name(b"Tx".to_vec()));
+        let ft = if depth == 0 { Object::Ref(tx) } else { Object::Name(b"Tx".to_vec()) };
+        let mut kid = w;
+        for level in 0..=depth {
+            let mut f: Dict = [(b"Kids".to_vec(), Object::Array(vec![Object::Ref(kid)]))].into_iter().collect();
+            f.set(b"T".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(format!("l{level}").into_bytes())));
+            if level == 0 {
+                f.set(b"FT".to_vec(), ft.clone());
+                f.set(b"V".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"LONE-SECRET".to_vec())));
+            }
+            kid = lone.add(Object::Dict(f));
+        }
+        let root = lone.root().unwrap();
+        let af = lone.get(root).as_dict().unwrap().reference(b"AcroForm").unwrap();
+        lone.update_dict(af, |d| {
+            let mut fields = d.get(b"Fields").and_then(Object::as_array).cloned().unwrap_or_default();
+            fields.push(Object::Ref(kid));
+            d.set(b"Fields".to_vec(), Object::Array(fields));
+        })
+        .unwrap();
+        mark(&mut lone, 0, &[[190.0, 40.0, 290.0, 80.0]], "");
+        assert!(matches!(apply(&mut lone, None), Err(RedactError::FieldNotRead)), "depth {depth}");
+    }
+    let (mut orphan, _) = filled();
+    let _ = widget(&mut orphan, None, None);
+    mark(&mut orphan, 0, &[[190.0, 40.0, 290.0, 80.0]], "");
+    assert_eq!(apply(&mut orphan, None).unwrap().fields, 0);
+    assert!(full_save_holds(&orphan, b"SSN-078-05-1120"), "the field outside the mark keeps its value");
+}
+
+/// Nodes sharing one `/Kids` array, which the field reaches through a reference to a reference:
+/// redaction's walk of the form's tree loads each reference once and reads the array once, not
+/// once for each node that names it.
+#[test]
+fn a_kids_array_nodes_share_is_read_once_by_the_form_tree() {
+    let k = 2000;
+    let mut objs: Vec<Vec<u8>> =
+        vec![b"<< /Type /Catalog /AcroForm << /Fields [2 0 R] >> >>".to_vec(), b"<< /FT /Tx /T (f) /Kids 3 0 R >>".to_vec(), b"4 0 R".to_vec()];
+    objs.push(format!("[{}]", (0..k).map(|i| format!("{} 0 R", i + 5)).collect::<Vec<_>>().join(" ")).into_bytes());
+    objs.extend((0..k).map(|_| b"<< /Kids 4 0 R >>".to_vec()));
+    let doc = pdf(objs);
+    TREE_ENTRIES.with(|c| c.set(0));
+    TREE_LOADS.with(|c| c.set(0));
+    assert_eq!(form_tree(&doc).len(), k + 1);
+    let (entries, loads) = (TREE_ENTRIES.with(std::cell::Cell::get), TREE_LOADS.with(std::cell::Cell::get));
+    assert_eq!((entries, loads), (k, 2), "the reference and the array, each once");
+}
+
+/// A `/Kids` array behind references to references is reached as far as `Document::resolve`
+/// follows them, and a walk that runs out of references on a long chain doesn't hide the array
+/// from a node naming a reference further down it.
+#[test]
+fn the_form_tree_follows_references_as_far_as_resolve() {
+    // 1 catalog, 2 the field, then `refs` references ending at the array, then the array and the
+    // widget it lists. `entry` is how many references in the field's /Kids names; `head` adds a
+    // node naming the chain's first, before or after the field in /Fields.
+    let build = |refs: u32, entry: u32, head: Option<bool>| {
+        let widget = 4 + refs;
+        let fields = match head {
+            Some(true) => format!("[{} 0 R 2 0 R]", widget + 1),
+            Some(false) => format!("[2 0 R {} 0 R]", widget + 1),
+            None => "[2 0 R]".into(),
+        };
+        let mut objs: Vec<Vec<u8>> = vec![
+            format!("<< /Type /Catalog /AcroForm << /Fields {fields} >> >>").into_bytes(),
+            format!("<< /T (f) /Kids {} 0 R >>", 3 + entry).into_bytes(),
+        ];
+        objs.extend((0..refs).map(|i| format!("{} 0 R", 4 + i).into_bytes()));
+        objs.push(format!("[{widget} 0 R]").into_bytes());
+        objs.push(b"<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] >>".to_vec());
+        if head.is_some() {
+            objs.push(b"<< /Kids 3 0 R >>".to_vec());
+        }
+        (pdf(objs), ObjRef::new(widget, 0), ObjRef::new(3 + entry, 0))
+    };
+    for refs in [31, 32, 33] {
+        let (doc, widget, first) = build(refs, 0, None);
+        let resolved = doc.resolve(&Object::Ref(first)).as_array().is_some();
+        assert_eq!(form_tree(&doc).contains(&widget), resolved, "{refs} references");
+        assert_eq!(resolved, refs <= 32, "{refs} references");
+    }
+    // A node names a chain of 40, too long; the field names its 12th. Whichever is walked first,
+    // the field reaches the array.
+    for before in [true, false] {
+        let (doc, widget, _) = build(40, 11, Some(before));
+        assert!(form_tree(&doc).contains(&widget), "head node first in /Fields: {before}");
+    }
+}
+
 /// A surviving form shares the page's resource dictionary, which lists the image the mark
 /// removes; the form never draws it.
 #[test]

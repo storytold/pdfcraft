@@ -45,7 +45,12 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   nothing paints inside the areas;
 - **form XObjects**: rewritten recursively into new objects (pages sharing the original keep it);
 - **annotations** whose rectangle overlaps (with their pop-ups and their replies, `/IRT`), and **form fields** with a
-  widget under a mark;
+  widget under a mark. A widget under a mark whose field the form's reading doesn't have refuses
+  the redaction and changes nothing: one the form's `/Fields` tree reaches through `/Kids`, or
+  that names a field (`/Parent`, `/T` or `/FT`), as a field whose type is given by reference, that
+  nests too deep or that its parent's `/Kids` leaves out does (`RedactError::FieldNotRead`); and
+  any while the reading left fields out, their text past its allowances
+  (`RedactError::FormPastAllowance`). Removing the widget would keep the field and its value;
 - the marks themselves, replaced by boxes in their fill colour (and overlay text) drawn into the
   page as a `/PCMark /Redaction` stream.
 

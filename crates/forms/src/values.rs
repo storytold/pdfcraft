@@ -1,5 +1,5 @@
 use super::appearances::{declares_pdfa, need_appearances};
-use super::read::{acroform, field_flags, fields, page_refs};
+use super::read::{acroform, field_flags, fields, held, page_refs};
 use super::{
     Dict, Document, Field, FieldEvent, FieldKind, FieldValue, FormError, NoScripts, ObjRef, Object, PdfString, Scripts, Widget, af, appearance,
     author, calc_order, flags, invalid, name_obj, scripting,
@@ -642,20 +642,35 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
     Ok(targets.len())
 }
 
-/// Whether `field`'s `key` (`/V` or `/DV`, its own or inherited) is a stream with data, which
-/// [`fields`] reads as empty once its value budget is spent.
-fn unread_stream(doc: &Document, field: ObjRef, key: &[u8]) -> bool {
+/// Whether `field`'s `key` (`/V` or `/DV`, its own or inherited) holds a value, which [`fields`]
+/// reads as none once its value allowance is spent: a stream with data, a list whose first entry
+/// is text, or a string or name that reads as something other than nothing or Off.
+fn unread_value(doc: &Document, field: ObjRef, key: &[u8]) -> bool {
     let mut node = Some(field);
     for _ in 0..64 {
         let Some(r) = node else { break };
         let obj = doc.get(r);
         let Some(d) = obj.as_dict() else { break };
         if let Some(value) = d.get(key) {
-            return matches!(&*doc.resolve(value), Object::Stream(s) if !s.raw.is_empty());
+            return holds_value(doc, value);
         }
         node = d.reference(b"Parent");
     }
     false
+}
+
+/// Whether a `/V` or `/DV` entry holds a value, read where it is and without converting a long
+/// string: one that had no room in the reading would be copied again for each field that names
+/// it. A string of more than 16 bytes counts as text.
+fn holds_value(doc: &Document, o: &Object) -> bool {
+    match &*held(doc, o) {
+        Object::Stream(s) => !s.raw.is_empty(),
+        Object::Array(a) => a.first().is_some_and(|x| matches!(&*held(doc, x), Object::String(_) | Object::Name(_))),
+        Object::String(s) if s.bytes.len() > 16 => true,
+        Object::String(s) => !matches!(s.to_text().as_str(), "" | "Off"),
+        Object::Name(n) => !matches!(n.as_slice(), b"" | b"Off"),
+        _ => false,
+    }
 }
 
 /// Acrobat's Clear form: every field (or the named ones) back to its default value.
@@ -671,10 +686,10 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
     }
     let mut changed = 0;
     for f in all.iter().filter(|f| names.is_none_or(|n| n.contains(&f.name))) {
-        // A default the reading didn't decode (its budget spent) is unknown, not empty: clearing
-        // the field to nothing would lose the value it should go back to. A value it didn't decode
+        // A default the reading didn't read (its allowance spent) is unknown, not empty: clearing
+        // the field to nothing would lose the value it should go back to. A value it didn't read
         // isn't known to be the default, so it is reset.
-        let unread = |key: &[u8], read: &[String]| read.is_empty() && unread_stream(doc, f.obj, key);
+        let unread = |key: &[u8], read: &[String]| read.is_empty() && unread_value(doc, f.obj, key);
         if unread(b"DV", &f.default) || (f.value == f.default && !unread(b"V", &f.value)) {
             continue;
         }

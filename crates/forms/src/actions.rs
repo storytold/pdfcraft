@@ -3,6 +3,7 @@
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString};
 
+use crate::read::{Allowance, MAX_TEXT_BYTES, held};
 use crate::{FormError, fields};
 
 /// The Actions tab's triggers.
@@ -97,43 +98,80 @@ impl FieldAction {
     }
 }
 
-fn texts(doc: &Document, o: &Object) -> Vec<String> {
-    match &*doc.resolve(o) {
-        Object::Array(a) => a.iter().filter_map(|x| doc.resolve(x).as_string().map(|s| s.to_text())).collect(),
-        Object::String(s) => vec![s.to_text()],
+/// What reading one field's actions may copy, however often they name the same script or text.
+struct Allowances {
+    scripts: Allowance,
+    text: Allowance,
+}
+
+impl Allowances {
+    fn new() -> Self {
+        Self { scripts: crate::script_budget(), text: Allowance::new(MAX_TEXT_BYTES) }
+    }
+
+    /// Copies refused so far, of text and of scripts.
+    fn refusals(&self) -> usize {
+        self.text.refusals().saturating_add(self.scripts.refusals())
+    }
+}
+
+/// The text of a string, or of each string an array lists until `text` is spent.
+fn texts(doc: &Document, o: &Object, text: &mut Allowance) -> Vec<String> {
+    match &*held(doc, o) {
+        Object::Array(a) => {
+            let mut out = Vec::new();
+            for x in a {
+                if !text.entry() {
+                    break;
+                }
+                out.extend(text.string(doc, x));
+            }
+            out
+        }
+        s @ Object::String(_) => text.string(doc, s).into_iter().collect(),
         _ => Vec::new(),
     }
 }
 
-fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef], scripts: &mut pdfcraft_cos::DecodeBudget) -> Option<FieldAction> {
-    let a = doc.resolve(o);
+/// An action, its script copied against `allowances.scripts` and its other text against
+/// `allowances.text`. One whose script or text doesn't fit reads as an action of another type,
+/// named by at most 64 bytes of its `/S`, which [`set_field_actions`] keeps as it is: read as
+/// none, or as an empty script, it would be lost or emptied when the list is written back.
+fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef], allowances: &mut Allowances) -> Option<FieldAction> {
+    let a = held(doc, o);
     let d = a.as_dict()?;
-    Some(match d.name(b"S")? {
-        b"JavaScript" => FieldAction::JavaScript(crate::script(doc, o, scripts).unwrap_or_default()),
-        b"URI" => FieldAction::Uri(d.get(b"URI").and_then(|u| doc.resolve(u).as_string().map(|s| s.to_text())).unwrap_or_default()),
-        b"ResetForm" => FieldAction::Reset(d.get(b"Fields").map(|f| texts(doc, f)).unwrap_or_default()),
-        b"Named" => FieldAction::Named(d.name(b"N").map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_default()),
+    let refusals = allowances.refusals();
+    let text = &mut allowances.text;
+    let kind = d.name(b"S")?;
+    let action = match kind {
+        b"JavaScript" => FieldAction::JavaScript(crate::script(doc, o, &mut allowances.scripts).unwrap_or_default()),
+        b"URI" => FieldAction::Uri(d.get(b"URI").and_then(|u| text.string(doc, u)).unwrap_or_default()),
+        b"ResetForm" => FieldAction::Reset(d.get(b"Fields").map(|f| texts(doc, f, text)).unwrap_or_default()),
+        b"Named" => FieldAction::Named(d.name(b"N").and_then(|n| text.copy(n.len(), || String::from_utf8_lossy(n).into_owned())).unwrap_or_default()),
         b"GoTo" => {
-            let dest = d.get(b"D").map(|x| doc.resolve(x))?;
+            let dest = held(doc, d.get(b"D")?);
             let target = dest.as_array()?.first()?.as_ref()?;
             FieldAction::GoTo(pages.iter().position(|p| *p == target)?)
         }
         b"Hide" => FieldAction::ShowHide {
-            fields: d.get(b"T").map(|t| texts(doc, t)).unwrap_or_default(),
+            fields: d.get(b"T").map(|t| texts(doc, t, text)).unwrap_or_default(),
             hide: !matches!(d.get(b"H"), Some(Object::Bool(false))),
         },
         b"SubmitForm" => FieldAction::Submit(
             d.get(b"F")
-                .map(|f| doc.resolve(f))
                 .and_then(|f| {
-                    f.as_string()
-                        .map(|s| s.to_text())
-                        .or_else(|| f.as_dict().and_then(|fd| fd.get(b"F")).and_then(|x| doc.resolve(x).as_string().map(|s| s.to_text())))
+                    let f = held(doc, f);
+                    text.string(doc, &f).or_else(|| f.as_dict().and_then(|fd| fd.get(b"F")).and_then(|x| text.string(doc, x)))
                 })
                 .unwrap_or_default(),
         ),
-        other => FieldAction::Other(String::from_utf8_lossy(other).into_owned()),
-    })
+        other => FieldAction::Other(text.copy(other.len(), || String::from_utf8_lossy(other).into_owned()).unwrap_or_default()),
+    };
+    if allowances.refusals() == refusals {
+        Some(action)
+    } else {
+        Some(FieldAction::Other(String::from_utf8_lossy(kind.get(..64).unwrap_or(kind)).into_owned()))
+    }
 }
 
 /// The actions of field `name` (its first widget), by trigger, in the tab's order.
@@ -141,22 +179,27 @@ pub fn field_actions(doc: &Document, name: &str) -> Result<Vec<(Trigger, FieldAc
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
     let pages = crate::page_refs(doc);
-    let Some(w) = f.widgets.first() else { return Ok(Vec::new()) };
+    Ok(widget_actions(doc, f, &pages))
+}
+
+/// [`field_actions`] of field `f`, read within allowances of their own.
+fn widget_actions(doc: &Document, f: &crate::Field, pages: &[pdfcraft_cos::ObjRef]) -> Vec<(Trigger, FieldAction)> {
+    let Some(w) = f.widgets.first() else { return Vec::new() };
     let wd = doc.get(w.obj).as_dict().cloned().unwrap_or_default();
     let aa = wd.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).unwrap_or_default();
     let mut out = Vec::new();
-    let mut scripts = crate::script_budget();
+    let mut allowances = Allowances::new();
     for t in Trigger::ALL {
         let o = match t.key() {
             None => wd.get(b"A").cloned().or_else(|| aa.get(b"U").cloned()),
             Some(k) => aa.get(k).cloned(),
         };
         // An action chain (/Next) counts as its first action here.
-        if let Some(a) = o.and_then(|o| read(doc, &o, &pages, &mut scripts)) {
+        if let Some(a) = o.and_then(|o| read(doc, &o, pages, &mut allowances)) {
             out.push((t, a));
         }
     }
-    Ok(out)
+    out
 }
 
 /// Most chained actions [`field_action_chains`] walks per trigger.
@@ -266,19 +309,29 @@ struct TriggerUpdate<'a> {
     trigger: Trigger,
     replacement: Option<&'a FieldAction>,
     previous: Option<Object>,
+    /// What the list the replacement came from had for the trigger: the first widget's action.
+    listed: Option<&'a FieldAction>,
 }
 
 fn replace_trigger(
     doc: &mut Document,
     pages: &[pdfcraft_cos::ObjRef],
-    scripts: &mut pdfcraft_cos::DecodeBudget,
+    allowances: &mut Allowances,
     update: TriggerUpdate<'_>,
     aa: &mut Dict,
     a_entry: &mut Option<Object>,
 ) -> Result<(), FormError> {
-    let TriggerUpdate { trigger: t, replacement: new, previous: old } = update;
-    let old_action = old.as_ref().and_then(|o| read(doc, o, pages, scripts));
-    if new.is_some() && new == old_action.as_ref() {
+    let TriggerUpdate { trigger: t, replacement: new, previous: old, listed } = update;
+    // An old action is kept when it reads as the new one. One the allowances can't read is
+    // compared with the list instead: the user left that trigger as it was, so it is kept, or
+    // changed it, so it is replaced. Written again unchanged, it would lose what `write` doesn't
+    // know (a reset's or a submission's `/Flags`).
+    let keep = new.is_some() && {
+        let refusals = allowances.refusals();
+        let old_action = old.as_ref().and_then(|o| read(doc, o, pages, allowances));
+        if allowances.refusals() == refusals { new == old_action.as_ref() } else { new == listed }
+    };
+    if keep {
         return Ok(());
     }
     // The list shows a trigger's first action: replacing it keeps the ones chained after it.
@@ -307,12 +360,15 @@ fn replace_trigger(
 
 /// Replace field `name`'s actions (on every widget) with `actions`; triggers not listed lose
 /// theirs. `Other` actions, and actions that read the same as before, are left as they are (with
-/// their chain and the keys this module doesn't read); a replaced action keeps its chain.
+/// their chain and the keys this module doesn't read); a replaced action keeps its chain. An
+/// action too long to read within the operation's allowances is left as it is when `actions`
+/// has for its trigger what [`field_actions`] reads, and replaced when it has something else.
 pub fn set_field_actions(doc: &mut Document, name: &str, actions: &[(Trigger, FieldAction)]) -> Result<(), FormError> {
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
     let pages = crate::page_refs(doc);
-    let mut scripts = crate::script_budget();
+    let listed = widget_actions(doc, &f, &pages);
+    let mut allowances = Allowances::new();
     for w in &f.widgets {
         let wd = doc.get(w.obj).as_dict().cloned().unwrap_or_default();
         let mut aa = wd.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).unwrap_or_default();
@@ -326,7 +382,15 @@ pub fn set_field_actions(doc: &mut Document, name: &str, actions: &[(Trigger, Fi
                 None => wd.get(b"A").cloned().or_else(|| aa.get(b"U").cloned()),
                 Some(k) => aa.get(k).cloned(),
             };
-            replace_trigger(doc, &pages, &mut scripts, TriggerUpdate { trigger: t, replacement: new, previous: old }, &mut aa, &mut a_entry)?;
+            let listed = listed.iter().find(|(x, _)| *x == t).map(|(_, a)| a);
+            replace_trigger(
+                doc,
+                &pages,
+                &mut allowances,
+                TriggerUpdate { trigger: t, replacement: new, previous: old, listed },
+                &mut aa,
+                &mut a_entry,
+            )?;
         }
         doc.update_dict(w.obj, |d| {
             match &a_entry {

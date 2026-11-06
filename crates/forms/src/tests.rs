@@ -3623,6 +3623,65 @@ fn clear_form_keeps_a_field_whose_default_was_not_read() {
     assert!(last.as_dict().and_then(|d| d.get(b"V")).is_none_or(|v| !matches!(v, Object::Ref(_))), "the last field's unread value is cleared");
 }
 
+/// Clear form leaves a field as it is when its default is a string, or a list of values, that the
+/// value allowance didn't reach, and resets one whose value string it didn't reach.
+#[test]
+fn clear_form_keeps_a_field_whose_default_string_was_not_read() {
+    let n = 70;
+    let fields_list: String = (0..=n).map(|i| format!("{} 0 R ", i + 3)).collect();
+    let value = |doc: &Document, i: usize| -> Option<Object> { doc.get(ObjRef::new(i as u32 + 3, 0)).as_dict().and_then(|d| d.get(b"V").cloned()) };
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), long_string()];
+    objs.extend((0..n).map(|i| format!("<< /FT /Tx /T (f{i}) /V (typed) /DV 2 0 R >>")));
+    objs.push(format!("<< /FT /Ch /Ff 2097152 /T (l) /Opt [(a) (x)] /V [(a)] /DV [{}] >>", "2 0 R ".repeat(n)));
+    let mut doc = document(&objs);
+    reset(&mut doc, None).unwrap();
+    let text = |o: Option<Object>| o.and_then(|v| v.as_string().map(PdfString::to_text)).unwrap_or_default();
+    assert_eq!(text(value(&doc, 0)), "x".repeat(1 << 20), "the first field goes back to its default");
+    assert_eq!(text(value(&doc, n - 1)), "typed", "the last field, whose default wasn't read, keeps its value");
+    assert_eq!(value(&doc, n), Some(Object::Array(vec![Object::String(PdfString::literal("a"))])), "the list keeps its selection");
+    // A value string the reading didn't reach, with no default, is cleared: it isn't known to be
+    // empty.
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), long_string()];
+    objs.extend((0..=n).map(|i| format!("<< /FT /Tx /T (f{i}) /V 2 0 R >>")));
+    let mut doc = document(&objs);
+    reset(&mut doc, None).unwrap();
+    assert!(value(&doc, n).is_none_or(|v| !matches!(v, Object::Ref(_))), "the last field's unread value is cleared");
+}
+
+/// Past the value allowance a short value string or name reads as none, and Clear form resets
+/// its field: it isn't known to be empty. A string that reads as nothing is known to be empty
+/// when it is short; past 16 bytes it counts as text, unconverted.
+#[test]
+fn clear_form_resets_short_values_the_reading_did_not_reach() {
+    let string = |bytes: Vec<u8>| Object::String(pdfcraft_cos::PdfString::literal(bytes));
+    let mut doc = Document::new_empty();
+    let field = |doc: &mut Document, name: &str, key: &[u8], v: Object| {
+        doc.add(Object::Dict([(b"FT".to_vec(), Object::name("Tx")), (b"T".to_vec(), string(name.into())), (key.to_vec(), v)].into_iter().collect()))
+    };
+    // A default that leaves 8 bytes of the allowance, too few for any other copy.
+    let copy = std::mem::size_of::<String>();
+    let big = field(&mut doc, "big", b"DV", string(vec![b'x'; crate::read::MAX_VALUE_BYTES - copy - 8]));
+    let typed = field(&mut doc, "typed", b"V", string(b"typed".to_vec()));
+    let named = field(&mut doc, "named", b"V", Object::name("Yes"));
+    // U+FEFF only, which reads as nothing: 16 bytes are converted, 18 aren't.
+    let marks = |n: usize| string([0xFE, 0xFF].repeat(n));
+    let short = field(&mut doc, "short", b"V", marks(8));
+    let long = field(&mut doc, "long", b"V", marks(9));
+    let list = [big, typed, named, short, long].map(Object::Ref).to_vec();
+    let catalog = doc.add(Object::Dict(
+        [(b"AcroForm".to_vec(), Object::Dict([(b"Fields".to_vec(), Object::Array(list))].into_iter().collect()))].into_iter().collect(),
+    ));
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    let names = ["typed", "named", "short", "long"].map(String::from);
+    reset(&mut doc, Some(&names)).unwrap();
+    let v = |r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"V").cloned());
+    let cleared = |o: Option<Object>| o.is_none_or(|v| v.as_string().is_some_and(|s| s.to_text().is_empty() && s.bytes.len() <= 2));
+    assert!(cleared(v(typed)), "an unread value string is reset");
+    assert!(cleared(v(named)), "an unread value name is reset");
+    assert_eq!(v(short), Some(marks(8)), "a short string that reads as nothing is known to be empty");
+    assert!(cleared(v(long)), "a longer one counts as text");
+}
+
 /// Renaming a field that 300 calculations read through one shared Calculate action, whose script
 /// is a 256 KiB stream, decodes and rewrites that action once, in place: every calculation reads
 /// the new name, and nothing is decoded or written 300 times.
@@ -3652,6 +3711,867 @@ fn a_rename_rewrites_a_shared_calculation_once() {
     let js = doc.get(action).as_dict().and_then(|d| d.get(b"JS")?.as_string().map(PdfString::to_text)).unwrap_or_default();
     assert!(js.contains("\"qty\"") && !js.contains("\"a\""), "the shared action reads the new name");
     assert!(js.len() <= MAX_SCRIPT_BYTES, "{} bytes written once", js.len());
+}
+
+/// A 1 MiB literal string, as an object of [`document`].
+/// Marked as UTF-8, it reads without a conversion per byte: the bounds tests copy hundreds of
+/// MiB of it.
+fn long_string() -> String {
+    format!("(\u{FEFF}{})", "x".repeat(1 << 20))
+}
+
+/// 300 references to one 1 MiB value string, from fields that name it, from fields that inherit
+/// it and from one list box's array of values, are copied within one allowance, not 300 MiB.
+#[test]
+fn value_strings_named_by_reference_share_one_allowance() {
+    let read = |all: &[Field]| -> usize { all.iter().flat_map(|f| f.value.iter().chain(&f.default)).map(String::len).sum() };
+    let fields_list: String = (0..300).map(|i| format!("{} 0 R ", i + 3)).collect();
+    let mut named = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), long_string()];
+    named.extend((0..300).map(|i| format!("<< /FT /Tx /T (f{i}) /V 2 0 R /DV 2 0 R >>")));
+    let kids: String = (0..300).map(|i| format!("{} 0 R ", i + 4)).collect();
+    let mut inherited =
+        vec!["<< /Type /Catalog /AcroForm << /Fields [3 0 R] >> >>".into(), long_string(), format!("<< /FT /Tx /T (p) /V 2 0 R /Kids [{kids}] >>")];
+    inherited.extend((0..300).map(|i| format!("<< /T (k{i}) /Parent 3 0 R >>")));
+    for (how, objs) in [("named", named), ("inherited", inherited)] {
+        let all = fields(&document(&objs));
+        let bytes = read(&all);
+        assert!(bytes <= crate::read::MAX_VALUE_BYTES, "{bytes} bytes of values {how}");
+        assert_eq!(all[0].value.first(), Some(&"x".repeat(1 << 20)), "the first value {how} is read");
+    }
+    // A list of values read in part would be taken for the whole: one that doesn't fit reads as
+    // none, and a short one after it is read.
+    let listed = vec![
+        "<< /Type /Catalog /AcroForm << /Fields [3 0 R 4 0 R] >> >>".into(),
+        long_string(),
+        format!("<< /FT /Ch /T (l) /Ff 2097152 /V [{}] >>", "2 0 R ".repeat(300)),
+        "<< /FT /Ch /T (m) /Ff 2097152 /V [(a) (b)] >>".into(),
+    ];
+    let all = fields(&document(&listed));
+    assert_eq!(all[0].value, Vec::<String>::new(), "a list of values that doesn't fit reads as none");
+    assert_eq!(all[1].value, ["a", "b"]);
+}
+
+/// Script strings named by reference — one 256 KiB calculation script that 300 fields' own
+/// calculations and 300 document scripts name, one 1 MiB format script the fields name, and a
+/// 1 MiB name each document script has — are copied within the script allowance: by a reading
+/// of the form, by the document's scripts with their names, and by renaming the field the
+/// calculations read, which rewrites each field's own calculation.
+#[test]
+fn script_strings_named_by_reference_share_one_allowance() {
+    let n = 300;
+    let refs = |from: usize| -> String { (from..from + n).map(|i| format!("{i} 0 R ")).collect() };
+    let names: String = (0..n).map(|_| format!("{} 0 R 6 0 R ", 8 + n)).collect();
+    let mut objs = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R /Names << /JavaScript << /Names [{names}] >> >> >>"),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [5 0 R {}] >>", refs(8)),
+        format!("<< /Fields [5 0 R {}] /DA (/Helv 0 Tf 0 g) >>", refs(8)),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (a) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /S /JavaScript /JS 7 0 R >>".into(),
+        format!("(AFSimple_Calculate(\"SUM\", new Array (\"a\"));{})", " ".repeat(256 << 10)),
+    ];
+    // Each calculated field has a calculation of its own, whose script is the shared string, and
+    // formats its value with the 1 MiB string, a script no native format reads, which the reading
+    // keeps as text.
+    objs.extend(
+        (0..n).map(|i| {
+            format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (c{i}) /Rect [50 10 250 30] /P 3 0 R /AA << /C << /S /JavaScript /JS 7 0 R >> /F {} 0 R >> >>", 9 + n)
+        }),
+    );
+    objs.push(long_string());
+    objs.push(format!("<< /S /JavaScript /JS {} 0 R >>", 8 + n));
+    let mut doc = document(&objs);
+    let kept: usize = fields(&doc).iter().filter_map(|f| f.actions.scripts.format.as_ref()).map(String::len).sum();
+    assert!(kept > 0 && kept <= MAX_SCRIPT_BYTES, "{kept} bytes of field scripts");
+    let named: usize = document_scripts_named(&doc).iter().map(|(name, js)| name.len() + js.len()).sum();
+    assert!(named > 0 && named <= MAX_SCRIPT_BYTES, "{named} bytes of document scripts and their names");
+    set_props(&mut doc, "a", &FieldProps { name: Some("qty".into()), ..FieldProps::default() }).unwrap();
+    let rewritten: Vec<usize> = (8..8 + n)
+        .filter_map(|i| {
+            let field = doc.get(ObjRef::new(i as u32, 0));
+            let c = field.as_dict()?.get(b"AA")?.as_dict()?.get(b"C")?.as_dict()?.clone();
+            let js = c.get(b"JS")?.as_string()?.to_text();
+            js.contains("\"qty\"").then_some(js.len())
+        })
+        .collect();
+    assert!(!rewritten.is_empty(), "the first calculations are renamed");
+    let total: usize = rewritten.iter().sum();
+    assert!(total <= MAX_SCRIPT_BYTES, "{} calculations, {total} bytes, renamed", rewritten.len());
+}
+
+/// A field's full name copies the names above it: 300 fields under one whose name is a 1 MiB
+/// string get their names within the text allowance, the fields whose names don't fit are left
+/// out, and a field after them is read.
+#[test]
+fn full_names_stay_within_the_text_allowance() {
+    let kids: String = (0..300).map(|i| format!("{} 0 R ", i + 5)).collect();
+    let mut objs = vec![
+        "<< /Type /Catalog /AcroForm << /Fields [3 0 R 4 0 R] >> >>".into(),
+        long_string(),
+        format!("<< /T 2 0 R /FT /Tx /Kids [{kids}] >>"),
+        "<< /T (after) /FT /Tx >>".into(),
+    ];
+    objs.extend((0..300).map(|i| format!("<< /T (f{i}) /Parent 3 0 R >>")));
+    let all = fields(&document(&objs));
+    let names: usize = all.iter().map(|f| f.name.len()).sum();
+    assert!(names <= crate::read::MAX_TEXT_BYTES, "{} fields, {names} bytes of names", all.len());
+    assert_eq!(all.first().map(|f| f.name.clone()), Some(format!("{}.f0", "x".repeat(1 << 20))));
+    assert!(all.len() < 301, "fields whose names don't fit are left out");
+    assert_eq!(all.last().map(|f| f.name.as_str()), Some("after"), "the field after them is read");
+}
+
+/// 300 fields whose `/DA`, options, tooltip, caption, on state or list-box `/DA` name one 1 MiB
+/// string get them within the text allowance, and each field is read whole or left out: none is
+/// read with a fallback `/DA`, or without its options.
+#[test]
+fn field_text_named_by_reference_stays_within_the_text_allowance() {
+    let n = 300;
+    let list: String = (0..n).map(|i| format!("{} 0 R ", i + 5)).collect();
+    let da = format!("(\u{FEFF}/Helv 0 Tf 0 g{})", " ".repeat(1 << 20));
+    let long_name = format!("/{}", "y".repeat(1 << 20));
+    let text = |f: &Field| -> usize {
+        let widgets: usize = f.widgets.iter().map(|w| w.caption.as_ref().map_or(0, String::len) + w.on_state.as_ref().map_or(0, String::len)).sum();
+        f.name.len()
+            + f.da.len()
+            + f.options.iter().map(|(a, b)| a.len() + b.len()).sum::<usize>()
+            + f.tooltip.as_ref().map_or(0, String::len)
+            + widgets
+    };
+    // Each case: what is named by reference, objects 2 to 4 its fields share, its field, and what
+    // a field read whole has.
+    type Case = (&'static str, [String; 3], fn(usize) -> String, fn(&Field) -> bool);
+    let cases: [Case; 5] = [
+        ("/DA", [da.clone(), "null".into(), "null".into()], |i| format!("<< /FT /Tx /T (f{i}) /DA 2 0 R >>"), |f| f.da.len() > 1 << 20),
+        (
+            "/Opt",
+            [long_string(), "[2 0 R [2 0 R 2 0 R]]".into(), "null".into()],
+            |i| format!("<< /FT /Ch /Ff 131072 /T (f{i}) /Opt 3 0 R >>"),
+            |f| f.options.len() == 2,
+        ),
+        ("/TU", [long_string(), "null".into(), "null".into()], |i| format!("<< /FT /Tx /T (f{i}) /TU 2 0 R >>"), |f| f.tooltip.is_some()),
+        (
+            "/MK /CA",
+            [long_string(), "null".into(), "<< /CA 2 0 R >>".into()],
+            |i| format!("<< /FT /Btn /Ff 65536 /T (f{i}) /Rect [0 0 10 10] /MK 4 0 R >>"),
+            |f| f.widgets.iter().all(|w| w.caption.is_some()),
+        ),
+        (
+            "on state",
+            ["<< >>".into(), "null".into(), format!("<< /Off 2 0 R {long_name} 2 0 R >>")],
+            |i| format!("<< /FT /Btn /T (f{i}) /Rect [0 0 10 10] /AP << /N 4 0 R >> >>"),
+            |f| f.widgets.iter().all(|w| w.on_state.is_some()),
+        ),
+    ];
+    for (what, shared, field, whole) in cases {
+        let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{list}] >> >>")];
+        objs.extend(shared);
+        objs.extend((0..n).map(field));
+        let all = fields(&document(&objs));
+        let bytes: usize = all.iter().map(text).sum();
+        assert!(bytes <= crate::read::MAX_TEXT_BYTES, "{} fields, {bytes} bytes of text, with {what} by reference", all.len());
+        assert!(!all.is_empty() && all.len() < n, "{} fields read whole with {what} by reference", all.len());
+        assert!(all.iter().all(whole), "a field is read with its {what}, or left out");
+    }
+    // List boxes whose widgets' own `/DA` names the string: reading their rows copies it for
+    // each widget, though no field keeps it.
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{list}] >> >>"), da, "null".into(), "null".into()];
+    objs.extend((0..n).map(|i| format!("<< /FT /Ch /T (f{i}) /Kids [{} 0 R] >>", 5 + n + i)));
+    objs.extend((0..n).map(|i| format!("<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /DA 2 0 R /Parent {} 0 R >>", 5 + i)));
+    let all = fields(&document(&objs));
+    assert!(!all.is_empty() && all.len() < n, "{} list boxes read within the allowance", all.len());
+    assert!(all.iter().all(|f| f.widgets.iter().all(|w| w.list.is_some())));
+}
+
+/// Push buttons' action text named by reference is copied within the text allowance by a
+/// reading of the form, and a field's actions within one by Field Properties ▸ Actions.
+#[test]
+fn action_text_named_by_reference_stays_within_the_text_allowance() {
+    let n = 300;
+    let list: String = (0..n).map(|i| format!("{} 0 R ", i + 4)).collect();
+    let mut uri = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{list}] >> >>"), long_string(), "<< /S /URI /URI 2 0 R >>".into()];
+    uri.extend((0..n).map(|i| format!("<< /FT /Btn /Ff 65536 /T (b{i}) /Rect [0 0 10 10] /A 3 0 R >>")));
+    let all = fields(&document(&uri));
+    let bytes: usize = all.iter().map(|f| if let Some(af::ButtonAction::Uri(u)) = &f.button { u.len() } else { 0 }).sum();
+    assert!(bytes <= crate::read::MAX_TEXT_BYTES, "{bytes} bytes of links");
+    assert!(!all.is_empty() && all.len() < n, "{} buttons read whole", all.len());
+    // One button that hides 300 fields named by reference to a field whose name is 1 MiB, and
+    // one text field that resets them.
+    let targets = "4 0 R ".repeat(n);
+    let named = vec![
+        "<< /Type /Catalog /AcroForm << /Fields [5 0 R 6 0 R] >> >>".into(),
+        long_string(),
+        format!("<< /S /Hide /T [{targets}] >>"),
+        "<< /T 2 0 R /FT /Tx >>".into(),
+        "<< /FT /Btn /Ff 65536 /T (hide) /Rect [0 0 10 10] /A 3 0 R >>".into(),
+        format!("<< /FT /Tx /T (reset) /Rect [0 0 10 10] /A << /S /ResetForm /Fields [{}] >> >>", "2 0 R ".repeat(n)),
+    ];
+    let doc = document(&named);
+    let all = fields(&doc);
+    let hidden: usize = all
+        .iter()
+        .map(|f| if let Some(af::ButtonAction::ShowHide { fields, .. }) = &f.button { fields.iter().map(String::len).sum() } else { 0 })
+        .sum();
+    assert!(hidden <= crate::read::MAX_TEXT_BYTES, "{hidden} bytes of hidden field names");
+    let reset: usize = field_actions(&doc, "reset")
+        .unwrap()
+        .iter()
+        .map(|(_, a)| if let FieldAction::Reset(f) = a { f.iter().map(String::len).sum() } else { 0 })
+        .sum();
+    assert!(reset <= crate::read::MAX_TEXT_BYTES, "{reset} bytes of reset field names");
+}
+
+/// An ordinary large form is read whole: 300 combo boxes listing one 2,000-item catalogue copy
+/// 600,000 options, about 65 MiB of the text allowance.
+#[test]
+fn a_large_ordinary_form_is_read_whole() {
+    let n = 300;
+    let list: String = (0..n).map(|i| format!("{} 0 R ", i + 3)).collect();
+    let items: String = (0..2000).map(|i| format!("[(SKU-{i:06}) (Catalogue item {i:06}, standard)] ")).collect();
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{list}] >> >>"), format!("[{items}]")];
+    objs.extend((0..n).map(|i| format!("<< /FT /Ch /Ff 131072 /T (item{i}) /Opt 2 0 R >>")));
+    let all = fields(&document(&objs));
+    assert_eq!(all.len(), n);
+    assert!(all.iter().all(|f| f.options.len() == 2000));
+}
+
+/// Every entry of an array a reading walks costs it, text or not: 1,000 list boxes whose options
+/// are one array of 100,000 numbers are read until the text allowance is spent, and when that
+/// array is 1,000 fields' value, the value of a field after them doesn't fit.
+#[test]
+fn array_entries_are_charged_text_or_not() {
+    let n = 1000;
+    let list: String = (0..=n).map(|i| format!("{} 0 R ", i + 3)).collect();
+    let numbers = format!("[{}]", "0 ".repeat(100_000));
+    let mut options = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{list}] >> >>"), numbers.clone()];
+    options.extend((0..n).map(|i| format!("<< /FT /Ch /T (l{i}) /Opt 2 0 R >>")));
+    let all = fields(&document(&options));
+    assert!(all.len() < n, "{} list boxes read", all.len());
+    let mut values = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{list}] >> >>"), numbers];
+    values.extend((0..n).map(|i| format!("<< /FT /Ch /T (l{i}) /V 2 0 R >>")));
+    values.push("<< /FT /Tx /T (last) /V (a) >>".into());
+    let all = fields(&document(&values));
+    assert_eq!(field(&all, "last").value, Vec::<String>::new(), "the values allowance is spent");
+}
+
+/// An action whose text doesn't fit reads as one of another type, and survives the actions list
+/// being written back: read as none, it would be dropped.
+#[test]
+fn an_action_whose_text_does_not_fit_survives_a_round_trip() {
+    let names = "2 0 R ".repeat(300);
+    let doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [3 0 R] >> >>".into(),
+        long_string(),
+        format!("<< /FT /Tx /T (f) /Rect [0 0 10 10] /A << /S /ResetForm /Fields [{names}] >> /AA << /D << /S /Hide /T [{names}] >> >> >>"),
+    ]);
+    let mut doc = doc;
+    let before = doc.get(ObjRef::new(3, 0)).as_dict().cloned().unwrap();
+    let acts = field_actions(&doc, "f").unwrap();
+    assert_eq!(acts, [(Trigger::MouseUp, FieldAction::Other("ResetForm".into())), (Trigger::MouseDown, FieldAction::Other("Hide".into()))]);
+    set_field_actions(&mut doc, "f", &acts).unwrap();
+    let after = doc.get(ObjRef::new(3, 0)).as_dict().cloned().unwrap();
+    assert_eq!(after.get(b"A"), before.get(b"A"));
+    assert_eq!(after.get(b"AA"), before.get(b"AA"));
+}
+
+/// Writing a field's actions back leaves the actions its 300 widgets share as they are: each is
+/// read once, not until the allowances run out, after which it would be written again without
+/// the keys `write` doesn't know (a reset's `/Flags`).
+#[test]
+fn actions_widgets_share_are_kept_when_the_list_is_written_back() {
+    let n = 300;
+    let kids: String = (0..n).map(|i| format!("{} 0 R ", i + 8)).collect();
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        format!("<< /S /URI /URI {} 0 R >>", 8 + n),
+        format!("<< /S /ResetForm /Fields [{}] /Flags 1 >>", format!("{} 0 R ", 8 + n).repeat(4)),
+        format!("<< /S /JavaScript /JS {} 0 R >>", 9 + n),
+        format!("<< /FT /Tx /T (f) /Kids [{kids}] >>"),
+    ];
+    objs.extend(
+        (0..n).map(|_| "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /Parent 7 0 R /A 4 0 R /AA << /D 5 0 R /X 6 0 R >> >>".to_string()),
+    );
+    objs.push(long_string());
+    objs.push(long_string());
+    let mut doc = document(&objs);
+    let mut acts = field_actions(&doc, "f").unwrap();
+    acts.push((Trigger::OnFocus, FieldAction::Named("Print".into())));
+    set_field_actions(&mut doc, "f", &acts).unwrap();
+    for i in 0..n {
+        let w = doc.get(ObjRef::new(i as u32 + 8, 0));
+        let d = w.as_dict().unwrap();
+        let aa = d.get(b"AA").and_then(Object::as_dict).unwrap();
+        assert_eq!(d.get(b"A"), Some(&Object::Ref(ObjRef::new(4, 0))), "widget {i}'s link");
+        assert_eq!(aa.get(b"D"), Some(&Object::Ref(ObjRef::new(5, 0))), "widget {i}'s reset");
+        assert_eq!(aa.get(b"X"), Some(&Object::Ref(ObjRef::new(6, 0))), "widget {i}'s script");
+        assert!(aa.contains(b"Fo"), "widget {i} gets the new action");
+    }
+}
+
+/// Actions of a widget's own that the allowances can no longer read are kept when the list is
+/// written back: unknown isn't different, and writing them again would drop a reset's `/Flags`
+/// and a script's keys `write` doesn't know, from the widget where the scripts' allowance runs
+/// out on.
+#[test]
+fn an_action_too_long_to_read_is_kept_when_the_list_is_written_back() {
+    let n = 300;
+    let kids: String = (0..n).map(|i| format!("{} 0 R ", i + 5)).collect();
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        format!("<< /FT /Tx /T (f) /Kids [{kids}] >>"),
+    ];
+    let own = format!(
+        "/A << /S /URI /URI {0} 0 R >> /AA << /D << /S /ResetForm /Fields [{0} 0 R {0} 0 R {0} 0 R {0} 0 R] /Flags 1 >> /X << /S /JavaScript /JS {1} 0 R /Extra 1 >> >>",
+        5 + n,
+        6 + n
+    );
+    objs.extend((0..n).map(|_| format!("<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /Parent 4 0 R {own} >>")));
+    objs.push(long_string());
+    objs.push(raw_stream(&"x".repeat(1 << 20)));
+    let mut doc = document(&objs);
+    let acts = field_actions(&doc, "f").unwrap();
+    set_field_actions(&mut doc, "f", &acts).unwrap();
+    for i in 0..n {
+        let w = doc.get(ObjRef::new(i as u32 + 5, 0));
+        let aa = w.as_dict().and_then(|d| d.get(b"AA")?.as_dict().cloned()).unwrap();
+        let key = |trigger: &[u8], key: &[u8]| aa.get(trigger).and_then(|a| a.as_dict()?.get(key).cloned());
+        assert_eq!(key(b"D", b"Flags"), Some(Object::Int(1)), "widget {i}'s reset keeps its /Flags");
+        assert_eq!(key(b"X", b"Extra"), Some(Object::Int(1)), "widget {i}'s script keeps its keys");
+    }
+}
+
+/// Deleting one trigger leaves a script on another that the scripts allowance couldn't read as it
+/// is: listed as an action of another type, not as an empty script written back over it. A script
+/// whose stream won't decode reads as empty, as on `main`.
+#[test]
+fn a_script_too_long_to_read_is_kept_when_another_trigger_is_deleted() {
+    use pdfcraft_cos::{Dict, PdfString, Stream};
+    let dict = |entries: Vec<(&[u8], Object)>| -> Object { Object::Dict(entries.into_iter().map(|(k, v)| (k.to_vec(), v)).collect()) };
+    let mut doc = Document::new_empty();
+    // 25 MiB of bytes past 0x7F: 75 MiB once read as text, which spends the scripts allowance.
+    let long = doc.add(Object::String(PdfString::literal(vec![0x80; 25 << 20])));
+    let js = |s: Object| dict(vec![(b"S", Object::name("JavaScript")), (b"JS", s)]);
+    let down = dict(vec![(b"S", Object::name("JavaScript")), (b"JS", Object::String(PdfString::literal("y"))), (b"Extra", Object::Int(1))]);
+    let rect = || Object::Array([0, 0, 10, 10].map(Object::from).to_vec());
+    let f = doc.add(dict(vec![
+        (b"FT", Object::name("Tx")),
+        (b"T", Object::String(PdfString::literal("f"))),
+        (b"Rect", rect()),
+        (b"A", js(Object::Ref(long))),
+        (b"AA", dict(vec![(b"D", down)])),
+    ]));
+    let mut broken = Stream::flate(Dict::new(), b"abc");
+    broken.dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    let broken = doc.add(Object::Stream(broken));
+    let g = doc.add(dict(vec![
+        (b"FT", Object::name("Tx")),
+        (b"T", Object::String(PdfString::literal("g"))),
+        (b"Rect", rect()),
+        (b"A", js(Object::Ref(broken))),
+    ]));
+    let catalog = doc.add(dict(vec![(b"AcroForm", dict(vec![(b"Fields", Object::Array(vec![Object::Ref(f), Object::Ref(g)]))]))]));
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    let acts = field_actions(&doc, "f").unwrap();
+    assert_eq!(acts, [(Trigger::MouseUp, FieldAction::Other("JavaScript".into())), (Trigger::MouseDown, FieldAction::Other("JavaScript".into()))]);
+    let kept: Vec<_> = acts.into_iter().filter(|(t, _)| *t != Trigger::MouseUp).collect();
+    set_field_actions(&mut doc, "f", &kept).unwrap();
+    let w = doc.get(f);
+    let down = w.as_dict().and_then(|d| d.get(b"AA")?.as_dict()?.get(b"D")?.as_dict().cloned()).unwrap();
+    assert_eq!(down.get(b"JS"), Some(&Object::String(PdfString::literal("y"))));
+    assert_eq!(down.get(b"Extra"), Some(&Object::Int(1)));
+    assert_eq!(field_actions(&doc, "g").unwrap(), [(Trigger::MouseUp, FieldAction::JavaScript(String::new()))]);
+}
+
+/// An action the allowances can't read is replaced when the list changes it: on one widget whose
+/// reset, too long to read, the user turns into a link, and on 300 widgets each with a link of its
+/// own the user changes, past the allowance as well as before it.
+#[test]
+fn an_action_too_long_to_read_is_replaced_when_the_list_changes_it() {
+    let link = || FieldAction::Uri("https://example.org".into());
+    let mut doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [3 0 R] >> >>".into(),
+        long_string(),
+        format!("<< /FT /Tx /T (f) /Rect [0 0 10 10] /A << /S /ResetForm /Fields [{}] >> >>", "2 0 R ".repeat(300)),
+    ]);
+    set_field_actions(&mut doc, "f", &[(Trigger::MouseUp, link())]).unwrap();
+    assert_eq!(field_actions(&doc, "f").unwrap(), [(Trigger::MouseUp, link())]);
+    let n = 300;
+    let kids: String = (0..n).map(|i| format!("{} 0 R ", i + 5)).collect();
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        format!("<< /FT /Tx /T (f) /Kids [{kids}] >>"),
+    ];
+    objs.extend((0..n).map(|_| format!("<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /Parent 4 0 R /A << /S /URI /URI {} 0 R >> >>", 5 + n)));
+    objs.push(long_string());
+    let mut doc = document(&objs);
+    set_field_actions(&mut doc, "f", &[(Trigger::MouseUp, link())]).unwrap();
+    for i in 0..n {
+        let w = doc.get(ObjRef::new(i as u32 + 5, 0));
+        let a = w.as_dict().and_then(|d| d.get(b"A").cloned()).map(|a| doc.resolve(&a));
+        let uri = a.as_deref().and_then(|a| a.as_dict()?.get(b"URI")?.as_string().map(|s| s.to_text()));
+        assert_eq!(uri.as_deref(), Some("https://example.org"), "widget {i}");
+    }
+}
+
+/// An action 300 widgets share, changed in the list, is replaced on every widget, past the
+/// allowances as well as before them.
+#[test]
+fn a_shared_action_changed_is_replaced_on_every_widget() {
+    let n = 300;
+    let kids: String = (0..n).map(|i| format!("{} 0 R ", i + 6)).collect();
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        format!("<< /S /URI /URI {} 0 R >>", 6 + n),
+        format!("<< /FT /Tx /T (f) /Kids [{kids}] >>"),
+    ];
+    objs.extend((0..n).map(|_| "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /Parent 5 0 R /A 4 0 R >>".to_string()));
+    objs.push(long_string());
+    let mut doc = document(&objs);
+    set_field_actions(&mut doc, "f", &[(Trigger::MouseUp, FieldAction::Named("Print".into()))]).unwrap();
+    for i in 0..n {
+        let w = doc.get(ObjRef::new(i as u32 + 6, 0));
+        let a = w.as_dict().and_then(|d| d.get(b"A").cloned()).map(|a| doc.resolve(&a));
+        assert_eq!(a.as_deref().and_then(|a| a.as_dict()?.name(b"N")), Some(&b"Print"[..]), "widget {i}");
+    }
+}
+
+/// A field's `/DA`, tooltip, options, value and calculation named through a reference to a
+/// reference are read, as `Document::resolve` follows them.
+#[test]
+fn entries_named_through_a_reference_to_a_reference_are_read() {
+    let doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [8 0 R 9 0 R] >> >>".into(),
+        "3 0 R".into(),
+        "(/Helv 9 Tf 0 g)".into(),
+        "5 0 R".into(),
+        "[(x) (y)]".into(),
+        "7 0 R".into(),
+        "<< /C << /S /JavaScript /JS (AFSimple_Calculate(\"SUM\", new Array (\"a\"));) >> >>".into(),
+        "<< /FT /Ch /T (l) /DA 2 0 R /TU 10 0 R /Opt 4 0 R /V 12 0 R /AA 6 0 R >>".into(),
+        "<< /FT /Tx /T (a) >>".into(),
+        "11 0 R".into(),
+        "(hello)".into(),
+        "13 0 R".into(),
+        "[(x)]".into(),
+    ]);
+    let all = fields(&doc);
+    let l = field(&all, "l");
+    assert_eq!(l.da, "/Helv 9 Tf 0 g");
+    assert_eq!(l.tooltip.as_deref(), Some("hello"));
+    assert_eq!(l.options, [("x".to_string(), "x".to_string()), ("y".to_string(), "y".to_string())]);
+    assert_eq!(l.value, ["x"]);
+    assert_eq!(l.actions.calculate, af::Calculate::Simple { op: af::CalcOp::Sum, fields: vec!["a".into()] });
+}
+
+/// A reading of the form walks the page tree once, however many push buttons go to a page.
+#[test]
+fn go_to_buttons_share_one_walk_of_the_page_tree() {
+    let n = 50;
+    let list: String = (0..n).map(|i| format!("{} 0 R ", i + 5)).collect();
+    let mut objs = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [{list}] >> >>"),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /S /GoTo /D [3 0 R /Fit] >>".into(),
+    ];
+    objs.extend((0..n).map(|i| format!("<< /FT /Btn /Ff 65536 /T (b{i}) /Rect [0 0 10 10] /A 4 0 R >>")));
+    let doc = document(&objs);
+    let before = crate::read::page_walks();
+    let all = fields(&doc);
+    assert_eq!(crate::read::page_walks() - before, 1);
+    assert!(all.iter().all(|f| f.button == Some(af::ButtonAction::GoTo(0))));
+}
+
+/// Each step up a hide target's `/Parent` chain costs the text allowance an entry: a hide action
+/// can name one deep widget many times.
+#[test]
+fn a_hide_target_pays_for_each_step_up_its_parents() {
+    let n = 20;
+    let mut objs = vec!["<< /Type /Catalog >>".into(), "<< /T (top) >>".into()];
+    objs.extend((0..n).map(|i| format!("<< /Parent {} 0 R >>", i + 2)));
+    let doc = document(&objs);
+    let bottom = ObjRef::new(n as u32 + 2, 0);
+    let copy = std::mem::size_of::<String>();
+    let mut wide = crate::read::Allowance::new(1 << 20);
+    assert_eq!(crate::read::qualified_name(&doc, bottom, &mut wide).as_deref(), Some("top"));
+    let mut narrow = crate::read::Allowance::new(10 * copy);
+    assert_eq!(crate::read::qualified_name(&doc, bottom, &mut narrow), None, "20 steps don't fit in 10 entries");
+    assert_eq!(narrow.refusals(), 1);
+}
+
+/// Text decoded from a stream is charged for what it grows by: a PDFDocEncoding byte past 0x7F
+/// can take three in UTF-8, and an invalid one in a script reads as U+FFFD, three as well.
+#[test]
+fn text_from_streams_is_charged_for_what_it_grows_by() {
+    use pdfcraft_cos::{Dict, PdfString, Stream};
+    let n = 300;
+    let mut doc = Document::new_empty();
+    let value = doc.add(Object::Stream(Stream::flate(Dict::new(), &vec![0x80; 1 << 20])));
+    let js = doc.add(Object::Stream(Stream::flate(Dict::new(), &vec![0xFF; 1 << 20])));
+    let format = doc.add(Object::Dict([(b"S".to_vec(), Object::name("JavaScript")), (b"JS".to_vec(), Object::Ref(js))].into_iter().collect()));
+    let list: Vec<Object> = (0..n)
+        .map(|i| {
+            let aa = Object::Dict([(b"F".to_vec(), Object::Ref(format))].into_iter().collect());
+            let entries = [
+                (b"FT".to_vec(), Object::name("Tx")),
+                (b"T".to_vec(), Object::String(PdfString::literal(format!("f{i}")))),
+                (b"V".to_vec(), Object::Ref(value)),
+                (b"AA".to_vec(), aa),
+            ];
+            Object::Ref(doc.add(Object::Dict(entries.into_iter().collect())))
+        })
+        .collect();
+    let form = Object::Dict([(b"Fields".to_vec(), Object::Array(list))].into_iter().collect());
+    let catalog = doc.add(Object::Dict([(b"AcroForm".to_vec(), form)].into_iter().collect()));
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    let all = fields(&doc);
+    let values: usize = all.iter().flat_map(|f| &f.value).map(String::len).sum();
+    assert!(values > 0 && values <= crate::read::MAX_VALUE_BYTES, "{values} bytes of values");
+    let scripts: usize = all.iter().filter_map(|f| f.actions.scripts.format.as_ref()).map(String::len).sum();
+    assert!(scripts > 0 && scripts <= MAX_SCRIPT_BYTES, "{scripts} bytes of scripts");
+}
+
+/// Renaming a field that calculations read through an `/AA` they share by reference rewrites
+/// that `/AA` once, in place: the fields keep sharing it, and its other actions stay as they are.
+#[test]
+fn a_rename_rewrites_a_shared_aa_once_in_place() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (a) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (c0) /Rect [50 10 250 30] /P 3 0 R /AA 8 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (c1) /Rect [50 40 250 60] /P 3 0 R /AA 8 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (c2) /Rect [50 70 250 90] /P 3 0 R /AA 8 0 R >>".into(),
+        "<< /C << /S /JavaScript /JS (AFSimple_Calculate(\"SUM\", new Array (\"a\"));) >> /F << /S /JavaScript /JS (other) >> >>".into(),
+    ]);
+    set_props(&mut doc, "a", &FieldProps { name: Some("qty".into()), ..FieldProps::default() }).unwrap();
+    let aa = ObjRef::new(8, 0);
+    for i in 5..=7 {
+        assert_eq!(
+            doc.get(ObjRef::new(i, 0)).as_dict().and_then(|d| d.get(b"AA").cloned()),
+            Some(Object::Ref(aa)),
+            "field {i} still names the shared /AA"
+        );
+    }
+    let shared = doc.get(aa);
+    let js = |key: &[u8]| shared.as_dict().and_then(|d| d.get(key)?.as_dict()?.get(b"JS")?.as_string().map(|s| s.to_text()));
+    assert_eq!(js(b"C").as_deref(), Some("AFSimple_Calculate(\"SUM\", new Array (\"qty\"));"));
+    assert_eq!(js(b"F").as_deref(), Some("other"));
+}
+
+/// An allowance charges each copy with the `String` that holds it, refuses a copy that doesn't
+/// fit without charging it, and is spent by text that comes out longer than it was stored.
+#[test]
+fn an_allowance_charges_each_copy_and_refuses_what_does_not_fit() {
+    use crate::read::Allowance;
+    let copy = std::mem::size_of::<String>();
+    let mut a = Allowance::new(2 * copy);
+    assert!(a.entry() && a.entry());
+    assert!(!a.entry(), "a third entry doesn't fit");
+    assert_eq!(a.refusals(), 1);
+    let mut a = Allowance::new(copy + 5);
+    assert_eq!(a.copy(5, || "abcde".into()).as_deref(), Some("abcde"), "text exactly as long as what is left fits");
+    assert!(!a.entry());
+    let mut a = Allowance::new(copy + 4);
+    assert_eq!(a.copy(5, || panic!("converted")), None, "stored bytes that don't fit aren't converted");
+    assert!(a.entry(), "a refused copy charges nothing");
+    let mut a = Allowance::new(copy + 2);
+    assert_eq!(a.copy(1, || "€".into()), None);
+    assert!(!a.entry(), "text longer than its stored bytes that doesn't fit spends what is left");
+}
+
+/// A `/DA` past the text allowance, the form's or a parent's, leaves out the fields that would
+/// draw with it; a field under it with a `/DA` of its own is read, and so is a signature, which
+/// draws without one. A `/DA` that isn't text leaves the inherited one in place.
+#[test]
+fn a_da_that_does_not_fit_leaves_out_only_the_fields_that_draw_with_it() {
+    let read = |form: Option<Vec<u8>>, parent: Option<Vec<u8>>| {
+        let mut doc = document(&[
+            "<< /Type /Catalog /AcroForm << /Fields [2 0 R 3 0 R 4 0 R 8 0 R] >> >>".into(),
+            "<< /FT /Tx /T (a) >>".into(),
+            "<< /FT /Tx /T (b) /DA (/Helv 9 Tf 0 g) >>".into(),
+            "<< /FT /Tx /T (p) /Kids [5 0 R 6 0 R 7 0 R 9 0 R] >>".into(),
+            "<< /T (c) /Parent 4 0 R >>".into(),
+            "<< /T (d) /Parent 4 0 R /DA (/Helv 7 Tf 0 g) >>".into(),
+            "<< /T (e) /Parent 4 0 R /DA 5 >>".into(),
+            "<< /FT /Sig /T (s) >>".into(),
+            "<< /T (t) /Parent 4 0 R /FT /Sig >>".into(),
+        ]);
+        if let Some(da) = form {
+            let da = doc.add(Object::String(pdfcraft_cos::PdfString::literal(da)));
+            let mut form = doc.get(ObjRef::new(1, 0)).as_dict().and_then(|c| c.get(b"AcroForm")).and_then(Object::as_dict).cloned().unwrap();
+            form.set(b"DA".to_vec(), Object::Ref(da));
+            doc.update_dict(ObjRef::new(1, 0), |c| c.set(b"AcroForm".to_vec(), Object::Dict(form))).unwrap();
+        }
+        if let Some(da) = parent {
+            let da = doc.add(Object::String(pdfcraft_cos::PdfString::literal(da)));
+            doc.update_dict(ObjRef::new(4, 0), |p| p.set(b"DA".to_vec(), Object::Ref(da))).unwrap();
+        }
+        let read = fields_with_adopted(&doc);
+        (read.items.into_iter().map(|f| (f.name, f.da)).collect::<Vec<_>>(), read.left_out)
+    };
+    let own = |name: &str, da: &str| (name.to_string(), da.to_string());
+    let (fits, default) = ("/Helv 5 Tf 0 g", "/Helv 0 Tf 0 g");
+    let past = || Some(vec![b' '; crate::read::MAX_TEXT_BYTES]);
+    let (b, d) = (own("b", "/Helv 9 Tf 0 g"), own("p.d", "/Helv 7 Tf 0 g"));
+    let all = |top: &str, under: &str| [own("a", top), b.clone(), own("p.c", under), d.clone(), own("p.e", under), own("p.t", under), own("s", top)];
+    assert_eq!(read(Some(fits.into()), None).0, all(fits, fits));
+    assert_eq!(read(None, Some(fits.into())).0, all(default, fits));
+    assert_eq!(read(past(), None).0, [b.clone(), d.clone(), own("p.t", default), own("s", default)]);
+    assert_eq!(read(None, past()).0, [own("a", default), b.clone(), d.clone(), own("p.t", default), own("s", default)]);
+    // Each field that would draw with a `/DA` that didn't fit counts as left out.
+    assert_eq!(read(past(), None).1, 3);
+    // A signature under a `/DA` that didn't fit reports none, not the one above it.
+    assert_eq!(read(Some(fits.into()), past()).0, [own("a", fits), b, d, own("p.t", default), own("s", fits)]);
+}
+
+/// A field left out of the reading doesn't keep the widgets it lists: a later field listing the
+/// same widget has it.
+#[test]
+fn a_field_left_out_leaves_its_widgets_to_a_later_field() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /FT /Tx /T (first) /Kids [6 0 R] >>".into(),
+        "<< /FT /Tx /T (second) /Kids [6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /Parent 4 0 R >>".into(),
+    ]);
+    let widgets =
+        |doc: &Document| fields(doc).into_iter().map(|f| (f.name, f.widgets.iter().map(|w| w.obj.num).collect::<Vec<_>>())).collect::<Vec<_>>();
+    assert_eq!(widgets(&doc), [("first".to_string(), vec![6]), ("second".to_string(), vec![])]);
+    let tooltip = || Object::String(pdfcraft_cos::PdfString::literal(vec![b' '; crate::read::MAX_TEXT_BYTES]));
+    doc.update_dict(ObjRef::new(4, 0), |f| f.set(b"TU".to_vec(), tooltip())).unwrap();
+    assert_eq!(widgets(&doc), [("second".to_string(), vec![6])]);
+    // A widget only a field left out lists, with no `/Parent`, isn't adopted as a field of its own.
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),
+        "<< /FT /Tx /T (only) /V (old) /Kids [5 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Rect [0 0 10 10] >>".into(),
+    ]);
+    assert_eq!(widgets(&doc), [("only".to_string(), vec![5])]);
+    doc.update_dict(ObjRef::new(4, 0), |f| f.set(b"TU".to_vec(), tooltip())).unwrap();
+    assert_eq!(widgets(&doc), []);
+    assert_eq!(fields_with_adopted(&doc).left_out, 1);
+    // Nor when the field, or a field above it, is left out for its name.
+    let long_name = || Object::String(pdfcraft_cos::PdfString::literal(vec![b'n'; crate::read::MAX_TEXT_BYTES]));
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /T (p) /Kids [6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Rect [0 0 10 10] >>".into(),
+        "<< /FT /Tx /T (k) /Kids [5 0 R 7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Rect [0 20 10 30] >>".into(),
+        // A widget whose /Parent is the kid field, which doesn't list it.
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Parent 6 0 R /Rect [0 40 10 50] >>".into(),
+    ]);
+    assert_eq!(widgets(&doc), [("p.k".to_string(), vec![5, 7])]);
+    for owner in [6, 4] {
+        let mut doc = doc.clone();
+        doc.update_dict(ObjRef::new(owner, 0), |f| f.set(b"T".to_vec(), long_name())).unwrap();
+        let read = fields_with_adopted(&doc);
+        assert!(read.items.is_empty(), "{owner}: {:?}", read.items.iter().map(|f| &f.name).collect::<Vec<_>>());
+        assert_eq!((read.adopted_page_fields, read.left_out), (0, 1), "{owner}");
+    }
+    // Each terminal field under one left out for its name counts.
+    let mut doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [2 0 R] >> >>".into(),
+        "<< /FT /Tx /T (p) /Kids [3 0 R 4 0 R 5 0 R] >>".into(),
+        "<< /T (k0) /Parent 2 0 R >>".into(),
+        "<< /T (k1) /Parent 2 0 R >>".into(),
+        "<< /T (k2) /Parent 2 0 R >>".into(),
+    ]);
+    doc.update_dict(ObjRef::new(2, 0), |f| f.set(b"T".to_vec(), long_name())).unwrap();
+    assert_eq!(fields_with_adopted(&doc).left_out, 3);
+}
+
+/// Fields left out for their names, and the nodes under them, sharing one `/Kids` array: the walks
+/// that withhold them load the array once in the reading and read it once, not once for each
+/// node or field that names it.
+#[test]
+fn a_kids_array_nodes_share_is_read_once_under_fields_left_out() {
+    let (k, m) = (2000, 20);
+    let array = m + 2;
+    let mut objs: Vec<String> =
+        vec![format!("<< /Type /Catalog /AcroForm << /Fields [{}] >> >>", (2..array).map(|i| format!("{i} 0 R")).collect::<Vec<_>>().join(" "))];
+    objs.extend((0..m).map(|i| format!("<< /FT /Tx /T (f{i}) /Kids {array} 0 R >>")));
+    objs.push(format!("[{}]", (0..k).map(|i| format!("{} 0 R", array + 1 + i)).collect::<Vec<_>>().join(" ")));
+    objs.extend((0..k).map(|_| format!("<< /Kids {array} 0 R >>")));
+    let mut doc = document(&objs);
+    let name = doc.add(Object::String(pdfcraft_cos::PdfString::literal(vec![b'n'; crate::read::MAX_TEXT_BYTES])));
+    for f in 2..array {
+        doc.update_dict(ObjRef::new(u32::try_from(f).unwrap(), 0), |d| d.set(b"T".to_vec(), Object::Ref(name))).unwrap();
+    }
+    crate::read::WITHHELD_ENTRIES.with(|c| c.set(0));
+    crate::read::WITHHELD_LOADS.with(|c| c.set(0));
+    let read = fields_with_adopted(&doc);
+    let entries = crate::read::WITHHELD_ENTRIES.with(std::cell::Cell::get);
+    let loads = crate::read::WITHHELD_LOADS.with(std::cell::Cell::get);
+    assert_eq!((read.items.len(), read.left_out), (0, m));
+    assert!(entries <= 2 * k && loads == 1, "{entries} entries read, {loads} loads");
+}
+
+/// Under a field left out for its name, a widget behind 32 references to references, as far as
+/// `Document::resolve` follows them, is withheld, and so isn't adopted from the page.
+#[test]
+fn a_widget_behind_references_under_a_field_left_out_is_withheld() {
+    let refs = 32u32;
+    let widget = 6 + refs;
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [{widget} 0 R] >>"),
+        "<< /FT /Tx /T (f) /V (old) /Kids 5 0 R >>".into(),
+    ];
+    objs.extend((0..refs).map(|i| format!("{} 0 R", 6 + i)));
+    objs.push(format!("[{widget} 0 R]"));
+    objs.push("<< /Type /Annot /Subtype /Widget /FT /Tx /Rect [0 0 10 10] >>".into());
+    assert_eq!(objs.len(), usize::try_from(widget).unwrap());
+    let mut doc = document(&objs);
+    assert_eq!(fields(&doc).iter().map(|f| f.widgets.len()).collect::<Vec<_>>(), [1], "read whole, the field has its widget");
+    doc.update_dict(ObjRef::new(4, 0), |f| {
+        f.set(b"T".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(vec![b'n'; crate::read::MAX_TEXT_BYTES])))
+    })
+    .unwrap();
+    let read = fields_with_adopted(&doc);
+    assert_eq!((read.items.len(), read.adopted_page_fields, read.left_out), (0, 0, 1));
+}
+
+/// Fields left out for their names reach a `/Kids` array behind references to references as far
+/// as `Document::resolve` follows them, and no further; and a chain too long to follow, walked
+/// first from one field, doesn't hide the array from another that names a reference within reach.
+#[test]
+fn fields_left_out_follow_references_as_far_as_resolve() {
+    // 1 catalog, 2 pages, 3 the page, then the fields naming references `entries` into a chain
+    // of `refs`, then the chain, the array and the widget it lists, with no /Parent.
+    let build = |refs: u32, entries: &[u32]| {
+        let fields = u32::try_from(entries.len()).unwrap();
+        let chain = 4 + fields;
+        let widget = chain + refs + 1;
+        let listed: Vec<String> = (0..fields).map(|i| format!("{} 0 R", 4 + i)).collect();
+        let mut objs: Vec<String> = vec![
+            format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [{}] >> >>", listed.join(" ")),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+            format!("<< /Type /Page /Parent 2 0 R /Annots [{widget} 0 R] >>"),
+        ];
+        objs.extend(entries.iter().enumerate().map(|(i, e)| format!("<< /FT /Tx /T (f{i}) /V (old) /Kids {} 0 R >>", chain + e)));
+        objs.extend((0..refs).map(|i| format!("{} 0 R", chain + i + 1)));
+        objs.push(format!("[{widget} 0 R]"));
+        objs.push("<< /Type /Annot /Subtype /Widget /FT /Tx /Rect [0 0 10 10] >>".into());
+        assert_eq!(objs.len(), usize::try_from(widget).unwrap());
+        let mut doc = document(&objs);
+        let name = doc.add(Object::String(pdfcraft_cos::PdfString::literal(vec![b'n'; crate::read::MAX_TEXT_BYTES])));
+        for f in 0..fields {
+            doc.update_dict(ObjRef::new(4 + f, 0), |d| d.set(b"T".to_vec(), Object::Ref(name))).unwrap();
+        }
+        (doc, ObjRef::new(chain, 0))
+    };
+    for refs in [31, 32, 33] {
+        let (doc, first) = build(refs, &[0]);
+        let resolved = doc.resolve(&Object::Ref(first)).as_array().is_some();
+        let read = fields_with_adopted(&doc);
+        assert_eq!(read.adopted_page_fields == 0, resolved, "{refs} references: the widget is withheld as far as resolve reaches");
+        assert_eq!(resolved, refs <= 32);
+    }
+    for entries in [[0, 11], [11, 0]] {
+        let (doc, _) = build(40, &entries);
+        let read = fields_with_adopted(&doc);
+        assert_eq!((read.items.len(), read.adopted_page_fields, read.left_out), (0, 0, 2), "fields naming {entries:?}");
+    }
+}
+
+/// A widget's `/AS` is copied within the text allowance like the rest of the field's text: one
+/// that doesn't fit leaves the field out.
+#[test]
+fn a_widgets_state_is_charged_to_the_text_allowance() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [2 0 R 3 0 R] >> >>".into(),
+        "<< /FT /Btn /T (check) /Rect [0 0 10 10] /AS /Yes /AP << /N << /Yes 4 0 R /Off 4 0 R >> >> >>".into(),
+        "<< /FT /Tx /T (text) /Rect [0 0 10 10] >>".into(),
+        "<< /Length 0 >>\nstream\n\nendstream".into(),
+    ]);
+    let names = |doc: &Document| fields(doc).into_iter().map(|f| f.name).collect::<Vec<_>>();
+    assert_eq!(names(&doc), ["check", "text"]);
+    assert_eq!(fields(&doc)[0].widgets[0].state.as_deref(), Some("Yes"));
+    // Given by reference, it reads the same.
+    let mut by_reference = doc.clone();
+    let yes = by_reference.add(Object::name("Yes"));
+    by_reference.update_dict(ObjRef::new(2, 0), |f| f.set(b"AS".to_vec(), Object::Ref(yes))).unwrap();
+    assert_eq!(fields(&by_reference)[0].widgets[0].state.as_deref(), Some("Yes"));
+    doc.update_dict(ObjRef::new(2, 0), |f| f.set(b"AS".to_vec(), Object::Name(vec![b'x'; crate::read::MAX_TEXT_BYTES]))).unwrap();
+    assert_eq!(names(&doc), ["text"]);
+}
+
+/// What a reading of the form takes from push buttons' actions (named, submit, go-to, reset and
+/// hide actions), and from a list box's border and a widget's own flags; check boxes and text
+/// fields have no button action, whatever their `/A`.
+#[test]
+fn push_button_actions_and_widget_details_are_read() {
+    let button = |name: &str, action: &str| format!("<< /FT /Btn /Ff 65536 /T ({name}) /Rect [0 0 10 10] /A {action} >>");
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        button("named", "<< /S /Named /N /Print >>"),
+        button("submit", "<< /S /SubmitForm /F << /FS /URL /F (https://example.org/a) >> >>"),
+        button("post", "<< /S /SubmitForm /F (https://example.org/b) >>"),
+        button("go", "<< /S /GoTo /D [3 0 R /Fit] >>"),
+        button("reset", "<< /S /ResetForm /Fields [9 0 R (named)] >>"),
+        "<< /FT /Btn /T (check) /Rect [0 0 10 10] /A << /S /Named /N /Print >> >>".into(),
+        "<< /FT /Tx /T (text) /Rect [0 0 10 10] /A << /S /Hide /T (named) >> >>".into(),
+        button("hide", "<< /S /Hide /T [14 0 R 9 0 R] >>"),
+        "<< /FT /Ch /T (list) /Rect [0 0 100 100] /MK << /BC [0] >> /BS << /W 3 >> >>".into(),
+        "<< /FT /Tx /T (two) /Kids [15 0 R 16 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /Parent 13 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /Parent 13 0 R /Ff 1 >>".into(),
+    ]);
+    let all = fields(&doc);
+    let get = |name: &str| field(&all, name).clone();
+    let s = |t: &str| t.to_string();
+    assert_eq!(get("named").button, Some(af::ButtonAction::Named(s("Print"))));
+    assert_eq!(get("submit").button, Some(af::ButtonAction::Submit(s("https://example.org/a"))));
+    assert_eq!(get("post").button, Some(af::ButtonAction::Submit(s("https://example.org/b"))));
+    assert_eq!(get("go").button, Some(af::ButtonAction::GoTo(0)));
+    assert_eq!(get("reset").button, Some(af::ButtonAction::Reset { fields: vec![s("check"), s("named")], exclude: false }));
+    assert_eq!(get("check").button, None);
+    assert_eq!(get("text").button, None);
+    assert_eq!(field_actions(&doc, "text").unwrap(), [(Trigger::MouseUp, FieldAction::ShowHide { fields: vec![s("named")], hide: true })]);
+    // A hide target that is no field (a widget with no name above it) names nothing.
+    assert_eq!(get("hide").button, Some(af::ButtonAction::ShowHide { fields: vec![s("check")], hide: true }));
+    assert_eq!(get("list").widgets[0].list.map(|l| l.inset), Some(5.0), "inset by the border's width");
+    assert_eq!(get("two").widgets.iter().map(|w| w.read_only).collect::<Vec<_>>(), [false, true], "a widget's own /Ff");
+}
+
+/// Renaming a field renames it in a calculation held by a field with several widgets, which the
+/// field's own `/AA` carries.
+#[test]
+fn a_rename_reaches_the_calculation_of_a_field_with_several_widgets() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (a) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /FT /Tx /T (total) /Kids [7 0 R 8 0 R] /AA << /C << /S /JavaScript /JS (AFSimple_Calculate(\"SUM\", new Array (\"a\"));) >> >> >>".into(),
+        "null".into(),
+        "<< /Type /Annot /Subtype /Widget /Rect [50 10 250 30] /Parent 5 0 R /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Rect [50 40 250 60] /Parent 5 0 R /P 3 0 R >>".into(),
+    ]);
+    set_props(&mut doc, "a", &FieldProps { name: Some("qty".into()), ..FieldProps::default() }).unwrap();
+    let total = doc.get(ObjRef::new(5, 0));
+    let js = total.as_dict().and_then(|d| d.get(b"AA")?.as_dict()?.get(b"C")?.as_dict()?.get(b"JS")?.as_string().map(|s| s.to_text()));
+    assert_eq!(js.as_deref(), Some("AFSimple_Calculate(\"SUM\", new Array (\"qty\"));"));
 }
 
 /// A page whose `/Contents` lists one 1 MiB stream ten times is read within the budget given:
