@@ -104,11 +104,22 @@ impl PdfCraftApp {
         } else if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
             self.put_down_edit_text();
         }
-        // Read mode hides the quick toolbar, so only the reading tool may stay active there:
-        // the default tool (Select, or Hand when the user reads by dragging the page, #6235).
+        // Read mode hides the quick toolbar, so only the reading tool may stay active there.
         // Opening a document with Read as the default mode comes here without `switch_mode`.
         if mode == Mode::Read {
-            self.quick_tool = self.default_tool.quick_tool();
+            self.put_tool_down_for_reading();
+        }
+    }
+
+    /// Put the tool in use down to the default tool (Select, or Hand when the user reads by
+    /// dragging the page, #6235), as Read mode does. In full screen a click turns the page, so
+    /// Select stays active there and the default tool is the one given back when it ends.
+    fn put_tool_down_for_reading(&mut self) {
+        let tool = self.default_tool.quick_tool();
+        if self.full_screen {
+            self.full_screen_tool = Some(tool);
+        } else {
+            self.quick_tool = tool;
         }
     }
 
@@ -157,7 +168,7 @@ impl PdfCraftApp {
             if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
                 self.put_down_edit_text();
             }
-            self.quick_tool = self.default_tool.quick_tool();
+            self.put_tool_down_for_reading();
         } else if mode != Mode::Read && was_read {
             let before = self.right_before_read.take();
             if self.right.is_none() {

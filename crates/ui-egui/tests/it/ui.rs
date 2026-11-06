@@ -529,6 +529,27 @@ fn read_mode_puts_the_tool_down_to_the_default_tool() {
     assert_eq!((h.state().mode, h.state().quick_tool), (Mode::Read, QuickTool::Hand), "opened into Read mode");
 }
 
+/// In full screen a click turns the page, so Read mode entered there keeps the Select tool; the
+/// default tool (Hand) is the one given back when full screen ends, not the tool in use before it.
+#[test]
+fn read_mode_in_full_screen_keeps_select_and_gives_back_the_default_tool() {
+    use pdfcraft_ui_egui::{DefaultTool, Mode, QuickTool};
+    let mut h = harness(|app| {
+        app.default_tool = DefaultTool::Hand;
+        app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
+    });
+    h.state_mut().set_option("quick", "highlight").unwrap();
+    h.state_mut().apply_full_screen(true);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    h.state_mut().run_command("view.read_mode");
+    h.run_steps(3);
+    assert_eq!((h.state().mode, h.state().quick_tool), (Mode::Read, QuickTool::Select), "a click still turns the page");
+    h.state_mut().apply_full_screen(false);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand, "the reading tool comes back, not the highlighter");
+}
+
 /// A pane closed in Read mode stays closed on the way out: leaving Read mode doesn't bring back the
 /// pane saved on the way in, and closing Comments keeps its close preference.
 #[test]
