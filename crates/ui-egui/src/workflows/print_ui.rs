@@ -666,6 +666,18 @@ mod tests {
         }
     }
 
+    /// #5806: with Print as image, grayscale makes the pictures grey, so the job doesn't ask the
+    /// driver for it as well; a driver that keeps no grayscale setting then still prints.
+    #[test]
+    fn grey_pictures_dont_ask_the_driver_for_grayscale() {
+        let vector = PrintDraft { grayscale: true, ..PrintDraft::default() };
+        assert!(vector.job("a.pdf").grayscale, "vector pages: the driver makes them grey");
+        let pictures = PrintDraft { grayscale: true, as_image: true, ..PrintDraft::default() };
+        assert!(!pictures.job("a.pdf").grayscale, "grey pictures: nothing for the driver to do");
+        assert!(pictures.settings(1, &[]).unwrap().raster.is_some_and(|r| r.grayscale), "grey pictures: the pages are rendered grey");
+        assert!(!PrintDraft::default().job("a.pdf").grayscale);
+    }
+
     #[test]
     fn composed_sheets_keep_exact_scaling_and_the_dialogs_duplex_choice() {
         let draft = PrintDraft { duplex: Some(spool::Duplex::LongEdge), ..PrintDraft::default() };
