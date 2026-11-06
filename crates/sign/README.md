@@ -22,7 +22,10 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   An existing unsigned field or a new one (visible with Acrobat's name-and-details appearance,
   or invisible); certification with DocMDP P=1/2/3. A visible signature can show a `Graphic`
   where the large name would be: drawn strokes, filled outlines (a typed signature) or RGBA
-  pixels (an image XObject with a soft mask), checked and size-capped first. The document is written incrementally
+  pixels (an image XObject with a soft mask), checked and size-capped first. On a page shown
+  turned (`/Rotate`, inherited or not), a new visible signature reads upright as displayed: its
+  widget gets `/MK /R` and its appearance is laid out in the displayed box and turned back by a
+  `/Matrix`; an existing field follows its own `/MK /R`. The document is written incrementally
   with a zero-filled `/Contents` and fixed-width `/ByteRange`, which are then patched in
   place. Encrypted documents are refused for now.
 - **Timestamps (PAdES B-T):** the `timestamp` module builds and parses RFC 3161 requests,

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use pdfcraft_cos::{Document, ObjRef, Object, SaveOptions, write_incremental};
 
+use super::modify::text_box_of;
 use super::*;
 
 /// Two pages. Page 1 has an inline Square annotation in a direct /Annots array; page 2 has an
@@ -40,7 +41,7 @@ fn new(page: usize, shape: Shape) -> NewAnnotation {
     NewAnnotation {
         page,
         shape,
-        style: Style { color: [0.0, 0.4, 1.0], opacity: 1.0, width: 2.0, fill: None },
+        style: Style { color: [0.0, 0.4, 1.0], opacity: 1.0, width: 2.0, fill: None, ..Style::default() },
         contents: "hello".into(),
         author: "Ada".into(),
     }
@@ -229,6 +230,75 @@ fn delete_takes_popup_and_reply_chain() {
     assert_eq!(delete_annotation(&mut doc, 0, 9), Err(AnnotError::NoSuchAnnotation { page: 0, index: 9 }));
 }
 
+/// A locked reply can't be deleted, so it doesn't go with what it answers either: deleting the
+/// reply above it, or the comment, is refused and changes nothing; once it is unlocked they go.
+#[test]
+fn a_locked_reply_keeps_what_it_answers() {
+    let mut doc = fixture();
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 100.0], icon: NoteIcon::Comment }), &meta("n")).unwrap();
+    let reply = add_reply(&mut doc, 0, note, "first", "Bob", &meta("r1")).unwrap();
+    let answer = add_reply(&mut doc, 0, reply, "locked answer", "Ada", &meta("r2")).unwrap();
+    set_locked(&mut doc, 0, answer, true).unwrap();
+    let before = list(&doc, 0).len();
+    assert_eq!(delete_annotation(&mut doc, 0, reply), Err(AnnotError::Invalid("a reply to it is locked".into())));
+    assert_eq!(delete_annotation(&mut doc, 0, note), Err(AnnotError::Invalid("a reply to it is locked".into())));
+    assert_eq!(list(&doc, 0).len(), before, "nothing went");
+    // Asked first, read-only, as a Delete command does: the same answer, and the answer's own
+    // lock is its own.
+    assert_eq!(deletable(&doc, 0, note), Err(AnnotError::Invalid("a reply to it is locked".into())));
+    assert_eq!(deletable(&doc, 0, answer), Err(AnnotError::Invalid("the comment is locked".into())));
+    // Lifted on a copy, to draw the page beneath, the locks don't count.
+    let mut copy = doc.clone();
+    lift_annotation(&mut copy, 0, note).unwrap();
+    assert!(list(&copy, 0).len() < before, "the thread is lifted off the copy");
+    set_locked(&mut doc, 0, answer, false).unwrap();
+    assert_eq!(deletable(&doc, 0, reply), Ok(()));
+    delete_annotation(&mut doc, 0, reply).unwrap();
+    let left: Vec<String> = list(&doc, 0).iter().map(|d| text(d, b"Contents")).collect();
+    assert!(!left.iter().any(|t| t == "first" || t == "locked answer"), "the reply and its answer went: {left:?}");
+}
+
+/// A reply or pop-up written inline in `/Annots` (a file can, though the standard asks for
+/// references) goes with the comment it points at, and so does a pop-up an inline reply or an
+/// inline comment names. An unrelated inline comment stays until it is deleted itself.
+#[test]
+fn delete_takes_inline_replies_and_popups() {
+    let mut doc = fixture();
+    let mut popup = |note: &str| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Popup"));
+        d.set(b"Contents".to_vec(), PdfString::text(note));
+        doc.add(Object::Dict(d))
+    };
+    let (reply_popup, square_popup) = (popup("of the reply"), popup("of the square"));
+    let inline = |subtype: &str, links: &[(&[u8], ObjRef)]| {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name(subtype));
+        links.iter().for_each(|(key, r)| d.set(key.to_vec(), Object::Ref(*r)));
+        Object::Dict(d)
+    };
+    let stamp = ObjRef::new(6, 0);
+    let entries = vec![
+        Object::Ref(stamp),
+        inline("Text", &[(b"IRT", stamp), (b"Popup", reply_popup)]),
+        Object::Ref(reply_popup),
+        inline("Popup", &[(b"Parent", stamp)]),
+        inline("Square", &[(b"Popup", square_popup)]),
+        Object::Ref(square_popup),
+    ];
+    doc.set(ObjRef::new(5, 0), Object::Array(entries));
+    let subtypes = |doc: &Document| -> Vec<String> {
+        list(doc, 1).iter().map(|d| String::from_utf8_lossy(d.name(b"Subtype").unwrap()).into_owned() + ":" + &text(d, b"Contents")).collect()
+    };
+    delete_annotation(&mut doc, 1, 0).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(subtypes(&doc), ["Square:", "Popup:of the square"]);
+    delete_annotation(&mut doc, 1, 0).unwrap();
+    assert!(subtypes(&reopen(&doc)).is_empty(), "the inline comment's pop-up went with it");
+}
+
 #[test]
 fn deleting_the_last_comment_removes_annots() {
     let mut doc = fixture();
@@ -262,7 +332,7 @@ fn move_shifts_all_geometry_and_the_popup() {
 fn restyle_and_resize_redraw_the_appearance() {
     let mut doc = fixture();
     let r = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 110.0, 60.0] }), &meta("r")).unwrap();
-    set_style(&mut doc, 0, r, Some([1.0, 0.0, 0.0]), Some(0.5), Some(4.0), None, &meta("")).unwrap();
+    set_style(&mut doc, 0, r, StyleChange::new(Some([1.0, 0.0, 0.0]), Some(0.5), Some(4.0), None), &meta("")).unwrap();
     set_rect(&mut doc, 0, r, [0.0, 0.0, 200.0, 100.0], &meta("")).unwrap();
     let doc2 = reopen(&doc);
     let d = &list(&doc2, 0)[r];
@@ -272,7 +342,10 @@ fn restyle_and_resize_redraw_the_appearance() {
     assert_eq!(d.get(b"CA").and_then(|o| o.as_f64()), Some(0.5));
     // A stamp's appearance can't be regenerated, so restyling it changes nothing.
     let before = list(&doc, 1)[0].clone();
-    assert_eq!(set_style(&mut doc, 1, 0, Some([0.0; 3]), None, None, None, &meta("")), Err(AnnotError::Unsupported("Stamp".into())));
+    assert_eq!(
+        set_style(&mut doc, 1, 0, StyleChange::new(Some([0.0; 3]), None, None, None), &meta("")),
+        Err(AnnotError::Unsupported("Stamp".into()))
+    );
     assert_eq!(list(&doc, 1)[0], before);
     // Lines can't be resized as rectangles.
     let l = add_annotation(
@@ -282,6 +355,296 @@ fn restyle_and_resize_redraw_the_appearance() {
     )
     .unwrap();
     assert!(matches!(set_rect(&mut doc, 0, l, [0.0, 0.0, 5.0, 5.0], &meta("")), Err(AnnotError::Invalid(_))));
+}
+
+/// Typed text or a text box takes an oval or a circle for its border: the text box keeps its
+/// place and the shape goes around it (`/Rect` grows, `/RD` holds the text box, `/PCBorderShape`
+/// the shape); back to a rectangle, it is the text box it was. A resized frame takes its text box
+/// along, a thicker border leaves it where it is.
+#[test]
+fn text_boxes_take_an_oval_or_a_circle_around_their_text() {
+    let close = |a: &[f64], b: &[f64]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.01);
+    let nums = |d: &Dict, k: &[u8]| -> Vec<f64> {
+        d.get(k).and_then(|o| o.as_array()).map(|a| a.iter().filter_map(|x| x.as_f64()).collect()).unwrap_or_default()
+    };
+    // Where the text starts: its first line's text matrix.
+    let text_at = |doc: &Document, d: &Dict| ap_content(doc, d).lines().find(|l| l.ends_with(" Tm") || l.contains(" Tm ")).map(str::to_owned);
+    let mut doc = fixture();
+    let mut tw = new(0, Shape::Typewriter { rect: [100.0, 100.0, 200.0, 120.0], font_size: 10.0 });
+    tw.style.width = 1.0;
+    let t = add_annotation(&mut doc, &tw, &meta("t")).unwrap();
+    // In an oval or a circle the text is centred in its text box (left-aligned in a box): one
+    // line of "hello" at 10 pt in the 100 × 20 text box centred on (150, 110), 3 pt from its top.
+    let centred = format!("1 0 0 1 {} {} Tm (hello) Tj", n(150.0 - appearance::text_width("hello", 10.0) / 2.0), n(107.0));
+    assert!(text_at(&doc, &list(&doc, 0)[t]).is_some_and(|l| l.starts_with("1 0 0 1 103 ")), "a box: left-aligned");
+    set_border_shape(&mut doc, 0, t, BorderShape::Oval, &meta("")).unwrap();
+    let doc2 = reopen(&doc);
+    let d = &list(&doc2, 0)[t];
+    // Around the 100 × 20 text box, centred: √2 its size, two points more for the 1 pt border.
+    let (ax, ay) = (50.0 * std::f64::consts::SQRT_2 + 2.0, 10.0 * std::f64::consts::SQRT_2 + 2.0);
+    assert!(close(&rect(d), &[150.0 - ax, 110.0 - ay, 150.0 + ax, 110.0 + ay]), "{:?}", rect(d));
+    assert!(close(&nums(d, b"RD"), &[ax - 50.0, ay - 10.0, ax - 50.0, ay - 10.0]), "{:?}", nums(d, b"RD"));
+    assert_eq!(d.name(b"PCBorderShape"), Some(&b"Oval"[..]));
+    let ap = ap_content(&doc2, d);
+    assert!(ap.contains(" c\n") && ap.contains("S\n") && !ap.contains("re S"), "an oval, not a box: {ap}");
+    assert_eq!(text_at(&doc2, d).as_deref(), Some(centred.as_str()), "the text keeps its place");
+    assert_eq!(props(&doc2, 0, t).unwrap().border_shape, Some(BorderShape::Oval));
+    // A circle around the text: the text box shrinks to "hello" with its padding, centred where it
+    // was, and the circle touches its sides (the text a point clear of the border inside).
+    set_border_shape(&mut doc, 0, t, BorderShape::Circle, &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    let hw = appearance::text_width("hello", 10.0) / 2.0;
+    let r = (hw + 5.0).max(hw.hypot(6.0) + 2.0);
+    assert!(close(&rect(d), &[150.0 - r, 110.0 - r, 150.0 + r, 110.0 + r]), "{:?}", rect(d));
+    assert!(close(&nums(d, b"RD"), &[r - hw - 5.0, r - 10.0, r - hw - 5.0, r - 10.0]), "{:?}", nums(d, b"RD"));
+    assert_eq!(text_at(&doc, d).as_deref(), Some(centred.as_str()));
+    // A thicker border: the typed text's box grows by the change on every side, so its text keeps
+    // its place inside the thicker line (as with a rectangle), and the circle goes around that.
+    set_style(&mut doc, 0, t, StyleChange::new(None, None, Some(3.0), None), &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    assert_eq!(text_at(&doc, d).as_deref(), Some(centred.as_str()));
+    let r3 = (hw + 7.0).max(hw.hypot(6.0) + 4.0);
+    assert!(close(&rect(d), &[150.0 - r3, 110.0 - r3, 150.0 + r3, 110.0 + r3]), "{:?}", rect(d));
+    // Its frame resized: the text box follows inside, keeping its proportions, its longer sides
+    // reaching the circle.
+    set_rect(&mut doc, 0, t, [150.0 - 2.0 * r3, 110.0 - 2.0 * r3, 150.0 + 2.0 * r3, 110.0 + 2.0 * r3], &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    let rd = nums(d, b"RD");
+    let tb = [rect(d)[0] + rd[0], rect(d)[1] + rd[1], rect(d)[2] - rd[2], rect(d)[3] - rd[3]];
+    assert!(((tb[2] - tb[0]) / (tb[3] - tb[1]) - (hw + 7.0) / 12.0).abs() < 0.01, "the text box keeps its proportions: {tb:?}");
+    assert!(close(&rect(d), &[150.0 - 2.0 * r3, 110.0 - 2.0 * r3, 150.0 + 2.0 * r3, 110.0 + 2.0 * r3]), "{:?}", rect(d));
+    // A rectangle again: the text box it has, nothing around it.
+    set_border_shape(&mut doc, 0, t, BorderShape::Rectangle, &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    assert!(close(&rect(d), &tb), "{:?} vs {tb:?}", rect(d));
+    assert!(!d.contains(b"RD") && !d.contains(b"PCBorderShape"));
+    assert!(ap_content(&doc, d).contains("re S"));
+
+    // A filled text box made with an oval: the background takes the shape too.
+    let mut tb = new(0, Shape::TextBox { rect: [300.0, 500.0, 400.0, 540.0], font_size: 12.0 });
+    (tb.style.fill, tb.style.width, tb.style.border_shape) = (Some([1.0, 1.0, 0.6]), 1.0, BorderShape::Oval);
+    let b = add_annotation(&mut doc, &tb, &meta("b")).unwrap();
+    let d = &list(&doc, 0)[b];
+    assert_eq!(d.name(b"PCBorderShape"), Some(&b"Oval"[..]));
+    let ap = ap_content(&doc, d);
+    assert!(ap.contains("1 1 0.6 rg") && ap.contains(" c\nh\nf\n") && !ap.contains(" re f"), "{ap}");
+    // A callout's border stays a rectangle.
+    let c = add_annotation(
+        &mut doc,
+        &new(
+            0,
+            Shape::Callout {
+                rect: [300.0, 300.0, 400.0, 340.0],
+                knee: [280.0, 320.0],
+                point: [250.0, 280.0],
+                ending: LineEnding::OpenArrow,
+                font_size: 10.0,
+            },
+        ),
+        &meta("c"),
+    )
+    .unwrap();
+    assert!(matches!(set_border_shape(&mut doc, 0, c, BorderShape::Oval, &meta("")), Err(AnnotError::Invalid(_))));
+    assert_eq!(props(&doc, 0, c).unwrap().border_shape, None);
+    assert_eq!(BorderShape::parse("CIRCLE"), Some(BorderShape::Circle));
+}
+
+/// A circle goes snug around short text, as a number on a drawing is circled: the text box is no
+/// wider than its text needs and the circle touches its sides, where one through the box's corners
+/// stood well clear. It follows the text and its size as they change; one made larger by hand
+/// keeps its size.
+#[test]
+fn a_circle_goes_snug_around_its_text_and_follows_it() {
+    let close = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01;
+    let mut doc = fixture();
+    // "3" at 10 pt with a 1 pt border, in the box Fill & Sign sizes to it: the digit with 2 pt of
+    // padding and 4 pt to spare across, a line and 6 pt down, the border around that.
+    let w3 = appearance::text_width("3", 10.0);
+    let mut typed = new(0, Shape::Typewriter { rect: [100.0, 680.0, 110.0 + w3, 700.0], font_size: 10.0 });
+    (typed.contents, typed.style.width, typed.style.border_shape) = ("3".into(), 1.0, BorderShape::Circle);
+    let t = add_annotation(&mut doc, &typed, &meta("t")).unwrap();
+    let frame = |doc: &Document| {
+        let r = rect(&list(doc, 0)[t]);
+        ((r[2] - r[0], r[3] - r[1]), ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0))
+    };
+    let centre = (105.0 + w3 / 2.0, 690.0);
+    // As tall as the box, 20 pt across: through the corners it was 29.
+    assert!(close(frame(&doc).0, (20.0, 20.0)) && close(frame(&doc).1, centre), "{:?}", frame(&doc));
+    // The text box Fill & Sign gives a box to type into, 40 pt wide: a circle goes snug around its
+    // text there too.
+    let mut wide = typed.clone();
+    wide.shape = Shape::Typewriter { rect: [300.0, 680.0, 342.0, 700.0], font_size: 10.0 };
+    wide.style.border_shape = BorderShape::Rectangle;
+    let b = add_annotation(&mut doc, &wide, &meta("b")).unwrap();
+    set_border_shape(&mut doc, 0, b, BorderShape::Circle, &meta("")).unwrap();
+    let r = rect(&list(&doc, 0)[b]);
+    assert!(close((r[2] - r[0], r[3] - r[1]), (20.0, 20.0)), "{r:?}");
+    // More text: the circle grows with it, about the same centre; less, and it shrinks back.
+    set_contents(&mut doc, 0, t, "123", &meta("")).unwrap();
+    let w = appearance::text_width("123", 10.0) / 2.0;
+    let d = 2.0 * (w + 5.0).max(10.0).max(w.hypot(6.0) + 2.0);
+    assert!(close(frame(&doc).0, (d, d)) && close(frame(&doc).1, centre), "{:?}", frame(&doc));
+    set_contents(&mut doc, 0, t, "3", &meta("")).unwrap();
+    assert!(close(frame(&doc).0, (20.0, 20.0)) && close(frame(&doc).1, centre), "{:?}", frame(&doc));
+    // A larger font: a larger circle, still snug.
+    set_font_size(&mut doc, 0, t, 20.0, &meta("")).unwrap();
+    let w = appearance::text_width("3", 20.0) / 2.0;
+    let d = 2.0 * (w + 5.0).max(16.0).max(w.hypot(12.0) + 2.0);
+    assert!(close(frame(&doc).0, (d, d)) && close(frame(&doc).1, centre), "{:?}", frame(&doc));
+    set_font_size(&mut doc, 0, t, 10.0, &meta("")).unwrap();
+    assert!(close(frame(&doc).0, (20.0, 20.0)), "{:?}", frame(&doc));
+    // Made larger by hand, it keeps its size as its text changes.
+    set_rect(&mut doc, 0, t, [centre.0 - 20.0, centre.1 - 20.0, centre.0 + 20.0, centre.1 + 20.0], &meta("")).unwrap();
+    assert!(close(frame(&doc).0, (40.0, 40.0)), "{:?}", frame(&doc));
+    set_contents(&mut doc, 0, t, "4", &meta("")).unwrap();
+    assert!(close(frame(&doc).0, (40.0, 40.0)) && close(frame(&doc).1, centre), "{:?}", frame(&doc));
+}
+
+/// A circle around a line wider than it is tall touches its text box's sides: `/RD` is 0 there,
+/// not a rounding error below it, and a hair below 0 still reads. (A text box that couldn't be
+/// read stopped following its text, and its text wrapped in a narrower one.) The circle keeps its
+/// centre as its text changes.
+#[test]
+fn a_circle_touching_its_text_box_keeps_following_its_text() {
+    let mut doc = fixture();
+    // Sized to its text: 2 pt of padding and half a point to spare across, a line down.
+    let (w, h) = (appearance::text_width("Testtext", 12.0) + 4.5, 12.0 * 1.11 + 4.0);
+    let mut b = new(0, Shape::TextBox { rect: [210.79, 700.0 - h, 210.79 + w, 700.0], font_size: 12.0 });
+    (b.contents, b.style.width) = ("Testtext".into(), 0.0);
+    let t = add_annotation(&mut doc, &b, &meta("t")).unwrap();
+    // Circle, then a 1 pt border, which the circle grows by.
+    set_border_shape(&mut doc, 0, t, BorderShape::Circle, &meta("")).unwrap();
+    set_style(&mut doc, 0, t, StyleChange::new(None, None, Some(1.0), None), &meta("")).unwrap();
+    let lines = |doc: &Document| ap_content(doc, &list(doc, 0)[t]).matches(" Tj").count();
+    let frame = |doc: &Document| {
+        let r = rect(&list(doc, 0)[t]);
+        ((r[2] - r[0], r[3] - r[1]), ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0))
+    };
+    let rd = |doc: &Document| -> Vec<f64> { list(doc, 0)[t].get(b"RD").unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect() };
+    assert!(rd(&doc).iter().all(|x| *x >= 0.0) && rd(&doc)[0] < 0.01, "touching the sides: {:?}", rd(&doc));
+    assert_eq!(lines(&doc), 1, "Testtext on one line");
+    let (wide, centre) = frame(&doc);
+    set_contents(&mut doc, 0, t, "KRS", &meta("")).unwrap();
+    let (small, at) = frame(&doc);
+    assert!(small.0 < wide.0 - 10.0 && (small.0 - small.1).abs() < 0.01, "a smaller circle: {small:?} from {wide:?}");
+    assert!((at.0 - centre.0).abs() < 0.01 && (at.1 - centre.1).abs() < 0.01, "about its centre: {at:?} {centre:?}");
+    assert_eq!(lines(&doc), 1);
+    // A hair below 0, as rounding left it: still read, so the circle follows its text again.
+    let (_, r) = annot_ref(&mut doc, 0, t).unwrap();
+    let mut was = rd(&doc);
+    was[0] = -2.8e-14;
+    doc.update_dict(r, |d| d.set(b"RD".to_vec(), num_array(&was))).unwrap();
+    assert!(text_box_of(&list(&doc, 0)[t]).is_some());
+    set_contents(&mut doc, 0, t, "Testtext", &meta("")).unwrap();
+    assert!((frame(&doc).0.0 - wide.0).abs() < 0.01 && lines(&doc) == 1, "{:?}", frame(&doc));
+    assert!(rd(&doc).iter().all(|x| *x >= 0.0), "{:?}", rd(&doc));
+}
+
+/// On a page turned a quarter, typed text is laid out as the page is shown (`/PCTextRotate`), and a
+/// circle made with it goes around the text as shown: as large as around the same text on an
+/// upright page. (Made before the turn was set, its text wrapped at the box's displayed height and
+/// the circle went around several lines.)
+#[test]
+fn a_circle_made_on_a_turned_page_is_sized_as_on_an_upright_one() {
+    let w = appearance::text_width("12345", 10.0);
+    let typed = |rect: [f64; 4]| {
+        let mut t = new(0, Shape::Typewriter { rect, font_size: 10.0 });
+        (t.contents, t.style.width, t.style.border_shape) = ("12345".into(), 1.0, BorderShape::Circle);
+        t
+    };
+    let size = |doc: &Document, i: usize| {
+        let r = rect(&list(doc, 0)[i]);
+        (r[2] - r[0], r[3] - r[1])
+    };
+    let mut upright = fixture();
+    let u = add_annotation(&mut upright, &typed([100.0, 680.0, 110.0 + w, 700.0]), &meta("u")).unwrap();
+    for turn in [90, 270] {
+        let mut doc = fixture();
+        let page = page_refs(&doc).unwrap()[0];
+        doc.update_dict(page, |d| d.set(b"Rotate".to_vec(), Object::Int(turn))).unwrap();
+        // The same box as shown: its sides swapped in user space.
+        let t = add_annotation(&mut doc, &typed([100.0, 680.0, 120.0, 690.0 + w]), &meta("t")).unwrap();
+        assert_eq!(list(&doc, 0)[t].get(b"PCTextRotate").and_then(Object::as_int), Some(turn));
+        let (turned, straight) = (size(&doc, t), size(&upright, u));
+        assert!((turned.0 - straight.0).abs() < 0.01 && (turned.1 - straight.1).abs() < 0.01, "{turn}°: {turned:?}, upright {straight:?}");
+    }
+}
+
+/// A rectangle's fill, and a text box's border, background and text, each drawn at an opacity of
+/// its own: the line's in `/CA`, the fill's in `/ca` (PDF 2.0), the text's in `/PCTextOpacity`, and
+/// in the appearance `/GS0` (strokes at the line's, fills at the fill's) and `/GS1` for the text.
+#[test]
+fn parts_are_drawn_at_opacities_of_their_own() {
+    let num = |d: &Dict, k: &[u8]| d.get(k).and_then(|o| o.as_f64());
+    let gstate = |doc: &Document, d: &Dict, name: &[u8]| -> Option<(f64, f64)> {
+        let n = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.reference(b"N")))?;
+        let obj = doc.get(n);
+        let Object::Stream(s) = &*obj else { return None };
+        let res = s.dict.get(b"Resources").map(|r| doc.resolve(r))?;
+        let gs = res.as_dict()?.get(b"ExtGState").map(|g| doc.resolve(g))?;
+        let gs = gs.as_dict()?.get(name).map(|g| doc.resolve(g))?;
+        let gs = gs.as_dict()?;
+        Some((gs.get(b"CA")?.as_f64()?, gs.get(b"ca")?.as_f64()?))
+    };
+    let mut doc = fixture();
+    let r = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 110.0, 60.0] }), &meta("r")).unwrap();
+    set_fill(&mut doc, 0, r, Some([1.0, 1.0, 0.0]), &meta("")).unwrap();
+    set_part_opacity(&mut doc, 0, r, Some(0.3), None, &meta("")).unwrap();
+    let doc2 = reopen(&doc);
+    let d = &list(&doc2, 0)[r];
+    assert_eq!((num(d, b"CA"), num(d, b"ca")), (None, Some(0.3)), "an opaque line, a fill of its own");
+    assert_eq!(gstate(&doc2, d, b"GS0"), Some((1.0, 0.3)));
+    let ap = ap_content(&doc2, d);
+    assert!(ap.starts_with("/GS0 gs") && ap.contains("\nB\n"), "filled and stroked in one go: {ap}");
+    let p = props(&doc2, 0, r).unwrap();
+    assert_eq!((p.opacity, p.fill_opacity, p.text_opacity), (1.0, Some(0.3), None));
+    // The whole comment's opacity (StyleAnnotation, the quick bar): the fill goes along again.
+    set_style(&mut doc, 0, r, StyleChange::new(None, Some(0.6), None, None), &meta("")).unwrap();
+    let d = &list(&doc, 0)[r];
+    assert_eq!((num(d, b"CA"), num(d, b"ca")), (Some(0.6), None));
+    assert_eq!(props(&doc, 0, r).unwrap().fill_opacity, Some(0.6));
+
+    // A text box with its border opaque, its background at 20 % and its text opaque, as made.
+    let mut tb = new(0, Shape::TextBox { rect: [200.0, 600.0, 400.0, 650.0], font_size: 12.0 });
+    tb.style.fill = Some([1.0, 1.0, 0.6]);
+    tb.style.width = 1.0;
+    (tb.style.fill_opacity, tb.style.text_opacity) = (Some(0.2), Some(1.0));
+    let t = add_annotation(&mut doc, &tb, &meta("t")).unwrap();
+    let doc2 = reopen(&doc);
+    let d = &list(&doc2, 0)[t];
+    assert_eq!((num(d, b"CA"), num(d, b"ca"), num(d, b"PCTextOpacity")), (None, Some(0.2), Some(1.0)));
+    assert_eq!((gstate(&doc2, d, b"GS0"), gstate(&doc2, d, b"GS1")), (Some((1.0, 0.2)), Some((1.0, 1.0))));
+    let ap = ap_content(&doc2, d);
+    let (gs1, text) = (ap.find("/GS1 gs\n").expect("the text's own state, an operator of its own"), ap.find("BT").expect("text"));
+    assert!(ap.find(" re f").is_some_and(|fill| fill < gs1) && gs1 < text, "background at 20 %, then the text at its own: {ap}");
+    // A new fill opacity leaves the text as it is drawn.
+    set_part_opacity(&mut doc, 0, t, Some(0.5), None, &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    assert_eq!((num(d, b"ca"), num(d, b"PCTextOpacity")), (Some(0.5), Some(1.0)));
+    let p = props(&doc, 0, t).unwrap();
+    assert_eq!((p.opacity, p.fill_opacity, p.text_opacity), (1.0, Some(0.5), Some(1.0)));
+    // All at one opacity again: only /CA stays.
+    set_part_opacity(&mut doc, 0, t, Some(1.0), Some(1.0), &meta("")).unwrap();
+    let d = &list(&doc, 0)[t];
+    assert_eq!((num(d, b"CA"), num(d, b"ca"), num(d, b"PCTextOpacity")), (None, None, None));
+
+    // Only the parts a comment has, and finite values; nothing changes when refused.
+    let l = add_annotation(
+        &mut doc,
+        &new(0, Shape::Line { from: [0.0, 0.0], to: [10.0, 10.0], start: LineEnding::None, end: LineEnding::None }),
+        &meta("l"),
+    )
+    .unwrap();
+    assert!(matches!(set_part_opacity(&mut doc, 0, l, Some(0.5), None, &meta("")), Err(AnnotError::Invalid(_))), "a line has no fill");
+    assert!(matches!(set_part_opacity(&mut doc, 0, r, None, Some(0.5), &meta("")), Err(AnnotError::Invalid(_))), "a rectangle has no text");
+    let before = list(&doc, 0)[r].clone();
+    assert!(matches!(set_part_opacity(&mut doc, 0, r, Some(f64::NAN), None, &meta("")), Err(AnnotError::Invalid(_))));
+    assert_eq!(list(&doc, 0)[r], before);
+    // Another app's comment with /CA alone is drawn at it throughout, as before.
+    assert_eq!(
+        appearance::part_opacity(&Dict::from_iter([(b"CA".to_vec(), Object::Real(0.4))])),
+        appearance::PartOpacity { line: 0.4, fill: 0.4, text: 0.4 }
+    );
 }
 
 #[test]
@@ -333,7 +696,7 @@ fn text_box_text_and_colour_changes_are_drawn() {
     let mut doc = fixture();
     let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [0.0, 0.0, 300.0, 100.0], font_size: 12.0 }), &meta("t")).unwrap();
     set_contents(&mut doc, 0, t, "Caf\u{e9} (draft) \u{2014} 100%", &meta("")).unwrap();
-    set_style(&mut doc, 0, t, Some([1.0, 0.0, 0.0]), None, None, None, &meta("")).unwrap();
+    set_style(&mut doc, 0, t, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
     let doc = reopen(&doc);
     let d = &list(&doc, 0)[t];
     assert_eq!(text(d, b"Contents"), "Caf\u{e9} (draft) \u{2014} 100%");
@@ -515,8 +878,87 @@ fn fill_and_sign_items_are_drawn() {
     assert_eq!(text(&all[s], b"Subj"), "Signature");
     // Other stamps still can't be restyled; ours can.
     let mut doc = doc;
-    set_style(&mut doc, 1, marks[0], Some([0.0, 0.0, 1.0]), None, None, None, &meta("")).unwrap();
-    assert!(set_style(&mut doc, 1, 0, Some([0.0; 3]), None, None, None, &meta("")).is_err());
+    set_style(&mut doc, 1, marks[0], StyleChange::new(Some([0.0, 0.0, 1.0]), None, None, None), &meta("")).unwrap();
+    assert!(set_style(&mut doc, 1, 0, StyleChange::new(Some([0.0; 3]), None, None, None), &meta("")).is_err());
+}
+
+/// A border chosen for typewriter text goes around it in the text's colour. Changing it grows or
+/// shrinks the box on every side, so the text stays where it was typed; a text box keeps its box.
+#[test]
+fn a_typewriter_border_goes_around_its_text_which_stays_put() {
+    let mut doc = fixture();
+    let shape = Shape::Typewriter { rect: [100.0, 700.0, 200.0, 716.0], font_size: 11.0 };
+    let style = Style { width: 1.0, ..Style::default_for(&shape) };
+    let t = add_annotation(&mut doc, &NewAnnotation { page: 1, shape, style, contents: "Ada".into(), author: "Ada".into() }, &meta("x")).unwrap();
+    // The text starts 2 pt inside the border: 100 + 1 + 2 across, 716 - 1 - 2 - 0.9 em down.
+    let at = "1 0 0 1 103 703.1 Tm";
+    let d = &list(&doc, 1)[t];
+    let ap = ap_content(&doc, d);
+    assert!(ap.contains("1 w\n") && ap.contains(" re S"), "a 1 pt border: {ap}");
+    assert!(ap.contains(at), "{ap}");
+    for (width, expected) in [(2.0, [99.0, 699.0, 201.0, 717.0]), (0.0, [101.0, 701.0, 199.0, 715.0])] {
+        set_style(&mut doc, 1, t, StyleChange::new(None, None, Some(width), None), &meta("")).unwrap();
+        let d = &list(&doc, 1)[t];
+        assert_eq!(rect(d), expected, "{width} pt border");
+        let ap = ap_content(&doc, d);
+        assert!(ap.contains(at), "{width} pt: the text keeps its place: {ap}");
+        assert_eq!(ap.contains(" re S"), width > 0.0, "{width} pt: {ap}");
+    }
+    let shape = Shape::TextBox { rect: [100.0, 600.0, 200.0, 650.0], font_size: 11.0 };
+    let b = add_annotation(&mut doc, &new(1, shape), &meta("b")).unwrap();
+    set_style(&mut doc, 1, b, StyleChange::new(None, None, Some(3.0), None), &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 1)[b]), [100.0, 600.0, 200.0, 650.0], "a text box keeps the box it was drawn with");
+    // Another app's typed text with its width in /Border (no /BS): 4 pt, so 2 pt shrinks the box
+    // by 2 on every side, as it is drawn.
+    let shape = Shape::Typewriter { rect: [100.0, 500.0, 200.0, 530.0], font_size: 11.0 };
+    let o = add_annotation(
+        &mut doc,
+        &NewAnnotation { page: 1, style: Style::default_for(&shape), shape: shape.clone(), contents: "Bo".into(), author: "Ada".into() },
+        &meta("o"),
+    )
+    .unwrap();
+    let (_, r) = annot_ref(&mut doc, 1, o).unwrap();
+    doc.update_dict(r, |d| {
+        d.remove(b"BS");
+        d.set(b"Border".to_vec(), num_array(&[0.0, 0.0, 4.0]));
+    })
+    .unwrap();
+    set_style(&mut doc, 1, o, StyleChange::new(None, None, Some(2.0), None), &meta("")).unwrap();
+    assert_eq!(rect(&list(&doc, 1)[o]), [102.0, 502.0, 198.0, 528.0], "the imported 4 pt border is read from /Border");
+    // A border colour that isn't a colour is refused before anything is written.
+    let mut bad = NewAnnotation { page: 1, style: Style::default_for(&shape), shape, contents: "x".into(), author: "Ada".into() };
+    bad.style.border_color = Some([f64::NAN, 0.0, 0.0]);
+    let before = list(&doc, 1).len();
+    assert!(matches!(add_annotation(&mut doc, &bad, &meta("n")), Err(AnnotError::Invalid(_))));
+    assert_eq!(list(&doc, 1).len(), before);
+}
+
+/// Text keeps its colour and the border gets its own: the stroking colour in `/DA`, which a new
+/// text colour or font size keeps, and which `None` gives back to the text's.
+#[test]
+fn a_text_border_can_have_its_own_colour() {
+    let mut doc = fixture();
+    let shape = Shape::Typewriter { rect: [100.0, 700.0, 200.0, 716.0], font_size: 11.0 };
+    let style = Style { color: [0.0, 0.5, 0.0], width: 1.0, border_color: Some([1.0, 0.0, 0.0]), ..Style::default_for(&shape) };
+    let t = add_annotation(&mut doc, &NewAnnotation { page: 1, shape, style, contents: "Ada".into(), author: "Ada".into() }, &meta("x")).unwrap();
+    let da = |doc: &Document| text(&list(doc, 1)[t], b"DA");
+    assert_eq!(da(&doc), "0 0.5 0 rg 1 0 0 RG /Helv 11 Tf");
+    let ap = ap_content(&doc, &list(&doc, 1)[t]);
+    assert!(ap.contains("1 0 0 RG\n1 w"), "the border in red: {ap}");
+    assert!(ap.contains("0 0.5 0 rg"), "the text in green: {ap}");
+    assert_eq!(props(&doc, 1, t).unwrap().border_color, Some([1.0, 0.0, 0.0]));
+    set_style(&mut doc, 1, t, StyleChange::new(Some([0.0, 0.0, 1.0]), None, None, None), &meta("")).unwrap();
+    assert_eq!(da(&doc), "0 0 1 rg 1 0 0 RG /Helv 11 Tf", "a new text colour keeps the border's");
+    set_font_size(&mut doc, 1, t, 14.0, &meta("")).unwrap();
+    assert_eq!(da(&doc), "0 0 1 rg 1 0 0 RG /Helv 14 Tf", "so does a new size");
+    set_border_color(&mut doc, 1, t, Some([0.5, 0.5, 0.5]), &meta("")).unwrap();
+    assert!(ap_content(&doc, &list(&doc, 1)[t]).contains("0.5 0.5 0.5 RG\n1 w"));
+    set_border_color(&mut doc, 1, t, None, &meta("")).unwrap();
+    assert_eq!(da(&doc), "0 0 1 rg /Helv 14 Tf");
+    assert!(ap_content(&doc, &list(&doc, 1)[t]).contains("0 0 1 RG\n1 w"), "the text's colour again");
+    assert_eq!(props(&doc, 1, t).unwrap().border_color, None);
+    let m = add_annotation(&mut doc, &new(0, Shape::Rectangle { rect: [10.0, 10.0, 50.0, 50.0] }), &meta("m")).unwrap();
+    assert!(set_border_color(&mut doc, 0, m, Some([1.0, 0.0, 0.0]), &meta("")).is_err(), "a rectangle's colour is its border");
 }
 
 #[test]
@@ -801,9 +1243,22 @@ fn cloud_ys(path: &str) -> Vec<f64> {
 fn replace_text_groups_a_strikeout_and_a_caret() {
     let mut doc = fixture();
     let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
-    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
-    let blue = Style { color: [0.0, 0.47, 0.84], opacity: 1.0, width: 1.0, fill: None };
-    let i = add_text_replacement(&mut doc, 0, &quads, "new words", "Ada", &red, &blue, &meta("r"), &meta("r-caret")).unwrap();
+    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None, ..Style::default() };
+    let blue = Style { color: [0.0, 0.47, 0.84], opacity: 1.0, width: 1.0, fill: None, ..Style::default() };
+    let i = add_text_replacement(
+        &mut doc,
+        TextReplacement {
+            page: 0,
+            quads: &quads,
+            replacement: "new words",
+            author: "Ada",
+            strike: &red,
+            caret: &blue,
+            strike_meta: &meta("r"),
+            caret_meta: &meta("r-caret"),
+        },
+    )
+    .unwrap();
     let doc = reopen(&doc);
     let a = list(&doc, 0);
     let strike = &a[i];
@@ -825,7 +1280,22 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
     let mut doc = doc;
     delete_annotation(&mut doc, 0, i).unwrap();
     assert!(!list(&doc, 0).iter().any(|d| d.name(b"Subtype") == Some(b"Caret")));
-    assert!(add_text_replacement(&mut doc, 0, &[], "x", "Ada", &red, &blue, &meta("r"), &meta("r-caret")).is_err());
+    assert!(
+        add_text_replacement(
+            &mut doc,
+            TextReplacement {
+                page: 0,
+                quads: &[],
+                replacement: "x",
+                author: "Ada",
+                strike: &red,
+                caret: &blue,
+                strike_meta: &meta("r"),
+                caret_meta: &meta("r-caret")
+            }
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -1014,6 +1484,89 @@ fn a_note_without_an_appearance_is_shown_at_icon_size() {
     assert_eq!(rects(&doc), original, "the source document is unchanged");
 }
 
+/// The fourteen rubber stamp names viewers draw without an appearance (ISO 32000-2 Table 184).
+const TABLE_184_STAMPS: [(&str, &str); 14] = [
+    ("Approved", "APPROVED"),
+    ("Experimental", "EXPERIMENTAL"),
+    ("NotApproved", "NOT APPROVED"),
+    ("AsIs", "AS IS"),
+    ("Expired", "EXPIRED"),
+    ("NotForPublicRelease", "NOT FOR PUBLIC RELEASE"),
+    ("Confidential", "CONFIDENTIAL"),
+    ("Final", "FINAL"),
+    ("Sold", "SOLD"),
+    ("Departmental", "DEPARTMENTAL"),
+    ("ForComment", "FOR COMMENT"),
+    ("TopSecret", "TOP SECRET"),
+    ("Draft", "DRAFT"),
+    ("ForPublicRelease", "FOR PUBLIC RELEASE"),
+];
+
+fn stamp_dict(extra: &str) -> Dict {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        format!("<< /Type /Annot /Subtype /Stamp /Rect [20 40 140 100] {extra} >>").as_bytes(),
+    ]);
+    list(&doc, 0).remove(0)
+}
+
+fn drawn(d: &Dict) -> String {
+    String::from_utf8_lossy(&appearance::display_stamp(d).expect("a stamp is drawn").decoded().unwrap()).into_owned()
+}
+
+/// A stamp another program wrote without an appearance draws the stamp its `/Name` names, Draft
+/// when it has none, and a frame with both diagonals for any other name, never the name itself.
+#[test]
+fn a_stamp_without_an_appearance_draws_the_stamp_it_names() {
+    for (name, label) in TABLE_184_STAMPS {
+        let content = drawn(&stamp_dict(&format!("/Name /{name}")));
+        assert!(content.contains(&format!("({label}) Tj")), "{name}: {content}");
+    }
+    assert!(drawn(&stamp_dict("")).contains("(DRAFT) Tj"), "Table 184's default");
+    assert!(drawn(&stamp_dict("/IT /Stamp")).contains("(DRAFT) Tj"), "a stamp intent keeps the default");
+    // Any other name, a name in another case (names are compared byte for byte, §7.3.5), and an
+    // image stamp (`/IT`, which has no `/Name` to default): the frame and its diagonals.
+    for extra in ["/Name /MyCustomStamp", "/Name /draft", "/Name /APPROVED", "/IT /StampImage", "/Name /PCVoid"] {
+        let content = drawn(&stamp_dict(extra));
+        assert!(!content.contains("Tj") && content.contains(" re\n") && content.matches(" l\n").count() == 2, "{extra}: {content}");
+    }
+    // `/C` colours the stamp, as it does PdfCraft's own.
+    assert!(drawn(&stamp_dict("/Name /Final /C [1 0 1]")).contains("1 0 1 RG"));
+    // The placeholder stays grey whatever the `/C`: it is not the stamp, so it takes none of its colour.
+    let placeholder = drawn(&stamp_dict("/Name /MyCustomStamp /C [1 0 0]"));
+    assert!(placeholder.contains("0.45 0.45 0.45 RG") && !placeholder.contains("1 0 0 RG"), "{placeholder}");
+    // A stamp's own artwork is never replaced, and the drawing is for display only: edits
+    // (restyling, flattening) still find nothing they may write.
+    assert!(appearance::display_stamp(&stamp_dict("/Name /Draft /AP << /N 9 0 R >>")).is_none());
+    assert!(appearance::build(&stamp_dict("/Name /Draft")).is_none());
+    assert!(appearance::display_stamp(&stamp_dict("/Name /Draft /PCStamp true")).is_none(), "PdfCraft's own stamps are drawn by `build`");
+    assert!(appearance::display_stamp(&stamp_dict("/Name /Draft /Rect [5 5 5 50]")).is_none(), "no width");
+}
+
+/// The display copy draws a stamp that has no normal appearance, and keeps one that has.
+#[test]
+fn the_display_copy_draws_stamps_without_a_normal_appearance_only() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >>",
+        b"<< /Type /Annot /Subtype /Stamp /Rect [20 40 140 100] /Name /TopSecret >>",
+        b"<< /Type /Annot /Subtype /Stamp /Rect [20 140 140 200] /Name /Draft /AP << /N 8 0 R >> >>",
+        b"<< /Type /Annot /Subtype /Stamp /Rect [20 240 140 300] /Name /Sold /AP << /D 8 0 R >> >>",
+        b"<< /Type /Annot /Subtype /Stamp /Rect [20 340 140 400] /Name /Unheard >>",
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 8 >>\nstream\n1 0 0 rg\nendstream",
+    ]);
+    let display = with_missing_appearances(&doc).expect("three stamps need an appearance");
+    let shown = list(&display, 0);
+    assert!(ap_content(&display, &shown[0]).contains("(TOP SECRET) Tj"));
+    assert_eq!(shown[1].get(b"AP"), list(&doc, 0)[1].get(b"AP"), "an existing appearance is kept");
+    assert!(ap_content(&display, &shown[2]).contains("(SOLD) Tj"), "an /AP without /N has nothing to keep");
+    assert!(!ap_content(&display, &shown[3]).contains("Tj"), "an unknown name gets the placeholder");
+    assert!(list(&doc, 0)[0].get(b"AP").is_none(), "the document itself is untouched");
+}
+
 #[test]
 fn every_line_ending_is_drawn() {
     let filled = [LineEnding::Square, LineEnding::Circle, LineEnding::Diamond, LineEnding::ClosedArrow, LineEnding::RClosedArrow];
@@ -1053,7 +1606,7 @@ fn every_line_ending_is_drawn() {
     )
     .unwrap();
     let before = rect(&list(&doc, 0).into_iter().find(|d| d.name(b"Subtype") == Some(b"Line")).expect("line"));
-    set_style(&mut doc, 0, index, None, None, None, Some(&[LineEnding::None, LineEnding::Square]), &meta("style")).unwrap();
+    set_style(&mut doc, 0, index, StyleChange::new(None, None, None, Some(vec![LineEnding::None, LineEnding::Square])), &meta("style")).unwrap();
     let mut doc = reopen(&doc);
     let line = list(&doc, 0).into_iter().find(|d| d.name(b"Subtype") == Some(b"Line")).expect("line");
     let after = rect(&line);
@@ -1121,7 +1674,7 @@ fn redraw_keeps_shared_annotation_appearances_and_drops_stale_alternates() {
         let other_dict = list(&doc, 0)[other].clone();
         let source = other_dict.get(b"AP").unwrap();
         let before = doc.resolve(source);
-        set_style(&mut doc, 0, first, Some([1.0, 0.0, 0.0]), None, None, None, &meta("")).unwrap();
+        set_style(&mut doc, 0, first, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
         assert_eq!(doc.resolve(source), before, "a shared AP must not change");
         for full in [false, true] {
             let bytes = if full {
@@ -1243,7 +1796,7 @@ fn comment_text_the_standard_fonts_cannot_draw_is_kept_and_marked() {
     .unwrap();
     assert_eq!(mark(&doc, s), Some('张'));
     // Our own `?` appearance is redrawn on a restyle; Western European text clears the mark.
-    set_style(&mut doc, 0, t, Some([1.0, 0.0, 0.0]), None, None, None, &meta("")).unwrap();
+    set_style(&mut doc, 0, t, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
     assert_eq!(mark(&doc, t), Some('签'));
     set_contents(&mut doc, 0, t, "Zürich —\nGenève", &meta("")).unwrap();
     assert_eq!(mark(&doc, t), None);
@@ -1271,7 +1824,7 @@ fn comment_text_the_standard_fonts_cannot_draw_is_kept_and_marked() {
     set_annots(&mut doc, page, on_page).unwrap();
     let k = list(&doc, 0).len() - 1;
     let before = list(&doc, 0)[k].clone();
-    let err = set_style(&mut doc, 0, k, Some([1.0, 0.0, 0.0]), Some(0.4), Some(6.0), None, &meta("")).unwrap_err();
+    let err = set_style(&mut doc, 0, k, StyleChange::new(Some([1.0, 0.0, 0.0]), Some(0.4), Some(6.0), None), &meta("")).unwrap_err();
     assert!(matches!(&err, AnnotError::Undrawable(m) if m.contains("can't redraw") && m.contains("\"欢\" (U+6B22)")), "{err:?}");
     assert_eq!(list(&doc, 0)[k], before, "a refused restyle keeps the colour, opacity, width and appearance");
     let err = set_rect(&mut doc, 0, k, [40.0, 40.0, 180.0, 90.0], &meta("")).unwrap_err();
@@ -1316,9 +1869,9 @@ fn cached_appearances_are_reused_while_annotations_are_unchanged() {
     .expect("strips");
     let mut cache = AppearanceCache::default();
     let first = with_missing_appearances_cached(&doc, &mut cache).expect("builds");
-    assert_eq!((cache.builds(), cache.hits()), (1, 0), "only the note needs an appearance");
+    assert_eq!((cache.builds(), cache.hits()), (2, 0), "the note and the file's stamp need an appearance");
     let second = with_missing_appearances_cached(&doc, &mut cache).expect("reuses");
-    assert_eq!((cache.builds(), cache.hits()), (1, 1), "nothing is redrawn");
+    assert_eq!((cache.builds(), cache.hits()), (2, 2), "nothing is redrawn");
     let [a, b] = [&first, &second].map(|copy| ap_content(copy, &list(copy, 0)[idx]));
     assert!(!a.is_empty());
     assert_eq!(a, b, "the reused appearance is byte-identical");
@@ -1352,7 +1905,7 @@ fn a_comment_listed_many_times_is_drawn_once_for_display() {
 fn text_box_font_size_changes_the_da_and_grows_the_box() {
     let mut doc = fixture();
     let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [100.0, 680.0, 220.0, 692.0], font_size: 12.0 }), &meta("t")).unwrap();
-    set_style(&mut doc, 0, t, Some([1.0, 0.0, 0.0]), None, None, None, &meta("")).unwrap();
+    set_style(&mut doc, 0, t, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
     set_contents(&mut doc, 0, t, "one two three four five six seven eight nine ten eleven twelve", &meta("")).unwrap();
     let height = |doc: &Document| {
         let rect: Vec<f64> = list(doc, 0)[t].get(b"Rect").unwrap().as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
@@ -1398,7 +1951,7 @@ fn text_boxes_and_callouts_can_change_fill_and_border() {
         let index = add_annotation(&mut doc, &new(0, shape), &meta("test")).unwrap();
         assert!(props(&doc, 0, index).unwrap().fillable);
         set_fill(&mut doc, 0, index, Some([1.0, 1.0, 1.0]), &meta("test")).unwrap();
-        set_style(&mut doc, 0, index, None, None, Some(3.0), None, &meta("test")).unwrap();
+        set_style(&mut doc, 0, index, StyleChange::new(None, None, Some(3.0), None), &meta("test")).unwrap();
         let saved = reopen(&doc);
         let properties = props(&saved, 0, index).unwrap();
         assert_eq!(properties.fill, Some([1.0; 3]));
@@ -1621,4 +2174,608 @@ fn cloud_outline_has_a_bump_budget() {
     let pts: Vec<(f64, f64)> = (0..50).map(|i| (f64::from(i) * std::f64::consts::TAU / 50.0).sin_cos()).map(|(s, c)| (1e7 * c, 1e7 * s)).collect();
     let bumps = appearance::cloud_path(&pts, 1.0).lines().filter(|l| l.ends_with(" c")).count();
     assert!((pts.len()..=appearance::MAX_CLOUD_BUMPS + 2 * pts.len()).contains(&bumps), "{bumps} bumps");
+}
+
+/// A note's drawn icon (its built appearance's content) for `/Name` (none when `None`) and `/C`.
+fn note_drawing(name: Option<&str>, color: [f64; 3]) -> Vec<u8> {
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Text"));
+    d.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 20.0, 20.0].map(Object::Real).to_vec()));
+    d.set(b"C".to_vec(), Object::Array(color.map(Object::Real).to_vec()));
+    if let Some(n) = name {
+        d.set(b"Name".to_vec(), Object::name(n));
+    }
+    crate::appearance::build(&d).expect("a note is drawn").decoded().unwrap()
+}
+
+/// ISO 32000-2 §12.5.6.4, Table 175: a viewer shall provide icons for the seven standard names,
+/// and may support more. Each of the fourteen names PdfCraft offers draws a shape of its own, so
+/// a note shows the icon it names; a name it doesn't know, and a note without one, draw `Note`
+/// (the table's default).
+#[test]
+fn every_note_icon_draws_its_own_shape() {
+    let yellow = [1.0, 0.82, 0.0];
+    let drawn: Vec<Vec<u8>> = NoteIcon::ALL.iter().map(|i| note_drawing(Some(i.name()), yellow)).collect();
+    for (i, a) in drawn.iter().enumerate() {
+        for (j, b) in drawn.iter().enumerate().skip(i + 1) {
+            assert_ne!(a, b, "{} and {} look alike", NoteIcon::ALL[i].name(), NoteIcon::ALL[j].name());
+        }
+    }
+    let note = note_drawing(Some("Note"), yellow);
+    assert_eq!(note_drawing(Some("Sparkle"), yellow), note, "an unknown name");
+    assert_eq!(note_drawing(None, yellow), note, "no name");
+    for icon in NoteIcon::ALL {
+        assert_eq!(NoteIcon::from_name(icon.name()), Some(icon));
+    }
+}
+
+/// A note named with one of the further icons reads as that icon, and a colour change redraws it
+/// as itself, not as a page.
+#[test]
+fn a_star_note_keeps_its_star_when_recoloured() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 600] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Text /Rect [100 100 120 120] /Name /Star /C [1 0.82 0] /F 4 >>",
+    ]);
+    assert_eq!(props(&doc, 0, 0).and_then(|p| p.icon), Some(NoteIcon::Star));
+    set_style(&mut doc, 0, 0, StyleChange::new(Some([0.0, 0.0, 1.0]), None, None, None), &meta("")).unwrap();
+    let doc = reopen(&doc);
+    let d = &list(&doc, 0)[0];
+    assert_eq!(d.name(b"Name"), Some(&b"Star"[..]));
+    let n = d.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    let Object::Stream(s) = &*doc.get(n) else { panic!() };
+    assert_eq!(s.decoded().unwrap(), note_drawing(Some("Star"), [0.0, 0.0, 1.0]));
+}
+
+/// The built appearance's content for an annotation dictionary written in PDF syntax.
+fn content_of(src: &str) -> String {
+    let doc = document_of(&[src.as_bytes()]);
+    let d = doc.get(ObjRef::new(1, 0)).as_dict().cloned().expect("a dictionary");
+    let stream = appearance::build(&d).expect("drawn");
+    String::from_utf8_lossy(&stream.decoded().unwrap()).into_owned()
+}
+
+/// ISO 32000-2 Table 166: `/Border [hr vr w [dash]]`; the optional fourth element, a dash array,
+/// used to hide the width (drawn 1 pt solid instead of 3 pt dashed).
+#[test]
+fn legacy_border_width_and_dash_are_drawn() {
+    let square = |border: &str| content_of(&format!("<< /Subtype /Square /Rect [0 0 100 100] /C [1 0 0] {border} >>"));
+    let c = square("/Border [0 0 3 [6 3]]");
+    assert!(c.contains("3 w") && c.contains("[6 3] 0 d"), "{c}");
+    assert!(c.contains("1.5 1.5 97 97 re"), "the stroke is inset by half its width: {c}");
+    let c = square("/Border [0 0 3]");
+    assert!(c.contains("3 w") && !c.contains(" d\n"), "no dash array: solid: {c}");
+    // `/BS` overrides `/Border` (Table 166), for the width and the dashes alike.
+    let c = square("/Border [0 0 3 [6 3]] /BS << /W 2 >>");
+    assert!(c.contains("2 w") && !c.contains(" d\n"), "{c}");
+    let c = square("/Border [0 0 3 [6 3]] /BS << /W 2 /S /D /D [4 1] >>");
+    assert!(c.contains("2 w") && c.contains("[4 1] 0 d"), "{c}");
+    // A /BS without /W means its default width 1, not the ignored /Border's.
+    let c = square("/Border [0 0 3] /BS << /S /S >>");
+    assert!(c.contains("1 w") && !c.contains("3 w"), "{c}");
+    // A FreeText border and a line take the legacy dash array too.
+    let c = content_of("<< /Subtype /FreeText /Rect [0 0 100 40] /Contents (x) /Border [0 0 2 [5 2]] >>");
+    assert!(c.contains("2 w") && c.contains("[5 2] 0 d"), "{c}");
+    let c = content_of("<< /Subtype /Line /Rect [0 0 100 100] /L [10 10 90 90] /C [0 0 1] /Border [0 0 2 [5 2]] >>");
+    assert!(c.contains("[5 2] 0 d"), "{c}");
+}
+
+/// Dash arrays that can't be drawn (§8.4.3.6: all zeros is invalid; negative or non-numeric
+/// lengths, and absurdly long arrays) draw solid, without a panic. A non-finite or negative
+/// width falls back to 1.
+#[test]
+fn bad_dash_arrays_draw_solid() {
+    let square = |border: &str| content_of(&format!("<< /Subtype /Square /Rect [0 0 100 100] /C [1 0 0] {border} >>"));
+    let long = format!("[{}]", vec!["1"; 65].join(" "));
+    for bad in ["[0 0]", "[-3 2]", "[]", "[(a) 2]", "5", long.as_str()] {
+        let c = square(&format!("/Border [0 0 3 {bad}]"));
+        assert!(c.contains("3 w") && !c.contains(" d\n"), "{bad}: {c}");
+        let c = square(&format!("/BS << /W 3 /S /D /D {bad} >>"));
+        assert!(c.contains("3 w") && !c.contains(" d\n"), "{bad}: {c}");
+    }
+    assert!(square(&format!("/Border [0 0 3 [{}]]", vec!["1"; 64].join(" "))).contains(" 0 d\n"), "64 elements are drawn");
+    // `/S /D` without `/D` uses the default `[3]` (Table 168).
+    assert!(square("/BS << /W 3 /S /D >>").contains("[3] 0 d"));
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Square"));
+    d.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 100.0, 100.0].map(Object::Real).to_vec()));
+    d.set(b"C".to_vec(), Object::Array([1.0, 0.0, 0.0].map(Object::Real).to_vec()));
+    for w in [f64::NAN, f64::INFINITY, -2.0] {
+        let dash = Object::Array([f64::NAN, 2.0].map(Object::Real).to_vec());
+        d.set(b"Border".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Real(w), dash]));
+        let c = String::from_utf8_lossy(&appearance::build(&d).unwrap().decoded().unwrap()).into_owned();
+        assert!(c.contains("1 w") && !c.contains(" d\n") && !c.contains("NaN") && !c.contains("inf"), "{w}: {c}");
+    }
+}
+
+/// Table 182: an ink annotation's `/BS` gives the width and dash pattern its paths are drawn with.
+#[test]
+fn ink_draws_its_border_style_dashes() {
+    let ink = |style: &str| content_of(&format!("<< /Subtype /Ink /Rect [0 0 100 100] /C [1 0 0] /InkList [[5 5 50 95 95 5]] {style} >>"));
+    let c = ink("/BS << /W 3 /S /D /D [6 3] >>");
+    assert!(c.contains("3 w 1 J 1 j\n[6 3] 0 d"), "{c}");
+    assert!(!ink("/BS << /W 3 >>").contains(" d\n"));
+    assert!(ink("/Border [0 0 2 [4 4]]").contains("[4 4] 0 d"));
+}
+
+/// Table 183: `/Sy /P` associates a new paragraph symbol (¶) with the caret. It is drawn to the
+/// caret's right in the caret's colour, inside `/Rect`; `/Sy /None` (the default) draws none.
+#[test]
+fn a_caret_with_a_paragraph_symbol_draws_the_pilcrow() {
+    let caret = |extra: &str| {
+        let doc = document_of(&[format!("<< /Subtype /Caret /Rect [30 30 60 60] /C [0.9 0.1 0.1] {extra} >>").as_bytes()]);
+        let d = doc.get(ObjRef::new(1, 0)).as_dict().cloned().unwrap();
+        let s = appearance::build(&d).unwrap();
+        (s.decoded().unwrap(), s.dict.get(b"Resources").and_then(Object::as_dict).is_some_and(|r| r.contains(b"Font")))
+    };
+    let has_pilcrow = |c: &[u8]| c.windows(5).any(|w| w == b"(\xb6) T");
+    let (c, font) = caret("/Sy /P");
+    assert!(has_pilcrow(&c) && font, "{}", String::from_utf8_lossy(&c));
+    let text = String::from_utf8_lossy(&c).into_owned();
+    assert!(text.starts_with("0.9 0.1 0.1 rg"), "{text}");
+    // The caret gives up room on the right for the symbol, which stays within /Rect.
+    let td: Vec<f64> = text.split("Tf ").nth(1).unwrap().split_whitespace().take(2).map(|v| v.parse().unwrap()).collect();
+    let size: f64 = text.split("/Helv ").nth(1).unwrap().split_whitespace().next().unwrap().parse().unwrap();
+    assert!(td[0] > 45.0 && td[0] + appearance::text_width("\u{b6}", size) <= 60.0 + 1e-6 && td[1] >= 30.0, "{text}");
+    assert!(!text.contains("60 30 c h f"), "the caret no longer reaches the right edge: {text}");
+    for none in ["/Sy /None", ""] {
+        let (c, font) = caret(none);
+        assert!(!has_pilcrow(&c) && !font, "{none}");
+        assert!(String::from_utf8_lossy(&c).contains("60 30 c h f"), "{none}: the caret fills /Rect as before");
+    }
+    // With /RD leaving room on the right, the caret keeps its box and the symbol fits beside it.
+    let (c, _) = caret("/Sy /P /RD [0 0 15 0]");
+    let text = String::from_utf8_lossy(&c).into_owned();
+    assert!(text.contains("45 30 c h f") && has_pilcrow(&c), "{text}");
+    // Malformed /RD and a degenerate /Rect don't panic.
+    for rd in ["/RD [40 0 40 0]", "/RD [-1 0 0 0]", "/RD [1 2]", "/RD (x)"] {
+        assert!(has_pilcrow(&caret(&format!("/Sy /P {rd}")).0), "{rd}");
+    }
+    let doc = document_of(&[b"<< /Subtype /Caret /Rect [30 30 30 30] /Sy /P >>"]);
+    let d = doc.get(ObjRef::new(1, 0)).as_dict().cloned().unwrap();
+    assert!(appearance::build(&d).is_some());
+}
+
+// ── Line annotations: leader lines and captions (ISO 32000-2 §12.5.6.7, Table 178) ──────────
+
+/// A red Line from `l` with a 1 pt border, a generous `/Rect`, and `extra` entries.
+fn table_178_line(l: [f64; 4], extra: &[(&str, Object)]) -> Dict {
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("Line"));
+    d.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 600.0, 800.0].map(Object::Real).to_vec()));
+    d.set(b"C".to_vec(), Object::Array([1.0, 0.0, 0.0].map(Object::Real).to_vec()));
+    d.set(b"L".to_vec(), Object::Array(l.map(Object::Real).to_vec()));
+    for (k, v) in extra {
+        d.set(k.as_bytes().to_vec(), v.clone());
+    }
+    d
+}
+
+/// The built appearance's content.
+fn line_drawing(d: &Dict) -> String {
+    let s = crate::appearance::build(d).expect("the line is drawn");
+    String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
+}
+
+/// Every straight two-point stroke (`x0 y0 m x1 y1 l S`) in a drawing.
+fn segments(content: &str) -> Vec<[f64; 4]> {
+    content
+        .lines()
+        .filter_map(|line| {
+            let t: Vec<&str> = line.split_whitespace().collect();
+            if t.len() != 7 || t[2] != "m" || t[5] != "l" || t[6] != "S" {
+                return None;
+            }
+            let v: Vec<f64> = [t[0], t[1], t[3], t[4]].iter().map(|x| x.parse().unwrap()).collect();
+            Some([v[0], v[1], v[2], v[3]])
+        })
+        .collect()
+}
+
+/// The caption's text matrix (`a b c d e f Tm`), if any.
+fn caption_matrix(content: &str) -> Option<[f64; 6]> {
+    let at = content.find(" Tm")?;
+    let before: Vec<f64> = content[..at].split_whitespace().rev().take(6).map(|x| x.parse().unwrap()).collect();
+    Some([before[5], before[4], before[3], before[2], before[1], before[0]])
+}
+
+fn has(segs: &[[f64; 4]], want: [f64; 4]) -> bool {
+    segs.iter().any(|s| s.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01))
+}
+
+#[test]
+fn a_positive_leader_length_puts_the_line_above_a_left_to_right_line_and_a_negative_one_below() {
+    let up = segments(&line_drawing(&table_178_line([72.0, 620.0, 272.0, 620.0], &[("LL", Object::Real(20.0))])));
+    assert!(has(&up, [72.0, 640.0, 272.0, 640.0]), "the line is 20 above /L: {up:?}");
+    assert!(has(&up, [72.0, 620.0, 72.0, 640.0]) && has(&up, [272.0, 620.0, 272.0, 640.0]), "leader lines from /L up to it: {up:?}");
+    assert!(!has(&up, [72.0, 620.0, 272.0, 620.0]), "nothing along /L itself: {up:?}");
+
+    let down = segments(&line_drawing(&table_178_line([72.0, 540.0, 272.0, 540.0], &[("LL", Object::Real(-20.0)), ("LLE", Object::Real(10.0))])));
+    assert!(has(&down, [72.0, 520.0, 272.0, 520.0]), "the line is 20 below /L: {down:?}");
+    assert!(has(&down, [72.0, 540.0, 72.0, 510.0]) && has(&down, [272.0, 540.0, 272.0, 510.0]), "leaders run 10 past it: {down:?}");
+}
+
+#[test]
+fn a_leader_offset_leaves_a_gap_and_the_endings_sit_on_the_line_itself() {
+    let d = table_178_line(
+        [72.0, 460.0, 272.0, 460.0],
+        &[("LL", Object::Real(20.0)), ("LLO", Object::Real(10.0)), ("LE", Object::Array(vec![Object::name("OpenArrow"), Object::name("OpenArrow")]))],
+    );
+    let content = line_drawing(&d);
+    let segs = segments(&content);
+    assert!(has(&segs, [72.0, 490.0, 272.0, 490.0]), "the line sits |LL| + LLO above /L: {segs:?}");
+    assert!(has(&segs, [72.0, 470.0, 72.0, 490.0]) && has(&segs, [272.0, 470.0, 272.0, 490.0]), "leaders start LLO from /L: {segs:?}");
+    // The open arrows' tips (`tip l`) are at the ends of the line, not of /L.
+    assert!(content.contains(" 72 490 l ") && content.contains(" 272 490 l "), "arrows at the moved line: {content}");
+    assert!(!content.contains(" 72 460 l "), "no arrow on /L: {content}");
+}
+
+#[test]
+fn an_inline_caption_breaks_the_line_around_its_text() {
+    let d =
+        table_178_line([72.0, 380.0, 272.0, 380.0], &[("Cap", Object::Bool(true)), ("Contents", Object::String(PdfString::text("Inline 50 mm")))]);
+    let content = line_drawing(&d);
+    assert!(content.contains("(Inline 50 mm) Tj"), "the caption is drawn: {content}");
+    assert!(content.contains("/Helv 10 Tf"), "in Helvetica 10: {content}");
+    let m = caption_matrix(&content).expect("text matrix");
+    let width = crate::appearance::text_width("Inline 50 mm", 10.0);
+    assert!((m[4] - (172.0 - width / 2.0)).abs() < 0.01 && m[5] < 380.0 && m[5] > 380.0 - 10.0, "centred on the line: {m:?}");
+    let segs = segments(&content);
+    assert_eq!(segs.len(), 2, "two pieces: {segs:?}");
+    assert!(segs.iter().all(|s| s[2] <= 172.0 - width / 2.0 || s[0] >= 172.0 + width / 2.0), "no stroke under the text: {segs:?}");
+    assert!(has(&segs, [72.0, 380.0, 172.0 - width / 2.0 - 2.0, 380.0]), "the left piece starts at the line's start: {segs:?}");
+}
+
+#[test]
+fn a_top_caption_sits_above_the_unbroken_line() {
+    let d = table_178_line(
+        [72.0, 300.0, 272.0, 300.0],
+        &[("Cap", Object::Bool(true)), ("CP", Object::name("Top")), ("Contents", Object::String(PdfString::text("Top 50 mm")))],
+    );
+    let content = line_drawing(&d);
+    let m = caption_matrix(&content).expect("text matrix");
+    assert!(m[5] > 300.0 && m[5] < 305.0, "baseline just above the line: {m:?}");
+    assert_eq!(segments(&content), vec![[72.0, 300.0, 272.0, 300.0]], "the line is whole");
+}
+
+#[test]
+fn a_caption_offset_moves_it_along_and_off_the_line_with_a_tick() {
+    let co = |h: f64, v: f64| Object::Array(vec![Object::Real(h), Object::Real(v)]);
+    let text = ("Contents", Object::String(PdfString::text("Offset 15")));
+    let base = caption_matrix(&line_drawing(&table_178_line([330.0, 700.0, 530.0, 700.0], &[("Cap", Object::Bool(true)), text.clone()]))).unwrap();
+    let content = line_drawing(&table_178_line([330.0, 700.0, 530.0, 700.0], &[("Cap", Object::Bool(true)), ("CO", co(0.0, 15.0)), text.clone()]));
+    let up = caption_matrix(&content).unwrap();
+    assert!((up[5] - base[5] - 15.0).abs() < 0.01 && (up[4] - base[4]).abs() < 0.01, "15 up: {base:?} → {up:?}");
+    let segs = segments(&content);
+    assert!(has(&segs, [330.0, 700.0, 530.0, 700.0]), "a caption off the line leaves it whole: {segs:?}");
+    assert!(segs.iter().any(|s| s[0] == 430.0 && s[2] == 430.0 && s[1] == 700.0 && s[3] > 705.0), "a tick from the midpoint up: {segs:?}");
+    let along =
+        caption_matrix(&line_drawing(&table_178_line([330.0, 700.0, 530.0, 700.0], &[("Cap", Object::Bool(true)), ("CO", co(-30.0, 0.0)), text])))
+            .unwrap();
+    assert!((along[4] - base[4] + 30.0).abs() < 0.01 && (along[5] - base[5]).abs() < 0.01, "30 left: {base:?} → {along:?}");
+}
+
+#[test]
+fn without_cap_true_no_caption_is_drawn() {
+    for cap in [None, Some(Object::Bool(false)), Some(Object::Int(1))] {
+        let mut extra = vec![("Contents", Object::String(PdfString::text("Hidden caption")))];
+        if let Some(c) = cap.clone() {
+            extra.push(("Cap", c));
+        }
+        let d = table_178_line([330.0, 620.0, 530.0, 620.0], &extra);
+        let content = line_drawing(&d);
+        assert!(!content.contains("Tj"), "{cap:?}: {content}");
+        assert_eq!(segments(&content), vec![[330.0, 620.0, 530.0, 620.0]]);
+        assert!(crate::appearance::undrawable_text(&d).is_none());
+    }
+}
+
+#[test]
+fn a_diagonal_lines_leaders_are_perpendicular_and_its_caption_turns_with_it() {
+    let d = table_178_line(
+        [330.0, 460.0, 530.0, 560.0],
+        &[
+            ("LL", Object::Real(20.0)),
+            ("LLE", Object::Real(10.0)),
+            ("Cap", Object::Bool(true)),
+            ("Contents", Object::String(PdfString::text("Diagonal"))),
+        ],
+    );
+    let content = line_drawing(&d);
+    let segs = segments(&content);
+    let (ux, uy) = (200.0 / 100f64.hypot(200.0), 100.0 / 100f64.hypot(200.0));
+    let leaders: Vec<&[f64; 4]> = segs.iter().filter(|s| (s[2] - s[0]) * ux + (s[3] - s[1]) * uy < 1e-2).collect();
+    assert_eq!(leaders.len(), 2, "two leader lines across the line: {segs:?}");
+    for l in leaders {
+        let (dx, dy) = (l[2] - l[0], l[3] - l[1]);
+        assert!((dx.hypot(dy) - 30.0).abs() < 0.01, "|LL| + LLE long: {l:?}");
+        assert!(dx < 0.0 && dy > 0.0, "up and to the left (left of travel): {l:?}");
+    }
+    let m = caption_matrix(&content).expect("caption");
+    assert!((m[0] - ux).abs() < 1e-3 && (m[1] - uy).abs() < 1e-3, "the text runs along the line: {m:?}");
+    // Drawn right to left, it still reads left to right.
+    let back = caption_matrix(&line_drawing(&table_178_line(
+        [530.0, 560.0, 330.0, 460.0],
+        &[("Cap", Object::Bool(true)), ("Contents", Object::String(PdfString::text("x")))],
+    )))
+    .unwrap();
+    assert!(back[0] > 0.0, "{back:?}");
+}
+
+#[test]
+fn a_caption_from_rich_text_and_one_the_font_cant_draw() {
+    let rc = "<?xml version=\"1.0\"?><body xmlns=\"http://www.w3.org/1999/xhtml\"><p>Dim &amp; <b>5</b>0&#x20;mm &lt;x&gt;</p></body>";
+    let d = table_178_line([0.0, 0.0, 100.0, 0.0], &[("Cap", Object::Bool(true)), ("RC", Object::String(PdfString::text(rc)))]);
+    let s = crate::appearance::build(&d).unwrap().decoded().unwrap();
+    assert!(s.windows(17).any(|w| w == b"(Dim & 50 mm <x>)"), "{}", String::from_utf8_lossy(&s));
+    let cjk = table_178_line([0.0, 0.0, 100.0, 0.0], &[("Cap", Object::Bool(true)), ("Contents", Object::String(PdfString::text("長さ")))]);
+    assert_eq!(crate::appearance::undrawable_text(&cjk), Some(("the line's caption", '長')));
+    // A PdfCraft measurement's label is its caption: the comment text isn't drawn a second time.
+    let mut measured = cjk.clone();
+    measured.set(b"PCMeasureValue".to_vec(), Object::String(PdfString::text("5 mm")));
+    assert_eq!(crate::appearance::undrawable_text(&measured), None);
+    let content = line_drawing(&measured);
+    assert_eq!(content.matches(" Tj").count(), 1, "{content}");
+}
+
+#[test]
+fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
+    let cap = ("Cap", Object::Bool(true));
+    let text = ("Contents", Object::String(PdfString::text(&"w".repeat(10_000))));
+    // A zero-length line has no direction: no leader lines, no caption, no NaN.
+    let point =
+        line_drawing(&table_178_line([50.0, 50.0, 50.0, 50.0], &[("LL", Object::Real(20.0)), ("LLE", Object::Real(5.0)), cap.clone(), text.clone()]));
+    assert!(!point.contains("NaN") && !point.contains("inf") && !point.contains("Tj"), "{point}");
+    assert_eq!(segments(&point).len(), 1);
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e300, -1e300, f64::MAX] {
+        let d = table_178_line(
+            [0.0, 0.0, 100.0, 0.0],
+            &[
+                ("LL", Object::Real(bad)),
+                ("LLE", Object::Real(bad)),
+                ("LLO", Object::Real(bad)),
+                ("CO", Object::Array(vec![Object::Real(bad), Object::Real(bad)])),
+                cap.clone(),
+                text.clone(),
+            ],
+        );
+        let content = line_drawing(&d);
+        assert!(!content.contains("NaN") && !content.contains("inf"), "{bad}: {content}");
+        for s in segments(&content) {
+            assert!(s.iter().all(|x| x.abs() <= 50_000.0), "{bad}: {s:?}");
+        }
+    }
+    // Negative LLE and LLO count as 0.
+    let neg = segments(&line_drawing(&table_178_line(
+        [0.0, 0.0, 100.0, 0.0],
+        &[("LL", Object::Real(10.0)), ("LLE", Object::Real(-5.0)), ("LLO", Object::Real(-5.0))],
+    )));
+    assert!(has(&neg, [0.0, 0.0, 0.0, 10.0]) && has(&neg, [0.0, 10.0, 100.0, 10.0]), "{neg:?}");
+    // Huge endpoints whose midpoint would overflow fall back to the plain line.
+    let huge = line_drawing(&table_178_line([f64::MAX, f64::MAX, f64::MAX / 2.0, f64::MAX], &[("LL", Object::Real(20.0)), cap, text]));
+    assert!(!huge.contains("NaN") && !huge.contains("inf"), "{huge}");
+    // The caption is cut to 256 characters.
+    let long = line_drawing(&table_178_line(
+        [0.0, 0.0, 100.0, 0.0],
+        &[("Cap", Object::Bool(true)), ("Contents", Object::String(PdfString::text(&"w".repeat(10_000))))],
+    ));
+    assert!(long.contains(&format!("({}) Tj", "w".repeat(256))), "cut to 256");
+    assert!(!long.contains(&"w".repeat(257)));
+}
+
+#[test]
+fn freehand_highlight_is_compatible_ink_with_marker_blending() {
+    let shape = Shape::FreehandHighlight { strokes: vec![vec![[20.0, 100.0], [120.0, 100.0]]] };
+    let mut annotation = new(0, shape.clone());
+    annotation.style = Style::default_for(&shape);
+    let mut doc = fixture();
+    let index = add_annotation(&mut doc, &annotation, &meta("marker")).unwrap();
+    let doc = reopen(&doc);
+    let ink = &list(&doc, 0)[index];
+
+    assert_eq!(ink.name(b"Subtype"), Some(&b"Ink"[..]));
+    assert_eq!(ink.name(b"IT"), Some(&b"FreehandHighlight"[..]));
+    assert_eq!(ink.get(b"CA").and_then(Object::as_f64), Some(0.35));
+    let ap = ink.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    let resources = doc.get(ap).as_dict().unwrap().get(b"Resources").cloned().unwrap();
+    let blend = resources.as_dict().unwrap().get(b"ExtGState").unwrap().as_dict().unwrap().get(b"GS0").unwrap().as_dict().unwrap();
+    assert_eq!(blend.name(b"BM"), Some(&b"Multiply"[..]));
+
+    let mut doc = doc;
+    let rect_of = |doc: &Document, idx: usize| -> Vec<f64> {
+        list(doc, 0)[idx].get(b"Rect").unwrap().as_array().unwrap().iter().filter_map(Object::as_f64).collect()
+    };
+    let rect_before = rect_of(&doc, index);
+    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(34.0), endings: None }, &meta("wider")).unwrap();
+    let rect_after = rect_of(&doc, index);
+    assert!((rect_after[0] - (rect_before[0] - 10.0)).abs() < 1e-4);
+    assert!((rect_after[2] - (rect_before[2] + 10.0)).abs() < 1e-4);
+
+    // Repeated increase/decrease cycles must keep bounds stable and never accumulate padding.
+    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(14.0), endings: None }, &meta("narrower")).unwrap();
+    let rect_restored = rect_of(&doc, index);
+    for (a, b) in rect_restored.iter().zip(rect_before.iter()) {
+        assert!((a - b).abs() < 1e-4, "expected {rect_before:?}, got {rect_restored:?}");
+    }
+    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(34.0), endings: None }, &meta("wider-again")).unwrap();
+    let rect_second_wide = rect_of(&doc, index);
+    for (a, b) in rect_second_wide.iter().zip(rect_after.iter()) {
+        assert!((a - b).abs() < 1e-4, "expected {rect_after:?}, got {rect_second_wide:?}");
+    }
+
+    // Imported ink whose width is specified only by `/Border [0 0 20]` must use 20 pt as its
+    // previous width (shrinking by 5 pt on a decrease to 10 pt rather than expanding as if 1 pt).
+    let (_, r) = lookup::annot_ref(&mut doc, 0, index).unwrap();
+    doc.update_dict(r, |d| {
+        d.remove(b"BS");
+        d.set(b"Border".to_vec(), Object::Array(vec![Object::Real(0.0), Object::Real(0.0), Object::Real(20.0)]));
+        d.set(b"Rect".to_vec(), create::num_array(&[5.0, 85.0, 135.0, 115.0]));
+    })
+    .unwrap();
+    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(10.0), endings: None }, &meta("border-shrink")).unwrap();
+    let rect_from_border = rect_of(&doc, index);
+    for (a, b) in rect_from_border.iter().zip([10.0, 90.0, 130.0, 110.0]) {
+        assert!((a - b).abs() < 1e-4, "expected [10, 90, 130, 110], got {rect_from_border:?}");
+    }
+}
+
+/// A 3D annotation is PDF 1.6 and a PRC model 1.7 (ISO 32000-2 §13.6): an older document's
+/// catalog says so, and a newer one is left as it is.
+#[test]
+fn a_3d_model_raises_an_older_document_to_its_version() {
+    let catalog_version = |doc: &Document| {
+        let root = doc.root().unwrap();
+        doc.get(root).as_dict().unwrap().name(b"Version").map(<[u8]>::to_vec)
+    };
+    let add = |doc: &mut Document, model: &[u8]| {
+        let new = NewModel3d { page: 0, rect: [100.0, 100.0, 300.0, 300.0], model, activation: Activation3d::default(), poster: None, contents: "" };
+        add_3d_model(doc, &new, &meta("m")).unwrap();
+    };
+    let mut doc = fixture();
+    add(&mut doc, b"U3D\0rest");
+    assert_eq!(catalog_version(&reopen(&doc)), None, "a 1.7 file needs nothing for U3D");
+    for (model, version) in [(&b"U3D\0rest"[..], &b"1.6"[..]), (b"PRC rest", b"1.7")] {
+        let mut doc = fixture();
+        doc.set_version("1.4");
+        add(&mut doc, model);
+        assert_eq!(catalog_version(&reopen(&doc)).as_deref(), Some(version));
+    }
+    let mut doc = fixture();
+    doc.set_version("2.0");
+    add(&mut doc, b"PRC rest");
+    assert_eq!(catalog_version(&reopen(&doc)), None, "a 2.0 file takes PRC as it is");
+}
+
+/// Before 2.0, PRC is an Adobe extension to PDF 1.7 (§7.12): a PRC model declares it, keeping
+/// other extensions and a later ADBE level; U3D and a 2.0 file need nothing.
+#[test]
+fn a_prc_model_declares_the_adobe_extension_before_pdf_2() {
+    let adbe = |doc: &Document| {
+        let root = doc.root().unwrap();
+        let ext = doc.get(root).as_dict().unwrap().get(b"Extensions").map(|e| doc.resolve(e).as_dict().unwrap().clone());
+        ext.map(|e| {
+            let adbe = e.get(b"ADBE").map(|a| a.as_dict().unwrap().clone());
+            (e.get(b"XYZ").is_some(), adbe.map(|a| (a.name(b"BaseVersion").map(<[u8]>::to_vec), a.get(b"ExtensionLevel").and_then(Object::as_int))))
+        })
+    };
+    let add = |doc: &mut Document, model: &[u8]| {
+        let new = NewModel3d { page: 0, rect: [100.0, 100.0, 300.0, 300.0], model, activation: Activation3d::default(), poster: None, contents: "" };
+        add_3d_model(doc, &new, &meta("m")).unwrap();
+    };
+    let mut doc = fixture();
+    add(&mut doc, b"PRC rest");
+    assert_eq!(adbe(&reopen(&doc)), Some((false, Some((Some(b"1.7".to_vec()), Some(1))))));
+    let mut doc = fixture();
+    add(&mut doc, b"U3D rest");
+    assert_eq!(adbe(&reopen(&doc)), None, "U3D is in ISO 32000-1");
+    let mut doc = fixture();
+    doc.set_version("2.0");
+    add(&mut doc, b"PRC rest");
+    assert_eq!(adbe(&reopen(&doc)), None, "PRC is in ISO 32000-2");
+
+    let mut doc = fixture();
+    let root = doc.root().unwrap();
+    let mut level3 = Dict::new();
+    level3.set(b"BaseVersion".to_vec(), Object::name("1.7"));
+    level3.set(b"ExtensionLevel".to_vec(), Object::Int(3));
+    let mut ext = Dict::new();
+    ext.set(b"ADBE".to_vec(), Object::Dict(level3));
+    ext.set(b"XYZ".to_vec(), Object::Dict(Dict::new()));
+    doc.update_dict(root, |c| c.set(b"Extensions".to_vec(), Object::Dict(ext.clone()))).unwrap();
+    add(&mut doc, b"PRC rest");
+    assert_eq!(adbe(&reopen(&doc)), Some((true, Some((Some(b"1.7".to_vec()), Some(3))))), "a later level is kept");
+    ext.remove(b"ADBE");
+    let mut doc = fixture();
+    doc.update_dict(root, |c| c.set(b"Extensions".to_vec(), Object::Dict(ext))).unwrap();
+    add(&mut doc, b"PRC rest");
+    assert_eq!(adbe(&reopen(&doc)), Some((true, Some((Some(b"1.7".to_vec()), Some(1))))), "other extensions are kept");
+
+    let mut doc = fixture();
+    let mut ext = Dict::new();
+    ext.set(b"ADBE".to_vec(), Object::Array(vec![Object::Dict(Dict::new())]));
+    let ext = doc.add(Object::Dict(ext));
+    doc.update_dict(root, |c| c.set(b"Extensions".to_vec(), Object::Ref(ext))).unwrap();
+    add(&mut doc, b"PRC rest");
+    let doc = reopen(&doc);
+    let ext = doc.resolve(doc.get(doc.root().unwrap()).as_dict().unwrap().get(b"Extensions").unwrap());
+    assert!(ext.as_dict().unwrap().get(b"ADBE").unwrap().as_array().is_some(), "an array of ADBE extensions is left alone");
+}
+
+#[test]
+fn a_picture_is_placed_by_its_box_and_a_form_needs_a_positive_size() {
+    let at = [10.0, 20.0, 110.0, 70.0];
+    assert_eq!(appearance::picture_place(at, true, None).as_deref(), Some("100 0 0 50 10 20 cm"), "an image fills its unit square");
+    assert_eq!(appearance::picture_place(at, false, Some((200.0, 25.0))).as_deref(), Some("0.5 0 0 2 10 20 cm"));
+    for size in [None, Some((0.0, 25.0)), Some((200.0, -1.0))] {
+        assert_eq!(appearance::picture_place(at, false, size), None, "{size:?}");
+    }
+}
+
+/// The poster's box must lie in the rectangle, and a form poster needs a size to scale by.
+#[test]
+fn a_3d_poster_outside_its_rectangle_or_without_a_size_is_refused() {
+    let picture = |at: [f64; 4], size: (f64, f64)| PosterPicture { xobject: ObjRef { num: 6, generation: 0 }, image: false, size, at };
+    for (poster, why) in [
+        (picture([50.0, 100.0, 250.0, 300.0], (10.0, 10.0)), "starts left of the rectangle"),
+        (picture([100.0, 100.0, 300.0, 301.0], (10.0, 10.0)), "ends above it"),
+        (picture([100.0, 100.0, 300.0, 300.0], (0.0, 10.0)), "has no width"),
+        (picture([100.0 - 2e-7, 150.0, 100.0 - 1e-7, 200.0], (10.0, 10.0)), "lies outside within the rounding slack"),
+    ] {
+        let mut doc = fixture();
+        let new = NewModel3d {
+            page: 0,
+            rect: [100.0, 100.0, 300.0, 300.0],
+            model: b"PRC rest",
+            activation: Activation3d::default(),
+            poster: Some(poster),
+            contents: "",
+        };
+        assert!(matches!(add_3d_model(&mut doc, &new, &meta("m")), Err(AnnotError::Invalid(_))), "{why}");
+        assert_eq!(list(&doc, 0).len(), 1, "{why}: nothing added");
+    }
+}
+
+/// A poster box fitted to the rectangle in floating point ends an ulp outside it: a 7×3 picture
+/// centred in [0 100 3.6 110.8] spans -2.2e-16 to 3.6000000000000005. It is taken, inside the
+/// rectangle.
+#[test]
+fn a_3d_poster_fitted_to_its_rectangle_with_rounding_is_taken() {
+    let mut doc = fixture();
+    let at = [-2.220446049250313e-16, 104.62857142857143, 3.6000000000000005, 106.17142857142858];
+    let poster = PosterPicture { xobject: ObjRef { num: 6, generation: 0 }, image: false, size: (7.0, 3.0), at };
+    let new = NewModel3d {
+        page: 0,
+        rect: [0.0, 100.0, 3.6, 110.8],
+        model: b"PRC rest",
+        activation: Activation3d::default(),
+        poster: Some(poster),
+        contents: "",
+    };
+    assert_eq!(add_3d_model(&mut doc, &new, &meta("m")), Ok(1));
+}
+
+#[test]
+fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
+    let mut doc = fixture();
+    let intent = Object::Ref(doc.add(Object::name("FreeTextTypeWriter")));
+    let page = page_refs(&doc).unwrap()[0];
+    let mut entries = annots(&doc, page);
+    let Object::Dict(annotation) = &mut entries[0] else { panic!("fixture annotation is inline") };
+    annotation.set(b"Subtype".to_vec(), Object::name("FreeText"));
+    annotation.set(b"IT".to_vec(), intent);
+    let contents = " \nAda\n\nLovelace\n\n ";
+    annotation.set(b"Contents".to_vec(), PdfString::text(contents));
+    set_annots(&mut doc, page, entries).unwrap();
+    let check = |doc: &Document| {
+        let list = summaries(doc);
+        let summary = list.iter().find(|a| a.page == 0 && a.index == 0).expect("direct Subtype is listed");
+        assert_eq!(summary.contents.as_deref(), Some(contents), "indirect typewriter intent preserves outer whitespace");
+        assert_eq!(summary.subtype, "FreeText");
+        assert_eq!(summary.intent.as_deref(), Some("FreeTextTypeWriter"));
+        assert!(summary.fill_sign, "indirect intent still identifies a Fill & Sign mark");
+    };
+    check(&doc);
+    check(&reopen(&doc));
 }

@@ -52,6 +52,12 @@ impl Op {
     pub fn name(&self, i: usize) -> Option<&[u8]> {
         self.operands.get(i).and_then(Object::as_name)
     }
+
+    /// The last operand as a name: the one `Do` and the other one-operand operators act on, since
+    /// the renderer takes operands from the end and ignores any surplus before them.
+    pub fn last_name(&self) -> Option<&[u8]> {
+        self.operands.last().and_then(Object::as_name)
+    }
 }
 
 /// A parsed stream.
@@ -724,11 +730,14 @@ impl Matrix {
     pub fn invert(&self) -> Option<Matrix> {
         let [a, b, c, d, e, f] = self.0;
         let det = a * d - b * c;
-        if det.abs() < 1e-12 || !det.is_finite() {
+        if det == 0.0 || !det.is_finite() || det.abs() <= 1e-12 * ((a * d).abs() + (b * c).abs()) {
             return None;
         }
         let (ia, ib, ic, id) = (d / det, -b / det, -c / det, a / det);
-        Some(Matrix([ia, ib, ic, id, -(e * ia + f * ic), -(e * ib + f * id)]))
+        let inverse = [ia, ib, ic, id, -(e * ia + f * ic), -(e * ib + f * id)];
+        // A determinant that underflows toward zero can still pass the relative check above,
+        // and dividing by it overflows: such a matrix has no usable inverse.
+        inverse.iter().all(|v| v.is_finite()).then_some(Matrix(inverse))
     }
 
     /// The bounding box of a rectangle `[x0 y0 x1 y1]` after this transform.

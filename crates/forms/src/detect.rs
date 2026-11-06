@@ -6,7 +6,7 @@
 //! the shapes from a page's content, [`raster::shapes`] from a picture of the page (a scan).
 
 use pdfcraft_content::{Matrix, Pieces};
-use pdfcraft_cos::{Document, Object};
+use pdfcraft_cos::{DecodeBudget, Document, Object};
 
 pub mod raster;
 
@@ -48,6 +48,60 @@ pub struct Candidate {
 /// The most points a subpath may have and still be read as a rectangle: its four corners plus
 /// points along its sides (#2942: a cell drawn with a midpoint on each vertical side).
 const MAX_RECT_POINTS: usize = 16;
+
+/// Graphics states saved (`q`) and kept at once while detecting; deeper saves are counted, not kept.
+const MAX_SAVES: usize = 256;
+
+/// The graphics states a page saves (`q`) as detection follows its matrix: at most [`MAX_SAVES`]
+/// kept, deeper ones counted so each `Q` still closes its own. Of those not kept: the matrix when
+/// the first was made, which closing the last restores; the shallowest a `cm` changed the matrix
+/// in; and whether a `Q` has closed that one, so the matrix isn't known until the last closes.
+struct Saves {
+    kept: Vec<Matrix>,
+    lost: usize,
+    lost_base: Matrix,
+    moved_at: usize,
+    unknown: bool,
+}
+
+impl Default for Saves {
+    fn default() -> Self {
+        Saves { kept: Vec::new(), lost: 0, lost_base: Matrix::IDENTITY, moved_at: usize::MAX, unknown: false }
+    }
+}
+
+impl Saves {
+    fn save(&mut self, ctm: Matrix) {
+        if self.kept.len() < MAX_SAVES && self.lost == 0 {
+            self.kept.push(ctm);
+        } else {
+            if self.lost == 0 {
+                self.lost_base = ctm;
+            }
+            self.lost = self.lost.saturating_add(1);
+        }
+    }
+
+    fn restore(&mut self, ctm: &mut Matrix) {
+        if self.lost == 0 {
+            *ctm = self.kept.pop().unwrap_or(*ctm);
+            return;
+        }
+        self.lost -= 1;
+        if self.lost == 0 {
+            (*ctm, self.moved_at, self.unknown) = (self.lost_base, usize::MAX, false);
+        } else if self.lost < self.moved_at {
+            self.unknown = true;
+        }
+    }
+
+    /// A `cm` changed the matrix at the current depth.
+    fn moved(&mut self) {
+        if self.lost > 0 {
+            self.moved_at = self.moved_at.min(self.lost);
+        }
+    }
+}
 
 /// The rectangles and horizontal segments a page draws (stroked or filled), in user space.
 #[derive(Default)]
@@ -125,7 +179,15 @@ impl DetectionPath {
     }
 }
 
+/// The shapes page `page`'s content draws, its streams decoded within one page's allowance
+/// ([`DecodeBudget::page`]), however often `/Contents` lists the same stream.
 pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
+    shapes_within(doc, page, &mut DecodeBudget::page())
+}
+
+/// [`page_shapes`], decoding against `budget`: a stream `/Contents` lists again is charged again,
+/// and one past what is left reads as empty.
+pub(crate) fn shapes_within(doc: &Document, page: usize, budget: &mut DecodeBudget) -> Shapes {
     let mut out = Shapes::default();
     let Some(p) = pdfcraft_model::pages(doc).into_iter().nth(page) else { return out };
     let list: Vec<Object> = match p.dict.get(b"Contents").map(|c| doc.resolve(c)) {
@@ -139,23 +201,35 @@ pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
     let mut pieces = Vec::new();
     for o in list {
         if let Object::Stream(s) = &*doc.resolve(&o) {
-            pieces.push(s.decoded().unwrap_or_default());
+            pieces.push(budget.decode(s).unwrap_or_default());
         }
     }
     let mut ctm = Matrix::IDENTITY;
-    let mut stack = Vec::new();
+    let mut saves = Saves::default();
     let mut path_boxes: Vec<[f64; 4]> = Vec::new();
     let mut subpaths: Vec<DetectionPath> = Vec::new();
     let mut path = DetectionPath::default();
     let mut cur: Option<[f64; 2]> = None;
-    for op in Pieces::join(&pieces).parse().ops {
+    let joined = Pieces::join(&pieces);
+    drop(pieces);
+    // An operator at a time: dense content (`n n n …`) parsed whole holds about 80 bytes for each
+    // byte it decoded.
+    for op in pdfcraft_content::ops(joined.data()) {
         match op.op.as_slice() {
-            b"q" => stack.push(ctm),
-            b"Q" => ctm = stack.pop().unwrap_or(ctm),
+            b"q" => saves.save(ctm),
+            b"Q" => saves.restore(&mut ctm),
             b"cm" => {
                 if let Some(m) = op.nums::<6>() {
                     ctm = Matrix(m).then(&ctm);
+                    saves.moved();
                 }
+            }
+            // Painted where the matrix isn't known: dropped, as `n` drops a path.
+            b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" if saves.unknown => {
+                path_boxes.clear();
+                subpaths.clear();
+                path = DetectionPath::default();
+                cur = None;
             }
             b"re" => {
                 path.finish(&mut subpaths);
@@ -307,7 +381,7 @@ fn label_for(words: &[Word], rect: [f64; 4], right_of: bool) -> String {
         .iter()
         .filter(|w| w.rect[1] >= rect[3] - 1.0 && w.rect[1] - rect[3] < 24.0 && w.rect[0] < rect[2] && w.rect[2] > rect[0] - 4.0)
         .collect();
-    let Some(line) = above.iter().map(|w| mid(w.rect)).min_by(|a, b| a.total_cmp(b)) else { return String::new() };
+    let Some(line) = above.iter().map(|w| mid(w.rect)).min_by(f64::total_cmp) else { return String::new() };
     let mut on: Vec<&&Word> = above.iter().filter(|w| (mid(w.rect) - line).abs() < 3.0).collect();
     on.sort_by(|a, b| a.rect[0].total_cmp(&b.rect[0]));
     clean(&on.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" "))

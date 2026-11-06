@@ -369,7 +369,8 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
         let mut report = Report::default();
         let mode = if write { Mode::Apply } else { Mode::Verify };
-        let mut scope = Scope::new(&[], mode, &mut report, budget);
+        let mut images = pdfcraft_cos::ImageBudget::new(doc);
+        let mut scope = Scope::new(&[], mode, &mut report, budget, &mut images);
         if text {
             let c = page.crop(doc);
             scope.hidden_text = Some([c[0].min(c[2]), c[1].min(c[3]), c[0].max(c[2]), c[1].max(c[3])]);
@@ -400,6 +401,8 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
                 _ => Dict::new(),
             };
             dict.remove(b"Length");
+            // The source text of an added item (Edit ▸ Add content) would keep what was removed.
+            dict.remove(b"PCAdded");
             new_list[i] = Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::flate(dict, &bytes))));
             changed = true;
         }
@@ -422,6 +425,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
             retired_properties.extend(crate::interp::prune_properties(doc, &mut res, &page_content)?);
+            crate::type3::prune_type3_from_resources(doc, &mut res, &page_content)?;
             doc.update_dict(page.obj, |d| {
                 d.set(b"Contents".to_vec(), Object::Array(new_list));
                 d.set(b"Resources".to_vec(), Object::Dict(res));
@@ -441,7 +445,11 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
     }
     // What a page no longer draws must not stay reachable through an inherited or shared
     // /Resources either.
-    crate::interp::unlink_doomed(doc, &doomed, &retired_properties)?;
+    // Only a removal rewrites the document; a count on a clone has nothing to unlink, and a
+    // cleanup error there would be mistaken for "nothing to remove".
+    if write {
+        crate::interp::unlink_doomed(doc, &doomed, &retired_properties)?;
+    }
     Ok((total, retained_off_layers))
 }
 
@@ -472,7 +480,16 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
                         + owned(Hidden::Attachments)
                 }
                 Hidden::Comments => annots.iter().filter(|a| is_comment(a.name(b"Subtype").unwrap_or(b""))).count(),
-                Hidden::FormFields => pdfcraft_forms::fields(doc).len(),
+                Hidden::FormFields => {
+                    let n = pdfcraft_forms::fields(doc).len();
+                    if n > 0 {
+                        n
+                    } else if cat.contains(b"AcroForm") {
+                        1
+                    } else {
+                        0
+                    }
+                }
                 Hidden::HiddenText => content_pass(&mut doc2, true, false, false).map(|(n, _)| n).unwrap_or(0),
                 Hidden::HiddenLayers => {
                     let off = hidden_layers(doc).len();
@@ -505,17 +522,11 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     let count = |h: Hidden| counts.iter().find(|c| c.0 == h).map_or(0, |c| c.1);
     let (root, _) = catalog(doc).ok_or(RedactError::NothingToApply)?;
     let mut done = Vec::new();
-    // Content first (it needs the layers and the form still in place).
-    let (text, layers) = (which.contains(&Hidden::HiddenText), which.contains(&Hidden::HiddenLayers));
-    let retained_off_layers = if (text && count(Hidden::HiddenText) > 0) || (layers && count(Hidden::HiddenLayers) > 0) {
-        content_pass(doc, text, layers, true)?.1
-    } else {
-        std::collections::HashSet::new()
-    };
     // Every annotation the pages list now: whatever is no longer listed at the end (flattened
     // widgets included) leaves the structure tree too.
     let listed_before = listed_annotations(doc);
-    let fields = which.contains(&Hidden::FormFields) && count(Hidden::FormFields) > 0;
+    let has_acroform = doc.get(root).as_dict().is_some_and(|d| d.contains(b"AcroForm"));
+    let fields = which.contains(&Hidden::FormFields) && (count(Hidden::FormFields) > 0 || has_acroform);
     if fields {
         // Fields without appearances get one first, so their values stay visible.
         for f in pdfcraft_forms::fields(doc) {
@@ -529,6 +540,14 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
             d.remove(b"AcroForm");
         })?;
     }
+    // Content next (it needs the layers still in place). Flattened appearances are page content
+    // by now, so hidden text or layers inside them are removed with the rest.
+    let (text, layers) = (which.contains(&Hidden::HiddenText), which.contains(&Hidden::HiddenLayers));
+    let retained_off_layers = if (text && (fields || count(Hidden::HiddenText) > 0)) || (layers && (fields || count(Hidden::HiddenLayers) > 0)) {
+        content_pass(doc, text, layers, true)?.1
+    } else {
+        std::collections::HashSet::new()
+    };
     // Annotations: comments, attachments, links, actions, and the widgets flattening kept (hidden
     // ones, and ones with nothing to draw), which still hold their field's value and parent.
     let drop_annot = |a: &Dict| -> bool {
@@ -628,9 +647,12 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
                     cat.set(b"OCProperties".to_vec(), Object::Dict(oc));
                 }
             }
+            Hidden::FormFields => {
+                cat.remove(b"AcroForm");
+            }
             _ => {}
         }
-        let n = count(h);
+        let n = if h == Hidden::FormFields && fields { count(h).max(1) } else { count(h) };
         if n > 0 {
             done.push((h, n));
         }
@@ -652,16 +674,21 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     if done.is_empty() {
         return Err(RedactError::NothingToApply);
     }
-    doc.require_full_save();
+    // The rewrite drops the revisions that held the removed content, so it is a different file from
+    // its source: it gets a new identifier, whoever asked for the removal (the remove-hidden edit
+    // and the optimizer's discard option call this function directly, not through [`sanitize`]).
+    doc.require_full_save_with_new_id();
     Ok(done)
 }
 
 /// Sanitize Document: remove every category of hidden information.
 pub fn sanitize(doc: &mut Document) -> Result<Vec<(Hidden, usize)>, RedactError> {
     match remove_hidden(doc, &HIDDEN) {
-        // Nothing hidden is fine for Sanitize: the full rewrite still drops old revisions.
+        // Nothing hidden is fine for Sanitize: the full rewrite still drops old revisions. The
+        // rewrite is a new file either way, so it asks for a new identifier itself (when something
+        // was removed, `remove_hidden` has already asked).
         Err(RedactError::NothingToApply) => {
-            doc.require_full_save();
+            doc.require_full_save_with_new_id();
             Ok(Vec::new())
         }
         r => r,

@@ -190,6 +190,54 @@ fn guarded(a: &mut Automation, tool: &str, args: &Value) -> std::result::Result<
     }
 }
 
+/// A new one-page blank document, by id.
+fn blank_doc(a: &mut Automation) -> u64 {
+    let created = a.call("doc_create", &json!({ "from": "blank", "pages": 1 })).expect("create a blank document");
+    created
+        .into_iter()
+        .find_map(|c| match c {
+            pdfcraft_automation::Content::Json(v) => v["doc"].as_u64(),
+            pdfcraft_automation::Content::Png { .. } => None,
+        })
+        .expect("the new document has an id")
+}
+
+/// Delete everything inside `dir`, so one tool never sees files an earlier tool wrote: a digital ID
+/// that `sign_id_create` wrote to the `in.pdf` placeholder would stop every later `sign_document`
+/// call at its decrypt, before the argument under test.
+///
+/// The entries are reached through the canonical path, as the tools reach them: on Windows that
+/// is a `\\?\` path, whose names are taken literally. Through the plain path a file the tools
+/// named `" "` would lose its trailing space and name `dir` itself, which would then be deleted.
+fn empty_dir(dir: &Path) {
+    let dir = dir.canonicalize().expect("the root exists");
+    for entry in std::fs::read_dir(&dir).expect("read the root") {
+        let entry = entry.unwrap_or_else(|e| panic!("list {}: {e}", dir.display()));
+        let path = entry.path();
+        let is_dir = entry.file_type().unwrap_or_else(|e| panic!("file type of {}: {e}", path.display())).is_dir();
+        let removed = if is_dir { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+        removed.unwrap_or_else(|e| panic!("remove {} before the next tool: {e}", path.display()));
+    }
+}
+
+/// Real values for the arguments a tool checks before the others, so a hostile value reaches the
+/// argument it is meant for instead of failing on a placeholder. `sign_document` checks its
+/// digital ID first and its document second: this ID opens with its password, and each call gets
+/// a fresh document (which the caller closes), since a successful call signs it. The ID is a test
+/// key with a low key derivation count, so the hundreds of calls that open it stay fast.
+fn fixture(a: &mut Automation, root: &Path, tool: &str) -> serde_json::Map<String, Value> {
+    match tool {
+        "sign_document" => {
+            let id = Path::new(env!("CARGO_MANIFEST_DIR")).join("../sign/tests/data/ec-p256.p12");
+            std::fs::copy(&id, root.join("id.p12")).expect("copy the test digital ID");
+            let doc = blank_doc(a);
+            let args = json!({ "doc": doc, "id": "id.p12", "password": "test", "out": "signed.pdf" });
+            args.as_object().cloned().unwrap_or_default()
+        }
+        _ => serde_json::Map::new(),
+    }
+}
+
 #[test]
 fn no_tool_panics_on_hostile_arguments() {
     let root = tmp("args");
@@ -199,6 +247,7 @@ fn no_tool_panics_on_hostile_arguments() {
     let mut calls = 0usize;
 
     for def in tools() {
+        empty_dir(&root);
         // The whole arguments object, not just its properties.
         for bad in [json!(null), json!([]), json!("string"), json!(7), json!(true), json!({})] {
             calls += 1;
@@ -210,12 +259,23 @@ fn no_tool_panics_on_hostile_arguments() {
         for prop in &props {
             for value in &values {
                 let mut obj = plausible(&def);
+                let fixed = fixture(&mut a, &root, def.name);
+                let fixture_doc = fixed.get("doc").cloned();
+                obj.extend(fixed);
                 obj.insert(prop.clone(), value.clone());
                 calls += 1;
                 if let Err(e) = guarded(&mut a, def.name, &Value::Object(obj)) {
                     failures.push(e);
                 }
+                // Later tools pass placeholder document ids, which must not find this one open.
+                if let Some(doc) = fixture_doc {
+                    a.call("doc_close", &json!({ "doc": doc, "discard_changes": true })).expect("close the fixture's document");
+                }
             }
+        }
+        // A signed file shows the fixture got calls past the ID and document checks.
+        if def.name == "sign_document" {
+            assert!(root.join("signed.pdf").is_file(), "no sign_document call signed: the hostile values stop at the ID or document");
         }
     }
 
@@ -256,14 +316,7 @@ fn no_tool_escapes_the_root() {
     let mut a = Automation::new().with_root(&root).expect("root");
 
     // A real document, so tools reach their path arguments instead of failing on `doc` first.
-    let created = a.call("doc_create", &json!({ "from": "blank", "pages": 1 })).expect("create a blank document");
-    let doc = created
-        .into_iter()
-        .find_map(|c| match c {
-            pdfcraft_automation::Content::Json(v) => v["doc"].as_u64(),
-            pdfcraft_automation::Content::Png { .. } => None,
-        })
-        .expect("the new document has an id");
+    let doc = blank_doc(&mut a);
 
     let mut leaked = Vec::new();
     let mut tried = 0usize;

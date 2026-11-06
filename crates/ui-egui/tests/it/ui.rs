@@ -49,14 +49,14 @@ fn tools_panel_side_preference_moves_and_persists() {
     h.get_by_label("Tools panel side");
     h.get_by_label("Right").click();
     h.run_steps(3);
-    assert!(h.state().docking.tools_on_right());
+    assert!(h.state().side_panels.tools_on_right());
     let saved = h.state().persist();
     let mut restored = PdfCraftApp::new();
     restored.restore(&saved);
-    assert!(restored.docking.tools_on_right());
+    assert!(restored.side_panels.tools_on_right());
     h.get_by_label("Left").click();
     h.run_steps(3);
-    assert!(!h.state().docking.tools_on_right());
+    assert!(!h.state().side_panels.tools_on_right());
 }
 
 /// Every piece of text painted on the last frame: its whole text, whether it was cut with "…",
@@ -126,6 +126,170 @@ fn every_catalog_tool_is_listed_after_view_more() {
 }
 
 #[test]
+fn expanded_all_tools_lists_every_tool_by_category_and_searches() {
+    let mut h = harness(|_| {});
+    h.get_by_label("Expand all tools").click();
+    h.run_steps(3);
+    assert!(h.state().all_tools_full);
+    for c in pdfcraft_engine::catalog::TOOL_CATEGORIES {
+        h.get_by_label(c.label);
+    }
+    for g in pdfcraft_engine::catalog::TOOL_GROUPS {
+        assert!(h.query_all_by_label(g.label).count() >= 1, "tool {} missing from the expanded view", g.label);
+    }
+    // An item name finds its tool; the other categories drop out.
+    h.state_mut().all_tools_query = "rotate".into();
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Organize pages").count(), 1, "only the expanded view's tile; the sidebar is gone");
+    assert!(h.query_by_label("Forms & Signatures").is_none());
+    h.state_mut().all_tools_query = "no such tool".into();
+    h.run_steps(3);
+    h.get_by_label("No tools match your search.");
+    // Choosing a tool goes back to the workspace with that tool's panel.
+    h.state_mut().all_tools_query = "organize".into();
+    h.run_steps(3);
+    h.get_by_label("Organize pages").click();
+    h.run_steps(3);
+    assert!(!h.state().all_tools_full);
+    assert_eq!(h.state().left, pdfcraft_ui_egui::LeftPanel::Tool("organize"));
+    h.get_by_label("Back to all tools");
+}
+
+#[test]
+fn collapse_and_escape_close_the_expanded_all_tools() {
+    let mut h = harness(|app| app.set_option("tools", "full").unwrap());
+    h.get_by_label("Collapse all tools").click();
+    h.run_steps(3);
+    assert!(!h.state().all_tools_full);
+    h.get_by_label("View more");
+    h.get_by_label("Expand all tools").click();
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!h.state().all_tools_full);
+}
+
+#[test]
+fn escape_in_a_dialog_over_the_expanded_all_tools_leaves_the_view_open() {
+    let mut h = harness(|app| app.set_option("tools", "full").unwrap());
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::About);
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().all_tools_full, "Escape belonged to the dialog");
+}
+
+#[test]
+fn escape_in_the_command_palette_over_the_expanded_all_tools_leaves_the_view_open() {
+    let mut h = harness(|app| app.set_option("tools", "full").unwrap());
+    h.state_mut().palette_open = true;
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!h.state().palette_open, "Escape closed the palette");
+    assert!(h.state().all_tools_full, "and only the palette");
+}
+
+#[test]
+fn another_workspace_from_the_mode_option_puts_the_expanded_all_tools_away() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("tools", "full").unwrap();
+    app.set_option("mode", "all").unwrap();
+    assert!(app.all_tools_full, "All tools itself keeps the view");
+    app.set_option("mode", "read").unwrap();
+    app.set_option("mode", "all").unwrap();
+    assert!(!app.all_tools_full, "coming back shows the sidebar, as the mode bar does");
+}
+
+#[test]
+fn opening_a_document_puts_the_expanded_all_tools_away() {
+    use pdfcraft_ui_egui::Mode;
+    // All tools as the default workspace: no workspace change, but the document must show.
+    let mut app = PdfCraftApp::new();
+    app.set_option("tools", "full").unwrap();
+    app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
+    assert!(!app.all_tools_full, "the document shows, not the catalogue over it");
+    // Read as the default workspace: coming back to All tools later shows the sidebar.
+    let mut app = PdfCraftApp::new();
+    app.set_option("default-mode", "read").unwrap();
+    app.set_option("tools", "full").unwrap();
+    app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
+    assert_eq!(app.mode, Mode::Read);
+    assert!(!app.all_tools_full);
+}
+
+#[test]
+fn choosing_a_tool_puts_the_expanded_all_tools_away() {
+    use pdfcraft_ui_egui::LeftPanel;
+    let mut h = harness(|app| app.set_option("tools", "full").unwrap());
+    h.state_mut().set_option("tool", "organize").unwrap();
+    h.run_steps(3);
+    assert!(!h.state().all_tools_full, "the tool's panel shows, not the catalogue");
+    assert_eq!(h.state().left, LeftPanel::Tool("organize"));
+}
+
+#[test]
+fn another_tab_coming_forward_puts_the_expanded_all_tools_away() {
+    // Home, through the control option.
+    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    h.state_mut().set_option("tools", "full").unwrap();
+    h.run_steps(3);
+    assert!(h.state().all_tools_full, "the document's own tab keeps it");
+    h.state_mut().set_option("home", "").unwrap();
+    h.run_steps(3);
+    assert!(!h.state().all_tools_full);
+    h.get_by_label_contains("Welcome to PdfCraft");
+    // Another document's tab.
+    let mut h = harness(|app| {
+        app.open_bytes("one.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
+        app.open_bytes("two.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
+    });
+    h.state_mut().set_option("tools", "full").unwrap();
+    h.run_steps(3);
+    h.state_mut().active = Some(0);
+    h.run_steps(3);
+    assert!(!h.state().all_tools_full, "one.pdf shows, not the catalogue over it");
+}
+
+#[test]
+fn going_home_with_no_document_puts_the_expanded_all_tools_away() {
+    // Home is already the tab in front, so only the option itself can put the view away.
+    let mut h = harness(|app| app.set_option("tools", "full").unwrap());
+    h.state_mut().set_option("home", "").unwrap();
+    h.run_steps(3);
+    assert!(!h.state().all_tools_full);
+    h.get_by_label_contains("Welcome to PdfCraft");
+}
+
+#[test]
+fn expanding_all_tools_from_read_mode_restores_the_right_panel() {
+    use pdfcraft_ui_egui::{Mode, RightPanel};
+    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    h.state_mut().right = Some(RightPanel::Bookmarks);
+    h.state_mut().execute("view.read_mode");
+    h.run_steps(3);
+    assert_eq!((h.state().mode, h.state().right), (Mode::Read, None), "Read mode hides the panel");
+    h.state_mut().set_option("tools", "full").unwrap();
+    h.run_steps(3);
+    assert!(h.state().all_tools_full);
+    assert_eq!((h.state().mode, h.state().right), (Mode::AllTools, Some(RightPanel::Bookmarks)));
+}
+
+#[test]
+fn expanding_all_tools_from_edit_puts_edit_text_down() {
+    use pdfcraft_ui_egui::{LeftPanel, Mode, QuickTool};
+    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    support::outside_menus(&h, "Edit").click();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::EditText);
+    h.state_mut().set_option("tools", "full").unwrap();
+    h.run_steps(3);
+    assert!(h.state().all_tools_full);
+    assert_eq!((h.state().mode, h.state().quick_tool), (Mode::AllTools, QuickTool::Select));
+    assert_eq!(h.state().left, LeftPanel::AllTools, "collapsing goes back to the All tools list");
+}
+
+#[test]
 fn opening_a_pdf_shows_comments_and_bookmarks() {
     let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     // Documents with comments open on the Comments panel, like Acrobat.
@@ -180,6 +344,30 @@ fn closed_right_panel_stays_closed_for_a_document_asking_for_its_outline() {
         app.open_bytes("outline.pdf", None, pdf()).expect("outline PDF opens");
     });
     assert_eq!(h.state().right, None, "the closed right panel reopened after a restart");
+}
+
+#[test]
+fn navigation_rail_toggles_between_right_and_left_and_persists() {
+    use pdfcraft_ui_egui::Dialog;
+
+    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    assert_eq!(h.state().side_panels.rail_side, pdfcraft_ui_egui::side_panels::ToolsSide::Right);
+    h.get_by_label("Dock navigation rail on Left").click();
+    h.run_steps(3);
+    assert_eq!(h.state().side_panels.rail_side, pdfcraft_ui_egui::side_panels::ToolsSide::Left);
+    let saved = h.state().persist();
+    let mut h2 = harness(move |app| {
+        app.restore(&saved);
+    });
+    assert_eq!(h2.state().side_panels.rail_side, pdfcraft_ui_egui::side_panels::ToolsSide::Left);
+    h2.state_mut().dialog = Some(Dialog::Preferences);
+    h2.run_steps(3);
+    h2.get_by_label("Navigation rail side: Right").click();
+    h2.run_steps(3);
+    assert_eq!(h2.state().side_panels.rail_side, pdfcraft_ui_egui::side_panels::ToolsSide::Right);
+    h2.get_by_label("Navigation rail side: Left").click();
+    h2.run_steps(3);
+    assert_eq!(h2.state().side_panels.rail_side, pdfcraft_ui_egui::side_panels::ToolsSide::Left);
 }
 
 /// Read mode hides the tools, not the navigation panes: the rail's Bookmarks button opens the
@@ -432,6 +620,7 @@ fn overflowing_tabs_can_be_reached_by_scrolling() {
             delta: egui::vec2(-500.0, 0.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
         });
         h.run_steps(8);
     }
@@ -451,7 +640,7 @@ fn overflowing_tabs_can_be_reached_by_scrolling() {
     assert!(h.state().active.is_some_and(|i| i < 19));
     if let Ok(dir) = std::env::var("PDFCRAFT_TAB_SHOTS") {
         let _gpu = crate::gpu();
-        settle(&mut h);
+        crate::support::settle(&mut h);
         h.render().unwrap().save(format!("{dir}/overflow-tabs.png")).unwrap();
     }
 }
@@ -541,11 +730,11 @@ fn narrow_tab_strips_accept_vertical_wheel_scrolling() {
             app
         });
         h.run_steps(4);
-        let last = h.get_by_label("narrow-11.pdf").rect();
+        let last = h.get_by(|n| n.role() == egui::accesskit::Role::Tab && n.label().as_deref() == Some("narrow-11.pdf")).rect();
         assert!(last.center().x > 28.0 && last.right() < width - 100.0, "active tab: {last:?}");
         h.state_mut().active = Some(0);
         h.run_steps(4);
-        let first = h.get_by_label("narrow-00.pdf").rect();
+        let first = h.get_by(|n| n.role() == egui::accesskit::Role::Tab && n.label().as_deref() == Some("narrow-00.pdf")).rect();
         assert!(first.center().x > 28.0 && first.right() < width - 100.0);
         h.event(egui::Event::PointerMoved(first.center()));
         for _ in 0..8 {
@@ -554,18 +743,19 @@ fn narrow_tab_strips_accept_vertical_wheel_scrolling() {
                 delta: egui::vec2(0.0, -500.0),
                 phase: egui::TouchPhase::Move,
                 modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Unknown,
             });
             h.run_steps(8);
         }
-        let last = h.get_by_label("narrow-11.pdf").rect();
+        let last = h.get_by(|n| n.role() == egui::accesskit::Role::Tab && n.label().as_deref() == Some("narrow-11.pdf")).rect();
         assert!(last.center().x > 28.0 && last.right() < width - 100.0, "scrolled tab: {last:?}");
-        h.get_by_label("narrow-11.pdf").click();
+        h.get_by(|n| n.role() == egui::accesskit::Role::Tab && n.label().as_deref() == Some("narrow-11.pdf")).click();
         h.run_steps(4);
         assert_eq!(h.state().active, Some(11));
         assert!(h.get_by_label_contains("Display theme:").rect().right() <= width);
         if let Ok(dir) = std::env::var("PDFCRAFT_TAB_SHOTS") {
             let _gpu = crate::gpu();
-            settle(&mut h);
+            crate::support::settle(&mut h);
             h.render().unwrap().save(format!("{dir}/tabs-{width}.png")).unwrap();
         }
     }
@@ -612,23 +802,13 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
 
-fn settle(h: &mut Harness<'static, PdfCraftApp>) {
-    for _ in 0..200 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-}
-
 #[test]
 fn find_counts_matches_across_pages() {
     let mut h = harness(|app| {
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option("find", "brown").unwrap();
     });
-    settle(&mut h);
+    crate::support::settle(&mut h);
     h.get_by_label_contains("of 2");
     let v = &h.state().views[0];
     let f = v.find.as_ref().expect("find open");
@@ -641,7 +821,7 @@ fn find_reports_no_matches() {
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option("find", "zebra").unwrap();
     });
-    settle(&mut h);
+    crate::support::settle(&mut h);
     h.get_by_label("No matches");
 }
 
@@ -651,7 +831,7 @@ fn drag_selects_text_and_copy_returns_it() {
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
     });
-    settle(&mut h);
+    crate::support::settle(&mut h);
     // "The quick brown fox": glyph 4 = 'q', glyph 14 = 'n' of "brown".
     let (a, b) = {
         let v = &h.state().views[0];
@@ -709,6 +889,24 @@ fn a_saved_no_fill_clears_a_comment_tool_default_fill() {
     assert_eq!(c.comment_prefs.style(CommentTool::Rectangle).fill, None);
 }
 
+/// A tool's saved "Same as text" border colour (`"border_color": null`) clears an own border
+/// colour it had; a missing or malformed one keeps it.
+#[test]
+fn a_saved_same_as_text_clears_a_comment_tool_border_colour() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let red = Some([0.89, 0.13, 0.13]);
+    let mut a = PdfCraftApp::new();
+    a.comment_prefs.set_border_color(CommentTool::TextBox, red);
+    a.restore(r#"{"comment_styles":[{"tool":"comment.freetext","border_color":"red"}]}"#);
+    assert_eq!(a.comment_prefs.style(CommentTool::TextBox).border_color, red, "malformed keeps it");
+    a.restore(r#"{"comment_styles":[{"tool":"comment.freetext","border_color":null}]}"#);
+    assert_eq!(a.comment_prefs.style(CommentTool::TextBox).border_color, None, "null clears it");
+    let mut b = PdfCraftApp::new();
+    b.comment_prefs.set_border_color(CommentTool::TextBox, red);
+    b.restore(&a.persist());
+    assert_eq!(b.comment_prefs.style(CommentTool::TextBox).border_color, None, "a round trip keeps it cleared");
+}
+
 /// Persisted per-tool comment styles go through their clamping setters: hostile or malformed
 /// values are clamped or ignored, never trusted (#340).
 #[test]
@@ -731,6 +929,28 @@ fn comment_style_settings_clamp_and_refuse_hostile_values() {
     assert_eq!(note.color, [1.0, 0.82, 0.0], "the default colour stays");
 }
 
+/// A tool's fill's and text's own opacities survive a restart, clamped; a tool without a fill or
+/// text keeps none, and the quick bar's Opacity (the whole comment's) clears them.
+#[test]
+fn part_opacity_defaults_persist_and_clamp() {
+    use pdfcraft_ui_egui::comments::CommentTool;
+    let mut a = PdfCraftApp::new();
+    a.comment_prefs.set_part_opacity(CommentTool::Rectangle, Some(0.3), None);
+    a.comment_prefs.set_part_opacity(CommentTool::TextBox, Some(0.2), Some(1.0));
+    a.comment_prefs.set_part_opacity(CommentTool::Line, Some(0.5), Some(0.5));
+    let mut b = PdfCraftApp::new();
+    b.restore(&a.persist());
+    let parts = |app: &PdfCraftApp, tool| {
+        let s = app.comment_prefs.style(tool);
+        (s.fill_opacity, s.text_opacity)
+    };
+    assert_eq!(parts(&b, CommentTool::Rectangle), (Some(0.3), None));
+    assert_eq!(parts(&b, CommentTool::TextBox), (Some(0.2), Some(1.0)));
+    assert_eq!(parts(&b, CommentTool::Line), (None, None), "a line has no fill or text of its own");
+    b.restore(r#"{"comment_styles":[{"tool":"comment.freetext","fill_opacity":7,"text_opacity":-1}]}"#);
+    assert_eq!(parts(&b, CommentTool::TextBox), (Some(1.0), Some(0.1)), "clamped; the text stays visible");
+}
+
 #[test]
 fn zoom_keeps_the_point_under_the_cursor_still() {
     let mut h = harness(|app| {
@@ -738,7 +958,7 @@ fn zoom_keeps_the_point_under_the_cursor_still() {
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "none").unwrap();
     });
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let before = h.state().views[0].glyph_screen_pos(0, 4).expect("glyph on screen");
     let z = h.state().views[0].zoom;
     h.state_mut().views[0].zoom_at(z * 2.0, before);
@@ -754,7 +974,7 @@ fn trackpad_pinch_zooms_the_pdf_under_the_pointer() {
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "none").unwrap();
     });
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let before = h.state().views[0].glyph_screen_pos(0, 4).expect("glyph on screen");
     let zoom = h.state().views[0].zoom;
     h.hover_at(before);
@@ -781,7 +1001,7 @@ fn selection_works_in_every_view_rotation() {
             // Keep the whole rotated page on screen.
             app.set_option("zoom", "60").unwrap();
         });
-        settle(&mut h);
+        crate::support::settle(&mut h);
         let (a, b) = {
             let v = &h.state().views[0];
             (v.glyph_screen_pos(0, 4).expect("glyph"), v.glyph_screen_pos(0, 14).expect("glyph"))
@@ -1279,6 +1499,9 @@ fn cancelling_then_discarding_an_earlier_dirty_tab_preserves_the_selected_docume
 
 #[test]
 fn long_german_tool_labels_stay_within_the_sidebar() {
+    if crate::support::skip_without_catalogs("long_german_tool_labels_stay_within_the_sidebar") {
+        return;
+    }
     use pdfcraft_ui_egui::{LeftPanel, Mode};
     let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     h.state_mut().set_option("language", "de").unwrap();
@@ -1321,7 +1544,7 @@ fn document_tabs_expose_selection_and_activate_from_keyboard() {
         }
         if let Ok(dir) = std::env::var("PDFCRAFT_TAB_SHOTS") {
             let _gpu = crate::gpu();
-            settle(&mut h);
+            crate::support::settle(&mut h);
             h.render().unwrap().save(format!("{dir}/focused-tab-{key:?}.png")).unwrap();
         }
     }
@@ -1484,7 +1707,7 @@ fn the_edit_tab_turns_on_edit_text_and_images() {
     use pdfcraft_ui_egui::{Mode, QuickTool};
     let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     assert_eq!(h.state().quick_tool, QuickTool::Select);
-    h.get_by_label("Edit").click();
+    support::outside_menus(&h, "Edit").click();
     h.run_steps(3);
     assert_eq!(h.state().mode, Mode::Edit);
     assert_eq!(h.state().quick_tool, QuickTool::EditText);
@@ -1493,7 +1716,7 @@ fn the_edit_tab_turns_on_edit_text_and_images() {
     assert_eq!(h.state().mode, Mode::AllTools);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
     // Another tool picked inside Edit is not taken away by leaving it.
-    h.get_by_label("Edit").click();
+    support::outside_menus(&h, "Edit").click();
     h.run_steps(3);
     h.state_mut().quick_tool = QuickTool::Hand;
     h.get_by_label("Convert").click();
@@ -1507,7 +1730,7 @@ fn the_edit_tab_turns_on_edit_text_and_images() {
 fn organize_pages_from_the_edit_panel_opens_its_panel() {
     use pdfcraft_ui_egui::LeftPanel;
     let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
-    h.get_by_label("Edit").click();
+    support::outside_menus(&h, "Edit").click();
     h.run_steps(3);
     assert_eq!(h.state().left, LeftPanel::Tool("edit"));
     assert!(
@@ -1525,7 +1748,7 @@ fn organize_pages_from_the_edit_panel_opens_its_panel() {
 #[test]
 fn the_edit_panel_keeps_the_add_update_remove_menu() {
     let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
-    h.get_by_label("Edit").click();
+    support::outside_menus(&h, "Edit").click();
     h.run_steps(3);
     h.get_by_label("Watermark").click();
     h.run_steps(3);
@@ -1540,33 +1763,189 @@ fn the_edit_panel_keeps_the_add_update_remove_menu() {
 /// being drawn under the page number field.
 #[test]
 fn short_window_rail_buttons_scroll_clear_of_page_navigation() {
-    let (width, height) = (1000.0, 560.0);
-    let mut h = Harness::builder().with_size(egui::vec2(width, height)).build_eframe(|_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("short.pdf", None, FIXTURE.to_vec()).unwrap();
-        app
-    });
-    settle(&mut h);
-    let rail = |h: &Harness<'static, PdfCraftApp>, label: &str| {
-        h.query_all_by_label(label).map(|n| n.rect()).find(|r| r.left() >= width - 48.0).unwrap_or_else(|| panic!("{label} in the rail"))
-    };
-    let page = h.get(By::new().role(egui::accesskit::Role::TextInput).value("1")).rect();
-    assert!(page.left() >= width - 48.0 && page.bottom() <= height, "page field {page:?} in the rail");
-    assert!(rail(&h, "Comments").bottom() <= page.top(), "the first button sits above the page field");
-    assert!(rail(&h, "Tags").top() >= page.top(), "the window is short enough that the buttons must scroll");
-    let over = rail(&h, "Comments").center();
-    h.event(egui::Event::PointerMoved(over));
-    for _ in 0..8 {
-        h.event(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(0.0, -200.0),
-            phase: egui::TouchPhase::Move,
-            modifiers: egui::Modifiers::NONE,
+    use pdfcraft_ui_egui::side_panels::ToolsSide;
+
+    for side in [ToolsSide::Right, ToolsSide::Left] {
+        let (width, height) = (1000.0, 560.0);
+        let mut h = Harness::builder().with_size(egui::vec2(width, height)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.side_panels.rail_side = side;
+            app.open_bytes("short.pdf", None, FIXTURE.to_vec()).unwrap();
+            app
         });
-        h.run_steps(4);
+        crate::support::settle(&mut h);
+        let in_rail = |r: egui::Rect| match side {
+            ToolsSide::Left => r.right() <= 48.0,
+            ToolsSide::Right => r.left() >= width - 48.0,
+        };
+        let rail = |h: &Harness<'static, PdfCraftApp>, label: &str| {
+            h.query_all_by_label(label).map(|n| n.rect()).find(|r| in_rail(*r)).unwrap_or_else(|| panic!("{label} in the rail"))
+        };
+        let page = h.get(By::new().role(egui::accesskit::Role::TextInput).value("1")).rect();
+        assert!(in_rail(page) && page.bottom() <= height, "page field {page:?} in the rail");
+        let dock_label = match side {
+            ToolsSide::Right => "Dock navigation rail on Left",
+            ToolsSide::Left => "Dock navigation rail on Right",
+        };
+        let dock = rail(&h, dock_label);
+        assert!(dock.top() >= page.bottom() && dock.bottom() <= height, "dock button {dock:?} stays below navigation and inside the window");
+        assert!(rail(&h, "Comments").bottom() <= page.top(), "the first button sits above the page field");
+        assert!(rail(&h, "Tags").top() >= page.top(), "the window is short enough that the buttons must scroll");
+        let first = rail(&h, "Comments");
+        let over = first.center();
+        h.event(egui::Event::PointerMoved(over));
+        for _ in 0..8 {
+            h.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -200.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Unknown,
+            });
+            h.run_steps(4);
+        }
+        let tags = rail(&h, "Tags");
+        assert!(tags.top() >= first.top(), "Tags {tags:?} is fully visible in the scrolling area");
+        assert!(tags.bottom() <= page.top(), "Tags {tags:?} scrolls into view above the page field {page:?}");
+        assert_eq!(h.get(By::new().role(egui::accesskit::Role::TextInput).value("1")).rect(), page, "navigation stays put");
     }
-    let tags = rail(&h, "Tags");
-    assert!(tags.bottom() <= page.top(), "Tags {tags:?} scrolls into view above the page field {page:?}");
-    assert_eq!(h.get(By::new().role(egui::accesskit::Role::TextInput).value("1")).rect(), page, "navigation stays put");
+}
+
+/// A PDF with `n` empty 200×300 pt pages.
+fn pages_fixture(n: usize) -> Vec<u8> {
+    let mut objs: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()];
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 3 + i)).collect();
+    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 200 300] >>", kids.join(" ")).into_bytes());
+    for _ in 0..n {
+        objs.push(b"<< /Type /Page /Parent 2 0 R >>".to_vec());
+    }
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// A file opened again shows the page, zoom and page display it was last shown with (#1767,
+/// Acrobat's "Restore last view settings when reopening documents"): remembered when its tab
+/// closes and when settings are saved with it open, applied over the file's own initial view,
+/// and not at all with the preference off. Settings are untrusted: bad entries are ignored.
+#[test]
+fn a_file_opened_again_shows_its_last_view() {
+    use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
+    let path = std::env::temp_dir().join(format!("pdfcraft-last-view-{}.pdf", std::process::id())).to_string_lossy().into_owned();
+    let p = path.clone();
+    let mut h = harness(move |app| app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens"));
+    let p = path.clone();
+    assert!(h.state().restore_last_view, "on by default");
+    {
+        let app = h.state_mut();
+        app.set_option("zoom", "50").unwrap();
+        let view = &mut app.views[0];
+        view.set_display(PageLayout::TwoUp, false);
+        view.set_cover(true);
+        view.go_to_page(2);
+    }
+    h.run_steps(3);
+    // Saved with the tab still open: quitting remembers it.
+    let saved_open = h.state().persist();
+    h.state_mut().close_tab(0);
+    let saved_closed = h.state().persist();
+    for (label, saved) in [("open", saved_open), ("closed", saved_closed)] {
+        let (saved, p) = (saved.clone(), p.clone());
+        let h = harness(move |app| {
+            app.restore(&saved);
+            app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens");
+        });
+        let v = &h.state().views[0];
+        assert_eq!((v.current, v.fit, v.zoom, v.layout, v.continuous, v.cover), (2, Fit::None, 0.5, PageLayout::TwoUp, false, true), "{label}");
+    }
+    // The preference off: the defaults.
+    let saved = h.state().persist();
+    let p = path.clone();
+    let h = harness(move |app| {
+        app.restore(&saved);
+        app.restore_last_view = false;
+        app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens");
+    });
+    let v = &h.state().views[0];
+    assert_eq!((v.current, v.fit, v.layout, v.continuous, v.cover), (0, Fit::Width, PageLayout::Single, true, false));
+    // Garbage in the settings is ignored, a usable entry among it is kept.
+    let mut app = PdfCraftApp::new();
+    app.restore(&format!(
+        r#"{{"restore_last_view": "yes", "last_views": [5, {{"path": ""}}, {{"path": "{}", "page": -1, "zoom": "huge", "display": "single"}}, {{"path": "{}", "page": 1, "zoom": "fit-page", "display": "two-up"}}]}}"#,
+        path.replace('\\', "/"),
+        path.replace('\\', "/")
+    ));
+    assert!(app.restore_last_view, "a non-boolean keeps the default");
+    assert_eq!(app.last_views.len(), 1);
+    assert_eq!((app.last_views[0].page, app.last_views[0].zoom.as_str()), (1, "fit-page"));
+}
+
+/// #1767: a fixed zoom with a fraction comes back as it was, not rounded to a whole percent.
+#[test]
+fn a_fractional_zoom_is_remembered_exactly() {
+    use pdfcraft_ui_egui::canvas::Fit;
+    let path = std::env::temp_dir().join(format!("pdfcraft-last-view-frac-{}.pdf", std::process::id())).to_string_lossy().into_owned();
+    let p = path.clone();
+    let mut h = harness(move |app| app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens"));
+    h.state_mut().views[0].set_zoom(0.625);
+    h.run_steps(3);
+    h.state_mut().close_tab(0);
+    assert_eq!(h.state().last_views[0].zoom, "62.5%");
+    let saved = h.state().persist();
+    let h = harness(move |app| {
+        app.restore(&saved);
+        app.open_bytes("doc.pdf", Some(path), pages_fixture(3)).expect("opens");
+    });
+    let v = &h.state().views[0];
+    assert_eq!((v.fit, v.zoom), (Fit::None, 0.625));
+}
+
+/// #1767 with full screen: the view remembered while presenting is the one full screen will go
+/// back to, and a file reopened in full screen presents one fitted page, then leaves full
+/// screen for the remembered view.
+#[test]
+fn full_screen_neither_is_remembered_nor_hides_the_last_view() {
+    use pdfcraft_ui_egui::canvas::{Fit, PageLayout};
+    let path = std::env::temp_dir().join(format!("pdfcraft-last-view-fs-{}.pdf", std::process::id())).to_string_lossy().into_owned();
+    let p = path.clone();
+    let mut h = harness(move |app| app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens"));
+    {
+        let app = h.state_mut();
+        app.set_option("zoom", "50").unwrap();
+        let view = &mut app.views[0];
+        view.set_display(PageLayout::TwoUp, false);
+        view.go_to_page(2);
+        view.enter_presentation();
+        assert!(view.presenting() && view.fit == Fit::Page);
+    }
+    h.run_steps(3);
+    let saved = h.state().persist();
+    h.state_mut().close_tab(0);
+    let remembered = h.state().last_views[0].clone();
+    assert_eq!((remembered.page, remembered.zoom.as_str()), (2, "50%"), "not full screen's fitted page");
+    let p = path.clone();
+    let mut h = harness(move |app| {
+        app.restore(&saved);
+        app.full_screen = true;
+        app.open_bytes("doc.pdf", Some(p), pages_fixture(3)).expect("opens");
+    });
+    let v = &h.state().views[0];
+    assert!(v.presenting(), "opened in full screen");
+    assert_eq!((v.fit, v.continuous, v.current), (Fit::Page, false, 2), "one fitted page, where the reader left off");
+    let view = &mut h.state_mut().views[0];
+    view.leave_presentation();
+    assert_eq!((view.fit, view.zoom, view.layout, view.continuous), (Fit::None, 0.5, PageLayout::TwoUp, false), "the remembered view");
 }
