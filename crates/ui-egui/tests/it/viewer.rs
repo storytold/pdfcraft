@@ -557,6 +557,21 @@ fn end_shows_the_bottom_of_the_last_page() {
     assert_eq!(v.current, 0, "the first page");
     let first = v.page_screen_rect(0).expect("the first page is on screen");
     assert!(first.top() >= vp.top() - 1.0 && first.top() < vp.top() + 40.0, "its top edge is at the window's: {first:?} in {vp:?}");
+
+    // The keys listed with them for Go to first / last page do the same.
+    let shift_cmd = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    for (last, first) in [(Key::ArrowDown, Key::ArrowUp), (Key::PageDown, Key::PageUp)] {
+        h.key_press_modifiers(shift_cmd, last);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        let bottom = v.page_screen_rect(4).map(|r| r.bottom());
+        assert!(v.current == 4 && bottom.is_some_and(|b| (b - vp.bottom()).abs() < 40.0), "{last:?}: {bottom:?} in {vp:?}");
+        h.key_press_modifiers(shift_cmd, first);
+        h.run_steps(4);
+        let v = &h.state().views[0];
+        let top = v.page_screen_rect(0).map(|r| r.top());
+        assert!(v.current == 0 && top.is_some_and(|t| (t - vp.top()).abs() < 40.0), "{first:?}: {top:?} in {vp:?}");
+    }
 }
 
 #[test]

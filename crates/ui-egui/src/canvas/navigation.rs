@@ -417,10 +417,13 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
             view.find = None;
         }
     }
-    if key(Key::Home) {
+    // Home and End, and the keys listed with them for Go to first / last page: Shift+Ctrl
+    // (Shift+⌘ on macOS) with ↑ / ↓ or Page Up / Page Down (#6434).
+    let shift_cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, k);
+    if key(Key::Home) || pressed(shift_cmd(Key::ArrowUp)) || pressed(shift_cmd(Key::PageUp)) {
         view.go_to_page(0);
     }
-    if key(Key::End) {
+    if key(Key::End) || pressed(shift_cmd(Key::ArrowDown)) || pressed(shift_cmd(Key::PageDown)) {
         view.go_to_end();
     }
     // Full screen: Space and Enter go forward a page and Backspace back, as in Acrobat (the
