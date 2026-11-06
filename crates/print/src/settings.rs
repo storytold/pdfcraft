@@ -50,6 +50,20 @@ pub fn booklet_duplex(subset: BookletSubset) -> spool::Duplex {
     }
 }
 
+/// What a booklet's job asks the printer for, given whether its driver takes two-sided settings
+/// from other programs (`two_sided`, as the printer list reports it): [`booklet_duplex`], only as
+/// Acrobat enables two-sided printing "if available". A driver that doesn't (`Some(false)`) would
+/// refuse a two-sided job and print nothing, so both sides ask for nothing and its own setting
+/// applies, such as manual two-sided printing chosen in its Properties (#5772). A driver of
+/// unknown support is asked for two-sided as before; one side on its own is always one-sided.
+pub fn booklet_job_duplex(subset: BookletSubset, two_sided: Option<bool>) -> Option<spool::Duplex> {
+    match booklet_duplex(subset) {
+        spool::Duplex::Off => Some(spool::Duplex::Off),
+        _ if two_sided == Some(false) => None,
+        two_sided_duplex => Some(two_sided_duplex),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Binding {
     #[default]

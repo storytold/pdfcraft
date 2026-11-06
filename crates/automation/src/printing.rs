@@ -23,13 +23,22 @@ fn duplex(value: &str, cut_stack: bool) -> Result<Option<spool::Duplex>> {
 }
 
 /// [`duplex`] for a job laid out as `layout`: the name is checked either way, and a booklet
-/// decides two-sided itself (#2707), as the Print dialog does (`print::booklet_duplex`).
-fn job_duplex(value: &str, layout: &Layout) -> Result<Option<spool::Duplex>> {
+/// decides two-sided itself (#2707) as far as the printer's driver takes it, as the Print dialog
+/// does (`print::booklet_job_duplex`). `two_sided` says whether it does; it is only asked for a
+/// booklet's both sides, the one job it changes.
+fn job_duplex(value: &str, layout: &Layout, two_sided: impl FnOnce() -> Option<bool>) -> Result<Option<spool::Duplex>> {
     let chosen = duplex(value, matches!(layout, Layout::Multiple { order: PageOrder::CutStack, .. }))?;
     Ok(match layout {
-        Layout::Booklet { subset, .. } => Some(print::booklet_duplex(*subset)),
+        Layout::Booklet { subset: BookletSubset::BothSides, .. } => print::booklet_job_duplex(BookletSubset::BothSides, two_sided()),
+        Layout::Booklet { subset, .. } => print::booklet_job_duplex(*subset, None),
         _ => chosen,
     })
+}
+
+/// `printer` (a name, or "default" for the default printer) in `printers`; `None` when the list
+/// has no such printer.
+fn printer_in(printers: Vec<spool::Printer>, printer: &str) -> Option<spool::Printer> {
+    printers.into_iter().find(|p| if printer == "default" { p.default } else { p.name == printer })
 }
 
 /// An invalid-arguments error saying `m`.
@@ -171,7 +180,14 @@ impl Automation {
             },
             l => return Err(bad(format!("unknown layout {l:?}"))),
         };
-        let duplex = job_duplex(a.opt_str("duplex")?.unwrap_or("off"), &layout)?;
+        let printer = a.opt_str("printer")?;
+        // The printer whose driver a booklet's both sides were decided for. The job goes to it by
+        // name, so "default" can't become another printer while the document is rendered.
+        let mut asked = None;
+        let duplex = job_duplex(a.opt_str("duplex")?.unwrap_or("off"), &layout, || {
+            asked = printer.and_then(|p| printer_in(spool::printers(), p));
+            asked.as_ref()?.two_sided
+        })?;
         if a.opt_str("order")? == Some("cut-stack") && !matches!(layout, Layout::Multiple { .. }) {
             return Err(bad("cut-stack order needs layout multiple"));
         }
@@ -205,13 +221,14 @@ impl Automation {
         let sheets = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?.len();
         let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
         let mut out = json!({ "sheets": sheets, "pages": settings.pages.len(), "bytes": bytes.len() });
-        match (a.opt_str("path")?, a.opt_str("printer")?) {
+        match (a.opt_str("path")?, printer) {
             (Some(p), None) => {
                 let path = self.resolve(p, true)?;
                 write_atomic(&path, &bytes)?;
                 out["path"] = json!(path.to_string_lossy());
             }
             (None, Some(printer)) => {
+                let printer = asked.as_ref().map_or(printer, |p| p.name.as_str());
                 let job = spool_job(a, printer, self.doc(a)?.name.clone(), duplex, paper_index)?;
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
@@ -226,16 +243,41 @@ mod tests {
     use super::*;
 
     /// #2707: a booklet sets two-sided itself whatever `duplex` asks; a bad name is still an error.
+    /// #5772: its both sides leave two-sided to a driver that doesn't take the setting, and only
+    /// they look the printer up.
     #[test]
     fn a_booklet_decides_two_sided_itself() {
         let booklet = |subset| Layout::Booklet { subset, binding: Binding::Left };
+        let unread = || -> Option<bool> { panic!("the printer's two-sided support is read for nothing") };
         for asked in ["printer", "off", "long-edge", "short-edge"] {
-            assert_eq!(job_duplex(asked, &booklet(BookletSubset::BothSides)).ok(), Some(Some(spool::Duplex::ShortEdge)), "{asked}");
-            assert_eq!(job_duplex(asked, &booklet(BookletSubset::FrontOnly)).ok(), Some(Some(spool::Duplex::Off)), "{asked}");
-            assert_eq!(job_duplex(asked, &booklet(BookletSubset::BackOnly)).ok(), Some(Some(spool::Duplex::Off)), "{asked}");
+            assert_eq!(job_duplex(asked, &booklet(BookletSubset::BothSides), || Some(true)).ok(), Some(Some(spool::Duplex::ShortEdge)), "{asked}");
+            assert_eq!(job_duplex(asked, &booklet(BookletSubset::BothSides), || None).ok(), Some(Some(spool::Duplex::ShortEdge)), "{asked}");
+            assert_eq!(job_duplex(asked, &booklet(BookletSubset::BothSides), || Some(false)).ok(), Some(None), "{asked}");
+            assert_eq!(job_duplex(asked, &booklet(BookletSubset::FrontOnly), unread).ok(), Some(Some(spool::Duplex::Off)), "{asked}");
+            assert_eq!(job_duplex(asked, &booklet(BookletSubset::BackOnly), unread).ok(), Some(Some(spool::Duplex::Off)), "{asked}");
         }
-        assert!(job_duplex("sideways", &booklet(BookletSubset::BothSides)).is_err());
-        assert_eq!(job_duplex("long-edge", &Layout::Size(SizeMode::Fit)).ok(), Some(Some(spool::Duplex::LongEdge)), "other layouts keep it");
+        assert!(job_duplex("sideways", &booklet(BookletSubset::BothSides), || None).is_err());
+        assert_eq!(job_duplex("long-edge", &Layout::Size(SizeMode::Fit), unread).ok(), Some(Some(spool::Duplex::LongEdge)), "other layouts keep it");
+    }
+
+    /// #5772: a booklet's printer is found by name, or as the default for "default", and only
+    /// what the list says about it counts. "default" is found by its name, which the job is sent
+    /// to.
+    #[test]
+    fn a_booklets_printer_comes_from_the_list() {
+        let printer = |name: &str, default, two_sided| spool::Printer { name: name.into(), default, two_sided, description: String::new() };
+        let list = [printer("Epson", false, Some(false)), printer("Laser", true, Some(true)), printer("Network", false, None)];
+        let found = |list: &[spool::Printer], name| printer_in(list.to_vec(), name).map(|p| (p.name, p.two_sided));
+        assert_eq!(found(&list, "Epson"), Some(("Epson".into(), Some(false))));
+        assert_eq!(found(&list, "Laser"), Some(("Laser".into(), Some(true))));
+        assert_eq!(found(&list, "default"), Some(("Laser".into(), Some(true))), "the default printer");
+        assert_eq!(found(&list, "Network"), Some(("Network".into(), None)), "the list doesn't say");
+        assert_eq!(found(&list, "Gone"), None, "no such printer");
+        assert_eq!(found(&list, "epson"), None, "names are exact");
+        let default_one_sided = [printer("Epson", true, Some(false)), printer("Laser", false, Some(true))];
+        assert_eq!(found(&default_one_sided, "default"), Some(("Epson".into(), Some(false))), "the default printer");
+        let without_default = [printer("Epson", false, Some(false))];
+        assert_eq!(found(&without_default, "default"), None);
     }
 
     /// `printer` leaves two-sided to the printer's own default (#2422); cut and stack still asks

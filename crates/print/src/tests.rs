@@ -1164,6 +1164,19 @@ fn a_booklet_prints_both_sides_on_the_short_edge() {
     assert_eq!(booklet_duplex(BookletSubset::BackOnly), spool::Duplex::Off);
 }
 
+/// #5772: both sides ask a driver that takes two-sided settings for the short edge, and one that
+/// doesn't for nothing, so its own setting (manual two-sided, say) prints the booklet rather than
+/// the job being refused. One side on its own asks every driver for one side.
+#[test]
+fn a_booklet_leaves_two_sided_to_a_driver_that_keeps_its_own() {
+    use BookletSubset::{BackOnly, BothSides, FrontOnly};
+    for (two_sided, both) in [(Some(true), Some(spool::Duplex::ShortEdge)), (None, Some(spool::Duplex::ShortEdge)), (Some(false), None)] {
+        assert_eq!(booklet_job_duplex(BothSides, two_sided), both, "{two_sided:?}");
+        assert_eq!(booklet_job_duplex(FrontOnly, two_sided), Some(spool::Duplex::Off), "{two_sided:?}");
+        assert_eq!(booklet_job_duplex(BackOnly, two_sided), Some(spool::Duplex::Off), "{two_sided:?}");
+    }
+}
+
 /// #3502: `/Contents` array pieces are joined with a space, matching the renderer, so a `%`
 /// comment at the end of a piece without a line break continues through the first line of the
 /// next piece in both `impose` and `text_reads_up`.
