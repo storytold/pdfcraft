@@ -302,7 +302,7 @@ struct ChangedObjectClassifier<'a> {
     dss: &'a HashSet<u32>,
     /// [`form_fill_roles`] of the signed revision, worked out the first time a change would
     /// otherwise be refused.
-    form_roles: OnceCell<HashMap<ObjRef, FormRole>>,
+    form_roles: OnceCell<HashMap<u32, FormRole>>,
 }
 
 impl ChangedObjectClassifier<'_> {
@@ -327,7 +327,7 @@ impl ChangedObjectClassifier<'_> {
         }
         // A field appearance or a form resource rewritten in place (#3442), judged by the role the
         // object held when signed and held nowhere else.
-        match self.form_roles.get_or_init(|| form_fill_roles(self.old)).get(&r) {
+        match self.form_roles.get_or_init(|| form_fill_roles(self.old)).get(&r.num) {
             Some(FormRole::Appearance) => Some(kind::FORM_FILL),
             Some(FormRole::Resources) if before.is_some_and(|b| only_gained_entries(b, new, 0)) => Some(kind::FORM_FILL),
             _ => what,
@@ -512,12 +512,18 @@ enum Visit {
 /// Rewriting an ordinary field's appearance in place grants nothing a form fill can't already do:
 /// filling may give the widget a new appearance stream drawing anything. Past `MAX_VISITED`
 /// objects the walk gives up and nothing qualifies, so the changes are judged as before.
-fn form_fill_roles(old: &Document) -> HashMap<ObjRef, FormRole> {
+///
+/// Roles are keyed by object number, as every other role in [`classify_changes`] is: a damaged
+/// slot accepts two generations (#1143), and an object the walk reaches as `6 5 R` is the
+/// appearance a widget names as `6 0 R`. The walk itself follows each reference as written, so
+/// one that resolves to nothing does not hide what another generation of the same slot refers to.
+fn form_fill_roles(old: &Document) -> HashMap<u32, FormRole> {
     const MAX_VISITED: usize = 500_000;
     const STATES: [&[u8]; 3] = [b"N", b"R", b"D"];
     const RESOURCE_CATEGORIES: [&[u8]; 8] = [b"Font", b"XObject", b"ExtGState", b"ColorSpace", b"Pattern", b"Shading", b"Properties", b"Encoding"];
 
-    let acroform_ref = old.root().and_then(|root| old.get(root).as_dict().and_then(|c| c.get(b"AcroForm").and_then(Object::as_ref)));
+    let catalog_num = old.root().map(|root| root.num);
+    let acroform_num = old.root().and_then(|root| old.get(root).as_dict().and_then(|c| c.get(b"AcroForm").and_then(Object::as_ref))).map(|r| r.num);
     let mut seen: HashSet<ObjRef> = HashSet::new();
     // `/DR` and its category dictionaries: walked through without being marked reached.
     let mut containers: HashSet<ObjRef> = HashSet::new();
@@ -556,8 +562,9 @@ fn form_fill_roles(old: &Document) -> HashMap<ObjRef, FormRole> {
             }
             (Object::Dict(d), _) => {
                 let widget = d.name(b"Subtype") == Some(b"Widget") && is_ordinary_field(old, d);
-                let form = visit == Visit::InlineForm || (here.is_some() && here == acroform_ref);
-                let catalog = here.is_some() && here == old.root();
+                let num = here.map(|r| r.num);
+                let form = visit == Visit::InlineForm || (num.is_some() && num == acroform_num);
+                let catalog = num.is_some() && num == catalog_num;
                 for (k, v) in d.iter() {
                     match k.as_slice() {
                         b"AP" if widget => appearances.push(v.clone()),
@@ -576,12 +583,14 @@ fn form_fill_roles(old: &Document) -> HashMap<ObjRef, FormRole> {
         }
     }
 
+    let reached: HashSet<u32> = seen.iter().map(|r| r.num).collect();
     let mut roles = HashMap::new();
-    // Anything the walk reached has another role too; a conflict takes the stricter role.
+    // Anything the walk reached, under any generation, has another role too; a conflict takes the
+    // stricter role.
     let mut claim = |r: ObjRef, role: FormRole| {
-        if !seen.contains(&r) {
+        if !reached.contains(&r.num) {
             roles
-                .entry(r)
+                .entry(r.num)
                 .and_modify(|held: &mut FormRole| {
                     if *held != role {
                         *held = FormRole::Resources;
