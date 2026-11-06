@@ -229,6 +229,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-06 (M9, PR #6264 test review):** Arabic appearance tests decode the actual drawn Type 3 codes and compare exact visual-order cluster text. Three font-dependent tests fail on a missing Arabic face when `PDFCRAFT_TEST_ARABIC_REQUIRED` is set; ordinary no-font builds still skip them. CI flag wiring remains a separate shared-workflow task under the repository's CI policy. No behavior or estimate changes.
+
 - **2026-11-05 (M9, PR #6264 Markdown review):** Removed unquoted blank separators introduced between the M9 roadmap blockquotes. Previously added Rust docstrings remain intact; CodeRabbit's current hosted review is still in progress. No behavior or estimate changes.
 
 - **2026-11-05 (M9, PR #6264 documentation review):** Documented the signature font, coverage, rendering and regression helpers introduced by this PR, including unbounded measurement semantics. No behavior, parity claims or estimates changed; hosted docstring coverage must be rechecked after publication.

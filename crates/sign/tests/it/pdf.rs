@@ -2550,6 +2550,7 @@ fn visible_appearance_draws_central_european_characters_with_embedded_font() {
 #[test]
 fn visible_appearance_draws_arabic_characters_with_embedded_font() {
     if pdfcraft_fonts::document_arabic_font().is_none() {
+        assert!(std::env::var_os("PDFCRAFT_TEST_ARABIC_REQUIRED").is_none(), "Arabic test font is missing");
         return;
     }
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
@@ -2582,10 +2583,27 @@ fn visible_appearance_draws_arabic_characters_with_embedded_font() {
     let cmap = String::from_utf8(cmap.decoded().unwrap()).unwrap();
     assert!(cmap.contains("/CMapName /PdfCraftSignature def") && cmap.contains("/CIDSystemInfo"), "{cmap}");
     let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, arabic);
-    let texts: String = (1..=240).map(|code| metrics.decode(&[code])).collect();
-    for c in "فراسشماسمجلسالإدارةموافقعلىالمستنددمشق،سورية".chars() {
-        assert!(texts.contains(c), "ToUnicode is missing {c:?}: {texts}");
-    }
+    let texts: String = content
+        .lines()
+        .filter(|line| line.starts_with("/PCFull0 "))
+        .map(|line| {
+            let (_, operand) = line.rsplit_once('<').expect("Arabic text must use a hex string");
+            let hex = operand.strip_suffix("> Tj").expect("Arabic text must be drawn with Tj");
+            assert_eq!(hex.len() % 2, 0, "Arabic codes must be whole bytes");
+            let codes: Vec<u8> =
+                hex.as_bytes().as_chunks::<2>().0.iter().map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap()).collect();
+            metrics.decode(&codes)
+        })
+        .collect();
+    // Drawing order: large name, signed-by name, the DN's wrapped organization and
+    // common name, reason, location. Shape each expected Arabic run RTL so ligature
+    // clusters retain their logical text while the clusters themselves are visual-order.
+    let expected: String = ["فراس شماس", "فراس شماس", "مجلس", "الإدارة", "فراس شماس", "موافق على المستند", "دمشق، سورية"]
+        .into_iter()
+        .flat_map(|run| pdfcraft_fonts::shape_arabic(run, true).unwrap())
+        .map(|cluster| cluster.text)
+        .collect();
+    assert_eq!(texts, expected, "drawn Arabic codes must decode to the expected visual-order cluster text");
     let trust = TrustStore { certs: vec![firas_id.certificate.clone()] };
     let s = signatures(&doc, &signed, &trust).into_iter().find(|s| s.signed).unwrap();
     assert_eq!(s.status, Status::Valid);
@@ -2596,6 +2614,7 @@ fn visible_appearance_draws_arabic_characters_with_embedded_font() {
 #[test]
 fn visible_arabic_appearance_supports_latin_fallback_and_line_breaks() {
     if pdfcraft_fonts::document_arabic_font().is_none() {
+        assert!(std::env::var_os("PDFCRAFT_TEST_ARABIC_REQUIRED").is_none(), "Arabic test font is missing");
         return;
     }
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
@@ -2622,6 +2641,7 @@ fn visible_arabic_appearance_supports_latin_fallback_and_line_breaks() {
 #[test]
 fn visible_arabic_appearance_does_not_shape_a_hidden_name() {
     if pdfcraft_fonts::document_arabic_font().is_none() {
+        assert!(std::env::var_os("PDFCRAFT_TEST_ARABIC_REQUIRED").is_none(), "Arabic test font is missing");
         return;
     }
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();

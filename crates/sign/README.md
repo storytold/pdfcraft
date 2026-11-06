@@ -2,6 +2,11 @@
 
 Layer L4: digital signatures (execution plan M9; ISO 32000-2 §12.8; PAdES, ETSI EN 319 142).
 
+For Arabic appearance tests, build with `CRAFT_FONTS_DIR` pointing at craft-fonts.
+Set `PDFCRAFT_TEST_ARABIC_REQUIRED=1` only in font-enabled test environments to
+fail rather than skip if the Arabic face is missing. `CRAFT_FONTS_REQUIRED`
+checks for a Hans face, not Arabic. Leave the Arabic flag unset for no-font builds.
+
 ```rust
 let id = pkcs12::open(&std::fs::read("me.p12")?, "password")?;          // a digital ID
 let signed = sign(&doc, &id, &SignOptions { page: 0, rect: Some(r), date, ..Default::default() })?;
