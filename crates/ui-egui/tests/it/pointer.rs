@@ -1418,18 +1418,19 @@ fn the_link_tools_hand_stops_at_the_pages_edge() {
     assert_ne!(cursor_at(&mut h, beside), egui::CursorIcon::PointingHand, "just off the page");
 }
 
-/// With Edit text a right-click on a paragraph is Edit text's, as before, though a comment lies
-/// over it: the comment is not selected. The page's menu is anchored there all the same (Paste on
-/// the picture menu, Delete page); it used to stay where the last right-click comments saw was.
+/// A comment above an editable paragraph owns the context click, just as one above an image
+/// does. The menu still anchors on this page; primary Edit clicks retain their own tool behavior.
 #[test]
-fn a_right_click_with_edit_text_on_a_paragraph_under_a_comment_selects_no_comment() {
+fn a_right_click_with_edit_text_on_a_paragraph_under_a_comment_opens_the_comments_menu() {
     let mut h = open(comment_on_text_pdf(), "150", false);
+    h.state_mut().system_clipboard = false;
     h.state_mut().quick_tool = QuickTool::EditText;
     h.run_steps(4);
     let on_text = at(&h, 100.0, 303.0);
     wait_for_cursor(&mut h, on_text, |c| c != egui::CursorIcon::Default);
-    right_click(&mut h, on_text);
-    assert_eq!(h.state().views[0].comments.selected, None);
+    annotation_image::click(&mut h, on_text, egui::PointerButton::Secondary);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)));
+    h.get_by_label("Properties…");
     assert_eq!(h.state().views[0].comments.context_at.map(|(page, _)| page), Some(0), "the menu is anchored on the page");
 }
 
@@ -1591,8 +1592,7 @@ fn a_right_click_after_escape_cancelled_the_press_anchors_the_menu_on_its_page()
     assert_eq!(menu_page_after_a_right_click_with_the_button_held(true), Some(1), "the menu is page 2's");
 }
 
-/// With Edit text a right-click on added text reaches comments, as before (Edit text keeps those on
-/// its own paragraphs and pictures): the selected comment is unselected.
+/// A right-click on added text away from the selected comment unselects that comment.
 #[test]
 fn a_right_click_with_edit_text_on_added_text_unselects_the_comment() {
     let mut h = open(comment_on_text_pdf(), "150", false);
@@ -1818,3 +1818,5 @@ fn a_camera_click_released_off_its_page_moves_nothing() {
     h.run_steps(2);
     assert_eq!(h.state().views[0].camera.map(|q| q.page), Some(0));
 }
+
+mod annotation_image;
