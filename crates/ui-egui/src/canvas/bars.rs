@@ -60,7 +60,7 @@ pub(super) enum Notice {
 
 /// The notice bar above the pages: a file changed on disk first, then what a historical
 /// snapshot is, then the signature status bar, a form's scripts having been turned
-/// off, security, forms and warnings.
+/// off, security, forms and warnings. None in full screen.
 pub(super) fn notices(
     view: &mut DocView,
     doc: &pdfcraft_engine::Document,
@@ -70,6 +70,11 @@ pub(super) fn notices(
     ui: &mut egui::Ui,
     t: &Tokens,
 ) -> Option<Notice> {
+    // Full screen shows the page and nothing else (#1459), so the notice bar above the pages waits
+    // until it is left; filling the screen, a bar would push the page past its bottom (#576).
+    if view.presentation.is_some() {
+        return None;
+    }
     let info = &doc.info;
     let xfa = doc.xfa.as_ref();
     // The file changed on disk while this document has unsaved changes (#431): ask before

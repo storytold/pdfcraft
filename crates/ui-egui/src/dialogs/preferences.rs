@@ -724,6 +724,10 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
     });
     ctx.checkbox(ui, &mut defaults.show_page_gaps, tl!("Show gaps between pages"), t);
     ctx.label_secondary(ui, tl!("Hide gaps to join page edges. Margins inside the PDF remain unchanged."), t);
+    ctx.checkbox(ui, &mut defaults.full_screen_fill, tl!("Full screen fills the screen with one page at a time"), t);
+    ctx.label_secondary(ui, tl!("Turn off to keep the page display, such as continuous scrolling, in full screen."), t);
+    ctx.checkbox(ui, &mut app.full_screen_escape_exits, tl!("Esc leaves full screen"), t);
+    ctx.label_secondary(ui, tl!("Turn off so that only Ctrl+L (⌘L on macOS) leaves full screen, as for a kiosk display."), t);
     ui.add_space(6.0);
 
     ui.horizontal(|ui| {
