@@ -496,6 +496,43 @@ fn of_two_fields_that_share_a_name_and_dont_scroll_the_one_typed_in_takes_what_f
     assert!(wide.fits(&kept) && !wide.fits(&format!("{kept}W")), "as much as fits the wide one: {} kept", kept.len());
 }
 
+/// `name` on a page by itself.
+fn one_field_pdf() -> Vec<u8> {
+    pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 350 280 372] /P 3 0 R /F 4 >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ])
+}
+
+#[test]
+fn typing_in_a_page_copy_that_undo_takes_away_goes_with_it() {
+    // The focus fell back to the first field of its name once its own was gone: what was typed
+    // in the copy went on in the original, and a click away put it there.
+    let mut h = form_harness(one_field_pdf());
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::DuplicatePages { pages: vec![0], at: Some(0) }));
+    h.run_steps(2);
+    assert_eq!(values(&h, "name").len(), 2, "the copy is a field of its own, of the same name");
+    let copy = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.widgets.first().is_some_and(|w| w.page == Some(0))).expect("the copy, on the first page");
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
+    };
+    click_at(&mut h, copy.center());
+    h.event(egui::Event::Text("Ada".into()));
+    h.run_steps(1);
+    // As from the toolbar with the copy's page scrolled away, which leaves its typing open.
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert!(h.state().views[0].forms.focus.is_none(), "the typing went with its field");
+    let original = copy_rect(&h, "name", 0);
+    click_at(&mut h, original.center() + egui::vec2(0.0, 120.0));
+    assert_eq!(values(&h, "name"), [Vec::<String>::new()], "and the original was left as it was");
+}
+
 #[test]
 fn page_keys_still_work_with_a_check_box_or_radio_button_focused() {
     // The widget that takes Space for a focused box must not swallow the page keys.

@@ -146,13 +146,14 @@ fn open_after_commit(view: &DocView, f: &FormField, widget: usize) -> Focus {
     focus
 }
 
-/// Which field of `form` `focus` is on: the one with its dictionary, else (the form no longer has
-/// that dictionary) the first of its name. Fields that share a name are listed apart (#2217), and
-/// a writer can list a copy that no page shows before the one a page does, as iOS's Quartz
-/// PDFContext saves a form filled in on it: found by name, the focus was on that copy, whose
-/// widget is on no page, so every edit to the field was dropped.
+/// Which field of `form` `focus` is on: the one with its dictionary. Fields that share a name are
+/// listed apart (#2217), and a writer can list a copy that no page shows before the one a page
+/// does, as iOS's Quartz PDFContext saves a form filled in on it: found by name, the focus was on
+/// that copy, whose widget is on no page, so every edit to the field was dropped. `None` once the
+/// form no longer has the dictionary, though another field may have its name: when Undo took
+/// away a page copy, what was typed in it went on in the original.
 fn focused_index(form: &[FormField], focus: &Focus) -> Option<usize> {
-    form.iter().position(|f| f.obj == focus.field && f.name == focus.name).or_else(|| form.iter().position(|f| f.name == focus.name))
+    form.iter().position(|f| f.obj == focus.field && f.name == focus.name)
 }
 
 /// The field of `form` that `focus` is on ([`focused_index`]).
