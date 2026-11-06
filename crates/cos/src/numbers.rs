@@ -18,9 +18,29 @@
 use crate::document::Held;
 use crate::{Document, Object};
 
-/// The most entries any numeric tuple or sequence may have (a conservative product allowance,
-/// not a limit ISO 32000-2 sets).
+/// The most entries any numeric sequence may have (a conservative product allowance, not a limit
+/// ISO 32000-2 sets).
 pub const MAX_NUMERIC_ENTRIES: usize = 65_536;
+
+/// The most entries a [`NumberReader::tuple`] may have. A tuple is an array on the stack, so its
+/// length is a compile-time choice, never one sized by input. 16, at 128 bytes, covers the
+/// fixed-length numeric arrays of ISO 32000-2 that this is for (a rectangle has 4 entries, a
+/// transformation matrix 6, a CalRGB `/Matrix` 9, a 3D transformation matrix 12); a longer or
+/// variable-length array is a [`NumberReader::sequence`].
+/// `N` up to 16 compiles:
+///
+/// ```
+/// # use pdfcraft_cos::{Object, numbers::NumberReader};
+/// let _ = NumberReader::direct().tuple::<16>(&Object::Null);
+/// ```
+///
+/// and the same call with a longer `N` does not:
+///
+/// ```compile_fail
+/// # use pdfcraft_cos::{Object, numbers::NumberReader};
+/// let _ = NumberReader::direct().tuple::<17>(&Object::Null);
+/// ```
+pub const MAX_TUPLE_ENTRIES: usize = 16;
 
 /// Why one value is not a usable number.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -105,11 +125,10 @@ impl<'doc> NumberReader<'doc> {
     }
 
     /// Exactly `N` finite numbers. The array's length is checked before any entry is read, and
-    /// any bad entry rejects the whole tuple: no entry is skipped and no prefix is taken.
+    /// any bad entry rejects the whole tuple: no entry is skipped and no prefix is taken. `N` is at
+    /// most [`MAX_TUPLE_ENTRIES`], checked when the call is compiled.
     pub fn tuple<const N: usize>(&self, object: &Object) -> Result<[f64; N], ArrayError> {
-        if N > MAX_NUMERIC_ENTRIES {
-            return Err(ArrayError::TooLong { len: N, cap: MAX_NUMERIC_ENTRIES });
-        }
+        const { assert!(N <= MAX_TUPLE_ENTRIES, "a numeric tuple has at most MAX_TUPLE_ENTRIES entries") };
         let held = self.hold(object).ok_or(ArrayError::UnresolvedReference)?;
         let array = held.as_array().ok_or(ArrayError::NotArray)?;
         if array.len() != N {

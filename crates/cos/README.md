@@ -46,7 +46,7 @@ Useful alongside: `doc.repair_log()` (what was reconstructed), `doc.revisions()`
 `doc.require_full_save()` for edits that cannot be expressed incrementally.
 
 `numbers::NumberReader` reads numbers out of the graph without losing their places: one finite
-number, an exact-length tuple (`tuple::<N>`, its length checked before any entry is read), or a
+number, an exact-length tuple (`tuple::<N>`, its length checked before any entry is read; `N` is at most `MAX_TUPLE_ENTRIES`, 16, checked at compile time), or a
 capped `sequence` in which every original slot keeps its own result, so a bad entry never shifts
 the ones after it and an array past the cap gives no prefix. It follows references with `resolve`'s
 bounded chain (a chain that still ends in a reference is an error), reads a direct array in place

@@ -105,10 +105,9 @@ fn a_tuple_has_exactly_its_length_of_valid_entries() {
     assert_eq!(r.tuple::<4>(&parse(b"[1 null 3 4]")), Err(ArrayError::InvalidEntry { index: 1, error: NumberError::NotNumber }));
     assert_eq!(r.tuple::<2>(&parse(b"[1 -nan]")), Err(ArrayError::InvalidEntry { index: 1, error: NumberError::NonFinite }));
     assert_eq!(r.tuple::<4>(&Object::Int(4)), Err(ArrayError::NotArray));
-    assert_eq!(
-        r.tuple::<{ MAX_NUMERIC_ENTRIES + 1 }>(&parse(b"[]")),
-        Err(ArrayError::TooLong { len: MAX_NUMERIC_ENTRIES + 1, cap: MAX_NUMERIC_ENTRIES })
-    );
+    // The longest tuple allowed reads; a longer one does not compile (see `MAX_TUPLE_ENTRIES`).
+    let sixteen = Object::Array((0..16).map(Object::Int).collect());
+    assert_eq!(r.tuple::<MAX_TUPLE_ENTRIES>(&sixteen).map(|t| t[15]), Ok(15.0));
 }
 
 #[test]
