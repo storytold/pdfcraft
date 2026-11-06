@@ -68,6 +68,7 @@ impl Session {
             cx.js = Some(js::JsRunner::new(&next, &name));
         }
         cx.renamed_fields.clear();
+        cx.renamed_by = (false, false);
         cx.redaction_overlays.clear();
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
         guard(|| run_edit(&mut next, &edit, &mut cx))
@@ -88,7 +89,12 @@ impl Session {
                 let more = renamed.len().saturating_sub(shown.len());
                 let more = if more > 0 { format!(", and {more} more") } else { String::new() };
                 format!(
-                    "inserted pages renamed {} form field{} to keep their names separate ({}{more}); scripts that refer to the old names were not rewritten",
+                    "{} renamed {} form field{} to keep their names separate ({}{more}); scripts that refer to the old names were not rewritten",
+                    match cx.renamed_by {
+                        (true, false) => "duplicated pages",
+                        (false, true) => "inserted pages",
+                        _ => "duplicated and inserted pages",
+                    },
                     renamed.len(),
                     if renamed.len() == 1 { "" } else { "s" },
                     shown.join(", ")
@@ -98,14 +104,20 @@ impl Session {
         if let Some(note) = renamed_note(&cx.renamed_fields) {
             next.note_repair(note);
         }
-        // Only Insert from File renames fields; its label says so in a wording the interface
-        // translates (the count lives in the repair note).
+        // Only Insert from File and Duplicate pages with new field names rename fields; their
+        // labels say so in a wording the interface translates (the count lives in the repair
+        // note).
         let label = match (&edit, cx.renamed_fields.len()) {
             (_, 0) => edit.label(),
             (Edit::InsertPagesFrom { name, .. }, n) => Label::with(
                 if n == 1 { "Insert pages from {name} — 1 field renamed" } else { "Insert pages from {name} — fields renamed" },
                 name.as_str(),
             ),
+            (Edit::DuplicatePages { .. }, 1) => Label::of("Duplicate pages — 1 field renamed"),
+            (Edit::DuplicatePages { .. }, _) => Label::of("Duplicate pages — fields renamed"),
+            // A batch keeps its own name and says that fields were renamed (CodeRabbit on #4557).
+            (Edit::Batch { label: name, .. }, 1) => Label::with("{batch} — 1 field renamed", name.as_str()),
+            (Edit::Batch { label: name, .. }, _) => Label::with("{batch} — fields renamed", name.as_str()),
             _ => edit.label(),
         };
         // An XFA form's scripts answer the change: exit and validate scripts of the field, then

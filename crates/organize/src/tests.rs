@@ -3085,6 +3085,68 @@ fn duplicating_a_page_with_a_field_keeps_the_field_name() {
     assert_eq!(form_field_names(&doc), ["Text1", "Text1"], "nothing renamed");
 }
 
+/// #2228: duplicating with new field names makes each copied field one of its own, named after
+/// the first free variant, so filling in the copy leaves the original alone. A second duplicate
+/// takes the next free name, and the copied widget sits on the new page.
+#[test]
+fn duplicating_with_rename_gives_the_copies_fields_of_their_own() {
+    let mut doc = doc_with_field("Text1");
+    let renamed = crate::duplicate_pages_with(&mut doc, &[0], None, FieldConflicts::Rename).unwrap();
+    assert_eq!(renamed, [("Text1".to_string(), "Text1-1".to_string())]);
+    assert_eq!(form_field_names(&doc), ["Text1", "Text1-1"]);
+    let renamed = crate::duplicate_pages_with(&mut doc, &[0], None, FieldConflicts::Rename).unwrap();
+    assert_eq!(renamed, [("Text1".to_string(), "Text1-2".to_string())], "the next free name");
+    assert_eq!(form_field_names(&doc), ["Text1", "Text1-1", "Text1-2"]);
+    let out = full_roundtrip(&doc);
+    let ps = pages(&out).unwrap();
+    assert_eq!(ps.len(), 3);
+    // Each field's one widget is on its own page: the original on page 1, the copies on the
+    // pages inserted after it (the latest copy right after the original).
+    let form = catalog(&out).get(b"AcroForm").map(|f| out.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap();
+    let fields = form.get(b"Fields").map(|f| out.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap();
+    let annots = |page: ObjRef| -> Vec<ObjRef> {
+        let annots = out.get(page).as_dict().and_then(|d| d.get(b"Annots").cloned()).map(|a| out.resolve(&a)).and_then(|a| a.as_array().cloned());
+        annots.unwrap_or_default().iter().filter_map(Object::as_ref).collect()
+    };
+    // A field is its own widget (the original) or holds it in /Kids (the copies, split into a
+    // field and its widget).
+    let widgets = |f: ObjRef| -> Vec<ObjRef> {
+        let kids = out.get(f).as_dict().and_then(|d| d.get(b"Kids").cloned()).map(|k| out.resolve(&k)).and_then(|k| k.as_array().cloned());
+        kids.map_or_else(|| vec![f], |k| k.iter().filter_map(Object::as_ref).collect())
+    };
+    let on: Vec<Vec<usize>> = fields
+        .iter()
+        .filter_map(Object::as_ref)
+        .map(|f| widgets(f).into_iter().filter_map(|w| ps.iter().position(|p| annots(p.obj).contains(&w))).collect())
+        .collect();
+    assert_eq!(on, [vec![0], vec![2], vec![1]]);
+}
+
+/// Several pages at once: every field on them is renamed, each once, and a field whose
+/// full name is nested (`address.street`) is renamed at its root, so its children keep
+/// their own names.
+#[test]
+fn duplicating_several_pages_with_rename_renames_every_field_once() {
+    let mut doc = doc_with_fields(&["Name", "Date"]);
+    let renamed = crate::duplicate_pages_with(&mut doc, &[0, 0], Some(0), FieldConflicts::Rename).unwrap();
+    assert_eq!(crate::page_count(&doc).unwrap(), 2, "a page listed twice is copied once");
+    assert_eq!(renamed, [("Name".to_string(), "Name-1".to_string()), ("Date".to_string(), "Date-1".to_string())]);
+    assert_eq!(form_field_names(&doc), ["Name", "Date", "Name-1", "Date-1"]);
+    let mut nested = doc_with_tree("address", "street");
+    let renamed = crate::duplicate_pages_with(&mut nested, &[0], None, FieldConflicts::Rename).unwrap();
+    assert_eq!(renamed, [("address".to_string(), "address-1".to_string())]);
+}
+
+/// Merge is plain Duplicate: nothing renamed, and nothing to report.
+#[test]
+fn duplicating_with_merge_renames_nothing() {
+    let mut doc = doc_with_field("Text1");
+    assert!(crate::duplicate_pages_with(&mut doc, &[0], None, FieldConflicts::Merge).unwrap().is_empty());
+    assert_eq!(form_field_names(&doc), ["Text1", "Text1"]);
+    assert!(crate::duplicate_pages_with(&mut doc, &[], None, FieldConflicts::Rename).unwrap().is_empty(), "no pages, nothing done");
+    assert!(crate::duplicate_pages_with(&mut doc, &[9], None, FieldConflicts::Rename).is_err(), "a page that isn't there");
+}
+
 /// Replace Pages keeps the field names too.
 #[test]
 fn replacing_a_page_renames_no_fields() {
