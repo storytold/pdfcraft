@@ -331,6 +331,14 @@ impl PdfCraftApp {
         }
     }
 
+    /// Replace a document's recovery snapshot with its current state now. After an edit that takes
+    /// content out (Apply Redactions, Sanitize, Remove Hidden Information), the last snapshot still
+    /// holds what went, until the next autosave, and for good if the app is killed before then.
+    pub(crate) fn renew_recovery(&mut self, doc: pdfcraft_engine::DocId) {
+        self.forget_recovery(doc);
+        self.autosave_now();
+    }
+
     /// Autosave when the interval has passed (called by `logic`, which also runs while hidden).
     ///
     /// The deadline is monotonic (`web_time::Instant`): egui's input clock does not advance
