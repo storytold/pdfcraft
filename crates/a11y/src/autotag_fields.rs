@@ -40,7 +40,15 @@ pub fn tag_form_fields(doc: &mut Document) -> Result<usize, String> {
     let mut widgets = Vec::new();
     // A widget listed in more than one page's /Annots is tagged once (one key, one /Form).
     let mut seen = std::collections::HashSet::new();
+    // A shared indirect /Annots array is scanned for the first page that lists it: its widgets
+    // are tagged once anyway, so scanning it again for every page only repeats the work.
+    let mut arrays = std::collections::HashSet::new();
     for page in &pages {
+        if let Some(array) = page.dict.get(b"Annots").and_then(Object::as_ref)
+            && !arrays.insert(array)
+        {
+            continue;
+        }
         let annots = page.dict.get(b"Annots").map(|a| doc.resolve(a)).as_deref().and_then(Object::as_array).cloned().unwrap_or_default();
         for annot in annots {
             let Some(reference) = annot.as_ref() else { continue };
