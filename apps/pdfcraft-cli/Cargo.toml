@@ -24,6 +24,7 @@ pdfcraft-platform = { workspace = true }
 base64 = "0.23"
 
 [dev-dependencies]
+pdfcraft-testkit = { workspace = true }
 # Decodes `render` output in tests/it/owner_password.rs; already a dependency of the engine.
 png = "0.18"
 

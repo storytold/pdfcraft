@@ -1,9 +1,8 @@
 //! Add Background on pages that paint their own backdrop, end to end through the tools: what
 //! `page_render` draws, `doc_backdrops`, save and reopen, and Remove putting the page back.
 
-use std::path::PathBuf;
-
 use pdfcraft_automation::{Automation, Content};
+use pdfcraft_testkit::ScratchDir;
 use serde_json::{Value, json};
 
 /// Two 200 × 100 pt pages saying "Hi": page 1 on a white fill of its own (as browsers write),
@@ -39,15 +38,14 @@ fn fixture() -> Vec<u8> {
     out
 }
 
-fn workdir() -> PathBuf {
+fn workdir() -> ScratchDir {
     named_workdir("main")
 }
 
-/// A folder of its own per test: the tests of this binary run at the same time.
-fn named_workdir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("pdfcraft-automation-backdrop-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+/// A folder of its own per test, with `a.pdf` in it, removed when the test ends (#6028): the
+/// tests of this binary run at the same time.
+fn named_workdir(name: &str) -> ScratchDir {
+    let dir = ScratchDir::new(&format!("automation-backdrop-{name}")).unwrap();
     std::fs::write(dir.join("a.pdf"), fixture()).unwrap();
     dir
 }

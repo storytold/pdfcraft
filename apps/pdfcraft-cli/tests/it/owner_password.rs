@@ -58,10 +58,9 @@ fn protected_with(algorithm: Algorithm, content: &str) -> Vec<u8> {
     pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()
 }
 
-fn tmp(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("pdfcraft-cli-owner-{}", std::process::id()));
-    std::fs::create_dir_all(&d).unwrap();
-    d.join(name)
+/// `name` in a scratch folder of its own, removed when the returned value is dropped (#6028).
+fn tmp(name: &str) -> pdfcraft_testkit::ScratchFile {
+    pdfcraft_testkit::ScratchFile::new("cli-owner", name).unwrap()
 }
 
 const ALGORITHMS: [Algorithm; 4] = [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128, Algorithm::Aes256];

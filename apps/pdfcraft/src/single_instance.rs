@@ -430,11 +430,12 @@ mod tests {
         assert!(socket_path().is_none_or(|p| p.file_name().is_some_and(|f| f.to_string_lossy().ends_with(&name))), "{name}");
     }
 
+    /// The socket `test` claims, in a scratch folder of its own that is removed when the test ends
+    /// (#6028). Both Windows and Linux let a socket file be deleted while a listener is still bound
+    /// to it, as the tests' listener threads are when they finish.
     #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
-    fn socket(test: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("pdfcraft-instance-{}-{test}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir.join(socket_name(None, None))
+    fn socket(test: &str) -> pdfcraft_testkit::ScratchFile {
+        pdfcraft_testkit::ScratchFile::new(&format!("instance-{test}"), &socket_name(None, None)).unwrap()
     }
 
     #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
@@ -458,7 +459,7 @@ mod tests {
         let barrier = Arc::new(std::sync::Barrier::new(8));
         let launches: Vec<_> = (0..8)
             .map(|i| {
-                let (path, barrier) = (path.clone(), Arc::clone(&barrier));
+                let (path, barrier) = (path.to_path_buf(), Arc::clone(&barrier));
                 std::thread::spawn(move || {
                     barrier.wait();
                     claim_at(&path, &[format!("C:\\{i}.pdf")], true)

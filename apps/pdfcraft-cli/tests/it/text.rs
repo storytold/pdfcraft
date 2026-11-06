@@ -33,10 +33,9 @@ fn fixture(n: usize) -> Vec<u8> {
     out
 }
 
-fn tmp(name: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("pdfcraft-cli-text-{}", std::process::id()));
-    std::fs::create_dir_all(&d).unwrap();
-    d.join(name)
+/// `name` in a scratch folder of its own, removed when the returned value is dropped (#6028).
+fn tmp(name: &str) -> pdfcraft_testkit::ScratchFile {
+    pdfcraft_testkit::ScratchFile::new("cli-text", name).unwrap()
 }
 
 #[test]
@@ -59,17 +58,18 @@ fn text_of_a_readable_document_succeeds() {
     assert!(stdout.contains("Page 1") && stdout.contains("Page 3"), "{stdout}");
 }
 
-/// `three.pdf` encrypted with the open password `openme`, via `run --script`. `tag` keeps each
-/// test's files apart: tests run in parallel and would otherwise overwrite each other's.
-fn protected_fixture(tag: &str) -> std::path::PathBuf {
+/// `three.pdf` encrypted with the open password `openme`, via `run --script`. Each file is in a
+/// scratch folder of its own (tests run in parallel); `tag` names them, and the returned file's
+/// folder lasts as long as the caller keeps it.
+fn protected_fixture(tag: &str) -> pdfcraft_testkit::ScratchFile {
     let src = tmp(&format!("to-protect-{tag}.pdf"));
     std::fs::write(&src, fixture(3)).unwrap();
     let out_path = tmp(&format!("protected-{tag}.pdf"));
     let script = tmp(&format!("protect-{tag}.json"));
     let steps = serde_json::json!([
-        { "tool": "doc_open", "args": { "path": src } },
+        { "tool": "doc_open", "args": { "path": src.path() } },
         { "tool": "doc_protect", "args": { "doc": 1, "open_password": "openme" } },
-        { "tool": "doc_save", "args": { "doc": 1, "path": out_path } },
+        { "tool": "doc_save", "args": { "doc": 1, "path": out_path.path() } },
     ]);
     std::fs::write(&script, steps.to_string()).unwrap();
     let out = Command::new(BIN).args(["run", "--script", script.to_str().unwrap()]).output().unwrap();
@@ -98,15 +98,15 @@ fn text_of_a_protected_document_with_the_password_succeeds() {
 
 /// `three.pdf` encrypted so that the open password `openme` doesn't allow copying, and the
 /// permissions password `boss` lifts that.
-fn copy_protected_fixture() -> std::path::PathBuf {
+fn copy_protected_fixture() -> pdfcraft_testkit::ScratchFile {
     let src = tmp("to-protect-no-copy.pdf");
     std::fs::write(&src, fixture(3)).unwrap();
     let out_path = tmp("protected-no-copy.pdf");
     let script = tmp("protect-no-copy.json");
     let steps = serde_json::json!([
-        { "tool": "doc_open", "args": { "path": src } },
+        { "tool": "doc_open", "args": { "path": src.path() } },
         { "tool": "doc_protect", "args": { "doc": 1, "open_password": "openme", "permissions_password": "boss", "copy": false } },
-        { "tool": "doc_save", "args": { "doc": 1, "path": out_path } },
+        { "tool": "doc_save", "args": { "doc": 1, "path": out_path.path() } },
     ]);
     std::fs::write(&script, steps.to_string()).unwrap();
     let out = Command::new(BIN).args(["run", "--script", script.to_str().unwrap()]).output().unwrap();
