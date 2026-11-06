@@ -230,11 +230,23 @@ mod host {
     }
 }
 
-/// The name a file opened from the system shows under: the name the browser gave, or
-/// `document.pdf` when it gave none (or only blanks).
+/// The name a file opened from the system shows under: the first name the browser gave that isn't
+/// blank (the file's own name, then the handle's), or `document.pdf` when there is none.
 #[cfg(any(target_arch = "wasm32", test))]
-fn file_name(name: Option<String>) -> String {
-    name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "document.pdf".to_string())
+fn file_name(names: impl IntoIterator<Item = Option<String>>) -> String {
+    names.into_iter().flatten().find(|n| !n.trim().is_empty()).unwrap_or_else(|| "document.pdf".to_string())
+}
+
+/// Refuse a file from the system that is over `limit` bytes before it is read into memory. The size
+/// comes from the browser: a size that is not a number is refused too.
+#[cfg(any(target_arch = "wasm32", test))]
+fn check_size(size: f64, limit: u64) -> Result<(), String> {
+    // `!(a <= b)` and not `a > b`: NaN compares false both ways and must be refused.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    if !(size <= limit as f64) {
+        return Err(format!("{size} bytes, over the {} MiB limit", limit >> 20));
+    }
+    Ok(())
 }
 
 /// File Handling: an installed copy of the page (a PWA) is registered by `manifest.webmanifest`'s
@@ -245,6 +257,8 @@ fn file_name(name: Option<String>) -> String {
 /// `launchQueue`, and then this does nothing.
 #[cfg(target_arch = "wasm32")]
 mod launch_queue {
+    use std::sync::PoisonError;
+
     use eframe::wasm_bindgen::{JsCast, JsValue, closure::Closure};
 
     pub fn listen(inbox: pdfcraft_ui_egui::Inbox, failed: pdfcraft_ui_egui::FailedInbox, ctx: egui::Context) {
@@ -263,39 +277,32 @@ mod launch_queue {
             if !js_sys::Array::is_array(&files) {
                 return;
             }
-            // One launch is one batch: read the files in the order the system gave them and queue
-            // them together, so their tabs open in that order and the batch's last file is the one
-            // that ends up active, as for any startup batch. Whether a startup file takes focus at
-            // all (it doesn't once the user has started working) stays the app's decision.
+            // Read the files of one launch one after another, in the order the system gave them,
+            // and queue each as soon as it is read: tabs open in that order, the first appears
+            // without waiting for the rest, and the batch's last file ends up active, as for any
+            // startup batch. Whether a startup file takes focus at all (it doesn't once the user
+            // has started working) stays the app's decision.
             let handles: Vec<JsValue> = js_sys::Array::from(&files).iter().collect();
             let (inbox, failed, ctx) = (inbox.clone(), failed.clone(), ctx.clone());
             wasm_bindgen_futures::spawn_local(async move {
-                let mut opened = Vec::with_capacity(handles.len());
-                let mut errors = Vec::new();
                 for handle in &handles {
                     match read(handle).await {
-                        Ok(file) => opened.push(file),
+                        // A poisoned lock still holds a usable queue; take it rather than drop the file.
+                        Ok(file) => inbox.lock().unwrap_or_else(PoisonError::into_inner).push(file),
                         Err((name, e)) => {
                             eframe::web_sys::console::error_1(&format!("PdfCraft: could not open {name}: {e}").into());
-                            errors.push((name, e));
+                            failed.lock().unwrap_or_else(PoisonError::into_inner).push((name, e));
                         }
                     }
+                    ctx.request_repaint();
                 }
-                if let Ok(mut q) = inbox.lock() {
-                    q.extend(opened);
-                }
-                if !errors.is_empty()
-                    && let Ok(mut q) = failed.lock()
-                {
-                    q.extend(errors);
-                }
-                ctx.request_repaint();
             });
         });
         // The queue holds launches made before a consumer was set and delivers them now; the
         // consumer lives as long as the page.
-        if set_consumer.call1(&queue, consumer.as_ref()).is_ok() {
-            consumer.forget();
+        match set_consumer.call1(&queue, consumer.as_ref()) {
+            Ok(_) => consumer.forget(),
+            Err(e) => eframe::web_sys::console::error_1(&format!("PdfCraft: could not receive files opened from the system: {e:?}").into()),
         }
     }
 
@@ -304,7 +311,7 @@ mod launch_queue {
     async fn read(handle: &JsValue) -> Result<(String, Vec<u8>), (String, String)> {
         // The handle's name is known before `getFile()` runs, so errors on the way still name the
         // file the user opened (the file's own name, read later, is normally the same).
-        let handle_name = super::file_name(js_sys::Reflect::get(handle, &JsValue::from_str("name")).ok().and_then(|n| n.as_string()));
+        let handle_name = super::file_name([js_sys::Reflect::get(handle, &JsValue::from_str("name")).ok().and_then(|n| n.as_string())]);
         let named = |e: &str| (handle_name.clone(), e.to_string());
         let get_file = js_sys::Reflect::get(handle, &JsValue::from_str("getFile"))
             .ok()
@@ -320,10 +327,8 @@ mod launch_queue {
             .ok()
             .and_then(|f| f.dyn_into().ok())
             .ok_or_else(|| named("the file could not be read (moved, or no permission?)"))?;
-        let name = Some(file.name()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| handle_name.clone());
-        if file.size() > super::host::MAX_OPEN_BYTES as f64 {
-            return Err((name, format!("{} bytes, over the {} MiB limit", file.size(), super::host::MAX_OPEN_BYTES >> 20)));
-        }
+        let name = super::file_name([Some(file.name()), Some(handle_name.clone())]);
+        super::check_size(file.size(), super::host::MAX_OPEN_BYTES).map_err(|e| (name.clone(), e))?;
         let buf =
             wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await.map_err(|e| (name.clone(), format!("could not read the file: {e:?}")))?;
         Ok((name, js_sys::Uint8Array::new(&buf).to_vec()))
@@ -358,6 +363,13 @@ mod tests {
         assert!(pdf["accept"]["application/pdf"].as_array().into_iter().flatten().any(|e| e == ".pdf"));
         // Relative to the manifest, so the site works under any path (packaging/web/package.sh).
         assert_eq!(pdf["action"], "./", "the action must stay inside the scope");
+        // Installability: a name, a start URL inside the scope and an app window.
+        assert_eq!(m["name"], "PdfCraft");
+        assert_eq!(m["start_url"], "./");
+        assert_eq!(m["display"], "standalone");
+        // A second PDF opens as a tab in the window already open, not in a new window.
+        let modes = m["launch_handler"]["client_mode"].as_array().expect("launch_handler.client_mode");
+        assert_eq!(modes.first().and_then(|v| v.as_str()), Some("focus-existing"));
     }
 
     /// Every manifest icon is a file the `copy-dir` of `assets/app-icon/hicolor` into `icons/`
@@ -379,8 +391,22 @@ mod tests {
 
     #[test]
     fn launched_file_keeps_its_name() {
-        assert_eq!(super::file_name(Some("Invoice 42.pdf".into())), "Invoice 42.pdf");
-        assert_eq!(super::file_name(Some("   ".into())), "document.pdf");
-        assert_eq!(super::file_name(None), "document.pdf");
+        assert_eq!(super::file_name([Some("Invoice 42.pdf".into())]), "Invoice 42.pdf");
+        assert_eq!(super::file_name([Some("   ".into())]), "document.pdf");
+        assert_eq!(super::file_name([None]), "document.pdf");
+        // The file's own name first, the handle's when the file's is blank.
+        assert_eq!(super::file_name([Some("a.pdf".into()), Some("b.pdf".into())]), "a.pdf");
+        assert_eq!(super::file_name([Some(String::new()), Some("b.pdf".into())]), "b.pdf");
+    }
+
+    #[test]
+    fn launched_file_size_limit() {
+        let limit = 512u64 << 20;
+        assert!(super::check_size(0.0, limit).is_ok());
+        assert!(super::check_size(limit as f64, limit).is_ok(), "exactly at the limit opens");
+        let over = super::check_size(limit as f64 + 1.0, limit).expect_err("over the limit is refused");
+        assert!(over.contains("512 MiB"), "{over}");
+        assert!(super::check_size(f64::NAN, limit).is_err(), "a size that is not a number is refused");
+        assert!(super::check_size(f64::INFINITY, limit).is_err());
     }
 }
