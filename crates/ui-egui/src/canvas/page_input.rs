@@ -111,6 +111,14 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // press, which egui reports as a right-click with the finger still down, opens its menu.
     let press_held = ptr.primary_down && !resp.long_touched();
     let context = frame.right_click_on(xf.rect).and_then(|p| right_click(&hits, &under, view, p, press_held));
+    // The context winner, not an editable picture underneath it, owns this right-click.
+    // Leave an active primary drag alone, as right_click does above.
+    let comment_context = tool == QuickTool::EditText && !press_held && matches!(context, Some(Owner::Comment { .. }));
+    if comment_context {
+        view.image_selection = None;
+        crate::content_ui::release_image_selection(view, added);
+        ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
+    }
     // A mark already placed takes its own press (comments, below), as does one being moved on this
     // page until its move ends; with no button down the Fill & Sign tool's preview hides where a
     // press would be taken (a mark, its handles, a Prepare field).
@@ -172,7 +180,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let on_edit_text = (tool == QuickTool::EditText || over_source) && can_modify && {
         // Editable text takes precedence over background/overlapping artwork. Both
         // inventories are painted every frame, even when text owns the pointer.
-        let text_used = crate::edit_text_ui::page_input(cx, &lines, view, !others_own_pointer);
+        let text_used = crate::edit_text_ui::page_input(cx, &lines, view, !others_own_pointer && !comment_context);
         let image_cx = crate::edit_text_ui::ImageCx {
             ui,
             resp,
@@ -180,7 +188,9 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
             ptr,
             page: i,
             info,
-            allow_interaction: !others_own_pointer && (matches!(view.router.owner(i), Some(crate::page_router::Owner::Picture { .. })) || !text_used),
+            allow_interaction: !others_own_pointer
+                && !comment_context
+                && (matches!(view.router.owner(i), Some(crate::page_router::Owner::Picture { .. })) || !text_used),
         };
         let image_used = crate::edit_text_ui::image_input(&image_cx, &images, view);
         !others_own_pointer && (text_used || image_used)
@@ -345,13 +355,12 @@ fn right_click(hits: &PageHits<'_>, under: &[crate::page_router::Hit], view: &mu
     if press_held {
         return context;
     }
-    // Add text takes every right-click on a page it can change, Edit text those on its own
-    // paragraphs and pictures (the objects selected together, and crop mode's picture, among them),
-    // the Link tool those on a link, and a Prepare field tool the whole page, as before: comments
-    // see none of them.
+    // Add text takes every right-click on a page it can change; Edit text takes a winning
+    // paragraph, picture or object hit, not one underneath a higher comment hit. The Link tool
+    // takes links, and a Prepare field tool takes the whole page, as before.
     let tool_takes_it = match hits.tool {
         QuickTool::AddText => hits.can_modify,
-        QuickTool::EditText => under.iter().any(|h| matches!(h.owner, Owner::Paragraph { .. } | Owner::Picture { .. } | Owner::Objects { .. })),
+        QuickTool::EditText => matches!(context, Some(Owner::Paragraph { .. } | Owner::Picture { .. } | Owner::Objects { .. })),
         QuickTool::Link => hits.can_modify && matches!(context, Some(Owner::Link { .. })),
         _ => hits.field_tool.is_some(),
     };
