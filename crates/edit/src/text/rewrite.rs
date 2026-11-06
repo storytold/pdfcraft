@@ -635,12 +635,17 @@ impl LineWriter<'_> {
         }
         // Each wrapped line in typing order; drawn left to right (right-to-left runs reversed).
         let visual = crate::bidi::to_visual(shown);
-        // Stretched without word spacing: shown up to and including each space, then moved on.
-        let pieces: Vec<&str> = if stretch > 0.0 { visual.split_inclusive(' ').collect() } else { vec![visual.as_str()] };
-        for piece in pieces {
-            self.show_piece(piece, line, tw, cursor, ops)?;
-            if stretch > 0.0 && piece.ends_with(' ') {
-                ops.push(Op::new("TJ", vec![Object::Array(vec![n(-1000.0 * stretch / self.size)])]));
+        if let Some(metrics) = self.source.filter(|m| m.encode(" ").is_none()) {
+            let indic_line = if metrics.visual_order { crate::indic::to_visual(&visual) } else { visual };
+            ops.extend(source_show(metrics, &indic_line, self.size, self.space, self.char_spacing, tw + stretch)?);
+        } else {
+            // Stretched without word spacing: shown up to and including each space, then moved on.
+            let pieces: Vec<&str> = if stretch > 0.0 { visual.split_inclusive(' ').collect() } else { vec![visual.as_str()] };
+            for piece in pieces {
+                self.show_piece(piece, line, tw, cursor, ops)?;
+                if stretch > 0.0 && piece.ends_with(' ') {
+                    ops.push(Op::new("TJ", vec![Object::Array(vec![n(-1000.0 * stretch / self.size)])]));
+                }
             }
         }
         let tw = tw + stretch;
