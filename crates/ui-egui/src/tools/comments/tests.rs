@@ -561,3 +561,42 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
     let selected = CommentView { selected: Some((0, 0)), ..CommentView::default() };
     assert!(hover_outline(&cx, &selected, Some(&comment)).is_none(), "the selected comment has its own frame");
 }
+
+/// The oval's preview is stroked inside the dragged box, as the saved appearance is, so the
+/// ellipse does not shrink when the mouse is released.
+#[test]
+fn the_oval_preview_is_stroked_inside_the_dragged_box() {
+    use super::paint::paint_page;
+    let page = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation: 0 };
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), rot: 0, pw: 200.0, ph: 200.0 };
+    let info = DocInfo { pages: vec![page], ..Default::default() };
+    let prefs = CommentPrefs::default();
+    let ptr = PagePointer::default();
+    let cx = PageCx {
+        page: 0,
+        xf: &xf,
+        ptr: &ptr,
+        info: &info,
+        tool: QuickTool::Comment(CommentTool::Oval),
+        prefs: &prefs,
+        allowed: true,
+        hidden: false,
+        redact_mark: ([0.0; 3], 1.0),
+    };
+    let mut view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
+    view.comments.gesture = Some(Gesture::Draw { page: 0, tool: CommentTool::Oval, points: vec![[50.0, 50.0], [150.0, 150.0]] });
+    let ctx = egui::Context::default();
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| paint_page(ui, &ui.painter().clone(), &cx, &view, None));
+    out.textures_delta.clear();
+    let width = prefs.style(CommentTool::Oval).width as f32;
+    let radius = out
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Ellipse(e) => Some(e.radius),
+            _ => None,
+        })
+        .expect("the oval preview");
+    let outer = radius.x + width / 2.0;
+    assert!((outer - 50.0).abs() < 0.01, "the stroke's outer edge is the dragged box: {radius:?} at width {width}");
+}
