@@ -2089,13 +2089,16 @@ fn control_tool_call_runs_on_the_windows_documents_and_shows_the_change() {
     let tabs = ok(&mut h, &c, "ui.state", json!({}));
     assert_eq!(tabs["documents"].as_array().unwrap().len(), 2, "{tabs}");
     assert_eq!(tabs["documents"][0]["active"], true, "{tabs}");
-    // The runner's refusal is the client's error; junk parameters are refused before it runs.
+    // Signing is refused by the window policy before the injected runner is reached.
     let e = call(&mut h, &c, "tool.call", json!({ "name": "sign_document", "arguments": { "doc": 1 } })).unwrap_err();
-    assert!(e.contains("refused"), "{e}");
+    assert!(e.contains("HUMAN_SIGNATURE_REQUIRED"), "{e}");
+    // An ordinary runner refusal still reaches the client without replacing its reason.
+    let e = call(&mut h, &c, "tool.call", json!({ "name": "doc_list" })).unwrap_err();
+    assert!(e.contains("doc_list: refused"), "{e}");
     for junk in [json!({}), json!({ "name": 3 }), json!({ "name": "doc_list", "root": 1 }), json!({ "name": "doc_list", "extra": true })] {
         assert!(call(&mut h, &c, "tool.call", junk.clone()).is_err(), "{junk}");
     }
-    assert_eq!(seen.lock().unwrap().len(), 2, "signing and junk never reached the runner");
+    assert_eq!(seen.lock().unwrap().len(), 3, "only the two edits and the ordinary query reached the runner");
 }
 
 #[test]
