@@ -776,7 +776,7 @@ fn extensions_kept(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> bool {
 
 /// A change to the signed catalog `b`, now `d`.
 fn catalog_kind(doc: &Document, old: &Document, d: &Dict, b: &Dict) -> &'static str {
-    let keys: &[&[u8]] = &[b"AcroForm", b"DSS", b"Perms", b"Metadata", b"NeedsRendering", b"Extensions"];
+    let keys: &[&[u8]] = &[b"AcroForm", b"DSS", b"Perms", b"Metadata", b"Extensions"];
     if without(d, keys) != without(b, keys) {
         kind::STRUCTURE
     } else if !extensions_kept(doc, old, d, b) {
