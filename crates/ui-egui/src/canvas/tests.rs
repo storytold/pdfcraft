@@ -2417,3 +2417,23 @@ fn enhancing_a_scan_re_renders_the_page_shown() {
     assert!(app.scan_clean_run.is_none());
     assert_eq!(app.views[i].pages.get(&0).unwrap().tag, STALE_TAG, "the old raster is re-rendered");
 }
+
+/// #5708 review: a page that fits is centred with nothing to scroll, so only pixel snapping may
+/// pass for fitting. A page half a pixel or more too tall scrolls, or its ends would be cut off.
+#[test]
+fn only_pixel_snapping_passes_for_fitting_the_view() {
+    let page = |height: f32| [Rect::from_min_size(pos2(0.0, MARGIN), vec2(300.0, height))];
+    for ppp in [1.0, 2.0] {
+        let slack = 0.5 / ppp;
+        let (_, content) = vertical_placement(false, &page(600.0 + slack), &[0], 600.0, ppp);
+        assert_eq!(content, 600.0, "at {ppp}x, snapping's half pixel still fits");
+        for over in [slack + 0.1, 1.0] {
+            let (shift, content) = vertical_placement(false, &page(600.0 + over), &[0], 600.0, ppp);
+            assert_eq!((shift, content), (0.0, 600.0 + over + 2.0 * MARGIN), "at {ppp}x, {over} pt too tall scrolls");
+        }
+    }
+    // A scale that isn't one has no slack and never panics.
+    for ppp in [0.0, f32::NAN, f32::INFINITY] {
+        assert!(!fits_height(Rect::from_min_size(pos2(0.0, 0.0), vec2(1.0, 600.5)), 600.0, ppp));
+    }
+}
