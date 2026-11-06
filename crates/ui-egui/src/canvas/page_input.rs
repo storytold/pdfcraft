@@ -256,6 +256,7 @@ fn tool_input(
         by_line,
         can_crop,
         can_modify,
+        custom_line,
         custom_stamp,
         date_text,
         doc,
@@ -284,7 +285,7 @@ fn tool_input(
     }
     if let Some(cs) = custom_stamp.as_ref()
         && allowed
-        && crate::stamps_ui::place_custom(cx, cs, author, free, view)
+        && crate::stamps_ui::place_custom(cx, cs, custom_line, author, free, view)
     {
         frame.out.stamp_placed = true;
     }
