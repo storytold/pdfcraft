@@ -444,13 +444,22 @@ impl PageCx<'_> {
         let r = self.screen_rects(a).last()?;
         let size = vec2(12.0, 12.0);
         let page = self.xf.rect;
+        let marker_max = page.max - size;
         let desired = pos2(r.right() + 3.0, r.top() - 14.0);
         // Keep the fixed-size marker visible at page edges. At extremely small zooms,
         // omit it rather than covering a page that is smaller than the marker itself.
-        if !page.is_finite() || !r.is_finite() || !desired.is_finite() || !page.intersects(r) || page.width() < size.x || page.height() < size.y {
+        if !page.is_finite()
+            || !r.is_finite()
+            || !desired.is_finite()
+            || !page.intersects(r)
+            || page.width() < size.x
+            || page.height() < size.y
+            || marker_max.x < page.min.x
+            || marker_max.y < page.min.y
+        {
             return None;
         }
-        Some(Rect::from_min_size(desired.clamp(page.min, page.max - size), size))
+        Some(Rect::from_min_size(desired.clamp(page.min, marker_max), size))
     }
 
     /// A redaction mark's areas: one per marked quad, or its rectangle.

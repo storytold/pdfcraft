@@ -527,6 +527,37 @@ fn text_boxes_fit_their_text() {
 }
 
 #[test]
+fn markup_comment_markers_skip_rounded_inverted_clamp_bounds() {
+    let prefs = CommentPrefs::default();
+    let ptr = PagePointer::default();
+    let info = DocInfo {
+        pages: vec![PageInfo { width: 12.0, height: 12.0, label: String::new(), crop: [0.0, 0.0, 12.0, 12.0], rotation: 0 }],
+        ..Default::default()
+    };
+    let a = Annotation { rect: [0.0, 0.0, 12.0, 12.0], contents: Some("Review".into()), ..annotation("Highlight", None, false) };
+    for min in [pos2(1.0e-7, 0.0), pos2(0.0, 1.0e-7)] {
+        let page = Rect::from_min_max(min, pos2(12.0, 12.0));
+        assert_eq!(page.size(), vec2(12.0, 12.0));
+        let marker_max = page.max - vec2(12.0, 12.0);
+        assert!(marker_max.x < page.min.x || marker_max.y < page.min.y);
+        let xf = PageXform { rect: page, rot: 0, pw: 12.0, ph: 12.0 };
+        let cx = PageCx {
+            page: 0,
+            xf: &xf,
+            ptr: &ptr,
+            info: &info,
+            tool: QuickTool::Select,
+            prefs: &prefs,
+            allowed: true,
+            hidden: false,
+            redact_mark: ([0.0; 3], 1.0),
+        };
+        assert!(page.intersects(cx.screen_rects(&a).last().unwrap()));
+        assert!(cx.comment_marker_rect(&a).is_none());
+    }
+}
+
+#[test]
 fn markup_comment_markers_stay_inside_turned_and_zoomed_pages() {
     let prefs = CommentPrefs::default();
     for (page_rotation, rotation) in [(0, 0), (90, 0), (180, 0), (270, 0), (0, 90), (0, 180), (0, 270), (90, 270)] {
