@@ -1,4 +1,4 @@
-use super::{Args, Automation, Result, ToolError, Value, child, failed, json, write_atomic};
+use super::{Args, Automation, Result, ToolError, Value, child, failed, json, with_warnings, write_atomic};
 
 impl Automation {
     /// The settings every OCR tool shares: dpi, language, the engine/strategy choice, the four
@@ -258,9 +258,11 @@ impl Automation {
         let recognizers = pdfcraft_engine::ocr::recognizers(&settings).map_err(failed)?;
         match out {
             None => {
+                let mark = self.session.js_output_mark(id);
                 let found = self.session.recognize_text(id, &pages, settings).map_err(failed)?;
+                let warnings = self.session.take_js_output_since(id, mark).errors;
                 let words = found.iter().map(|p| p.words.len()).sum::<usize>();
-                Ok(json!({ "words": words, "pages": Self::ocr_pages_json(&found, copy) }))
+                Ok(with_warnings(json!({ "words": words, "pages": Self::ocr_pages_json(&found, copy) }), warnings))
             }
             Some(out) => {
                 let job = self.session.ocr_job(id, &pages, settings).ok_or_else(|| failed("the document could not be read"))?;
