@@ -455,17 +455,12 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
     let reset_clicked = allow_interaction
         && reset
             .is_some_and(|r| reset_resp.as_ref().is_some_and(|res| res.clicked()) || (resp.clicked() && hover_pos.is_some_and(|p| r.contains(p))));
-    // A click away from the picture, its crop box, its handles and the pills applies the crop and
-    // lets the picture go, as Done and then that click would (#6422).
+    // A click away from the picture and its crop box and handles applies the crop and lets the
+    // picture go, as Done and then that click would (#6422). A pill's click is the pill's.
     let away_clicked = allow_interaction
         && resp.clicked()
-        && hover_pos.is_some_and(|p| {
-            !b.contains(p)
-                && !crop_controls_contain(image, mode, xf, info, page, p)
-                && !done.contains(p)
-                && !cancel.contains(p)
-                && !reset.is_some_and(|r| r.contains(p))
-        });
+        && !(done_clicked || cancel_clicked || reset_clicked)
+        && hover_pos.is_some_and(|p| !b.contains(p) && !crop_controls_contain(image, mode, xf, info, page, p));
 
     if reset_clicked {
         mode.keep = if image.has_editor_crop() { image.rect } else { initial_keep };
