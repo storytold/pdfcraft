@@ -1,5 +1,5 @@
 use super::host::{arg, colour, error, function, host, read, s, set_value, strings, text, value_of, write};
-use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldType, Request};
+use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldState, FieldType, NOT_A_SIGNATURE_FIELD, Request};
 use super::{Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, js_string};
 
 macro_rules! getter {
@@ -128,13 +128,30 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         host(c)?.borrow_mut().request(Request::Focus(name.to_std_string_escaped()));
         Ok(JsValue::undefined())
     }
+    fn signature_info(_: &JsValue, _: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let f = read(c, name)?;
+        Ok(ObjectInitializer::new(c).property(js_string!("status"), JsValue::from(signature_status(&f)), Attribute::all()).build().into())
+    }
+    fn signature_validate(_: &JsValue, _: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        let f = read(c, name)?;
+        Ok(JsValue::from(signature_status(&f)))
+    }
 
     let rw = Attribute::CONFIGURABLE | Attribute::ENUMERABLE;
     let get_item_at = NativeFunction::from_copy_closure_with_captures(get_item_at, n.clone());
     let is_box_checked = NativeFunction::from_copy_closure_with_captures(is_box_checked, n.clone());
     let check_this_box = NativeFunction::from_copy_closure_with_captures(check_this_box, n.clone());
     let set_focus = NativeFunction::from_copy_closure_with_captures(set_focus, n.clone());
-    ObjectInitializer::new(ctx)
+    let signature_info = NativeFunction::from_copy_closure_with_captures(signature_info, n.clone());
+    let signature_validate = NativeFunction::from_copy_closure_with_captures(signature_validate, n.clone());
+    // In an XFA form's scripts only signature fields have the signature methods; elsewhere every
+    // field has them, giving -1 for a field that isn't one.
+    let signature_methods = host(ctx).map_or(true, |h| {
+        let h = h.borrow();
+        !h.xfa || h.fields.iter().any(|f| f.name == name && f.kind == FieldType::Signature)
+    });
+    let mut object = ObjectInitializer::new(ctx);
+    object
         .accessor(js_string!("value"), Some(value_get), Some(value_set), rw)
         .accessor(js_string!("valueAsString"), Some(as_string), None, rw)
         .accessor(js_string!("defaultValue"), Some(default), None, rw)
@@ -153,8 +170,18 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         .function(get_item_at, js_string!("getItemAt"), 2)
         .function(is_box_checked, js_string!("isBoxChecked"), 1)
         .function(check_this_box, js_string!("checkThisBox"), 2)
-        .function(set_focus, js_string!("setFocus"), 0)
-        .build()
+        .function(set_focus, js_string!("setFocus"), 0);
+    if signature_methods {
+        object.function(signature_info, js_string!("signatureInfo"), 1).function(signature_validate, js_string!("signatureValidate"), 2);
+    }
+    object.build()
+}
+
+/// What `signatureInfo().status` and `signatureValidate()` say of `f`: its
+/// [`SignatureState::status`](crate::SignatureState::status), or [`NOT_A_SIGNATURE_FIELD`]. Nothing is checked again (no
+/// network, no new validation): the state is what PdfCraft found when it read the signatures.
+fn signature_status(f: &FieldState) -> i32 {
+    if f.kind == FieldType::Signature { f.signature.status() } else { NOT_A_SIGNATURE_FIELD }
 }
 
 // ── the document (global object) ────────────────────────────────────────────────────────────

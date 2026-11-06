@@ -1,10 +1,10 @@
 use super::host::host;
 use super::instances::instance_manager;
-use super::model::{MAX_DEPTH, XfaDoc, XfaEffect, XfaEvent, clip, reset_names};
+use super::model::{MAX_DEPTH, MAX_NODES, XfaDoc, XfaEffect, XfaEvent, XfaKind, clip, reset_names};
 use super::nodes::{node_index, node_object, noop, resolve_som, resolver, sink};
 use super::{
-    Attribute, Context, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, arg, js_string, platform, printd, printf, printx, s, scand,
-    text,
+    Attribute, Context, HashSet, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, arg, data_object, error, js_string, platform,
+    printd, printf, printx, s, scand, text,
 };
 
 // ── xfa.host, xfa.layout, xfa.event, app, console ───────────────────────────────────────────
@@ -12,6 +12,138 @@ use super::{
 /// Records effect `e` on the host, against the run's limits, as [`XHost::push`] does.
 fn effect(ctx: &mut Context, e: XfaEffect) -> JsResult<()> {
     host(ctx)?.borrow_mut().push(e);
+    Ok(())
+}
+
+/// `event.target.exportDataObject(…)`: the document asks to open or save an attached file.
+fn export_data_object(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let (name, open) = data_object(args, ctx)?;
+    effect(ctx, XfaEffect::OpenAttachment { name, open })?;
+    Ok(JsValue::undefined())
+}
+
+/// `event.target.getField(name)`: the document's field whose fully qualified name is `name`.
+/// A field PdfCraft laid out is named by the SOM expression of its XFA field with every index
+/// written (`form1[0].page1[0].total[0]`), as form tools name the PDF fields of an XFA form
+/// (XFA 3.3, ch. 2, "Field Names", pp. 72-74), and only that spelling finds it: no other
+/// spelling, short name or missing index does. A subform's SOM expression gives an object that
+/// names the subform. A signature field isn't found by an initialize script (it is from later
+/// events). Anything else gives `null`; no name at all is an error.
+fn get_field(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let Some(wanted) = args.first() else { return Err(error("getField: a field name is required")) };
+    let name = clip(text(wanted, ctx)?);
+    if name.is_empty() {
+        return Ok(JsValue::null());
+    }
+    let kind = crate::host::host(ctx)?.borrow().fields.iter().find(|f| f.name == name).map(|f| f.kind);
+    match kind {
+        Some(crate::FieldType::Signature) if host(ctx)?.borrow().activity == "initialize" => Ok(JsValue::null()),
+        Some(_) => Ok(crate::document::field_object(ctx, &name).into()),
+        None => {
+            let subform = host(ctx)?.borrow().nodes.iter().any(|n| !n.gone && n.som == name && n.kind == XfaKind::Subform);
+            Ok(if subform {
+                ObjectInitializer::new(ctx).property(js_string!("name"), s(&name), Attribute::READONLY).build().into()
+            } else {
+                JsValue::null()
+            })
+        }
+    }
+}
+
+/// A SOM path without its indexes (`form.page1.qty`), for matching the names scripts pass.
+fn plain_som(som: &str) -> String {
+    let mut out = String::with_capacity(som.len());
+    let mut skip = false;
+    for c in som.chars() {
+        match c {
+            '[' => skip = true,
+            ']' => skip = false,
+            _ if !skip => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Does `name` from a script (`qty`, `page1.qty`, `xfa.form.form.page1.qty`, a SOM expression with
+/// its indexes, or a container such as `table`) name the object at `som` or one of its
+/// ancestors? What `xfa.host.resetData` and `event.target.resetForm` reset by.
+pub fn som_names(som: &str, name: &str) -> bool {
+    let plain = plain_som(som);
+    let n = plain_som(name.trim());
+    let n = n.strip_prefix("xfa.form.").or_else(|| n.strip_prefix("$form.")).unwrap_or(&n);
+    let want: Vec<&str> = n.split('.').filter(|s| !s.is_empty()).collect();
+    let have: Vec<&str> = plain.split('.').filter(|s| !s.is_empty()).collect();
+    !want.is_empty() && have.windows(want.len()).any(|w| w == want.as_slice())
+}
+
+/// `event.target.resetForm(names)`: resets the named fields (an array of names, or one name; a
+/// name is matched as [`som_names`] matches it), or every field when no names are given; a list
+/// that names nothing (an empty array, or only missing or empty entries) resets nothing. The
+/// script reads the fields' default values back at once; the form itself is reset by the
+/// effect when the script is done, as for `xfa.host.resetData`.
+fn reset_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let given = arg(args, 0);
+    let all = given.is_undefined() || given.is_null();
+    let mut seen = HashSet::new();
+    let mut names = Vec::new();
+    for name in crate::host::strings(&given, ctx)? {
+        let name = clip(name.trim().to_string());
+        if !name.is_empty() && names.len() < MAX_NODES && seen.insert(name.clone()) {
+            names.push(name);
+        }
+    }
+    if !all && names.is_empty() {
+        return Ok(JsValue::undefined());
+    }
+    effect(ctx, XfaEffect::ResetData(names.clone()))?;
+    // What the script reads from now on: each reset field's default value.
+    let reset: Vec<(String, Vec<String>)> = {
+        let mut fields = crate::host::host(ctx)?.borrow_mut();
+        let fields = std::sync::Arc::make_mut(&mut fields.fields);
+        let mut out = Vec::new();
+        for f in fields.iter_mut() {
+            let named = names.is_empty() || names.iter().any(|n| som_names(&f.name, n));
+            if named && !matches!(f.kind, crate::FieldType::Button | crate::FieldType::Signature) {
+                f.value = f.default.clone();
+                out.push((f.name.clone(), f.default.clone()));
+            }
+        }
+        out
+    };
+    let mut h = host(ctx)?.borrow_mut();
+    for (som, value) in reset {
+        if let Some(n) = h.nodes.iter_mut().find(|n| !n.gone && n.som == som && n.kind == XfaKind::Field) {
+            n.value = value.join("\n");
+            n.formatted = None;
+        }
+    }
+    Ok(JsValue::undefined())
+}
+
+/// A script changed `before` into `after` through `getField`: a new value is set on the XFA
+/// field the same way `rawValue` sets it (so the script reads it back there too); properties
+/// XFA fields have no counterpart for here are noted and left as they were.
+pub(crate) fn field_written(ctx: &mut Context, before: &crate::FieldState, after: &crate::FieldState) -> JsResult<()> {
+    let mut h = host(ctx)?.borrow_mut();
+    if before.value != after.value {
+        let at = h.nodes.iter().position(|n| !n.gone && n.som == after.name);
+        if !at.is_some_and(|i| h.set_value(i, after.value.join("\n"))) {
+            h.unapplied(format!("{}: value", after.name));
+        }
+    }
+    let others = [
+        ("readonly", before.readonly != after.readonly),
+        ("required", before.required != after.required),
+        ("display", before.display != after.display),
+        ("textColor", before.text_color != after.text_color),
+        ("fillColor", before.fill_color != after.fill_color),
+    ];
+    for (property, changed) in others {
+        if changed {
+            h.unapplied(format!("{}: {property}", after.name));
+        }
+    }
     Ok(())
 }
 
@@ -48,13 +180,13 @@ fn print(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::undefined())
 }
 
-/// `xfa.host.beep()`: asks to beep.
+/// `xfa.host.beep()` and `app.beep()`: ask to beep.
 fn beep(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     effect(ctx, XfaEffect::Beep)?;
     Ok(JsValue::undefined())
 }
 
-/// `xfa.host.gotoURL(url)`: asks to open the URL.
+/// `xfa.host.gotoURL(url)` and `app.launchURL(url)`: ask to open the URL.
 fn goto_url(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let u = text(&arg(args, 0), ctx)?;
     effect(ctx, XfaEffect::LaunchUrl(u))?;
@@ -95,50 +227,63 @@ fn exec_menu_item(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<
     Ok(JsValue::undefined())
 }
 
+/// `recalculate(…)` on a node or on `xfa`: records a request to recalculate the form.
 pub(super) fn recalculate(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     effect(ctx, XfaEffect::Recalculate)?;
     Ok(JsValue::undefined())
 }
 
+/// `xfa.layout.relayout()`, `relayoutPageArea()` and `remerge()`: record a request to lay the
+/// form out again.
 pub(super) fn relayout(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     effect(ctx, XfaEffect::Relayout)?;
     Ok(JsValue::undefined())
 }
 
+/// `console.println(…)`: adds the line, cut to [`MAX_LINE`] characters, to the run's console
+/// output.
 fn console_println(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let m = clip(text(&arg(args, 0), ctx)?);
     host(ctx)?.borrow_mut().print(m);
     Ok(JsValue::undefined())
 }
 
+/// `xfa.host.response(…)` and `app.response(…)`: always return `null`, as for a canceled dialog.
 fn response(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::null())
 }
 
+/// `xfa.layout.page(…)`: the current page, 1-based, whatever the argument.
 fn layout_page(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::from(host(ctx)?.borrow().doc.page as f64 + 1.0))
 }
 
+/// `xfa.layout.absPage(…)`: the current page, 0-based, whatever the argument.
 fn layout_page0(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::from(host(ctx)?.borrow().doc.page as f64))
 }
 
+/// `xfa.layout.pageCount()` and `absPageCount()`: the document's page count.
 fn layout_page_count(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::from(host(ctx)?.borrow().doc.page_count as f64))
 }
 
+/// The `xfa.layout` measures `h`, `w`, `x`, `y` and `pageSpan`: always 0.
 fn zero(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::from(0.0))
 }
 
+/// `xfa.resolveNode(som)`, or `xfa.resolveNodes(som)` when `many`, resolving from the node the
+/// script runs on.
 fn xfa_resolve(ctx: &mut Context, many: bool) -> JsResult<JsValue> {
     let current = host(ctx)?.borrow().current;
     resolver(ctx, current, many)
 }
 
 /// Defines the globals for one script on node `current`: `xfa` (`form`, `host`, `layout`, `event`,
-/// `resolveNode` and more), `event` as the same object as `xfa.event`, `app`, `console`, `util`,
-/// and the nodes in scope by name, with `_name` for each repeatable one's instance manager.
+/// `resolveNode` and more; `xfa.event`'s target is that node), a separate global `event` whose
+/// target is a document offering `exportDataObject`, `app`, `console`, `util`, and the nodes in
+/// scope by name, with `_name` for each repeatable one's instance manager.
 pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current: usize) -> JsResult<()> {
     let rw = Attribute::CONFIGURABLE;
     let form = node_object(ctx, 0)?;
@@ -183,24 +328,36 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
         .function(NativeFunction::from_fn_ptr(zero), js_string!("pageSpan"), 1)
         .property(js_string!("ready"), JsValue::from(true), Attribute::READONLY)
         .build();
-    let ev = ObjectInitializer::new(ctx)
-        .property(js_string!("name"), s(&event.activity), Attribute::all())
-        .property(js_string!("newText"), s(&event.new_text), Attribute::all())
-        .property(js_string!("prevText"), s(&event.prev_text), Attribute::all())
-        .property(js_string!("fullText"), s(&event.new_text), Attribute::all())
-        .property(js_string!("change"), s(""), Attribute::all())
-        .property(js_string!("target"), this_node.clone(), Attribute::all())
-        .property(js_string!("selStart"), JsValue::from(0.0), Attribute::all())
-        .property(js_string!("selEnd"), JsValue::from(0.0), Attribute::all())
-        .property(js_string!("cancelAction"), JsValue::from(false), Attribute::all())
-        .property(js_string!("reenter"), JsValue::from(false), Attribute::all())
-        .property(js_string!("shift"), JsValue::from(false), Attribute::all())
-        .property(js_string!("modifier"), JsValue::from(false), Attribute::all())
-        .property(js_string!("keyDown"), JsValue::from(false), Attribute::all())
-        .property(js_string!("commitKey"), JsValue::from(0.0), Attribute::all())
-        .function(NativeFunction::from_fn_ptr(noop), js_string!("emit"), 0)
-        .function(NativeFunction::from_fn_ptr(noop), js_string!("reset"), 0)
+    // Two event objects, as in Acrobat's XFA scripting: `xfa.event`, whose target is the form
+    // node the event happened on, and Acrobat's own `event`, whose target is the document
+    // (`event.target.exportDataObject(…)` is how forms open their attached files).
+    let acrobat_doc = ObjectInitializer::new(ctx)
+        .function(NativeFunction::from_fn_ptr(export_data_object), js_string!("exportDataObject"), 4)
+        .function(NativeFunction::from_fn_ptr(get_field), js_string!("getField"), 1)
+        .function(NativeFunction::from_fn_ptr(reset_form), js_string!("resetForm"), 1)
         .build();
+    let event_object = |ctx: &mut Context, target: JsValue| {
+        ObjectInitializer::new(ctx)
+            .property(js_string!("name"), s(&event.activity), Attribute::all())
+            .property(js_string!("newText"), s(&event.new_text), Attribute::all())
+            .property(js_string!("prevText"), s(&event.prev_text), Attribute::all())
+            .property(js_string!("fullText"), s(&event.new_text), Attribute::all())
+            .property(js_string!("change"), s(""), Attribute::all())
+            .property(js_string!("target"), target, Attribute::all())
+            .property(js_string!("selStart"), JsValue::from(0.0), Attribute::all())
+            .property(js_string!("selEnd"), JsValue::from(0.0), Attribute::all())
+            .property(js_string!("cancelAction"), JsValue::from(false), Attribute::all())
+            .property(js_string!("reenter"), JsValue::from(false), Attribute::all())
+            .property(js_string!("shift"), JsValue::from(false), Attribute::all())
+            .property(js_string!("modifier"), JsValue::from(false), Attribute::all())
+            .property(js_string!("keyDown"), JsValue::from(false), Attribute::all())
+            .property(js_string!("commitKey"), JsValue::from(0.0), Attribute::all())
+            .function(NativeFunction::from_fn_ptr(noop), js_string!("emit"), 0)
+            .function(NativeFunction::from_fn_ptr(noop), js_string!("reset"), 0)
+            .build()
+    };
+    let ev = event_object(ctx, this_node.clone());
+    let acrobat_ev = event_object(ctx, acrobat_doc.into());
     let datasets = ObjectInitializer::new(ctx).property(js_string!("data"), form.clone(), rw).build();
     let template = sink(ctx)?;
     let resolve_one = xfa_resolve(ctx, false)?;
@@ -219,7 +376,7 @@ pub(super) fn install(ctx: &mut Context, event: &XfaEvent, doc: &XfaDoc, current
         .function(NativeFunction::from_fn_ptr(relayout), js_string!("remerge"), 0)
         .build();
     ctx.register_global_property(js_string!("xfa"), xfa, rw)?;
-    ctx.register_global_property(js_string!("event"), ev, rw)?;
+    ctx.register_global_property(js_string!("event"), acrobat_ev, rw)?;
     ctx.register_global_property(js_string!("__xfa_this"), this_node, rw)?;
     let app = ObjectInitializer::new(ctx)
         .function(NativeFunction::from_fn_ptr(app_alert), js_string!("alert"), 4)

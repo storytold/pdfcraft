@@ -1,6 +1,6 @@
 use super::globals::install;
 use super::host::{Shared, XHost};
-use super::model::{XfaDoc, XfaEvent, XfaNode, XfaOutcome, clip_result};
+use super::model::{XfaDoc, XfaEffect, XfaEvent, XfaNode, XfaOutcome, clip_result};
 use super::{Attribute, Context, JsResult, Limits, RefCell, Source, js_string, refuse, s, text};
 
 /// Run `script` for `event` on the form `root` (the root subform), from node `event.target`.
@@ -133,9 +133,23 @@ pub(crate) fn run_here(script: &str, event: &XfaEvent, doc: &XfaDoc, root: XfaNo
     };
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
-    let host_state = XHost::new(root, &event.target, doc);
+    let mut host_state = XHost::new(root, &event.target, doc);
+    host_state.activity = event.activity.clone();
     let current = host_state.current;
     ctx.insert_data(RefCell::new(host_state));
+    // The document's fields, for `event.target.getField(…)`: the form object model's own field
+    // objects, writing through to the XFA form.
+    ctx.insert_data(RefCell::new(crate::host::Host {
+        fields: std::sync::Arc::clone(&doc.fields),
+        changed: Default::default(),
+        alerts: Vec::new(),
+        console: Vec::new(),
+        requests: Vec::new(),
+        doc: crate::DocInfo { file_name: doc.file_name.clone(), num_pages: doc.page_count, page: doc.page, info: Vec::new(), xfa: true },
+        kept: 0,
+        dropped: 0,
+        xfa: true,
+    }));
     let mut out = XfaOutcome::default();
     let result = (|| -> JsResult<()> {
         install(&mut ctx, event, doc, current)?;
@@ -158,6 +172,17 @@ pub(crate) fn run_here(script: &str, event: &XfaEvent, doc: &XfaDoc, root: XfaNo
     })();
     if let Err(e) = result {
         out.error = Some(e.to_string());
+    }
+    // `field.setFocus()` on a field from `getField` asks to focus its XFA field.
+    if let Some(fields) = ctx.remove_data::<crate::host::Shared>()
+        && let Ok(h) = super::host::host(&ctx)
+    {
+        let mut h = h.borrow_mut();
+        for r in fields.into_inner().requests {
+            if let crate::Request::Focus(som) = r {
+                h.push(XfaEffect::SetFocus(som));
+            }
+        }
     }
     if let Some(h) = ctx.remove_data::<Shared>() {
         let h = h.into_inner();

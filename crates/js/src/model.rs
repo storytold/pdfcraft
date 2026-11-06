@@ -33,6 +33,40 @@ pub const DISPLAY_NO_PRINT: i32 = 2;
 
 pub const DISPLAY_NO_VIEW: i32 = 3;
 
+/// Where a signature field stands, as `signatureInfo().status` and `signatureValidate()` report
+/// it (ISO 32000-2 12.7.5.5: a signature field without a signature dictionary as its value is
+/// unsigned).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SignatureState {
+    /// No signature in the field.
+    #[default]
+    Unsigned,
+    /// Signed, but whether the signature is valid could not be established (an untrusted signer,
+    /// say).
+    Unknown,
+    /// Signed, and the signature fails its check.
+    Invalid,
+    /// Signed, intact and by a trusted signer.
+    Valid,
+}
+
+impl SignatureState {
+    /// The status number scripts read: 0 unsigned, 1 unknown, 2 invalid, 4 valid (3, valid with
+    /// the signer's identity unverified, is reported as unknown, which is what PdfCraft can say
+    /// of such a signature).
+    pub fn status(self) -> i32 {
+        match self {
+            SignatureState::Unsigned => 0,
+            SignatureState::Unknown => 1,
+            SignatureState::Invalid => 2,
+            SignatureState::Valid => 4,
+        }
+    }
+}
+
+/// `signatureInfo().status` and `signatureValidate()` of a field that is not a signature field.
+pub const NOT_A_SIGNATURE_FIELD: i32 = -1;
+
 /// A field as scripts see it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldState {
@@ -52,6 +86,8 @@ pub struct FieldState {
     /// `textColor` / `fillColor` as Acrobat colour arrays (`["RGB", r, g, b]` etc.), when set.
     pub text_color: Option<Vec<String>>,
     pub fill_color: Option<Vec<String>>,
+    /// Signature fields: whether the field is signed, and how its signature checks.
+    pub signature: SignatureState,
 }
 
 impl FieldState {
@@ -68,6 +104,7 @@ impl FieldState {
             char_limit: None,
             text_color: None,
             fill_color: None,
+            signature: SignatureState::Unsigned,
         }
     }
 
@@ -236,6 +273,12 @@ pub enum Request {
     Beep,
     /// `app.execMenuItem("SaveAs")` (XFA forms' Save buttons).
     SaveAs,
+    /// `this.exportDataObject(cName, …, nLaunch)`: the attached file `name`, to open (`nLaunch`
+    /// 1 or 2) or to save (0).
+    OpenAttachment {
+        name: String,
+        open: bool,
+    },
     /// `app.execMenuItem("ShowHide…")`: show the side panel, or hide it when it is showing.
     ShowPanel(Panel),
 }
