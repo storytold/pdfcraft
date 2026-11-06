@@ -566,6 +566,9 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         !doc.info.layers.is_empty(),
         !doc.info.attachments.is_empty(),
     );
+    let has_measurements = crate::measure_ui::listing(&mut app.views[index].measure, doc)
+        .as_ref()
+        .is_ok_and(|l| !l.measurements.is_empty() || !l.unsupported.is_empty());
     let page_count = doc.info.pages.len();
     let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
     let item = |panel: RightPanel, icon: &str, label: &str, marker: Option<&str>| {
@@ -583,6 +586,7 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         item(RightPanel::Fields, "text-cursor-input", "Form fields", has(has_fields, "Has form fields")),
         item(RightPanel::Layers, "layers", "Layers", has(has_layers, "Has layers")),
         item(RightPanel::Attachments, "paperclip", "Attachments", has(has_files, "Has attachments")),
+        item(RightPanel::Measurements, "ruler", "Measurements", has(has_measurements, "Has measurements")),
         item(RightPanel::Signatures, "signature", "Signatures", has(has_signatures, "Signed")),
     ];
     if has_check {

@@ -1,5 +1,5 @@
 //! Left tool panel (All tools + tool sub-panels, generated from the engine catalogue) and the
-//! right-hand panels (Comments, Bookmarks, Pages, Fields, Layers, Attachments).
+//! right-hand panels (Comments, Bookmarks, Pages, Fields, Layers, Attachments, Measurements).
 
 use egui::{Align, Align2, Color32, CornerRadius, Layout, Rect, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::catalog::{self, Availability, TOOL_GROUPS, ToolGroup, ToolItem};
@@ -13,6 +13,7 @@ mod bookmarks;
 pub(super) mod comments_panel;
 mod edit;
 pub(super) mod format_text_ui;
+mod measurements;
 pub(super) mod organize_panel;
 pub(super) mod page_selection_ui;
 mod pages;
