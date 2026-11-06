@@ -18,7 +18,8 @@ mod strip;
 pub use common::jpeg_size;
 pub(crate) use common::rounded;
 use common::{
-    all_faces, content_hash, empty_form, hex32, jpeg_info, js_action, js_string, n, parse_hex32, rgb, rgb_array, standard_font, state_name,
+    all_faces, content_hash, empty_form, hex32, jpeg_info, js_action, js_string, js_text_action, n, parse_hex32, rgb, rgb_array, standard_font,
+    state_name,
 };
 pub(crate) use strip::USAGE_RIGHTS_REMOVED;
 use strip::drop_usage_rights;
@@ -160,6 +161,28 @@ fn existing_fields(doc: &Document, catalog: &Dict) -> (HashMap<String, Signed>, 
     (out, names)
 }
 
+/// The Format and Keystroke actions of a text widget of `kind`: Acrobat's date or number format
+/// from the field's picture. `None` for a plain text or password field.
+fn format_actions(kind: &WidgetKind) -> Option<Dict> {
+    let (format, keystroke) = match kind {
+        WidgetKind::Date(pattern) => {
+            let pattern = js_string(pattern);
+            (js_action(&format!("AFDate_FormatEx({pattern});")), js_action(&format!("AFDate_KeystrokeEx({pattern});")))
+        }
+        // Shown through the display picture; typing takes a number, as the field is a numeric
+        // one. The currency may be any text (`€`): a text string holds it.
+        WidgetKind::Number(f) => {
+            let args = format!("{}, {}, {}, 0, {}, {}", f.decimals, f.sep, f.neg, js_string(&f.currency), f.prepend);
+            (js_text_action(&format!("AFNumber_Format({args});")), js_text_action(&format!("AFNumber_Keystroke({args});")))
+        }
+        _ => return None,
+    };
+    let mut aa = Dict::new();
+    aa.set(b"F".to_vec(), format);
+    aa.set(b"K".to_vec(), keystroke);
+    Some(aa)
+}
+
 impl Emitter<'_> {
     fn da(face: &Face) -> Vec<u8> {
         format!("/{} {} Tf {} rg", face.resource_name(), n(face.size), rgb(face.color)).into_bytes()
@@ -176,7 +199,7 @@ impl Emitter<'_> {
         // SOM path.
         let mut under: Option<String> = None;
         match &w.kind {
-            WidgetKind::Text | WidgetKind::Date(_) | WidgetKind::Password => {
+            WidgetKind::Text | WidgetKind::Date(_) | WidgetKind::Number(_) | WidgetKind::Password => {
                 d.set(b"FT".to_vec(), Object::name("Tx"));
                 if w.multiline {
                     ff |= 1 << 12;
@@ -205,11 +228,7 @@ impl Emitter<'_> {
                 if let Some(v) = &w.default {
                     d.set(b"DV".to_vec(), Object::String(PdfString::text(v)));
                 }
-                if let WidgetKind::Date(pattern) = &w.kind {
-                    let mut aa = Dict::new();
-                    let pattern = js_string(pattern);
-                    aa.set(b"F".to_vec(), js_action(&format!("AFDate_FormatEx({pattern});")));
-                    aa.set(b"K".to_vec(), js_action(&format!("AFDate_KeystrokeEx({pattern});")));
+                if let Some(aa) = format_actions(&w.kind) {
                     d.set(b"AA".to_vec(), Object::Dict(aa));
                 }
             }

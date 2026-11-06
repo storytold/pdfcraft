@@ -6754,6 +6754,36 @@ fn xfa_date_arithmetic_reads_the_date_as_its_display_picture_shows_it() {
     assert_eq!(value(&s, "to"), ["20261022"], "{:?}", out.errors);
 }
 
+/// #5820: an XFA number field is shown through its display picture on the page, where it used to
+/// show the raw value (`279893.88000000`): a calculated amount too, a typed price after it changes,
+/// and a German field in its own locale. The field and the XFA data keep plain numbers, and a
+/// picture Acrobat's number format can't show still shows the raw value.
+#[test]
+fn xfa_number_fields_are_shown_through_their_display_pictures() {
+    let xml = pdfcraft_xfa::fixtures::number_pictures_template(pdfcraft_xfa::fixtures::NUMBER_PICTURES_DATA);
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("invoice.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(&xml)), None).expect("opens");
+    let shown = |s: &Session| page_texts(s, id).join("\n");
+    let text = shown(&s);
+    assert_eq!(text.matches("$279,893.88").count(), 2, "the price and the amount calculated from it: {text}");
+    for picture in ["($1,466,917.35)", "$12.50", "1.234,50 €"] {
+        assert!(text.contains(picture), "{picture} in {text}");
+    }
+    assert!(!text.contains("279893.88"), "no raw price: {text}");
+    // The quantity's `1.00000000` shows as `1`; only the ratio's optional decimals, which can't be
+    // shown, leave the raw value standing.
+    assert_eq!(text.matches("1.00000000").count(), 1, "{text}");
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).map(|f| f.value.clone()).unwrap_or_default();
+    assert_eq!(value(&s, "price"), ["279893.88000000"], "stored as the data holds it");
+    s.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("1234.5".into()) }).unwrap();
+    let text = shown(&s);
+    assert_eq!(text.matches("$1,234.50").count(), 2, "the typed price and the amount: {text}");
+    let saved = s.save_bytes(id).unwrap();
+    let cos = pdfcraft_cos::Document::open(saved).unwrap();
+    let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).unwrap();
+    assert_eq!(data.text_at(&pdfcraft_xfa::som_to_path("form[0].page[0].price[0]")), Some("1234.5"), "a plain number in the data");
+}
+
 #[test]
 fn filling_growable_xfa_text_reflows_and_undo_restores_the_layout() {
     let text: String = (0..150).map(|i| format!("Row{i:03} {}sample\n", "sample ".repeat(8))).collect();

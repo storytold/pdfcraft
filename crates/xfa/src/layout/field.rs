@@ -161,6 +161,16 @@ impl Layouter<'_> {
         // A choice list's default is a saved value too.
         let template_default = f.value.plain().map(|v| f.saved_value(v.trim())).filter(|v| !v.is_empty());
         let plain_value = data_value.clone().or_else(|| template_default.clone());
+        // A number field keeps its value as the data holds it and shows it through its display
+        // picture, when Acrobat's number format can (#5820); otherwise it is a text field.
+        let text_kind = match f.ui {
+            Ui::NumericEdit | Ui::TextEdit if f.numeric => f
+                .display_picture
+                .as_deref()
+                .and_then(|p| crate::number::number_format(p, fctx.locale.as_deref(), &self.tpl.locales))
+                .map_or(WidgetKind::Text, WidgetKind::Number),
+            _ => WidgetKind::Text,
+        };
         let (kind, rect, border, value, tooltip) = match f.ui {
             Ui::CheckButton => {
                 let s = f.check_size.unwrap_or(10.0).min(ui.w.max(1.0)).min(ui.h.max(1.0));
@@ -234,7 +244,7 @@ impl Layouter<'_> {
                 (WidgetKind::Image, ui, none, None, f.tooltip.clone())
             }
             Ui::PasswordEdit => (WidgetKind::Password, ui, widget_border(f.ui_border.as_ref(), false), plain_value, f.tooltip.clone()),
-            _ => (WidgetKind::Text, ui, widget_border(f.ui_border.as_ref(), false), plain_value, f.tooltip.clone()),
+            _ => (text_kind, ui, widget_border(f.ui_border.as_ref(), false), plain_value, f.tooltip.clone()),
         };
         if rect.w < 1.0 || rect.h < 1.0 {
             return Ok(());

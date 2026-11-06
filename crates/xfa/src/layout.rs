@@ -60,11 +60,19 @@ struct Ctx {
     font: Font,
     para: Para,
     som: String,
+    /// The locale values are shown in: the nearest one an enclosing object names (`ambient`
+    /// included, which stops a locale further out from applying).
+    locale: Option<String>,
 }
 
 impl Ctx {
     fn child(&self, c: &Common) -> Ctx {
-        Ctx { font: self.font.apply(&c.font), para: self.para.apply(&c.para), som: self.som.clone() }
+        Ctx {
+            font: self.font.apply(&c.font),
+            para: self.para.apply(&c.para),
+            som: self.som.clone(),
+            locale: c.locale.clone().or_else(|| self.locale.clone()),
+        }
     }
 
     /// [`Self::child`] for object `c`, its SOM path extended by its name and `index` among the
@@ -202,7 +210,7 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         leaves: Vec::new(),
         frames: Vec::new(),
     };
-    let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };
+    let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new(), locale: None };
     l.new_page()?;
     if tpl.root.common.presence.occupies() {
         l.flow_subform(&root_node, None, &ctx, 0, 0)?;

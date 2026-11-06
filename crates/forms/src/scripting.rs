@@ -141,10 +141,20 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
                 FieldKind::Combo | FieldKind::List => FieldValue::Choice(v.clone()),
                 _ => continue,
             };
+            // A script's value is taken as the script gives it: no keystroke, validate or other
+            // script runs on it.
             let mut tmp = f.clone();
             tmp.flags &= !flags::NO_TOGGLE_TO_OFF;
             tmp.actions = Default::default();
             crate::write_value(doc, &tmp, &value, &mut NoScripts)?;
+            // It is still shown through the field's format, as Acrobat runs the Format event to
+            // display any value, and as a calculated value is (#5820).
+            if f.actions.format != crate::af::Format::None
+                && let [one] = v.as_slice()
+            {
+                let shown = Field { actions: crate::af::Actions { format: f.actions.format.clone(), ..Default::default() }, ..tmp };
+                crate::values::redraw_formatted(doc, &shown, one)?;
+            }
         }
         let mut ff = f.flags;
         for (on, bit) in [(c.read_only, flags::READ_ONLY), (c.required, flags::REQUIRED)] {
