@@ -39,7 +39,12 @@ fn automatic_edit_leaves_rectangle_texture_clean_and_offers_explicit_ocr_once() 
     assert_eq!(doc.bytes.as_ref(), &original);
     assert!(doc.text_lines(0).is_empty());
     let notice = h.state().toast.as_ref().map(|t| t.0.as_str());
-    assert_eq!(notice, Some("Automatic text recognition was skipped for this page. To recognize it, use Recognize text in Scan & OCR."));
+    assert_eq!(
+        notice,
+        Some(
+            "Automatic text recognition was skipped for this page, so no editable text was added. To recognize it, use Recognize text in Scan & OCR."
+        )
+    );
     if let Some(path) = shot {
         h.render().unwrap().save(path).unwrap();
     }

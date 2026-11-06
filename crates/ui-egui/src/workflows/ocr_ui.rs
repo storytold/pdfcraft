@@ -740,7 +740,7 @@ impl PdfCraftApp {
             && automatic::text_share(found.iter().filter(|p| p.skipped.is_none()).flat_map(|p| p.words.iter().map(|w| w.text.as_str())))
                 .is_some_and(|share| share < automatic::MIN_TEXT_SHARE)
         {
-            self.notify_tr("Automatic text recognition was skipped for this page. To recognize it, use Recognize text in Scan & OCR.");
+            self.notify_tr("Automatic text recognition was skipped for this page, so no editable text was added. To recognize it, use Recognize text in Scan & OCR.");
             return;
         }
         let read = found.iter().filter(|p| p.skipped.is_none()).count();
