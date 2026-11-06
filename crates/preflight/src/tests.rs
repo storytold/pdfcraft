@@ -488,3 +488,62 @@ fn an_output_intent_profile_header_is_read_within_a_size_cap() {
         assert_eq!(pdfa_intent_profile(&doc), Some(n), "a {size}-byte profile");
     }
 }
+
+/// PDF/A-2 6.5.1: the PDF 1.2 SetState and NOP actions aren't allowed, and a Named action may
+/// only name NextPage, PrevPage, FirstPage or LastPage; Save as PDF/A removes the others.
+#[test]
+fn set_state_no_op_and_named_actions_are_checked() {
+    let doc_with = |action: &str| {
+        let outline = format!("<< /Title (x) /Parent 4 0 R /A {action} >>");
+        build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >>",
+                "<< /Type /Pages /Kids [] /Count 0 >>",
+                &outline,
+                "<< /Type /Outlines /First 3 0 R /Last 3 0 R /Count 1 >>",
+                "/NextPage",
+                "/Named",
+                "/NOP",
+            ],
+            "",
+        )
+    };
+    let actions = |action: &str| -> Vec<String> {
+        verify(&doc_with(action), Level::A2b).into_iter().filter(|i| i.clause == "6.5.1").map(|i| i.message).collect()
+    };
+    assert_eq!(actions("<< /Type /Action /S /SetState /T [] >>"), ["A SetState action isn't allowed"]);
+    assert_eq!(actions("<< /S /NOP >>"), ["A NOP action isn't allowed"]);
+    assert_eq!(actions("<< /S /Named /N /Print >>"), ["A Named Print action isn't allowed"]);
+    assert_eq!(actions("<< /S /Named >>"), ["A Named action isn't allowed"]);
+    // Behind an allowed action, in its /Next.
+    assert_eq!(actions("<< /S /GoTo /D [0 /Fit] /Next << /S /NOP >> >>"), ["A NOP action isn't allowed"]);
+    for allowed in ["NextPage", "PrevPage", "FirstPage", "LastPage"] {
+        assert!(actions(&format!("<< /S /Named /N /{allowed} >>")).is_empty(), "{allowed}");
+    }
+    // The name given by reference (object 5 is /NextPage).
+    assert!(actions("<< /S /Named /N 5 0 R >>").is_empty());
+    // The type given by reference (object 6 is /Named, 7 is /NOP).
+    assert_eq!(actions("<< /S 6 0 R /N /Print >>"), ["A Named Print action isn't allowed"]);
+    assert_eq!(actions("<< /S 7 0 R >>"), ["A NOP action isn't allowed"]);
+    assert!(actions("<< /S 6 0 R /N 5 0 R >>").is_empty());
+    // Save as PDF/A removes them.
+    for action in ["<< /S /SetState /T [] >>", "<< /S /NOP >>", "<< /S /Named /N /Print >>"] {
+        let mut doc = doc_with(action);
+        convert(&mut doc, Level::A2b).unwrap();
+        assert!(verify(&doc, Level::A2b).iter().all(|i| i.clause != "6.5.1"), "{action}");
+    }
+    // A permitted Named action survives it, also one naming its page move by reference.
+    for action in ["<< /S /Named /N /NextPage >>", "<< /S /Named /N 5 0 R >>"] {
+        let mut doc = doc_with(action);
+        convert(&mut doc, Level::A2b).unwrap();
+        let outline = doc.get(ObjRef { num: 3, generation: 0 });
+        let kept = outline
+            .as_dict()
+            .and_then(|d| d.get(b"A"))
+            .and_then(Object::as_dict)
+            .map(|a| (a.name(b"S").map(<[u8]>::to_vec), a.get(b"N").map(|n| doc.resolve(n))));
+        let (s, n) = kept.unwrap_or_else(|| panic!("{action}: the action is gone"));
+        assert_eq!(s.as_deref(), Some(&b"Named"[..]), "{action}");
+        assert_eq!(n.as_deref().and_then(Object::as_name), Some(&b"NextPage"[..]), "{action}");
+    }
+}
