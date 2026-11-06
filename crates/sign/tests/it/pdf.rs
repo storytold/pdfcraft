@@ -638,7 +638,7 @@ fn tsa_id_cross_signed() -> (DigitalId, Certificate) {
     let eku = der::seq(&[&der::oid("2.5.29.37"), &der::boolean(true), &der::octets(&der::seq(&[&der::oid("1.3.6.1.5.5.7.3.8")]))]);
     let root_key = pdfcraft_sign::PrivateKey::generate_p256().unwrap();
     let root_name = Name::build("Test Root", "", "PdfCraft Tests", "", "US");
-    let root = Certificate::self_signed(&root_name, &root_key, from, 10, &[0x41]).unwrap();
+    let root = issue(&root_name, &root_key, &root_name, &root_key, 0x41, &[&ca, &ku]);
     let other_key = pdfcraft_sign::PrivateKey::generate_p256().unwrap();
     let other_name = Name::build("Other Root", "", "PdfCraft Tests", "", "US");
     let cross = issue(&root_name, &root_key, &other_name, &other_key, 0x42, &[&ca, &ku]);

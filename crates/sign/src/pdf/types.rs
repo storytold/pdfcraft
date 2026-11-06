@@ -15,10 +15,13 @@ impl TrustStore {
     /// issuers to subjects; keys by the key itself, across a curve point's two encodings
     /// ([`PublicKey::same_key`](crate::keys::PublicKey::same_key)). A certificate with the name
     /// and another key, or the key and another name, is not the anchor — and neither is a copy
-    /// whose `pathLenConstraint` allows more CA certificates below it than the trusted
-    /// certificate's does: the restriction the user configured governs, not the copy's.
+    /// claiming more than the trusted certificate does: a looser `pathLenConstraint`, the
+    /// right to issue certificates when the trusted certificate has none, or a validity
+    /// window reaching beyond the trusted certificate's. Nothing verifies the signature on
+    /// a copy, so its fields are its bearer's word; the restrictions the user trusted
+    /// govern, not the copy's.
     pub(super) fn trusts(&self, c: &Certificate) -> bool {
-        self.certs.iter().any(|t| t.subject.raw == c.subject.raw && t.public_key.same_key(&c.public_key) && !loosens_path_len(t, c))
+        self.certs.iter().any(|t| t.subject.raw == c.subject.raw && t.public_key.same_key(&c.public_key) && !loosens(t, c))
     }
 }
 
@@ -31,6 +34,17 @@ fn loosens_path_len(t: &Certificate, c: &Certificate) -> bool {
         (Some(_), None) => true,
         _ => false,
     }
+}
+
+/// Whether `c` claims more than the trusted certificate `t` whose name and key it carries:
+/// the right to issue when `t` has none, or a validity window reaching before `t`'s begins
+/// or after `t`'s ends. A copy may be stricter than the anchor in any of these, never
+/// looser — the chain builder judges a chain by the copy it reaches (its CA standing, its
+/// validity), so an unchecked copy would let the holder of a trusted key act beyond the
+/// certificate the user actually trusted: make an end entity a CA, or keep an expired
+/// anchor issuing.
+fn loosens(t: &Certificate, c: &Certificate) -> bool {
+    loosens_path_len(t, c) || (c.may_issue() && !t.may_issue()) || c.not_before < t.not_before || c.not_after > t.not_after
 }
 
 #[cfg(test)]
@@ -102,6 +116,52 @@ mod tests {
         // A stricter copy of an unlimited anchor is still the anchor.
         let trust = TrustStore { certs: vec![ca_cert(&name, &key, 1, None)] };
         assert!(trust.trusts(&ca_cert(&name, &key, 2, Some(0))), "a stricter copy");
+    }
+
+    /// A certificate for `key` under `name`, self-issued, a CA when `ca`, valid from `FROM`
+    /// until `until`.
+    fn copy_with(name: &Name, key: &PrivateKey, serial: u8, ca: bool, until: Time) -> Certificate {
+        let alg = key.preferred_digest();
+        let sig_alg = key.signature_algorithm(alg);
+        let bc_fields: Vec<Vec<u8>> = if ca { vec![der::boolean(true)] } else { vec![] };
+        let bc_refs: Vec<&[u8]> = bc_fields.iter().map(Vec::as_slice).collect();
+        let bc = der::seq(&[&der::oid("2.5.29.19"), &der::boolean(true), &der::octets(&der::seq(&bc_refs))]);
+        let tbs = der::seq(&[
+            &der::explicit(0, &der::int(2)),
+            &der::uint(&[serial]),
+            &sig_alg,
+            &name.raw,
+            &der::seq(&[&FROM.encode(), &until.encode()]),
+            &name.raw,
+            &key.public_key().spki(),
+            &der::explicit(3, &der::seq(&[&bc])),
+        ]);
+        let signature = key.sign(alg, &tbs).unwrap();
+        Certificate::parse(&der::seq(&[&tbs, &sig_alg, &der::bit_string(&signature)])).unwrap()
+    }
+
+    #[test]
+    fn a_copy_of_the_anchor_may_not_gain_the_right_to_issue() {
+        let name = Name::build("Trust Anchor", "", "Anchor Tests", "", "US");
+        let key = PrivateKey::generate_p256().unwrap();
+        let until = Time { year: FROM.year + 20, ..FROM };
+        // The anchor may sign documents but not issue: a copy claiming to be a CA is not it.
+        let trust = TrustStore { certs: vec![copy_with(&name, &key, 1, false, until)] };
+        assert!(!trust.trusts(&copy_with(&name, &key, 2, true, until)), "a copy that made the anchor a CA");
+        assert!(trust.trusts(&copy_with(&name, &key, 3, false, until)), "a copy with the anchor's own standing");
+        // Nor does a bare document-signing anchor (the crate's self-signed profile: no basic
+        // constraints, a signing key usage) vouch for a copy that may issue.
+        let trust = TrustStore { certs: vec![cert(&name, &key, 9)] };
+        assert!(!trust.trusts(&ca_cert(&name, &key, 10, None)), "a CA copy of a document-signing anchor");
+    }
+
+    #[test]
+    fn a_copy_of_the_anchor_may_not_outlive_it() {
+        let name = Name::build("Trust Anchor", "", "Anchor Tests", "", "US");
+        let key = PrivateKey::generate_p256().unwrap();
+        let trust = TrustStore { certs: vec![copy_with(&name, &key, 1, true, Time { year: FROM.year + 20, ..FROM })] };
+        assert!(!trust.trusts(&copy_with(&name, &key, 2, true, Time { year: FROM.year + 30, ..FROM })), "a copy valid a decade longer");
+        assert!(trust.trusts(&copy_with(&name, &key, 3, true, Time { year: FROM.year + 10, ..FROM })), "a copy that expires sooner");
     }
 }
 

@@ -446,3 +446,35 @@ fn a_trusted_roots_key_under_another_name_is_not_trusted() {
     let (status, details) = verdict(leaf, vec![i.cert.clone(), renamed], &g4.cert);
     assert_eq!(status, Status::Unknown, "{details:?}");
 }
+
+/// A forged "copy" of `anchor`: its name and key, with fields of the forger's choosing, signed by
+/// a throwaway key nobody has heard of. (Tests by tomcatt, from PR #6277 review.)
+fn forged_copy(anchor: &Party, valid: (u32, u32)) -> Certificate {
+    let nobody = PrivateKey::generate_p256().unwrap();
+    certify(&anchor.name, &anchor.key, (&nobody, &name("Nobody")), 97, valid, &ca_extensions())
+}
+
+/// A trusted end-entity certificate may not issue. An embedded "copy" saying `cA` must not change
+/// that.
+#[test]
+fn a_forged_copy_does_not_make_a_trusted_end_entity_a_ca() {
+    let colleague = issue("Colleague", None, FOREVER, &[basic_constraints(false, None), key_usage(DIGITAL_SIGNATURE)]);
+    let trusted = colleague.cert.clone();
+    let (status, details) = verdict(end_entity("Someone Else", &colleague), vec![], &trusted);
+    assert_eq!(status, Status::Unknown, "control, no forged copy: {details:?}");
+    let forged = forged_copy(&colleague, FOREVER);
+    let (status, details) = verdict(end_entity("Someone Else", &colleague), vec![forged], &trusted);
+    assert_eq!(status, Status::Unknown, "a forged copy made an end entity a CA: {details:?}");
+}
+
+/// An expired anchor stays expired, whatever dates a forged copy claims.
+#[test]
+fn a_forged_copy_does_not_extend_an_expired_anchor() {
+    let root = issue("Expired Root", None, (2000, 2010), &ca_extensions());
+    let trusted = root.cert.clone();
+    let (status, details) = verdict(end_entity("Late Signer", &root), vec![], &trusted);
+    assert_eq!(status, Status::Unknown, "control, no forged copy: {details:?}");
+    let forged = forged_copy(&root, FOREVER);
+    let (status, details) = verdict(end_entity("Late Signer", &root), vec![forged], &trusted);
+    assert_eq!(status, Status::Unknown, "a forged copy revived an expired anchor: {details:?}");
+}
