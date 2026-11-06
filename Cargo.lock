@@ -4269,6 +4269,7 @@ dependencies = [
  "pdfcraft-fonts",
  "pdfcraft-model",
  "thiserror 2.0.21",
+ "unicode-bidi",
 ]
 
 [[package]]
