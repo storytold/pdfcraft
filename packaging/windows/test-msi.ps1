@@ -249,6 +249,31 @@ $pdfChecked = Read-Row 'SELECT `Value` FROM `CheckBox` WHERE `Property` = ''INST
 Assert-Equal $pdfChecked[0] '1' 'Welcome PDF context-menu value'
 Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Key` = ''Software\Classes\.pdf'' AND `Name` IS NULL' '.pdf default app'
 
+# Install folder (#1139): the welcome dialog's "Install to" row (a PathEdit, and Browse… into a
+# native folder browser) changes the folder install-policy.wxi chose for the scope. Its secure
+# property, the recorded folder and the restore on update are check-install-policy.ps1's.
+$installTo = Read-Row 'SELECT `Type`, `Property` FROM `Control` WHERE `Dialog_` = ''InstallWelcome'' AND `Control` = ''InstallTo''' 2
+Assert-Equal $installTo[0] 'PathEdit' 'Welcome install-folder control'
+Assert-Equal $installTo[1] 'INSTALLFOLDER' 'Welcome install-folder property'
+$browse = Read-Row 'SELECT `Event`, `Argument` FROM `ControlEvent` WHERE `Dialog_` = ''InstallWelcome'' AND `Control_` = ''Browse''' 2
+Assert-Equal $browse[0] 'SpawnDialog' 'Welcome Browse event'
+Assert-Equal $browse[1] 'BrowseFolder' 'Welcome Browse dialog'
+# Each scope has its own Install button, and each sets the folder before the dialog closes.
+foreach ($button in @('Install', 'InstallUser')) {
+  $setPath = Read-Row ('SELECT `Ordering` FROM `ControlEvent` WHERE `Dialog_` = ''InstallWelcome'' AND `Control_` = ''' + $button + ''' AND `Event` = ''SetTargetPath'' AND `Argument` = ''INSTALLFOLDER''') 1
+  $endWelcome = Read-Row ('SELECT `Ordering` FROM `ControlEvent` WHERE `Dialog_` = ''InstallWelcome'' AND `Control_` = ''' + $button + ''' AND `Event` = ''EndDialog''') 1
+  if ([int] $setPath[0] -ge [int] $endWelcome[0]) { throw "$button must set the install folder before closing the welcome dialog" }
+}
+foreach ($control in @('DirectoryCombo', 'DirectoryList', 'PathEdit')) {
+  $row = Read-Row ('SELECT `Type`, `Property` FROM `Control` WHERE `Dialog_` = ''BrowseFolder'' AND `Control` = ''' + $control + '''') 2
+  Assert-Equal $row[0] $control "Browse $control control"
+  Assert-Equal $row[1] 'INSTALLFOLDER' "Browse $control property"
+}
+$browseOk = Read-Row 'SELECT `Argument` FROM `ControlEvent` WHERE `Dialog_` = ''BrowseFolder'' AND `Control_` = ''OK'' AND `Event` = ''SetTargetPath''' 1
+Assert-Equal $browseOk[0] 'INSTALLFOLDER' 'Browse OK sets the folder'
+$browseCancel = Read-Row 'SELECT `Event` FROM `ControlEvent` WHERE `Dialog_` = ''BrowseFolder'' AND `Control_` = ''Cancel'' AND `Event` = ''Reset''' 1
+Assert-Equal $browseCancel[0] 'Reset' 'Browse Cancel puts the folder back'
+
 # Negative sequences are Windows Installer's success/user-exit/failure paths. Only full UI
 # shows these dialogs: an unattended /qn or /qb install must never wait for a Finish click.
 foreach ($exit in @(@('InstallComplete', '-1'), @('InstallCancelled', '-2'), @('InstallFailed', '-3'))) {
@@ -282,4 +307,4 @@ $rm = Read-Row 'SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = ''MsiRMFilesInUse
 Assert-Equal $rm[0] 'MsiRMFilesInUse' 'Files-in-use dialog'
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
-Write-Output 'ok MSI: dual-scope guards, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut and PDF and image context menus (on for a first install, kept on update only while present; checkboxes for the first two), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'
+Write-Output 'ok MSI: dual-scope guards, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut and PDF and image context menus (on for a first install, kept on update only while present; checkboxes for the first two), install folder (welcome row and browse dialog), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'
