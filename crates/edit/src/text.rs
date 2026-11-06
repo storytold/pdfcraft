@@ -117,9 +117,10 @@ pub struct TextLine {
     /// so which way its glyphs advance is unknown. The line is listed as horizontal text.
     unreadable_mode: Option<String>,
     /// The runs the line joins, in content order: each one's text, the end of its words in
-    /// `ink`, and whether joining put a space before it. Empty when the line's text was put
-    /// into another order (see [`TextLine::runs`]).
-    runs: Vec<(String, usize, bool)>,
+    /// `ink`, whether joining put a space before it, and its font resource (a line may join
+    /// several resources of one font, #3661). Empty when the line's text was put into another
+    /// order (see [`TextLine::runs`]).
+    runs: Vec<(String, usize, bool, String)>,
     /// This line continues the previous one because a rewrite wrapped it (`/PCSoft`).
     soft_break: bool,
     /// This line starts after a break a rewrite kept on purpose (`/PCHard`).
