@@ -33,7 +33,10 @@ fn build(objs: &[&str], trailer_extra: &str) -> Document {
     for o in offsets {
         out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R {trailer_extra} >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    // ISO 19005-2 6.1.3: the trailer names a file identifier; a test about another clause gets one
+    // unless it gives its own.
+    let id = if trailer_extra.contains("/ID") { "" } else { "/ID [<00112233445566778899AABBCCDDEEFF> <00112233445566778899AABBCCDDEEFF>]" };
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R {id} {trailer_extra} >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     Document::open(std::sync::Arc::new(out)).unwrap()
 }
 
