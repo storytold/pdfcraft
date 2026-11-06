@@ -5,7 +5,7 @@ exclude = ["vendor"]
 default-members = ["crates/*", "apps/pdfcraft", "apps/pdfcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.18.2"
+version = "0.19.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
