@@ -265,3 +265,42 @@ fn removing_hidden_information_and_sanitizing() {
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Sanitize document"));
 }
+
+#[test]
+fn redaction_search_caps_matches_and_shows_limit_notice() {
+    assert_eq!(pdfcraft_ui_egui::MAX_REDACT_SEARCH_MATCHES, 10_000);
+    let mut session = pdfcraft_engine::Session::new();
+    let page1 = session.create_from_text("p1", "Ada one\nAda two\nAda three").unwrap().to_vec();
+    let page2 = session.create_from_text("p2", "Ada four\nAda five").unwrap().to_vec();
+    let id = session.open("memo.pdf", None, std::sync::Arc::new(page1), None).unwrap();
+    session
+        .apply(
+            id,
+            pdfcraft_engine::Edit::InsertPagesFrom {
+                name: "p2.pdf".into(),
+                bytes: std::sync::Arc::new(page2),
+                pages: None,
+                at: 1,
+                field_conflicts: pdfcraft_engine::FieldConflicts::Rename,
+            },
+        )
+        .unwrap();
+    let memo = session.save_bytes(id).unwrap().to_vec();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("memo.pdf", None, memo.clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().execute("redact.search");
+    h.state_mut().redact_search.text = "Ada".into();
+    h.run_steps(2);
+    let marked = h.state_mut().redact_search_up_to(3);
+    assert_eq!(marked, 3);
+    assert_eq!((marks(&h), h.state().redact_search.found, h.state().redact_search.capped), (3, Some(3), true));
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert!(doc.info.annotations.iter().all(|a| a.page == 0), "stopped once the cap was reached on page 1");
+    h.run_steps(2);
+    h.get_by_label("First 3 matches marked for redaction (limit reached).");
+}
