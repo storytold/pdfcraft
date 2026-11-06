@@ -10,7 +10,12 @@
   };
 
   outputs =
-    { nixpkgs, rust-overlay, ... }:
+    {
+      self,
+      nixpkgs,
+      rust-overlay,
+      ...
+    }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs {
@@ -63,6 +68,7 @@
       overlays.default = nixpkgs.lib.composeExtensions rust-overlay.overlays.default (
         final: _prev: { pdfcraft = pdfcraftFor final; }
       );
+      homeModules.default = import ./nix/hm-module.nix self;
 
       devShells.${system}.default = pkgs.mkShell {
         nativeBuildInputs = with pkgs; [
