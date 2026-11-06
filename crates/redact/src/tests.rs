@@ -1922,19 +1922,22 @@ fn the_cleanups_after_the_content_walk_spend_what_it_left_of_the_pages_allowance
 }
 
 /// The cleanups of a form the redaction rewrites spend the page's allowance too. The rewritten
-/// form draws a form without resources of its own that crosses the mark: the walk reads it, then
-/// the check of what the rewritten form still draws and its font cleanup read it again. At
-/// 100 MiB, three reads are more than the page's 256 MiB, and the redaction is refused; at 50 MiB
-/// it goes on.
+/// form has resources of its own, so the page's cleanups don't follow it, and draws through them a
+/// form without any that crosses the mark: the walk reads that form, then the check of what the
+/// rewritten form still draws and its font cleanup read it again. At 100 MiB, three reads are more
+/// than the page's 256 MiB, and the redaction is refused; at 50 MiB it goes on.
 #[test]
 fn the_cleanups_of_a_rewritten_form_spend_the_pages_allowance() {
     for (mib, refused) in [(100, true), (50, false)] {
         let blank = pdfcraft_filters::encode_flate(&vec![b' '; mib << 20]);
         let mut doc = one_page(
             b"/FmText Do",
-            "/XObject << /FmText 7 0 R /FmBare 8 0 R >>",
+            "/XObject << /FmText 7 0 R >>",
             vec![
-                stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300]", b"BT /F1 10 Tf 20 250 Td (SECRET) Tj ET /FmBare Do"),
+                stream(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> /XObject << /FmBare 8 0 R >> >>",
+                    b"BT /F1 10 Tf 20 250 Td (SECRET) Tj ET /FmBare Do",
+                ),
                 stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Filter /FlateDecode", &blank),
             ],
         );
