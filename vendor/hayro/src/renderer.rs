@@ -637,6 +637,47 @@ pub fn set_skip_offscreen_paths(skip: bool) {
     SKIP_OFFSCREEN_PATHS.with(|s| s.set(skip));
 }
 
+/// PdfCraft patch (30): what the renders on this thread have drawn offscreen, for tests that check
+/// a page's cost by counting rather than by timing it (see [`offscreen_draws`]).
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OffscreenDraws {
+    /// Tiling pattern cells drawn; a cell taken from `tiling_cells` isn't drawn again.
+    pub tiling_cells: u64,
+    /// The pixels of every pixmap drawn offscreen: tiling cells, masks, groups and the like.
+    pub pixels: u64,
+}
+
+thread_local! {
+    /// PdfCraft patch (30): see [`OffscreenDraws`].
+    static OFFSCREEN_DRAWS: std::cell::Cell<OffscreenDraws> =
+        const { std::cell::Cell::new(OffscreenDraws { tiling_cells: 0, pixels: 0 }) };
+}
+
+/// PdfCraft patch (30): exported for its regression tests (see [`OffscreenDraws`]). The counts
+/// only grow; a test takes the difference across a render.
+#[doc(hidden)]
+pub fn offscreen_draws() -> OffscreenDraws {
+    OFFSCREEN_DRAWS
+        .try_with(std::cell::Cell::get)
+        .unwrap_or_default()
+}
+
+/// PdfCraft patch (30): a `width` × `height` pixmap to draw offscreen, counted in
+/// [`OffscreenDraws`]. Every pixmap the renderer renders into, besides the page, is made here.
+fn offscreen_pixmap(width: u16, height: u16, tiling_cell: bool) -> Pixmap {
+    // Gone only while the thread exits, when there is nothing left to count for.
+    let _ = OFFSCREEN_DRAWS.try_with(|draws| {
+        let mut counts = draws.get();
+        counts.pixels = counts
+            .pixels
+            .saturating_add(u64::from(width) * u64::from(height));
+        counts.tiling_cells = counts.tiling_cells.saturating_add(u64::from(tiling_cell));
+        draws.set(counts);
+    });
+    Pixmap::new(width, height)
+}
+
 /// PdfCraft patch: whether a device-space box can paint a pixel of a `width` × `height`
 /// canvas. A box whose bounds miss the canvas is skipped without changing a pixel.
 /// Bounds that aren't finite are drawn as before.
@@ -1066,7 +1107,7 @@ impl Renderer {
                 image_transparency_stack: Vec::new(),
                 ink: InkState::default(),
             };
-            let mut mask_pix = Pixmap::new(self.ctx.width(), self.ctx.height());
+            let mut mask_pix = offscreen_pixmap(self.ctx.width(), self.ctx.height(), false);
             let rgb_data = ImageData::Rgb(RgbData {
                 data: dummy_rgb,
                 width: alpha_data.width,
@@ -1614,7 +1655,7 @@ impl Renderer {
             ink: InkState::default(),
         };
         t.interpret(&mut renderer, initial_transform, is_stroke);
-        let mut pix = Pixmap::new(size.0, size.1);
+        let mut pix = offscreen_pixmap(size.0, size.1, true);
         renderer.ctx.flush();
         let mut resources = vello_cpu::Resources::default();
         renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
@@ -1695,7 +1736,7 @@ impl Renderer {
         if renderer.ink.unsupported {
             return None;
         }
-        let mut pix = Pixmap::new(width, height);
+        let mut pix = offscreen_pixmap(width, height, false);
         renderer.ctx.flush();
         let mut resources = vello_cpu::Resources::default();
         renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
@@ -2434,7 +2475,7 @@ impl<'a> Device<'a> for Renderer {
             return false;
         }
 
-        let mut result = Pixmap::new(width, height);
+        let mut result = offscreen_pixmap(width, height, false);
         for ((px, rgb), coverage) in result.data_mut().iter_mut().zip(rgb.chunks_exact(3)).zip(cmy.data()) {
             let a = u32::from(coverage.a);
             let premul = |v: u8| ((u32::from(v) * a + 127) / 255) as u8;
@@ -2846,7 +2887,7 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         renderer.ctx.pop_layer();
     }
 
-    let mut pix = Pixmap::new(width, height);
+    let mut pix = offscreen_pixmap(width, height, false);
     renderer.ctx.flush();
     let mut resources = vello_cpu::Resources::default();
     renderer.ctx.render_to_pixmap(&mut resources, &mut pix);
