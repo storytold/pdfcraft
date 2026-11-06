@@ -37,6 +37,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("prc", Class::Standalone(0)),
     // L1 object layer
     ("cos", Class::Standalone(1)),
+    ("collab-proto", Class::Layer(1)),
     // L2 core model
     ("content", Class::Layer(2)),
     ("model", Class::Layer(2)),

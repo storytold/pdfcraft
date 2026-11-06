@@ -4359,6 +4359,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft-collab-proto"
+version = "0.18.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "pdfcraft-compare"
 version = "0.18.1"
 
