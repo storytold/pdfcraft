@@ -1,6 +1,6 @@
 use super::{
-    CosError, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope, is_vertical, num,
-    overlaps, page_streams, res_dict,
+    CosError, DecodeBudget, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope,
+    is_vertical, num, overlaps, page_streams, res_dict,
 };
 
 /// Drop every `replaced` resource name whose `Do` no longer appears in the rewritten `content`,
@@ -49,29 +49,12 @@ fn content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict, name: &[u8], de
     Some(false)
 }
 
-/// Unlink the XObjects a rewrite dropped or replaced (`doomed`) from every page-tree resource
-/// dictionary that still names them. The rewritten page has its own pruned /Resources, but the
-/// originals stay reachable, and so stay in a full-rewrite save, when:
-/// - the page inherited its /Resources from a /Pages node, which still lists them;
-/// - several pages share one resource dictionary, and another page still refers to it;
-/// - a form without /Resources drew them through the page's dictionary.
-///
-/// An entry goes unless a page that draws through that dictionary still draws the name (the same
-/// image shown on another page, or again outside a mark). A dictionary that loses an entry is
-/// replaced by a private copy on its node, so a dictionary object shared with other nodes is
-/// left as it is for them. Retired properties are likewise unlinked only when none of the
-/// holder's pages or inheriting forms names them. Fails closed when use cannot be determined.
-pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_properties: &[Object]) -> Result<(), RedactError> {
-    crate::type3::unlink_type3(doc)?;
-    if doomed.is_empty() && retired_properties.is_empty() {
-        return Ok(());
-    }
-    let doomed: HashSet<ObjRef> = doomed.iter().copied().collect();
-    let Some(top) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))) else { return Ok(()) };
-    // Every page-tree node with a /Resources of its own, and the pages that draw through it
-    // (the nearest such node above a page, or the page itself). Cycles are cut as in
-    // `pdfcraft_model::pages`.
+/// Every page-tree node with a /Resources of its own, and the pages that draw through it (the
+/// nearest such node above a page, or the page itself). Cycles are cut as in
+/// `pdfcraft_model::pages`.
+fn resource_holders(doc: &Document) -> Vec<(ObjRef, Vec<ObjRef>)> {
     let mut holders: Vec<(ObjRef, Vec<ObjRef>)> = Vec::new();
+    let Some(top) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))) else { return holders };
     let mut seen = HashSet::new();
     let mut stack: Vec<(ObjRef, Option<usize>)> = vec![(top, None)];
     while let Some((node, mut holder)) = stack.pop() {
@@ -92,6 +75,152 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
             h.1.push(node);
         }
     }
+    holders
+}
+
+/// Unlink the image and form XObjects nothing draws from the page-tree resource dictionaries
+/// that still name them: Delete Image and Replace Image take an image off the page but leave it
+/// listed there, and so in a full-rewrite save. A name stays when anything that draws through the
+/// dictionary uses it ([`names_drawn`]), and a dictionary whose use can't be told is left as it
+/// is. A dictionary that loses an entry is replaced by a private copy on its node, as in
+/// [`unlink_doomed`]. Returns how many names went.
+pub(crate) fn unlink_undrawn(doc: &mut Document) -> Result<usize, RedactError> {
+    let index: HashMap<ObjRef, usize> = pdfcraft_model::pages(doc).iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
+    let mut n = 0;
+    for (node, users) in resource_holders(doc) {
+        let Some(mut res) = doc.get(node).as_dict().and_then(|d| d.get(b"Resources")).and_then(|r| doc.resolve(r).as_dict().cloned()) else {
+            continue;
+        };
+        let mut xo = res_dict(doc, &res, b"XObject");
+        let listed: Vec<Vec<u8>> = xo
+            .iter()
+            .filter(|(_, v)| {
+                v.as_ref().is_some_and(|r| matches!(&*doc.get(r), Object::Stream(s) if matches!(s.dict.name(b"Subtype"), Some(b"Image" | b"Form"))))
+            })
+            .map(|(name, _)| name.to_vec())
+            .collect();
+        if listed.is_empty() {
+            continue;
+        }
+        let Some(drawn) = names_drawn(doc, &res, &users, &index) else { continue };
+        let mut pruned = false;
+        for name in listed.iter().filter(|name| !drawn.contains(*name)) {
+            xo.remove(name);
+            pruned = true;
+            n += 1;
+        }
+        if pruned {
+            res.set(b"XObject".to_vec(), Object::Dict(xo));
+            doc.update_dict(node, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
+        }
+    }
+    Ok(n)
+}
+
+/// Every name used with `Do` by what draws through `res`, the resource dictionary of `pages`:
+/// their content, their annotations' appearances, and every form, tiling pattern, Type 3 glyph
+/// and soft mask those can reach, with /Resources of their own or not. A name such a stream
+/// doesn't define is looked up in the resources of whatever draws it, up to the page's, so a `Do`
+/// anywhere in there may draw from `res`. Going by name keeps more than it must, never less.
+/// Each stream is read once, against one budget. `None` when that can't be told: a page or
+/// stream that won't decode, or the budget spent.
+fn names_drawn(doc: &Document, res: &Dict, pages: &[ObjRef], index: &HashMap<ObjRef, usize>) -> Option<HashSet<Vec<u8>>> {
+    let mut drawn = HashSet::new();
+    let mut note = |data: &[u8]| {
+        for op in pdfcraft_content::parse(data).ops.iter().filter(|op| op.is("Do")) {
+            if let Some(name) = op.last_name() {
+                drawn.insert(name.to_vec());
+            }
+        }
+    };
+    // Streams still to read, and resource dictionaries still to look through.
+    let mut streams: Vec<ObjRef> = Vec::new();
+    let mut dicts: Vec<Dict> = vec![res.clone()];
+    for page in pages {
+        let dict = doc.get(*page).as_dict().cloned().unwrap_or_default();
+        let (_, content) = page_streams(doc, &dict, index.get(page).copied().unwrap_or(0)).ok()?;
+        content.iter().for_each(|c| note(c));
+        let annots = dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
+        for annot in annots {
+            let ap = doc.resolve(&annot).as_dict().and_then(|a| a.get(b"AP")).map(|ap| doc.resolve(ap)).and_then(|ap| ap.as_dict().cloned());
+            // Each of /N, /R and /D is an appearance, or a dictionary of them by state.
+            for (_, look) in ap.unwrap_or_default().iter() {
+                match look.as_ref() {
+                    Some(r) if matches!(&*doc.get(r), Object::Stream(_)) => streams.push(r),
+                    _ => streams.extend(doc.resolve(look).as_dict().into_iter().flat_map(|states| states.iter().filter_map(|(_, v)| v.as_ref()))),
+                }
+            }
+        }
+    }
+    let mut budget = DecodeBudget::page();
+    let mut read = HashSet::new();
+    let mut looked = 0;
+    loop {
+        while let Some(dict) = dicts.get(looked) {
+            streams.extend(drawn_through(doc, dict));
+            looked += 1;
+        }
+        let Some(r) = streams.pop() else { break };
+        if !read.insert(r) {
+            continue;
+        }
+        let obj = doc.get(r);
+        let Object::Stream(s) = &*obj else { continue };
+        if !budget.enter_form() {
+            return None;
+        }
+        note(&budget.decode_strict(s).ok()?);
+        if let Some(own) = s.dict.get(b"Resources").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()) {
+            dicts.push(own);
+        }
+    }
+    Some(drawn)
+}
+
+/// The content streams the resource dictionary `res` lists: its form XObjects, its tiling
+/// patterns, its Type 3 fonts' glyph procedures and its soft masks' groups.
+fn drawn_through(doc: &Document, res: &Dict) -> Vec<ObjRef> {
+    let is_stream = |r: &ObjRef| matches!(&*doc.get(*r), Object::Stream(_));
+    let mut found: Vec<ObjRef> = Vec::new();
+    for (_, x) in res_dict(doc, res, b"XObject").iter() {
+        found.extend(x.as_ref().filter(|r| matches!(&*doc.get(*r), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Form"))));
+    }
+    for (_, p) in res_dict(doc, res, b"Pattern").iter() {
+        found.extend(p.as_ref().filter(|r| matches!(&*doc.get(*r), Object::Stream(s) if s.dict.int(b"PatternType") == Some(1))));
+    }
+    for (_, f) in res_dict(doc, res, b"Font").iter() {
+        let font = doc.resolve(f);
+        let Some(font) = font.as_dict().filter(|f| f.name(b"Subtype") == Some(b"Type3")) else { continue };
+        let procs = font.get(b"CharProcs").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()).unwrap_or_default();
+        found.extend(procs.iter().filter_map(|(_, v)| v.as_ref()).filter(is_stream));
+    }
+    for (_, g) in res_dict(doc, res, b"ExtGState").iter() {
+        let gs = doc.resolve(g);
+        let mask = gs.as_dict().and_then(|g| g.get(b"SMask")).map(|m| doc.resolve(m));
+        found.extend(mask.as_ref().and_then(|m| m.as_dict()).and_then(|m| m.reference(b"G")).filter(is_stream));
+    }
+    found
+}
+
+/// Unlink the XObjects a rewrite dropped or replaced (`doomed`) from every page-tree resource
+/// dictionary that still names them. The rewritten page has its own pruned /Resources, but the
+/// originals stay reachable, and so stay in a full-rewrite save, when:
+/// - the page inherited its /Resources from a /Pages node, which still lists them;
+/// - several pages share one resource dictionary, and another page still refers to it;
+/// - a form without /Resources drew them through the page's dictionary.
+///
+/// An entry goes unless a page that draws through that dictionary still draws the name (the same
+/// image shown on another page, or again outside a mark). A dictionary that loses an entry is
+/// replaced by a private copy on its node, so a dictionary object shared with other nodes is
+/// left as it is for them. Retired properties are likewise unlinked only when none of the
+/// holder's pages or inheriting forms names them. Fails closed when use cannot be determined.
+pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_properties: &[Object]) -> Result<(), RedactError> {
+    crate::type3::unlink_type3(doc)?;
+    if doomed.is_empty() && retired_properties.is_empty() {
+        return Ok(());
+    }
+    let doomed: HashSet<ObjRef> = doomed.iter().copied().collect();
+    let holders = resource_holders(doc);
     let index: HashMap<ObjRef, usize> = pdfcraft_model::pages(doc).iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     let holder_nodes: Vec<ObjRef> = holders.iter().map(|(node, _)| *node).collect();
     for (node, users) in holders {
