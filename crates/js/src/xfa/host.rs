@@ -1,8 +1,8 @@
 use super::model::{
-    MAX_ALERTS, MAX_CONSOLE, MAX_DEPTH, MAX_EFFECTS, MAX_NODES, MAX_PAYLOAD, MAX_VALUE, XfaDoc, XfaEffect, XfaKind, XfaNode, clip, clip_value,
-    effect_key, payload,
+    MAX_ALERTS, MAX_CONSOLE, MAX_DEPTH, MAX_EFFECTS, MAX_NODES, MAX_PAYLOAD, MAX_READS, MAX_VALUE, XfaDoc, XfaEffect, XfaKind, XfaNode, clip,
+    clip_value, effect_key, payload,
 };
-use super::{Context, HashMap, JsResult, Message, RefCell, error};
+use super::{Context, HashMap, HashSet, JsResult, Message, RefCell, error};
 
 /// One node of the flattened form, shared by the JavaScript and FormCalc engines.
 pub(crate) struct HNode {
@@ -25,6 +25,14 @@ pub(crate) struct HNode {
     pub(crate) formatted: Option<String>,
 }
 
+/// The values a script read (see [`XfaOutcome::reads`]).
+#[derive(Default)]
+pub(crate) struct ReadLog {
+    soms: Vec<String>,
+    seen: HashSet<usize>,
+    cut: bool,
+}
+
 /// The form as a script sees and changes it, with the effects it records.
 pub(crate) struct XHost {
     pub(crate) nodes: Vec<HNode>,
@@ -45,6 +53,8 @@ pub(crate) struct XHost {
     clipped_values: usize,
     dropped_alerts: usize,
     dropped_console: usize,
+    /// Behind a cell so that reading a value, which only takes the host, can note it.
+    reads: RefCell<ReadLog>,
     /// Bytes of text kept in effects, console lines and values written, against [`MAX_PAYLOAD`].
     kept: usize,
     dropped_bytes: usize,
@@ -72,6 +82,7 @@ impl XHost {
             clipped_values: 0,
             dropped_alerts: 0,
             dropped_console: 0,
+            reads: RefCell::default(),
             kept: 0,
             dropped_bytes: 0,
         }
@@ -89,6 +100,31 @@ impl XHost {
                 false
             }
         }
+    }
+
+    /// Note that the script read the value of node `i`. Only fields and exclusion groups hold
+    /// values; past [`MAX_READS`] the log is marked cut instead.
+    pub(crate) fn read(&self, i: usize) {
+        let Some(n) = self.nodes.get(i) else { return };
+        if n.gone || !matches!(n.kind, XfaKind::Field | XfaKind::ExclGroup) {
+            return;
+        }
+        // Never borrowed elsewhere while a value is read; a busy cell only loses the note.
+        let Ok(mut log) = self.reads.try_borrow_mut() else { return };
+        if !log.seen.insert(i) {
+            return;
+        }
+        if log.soms.len() >= MAX_READS {
+            log.cut = true;
+        } else {
+            log.soms.push(n.som.clone());
+        }
+    }
+
+    /// The values the script read, and whether there were more than the log holds.
+    pub(crate) fn take_reads(&mut self) -> (Vec<String>, bool) {
+        let log = std::mem::take(self.reads.get_mut());
+        (log.soms, log.cut)
     }
 
     /// Record an effect: values, presence and access set again on the same object replace the

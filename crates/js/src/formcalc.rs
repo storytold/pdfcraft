@@ -164,6 +164,7 @@ pub(crate) fn run_formcalc_at(
         }
         Err(e) => out.error = Some(e),
     }
+    (out.reads, out.reads_cut) = host.take_reads();
     out.notes = host.notes();
     out.effects = host.effects;
     out.console = host.console;
