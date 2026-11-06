@@ -34,7 +34,8 @@ pub struct CommitOutcome {
     pub conflict: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
 pub struct AdapterError {
     pub code: ErrorCode,
     pub message: String,
