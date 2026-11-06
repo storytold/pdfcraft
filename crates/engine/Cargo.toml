@@ -46,6 +46,8 @@ tiff = "0.11"
 url = "2.5"
 idna = "1.1"
 icu_properties = "2.3"
+sha2 = "0.11"
+serde = { workspace = true }
 unicode-segmentation = "1.13"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -53,6 +55,10 @@ unicode-segmentation = "1.13"
 # entry is std-only; this target adds `clock` for `chrono::Local::now`.
 chrono = { workspace = true, features = ["clock"] }
 getrandom = "0.4"
+# The optional historical OCR add-on: explicit, checksum-verified download and atomic install.
+ureq = { version = "3.4", default-features = false, features = ["rustls-no-provider", "_ring"] }
+rustls-native-certs = "0.8"
+tempfile = "3.27"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.4", features = ["wasm_js"] }

@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
 use pdfcraft_engine::DocId;
-use pdfcraft_engine::ocr::{EngineChoice, LANGUAGES, MergeStrategy, OcrPage, OcrSettings, OutputMode};
+use pdfcraft_engine::ocr::{EngineChoice, LANGUAGES, MergeStrategy, OcrPage, OcrSettings, OutputMode, RecognizerChoice};
+use pdfcraft_engine::ocr_addons::{self, AddonStatus};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
@@ -29,8 +30,15 @@ pub struct OcrDraft {
     pub from: usize,
     pub to: usize,
     pub language: String,
+    pub recognizer: RecognizerChoice,
     /// "Downsample to" resolution.
     pub dpi: u32,
+    /// Correct scanned pages: turn pages upright and straighten them in the document.
+    pub rotate_pages: bool,
+    pub straighten_pages: bool,
+    pub auto_crop: bool,
+    pub crop_margin: f64,
+    pub recognize: bool,
     /// Also recognize pages that already have text (pictures on them; their text isn't added again).
     pub text_pages: bool,
     /// Which engine reads the pages.
@@ -61,8 +69,14 @@ impl Default for OcrDraft {
             pages: OcrPages::All,
             from: 1,
             to: 1,
-            language: "en".into(),
+            language: pdfcraft_engine::ocr::language_for_locale(sys_locale::get_locale().as_deref()).into(),
+            recognizer: RecognizerChoice::Modern,
             dpi: 300,
+            rotate_pages: true,
+            straighten_pages: true,
+            auto_crop: false,
+            crop_margin: 2.0,
+            recognize: true,
             text_pages: false,
             engine: EngineChoice::default(),
             strategy: MergeStrategy::default(),
@@ -80,11 +94,12 @@ impl Default for OcrDraft {
 }
 
 impl OcrDraft {
-    /// The recognition settings these choices make.
+    /// Shared single-file and batch recognition settings.
     pub fn settings(&self) -> OcrSettings {
         OcrSettings {
             dpi: self.dpi as f32,
             language: self.language.clone(),
+            recognizer: self.recognizer,
             engine: self.engine,
             strategy: self.strategy,
             auto_rotate: self.auto_rotate,
@@ -93,10 +108,22 @@ impl OcrDraft {
             binarize: self.binarize,
             output_mode: self.output_mode,
             skip_text_files: self.skip_text_files,
-            skip_text_pages: self.skip_text_pages && !self.text_pages,
+            // Correct scanned pages alone also corrects pages that already have text.
+            skip_text_pages: self.recognize && self.skip_text_pages && !self.text_pages,
             force_ocr: self.force_ocr,
+            rotate_pages: self.rotate_pages,
+            straighten_pages: self.straighten_pages,
+            auto_crop: self.auto_crop,
+            crop_margin: self.crop_margin,
+            recognize: self.recognize,
             ..Default::default()
         }
+    }
+
+    /// Recognize text in multiple files always adds text, even straight after Correct scanned
+    /// pages turned recognition off.
+    pub fn batch_settings(&self) -> OcrSettings {
+        OcrSettings { recognize: true, skip_text_pages: self.skip_text_pages && !self.text_pages, ..self.settings() }
     }
 
     /// Restore from the preferences JSON (`ocr` object); unknown or malformed values keep the
@@ -130,6 +157,11 @@ impl OcrDraft {
                 *flag = on;
             }
         }
+        for (key, flag) in [("rotate_pages", &mut self.rotate_pages), ("straighten_pages", &mut self.straighten_pages)] {
+            if let Some(on) = v[key].as_bool() {
+                *flag = on;
+            }
+        }
         for (key, flag) in
             [("skip_text_files", &mut self.skip_text_files), ("skip_text_pages", &mut self.skip_text_pages), ("force_ocr", &mut self.force_ocr)]
         {
@@ -157,6 +189,8 @@ impl OcrDraft {
             "deskew": self.deskew,
             "denoise": self.denoise,
             "binarize": self.binarize,
+            "rotate_pages": self.rotate_pages,
+            "straighten_pages": self.straighten_pages,
             "skip_text_files": self.skip_text_files,
             "skip_text_pages": self.skip_text_pages,
             "force_ocr": self.force_ocr,
@@ -226,12 +260,32 @@ pub(crate) fn keep_asking_while_probing(ctx: &egui::Context) {
     }
 }
 
+type AddonResult = Arc<Mutex<Option<Result<AddonStatus, String>>>>;
+
+/// Status is cached so drawing the dialog does not repeatedly hash model files.
+#[derive(Default)]
+pub struct AddonState {
+    pub status: Option<AddonStatus>,
+    pub message: Option<String>,
+    pending: Option<AddonResult>,
+}
+
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
+    app.poll_ocr_addon();
+    if app.ocr_addon.status.is_none() && app.ocr_addon.pending.is_none() && app.ocr_addon.message.is_none() {
+        app.start_ocr_addon_job(|| Ok(ocr_addons::status()));
+    }
+    let addon_installed = app.ocr_addon.status.as_ref().is_some_and(|status| status.installed);
+    let addon_supported = app.ocr_addon.status.as_ref().is_some_and(|status| status.supported);
+    let addon_damaged = app.ocr_addon.status.as_ref().is_some_and(|status| status.state == "damaged");
+    let addon_pending = app.ocr_addon.pending.is_some();
+    let addon_message = app.ocr_addon.message.clone();
+    let (mut install_addon, mut remove_addon) = (false, false);
     let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
     let d = &mut app.ocr_draft;
     d.to = d.to.clamp(1, pages);
     d.from = d.from.clamp(1, d.to);
-    ui.label(egui::RichText::new(tl!("Recognize Text")).font(theme::semibold(18.0)));
+    ui.label(egui::RichText::new(tl!("Scan and text recognition")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     let group = |ui: &mut egui::Ui, title: &str, body: &mut dyn FnMut(&mut egui::Ui)| {
         ui.label(egui::RichText::new(tl!(title)).font(theme::semibold(13.0)));
@@ -255,12 +309,31 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     group(ui, "Settings", &mut |ui| {
         egui::Grid::new("ocr-settings").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             ui.label(tl!("Document language"));
-            let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
-            craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).show_ui(ui, |ui| {
-                for (code, name) in LANGUAGES {
-                    ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
-                }
-            });
+            if d.recognizer != RecognizerChoice::Modern {
+                ui.label(tl!("Automatic (historical model)"));
+            } else {
+                let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| language_name(ui, l.0, l.1));
+                craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).height(560.0).show_ui(ui, |ui| {
+                    for (code, name) in LANGUAGES {
+                        let name = language_name(ui, code, name);
+                        ui.selectable_value(&mut d.language, (*code).to_string(), tl!(name));
+                    }
+                });
+            }
+            ui.end_row();
+            ui.label(tl!("Text style"));
+            craft_ui::ComboBox::from_id_salt("ocr-recognizer")
+                .selected_text(match d.recognizer {
+                    RecognizerChoice::Modern => tl!("Modern print"),
+                    RecognizerChoice::Historical => tl!("Historical print (Fraktur)"),
+                    RecognizerChoice::HistoricalHandwriting => tl!("Historical handwriting (Kurrent)"),
+                })
+                .width(220.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut d.recognizer, RecognizerChoice::Modern, tl!("Modern print"));
+                    ui.selectable_value(&mut d.recognizer, RecognizerChoice::Historical, tl!("Historical print (Fraktur)"));
+                    ui.selectable_value(&mut d.recognizer, RecognizerChoice::HistoricalHandwriting, tl!("Historical handwriting (Kurrent)"));
+                });
             ui.end_row();
             ui.label(tl!("Engine"));
             let engine_name = match d.engine {
@@ -294,14 +367,17 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             });
             ui.end_row();
             ui.label(tl!("Output"));
+            // Only exact output leaves the page image alone; the scan corrections change it.
+            let exact = d.recognize && !(d.rotate_pages || d.straighten_pages || d.auto_crop);
+            let searchable = if exact { tl!("Searchable Image (Exact)") } else { tl!("Searchable Image") };
             let mode_name = match d.output_mode {
-                OutputMode::Searchable => tl!("Searchable Image (Exact)"),
+                _ if !d.recognize => tl!("Corrected scan"),
+                OutputMode::Searchable => searchable,
                 OutputMode::EditableText => tl!("Editable text"),
             };
             craft_ui::ComboBox::from_id_salt("ocr-output").selected_text(mode_name).width(220.0).show_ui(ui, |ui| {
-                let s = ui
-                    .selectable_label(d.output_mode == OutputMode::Searchable, tl!("Searchable Image (Exact)"))
-                    .on_hover_text(tl!("Adds invisible text over each word; the page image is not changed"));
+                let s = ui.selectable_label(d.output_mode == OutputMode::Searchable, searchable);
+                let s = if exact { s.on_hover_text(tl!("Adds invisible text over each word; the page image is not changed")) } else { s };
                 if s.clicked() {
                     d.output_mode = OutputMode::Searchable;
                 }
@@ -321,6 +397,51 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             });
             ui.end_row();
         });
+        if d.recognizer != RecognizerChoice::Modern {
+            ui.add_space(6.0);
+            if d.recognizer == RecognizerChoice::HistoricalHandwriting {
+                ui.label(
+                    egui::RichText::new(tl!(
+                        "Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported."
+                    ))
+                    .small(),
+                );
+            }
+            ui.label(
+                egui::RichText::new(tl!("Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.")).small(),
+            );
+            ui.label(
+                egui::RichText::new(tl!("Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking."))
+                    .small()
+                    .color(t.text_muted),
+            );
+            ui.label(
+                egui::RichText::new(tl!("The historical model detects its supported scripts automatically; Japanese is not included."))
+                    .small()
+                    .color(t.text_muted),
+            );
+            if addon_pending {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(tl!("Preparing OCR add-on…"));
+                });
+            } else if addon_installed {
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Historical OCR add-on installed"));
+                    remove_addon = ui.button(tl!("Remove add-on")).clicked();
+                });
+            } else if addon_supported {
+                install_addon = ui.button(tl!("Download historical OCR add-on (13 MB)")).clicked();
+                if addon_damaged {
+                    remove_addon = ui.button(tl!("Remove add-on")).clicked();
+                }
+            } else {
+                ui.label(egui::RichText::new(tl!("Historical OCR add-ons require the desktop app.")).small());
+            }
+            if let Some(message) = &addon_message {
+                ui.label(egui::RichText::new(message).small().color(t.text_muted));
+            }
+        }
         ui.add_space(4.0);
         ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
             .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));
@@ -328,6 +449,26 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.add(crate::widgets::checkbox(&mut d.deskew, tl!("Straighten skewed text lines")));
         ui.add(crate::widgets::checkbox(&mut d.denoise, tl!("Remove scan speckle")));
         ui.add(crate::widgets::checkbox(&mut d.binarize, tl!("Black and white (binarize)")));
+    });
+    group(ui, "Scan correction", &mut |ui| {
+        ui.add(crate::widgets::checkbox(&mut d.rotate_pages, tl!("Automatically rotate sideways and upside-down pages")));
+        ui.add(crate::widgets::checkbox(&mut d.straighten_pages, tl!("Straighten skewed scans")));
+        ui.add(crate::widgets::checkbox(&mut d.auto_crop, tl!("Crop scanner borders to the paper edge")));
+        ui.add_enabled_ui(d.auto_crop, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(tl!("Safety margin (pt)"));
+                ui.add(egui::DragValue::new(&mut d.crop_margin).range(0.0..=20.0).speed(0.5));
+            });
+        });
+        ui.label(
+            egui::RichText::new(tl!("Only clear paper edges are cropped. Indistinguishable white borders are kept.")).small().color(t.text_muted),
+        );
+        ui.add(crate::widgets::checkbox(&mut d.recognize, tl!("Add searchable text")));
+        ui.label(
+            egui::RichText::new(tl!("Uncertain orientations are left unchanged. Deskew fits the full image inside the page."))
+                .small()
+                .color(t.text_muted),
+        );
     });
     group(ui, "Skip", &mut |ui| {
         ui.add(crate::widgets::checkbox(&mut d.skip_text_pages, tl!("Skip pages that already have text")))
@@ -351,10 +492,13 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         });
     });
     keep_asking_while_probing(ui.ctx());
-    if let Some(why) = pdfcraft_engine::ocr::engine_unavailable_reason(d.engine) {
+    // The historical add-on reads alone, over the lines the built-in models detect: only those
+    // models count then, whatever the engine choice says.
+    let engine = if d.recognizer == RecognizerChoice::Modern { d.engine } else { EngineChoice::Ocrs };
+    if let Some(why) = pdfcraft_engine::ocr::engine_unavailable_reason(engine) {
         // Said in the interface's language: the built-in engine's missing models get the
         // notice users know; Tesseract's reasons are catalog keys of their own.
-        let text = match d.engine {
+        let text = match engine {
             pdfcraft_engine::ocr::EngineChoice::Tesseract => crate::i18n::t(&why).to_string(),
             _ => tl!("Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.")
                 .to_string(),
@@ -364,10 +508,15 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     }
     ui.add_space(6.0);
     let (mut go, mut cancel) = (false, false);
-    let can_run = pdfcraft_engine::ocr::engine_unavailable_reason(d.engine).is_none();
+    let can_run = pdfcraft_engine::ocr::engine_unavailable_reason(engine).is_none()
+        && (!d.recognize || d.recognizer == RecognizerChoice::Modern || (addon_installed && !addon_pending));
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.add_enabled_ui(can_run, |ui| widgets::pill_button(ui, tl!("Recognize text"), true)).inner.clicked() {
+            if ui
+                .add_enabled_ui(can_run, |ui| widgets::pill_button(ui, if d.recognize { tl!("Recognize text") } else { tl!("Correct scans") }, true))
+                .inner
+                .clicked()
+            {
                 go = true;
             }
             if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
@@ -375,10 +524,78 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             }
         })
     });
+    if install_addon {
+        app.start_ocr_addon_action(false);
+    }
+    if remove_addon {
+        app.start_ocr_addon_action(true);
+    }
     (go, cancel)
 }
 
 impl PdfCraftApp {
+    fn start_ocr_addon_job(&mut self, action: impl FnOnce() -> Result<AddonStatus, String> + Send + 'static) {
+        if self.ocr_addon.pending.is_some() {
+            return;
+        }
+        let result: AddonResult = Arc::new(Mutex::new(None));
+        self.ocr_addon.pending = Some(result.clone());
+        self.ocr_addon.message = None;
+        let ctx = self.ctx.clone();
+        let work = move || {
+            let answer =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(action)).unwrap_or_else(|_| Err("OCR add-on operation failed safely".into()));
+            if let Ok(mut slot) = result.lock() {
+                *slot = Some(answer);
+            }
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.run_inline {
+            work();
+        } else if let Err(error) = std::thread::Builder::new().name("pdfcraft-ocr-addon".into()).spawn(work) {
+            self.ocr_addon.pending = None;
+            self.ocr_addon.message = Some(error.to_string());
+        }
+        #[cfg(target_arch = "wasm32")]
+        work();
+        self.poll_ocr_addon();
+    }
+
+    fn start_ocr_addon_action(&mut self, remove: bool) {
+        if self.ocr_run.is_some() || self.ocr_batch.is_some() {
+            self.notify_tr("Wait for text recognition to finish before changing add-ons");
+            return;
+        }
+        self.start_ocr_addon_job(move || {
+            if remove {
+                ocr_addons::remove()?;
+                Ok(ocr_addons::status())
+            } else {
+                ocr_addons::install()
+            }
+        });
+    }
+
+    fn poll_ocr_addon(&mut self) {
+        let Some(pending) = self.ocr_addon.pending.clone() else { return };
+        let result = pending.lock().ok().and_then(|mut value| value.take());
+        if let Some(result) = result {
+            self.ocr_addon.pending = None;
+            match result {
+                Ok(status) => {
+                    self.ocr_addon.message = (status.state != "missing").then(|| status.detail.clone()).flatten();
+                    self.ocr_addon.status = Some(status);
+                }
+                Err(error) => self.ocr_addon.message = Some(error),
+            }
+        } else if let Some(ctx) = &self.ctx {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
+    }
+
     /// Recognize text on the pages chosen in the dialog, in the background.
     pub fn start_ocr(&mut self) {
         let Some((vi, id)) = self.active_ids() else { return };
@@ -422,6 +639,12 @@ impl PdfCraftApp {
         // a page with real text and a background picture is left alone.
         settings.skip_text_pages = true;
         settings.native_text_only = true;
+        // Reading only: the scan corrections the dialog may have left on would turn, straighten
+        // or crop the page in view unasked.
+        settings.recognize = true;
+        settings.rotate_pages = false;
+        settings.straighten_pages = false;
+        settings.auto_crop = false;
         self.start_ocr_pages(scan.doc, &[scan.page], settings, true);
     }
 
@@ -521,7 +744,7 @@ impl PdfCraftApp {
         }
         // The settings showing now, not when the folder arrives. A remembered folder (the last
         // batch's pick, persisted with the preferences) is reused; otherwise the user is asked.
-        let settings = self.ocr_draft.settings();
+        let settings = self.ocr_draft.batch_settings();
         #[cfg(not(target_arch = "wasm32"))]
         match self.export_dir_override.clone().or_else(|| self.ocr_draft.output_folder.clone()) {
             Some(d) => self.ocr_files_into(files, settings, d.into()),
@@ -636,6 +859,7 @@ impl PdfCraftApp {
 
     /// Show progress; apply the result once the worker is done.
     pub(crate) fn poll_ocr(&mut self) {
+        self.poll_ocr_addon();
         if let Some(b) = self.ocr_batch.clone() {
             let msg = b.lock().map(|mut s| s.message.take().ok_or((s.done, s.total))).map_err(|e| e.to_string());
             match msg {
@@ -699,8 +923,13 @@ impl PdfCraftApp {
             }
             return;
         };
+        let cancelled = s.cancel;
         drop(s);
         self.ocr_run = None;
+        if cancelled {
+            self.notify_tr("Scan processing cancelled");
+            return;
+        }
         // The result is for the bytes the run started from. If the document has changed since (a
         // page deleted or moved, say) its page index may now name another page: drop it, and let
         // the page in view be judged again.
@@ -730,6 +959,7 @@ impl PdfCraftApp {
         }
         let read = found.iter().filter(|p| p.skipped.is_none()).count();
         let skipped = found.len() - read;
+        let corrected = found.iter().filter(|p| p.skipped.is_none() && p.changed()).count();
         // The guard refuses a result that no longer fits its document (the user edited, or
         // redacted, while the worker was out); its reason says so.
         match self.session.apply_ocr_checked(doc, &found, &guard) {
@@ -752,10 +982,18 @@ impl PdfCraftApp {
                 let mut msg = crate::i18n::fmt(tl!("{words} on {pages}"), &[("words", &words_part), ("pages", &pages_part)]);
                 if skipped > 0 {
                     msg.push_str(&if skipped == 1 {
-                        crate::i18n::fmt(tl!("; 1 page already had text"), &[])
+                        crate::i18n::fmt(tl!("; 1 page skipped"), &[])
                     } else {
-                        crate::i18n::fmt(tl!("; {n} pages already had text"), &[("n", &skipped.to_string())])
+                        crate::i18n::fmt(tl!("; {n} pages skipped"), &[("n", &skipped.to_string())])
                     });
+                }
+                if corrected > 0 {
+                    msg.push_str(&crate::i18n::fmt(tl!("; corrected {n} pages"), &[("n", &corrected.to_string())]));
+                }
+                let reasons: std::collections::BTreeSet<_> = found.iter().filter_map(|p| p.skipped.as_deref()).collect();
+                if !reasons.is_empty() {
+                    msg.push_str(": ");
+                    msg.push_str(&reasons.into_iter().collect::<Vec<_>>().join("; "));
                 }
                 // The pages' own notes (the editable output's unrenderable-character warning,
                 // for one) are part of the result: said here, not dropped.
@@ -839,6 +1077,20 @@ fn batch_summary(ok: usize, words: usize, skipped: usize, failed: &[String], not
         msg.push_str(note);
     }
     msg
+}
+
+/// An OCR language's name in the picker: its native name when the interface's fonts can draw it,
+/// otherwise English, as the other language pickers do ([`crate::i18n::Lang::picker_name`]).
+/// egui 0.37 panics on a glyph no face has, and an English-only build without an embedded or
+/// installed Chinese face cannot draw `简体中文`.
+fn language_name(ui: &egui::Ui, code: &str, native: &'static str) -> &'static str {
+    let english = match code {
+        "ja" => "Japanese",
+        "zh-Hant" => "Traditional Chinese",
+        "zh-Hans" => "Simplified Chinese",
+        _ => return native,
+    };
+    if crate::dialogs::preferences::picker_text_is_drawable(ui, native) { native } else { english }
 }
 
 /// "Recognize text failed: {e}", in the current language.
@@ -935,6 +1187,19 @@ mod tests {
         app.session.apply(id, add).unwrap();
         assert_eq!(found(&mut app), Some(0), "a picture over the page makes it a scan");
     }
+    /// Correct scanned pages turns recognition off in the shared draft; a batch run started after it
+    /// still adds text, and skips pages with text unless the dialog says otherwise.
+    #[test]
+    fn batch_recognition_adds_text_after_correct_scanned_pages() {
+        let mut app = app_with(scan());
+        assert!(app.execute("ocr.correct_scan"));
+        assert!(!app.ocr_draft.settings().recognize);
+        let batch = app.ocr_draft.batch_settings();
+        assert!(batch.recognize && batch.skip_text_pages, "{batch:?}");
+        app.ocr_draft.text_pages = true;
+        assert!(!app.ocr_draft.batch_settings().skip_text_pages);
+    }
+
     /// A finished run Edit started is applied only once Read mode and dialogs are gone; one the user
     /// asked for is applied at once. The result is made up, so no OCR models are needed.
     #[test]
@@ -949,7 +1214,7 @@ mod tests {
         };
         let finished = |app: &PdfCraftApp, automatic: bool| {
             let generation = app.session.get(app.active_ids().unwrap().1).unwrap().edit_generation();
-            let page = pdfcraft_engine::ocr::OcrPage { page: 0, words: vec![word()], already_on_page: 0, skipped: None, notes: Vec::new() };
+            let page = pdfcraft_engine::ocr::OcrPage::with_words(0, vec![word()]);
             let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
             let guard = app.session.ocr_guard(app.active_ids().unwrap().1).unwrap();
             OcrRun {
@@ -991,9 +1256,9 @@ mod tests {
         let mut app = app_with(scan());
         let id = app.active_ids().unwrap().1;
         let generation = app.session.get(id).unwrap().edit_generation();
-        let page = pdfcraft_engine::ocr::OcrPage {
-            page: 0,
-            words: vec![pdfcraft_engine::ocr::PlacedWord {
+        let page = pdfcraft_engine::ocr::OcrPage::with_words(
+            0,
+            vec![pdfcraft_engine::ocr::PlacedWord {
                 text: "scanned".into(),
                 origin: [72.0, 700.0],
                 across: [60.0, 0.0],
@@ -1001,10 +1266,7 @@ mod tests {
                 confidence: None,
                 source: "ocrs".into(),
             }],
-            already_on_page: 0,
-            skipped: None,
-            notes: Vec::new(),
-        };
+        );
         let progress = Arc::new(Mutex::new(OcrProgress { done: 1, total: 1, result: Some(Ok(vec![page])), cancel: false }));
         let guard = app.session.ocr_guard(id).unwrap();
         app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: Some(AutoOcr { page: 0, generation }), editable: false });
@@ -1256,7 +1518,7 @@ mod tests {
             confidence: Some(95.0),
             source: "fake".into(),
         };
-        let page = OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() };
+        let page = OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new(), ..Default::default() };
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
         app.ocr_run = Some(OcrRun { doc: id, progress, guard, automatic: None, editable: false });
         app.poll_ocr();
@@ -1291,6 +1553,7 @@ mod tests {
             already_on_page: 0,
             skipped: None,
             notes: vec!["3 characters had no font that could show them and appear as ? in the output".into()],
+            ..Default::default()
         };
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
@@ -1317,7 +1580,7 @@ mod tests {
             confidence: Some(95.0),
             source: "ocrs".into(),
         };
-        let page = OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new() };
+        let page = OcrPage { page: 0, words: vec![word], already_on_page: 0, skipped: None, notes: Vec::new(), ..Default::default() };
         let guard = app.session.ocr_guard(id).unwrap();
         let progress = Arc::new(Mutex::new(OcrProgress { total: 1, done: 1, result: Some(Ok(vec![page])), cancel: false }));
         app.ocr_draft.output_mode = pdfcraft_engine::ocr::OutputMode::EditableText;

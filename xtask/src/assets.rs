@@ -2,7 +2,8 @@
 //!
 //! `ATTRIBUTION.toml` lists every asset: committed or vendored files (`[[asset]]`), files that
 //! Cargo dependencies compile into PdfCraft (`[[bundled]]`), and files xtask downloads at build
-//! time (`[[fetched]]`). This gate fails when:
+//! time (`[[fetched]]`), and explicit user-installed add-ons (`optional = true`).
+//! Optional add-ons are never fetched by build/package commands. This gate fails when:
 //! - an asset-like file in the repository has no entry, or its SHA-256 is missing or differs;
 //! - a licence is not on the allowlist, or a declared licence file is missing;
 //! - an icon, image or font names Adobe as author or source, or an `adobe_data` entry is not on
@@ -125,6 +126,9 @@ pub struct Bundled {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fetched {
+    /// Explicit user download only: never fetch or credit as a standard package asset.
+    #[serde(default)]
+    pub optional: bool,
     pub file: String,
     pub url: String,
     pub title: String,
@@ -171,10 +175,11 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     if problems.is_empty() {
         println!(
-            "assets: ok ({} repository assets, {} bundled by dependencies, {} fetched at build time)",
+            "assets: ok ({} repository assets, {} bundled by dependencies, {} fetched at build time, {} optional downloads)",
             manifest.asset.len(),
             manifest.bundled.len(),
-            manifest.fetched.len()
+            manifest.fetched.iter().filter(|f| !f.optional).count(),
+            manifest.fetched.iter().filter(|f| f.optional).count()
         );
         Ok(())
     } else {
@@ -315,12 +320,19 @@ pub fn check(root: &Path, m: &Manifest, repo_files: &[String], lock: &BTreeSet<(
     problems
 }
 
-/// Download (if needed) and verify every `[[fetched]]` entry of `kind` into `dir`, with its licence
+/// Download (if needed) and verify non-optional `[[fetched]]` entries of `kind`, with their licence
 /// text. Returns the paths of the fetched files. Uses `curl`, present on macOS, Windows 10+ and Linux.
 pub fn fetch_all(m: &Manifest, dir: &Path, kind: &str) -> Result<Vec<PathBuf>> {
     std::fs::create_dir_all(dir)?;
+    // Package scripts copy this whole directory. Reject contamination from an earlier
+    // manual download instead of accidentally shipping an opt-in add-on in an installer.
+    for f in m.fetched.iter().filter(|f| f.kind == kind && f.optional) {
+        if std::fs::symlink_metadata(dir.join(&f.file)).is_ok() {
+            bail!("optional add-on {} must not be in the standard {kind} package directory {}; move it out before packaging", f.file, dir.display());
+        }
+    }
     let mut out = Vec::new();
-    for f in m.fetched.iter().filter(|f| f.kind == kind) {
+    for f in m.fetched.iter().filter(|f| f.kind == kind && !f.optional) {
         let path = dir.join(&f.file);
         fetch_verified(&f.url, &path, &f.sha256)?;
         let licence = dir.join(format!("{}.LICENCE.txt", f.file));
@@ -366,7 +378,7 @@ pub fn models(args: &[String]) -> Result<()> {
 /// The credits shipped beside the models (their licences require attribution).
 fn models_attribution(m: &Manifest) -> String {
     let mut s = String::from("PdfCraft's text recognition (Scan & OCR) uses these models, unmodified.\n");
-    for f in m.fetched.iter().filter(|f| f.kind == "model") {
+    for f in m.fetched.iter().filter(|f| f.kind == "model" && !f.optional) {
         let _ = write!(
             s,
             "\n{}\n  {}\n  by {}\n  from {}\n  licence: {} ({}; full text in {}.LICENCE.txt)\n",
@@ -416,9 +428,16 @@ pub fn render_markdown(m: &Manifest) -> String {
     }
     s.push_str(&format!(
         "\n## Downloaded at build time ({})\n\nFonts are fetched by `cargo xtask demo-pdf` into `target/demo-fonts/`, OCR models by `cargo xtask models` into `assets/models/`; each is verified by SHA-256 and never committed.\n\n| File | Title | Author | Licence | Source | Used for |\n|---|---|---|---|---|---|\n",
-        m.fetched.len()
+        m.fetched.iter().filter(|f| !f.optional).count()
     ));
-    for f in &m.fetched {
+    for f in m.fetched.iter().filter(|f| !f.optional) {
+        let _ = writeln!(s, "| `{}` | {} | {} | {} | {} | {} |", f.file, esc(&f.title), esc(&f.author), f.licence, esc(&f.source), esc(&f.usage));
+    }
+    s.push_str(&format!(
+        "\n## Optional user-installed add-ons ({})\n\nDownloaded only after an explicit user action and verified by SHA-256. Build commands never fetch these files and standard installers never include them.\n\n| File | Title | Author | Licence | Source | Used for |\n|---|---|---|---|---|---|\n",
+        m.fetched.iter().filter(|f| f.optional).count()
+    ));
+    for f in m.fetched.iter().filter(|f| f.optional) {
         let _ = writeln!(s, "| `{}` | {} | {} | {} | {} | {} |", f.file, esc(&f.title), esc(&f.author), f.licence, esc(&f.source), esc(&f.usage));
     }
     s.push_str(&format!(
@@ -451,11 +470,35 @@ mod tests {
     fn models_attribution_credits_every_model() {
         let m = load(&root()).unwrap();
         let text = models_attribution(&m);
-        let models: Vec<_> = m.fetched.iter().filter(|f| f.kind == "model").collect();
+        let models: Vec<_> = m.fetched.iter().filter(|f| f.kind == "model" && !f.optional).collect();
         assert!(!models.is_empty());
         for f in models {
             assert!(text.contains(&f.file) && text.contains(&f.author) && text.contains(&f.licence), "{}", f.file);
         }
+    }
+
+    #[test]
+    fn optional_models_are_never_fetched_or_listed_in_standard_packages() {
+        let mut m = load(&root()).unwrap();
+        m.fetched.retain(|f| f.optional);
+        assert_eq!(m.fetched.len(), 2);
+        for f in &mut m.fetched {
+            f.url = "https://example.invalid/this-must-not-be-requested".into();
+        }
+        // fetch_all would fail if it attempted either deliberately unreachable URL.
+        let dir = root().join("target/optional-model-fetch-test");
+        assert!(fetch_all(&m, &dir, "model").unwrap().is_empty());
+        let credits = models_attribution(&m);
+        for f in &m.fetched {
+            assert!(!credits.contains(&f.file));
+            assert!(!dir.join(&f.file).exists());
+        }
+        assert!(render_markdown(&m).contains("Optional user-installed add-ons (2)"));
+        let contamination = dir.join(&m.fetched[0].file);
+        std::fs::write(&contamination, b"must not be bundled").unwrap();
+        let result = fetch_all(&m, &dir, "model");
+        std::fs::remove_file(contamination).unwrap();
+        assert!(result.unwrap_err().to_string().contains("must not be in the standard"));
     }
 
     fn asset(path: &str, author: &str, kind: &str, licence: &str) -> Asset {

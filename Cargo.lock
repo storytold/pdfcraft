@@ -4440,9 +4440,14 @@ dependencies = [
  "pdfcraft-xfa",
  "pdfcraft-xfdf",
  "png 0.18.1",
+ "rustls-native-certs",
+ "serde",
+ "sha2 0.11.1",
+ "tempfile",
  "thiserror 2.0.21",
  "tiff",
  "unicode-segmentation",
+ "ureq",
  "url",
 ]
 
@@ -4525,12 +4530,17 @@ dependencies = [
 name = "pdfcraft-ocr"
 version = "0.18.1"
 dependencies = [
+ "image",
  "ocrs",
  "pdfcraft-fonts",
  "png 0.18.1",
  "rten",
+ "rten-imageproc",
+ "rten-tensor",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "unicode-normalization",
 ]
 
 [[package]]

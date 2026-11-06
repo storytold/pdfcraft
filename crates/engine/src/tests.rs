@@ -5275,7 +5275,7 @@ fn recognize_text_makes_a_scanned_page_searchable() {
     assert_eq!(found.len(), 1);
     let text = page_texts(&s, id)[0].to_lowercase();
     for w in ["quick", "brown", "fox", "lazy"] {
-        assert!(text.contains(w), "{text}");
+        assert!(text.contains(w), "{text}; correction: {:?}", found[0].correction);
     }
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Recognize text"));
     // The text sits over the words: "quick" is left of "lazy" and on the same line.
@@ -6993,23 +6993,29 @@ fn a_value_a_script_sets_reaches_every_field_bound_to_the_same_data_node() {
     // `carried` inside the area and a second `carried` outside it bind to one data node (areas
     // are not data scopes). In document order: `setter` writes the inner one, `echo` reads the
     // outer one in the same event, and the saved data holds the one value.
-    let tpl = pdfcraft_xfa::fixtures::leave_template("<form><page><carried>5</carried></page></form>")
-        .replace(
-            r#"    <field name="rest" y="2.5in" w="2in" h="0.3in" access="readOnly">"#,
-            r#"    <field name="setter" y="3in" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate><script>carried = 9
+    // Keep this binding regression independent of the leave form's repeating table and
+    // unrelated calculation scripts: those can exhaust the real script deadline in a VM.
+    let tpl = r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea><contentArea w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" w="7.5in" h="9in">
+  <subform w="7.5in" h="8in">
+   <area name="box">
+    <field name="carried" y="1.5in" w="2in" h="0.3in"><ui><numericEdit/></ui></field>
+    <field name="allowance" y="2in" w="2in" h="0.3in"><ui><numericEdit/></ui><value><float>30</float></value></field>
+    <field name="setter" y="3in" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate><script>carried = 9
 9</script></calculate></field>
-    <field name="rest" y="2.5in" w="2in" h="0.3in" access="readOnly">"#,
-        )
-        .replace(
-            "  </subform>\n </subform>\n</subform>",
-            r#"  </subform>
+   </area>
+  </subform>
   <field name="carried" y="8.2in" w="2in" h="0.3in"><ui><numericEdit/></ui></field>
   <field name="echo" y="8.5in" w="2in" h="0.3in"><ui><numericEdit/></ui><calculate><script>carried + 0</script></calculate></field>
  </subform>
-</subform>"#,
-        );
-    assert!(tpl.contains("name=\"echo\"") && tpl.contains("name=\"setter\""), "the fixture was reshaped");
-    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&tpl));
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><page><carried>5</carried></page></form></xfa:data></xfa:datasets>
+</xdp:xdp>"#;
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(tpl));
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("shared.pdf", None, bytes, None).expect("opens");
     let out = s.take_js_output(id);
@@ -7230,18 +7236,28 @@ f(1)</script>",
 
 #[test]
 fn a_formcalc_calculate_result_is_cut_before_it_is_saved() {
-    let tpl = pdfcraft_xfa::fixtures::formcalc_template()
-        .replace("<script>WordNum(total)</script>", "<script>Replace(Space(100000), \" \", \"x\")</script>");
-    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&tpl));
+    // Only the calculation under test: unrelated initialize/total/table scripts in the
+    // full demo form can spend the opening budget on a contended/virtualized CI runner.
+    // Keep production time limits, exact clipping and persisted-content checks unchanged.
+    let tpl = r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+      <subform name="form">
+        <field name="words" w="4in" h="0.3in" access="readOnly">
+          <ui><textEdit/></ui>
+          <calculate><script contentType="application/x-formcalc">Replace(Space(100000), " ", "x")</script></calculate>
+        </field>
+      </subform>
+    </template>"#;
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(tpl));
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("long.pdf", None, bytes, None).expect("opens");
     let words = |s: &Session, id| s.get(id).unwrap().form.iter().find(|f| f.name == "words").unwrap().value.concat();
-    assert_eq!(words(&s, id).chars().count(), 65_536);
     let out = s.take_js_output(id);
+    assert_eq!(words(&s, id), "x".repeat(65_536), "{out:?}");
     assert!(out.errors.iter().any(|e| e.contains("cut")), "{out:?}");
     let saved = s.save_bytes(id).unwrap();
+    s.set_javascript(false); // Read persisted data without calculating it again.
     let id2 = s.open("again.pdf", None, saved, None).unwrap();
-    assert!(words(&s, id2).chars().count() <= 65_536);
+    assert_eq!(words(&s, id2), "x".repeat(65_536));
 }
 
 #[test]

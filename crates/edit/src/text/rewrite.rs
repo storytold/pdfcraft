@@ -254,7 +254,7 @@ fn choose_rewrite_path(
         use_styled_path: upright
             && !hebrew
             && !visual_indic
-            && (explicit_styled_text || (source_requires_styled_path && style.family.is_none() && style.bold.is_none())),
+            && (block.invisible || explicit_styled_text || (source_requires_styled_path && style.family.is_none() && style.bold.is_none())),
     })
 }
 

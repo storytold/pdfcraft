@@ -184,7 +184,7 @@ pub(super) fn across(line: &TextLine) -> f64 {
 }
 
 /// Invisible text (rendering mode 3), as in an OCR layer over a scanned image.
-fn invisible(line: &TextLine) -> bool {
+pub(super) fn invisible(line: &TextLine) -> bool {
     line.origin.state.render_mode == 3
 }
 
@@ -253,10 +253,20 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 // two equal-size runs can land within it too, at a baseline shift tight columns
                 // or compressed text (`Tz`) can produce between genuinely separate rows, and the
                 // original 20% tolerance is what keeps those apart.
-                && ((prev.frame_origin().1 - line.frame_origin().1).abs() < prev.size.min(line.size) * 0.2
-                    || (gap >= 0.0
-                        && prev.size.min(line.size) < prev.size.max(line.size) * 0.9
-                        && (prev.frame_origin().1 - line.frame_origin().1).abs() < prev.size.max(line.size) * 0.5))
+                && if mixed && invisible(prev) && invisible(line) {
+                    // OCR fonts fit each word's ink box. Their synthetic baselines differ for
+                    // words with descenders; require substantial vertical overlap instead.
+                    let a = prev.frame_rect();
+                    let b = line.frame_rect();
+                    let overlap = a[3].min(b[3]) - a[1].max(b[1]);
+                    let height = (a[3] - a[1]).min(b[3] - b[1]);
+                    height > 0.0 && overlap > height * 0.5
+                } else {
+                    (prev.frame_origin().1 - line.frame_origin().1).abs() < prev.size.min(line.size) * 0.2
+                        || (gap >= 0.0
+                            && prev.size.min(line.size) < prev.size.max(line.size) * 0.9
+                            && (prev.frame_origin().1 - line.frame_origin().1).abs() < prev.size.max(line.size) * 0.5)
+                }
                 && gap >= -prev.size.min(line.size) * 0.2
                 && gap < prev.size.max(line.size) * 1.5
                 // Separate same-style text objects that merely touch or overlap, with no space
