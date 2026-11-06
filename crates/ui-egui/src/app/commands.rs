@@ -104,10 +104,11 @@ impl PdfCraftApp {
         } else if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
             self.put_down_edit_text();
         }
-        // Read mode hides the quick toolbar, so no other tool may stay active there. Opening a
-        // document with Read as the default mode comes here without `switch_mode`.
+        // Read mode hides the quick toolbar, so only the reading tool may stay active there:
+        // the default tool (Select, or Hand when the user reads by dragging the page, #6235).
+        // Opening a document with Read as the default mode comes here without `switch_mode`.
         if mode == Mode::Read {
-            self.quick_tool = QuickTool::Select;
+            self.quick_tool = self.default_tool.quick_tool();
         }
     }
 
@@ -141,7 +142,8 @@ impl PdfCraftApp {
     /// Switches workspace because the user chose to (mode bar, Read mode command). Entering Read
     /// mode closes the right panel, as Acrobat's Read mode hides its panes, and leaving it reopens
     /// that panel. The rail stays in Read mode, and its buttons open panels there too (#932).
-    /// Read mode hides the quick toolbar, so entering it also puts the current tool down.
+    /// Read mode hides the quick toolbar, so entering it also puts the current tool down, to the
+    /// default tool.
     pub(crate) fn switch_mode(&mut self, mode: Mode, select_tools: bool) {
         let was_read = self.mode == Mode::Read;
         if select_tools {
@@ -154,9 +156,8 @@ impl PdfCraftApp {
             // An editing tool is put down so its open paragraph is applied, as `select_mode` does.
             if matches!(self.quick_tool, QuickTool::EditText | QuickTool::AddText) {
                 self.put_down_edit_text();
-            } else {
-                self.quick_tool = QuickTool::Select;
             }
+            self.quick_tool = self.default_tool.quick_tool();
         } else if mode != Mode::Read && was_read {
             let before = self.right_before_read.take();
             if self.right.is_none() {

@@ -504,6 +504,31 @@ fn opening_into_read_mode_puts_the_tool_down() {
     assert_eq!(h.state().quick_tool, QuickTool::Select, "no tool stays active behind the hidden toolbar");
 }
 
+/// With Hand as the default tool (#6235), Read mode puts the tool in use down to the Hand tool, not
+/// to Select: entering it from another tool, from an editing tool, and opening a document into it.
+#[test]
+fn read_mode_puts_the_tool_down_to_the_default_tool() {
+    use pdfcraft_ui_egui::{DefaultTool, Mode, QuickTool};
+    let mut h = harness(|app| {
+        app.default_tool = DefaultTool::Hand;
+        app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens");
+    });
+    for tool in ["highlight", "select", "edit-text"] {
+        h.state_mut().set_option("quick", tool).unwrap();
+        h.state_mut().run_command("view.read_mode");
+        h.run_steps(3);
+        assert_eq!((h.state().mode, h.state().quick_tool), (Mode::Read, QuickTool::Hand), "Read mode from {tool}");
+        h.state_mut().run_command("view.read_mode");
+        h.run_steps(2);
+        assert_eq!(h.state().mode, Mode::AllTools);
+    }
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.state_mut().set_option("default-mode", "read").unwrap();
+    h.state_mut().open_bytes("again.pdf", None, FIXTURE.to_vec()).unwrap();
+    h.run_steps(3);
+    assert_eq!((h.state().mode, h.state().quick_tool), (Mode::Read, QuickTool::Hand), "opened into Read mode");
+}
+
 /// A pane closed in Read mode stays closed on the way out: leaving Read mode doesn't bring back the
 /// pane saved on the way in, and closing Comments keeps its close preference.
 #[test]
@@ -1286,6 +1311,40 @@ fn preferences_selects_default_workspace_for_next_open() {
     h.run_steps(2);
     h.state_mut().open_bytes("fixture.pdf", None, FIXTURE.to_vec()).unwrap();
     assert_eq!(h.state().mode, Mode::Read);
+}
+
+/// The default tool (#6235) is saved, and it is the tool PdfCraft starts with; a saved value other
+/// than select or hand leaves Select.
+#[test]
+fn the_default_tool_is_saved_and_starts_the_app() {
+    use pdfcraft_ui_egui::{DefaultTool, QuickTool};
+    for tool in [DefaultTool::Select, DefaultTool::Hand] {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.default_tool = tool;
+        let mut restored = PdfCraftApp::new();
+        restored.set_option("language", "en").unwrap();
+        restored.restore(&app.persist());
+        assert_eq!((restored.default_tool, restored.quick_tool), (tool, tool.quick_tool()));
+    }
+    for json in ["{}", r#"{"default_tool": null}"#, r#"{"default_tool": 5}"#, r#"{"default_tool": "highlight"}"#] {
+        let mut app = PdfCraftApp::new();
+        app.restore(json);
+        assert_eq!((app.default_tool, app.quick_tool), (DefaultTool::Select, QuickTool::Select), "{json}");
+    }
+}
+
+#[test]
+fn preferences_sets_the_default_tool() {
+    use egui::accesskit::Role;
+    use pdfcraft_ui_egui::DefaultTool;
+    let mut h = harness(|app| app.set_option("dialog", "preferences").unwrap());
+    h.get_by_label("Default tool");
+    h.get_by_role_and_label(Role::RadioButton, "Hand").scroll_to_me();
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::RadioButton, "Hand").click();
+    h.run_steps(2);
+    assert_eq!(h.state().default_tool, DefaultTool::Hand);
 }
 
 /// GNOME on Wayland: the tab strip carries the window buttons until Preferences ▸ Use system title

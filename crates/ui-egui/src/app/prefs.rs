@@ -92,6 +92,7 @@ impl PdfCraftApp {
             "invert_middle_drag": self.invert_middle_drag,
             "animation_effects": self.animation_effects,
             "default_mode": self.default_mode,
+            "default_tool": self.default_tool,
             "default_layout": canvas::display_token(self.view_defaults.layout, self.view_defaults.continuous),
             "default_zoom": self.view_defaults.zoom_name(),
             "always_default_view": self.always_default_view,
@@ -263,6 +264,11 @@ impl PdfCraftApp {
         }
         if let Ok(mode) = serde_json::from_value::<Mode>(v["default_mode"].clone()) {
             self.default_mode = mode;
+        }
+        // The saved default tool is also the tool PdfCraft starts with.
+        if let Ok(tool) = serde_json::from_value::<DefaultTool>(v["default_tool"].clone()) {
+            self.default_tool = tool;
+            self.quick_tool = tool.quick_tool();
         }
         if let Some((layout, continuous)) = v["default_layout"].as_str().and_then(canvas::parse_display_token) {
             (self.view_defaults.layout, self.view_defaults.continuous) = (layout, continuous);

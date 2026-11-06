@@ -710,6 +710,13 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
     ctx.label_secondary(ui, tl!("Used when opening PDFs. An explicit launch or control mode takes precedence for the session."), t);
     ui.add_space(6.0);
 
+    ui.horizontal(|ui| {
+        ctx.label_primary(ui, tl!("Default tool"), t);
+        ctx.pill_choice(ui, t, &mut app.default_tool, &[(crate::DefaultTool::Select, tl!("Select")), (crate::DefaultTool::Hand, tl!("Hand"))]);
+    });
+    ctx.label_secondary(ui, tl!("The tool PdfCraft starts with, and the one Read mode uses. V and H still switch."), t);
+    ui.add_space(6.0);
+
     let defaults = &mut app.view_defaults;
     ui.horizontal(|ui| {
         ctx.label_primary(ui, tl!("Default page display"), t);
