@@ -1,10 +1,10 @@
-//! Scan & OCR ▸ Correct recognized text: the OCR Verify screen. A full-workspace surface with
-//! four panes (page list, source page, recognized text, zoom + word inspector) where a
-//! recognition is reviewed before it is applied: words are colored by confidence, corrected,
-//! removed (and restored), sent to a per-language user dictionary, and navigated by their
-//! uncertainty. Accept applies the review — as one undoable step on the open document
-//! (searchable), or as a new `<name>_ocr.pdf` of visible text (editable). Reject throws the
-//! reading away.
+//! Scan & OCR ▸ Correct recognized text: the OCR Verify screen. It takes the document area,
+//! under the window's tabs, menus and toolbar, with four panes (page list, source page,
+//! recognized text, zoom + word inspector) where a recognition is reviewed before it is
+//! applied: words are colored by confidence, corrected, removed (and restored), sent to a
+//! per-language user dictionary, and navigated by their uncertainty. Accept applies the
+//! review — as one undoable step on the open document (searchable), or as a new
+//! `<name>_ocr.pdf` of visible text (editable). Reject throws the reading away.
 //!
 //! The state machine is [`Phase`]: recognition runs on a worker thread ([`Phase::Running`], a
 //! real Cancel keeps the pages already read), results land in [`Phase::ReviewReady`], failures
@@ -220,7 +220,8 @@ pub struct RereadProgress {
 pub struct OcrVerify {
     pub open: bool,
     pub phase: Phase,
-    /// The document being reviewed; `None` until a run starts.
+    /// The document being reviewed; before a run, the document in front (the source pane shows
+    /// its page).
     pub doc: Option<DocId>,
     /// The recognition results, in page order, as read (review edits mutate them).
     pub pages: Vec<OcrPage>,
@@ -250,6 +251,9 @@ pub struct OcrVerify {
     /// Language of the captured recognition, independent of the interface locale.
     pub dictionary_language: String,
     pub(crate) preview: Option<Preview>,
+    /// The mode the screen was last drawn in (`None` while it is closed): switching to another
+    /// puts the screen away.
+    pub(crate) shown_in: Option<crate::state::Mode>,
 }
 
 fn dictionary_path(dir: &std::path::Path, language: &str) -> Result<PathBuf, String> {
@@ -294,6 +298,7 @@ impl Default for OcrVerify {
             dictionary_dir: None,
             dictionary_language: "en".into(),
             preview: None,
+            shown_in: None,
         }
     }
 }
@@ -308,9 +313,16 @@ impl OcrVerify {
         self.review = Review::default();
         self.selected = None;
         self.region = None;
-        self.current = self.current.min(self.pages.len().saturating_sub(1));
+        self.show_a_read_page();
         self.phase = Phase::ReviewReady;
         self.load_dictionary_pref();
+    }
+
+    /// Keep showing the current page if the reading has it, else show the first page read.
+    fn show_a_read_page(&mut self) {
+        if self.page(self.current).is_none() {
+            self.current = self.pages.first().map_or(0, |p| p.page);
+        }
     }
 
     /// The count of live (not removed, not empty) words across the review.
@@ -1040,7 +1052,7 @@ impl OcrVerify {
         self.review = Review::default();
         self.selected = None;
         self.region = None;
-        self.current = self.current.min(self.pages.len().saturating_sub(1));
+        self.show_a_read_page();
         let total = self.pages.len();
         self.message = if cancelled {
             crate::i18n::fmt(
@@ -1091,7 +1103,8 @@ impl OcrVerify {
         let progress = Arc::new(Mutex::new(ocr_ui::OcrProgress { total: job.pages.len(), ..Default::default() }));
         self.doc = Some(id);
         self.guard = Some(job.guard.clone());
-        self.current = 0;
+        // The source pane shows the first page this run reads (the current page, for that scope).
+        self.current = job.pages.first().copied().unwrap_or(0);
         self.cancelled = false;
         self.phase = Phase::Running;
         self.message = String::new();
@@ -1186,9 +1199,10 @@ fn band_color(band: ConfidenceBand) -> egui::Color32 {
     }
 }
 
-/// The whole-window OCR Verify screen (Scan & OCR ▸ Correct recognized text).
+/// The OCR Verify screen (Scan & OCR ▸ Correct recognized text), in the document area.
 pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     use egui::{Key, Modifiers};
+    follow_active_document(app);
     let ctx = ui.ctx().clone();
     let t = Tokens::get(&ctx);
     let wants_text = ctx.egui_wants_keyboard_input();
@@ -1251,6 +1265,19 @@ pub(crate) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         app.ocr_verify.focus = app.ocr_verify.focus.next();
     }
     apply(app, n);
+}
+
+/// With no reading in hand (before a run, or after a review was accepted or rejected), the
+/// source pane shows the document in front at the page it is on, so the screen never opens on
+/// a blank pane (#6485). A run or a review keeps the document and page it was made for.
+fn follow_active_document(app: &mut PdfCraftApp) {
+    let v = &app.ocr_verify;
+    if !(v.phase == Phase::Idle || (v.phase == Phase::RecoverableError && v.pages.is_empty())) {
+        return;
+    }
+    let active = app.active_ids();
+    app.ocr_verify.doc = active.map(|(_, id)| id);
+    app.ocr_verify.current = active.and_then(|(i, _)| app.views.get(i)).map_or(0, |view| view.current);
 }
 
 /// A pane's caption; the focused pane's name is underlined (Ctrl+Tab moves the focus).
@@ -2826,5 +2853,44 @@ mod tests {
         let img = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(396.0, 306.0));
         let r = pane_region([100.0, 50.0, 200.0, 150.0], &turned, img).expect("on the page");
         assert_eq!((r.left(), r.top(), r.right(), r.bottom()), (50.0, 25.0, 100.0, 75.0));
+    }
+
+    /// Correct recognized text on a document not yet read keeps the window's tabs, menus and
+    /// toolbar, and its source pane shows the document's page (#6485: the screen took the
+    /// whole window and the page area was blank). Another mode puts the screen away.
+    #[test]
+    fn correct_recognized_text_keeps_the_chrome_and_shows_the_page() {
+        use egui_kittest::kittest::Queryable;
+        let bytes = Session::new().create_from_text("t", "Recognize these scanned words").expect("fixture").to_vec();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.open_bytes("scan.pdf", None, bytes.clone()).expect("fixture");
+            app
+        });
+        h.run_steps(4);
+        assert!(h.state_mut().execute("ocr.correct"));
+        h.run_steps(3);
+        let id = h.state().active_ids().expect("a document is open").1;
+        h.get_by_label("Run OCR");
+        assert!(h.query_by_label("Find tools and commands").is_some(), "the toolbar stays");
+        assert!(h.query_by_label("scan.pdf").is_some(), "the document's tab stays");
+        let v = &h.state().ocr_verify;
+        assert_eq!(v.doc, Some(id), "the screen shows the document in front");
+        let preview = v.preview.as_ref().expect("the source page is rendered");
+        assert_eq!((preview.doc, preview.page), (id, 0));
+        assert!(preview.texture.is_some(), "and drawn");
+        h.get_by_label("E-Sign").click();
+        h.run_steps(3);
+        assert!(!h.state().ocr_verify.open, "another mode puts the screen away");
+    }
+
+    /// A run of one page shows that page when its reading lands, not page 1.
+    #[test]
+    fn a_finished_run_shows_a_page_it_read() {
+        let mut v = OcrVerify { current: 0, ..Default::default() };
+        let page = OcrPage { already_on_page: 0, page: 2, words: vec![word("w", Some(95.0))], skipped: None, notes: Vec::new() };
+        v.finished(vec![page], false);
+        assert_eq!(v.current, 2);
+        assert!(v.page(v.current).is_some());
     }
 }
