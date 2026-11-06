@@ -42,6 +42,12 @@ impl PdfCraftApp {
                 })
                 .collect()
         });
+        // In the Pages panel they copy, cut and paste pages, as its menu does: into another tab
+        // or window too, since the copied pages are the app's. Nothing lands on the page.
+        if self.pages_panel_has_keys(i, ctx) {
+            self.page_clipboard_keys(ctx, !pastes.is_empty());
+            return;
+        }
         let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input() && !self.is_preparing();
         if !free || self.views.get(i).is_some_and(|v| v.forms.focus.is_some() || v.organize) {
             self.receive_pastes(i, pastes, false);
@@ -89,6 +95,42 @@ impl PdfCraftApp {
 
             let page = self.views.get(i).map_or(0, |v| v.current);
             self.paste_image(page, None);
+        }
+    }
+
+    /// Whether ⌘C / ⌘X / ⌘V are the Pages panel's: it shows tab `i`'s pages, nothing modal is
+    /// open, and its thumbnails have the keyboard, or the pointer is over it while nothing else
+    /// has the keyboard (as for its Delete key). The page grid has its own.
+    fn pages_panel_has_keys(&self, i: usize, ctx: &egui::Context) -> bool {
+        let Some(view) = self.views.get(i) else { return false };
+        if self.right != Some(RightPanel::Pages) || view.organize || self.dialog.is_some() || self.palette_open {
+            return false;
+        }
+        let focused = view.pages_focus_id.is_some_and(|id| ctx.memory(|m| m.has_focus(id)));
+        // The panel's rect as last drawn: these keys are read before the panels draw.
+        let over = || view.pages_panel.zip(ctx.pointer_hover_pos()).is_some_and(|(panel, at)| panel.contains(at));
+        focused || (!ctx.egui_wants_keyboard_input() && over())
+    }
+
+    /// ⌘C / ⌘X / ⌘V in the Pages panel: Copy, Cut and Paste after on the selected pages (the
+    /// current one when none is), as Pages ▸ … does. The desktop delivers them as clipboard
+    /// events (`pasted`: a paste of anything, since what is pasted is the copied pages), tests as
+    /// keys. Cut and Paste need a document that may be assembled (the command is greyed out
+    /// otherwise).
+    fn page_clipboard_keys(&mut self, ctx: &egui::Context, pasted: bool) {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        let event = |f: fn(&egui::Event) -> bool| ctx.input(|input| input.events.iter().any(f));
+        let shortcut = |key| ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, key)));
+        let cut = event(|e| matches!(e, egui::Event::Cut)) | shortcut(Key::X);
+        let copy = event(|e| matches!(e, egui::Event::Copy)) | shortcut(Key::C);
+        let paste = pasted | shortcut(Key::V);
+        if cut {
+            self.execute("page.cut");
+        } else if copy {
+            self.execute("page.copy");
+        }
+        if paste {
+            self.execute("page.paste");
         }
     }
 
