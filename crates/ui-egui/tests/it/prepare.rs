@@ -56,6 +56,68 @@ fn rect_of(h: &Harness<'static, PdfCraftApp>, name: &str) -> [f64; 4] {
 }
 
 #[test]
+fn shift_selected_small_widgets_have_blue_tags_and_visible_outlines() {
+    use egui::{Color32, Event, Modifiers, PointerButton, Shape, StrokeKind};
+    use pdfcraft_engine::{Edit, NewField, Session};
+
+    let mut session = Session::new();
+    let bytes = session.create_blank(300.0, 400.0, 1).unwrap();
+    let id = session.open("selection.pdf", None, bytes, None).unwrap();
+    for (name, rect, kind) in [
+        ("first", [40.0, 290.0, 54.0, 304.0], NewField::CheckBox),
+        ("second", [90.0, 290.0, 104.0, 304.0], NewField::CheckBox),
+        ("text", [40.0, 230.0, 230.0, 254.0], NewField::Text { multiline: false }),
+    ] {
+        session.apply(id, Edit::AddField { name: Some(name.into()), page: 0, rect, kind }).unwrap();
+    }
+    let mut h = harness_with("selection.pdf", session.save_bytes(id).unwrap().as_ref().clone());
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(3);
+    for (x, modifiers) in [(47.0, Modifiers::NONE), (97.0, Modifiers::SHIFT)] {
+        let pos = at(&h, x, 103.0);
+        h.event(Event::ModifiersChanged(modifiers));
+        h.hover_at(pos);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers });
+            h.run_steps(1);
+        }
+    }
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].prepare.names().len(), 2);
+    let blue = Color32::from_rgb(0x14, 0x73, 0xE6);
+    for (x, y, selected) in [(47.0, 103.0, true), (97.0, 103.0, true), (135.0, 158.0, false)] {
+        let center = at(&h, x, y);
+        let shapes: Vec<_> = h.output().shapes.iter().filter(|s| s.clip_rect.contains(center)).collect();
+        let tag = shapes.iter().position(|s| {
+            matches!(&s.shape, Shape::Rect(r)
+            if r.rect.contains(center) && r.fill == if selected { blue } else { Color32::BLACK })
+        });
+        assert!(tag.is_some(), "widget at {center:?} must have its selection-colored name tag");
+        let outline = shapes.iter().position(|s| {
+            matches!(&s.shape, Shape::Rect(r)
+            if r.rect.contains(center) && r.stroke.color == blue && r.stroke.width == 2.0 && r.stroke_kind == StrokeKind::Outside)
+        });
+        if selected {
+            assert!(outline > tag, "the selected outline must be outside and painted after the tag");
+        } else {
+            assert!(outline.is_none(), "unselected text field has no selection outline");
+        }
+    }
+    assert_eq!(
+        h.output()
+            .shapes
+            .iter()
+            .filter(|s| matches!(&s.shape, Shape::Circle(c)
+        if c.radius == 3.5 && c.stroke.color == blue))
+            .count(),
+        4,
+        "only the primary has resize handles"
+    );
+}
+
+#[test]
 fn placing_moving_editing_and_deleting_a_field() {
     let mut h = harness();
     let before = names(&h).len();
