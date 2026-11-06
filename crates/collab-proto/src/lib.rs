@@ -370,7 +370,8 @@ pub struct VersionHint {
     pub epoch: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[error("{message}")]
 pub struct Rejected {
     pub op_id: OpId,
     pub code: ErrorCode,
@@ -498,7 +499,8 @@ pub enum ServerMessage {
     Pong(Ping),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[error("{message}")]
 pub struct ServerError {
     pub code: ErrorCode,
     pub message: String,
