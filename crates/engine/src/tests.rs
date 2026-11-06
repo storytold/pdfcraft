@@ -3301,6 +3301,72 @@ fn printing_keeps_hidden_layers_hidden() {
     assert!(red > 100, "shown again, Layer A prints again: {red} red");
 }
 
+/// ISO 32000-2 §8.11.4.4: the default configuration's auto state for the Print event sets the
+/// layers it names when the document prints. Red is on screen but `/PrintState /OFF`, green is off
+/// on screen but `/PrintState /ON`: on paper, vector or as an image, green prints and red doesn't.
+#[test]
+fn printing_applies_the_print_auto_state() {
+    let content = b"/OC /A BDC 1 0 0 rg 10 10 80 80 re f EMC /OC /B BDC 0 1 0 rg 110 10 80 80 re f EMC";
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R 6 0 R] /D << /OFF [6 0 R] \
+          /AS [<< /Event /Print /OCGs [5 0 R 6 0 R] /Category [/Print] >> << /Event /View /OCGs [5 0 R 6 0 R] /Category [/View] >>] >> >> >>"
+            .to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Properties << /A 5 0 R /B 6 0 R >> >> >>".to_vec(),
+        [format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(), content, b"\nendstream"].concat(),
+        b"<< /Type /OCG /Name (View only) /Usage << /View << /ViewState /ON >> /Print << /PrintState /OFF >> >> >>".to_vec(),
+        b"<< /Type /OCG /Name (Print only) /Usage << /View << /ViewState /OFF >> /Print << /PrintState /ON >> >> >>".to_vec(),
+    ];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        pdf.extend_from_slice(o);
+        pdf.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+
+    let colours = |page: &pdfcraft_render::RenderedPage| {
+        let px = page.rgba.as_chunks::<4>().0;
+        let red = px.iter().filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60).count();
+        let green = px.iter().filter(|p| p[1] > 200 && p[0] < 60 && p[2] < 60).count();
+        (red, green)
+    };
+    let mut s = Session::new();
+    let id = s.open("auto-state.pdf", None, Arc::new(pdf), None).unwrap();
+    let (red, green) = colours(&render_page(&s, id));
+    assert!(red > 100 && green == 0, "on screen, red shows and green doesn't: {red} red, {green} green");
+    for raster in [None, Some(print::Raster { dpi: 72.0, grayscale: false })] {
+        let bytes = Arc::new(s.print_pdf(id, &print::Settings { pages: vec![0], raster, ..Default::default() }).unwrap());
+        let mut out = Session::new();
+        let printed = out.open("print.pdf", None, bytes.clone(), None).unwrap();
+        let (red, green) = colours(&render_page(&out, printed));
+        assert_eq!(red, 0, "the view-only layer doesn't print (as image: {})", raster.is_some());
+        assert!(green > 100, "the print-only layer prints (as image: {}): {green} green", raster.is_some());
+        // The vector copy's states are final: nothing a reader applies when drawing is left to
+        // turn them back (the auto state, or a layer's `/Usage /View /ViewState`).
+        let layers = &out.get(printed).unwrap().info.layers;
+        if raster.is_none() {
+            let cos = pdfcraft_cos::Document::open(bytes).unwrap();
+            assert_eq!(layers.len(), 2);
+            for layer in layers {
+                let group = cos.get(pdfcraft_cos::ObjRef::new(layer.id.0, layer.id.1));
+                assert!(group.as_dict().is_some_and(|g| !g.contains(b"Usage")), "{} keeps its /Usage", layer.name);
+            }
+            let root = cos.trailer().get(b"Root").map(|r| cos.resolve(r)).unwrap();
+            let properties = root.as_dict().and_then(|r| r.get(b"OCProperties")).map(|p| cos.resolve(p)).unwrap();
+            let config = properties.as_dict().and_then(|p| p.get(b"D")).map(|d| cos.resolve(d)).unwrap();
+            assert!(config.as_dict().is_some_and(|d| !d.contains(b"AS")), "the print copy keeps /AS");
+        }
+    }
+}
+
 #[test]
 fn printing_lays_out_sheets_that_render() {
     let (s, id) = session_with(5);
