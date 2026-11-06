@@ -290,11 +290,13 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     use crate::{icons, widgets};
 
     let t = Tokens::get(ui.ctx());
+    let rtl = crate::i18n::current().rtl();
+    let end_center = if rtl { egui::Layout::left_to_right(egui::Align::Center) } else { egui::Layout::right_to_left(egui::Align::Center) };
     app.refresh_pinned(ui.input(|i| i.time));
     let mut pin = false;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!("Folders")).font(theme::semibold(17.0)));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(end_center, |ui| {
             pin = widgets::ghost_button(ui, "folder-plus", tl!("Pin a folder…")).clicked();
         });
     });
@@ -324,7 +326,7 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 ui.set_max_width(room);
                 widgets::label_ltr(ui, location(folder), theme::regular(12.0), t.text_faint).on_hover_text(folder);
             });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.with_layout(end_center, |ui| {
                 let resp = widgets::ghost_button(ui, "x", tl!("Unpin"));
                 // Every folder has an Unpin button: say which one it is.
                 let label = crate::i18n::fmt(tl!("Unpin {folder}"), &[("folder", &name)]);
@@ -358,19 +360,25 @@ pub(crate) fn section(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             if resp.hovered() {
                 ui.painter().rect_filled(rect, CornerRadius::same(8), t.hover);
             }
-            icons::paint(
-                ui,
-                Rect::from_min_size(rect.min + vec2(32.0, 9.0), vec2(20.0, 20.0)),
-                "file-text",
-                18.0,
-                egui::Color32::from_rgb(0xE0, 0x3E, 0x3E),
-            );
+            let icon_pos = if rtl { egui::pos2(rect.right() - 52.0, rect.top() + 9.0) } else { rect.min + vec2(32.0, 9.0) };
+            icons::paint(ui, Rect::from_min_size(icon_pos, vec2(20.0, 20.0)), "file-text", 18.0, egui::Color32::from_rgb(0xE0, 0x3E, 0x3E));
             let size = crate::panels::human_size(usize::try_from(f.size).unwrap_or(usize::MAX));
             let when = f.modified.map(crate::combine_ui::ago).unwrap_or_default();
             let detail = if when.is_empty() { size } else { format!("{when}  ·  {size}") };
-            let detail = ui.painter().text(rect.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, detail, theme::regular(12.0), t.text_muted);
-            let width = detail.left() - 16.0 - (rect.left() + 62.0);
-            widgets::row_text(ui, rect.min + vec2(62.0, 19.0), f.name.as_str(), theme::medium(13.0), t.text, width);
+            let (detail_pos, detail_align) = if rtl {
+                (rect.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER)
+            } else {
+                (rect.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER)
+            };
+            let detail = ui.painter().text(detail_pos, detail_align, detail, theme::regular(12.0), t.text_muted);
+            let (text_x, width) = if rtl {
+                let start = rect.right() - 62.0;
+                (start, start - (detail.right() + 16.0))
+            } else {
+                let start = rect.left() + 62.0;
+                (start, detail.left() - 16.0 - start)
+            };
+            widgets::row_text(ui, egui::pos2(text_x, rect.top() + 19.0), f.name.as_str(), theme::medium(13.0), t.text, width);
             if resp.on_hover_text(&f.path).clicked() {
                 open = Some(f.path.clone());
             }
