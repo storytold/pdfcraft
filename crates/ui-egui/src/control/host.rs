@@ -135,6 +135,8 @@ impl Host for crate::PdfCraftApp {
             "home": self.active.is_none(),
             "mode": format!("{:?}", self.mode),
             "default_mode": self.default_mode,
+            "ask_default_pdf": self.ask_default_pdf,
+            "default_pdf_prompt": self.default_pdf.open,
             "hotbar": self.hotbar,
             "comment_tool_pinned": self.comment_prefs.pinned,
             "left_panel": if self.left_open { json!(format!("{:?}", self.left)) } else { Value::Null },

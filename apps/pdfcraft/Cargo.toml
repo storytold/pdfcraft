@@ -52,8 +52,9 @@ winit = { version = "0.30", default-features = false, features = ["wayland"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 # Which GPU drives which display (EnumDisplayDevices), so the window is drawn on the GPU that
 # shows it (issue #378). Safe wrappers over Win32; only the `user` feature (which brings `kernel` with it),
-# and `advapi` for the session id that names the single-instance socket (#3338).
-winsafe = { version = "0.0.29", default-features = false, features = ["user", "advapi"] }
+# `advapi` for the session id that names the single-instance socket (#3338) and the default-app
+# registry query, and `shell` for the Settings launcher and opening a saved email draft (#1172).
+winsafe = { version = "0.0.29", default-features = false, features = ["user", "advapi", "shell"] }
 # Settings ▸ Accessibility ▸ Visual effects ▸ Animation effects (src/motion.rs), through WinRT's
 # `UISettings`, whose bindings are safe to call (winsafe's `SystemParametersInfo` is an unsafe
 # fn). Already in the tree through wgpu's DX12 backend; this adds one small namespace to it.

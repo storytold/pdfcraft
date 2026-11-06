@@ -116,6 +116,9 @@ impl PdfCraftApp {
             fill_text_default: fill_sign::TextBorder::NONE,
             dialog: None,
             updates: updates::Updates::default(),
+            default_pdf_integration: None,
+            ask_default_pdf: true,
+            default_pdf: default_pdf::Prompt::default(),
             printer_source: None,
             options_source: None,
             print_tasks: print_ui::PrintTasks::default(),
@@ -173,6 +176,16 @@ impl PdfCraftApp {
             failed_inbox: Default::default(),
             unsaved_flag: Default::default(),
             os_events: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            open_email_draft: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            shell_email_paths: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            shell_email_generation: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            shell_email_run: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            shell_requests: Default::default(),
             host_save: None,
             host_dirty: None,
             close_request: None,
@@ -337,6 +350,15 @@ impl PdfCraftApp {
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
     /// on the document underneath it.
     pub(crate) fn modal_open(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if !self.shell_email_paths.is_empty() || self.shell_email_run.is_some() {
+            return true;
+        }
+        self.dialog_open()
+    }
+
+    /// Existing dialogs take precedence over an incoming Explorer attachment review.
+    pub(crate) fn dialog_open(&self) -> bool {
         self.dialog.is_some()
             || self.close_request.is_some()
             || self.password_prompt.is_some()
@@ -344,6 +366,7 @@ impl PdfCraftApp {
             || self.pending_link.is_some()
             || self.pending_remote_link.is_some()
             || self.updates.open
+            || self.default_pdf.open
     }
 
     /// Show `msg` in the toast now, in place of whatever it showed. Script messages still waiting
@@ -563,6 +586,10 @@ impl eframe::App for PdfCraftApp {
                 }
                 #[cfg(target_arch = "wasm32")]
                 OsEvent::Open(_) => {}
+                #[cfg(not(target_arch = "wasm32"))]
+                OsEvent::Shell(action, paths) => self.receive_shell(action, &paths),
+                #[cfg(target_arch = "wasm32")]
+                OsEvent::Shell(_, _) => {}
                 // Like closing the window: `guard_quit` asks about unsaved changes.
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             }
@@ -590,6 +617,9 @@ impl eframe::App for PdfCraftApp {
             }
         }
         self.poll_updates();
+        self.poll_default_pdf();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_shell_requests();
         self.poll_print();
         // Shortcuts deferred last frame: the text field has taken that frame's typing since.
         let deferred = std::mem::take(&mut self.deferred_commands);
@@ -728,6 +758,8 @@ impl eframe::App for PdfCraftApp {
         self.process_pending_edits();
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.shell_email_window(&ctx);
         self.show_progress(&ctx);
         widgets::toast(self, &ctx);
         self.finish_render_frame(&ctx);

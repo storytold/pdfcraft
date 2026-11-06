@@ -80,6 +80,9 @@ impl PdfCraftApp {
     /// Whether a registered command can run now. The engine judges the document (security,
     /// contents, undo history); view state it can't see is checked here.
     pub(crate) fn command_enabled(&self, spec: &CommandSpec) -> bool {
+        if spec.id == "app.default_pdf_settings" {
+            return self.default_pdf_integration.is_some();
+        }
         // Undo and Redo act on the Combine files list while its tab shows.
         if self.combine_showing() && matches!(spec.needs, commands::Needs::Undo | commands::Needs::Redo) {
             return self.combine_can_undo(spec.needs == commands::Needs::Undo);
@@ -223,6 +226,7 @@ impl PdfCraftApp {
                 }
             }
             "app.preferences" => self.dialog = Some(Dialog::Preferences),
+            "app.default_pdf_settings" => self.open_default_pdf_settings(),
             "protect.remove_hidden" => self.open_remove_hidden(),
             "print.dialog" => self.open_print(),
             "optimize.advanced" => self.dialog = Some(Dialog::Optimize),

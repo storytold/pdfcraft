@@ -703,6 +703,29 @@ fn tool_schema_enums_have_one_json_type() {
 }
 
 #[test]
+fn email_draft_converts_all_sources_keeps_pdfs_and_respects_root() {
+    let directory = workdir("email-draft");
+    std::fs::write(directory.join("notes.txt"), b"Synthetic note attachment").unwrap();
+    let mut a = auto(&directory);
+    let result = ok(&mut a, "doc_email_draft", json!({"paths": ["a.pdf", "notes.txt"], "out_dir": "."}));
+    assert_eq!(result["sent"], false);
+    let path = std::path::Path::new(result["path"].as_str().unwrap());
+    assert!(path.canonicalize().unwrap().starts_with(directory.canonicalize().unwrap()));
+    let message = std::fs::read_to_string(path).unwrap();
+    assert!(message.starts_with("X-Unsent: 1\r\n"));
+    assert_eq!(result["attachments"].as_array().unwrap().len(), 2);
+    for attachment in result["attachments"].as_array().unwrap() {
+        let info = ok(&mut a, "doc_open", json!({"path": attachment}));
+        assert!(info["pages"].as_u64().unwrap() > 0);
+    }
+    let before = std::fs::read_dir(&directory).unwrap().count();
+    assert!(a.call("doc_email_draft", &json!({"paths": ["a.pdf", "missing.txt"], "out_dir": "."})).is_err());
+    assert!(a.call("doc_email_draft", &json!({"paths": ["../outside.txt"], "out_dir": "."})).is_err());
+    assert!(a.call("doc_email_draft", &json!({"paths": ["a.pdf"], "out_dir": ".."})).is_err());
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), before, "failed draft leaves no partial output");
+}
+
+#[test]
 fn explicit_font_and_disjoint_ranges_save_reopen_through_tools() {
     let dir = workdir("font-ranges");
     std::fs::write(dir.join("inter.ttf"), include_bytes!("../../../../assets/fonts/Inter-Regular.ttf")).unwrap();
@@ -4004,7 +4027,7 @@ fn editing_form_artwork_through_tools() {
 
 #[test]
 fn auditing_space_through_tools() {
-    let dir = workdir("audit");
+    let dir = workdir("audit-space");
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
     let r = ok(&mut a, "doc_audit_space", json!({ "doc": doc }));

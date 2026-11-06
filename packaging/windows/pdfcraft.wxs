@@ -156,6 +156,17 @@
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit" Name="Icon" Value="&quot;[#PdfcraftExe]&quot;,0" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit" Name="MultiSelectModel" Value="Document" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit\command" Value="&quot;[#PdfcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <!-- Explorer actions (#1172): localized classic verbs (MUIVerb resources 1002/1003 in
+             pdfcraft.exe). Player starts one launch per file; the typed single-instance hand-off
+             collects them into one review list. -->
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.EmailPdf" Name="MUIVerb" Value="@[#PdfcraftExe],-1002" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.EmailPdf" Name="Icon" Value="[#PdfcraftExe],0" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.EmailPdf" Name="MultiSelectModel" Value="Player" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.EmailPdf\command" Value="&quot;[#PdfcraftExe]&quot; --shell-email -- &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Combine" Name="MUIVerb" Value="@[#PdfcraftExe],-1003" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Combine" Name="Icon" Value="[#PdfcraftExe],0" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Combine" Name="MultiSelectModel" Value="Player" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Combine\command" Value="&quot;[#PdfcraftExe]&quot; --shell-combine -- &quot;%1&quot;" Type="string" />
       </Component>
 
       <!-- Image context menu (#190): "Create PDF with PdfCraft…" opens the DPI chooser, without
@@ -194,6 +205,34 @@
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpx\shell\PdfCraft.CreatePdf" Value="Create PDF with PdfCraft…" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpx\shell\PdfCraft.CreatePdf" Name="MultiSelectModel" Value="Single" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.jpx\shell\PdfCraft.CreatePdf\command" Value="&quot;[#PdfcraftExe]&quot; --create-images &quot;%1&quot;" Type="string" />
+        <!-- Explorer actions (#1172): "Convert to PDF and email…" and "Combine files in PdfCraft…"
+             for every image type above, and the three actions for plain text, which has no DPI
+             chooser. Localized through MUIVerb resources 1001-1003 in pdfcraft.exe; the source type
+             list mirrors pdfcraft_engine::CONVERTIBLE. No Office or shortcut type is claimed. -->
+        <?foreach ext in png;jpg;jpeg;tif;tiff;gif;bmp;jp2;j2k;jpx?>
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.EmailPdf" Name="MUIVerb" Value="@[#PdfcraftExe],-1002" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.EmailPdf" Name="Icon" Value="[#PdfcraftExe],0" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.EmailPdf" Name="MultiSelectModel" Value="Player" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.EmailPdf\command" Value="&quot;[#PdfcraftExe]&quot; --shell-email -- &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.Combine" Name="MUIVerb" Value="@[#PdfcraftExe],-1003" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.Combine" Name="Icon" Value="[#PdfcraftExe],0" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.Combine" Name="MultiSelectModel" Value="Player" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.Combine\command" Value="&quot;[#PdfcraftExe]&quot; --shell-combine -- &quot;%1&quot;" Type="string" />
+        <?endforeach?>
+        <?foreach ext in txt;text?>
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.CreatePdf" Name="MUIVerb" Value="@[#PdfcraftExe],-1001" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.CreatePdf" Name="Icon" Value="[#PdfcraftExe],0" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.CreatePdf" Name="MultiSelectModel" Value="Player" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.CreatePdf\command" Value="&quot;[#PdfcraftExe]&quot; --shell-convert -- &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.EmailPdf" Name="MUIVerb" Value="@[#PdfcraftExe],-1002" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.EmailPdf" Name="Icon" Value="[#PdfcraftExe],0" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.EmailPdf" Name="MultiSelectModel" Value="Player" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.EmailPdf\command" Value="&quot;[#PdfcraftExe]&quot; --shell-email -- &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.Combine" Name="MUIVerb" Value="@[#PdfcraftExe],-1003" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.Combine" Name="Icon" Value="[#PdfcraftExe],0" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.Combine" Name="MultiSelectModel" Value="Player" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\SystemFileAssociations\.$(var.ext)\shell\PdfCraft.Combine\command" Value="&quot;[#PdfcraftExe]&quot; --shell-combine -- &quot;%1&quot;" Type="string" />
+        <?endforeach?>
       </Component>
 
       <Component Id="PdfcraftCli">

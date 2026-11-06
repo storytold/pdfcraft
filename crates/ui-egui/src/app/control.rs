@@ -88,6 +88,13 @@ impl PdfCraftApp {
             ("default-mode", _) => {
                 self.default_mode = Mode::parse(value).ok_or("default-mode must be all, read, edit, convert or sign")?;
             }
+            ("ask-default-pdf", _) => {
+                self.ask_default_pdf = match value {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("ask-default-pdf must be on or off".into()),
+                }
+            }
             ("date-format", _) => self.session.set_date_format(value)?,
             ("date-language", _) => self.session.set_date_language(Some(value).filter(|v| *v != "auto"))?,
             ("tool", _) => {

@@ -1,5 +1,5 @@
 //! Native launch arguments and per-file view overrides (#1354).
-use pdfcraft_ui_egui::PdfCraftApp;
+use pdfcraft_ui_egui::{PdfCraftApp, ShellAction};
 
 #[derive(Default)]
 pub(super) struct Arguments {
@@ -7,6 +7,8 @@ pub(super) struct Arguments {
     pub options: Vec<(String, String)>,
     pub control_file: Option<String>,
     pub create_images: bool,
+    /// An Explorer verb (`--shell-convert|--shell-email|--shell-combine -- files…`).
+    pub shell_action: Option<ShellAction>,
     pub new_window: bool,
     pub two_paged: bool,
     pub version: bool,
@@ -23,6 +25,13 @@ impl Arguments {
         let mut args = args.into_iter();
         while let Some(a) = args.next() {
             match a.as_str() {
+                "--" => {
+                    parsed.files.extend(args.by_ref().map(super::path_from_arg));
+                    break;
+                }
+                "--shell-convert" => parsed.shell_action = Some(ShellAction::Convert),
+                "--shell-email" => parsed.shell_action = Some(ShellAction::Email),
+                "--shell-combine" => parsed.shell_action = Some(ShellAction::Combine),
                 "--version" => {
                     parsed.version = true;
                     break;
@@ -116,6 +125,18 @@ mod tests {
         assert!(!parsed.may_hand_off());
         let version = parse(&["--two-paged", "--version", "ignored.pdf"]);
         assert!(version.version && version.files.is_empty());
+    }
+
+    #[test]
+    fn explorer_verbs_take_every_file_after_the_separator() {
+        let parsed = parse(&["--shell-combine", "--", "--odd.png", "b.txt"]);
+        assert_eq!(parsed.shell_action, Some(ShellAction::Combine));
+        assert_eq!(parsed.files, ["--odd.png", "b.txt"]);
+        assert!(parsed.options.is_empty());
+        // Explorer selections are handed to a running PdfCraft like plain file launches.
+        assert!(parsed.may_hand_off());
+        assert_eq!(parse(&["--shell-convert", "--", "a.png"]).shell_action, Some(ShellAction::Convert));
+        assert_eq!(parse(&["--shell-email", "--", "a.pdf"]).shell_action, Some(ShellAction::Email));
     }
 
     #[test]

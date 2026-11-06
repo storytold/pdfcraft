@@ -10364,11 +10364,11 @@ title = "Send the file by email (system mail client)"
 area = "N"
 tier = "P3"
 milestone = "M14"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = ""
+tools = ["doc_email_draft"]
+evidence = ["crates/automation/tests/it/automation.rs::email_draft_converts_all_sources_keeps_pdfs_and_respects_root", "crates/ui-egui/tests/it/explorer.rs::email_picker_cancellation_retains_selection_and_client_failure_keeps_saved_bundle"]
+notes = "Windows Explorer prepares a local unsent MIME draft and separate PDFs, then opens the registered .eml handler. No mail is sent. Desktop draft support varies by client; Outlook.com needs manual attachment of the saved PDFs. Classic Windows 11 Show more options only."
 
 [[feature]]
 id = "misc.user-docs"
@@ -10381,3 +10381,15 @@ commands = []
 tools = []
 evidence = []
 notes = ""
+
+[[feature]]
+id = "misc.windows-default-pdf"
+title = "Offer the Windows default PDF application settings"
+area = "N"
+tier = "P2"
+milestone = "M14"
+status = "shipped"
+commands = ["app.default_pdf_settings"]
+tools = []
+evidence = ["crates/ui-egui/tests/it/default_pdf.rs::default_pdf_only_successful_pdf_opens_trigger_once_per_session", "crates/ui-egui/tests/it/default_pdf.rs::default_pdf_checkbox_persists_for_yes_later_close_and_escape", "crates/ui-egui/tests/it/default_pdf.rs::default_pdf_control_command_and_preference_are_explicit_and_testable", "apps/pdfcraft/src/default_pdf.rs::default_pdf_registered_user_machine_and_unregistered_choose_supported_settings"]
+notes = "Windows desktop only: a successful existing-PDF open may offer Settings once per session. Already associated, disabled, other-platform and automation hosts do not prompt. Do not ask again persists on Yes/Later/Close/Escape and Preferences can re-enable it. ui.command opens Settings explicitly; ui.set ask-default-pdf on/off and ui.state expose the preference. Windows chooses the association; PdfCraft never writes UserChoice. Registered per-user/machine Windows 11 deep links fall back to the general Default Apps page on older Windows."

@@ -253,6 +253,16 @@ impl PdfCraftApp {
 
     /// Add files to the Combine files list, with what can be known about them up front.
     pub(crate) fn stage_combine_with(&mut self, files: Vec<Incoming>) {
+        self.stage_combine_results(files, None);
+    }
+
+    /// Keep a refused/unreadable source as an explicit failed row. Empty bytes with a .txt
+    /// filename must not run through the converter, which would create a valid blank PDF.
+    pub(crate) fn stage_combine_failure(&mut self, name: String, error: String) {
+        self.stage_combine_results(vec![Incoming { name, bytes: Arc::new(Vec::new()), modified: None, note: None, open_doc: None }], Some(error));
+    }
+
+    fn stage_combine_results(&mut self, files: Vec<Incoming>, failure: Option<String>) {
         let mut added = Vec::new();
         for Incoming { name, bytes, modified, note, open_doc } in files {
             // Images and text files become PDFs as they join the list (#569): from then on they
@@ -267,19 +277,23 @@ impl PdfCraftApp {
                 notes: Vec::new(),
             };
             let source = bytes.clone();
-            let (bytes, assessed) = match self.session.as_pdf(&name, &bytes) {
-                Ok(pdf) => {
-                    let assessed = assess(&pdf, None);
-                    (pdf, assessed)
-                }
-                Err(e) => {
-                    // (The engine's message names the file, which the row already shows.)
-                    let e = match e {
-                        pdfcraft_engine::EditError::Source(m) => m,
-                        other => other.to_string(),
-                    };
-                    let why = e.strip_prefix(&format!("{name}: ")).unwrap_or(&e).to_string();
-                    (bytes, Ok(unreadable(&why)))
+            let (bytes, assessed) = if let Some(error) = &failure {
+                (bytes, Ok(unreadable(error)))
+            } else {
+                match self.session.as_pdf(&name, &bytes) {
+                    Ok(pdf) => {
+                        let assessed = assess(&pdf, None);
+                        (pdf, assessed)
+                    }
+                    Err(e) => {
+                        // (The engine's message names the file, which the row already shows.)
+                        let e = match e {
+                            pdfcraft_engine::EditError::Source(m) => m,
+                            other => other.to_string(),
+                        };
+                        let why = e.strip_prefix(&format!("{name}: ")).unwrap_or(&e).to_string();
+                        (bytes, Ok(unreadable(&why)))
+                    }
                 }
             };
             let assessed = match assessed {

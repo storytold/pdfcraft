@@ -173,6 +173,9 @@ first beta items. Ready for real work, ≈ 49%, is inside the alpha band. (A fir
 gate the same day judged convert and share as blocking and put PdfCraft at pre-alpha; re-judged with
 the shared rule, encryption and Office→PDF are sub-cases and Word export is lossy, not absent.)
 
+M14 Windows integration update (2026-10-11): [Explorer actions](windows-explorer.md) now prepare image/text PDFs, collect a reviewed Combine selection, and save unsent MIME drafts with standalone PDF attachments. Classic Windows 11 menu only; no automatic webmail attachment or sending.
+The main-branch integration preserves the consolidated text-selection regression and adds Greek, Kazakh, Slovenian and Turkish menu resources (21 interface languages total). Its validation is pending; the previous tested draft remains available.
+
 ## Current focus
 
 In order. Each item names its entry in [gaps.md](gaps.md).
@@ -312,11 +315,14 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | patch | #1172: merge main after the catalogs moved to craft-i18n; the Explorer menu labels (MUIVerb 1001–1003) now come from `CRAFT_I18N_DIR` `locales/<code>/pdfcraft.tsv`, English without a checkout or for a locale missing one. Estimates unchanged. |
 | 2026-11-03 | minor | M11: Optimize's JBIG2 images share a symbol dictionary (`/JBIG2Globals`), up to 16 at a time and when smaller (`pdfcraft_filters::encode_jbig2_shared`): 41–46% smaller on rendered text in proportional fonts, 10% in Courier |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
+| 2026-11-03 | patch | #1172: merge current main; the Explorer arrival-order test opens Rotate Pages after the harness's first accessibility-checked run (FreeBSD CI). Estimates unchanged. |
 | 2026-11-02 | patch | M10 #5743: macOS print jobs carry the job name and owner some vendors' filters need; not yet checked on a physical printer |
 | 2026-11-02 | patch | M14 #5737, #5460: Preferences turns off the update check at start, on by default |
+| 2026-11-02 | minor | #1172 Explorer actions and the default-PDF prompt (asks once; only opens Windows Settings after Yes) merged with current main (split automation dispatch, i18n module, installer menu-detection); Windows installed-package acceptance remains open. Estimates unchanged. |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
 | 2026-10-31 | patch | #1577: reconcile optional page shadows with current viewer/organizer and settings modules; CI validation pending. |
 | 2026-10-31 | patch | M3 #1354: reconcile the launch override with split app/file modules and the structured open result; preserve headless help/version exits. CI validation pending. |

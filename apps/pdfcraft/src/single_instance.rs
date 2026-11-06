@@ -33,7 +33,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 #[cfg(windows)]
 use uds_windows::{UnixListener, UnixStream};
 
-use pdfcraft_ui_egui::{OsEvent, OsEventsFn};
+use pdfcraft_ui_egui::{OsEvent, OsEventsFn, ShellAction};
 
 /// Longest request read: one line of JSON, far longer than any real list of paths.
 #[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
@@ -57,7 +57,7 @@ pub enum Claim {
 /// Files that later launches handed over, and how to wake the UI for them.
 #[derive(Default)]
 struct Inbox {
-    paths: Vec<String>,
+    events: Vec<OsEvent>,
     wake: Option<Box<dyn Fn() + Send>>,
 }
 
@@ -75,12 +75,23 @@ impl Server {
 
     /// Queue files from another launch and wake the UI.
     #[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
-    fn deliver(&self, paths: Vec<String>) {
+    fn deliver(&self, event: OsEvent) -> std::io::Result<()> {
         let mut inbox = self.inbox.lock().unwrap_or_else(PoisonError::into_inner);
-        inbox.paths.extend(paths);
+        let paths = event_paths(&event);
+        let count = inbox.events.iter().map(|e| event_paths(e).len()).sum::<usize>();
+        let bytes = inbox.events.iter().flat_map(event_paths).map(String::len).sum::<usize>();
+        if count.saturating_add(paths.len()) > 100 || bytes.saturating_add(paths.iter().map(String::len).sum()) > MAX_REQUEST as usize {
+            return Err(std::io::Error::other("the running PdfCraft's file queue is full"));
+        }
+        match (inbox.events.last_mut(), event) {
+            (Some(OsEvent::Open(queued)), OsEvent::Open(paths)) => queued.extend(paths),
+            (Some(OsEvent::Shell(a, queued)), OsEvent::Shell(b, paths)) if *a == b => queued.extend(paths),
+            (_, event) => inbox.events.push(event),
+        }
         if let Some(wake) = &inbox.wake {
             wake();
         }
+        Ok(())
     }
 
     /// The queue the UI drains every frame (`PdfCraftApp::os_events`). Files that arrived before
@@ -94,8 +105,8 @@ impl Server {
         let inbox = Arc::clone(&self.inbox);
         let ctx = ctx.clone();
         Box::new(move || {
-            let paths = std::mem::take(&mut inbox.lock().unwrap_or_else(PoisonError::into_inner).paths);
-            if paths.is_empty() {
+            let events = std::mem::take(&mut inbox.lock().unwrap_or_else(PoisonError::into_inner).events);
+            if events.is_empty() {
                 return Vec::new();
             }
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -103,7 +114,7 @@ impl Server {
             if native_wayland {
                 ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
             }
-            vec![OsEvent::Open(paths)]
+            events
         })
     }
 }
@@ -116,14 +127,59 @@ pub fn request(paths: &[String]) -> String {
     line
 }
 
+fn event_paths(event: &OsEvent) -> &[String] {
+    match event {
+        OsEvent::Open(paths) | OsEvent::Shell(_, paths) => paths,
+        OsEvent::Quit => &[],
+    }
+}
+
+#[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
+fn shell_request(paths: &[String], action: Option<ShellAction>) -> String {
+    match action {
+        None => request(paths),
+        // Old running versions don't recognize this key and refuse the handoff; the new process
+        // opens its own window instead of silently treating a Combine/Email request as Open.
+        Some(action) => format!("{}\n", serde_json::json!({"shell": action.code(), "paths": paths})),
+    }
+}
+
+#[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
+fn parse_event(line: &str) -> Option<OsEvent> {
+    if line.len() > MAX_REQUEST as usize {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(line.trim_end()).ok()?;
+    let object = value.as_object()?;
+    let (key, action) = if object.len() == 1 && object.contains_key("open") {
+        ("open", None)
+    } else if object.len() == 2 && object.contains_key("paths") {
+        ("paths", Some(ShellAction::parse(value.get("shell")?.as_str()?)?))
+    } else {
+        return None;
+    };
+    let items = value.get(key)?.as_array()?;
+    if items.is_empty() || items.len() > 100 {
+        return None;
+    }
+    let paths = items
+        .iter()
+        .map(|p| p.as_str().filter(|s| !s.is_empty() && s.len() <= 32768 && !s.contains('\0')).map(str::to_owned))
+        .collect::<Option<Vec<_>>>()?;
+    Some(match action {
+        None => OsEvent::Open(paths),
+        Some(action) => OsEvent::Shell(action, paths),
+    })
+}
+
 /// The paths a request names, or `None` when it isn't a request: anything but one JSON object
 /// whose `open` is a non-empty list of non-empty strings.
-#[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
+#[cfg(test)]
 pub fn parse_request(line: &str) -> Option<Vec<String>> {
-    let value: serde_json::Value = serde_json::from_str(line.trim_end()).ok()?;
-    let open = value.get("open")?.as_array()?;
-    let paths = open.iter().map(|p| p.as_str().filter(|s| !s.is_empty()).map(str::to_string)).collect::<Option<Vec<String>>>()?;
-    (!paths.is_empty()).then_some(paths)
+    match parse_event(line)? {
+        OsEvent::Open(paths) => Some(paths),
+        _ => None,
+    }
 }
 
 /// File arguments made absolute against this launch's working folder, which the running app
@@ -134,17 +190,17 @@ pub fn absolute(paths: &[String]) -> Vec<String> {
 
 /// Decide what this launch does. `files` are absolute ([`absolute`]); `may_hand_off` is false
 /// when the launch asked for anything besides opening files, so it gets its own window.
-pub fn claim(files: &[String], may_hand_off: bool) -> Claim {
+pub fn claim(files: &[String], may_hand_off: bool, action: Option<ShellAction>) -> Claim {
     #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
     {
         match socket_path() {
-            Some(path) => claim_at(&path, files, may_hand_off),
+            Some(path) => claim_action_at(&path, files, may_hand_off, action),
             None => Claim::Alone,
         }
     }
     #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
-        let _ = (files, may_hand_off);
+        let _ = (files, may_hand_off, action);
         Claim::Alone
     }
 }
@@ -237,8 +293,13 @@ fn election(socket: &std::path::Path) -> Option<std::fs::File> {
 }
 
 /// [`claim`] with the socket at `path`.
-#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+#[cfg(all(any(windows, all(unix, not(target_os = "macos"))), test))]
 fn claim_at(path: &std::path::Path, files: &[String], may_hand_off: bool) -> Claim {
+    claim_action_at(path, files, may_hand_off, None)
+}
+
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+fn claim_action_at(path: &std::path::Path, files: &[String], may_hand_off: bool, action: Option<ShellAction>) -> Claim {
     // Released when this function returns: by then this launch listens, or has handed over.
     let _election = election(path);
     // Two launches can start together: the one that loses the race to bind hands over to the
@@ -249,7 +310,7 @@ fn claim_at(path: &std::path::Path, files: &[String], may_hand_off: bool) -> Cla
                 if !may_hand_off {
                     return Claim::Alone;
                 }
-                return match hand_off(&stream, files) {
+                return match hand_off(&stream, files, action) {
                     Ok(()) => Claim::HandedOff,
                     Err(e) => {
                         log::warn!("couldn't hand the files to the running PdfCraft ({e}); opening a new window");
@@ -295,12 +356,12 @@ fn claim_at(path: &std::path::Path, files: &[String], may_hand_off: bool) -> Cla
 
 /// Send `files` over `stream` and wait for the running app's `ok`.
 #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
-fn hand_off(stream: &UnixStream, files: &[String]) -> std::io::Result<()> {
+fn hand_off(stream: &UnixStream, files: &[String], action: Option<ShellAction>) -> std::io::Result<()> {
     use std::io::{BufRead, Read, Write};
     stream.set_read_timeout(Some(TIMEOUT))?;
     stream.set_write_timeout(Some(TIMEOUT))?;
     let mut writer = stream;
-    writer.write_all(request(files).as_bytes())?;
+    writer.write_all(shell_request(files, action).as_bytes())?;
     let mut reply = String::new();
     std::io::BufReader::new(stream.take(16)).read_line(&mut reply)?;
     if reply == "ok\n" { Ok(()) } else { Err(std::io::Error::other("the running PdfCraft didn't confirm")) }
@@ -342,8 +403,8 @@ fn receive(stream: &UnixStream, server: &Server) -> std::io::Result<()> {
     if line.is_empty() {
         return Ok(());
     }
-    let paths = parse_request(&line).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "not an open request"))?;
-    server.deliver(paths);
+    let event = parse_event(&line).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "not a file request"))?;
+    server.deliver(event)?;
     let mut writer = stream;
     writer.write_all(b"ok\n")
 }
@@ -365,6 +426,63 @@ mod tests {
         for line in ["", "ok\n", "{}", r#"{"open":[]}"#, r#"{"open":[""]}"#, r#"{"open":["a.pdf",3]}"#, r#"{"open":"a.pdf"}"#, "[\"a.pdf\"]"] {
             assert_eq!(parse_request(line), None, "{line:?}");
         }
+    }
+
+    #[test]
+    fn typed_requests_are_bounded_and_never_become_plain_opens() {
+        let paths = vec![r"C:\A & B\quotation.txt".into(), r"D:\日本語\two.png".into()];
+        for action in [ShellAction::Convert, ShellAction::Email, ShellAction::Combine] {
+            let line = shell_request(&paths, Some(action));
+            assert_eq!(parse_event(&line), Some(OsEvent::Shell(action, paths.clone())));
+            assert_eq!(parse_request(&line), None, "old open-only protocol must refuse it");
+        }
+        assert!(parse_event(&shell_request(&vec!["a".into(); 101], Some(ShellAction::Email))).is_none());
+        assert!(parse_event(r#"{"shell":"send","paths":["a"]}"#).is_none());
+        assert!(parse_event(r#"{"shell":"email","paths":["a"],"open":["b"]}"#).is_none());
+        assert!(parse_event(r#"{"open":["a\u0000b"]}"#).is_none());
+    }
+
+    #[test]
+    fn queue_preserves_action_boundaries_and_refuses_overflow_before_acknowledging() {
+        let server = Server::new();
+        let mut poll = server.connect(&egui::Context::default(), false);
+        server.deliver(OsEvent::Shell(ShellAction::Combine, vec!["one.pdf".into()])).unwrap();
+        server.deliver(OsEvent::Shell(ShellAction::Combine, vec!["two.pdf".into()])).unwrap();
+        server.deliver(OsEvent::Open(vec!["view.pdf".into()])).unwrap();
+        server.deliver(OsEvent::Shell(ShellAction::Email, vec!["mail.txt".into()])).unwrap();
+        let events = poll();
+        assert_eq!(events.len(), 3);
+        assert!(matches!(&events[0], OsEvent::Shell(ShellAction::Combine, p) if p.len()==2));
+        assert!(matches!(&events[1], OsEvent::Open(_)));
+        assert!(matches!(&events[2], OsEvent::Shell(ShellAction::Email, _)));
+        server.deliver(OsEvent::Open(vec!["x.pdf".into(); 100])).unwrap();
+        assert!(server.deliver(OsEvent::Open(vec!["overflow.pdf".into()])).is_err());
+        assert_eq!(event_paths(&poll()[0]).len(), 100);
+    }
+
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+    #[test]
+    fn simultaneous_explorer_combines_arrive_in_one_review_list() {
+        let path = socket("shell-combine");
+        let Claim::Primary(server) = claim_action_at(&path, &[], true, Some(ShellAction::Combine)) else { panic!("listen") };
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let launches: Vec<_> = (0..8)
+            .map(|i| {
+                let (path, barrier) = (path.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    assert!(matches!(claim_action_at(&path, &[format!("C:\\{i}.txt")], true, Some(ShellAction::Combine)), Claim::HandedOff));
+                })
+            })
+            .collect();
+        for launch in launches {
+            launch.join().unwrap();
+        }
+        let mut poll = server.connect(&egui::Context::default(), false);
+        let events = poll();
+        let [OsEvent::Shell(ShellAction::Combine, paths)] = events.as_slice() else { panic!("one combine batch") };
+        assert_eq!(paths.len(), 8);
+        assert_eq!(paths.iter().collect::<std::collections::HashSet<_>>().len(), 8);
     }
 
     #[test]
@@ -397,10 +515,10 @@ mod tests {
     fn delivered_files_reach_the_ui_once_wake_it_and_bring_the_window_forward() {
         let server = Server::new();
         // Before the window exists: queued, nothing to wake yet.
-        server.deliver(vec!["a.pdf".into()]);
+        server.deliver(OsEvent::Open(vec!["a.pdf".into()])).unwrap();
         let ctx = egui::Context::default();
         let mut poll = server.connect(&ctx, false);
-        server.deliver(vec!["b.pdf".into()]);
+        server.deliver(OsEvent::Open(vec!["b.pdf".into()])).unwrap();
         let events = poll();
         assert!(matches!(events.as_slice(), [OsEvent::Open(p)] if p == &["a.pdf", "b.pdf"]));
         assert!(poll().is_empty(), "each file is delivered once");
