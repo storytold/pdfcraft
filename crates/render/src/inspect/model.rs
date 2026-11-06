@@ -519,6 +519,44 @@ pub enum AttachmentSource {
     Annotation { page: usize, index: usize },
 }
 
+/// A PDF portfolio: a catalog with a `/Collection` (ISO 32000-2 §7.11.6, Table 153). Its pages
+/// are a cover sheet for viewers that show no file list; its documents are its attachments.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Portfolio {
+    /// The document to present first (`/D`): the index in `DocInfo::attachments` of the
+    /// `/EmbeddedFiles` entry it names. `None` without `/D` (the portfolio's own pages come
+    /// first) or when it names no listed attachment.
+    pub initial: Option<usize>,
+    /// How the file list first shows (`/View`).
+    pub view: PortfolioView,
+}
+
+/// A portfolio's initial view (`/Collection /View`, Table 153).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PortfolioView {
+    /// `D`, the default: the files with their details.
+    #[default]
+    Details,
+    /// `T`: the files as tiles.
+    Tile,
+    /// `H`: the file list starts hidden, shown when the reader asks for it.
+    Hidden,
+    /// `C`: a custom navigator (`/Navigator`).
+    Custom,
+}
+
+impl PortfolioView {
+    /// The view's name in `doc_info`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Details => "details",
+            Self::Tile => "tile",
+            Self::Hidden => "hidden",
+            Self::Custom => "custom",
+        }
+    }
+}
+
 /// A font used by the document (Document Properties ▸ Fonts).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FontInfo {

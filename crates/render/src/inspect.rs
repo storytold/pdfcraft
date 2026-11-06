@@ -37,7 +37,7 @@ pub use core::{check_pages, inspect, pretty_date};
 use core::{inspect_structure, spend};
 pub use model::{
     Annotation, Attachment, AttachmentSource, DestView, Field, FieldKind, FontInfo, Layer, LayerOp, Link, LinkTarget, OutlineItem, PageInfo,
-    PageTransition, RemoteDestination, TransitionStyle, Xfa, link_replies, thread_tops,
+    PageTransition, Portfolio, PortfolioView, RemoteDestination, TransitionStyle, Xfa, link_replies, thread_tops,
 };
 #[cfg(test)]
 use navigation::{OUTLINE_DEPTH, OUTLINE_WINDOW};
@@ -76,6 +76,8 @@ pub struct DocInfo {
     pub layer_groups: Vec<Vec<(u32, u16)>>,
     pub fonts: Vec<FontInfo>,
     pub attachments: Vec<Attachment>,
+    /// The document is a PDF portfolio (`/Collection`): its documents are `attachments`.
+    pub portfolio: Option<Portfolio>,
     /// Pages with a presentation transition (`/Trans`) or display time (`/Dur`), in page order.
     pub transitions: Vec<PageTransition>,
     /// Where the document opens (`/OpenAction`): the (0-based page, view) of its destination,
@@ -85,5 +87,7 @@ pub struct DocInfo {
     pub warnings: Vec<String>,
 }
 
+#[cfg(test)]
+mod portfolio_tests;
 #[cfg(test)]
 mod tests;

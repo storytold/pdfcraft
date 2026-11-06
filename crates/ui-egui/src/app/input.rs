@@ -129,7 +129,9 @@ impl PdfCraftApp {
         self.startup_superseded = true;
         let inbox = self.inbox.clone();
         let ctx = ctx.clone();
+        let read = WebRead::start(&self.web_reads);
         wasm_bindgen_futures::spawn_local(async move {
+            let _read = read;
             let name = f.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped.pdf".into());
             if let Ok(bytes) = f.bytes_async().await
                 && let Ok(mut q) = inbox.lock()
@@ -138,5 +140,27 @@ impl PdfCraftApp {
                 ctx.request_repaint();
             }
         });
+    }
+}
+
+/// One browser file read counted in `PdfCraftApp::web_reads` for as long as it lives, so the
+/// count falls however the read ends.
+#[cfg(target_arch = "wasm32")]
+pub(super) struct WebRead(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(target_arch = "wasm32")]
+impl WebRead {
+    /// Count a read starting in `reads`.
+    pub(super) fn start(reads: &std::sync::Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self(reads.clone())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for WebRead {
+    /// The read is over, whether its file arrived or not.
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
