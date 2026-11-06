@@ -63,73 +63,18 @@ impl Default for HeaderFooter {
     }
 }
 
-/// Whether this line uses Arabic layout; any Syriac keeps its explicitly selected family path.
-pub(crate) fn arabic_text(text: &str) -> bool {
-    !pdfcraft_fonts::content_text::contains_syriac(text) && text.chars().any(pdfcraft_fonts::source_shaping::is_arabic)
-}
-
-/// The standard Latin face used beside Arabic in a header or footer.
-pub(crate) fn latin_face(family: added::Family) -> pdfcraft_fonts::Std14 {
-    match family {
-        added::Family::Helvetica => pdfcraft_fonts::Std14::Helvetica,
-        added::Family::Times => pdfcraft_fonts::Std14::TimesRoman,
-        added::Family::Courier => pdfcraft_fonts::Std14::Courier,
-    }
-}
-
-/// Shape exactly one Arabic mark line using the selected Latin metrics and bounded writer.
-pub(crate) fn arabic_line(text: &str, size: f64, latin: pdfcraft_fonts::Std14) -> Result<pdfcraft_fonts::appearance_text::Line, EditError> {
-    if text.contains(['\r', '\n']) {
-        return Err(EditError::Invalid("an Arabic page-mark line cannot contain a line break".into()));
-    }
-    if let Some(ch) = pdfcraft_fonts::appearance_text::first_undrawable(text) {
-        return Err(super::place::undrawable(ch));
-    }
-    pdfcraft_fonts::appearance_text::wrap_with_latin(text, size, f64::MAX, latin)
-        .map_err(|error| EditError::Invalid(format!("Arabic page-mark shaping failed: {error:?}")))?
-        .into_iter()
-        .next()
-        .ok_or_else(|| EditError::Invalid("the Arabic page-mark line is missing".into()))
-}
-
-/// Accept supported shaped text; otherwise report the first non-WinAnsi character.
+/// Accept Syriac when the selected face shapes the text; otherwise report the first non-WinAnsi character.
 /// The reported character identifies the fallback warning, not necessarily the glyph that made shaping fail.
 fn content_undrawable(text: &str, family: pdfcraft_fonts::SyriacFamily) -> Option<char> {
     if pdfcraft_fonts::content_text::contains_syriac(text) && pdfcraft_fonts::content_text::wrap_for_family(text, 1.0, f64::MAX, family).is_ok() {
         return None;
-    }
-    if arabic_text(text) {
-        if text.contains('\r') {
-            return Some('\r');
-        }
-        if arabic_line(text, 1.0, pdfcraft_fonts::Std14::Helvetica).is_ok() {
-            return None;
-        }
-        return pdfcraft_fonts::appearance_text::first_undrawable(text)
-            .or_else(|| text.chars().find(|c| pdfcraft_fonts::source_shaping::is_arabic(*c)));
     }
     pdfcraft_fonts::first_non_win_ansi(text)
 }
 
 impl HeaderFooter {
     /// Shared baseline metrics for a column, including Syriac vowel and dot ink.
-    pub(crate) fn column_metrics(
-        text: &str,
-        family: pdfcraft_fonts::SyriacFamily,
-        latin: pdfcraft_fonts::Std14,
-    ) -> Result<(f64, f64, f64), EditError> {
-        if arabic_text(text) {
-            if text.len() > pdfcraft_fonts::content_text::MAX_TEXT_BYTES || text.lines().take(1025).count() > 1024 {
-                return Err(EditError::Invalid("Arabic page marks need at most 262144 UTF-8 bytes and 1024 lines per text box".into()));
-            }
-            let (mut ascent, mut descent) = (0.8f64, -0.2f64);
-            for line in text.lines() {
-                let row = arabic_line(line, 1.0, latin)?;
-                ascent = ascent.max(row.ascent);
-                descent = descent.min(-row.descent);
-            }
-            return Ok((ascent, descent, (ascent - descent + 0.1).max(1.2)));
-        }
+    pub(crate) fn column_metrics(text: &str, family: pdfcraft_fonts::SyriacFamily) -> Result<(f64, f64, f64), EditError> {
         if !pdfcraft_fonts::content_text::contains_syriac(text) {
             return Ok((0.8, 0.0, 1.2));
         }
@@ -162,7 +107,7 @@ impl HeaderFooter {
                 .iter()
                 .filter(|t| !t.trim().is_empty())
                 .map(|t| {
-                    let (ascent, descent, pitch) = Self::column_metrics(t, self.syriac_family, latin_face(self.font)).unwrap_or((0.8, 0.0, 1.2));
+                    let (ascent, descent, pitch) = Self::column_metrics(t, self.syriac_family).unwrap_or((0.8, 0.0, 1.2));
                     let rows = t.lines().count().max(1);
                     let ink = if header { (ascent - descent).max(1.0) } else { ascent - descent };
                     (ink + rows.saturating_sub(1) as f64 * pitch + 0.5) * size

@@ -21,9 +21,8 @@ pub(super) fn source_look(base_font: &str, size: f64, color: [f64; 3], detected_
     }
 }
 
-/// Build the paragraph editor's source look while retaining its stored direction.
 pub(super) fn look_of(b: &pdfcraft_engine::TextBlock) -> pdfcraft_engine::AddedText {
-    pdfcraft_engine::AddedText { direction: b.text_direction, ..source_look(&b.base_font, b.size, b.color, b.bold, b.italic) }
+    source_look(&b.base_font, b.size, b.color, b.bold, b.italic)
 }
 
 pub(crate) fn editor_font(look: &pdfcraft_engine::AddedText, size: f32) -> FontId {
@@ -106,9 +105,8 @@ pub(crate) fn install_source_fonts(ctx: &egui::Context, doc: &pdfcraft_engine::D
     families
 }
 
-/// Build the inline paragraph's native text layout with its source/range styles and explicit direction.
 pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> egui::text::LayoutJob {
-    let mut job = egui::text::LayoutJob { direction: crate::bidi::text_direction(ed.look.direction), ..Default::default() };
+    let mut job = egui::text::LayoutJob::default();
     // An unchanged PDF row already has an authoritative line break. Do not rewrap it
     // because font rounding or a fallback face measures a fraction of a pixel wider.
     job.wrap.max_width = if text == ed.original && ed.look == ed.look0 && ed.extras == ed.extras0 { f32::INFINITY } else { width };

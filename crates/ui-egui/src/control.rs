@@ -27,8 +27,6 @@
 //! - `ui.drag {from: [x, y], to: [x, y], steps?, modifiers?, button?}`: press, move and release (drawing
 //!   comments, selecting text, moving comments). `ui.state` reports `pages_on_screen` to aim at.
 //! - `ui.type {text}`, `ui.key {key, modifiers?}`: keyboard input to the focused widget / app.
-//! - `ui.ime {phase, text?, selection?}`: bounded preedit/commit/cancel input to the focused
-//!   widget; selection indices count Unicode characters. This exercises delivery, not a native IME provider.
 //! - `ui.command {id}`: run a registry command (as the menu would). `ui.commands` lists them.
 //! - `ui.set {key: "show_page_edge_shadows", value: "true"|"false"}` controls page
 //!   decoration app-wide; `ui.state.show_page_edge_shadows` reports the saved preference.

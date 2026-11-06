@@ -240,11 +240,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
         });
         if joins && let Some(l) = lines.last_mut() {
             let gap = last.map_or(0.0, |(_, pen)| pen.continues(&s, 0.0).1);
-            let spaced = !s.text.is_empty()
-                && !l.text.is_empty()
-                && gap - s.tracking > l.size * s.state.scale.abs() * 0.2
-                && !l.text.ends_with(' ')
-                && !s.text.starts_with(' ');
+            let spaced = gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ');
             if spaced {
                 l.text.push(' ');
             }
@@ -280,7 +276,6 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 face: s.face.clone(),
                 stream: si,
                 scope: s.scope,
-                text_direction: s.text_direction,
                 paint: s.paint.clone(),
                 logical_order: s.logical_order,
                 actual_text: s.actual_text,
@@ -304,10 +299,7 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
                 },
             });
         }
-        // Keep ink/operators from empty Unicode auxiliaries without moving the word pen.
-        if !s.text.is_empty() || !joins || last.is_none() {
-            last = Some((si, Pen::after(&s)));
-        }
+        last = Some((si, Pen::after(&s)));
     }
     // Content streams draw right-to-left lines in visual order; the editor works in typing order.
     for l in lines.iter_mut().filter(|l| !l.logical_order) {
@@ -366,11 +358,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
     });
     if joins && let Some(l) = lines.last_mut() {
         let gap = last.map_or(0.0, |pen| pen.continues(&s, 0.0).1);
-        let spaced = !s.text.is_empty()
-            && !l.text.is_empty()
-            && gap - s.tracking > l.size * s.state.scale.abs() * 0.2
-            && !l.text.ends_with(' ')
-            && !s.text.starts_with(' ');
+        let spaced = gap - s.tracking > l.size * s.state.scale.abs() * 0.2 && !l.text.ends_with(' ') && !s.text.starts_with(' ');
         if spaced {
             l.text.push(' ');
         }
@@ -405,7 +393,6 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             face: s.face.clone(),
             stream,
             scope: s.scope,
-            text_direction: s.text_direction,
             paint: s.paint.clone(),
             logical_order: s.logical_order,
             actual_text: s.actual_text,
@@ -429,9 +416,7 @@ fn add_shown(lines: &mut Vec<TextLine>, last: &mut Option<Pen>, s: Shown, stream
             },
         });
     }
-    if !s.text.is_empty() || !joins || last.is_none() {
-        *last = Some(Pen::after(&s));
-    }
+    *last = Some(Pen::after(&s));
 }
 
 /// How deep form XObjects nest before reading stops (they may also refer to themselves). The
@@ -600,14 +585,7 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
         let Some(form) = form_call(w.doc, resources, name, ts.ctm, &w.path, &mut w.budget) else { return Ok(()) };
         let ops = parse(&form.data).ops;
         // The form starts with the graphics state at its `Do`, its own matrix applied.
-        let mut carry = Carry {
-            ts: Ts { ctm: form.ctm, ..ts },
-            stack: Vec::new(),
-            marked: Vec::new(),
-            directions: Vec::new(),
-            layers: Vec::new(),
-            text_left: *text_left,
-        };
+        let mut carry = Carry { ts: Ts { ctm: form.ctm, ..ts }, stack: Vec::new(), marked: Vec::new(), layers: Vec::new(), text_left: *text_left };
         let stream = w.next_stream;
         w.next_stream = w.next_stream.saturating_add(1);
         if let Some(r) = form.obj {

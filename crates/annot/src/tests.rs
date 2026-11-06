@@ -2700,103 +2700,6 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
     }
 }
 
-/// Generated font resources stay local to each display copy, including cached rebuilds
-/// and save/reopen; logical Contents and explicit PDF text state survive regeneration.
-#[test]
-fn arabic_generated_comments_roundtrip_and_cache_indirect_fonts() {
-    if pdfcraft_fonts::document_arabic_font().is_none() {
-        return;
-    }
-    let mut doc = fixture();
-    let mut entry = new(0, Shape::Typewriter { rect: [50.0, 500.0, 300.0, 560.0], font_size: 18.0 });
-    entry.contents = "سَلَام 123 PDF".into();
-    let index = add_annotation(&mut doc, &entry, &meta("arabic-typewriter")).unwrap();
-    let r = annots(&doc, page_refs(&doc).unwrap()[0])[index].as_ref().unwrap();
-    let check = |doc: &Document| {
-        let d = &list(doc, 0)[index];
-        assert_eq!(text(d, b"Contents"), entry.contents);
-        assert!(pdfcraft_fonts::undrawn_mark(d).is_none());
-        let content = ap_content(doc, d);
-        assert!(content.contains("/ActualText"));
-        let operators = content.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(operators.contains("BT 0 Tc 0 Tw 100 Tz 0 Ts 0 Tr"), "all generated text state must be explicit");
-        let ap = doc.dict(d.get(b"AP").unwrap()).unwrap();
-        let normal = doc.resolve(ap.get(b"N").unwrap());
-        let Object::Stream(stream) = normal.as_ref() else { panic!("normal stream") };
-        let resources = doc.dict(stream.dict.get(b"Resources").unwrap()).unwrap();
-        let fonts = doc.dict(resources.get(b"Font").unwrap()).unwrap();
-        let mut shaped = 0;
-        for (_, value) in fonts.iter() {
-            let font = doc.dict(value).unwrap();
-            if font.name(b"Subtype") != Some(b"Type3") {
-                continue;
-            }
-            shaped += 1;
-            assert!(matches!(font.get(b"ToUnicode"), Some(Object::Ref(_))));
-            let procs = doc.dict(font.get(b"CharProcs").unwrap()).unwrap();
-            assert!(procs.iter().all(|(_, proc)| matches!(proc, Object::Ref(_))));
-        }
-        assert!(shaped > 0);
-    };
-    check(&reopen(&doc));
-    doc.update_dict(r, |d| {
-        d.remove(b"AP");
-    })
-    .unwrap();
-    let mut cache = AppearanceCache::default();
-    let a = with_missing_appearances_cached(&doc, &mut cache).unwrap();
-    let b = with_missing_appearances_cached(&doc, &mut cache).unwrap();
-    assert!(cache.hits() > 0);
-    check(&reopen(&a));
-    check(&reopen(&b));
-}
-
-/// Missing quadding follows the RTL paragraph, explicit left stays left, and multiline
-/// box height includes the generated rows' ink rather than assuming Latin metrics.
-#[test]
-fn arabic_generated_comments_keep_explicit_left_and_size_from_ink() {
-    if pdfcraft_fonts::document_arabic_font().is_none() {
-        return;
-    }
-    let mut d = Dict::new();
-    d.set(b"Subtype".to_vec(), Object::name("FreeText"));
-    d.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 300.0, 80.0].map(Object::Real).to_vec()));
-    d.set(b"Contents".to_vec(), pdfcraft_cos::PdfString::text("سَلَام"));
-    d.set(b"DA".to_vec(), pdfcraft_cos::PdfString::text("/Helv 24 Tf 0 g"));
-    let content = |dict: &Dict| String::from_utf8(appearance::build(dict).unwrap().decoded().unwrap()).unwrap();
-    let default = content(&d);
-    d.set(b"Q".to_vec(), Object::Int(0));
-    let left = content(&d);
-    d.set(b"Q".to_vec(), Object::Int(2));
-    let right = content(&d);
-    assert_eq!(default, right, "absent quadding follows the RTL paragraph");
-    assert_ne!(left, right, "explicit left alignment stays left");
-    let text = "سَلَام\nمَرْحَبًا";
-    let size = 32.0;
-    let measured = appearance::text_box_size_for_family(text, size, Default::default()).unwrap();
-    let lines = pdfcraft_fonts::appearance_text::wrap(text, size, 592.0).unwrap();
-    assert!(measured[1] >= pdfcraft_fonts::appearance_text::height(&lines, size) + 6.0 - 0.001);
-}
-
-/// A contextual-layout budget failure rolls back both creation and content replacement,
-/// preserving incremental bytes, appearance geometry and allocated objects.
-#[test]
-fn arabic_generated_comment_budget_failure_is_atomic() {
-    if pdfcraft_fonts::document_arabic_font().is_none() {
-        return;
-    }
-    let mut doc = fixture();
-    let mut entry = new(0, Shape::TextBox { rect: [50.0, 500.0, 300.0, 560.0], font_size: 12.0 });
-    let index = add_annotation(&mut doc, &entry, &meta("before")).unwrap();
-    let snapshot = |doc: &Document| write_incremental(doc, &SaveOptions::default()).unwrap();
-    let before = snapshot(&doc);
-    entry.contents = format!("مرحبا{}", "\u{200e}".repeat(90_000));
-    assert!(add_annotation(&mut doc, &entry, &meta("refused")).is_err());
-    assert_eq!(snapshot(&doc), before, "failed creation includes object allocation rollback");
-    assert!(set_contents(&mut doc, 0, index, &entry.contents, &meta("refused")).is_err());
-    assert_eq!(snapshot(&doc), before, "failed content replacement keeps text, box, appearance and objects");
-}
-
 /// A 3D annotation is PDF 1.6 and a PRC model 1.7 (ISO 32000-2 §13.6): an older document's
 /// catalog says so, and a newer one is left as it is.
 #[test]
@@ -2954,4 +2857,47 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     };
     check(&doc);
     check(&reopen(&doc));
+}
+
+#[test]
+fn syriac_family_reselection_preserves_round_text_box_size() {
+    use pdfcraft_fonts::SyriacFamily;
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none(), "supplied fonts must include Eastern Syriac");
+        return;
+    }
+    for shape in [BorderShape::Oval, BorderShape::Circle] {
+        let mut doc = fixture();
+        let mut boxed = new(0, Shape::Typewriter { rect: [100.0, 100.0, 300.0, 170.0], font_size: 12.0 });
+        boxed.contents = "ܫܠܡܐ".into();
+        boxed.style.syriac_family = Some(SyriacFamily::Eastern);
+        let index = add_annotation(&mut doc, &boxed, &meta("syriac-round")).unwrap();
+        set_border_shape(&mut doc, 0, index, shape, &meta("shape")).unwrap();
+        // A first family application may grow a compact circle to fit shaped marks.
+        set_style(
+            &mut doc,
+            0,
+            index,
+            StyleChange { color: None, opacity: None, width: None, endings: None, syriac_family: Some(SyriacFamily::Eastern) },
+            &meta("initial-family"),
+        )
+        .unwrap();
+        let before = rect(&list(&doc, 0)[index]);
+        for _ in 0..3 {
+            set_style(
+                &mut doc,
+                0,
+                index,
+                StyleChange { color: None, opacity: None, width: None, endings: None, syriac_family: Some(SyriacFamily::Eastern) },
+                &meta("family"),
+            )
+            .unwrap();
+            let after = rect(&list(&doc, 0)[index]);
+            assert!(
+                before.iter().zip(after).all(|(a, b)| (a - b).abs() < 0.01),
+                "family reselection must preserve {shape:?}: {before:?}, actual: {:?}",
+                rect(&list(&doc, 0)[index])
+            );
+        }
+    }
 }

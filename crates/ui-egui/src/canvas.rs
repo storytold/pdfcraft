@@ -487,8 +487,6 @@ pub struct DocView {
     pub snapshot: Option<Snapshot>,
     /// Two-page view: show the first page alone, as a cover (View ▸ Page display).
     pub cover: bool,
-    /// Two-page view places the earlier page of each pair on the right (#2339).
-    pub rtl_pages: bool,
     /// Previous view / Next view: pages visited before (and after, once going back).
     pub back: Vec<usize>,
     pub forward: Vec<usize>,
@@ -944,7 +942,6 @@ impl DocView {
             close_requested: false,
             snapshot: None,
             cover: false,
-            rtl_pages: false,
             back: Vec::new(),
             forward: Vec::new(),
             goto: None,
@@ -1119,7 +1116,6 @@ impl DocView {
         fresh.snapshot = self.snapshot.clone();
         fresh.close_requested = self.close_requested;
         fresh.cover = self.cover;
-        fresh.rtl_pages = self.rtl_pages;
         // Still presenting, with the display to go back to on leaving.
         fresh.presentation = self.presentation.take();
         fresh.back = std::mem::take(&mut self.back);
@@ -2607,24 +2603,6 @@ fn track_scroll<T>(ui: &egui::Ui, view: &mut DocView, out: &egui::containers::sc
     now_settle < view.pan_hold_until
 }
 
-/// A plain label leaves Arabic in stored order. A Latin label in front of Arabic
-/// (`Note: واحد اثنين`) makes the paragraph left to right, so the paragraph direction is the
-/// wrong test: any Arabic or Hebrew uses the same wrap as the comments panel.
-pub(super) fn comment_hover_uses_bidi(text: &str) -> bool {
-    crate::bidi::has_rtl(text)
-}
-
-/// Paint comment hover text through bidi-aware wrapping whenever it contains RTL characters.
-fn paint_hover_text(ui: &mut egui::Ui, text: &str) {
-    if !comment_hover_uses_bidi(text) {
-        ui.label(text);
-        return;
-    }
-    let font = egui::FontSelection::default().resolve(ui.style());
-    let color = ui.visuals().text_color();
-    crate::widgets::wrapped_text(ui, text, font, color, false);
-}
-
 /// The way the view moves after a frame whose offset changed by `dy` points: down (1) or up (-1)
 /// for a move of more than half a point, `dir` otherwise, and 0 when the content's size changed
 /// (a zoom or a layout change).
@@ -2650,7 +2628,7 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
         tip.fixed_pos(pos + vec2(14.0, 16.0)).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_max_width(320.0);
-                paint_hover_text(ui, &text);
+                ui.label(text);
             });
         });
     }

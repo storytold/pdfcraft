@@ -242,7 +242,7 @@ fn selected_families_persist_across_content_surfaces_and_refuse_irrelevant_selec
                 "doc":id,"fields":["single","multi","comb","combo","list","button"],"syriac_family":family,"font_size":18,
             }),
         ));
-        no_warning(&call(&mut auto, "form_set_props", json!({"doc":id,"field":"comb","max_length":16,"flags":{"comb":true}})));
+        no_warning(&call(&mut auto, "form_set_props", json!({"doc":id,"field":"comb","max_length":16,"font_size":12,"flags":{"comb":true}})));
         no_warning(&call(
             &mut auto,
             "form_fill",

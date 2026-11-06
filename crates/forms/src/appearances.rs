@@ -62,10 +62,8 @@ pub fn with_field_appearances_cached(doc: &Document, cache: &mut FieldAppearance
                 continue;
             }
             let inputs = appearance_inputs(doc, w);
-            // Syriac allocates its font objects while drawing, and those of one display copy
-            // cannot be reused in another. Other drawings (Arabic's inline Type3 fonts too) hold
-            // no document objects, so they are cached and given their fonts in each copy below.
-            let mut stream = if appearance::needs_syriac(doc, &f, w, &f.value) {
+            let stream = if appearance::needs_syriac(doc, &f, w, &f.value) {
+                // Font objects allocated in one display copy cannot be reused in another.
                 let current = copy.get_or_insert_with(|| doc.clone());
                 appearance::field_appearance_drawn_in(current, &f, w, &f.value, true).0
             } else {
@@ -83,7 +81,6 @@ pub fn with_field_appearances_cached(doc: &Document, cache: &mut FieldAppearance
                 }
             };
             let target = copy.get_or_insert_with(|| doc.clone());
-            appearance::materialize_inline_fonts(target, &mut stream);
             let ap = target.add(Object::Stream(stream));
             let mut fresh = Dict::new();
             match &state {

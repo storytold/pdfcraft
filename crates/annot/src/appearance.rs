@@ -11,7 +11,7 @@
 //! Helvetica's proportions by character class (no font program or metrics file is bundled).
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
-use pdfcraft_fonts::{appearance_text, first_undrawable, literal, win_ansi};
+use pdfcraft_fonts::{first_undrawable, literal, win_ansi};
 pub use pdfcraft_fonts::{helvetica_width as text_width, wrap};
 
 use crate::{NOTE_SIZE, Rgb, n};
@@ -21,41 +21,22 @@ mod symbols;
 pub(crate) use symbols::display_stamp;
 use symbols::{CAPTION_SIZE, attach_icon, ellipse, line_caption, line_layout, note_icon, stamp};
 
-/// Use the generated Arabic layout only outside the selected-family Syriac path.
-pub(crate) fn arabic_text(text: &str) -> bool {
-    !pdfcraft_fonts::content_text::contains_syriac(text) && text.chars().any(pdfcraft_fonts::source_shaping::is_arabic)
-}
-
-/// Measure supported generated Arabic text with the same font and ink metrics as drawing.
-pub(crate) fn arabic_lines(text: &str, size: f64, width: f64) -> Option<Vec<appearance_text::Line>> {
-    (arabic_text(text) && appearance_text::can_shape(text)).then(|| appearance_text::wrap(text, size, width).ok()).flatten()
-}
-
 /// Initial Fill & Sign text bounds, including the selected Syriac face's ink extents.
 /// Other text retains the established Helvetica sizing policy.
 pub fn text_box_size_for_family(text: &str, size: f64, family: pdfcraft_fonts::SyriacFamily) -> Result<[f64; 2], String> {
     text_box_size_for_family_min(text, size, family, 20.0)
 }
 
-/// Measure typed text, allowing circular borders to fit it without a minimum box width.
+/// Initial typed-text bounds, with the circle's tighter minimum width when requested.
 pub fn text_box_size_for_family_min(text: &str, size: f64, family: pdfcraft_fonts::SyriacFamily, min_width: f64) -> Result<[f64; 2], String> {
     if !size.is_finite() || size <= 0.0 || !min_width.is_finite() || !(0.0..=600.0).contains(&min_width) {
         return Err("text size must be positive and finite".into());
     }
-    if arabic_text(text) && appearance_text::can_shape(text) {
-        let lines = appearance_text::wrap(text, size, 592.0).map_err(|_| "Arabic Fill & Sign text is too long or complex; shorten it")?;
-        let width = lines.iter().map(|line| line.width).fold(0.0, f64::max);
-        let height = appearance_text::height(&lines, size) + 6.0;
-        if !width.is_finite() || width > 592.0 || !height.is_finite() || height > 14_400.0 {
-            return Err("Arabic Fill & Sign text is too large; use a smaller font size or shorter text".into());
-        }
-        return Ok([(width + 8.0).clamp(min_width, 600.0), height]);
-    }
     if !pdfcraft_fonts::content_text::contains_syriac(text) {
         let longest = text.lines().map(|line| text_width(line, size)).fold(0.0, f64::max);
-        let w = (longest + 8.0).clamp(min_width, 600.0);
-        let rows = wrap(text, size, w - 4.0).len().max(1);
-        return Ok([w, rows as f64 * size * 1.2 + 6.0]);
+        let width = (longest + 8.0).clamp(min_width, 600.0);
+        let rows = wrap(text, size, width - 4.0).len().max(1);
+        return Ok([width, rows as f64 * size * 1.2 + 6.0]);
     }
     let lines = pdfcraft_fonts::content_text::wrap_for_family(text, size, 592.0, family)?;
     let (mut width, mut ascent, mut descent) = (0.0f64, 0.9f64, -0.2f64);
@@ -450,9 +431,6 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
         && pdfcraft_fonts::content_text::wrap_for_family(&text, 12.0, 1000.0, pdfcraft_fonts::SyriacFamily::from_dict(d)).is_ok()
     {
         return None;
-    }
-    if d.name(b"Subtype") == Some(b"FreeText") && arabic_text(&text) {
-        return Some((what, appearance_text::first_undrawable(&text)?));
     }
     Some((what, first_undrawable(&text)?))
 }
@@ -1079,17 +1057,6 @@ fn shaped_border(
     Some(rect)
 }
 
-/// Explicit alignment wins; otherwise use the shaped paragraph's base direction.
-fn free_text_alignment(dict: &Dict, alignment: i64, rtl: bool) -> i64 {
-    if dict.contains(b"Q") {
-        alignment
-    } else if rtl {
-        2
-    } else {
-        0
-    }
-}
-
 /// Draw FreeText or callout geometry and text, using shaped Syriac when resources are available.
 /// Preserve rotation and alignment, with a standard-font fallback when shaping is unavailable.
 fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing, doc: Option<&mut Document>) -> Option<Stream> {
@@ -1173,11 +1140,14 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
             ));
         }
     }
-    let layout = FreeTextLayout { rect, full, matrix, pad: 2.0 + bw, round: shape != crate::BorderShape::Rectangle };
-    draw_free_text_content(context, doc, layout, AppearanceDrawing { content: c, resources: res, tail: Vec::new() })
+    draw_free_text_content(
+        context,
+        doc,
+        FreeTextLayout { rect, full, matrix, pad: 2.0 + bw, round: shape != crate::BorderShape::Rectangle },
+        AppearanceDrawing { content: c, resources: res, tail: Vec::new() },
+    )
 }
 
-/// Text space after the border and rotation have placed a FreeText box.
 struct FreeTextLayout {
     rect: [f64; 4],
     full: [f64; 4],
@@ -1186,7 +1156,7 @@ struct FreeTextLayout {
     round: bool,
 }
 
-/// Draw shaped Arabic/Syriac or standard-font text in the already placed box.
+/// Draw text in the already placed annotation box.
 fn draw_free_text_content(
     context: &AppearanceContext<'_>,
     doc: Option<&mut Document>,
@@ -1228,7 +1198,13 @@ fn draw_free_text_content(
             if y < rect[1] - size {
                 break;
             }
-            let align = if round { 1 } else { free_text_alignment(d, q, line.rtl) };
+            let align = if round || d.contains(b"Q") {
+                q
+            } else if line.rtl {
+                2
+            } else {
+                0
+            };
             let x = match align {
                 1 => rect[0] + pad + (width - line.width * size) / 2.0,
                 2 => rect[2] - pad - line.width * size,
@@ -1241,30 +1217,6 @@ fn draw_free_text_content(
         let mut stream = form(full, &out, res);
         if let Some(m) = matrix {
             stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
-        }
-        return Some(stream);
-    }
-    if arabic_text(&text) && appearance_text::can_shape(&text) {
-        // Template font streams remain inline until installed in the actual document.
-        // Shape/outline failures refuse the redraw instead of silently baking in placeholders.
-        let lines = appearance_text::wrap(&text, size, width).ok()?;
-        let mut bounds = [rect[0] + pad, rect[1] + pad, rect[2] - pad, rect[3] - pad];
-        if round {
-            bounds[3] -= ((bounds[3] - bounds[1] - appearance_text::height(&lines, size)) / 2.0).max(0.0);
-        }
-        let (bytes, fonts) = if round || d.contains(b"Q") {
-            appearance_text::draw(&lines, size, bounds, q, text_color)
-        } else {
-            appearance_text::draw_directional(&lines, size, bounds, q, text_color)
-        }
-        .ok()?;
-        c.push_str(&format!("{} {} {} {} re W n\n", n(rect[0]), n(rect[1]), n(rect[2] - rect[0]), n(rect[3] - rect[1])));
-        let mut out = c.into_bytes();
-        out.extend(bytes);
-        res.set(b"Font".to_vec(), Object::Dict(fonts));
-        let mut stream = form(full, &out, res);
-        if let Some(matrix) = matrix {
-            stream.dict.set(b"Matrix".to_vec(), Object::Array(matrix.iter().copied().map(Object::Real).collect()));
         }
         return Some(stream);
     }

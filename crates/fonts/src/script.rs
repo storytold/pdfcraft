@@ -175,11 +175,7 @@ fn glyph_in_face(bytes: &[u8], ch: char) -> Result<GlyphOutline, GlyphError> {
 
 /// Glyph `gid` of `font` in em units with advance `width`, bounded like [`japanese_glyph`].
 pub(crate) fn bounded_outline(font: &FontRef, gid: GlyphId, width: f64) -> Result<GlyphOutline, GlyphError> {
-    bounded_outline_at(font, gid, width, LocationRef::default())
-}
-
-/// A bounded outline at the selected variation location.
-pub(crate) fn bounded_outline_at(font: &FontRef, gid: GlyphId, width: f64, loc: LocationRef<'_>) -> Result<GlyphOutline, GlyphError> {
+    let loc = LocationRef::default();
     let scale = 1.0 / font.metrics(Size::unscaled(), loc).units_per_em.max(1) as f64;
     let Some(glyph) = font.outline_glyphs().get(gid) else { return Err(GlyphError::Missing) };
     let mut pen = Flatten::new(scale);
@@ -218,8 +214,7 @@ pub fn script_missing(text: &str) -> Option<char> {
 
 /// Like [`script_missing`], using exactly `family` for the whole line when Syriac is present.
 /// A failed Syriac layout returns its first Syriac character as a rejection marker.
-/// Arabic uses the same bounded shaping/outline path as placement. Other text keeps the
-/// Dancing Script / Inter cmap-coverage policy.
+/// Text without Syriac keeps the Dancing Script / Inter cmap-coverage policy.
 pub fn script_missing_for_family(text: &str, family: crate::SyriacFamily) -> Option<char> {
     if crate::content_text::contains_syriac(text) {
         if text.len() > crate::content_text::MAX_TEXT_BYTES {
@@ -230,13 +225,6 @@ pub fn script_missing_for_family(text: &str, family: crate::SyriacFamily) -> Opt
             .err()
             .and_then(|_| text.chars().find(|c| crate::source_shaping::is_syriac(*c)));
     }
-    if text.chars().any(crate::source_shaping::is_arabic) {
-        return arabic_signature_outline(text).err().and_then(|_| {
-            text.chars()
-                .find(|c| !c.is_whitespace() && !crate::embedding::default_ignorable(*c) && !crate::arabic_has(*c))
-                .or_else(|| text.chars().find(|c| crate::source_shaping::is_arabic(*c)))
-        });
-    }
     let font = FontRef::new(FONT).ok()?;
     let charmap = font.charmap();
     let fallback = FontRef::new(INTER_REGULAR).ok();
@@ -245,8 +233,8 @@ pub fn script_missing_for_family(text: &str, family: crate::SyriacFamily) -> Opt
 }
 
 /// Build signature outlines with the default Estrangela selection; see [`script_outline_for_family`].
-/// Arabic uses its approved document face with contextual shaping. Other text uses Dancing
-/// Script with slanted Inter fallback. Contextual shaping failure returns an empty outline.
+/// Without Syriac, use Dancing Script with slanted, cap-height-scaled Inter fallback and skip
+/// characters neither font has. With Syriac, shaping failure returns an empty outline instead.
 /// Check [`script_missing`] before unpreviewed placement; over-limit input returns an empty outline.
 pub fn script_outline(text: &str) -> ScriptOutline {
     script_outline_for_family(text, crate::SyriacFamily::default())
@@ -255,8 +243,7 @@ pub fn script_outline(text: &str) -> ScriptOutline {
 /// Build signature outlines in em units, limited to [`MAX_SIGNATURE_CHARS`] characters.
 /// When Syriac is present, flatten CR/LF to spaces and shape the whole line with exactly
 /// `family`; unavailable glyphs/faces or shaping/outline failure return an empty outline.
-/// Arabic uses the approved Arabic face for the whole line, including supported Latin/digits.
-/// Other text uses Dancing Script plus slanted Inter and skips unsupported characters.
+/// Without Syriac, use Dancing Script plus slanted Inter and skip unsupported characters.
 /// Exceeding the character or outline budget also returns an empty outline, never a truncated name.
 pub fn script_outline_for_family(text: &str, family: crate::SyriacFamily) -> ScriptOutline {
     if text.chars().take(MAX_SIGNATURE_CHARS + 1).count() > MAX_SIGNATURE_CHARS {
@@ -268,9 +255,6 @@ pub fn script_outline_for_family(text: &str, family: crate::SyriacFamily) -> Scr
             .ok()
             .and_then(|lines| lines.first().and_then(|line| line.outline().ok()))
             .unwrap_or_default();
-    }
-    if text.chars().any(crate::source_shaping::is_arabic) {
-        return arabic_signature_outline(text).unwrap_or_default();
     }
     let Ok(font) = FontRef::new(FONT) else { return ScriptOutline::default() };
     let loc = LocationRef::default();
@@ -320,82 +304,8 @@ pub fn script_outline_for_family(text: &str, family: crate::SyriacFamily) -> Scr
     ScriptOutline { contours: pen.contours, width: pen.dx, ascent: metrics.ascent as f64 * scale, descent: metrics.descent as f64 * scale }
 }
 
-/// Shape one signature in the approved Arabic face, preserving bidi runs and positioned marks.
-/// Use the same function for preflight and drawing: any missing glyph or budget failure refuses
-/// the whole name. No fallback can silently retain just the Latin part of an Arabic signature.
-fn arabic_signature_outline(text: &str) -> Result<ScriptOutline, GlyphError> {
-    if text.chars().take(MAX_SIGNATURE_CHARS + 1).count() > MAX_SIGNATURE_CHARS {
-        return Err(GlyphError::TooComplex);
-    }
-    let shown = text.replace(['\n', '\r'], " ");
-    let bidi = unicode_bidi::ParagraphBidiInfo::new(&shown, None);
-    let (levels, runs) = bidi.visual_runs(0..shown.len());
-    let mut output = ScriptOutline::default();
-    let mut points = 0usize;
-    for run in runs {
-        let rtl = levels.get(run.start).is_some_and(unicode_bidi::Level::is_rtl);
-        let input: String = shown.get(run).ok_or(GlyphError::Missing)?.chars().filter(|c| !crate::appearance_text::is_bidi_control(*c)).collect();
-        for cluster in crate::shape_arabic(&input, rtl)? {
-            for (id, offset) in cluster.glyphs {
-                let glyph = crate::shaped_glyph(cluster.script, id)?;
-                for contour in glyph.contours {
-                    points = points.saturating_add(contour.len());
-                    if points > 262_144 {
-                        return Err(GlyphError::TooComplex);
-                    }
-                    let mut moved = Vec::with_capacity(contour.len());
-                    for p in contour {
-                        let point = [p[0] + output.width + offset[0], p[1] + offset[1]];
-                        if !point.iter().all(|v| v.is_finite()) {
-                            return Err(GlyphError::Missing);
-                        }
-                        output.ascent = output.ascent.max(point[1]);
-                        output.descent = output.descent.min(point[1]);
-                        moved.push(point);
-                    }
-                    output.contours.push(moved);
-                }
-            }
-            output.width += cluster.advance;
-            if !output.width.is_finite() || output.width < 0.0 {
-                return Err(GlyphError::Missing);
-            }
-        }
-    }
-    Ok(output)
-}
-
 #[cfg(test)]
 mod tests {
-    /// Joining, attached marks, controls and mixed names retain finite complete outlines;
-    /// a missing glyph or over-budget name must yield no partial signature artwork.
-    #[test]
-    fn arabic_signature_shapes_joining_marks_and_mixed_names_without_partial_output() {
-        if crate::document_arabic_font().is_none() {
-            assert!(std::env::var_os("CRAFT_FONTS_REQUIRED").is_none(), "Arabic font required");
-            assert!(super::script_missing("سلام").is_some());
-            assert!(super::script_outline("سلام").contours.is_empty());
-            return;
-        }
-        for text in ["سلام", "سَلام", "سارة 123 (Ada)", "Ada سارة", "سارة\n123", "س\u{200d}لام"] {
-            assert_eq!(super::script_missing(text), None, "{text}");
-            let outline = super::script_outline(text);
-            assert!(!outline.contours.is_empty() && outline.width > 0.0, "{text}");
-            assert!(outline.bounds().iter().all(|v| v.is_finite()));
-            assert!(outline.contours.iter().flatten().all(|p| p.iter().all(|v| v.is_finite())));
-        }
-        assert_ne!(super::script_outline("سلام").contours, super::script_outline("سَلام").contours, "the vowel mark must survive");
-        let joined = super::script_outline("لا");
-        let isolated_width = super::script_outline("ل").width + super::script_outline("ا").width;
-        assert!((joined.width - isolated_width).abs() > 0.01, "lam-alef must be contextually shaped");
-        let mixed = super::script_outline("سارة 123 (Ada)");
-        assert!(mixed.width > super::script_outline("سارة").width, "Latin and digits must survive");
-        assert!(super::script_missing("سارة 张").is_some());
-        assert!(super::script_outline("سارة 张").contours.is_empty(), "unsupported text must not yield a partial signature");
-        assert!(super::script_missing(&"س".repeat(super::MAX_SIGNATURE_CHARS + 1)).is_some());
-        assert!(super::script_outline(&"س".repeat(super::MAX_SIGNATURE_CHARS + 1)).contours.is_empty());
-    }
-
     #[test]
     fn long_names_keep_every_glyph_with_bounded_outline_work() {
         let text = "Alexandria Catherine Elizabeth Montgomery-Wellington";

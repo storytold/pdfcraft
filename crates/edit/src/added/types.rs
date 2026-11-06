@@ -104,7 +104,6 @@ pub struct AddedText {
     pub size: f64,
     pub color: [f64; 3],
     pub align: Align,
-    pub direction: pdfcraft_fonts::TextDirection,
     /// Extra space after every character, in points: the PDF's character spacing (`Tc`).
     pub char_spacing: f64,
     /// Paragraphs (lines typed with Enter) aligned other than [`AddedText::align`], by index;
@@ -120,7 +119,7 @@ impl AddedText {
 }
 
 impl Default for AddedText {
-    /// Create empty Helvetica text with automatic direction and the standard editing defaults.
+    /// Start with empty, left-aligned black Helvetica text at 12 points and default Estrangela.
     fn default() -> Self {
         AddedText {
             rect: [0.0; 4],
@@ -132,7 +131,6 @@ impl Default for AddedText {
             size: 12.0,
             color: [0.0; 3],
             align: Align::Left,
-            direction: Default::default(),
             aligns: Vec::new(),
             char_spacing: 0.0,
         }

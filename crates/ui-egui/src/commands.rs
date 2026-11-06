@@ -152,9 +152,6 @@ impl PdfCraftApp {
             }
             commands::Needs::Copying if self.active.is_some() => crate::copy_refused().to_string(),
             commands::Needs::Printing if self.active.is_some() => crate::print_refused().to_string(),
-            commands::Needs::TwoPageView if self.active.is_some() && spec.id == "view.layout.rtl" => {
-                tl!("Switch to two-page view first to put pages in right-to-left order").to_string()
-            }
             commands::Needs::TwoPageView if self.active.is_some() => tl!("Switch to two-page view first to show the cover page").to_string(),
             _ => tl!("Open a document first").to_string(),
         }
@@ -258,7 +255,6 @@ impl PdfCraftApp {
         Some(true)
     }
 
-    /// Apply a registered view command to the current document without changing its stored PDF content.
     fn run_view_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
             "ui.dock.reset" => {
@@ -309,12 +305,6 @@ impl PdfCraftApp {
                 if let Some(i) = active {
                     let v = &mut self.views[i];
                     v.set_cover(!v.cover);
-                }
-            }
-            "view.layout.rtl" => {
-                if let Some(i) = active {
-                    let v = &mut self.views[i];
-                    v.set_rtl_pages(!v.rtl_pages);
                 }
             }
             "view.fit_width_scrolling" | "view.fit_one_page" => {
@@ -861,9 +851,8 @@ impl PdfCraftApp {
     pub(crate) fn dispatch_command(&mut self, ctx: &egui::Context, id: &'static str) {
         let active = self.active_ids();
         let form_typing = active.and_then(|(i, _)| self.views.get(i)).is_some_and(|v| v.forms.focus.is_some());
-        let page_typing = self.page_box_focused(ctx);
-        if form_typing || page_typing {
-            // The editor has the keyboard: let it take this frame's typing/composition first,
+        if form_typing {
+            // A form field has the keyboard: let it take this frame's typing (and Escape) first,
             // so ⌘S saves what's on screen (#166). Runs next frame, for this document only.
             self.deferred_commands.push((id, active.map(|(_, id)| id)));
             ctx.request_repaint();

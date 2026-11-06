@@ -227,7 +227,7 @@ fn value_for(f: &FormField, v: &Value) -> Result<FieldValue> {
 }
 
 impl Automation {
-    /// Report form values, widget geometry and editing properties, including stored text direction and text-family choices.
+    /// Report field values, widget geometry and type-specific properties, including text-family choices.
     pub(crate) fn form_fields(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let out: Vec<Value> = doc
@@ -252,7 +252,6 @@ impl Automation {
                     "page": w.and_then(|w| w.page).map(|p| p + 1),
                     "rect": rect,
                     "rotation": w.map(|w| w.rotation).unwrap_or(0),
-                    "direction": f.text_direction.name().to_ascii_lowercase(),
                     "read_only": f.read_only(),
                     "required": f.has(field_flags::REQUIRED),
                 });
@@ -536,8 +535,7 @@ impl Automation {
         Ok(out)
     }
 
-    /// Prepare field properties without mutating the document.
-    /// Validate tool arguments and convert displayed-page rectangle coordinates into PDF user space; omitted properties remain unchanged.
+    /// Build a partial field-property change, translating displayed geometry and validating selectors.
     fn field_props_arg(&self, a: &Args, name: &str) -> Result<FieldProps> {
         let doc = self.doc(a)?;
         let f = doc.form.iter().find(|f| f.name == name).ok_or_else(|| failed(format!("there is no field named {name:?} (see form_fields)")))?;
@@ -597,7 +595,6 @@ impl Automation {
             format: a.get("format").map(format_arg).transpose()?,
             validate: a.get("validate").map(validate_arg).transpose()?,
             calculate: a.get("calculate").map(calculate_arg).transpose()?,
-            text_direction: a.opt_str("direction")?.map(crate::content::parse_direction).transpose()?,
             quadding: match a.opt_str("align")? {
                 None => None,
                 Some("left") => Some(0),

@@ -283,7 +283,6 @@ struct Inherited {
     dv: Option<Object>,
     da: Option<String>,
     q: Option<i64>,
-    text_direction: Option<pdfcraft_fonts::TextDirection>,
     max_len: Option<usize>,
 }
 
@@ -475,9 +474,6 @@ fn walk(
     if let Some(q) = d.get(b"Q").and_then(|o| doc.resolve(o).as_int()) {
         inh.q = Some(q);
     }
-    if let Some(direction) = d.name(b"PCTextDirection") {
-        inh.text_direction = Some(pdfcraft_fonts::TextDirection::from_name(direction));
-    }
     if let Some(m) = d.get(b"MaxLen").and_then(|o| doc.resolve(o).as_int()) {
         // Compatibility: some writers emit zero for an unlimited text field. Keep /MaxLen
         // untouched in the object graph, but expose only positive limits to both UI and API.
@@ -545,9 +541,7 @@ fn walk(
                         value.as_string().map(|s| s.to_text())
                     })
                     .flatten(),
-                list: (kind == FieldKind::List).then(|| {
-                    appearance::list_rows_of(doc, inh.da.as_deref().unwrap_or("/Helv 0 Tf 0 g"), Some(d), wd, inh.text_direction.unwrap_or_default())
-                }),
+                list: (kind == FieldKind::List).then(|| appearance::list_rows_of(doc, inh.da.as_deref().unwrap_or("/Helv 0 Tf 0 g"), Some(d), wd)),
                 round: kind == FieldKind::Radio || (kind == FieldKind::CheckBox && appearance::is_round(doc, wd)),
             })
         })
@@ -574,14 +568,12 @@ fn walk(
         options,
         da: inh.da.clone().unwrap_or_else(|| "/Helv 0 Tf 0 g".into()),
         quadding: inh.q.unwrap_or(0),
-        text_direction: inh.text_direction.unwrap_or_default(),
         tooltip: d.get(b"TU").and_then(|o| text_of(&doc.resolve(o))),
         widgets,
         actions,
         button,
     };
-    // Shaped Syriac labels can make the drawn rows taller than the `/DA` size gives; clicks and
-    // scrolling must use the rows the appearance draws.
+    // The click/scroll row geometry must match the selected Syriac face's drawn extents.
     if field.kind == FieldKind::List && field.widgets.iter().any(|w| appearance::needs_syriac(doc, &field, w, &field.value)) {
         let rows: Vec<_> = field.widgets.iter().map(|w| appearance::list_rows(doc, &field, w)).collect();
         for (w, rows) in field.widgets.iter_mut().zip(rows) {

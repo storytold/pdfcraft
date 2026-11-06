@@ -8,6 +8,11 @@ use pdfcraft_cos::{Dict, Document, Object};
 use std::collections::HashMap;
 use unicode_bidi::{Level, ParagraphBidiInfo};
 
+/// First strong paragraph direction; neutral text defaults to LTR.
+pub fn paragraph_rtl(text: &str) -> bool {
+    unicode_bidi::get_base_direction(text) == unicode_bidi::Direction::Rtl
+}
+
 pub const MAX_TEXT_BYTES: usize = 262_144;
 const MAX_LINES: usize = 1024;
 const MAX_POINTS: usize = 1_000_000;
@@ -62,7 +67,13 @@ fn paragraph_line(paragraph: &ParagraphBidiInfo<'_>, range: std::ops::Range<usiz
     let rtl = paragraph.paragraph_level.is_rtl();
     let mut clusters = Vec::new();
     if !text.is_empty() {
-        let bidi = crate::appearance_text::line_bidi(paragraph, range, text).map_err(error)?;
+        let bidi = ParagraphBidiInfo {
+            text,
+            original_classes: paragraph.original_classes.get(range.clone()).ok_or("Syriac line classes are outside the paragraph")?.to_vec(),
+            levels: paragraph.levels.get(range).ok_or("Syriac line levels are outside the paragraph")?.to_vec(),
+            paragraph_level: paragraph.paragraph_level,
+            is_pure_ltr: paragraph.is_pure_ltr,
+        };
         let (levels, runs) = bidi.visual_runs(0..text.len());
         for run in runs {
             let input: String = text.get(run.clone()).unwrap_or_default().chars().filter(|c| !bidi_control(*c)).collect();

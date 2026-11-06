@@ -69,7 +69,6 @@ const PICKERS: &[&str] = &[
 ];
 
 #[test]
-/// Exercise enabled registry commands with their required document/view setup while avoiding interactive file pickers.
 fn every_registered_command_is_implemented() {
     for spec in COMMANDS {
         // Page-text Copy needs a loaded view and egui context, covered by text_select.
@@ -163,7 +162,7 @@ fn every_registered_command_is_implemented() {
             app.apply_edit(pdfcraft_engine::Edit::Protect(p));
         }
         // The cover toggle needs two-page view first (it is disabled elsewhere).
-        if spec.id == "view.layout.cover" || spec.id == "view.layout.rtl" {
+        if spec.id == "view.layout.cover" {
             app.set_option("layout", "two-up").unwrap();
         }
         // History commands need a real jump (and Back first to make Forward available).
@@ -195,9 +194,6 @@ fn disabled_commands_explain_themselves() {
     // View state counts too: the cover page exists only in two-page view.
     assert!(!app.execute("view.layout.cover"));
     assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Switch to two-page view first to show the cover page"));
-    // Right-to-left order shares that requirement but says what it is for.
-    assert!(!app.execute("view.layout.rtl"));
-    assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Switch to two-page view first to put pages in right-to-left order"));
     assert!(!app.execute("no.such.command"));
 }
 

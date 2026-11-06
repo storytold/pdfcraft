@@ -134,7 +134,6 @@ fn number(v: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-/// Draw the formatting rail and emit supported paragraph, font and alignment changes.
 pub(crate) fn panel(
     ui: &mut egui::Ui,
     t: &Tokens,
@@ -259,11 +258,6 @@ pub(crate) fn panel(
     font_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), tl!("Font")));
     font_resp.on_hover_text(format!("{}\n{}", tl!("Font"), tl!("Thai and Arabic use regular fallback fonts when available.")));
     ui.add_space(4.0);
-
-    row(ui, |ui| {
-        ui.label(tl!("Text direction"));
-        widgets::direction_buttons(ui, &mut look.direction);
-    });
 
     // Size and colour | bullets, numbering and alignment.
     let mut size_committed = false;

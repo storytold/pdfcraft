@@ -4,14 +4,6 @@ use super::modify::refuse_foreign_text;
 use super::types::NOTE_SIZE;
 use super::{AnnotError, Dict, Document, ObjRef, Object, Stream, appearance};
 
-/// Commit a generated-text operation only after all drawing and document updates succeed.
-pub(crate) fn appearance_transaction<T>(doc: &mut Document, apply: impl FnOnce(&mut Document) -> Result<T, AnnotError>) -> Result<T, AnnotError> {
-    let mut staged = doc.clone();
-    let result = apply(&mut staged)?;
-    *doc = staged;
-    Ok(result)
-}
-
 /// (Re)generate `/AP /N` for the annotation `r` from its dictionary, for an edit that keeps its
 /// text (a restyle, a new size or colour).
 ///
@@ -41,18 +33,7 @@ pub(crate) fn redraw_or_restore(doc: &mut Document, r: ObjRef, before: Dict) -> 
 pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), AnnotError> {
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
-    let Some(stream) = build_appearance_in(doc, &d) else {
-        if d.name(b"Subtype") == Some(b"FreeText")
-            && let Some(text) = d.get(b"Contents").and_then(Object::as_string).map(|s| s.to_text())
-            && appearance::arabic_text(&text)
-            && pdfcraft_fonts::appearance_text::can_shape(&text)
-        {
-            return Err(AnnotError::Invalid(
-                "the Arabic comment is too long or complex to draw; shorten it or split it into several comments".into(),
-            ));
-        }
-        return Err(AnnotError::Unsupported(subtype));
-    };
+    let Some(stream) = build_appearance_in(doc, &d) else { return Err(AnnotError::Unsupported(subtype)) };
     apply_appearance(doc, r, &d, stream)
 }
 
@@ -80,15 +61,9 @@ fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
 }
 
 /// Store a built appearance on the annotation: the cheap half of [`set_appearance`].
-fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, mut stream: Stream) -> Result<(), AnnotError> {
+fn apply_appearance(doc: &mut Document, r: ObjRef, d: &Dict, stream: Stream) -> Result<(), AnnotError> {
     // Characters the standard fonts can't draw came out as `?`: mark the annotation with the first.
     let missing = appearance::undrawable_text(d).map(|(_, c)| c);
-    if let Some(Object::Dict(resources)) = stream.dict.get_mut(b"Resources")
-        && let Some(Object::Dict(fonts)) = resources.get(b"Font")
-    {
-        let fonts = pdfcraft_fonts::appearance_text::materialize_fonts(doc, fonts);
-        resources.set(b"Font".to_vec(), Object::Dict(fonts));
-    }
     let ap = doc.add(Object::Stream(stream));
     // A copy (a shared /AP is left alone) that keeps unknown entries; the old down and rollover
     // appearances would show the previous look on press or hover, so they go with the old /N.
@@ -151,38 +126,13 @@ impl AppearanceCache {
         Some(stream)
     }
 
-    /// Cache a document-independent appearance template for per-copy font materialization.
-    /// Count owned glyph/CMap streams in the byte budget, leaving existing entries untouched
-    /// when a new entry would exceed it; clear all entries at the separate count cap.
     fn insert(&mut self, r: ObjRef, stream: &Stream) {
         self.builds += 1;
         if self.entries.len() >= 1_000_000 {
             self.clear();
         }
-        // Include owned compressed font streams; cached templates have no document references.
-        let font_bytes =
-            stream.dict.get(b"Resources").and_then(Object::as_dict).and_then(|resources| resources.get(b"Font")).and_then(Object::as_dict).map_or(
-                0,
-                |fonts| {
-                    fonts.iter().fold(0usize, |total, (_, font)| {
-                        let Some(font) = font.as_dict() else { return total };
-                        let cmap = match font.get(b"ToUnicode") {
-                            Some(Object::Stream(s)) => s.raw.len(),
-                            _ => 0,
-                        };
-                        let glyphs = font.get(b"CharProcs").and_then(Object::as_dict).map_or(0, |procs| {
-                            procs.iter().fold(0usize, |sum, (_, glyph)| match glyph {
-                                Object::Stream(s) => sum.saturating_add(s.raw.len()),
-                                _ => sum,
-                            })
-                        });
-                        total.saturating_add(cmap).saturating_add(glyphs)
-                    })
-                },
-            );
-        let bytes = stream.raw.len().saturating_add(font_bytes);
-        if self.bytes.saturating_add(bytes) <= Self::MAX_BYTES {
-            self.bytes += bytes;
+        if self.bytes.saturating_add(stream.raw.len()) <= Self::MAX_BYTES {
+            self.bytes += stream.raw.len();
             self.entries.insert(r, stream.clone());
         }
         // Else over budget: keep serving the entries already cached instead of growing.

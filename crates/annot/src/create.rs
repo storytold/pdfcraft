@@ -220,14 +220,6 @@ fn validate_syriac_family(new: &NewAnnotation) -> Result<(), AnnotError> {
 
 /// Add a comment; returns its index in the page's `/Annots`.
 pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> Result<usize, AnnotError> {
-    if new.shape.subtype() == "FreeText" {
-        return super::draw::appearance_transaction(doc, |staged| add_annotation_in_place(staged, new, meta));
-    }
-    add_annotation_in_place(doc, new, meta)
-}
-
-/// Add the validated annotation to the supplied document or staged FreeText transaction.
-fn add_annotation_in_place(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> Result<usize, AnnotError> {
     let page = page_ref(doc, new.page)?;
     let style = &new.style;
     validate_style(style)?;

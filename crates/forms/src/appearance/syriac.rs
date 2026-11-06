@@ -7,13 +7,35 @@ use pdfcraft_fonts::{SyriacFamily, content_text as text};
 
 /// Detect unmasked Syriac text, option labels or captions on eligible field kinds.
 /// Button state names are not text; this predicate does not filter hidden widgets.
-pub(crate) fn requested(doc: &Document, f: &Field, w: &Widget, values: &[String]) -> bool {
+pub(crate) fn requested(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> bool {
     if f.has(flags::PASSWORD) || !matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List | FieldKind::PushButton) {
         return false;
     }
-    values.iter().any(|value| text::contains_syriac(value))
+    text::contains_syriac(&displayed_text(f, values, format))
         || f.options.iter().any(|(_, display)| text::contains_syriac(display))
         || (f.kind == FieldKind::PushButton && caption(doc, w).is_some_and(|caption| text::contains_syriac(&caption)))
+}
+
+/// Format and resolve the visible combo label without changing its stored export value.
+pub(super) fn displayed_text(f: &Field, values: &[String], format: bool) -> String {
+    let formatted;
+    let values = if format && matches!(f.kind, FieldKind::Text | FieldKind::Combo) && values.len() == 1 && f.actions.format != crate::af::Format::None
+    {
+        formatted = [crate::af::format_value(&f.actions.format, values.first().map_or("", String::as_str))];
+        &formatted
+    } else {
+        values
+    };
+    let shown = if f.kind == FieldKind::Combo {
+        values
+            .iter()
+            .map(|v| f.options.iter().find(|(export, _)| export == v).map_or(v.clone(), |(_, label)| label.clone()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    } else {
+        values.first().cloned().unwrap_or_default()
+    };
+    if f.has(flags::PASSWORD) { "*".repeat(shown.chars().count()) } else { shown }
 }
 
 /// Read the widget caption through a possibly indirect appearance-characteristics dictionary.
@@ -62,7 +84,7 @@ fn layout(value: &str, size: f64, width: f64, multiline: bool, family: SyriacFam
 /// The UAX #9 base direction `wrap_for_family` gives the value's first paragraph, without
 /// shaping it; a neutral paragraph is LTR.
 fn unicode_bidi_rtl(value: &str) -> bool {
-    pdfcraft_fonts::appearance_text::paragraph_rtl(value.split(['\r', '\n']).next().unwrap_or_default())
+    pdfcraft_fonts::content_text::paragraph_rtl(value.split(['\r', '\n']).next().unwrap_or_default())
 }
 
 /// Use an explicit size or compute an automatic size from shaped bounds, with a 4-point minimum.
@@ -233,7 +255,7 @@ pub(super) fn field(doc: &mut Document, f: &Field, w: &Widget, values: &[String]
         value.push_str(part);
     }
     if f.kind == FieldKind::Combo {
-        value = super::displayed_text(f, values, format);
+        value = displayed_text(f, values, format);
     } else if format && matches!(f.kind, FieldKind::Text | FieldKind::Combo) && f.actions.format != crate::af::Format::None {
         value = crate::af::format_value(&f.actions.format, &value);
     }
@@ -374,9 +396,9 @@ mod tests {
         // These values identify selected states; they are never visible text captions.
         for kind in [FieldKind::CheckBox, FieldKind::Radio, FieldKind::Signature] {
             field.kind = kind;
-            assert!(!requested(&doc, &field, &widget, &selected), "{kind:?} must retain its existing appearance path");
+            assert!(!requested(&doc, &field, &widget, &selected, true), "{kind:?} must retain its existing appearance path");
         }
         field.kind = FieldKind::Text;
-        assert!(requested(&doc, &field, &widget, &selected), "the same Unicode remains supported as actual text");
+        assert!(requested(&doc, &field, &widget, &selected, true), "the same Unicode remains supported as actual text");
     }
 }

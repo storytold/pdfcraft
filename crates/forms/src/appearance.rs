@@ -27,8 +27,6 @@ use pdfcraft_fonts::{UnicodeCMap, cjk_width, helvetica_width, literal, win_ansi,
 
 use crate::{Field, FieldKind, Widget, acroform, flags};
 
-mod arabic;
-mod arabic_list;
 mod syriac;
 
 /// The persisted Syriac content face, with a widget override before the field's choice.
@@ -61,44 +59,15 @@ pub(crate) fn widget_syriac_family(doc: &Document, w: &Widget) -> pdfcraft_fonts
 /// Select the Syriac writer for unmasked text, labels or captions on supported field kinds.
 /// This selects a text appearance path; it does not filter hidden widgets.
 pub(crate) fn needs_syriac(doc: &Document, f: &Field, w: &Widget, values: &[String]) -> bool {
-    needs_syriac_display(doc, f, w, values, true)
-}
-
-/// A combo draws only its effective selection; unrelated options must not select its face.
-fn needs_syriac_display(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> bool {
-    if f.kind == FieldKind::Combo && f.text_direction == pdfcraft_fonts::TextDirection::Auto {
-        return pdfcraft_fonts::content_text::contains_syriac(&displayed_text(f, values, format));
-    }
-    syriac::requested(doc, f, w, values)
-}
-
-/// Arabic single-line appearances need fresh indirect resources in each display copy.
-pub(crate) fn needs_arabic(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> bool {
-    if arabic_list::eligible(f) {
-        let widget = doc.get(w.obj);
-        let wd = widget.as_dict().cloned().unwrap_or_default();
-        let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
-        return arabic_list::needs(doc, f, &da);
-    }
-    if !arabic::eligible(f) {
-        return false;
-    }
-    let shown = displayed_text(f, values, format);
-    arabic::requested(f, &shown)
-        && text_box(doc, f, w)
-            .font
-            .as_ref()
-            .is_none_or(|font| font.first_unencodable_lines(&shown, f.kind == FieldKind::Text && f.has(flags::MULTILINE)).is_some())
+    syriac::requested(doc, f, w, values, true)
 }
 
 /// Font-backed field appearances, staged so a refused glyph never leaves resources behind.
 /// A shaping failure returns the legacy appearance and its first undrawn character.
 /// The caller owns the warning marker and NeedAppearances policy for that fallback.
 pub fn field_appearance_drawn_in(doc: &mut Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>) {
-    if !needs_syriac_display(doc, f, w, values, format) {
-        let (mut stream, missing) = field_appearance_drawn(doc, f, w, values, format);
-        materialize_inline_fonts(doc, &mut stream);
-        return (stream, missing);
+    if !syriac::requested(doc, f, w, values, format) {
+        return field_appearance_drawn(doc, f, w, values, format);
     }
     if f.kind == FieldKind::PushButton {
         return crate::author::button_appearance_in(doc, w, &f.da);
@@ -110,21 +79,6 @@ pub fn field_appearance_drawn_in(doc: &mut Document, f: &Field, w: &Widget, valu
             (stream, None)
         }
         Err(_) => field_appearance_drawn(doc, f, w, values, format),
-    }
-}
-
-/// PR #3465's writer returns inline Type3 fonts, which hold no document objects, so one drawing
-/// can serve several documents: give `stream` its own copies of them in `doc`. Syriac already
-/// owns document-backed font resources and has none, which leaves it unchanged.
-pub(crate) fn materialize_inline_fonts(doc: &mut Document, stream: &mut Stream) {
-    if let Some(Object::Dict(resources)) = stream.dict.get_mut(b"Resources")
-        && let Some(Object::Dict(fonts)) = resources.get(b"Font")
-        && fonts.iter().any(|(_, font)| matches!(font, Object::Dict(d) if d.name(b"Subtype") == Some(b"Type3")))
-    {
-        let mut staged = doc.clone();
-        let fonts = pdfcraft_fonts::appearance_text::materialize_fonts(&mut staged, fonts);
-        resources.set(b"Font".to_vec(), Object::Dict(fonts));
-        *doc = staged;
     }
 }
 
@@ -194,16 +148,13 @@ pub fn auto_text_size_by(width: f64, height: f64, multiline: bool, line_width: i
 /// multi-line field; the two must change together.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextBox {
-    arabic: bool,
-    arabic_latin: pdfcraft_fonts::Std14,
     syriac_family: pdfcraft_fonts::SyriacFamily,
     /// The `/DA` font from `/DR`, when it is one the appearance can draw with.
     font: Option<FontText>,
     /// Width and height inside the border and padding.
     inner_w: f64,
-    inner_h: f64,
-    /// Full layout width: comb dividers span the widget, not only its padded text box.
     outer_w: f64,
+    inner_h: f64,
     /// The `/DA` size; `None` for an automatic (`0 Tf`) size, which shrinks to fit.
     size: Option<f64>,
     multiline: bool,
@@ -222,13 +173,11 @@ pub fn text_box(doc: &Document, f: &Field, w: &Widget) -> TextBox {
     let pad = 2.0 + border_width(doc, &wd);
     let multiline = f.has(flags::MULTILINE);
     TextBox {
-        arabic: arabic::eligible(f),
-        arabic_latin: arabic::latin_face(doc, &da.font),
         syriac_family: syriac_family(doc, f, w),
         font: dr_font(doc, &da.font).map(|(_, enc)| enc),
+        outer_w: place.layout_w,
         inner_w: (place.layout_w - 2.0 * pad).max(1.0),
         inner_h: place.layout_h - 2.0 * pad,
-        outer_w: place.layout_w,
         size: (da.size > 0.0 && da.size.is_finite()).then_some(da.size),
         multiline,
         password: f.has(flags::PASSWORD),
@@ -249,14 +198,6 @@ impl TextBox {
         if !self.password
             && pdfcraft_fonts::content_text::contains_syriac(text)
             && let Ok(fits) = syriac::fits(self, text)
-        {
-            return fits;
-        }
-        if self.arabic
-            && self.font.as_ref().is_none_or(|font| font.first_unencodable_lines(text, self.multiline).is_some())
-            && text.chars().any(pdfcraft_fonts::source_shaping::is_arabic)
-            && !pdfcraft_fonts::content_text::contains_syriac(text)
-            && let Some(fits) = arabic::fits(self, text)
         {
             return fits;
         }
@@ -454,11 +395,6 @@ impl FontText {
             }
             Self::Unicode(cmap) => cmap.first_unencodable(s),
         }
-    }
-
-    /// Multiline separators are layout, not glyphs that can disqualify a selected font.
-    fn first_unencodable_lines(&self, text: &str, multiline: bool) -> Option<char> {
-        if multiline { text.split(['\r', '\n']).find_map(|line| self.first_unencodable(line)) } else { self.first_unencodable(text) }
     }
 
     fn width(&self, s: &str, size: f64) -> f64 {
@@ -802,15 +738,10 @@ fn top_index(doc: &Document, wd: &Dict, field: Option<&Dict>) -> usize {
 }
 
 /// The rows of a list box whose field's `/DA` is `f_da`, in widget `wd`.
-pub(crate) fn list_rows_of(doc: &Document, f_da: &str, field: Option<&Dict>, wd: &Dict, direction: pdfcraft_fonts::TextDirection) -> ListRows {
+pub(crate) fn list_rows_of(doc: &Document, f_da: &str, field: Option<&Dict>, wd: &Dict) -> ListRows {
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(f_da));
     let size = if da.size > 0.0 { da.size } else { 12.0 };
-    ListRows {
-        top: top_index(doc, wd, field),
-        inset: 2.0 + border_width(doc, wd),
-        row: arabic_list::row_height(doc, field, &da, direction, size).unwrap_or(size * 1.15),
-        size,
-    }
+    ListRows { top: top_index(doc, wd, field), inset: 2.0 + border_width(doc, wd), row: size * 1.15, size }
 }
 
 /// The rows of list box `f` as drawn in widget `w`.
@@ -818,10 +749,9 @@ pub fn list_rows(doc: &Document, f: &Field, w: &Widget) -> ListRows {
     let wobj = doc.get(w.obj);
     let wd = wobj.as_dict().cloned().unwrap_or_default();
     let fobj = doc.get(f.obj);
-    let mut rows = list_rows_of(doc, &f.da, fobj.as_dict(), &wd, f.text_direction);
-    // The same test that picks the Syriac writer, so a password list keeps the rows it is drawn with.
-    if f.kind == FieldKind::List
-        && needs_syriac(doc, f, w, &f.value)
+    let mut rows = list_rows_of(doc, &f.da, fobj.as_dict(), &wd);
+    if needs_syriac(doc, f, w, &f.value)
+        && f.options.iter().any(|(_, label)| pdfcraft_fonts::content_text::contains_syriac(label))
         && let Ok((top, bottom)) = syriac::option_extents(f, syriac_family(doc, f, w))
     {
         rows.row = (top - bottom + 0.1).max(1.15) * rows.size;
@@ -852,10 +782,6 @@ pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[S
 /// A text value that its box cuts off at the field's font size (#4018).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Overflow {
-    /// The explicit direction could not be applied within the bounded row budget.
-    DirectionBudget,
-    /// The simple appearance path cannot safely reorder the value.
-    DirectionUnsupported,
     /// One line `width` points wide, with `room` for it, at `size` points.
     Wide { width: f64, room: f64, size: f64 },
     /// `lines` wrapped lines, of which the box shows `room`, at `size` points.
@@ -864,28 +790,9 @@ pub enum Overflow {
     High { height: f64, room: f64, size: f64 },
 }
 
-/// Check the byte budget and shaping requirement of text destined for an explicit-direction simple appearance.
-/// Callers supply displayed text after password masking and choice-label resolution; mirroring failures remain a separate layout check.
-pub(crate) fn explicit_direction_issue(text: &str) -> Option<Overflow> {
-    if text.len() > pdfcraft_fonts::text_direction::MAX_DIRECTION_BYTES {
-        Some(Overflow::DirectionBudget)
-    } else if pdfcraft_fonts::source_shaping::required(text) {
-        Some(Overflow::DirectionUnsupported)
-    } else {
-        None
-    }
-}
-
 impl std::fmt::Display for Overflow {
-    /// Describe field overflow or refused direction layout with the value's relevant size and available room.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::DirectionBudget => {
-                f.write_str("explicit text direction was skipped: a line exceeds 262144 UTF-8 bytes; shorten the value or use automatic direction")
-            }
-            Self::DirectionUnsupported => {
-                f.write_str("explicit text direction was skipped: this value needs a shaping or mirroring path the form appearance does not support")
-            }
             Self::Wide { width, room, size } => {
                 write!(f, "the value does not fit: {} pt wide at {} pt, room for {} pt", fmt(*width), fmt(*size), fmt(*room))
             }
@@ -897,57 +804,29 @@ impl std::fmt::Display for Overflow {
     }
 }
 
-/// Whether a text/choice field's effective displayed value is cut off in widget `w`.
+/// Whether the text field's value, drawn in widget `w`, is cut off by its box.
 pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow> {
     if !matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) {
         return None;
     }
-    if f.kind == FieldKind::List && needs_syriac_display(doc, f, w, &f.value, true) {
-        // Lists draw visible option labels, never the selected export value.
+    if f.kind == FieldKind::List && needs_syriac(doc, f, w, &f.value) {
         return syriac::list_overflow(doc, f, w).ok().flatten();
     }
-    let shown = displayed_text(f, &f.value, true);
-    let syriac_display = !f.has(flags::PASSWORD) && pdfcraft_fonts::content_text::contains_syriac(&shown);
-    let shaped_combo = f.kind == FieldKind::Combo && (syriac_display || needs_arabic(doc, f, w, &f.value, true));
-    if f.kind != FieldKind::Text && !shaped_combo && f.text_direction == pdfcraft_fonts::TextDirection::Auto {
-        return None;
-    }
-    if f.kind == FieldKind::Text
-        && f.text_direction != pdfcraft_fonts::TextDirection::Auto
-        && let Some(issue) = explicit_direction_issue(&shown)
+    let shown = syriac::displayed_text(f, &f.value, true);
+    if !f.has(flags::PASSWORD)
+        && pdfcraft_fonts::content_text::contains_syriac(&shown)
+        && let Ok(overflow) = syriac::overflow(&text_box(doc, f, w), f, &shown)
     {
-        return Some(issue);
-    }
-    if syriac_display && let Ok(overflow) = syriac::overflow(&text_box(doc, f, w), f, &shown) {
         return overflow;
+    }
+    if f.kind != FieldKind::Text {
+        return None;
     }
     field_appearance_fit(doc, f, w, &f.value, true).2
 }
 
-/// The text a text/combo appearance displays: native formatting, choice-label resolution, then masking.
-/// `format = false` means a custom Format event already supplied the display values; never run scripts here.
-/// Property validation uses the same transformation on the proposed field without changing its logical value.
-pub(crate) fn displayed_text(f: &Field, values: &[String], format: bool) -> String {
-    let formatted;
-    let values = if format
-        && matches!(f.kind, crate::FieldKind::Text | crate::FieldKind::Combo)
-        && values.len() == 1
-        && f.actions.format != crate::af::Format::None
-    {
-        formatted = [crate::af::format_value(&f.actions.format, values.first().map_or("", String::as_str))];
-        &formatted
-    } else {
-        values
-    };
-    let text: String = if f.kind == FieldKind::Combo {
-        values.iter().map(|v| f.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone())).collect::<Vec<_>>().join(", ")
-    } else {
-        values.first().cloned().unwrap_or_default()
-    };
-    if f.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text }
-}
-
-/// Whether the selected appearance font can encode a formatted date without placeholders.
+/// Whether `text` draws in widget `wd` of `f` with no `?`: in the field's `/DR` font when that
+/// holds it, as [`field_appearance_fit`] picks, or else in the Helvetica (WinAnsi) stand-in.
 fn draws(doc: &Document, f: &Field, wd: &Dict, text: &str) -> bool {
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
     let enc = dr_font(doc, &da.font).map(|(_, enc)| enc).filter(|enc| enc.can_encode(text)).unwrap_or(FontText::WinAnsi);
@@ -958,34 +837,33 @@ fn draws(doc: &Document, f: &Field, wd: &Dict, text: &str) -> bool {
 fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>, Option<Overflow>) {
     let wobj = doc.get(w.obj);
     let wd = wobj.as_dict().cloned().unwrap_or_default();
+    // The Format event: what is shown, not what is stored.
+    let formatted: Vec<String>;
+    let values = if format
+        && matches!(f.kind, crate::FieldKind::Text | crate::FieldKind::Combo)
+        && values.len() == 1
+        && f.actions.format != crate::af::Format::None
+    {
+        let shown = crate::af::format_value(&f.actions.format, &values[0]);
+        // Month and weekday names in the date language that no font here can draw ("окт." in
+        // Helvetica) are drawn in English rather than as `?` (#5303).
+        let english = || crate::af::format_value_in(&f.actions.format, &values[0], &crate::af::ENGLISH_DATE_NAMES);
+        let dated = matches!(f.actions.format, crate::af::Format::Date(_) | crate::af::Format::Time(_));
+        formatted = vec![if !dated || draws(doc, f, &wd, &shown) { shown } else { english() }];
+        &formatted[..]
+    } else {
+        values
+    };
     let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
     let place = placement(mk_rotation(doc, &wd), page_w, page_h);
     let (width, height) = (place.layout_w, place.layout_h);
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
-    let mut text = displayed_text(f, values, format);
-    // Preserve main's English fallback for date names the available font cannot draw.
-    // Arabic/Syriac use their shaped appearances when available instead of placeholders.
-    let shaped =
-        (arabic::requested(f, &text) && pdfcraft_fonts::appearance_text::can_shape(&text)) || needs_syriac_display(doc, f, w, values, format);
-    if format
-        && matches!(f.actions.format, crate::af::Format::Date(_) | crate::af::Format::Time(_))
-        && !f.has(flags::PASSWORD)
-        && !draws(doc, f, &wd, &text)
-        && !shaped
-        && let [value] = values
-    {
-        text = crate::af::format_value_in(&f.actions.format, value, &crate::af::ENGLISH_DATE_NAMES);
-    }
-    if let Some((stream, missing)) = arabic_list::field(doc, f, values, &wd, &da, place) {
-        return (stream, missing, None);
-    }
-    if arabic::requested(f, &text)
-        && dr_font(doc, &da.font)
-            .is_none_or(|(_, font)| font.first_unencodable_lines(&text, f.kind == FieldKind::Text && f.has(flags::MULTILINE)).is_some())
-        && let Some(result) = arabic::field(doc, f, &text, &wd, &da, place)
-    {
-        return result;
-    }
+    let text: String = if f.kind == FieldKind::Combo {
+        values.iter().map(|v| f.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone())).collect::<Vec<_>>().join(", ")
+    } else {
+        values.first().cloned().unwrap_or_default()
+    };
+    let text = if f.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text };
     let can_show = |enc: &FontText| {
         if f.kind == FieldKind::List {
             f.options.iter().all(|(_, display)| enc.can_encode(display))
@@ -999,14 +877,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         Some((o, enc)) => (da.font.clone(), o, enc),
         None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
     };
-    let width_of = |text: &str, size: f64| {
-        if f.text_direction == pdfcraft_fonts::TextDirection::Auto || explicit_direction_issue(text).is_some() {
-            enc.width(text, size)
-        } else {
-            // Mirroring can change a glyph's width; fit and align what is drawn.
-            f.text_direction.visual_plain(text).map_or_else(|_| enc.width(text, size), |visual| enc.width(&visual, size))
-        }
-    };
+    let width_of = |text: &str, size: f64| enc.width(text, size);
     let (mut c, bw) = frame(doc, &wd, width, height);
     let pad = 2.0 + bw;
     let inner_w = (width - 2.0 * pad).max(1.0);
@@ -1014,47 +885,15 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     let mut body: Vec<u8> = Vec::new();
     // The first character drawn that the font can't hold (drawn as `?`), for the caller to report.
     let mut unencodable: Option<char> = None;
-    let mut direction_warning = None;
     let mut show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str| {
         // A line break in a single-line value is a space, as in viewers (multiline text is split).
         let text: String = text.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect();
         if unencodable.is_none() {
             unencodable = enc.first_unencodable(&text);
         }
-        let visual = if f.text_direction == pdfcraft_fonts::TextDirection::Auto {
-            text.clone()
-        } else if let Some(warning) = explicit_direction_issue(&text) {
-            // Encodable letters still need contextual shaping; retain logical fallback order and report the refusal.
-            direction_warning = Some(warning);
-            text.clone()
-        } else {
-            match f.text_direction.visual_plain(&text) {
-                Ok(visual) => visual,
-                Err(_) => {
-                    direction_warning = Some(if text.len() > pdfcraft_fonts::text_direction::MAX_DIRECTION_BYTES {
-                        Overflow::DirectionBudget
-                    } else {
-                        Overflow::DirectionUnsupported
-                    });
-                    text.clone()
-                }
-            }
-        };
-        if unencodable.is_none() {
-            unencodable = enc.first_unencodable(&visual);
-        }
-        let replacement = visual != text;
-        if replacement {
-            body.extend_from_slice(b"/Span <</ActualText ");
-            body.extend(literal(&pdfcraft_cos::PdfString::text(&text).bytes));
-            body.extend_from_slice(b">> BDC\n");
-        }
         body.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
-        body.extend(literal(&enc.encode(&visual)));
+        body.extend(literal(&enc.encode(&text)));
         body.extend_from_slice(b" Tj\n");
-        if replacement {
-            body.extend_from_slice(b"EMC\n");
-        }
     };
     let x_for = |text: &str, size: f64| -> f64 {
         let tw = width_of(text, size);
@@ -1070,7 +909,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         FieldKind::List => {
             // Every option, one per line from the top (from `/TI`); selected ones highlighted.
             let fobj = doc.get(f.obj);
-            let rows = list_rows_of(doc, &f.da, fobj.as_dict(), &wd, f.text_direction);
+            let rows = list_rows_of(doc, &f.da, fobj.as_dict(), &wd);
             size = rows.size;
             let line = rows.row;
             let mut y = height - rows.inset;
@@ -1170,7 +1009,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
     set_form_box(&mut d, place);
     d.set(b"Resources".to_vec(), Object::Dict(res));
     // Nothing drawn is nothing cut, however small the box.
-    let overflow = direction_warning.or_else(|| overflow.filter(|_| !text.is_empty()));
+    let overflow = overflow.filter(|_| !text.is_empty());
     (Stream::flate(d, &content), unencodable, overflow)
 }
 

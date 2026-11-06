@@ -3,61 +3,6 @@ use super::look::{BorderStyle, da_string, patch_da, patch_widget_look, redraw_wi
 use super::tree::{ancestor_sets, attach, check_place, child_named, clash, detach, ensure_form, inherited, name_parts, own_inherited};
 use super::{Dict, Document, Field, FieldKind, FieldProps, FormError, MIN_FIELD_SIDE, ObjRef, Object, PdfString, fields, flags, invalid};
 
-/// Validate direction before renaming fields, changing actions or modifying lock flags.
-/// Text/choice fields accept the property; retained or requested non-Auto direction requires bounded values and refuses comb layout.
-/// Check the effective format, displayed value and final option labels through the appearance's display policy.
-fn validate_text_direction(f: &Field, props: &FieldProps) -> Result<(), FormError> {
-    // Direction refusal must precede renaming, actions and lock mutations too.
-    if props.text_direction.is_some() && !matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) {
-        return invalid("text direction applies only to text and choice fields");
-    }
-    if props.text_direction.unwrap_or(f.text_direction) != pdfcraft_fonts::TextDirection::Auto {
-        if f.value.iter().any(|value| value.len() > pdfcraft_fonts::text_direction::MAX_DIRECTION_BYTES) {
-            return invalid("explicit text direction needs a value of at most 262144 UTF-8 bytes; shorten it or use automatic direction");
-        }
-        let mut flags = f.flags;
-        for (flag, on) in &props.flags {
-            if *on {
-                flags |= *flag;
-            } else {
-                flags &= !*flag;
-            }
-        }
-        if f.kind == FieldKind::Text && flags & crate::flags::COMB != 0 {
-            return invalid("explicit text direction is not supported for comb fields; disable comb or use automatic direction");
-        }
-        let check = |text: &str| -> Result<(), FormError> {
-            match super::appearance::explicit_direction_issue(text) {
-                Some(issue) => invalid(issue.to_string()),
-                None => Ok(()),
-            }
-        };
-        if matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
-            let mut proposed = f.clone();
-            proposed.flags = flags;
-            if let Some(format) = &props.format {
-                proposed.actions.format = format.clone();
-            }
-            if let Some(options) = &props.options {
-                proposed.options = options.iter().map(|label| (label.clone(), label.clone())).collect();
-            }
-            check(&super::appearance::displayed_text(&proposed, &proposed.value, true))?;
-        }
-        if matches!(f.kind, FieldKind::Combo | FieldKind::List) {
-            if let Some(options) = &props.options {
-                for label in options {
-                    check(label)?;
-                }
-            } else {
-                for (_, label) in &f.options {
-                    check(label)?;
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Swap width and height, keeping the center. `None` when that is not a usable widget.
 fn swapped_around_center(r: [f64; 4]) -> Option<[f64; 4]> {
     if !r.iter().all(|v| v.is_finite()) {
@@ -200,7 +145,6 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     }
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
-    validate_text_direction(&f, props)?;
     validate_syriac_kind(&f, props)?;
     let export_options = props.export_value.as_ref().map(|(index, value)| button_export_options(&f, *index, value)).transpose()?;
     if props.export_value.is_some() && props.options.is_some() {
@@ -354,9 +298,6 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
             && matches!(f.kind, FieldKind::Combo | FieldKind::List)
         {
             list_picked = Some((repoint_selection(d, &f.value, exports, &kept), exports.len()));
-        }
-        if let Some(direction) = props.text_direction {
-            d.set(b"PCTextDirection".to_vec(), Object::name(direction.name()));
         }
         if let Some(q) = props.quadding {
             d.set(b"Q".to_vec(), Object::Int(q));

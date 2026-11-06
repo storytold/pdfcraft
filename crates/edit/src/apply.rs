@@ -1,6 +1,5 @@
 use super::marks::{
-    Background, Context, HeaderFooter, MarkKind, Watermark, add_picture_resource, arabic_line, arabic_text, bates_start, expand, latin_face,
-    matrix_number, n, picture, rgb, shrink_matrix,
+    Background, Context, HeaderFooter, MarkKind, Watermark, add_picture_resource, bates_start, expand, matrix_number, n, picture, rgb, shrink_matrix,
 };
 use super::place::{
     END, Isolation, add_page_resources, add_resources, begin, check, check_on_top, contents, free_font_name, isolation, page_fonts, page_list, place,
@@ -9,85 +8,9 @@ use super::place::{
 use super::{Dict, Document, EditError, Object, added, backdrop, helvetica_width};
 use pdfcraft_fonts::content_text;
 
-/// Refresh a page after resource mutations, returning an error if it no longer exists.
-fn current_page(doc: &Document, index: usize) -> Result<pdfcraft_model::Page, EditError> {
-    page_list(doc).get(index).cloned().ok_or_else(|| EditError::Invalid("the selected page is no longer available for page marks".into()))
-}
-
 /// Measure Syriac with the selected shaped face, otherwise use the caller's Latin metrics.
-fn content_width(
-    text: &str,
-    size: f64,
-    family: pdfcraft_fonts::SyriacFamily,
-    face: pdfcraft_fonts::Std14,
-    latin: impl FnOnce() -> f64,
-) -> Result<f64, EditError> {
-    if content_text::contains_syriac(text) {
-        content_text::width_for_family(text, size, family).map_err(EditError::Invalid)
-    } else if arabic_text(text) {
-        Ok(arabic_line(text, size, face)?.width)
-    } else {
-        Ok(latin())
-    }
-}
-
-/// Keep shaped fonts private to one form; page resource names must never alias its PCShaped/Helv names.
-fn arabic_mark_form(
-    doc: &mut Document,
-    page: &pdfcraft_model::Page,
-    row: pdfcraft_fonts::appearance_text::Line,
-    at: [f64; 2],
-    size: f64,
-    color: super::Rgb,
-) -> Result<Vec<u8>, EditError> {
-    if at.iter().any(|value| !value.is_finite()) {
-        return Err(EditError::Invalid("Arabic page-mark placement needs finite coordinates".into()));
-    }
-    let advance = row.width;
-    let mut bounds = [0.0, -row.descent * size, advance.max(0.001), row.ascent * size];
-    let (content, fonts) = pdfcraft_fonts::appearance_text::draw_positioned(&[row], size, &[[0.0, 0.0]], Some(color))
-        .map_err(|error| EditError::Invalid(format!("Arabic page-mark drawing failed: {error:?}")))?;
-    // A mark or joining glyph may overhang its advance. The private form must not
-    // clip that ink; Type3 bounds are in thousandths of an em, while pens span the row.
-    for (_, font) in fonts.iter() {
-        if let Some(font) = font.as_dict().filter(|font| font.name(b"Subtype") == Some(b"Type3"))
-            && let Some(bbox) = font.get(b"FontBBox").and_then(Object::as_array)
-            && let (Some(left), Some(right)) = (bbox.first().and_then(Object::as_f64), bbox.get(2).and_then(Object::as_f64))
-        {
-            bounds[0] = bounds[0].min(left * size / 1000.0);
-            bounds[2] = bounds[2].max(advance + right * size / 1000.0);
-        }
-    }
-    if bounds.iter().any(|value| !value.is_finite()) {
-        return Err(EditError::Invalid("the Arabic page-mark bounds are not finite".into()));
-    }
-    let current = doc.get(page.obj);
-    let mut resources = current
-        .as_dict()
-        .and_then(|dict| dict.get(b"Resources"))
-        .or_else(|| page.dict.get(b"Resources"))
-        .and_then(|value| doc.dict(value))
-        .unwrap_or_default();
-    let mut objects = resources.get(b"XObject").and_then(|value| doc.dict(value)).unwrap_or_default();
-    if objects.len() > 65_534 {
-        return Err(EditError::Invalid("the page has too many XObject resources for an Arabic mark".into()));
-    }
-    let name = (0..=objects.len())
-        .map(|index| format!("PCArabicMark{index}"))
-        .find(|name| !objects.contains(name.as_bytes()))
-        .ok_or_else(|| EditError::Invalid("the Arabic mark resource name budget was exhausted".into()))?;
-    let fonts = pdfcraft_fonts::appearance_text::materialize_fonts(doc, &fonts);
-    let form = Dict::from_iter([
-        (b"Type".to_vec(), Object::name("XObject")),
-        (b"Subtype".to_vec(), Object::name("Form")),
-        (b"BBox".to_vec(), Object::Array(bounds.map(Object::Real).to_vec())),
-        (b"Resources".to_vec(), Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(fonts))]))),
-    ]);
-    let reference = doc.add(Object::Stream(pdfcraft_cos::Stream::flate(form, &content)));
-    objects.set(name.clone().into_bytes(), Object::Ref(reference));
-    resources.set(b"XObject".to_vec(), Object::Dict(objects));
-    doc.update_dict(page.obj, |dict| dict.set(b"Resources".to_vec(), Object::Dict(resources)))?;
-    Ok(format!("q\n1 0 0 1 {} {} cm\n/{name} Do\nQ\n", n(at[0]), n(at[1])).into_bytes())
+fn content_width(text: &str, size: f64, family: pdfcraft_fonts::SyriacFamily, latin: impl FnOnce() -> f64) -> Result<f64, EditError> {
+    if content_text::contains_syriac(text) { content_text::width_for_family(text, size, family).map_err(EditError::Invalid) } else { Ok(latin()) }
 }
 
 /// Merge prepared font resources into the page without dropping its current resources.
@@ -197,13 +120,13 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
                 continue;
             }
             let expanded = expand(template, number, count, bates, cx);
-            let (ascent, descent, pitch) = HeaderFooter::column_metrics(&expanded, hf.syriac_family, latin_face(hf.font))?;
+            let (ascent, descent, pitch) = HeaderFooter::column_metrics(&expanded, hf.syriac_family)?;
             let lines: Vec<String> = expanded.lines().map(str::to_owned).collect();
             let header = slot < 3;
             let line_h = size * pitch;
             for (li, line) in lines.iter().enumerate() {
                 // Centred and right-aligned text is placed by its width in the chosen face.
-                let tw = content_width(line, size, hf.syriac_family, latin_face(hf.font), || hf.font.width(line, size, false, false))?;
+                let tw = content_width(line, size, hf.syriac_family, || hf.font.width(line, size, false, false))?;
                 let x = match slot % 3 {
                     0 => left,
                     1 => (w - tw) / 2.0,
@@ -222,11 +145,6 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
                     body.extend(row.write(doc, &mut shaped_fonts, [x, y], size).map_err(EditError::Invalid)?);
                     body.extend_from_slice(b"BT\n");
                     has_shaped = true;
-                } else if arabic_text(line) {
-                    let row = arabic_line(line, size, latin_face(hf.font))?;
-                    body.extend_from_slice(b"ET\n");
-                    body.extend(arabic_mark_form(doc, page, row, [x, y], size, hf.color)?);
-                    body.extend_from_slice(b"BT\n");
                 } else {
                     body.extend(text_op(x, y, line));
                 }
@@ -243,18 +161,17 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
         content.extend(body);
         content.extend_from_slice(END.as_bytes());
         // A name already there is that very font (see `free_font_name`): left as it is.
-        let page = &current_page(doc, i)?;
         if !page_fonts(doc, page).contains(resource.as_bytes()) {
             add_page_resources(doc, page, None, &[(resource.into_bytes(), base)])?;
         }
-        let page = &current_page(doc, i)?;
+        let page = &page_list(doc)[i];
         if has_shaped {
             install_shaped_fonts(doc, page, &shaped_fonts)?;
         }
         place(doc, page, MarkKind::HeaderFooter, content, false)?;
         if let Some(Some(m)) = shrinks.get(k) {
             let cm = format!("{} cm\n", m.map(matrix_number).join(" "));
-            let page = &current_page(doc, i)?;
+            let page = &page_list(doc)[i];
             place_inside_wrapper(doc, page, MarkKind::HeaderFooter.tag(), cm.into_bytes())?;
         }
     }
@@ -297,7 +214,7 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
     let opacity = wm.opacity.clamp(0.0, 1.0);
     let lines: Vec<&str> = text.lines().collect();
     for &i in pages {
-        let page = current_page(doc, i)?;
+        let page = page_list(doc)[i].clone();
         let (w, h) = page.display_size(doc);
         if let Some(src) = &wm.source {
             let mut content = begin(MarkKind::Watermark, "Watermark", page.view_matrix(doc));
@@ -305,14 +222,14 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
             content.push_str(&picture(src, (w, h), wm.scale, wm.rotation, wm.offset));
             content.push_str(END);
             add_resources(doc, &page, Some(opacity), None)?;
-            add_picture_resource(doc, &current_page(doc, i)?, src)?;
-            let page = &current_page(doc, i)?;
+            add_picture_resource(doc, &page_list(doc)[i].clone(), src)?;
+            let page = &page_list(doc)[i];
             place(doc, page, MarkKind::Watermark, content.into_bytes(), wm.behind)?;
             continue;
         }
         let widest = lines
             .iter()
-            .map(|line| content_width(line, 1.0, wm.syriac_family, pdfcraft_fonts::Std14::Helvetica, || helvetica_width(line, 1.0)))
+            .map(|line| content_width(line, 1.0, wm.syriac_family, || helvetica_width(line, 1.0)))
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .fold(0.0, f64::max)
@@ -320,11 +237,10 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
         let size = if wm.font_size > 0.0 { wm.font_size } else { ((w * w + h * h).sqrt() * 0.5 / widest).clamp(6.0, 300.0) };
         let (s, c) = wm.rotation.to_radians().sin_cos();
         let (cx, cy) = (w / 2.0 + wm.offset[0], h / 2.0 + wm.offset[1]);
-        let latin_resource = free_font_name(doc, &page_fonts(doc, &page), "PCHelv", "Helvetica");
         let mut content = begin(MarkKind::Watermark, "Watermark", page.view_matrix(doc)).into_bytes();
         content.extend(
             format!(
-                "/PCGS{} gs\n{} {} {} {} {} {} cm\nBT\n/{latin_resource} {} Tf\n{}\n",
+                "/PCGS{} gs\n{} {} {} {} {} {} cm\nBT\n/PCHelv {} Tf\n{}\n",
                 (opacity * 100.0).round() as i64,
                 n(c),
                 n(s),
@@ -338,16 +254,14 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
             .bytes(),
         );
         let syriac = content_text::contains_syriac(text);
-        let shaped = syriac || arabic_text(text);
-        let (ascent, descent, pitch) =
-            if shaped { HeaderFooter::column_metrics(text, wm.syriac_family, pdfcraft_fonts::Std14::Helvetica)? } else { (0.0, 0.0, 1.15) };
+        let (ascent, descent, pitch) = if syriac { HeaderFooter::column_metrics(text, wm.syriac_family)? } else { (0.0, 0.0, 1.15) };
         let line_h = size * pitch;
         let total = line_h * (lines.len() as f64 - 1.0);
         let mut shaped_fonts = page_fonts(doc, &page);
         let mut has_shaped = false;
         for (li, line) in lines.iter().enumerate() {
-            let tw = content_width(line, size, wm.syriac_family, pdfcraft_fonts::Std14::Helvetica, || helvetica_width(line, size))?;
-            let baseline = if shaped { (ascent + descent) / 2.0 } else { 0.35 };
+            let tw = content_width(line, size, wm.syriac_family, || helvetica_width(line, size))?;
+            let baseline = if syriac { (ascent + descent) / 2.0 } else { 0.35 };
             let at = [-tw / 2.0, total / 2.0 - li as f64 * line_h - size * baseline];
             if content_text::contains_syriac(line) {
                 let laid = content_text::wrap_for_family(line, size, f64::MAX, wm.syriac_family).map_err(EditError::Invalid)?;
@@ -356,25 +270,14 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
                 content.extend(row.write(doc, &mut shaped_fonts, at, size).map_err(EditError::Invalid)?);
                 content.extend_from_slice(b"BT\n");
                 has_shaped = true;
-            } else if arabic_text(line) {
-                let row = arabic_line(line, size, pdfcraft_fonts::Std14::Helvetica)?;
-                content.extend_from_slice(b"ET\n");
-                content.extend(arabic_mark_form(doc, &page, row, at, size, wm.color)?);
-                content.extend_from_slice(b"BT\n");
             } else {
                 content.extend(text_op(at[0], at[1], line));
             }
         }
         content.extend_from_slice(b"ET\n");
         content.extend_from_slice(END.as_bytes());
-        let refreshed = current_page(doc, i)?;
-        let faces = if page_fonts(doc, &refreshed).contains(latin_resource.as_bytes()) {
-            Vec::new()
-        } else {
-            vec![(latin_resource.into_bytes(), "Helvetica")]
-        };
-        add_page_resources(doc, &refreshed, Some(opacity), &faces)?;
-        let page = &current_page(doc, i)?;
+        add_resources(doc, &page, Some(opacity), None)?;
+        let page = &page_list(doc)[i];
         if has_shaped {
             install_shaped_fonts(doc, page, &shaped_fonts)?;
         }
@@ -391,8 +294,6 @@ pub fn add_background(doc: &mut Document, pages: &[usize], bg: &Background, repl
     apply_mark_transaction(doc, |staged| add_background_in_place(staged, pages, bg, replace))
 }
 
-/// Apply background changes to the transaction-owned document copy.
-/// The public wrapper commits this copy only after every requested page succeeds.
 fn add_background_in_place(doc: &mut Document, pages: &[usize], bg: &Background, replace: bool) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
@@ -401,9 +302,9 @@ fn add_background_in_place(doc: &mut Document, pages: &[usize], bg: &Background,
     }
     let opacity = if bg.opacity.is_finite() { bg.opacity.clamp(0.0, 1.0) } else { 1.0 };
     for &i in pages {
-        let mut page = current_page(doc, i)?;
+        let mut page = page_list(doc)[i].clone();
         if bg.replace_backdrop && backdrop::replace(doc, &page)? {
-            page = current_page(doc, i)?;
+            page = page_list(doc)[i].clone();
         }
         let (w, h) = page.display_size(doc);
         let mut content = begin(MarkKind::Background, "Background", page.view_matrix(doc));
@@ -417,9 +318,9 @@ fn add_background_in_place(doc: &mut Document, pages: &[usize], bg: &Background,
         content.push_str(END);
         add_resources(doc, &page, Some(opacity), None)?;
         if let Some(src) = &bg.source {
-            add_picture_resource(doc, &current_page(doc, i)?, src)?;
+            add_picture_resource(doc, &page_list(doc)[i].clone(), src)?;
         }
-        let page = &current_page(doc, i)?;
+        let page = &page_list(doc)[i];
         place(doc, page, MarkKind::Background, content.into_bytes(), true)?;
     }
     Ok(())

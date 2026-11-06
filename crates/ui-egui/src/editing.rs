@@ -385,9 +385,6 @@ impl PdfCraftApp {
     /// stays open) while it holds text the standard fonts can't draw, or text that couldn't be
     /// applied: it is shown, never lost.
     pub(crate) fn close_text_editors(&mut self, i: usize, id: pdfcraft_engine::DocId) -> bool {
-        if !self.composition_ready() {
-            return false;
-        }
         let Some(view) = self.views.get_mut(i) else { return true };
         if let Some(c) = view.content.blocked() {
             view.content.hold_blocked();
@@ -667,9 +664,6 @@ impl PdfCraftApp {
     /// is told why). The editor stays open with the text, and the caller must stop: nothing is
     /// saved, printed or exported without it.
     pub(crate) fn commit_form_typing(&mut self) -> bool {
-        if !self.composition_ready() {
-            return false;
-        }
         let Some((i, id)) = self.active_ids() else { return true };
         if !self.apply_queued_edit(i) {
             return false;
@@ -776,15 +770,6 @@ impl PdfCraftApp {
             self.active = Some(i);
         }
         self.commit_form_typing() && self.commit_open_fill_text(id) && self.commit_open_text_edits(id)
-    }
-
-    /// Native preedit is a candidate, not committed document text.
-    fn composition_ready(&mut self) -> bool {
-        if self.ctx.as_ref().is_some_and(crate::text_input::is_composing) {
-            self.notify_tr("Finish composing text before applying this action.");
-            return false;
-        }
-        true
     }
 
     /// The Edit a PDF ▸ Text boxes (new text, and a paragraph open for editing) commit on

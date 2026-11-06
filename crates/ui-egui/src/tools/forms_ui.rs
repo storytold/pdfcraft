@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
-use pdfcraft_engine::{DocId, Edit, FieldValue, FormField, FormFieldKind, FormWidget, field_flags, form_appearance};
+use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, FormWidget, field_flags, form_appearance};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
@@ -21,17 +21,6 @@ use crate::theme::Tokens;
 const FOCUS_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 /// Background of the in-place text field editor, the same in every theme.
 const FIELD_FILL: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xF4);
-
-/// The egui id of the editor drawn over widget `widget` of field `name`: text, combo, or the
-/// focus holder of a check box or radio button.
-fn editor_id(view: DocId, name: &str, widget: usize) -> egui::Id {
-    egui::Id::unique(("form-field", view.0, name, widget))
-}
-
-/// The id of the open field editor, so an IME composition in it can hold off a click on the page.
-pub(crate) fn focused_editor_id(view: &DocView) -> Option<egui::Id> {
-    view.forms.focus.as_ref().map(|focus| editor_id(view.id, &focus.name, focus.widget))
-}
 
 /// The field being edited.
 #[derive(Clone, Debug, PartialEq)]
@@ -348,7 +337,6 @@ struct ComboEditor<'a> {
     index: usize,
 }
 
-/// Edit a combo field using its existing options and native text input with the stored direction.
 fn combo_editor(ctx: &egui::Context, view: &mut DocView, editor: ComboEditor<'_>) {
     let ComboEditor { form, field: f, widget: w, rect, zoom, index: widget } = editor;
     let mut enter = false;
@@ -364,19 +352,13 @@ fn combo_editor(ctx: &egui::Context, view: &mut DocView, editor: ComboEditor<'_>
             let font = field_screen_font(ui.painter(), f, w, &fx.text, zoom);
             // The box is pale yellow in every theme, as a text field's is (#655).
             ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(FIELD_FILL);
-            let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _wrap: f32| {
-                let job = field_layout_job(f, text.as_str().to_owned(), font, f32::INFINITY);
-                ui.fonts_mut(|fonts| fonts.layout_job(job))
-            };
             let te = egui::TextEdit::singleline(&mut fx.text)
-                .layouter(&mut layouter)
                 .desired_width((rect.width() - 6.0 * zoom + 6.0).max(1.0))
                 .font(egui::FontId::proportional(font))
-                .align(field_text_align(f))
                 .background_color(FIELD_FILL)
                 .text_color(Color32::BLACK)
                 .margin(egui::Margin::symmetric(3, 1))
-                .id(editor_id(view.id, &f.name, widget));
+                .id(egui::Id::unique(("form-field", view.id.0, &f.name, widget)));
             // The form field's own logical name; not a visual/preordered label.
             let r = ui.add_sized(rect.size(), te).accessible_name(f.name.clone());
             if std::mem::take(&mut fx.request_focus) {
@@ -599,30 +581,6 @@ pub fn field_screen_font(painter: &egui::Painter, f: &FormField, w: &FormWidget,
     if font.is_nan() { 3.0 } else { font.clamp(3.0, MAX_SCREEN_FONT) }
 }
 
-/// Document direction and PDF quadding are independent of the interface's layout.
-fn field_layout_job(f: &FormField, text: String, font: f32, wrap: f32) -> egui::text::LayoutJob {
-    let font = egui::FontId::proportional(font);
-    let mut job = if f.has(field_flags::MULTILINE) {
-        egui::text::LayoutJob::simple(text, font, Color32::BLACK, wrap)
-    } else {
-        egui::text::LayoutJob::simple_singleline(text, font, Color32::BLACK)
-    };
-    job.direction = crate::bidi::text_direction(f.text_direction);
-    job.halign = field_text_align(f).x();
-    job.keep_trailing_whitespace = true;
-    job
-}
-
-/// Translate field quadding into physical widget alignment independently of bidi direction.
-fn field_text_align(f: &FormField) -> egui::Align2 {
-    match f.quadding {
-        1 => egui::Align2::CENTER_TOP,
-        2 => egui::Align2::RIGHT_TOP,
-        _ => egui::Align2::LEFT_TOP,
-    }
-}
-
-/// Draw a field without a baked appearance using its values, masking, direction and widget geometry.
 fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, w: &FormWidget, r: Rect) {
     match f.kind {
         FormFieldKind::Text | FormFieldKind::Combo => {
@@ -643,10 +601,8 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
                 // Multiline fields wrap at the box, as their page appearance does.
                 // At the width the size was fitted to: the box less 3 pt each side, scaled.
                 let wrap = if f.has(field_flags::MULTILINE) { (r.width() - 6.0 * zoom).max(1.0) } else { f32::INFINITY };
-                let job = field_layout_job(f, display_text, font_size, wrap);
-                let galley = p.ctx().fonts_mut(|fonts| fonts.layout_job(job));
-                let origin = align.anchor_size(pos, galley.size()).min - galley.rect.min.to_vec2();
-                p.galley(origin, galley, Color32::BLACK);
+                let galley = p.layout(display_text, egui::FontId::proportional(font_size), Color32::BLACK, wrap);
+                p.galley(align.anchor_size(pos, galley.size()).min, galley, Color32::BLACK);
             }
         }
         FormFieldKind::List => {
@@ -671,18 +627,13 @@ fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, 
                 if f.value.contains(export) {
                     p.rect_filled(row_rect, CornerRadius::ZERO, Color32::from_rgb(0x99, 0xC0, 0xDC));
                 }
-                let job = field_layout_job(f, display.clone(), font_size, f32::INFINITY);
-                let galley = p.ctx().fonts_mut(|fonts| fonts.layout_job(job));
-                let free = (r.width() - 6.0 - galley.size().x).max(0.0);
-                let x = r.min.x
-                    + 3.0
-                    + match f.quadding {
-                        1 => free / 2.0,
-                        2 => free,
-                        _ => 0.0,
-                    };
-                let origin = egui::pos2(x, y + font_size * 0.15) - galley.rect.min.to_vec2();
-                p.galley(origin, galley, Color32::BLACK);
+                p.text(
+                    egui::pos2(r.min.x + 3.0, y + font_size * 0.15),
+                    egui::Align2::LEFT_TOP,
+                    display,
+                    egui::FontId::proportional(font_size),
+                    Color32::BLACK,
+                );
                 y += row_h;
             }
         }
@@ -878,28 +829,19 @@ pub(crate) fn overlay(
                     ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(FIELD_FILL);
                     // A field that doesn't scroll takes no more than fits (ISO 32000-2 Table 228).
                     let before = text_box.map(|_| fx.text.clone());
-                    let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap: f32| {
-                        // Password fields retain egui's own masking layouter below.
-                        let job = field_layout_job(f, text.as_str().to_owned(), font, if multiline { wrap } else { f32::INFINITY });
-                        ui.fonts_mut(|fonts| fonts.layout_job(job))
-                    };
                     let mut te = if multiline { egui::TextEdit::multiline(&mut fx.text) } else { egui::TextEdit::singleline(&mut fx.text) };
                     te = te
                         // Wraps (inside the 3 px side margins) at the width the size was fitted to:
                         // the box less 3 pt each side, scaled.
                         .desired_width((rect.width() - 6.0 * zoom + 6.0).max(1.0))
                         .font(egui::FontId::proportional(font))
-                        .align(field_text_align(f))
                         .background_color(FIELD_FILL)
                         .text_color(Color32::BLACK)
                         .margin(egui::Margin::symmetric(3, 1))
                         .password(f.has(field_flags::PASSWORD))
-                        .id(editor_id(view.id, &f.name, focus.widget));
+                        .id(egui::Id::unique(("form-field", view.id.0, &f.name, focus.widget)));
                     if let Some(max) = f.max_len {
                         te = te.char_limit(max);
-                    }
-                    if !f.has(field_flags::PASSWORD) {
-                        te = te.layouter(&mut layouter);
                     }
                     if multiline {
                         te = te.desired_rows(((rect.height() / (font * 1.3)).floor() as usize).max(1));
@@ -962,13 +904,7 @@ pub(crate) fn overlay(
                         egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
                             for (export, display) in &f.options {
                                 let on = f.value.first() == Some(export);
-                                let mut label = egui::text::LayoutJob::simple_singleline(
-                                    display.clone(),
-                                    egui::TextStyle::Button.resolve(ui.style()),
-                                    ui.visuals().text_color(),
-                                );
-                                label.direction = crate::bidi::text_direction(f.text_direction);
-                                if ui.selectable_label(on, label).clicked() {
+                                if ui.selectable_label(on, display).clicked() {
                                     edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Choice(vec![export.clone()]) });
                                     close = true;
                                 }
@@ -1017,7 +953,7 @@ pub(crate) fn overlay(
         FormFieldKind::CheckBox | FormFieldKind::Radio => {
             // Nothing is drawn over the box, but a widget there holds egui's keyboard focus, so
             // Space, Tab and the arrows come here instead of turning or scrolling the page.
-            let id = editor_id(view.id, &f.name, focus.widget);
+            let id = egui::Id::unique(("form-field", view.id.0, &f.name, focus.widget));
             let mut has_focus = false;
             // Not interactable, so clicks still reach the page under it.
             let area = egui::Area::new(egui::Id::unique(("form-toggle", view.id.0))).order(egui::Order::Foreground).interactable(false);

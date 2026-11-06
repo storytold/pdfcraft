@@ -417,8 +417,6 @@ impl BfRange {
 enum Tok<'a> {
     /// A `<…>` string; `None` when it isn't an even number of hex digits.
     Hex(Option<Vec<u8>>),
-    /// A valid empty destination string; never a character code or CID.
-    EmptyHex,
     Open,
     Close,
     /// An operator, number or name (with its `/`), a `(…)` string or a `<<`/`>>`.
@@ -453,8 +451,6 @@ fn is_cmap_delimiter(b: u8) -> bool {
 impl<'a> Iterator for Lexer<'a> {
     type Item = Tok<'a>;
 
-    /// Read the next CMap token while skipping PDF whitespace and comments.
-    /// Preserve empty hex strings as real tokens so an explicit empty Unicode destination differs from an absent mapping.
     fn next(&mut self) -> Option<Tok<'a>> {
         loop {
             let b = self.at(self.pos)?;
@@ -496,9 +492,6 @@ impl<'a> Iterator for Lexer<'a> {
                     self.pos += 1;
                 }
                 self.pos += 1;
-                if valid && digits.is_empty() {
-                    return Some(Tok::EmptyHex);
-                }
                 if !valid || digits.is_empty() || !digits.len().is_multiple_of(2) {
                     return Some(Tok::Hex(None));
                 }
@@ -1130,13 +1123,8 @@ fn parse_to_unicode_within(data: &[u8], out: &mut Unicode, mut budget: usize) {
         match t {
             Tok::Word(b"beginbfchar") => {
                 while let Some([c, u]) = entry(&mut toks, b"endbfchar") {
-                    if let Tok::Hex(Some(c)) = c {
-                        let text = match u {
-                            Tok::Hex(Some(u)) => utf16(&u),
-                            Tok::EmptyHex => String::new(),
-                            _ => continue,
-                        };
-                        let added = add_explicit(out, &mut budget, &mut seq, be(&c), text);
+                    if let (Tok::Hex(Some(c)), Tok::Hex(Some(u))) = (c, u) {
+                        let added = add_explicit(out, &mut budget, &mut seq, be(&c), utf16(&u));
                         if !added {
                             break 'scan;
                         }
@@ -1165,9 +1153,6 @@ fn parse_to_unicode_within(data: &[u8], out: &mut Unicode, mut budget: usize) {
                                         if !added {
                                             break 'scan;
                                         }
-                                    }
-                                    Tok::EmptyHex if !add_explicit(out, &mut budget, &mut seq, c, String::new()) => {
-                                        break 'scan;
                                     }
                                     // A bad entry still stands for its code.
                                     _ => {}

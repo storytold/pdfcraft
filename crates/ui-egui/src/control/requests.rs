@@ -72,10 +72,6 @@ impl Control {
                 let text = str_param("text")?.to_string();
                 self.after_input(vec![vec![egui::Event::Text(text)]], json!({ "typed": true }), since)
             }
-            "ui.ime" => {
-                let event = ime_event(p)?;
-                self.after_input(vec![vec![event]], json!({ "input_method_event": true }), since)
-            }
             "ui.key" => {
                 let name = str_param("key")?;
                 let key = egui::Key::from_name(name)
@@ -92,7 +88,7 @@ impl Control {
                 Ok(Handled::Screenshot(region))
             }
             other => Err(format!(
-                "unknown method {other:?} (ui.state, ui.inspect, ui.click, ui.focus, ui.resize, ui.quit, ui.move, ui.drag, ui.type, ui.ime, ui.key, ui.command, ui.commands, ui.set, ui.open, ui.screenshot)"
+                "unknown method {other:?} (ui.state, ui.inspect, ui.click, ui.focus, ui.resize, ui.quit, ui.move, ui.drag, ui.type, ui.key, ui.command, ui.commands, ui.set, ui.open, ui.screenshot)"
             )),
         })();
         r.unwrap_or_else(|e| Handled::Now(Err(e)))
@@ -303,46 +299,6 @@ fn widget(id: NodeId, n: &accesskit::Node, depth: usize, focused: bool) -> Value
     w
 }
 
-/// Validate a composition request and translate it into native egui IME input.
-/// Text is capped at 262144 UTF-8 bytes; preedit selection counts ordered Unicode characters, not byte offsets. Reject extra or phase-incompatible parameters.
-fn ime_event(p: &Value) -> Result<egui::Event, String> {
-    let phase = p.get("phase").and_then(Value::as_str).ok_or("ui.ime: phase must be preedit, commit or cancel")?;
-    if phase == "cancel" {
-        only_params(p, "ui.ime", &["phase"])?;
-        return Ok(egui::Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
-    }
-    if !matches!(phase, "preedit" | "commit") {
-        return Err("ui.ime: phase must be preedit, commit or cancel".into());
-    }
-    only_params(p, "ui.ime", if phase == "preedit" { &["phase", "text", "selection"] } else { &["phase", "text"] })?;
-    let text = p.get("text").and_then(Value::as_str).ok_or("ui.ime: text must be a string")?;
-    if text.len() > pdfcraft_fonts::text_direction::MAX_DIRECTION_BYTES {
-        return Err("ui.ime: text exceeds 262144 UTF-8 bytes".into());
-    }
-    if phase == "commit" {
-        return Ok(egui::Event::Ime(egui::ImeEvent::Commit(text.to_owned())));
-    }
-    let active_range_chars = p
-        .get("selection")
-        .map(|value| {
-            let items = value.as_array().filter(|items| items.len() == 2).ok_or("ui.ime: selection must be [start, end] in character indices")?;
-            let number = |at| {
-                items
-                    .get(at)
-                    .and_then(Value::as_u64)
-                    .and_then(|n| usize::try_from(n).ok())
-                    .ok_or("ui.ime: selection indices must be nonnegative integers")
-            };
-            let (start, end) = (number(0)?, number(1)?);
-            if start > end || end > text.chars().count() {
-                return Err("ui.ime: selection must be ordered and inside the preedit text".to_string());
-            }
-            Ok(start..end)
-        })
-        .transpose()?;
-    Ok(egui::Event::Ime(egui::ImeEvent::Preedit { text: text.to_owned(), active_range_chars }))
-}
-
 fn only_params(p: &Value, method: &str, allowed: &[&str]) -> Result<(), String> {
     // The JSON-RPC transport represents omitted params as null.
     if p.is_null() && allowed.is_empty() {
@@ -409,29 +365,5 @@ fn rect_param(v: &Value) -> Result<egui::Rect, String> {
     match a.as_slice() {
         [x0, y0, x1, y1] if x1 > x0 && y1 > y0 => Ok(egui::Rect::from_min_max(egui::pos2(*x0, *y0), egui::pos2(*x1, *y1))),
         _ => Err("region must be [x0, y0, x1, y1] in points".into()),
-    }
-}
-
-#[cfg(test)]
-mod ime_tests {
-    use super::*;
-
-    #[test]
-    /// Verify composition requests reject oversized text and invalid Unicode character-index selections.
-    fn composition_parameters_are_bounded_and_use_character_indices() {
-        let event = ime_event(&json!({"phase":"preedit","text":"مَر","selection":[0,3]})).unwrap();
-        assert!(matches!(event, egui::Event::Ime(egui::ImeEvent::Preedit { active_range_chars: Some(range), .. }) if range == (0..3)));
-        for args in [
-            json!({"phase":"preedit","text":"مَر","selection":[0,4]}),
-            json!({"phase":"preedit","text":"مَر","selection":[2,1]}),
-            json!({"phase":"preedit","text":"مَر","selection":[-1,1]}),
-            json!({"phase":"commit","text":"ع","selection":[0,1]}),
-            json!({"phase":"cancel","text":"unwanted"}),
-            json!({"phase":"unknown","text":"ع"}),
-            json!({"phase":"commit","text":"ع".repeat(131073)}),
-        ] {
-            assert!(ime_event(&args).is_err());
-        }
-        assert!(matches!(ime_event(&json!({"phase":"cancel"})).unwrap(), egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) if text.is_empty()));
     }
 }

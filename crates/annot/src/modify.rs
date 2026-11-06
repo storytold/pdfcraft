@@ -162,17 +162,6 @@ pub fn with_replies_and_popups(doc: &Document, list: &[Object], doomed: impl Int
 /// new text: the wrap width and top edge stay, the height fits the wrapped lines. A circle snug
 /// around its text stays snug around the new text, centred where it was.
 pub fn set_contents(doc: &mut Document, page: usize, index: usize, text: &str, meta: &Meta) -> Result<(), AnnotError> {
-    // Inspect without promoting an inline annotation before the transaction begins.
-    let entries = annots(doc, page_ref(doc, page)?);
-    let free_text = entries.get(index).is_some_and(|entry| doc.resolve(entry).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"FreeText")));
-    if free_text {
-        return super::draw::appearance_transaction(doc, |staged| set_contents_in_place(staged, page, index, text, meta));
-    }
-    set_contents_in_place(doc, page, index, text, meta)
-}
-
-/// Apply the edit to the supplied document or staged FreeText transaction.
-fn set_contents_in_place(doc: &mut Document, page: usize, index: usize, text: &str, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     let d = annot_dict(doc, r);
     let free_text = d.name(b"Subtype") == Some(b"FreeText");
@@ -239,8 +228,6 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
                 longest = longest.max(pdfcraft_fonts::content_text::width_for_family(line, size, family).ok()?);
             }
             longest
-        } else if let Some(lines) = appearance::arabic_lines(text, size, f64::MAX) {
-            lines.iter().map(|line| line.width).fold(0.0, f64::max)
         } else {
             text.lines().map(|l| appearance::text_width(l, size)).fold(0.0, f64::max)
         };
@@ -256,9 +243,6 @@ fn fitted_box(doc: &Document, r: ObjRef, text: &str) -> Option<[f64; 4]> {
             descent = descent.min(bottom);
         }
         lines.len().max(1) as f64 * (ascent - descent + 0.1).max(1.2) * size
-    } else if appearance::arabic_text(text) && pdfcraft_fonts::appearance_text::can_shape(text) {
-        let lines = appearance::arabic_lines(text, size, (w - 2.0 * pad).max(1.0))?;
-        pdfcraft_fonts::appearance_text::height(&lines, size)
     } else {
         appearance::wrap(text, size, (w - 2.0 * pad).max(1.0)).len().max(1) as f64 * size * 1.2
     };
@@ -740,17 +724,6 @@ fn ink_rect_for_width(d: &Dict, old_w: f64, w: f64) -> Option<[f64; 4]> {
 
 /// Change a comment's style and redraw it. A Syriac family change is limited to FreeText.
 pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
-    // Inspect without promoting an inline annotation before the transaction begins.
-    let entries = annots(doc, page_ref(doc, page)?);
-    let free_text = entries.get(index).is_some_and(|entry| doc.resolve(entry).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"FreeText")));
-    if free_text {
-        return super::draw::appearance_transaction(doc, |staged| set_style_in_place(staged, page, index, change, meta));
-    }
-    set_style_in_place(doc, page, index, change, meta)
-}
-
-/// Apply the edit to the supplied document or staged FreeText transaction.
-fn set_style_in_place(doc: &mut Document, page: usize, index: usize, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
     let StyleChange { color, opacity, width, endings, syriac_family } = change;
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
@@ -796,11 +769,11 @@ fn set_style_in_place(doc: &mut Document, page: usize, index: usize, change: Sty
     });
     let before = d;
     doc.update_dict(r, |d| {
-        if let Some(family) = syriac_family {
-            d.set(pdfcraft_fonts::SyriacFamily::PDF_KEY.to_vec(), Object::name(family.name()));
-        }
         if let Some((rect, w)) = regrow {
             shape_text_box(d, rect, shape, w);
+        }
+        if let Some(family) = syriac_family {
+            d.set(pdfcraft_fonts::SyriacFamily::PDF_KEY.to_vec(), Object::name(family.name()));
         }
         if let Some(c) = color {
             if free_text {
@@ -849,9 +822,7 @@ fn set_style_in_place(doc: &mut Document, page: usize, index: usize, change: Sty
             // A family selection may need more room for marks but must not shrink a user's box.
             let current = annot_dict(doc, r);
             if !current.contains(b"CL")
-                && let Some(rect) = current.get(b"Rect").and_then(Object::as_array)
-                && let [x0, y0, x1, y1] = rect.as_slice()
-                && let (Some(x0), Some(y0), Some(x1), Some(y1)) = (x0.as_f64(), y0.as_f64(), x1.as_f64(), y1.as_f64())
+                && let Some([x0, y0, x1, y1]) = text_box_of(&current)
             {
                 fit = [fit[0].min(x0), fit[1].min(y0), fit[2].max(x1), fit[3].max(y1)];
             }
@@ -900,17 +871,6 @@ pub fn set_border_color(doc: &mut Document, page: usize, index: usize, color: Op
 /// rich-text strings follow) and redraw it. The box grows to hold the wrapped text at the new
 /// size and never shrinks, so a box the user drew large stays large. Sizes are 1 to 400 pt.
 pub fn set_font_size(doc: &mut Document, page: usize, index: usize, size: f64, meta: &Meta) -> Result<(), AnnotError> {
-    // Inspect without promoting an inline annotation before the transaction begins.
-    let entries = annots(doc, page_ref(doc, page)?);
-    let free_text = entries.get(index).is_some_and(|entry| doc.resolve(entry).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"FreeText")));
-    if free_text {
-        return super::draw::appearance_transaction(doc, |staged| set_font_size_in_place(staged, page, index, size, meta));
-    }
-    set_font_size_in_place(doc, page, index, size, meta)
-}
-
-/// Apply the edit to the supplied document or staged FreeText transaction.
-fn set_font_size_in_place(doc: &mut Document, page: usize, index: usize, size: f64, meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
     let d = annot_dict(doc, r);

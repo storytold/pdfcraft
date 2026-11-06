@@ -29,14 +29,14 @@ thread_local! {
     pub(crate) static WRAP_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// [`lines`], each with its paragraph base direction and which paragraph it is in.
+/// [`lines`], each with whether its paragraph runs right to left (its first strong character
+/// does) and which paragraph it is in.
 pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
     #[cfg(test)]
     WRAP_CALLS.with(|c| c.set(c.get().saturating_add(1)));
     let width = (t.rect[2] - t.rect[0]).max(t.size);
     let mut out = Vec::new();
     for (index, para) in t.text.split('\n').enumerate() {
-        let rtl = t.direction.rtl(para);
         // Arabic or Hebrew: laid out with the bidirectional algorithm and shaped.
         let rtl_script = para.chars().any(|c| is_arabic(c) || is_hebrew(c) || is_syriac(c));
         let thai = para.chars().any(is_thai);
@@ -44,9 +44,10 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
             && !rtl_script
             && let Ok(lines) = thai_lines(t, para, width)
         {
-            out.extend(lines.into_iter().map(|line| (line, rtl, index)));
+            out.extend(lines.into_iter().map(|line| (line, false, index)));
             continue;
         }
+        let rtl = rtl_script && unicode_bidi::get_base_direction(para) == unicode_bidi::Direction::Rtl;
         // Arabic words are shaped one by one (joining stops at spaces), so a line's width is the
         // sum of its words' and shaping stays linear in the paragraph's length. The space is the
         // paragraph's; a space between Latin words is drawn in the item's font, a few hundredths
@@ -113,7 +114,7 @@ pub(super) fn is_thai(c: char) -> bool {
 /// Arabic letters, marks, digits and punctuation: an item with any of them is shaped with the
 /// craft-fonts Arabic face.
 pub(super) fn is_arabic(c: char) -> bool {
-    pdfcraft_fonts::source_shaping::is_arabic(c)
+    matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x0870..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFC)
 }
 
 /// Hebrew letters, points, cantillation marks and punctuation (and the presentation forms): an
@@ -203,9 +204,6 @@ pub(super) enum Piece {
 /// A line of a shaped-text item in drawing order (the Unicode bidirectional algorithm, UAX #9), and
 /// its width at the item's size. `rtl` is its paragraph's direction.
 pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec<Piece>, f64), EditError> {
-    if line.len() > pdfcraft_fonts::text_direction::MAX_DIRECTION_BYTES {
-        return Err(EditError::Invalid("a directional text line exceeds 262144 UTF-8 bytes; shorten it before laying it out".into()));
-    }
     // unicode-bidi indexes the first level of a line, so an empty one would panic.
     if line.is_empty() {
         return Ok((Vec::new(), 0.0));
@@ -251,7 +249,6 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
             pieces.push(if let Some(script) = script {
                 let shaped = match script {
                     ShapedScript::Arabic => shape_arabic(&s, run_rtl).map_err(|e| arabic_error(e, &s))?,
-                    ShapedScript::ArabicBold => pdfcraft_fonts::shape_arabic_bold(&s, run_rtl).map_err(|e| arabic_error(e, &s))?,
                     ShapedScript::Hebrew => shape_hebrew(&s, run_rtl).map_err(|e| hebrew_error(e, &s))?,
                     ShapedScript::Thai => shape_thai(&s).map_err(|e| thai_error(e, &s))?,
                     kind @ (ShapedScript::Syriac | ShapedScript::SyriacEastern | ShapedScript::SyriacWestern) => {
@@ -388,5 +385,5 @@ fn copy_key(c: &Content) -> Content {
 
 /// The widest explicit line before wrapping, measured with the PDF writing fonts.
 pub fn text_width(t: &AddedText) -> f64 {
-    t.text.split('\n').map(|line| shaped_width(t, line, t.direction.rtl(line))).fold(0.0, f64::max)
+    t.text.split('\n').map(|line| shaped_width(t, line, unicode_bidi::get_base_direction(line) == unicode_bidi::Direction::Rtl)).fold(0.0, f64::max)
 }

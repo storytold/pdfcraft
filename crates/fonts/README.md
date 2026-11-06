@@ -92,18 +92,3 @@ Document font inputs use `embedding`: bounded static TrueType/OpenType-CFF valid
 exact program preservation, Unicode/CID/GID mapping and full-face subset completion.
 `shaping` uses the same program with harfrust and UAX #9; source UI fallback fonts are
 never exported. See [existing-text editing](../../docs/editing-existing-text.md).
-
-`source_shaping::is_arabic` shares the conservative Arabic font-routing policy with
-Add Text, including Extended-B/C, presentation forms and mathematical letters.
-It does not prove glyph coverage: unavailable glyphs remain explicit errors from
-the selected face. Contextual-table checks include the extended joining letters;
-pre-shaped presentation forms and mathematical letters do not acquire a joining
-requirement. Validated complete embedded source programs keep priority over
-optional matching faces. No new Arabic font or font-family selector is introduced.
-
-For a shaped source run, pass `ShapedRun::pdf_mappings(font_bytes)` to `embedding::embed_mapping`.
-The shaper can paint an Arabic dot before its advancing letter body. PDF Unicode ownership
-belongs on that body so readers obtain the letter's geometry; empty auxiliary destinations
-remain explicitly empty. The mapping helper leaves `ShapedGlyph` text/positions unchanged,
-including the existing character/word-spacing ownership. Real-font, subset and save/reopen
-regressions are documented in [the Arabic corpus guide](../../docs/arabic-editor-milestone.md).

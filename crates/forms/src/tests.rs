@@ -4,344 +4,6 @@ use pdfcraft_cos::{Document, Object, SaveOptions, write_incremental};
 
 use super::*;
 
-/// List warnings follow visible labels, widget size and family in Auto and explicit direction.
-#[test]
-fn review5914_followup_syriac_list_overflow_measures_visible_labels() {
-    use pdfcraft_fonts::{SyriacFamily, TextDirection, content_text};
-    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Eastern Syriac");
-        return;
-    }
-    let mut doc = fixture();
-    let all = fields(&doc);
-    let mut f = field(&all, "toppings").clone();
-    let mut w = f.widgets[0].clone();
-    doc.update_dict(w.obj, |d| {
-        d.set(b"DA".to_vec(), PdfString::text("/Helv 14 Tf 0 g"));
-        d.set(SyriacFamily::PDF_KEY.to_vec(), Object::name("Eastern"));
-        d.set(b"TI".to_vec(), Object::Int(1));
-    })
-    .unwrap();
-    let label = "ܫܠܡܐ ".repeat(20);
-    f.options = vec![("before".into(), label.clone()), ("code".into(), label.clone()), ("after".into(), label.clone())];
-    f.value = vec!["code".into()];
-    let rows = appearance::list_rows(&doc, &f, &w);
-    w.rect = [0.0, 0.0, 70.0, rows.inset + rows.row * 1.5];
-    assert_eq!(rows.visible(w.rect[3]), 1);
-    let wanted = content_text::width_for_family(&label, 14.0, SyriacFamily::Eastern).unwrap();
-    for direction in [TextDirection::Auto, TextDirection::RightToLeft, TextDirection::LeftToRight] {
-        f.text_direction = direction;
-        match appearance::value_overflow(&doc, &f, &w) {
-            Some(appearance::Overflow::Wide { width, size, .. }) => {
-                assert!((width - wanted).abs() < 0.001, "measure the visible label with the widget's family");
-                assert_eq!(size, 14.0);
-            }
-            other => panic!("wide visible list label must warn in {direction:?}: {other:?}"),
-        }
-        // Wide labels above and below the viewport and a wide export are not drawn.
-        f.options[1] = (label.clone(), "OK".into());
-        f.value = vec![label.clone()];
-        assert_eq!(appearance::value_overflow(&doc, &f, &w), None, "only the visible label matters in {direction:?}");
-        f.options[1] = ("code".into(), label.clone());
-        f.value = vec!["code".into()];
-    }
-}
-
-/// The rows a read Syriac list keeps for clicks and scrolling are the rows it is drawn with.
-#[test]
-fn review5914_round3_read_syriac_list_keeps_drawn_row_geometry() {
-    use pdfcraft_fonts::SyriacFamily;
-    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Eastern Syriac");
-        return;
-    }
-    let mut doc = fixture();
-    let f = field(&fields(&doc), "toppings").clone();
-    let w = f.widgets[0].clone();
-    doc.update_dict(w.obj, |d| {
-        d.set(b"DA".to_vec(), PdfString::text("/Helv 14 Tf 0 g"));
-        d.set(SyriacFamily::PDF_KEY.to_vec(), Object::name("Eastern"));
-    })
-    .unwrap();
-    // Lamadh's ascender under stacked marks and marks below a descending letter.
-    let labels = ["\u{0720}\u{0730}\u{0747}\u{0720}\u{0733}", "\u{0729}\u{0731}\u{0748}\u{0732}\u{0723}\u{0734}"];
-    doc.update_dict(f.obj, |d| d.set(b"Opt".to_vec(), Object::Array(labels.iter().map(|l| PdfString::text(l).into()).collect()))).unwrap();
-    let f = field(&fields(&doc), "toppings").clone();
-    let w = &f.widgets[0];
-    let drawn = appearance::list_rows(&doc, &f, w);
-    assert!(drawn.row > drawn.size * 1.15, "shaped Syriac extents must change the row height for this check to mean anything: {drawn:?}");
-    assert_eq!(w.list, Some(drawn));
-}
-
-/// A password list is drawn by the fallback writer, so its click rows must not take Syriac extents.
-#[test]
-fn review5914_round4_password_syriac_list_keeps_fallback_rows() {
-    use pdfcraft_fonts::SyriacFamily;
-    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Eastern Syriac");
-        return;
-    }
-    let mut doc = fixture();
-    let f = field(&fields(&doc), "toppings").clone();
-    let w = f.widgets[0].clone();
-    doc.update_dict(w.obj, |d| {
-        d.set(b"DA".to_vec(), PdfString::text("/Helv 14 Tf 0 g"));
-        d.set(SyriacFamily::PDF_KEY.to_vec(), Object::name("Eastern"));
-    })
-    .unwrap();
-    let labels = ["\u{0720}\u{0730}\u{0747}\u{0720}\u{0733}", "\u{0729}\u{0731}\u{0748}\u{0732}\u{0723}\u{0734}"];
-    let ff = i64::from(f.flags | flags::PASSWORD);
-    doc.update_dict(f.obj, |d| {
-        d.set(b"Opt".to_vec(), Object::Array(labels.iter().map(|l| PdfString::text(l).into()).collect()));
-        d.set(b"Ff".to_vec(), Object::Int(ff));
-    })
-    .unwrap();
-    let f = field(&fields(&doc), "toppings").clone();
-    assert!(f.has(flags::PASSWORD));
-    let w = &f.widgets[0];
-    let wd = doc.get(w.obj).as_dict().cloned().unwrap();
-    let fallback = appearance::list_rows_of(&doc, &f.da, doc.get(f.obj).as_dict(), &wd, f.text_direction);
-    assert_eq!(appearance::list_rows(&doc, &f, w), fallback, "a password list is not drawn by the Syriac writer");
-    assert_eq!(w.list, Some(fallback));
-}
-
-/// Syriac list labels follow the widget's quadding, as the Arabic list and Syriac text paths do.
-#[test]
-fn review5914_round4_syriac_list_labels_follow_quadding() {
-    use pdfcraft_fonts::SyriacFamily;
-    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Eastern Syriac");
-        return;
-    }
-    let mut doc = fixture();
-    let f = field(&fields(&doc), "toppings").clone();
-    doc.update_dict(f.widgets[0].obj, |d| d.set(SyriacFamily::PDF_KEY.to_vec(), Object::name("Eastern"))).unwrap();
-    doc.update_dict(f.obj, |d| d.set(b"Opt".to_vec(), Object::Array(vec![PdfString::text("\u{072B}\u{0720}\u{0721}\u{0710}").into()]))).unwrap();
-    let f = field(&fields(&doc), "toppings").clone();
-    let w = f.widgets[0].clone();
-    // The leftmost glyph origin of the label (`1 0 0 1 x y Tm`).
-    let mut left = Vec::new();
-    for q in 0..3 {
-        doc.update_dict(w.obj, |d| d.set(b"Q".to_vec(), Object::Int(q))).unwrap();
-        let (stream, missing) = appearance::field_appearance_drawn_in(&mut doc, &f, &w, &[], true);
-        assert_eq!(missing, None);
-        let text = String::from_utf8_lossy(&stream.decoded().unwrap()).into_owned();
-        let xs: Vec<f64> = text.split(" Tm").filter_map(|before| before.rsplit("1 0 0 1 ").next()?.split_whitespace().next()?.parse().ok()).collect();
-        assert!(!xs.is_empty(), "Q {q}: the label is drawn by the Syriac writer: {text}");
-        left.push(xs.iter().copied().fold(f64::INFINITY, f64::min));
-    }
-    assert!(left[0] < left[1] && left[1] < left[2], "left, centred and right labels move right in turn: {left:?}");
-}
-
-/// A combo draws its label on one line, so an imported Multiline flag must not wrap its measure.
-#[test]
-fn review5914_round3_syriac_combo_ignores_multiline_overflow() {
-    use pdfcraft_fonts::SyriacFamily;
-    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Eastern Syriac");
-        return;
-    }
-    let mut doc = fixture();
-    set_props(&mut doc, "country", &FieldProps { font_size: Some(12.0), syriac_family: Some(SyriacFamily::Eastern), ..Default::default() }).unwrap();
-    let all = fields(&doc);
-    let mut f = field(&all, "country").clone();
-    let mut w = f.widgets[0].clone();
-    // Tall enough for every wrapped row, far too narrow for the one drawn line.
-    w.rect = [0.0, 0.0, 60.0, 600.0];
-    f.options = vec![("code".into(), "ܫܠܡܐ ".repeat(8))];
-    f.value = vec!["code".into()];
-    assert!(matches!(appearance::value_overflow(&doc, &f, &w), Some(appearance::Overflow::Wide { .. })));
-    f.flags |= flags::MULTILINE;
-    assert!(
-        matches!(appearance::value_overflow(&doc, &f, &w), Some(appearance::Overflow::Wide { .. })),
-        "a combo with an imported Multiline flag still draws one clipped line"
-    );
-}
-
-/// Imported Comb flags on choices must not substitute cell widths for ordinary text widths.
-#[test]
-fn review5914_followup_syriac_choice_ignores_comb_overflow() {
-    use pdfcraft_fonts::SyriacFamily;
-    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Eastern Syriac");
-        return;
-    }
-    let mut doc = fixture();
-    set_props(&mut doc, "country", &FieldProps { font_size: Some(12.0), syriac_family: Some(SyriacFamily::Eastern), ..Default::default() }).unwrap();
-    let all = fields(&doc);
-    let mut f = field(&all, "country").clone();
-    let mut w = f.widgets[0].clone();
-    w.rect = [0.0, 0.0, 100.0, 200.0];
-    f.options = vec![("code".into(), "ܫ".into())];
-    f.value = vec!["code".into()];
-    assert_eq!(appearance::value_overflow(&doc, &f, &w), None);
-    f.flags |= flags::COMB;
-    f.max_len = Some(100);
-    assert_eq!(appearance::value_overflow(&doc, &f, &w), None, "a combo draws an ordinary label despite imported Comb flags");
-}
-
-/// Overflow follows the selected Syriac display label and family, never its export token.
-#[test]
-fn review5914_syriac_combo_overflow_uses_displayed_label_and_family() {
-    use pdfcraft_fonts::{SyriacFamily, content_text};
-    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Eastern Syriac");
-        return;
-    }
-    let mut doc = fixture();
-    set_props(&mut doc, "country", &FieldProps { font_size: Some(12.0), syriac_family: Some(SyriacFamily::Eastern), ..Default::default() }).unwrap();
-    let obj = field(&fields(&doc), "country").obj;
-    let label = "ܫܠܡܐ ".repeat(20);
-    doc.update_dict(obj, |d| {
-        d.set(b"Opt".to_vec(), Object::Array(vec![Object::Array(vec![PdfString::text("code").into(), PdfString::text(&label).into()])]));
-    })
-    .unwrap();
-    set_value(&mut doc, "country", &FieldValue::Text("code".into())).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "country");
-    let mut w = f.widgets[0].clone();
-    w.rect = [0.0, 0.0, 40.0, 200.0];
-    let wanted = content_text::width_for_family(&label, 12.0, SyriacFamily::Eastern).unwrap();
-    match appearance::value_overflow(&doc, f, &w) {
-        Some(appearance::Overflow::Wide { width, size, .. }) => {
-            assert!((width - wanted).abs() < 0.001, "measure the selected family, not Estrangela");
-            assert_eq!(size, 12.0);
-        }
-        other => panic!("long displayed label must overflow despite its short export: {other:?}"),
-    }
-    // A retained explicit direction from an imported combo must measure its drawn label too.
-    let mut directional = f.clone();
-    directional.text_direction = pdfcraft_fonts::TextDirection::RightToLeft;
-    match appearance::value_overflow(&doc, &directional, &w) {
-        Some(appearance::Overflow::Wide { width, .. }) => assert!((width - wanted).abs() < 0.001),
-        other => panic!("retained explicit combo direction must not measure the Latin export: {other:?}"),
-    }
-    // A hidden Syriac export and an unselected Syriac option do not make a short Latin label overflow.
-    let mut latin = f.clone();
-    latin.value = vec![label.clone()];
-    latin.options = vec![(label, "OK".into()), ("other".into(), "ܫܠܡܐ ".repeat(20))];
-    assert_eq!(appearance::value_overflow(&doc, &latin, &w), None);
-}
-
-/// A fixed-size isolated Syriac glyph must fit its actual MaxLen cell, even in a tall widget.
-#[test]
-fn review5914_syriac_comb_reports_fixed_size_cell_overflow() {
-    use pdfcraft_fonts::{SyriacFamily, content_text};
-    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Eastern Syriac");
-        return;
-    }
-    let mut doc = fixture();
-    set_props(&mut doc, "zip", &FieldProps { font_size: Some(12.0), syriac_family: Some(SyriacFamily::Eastern), ..Default::default() }).unwrap();
-    let all = fields(&doc);
-    let mut f = field(&all, "zip").clone();
-    f.value = vec!["ܫ".into()];
-    f.max_len = Some(24);
-    let mut w = f.widgets[0].clone();
-    w.rect = [0.0, 0.0, 24.0, 200.0];
-    let wanted = content_text::comb_cells_for_family("ܫ", SyriacFamily::Eastern).unwrap()[0].width * 12.0;
-    assert!(wanted > 1.0, "fixture must exceed its one-point cell");
-    match appearance::value_overflow(&doc, &f, &w) {
-        Some(appearance::Overflow::Wide { width, room, size }) => {
-            assert!((width - wanted).abs() < 0.001);
-            assert_eq!((room, size), (1.0, 12.0));
-        }
-        other => panic!("fixed-size comb glyph must report per-cell overflow: {other:?}"),
-    }
-    set_props(&mut doc, "zip", &FieldProps { font_size: Some(0.0), ..Default::default() }).unwrap();
-    let all = fields(&doc);
-    let mut automatic = field(&all, "zip").clone();
-    automatic.value = f.value;
-    automatic.max_len = f.max_len;
-    assert_eq!(appearance::value_overflow(&doc, &automatic, &w), None, "auto comb size fits the same cell");
-}
-
-/// Arabic appearances retain logical values, formatted text and regenerated resources.
-#[test]
-fn arabic_single_line_generated_appearance_and_reopen() {
-    if pdfcraft_fonts::document_arabic_font().is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied craft-fonts input must include Arabic");
-        return;
-    }
-    let mut doc = fixture();
-    set_value(&mut doc, "name", &FieldValue::Text("سلام 123".into())).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "name");
-    assert!(ap(&doc, &f.widgets[0]).contains("/ActualText"), "Arabic must use the shaped appearance");
-    assert_eq!(f.value, ["سلام 123"]);
-    assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), None);
-    let widget = f.widgets[0].obj;
-    doc.update_dict(widget, |d| {
-        d.remove(b"AP");
-    })
-    .unwrap();
-    let regenerated = with_field_appearances(&doc).unwrap();
-    let all = fields(&regenerated);
-    assert!(ap(&regenerated, &field(&all, "name").widgets[0]).contains("/ActualText"));
-    let bytes = pdfcraft_cos::write_full(&regenerated, &SaveOptions::default()).unwrap();
-    let reopened = Document::open(Arc::new(bytes)).unwrap();
-    assert_eq!(field(&fields(&reopened), "name").value, ["سلام 123"]);
-
-    set_value(&mut doc, "name", &FieldValue::Text("123".into())).unwrap();
-    let format = af::Format::Number { decimals: 2, sep: 0, neg: 0, currency: "بت".into(), prepend: true };
-    set_props(&mut doc, "name", &FieldProps { format: Some(format), ..Default::default() }).unwrap();
-    assert!(ap(&doc, &field(&fields(&doc), "name").widgets[0]).contains("/ActualText"), "routing must inspect formatted currency");
-    assert_eq!(field(&fields(&doc), "name").value, ["123"]);
-    set_value(&mut doc, "pin", &FieldValue::Text("سلام".into())).unwrap();
-    assert!(!ap(&doc, &field(&fields(&doc), "pin").widgets[0]).contains("/ActualText"));
-}
-
-/// Missing Arabic fonts retain explicit undrawn characters and preserve the logical value.
-#[test]
-fn arabic_single_line_without_font_retains_warning() {
-    if pdfcraft_fonts::document_arabic_font().is_some() {
-        return;
-    }
-    let mut doc = fixture();
-    set_value(&mut doc, "name", &FieldValue::Text("سلام".into())).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "name");
-    let (_, missing) = appearance::field_appearance_drawn_in(&mut doc, f, &f.widgets[0], &f.value, true);
-    assert!(missing.is_some());
-    assert_eq!(f.value, ["سلام"]);
-}
-
-/// Shaped Arabic uses measured overflow rather than claiming every generated line fits.
-#[test]
-fn arabic_single_line_reports_measured_overflow_and_fit() {
-    if pdfcraft_fonts::document_arabic_font().is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied craft-fonts input must include Arabic");
-        return;
-    }
-    let mut doc = fixture();
-    set_props(&mut doc, "name", &FieldProps { font_size: Some(12.0), ..Default::default() }).unwrap();
-    let all = fields(&doc);
-    let mut f = field(&all, "name").clone();
-    f.value = vec!["سلام ".repeat(30)];
-    let mut widget = f.widgets[0].clone();
-    widget.rect = [0.0, 0.0, 30.0, 200.0];
-    let (stream, missing) = appearance::field_appearance_drawn_in(&mut doc, &f, &widget, &f.value, true);
-    assert!(String::from_utf8_lossy(&stream.decoded().unwrap()).contains("/ActualText"));
-    assert_eq!(missing, None);
-    assert!(matches!(appearance::value_overflow(&doc, &f, &widget), Some(appearance::Overflow::Wide { .. })));
-    assert!(!appearance::text_box(&doc, &f, &widget).fits(&f.value[0]));
-}
-
-/// A later Syriac value cannot hide an unsupported stored explicit direction.
-#[test]
-fn syriac_value_keeps_explicit_direction_warning() {
-    if pdfcraft_fonts::document_syriac_font().is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied craft-fonts input must include Syriac");
-        return;
-    }
-    let mut doc = fixture();
-    set_props(&mut doc, "name", &FieldProps { text_direction: Some(pdfcraft_fonts::TextDirection::LeftToRight), ..Default::default() }).unwrap();
-    set_value(&mut doc, "name", &FieldValue::Text("ܫܠܡܐ".into())).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "name");
-    assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), Some(appearance::Overflow::DirectionUnsupported));
-}
-
 /// One page with a form: text fields (plain, multiline, comb, password, read-only, nested),
 /// a check box with appearances, one without, a radio group, a combo and a multi-select list,
 /// and a push button.
@@ -426,8 +88,249 @@ fn ap(doc: &Document, w: &Widget) -> String {
     String::from_utf8_lossy(&s.decoded().unwrap()).into_owned()
 }
 
-/// A push button's caption is drawn in the font, size and color its `/DA` asks for; with an
-/// automatic size (0) it is sized to fit the button, in the form's default font and color.
+/// List warnings follow visible labels, widget size and family using the selected family.
+#[test]
+fn review5914_followup_syriac_list_overflow_measures_visible_labels() {
+    use pdfcraft_fonts::{SyriacFamily, content_text};
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none(), "supplied input must include Eastern Syriac");
+        return;
+    }
+    let mut doc = fixture();
+    let all = fields(&doc);
+    let mut f = field(&all, "toppings").clone();
+    let mut w = f.widgets[0].clone();
+    doc.update_dict(w.obj, |d| {
+        d.set(b"DA".to_vec(), PdfString::text("/Helv 14 Tf 0 g"));
+        d.set(SyriacFamily::PDF_KEY.to_vec(), Object::name("Eastern"));
+        d.set(b"TI".to_vec(), Object::Int(1));
+    })
+    .unwrap();
+    let label = "ܫܠܡܐ ".repeat(20);
+    f.options = vec![("before".into(), label.clone()), ("code".into(), label.clone()), ("after".into(), label.clone())];
+    f.value = vec!["code".into()];
+    let rows = appearance::list_rows(&doc, &f, &w);
+    w.rect = [0.0, 0.0, 70.0, rows.inset + rows.row * 1.5];
+    assert_eq!(rows.visible(w.rect[3]), 1);
+    let wanted = content_text::width_for_family(&label, 14.0, SyriacFamily::Eastern).unwrap();
+    match appearance::value_overflow(&doc, &f, &w) {
+        Some(appearance::Overflow::Wide { width, size, .. }) => {
+            assert!((width - wanted).abs() < 0.001, "measure the visible label with the widget's family");
+            assert_eq!(size, 14.0);
+        }
+        other => panic!("wide visible list label must warn: {other:?}"),
+    }
+    // Wide labels above and below the viewport and a wide export are not drawn.
+    f.options[1] = (label.clone(), "OK".into());
+    f.value = vec![label.clone()];
+    assert_eq!(appearance::value_overflow(&doc, &f, &w), None, "only the visible label matters");
+    f.options[1] = ("code".into(), label.clone());
+    f.value = vec!["code".into()];
+}
+
+/// The rows a read Syriac list keeps for clicks and scrolling are the rows it is drawn with.
+#[test]
+fn review5914_round3_read_syriac_list_keeps_drawn_row_geometry() {
+    use pdfcraft_fonts::SyriacFamily;
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none(), "supplied input must include Eastern Syriac");
+        return;
+    }
+    let mut doc = fixture();
+    let f = field(&fields(&doc), "toppings").clone();
+    let w = f.widgets[0].clone();
+    doc.update_dict(w.obj, |d| {
+        d.set(b"DA".to_vec(), PdfString::text("/Helv 14 Tf 0 g"));
+        d.set(SyriacFamily::PDF_KEY.to_vec(), Object::name("Eastern"));
+    })
+    .unwrap();
+    // Lamadh's ascender under stacked marks and marks below a descending letter.
+    let labels = ["\u{0720}\u{0730}\u{0747}\u{0720}\u{0733}", "\u{0729}\u{0731}\u{0748}\u{0732}\u{0723}\u{0734}"];
+    doc.update_dict(f.obj, |d| d.set(b"Opt".to_vec(), Object::Array(labels.iter().map(|l| PdfString::text(l).into()).collect()))).unwrap();
+    let f = field(&fields(&doc), "toppings").clone();
+    let w = &f.widgets[0];
+    let drawn = appearance::list_rows(&doc, &f, w);
+    assert!(drawn.row > drawn.size * 1.15, "shaped Syriac extents must change the row height for this check to mean anything: {drawn:?}");
+    assert_eq!(w.list, Some(drawn));
+}
+
+/// A password list is drawn by the fallback writer, so its click rows must not take Syriac extents.
+#[test]
+fn review5914_round4_password_syriac_list_keeps_fallback_rows() {
+    use pdfcraft_fonts::SyriacFamily;
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none(), "supplied input must include Eastern Syriac");
+        return;
+    }
+    let mut doc = fixture();
+    let f = field(&fields(&doc), "toppings").clone();
+    let w = f.widgets[0].clone();
+    doc.update_dict(w.obj, |d| {
+        d.set(b"DA".to_vec(), PdfString::text("/Helv 14 Tf 0 g"));
+        d.set(SyriacFamily::PDF_KEY.to_vec(), Object::name("Eastern"));
+    })
+    .unwrap();
+    let labels = ["\u{0720}\u{0730}\u{0747}\u{0720}\u{0733}", "\u{0729}\u{0731}\u{0748}\u{0732}\u{0723}\u{0734}"];
+    let ff = i64::from(f.flags | flags::PASSWORD);
+    doc.update_dict(f.obj, |d| {
+        d.set(b"Opt".to_vec(), Object::Array(labels.iter().map(|l| PdfString::text(l).into()).collect()));
+        d.set(b"Ff".to_vec(), Object::Int(ff));
+    })
+    .unwrap();
+    let f = field(&fields(&doc), "toppings").clone();
+    assert!(f.has(flags::PASSWORD));
+    let w = &f.widgets[0];
+    let wd = doc.get(w.obj).as_dict().cloned().unwrap();
+    let fallback = appearance::list_rows_of(&doc, &f.da, doc.get(f.obj).as_dict(), &wd);
+    assert_eq!(appearance::list_rows(&doc, &f, w), fallback, "a password list is not drawn by the Syriac writer");
+    assert_eq!(w.list, Some(fallback));
+}
+
+/// Syriac list labels follow the widget's quadding, as Syriac text paths do.
+#[test]
+fn review5914_round4_syriac_list_labels_follow_quadding() {
+    use pdfcraft_fonts::SyriacFamily;
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none(), "supplied input must include Eastern Syriac");
+        return;
+    }
+    let mut doc = fixture();
+    let f = field(&fields(&doc), "toppings").clone();
+    doc.update_dict(f.widgets[0].obj, |d| d.set(SyriacFamily::PDF_KEY.to_vec(), Object::name("Eastern"))).unwrap();
+    doc.update_dict(f.obj, |d| d.set(b"Opt".to_vec(), Object::Array(vec![PdfString::text("\u{072B}\u{0720}\u{0721}\u{0710}").into()]))).unwrap();
+    let f = field(&fields(&doc), "toppings").clone();
+    let w = f.widgets[0].clone();
+    // The leftmost glyph origin of the label (`1 0 0 1 x y Tm`).
+    let mut left = Vec::new();
+    for q in 0..3 {
+        doc.update_dict(w.obj, |d| d.set(b"Q".to_vec(), Object::Int(q))).unwrap();
+        let (stream, missing) = appearance::field_appearance_drawn_in(&mut doc, &f, &w, &[], true);
+        assert_eq!(missing, None);
+        let text = String::from_utf8_lossy(&stream.decoded().unwrap()).into_owned();
+        let xs: Vec<f64> = text.split(" Tm").filter_map(|before| before.rsplit("1 0 0 1 ").next()?.split_whitespace().next()?.parse().ok()).collect();
+        assert!(!xs.is_empty(), "Q {q}: the label is drawn by the Syriac writer: {text}");
+        left.push(xs.iter().copied().fold(f64::INFINITY, f64::min));
+    }
+    assert!(left[0] < left[1] && left[1] < left[2], "left, centred and right labels move right in turn: {left:?}");
+}
+
+/// A combo draws its label on one line, so an imported Multiline flag must not wrap its measure.
+#[test]
+fn review5914_round3_syriac_combo_ignores_multiline_overflow() {
+    use pdfcraft_fonts::SyriacFamily;
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none(), "supplied input must include Eastern Syriac");
+        return;
+    }
+    let mut doc = fixture();
+    set_props(&mut doc, "country", &FieldProps { font_size: Some(12.0), syriac_family: Some(SyriacFamily::Eastern), ..Default::default() }).unwrap();
+    let all = fields(&doc);
+    let mut f = field(&all, "country").clone();
+    let mut w = f.widgets[0].clone();
+    // Tall enough for every wrapped row, far too narrow for the one drawn line.
+    w.rect = [0.0, 0.0, 60.0, 600.0];
+    f.options = vec![("code".into(), "ܫܠܡܐ ".repeat(8))];
+    f.value = vec!["code".into()];
+    assert!(matches!(appearance::value_overflow(&doc, &f, &w), Some(appearance::Overflow::Wide { .. })));
+    f.flags |= flags::MULTILINE;
+    assert!(
+        matches!(appearance::value_overflow(&doc, &f, &w), Some(appearance::Overflow::Wide { .. })),
+        "a combo with an imported Multiline flag still draws one clipped line"
+    );
+}
+
+/// Imported Comb flags on choices must not substitute cell widths for ordinary text widths.
+#[test]
+fn review5914_followup_syriac_choice_ignores_comb_overflow() {
+    use pdfcraft_fonts::SyriacFamily;
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none(), "supplied input must include Eastern Syriac");
+        return;
+    }
+    let mut doc = fixture();
+    set_props(&mut doc, "country", &FieldProps { font_size: Some(12.0), syriac_family: Some(SyriacFamily::Eastern), ..Default::default() }).unwrap();
+    let all = fields(&doc);
+    let mut f = field(&all, "country").clone();
+    let mut w = f.widgets[0].clone();
+    w.rect = [0.0, 0.0, 100.0, 200.0];
+    f.options = vec![("code".into(), "ܫ".into())];
+    f.value = vec!["code".into()];
+    assert_eq!(appearance::value_overflow(&doc, &f, &w), None);
+    f.flags |= flags::COMB;
+    f.max_len = Some(100);
+    assert_eq!(appearance::value_overflow(&doc, &f, &w), None, "a combo draws an ordinary label despite imported Comb flags");
+}
+
+/// Overflow follows the selected Syriac display label and family, never its export token.
+#[test]
+fn review5914_syriac_combo_overflow_uses_displayed_label_and_family() {
+    use pdfcraft_fonts::{SyriacFamily, content_text};
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none(), "supplied input must include Eastern Syriac");
+        return;
+    }
+    let mut doc = fixture();
+    set_props(&mut doc, "country", &FieldProps { font_size: Some(12.0), syriac_family: Some(SyriacFamily::Eastern), ..Default::default() }).unwrap();
+    let obj = field(&fields(&doc), "country").obj;
+    let label = "ܫܠܡܐ ".repeat(20);
+    doc.update_dict(obj, |d| {
+        d.set(b"Opt".to_vec(), Object::Array(vec![Object::Array(vec![PdfString::text("code").into(), PdfString::text(&label).into()])]));
+    })
+    .unwrap();
+    set_value(&mut doc, "country", &FieldValue::Text("code".into())).unwrap();
+    let all = fields(&doc);
+    let f = field(&all, "country");
+    let mut w = f.widgets[0].clone();
+    w.rect = [0.0, 0.0, 40.0, 200.0];
+    let wanted = content_text::width_for_family(&label, 12.0, SyriacFamily::Eastern).unwrap();
+    match appearance::value_overflow(&doc, f, &w) {
+        Some(appearance::Overflow::Wide { width, size, .. }) => {
+            assert!((width - wanted).abs() < 0.001, "measure the selected family, not Estrangela");
+            assert_eq!(size, 12.0);
+        }
+        other => panic!("long displayed label must overflow despite its short export: {other:?}"),
+    }
+    // A hidden Syriac export and an unselected Syriac option do not make a short Latin label overflow.
+    let mut latin = f.clone();
+    latin.value = vec![label.clone()];
+    latin.options = vec![(label, "OK".into()), ("other".into(), "ܫܠܡܐ ".repeat(20))];
+    assert_eq!(appearance::value_overflow(&doc, &latin, &w), None);
+}
+
+/// A fixed-size isolated Syriac glyph must fit its actual MaxLen cell, even in a tall widget.
+#[test]
+fn review5914_syriac_comb_reports_fixed_size_cell_overflow() {
+    use pdfcraft_fonts::{SyriacFamily, content_text};
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none(), "supplied input must include Eastern Syriac");
+        return;
+    }
+    let mut doc = fixture();
+    set_props(&mut doc, "zip", &FieldProps { font_size: Some(12.0), syriac_family: Some(SyriacFamily::Eastern), ..Default::default() }).unwrap();
+    let all = fields(&doc);
+    let mut f = field(&all, "zip").clone();
+    f.value = vec!["ܫ".into()];
+    f.max_len = Some(24);
+    let mut w = f.widgets[0].clone();
+    w.rect = [0.0, 0.0, 24.0, 200.0];
+    let wanted = content_text::comb_cells_for_family("ܫ", SyriacFamily::Eastern).unwrap()[0].width * 12.0;
+    assert!(wanted > 1.0, "fixture must exceed its one-point cell");
+    match appearance::value_overflow(&doc, &f, &w) {
+        Some(appearance::Overflow::Wide { width, room, size }) => {
+            assert!((width - wanted).abs() < 0.001);
+            assert_eq!((room, size), (1.0, 12.0));
+        }
+        other => panic!("fixed-size comb glyph must report per-cell overflow: {other:?}"),
+    }
+    set_props(&mut doc, "zip", &FieldProps { font_size: Some(0.0), ..Default::default() }).unwrap();
+    let all = fields(&doc);
+    let mut automatic = field(&all, "zip").clone();
+    automatic.value = f.value;
+    automatic.max_len = f.max_len;
+    assert_eq!(appearance::value_overflow(&doc, &automatic, &w), None, "auto comb size fits the same cell");
+}
+
+/// A push button uses its requested font, size and color.
 #[test]
 fn a_button_caption_is_drawn_in_its_fields_font_size_and_color() {
     let objs: Vec<String> = vec![
@@ -596,391 +499,6 @@ fn appearance_text(doc: &Document, w: &Widget, font_name: &[u8]) -> (Object, Vec
         .map(|op| op.operands[0].as_string().unwrap().bytes.clone())
         .collect();
     (font.as_ref().clone(), shown)
-}
-
-#[test]
-/// Verify oversized explicit-direction values are refused on editing and reported when already loaded.
-fn explicit_text_direction_budget_refuses_edits_and_reports_loaded_values() {
-    use pdfcraft_fonts::{TextDirection as D, text_direction::MAX_DIRECTION_BYTES};
-    let mut doc = fixture();
-    let value = "a".repeat(MAX_DIRECTION_BYTES.saturating_add(1));
-    doc.update_dict(pdfcraft_cos::ObjRef::new(10, 0), |d| {
-        d.set(b"V".to_vec(), Object::String(pdfcraft_cos::PdfString::text(&value)));
-    })
-    .unwrap();
-    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
-    let error = set_props(&mut doc, "name", &FieldProps { text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap_err();
-    assert!(error.to_string().contains("262144"));
-    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
-    // A file may already carry an over-budget override; reading/drawing remains bounded
-    // and reports the skipped direction without altering the field's logical value.
-    doc.update_dict(pdfcraft_cos::ObjRef::new(10, 0), |d| d.set(b"PCTextDirection".to_vec(), Object::name("RTL"))).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "name");
-    assert_eq!(f.value, [value]);
-    assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), Some(appearance::Overflow::DirectionBudget));
-}
-
-/// Synthetic simple encoding that can encode two Arabic letters without providing a shaping path.
-#[test]
-fn arabic_fallback_preserves_encodable_selected_font() {
-    if pdfcraft_fonts::document_arabic_font().is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied craft-fonts input must include Arabic");
-        return;
-    }
-    let mut doc = fixture();
-    let mut encoding = Dict::new();
-    encoding.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
-    encoding.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(128), Object::name("uni0661")]));
-    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |font| {
-        font.set(b"Encoding".to_vec(), Object::Dict(encoding));
-        font.set(b"FirstChar".to_vec(), Object::Int(128));
-        font.set(b"LastChar".to_vec(), Object::Int(128));
-        font.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(2000)]));
-    })
-    .unwrap();
-    set_props(&mut doc, "name", &FieldProps { font_size: Some(12.0), ..Default::default() }).unwrap();
-    set_value(&mut doc, "name", &FieldValue::Text("١".into())).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "name");
-    let (stream, missing) = appearance::field_appearance_drawn_in(&mut doc, f, &f.widgets[0], &f.value, true);
-    assert_eq!(missing, None);
-    assert!(
-        !String::from_utf8_lossy(&stream.decoded().unwrap()).contains("/ActualText"),
-        "an encodable selected font must retain its appearance path"
-    );
-    let mut narrow = f.widgets[0].clone();
-    narrow.rect = [0.0, 0.0, 20.0, 100.0];
-    assert!(!appearance::text_box(&doc, f, &narrow).fits("١"), "fit must use the selected font's 24-point digit advance");
-    assert!(matches!(appearance::value_overflow(&doc, f, &narrow), Some(appearance::Overflow::Wide { .. })));
-}
-
-/// Synthetic simple encoding that can encode two Arabic letters without providing a shaping path.
-fn shaping_required_fixture() -> Document {
-    let mut doc = fixture();
-    let mut encoding = Dict::new();
-    encoding.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
-    encoding.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(128), Object::name("uni0628"), Object::name("uni062A")]));
-    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |font| {
-        font.set(b"Encoding".to_vec(), Object::Dict(encoding));
-        font.set(b"FirstChar".to_vec(), Object::Int(128));
-        font.set(b"LastChar".to_vec(), Object::Int(129));
-        font.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(500), Object::Int(500)]));
-    })
-    .unwrap();
-    doc
-}
-
-/// Filled/imported Arabic stays logical and warns instead of silently applying unshaped bidi order.
-#[test]
-fn shaping_required_values_warn_after_explicit_direction_edits() {
-    use pdfcraft_fonts::TextDirection as D;
-    for direction in [D::RightToLeft, D::LeftToRight] {
-        let mut doc = shaping_required_fixture();
-        set_props(&mut doc, "name", &FieldProps { text_direction: Some(direction), ..Default::default() }).unwrap();
-        set_value(&mut doc, "name", &FieldValue::Text("بت".into())).unwrap();
-        let all = fields(&doc);
-        let f = field(&all, "name");
-        assert_eq!(f.value, ["بت"]);
-        assert!(undrawn_fields(&doc).is_empty(), "the fixture encodes both letters: this is a shaping refusal, not a missing-character warning");
-        assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), Some(appearance::Overflow::DirectionUnsupported));
-        assert_eq!(appearance_text(&doc, &f.widgets[0], b"Helv").1, [vec![128, 129]], "unsupported layout must retain the Auto-order fallback");
-        let mut doc = reopen(&doc);
-        let all = fields(&doc);
-        let f = field(&all, "name");
-        assert_eq!(f.value, ["بت"]);
-        assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), Some(appearance::Overflow::DirectionUnsupported));
-        set_props(&mut doc, "name", &FieldProps { text_direction: Some(D::Auto), ..Default::default() }).unwrap();
-        let all = fields(&doc);
-        let f = field(&all, "name");
-        assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), None, "Auto keeps its existing unqualified appearance policy");
-    }
-}
-
-/// Direction/property refusals are atomic; masking Arabic is safe and replacing list labels is checked.
-#[test]
-fn shaping_required_field_properties_are_refused_before_any_mutation() {
-    use pdfcraft_fonts::TextDirection as D;
-    let mut doc = shaping_required_fixture();
-    set_value(&mut doc, "name", &FieldValue::Text("بت".into())).unwrap();
-    for direction in [D::RightToLeft, D::LeftToRight] {
-        let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
-        let error = set_props(
-            &mut doc,
-            "name",
-            &FieldProps { name: Some("renamed".into()), locked: Some(true), text_direction: Some(direction), ..Default::default() },
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("shaping"), "{error}");
-        assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
-    }
-    for name in ["country", "toppings"] {
-        set_props(&mut doc, name, &FieldProps { text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap();
-        let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
-        let error = set_props(
-            &mut doc,
-            name,
-            &FieldProps { name: Some("renamed".into()), locked: Some(true), options: Some(vec!["بت".into()]), ..Default::default() },
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("shaping"), "{error}");
-        assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
-    }
-    set_value(&mut doc, "pin", &FieldValue::Text("بت".into())).unwrap();
-    set_props(&mut doc, "pin", &FieldProps { text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap();
-    let all = fields(&doc);
-    let pin = field(&all, "pin");
-    assert_eq!(appearance::value_overflow(&doc, pin, &pin.widgets[0]), None);
-    assert!(!ap(&doc, &pin.widgets[0]).contains("/ActualText"), "masked values must stay private");
-    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
-    assert!(set_props(&mut doc, "pin", &FieldProps { flags: vec![(flags::PASSWORD, false)], ..Default::default() }).is_err());
-    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before, "unmasking must validate the final visible value");
-
-    // An Arabic export identifier is harmless when the displayed choice label is Latin.
-    let mut doc = shaping_required_fixture();
-    doc.update_dict(pdfcraft_cos::ObjRef::new(23, 0), |d| {
-        d.set(
-            b"Opt".to_vec(),
-            Object::Array(vec![Object::Array(vec![Object::String(PdfString::text("بت")), Object::String(PdfString::text("Safe"))])]),
-        );
-    })
-    .unwrap();
-    set_value(&mut doc, "country", &FieldValue::Choice(vec!["بت".into()])).unwrap();
-    set_props(&mut doc, "country", &FieldProps { text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "country");
-    assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), None);
-}
-
-/// Existing, simultaneous and retained-direction formats must refuse atomically before other edits.
-#[test]
-fn formatted_direction_properties_are_checked_atomically() {
-    use pdfcraft_fonts::TextDirection as D;
-    let money = af::Format::Number { decimals: 2, sep: 0, neg: 0, currency: "بت".into(), prepend: true };
-    for direction in [D::RightToLeft, D::LeftToRight] {
-        for scenario in 0..3 {
-            let mut doc = shaping_required_fixture();
-            set_value(&mut doc, "name", &FieldValue::Text("123".into())).unwrap();
-            if scenario == 0 {
-                set_props(&mut doc, "name", &FieldProps { format: Some(money.clone()), ..Default::default() }).unwrap();
-            } else if scenario == 2 {
-                set_props(&mut doc, "name", &FieldProps { text_direction: Some(direction), ..Default::default() }).unwrap();
-            }
-            let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
-            let result = set_props(
-                &mut doc,
-                "name",
-                &FieldProps {
-                    name: Some("renamed".into()),
-                    locked: Some(true),
-                    text_direction: (scenario != 2).then_some(direction),
-                    format: (scenario != 0).then_some(money.clone()),
-                    ..Default::default()
-                },
-            );
-            assert!(result.is_err(), "unsupported formatted text was accepted: {direction:?}, scenario {scenario}");
-            assert!(result.unwrap_err().to_string().contains("shaping"));
-            assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
-        }
-    }
-}
-
-/// Masking, formatted choice labels, clearing a format and supported currency retain display/storage parity.
-#[test]
-fn formatted_direction_masks_labels_repairs_and_reopen() {
-    use pdfcraft_fonts::TextDirection as D;
-    let money = af::Format::Number { decimals: 2, sep: 0, neg: 0, currency: "بت".into(), prepend: true };
-    let mut doc = shaping_required_fixture();
-    set_value(&mut doc, "pin", &FieldValue::Text("123".into())).unwrap();
-    set_props(&mut doc, "pin", &FieldProps { format: Some(money.clone()), text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap();
-    let all = fields(&doc);
-    let pin = field(&all, "pin");
-    assert_eq!(pin.value, ["123"]);
-    assert!(ap(&doc, &pin.widgets[0]).contains("(********) Tj"));
-    assert!(!ap(&doc, &pin.widgets[0]).contains("ActualText"));
-    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
-    assert!(set_props(&mut doc, "pin", &FieldProps { flags: vec![(flags::PASSWORD, false)], ..Default::default() }).is_err());
-    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
-    set_props(&mut doc, "pin", &FieldProps { flags: vec![(flags::PASSWORD, false)], format: Some(af::Format::None), ..Default::default() }).unwrap();
-    assert!(ap(&doc, &field(&fields(&doc), "pin").widgets[0]).contains("(123) Tj"));
-
-    // Masking permits Arabic but must not bypass the displayed-row byte budget.
-    let huge =
-        af::Format::Number { decimals: 0, sep: 0, neg: 0, currency: "X".repeat(pdfcraft_fonts::text_direction::MAX_DIRECTION_BYTES), prepend: true };
-    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
-    let error =
-        set_props(&mut doc, "pin", &FieldProps { flags: vec![(flags::PASSWORD, true)], format: Some(huge), ..Default::default() }).unwrap_err();
-    assert!(error.to_string().contains("262144"), "{error}");
-    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
-
-    // The current appearance formats first, then resolves a combo's resulting display label.
-    doc.update_dict(pdfcraft_cos::ObjRef::new(23, 0), |d| {
-        d.set(b"Opt".to_vec(), Object::Array(vec![Object::Array(vec![PdfString::text("بت123.00").into(), PdfString::text("Safe").into()])]));
-        d.set(b"V".to_vec(), PdfString::text("123"));
-    })
-    .unwrap();
-    set_props(&mut doc, "country", &FieldProps { format: Some(money.clone()), text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap();
-    let all = fields(&doc);
-    let combo = field(&all, "country");
-    assert_eq!(combo.value, ["123"]);
-    assert!(ap(&doc, &combo.widgets[0]).contains("(Safe) Tj"));
-    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
-    assert!(set_props(&mut doc, "country", &FieldProps { options: Some(vec!["Safe".into()]), ..Default::default() }).is_err());
-    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
-
-    // An imported unsupported format can be repaired without first switching back to Auto.
-    set_value(&mut doc, "name", &FieldValue::Text("123".into())).unwrap();
-    set_props(&mut doc, "name", &FieldProps { format: Some(money), ..Default::default() }).unwrap();
-    doc.update_dict(pdfcraft_cos::ObjRef::new(10, 0), |d| d.set(b"PCTextDirection".to_vec(), Object::name("RTL"))).unwrap();
-    let safe = af::Format::Number { decimals: 2, sep: 0, neg: 0, currency: "$".into(), prepend: true };
-    set_props(&mut doc, "name", &FieldProps { format: Some(safe.clone()), ..Default::default() }).unwrap();
-    let doc = reopen(&doc);
-    let all = fields(&doc);
-    let f = field(&all, "name");
-    assert_eq!(f.value, ["123"]);
-    assert_eq!(f.actions.format, safe);
-    assert_eq!(f.text_direction, D::RightToLeft);
-    assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), None);
-    assert!(ap(&doc, &f.widgets[0]).contains("123.00"));
-}
-
-/// A rejected shaping row measures its logical fallback, including unequal mirrored-glyph widths.
-#[test]
-fn shaping_fallback_measures_the_text_it_draws() {
-    use pdfcraft_fonts::TextDirection as D;
-    let mut baseline = shaping_required_fixture();
-    baseline
-        .update_dict(pdfcraft_cos::ObjRef::new(5, 0), |font| {
-            let mut widths = vec![Object::Int(500); 130];
-            widths[40] = Object::Int(100);
-            widths[41] = Object::Int(900);
-            font.set(b"FirstChar".to_vec(), Object::Int(0));
-            font.set(b"Widths".to_vec(), Object::Array(widths));
-        })
-        .unwrap();
-    set_value(&mut baseline, "name", &FieldValue::Text(String::new())).unwrap();
-    set_props(&mut baseline, "name", &FieldProps { quadding: Some(2), font_size: Some(10.0), ..Default::default() }).unwrap();
-    let mut directed = baseline.clone();
-    set_props(&mut directed, "name", &FieldProps { text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap();
-    for doc in [&mut baseline, &mut directed] {
-        set_value(doc, "name", &FieldValue::Text("بت(".into())).unwrap();
-    }
-    let all = fields(&directed);
-    let f = field(&all, "name");
-    assert_eq!(appearance::value_overflow(&directed, f, &f.widgets[0]), Some(appearance::Overflow::DirectionUnsupported));
-    assert_eq!(
-        ap(&directed, &f.widgets[0]),
-        ap(&baseline, &field(&fields(&baseline), "name").widgets[0]),
-        "fallback alignment must use the logical opening parenthesis width"
-    );
-}
-
-/// Loaded list labels are checked on redraw, and safe replacement labels can repair an imported field.
-#[test]
-fn shaping_required_list_labels_warn_after_loaded_option_replacement() {
-    use pdfcraft_fonts::TextDirection as D;
-    let mut doc = shaping_required_fixture();
-    set_props(&mut doc, "toppings", &FieldProps { options: Some(vec!["بت".into()]), ..Default::default() }).unwrap();
-    doc.update_dict(pdfcraft_cos::ObjRef::new(24, 0), |d| d.set(b"PCTextDirection".to_vec(), Object::name("RTL"))).unwrap();
-    set_value(&mut doc, "toppings", &FieldValue::Choice(vec!["بت".into()])).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "toppings");
-    assert_eq!(f.value, ["بت"]);
-    assert!(undrawn_fields(&doc).is_empty());
-    assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), Some(appearance::Overflow::DirectionUnsupported));
-    let mut doc = reopen(&doc);
-    set_props(&mut doc, "toppings", &FieldProps { options: Some(vec!["Safe".into()]), ..Default::default() }).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "toppings");
-    assert_eq!(f.text_direction, D::RightToLeft);
-    assert_eq!(f.options, [("Safe".into(), "Safe".into())]);
-    assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), None);
-}
-
-#[test]
-/// Verify stored direction preserves field value and physical quadding through reopen.
-fn explicit_text_direction_preserves_value_quadding_and_reopen() {
-    use pdfcraft_fonts::TextDirection as D;
-    let mut doc = fixture();
-    set_value(&mut doc, "name", &FieldValue::Text("123 ABC".into())).unwrap();
-    let original_q = field(&fields(&doc), "name").quadding;
-    set_props(&mut doc, "name", &FieldProps { text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "name");
-    assert_eq!(f.text_direction, D::RightToLeft);
-    assert_eq!(f.quadding, original_q);
-    assert_eq!(f.value, ["123 ABC"]);
-    let appearance = ap(&doc, &f.widgets[0]);
-    assert!(appearance.contains("(ABC 123) Tj"), "{appearance}");
-    assert!(appearance.contains("/ActualText"), "copy retains the logical field value");
-    let bytes = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
-    let mut reopened = Document::open(Arc::new(bytes)).unwrap();
-    assert_eq!(field(&fields(&reopened), "name").text_direction, D::RightToLeft);
-    set_props(&mut reopened, "name", &FieldProps { text_direction: Some(D::Auto), ..Default::default() }).unwrap();
-    let all = fields(&reopened);
-    let f = field(&all, "name");
-    assert_eq!(f.text_direction, D::Auto);
-    assert_eq!(f.value, ["123 ABC"]);
-    assert_eq!(f.quadding, original_q);
-    assert!(ap(&reopened, &f.widgets[0]).contains("(123 ABC) Tj"));
-}
-
-#[test]
-/// Verify inherited direction metadata does not expose a password field's underlying value.
-fn explicit_text_direction_inherits_and_does_not_expose_passwords() {
-    use pdfcraft_fonts::TextDirection as D;
-    let mut doc = fixture();
-    doc.update_dict(pdfcraft_cos::ObjRef::new(15, 0), |d| d.set(b"PCTextDirection".to_vec(), Object::name("RTL"))).unwrap();
-    assert_eq!(field(&fields(&doc), "address.city").text_direction, D::RightToLeft);
-    doc.update_dict(pdfcraft_cos::ObjRef::new(16, 0), |d| d.set(b"PCTextDirection".to_vec(), Object::name("Auto"))).unwrap();
-    assert_eq!(field(&fields(&doc), "address.city").text_direction, D::Auto);
-    set_value(&mut doc, "pin", &FieldValue::Text("s3cr3t".into())).unwrap();
-    set_props(&mut doc, "pin", &FieldProps { text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap();
-    let appearance = ap(&doc, &field(&fields(&doc), "pin").widgets[0]);
-    assert!(!appearance.contains("s3cr3t"), "password appearance must stay masked");
-    assert!(!appearance.contains("/ActualText"), "a logical-value override must never expose password text as copyable metadata");
-    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
-    assert!(set_props(&mut doc, "agree", &FieldProps { text_direction: Some(D::RightToLeft), ..Default::default() }).is_err());
-    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
-}
-
-#[test]
-/// Verify a rejected direction edit leaves field names and permission flags unchanged.
-fn explicit_text_direction_refusal_does_not_rename_or_unlock_fields() {
-    use pdfcraft_fonts::TextDirection as D;
-    let mut doc = fixture();
-    set_props(&mut doc, "agree", &FieldProps { locked: Some(true), ..Default::default() }).unwrap();
-    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
-    let invalid = FieldProps {
-        name: Some("renamed".into()),
-        locked: Some(false),
-        tooltip: Some("must stay absent".into()),
-        text_direction: Some(D::RightToLeft),
-        ..Default::default()
-    };
-    assert!(set_props(&mut doc, "agree", &invalid).is_err());
-    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
-    assert!(field(&fields(&doc), "agree").locked());
-
-    // Comb places one character in each fixed cell: reordering it as a bidi span
-    // is deliberately refused, with no partial rename/lock/appearance change.
-    set_value(&mut doc, "zip", &FieldValue::Text("123 A".into())).unwrap();
-    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
-    for direction in [D::RightToLeft, D::LeftToRight] {
-        assert!(
-            set_props(
-                &mut doc,
-                "zip",
-                &FieldProps { name: Some("new-zip".into()), locked: Some(true), text_direction: Some(direction), ..Default::default() }
-            )
-            .is_err()
-        );
-        assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
-    }
-    set_props(&mut doc, "zip", &FieldProps { text_direction: Some(D::Auto), ..Default::default() }).unwrap();
-    let all = fields(&doc);
-    assert_eq!(field(&all, "zip").value, ["123 A"]);
-    assert_eq!(field(&all, "zip").text_direction, D::Auto);
 }
 
 #[test]
@@ -1192,105 +710,6 @@ fn a_short_multiline_field_takes_the_one_line_it_draws() {
     assert!(tb("plain").fits("one line") && !tb("plain").fits("one\ntwo"));
     // A 1 pt border takes 1 pt from each side: the line's descent then falls outside it.
     assert!(!tb("boxed").fits("one line"));
-}
-
-/// Arabic multiline appearances retain hard breaks, soft wrapping and regenerated logical values.
-#[test]
-fn arabic_multiline_wrap_reopen_and_regenerate() {
-    if pdfcraft_fonts::document_arabic_font().is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none());
-        return;
-    }
-    let mut doc = fixture();
-    let value = format!("{}\r\n\nسلام 123", "سلام Latin 42 ".repeat(8));
-    set_value(&mut doc, "notes", &FieldValue::Text(value.clone())).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "notes");
-    let drawn = ap(&doc, &f.widgets[0]);
-    assert!(drawn.matches("/ActualText").count() > 3, "hard paragraphs and soft wraps use shaped rows: {drawn}");
-    assert_eq!(f.value.as_slice(), std::slice::from_ref(&value));
-    let widget = f.widgets[0].obj;
-    let mut cache = FieldAppearanceCache::default();
-    with_field_appearances_cached(&doc, &mut cache);
-    let others = cache.builds();
-    doc.update_dict(widget, |d| {
-        d.remove(b"AP");
-    })
-    .unwrap();
-    let regenerated = with_field_appearances(&doc).unwrap();
-    let reopened = reopen(&regenerated);
-    let all = fields(&reopened);
-    let f = field(&all, "notes");
-    assert_eq!(f.value, [value]);
-    assert_eq!(ap(&reopened, &f.widgets[0]), drawn);
-    // A display refresh reuses the Arabic drawing and gives each copy its own fonts.
-    let mut cache = FieldAppearanceCache::default();
-    with_field_appearances_cached(&doc, &mut cache).unwrap();
-    let built = cache.builds();
-    assert_eq!(built, others + 1, "the Arabic field is drawn through the cache");
-    let again = reopen(&with_field_appearances_cached(&doc, &mut cache).unwrap());
-    assert_eq!((cache.builds(), cache.hits()), (built, built), "nothing changed, nothing reshaped");
-    assert_eq!(ap(&again, &field(&fields(&again), "notes").widgets[0]), drawn);
-}
-
-/// Multiline fit and overflow account for every row and overwide graphemes before clipping.
-#[test]
-fn arabic_multiline_measures_tall_and_wide() {
-    if pdfcraft_fonts::document_arabic_font().is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none());
-        return;
-    }
-    let mut doc = fixture();
-    set_props(&mut doc, "notes", &FieldProps { font_size: Some(12.0), ..Default::default() }).unwrap();
-    let all = fields(&doc);
-    let mut f = field(&all, "notes").clone();
-    f.value = vec!["سلام\n".repeat(20)];
-    let mut w = f.widgets[0].clone();
-    w.rect = [0.0, 0.0, 100.0, 40.0];
-    let (stream, missing) = appearance::field_appearance_drawn_in(&mut doc, &f, &w, &f.value, true);
-    assert!(String::from_utf8_lossy(&stream.decoded().unwrap()).contains("/ActualText"));
-    assert_eq!(missing, None);
-    assert!(matches!(appearance::value_overflow(&doc, &f, &w), Some(appearance::Overflow::Tall { .. })));
-    assert!(!appearance::text_box(&doc, &f, &w).fits(&f.value[0]));
-    f.value = vec!["بَ".into()];
-    w.rect = [0.0, 0.0, 5.0, 200.0];
-    assert!(matches!(appearance::value_overflow(&doc, &f, &w), Some(appearance::Overflow::Wide { .. })));
-    assert!(!appearance::text_box(&doc, &f, &w).fits(&f.value[0]));
-    // Too many hard rows or narrow-width soft rows refuse the shaped resource allocation.
-    for excessive in ["ب\n".repeat(1025), "ب ".repeat(1025)] {
-        f.value = vec![excessive];
-        let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
-        let (_, missing) = appearance::field_appearance_drawn_in(&mut doc, &f, &w, &f.value, true);
-        assert!(missing.is_some());
-        assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
-    }
-}
-
-/// Automatic Arabic multiline sizing fits the same rows it draws; encodable digits keep their source face across CRLF.
-#[test]
-fn arabic_multiline_auto_size_and_selected_encoding() {
-    if pdfcraft_fonts::document_arabic_font().is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none());
-        return;
-    }
-    let mut doc = fixture();
-    set_props(&mut doc, "notes", &FieldProps { font_size: Some(0.0), ..Default::default() }).unwrap();
-    let value = "سلام\nسلام\nسلام";
-    set_value(&mut doc, "notes", &FieldValue::Text(value.into())).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "notes");
-    assert!(ap(&doc, &f.widgets[0]).contains("/ActualText"));
-    assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), None);
-    assert!(appearance::text_box(&doc, f, &f.widgets[0]).fits(value));
-    let mut encoding = Dict::new();
-    encoding.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
-    encoding.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(128), Object::name("uni0661")]));
-    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |d| {
-        d.set(b"Encoding".to_vec(), Object::Dict(encoding));
-    })
-    .unwrap();
-    set_value(&mut doc, "notes", &FieldValue::Text("١\r\n١".into())).unwrap();
-    assert!(!ap(&doc, &field(&fields(&doc), "notes").widgets[0]).contains("/ActualText"));
 }
 
 /// A multi-line field narrower than one glyph: wrapping can't break inside a character, so the
@@ -1984,101 +1403,6 @@ fn choices_accept_exports_or_display_text() {
     assert!(matches!(set_value(&mut doc, "country", &FieldValue::Choice(vec!["ca".into(), "fr".into()])), Err(FormError::Invalid(_))));
 }
 
-/// Auto combos shape the selected Arabic label without changing exports or selecting an unrelated Syriac face.
-#[test]
-fn arabic_combo_selected_labels_reopen_and_overflow() {
-    if pdfcraft_fonts::document_arabic_font().is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied font input must include Arabic");
-        return;
-    }
-    let mut doc = fixture();
-    let obj = field(&fields(&doc), "country").obj;
-    let label = "سلام ".repeat(20);
-    doc.update_dict(obj, |d| {
-        d.set(
-            b"Opt".to_vec(),
-            Object::Array(vec![
-                Object::Array(vec![PdfString::text("ar").into(), PdfString::text(&label).into()]),
-                Object::Array(vec![PdfString::text("sy").into(), PdfString::text("ܫܠܡܐ").into()]),
-            ]),
-        );
-    })
-    .unwrap();
-    set_props(&mut doc, "country", &FieldProps { font_size: Some(12.0), ..Default::default() }).unwrap();
-    set_value(&mut doc, "country", &FieldValue::Text("ar".into())).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "country");
-    assert_eq!(f.value, ["ar"]);
-    assert!(!appearance::needs_syriac(&doc, f, &f.widgets[0], &f.value), "unselected Syriac option must not choose the selected Arabic label's font");
-    assert!(ap(&doc, &f.widgets[0]).contains("/ActualText"));
-    let index = doc.get(obj).as_dict().unwrap().get(b"I").cloned();
-    let mut narrow = f.widgets[0].clone();
-    narrow.rect = [0.0, 0.0, 30.0, 200.0];
-    assert!(matches!(appearance::value_overflow(&doc, f, &narrow), Some(appearance::Overflow::Wide { .. })));
-    let widget = f.widgets[0].obj;
-    doc.update_dict(widget, |d| {
-        d.remove(b"AP");
-    })
-    .unwrap();
-    let regenerated = with_field_appearances(&doc).unwrap();
-    let reopened = reopen(&regenerated);
-    let all = fields(&reopened);
-    let f = field(&all, "country");
-    assert_eq!(f.value, ["ar"]);
-    assert_eq!(reopened.get(f.obj).as_dict().unwrap().get(b"I").cloned(), index);
-    assert!(ap(&reopened, &f.widgets[0]).contains("/ActualText"));
-    set_value(&mut doc, "country", &FieldValue::Text("sy".into())).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "country");
-    assert!(appearance::needs_syriac(&doc, f, &f.widgets[0], &f.value));
-}
-
-/// Formatting precedes label lookup, while a selected simple font keeps encodable Arabic digits.
-#[test]
-fn arabic_combo_format_labels_and_selected_encoding() {
-    let mut doc = fixture();
-    let obj = field(&fields(&doc), "country").obj;
-    doc.update_dict(obj, |d| {
-        d.set(b"Opt".to_vec(), Object::Array(vec![Object::Array(vec![PdfString::text("123.00").into(), PdfString::text("سلام").into()])]));
-        d.set(b"V".to_vec(), PdfString::text("123"));
-    })
-    .unwrap();
-    set_props(
-        &mut doc,
-        "country",
-        &FieldProps {
-            format: Some(af::Format::Number { decimals: 2, sep: 0, neg: 0, currency: String::new(), prepend: true }),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "country");
-    assert_eq!(appearance::displayed_text(f, &f.value, true), "سلام");
-    let (stream, missing) = appearance::field_appearance_drawn_in(&mut doc, f, &f.widgets[0], &f.value, true);
-    if pdfcraft_fonts::document_arabic_font().is_some() {
-        assert!(String::from_utf8_lossy(&stream.decoded().unwrap()).contains("/ActualText"));
-        assert_eq!(missing, None);
-    } else {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied font input must include Arabic");
-        assert!(missing.is_some());
-    }
-    let mut digit = f.clone();
-    digit.actions.format = af::Format::None;
-    digit.options = vec![("digit".into(), "١".into())];
-    digit.value = vec!["digit".into()];
-    let mut encoding = Dict::new();
-    encoding.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
-    encoding.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(128), Object::name("uni0661")]));
-    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |d| {
-        d.set(b"Encoding".to_vec(), Object::Dict(encoding));
-    })
-    .unwrap();
-    let (stream, missing) = appearance::field_appearance_drawn_in(&mut doc, &digit, &digit.widgets[0], &digit.value, true);
-    assert_eq!(missing, None);
-    assert!(!String::from_utf8_lossy(&stream.decoded().unwrap()).contains("/ActualText"));
-}
-
 #[test]
 fn list_box_selection_scrolls_to_show_selected_options() {
     let objs: Vec<String> = vec![
@@ -2104,94 +1428,6 @@ fn list_box_selection_scrolls_to_show_selected_options() {
     assert!(appearance.contains("(Tue) Tj"), "Tue is drawn: {appearance}");
     assert!(appearance.contains("(Thu) Tj"), "Thu is drawn: {appearance}");
     assert_eq!(appearance.matches("0.6 0.75 0.86 rg").count(), 2, "both Tue and Thu highlighted");
-}
-
-/// Arabic list labels share ink-safe row geometry with hit testing, scrolling and selection highlights.
-#[test]
-fn arabic_list_labels_share_rows_selection_and_reopen() {
-    if pdfcraft_fonts::document_arabic_font().is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none());
-        return;
-    }
-    let mut doc = fixture();
-    let object = field(&fields(&doc), "toppings").obj;
-    let labels = ["بِسْمِ", "سلام", "Latin 123", "الرَّحْمَٰنِ", "آخر"];
-    doc.update_dict(object, |d| {
-        d.set(
-            b"Opt".to_vec(),
-            Object::Array(
-                labels
-                    .iter()
-                    .enumerate()
-                    .map(|(i, label)| Object::Array(vec![PdfString::text(&format!("v{i}")).into(), PdfString::text(label).into()]))
-                    .collect(),
-            ),
-        );
-        d.set(b"DA".to_vec(), PdfString::text("/Helv 24 Tf 0 g"));
-        d.set(b"TI".to_vec(), Object::Int(1));
-    })
-    .unwrap();
-    set_value(&mut doc, "toppings", &FieldValue::Choice(vec!["v1".into(), "v3".into()])).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "toppings");
-    let w = &f.widgets[0];
-    let rows = appearance::list_rows(&doc, f, w);
-    assert_eq!(w.list, Some(rows), "reader/hit test and drawing must use identical row geometry");
-    let reference = pdfcraft_fonts::appearance_text::wrap_with_latin("الرَّحْمَٰنِ", 24.0, 1.0e100, pdfcraft_fonts::Std14::Helvetica).unwrap();
-    assert!(rows.row + 0.01 >= (reference[0].ascent + reference[0].descent) * 24.0);
-    let drawn = ap(&doc, w);
-    assert!(drawn.contains("/ActualText"));
-    let visible = rows.visible(w.rect[3] - w.rect[1]);
-    let highlighted = [1usize, 3].into_iter().filter(|index| *index >= rows.top && *index < rows.top + visible).count();
-    assert_eq!(drawn.matches("0.6 0.75 0.86 rg").count(), highlighted);
-    assert_eq!(rows.option_at(rows.top, rows.inset + rows.row * 0.5), Some(rows.top));
-    let indices = doc.get(object).as_dict().unwrap().get(b"I").cloned();
-    let reopened = reopen(&doc);
-    let all = fields(&reopened);
-    let f = field(&all, "toppings");
-    assert_eq!(f.value, ["v1", "v3"]);
-    assert_eq!(reopened.get(f.obj).as_dict().unwrap().get(b"I").cloned(), indices);
-    assert_eq!(ap(&reopened, &f.widgets[0]), drawn);
-}
-
-/// Arabic lists retain mapped source encodings, existing Syriac routing and bounded fallback without resource leaks.
-#[test]
-fn arabic_list_source_font_and_budget_fallback() {
-    let mut doc = fixture();
-    let object = field(&fields(&doc), "toppings").obj;
-    doc.update_dict(object, |d| {
-        d.set(b"Opt".to_vec(), Object::Array(vec![Object::Array(vec![PdfString::text("one").into(), PdfString::text("سلام").into()])]));
-    })
-    .unwrap();
-    set_value(&mut doc, "toppings", &FieldValue::Choice(vec!["one".into()])).unwrap();
-    let all = fields(&doc);
-    let mut f = field(&all, "toppings").clone();
-    let (_, missing) = appearance::field_appearance_drawn_in(&mut doc, &f, &f.widgets[0], &f.value, true);
-    if pdfcraft_fonts::document_arabic_font().is_some() {
-        assert_eq!(missing, None);
-        assert!(ap(&doc, &f.widgets[0]).contains("/ActualText"));
-    } else {
-        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none());
-        assert!(missing.is_some());
-    }
-    let mut encoding = Dict::new();
-    encoding.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
-    encoding.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(128), Object::name("uni0661")]));
-    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |d| {
-        d.set(b"Encoding".to_vec(), Object::Dict(encoding));
-    })
-    .unwrap();
-    f.options = vec![("one".into(), "١".into())];
-    let (stream, missing) = appearance::field_appearance_drawn_in(&mut doc, &f, &f.widgets[0], &f.value, true);
-    assert_eq!(missing, None);
-    assert!(!String::from_utf8_lossy(&stream.decoded().unwrap()).contains("/ActualText"));
-    f.options = vec![("one".into(), "سلام".into()); 1025];
-    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
-    let (_, missing) = appearance::field_appearance_drawn_in(&mut doc, &f, &f.widgets[0], &f.value, true);
-    assert!(missing.is_some());
-    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
-    f.options = vec![("one".into(), "سلام".into()), ("two".into(), "ܫܠܡܐ".into())];
-    assert!(appearance::needs_syriac(&doc, &f, &f.widgets[0], &f.value));
 }
 
 #[test]
@@ -6718,31 +5954,4 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert!(error.to_string().contains("locked"));
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
-}
-
-/// Grapheme-cell drawing preserves the logical value through reopen without relaxing
-/// scalar MaxLen validation; oversized fixed-size ink still reports overflow.
-#[test]
-fn arabic_comb_draws_grapheme_cells_preserves_scalar_maxlen_and_reports_ink_overflow() {
-    if pdfcraft_fonts::document_arabic_font().is_none() {
-        assert!(std::env::var_os("CRAFT_FONTS_REQUIRED").is_none(), "Arabic font required");
-        return;
-    }
-    let mut doc = fixture();
-    set_value(&mut doc, "zip", &FieldValue::Text("لَا12".into())).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "zip");
-    let shown = ap(&doc, &f.widgets[0]);
-    assert!(shown.contains("/ActualText"), "Arabic comb must use contextual cell appearances: {shown}");
-    assert!(!undrawn_fields(&doc).iter().any(|(name, _)| name == "zip"));
-    assert_eq!(field(&fields(&reopen(&doc)), "zip").value, ["لَا12"]);
-    assert!(set_value(&mut doc, "zip", &FieldValue::Text("لَا123".into())).is_err(), "MaxLen still counts Unicode scalars");
-    assert_eq!(field(&fields(&doc), "zip").value, ["لَا12"]);
-    set_props(&mut doc, "zip", &FieldProps { font_size: Some(100.0), ..Default::default() }).unwrap();
-    let all = fields(&doc);
-    let f = field(&all, "zip");
-    assert!(matches!(
-        appearance::value_overflow(&doc, f, &f.widgets[0]),
-        Some(appearance::Overflow::High { .. }) | Some(appearance::Overflow::Wide { .. })
-    ));
 }

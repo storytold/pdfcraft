@@ -628,7 +628,6 @@ impl Automation {
             let edit = image.edit(page, &info, at, kind == "initials", &author).ok_or_else(|| ToolError::InvalidArgs("at must be finite".into()))?;
             return self.apply(a, edit);
         }
-        // A circle's box fits the text; other boxes keep the usual minimum width.
         let min_width = if border_shape == Some(BorderShape::Circle) { 0.0 } else { 20.0 };
         let text_at = |t: &str| -> Result<Shape> {
             let [w, h] = pdfcraft_engine::annot_text::text_box_size_for_family_min(t, size, family, min_width).map_err(ToolError::InvalidArgs)?;

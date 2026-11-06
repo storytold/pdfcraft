@@ -68,18 +68,3 @@ deterministic; the engine supplies them.
 
 Callouts, polygons and polylines, clouds, carets (insert/replace text), stamps, file
 attachments, rich text (`/RC`, `/DS`), and the shared named-appearance cache Acrobat writes.
-
-
-## Generated Arabic FreeText
-
-Text boxes, callouts and Fill & Sign typewriter text use the optional Arabic
-craft-fonts face for contextual shaping, positioned marks and logical ActualText.
-The generated layout sizes Arabic Fill & Sign boxes and refits edited FreeText.
-Absent quadding follows paragraph direction; explicit left alignment stays left.
-Syriac retains its selected-family path. Missing fonts retain the undrawn warning;
-shaping/output-budget failures refuse edits atomically, including newly allocated
-font objects. Cached Arabic appearances keep self-contained font templates and
-materialize their streams independently in each display or saved document.
-
-This path does not add Arabic line captions, measurement labels, rich-text span
-editing, or reuse arbitrary foreign annotation font programs.

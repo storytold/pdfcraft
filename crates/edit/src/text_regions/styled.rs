@@ -1,5 +1,5 @@
 use super::super::interp::TextState;
-use super::grouping::{across, break_gap, is_centred, row_rect};
+use super::grouping::{across, is_centred, row_rect};
 use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
     RangeStyle, TextBlock, TextLine, Type3Glyph, coincident_ops, content_streams, fallback_face, japanese_glyph_from, needs_type3, no_fallback_font,
@@ -36,43 +36,43 @@ struct FontResolver<'a> {
 }
 
 impl FontResolver<'_> {
-    /// Keep one real font across a Syriac span before resolving its characters.
-    /// Prefer the document program, then a loaded face, then an approved matching/default face.
+    /// Decode and validate a source program once per resolver, including missing programs.
+    fn cached_program(&mut self, name: &str) -> Option<std::sync::Arc<Vec<u8>>> {
+        self.programs.entry(name.to_owned()).or_insert_with(|| source_program(self.doc, self.fonts, name).map(std::sync::Arc::new)).clone()
+    }
+
+    /// Prefer a complete source program, then compatible document faces and the selected Syriac fallback.
     fn syriac_font(&mut self, source: &TextLine, span: &str) -> Result<Option<String>, EditError> {
         use pdfcraft_fonts::{embedding, source_shaping};
         if !span.chars().any(source_shaping::is_syriac) {
             return Ok(None);
         }
         let usable = |bytes: &[u8]| embedding::covers(bytes, span) && span.split(['\n', '\r']).all(|row| source_shaping::shape(bytes, row).is_ok());
-        // Only a complete program qualifies (`source_program`): a subset can keep a character's
-        // mapping after dropping its outline, which would leave the shaped text invisible.
-        let program = source_program(self.doc, self.fonts, &source.font).filter(|bytes| usable(bytes));
-        if program.is_some() && self.metrics.get(&source.font).is_some_and(|metrics| span.split(['\n', '\r']).all(|row| source_encodes(metrics, row)))
-        {
+        // A subset may retain a Unicode mapping after dropping its glyph; only a validated full face qualifies.
+        let program = self.cached_program(&source.font).filter(|bytes| usable(bytes));
+        if program.is_some() && self.metrics.get(&source.font).is_some_and(|m| span.split(['\n', '\r']).all(|row| source_encodes(m, row))) {
             return Ok(Some(source.font.clone()));
         }
         if let Some(bytes) = program {
             let family = embedding::names(&bytes).map_err(EditError::Invalid)?.0;
             return self.embed_face(format!("source {}", source.font), &bytes, &family, "the source Syriac font could not be loaded").map(Some);
         }
-        for (name, metrics) in self.metrics.iter() {
-            if !span.split(['\n', '\r']).all(|row| source_encodes(metrics, row)) {
-                continue;
-            }
-            if source_program(self.doc, self.fonts, name).is_some_and(|bytes| usable(&bytes)) {
-                return Ok(Some(name.clone()));
+        let candidates: Vec<_> =
+            self.metrics.iter().filter(|(_, m)| span.split(['\n', '\r']).all(|row| source_encodes(m, row))).map(|(name, _)| name.clone()).collect();
+        for name in candidates {
+            if self.cached_program(&name).is_some_and(|bytes| usable(&bytes)) {
+                return Ok(Some(name));
             }
         }
-        let face = embedding::matching_faces(&source.base_font)
-            .into_iter()
-            .chain(pdfcraft_fonts::document_syriac_font())
-            .find(|face| usable(face.bytes))
-            .ok_or_else(|| EditError::Invalid("Syriac editing needs a complete source or loaded font, or a Syrc face in craft-fonts".into()))?;
+        let face =
+            embedding::matching_faces(&source.base_font)
+                .into_iter()
+                .chain(pdfcraft_fonts::document_syriac_font())
+                .find(|f| usable(f.bytes))
+                .ok_or_else(|| EditError::Invalid("Syriac editing needs a complete source or loaded font, or a Syrc face in craft-fonts".into()))?;
         self.embed_face(face.name(), face.bytes, face.family, "the Syriac font could not be loaded").map(Some)
     }
 
-    /// Resolve an encoding for the requested text without replacing an explicit font resource.
-    /// Otherwise prefer existing source encodings, the validated complete source program and matching full faces. Return None when the caller must choose a fallback.
     fn encodable_font(&mut self, source: &TextLine, text: &str, requested: Option<&str>) -> Result<Option<String>, EditError> {
         if let Some(resource) = requested {
             if !self.metrics.get(resource).is_some_and(|metrics| source_encodes(metrics, text)) {
@@ -92,19 +92,11 @@ impl FontResolver<'_> {
         }) {
             return Ok(Some(name.clone()));
         }
-        if let Some(name) = self.complete_source_font(source, text)? {
-            return Ok(Some(name));
-        }
         if let Some(face) =
             pdfcraft_fonts::embedding::matching_faces(&source.base_font).into_iter().find(|face| pdfcraft_fonts::embedding::covers(face.bytes, text))
         {
             return self.embed_face(face.name(), face.bytes, face.family, "the full source font could not be loaded").map(Some);
         }
-        Ok(None)
-    }
-
-    /// Prefer the validated complete document program over optional matching faces.
-    fn complete_source_font(&mut self, source: &TextLine, text: &str) -> Result<Option<String>, EditError> {
         let Some(bytes) = self
             .programs
             .entry(source.font.clone())
@@ -120,22 +112,6 @@ impl FontResolver<'_> {
         }
         let family = pdfcraft_fonts::embedding::names(&bytes).map_or_else(|_| source.base_font.clone(), |(family, _)| family);
         self.embed_face(key, &bytes, &family, "the source font could not be loaded").map(Some)
-    }
-
-    /// Choose one directional-row encoding, preferring a complete source program when positioned spaces need completion.
-    fn uniform_row_font(&mut self, source: &TextLine, text: &str) -> Result<Option<String>, EditError> {
-        if let Some(font) = self.syriac_font(source, text)? {
-            return Ok(Some(font));
-        }
-        // source_encodes deliberately permits positioned spaces. When a complete
-        // program exists, keep its space glyph and all letters in one encoding.
-        let missing_space = text.contains(' ') && self.metrics.get(&source.font).is_some_and(|metrics| metrics.encode(" ").is_none());
-        if (missing_space || pdfcraft_fonts::source_shaping::required(text))
-            && let Some(name) = self.complete_source_font(source, text)?
-        {
-            return Ok(Some(name));
-        }
-        self.encodable_font(source, text, None)
     }
 
     fn embed_face(&mut self, key: String, bytes: &[u8], family: &str, missing_message: &str) -> Result<String, EditError> {
@@ -175,7 +151,6 @@ struct CharacterPreparation<'a> {
     first: &'a TextLine,
     lines: &'a [TextLine],
     draft: &'a str,
-    bases: &'a [pdfcraft_fonts::TextDirection],
     spans: Vec<(std::ops::Range<usize>, usize)>,
     style: &'a BlockStyle,
     overrides: &'a HashMap<usize, &'a RangeStyle>,
@@ -184,106 +159,29 @@ struct CharacterPreparation<'a> {
     max_glyphs: usize,
 }
 
-struct DirectionalRow<'a> {
-    start: usize,
-    uniform_text: Option<&'a str>,
-}
-
-type RowFontChoices = HashMap<usize, HashMap<String, Option<String>>>;
-
-/// Index UTF-8 draft row starts and cache uniform-font eligibility from resolved paragraph bases.
-/// Treat CRLF as one break, keep standalone CR/LF boundaries, and avoid rescanning a row for every style span.
-fn directional_rows<'a>(draft: &'a str, bases: &[pdfcraft_fonts::TextDirection]) -> Vec<DirectionalRow<'a>> {
-    let mut starts = vec![0];
-    for (at, ch) in draft.char_indices() {
-        if ch == '\n' || ch == '\r' && !draft.get(at.saturating_add(1)..).is_some_and(|rest| rest.starts_with('\n')) {
-            starts.push(at.saturating_add(1));
-        }
-    }
-    starts
-        .iter()
-        .enumerate()
-        .map(|(row, &start)| {
-            let end = starts.get(row.saturating_add(1)).copied().unwrap_or(draft.len());
-            let text = draft.get(start..end).unwrap_or_default().trim_end_matches(['\r', '\n']);
-            let uniform = !text.is_empty()
-                && (pdfcraft_fonts::source_shaping::required(text) || direction_needs_uniform_row(bases.get(row).copied().unwrap_or_default(), text));
-            DirectionalRow { start, uniform_text: uniform.then_some(text) }
-        })
-        .collect()
-}
-
-/// Cache one whole-row font choice per directional row and source resource.
-/// Check the cache before resolving a complete encoding; preserve source-style indexes so unsupported mixed-style bidi rows are still refused.
-fn prepare_directional_row_fonts(
-    rows: &[DirectionalRow<'_>],
-    span: std::ops::Range<usize>,
-    source: &TextLine,
-    resolver: &mut FontResolver<'_>,
-    cache: &mut RowFontChoices,
-) -> Result<(), EditError> {
-    let first = rows.partition_point(|row| row.start <= span.start).saturating_sub(1);
-    for (row, info) in rows.iter().enumerate().skip(first).take_while(|(_, row)| row.start < span.end) {
-        let Some(text) = info.uniform_text else { continue };
-        let choices = cache.entry(row).or_default();
-        let std::collections::hash_map::Entry::Vacant(entry) = choices.entry(source.font.clone()) else { continue };
-        // A sparse PDF encoding does not imply a sparse embedded program. Choose
-        // once for this whole row/source pair before resolving its characters.
-        entry.insert(resolver.uniform_row_font(source, text)?);
-    }
-    Ok(())
-}
-
 impl CharacterPreparation<'_> {
-    /// Resolve styled characters and bounded fallback glyphs before rewriting content.
-    /// Explicit resources stay authoritative; implicit bidi rows share a complete encoding, and source-style indexes remain available for later validation.
+    /// Resolve source and requested fonts for styled spans, shaping complex text and tracking substitutions.
+    /// Install bounded fallback fonts for characters the resolved source cannot encode.
     fn prepare(self) -> Result<PreparedCharacters, EditError> {
-        let Self { doc, first, lines, draft, bases, spans, style, overrides, fonts, metrics, max_glyphs } = self;
+        let Self { doc, first, lines, draft, spans, style, overrides, fonts, metrics, max_glyphs } = self;
         let mut chars = Vec::new();
         let mut substituted = None;
         let mut fallback = FallbackBuilder::new(max_glyphs);
         let mut resolver = FontResolver { doc, fonts, metrics, full_faces: HashMap::new(), programs: HashMap::new() };
-        let contextual = pdfcraft_fonts::source_shaping::required(draft);
-        let rows = directional_rows(draft, bases);
-        let mut row_fonts = RowFontChoices::new();
         for (range, index) in spans {
             let source = lines.get(index).unwrap_or(first);
             let start = range.start;
-            let end = range.end;
             let span = draft.get(range).unwrap_or_default();
-            let explicit = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
-            let syriac = if explicit.is_none() { resolver.syriac_font(source, span)? } else { None };
+            let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
+            let syriac = if requested.is_none() { resolver.syriac_font(source, span)? } else { None };
             if let Some(name) = &syriac
                 && let Some(metrics) = resolver.metrics.get(name)
                 && pdfcraft_fonts::embedding::face_key(&metrics.base_font) != pdfcraft_fonts::embedding::face_key(&source.base_font)
             {
                 substituted = Some(metrics.base_font.clone());
             }
-            let first_row = rows.partition_point(|row| row.start <= start).saturating_sub(1);
-            if explicit.is_none() {
-                prepare_directional_row_fonts(&rows, start..end, source, &mut resolver, &mut row_fonts)?;
-            }
-            // Choose one encoding before completing a contextual span or a Latin span
-            // whose unencoded spaces would split the completed run. Separate text matrices
-            // round positions differently from the same text in one full-font resource.
-            let unencoded_spaces = span.contains(' ') && resolver.metrics.get(&source.font).is_some_and(|metrics| metrics.encode(" ").is_none());
-            let complete = if (contextual || unencoded_spaces)
-                && explicit.is_none()
-                && span
-                    .chars()
-                    .filter(|ch| !matches!(ch, '\n' | '\r'))
-                    .any(|ch| !resolver.metrics.get(&source.font).is_some_and(|metrics| source_encodes(metrics, &ch.to_string())))
-            {
-                resolver.complete_source_font(source, span)?
-            } else {
-                None
-            };
-            let mut row = first_row;
+            let requested = requested.or(syriac.as_deref());
             for (offset, ch) in span.char_indices() {
-                let at = start.saturating_add(offset);
-                while rows.get(row.saturating_add(1)).is_some_and(|next| next.start <= at) {
-                    row = row.saturating_add(1);
-                }
                 if ch == '\n' {
                     chars.push((ch, index, source.font.clone()));
                     continue;
@@ -294,10 +192,6 @@ impl CharacterPreparation<'_> {
                     continue;
                 }
                 let text = ch.to_string();
-                let requested = explicit
-                    .or_else(|| row_fonts.get(&row).and_then(|fonts| fonts.get(&source.font)).and_then(Option::as_deref))
-                    .or(syriac.as_deref())
-                    .or(complete.as_deref());
                 let name = if let Some(name) = resolver.encodable_font(source, &text, requested)? {
                     name
                 } else if needs_type3(&text) {
@@ -394,87 +288,27 @@ struct ShapedRows {
     advances: HashMap<(usize, usize), f64>,
 }
 
-/// The simple-font path mirrors punctuation while reordering. Measure the exact characters
-/// it will show: custom source fonts need not give a mirrored pair identical advances.
-fn plain_segment_width(
-    segment: &[StyledChar],
-    advance: &impl Fn(&StyledChar) -> f64,
-    direction: pdfcraft_fonts::TextDirection,
-) -> Result<f64, EditError> {
-    if direction == pdfcraft_fonts::TextDirection::Auto {
-        return Ok(segment.iter().map(advance).sum());
-    }
-    let Some(first) = segment.first() else { return Ok(0.0) };
-    let logical: String = segment.iter().map(|item| item.0).collect();
-    let visual = direction.visual_plain(&logical).map_err(|message| EditError::Invalid(message.into()))?;
-    let mut item = (first.0, first.1, first.2.clone());
-    Ok(visual
-        .chars()
-        .map(|ch| {
-            item.0 = ch;
-            advance(&item)
-        })
-        .sum())
-}
-
-/// Paint never splits shaping: only contextual rows with identical shaping state
-/// may cross source style indices. Plain directional runs retain their old guard.
-fn run_end(items: &[StyledChar], at: usize, contextual: bool, compatible: &impl Fn(&StyledChar, &StyledChar) -> bool) -> usize {
-    let Some(first) = items.get(at) else {
-        return at;
-    };
-    let mut end = at.saturating_add(1);
-    while items.get(end).is_some_and(|next| next.2 == first.2 && (next.1 == first.1 || (contextual && compatible(first, next)))) {
-        end += 1;
-    }
-    end
-}
-
-/// Keep style boundaries, even when both sides ask for the same RGB value: a
-/// selection must not cut a shaping cluster or detach its auxiliary marks.
-fn segment_paints(segment: &[StyledChar], color: &impl Fn(usize) -> [f64; 3]) -> Vec<(std::ops::Range<usize>, [f64; 3])> {
-    let mut result: Vec<(std::ops::Range<usize>, [f64; 3])> = Vec::new();
-    let mut offset = 0usize;
-    let mut previous = None;
-    for (ch, source, _) in segment {
-        let end = offset.saturating_add(ch.len_utf8());
-        if previous == Some(*source)
-            && let Some((range, _)) = result.last_mut()
-        {
-            range.end = end;
-        } else {
-            result.push((offset..end, color(*source)));
-        }
-        previous = Some(*source);
-        offset = end;
-    }
-    result
-}
-
-/// Prepare contextual runs or plain visual advances for rewritten rows while leaving retained rows untouched.
 fn prepare_shaped_rows(
     doc: &Document,
     fonts: &Dict,
     rows: &[Vec<StyledChar>],
     kept: &[bool],
     advance: impl Fn(&StyledChar) -> f64,
-    direction: impl Fn(usize) -> pdfcraft_fonts::TextDirection,
-    compatible: &impl Fn(&StyledChar, &StyledChar) -> bool,
 ) -> Result<ShapedRows, EditError> {
     let mut runs = HashMap::new();
     let mut advances = HashMap::new();
     for (row_index, row) in rows.iter().enumerate().filter(|(index, _)| !kept.get(*index).copied().unwrap_or(false)) {
-        let direction = direction(row_index);
-        let contextual = pdfcraft_fonts::source_shaping::required(&row.iter().map(|item| item.0).collect::<String>());
         let mut at = 0;
         while let Some(item) = row.get(at) {
-            let end = run_end(row, at, contextual, compatible);
+            let mut end = at + 1;
+            while row.get(end).is_some_and(|next| next.1 == item.1 && next.2 == item.2) {
+                end += 1;
+            }
             let segment = row.get(at..end).unwrap_or_default();
+            advances.insert((row_index, at), segment.iter().map(&advance).sum::<f64>());
             let text: String = segment.iter().map(|character| character.0).collect();
-            if let Some((bytes, shaped, family)) = shape_source(doc, fonts, &item.2, &text, direction)? {
+            if let Some((bytes, shaped, family)) = shape_source(doc, fonts, &item.2, &text)? {
                 runs.insert((row_index, at), (bytes, shaped, family));
-            } else {
-                advances.insert((row_index, at), plain_segment_width(segment, &advance, direction)?);
             }
             at = end;
         }
@@ -482,34 +316,21 @@ fn prepare_shaped_rows(
     Ok(ShapedRows { runs, advances })
 }
 
-/// Embed each prepared glyph mapping and return its output font resource by row/run position.
 fn embed_shaped_resources(doc: &mut Document, fonts: &mut Dict, runs: &ShapedRunCache) -> Result<HashMap<(usize, usize), String>, EditError> {
     let mut resources = HashMap::new();
     for (key, (bytes, shaped, family)) in runs {
-        let mappings = shaped.pdf_mappings(bytes).map_err(EditError::Invalid)?;
+        let mappings: Vec<_> = shaped.glyphs.iter().map(|glyph| (glyph.text.clone(), glyph.id)).collect();
         let resource = pdfcraft_fonts::embedding::embed_mapping(doc, fonts, bytes, family, &mappings).map_err(EditError::Invalid)?;
         resources.insert(*key, resource);
     }
     Ok(resources)
 }
 
-/// Refuse rewritten contextual/bidi rows that cross unsupported font or source-style boundaries.
-/// Retained source rows are left alone; pure-Latin LTR rows may still use range styles.
-fn validate_contextual_rows(
-    rows: &[Vec<StyledChar>],
-    kept: &[bool],
-    directional: impl Fn(usize, &str) -> bool,
-    compatible: &impl Fn(&StyledChar, &StyledChar) -> bool,
-) -> Result<(), EditError> {
-    for ((index, row), _) in rows.iter().enumerate().zip(kept).filter(|(_, retained)| !**retained) {
+fn validate_contextual_rows(rows: &[Vec<StyledChar>], kept: &[bool]) -> Result<(), EditError> {
+    for (row, _) in rows.iter().zip(kept).filter(|(_, retained)| !**retained) {
         let text: String = row.iter().map(|character| character.0).collect();
-        if (pdfcraft_fonts::source_shaping::required(&text) || directional(index, &text))
-            && row.first().is_some_and(|first| {
-                row.iter().any(|character| {
-                    character.2 != first.2
-                        || (character.1 != first.1 && (!pdfcraft_fonts::source_shaping::required(&text) || !compatible(first, character)))
-                })
-            })
+        if pdfcraft_fonts::source_shaping::required(&text)
+            && row.first().is_some_and(|first| row.iter().any(|character| character.1 != first.1 || character.2 != first.2))
         {
             return Err(EditError::Invalid(
                 "contextual/bidi text across font or style boundaries needs a uniform full-face row; mixed contextual runs are not yet supported"
@@ -564,12 +385,10 @@ fn validated_ranges<'a>(draft: &str, style: &'a BlockStyle) -> Result<Vec<&'a Ra
     Ok(ranges)
 }
 
-/// Select the literal replacement when supplied, otherwise borrow the source editor rows.
-/// Refuse drafts over four million UTF-8 bytes before character and fallback preparation.
 fn replacement_text<'a>(block: &'a TextBlock, text: Option<&'a str>) -> Result<&'a str, EditError> {
     let draft = match text {
-        Some(text) => text,
-        None => &block.editor_text,
+        Some(text) if text != block.text => text,
+        _ => &block.editor_text,
     };
     if draft.len() > 4_000_000 {
         return Err(EditError::Invalid("the replacement text is too large".into()));
@@ -577,9 +396,8 @@ fn replacement_text<'a>(block: &'a TextBlock, text: Option<&'a str>) -> Result<&
     Ok(draft)
 }
 
-/// Detect unchanged content/style requests while excluding the source-break preservation policy.
 fn has_no_effective_style_change(block: &TextBlock, draft: &str, style: &BlockStyle) -> bool {
-    draft == block.editor_text && BlockStyle { preserve_source_breaks: false, ..style.clone() } == BlockStyle::default()
+    draft == block.editor_text && *style == BlockStyle::default()
 }
 
 fn page_font_metrics(
@@ -644,13 +462,10 @@ fn row_step(style: &BlockStyle, size: f64, source_leading: f64) -> f64 {
 
 type WrappedStyledRows = (StyledRows, RowRanges, Vec<usize>, Vec<bool>, Vec<usize>);
 
-/// Wrap styled characters into output rows with draft ranges, paragraph ownership and soft-gap metadata.
-/// Pass paragraph indexes to the measurement callback so continuations retain their chosen base.
-/// Draft ranges index styled characters, not UTF-8 bytes; rows stay logical until drawing applies bidi order.
 fn wrap_styled_rows(
     chars: &[StyledChar],
     width: f64,
-    measure: impl Fn(&[StyledChar], usize) -> Result<f64, EditError>,
+    measure: impl Fn(&[StyledChar]) -> Result<f64, EditError>,
 ) -> Result<WrappedStyledRows, EditError> {
     let mut rows: Vec<Vec<StyledChar>> = Vec::new();
     let mut row_ranges = Vec::new();
@@ -700,7 +515,7 @@ fn wrap_styled_rows(
             }
         }
         let word = chars.get(at..end).unwrap_or_default();
-        let word_width = measure(word, draft_line)?;
+        let word_width = measure(word)?;
         if !row.is_empty() && !item.0.is_whitespace() && row_width + word_width > width + 0.5 {
             let mut trimmed = 0usize;
             while row.last().is_some_and(|c: &StyledChar| c.0.is_whitespace()) {
@@ -731,11 +546,6 @@ fn wrap_styled_rows(
     Ok((rows, row_ranges, row_lines, row_soft, row_gap))
 }
 
-/// Split surviving draft spans at requested style and saved logical-paint boundaries.
-/// Saved paint offsets are relative to their original source run; translate them into
-/// paragraph UTF-8 offsets before cloning styled runs, so a later whole-cluster recolour
-/// retains earlier colours outside the new selection. Explicit range colours override
-/// inherited paint; cloned runs clear the old map after its colours become run state.
 fn apply_range_styles<'a>(
     first: &TextLine,
     block: &TextBlock,
@@ -749,18 +559,7 @@ fn apply_range_styles<'a>(
     let mut underlines = HashMap::new();
     let mut overrides = HashMap::new();
     for (span, source) in block.edited_spans(draft) {
-        let original = lines.get(source).unwrap_or(first);
-        let source_start = block.spans.iter().find(|(_, index)| *index == source).map_or(span.start, |(range, _)| range.start);
         let mut edges = vec![span.start, span.end];
-        for (paint, _) in original.origin.state.logical_paints.iter() {
-            for edge in [paint.start, paint.end] {
-                if let Some(edge) = source_start.checked_add(edge)
-                    && span.contains(&edge)
-                {
-                    edges.push(edge);
-                }
-            }
-        }
         for range in ranges {
             for edge in [range.range.start, range.range.end] {
                 if span.contains(&edge) {
@@ -773,11 +572,8 @@ fn apply_range_styles<'a>(
         for bounds in edges.windows(2) {
             let (Some(start), Some(end)) = (bounds.first().copied(), bounds.get(1).copied()) else { continue };
             let selected = ranges.iter().find(|range| range.range.contains(&start)).copied();
-            let inherited = start
-                .checked_sub(source_start)
-                .and_then(|offset| original.origin.state.logical_paints.iter().find(|(range, _)| range.contains(&offset)).map(|(_, color)| *color));
             let mut index = source;
-            if selected.is_some() || inherited.is_some() || style.family.is_some() || style.bold.is_some() {
+            if selected.is_some() || style.family.is_some() || style.bold.is_some() {
                 let default_range = RangeStyle {
                     range: start..end,
                     family: None,
@@ -805,8 +601,7 @@ fn apply_range_styles<'a>(
                 if let Some(size) = range.size {
                     line.size = size;
                 }
-                line.origin.state.logical_paints = Default::default();
-                if let Some(color) = range.color.or(inherited) {
+                if let Some(color) = range.color {
                     line.color = color;
                     line.origin.state.fill = vec![Op::new("rg", color.map(Object::Real).to_vec())];
                 }
@@ -837,7 +632,6 @@ fn shape_source(
     fonts: &Dict,
     name: &str,
     text: &str,
-    direction: pdfcraft_fonts::TextDirection,
 ) -> Result<Option<(Vec<u8>, pdfcraft_fonts::source_shaping::ShapedRun, String)>, EditError> {
     if !pdfcraft_fonts::source_shaping::required(text) {
         return Ok(None);
@@ -855,7 +649,7 @@ fn shape_source(
     for font in candidates {
         if let Some(bytes) = pdfcraft_fonts::pdf::embedded_sfnt(doc, &font)
             && pdfcraft_fonts::embedding::covers(&bytes, text)
-            && let Ok(shaped) = pdfcraft_fonts::source_shaping::shape_with_direction(&bytes, text, direction)
+            && let Ok(shaped) = pdfcraft_fonts::source_shaping::shape(&bytes, text)
         {
             return Ok(Some((bytes, shaped, family)));
         }
@@ -1103,240 +897,6 @@ fn splice_with_marker(
     data
 }
 
-/// Resolve one bidi base for each CR/LF-normalized paragraph under the caller's direction policy.
-fn paragraph_bases(draft: &str, direction: pdfcraft_fonts::TextDirection) -> Vec<pdfcraft_fonts::TextDirection> {
-    draft
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .split('\n')
-        .map(
-            |paragraph| {
-                if direction.rtl(paragraph) { pdfcraft_fonts::TextDirection::RightToLeft } else { pdfcraft_fonts::TextDirection::LeftToRight }
-            },
-        )
-        .collect()
-}
-
-/// Require uniform layout for RTL bases or RTL content without restricting pure-Latin LTR range styles.
-fn direction_needs_uniform_row(base: pdfcraft_fonts::TextDirection, text: &str) -> bool {
-    // Explicit LTR alone does not make a Latin row contextual. RTL content still
-    // needs a uniform face even when its paragraph base is forced left to right.
-    base == pdfcraft_fonts::TextDirection::RightToLeft || text.chars().any(crate::bidi::is_rtl)
-}
-
-type SourceBreaks = Vec<Option<usize>>;
-
-/// Capture source soft/hard break classifications before styling when preservation was requested.
-/// Require unchanged editor text and no width override; literal replacement drafts retain their own newline semantics.
-fn preserved_source_breaks(
-    block: &TextBlock,
-    lines: &[TextLine],
-    draft: &str,
-    implicit: bool,
-    style: &BlockStyle,
-) -> Result<Option<SourceBreaks>, EditError> {
-    // Intent belongs to the caller, not a comparison with the flattened source text.
-    if !(style.preserve_source_breaks || implicit && style.width.is_none()) {
-        return Ok(None);
-    }
-    if draft != block.editor_text || style.width.is_some() {
-        return Err(EditError::Invalid("preserving source breaks requires unchanged editor rows and no width override".into()));
-    }
-    // Capture original runs before range styling clones or changes them.
-    Ok(Some((0..block.rows.len()).map(|row| break_gap(block, lines, row)).collect()))
-}
-
-/// Map logical paragraph bases onto preserved visual rows.
-/// Soft continuations inherit their logical paragraph's base; hard breaks advance to the next logical paragraph.
-fn draft_row_bases(
-    block: &TextBlock,
-    draft: &str,
-    direction: pdfcraft_fonts::TextDirection,
-    breaks: Option<&[Option<usize>]>,
-) -> Vec<pdfcraft_fonts::TextDirection> {
-    let Some(breaks) = breaks else { return paragraph_bases(draft, direction) };
-    let logical = paragraph_bases(&block.reflow_text, direction);
-    let mut paragraph = 0usize;
-    breaks
-        .iter()
-        .enumerate()
-        .map(|(row, gap)| {
-            if row > 0 && gap.is_none() {
-                paragraph = paragraph.saturating_add(1);
-            }
-            logical.get(paragraph).copied().unwrap_or(direction)
-        })
-        .collect()
-}
-
-/// Restore captured source break kinds and separator counts on the rewritten row metadata.
-fn restore_source_breaks(breaks: Option<&[Option<usize>]>, soft: &mut [bool], gaps: &mut [usize]) {
-    let Some(breaks) = breaks else { return };
-    for (row, gap) in breaks.iter().enumerate().skip(1) {
-        if let Some(value) = soft.get_mut(row) {
-            *value = gap.is_some();
-        }
-        if let Some(value) = gaps.get_mut(row) {
-            *value = gap.unwrap_or(0);
-        }
-    }
-}
-
-/// Open ActualText only when the emitted visual string differs from its logical Unicode text.
-fn begin_logical_span(ops: &mut Vec<Op>, logical: &str, visual: &str) -> bool {
-    let changed = logical != visual;
-    if changed {
-        let mut props = Dict::new();
-        props.set(b"ActualText".to_vec(), Object::String(PdfString::text(logical)));
-        ops.push(Op::new("BDC", vec![Object::name("Span"), Object::Dict(props)]));
-    }
-    changed
-}
-
-/// Close the ActualText span only when its matching logical-text marker was emitted.
-fn end_logical_span(ops: &mut Vec<Op>, changed: bool) {
-    if changed {
-        ops.push(Op::new("EMC", vec![]));
-    }
-}
-
-/// Open the paragraph marker with explicit/stored direction metadata when that policy must survive saving.
-/// Keep Auto distinct from forced LTR/RTL instead of persisting only the resolved base.
-fn begin_direction_marker(ops: &mut Vec<Op>, marked: bool, direction: pdfcraft_fonts::TextDirection, explicit: bool) {
-    if marked && (explicit || direction != pdfcraft_fonts::TextDirection::Auto) {
-        let mut props = Dict::new();
-        props.set(b"PCTextDirection".to_vec(), Object::name(direction.name()));
-        ops.push(Op::new("BDC", vec![Object::name("P"), Object::Dict(props)]));
-    } else {
-        push_whole_paragraph_marker(ops, marked, "BMC");
-    }
-}
-
-/// Advance tracking only when a new shaped cluster begins.
-fn advance_cluster_spacing(text: &str, char_spacing: f64, word_spacing: f64, extra: &mut f64, pending: &mut f64) {
-    // The first glyph owns the cluster text; following dots/marks share its offset.
-    if !text.is_empty() {
-        *extra += *pending;
-        *pending = char_spacing * text.chars().count() as f64 + word_spacing * text.matches(' ').count() as f64;
-    }
-}
-
-/// Check every paint boundary before embedding any shaped output resources.
-fn validate_shaped_paints(
-    shaped_runs: &ShapedRunCache,
-    rows: &[Vec<StyledChar>],
-    compatible: &impl Fn(&StyledChar, &StyledChar) -> bool,
-    color_of: &impl Fn(usize) -> [f64; 3],
-) -> Result<(), EditError> {
-    for ((row_index, at), (_, run, _)) in shaped_runs {
-        let row = rows.get(*row_index).ok_or_else(|| EditError::Invalid("missing shaped row".into()))?;
-        let segment = row.get(*at..run_end(row, *at, true, compatible)).unwrap_or_default();
-        let paints = segment_paints(segment, color_of);
-        if paints.len() > 4096 {
-            return Err(EditError::Invalid("contextual paint range limit is 4096 per row".into()));
-        }
-        for glyph in &run.glyphs {
-            if !paints.iter().any(|(range, _)| range.start <= glyph.logical_range.start && range.end >= glyph.logical_range.end) {
-                return Err(EditError::Invalid(
-                    "the selected paint range splits a shaping cluster; select the whole cluster including its marks".into(),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Select source rows whose original operators can be retained unchanged.
-fn retained_rows(
-    block: &TextBlock,
-    draft: &str,
-    row_ranges: &[std::ops::Range<usize>],
-    rows: &[Vec<StyledChar>],
-    row_lines: &[usize],
-    style: &BlockStyle,
-    source_count: usize,
-) -> Vec<bool> {
-    let plain = block.text_direction == pdfcraft_fonts::TextDirection::Auto
-        && BlockStyle { ranges: Vec::new(), aligns: Vec::new(), preserve_source_breaks: false, ..style.clone() } == BlockStyle::default();
-    if plain {
-        untouched_rows(block, draft, row_ranges)
-            .into_iter()
-            .zip(rows)
-            .zip(row_lines)
-            .map(|((same, row), line)| same && row.iter().all(|c| c.1 < source_count) && style.aligns.get(*line).copied().flatten().is_none())
-            .collect()
-    } else {
-        vec![false; rows.len()]
-    }
-}
-
-/// Scalar text state needed while positioning one already-shaped run.
-struct ShapedGlyphState {
-    size: f64,
-    per_unit: f64,
-    char_spacing: f64,
-    word_spacing: f64,
-    rise: f64,
-    color: [f64; 3],
-}
-
-/// Emit positioned glyphs without changing their shaping, paint order or spacing.
-fn emit_shaped_glyphs(
-    block_ops: &mut Vec<Op>,
-    shaped: &pdfcraft_fonts::source_shaping::ShapedRun,
-    paints: &[(std::ops::Range<usize>, [f64; 3])],
-    shown: &Metrics,
-    state: ShapedGlyphState,
-) -> Result<f64, EditError> {
-    let ShapedGlyphState { size, per_unit, char_spacing, word_spacing, rise, color } = state;
-    let n = pdfcraft_content::num;
-    // `pen`: where the next glyph would start, in thousandths of the font size.
-    let (mut pen, mut extra, mut pending, mut raised) = (0.0, 0.0, 0.0, rise);
-    let mut shown_glyphs: Vec<Object> = Vec::new();
-    let mut painted = color;
-    for (i, glyph) in shaped.glyphs.iter().enumerate() {
-        let color = paints
-            .iter()
-            .find(|(range, _)| range.contains(&glyph.logical_range.start))
-            .map(|(_, color)| *color)
-            .ok_or_else(|| EditError::Invalid("missing logical cluster paint".into()))?;
-        if color != painted {
-            if !shown_glyphs.is_empty() {
-                block_ops.push(Op::new("TJ", vec![Object::Array(std::mem::take(&mut shown_glyphs))]));
-            }
-            block_ops.push(Op::new("rg", color.into_iter().map(n).collect()));
-            painted = color;
-        }
-        advance_cluster_spacing(&glyph.text, char_spacing, word_spacing, &mut extra, &mut pending);
-        let target = (glyph.position[0] * size + extra) * per_unit;
-        let glyph_rise = rise + glyph.position[1] * size;
-        if (glyph_rise - raised).abs() > 1e-9 || shown_glyphs.len() >= 4096 {
-            if !shown_glyphs.is_empty() {
-                block_ops.push(Op::new("TJ", vec![Object::Array(std::mem::take(&mut shown_glyphs))]));
-            }
-            if (glyph_rise - raised).abs() > 1e-9 {
-                block_ops.push(Op::new("Ts", vec![n(glyph_rise)]));
-                raised = glyph_rise;
-            }
-        }
-        if (target - pen).abs() > 1e-6 {
-            shown_glyphs.push(n(pen - target));
-        }
-        let code = u16::try_from(i + 1).map_err(|_| EditError::Invalid("shaped glyph limit".into()))?;
-        shown_glyphs.push(Object::String(PdfString::literal(code.to_be_bytes().to_vec())));
-        pen = target + shown.width(u32::from(code)) * 1000.0;
-    }
-    // Retain the final cluster's trailing advance for layout/following runs.
-    extra += pending;
-    if !shown_glyphs.is_empty() {
-        block_ops.push(Op::new("TJ", vec![Object::Array(shown_glyphs)]));
-    }
-    if (raised - rise).abs() > 1e-9 {
-        block_ops.push(Op::new("Ts", vec![n(rise)]));
-    }
-    Ok(extra)
-}
-
 /// Rewrite visual rows while keeping the source style on each surviving character. Resource
 /// names may differ between Unicode subsets of the same face; encoding searches those subsets.
 pub(crate) fn rewrite_styled_block(
@@ -1350,12 +910,6 @@ pub(crate) fn rewrite_styled_block(
 ) -> Result<LineEdit, EditError> {
     let first = block.lines.first().and_then(|i| lines.get(*i)).ok_or_else(|| EditError::Invalid("the paragraph has no source runs".into()))?;
     let draft = replacement_text(block, text)?;
-    // Dispatch has validated every retained show's transform before choosing this
-    // bounded path. Preview uses this same writer on a document clone.
-    let frame_axes =
-        (!first.upright()).then(|| super::super::interp::quarter_turn_axes(Matrix(first.origin.tm).then(&Matrix(first.origin.ctm)))).flatten();
-    let frame_rect = if frame_axes.is_some() { first.frame_rect() } else { block.rect };
-    let source_breaks = preserved_source_breaks(block, lines, draft, text.is_none(), style)?;
     if has_no_effective_style_change(block, draft, style) {
         return Ok(LineEdit { substituted: None });
     }
@@ -1369,18 +923,12 @@ pub(crate) fn rewrite_styled_block(
     let p = page_dict(doc, page)?;
     let mut res = p.dict.get(b"Resources").and_then(|resource| doc.resolve(resource).as_dict().cloned()).unwrap_or_default();
     let (mut fonts, mut metrics) = page_font_metrics(doc, &res, block, lines);
-    let (dx, dy, mut width) = paragraph_geometry(doc, &p, block, style)?;
-    if frame_axes.is_some() && style.width.is_none() {
-        width = (frame_rect[2] - frame_rect[0]).clamp(1.0, 14_400.0);
-    }
-    let direction = style.direction.unwrap_or(block.text_direction);
-    let bases = draft_row_bases(block, draft, direction, source_breaks.as_deref());
+    let (dx, dy, width) = paragraph_geometry(doc, &p, block, style)?;
     let prepared = CharacterPreparation {
         doc,
         first,
         lines,
         draft,
-        bases: &bases,
         spans: styled_spans,
         style,
         overrides: &overrides,
@@ -1394,39 +942,6 @@ pub(crate) fn rewrite_styled_block(
     let size_of = |source: &TextLine, index: usize| {
         overrides.get(&index).and_then(|r| r.size).or(style.size).unwrap_or(source.size).max(0.1) / source.origin.k.max(1e-6)
     };
-    let color_of =
-        |index: usize| overrides.get(&index).and_then(|r| r.color).or(style.color).unwrap_or_else(|| lines.get(index).unwrap_or(first).color);
-    let shape_states: Vec<_> = lines
-        .iter()
-        .enumerate()
-        .map(|(index, line)| {
-            let mut state = line.origin.state.clone();
-            state.font = None;
-            state.fill.clear();
-            state.logical_paints = Default::default();
-            if let Some(value) = overrides.get(&index).and_then(|r| r.char_spacing).or(style.char_spacing) {
-                state.char_spacing = value / line.origin.k.max(1e-6);
-            }
-            if let Some(value) = overrides.get(&index).and_then(|r| r.scale).or(style.scale) {
-                state.scale = (value / 100.0).clamp(0.1, 10.0);
-            }
-            state
-        })
-        .collect();
-    let compatible = |a: &StyledChar, b: &StyledChar| {
-        let left = lines.get(a.1).unwrap_or(first);
-        let right = lines.get(b.1).unwrap_or(first);
-        a.2 == b.2
-            && size_of(left, a.1) == size_of(right, b.1)
-            && shape_states.get(a.1) == shape_states.get(b.1)
-            && left.origin.ctm == right.origin.ctm
-            && left.origin.tm.get(..4) == right.origin.tm.get(..4)
-            && left.origin.baseline == right.origin.baseline
-            && left.origin.k == right.origin.k
-            && left.paint == right.paint
-            && underlines.get(&a.1).copied().or(style.underline) != Some(true)
-            && underlines.get(&b.1).copied().or(style.underline) != Some(true)
-    };
     // A source run may carry TJ kerning/justification that is absent from its text state.
     // Keep its measured advance when rebuilding the run instead of making it wrap on entry.
     // Each font's space width, worked out once: when a font can't show a space, finding one
@@ -1439,7 +954,7 @@ pub(crate) fn rewrite_styled_block(
         if let Some(w) = spaces.borrow().get(name) {
             return *w;
         }
-        let w = source_space(doc, &fonts, name, m);
+        let w = source_space(doc, &fonts, m);
         spaces.borrow_mut().insert(name.to_owned(), w);
         w
     };
@@ -1462,15 +977,17 @@ pub(crate) fn rewrite_styled_block(
             * across(source)
             * calibration.get(&item.1).copied().unwrap_or(1.0)
     };
-    let measure = |items: &[(char, usize, String)], direction: pdfcraft_fonts::TextDirection| -> Result<f64, EditError> {
-        let contextual = pdfcraft_fonts::source_shaping::required(&items.iter().map(|item| item.0).collect::<String>());
+    let measure = |items: &[(char, usize, String)]| -> Result<f64, EditError> {
         let mut width = 0.0;
         let mut at = 0;
         while let Some(item) = items.get(at) {
-            let end = run_end(items, at, contextual, &compatible);
+            let mut end = at + 1;
+            while items.get(end).is_some_and(|v| v.1 == item.1 && v.2 == item.2) {
+                end += 1;
+            }
             let segment = items.get(at..end).unwrap_or_default();
             let string: String = segment.iter().map(|v| v.0).collect();
-            if let Some((_, shaped, _)) = shape_source(doc, &fonts, &item.2, &string, direction)? {
+            if let Some((_, shaped, _)) = shape_source(doc, &fonts, &item.2, &string)? {
                 let source = lines.get(item.1).unwrap_or(first);
                 let scale =
                     overrides.get(&item.1).and_then(|r| r.scale).or(style.scale).map_or(source.origin.state.scale, |s| (s / 100.0).clamp(0.1, 10.0));
@@ -1483,34 +1000,32 @@ pub(crate) fn rewrite_styled_block(
                     + spacing * string.chars().count() as f64
                     + source.origin.state.word_spacing * string.matches(' ').count() as f64)
                     * scale
-                    * across(source);
+                    * source.origin.k;
             } else {
-                width += plain_segment_width(segment, &advance, direction)?;
+                width += segment.iter().map(&advance).sum::<f64>();
             }
             at = end;
         }
         Ok(width)
     };
-    // Auto is a paragraph choice: a wrapped continuation beginning with a number or a
-    // different script must keep the first strong character of its logical paragraph.
-    // Keep Auto in the PDF metadata so a subsequent edit can choose a new first strong base.
-    let row_width = source_breaks.as_ref().map_or(width, |_| f64::MAX);
-    let (rows, row_ranges, row_lines, mut row_soft, mut row_gap) =
-        wrap_styled_rows(&chars, row_width, |items, paragraph| measure(items, bases.get(paragraph).copied().unwrap_or(direction)))?;
-    if frame_axes.is_some() && rows.len() != 1 {
-        return Err(EditError::Invalid(
-            "quarter-turn contextual source editing supports one row; increase its baseline width or keep the text on one row".into(),
-        ));
-    }
-    restore_source_breaks(source_breaks.as_deref(), &mut row_soft, &mut row_gap);
-    let row_direction = |row: usize| row_lines.get(row).and_then(|paragraph| bases.get(*paragraph)).copied().unwrap_or(direction);
+    let (rows, row_ranges, row_lines, row_soft, row_gap) = wrap_styled_rows(&chars, width, measure)?;
     let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
     // A row the edit doesn't reach keeps its source operators, so its kerning, TJ word gaps and
     // glyph widths stay exactly as they were instead of being rebuilt from the text state. A row
     // aligned on its own is reached; the rows around it are not.
-    let mut kept = retained_rows(block, draft, &row_ranges, &rows, &row_lines, style, source_count);
+    let plain = BlockStyle { ranges: Vec::new(), aligns: Vec::new(), ..style.clone() } == BlockStyle::default();
+    let mut kept = if plain {
+        untouched_rows(block, draft, &row_ranges)
+            .into_iter()
+            .zip(&rows)
+            .zip(&row_lines)
+            .map(|((same, row), line)| same && row.iter().all(|c| c.1 < source_count) && style.aligns.get(*line).copied().flatten().is_none())
+            .collect()
+    } else {
+        vec![false; rows.len()]
+    };
     let kept_lines: std::collections::HashSet<usize> =
         kept.iter().enumerate().filter(|(_, k)| **k).filter_map(|(r, _)| block.rows.get(r)).flatten().copied().collect();
     // The rewrite is placed after the last rewritten row unless a text-show operator there
@@ -1521,11 +1036,10 @@ pub(crate) fn rewrite_styled_block(
     // What is in force where the rewrite is drawn, and what the text after it expects.
     let after = if split { &o.state } else { &o.bt_state };
     let at = if split { start } else { o.bt_op };
-    validate_contextual_rows(&rows, &kept, |index, text| direction_needs_uniform_row(row_direction(index), text), &compatible)?;
-    let measured: Vec<_> = rows.iter().enumerate().map(|(index, row)| measure(row, row_direction(index))).collect::<Result<_, _>>()?;
-    let shaped = prepare_shaped_rows(doc, &fonts, &rows, &kept, advance, row_direction, &compatible)?;
+    validate_contextual_rows(&rows, &kept)?;
+    let measured: Vec<_> = rows.iter().map(|row| measure(row)).collect::<Result<_, _>>()?;
+    let shaped = prepare_shaped_rows(doc, &fonts, &rows, &kept, advance)?;
     let ShapedRows { runs: shaped_runs, advances: segment_advances } = shaped;
-    validate_shaped_paints(&shaped_runs, &rows, &compatible, &color_of)?;
     let glyph_resources = embed_shaped_resources(doc, &mut fonts, &shaped_runs)?;
     let n = pdfcraft_content::num;
     let mut block_ops = vec![Op::new("q", vec![])];
@@ -1541,9 +1055,9 @@ pub(crate) fn rewrite_styled_block(
     // scope so the neighbour stays out (#2517). A row left in the source stream cannot share
     // that marker, so it is omitted and geometry groups those rows as before.
     let marked = kept.iter().all(|row| !*row);
-    begin_direction_marker(&mut block_ops, marked, direction, style.direction.is_some());
+    push_whole_paragraph_marker(&mut block_ops, marked, "BMC");
     let crop = p.crop(doc);
-    let centered = frame_axes.is_none() && is_centred(block, lines, (crop[0] + crop[2]) / 2.0, first.size);
+    let centered = is_centred(block, lines, (crop[0] + crop[2]) / 2.0, first.size);
     let source_leading = block
         .rows
         .windows(2)
@@ -1562,20 +1076,19 @@ pub(crate) fn rewrite_styled_block(
     const LINE_EM: f64 = 1.2;
     let pitch = source_leading.max(row_step(style, largest, source_leading)).max(largest * LINE_EM);
     let widest = measured.iter().copied().fold(width, f64::max);
-    // A quarter-turned row runs across user space, so its reach grows by the diagonal every way.
-    let reach = crate::Reach { rect: block.rect, offset: [dx, dy], width: widest, rows: rows.len(), pitch, upright: frame_axes.is_none() };
+    // This path lays rows out along user-space baselines, so the paragraph is upright here.
+    let reach = crate::Reach { rect: block.rect, offset: [dx, dy], width: widest, rows: rows.len(), pitch, upright: true };
     let over = crate::revealed_under_paint(doc, page, block.invisible, reach.bounds(), &ops, at);
     let initial = TextState::initial();
     let drawn_from = if over { &initial } else { after };
-    let mut baseline = if frame_axes.is_some() { first.frame_origin().1 } else { first.origin.baseline };
+    let mut baseline = first.origin.baseline;
     for (row_index, row) in rows.iter().enumerate() {
-        let visual_direction = row_direction(row_index);
         let anchor = block.rows.get(row_index).and_then(|r| r.first()).and_then(|i| lines.get(*i));
         if style.line_spacing.is_none()
             && style.size.is_none()
             && let Some(anchor) = anchor
         {
-            baseline = if frame_axes.is_some() { anchor.frame_origin().1 } else { anchor.origin.baseline };
+            baseline = anchor.origin.baseline;
         }
         let anchor = anchor.unwrap_or(first);
         if kept.get(row_index).copied().unwrap_or(false) {
@@ -1590,9 +1103,8 @@ pub(crate) fn rewrite_styled_block(
         // The row's own alignment, or the paragraph's.
         let asked = row_lines.get(row_index).and_then(|l| style.aligns.get(*l)).copied().flatten().or(style.align);
         let align = asked.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
-        let original_rect =
-            if frame_axes.is_some() { frame_rect } else { block.rows.get(row_index).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect) };
-        let left = if style.width.is_none() && asked.is_none() { original_rect[0] } else { frame_rect[0] };
+        let original_rect = block.rows.get(row_index).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect);
+        let left = if style.width.is_none() && asked.is_none() { original_rect[0] } else { block.rect[0] };
         let available = if style.width.is_none() && asked.is_none() { original_rect[2] - original_rect[0] } else { width };
         let mut x = left
             + match align {
@@ -1600,12 +1112,14 @@ pub(crate) fn rewrite_styled_block(
                 crate::added::Align::Right => available - w,
                 _ => 0.0,
             };
-        let contextual = pdfcraft_fonts::source_shaping::required(&row.iter().map(|item| item.0).collect::<String>());
         let mut pos = 0;
         while pos < row.len() {
             let Some(item) = row.get(pos) else { break };
             let source = lines.get(item.1).unwrap_or(first);
-            let end = run_end(row, pos, contextual, &compatible);
+            let mut end = pos + 1;
+            while row.get(end).is_some_and(|other| other.1 == item.1 && other.2 == item.2) {
+                end += 1;
+            }
             let segment = row.get(pos..end).unwrap_or_default();
             let string: String = segment.iter().map(|c| c.0).collect();
             let m = metrics.get(&item.2).ok_or_else(|| EditError::Invalid("the paragraph font is missing".into()))?;
@@ -1625,14 +1139,7 @@ pub(crate) fn rewrite_styled_block(
             }
             let inverse = Matrix(o.ctm).invert().ok_or_else(|| EditError::Invalid("the paragraph has a singular transform".into()))?;
             let mut tm = Matrix(source.origin.tm).then(&Matrix(source.origin.ctm)).then(&inverse).0;
-            let (delta_x, delta_y) = if let Some((u, v)) = frame_axes {
-                let (source_x, source_y) = source.frame_origin();
-                let (along, across) = (x - source_x, baseline - source_y);
-                (along * u - across * v, along * v + across * u)
-            } else {
-                (x - source.origin.x, baseline - source.origin.baseline)
-            };
-            let (ax, ay) = back.apply(delta_x, delta_y);
+            let (ax, ay) = back.apply(x - source.origin.x, baseline - source.origin.baseline);
             tm[4] += ax;
             tm[5] += ay;
             let mut segment_width = segment_advances.get(&(row_index, pos)).copied().unwrap_or(0.0);
@@ -1645,28 +1152,6 @@ pub(crate) fn rewrite_styled_block(
                 let resource = glyph_resources.get(&(row_index, pos)).ok_or_else(|| EditError::Invalid("shaped font is missing".into()))?;
                 let mut properties = Dict::new();
                 properties.set(b"ActualText".to_vec(), Object::String(PdfString::text(&string)));
-                let paints = segment_paints(segment, &color_of);
-                // Standard readers continue to use ActualText; this bounded private hint
-                // preserves logical paint ownership when PdfCraft edits the paragraph again.
-                if paints.len() > 1 {
-                    properties.set(
-                        b"PCPaint".to_vec(),
-                        Object::Array(
-                            paints
-                                .iter()
-                                .map(|(range, color)| {
-                                    Object::Array(vec![
-                                        Object::Int(range.start as i64),
-                                        Object::Int(range.end as i64),
-                                        n(color[0]),
-                                        n(color[1]),
-                                        n(color[2]),
-                                    ])
-                                })
-                                .collect(),
-                        ),
-                    );
-                }
                 block_ops.push(Op::new("BDC", vec![Object::name("Span"), Object::Dict(properties)]));
                 state.font = Some((resource.clone(), size_of(source, item.1)));
                 // One text object for the run: each glyph is placed where shaping put it by a TJ
@@ -1691,33 +1176,52 @@ pub(crate) fn rewrite_styled_block(
                 block_ops.push(Op::new("BT", vec![]));
                 block_ops.extend(state.ops());
                 block_ops.push(Op::new("Tm", tm.iter().map(|v| n(*v)).collect()));
-                let extra = emit_shaped_glyphs(
-                    &mut block_ops,
-                    shaped,
-                    &paints,
-                    &shown,
-                    ShapedGlyphState { size, per_unit, char_spacing, word_spacing, rise, color: color_of(item.1) },
-                )?;
+                // `pen`: where the next glyph would start, in thousandths of the font size.
+                let (mut pen, mut extra, mut raised) = (0.0, 0.0, rise);
+                let mut shown_glyphs: Vec<Object> = Vec::new();
+                for (i, glyph) in shaped.glyphs.iter().enumerate() {
+                    let target = (glyph.position[0] * size + extra) * per_unit;
+                    let glyph_rise = rise + glyph.position[1] * size;
+                    if (glyph_rise - raised).abs() > 1e-9 || shown_glyphs.len() >= 4096 {
+                        if !shown_glyphs.is_empty() {
+                            block_ops.push(Op::new("TJ", vec![Object::Array(std::mem::take(&mut shown_glyphs))]));
+                        }
+                        if (glyph_rise - raised).abs() > 1e-9 {
+                            block_ops.push(Op::new("Ts", vec![n(glyph_rise)]));
+                            raised = glyph_rise;
+                        }
+                    }
+                    if (target - pen).abs() > 1e-6 {
+                        shown_glyphs.push(n(pen - target));
+                    }
+                    let code = u16::try_from(i + 1).map_err(|_| EditError::Invalid("shaped glyph limit".into()))?;
+                    shown_glyphs.push(Object::String(PdfString::literal(code.to_be_bytes().to_vec())));
+                    pen = target + shown.width(u32::from(code)) * 1000.0;
+                    extra += char_spacing * glyph.text.chars().count() as f64 + word_spacing * glyph.text.matches(' ').count() as f64;
+                }
+                if !shown_glyphs.is_empty() {
+                    block_ops.push(Op::new("TJ", vec![Object::Array(shown_glyphs)]));
+                }
+                if (raised - rise).abs() > 1e-9 {
+                    block_ops.push(Op::new("Ts", vec![n(rise)]));
+                }
                 block_ops.push(Op::new("ET", vec![]));
                 (state.char_spacing, state.word_spacing) = (char_spacing, word_spacing);
                 block_ops.push(Op::new("EMC", vec![]));
-                segment_width = (shaped.advance * size + extra) * state.scale * across(source);
+                segment_width = (shaped.advance * size + extra) * state.scale * source.origin.k;
             } else {
-                let visual = visual_direction.visual_plain(&string).map_err(|message| EditError::Invalid(message.into()))?;
-                let replacement = begin_logical_span(&mut block_ops, &string, &visual);
                 block_ops.push(Op::new("BT", vec![]));
                 block_ops.extend(state.ops());
                 block_ops.push(Op::new("Tm", tm.iter().map(|v| n(*v)).collect()));
                 block_ops.extend(source_show(
                     m,
-                    &visual,
+                    &string,
                     size_of(source, item.1),
-                    spaces.borrow().get(&item.2).copied().unwrap_or_else(|| source_space(doc, &fonts, &item.2, m)),
+                    spaces.borrow().get(&item.2).copied().unwrap_or_else(|| source_space(doc, &fonts, m)),
                     state.char_spacing,
                     state.word_spacing,
                 )?);
                 block_ops.push(Op::new("ET", vec![]));
-                end_logical_span(&mut block_ops, replacement);
             }
             if underlines.get(&item.1).copied().or(style.underline) == Some(true) {
                 let [r, g, b] = overrides.get(&item.1).and_then(|r| r.color).or(style.color).unwrap_or(source.color);

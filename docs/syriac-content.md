@@ -1,11 +1,36 @@
 # Syriac PDF content
 
+## Current scope (2026-11-06)
+
+PR #5914 is being narrowed to Syriac against upstream `f42fda734243b66f54db87923d7c981d5221419e` (the content source in v0.19.0). The previous combined Arabic/Syriac implementation is preserved separately. Arabic generated appearances, explicit direction controls, IME changes and shared source-editing extensions are outside this contribution. Existing upstream Arabic and Hebrew support remains in place.
+
+The Syriac scope includes Estrangela, Eastern and Western families; added text and supported upright source edits; forms, FreeText/callouts, typed signature artwork, headers/footers and watermarks. It does not claim Syriac interface translation, keyboard composition, full Syriac Supplement coverage or native-reader approval.
+
+The official release font pin does not contain the Syriac faces. [craft-fonts #61](https://github.com/storytold/craft-fonts/pull/61) and adoption of that font input remain release dependencies; this feature PR does not modify CI workflows.
+
+
 This contribution is made in honor of the Maronite Church and its cultural history.
 
 This package adds Syriac document text through the existing engine and automation
 tools. It does not translate the interface or qualify Windows/browser keyboard
 composition. Content editors receive the approved Syriac glyph fallback so their
 text can be displayed; no interface language or layout is added.
+
+## Refocused validation (2026-11-07)
+
+With the pinned companion and `PDFCRAFT_REQUIRE_SYRIAC=1`, the refocused tree passes
+four font/budget tests, all 102 annotation tests, 12 focused Syriac form tests and
+all four Syriac automation scenarios (122 tests). The automation cases cover
+rendered family differences, logical text/search, history, existing paragraph
+editing, generated surfaces, invalid-selector atomicity and save/reopen.
+The three changed content crates also pass the WASM check. This run does not use
+the static Arabic test oracle. These are local checks with the companion input;
+they do not establish official-release availability or native-reader acceptance.
+
+The oval family-reselection regression failed before the inner-box correction;
+repeated oval/circle selection passes afterwards. The family-persistence fixture
+uses a 12-point comb value in its 15-point cells; it keeps asserting no warning.
+Separate form regressions retain the real fixed-size comb overflow check.
 
 ## Font input and shaping
 

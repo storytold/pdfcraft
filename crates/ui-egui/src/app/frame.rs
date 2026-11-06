@@ -93,10 +93,7 @@ impl PdfCraftApp {
 }
 
 impl PdfCraftApp {
-    /// Finalize input ownership and visible render caches after widgets run, suspending hidden documents before admitting textures.
     pub(crate) fn finish_render_frame(&mut self, ctx: &egui::Context) {
-        // All text widgets have run, including form fields, dialogs and search.
-        crate::text_input::finish_frame(ctx);
         self.finish_document_copy(ctx);
         // The Combine grid's thumbnails, whichever tab shows (renders under way still finish).
         self.combine_thumbs_frame(ctx);

@@ -721,11 +721,6 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                     .id(input)
                     .show(ui);
                 let resp = output.response;
-                // Native TextEdit promotes its preedit to Selection on a caret click/drag.
-                // Mirror that completed native transition; never change text or IME ranges.
-                if resp.clicked() || resp.dragged() {
-                    crate::text_input::forget(ui.ctx(), input);
-                }
                 if let Some(cursor) = output.cursor_range {
                     let chars = cursor.as_sorted_char_range();
                     let byte = |index: usize| t.text.char_indices().nth(index).map_or(t.text.len(), |(at, _)| at);
@@ -750,9 +745,6 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                     .corner_radius(CornerRadius::same(6))
                     .inner_margin(2)
                     .show(ui, |ui| {
-                        if crate::text_input::composing_for(ui.ctx(), input) {
-                            ui.disable();
-                        }
                         ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
                         ui.horizontal(|ui| {
                             done = crate::icons::button(ui, "check", 24.0, false, tl!("Done adding text")).clicked();
@@ -765,9 +757,8 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
                 // that is not a click away.
                 let on_buttons = ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| buttons.contains(p))
                     || crate::edit_text_ui::focus_pos(ui.ctx()).is_some_and(|p| buttons.contains(p));
-                let composing = crate::text_input::composing_for(ui.ctx(), input);
-                cancel |= !composing && ui.input(|i| i.key_pressed(egui::Key::Escape));
-                commit = !composing && (done || resp.lost_focus() && !on_buttons && !outside && !view.objects.hold_editor);
+                cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
+                commit = done || resp.lost_focus() && !on_buttons && !outside && !view.objects.hold_editor;
             });
             // Page text is drawn with the standard fonts; anything else would be saved as `?` (#125).
             undrawable = self::undrawable(t, memo);
@@ -842,7 +833,6 @@ fn aligned_galley(
     let job = |text: &str, align: TextAlign| {
         let mut job = spaced_job(text, font, color, letter_spacing, wrap, egui::Align::Min);
         job.justify = align == TextAlign::Justify;
-        job.direction = crate::bidi::text_direction(style.direction);
         job
     };
     let uniform = text.split('\n').enumerate().all(|(i, _)| style.paragraph_align(i) == style.align);
@@ -875,9 +865,7 @@ fn aligned_galley(
         }
         start = end + 1;
     }
-    let mut whole = spaced_job(text, font, color, letter_spacing, wrap, egui::Align::Min);
-    whole.direction = crate::bidi::text_direction(style.direction);
-    let whole = std::sync::Arc::new(whole);
+    let whole = std::sync::Arc::new(spaced_job(text, font, color, letter_spacing, wrap, egui::Align::Min));
     std::sync::Arc::new(egui::Galley::concat(whole, &galleys, ui.ctx().pixels_per_point()))
 }
 

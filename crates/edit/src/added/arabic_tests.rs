@@ -6,29 +6,6 @@ use std::cell::Cell;
 
 use super::*;
 
-/// Supplementary Arabic selects the Arabic shaper, with a specific refusal when its face lacks a glyph.
-#[test]
-fn extended_arabic_font_routing_keeps_missing_glyphs_explicit() {
-    for c in ['\u{0870}', '\u{10ec2}', '\u{1ee00}', '\u{fe8f}'] {
-        assert!(super::layout::is_arabic(c), "{c:?} missed the Arabic font route");
-        let text = c.to_string();
-        let t = AddedText { text: text.clone(), ..item() };
-        let result = super::layout::shaped_layout(&t, &text, true);
-        if pdfcraft_fonts::arabic_has(c) {
-            let (pieces, _) = result.unwrap();
-            assert!(pieces.iter().all(|p| matches!(p, Piece::Shaped(clusters) if clusters.iter().all(|c| c.script == ShapedScript::Arabic))));
-            assert_eq!(super::layout::first_undrawable(&t), None);
-        } else {
-            let Err(error) = result else { panic!("missing Arabic glyph was silently accepted") };
-            assert!(error.to_string().contains("Arabic"));
-            assert_eq!(super::layout::first_undrawable(&t), Some(c));
-        }
-    }
-    for c in ['A', '\u{0710}', '\u{0860}', '\u{0780}', '\u{07ca}', '\u{feff}'] {
-        assert!(!super::layout::is_arabic(c), "{c:?} must not select the Arabic face");
-    }
-}
-
 /// Regression fingerprint for the small-item fixture: drawing bytes, font map and document
 /// objects, with generated streams decoded so Flate backend selection cannot change the hash.
 // Re-pinned when the standard-14 metrics became exact (F1). The Latin run in the fingerprinted

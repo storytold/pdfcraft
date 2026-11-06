@@ -191,12 +191,6 @@ impl DocView {
         }
     }
 
-    /// → goes forward, except in right-to-left two-page view, where the next page is to the left (#2339).
-    pub(crate) fn horizontal_arrow_goes_forward(&self, right: bool) -> bool {
-        let rtl = self.rtl_pages && self.layout == PageLayout::TwoUp;
-        if right { !rtl } else { rtl }
-    }
-
     /// Next page (`true`) or previous page. In two-page view this moves a whole spread: the other
     /// page of the spread is already on screen, so stepping to it wouldn't move the view (#70).
     pub fn step_page(&mut self, forward: bool) {
@@ -358,7 +352,6 @@ fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) 
     }
 }
 
-/// Route viewer shortcuts while respecting editor ownership and the selected two-page reading order.
 pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_speed::ScrollSpeed) {
     use egui::{Key, KeyboardShortcut, Modifiers};
     if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::F))) {
@@ -452,8 +445,7 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     if key(Key::ArrowRight) && sideways(view, true) {
         view.key_side += line;
     } else if key(Key::ArrowRight) || (key(Key::PageDown) && (command || !scrolls)) {
-        // Horizontal arrows follow RTL page order; Page Down stays in document order.
-        view.step_page(!key(Key::ArrowRight) || view.horizontal_arrow_goes_forward(true));
+        view.step_page(true);
         if key(Key::ArrowRight) {
             at_edge(view, true);
         }
@@ -461,7 +453,7 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     if key(Key::ArrowLeft) && sideways(view, false) {
         view.key_side -= line;
     } else if key(Key::ArrowLeft) || (key(Key::PageUp) && (command || !scrolls)) {
-        view.step_page(key(Key::ArrowLeft) && view.horizontal_arrow_goes_forward(false));
+        view.step_page(false);
         if key(Key::ArrowLeft) {
             at_edge(view, false);
         }

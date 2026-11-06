@@ -588,9 +588,6 @@ pub struct Style {
     pub width: f64,
     /// Interior fill for rectangles and ovals (`/IC`), background for text boxes.
     pub fill: Option<Rgb>,
-    /// Document face for Syriac FreeText or an initially outlined typed signature.
-    /// `None` keeps the default Estrangela face and makes no request on other shapes.
-    pub syriac_family: Option<pdfcraft_fonts::SyriacFamily>,
     /// A text box's, typewriter text's or callout's border colour where it differs from the
     /// text's (`None`: the text colour), the stroking colour in its `/DA`.
     pub border_color: Option<Rgb>,
@@ -601,6 +598,9 @@ pub struct Style {
     pub fill_opacity: Option<f64>,
     /// A text box's text's own opacity, 0–1 (`/PCTextOpacity`); `None`: as the fill's.
     pub text_opacity: Option<f64>,
+    /// Document face for Syriac FreeText or an initially outlined typed signature.
+    /// `None` keeps the default Estrangela face and makes no request on other shapes.
+    pub syriac_family: Option<pdfcraft_fonts::SyriacFamily>,
 }
 
 /// The style properties changed by one annotation edit. `None` leaves a property unchanged.

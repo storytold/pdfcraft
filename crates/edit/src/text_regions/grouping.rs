@@ -1,11 +1,9 @@
 use super::{BlockStyle, HashMap, Matrix, TextBlock, TextLine, paragraph_separator, same_base_font, same_font, strip_subset_tag, union};
 
-/// Check whether two runs share compatible scope, direction, paint and transformed writing axes.
 fn same_plane(a: &TextLine, b: &TextLine) -> bool {
     let at = Matrix(a.origin.tm).then(&Matrix(a.origin.ctm));
     let bt = Matrix(b.origin.tm).then(&Matrix(b.origin.ctm));
     a.scope == b.scope
-        && a.text_direction == b.text_direction
         && a.paint == b.paint
         && [0, 2].iter().all(|axis| {
             let ax = at.0.get(*axis).copied().unwrap_or(0.0);
@@ -236,8 +234,6 @@ fn starts_list_item(row: &[usize], lines: &[TextLine]) -> bool {
     row.iter().filter_map(|i| lines.get(*i)).map(|l| l.text.trim_start()).find(|t| !t.is_empty()).is_some_and(opens_with_marker)
 }
 
-/// Group compatible runs and rows into paragraph blocks.
-/// Writing plane, source region and paragraph direction constrain joins; retain source indexes, physical editor rows and the text used to reflow soft wraps.
 fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
     let mut rows: Vec<Vec<usize>> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
@@ -355,7 +351,6 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 spans: Vec::new(),
                 rect,
                 base_font: first.base_font.clone(),
-                text_direction: first.text_direction,
                 size: first.size,
                 bold: first.bold,
                 italic: first.italic,
@@ -440,7 +435,7 @@ fn reflow_text(block: &TextBlock, lines: &[TextLine]) -> String {
 /// spaces — the count a `/PCSoft` marker recorded ([`TextLine::soft_gap`]), or, for a line this
 /// app did not mark (a file written elsewhere, or an older save), a single space when the
 /// geometry looks like an ordinary wrapped body line (`#2529`).
-pub(super) fn break_gap(block: &TextBlock, lines: &[TextLine], row_index: usize) -> Option<usize> {
+fn break_gap(block: &TextBlock, lines: &[TextLine], row_index: usize) -> Option<usize> {
     let line = block.rows.get(row_index).and_then(|row| row.first()).and_then(|i| lines.get(*i))?;
     if line.hard_break {
         return None;

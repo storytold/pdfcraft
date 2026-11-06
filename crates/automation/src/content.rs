@@ -55,9 +55,6 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
     if let Some(c) = a.opt_str("color")? {
         t.color = parse_color(c)?;
     }
-    if let Some(direction) = a.opt_str("direction")? {
-        t.direction = parse_direction(direction)?;
-    }
     if let Some(al) = a.opt_str("align")? {
         t.align = parse_align(al)?;
         // The whole box: no paragraph keeps an alignment of its own unless `aligns` gives it one.
@@ -74,17 +71,6 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
         t.char_spacing = c;
     }
     Ok(())
-}
-
-/// Strict public argument parser; malformed values cannot silently become Auto.
-pub(crate) fn parse_direction(value: &str) -> Result<pdfcraft_engine::TextDirection> {
-    use pdfcraft_engine::TextDirection as D;
-    match value {
-        "auto" => Ok(D::Auto),
-        "ltr" => Ok(D::LeftToRight),
-        "rtl" => Ok(D::RightToLeft),
-        _ => Err(bad("direction must be auto, ltr or rtl")),
-    }
 }
 
 /// Parse an optional family selector and reject unknown names with the supported choices.
@@ -127,8 +113,7 @@ pub(crate) fn opt_aligns(a: &Args) -> Result<Option<Vec<Option<TextAlign>>>> {
 }
 
 impl Automation {
-    /// List added page items with per-page indexes, stored text style and paragraph direction.
-    /// Geometry is reported in displayed-page coordinates so the same indexes can drive later edits.
+    /// List added text and images in displayed coordinates, including each text item's stored family.
     pub(crate) fn content_list(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let mut per_page: std::collections::HashMap<usize, usize> = Default::default();
@@ -151,7 +136,6 @@ impl Automation {
                         v["bold"] = json!(t.bold);
                         v["italic"] = json!(t.italic);
                         v["char_spacing"] = json!(t.char_spacing);
-                        v["direction"] = json!(t.direction.name().to_ascii_lowercase());
                     }
                     AddedContent::Image(_) => v["type"] = json!("image"),
                 }
@@ -211,8 +195,8 @@ impl Automation {
         Ok((page, index as usize - 1, it.content.clone(), ph))
     }
 
-    /// Validate and apply changes to one added text or image item.
-    /// Text-only and image-only options are checked before dispatch; omitted style fields retain the stored settings.
+    /// Update added content while retaining unspecified text styles and paragraph alignments.
+    /// Validate text-only and image-only options before dispatching the corresponding edits.
     pub(crate) fn content_update(&mut self, a: &Args) -> Result<Value> {
         let (page, index, content, ph) = self.item(a)?;
         let mut content = match rect_arg(a, "rect")? {
@@ -235,11 +219,9 @@ impl Automation {
                 if a.get("text").is_some() {
                     return Err(bad("images have no text"));
                 }
-                if ["font", "syriac_family", "size", "bold", "italic", "color", "align", "aligns", "char_spacing", "direction"]
-                    .iter()
-                    .any(|k| a.get(k).is_some())
+                if ["font", "syriac_family", "size", "bold", "italic", "color", "align", "aligns", "char_spacing"].iter().any(|k| a.get(k).is_some())
                 {
-                    return Err(bad("font, syriac_family, size, bold, italic, color, align, aligns, char_spacing and direction apply to text"));
+                    return Err(bad("font, syriac_family, size, bold, italic, color, align, aligns and char_spacing apply to text"));
                 }
                 if let Some(deg) = a.opt_int("rotate")? {
                     if deg.rem_euclid(90) != 0 {

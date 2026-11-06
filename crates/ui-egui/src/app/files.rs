@@ -63,7 +63,7 @@ impl PdfCraftApp {
             Some((info, (page, dest))) if !self.always_default_view => view.go_to_dest(page, dest, info),
             Some((_, (page, _))) if page > 0 => view.go_to_page(page),
             None if v.page > 0 && v.page < pages => view.go_to_page(v.page),
-            Some(_) | None => {}
+            _ => {}
         }
     }
 

@@ -7,7 +7,6 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-pub mod appearance_text;
 #[cfg(test)]
 mod cjk_scripts;
 mod cluster_font;
@@ -24,8 +23,6 @@ mod shaping;
 mod syriac;
 pub use syriac::SyriacFamily;
 pub mod source_shaping;
-pub mod text_direction;
-pub use text_direction::TextDirection;
 mod std14;
 mod std14_metrics;
 pub use craft::{
@@ -40,10 +37,10 @@ pub use script::{
     script_missing, script_missing_for_family, script_outline, script_outline_for_family,
 };
 pub use shaping::{
-    ShapedCluster, ShapedScript, arabic_bold_available, arabic_glyph, arabic_has, hebrew_has, shape_arabic, shape_arabic_bold, shape_hebrew,
-    shape_syriac, shape_syriac_for_family, shape_thai, shaped_bounds, shaped_glyph, syriac_has, syriac_has_for_family, thai_has,
+    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, hebrew_has, shape_arabic, shape_hebrew, shape_syriac, shape_syriac_for_family, shape_thai,
+    shaped_glyph, syriac_has, syriac_has_for_family, thai_has,
 };
-pub use std14::{Match as Std14Match, Std14};
+pub use std14::Std14;
 
 /// Advance of `s` in Helvetica at `size` points, using the exact standard-14 metrics.
 ///

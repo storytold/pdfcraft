@@ -1,8 +1,5 @@
 # Editing existing text and source subsets
 
-For the supported Arabic features, exact verification results and remaining limits,
-see [Arabic feature record](arabic-features.md).
-
 Click a text region in **Edit a PDF → Edit text and images**. One editor contains its
 source rows and mixed styles. Embedded TrueType and OpenType/CFF faces are used in memory;
 source font programs, colour, size and baseline anchors stay intact. A textless preview
@@ -77,23 +74,11 @@ a second bidi reversal; adjacent visual glyph runs still recover their own readi
 Only right-to-left ActualText is kept apart this way: left-to-right spans, such as the Latin
 ligatures (`fi`, `fl`) Word and Chrome wrap in ActualText mid-word, join their line as before.
 
-## Paragraph direction and layout limits
-
-Auto/LTR/RTL chooses the paragraph's base direction independently of physical alignment.
-For existing paragraphs, explicit Auto/LTR/RTL changes, including a reset to Auto,
-are refused for general turned source baselines and legacy visual-order Indic fonts.
-A uniform single-row baseline at a quarter turn supports both an explicit direction
-change and edits that retain its saved direction. Other turned paragraphs retaining
-non-Auto direction are refused before any document mutation. Ordinary automatic
-single-style edits retain their existing turned-text and legacy Indic paths.
-
 A justified paragraph stretches each row but its last to the paragraph's width by widening its
 spaces. Word spacing (`Tw`) widens only single-byte code 32, so where the font shows a space with
 another code (a composite font, the generated Type 3 fallback) each space is followed by a `TJ`
-adjustment instead. Justification of styled or explicit-direction existing paragraphs is
-refused. Selected-row alignment of existing paragraphs is also refused until its
-intent can be preserved across editing sessions. Whole-paragraph alignment remains
-available where the selected layout path supports it.
+adjustment instead. Justifying a paragraph with several formats in it is not supported yet: it is
+left-aligned.
 
 For headless editing, use `text_font_files` → `text_font_import` → `text_fonts` and pass a
 resource to `text_edit.font_resource`. `text_edit.ranges` holds selected range formatting.

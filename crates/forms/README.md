@@ -8,13 +8,6 @@ comb cells and push-button captions with the optional craft-fonts Syrc faces.
 Password fields retain masking. The immutable legacy appearance helper cannot
 allocate those glyph resources. See [supported content and limits](../../docs/syriac-content.md).
 
-Auto-direction text, combo, list and comb fields also have an Arabic fallback when
-their selected encoding cannot represent the effective displayed text. Multiline
-drawing and fitting share row metrics; list selections and comb marks retain their
-semantics. Encodable selected fonts retain their appearance and metrics.
-Explicit-direction Arabic form shaping remains outside this fallback; see
-[Arabic generated appearances](../../docs/arabic-generated-appearances.md).
-
 ## API
 
 ```rust
@@ -90,25 +83,6 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   dictionary keys are preserved. It is mutually exclusive with the complete `look` replacement.
   Use the engine's `Edit::Batch` to change several fields atomically in one undo step.
 - `/RV` (rich text) is removed when a value is set so it can't contradict `/V`.
-- `Field::text_direction` reads the inherited PdfCraft `PCTextDirection` override.
-  `FieldProps::text_direction` sets Auto/LTR/RTL for text and choice fields,
-  independently of `/Q` alignment and logical `/V`. Auto writes an explicit local
-  override of any inherited direction. Simple appearance text uses Unicode bidi
-  ordering and logical `/ActualText` when reordered; passwords retain masking.
-  This does not supply complex Arabic shaping or new form fonts. Existing
-  unsupported-character warnings still apply. Explicit overrides on comb fields
-  are refused. Directional text is bounded to 262,144 UTF-8 bytes; a loaded
-  oversized appearance reports `Overflow::DirectionBudget` without changing `/V`.
-  Explicit-direction simple appearances also report `Overflow::DirectionUnsupported`
-  when the displayed text requires contextual shaping, even if its encoding holds
-  every character. Filled/imported values retain their logical text and Auto-order
-  fallback. Property edits validate displayed values and final choice labels before
-  mutation. Preflight and drawing share native formatting, choice-label resolution
-  and password masking, including a format supplied in the same property edit.
-  Masked display text still obeys the row budget. When shaping is refused, the row
-  is measured in the logical order actually drawn, including mirrored characters
-  with unequal widths. Password masking and Latin labels with non-Latin export
-  identifiers remain supported. Auto retains its existing policy and is not a complex-shaping guarantee.
 - New fields follow Acrobat: names Text1, Check Box1, Group1 (radio groups), Dropdown1, List Box1,
   Button1, Date1, Signature1; `/Helv` is added to `/DR`; appearances are drawn at once. Radio
   buttons joining a group become kid widgets with their own export state. Renaming changes only

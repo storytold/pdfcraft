@@ -148,7 +148,6 @@ pub(crate) fn forget_typing_before(ctx: &egui::Context, id: egui::Id, doc: pdfcr
     // A box new to the text box starts with nothing of the last one's: no history, caret,
     // selection or rows' alignments by text.
     let (state, rows) = back.unwrap_or_default();
-    crate::text_input::forget(ctx, id);
     egui::TextEdit::store_state(ctx, id, state);
     ctx.data_mut(|d| {
         d.insert_temp(owner, doc);
@@ -289,7 +288,6 @@ impl LineEditor {
         let (l, o) = (&self.look, &self.look0);
         let mut style = pdfcraft_engine::BlockStyle {
             resource: self.font_resource.clone(),
-            direction: (l.direction != o.direction).then_some(l.direction),
             family: (l.family != o.family || self.family_chosen || l.bold != o.bold || l.italic != o.italic).then_some((l.family, l.bold, l.italic)),
             size: (self.size_chosen || l.size != o.size).then_some(l.size),
             color: (l.color != o.color).then_some(l.color),
@@ -329,9 +327,6 @@ impl LineEditor {
                 scale: style.scale.take(),
             });
         }
-        // An unchanged draft plus direction formatting is a source-row operation;
-        // explicit typing/reflow keeps its own newline semantics.
-        style.preserve_source_breaks = self.text == self.original && style.direction.is_some();
         style
     }
 
@@ -789,10 +784,6 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         // typed text is not dropped with the switched-away editor (#2022). A click on the open
         // box's own frame, which the editor's overlay does not cover, keeps it open instead.
         if let Some(open) = view.line_editor.as_ref().filter(|e| e.has_changes()) {
-            // A host preedit is a draft, not accepted document text.
-            if crate::text_input::composing_for(ui.ctx(), input_id()) {
-                return true;
-            }
             if open.page == page && open.block == hit {
                 return true;
             }
@@ -957,11 +948,6 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 }
                 look = Some((Arc::clone(&output.galley), output.galley_pos));
                 let r = output.response;
-                // Native TextEdit promotes its preedit to Selection on a caret click/drag.
-                // Mirror that completed native transition; never change text or IME ranges.
-                if r.clicked() || r.dragged() {
-                    crate::text_input::forget(ui.ctx(), input);
-                }
                 if ed.focus {
                     r.request_focus();
                     if let Some(range) = &ed.selection {
@@ -983,12 +969,11 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     ctx.request_repaint();
                 }
                 let lost = lost_focus_once(&r, &mut ed.had_focus);
-                let composing = crate::text_input::composing_for(ctx, input);
-                let esc = !composing && ui.input(|i| i.key_pressed(egui::Key::Escape));
+                let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
                 let apply = ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
                 if esc {
                     done = Some(false);
-                } else if !composing && (apply || (lost && !outside && !hold)) {
+                } else if apply || (lost && !outside && !hold) {
                     done = Some(true);
                 }
             });

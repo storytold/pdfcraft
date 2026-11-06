@@ -134,7 +134,6 @@ pub fn embed_shaped_clusters(
         Some(script) => script.font().map_or(
             match script {
                 ShapedScript::Arabic => "Arabic",
-                ShapedScript::ArabicBold => "ArabicBold",
                 ShapedScript::Hebrew => "Hebrew",
                 ShapedScript::Thai => "Thai",
                 ShapedScript::Syriac => "Syriac",
