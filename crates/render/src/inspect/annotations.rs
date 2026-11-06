@@ -1,5 +1,5 @@
 use super::core::{limited_pdf_string, pretty_date, spend};
-use super::model::{Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, link_replies};
+use super::model::{Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, Popup, RemoteDestination, link_replies};
 use super::navigation::text_string;
 use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
 
@@ -158,6 +158,29 @@ impl<'a> Inspector<'a> {
                 }
                 _ => Vec::new(),
             };
+            // Only the comment's own pop-up: a pop-up annotation whose /Parent, if any, is a
+            // reference to this comment (keep in step with `pdfcraft_annot::summaries`).
+            let own = self.resolved_id(a);
+            let is_own = |p: &&Dictionary| {
+                self.name(p, b"Subtype").as_deref() == Some("Popup")
+                    && p.get(b"Parent")
+                        .map_or(true, |parent| parent.as_reference().is_ok() && self.resolved_id(parent).is_some_and(|id| Some(id) == own))
+            };
+            // A pop-up without a `/Rect` of four numbers finite as `f32` is none, as
+            // `pdfcraft_annot::summaries` reads it: both lists of the comments agree. Its corners
+            // may come in any order.
+            let popup = d.get(b"Popup").ok().and_then(|o| self.dict(o)).filter(is_own).and_then(|p| {
+                let rect = self.resolve(p.get(b"Rect").ok()?).as_array().ok()?;
+                let nums: Vec<f32> = rect.iter().filter_map(|v| self.resolve(v).as_float().ok()).collect();
+                let [x0, y0, x1, y1] = nums[..] else { return None };
+                if !nums.iter().all(|v| v.is_finite()) {
+                    return None;
+                }
+                Some(Popup {
+                    rect: [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)],
+                    open: p.get(b"Open").ok().and_then(|o| self.resolve(o).as_bool().ok()).unwrap_or(false),
+                })
+            });
             let annotation = Annotation {
                 page,
                 subtype,
@@ -180,6 +203,7 @@ impl<'a> Inspector<'a> {
                 fill_sign,
                 no_rotate: d.get(b"F").is_ok_and(|f| draw_flags(self.resolve(f)) & 16 != 0),
                 points,
+                popup,
             };
             kept = kept.saturating_add(retained(&annotation));
             if kept > MAX_ANNOTATION_BYTES {

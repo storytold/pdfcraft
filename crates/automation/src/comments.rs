@@ -191,6 +191,8 @@ impl Automation {
                 "modified": c.modified,
                 "rect": crate::view_rect(&doc.info, c.page, c.shown_rect(doc.info.pages.get(c.page).map_or(0, |p| p.rotation))),
                 "color": c.color.map(hex),
+                // Unchanged on a page the viewer could not read, as `rect` is.
+                "popup": c.popup.map(|w| json!({ "rect": crate::view_rect(&doc.info, c.page, w.rect), "open": w.open })),
             });
             // A text box's or typed text's oval or circle (a rectangle is not reported).
             if c.subtype == "FreeText"
@@ -692,6 +694,17 @@ impl Automation {
         let marked = a.opt_bool("marked")?.unwrap_or(true);
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
         self.apply(a, Edit::MarkAnnotation { page, index, marked, author })
+    }
+
+    pub(crate) fn comment_popup(&mut self, a: &Args) -> Result<Value> {
+        let (page, index) = self.comment_target(a)?;
+        let info = self.doc(a)?.info.pages[page].clone();
+        let open = a.opt_bool("open")?;
+        let rect = a.nums::<4>("rect")?.map(|r| rect_to_user(&info, r));
+        if open.is_none() && rect.is_none() {
+            return Err(ToolError::InvalidArgs("nothing to change: pass open and/or rect".into()));
+        }
+        self.apply(a, Edit::SetAnnotationPopup { page, index, rect, open })
     }
 
     pub(crate) fn comment_lock(&mut self, a: &Args) -> Result<Value> {

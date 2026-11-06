@@ -168,6 +168,15 @@ impl PdfCraftApp {
             }
             _ => Vec::new(),
         };
+        // The comments the pop-ups hold unsaved text or a drag for, to see afterwards whether
+        // their places still name them (pages may move, come or go).
+        let popups_before: Vec<pdfcraft_render::Annotation> = match (self.views.get(i), self.session.get(id)) {
+            (Some(v), Some(d)) => {
+                let keys = v.comments.popup_keys();
+                d.info.annotations.iter().filter(|a| keys.contains(&(a.page, a.index))).cloned().collect()
+            }
+            _ => Vec::new(),
+        };
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
                 let Some(doc) = self.session.get(id) else { return true };
@@ -191,8 +200,12 @@ impl PdfCraftApp {
                 view.move_background.committed(&edit, doc.edit_generation());
                 view.text_background.committed(&edit);
                 if let Some(page) = comment_page(&edit).or_else(|| content_page(&edit)) {
-                    // Comment and content edits change one page: keep every other raster.
-                    view.page_changed(page);
+                    // Comment and content edits change one page: keep every other raster. Opening,
+                    // closing or moving a pop-up changes none: the window is drawn over the page, and
+                    // a /Popup annotation paints nothing in the raster (ISO 32000-2 §12.5.6.14).
+                    if !matches!(edit, Edit::SetAnnotationPopup { .. }) {
+                        view.page_changed(page);
+                    }
                 } else if let Some(form_before) = form_before
                     && doc.info.pages.len() == page_count_before
                     && doc.xfa.is_some() == had_xfa
@@ -209,6 +222,10 @@ impl PdfCraftApp {
                 }
                 if matches!(edit, Edit::AddAnnotation(_)) {
                     view.comments.comment_added();
+                }
+                // A deletion moves the pop-ups' state with its comments (`annotation_deleted`).
+                if !matches!(edit, Edit::DeleteAnnotation { .. }) {
+                    view.comments.popups_after_edit(&popups_before, &info.annotations);
                 }
                 // Keep the pages the user acted on selected, where they now are.
                 select_after_edit(view, &edit, info, &annots_before, self.quick_tool);
@@ -925,6 +942,7 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::SetAnnotationStatus { page, .. }
         | Edit::MoveAnnotation { page, .. }
         | Edit::ReshapeAnnotation { page, .. }
+        | Edit::SetAnnotationPopup { page, .. }
         | Edit::ResizeAnnotation { page, .. }
         | Edit::StyleAnnotation { page, .. }
         | Edit::FillAnnotation { page, .. }
