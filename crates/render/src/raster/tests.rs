@@ -8876,6 +8876,108 @@ trailer << /Root 1 0 R >>
     }
 }
 
+/// ISO 32000-2 §11.6.4.4: the fill and stroke opacity (`ca`, `CA`) in effect when a tiling
+/// pattern paints apply to the whole pattern, as to a solid colour or a shading pattern. A
+/// coloured pattern drew opaque whatever the opacity, and an uncoloured one took the fill
+/// opacity current at `scn`, so a `gs` after it had no effect. MuPDF and Ghostscript draw every
+/// band below at 25 %, except the uncoloured stroke, which takes its own 75 % stroke opacity
+/// under a 25 % fill opacity (so a stroke that took `ca` would show). Poppler and PDFium don't
+/// follow the stroke opacity for a pattern: the coloured stroke comes out opaque and the
+/// uncoloured one at `ca`.
+#[test]
+fn tiling_pattern_uses_the_alpha_current_at_paint_time() {
+    let content = "q /F1 gs /Pattern cs /P0 scn 0 80 100 15 re f Q \
+                   q /Pattern cs /P0 scn /F1 gs 0 55 100 15 re f Q \
+                   q /CS0 cs 1 0 0 /P1 scn /F1 gs 0 30 100 15 re f Q \
+                   q /Pattern CS /P0 SCN /S1 gs 10 w 0 12 m 100 12 l S Q \
+                   q /F1 gs /CS0 CS 1 0 0 /P1 SCN /S2 gs 6 w 0 23 m 100 23 l S Q \
+                   q /Pattern cs /P0 scn 0 0 10 5 re f Q";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R
+  /Resources << /ExtGState << /S1 << /CA 0.25 >> /S2 << /CA 0.75 >> /F1 << /ca 0.25 >> >> /ColorSpace << /CS0 [/Pattern /DeviceRGB] >>
+  /Pattern << /P0 5 0 R /P1 6 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >> /Length 23 >> stream
+1 0 0 rg 0 0 10 10 re f
+endstream endobj
+6 0 obj << /PatternType 1 /PaintType 2 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >> /Length 14 >> stream
+0 0 10 10 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len()
+    );
+    let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+    assert!(p.error.is_none(), "{:?}", p.error);
+    let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+    // Red at 25% over white is about (255, 191, 191); opaque red would be (255, 0, 0).
+    for (what, y) in [
+        ("coloured, /ca set before scn", 13),
+        ("coloured, /ca set after scn", 38),
+        ("uncoloured, /ca set after scn", 63),
+        ("coloured stroke, /CA set after SCN", 88),
+    ] {
+        let c = px(50, y);
+        assert!(c[0] >= 250 && (185..=197).contains(&c[1]) && (185..=197).contains(&c[2]), "{what}: {c:?}");
+    }
+    // Red at 75% over white is about (255, 64, 64): the stroke opacity, not the fill's 25%.
+    let c = px(50, 77);
+    assert!(c[0] >= 250 && (55..=73).contains(&c[1]) && (55..=73).contains(&c[2]), "uncoloured stroke, /CA set after SCN: {c:?}");
+    // Without an opacity in force the pattern stays opaque.
+    assert_eq!(px(5, 97), vec![255, 0, 0, 255], "no opacity");
+}
+
+/// The same rule where a step too large for a cell pixmap draws the cell once (#3349): the cell
+/// is rendered on its own and must take the opacity in force too, fill and stroke alike,
+/// coloured or uncoloured.
+#[test]
+fn a_tiling_pattern_drawn_once_uses_the_alpha_current_at_paint_time() {
+    let render = |content: &str| {
+        let cell = "0 0 1 rg 0 0 10 10 re f";
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R
+  /Resources << /ExtGState << /F1 << /ca 0.25 >> /S1 << /CA 0.25 >> >> /ColorSpace << /CS0 [/Pattern /DeviceRGB] >> /Pattern << /P1 5 0 R /P2 6 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 3 /BBox [0 0 10 10] /XStep 2147480100 /YStep 2147480100 /Matrix [1 0 0 -1 10 20] /Length {} >> stream
+{cell}
+endstream endobj
+6 0 obj << /Type /Pattern /PatternType 1 /PaintType 2 /TilingType 3 /BBox [0 0 10 10] /XStep 2147480100 /YStep 2147480100 /Matrix [1 0 0 -1 10 20] /Length 14 >> stream
+0 0 10 10 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len(),
+            cell.len()
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(p.error.is_none(), "{content}: {:?}", p.error);
+        p.rgba[((25 * 40 + 15) * 4)..][..4].to_vec()
+    };
+    // Blue at 25% over white is about (191, 191, 255); opaque blue would be (0, 0, 255).
+    for (what, content) in [
+        ("fill under /ca 0.25", "/F1 gs /Pattern cs /P1 scn 0 0 40 40 re f"),
+        ("stroke under /CA 0.25", "/Pattern CS /P1 SCN /S1 gs 20 w 0 15 m 40 15 l S"),
+        ("uncoloured fill, /ca set after scn", "/CS0 cs 0 0 1 /P2 scn /F1 gs 0 0 40 40 re f"),
+        ("uncoloured stroke, /CA set after SCN", "/CS0 CS 0 0 1 /P2 SCN /S1 gs 20 w 0 15 m 40 15 l S"),
+    ] {
+        let c = render(content);
+        assert!((185..=197).contains(&c[0]) && (185..=197).contains(&c[1]) && c[2] >= 250, "{what}: {c:?}");
+    }
+    assert_eq!(render("/Pattern cs /P1 scn 0 0 40 40 re f"), vec![0, 0, 255, 255], "no opacity");
+}
+
 /// ISO 32000-2 §8.5.4: `W` / `W*` clip with the current path once whichever path-painting
 /// operator ends it has painted it, `S`, `f` or `B` as much as `n`. The vendored interpreter
 /// applied the clip only on `n`: after `re W* S` everything later painted outside the clip,
