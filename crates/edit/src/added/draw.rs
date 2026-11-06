@@ -111,16 +111,20 @@ pub(super) fn draw_laid_shaped(
         out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
     }
     let paragraphs: Vec<usize> = laid.iter().map(|(_, _, p, ..)| *p).collect();
+    let mut rules = Vec::new();
     for (i, (line, rtl, _, pieces, w)) in laid.iter().enumerate() {
         // Shaped glyphs are painted in visual order. Keep the original line's typing order
         // explicitly, including marks, ligatures, digits and mixed-script punctuation.
         let logical: String = line.encode_utf16().map(|u| format!("{u:04X}")).collect();
         out.extend(format!("/Span <</ActualText <FEFF{logical}>>> BDC\n").bytes());
-        let spaces = line.matches(' ').count();
+        let spaces = word_spaces(line);
         let (x, tw) = placed(t, r, &paragraphs, i, *w, spaces, *rtl);
         let y = r[3] - (i as f64 * 1.2 + 0.95) * t.size;
         let mut pen = x;
         let mut current: Option<&str> = None;
+        // Where the line's letters begin and end, left to right as drawn: the rule skips white
+        // space at either end, and a line of nothing else has none.
+        let mut ink: Option<(f64, f64)> = None;
         for piece in pieces {
             match piece {
                 Piece::Latin(s) => {
@@ -128,7 +132,8 @@ pub(super) fn draw_laid_shaped(
                     out.extend(literal(&win_ansi(s)));
                     out.extend_from_slice(b" Tj\n");
                     current = Some(latin.as_str());
-                    pen += latin_width(t, s) + tw * s.matches(' ').count() as f64;
+                    ink = merge_ink(ink, ink_extent(t, s, pen, tw));
+                    pen += latin_width(t, s) + tw * word_spaces(s) as f64;
                 }
                 Piece::Shaped(clusters) => {
                     for c in clusters {
@@ -143,15 +148,70 @@ pub(super) fn draw_laid_shaped(
                         out.extend(format!("1 0 0 1 {} {} Tm ", n(pen), n(y)).bytes());
                         out.extend(literal(&[code]));
                         out.extend_from_slice(b" Tj\n");
+                        let before = pen;
                         pen += c.advance * t.size + t.char_spacing + if c.text == " " { tw } else { 0.0 };
+                        if !c.text.trim().is_empty() {
+                            ink = merge_ink(ink, Some((before.min(before + c.advance * t.size), before.max(before + c.advance * t.size))));
+                        }
                     }
                 }
             }
         }
         out.extend_from_slice(b"EMC\n");
+        if let Some((from, to)) = ink {
+            rules.push((from, to, y));
+        }
     }
     out.extend_from_slice(b"ET\n");
+    underline_rules(out, t, &rules);
     Ok(())
+}
+
+/// The spaces of `s` as drawn: WinAnsi writes a tab as a space, so the PDF's word spacing (`Tw`)
+/// stretches it too.
+fn word_spaces(s: &str) -> usize {
+    s.chars().filter(|c| matches!(c, ' ' | '\t')).count()
+}
+
+/// Where the letters of `s` are, left to right, drawn from `x` with `tw` added to each space:
+/// the least and the most any non-space glyph reaches. Taken glyph by glyph, so white space at
+/// either end, the spacing after the last character, and a character spacing so negative that the
+/// pen moves left all come out right. `None` for a line of white space alone.
+fn ink_extent(t: &AddedText, s: &str, x: f64, tw: f64) -> Option<(f64, f64)> {
+    let face = t.family.std14(t.bold, t.italic);
+    let mut pen = x;
+    let mut ink: Option<(f64, f64)> = None;
+    let mut buffer = [0u8; 4];
+    for c in s.chars() {
+        let glyph = face.text_width(c.encode_utf8(&mut buffer), t.size);
+        if !c.is_whitespace() {
+            ink = merge_ink(ink, Some((pen.min(pen + glyph), pen.max(pen + glyph))));
+        }
+        pen += glyph + t.char_spacing + if matches!(c, ' ' | '\t') { tw } else { 0.0 };
+    }
+    ink
+}
+
+/// The extent covering both `a` and `b`.
+fn merge_ink(a: Option<(f64, f64)>, b: Option<(f64, f64)>) -> Option<(f64, f64)> {
+    match (a, b) {
+        (Some((a0, a1)), Some((b0, b1))) => Some((a0.min(b0), a1.max(b1))),
+        (a, b) => a.or(b),
+    }
+}
+
+/// The rules under an underlined text's lines, (left, right, baseline) each: filled rectangles in
+/// the text's colour, which `ET` leaves set. Nothing for text that isn't underlined.
+fn underline_rules(out: &mut Vec<u8>, t: &AddedText, rules: &[(f64, f64, f64)]) {
+    if !t.underline {
+        return;
+    }
+    let thickness = (t.size * 0.06).max(0.4);
+    for (x0, x1, y) in rules {
+        if x1 > x0 {
+            out.extend(format!("{} {} {} {} re f\n", n(*x0), n(y - t.size * 0.12 - thickness / 2.0), n(x1 - x0), n(thickness)).bytes());
+        }
+    }
 }
 
 /// What makes two clusters the same Type 3 glyph: text, glyphs, offsets and advance (bit for bit;
@@ -300,17 +360,22 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
             }
             let all = wrapped(t);
             let paragraphs: Vec<usize> = all.iter().map(|(_, _, p)| *p).collect();
+            let mut rules = Vec::new();
             for (i, (line, ..)) in all.iter().enumerate() {
                 let w = latin_width(t, line);
                 // Baseline: 0.8 em below the line top.
                 let y = r[3] - (i as f64 * 1.2 + 0.95) * t.size;
                 // Justified: word spacing makes every line of a paragraph but its last fill the box.
-                let (x, tw) = placed(t, r, &paragraphs, i, w, line.matches(' ').count(), false);
+                let (x, tw) = placed(t, r, &paragraphs, i, w, word_spaces(line), false);
                 out.extend(format!("1 0 0 1 {} {} Tm {} Tw ", n(x), n(y), n(tw)).bytes());
                 out.extend(literal(&win_ansi(line)));
                 out.extend_from_slice(b" Tj\n");
+                if let Some((from, to)) = ink_extent(t, line, x, tw) {
+                    rules.push((from, to, y));
+                }
             }
             out.extend_from_slice(b"ET\n");
+            underline_rules(&mut out, t, &rules);
         }
         Content::Image(i) => {
             if !matches!(&*doc.get(i.image), Object::Stream(s) if s.dict.name(b"Subtype") == Some(b"Image")) {
@@ -364,6 +429,9 @@ pub(super) fn params(c: &Content) -> Dict {
             d.set(b"Rect".to_vec(), arr(&text_rect(t)));
             if t.char_spacing != 0.0 {
                 d.set(b"CharSpacing".to_vec(), Object::Real(t.char_spacing));
+            }
+            if t.underline {
+                d.set(b"Underline".to_vec(), Object::Bool(true));
             }
         }
         Content::Image(i) => {

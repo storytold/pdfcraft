@@ -269,3 +269,71 @@ fn a_font_name_the_page_already_uses_is_not_reused() {
     assert_ne!(second, first);
     assert!(second.starts_with(b"PCAr"), "{}", String::from_utf8_lossy(&second));
 }
+
+/// The (x, width) of every underline rule `out` draws.
+fn rules(out: &[u8]) -> Vec<(f64, f64)> {
+    String::from_utf8_lossy(out)
+        .lines()
+        .filter_map(|l| l.strip_suffix(" re f"))
+        .filter_map(|l| {
+            let v: Vec<f64> = l.split(' ').filter_map(|x| x.parse().ok()).collect();
+            (v.len() == 4).then_some((v[0], v[2]))
+        })
+        .collect()
+}
+
+fn underlined(laid: &[LaidLine], text: AddedText) -> Vec<(f64, f64)> {
+    let mut doc = Document::new_empty();
+    let (mut fonts, mut out) = (Dict::new(), Vec::new());
+    draw_laid_shaped(&mut doc, &AddedText { underline: true, ..text }, laid, &Dict::new(), &mut fonts, &mut out, |_, _| Ok(boxed(0.5))).unwrap();
+    rules(&out)
+}
+
+/// The rule under a shaped line runs from its first letter to its last: not under the spaces at
+/// either end, and a line of spaces alone has none.
+#[test]
+fn the_underline_of_a_shaped_line_skips_the_spaces_at_its_ends() {
+    let space = || ShapedCluster { script: ShapedScript::Arabic, glyphs: vec![(6, [0.0, 0.0])], advance: 0.25, text: " ".into() };
+    let size = item().size;
+    // Two letters of 0.5 em, a space between them, and spaces at both ends.
+    let line_of = |clusters: Vec<ShapedCluster>| line(clusters, false);
+    let padded = || line_of(vec![space(), cluster(1, 0.5), space(), cluster(2, 0.5), space(), space()]);
+    let bare = line_of(vec![cluster(1, 0.5), space(), cluster(2, 0.5)]);
+    let spaces = line_of(vec![space(), space()]);
+    let r = underlined(&[padded(), bare, spaces, line_of(vec![])], item());
+    assert_eq!(r.len(), 2, "a rule for each of the two lines with letters: {r:?}");
+    let letters = (0.5 + 0.25 + 0.5) * size;
+    assert!((r[0].0 - (72.0 + 0.25 * size)).abs() < 1e-6, "starts at the first letter, past the leading space: {r:?}");
+    assert!((r[0].1 - letters).abs() < 1e-6, "ends at the last letter: {r:?}");
+    assert!((r[1].0 - 72.0).abs() < 1e-6 && (r[1].1 - letters).abs() < 1e-6, "{r:?}");
+    // The spacing after the last letter isn't underlined either.
+    let spaced = underlined(&[padded()], AddedText { char_spacing: 1.0, ..item() });
+    assert!((spaced[0].1 - (letters + 2.0)).abs() < 1e-6, "three characters between the letters' ends, each 1 pt apart: {spaced:?}");
+}
+
+/// A Latin run in a shaped line is trimmed the same way.
+#[test]
+fn the_underline_of_a_latin_run_in_a_shaped_line_skips_its_spaces() {
+    let size = item().size;
+    let mixed: LaidLine =
+        ("  Hi  ب ".into(), false, 0, vec![Piece::Latin("  Hi  ".into()), Piece::Shaped(vec![cluster(1, 0.5)]), Piece::Latin(" ".into())], 9.0);
+    let r = underlined(&[mixed], item());
+    let lead = super::layout::latin_width(&item(), "  ");
+    let hi_end = super::layout::latin_width(&item(), "  Hi  ") + 0.5 * size;
+    assert_eq!(r.len(), 1);
+    assert!((r[0].0 - (72.0 + lead)).abs() < 1e-6, "past the leading spaces: {r:?}");
+    assert!((r[0].1 - (hi_end - lead)).abs() < 1e-6, "to the letter, and not under the space after it: {r:?}");
+}
+
+/// Shaped glyphs stepping left (a negative character spacing) are underlined from their leftmost
+/// to their rightmost reach.
+#[test]
+fn the_underline_of_a_shaped_line_with_a_negative_spacing_covers_its_glyphs() {
+    let size = item().size;
+    let laid = [line(vec![cluster(1, 0.1), cluster(2, 0.1), cluster(3, 0.1)], false)];
+    let r = underlined(&laid, AddedText { char_spacing: -3.0, ..item() });
+    assert_eq!(r.len(), 1, "{r:?}");
+    // The pen steps (0.1 em - 3) left from 72; each glyph is 0.1 em wide.
+    let step = 3.0 - 0.1 * size;
+    assert!((r[0].0 - (72.0 - 2.0 * step)).abs() < 1e-6 && (r[0].1 - (2.0 * step + 0.1 * size)).abs() < 1e-6, "{r:?}");
+}
