@@ -10278,9 +10278,83 @@ fn repeated_backdrop_artwork_survives_background_undo_redo_and_both_save_modes()
     s.apply(rewritten, Edit::RemoveMarks { kind: MarkKind::Background }).unwrap();
     black(&s, rewritten);
 }
+#[test]
+fn script_default_value_is_written_without_changing_the_value() {
+    use pdfcraft_forms::{FieldEvent, Scripts};
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(synthetic_acroform(2, 0))).unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let target = fields.iter().find(|f| f.name == "ranks").unwrap();
+    let mut runner = crate::js::JsRunner::new(&cos, "synthetic.pdf");
+    let result = runner.run(FieldEvent::Calculate, "getField('ranks').defaultValue='9';", target, "", &fields);
+    assert!(runner.output.errors.is_empty());
+    assert_eq!(result.changes.len(), 1);
+    pdfcraft_forms::apply_script_changes(&mut cos, &result.changes, &mut pdfcraft_forms::NoScripts).unwrap();
+    let field = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "ranks").unwrap();
+    assert_eq!(field.default, ["9"]);
+    assert_eq!(field.value, ["0"]);
+}
+
+#[test]
+fn script_char_limit_is_written_to_the_field() {
+    use pdfcraft_forms::{FieldEvent, Scripts};
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(synthetic_acroform(2, 0))).unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let target = fields.iter().find(|f| f.name == "ranks").unwrap();
+    let mut runner = crate::js::JsRunner::new(&cos, "synthetic.pdf");
+    let result = runner.run(FieldEvent::Calculate, "getField('ranks').charLimit=0;", target, "", &fields);
+    assert!(runner.output.errors.is_empty());
+    assert_eq!(result.changes.first().and_then(|change| change.max_len), Some(Some(0)));
+    pdfcraft_forms::apply_script_changes(&mut cos, &result.changes, &mut pdfcraft_forms::NoScripts).unwrap();
+    assert_eq!(cos.get(target.obj).as_dict().unwrap().int(b"MaxLen"), Some(0));
+    let fields = pdfcraft_forms::fields(&cos);
+    let target = fields.iter().find(|f| f.name == "ranks").unwrap();
+    let mut runner = crate::js::JsRunner::new(&cos, "synthetic.pdf");
+    let result = runner.run(FieldEvent::Calculate, "getField('ranks').charLimit=3;", target, "", &fields);
+    assert!(runner.output.errors.is_empty());
+    assert_eq!(result.changes.len(), 1);
+    pdfcraft_forms::apply_script_changes(&mut cos, &result.changes, &mut pdfcraft_forms::NoScripts).unwrap();
+    let field = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "ranks").unwrap();
+    assert_eq!(field.max_len, Some(3));
+    let mut runner = crate::js::JsRunner::new(&cos, "synthetic.pdf");
+    let result = runner.run(FieldEvent::Calculate, "getField('ranks').charLimit=0;", &field, "", &pdfcraft_forms::fields(&cos));
+    assert!(runner.output.errors.is_empty());
+    assert_eq!(result.changes.first().and_then(|change| change.max_len), Some(Some(0)));
+    pdfcraft_forms::apply_script_changes(&mut cos, &result.changes, &mut pdfcraft_forms::NoScripts).unwrap();
+    let field = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "ranks").unwrap();
+    assert_eq!(field.max_len, None);
+    assert_eq!(cos.get(field.obj).as_dict().unwrap().int(b"MaxLen"), Some(0));
+}
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+#[test]
+fn script_choice_index_preserves_repeated_export_values_through_save() {
+    use pdfcraft_cos::{Object, PdfString};
+    use pdfcraft_forms::{FieldEvent, Scripts};
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(synthetic_acroform(2, 0))).unwrap();
+    let ranks = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "ranks").unwrap();
+    cos.update_dict(ranks.obj, |d| {
+        d.set(b"FT".to_vec(), Object::name("Ch"));
+        d.set(b"V".to_vec(), Object::String(PdfString::text("same")));
+        d.set(b"Opt".to_vec(), Object::Array(vec![Object::String(PdfString::text("same")), Object::String(PdfString::text("same"))]));
+        d.set(b"I".to_vec(), Object::Array(vec![Object::Int(0)]));
+    })
+    .unwrap();
+    let fields = pdfcraft_forms::fields(&cos);
+    let target = fields.iter().find(|f| f.name == "ranks").unwrap();
+    let mut runner = crate::js::JsRunner::new(&cos, "synthetic.pdf");
+    let result = runner.run(FieldEvent::Calculate, "getField('ranks').currentValueIndices=1;", target, "", &fields);
+    assert!(runner.output.errors.is_empty());
+    assert_eq!(result.changes.first().and_then(|change| change.current_value_indices.as_deref()), Some(&[1][..]));
+    pdfcraft_forms::apply_script_changes(&mut cos, &result.changes, &mut pdfcraft_forms::NoScripts).unwrap();
+    let saved = pdfcraft_cos::write_incremental(&cos, &Default::default()).unwrap();
+    let reopened = pdfcraft_cos::Document::open(Arc::new(saved)).unwrap();
+    let field = pdfcraft_forms::fields(&reopened).into_iter().find(|f| f.name == "ranks").unwrap();
+    let saved_field = reopened.get(field.obj);
+    let indices = saved_field.as_dict().and_then(|d| d.get(b"I")).and_then(Object::as_array).unwrap();
+    assert_eq!(indices.iter().map(|i| i.as_int().unwrap()).collect::<Vec<_>>(), [1]);
 }
 
 #[test]

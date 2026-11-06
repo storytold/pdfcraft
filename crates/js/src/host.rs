@@ -194,9 +194,19 @@ pub(crate) fn value_of(f: &FieldState, ctx: &mut Context) -> JsValue {
 }
 
 pub(crate) fn set_value(f: &mut FieldState, vals: Vec<String>) {
+    let previous_indices = f.current_value_indices.clone();
     f.value = match f.kind {
         FieldType::CheckBox | FieldType::RadioButton => vals.into_iter().filter(|v| v != "Off" && !v.is_empty()).take(1).collect(),
         FieldType::ListBox => vals,
         _ => vals.into_iter().take(1).collect(),
+    };
+    let limit = if f.kind == FieldType::ComboBox { 1 } else { usize::MAX };
+    let previous_still_matches = f.kind == FieldType::ComboBox
+        && previous_indices.len() == 1
+        && f.options.get(previous_indices[0]).is_some_and(|option| f.value.contains(&option.0));
+    f.current_value_indices = if previous_still_matches {
+        previous_indices
+    } else {
+        f.options.iter().enumerate().filter_map(|(i, option)| f.value.contains(&option.0).then_some(i)).take(limit).collect()
     };
 }

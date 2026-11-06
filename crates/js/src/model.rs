@@ -48,7 +48,12 @@ pub struct FieldState {
     /// Choice options (export value, display text); check boxes and radios: their export
     /// values, one per widget.
     pub options: Vec<(String, String)>,
+    /// Selected positions in `/Opt`; preserves choices whose export values are identical.
+    pub current_value_indices: Vec<usize>,
     pub char_limit: Option<usize>,
+    /// The script explicitly assigned `charLimit`, including zero on an unlimited field.
+    pub max_len_explicit: bool,
+    pub is_comb: bool,
     /// `textColor` / `fillColor` as Acrobat colour arrays (`["RGB", r, g, b]` etc.), when set.
     pub text_color: Option<Vec<String>>,
     pub fill_color: Option<Vec<String>>,
@@ -65,7 +70,10 @@ impl FieldState {
             required: false,
             display: DISPLAY_VISIBLE,
             options: Vec::new(),
+            current_value_indices: Vec::new(),
             char_limit: None,
+            max_len_explicit: false,
+            is_comb: false,
             text_color: None,
             fill_color: None,
         }

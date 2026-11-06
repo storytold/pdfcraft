@@ -2939,6 +2939,7 @@ fn recalc_chain_where_script_changes_checkbox() {
                         read_only: None,
                         required: None,
                         display: None,
+                        ..Default::default()
                     }],
                     message: None,
                 }
