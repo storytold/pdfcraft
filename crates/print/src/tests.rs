@@ -145,6 +145,11 @@ fn size_modes() {
 }
 
 #[test]
+fn size_layout_rejects_non_finite_page_dimensions() {
+    assert!(layout(&[(f64::NAN, 200.0)], &settings(vec![0], Layout::Size(SizeMode::Actual))).is_err());
+}
+
+#[test]
 fn multiple_pages_per_sheet() {
     let sizes = vec![(200.0, 300.0); 5];
     let sheets = layout(&sizes, &settings((0..5).collect(), Layout::multiple(4))).unwrap();
