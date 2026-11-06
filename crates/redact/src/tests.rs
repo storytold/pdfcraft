@@ -1771,6 +1771,76 @@ fn what_content_draws_through_its_resources_is_read_up_to_two_million_operators(
     }
 }
 
+/// `content` behind a PNG predictor (Up, one column) whose `/DecodeParms` are given by reference,
+/// in a stream with `entries` too: read without the parameters, its bytes are the predictor's tags
+/// and differences, not the operators.
+fn behind_parms_by_reference(doc: &mut Document, entries: &[(&str, Object)], content: &[u8]) -> Stream {
+    let mut rows = Vec::new();
+    let mut above = 0u8;
+    for &b in content {
+        rows.extend([2, b.wrapping_sub(above)]);
+        above = b;
+    }
+    let parms = doc.add(Object::Dict(Dict::from_iter([(b"Predictor".to_vec(), Object::Int(12))])));
+    let mut s = Stream::flate(Dict::new(), &rows);
+    for (key, value) in entries {
+        s.dict.set(key.as_bytes().to_vec(), value.clone());
+    }
+    s.dict.set(b"DecodeParms".to_vec(), Object::Ref(parms));
+    s
+}
+
+/// A form's entries: `/Subtype /Form` and `bbox`.
+fn form_entries(bbox: [i64; 4]) -> Vec<(&'static str, Object)> {
+    vec![("Subtype", Object::name("Form")), ("BBox", Object::Array(bbox.into_iter().map(Object::Int).collect()))]
+}
+
+/// A form outside the mark draws the image again through the page's resources, its content behind
+/// a predictor whose `/DecodeParms` are given by reference. Both checks of whether the page still
+/// draws it read the form through them, the page's (`resource_ops`) and the unlinking one at the
+/// end (`content_draws`): the page keeps the image for the form.
+#[test]
+fn an_image_a_form_with_parameters_by_reference_draws_again_is_kept() {
+    let mut doc = one_page(
+        b"q 50 0 0 50 20 230 cm /Im1 Do Q /FmBare Do",
+        "/XObject << /FmBare 7 0 R /Im1 8 0 R >>",
+        vec![
+            stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100]", b""),
+            stream("/Type /XObject /Subtype /Image /Width 16 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBIMGSHOWNAGAIN"),
+        ],
+    );
+    let form = behind_parms_by_reference(&mut doc, &form_entries([0, 0, 100, 100]), b"q 50 0 0 50 20 20 cm /Im1 Do Q");
+    doc.set(ObjRef::new(7, 0), form);
+    mark(&mut doc, 0, &[[0.0, 200.0, 300.0, 300.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.images_removed, 1, "{r:?}");
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert_eq!(named_image(&saved, 0, b"Im1").as_deref(), Some(&b"PUBIMGSHOWNAGAIN"[..]), "the form still draws it");
+}
+
+/// A surviving form outside the mark shares the page's resources and draws the image itself, its
+/// content behind a predictor whose `/DecodeParms` are given by reference: unlinking the redacted
+/// image from the forms' resources reads it through them, and keeps the image the form draws.
+#[test]
+fn an_image_a_surviving_form_with_parameters_by_reference_draws_is_kept() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"q 100 0 0 100 0 0 cm /Im Do Q /Fm Do"),
+        b"<< /XObject << /Im 6 0 R /Fm 7 0 R >> >>".to_vec(),
+        stream("/Type /XObject /Subtype /Image /Width 11 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"IMAGESECRET"),
+        stream("/Type /XObject /Subtype /Form /BBox [150 150 300 300]", b""),
+    ]);
+    let mut entries = form_entries([150, 150, 300, 300]);
+    entries.push(("Resources", Object::Ref(ObjRef::new(5, 0))));
+    let form = behind_parms_by_reference(&mut doc, &entries, b"q 50 0 0 50 200 200 cm /Im Do Q");
+    doc.set(ObjRef::new(7, 0), form);
+    mark(&mut doc, 0, &[[0.0, 0.0, 120.0, 120.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().images_removed, 1);
+    assert!(surviving_references::full_save_holds(&doc, b"IMAGESECRET"), "the image the form still draws outside the mark");
+}
+
 /// A form with resources of its own draws through those, not its caller's: one on another page
 /// that names a different image /Im1 doesn't keep the redacted /Im1 in the dictionary both pages
 /// inherit.

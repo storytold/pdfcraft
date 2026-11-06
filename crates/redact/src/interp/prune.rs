@@ -49,7 +49,8 @@ fn content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict, name: &[u8], de
         if depth >= MAX_DEPTH {
             return None;
         }
-        let Ok(data) = s.decoded() else { return None };
+        // Its `/DecodeParms` given by reference are read too.
+        let Ok(data) = doc.with_direct_parms(s).decoded() else { return None };
         match content_draws(doc, std::slice::from_ref(&data), xo, name, depth + 1, seen) {
             Some(false) => {}
             other => return other,
@@ -222,7 +223,7 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
                 pending.push(res);
                 continue;
             }
-            let data = form.decoded()?;
+            let data = doc.with_direct_parms(form).decoded()?;
             let mut pruned = prune_doomed_xobjects(doc, std::slice::from_ref(&data), &mut xo, &doomed_names)?;
             if pruned {
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
@@ -272,6 +273,11 @@ pub(super) fn clip_out(rects: &[[f64; 4]], ctm: &Matrix, around: [f64; 4]) -> Op
     Some(ops)
 }
 
+/// The operators of `content`, and of every form without /Resources of its own that it draws
+/// through `res`, nested ones too: what draws with these resources. Each such form is read once,
+/// with its `/DecodeParms` given by reference. An error when that can't all be read: the parser
+/// can't read all of `content` or of such a form, the walk passes 2,000,000 operators, or such a
+/// form doesn't decode.
 pub(crate) fn resource_ops(doc: &Document, res: &Dict, content: &[Vec<u8>]) -> Result<Vec<Op>, CosError> {
     let parsed = Pieces::join(content).parse();
     if parsed.skipped > 0 || parsed.ops.len() > 2_000_000 {
@@ -290,7 +296,7 @@ pub(crate) fn resource_ops(doc: &Document, res: &Dict, content: &[Vec<u8>]) -> R
             && s.dict.name(b"Subtype") == Some(b"Form")
             && s.dict.get(b"Resources").is_none_or(|r| doc.resolve(r).as_dict().is_none())
         {
-            let parsed = pdfcraft_content::parse(&s.decoded()?);
+            let parsed = pdfcraft_content::parse(&doc.with_direct_parms(s).decoded()?);
             if seen.len() > 2_000_000 || ops.len().saturating_add(parsed.ops.len()) > 2_000_000 || parsed.skipped > 0 {
                 return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect inherited form resources".into() });
             }

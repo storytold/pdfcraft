@@ -298,3 +298,87 @@ fn type3_font_used_in_a_form_xobject_has_its_redacted_glyph_removed() {
     assert_eq!(report.glyphs, 1);
     assert!(!full_save_holds(&doc, b"SECRET_FORM_GLYPH_PAYLOAD"), "redacted glyph program survived");
 }
+
+/// A Type 3 font with glyphs A (its program object 7) and B (object 8), at object 6.
+const TYPE3: &str = "<< /Type /Font /Subtype /Type3 /FontBBox [0 -200 1000 800] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 66 /Widths [500 500] /Encoding << /Differences [65 /A /B] >> /CharProcs << /A 7 0 R /B 8 0 R >> >>";
+
+/// A form outside the mark shows glyph B of a Type 3 font, its content behind a predictor whose
+/// `/DecodeParms` are given by reference: the font's cleanup reads it through them, and keeps B.
+#[test]
+fn a_type3_glyph_a_form_with_parameters_by_reference_shows_is_kept() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (A) Tj ET /Fm Do"),
+        b"<< /Font << /T3 6 0 R >> /XObject << /Fm 9 0 R >> >>".to_vec(),
+        TYPE3.as_bytes().to_vec(),
+        stream("", b"% SECRET_TYPE3_GLYPH_A"),
+        stream("", b"% PUBLIC_TYPE3_GLYPH_B"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 50]", b""),
+    ]);
+    let mut entries = super::form_entries([0, 0, 300, 50]);
+    entries.push(("Resources", Object::Ref(ObjRef::new(5, 0))));
+    let form = super::behind_parms_by_reference(&mut doc, &entries, b"BT /T3 10 Tf 10 20 Td (B) Tj ET");
+    doc.set(ObjRef::new(9, 0), form);
+    mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+    assert!(!full_save_holds(&doc, b"SECRET_TYPE3_GLYPH_A"), "the redacted glyph program survived");
+    assert!(full_save_holds(&doc, b"PUBLIC_TYPE3_GLYPH_B"), "the form still shows B");
+}
+
+/// A form the page lists but doesn't draw shows glyph B, its content behind a predictor whose
+/// `/DecodeParms` are given by reference: the font's cleanup reads every surviving form, this one
+/// through them, and keeps B.
+#[test]
+fn a_type3_glyph_an_undrawn_form_with_parameters_by_reference_shows_is_kept() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (A) Tj ET"),
+        b"<< /Font << /T3 6 0 R >> /XObject << /Fm 9 0 R >> >>".to_vec(),
+        TYPE3.as_bytes().to_vec(),
+        stream("", b"% SECRET_TYPE3_GLYPH_A"),
+        stream("", b"% PUBLIC_TYPE3_GLYPH_B"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 50]", b""),
+    ]);
+    let mut entries = super::form_entries([0, 0, 300, 50]);
+    entries.push((
+        "Resources",
+        Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(Dict::from_iter([(b"T3".to_vec(), Object::Ref(ObjRef::new(6, 0)))])))])),
+    ));
+    let form = super::behind_parms_by_reference(&mut doc, &entries, b"BT /T3 10 Tf 10 20 Td (B) Tj ET");
+    doc.set(ObjRef::new(9, 0), form);
+    mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+    assert!(!full_save_holds(&doc, b"SECRET_TYPE3_GLYPH_A"), "the redacted glyph program survived");
+    assert!(full_save_holds(&doc, b"PUBLIC_TYPE3_GLYPH_B"), "the undrawn form still shows B");
+}
+
+/// Glyph B's program draws an image from the font's resources, behind a predictor whose
+/// `/DecodeParms` are given by reference: the font's cleanup reads it through them, and keeps the
+/// image B still draws while the one only the redacted A drew goes.
+#[test]
+fn an_image_a_type3_glyph_with_parameters_by_reference_draws_is_kept() {
+    let image = "/Type /XObject /Subtype /Image /Width 12 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8";
+    let font = TYPE3.replace("/CharProcs", "/Resources << /XObject << /ImA 9 0 R /ImB 10 0 R >> >> /CharProcs");
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (A) Tj 0 100 Td (B) Tj ET"),
+        b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+        font.into_bytes(),
+        stream("", b"/ImA Do"),
+        stream("", b""),
+        stream(image, b"SECRET_IMG_A"),
+        stream(image, b"PUBLIC_IMG_B"),
+    ]);
+    let glyph = super::behind_parms_by_reference(&mut doc, &[], b"/ImB Do");
+    doc.set(ObjRef::new(8, 0), glyph);
+    mark(&mut doc, 0, &[[9.0, 95.0, 16.0, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+    assert!(!full_save_holds(&doc, b"SECRET_IMG_A"), "the image only the redacted glyph drew survived");
+    assert!(full_save_holds(&doc, b"PUBLIC_IMG_B"), "glyph B still draws its image");
+}

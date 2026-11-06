@@ -327,7 +327,7 @@ fn scan_xobject(
     if !ctx.seen_forms.insert((r, current_font, through)) {
         return Ok(());
     }
-    let data = s.decoded()?;
+    let data = ctx.doc.with_direct_parms(s).decoded()?;
     match form_own_res {
         Some(form_res) => scan_content_stream(ctx, std::slice::from_ref(&data), r, &form_res, current_font, depth + 1),
         None => scan_content_stream(ctx, std::slice::from_ref(&data), holder_ref, res, current_font, depth + 1),
@@ -482,7 +482,7 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
     for (form_ref, form_res) in &form_holders {
         if !ctx.seen_forms.iter().any(|(form, _, _)| form == form_ref) {
             let Object::Stream(s) = &*ctx.doc.get(*form_ref) else { continue };
-            let data = s.decoded()?;
+            let data = ctx.doc.with_direct_parms(s).decoded()?;
             scan_content_stream(&mut ctx, std::slice::from_ref(&data), *form_ref, form_res, None, 0)?;
         }
     }
@@ -616,7 +616,7 @@ fn clean_type3_font(
             }
             .into());
         };
-        let data = s.decoded()?;
+        let data = doc.with_direct_parms(s).decoded()?;
         collect_used_resources_in_stream(&data, &mut used_in_glyphs)?;
     }
 
