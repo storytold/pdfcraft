@@ -111,7 +111,8 @@ fn a_field_that_doesnt_scroll_stops_taking_text_when_full() {
     );
     let text_box = |h: &Harness<'static, PdfCraftApp>| {
         let s = h.state();
-        s.session.get(s.views[0].id).unwrap().field_text_box("city", 0).expect("the city field's text box")
+        let doc = s.session.get(s.views[0].id).unwrap();
+        doc.field_text_box(doc.form.iter().find(|f| f.name == "city").unwrap().obj, 0).expect("the city field's text box")
     };
     let typing = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].forms.focus.as_ref().map(|f| f.text.clone()).unwrap_or_default();
     click_field(&mut h, "city", 0);
@@ -161,7 +162,8 @@ fn a_multi_line_auto_sized_field_that_doesnt_scroll_stops_when_full() {
     let kept = h.state().views[0].forms.focus.as_ref().map(|f| f.text.clone()).unwrap_or_default();
     let tb = {
         let s = h.state();
-        s.session.get(s.views[0].id).unwrap().field_text_box("city", 0).expect("the city field's text box")
+        let doc = s.session.get(s.views[0].id).unwrap();
+        doc.field_text_box(doc.form.iter().find(|f| f.name == "city").unwrap().obj, 0).expect("the city field's text box")
     };
     let lines = kept.lines().count();
     assert!(lines > 1 && lines < 60, "{lines} of 60 lines kept");
@@ -440,6 +442,61 @@ fn pressing_another_widget_of_the_field_being_typed_in_keeps_the_typing() {
 }
 
 #[test]
+fn undo_in_one_of_two_fields_that_share_a_name_takes_back_only_its_own_typing() {
+    // Their editors had one id, so one history: Undo in the second took back what was typed in
+    // the first, and leaving it put that back in both.
+    let mut h = form_harness(shown_twice_pdf());
+    let first = copy_rect(&h, "name", 0).center();
+    click_at(&mut h, first);
+    h.event(egui::Event::Text("Ada".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    let second = copy_rect(&h, "name", 1).center();
+    click_at(&mut h, second);
+    one_frame(&mut h, vec![key(egui::Key::Z, egui::Modifiers::COMMAND)]);
+    h.run_steps(2);
+    let editor = h.state().views[0].forms.focus.as_ref().map(|f| f.text.clone());
+    assert_eq!(editor.as_deref(), Some("Ada"), "nothing was typed here to take back");
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(values(&h, "name"), [["Ada"], ["Ada"]]);
+}
+
+/// `code` twice, as two fields that don't scroll (`DoNotScroll`), at 12 pt: a narrow one above a
+/// wide one.
+fn narrow_and_wide_pdf() -> Vec<u8> {
+    pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /DA (/Helv 12 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Ff 8388608 /T (code) /Rect [20 350 80 372] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /Ff 8388608 /T (code) /Rect [20 310 280 332] /P 3 0 R /F 4 >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ])
+}
+
+#[test]
+fn of_two_fields_that_share_a_name_and_dont_scroll_the_one_typed_in_takes_what_fits_it() {
+    // Its text box was looked up by its name, which found the narrow one: the wide one took only
+    // what fits the narrow one.
+    let mut h = form_harness(narrow_and_wide_pdf());
+    let at = copy_rect(&h, "code", 1).center();
+    click_at(&mut h, at);
+    h.event(egui::Event::Text("W".repeat(80)));
+    h.run_steps(2);
+    let kept = h.state().views[0].forms.focus.as_ref().map(|f| f.text.clone()).unwrap_or_default();
+    let boxes: Vec<_> = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        doc.form.iter().filter(|f| f.name == "code").map(|f| doc.field_text_box(f.obj, 0).expect("a text box")).collect()
+    };
+    let [narrow, wide] = &boxes[..] else { panic!("two text boxes") };
+    assert!(!narrow.fits(&kept), "more than fits the narrow one: {} kept", kept.len());
+    assert!(wide.fits(&kept) && !wide.fits(&format!("{kept}W")), "as much as fits the wide one: {} kept", kept.len());
+}
+
+#[test]
 fn page_keys_still_work_with_a_check_box_or_radio_button_focused() {
     // The widget that takes Space for a focused box must not swallow the page keys.
     let mut h = check_box_harness();
@@ -550,7 +607,7 @@ fn dragging_over_another_fields_text_focuses_it_and_selects_from_the_press() {
         let doc = s.session.get(s.views[0].id).unwrap();
         let f = doc.form.iter().find(|f| f.name == "name").unwrap();
         let rect = pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen");
-        (rect, egui::Id::unique(("form-field", s.views[0].id.0, "name", 0usize)))
+        (rect, egui::Id::unique(("form-field", s.views[0].id.0, "name", f.obj, 0usize)))
     };
     // From inside the first word ("Ad|a" at the field's auto size, 13.9 pt) to past the end of the text.
     let (from, to) = (egui::pos2(rect.left() + 38.0, rect.center().y), egui::pos2(rect.right() - 8.0, rect.center().y));

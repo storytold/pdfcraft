@@ -396,7 +396,7 @@ fn combo_editor(ctx: &egui::Context, view: &mut DocView, editor: ComboEditor<'_>
                 .background_color(FIELD_FILL)
                 .text_color(Color32::BLACK)
                 .margin(egui::Margin::symmetric(3, 1))
-                .id(egui::Id::unique(("form-field", view.id.0, &f.name, widget)));
+                .id(egui::Id::unique(("form-field", view.id.0, &f.name, f.obj, widget)));
             // The form field's own logical name; not a visual/preordered label.
             let r = ui.add_sized(rect.size(), te).accessible_name(f.name.clone());
             if std::mem::take(&mut fx.request_focus) {
@@ -703,7 +703,7 @@ pub(crate) fn text_box(doc: &pdfcraft_engine::Document, view: &DocView, form: &[
     let fx = view.forms.focus.as_ref()?;
     let f = focused_field(form, fx)?;
     let no_scroll = f.kind == FormFieldKind::Text && f.has(field_flags::DO_NOT_SCROLL);
-    no_scroll.then(|| doc.field_text_box(&fx.name, fx.widget)).flatten()
+    no_scroll.then(|| doc.field_text_box(f.obj, fx.widget)).flatten()
 }
 
 /// After the text editor is drawn: keeps a field that doesn't scroll within what fits, puts the
@@ -877,7 +877,8 @@ pub(crate) fn overlay(
                         .text_color(Color32::BLACK)
                         .margin(egui::Margin::symmetric(3, 1))
                         .password(f.has(field_flags::PASSWORD))
-                        .id(egui::Id::unique(("form-field", view.id.0, &f.name, focus.widget)));
+                        // By its dictionary too: fields that share a name each keep their own caret and Undo.
+                        .id(egui::Id::unique(("form-field", view.id.0, &f.name, f.obj, focus.widget)));
                     if let Some(max) = f.max_len {
                         te = te.char_limit(max);
                     }
@@ -991,7 +992,7 @@ pub(crate) fn overlay(
         FormFieldKind::CheckBox | FormFieldKind::Radio => {
             // Nothing is drawn over the box, but a widget there holds egui's keyboard focus, so
             // Space, Tab and the arrows come here instead of turning or scrolling the page.
-            let id = egui::Id::unique(("form-field", view.id.0, &f.name, focus.widget));
+            let id = egui::Id::unique(("form-field", view.id.0, &f.name, f.obj, focus.widget));
             let mut has_focus = false;
             // Not interactable, so clicks still reach the page under it.
             let area = egui::Area::new(egui::Id::unique(("form-toggle", view.id.0))).order(egui::Order::Foreground).interactable(false);

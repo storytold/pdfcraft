@@ -6073,9 +6073,11 @@ fn an_xfa_field_that_doesnt_scroll_opens_with_do_not_scroll_and_a_text_box() {
     let doc = s.get(id).unwrap();
     let field = |end: &str| doc.form.iter().find(|f| f.name.ends_with(end)).unwrap_or_else(|| panic!("no field {end}"));
     assert!(field("code").has(field_flags::DO_NOT_SCROLL) && !field("note").has(field_flags::DO_NOT_SCROLL));
-    let tb = doc.field_text_box(&field("code").name, 0).expect("a text box");
+    let tb = doc.field_text_box(field("code").obj, 0).expect("a text box");
     assert!(tb.fits("A1B2") && !tb.fits(&"W".repeat(40)), "a 1-inch field at 10 pt");
-    assert!(doc.field_text_box("no such field", 0).is_none() && doc.field_text_box(&field("code").name, 5).is_none());
+    // Object 0 heads the free list, so it is no field's dictionary.
+    let none = pdfcraft_cos::ObjRef::new(0, 0);
+    assert!(doc.field_text_box(none, 0).is_none() && doc.field_text_box(field("code").obj, 5).is_none());
 }
 
 /// A round XFA check button opens drawn round: the appearance its laid-out widget gets draws a
