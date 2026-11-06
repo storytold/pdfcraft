@@ -1,4 +1,4 @@
-use super::{SaveTarget, is_mail_temp_copy, save_dialog_folder, write_atomically, write_atomically_syncing, write_atomically_with};
+use super::{CloseRequest, SaveTarget, is_mail_temp_copy, save_dialog_folder, write_atomically, write_atomically_syncing, write_atomically_with};
 
 #[test]
 fn save_dialogs_open_in_the_documents_folder() {
@@ -390,4 +390,240 @@ fn save_asks_where_to_keep_an_email_attachment_and_leaves_the_temporary_copy_alo
     assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
     assert!(app.save_active(SaveTarget::InPlace));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The document every close test opens: a real form.
+const PDF: &[u8] = include_bytes!("../../tests/data/form.pdf");
+
+/// An app with one tab per name (in order) and an unsaved edit on each tab in `dirty`.
+fn app_with_docs(names: &[&str], dirty: &[usize]) -> crate::PdfCraftApp {
+    let mut app = crate::PdfCraftApp::new();
+    for name in names {
+        app.open_bytes(name, None, PDF.to_vec()).unwrap();
+    }
+    for &i in dirty {
+        app.active = Some(i);
+        assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }), "tab {i} gets an unsaved edit");
+    }
+    app
+}
+
+/// A fresh temporary file holding [`PDF`], opened under its own name (never an existing one).
+fn tmp_pdf(tag: &str) -> PathBuf {
+    use std::io::Write as _;
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let path = std::env::temp_dir().join(format!("pdfcraft-close-{}-{tag}-{nonce}.pdf", std::process::id()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+    file.write_all(PDF).unwrap();
+    path
+}
+
+#[test]
+fn close_others_with_a_gone_anchor_closes_nothing() {
+    // The anchor's own tab is closed before the call, so its DocId names no open tab.
+    let mut app = app_with_docs(&["a.pdf", "b.pdf", "anchor.pdf", "c.pdf"], &[2, 3]);
+    let anchor = app.views[2].id;
+    app.close_tab(2);
+    app.close_others(anchor);
+    assert_eq!(app.views.len(), 3, "a gone anchor closes no tab, clean or dirty");
+    assert_eq!(app.close_request, None, "and queues no prompt");
+}
+
+#[test]
+fn close_others_closes_clean_tabs_and_prompts_each_dirty_one() {
+    let ctx = egui::Context::default();
+    // Three clean documents plus a dirty anchor: everything but the anchor closes now.
+    let mut app = app_with_docs(&["a.pdf", "b.pdf", "c.pdf", "anchor.pdf"], &[3]);
+    let anchor = app.views[3].id;
+    app.close_others(anchor);
+    assert_eq!(app.views.len(), 1, "only the anchor stays");
+    assert_eq!(app.views[0].id, anchor);
+    assert_eq!(app.close_request, None, "nothing is left to ask about");
+
+    // Four documents, the anchor second: 0 and 2 dirty, 3 clean.
+    let mut app = app_with_docs(&["a.pdf", "anchor.pdf", "c.pdf", "d.pdf"], &[0, 2]);
+    let first = app.views[0].id;
+    let third = app.views[2].id;
+    let anchor = app.views[1].id;
+    app.close_others(anchor);
+    assert_eq!(app.views.len(), 3, "document 3 closed; the dirty ones and the anchor stay");
+    assert_eq!(app.views[0].id, first);
+    assert_eq!(app.views[1].id, anchor);
+    assert_eq!(app.views[2].id, third);
+    assert_eq!(app.close_request, Some(CloseRequest::Others(anchor)));
+    app.resolve_close(&ctx, Some(false));
+    assert_eq!(app.views.len(), 2, "the first dirty other closed");
+    assert_eq!(app.views[0].id, anchor);
+    assert_eq!(app.views[1].id, third);
+    assert_eq!(app.close_request, Some(CloseRequest::Others(anchor)), "the second dirty other still asks");
+    app.resolve_close(&ctx, Some(false));
+    assert_eq!(app.close_request, None);
+    assert_eq!(app.views.len(), 1);
+    assert_eq!(app.views[0].id, anchor);
+}
+
+#[test]
+fn close_right_of_skips_the_tabs_left_of_the_anchor() {
+    let ctx = egui::Context::default();
+    // The anchor second: 0 dirty, 2 clean, 3 dirty.
+    let mut app = app_with_docs(&["a.pdf", "anchor.pdf", "c.pdf", "d.pdf"], &[0, 3]);
+    let left = app.views[0].id;
+    let anchor = app.views[1].id;
+    let right = app.views[3].id;
+    app.close_tabs_right_of(anchor);
+    assert_eq!(app.views.len(), 3, "the clean tab right of the anchor closed");
+    assert_eq!(app.views[0].id, left);
+    assert_eq!(app.views[1].id, anchor);
+    assert_eq!(app.views[2].id, right, "the dirty tab right of the anchor stays for its prompt");
+    assert_eq!(app.close_request, Some(CloseRequest::RightOf(anchor)));
+    assert_eq!(app.close_request_target(), Some(2), "the prompt asks about the dirty tab right of the anchor");
+    app.resolve_close(&ctx, Some(false));
+    assert_eq!(app.views.len(), 2, "only the tab left of the anchor and the anchor remain");
+    assert_eq!(app.views[0].id, left);
+    assert_eq!(app.views[1].id, anchor);
+    assert_eq!(app.close_request, None, "the dirty tab left of the anchor is never asked about");
+}
+
+#[test]
+fn cancelling_a_batch_close_keeps_the_remaining_dirty_tabs() {
+    let ctx = egui::Context::default();
+    // The anchor second: 0 and 2 dirty, 3 clean.
+    let mut app = app_with_docs(&["a.pdf", "anchor.pdf", "c.pdf", "d.pdf"], &[0, 2]);
+    let anchor = app.views[1].id;
+    let second = app.views[2].id;
+    app.close_others(anchor);
+    assert_eq!(app.views.len(), 3, "the clean tab closed at once");
+    app.resolve_close(&ctx, Some(false));
+    assert_eq!(app.views.len(), 2, "one Don't-save closed the first dirty other");
+    app.resolve_close(&ctx, None);
+    assert_eq!(app.close_request, None, "the cancelled prompt is gone");
+    assert_eq!(app.views.len(), 2, "the second dirty tab stays open");
+    assert_eq!(app.views[0].id, anchor);
+    assert_eq!(app.views[1].id, second);
+    assert!(app.has_unsaved_work(1), "the cancelled tab keeps its changes");
+}
+
+#[test]
+fn saving_in_a_batch_closes_after_the_write_and_continues() {
+    let ctx = egui::Context::default();
+    let path = tmp_pdf("save");
+    let mut app = crate::PdfCraftApp::new();
+    app.open_bytes("first.pdf", Some(path.to_string_lossy().into_owned()), PDF.to_vec()).unwrap();
+    let first = app.views[0].id;
+    app.open_bytes("anchor.pdf", None, PDF.to_vec()).unwrap();
+    let anchor = app.views[1].id;
+    app.open_bytes("last.pdf", None, PDF.to_vec()).unwrap();
+    let last = app.views[2].id;
+    for i in [0, 2] {
+        app.active = Some(i);
+        assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    }
+    app.close_others(anchor);
+    assert_eq!(app.close_request, Some(CloseRequest::Others(anchor)));
+    app.resolve_close(&ctx, Some(true));
+    let saved = std::fs::read(&path).unwrap();
+    assert!(saved != PDF && saved.starts_with(b"%PDF"), "the document was written to its file");
+    assert!(app.views.iter().all(|v| v.id != first), "the saved tab closed after the write");
+    assert_eq!(app.views[0].id, anchor);
+    assert_eq!(app.views[1].id, last);
+    assert_eq!(app.active, Some(0), "the saved tab was brought forward to save, and its closing leaves the anchor active");
+    assert_eq!(app.close_request, Some(CloseRequest::Others(anchor)), "the next dirty other still asks");
+    assert!(app.has_unsaved_work(1));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A tab of the batch that the user saved themselves while another's save was pending — here,
+/// `last.pdf` is written to its own file between the batch's first question and its answer —
+/// closes with the batch, like the tabs that were clean when it started. Before the fix it
+/// stayed open: the continuation only closed the tab it was asked about and then looked for
+/// dirty ones, skipping the one that had become clean.
+#[test]
+fn a_tab_the_user_saved_while_a_batch_save_waited_still_closes() {
+    let ctx = egui::Context::default();
+    let path = tmp_pdf("save");
+    let other = tmp_pdf("other");
+    let mut app = crate::PdfCraftApp::new();
+    app.open_bytes("first.pdf", Some(path.to_string_lossy().into_owned()), PDF.to_vec()).unwrap();
+    let first = app.views[0].id;
+    app.open_bytes("anchor.pdf", None, PDF.to_vec()).unwrap();
+    let anchor = app.views[1].id;
+    app.open_bytes("last.pdf", Some(other.to_string_lossy().into_owned()), PDF.to_vec()).unwrap();
+    let last = app.views[2].id;
+    for i in [0, 2] {
+        app.active = Some(i);
+        assert!(app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    }
+    app.close_others(anchor);
+    assert_eq!(app.close_request, Some(CloseRequest::Others(anchor)), "the first dirty other asks");
+    // While first.pdf's save is pending, the user saves last.pdf themselves.
+    app.active = Some(2);
+    assert!(app.save_active(crate::editing::SaveTarget::InPlace), "the user's own save writes the file");
+    assert!(!app.has_unsaved_work(2), "last.pdf is clean now, but still open in the batch's scope");
+    // Answering the pending question continues the batch: first.pdf closes for its save, and
+    // last.pdf — clean, never asked about — closes with it. Only the anchor stays.
+    app.resolve_close(&ctx, Some(true));
+    assert!(app.views.iter().all(|v| v.id != first), "the saved tab closed after its write");
+    assert!(app.views.iter().all(|v| v.id != last), "the tab that became clean meanwhile closed too");
+    assert_eq!(app.views.len(), 1);
+    assert_eq!(app.views[0].id, anchor);
+    assert_eq!(app.close_request, None, "nothing dirty remains to ask about");
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&other);
+}
+
+#[test]
+fn a_batch_close_stops_when_its_anchor_is_gone() {
+    let ctx = egui::Context::default();
+    for right_of in [false, true] {
+        // The anchor second: 0 and 2 dirty.
+        let mut app = app_with_docs(&["a.pdf", "anchor.pdf", "c.pdf"], &[0, 2]);
+        let first = app.views[0].id;
+        let anchor = app.views[1].id;
+        let last = app.views[2].id;
+        if right_of {
+            app.close_tabs_right_of(anchor);
+            assert_eq!(app.close_request, Some(CloseRequest::RightOf(anchor)));
+        } else {
+            app.close_others(anchor);
+            assert_eq!(app.close_request, Some(CloseRequest::Others(anchor)));
+        }
+        app.close_tab(1); // the anchor's own tab, by hand
+        app.resolve_close(&ctx, Some(false));
+        assert_eq!(app.views.len(), 2, "nothing else closes once the anchor is gone");
+        assert_eq!(app.views[0].id, first);
+        assert_eq!(app.views[1].id, last);
+        assert_eq!(app.close_request, None);
+    }
+}
+
+#[test]
+fn a_batch_save_leaves_the_tab_open_when_its_anchor_closes_while_the_picker_waits() {
+    let ctx = egui::Context::default();
+    for right_of in [false, true] {
+        // The anchor second: 0 and 2 dirty, and neither has a file, so the save waits on
+        // a picker that answers on a later frame.
+        let mut app = app_with_docs(&["a.pdf", "anchor.pdf", "c.pdf"], &[0, 2]);
+        let first = app.views[0].id;
+        let anchor = app.views[1].id;
+        let last = app.views[2].id;
+        let dir = staging_dir(&format!("anchor-gone-{right_of}"));
+        let dest = dir.join("saved.pdf");
+        app.pick_override = Some(vec![dest.to_string_lossy().into_owned()]);
+        if right_of {
+            app.close_tabs_right_of(anchor);
+        } else {
+            app.close_others(anchor);
+        }
+        app.resolve_close(&ctx, Some(true));
+        assert!(!dest.exists(), "the save is still waiting on the picker");
+        app.close_tab(1); // the anchor's own tab, by hand, while the pick is pending
+        app.process_picked();
+        assert!(std::fs::read(&dest).is_ok_and(|b| b.starts_with(b"%PDF")), "the save itself completed");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(app.views.len(), 2, "the saved tab stays open once the anchor is gone");
+        assert_eq!(app.views[0].id, first);
+        assert_eq!(app.views[1].id, last);
+        assert!(!app.has_unsaved_work(usize::from(right_of)), "the saved tab is clean now");
+        assert_eq!(app.close_request, None, "the void batch asks about nothing more");
+    }
 }
