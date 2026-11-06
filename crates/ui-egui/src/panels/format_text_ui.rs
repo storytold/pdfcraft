@@ -3,7 +3,7 @@
 //! horizontal scale and character spacing. One panel serves a paragraph being edited (with the
 //! fonts already on its page and the spacing controls) and added text (the standard families,
 //! size, colour, style, alignment and character spacing). What PdfCraft can't apply yet (lists,
-//! paragraph spacing, or line spacing and scale for added text) is shown
+//! or line and paragraph spacing and scale for added text) is shown
 //! disabled and says so.
 //!
 //! The icons are Lucide's (AGENTS.md §1); only the arrangement follows Acrobat.
@@ -97,6 +97,7 @@ const SIZES: [f64; 16] = [4.0, 6.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0
 const LINE_SPACINGS: [f64; 7] = [1.0, 1.15, 1.2, 1.5, 2.0, 2.5, 3.0];
 const SCALES: [f64; 8] = [50.0, 75.0, 90.0, 100.0, 110.0, 125.0, 150.0, 200.0];
 const CHAR_SPACINGS: [f64; 8] = [-1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 3.0, 5.0];
+const PARAGRAPH_SPACINGS: [f64; 5] = [0.0, 6.0, 12.0, 18.0, 24.0];
 /// A row's height: the tallest control in it (the 30 pt icon buttons). Every control is centred
 /// on the row, whatever its own height, so lists, swatches and buttons line up (#3037).
 const ROW: f32 = 30.0;
@@ -127,6 +128,7 @@ pub(crate) const MIN_ROW: f32 = {
 /// What can be typed: horizontal scale in percent, character spacing in points.
 const SCALE_RANGE: std::ops::RangeInclusive<f64> = 10.0..=400.0;
 const CHAR_SPACING_RANGE: std::ops::RangeInclusive<f64> = -5.0..=50.0;
+const PARAGRAPH_SPACING_RANGE: std::ops::RangeInclusive<f64> = 0.0..=72.0;
 
 /// A number as the lists show it: no trailing zeros ("1.2", "100", "-0.5").
 fn number(v: f64) -> String {
@@ -373,19 +375,10 @@ pub(crate) fn panel(
                 spacing_resp.on_hover_text(&shown);
             });
             ui.add_space(8.0);
-            ui.add_enabled_ui(false, |ui| {
-                let label = labelled_icon(ui, t, "pilcrow", tl!("Paragraph spacing"));
-                let tip = format!("{} — {}", tl!("Paragraph spacing"), tl!("Planned"));
-                let _ = outlined(ui, |ui| {
-                    craft_ui::ComboBox::from_id_salt("format-paragraph-spacing")
-                        .selected_text(centred(ui, "0"))
-                        .width(half)
-                        .show_ui(ui, |_| {})
-                        .response
-                        .labelled_by(label.id)
-                        .on_disabled_hover_text(tip)
-                });
-            });
+            let label = labelled_icon(ui, t, "pilcrow", tl!("Paragraph spacing"));
+            let spacing = Number { value: &mut e.paragraph_spacing, range: PARAGRAPH_SPACING_RANGE, speed: 0.5, suffix: " pt" };
+            number_with_presets(ui, spacing, &PARAGRAPH_SPACINGS, half, (label.id, tl!("Paragraph spacing")))
+                .on_hover_text(tl!("Between paragraphs: press Enter in the box to start one"));
         });
     });
     // Any value the engine takes can be typed; the lists hold the common ones. Added text has
@@ -493,28 +486,34 @@ fn preset_arrow(ui: &mut egui::Ui, label: &str) -> egui::Response {
 }
 
 /// One box round a value and its arrow, like a list's, so the pair reads as a single control.
-fn boxed(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+fn boxed<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let t = Tokens::get(ui.ctx());
     let edge = if ui.is_enabled() { t.border } else { t.border.gamma_multiply(0.5) };
-    egui::Frame::new().fill(t.field).stroke(Stroke::new(1.0, edge)).corner_radius(CornerRadius::same(4)).show(ui, |ui| {
-        let w = &mut ui.visuals_mut().widgets;
-        for state in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
-            state.bg_stroke = Stroke::NONE;
-        }
-        w.inactive.weak_bg_fill = Color32::TRANSPARENT;
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.spacing_mut().button_padding.x = 2.0;
-        add(ui);
-    });
+    egui::Frame::new()
+        .fill(t.field)
+        .stroke(Stroke::new(1.0, edge))
+        .corner_radius(CornerRadius::same(4))
+        .show(ui, |ui| {
+            let w = &mut ui.visuals_mut().widgets;
+            for state in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+                state.bg_stroke = Stroke::NONE;
+            }
+            w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.spacing_mut().button_padding.x = 2.0;
+            add(ui)
+        })
+        .inner
 }
 
 /// A number field with an arrow beside it that lists common values, in `width` all told: type any
 /// value in its range, or pick one. Both are named by `label`: the icon before them and its text.
-fn number_with_presets(ui: &mut egui::Ui, n: Number<'_>, presets: &[f64], width: f32, label: (egui::Id, &str)) {
+/// Returns the field.
+fn number_with_presets(ui: &mut egui::Ui, n: Number<'_>, presets: &[f64], width: f32, label: (egui::Id, &str)) -> egui::Response {
     boxed(ui, |ui| {
         let field = egui::DragValue::new(&mut *n.value).range(n.range).speed(n.speed).max_decimals(2).suffix(n.suffix);
-        let drag_resp = ui.add_sized([(width - PRESET_LIST - 2.0).max(30.0), 26.0], field).labelled_by(label.0);
-        drag_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::SpinButton, ui.is_enabled(), label.1));
+        let field = ui.add_sized([(width - PRESET_LIST - 2.0).max(30.0), 26.0], field).labelled_by(label.0);
+        field.widget_info(|| egui::WidgetInfo::labeled(egui::Role::SpinButton, ui.is_enabled(), label.1));
         let list = preset_arrow(ui, label.1);
         egui::Popup::menu(&list).show(|ui| {
             for &v in presets {
@@ -524,7 +523,8 @@ fn number_with_presets(ui: &mut egui::Ui, n: Number<'_>, presets: &[f64], width:
                 }
             }
         });
-    });
+        field
+    })
 }
 
 /// The text colour as a square swatch that opens the palette.
