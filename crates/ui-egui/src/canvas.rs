@@ -669,6 +669,11 @@ pub struct DocView {
     /// Marquee Zoom / Snapshot: the rectangle being dragged (page, start), and a finished one.
     pub marquee: Option<(usize, Pos2)>,
     pub marquee_done: Option<crate::zoom_snap::Marquee>,
+    /// Dynamic Zoom: the drag in progress.
+    pub(crate) zoom_drag: Option<crate::zoom_snap::ZoomDrag>,
+    /// The last press went down with Dynamic Zoom, which has been the tool ever since, and the
+    /// document has not changed: no other press starts a zoom or clicks a zoom step.
+    pub(crate) zoom_press: bool,
     /// Fill & Sign text being typed.
     pub fill_text: Option<crate::fill_sign::TypeBox>,
     /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
@@ -898,6 +903,8 @@ impl DocView {
     pub(crate) fn cancel_pointer_gestures(&mut self) {
         self.marquee = None;
         self.marquee_done = None;
+        self.zoom_drag = None;
+        self.zoom_press = false;
         self.comments.gesture = None;
         self.links.drag = None;
         self.sign.drag = None;
@@ -1055,6 +1062,8 @@ impl DocView {
             pages_focus_id: None,
             marquee: None,
             marquee_done: None,
+            zoom_drag: None,
+            zoom_press: false,
             fill_text: None,
             fill_signature_page: None,
             signature_drag: Default::default(),
@@ -1088,6 +1097,11 @@ impl DocView {
         // Thumbnail drags hold page indexes from before the change.
         self.panel_drag = None;
         self.org_drag = None;
+        // A Dynamic Zoom drag anchors to page rectangles from before the change, and the next
+        // frame's would be too (laid out before this): the held press, a drag yet or not, zooms no
+        // more until it is up. Other tools' presses carry on.
+        self.zoom_drag = None;
+        self.zoom_press = false;
         self.reset_coarse_state();
     }
 
@@ -1126,6 +1140,8 @@ impl DocView {
         fresh.viewport_w = self.viewport_w;
         fresh.viewport_h = self.viewport_h;
         fresh.viewport_screen = self.viewport_screen;
+        // A press Escape cancelled stays cancelled on the new version, until the button is up.
+        fresh.press_cancelled = self.press_cancelled;
         *self = fresh;
         // Marks the kept images out of date and clamps the page to the new page count.
         self.document_changed(info);
@@ -1678,14 +1694,23 @@ fn draw_pages(
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Grab);
         }
     }
+    // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
+    // or a press they hold. The page modules read it rather than egui's raw pointer state.
+    let ptr = PagePointer::read(ui, &resp, modal);
+    // Dynamic Zoom zooms by this widget's drag, about the point pressed. The pages below are
+    // laid out at the old zoom, so it anchors to last frame's page rectangles, the ones on screen,
+    // before they are cleared.
+    if tool == QuickTool::DynamicZoom {
+        crate::zoom_snap::dynamic_input(ui, &resp, &ptr, view);
+    } else {
+        view.zoom_drag = None;
+        view.zoom_press = false;
+    }
     let origin = resp_rect.min - vec2(0.0, y_shift);
     let visible = viewport.translate(resp_rect.min.to_vec2());
     view.screen_rects.clear();
     view.screen_ppp = ui.ctx().pixels_per_point();
     view.screen_xforms.clear();
-    // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
-    // or a press they hold. The page modules read it rather than egui's raw pointer state.
-    let ptr = PagePointer::read(ui, &resp, modal);
     cancel_on_escape(ui.ctx(), view, &ptr);
     view.router.settle(ptr.any_down, !ptr.edges.is_empty());
     // A new press is no longer the last one's, wherever it lands (the page it is on gives it
@@ -2871,6 +2896,7 @@ fn tool_selects_text(tool: QuickTool, preparing: bool) -> bool {
         | QuickTool::Link
         | QuickTool::SignArea { .. }
         | QuickTool::MarqueeZoom
+        | QuickTool::DynamicZoom
         | QuickTool::Snapshot => false,
     }
 }

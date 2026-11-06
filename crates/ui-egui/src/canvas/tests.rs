@@ -2370,6 +2370,20 @@ fn cancelling_pointer_gestures_lets_go_of_a_camera_corner() {
     assert_eq!(v.camera.map(|q| q.grab), Some(None));
 }
 
+/// A press Escape cancelled stays ignored on a replaced document until the button is up, so its
+/// release can't click on the new version.
+#[test]
+fn replacing_the_document_keeps_a_cancelled_press_cancelled() {
+    let mut v = view(1, PageLayout::Single, true);
+    let info = pdfcraft_render::DocInfo {
+        pages: vec![pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 }],
+        ..Default::default()
+    };
+    v.press_cancelled = true;
+    v.document_replaced(&info);
+    assert!(v.press_cancelled);
+}
+
 /// A camera corner at the page's edge is hit on the page only: a press off the page is no page's,
 /// so its grab cursor does not show there.
 #[test]

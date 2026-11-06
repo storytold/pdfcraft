@@ -969,6 +969,248 @@ fn marquee_zoom_and_snapshot() {
 }
 
 #[test]
+fn dynamic_zoom_drags_and_clicks_about_the_pointer() {
+    use egui::{Event, Modifiers, PointerButton};
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    h.state_mut().set_option("quick", "dynamic-zoom").unwrap();
+    h.run_steps(2);
+    let r = h.state().views[i].page_screen_rect(0).expect("on screen");
+    // The page fraction under `p`, and where that fraction is on screen now.
+    let frac = |r: egui::Rect, p: egui::Pos2| (p - r.min) / r.size();
+    let press = r.center() + egui::vec2(-r.width() * 0.2, -r.height() * 0.1);
+    let f = frac(r, press);
+    let settle = |h: &mut Harness<'static, PdfCraftApp>| {
+        for _ in 0..3 {
+            h.run_steps(2);
+        }
+    };
+    // Dragging right zooms in, about the point pressed.
+    let z0 = h.state().views[i].zoom;
+    drag(&mut h, press, press + egui::vec2(100.0, 0.0));
+    settle(&mut h);
+    let z1 = h.state().views[i].zoom;
+    assert!((z1 / z0 - 2.0).abs() < 0.15, "one doubling: {z0} → {z1}");
+    let r1 = h.state().views[i].page_screen_rect(0).expect("still on screen");
+    let kept = r1.min + f * r1.size();
+    assert!((kept - press).length() < 4.0, "the pressed point stays put: {press:?} → {kept:?}");
+    // Up zooms in as well (Acrobat's direction); left or down zooms out.
+    drag(&mut h, press, press + egui::vec2(0.0, -50.0));
+    settle(&mut h);
+    let z2 = h.state().views[i].zoom;
+    assert!(z2 > z1 * 1.2, "up: {z1} → {z2}");
+    drag(&mut h, press, press + egui::vec2(-60.0, 40.0));
+    settle(&mut h);
+    let z3 = h.state().views[i].zoom;
+    assert!((z3 / z2 - 0.5).abs() < 0.05, "left 60 and down 40 halve it: {z2} → {z3}");
+    // A click steps in; Alt/Option-click steps out.
+    let at = h.state().views[i].viewport_rect().center();
+    let click = |h: &mut Harness<'static, PdfCraftApp>, modifiers: Modifiers| {
+        h.event(Event::ModifiersChanged(modifiers));
+        h.hover_at(at);
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers });
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers });
+        h.run_steps(1);
+        h.event(Event::ModifiersChanged(Modifiers::NONE));
+        for _ in 0..3 {
+            h.run_steps(2);
+        }
+    };
+    click(&mut h, Modifiers::NONE);
+    let z4 = h.state().views[i].zoom;
+    assert!(z4 > z3, "click: {z3} → {z4}");
+    click(&mut h, Modifiers::ALT);
+    let z5 = h.state().views[i].zoom;
+    assert!(z5 < z4, "Alt-click: {z4} → {z5}");
+    // Nothing was edited.
+    let id = h.state().views[i].id;
+    assert!(!h.state().session.get(id).expect("open").dirty);
+}
+
+/// Press with Dynamic Zoom and drag 40 points right (zooming in), leaving the button held.
+fn start_dynamic_zoom(h: &mut Harness<'static, PdfCraftApp>) -> (usize, egui::Pos2) {
+    let i = h.state().active.unwrap();
+    h.state_mut().set_option("quick", "dynamic-zoom").unwrap();
+    h.run_steps(2);
+    let press = h.state().views[i].page_screen_rect(0).expect("on screen").center();
+    h.hover_at(press);
+    h.run_steps(1);
+    h.drag_at(press);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(press + egui::vec2(10.0 * k as f32, 0.0));
+        h.run_steps(1);
+    }
+    (i, press)
+}
+
+/// Move the held pointer on to `to`, a step at a time, and let the view settle.
+fn hold_and_move(h: &mut Harness<'static, PdfCraftApp>, from: egui::Pos2, to: egui::Pos2) {
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(2);
+    }
+}
+
+/// egui also drops its drag on Escape; this guards the press staying cancelled until it is up.
+#[test]
+fn escape_ends_a_dynamic_zoom_drag_while_the_button_is_held() {
+    let mut h = harness();
+    let (i, press) = start_dynamic_zoom(&mut h);
+    let z0 = h.state().views[i].zoom;
+    assert!(z0 > 1.0, "the drag is under way: {z0}");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    let z1 = h.state().views[i].zoom;
+    let at = press + egui::vec2(40.0, 0.0);
+    hold_and_move(&mut h, at, at + egui::vec2(150.0, -50.0));
+    assert_eq!(h.state().views[i].zoom, z1, "the held press zooms no more after Escape (from {z0})");
+    // Its release does not click a zoom step either; the next press zooms again.
+    h.drop_at(at + egui::vec2(150.0, -50.0));
+    h.run_steps(3);
+    assert_eq!(h.state().views[i].zoom, z1, "the release");
+    let p = h.state().views[i].viewport_rect().center();
+    drag(&mut h, p, p + egui::vec2(100.0, 0.0));
+    h.run_steps(4);
+    assert!(h.state().views[i].zoom > z1 * 1.5, "a new drag zooms: {z1} → {}", h.state().views[i].zoom);
+}
+
+#[test]
+fn undo_or_redo_ends_a_dynamic_zoom_drag_while_the_button_is_held() {
+    for redo in [false, true] {
+        let mut h = harness();
+        // Rotating page 1 changes its shape, so undo and redo move every page rectangle.
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+        if redo {
+            assert!(h.state_mut().execute("edit.undo"));
+        }
+        crate::support::settle(&mut h);
+        let z = h.state().views[h.state().active.unwrap()].zoom;
+        let (i, press) = start_dynamic_zoom(&mut h);
+        assert!(h.state().views[i].zoom > z, "redo {redo}: the drag is under way");
+        assert!(h.state_mut().execute(if redo { "edit.redo" } else { "edit.undo" }));
+        h.run_steps(2);
+        let z1 = h.state().views[i].zoom;
+        let at = press + egui::vec2(40.0, 0.0);
+        hold_and_move(&mut h, at, at + egui::vec2(150.0, -50.0));
+        assert_eq!(h.state().views[i].zoom, z1, "redo {redo}: the held press zooms no more after the change");
+        h.drop_at(at + egui::vec2(150.0, -50.0));
+        h.run_steps(3);
+        assert_eq!(h.state().views[i].zoom, z1, "redo {redo}: the release");
+        let p = h.state().views[i].viewport_rect().center();
+        drag(&mut h, p, p + egui::vec2(100.0, 0.0));
+        h.run_steps(4);
+        assert!(h.state().views[i].zoom > z1 * 1.5, "redo {redo}: a new drag zooms");
+    }
+}
+
+/// An edit while the press is held, before it has moved far enough to be a drag: it zooms no
+/// more, and its release does not click a zoom step.
+#[test]
+fn undo_with_a_dynamic_zoom_press_not_yet_a_drag_ends_the_press() {
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    crate::support::settle(&mut h);
+    h.state_mut().set_option("quick", "dynamic-zoom").unwrap();
+    h.run_steps(2);
+    let press = h.state().views[i].page_screen_rect(0).expect("on screen").center();
+    h.hover_at(press);
+    h.run_steps(1);
+    h.drag_at(press);
+    h.run_steps(2);
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    let z = h.state().views[i].zoom;
+    hold_and_move(&mut h, press, press + egui::vec2(150.0, -50.0));
+    assert_eq!(h.state().views[i].zoom, z, "the held press zooms no more after the edit");
+    h.drop_at(press + egui::vec2(150.0, -50.0));
+    h.run_steps(3);
+    assert_eq!(h.state().views[i].zoom, z, "the release");
+    // Without moving: the release is no click either.
+    let press = h.state().views[i].viewport_rect().center();
+    h.hover_at(press);
+    h.run_steps(1);
+    h.drag_at(press);
+    h.run_steps(2);
+    assert!(h.state_mut().execute("edit.redo"));
+    h.run_steps(2);
+    let z = h.state().views[i].zoom;
+    h.drop_at(press);
+    h.run_steps(3);
+    assert_eq!(h.state().views[i].zoom, z, "the release of a press that never moved");
+    let p = h.state().views[i].viewport_rect().center();
+    drag(&mut h, p, p + egui::vec2(100.0, 0.0));
+    h.run_steps(4);
+    assert!(h.state().views[i].zoom > z * 1.5, "a new drag zooms: {z} → {}", h.state().views[i].zoom);
+}
+
+/// A press the edit ended stays ended when the file is then replaced, as a reload by the file
+/// watcher does, with the button still down.
+#[test]
+fn a_replaced_document_keeps_a_cancelled_dynamic_zoom_press_cancelled() {
+    let mut h = harness();
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+    crate::support::settle(&mut h);
+    let (i, press) = start_dynamic_zoom(&mut h);
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    let info = h.state().session.get(h.state().views[i].id).expect("open").info.clone();
+    h.state_mut().views[i].document_replaced(&info);
+    h.run_steps(2);
+    let z = h.state().views[i].zoom;
+    let at = press + egui::vec2(40.0, 0.0);
+    hold_and_move(&mut h, at, at + egui::vec2(150.0, -50.0));
+    assert_eq!(h.state().views[i].zoom, z, "the held press zooms no more on the new document");
+    h.drop_at(at + egui::vec2(150.0, -50.0));
+    h.run_steps(3);
+    assert_eq!(h.state().views[i].zoom, z, "the release");
+}
+
+/// Space picks up the Hand during a held press: when it is let go, Dynamic Zoom is back but the
+/// press is not its own any more, whether it began with Dynamic Zoom or with the Hand.
+#[test]
+fn a_press_through_the_space_hand_does_not_restart_dynamic_zoom() {
+    // Pressed with Dynamic Zoom, which Space interrupts.
+    let mut h = harness();
+    let (i, press) = start_dynamic_zoom(&mut h);
+    h.key_down(egui::Key::Space);
+    h.run_steps(2);
+    h.key_up(egui::Key::Space);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::DynamicZoom, "Dynamic Zoom is back");
+    let z = h.state().views[i].zoom;
+    let at = press + egui::vec2(40.0, 0.0);
+    hold_and_move(&mut h, at, at + egui::vec2(150.0, -50.0));
+    assert_eq!(h.state().views[i].zoom, z, "the held press zooms no more");
+    h.drop_at(at + egui::vec2(150.0, -50.0));
+    h.run_steps(3);
+    assert_eq!(h.state().views[i].zoom, z, "the release");
+    // Pressed with the Hand, while Space is down.
+    let p = h.state().views[i].viewport_rect().center();
+    h.key_down(egui::Key::Space);
+    h.run_steps(2);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(2);
+    h.key_up(egui::Key::Space);
+    h.run_steps(2);
+    let z = h.state().views[i].zoom;
+    hold_and_move(&mut h, p, p + egui::vec2(150.0, -50.0));
+    assert_eq!(h.state().views[i].zoom, z, "the Hand's press does not zoom");
+    h.drop_at(p + egui::vec2(150.0, -50.0));
+    h.run_steps(3);
+    assert_eq!(h.state().views[i].zoom, z, "the Hand's release");
+    // The next press is Dynamic Zoom's.
+    drag(&mut h, p, p + egui::vec2(100.0, 0.0));
+    h.run_steps(4);
+    assert!(h.state().views[i].zoom > z * 1.5, "a new drag zooms: {z} → {}", h.state().views[i].zoom);
+}
+
+#[test]
 fn fit_visible_zooms_to_the_content_width() {
     let mut h = harness();
     let i = h.state().active.unwrap();
@@ -1639,6 +1881,12 @@ fn v_h_and_space_pick_the_quick_tools() {
     };
     assert_eq!(press(&mut h, Key::H), QuickTool::Hand);
     assert_eq!(press(&mut h, Key::V), QuickTool::Select);
+    assert_eq!(press(&mut h, Key::Z), QuickTool::DynamicZoom);
+    // ⌘Z / Ctrl+Z is still Undo, not the zoom tool.
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "⌘Z");
     // V leaves any other tool too, as the toolbar button does.
     h.state_mut().quick_tool = QuickTool::Crop;
     assert_eq!(press(&mut h, Key::V), QuickTool::Select);

@@ -172,6 +172,9 @@ fn core_tool_buttons(ui: &mut egui::Ui, app: &mut PdfCraftApp, cell: f32, popup_
     if icons::button(ui, "hand", cell, app.quick_tool == QuickTool::Hand, tl!("Hand (H)")).clicked() {
         app.quick_tool = QuickTool::Hand;
     }
+    if icons::button(ui, "zoom-in", cell, app.quick_tool == QuickTool::DynamicZoom, tl!("Zoom (Z)")).clicked() {
+        app.quick_tool = QuickTool::DynamicZoom;
+    }
     // Comment ▸, Highlight ▸, Draw ▸ (Acrobat's comment toolbar groups). Clicking a
     // group selects its last-used tool; clicking it again opens the flyout.
     for g in 0..comments::GROUPS.len() {

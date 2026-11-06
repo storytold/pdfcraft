@@ -874,3 +874,5 @@ PR #2133 retains document-local Pages sidebar focus for Ctrl/Cmd+A and Escape af
 PR #1952 retains per-widget checkbox/radio export-value editing in the split form-authoring and Prepare modules. Caption editing remains supported. Tests cover preserved appearances and selection, invalid/locked refusals, data-format round trips, and Apply/Cancel/Undo. Current-head hosted validation is pending; feature estimates are unchanged.
 
 - **2026-10-31 (#1577):** Reconciled the page-shadow preference with split viewer, organizer, settings and control modules, preserving upstream page-gap shadow suppression. CI validation pending.
+
+- **2026-11-04 (M3, Dynamic Zoom, PR #4135):** Z or the quick bar's magnifier picks a Dynamic Zoom tool: drag right or up to zoom in, left or down to zoom out, about the point pressed (PhotoCraft's Scrubby Zoom, Acrobat's Dynamic Zoom); click steps in, Alt/Option-click out. Loupe still missing. Estimates unchanged.
