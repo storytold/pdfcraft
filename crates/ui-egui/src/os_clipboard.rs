@@ -66,24 +66,45 @@ pub(crate) fn read(mode: ReadMode) -> Result<Option<Clip>, NotResponding> {
 
 fn read_native(mode: ReadMode) -> Result<Option<Clip>, arboard::Error> {
     with(|cb| {
-        if matches!(mode, ReadMode::ImagePaste) && cb.get_text().is_ok_and(|text| !text.is_empty()) {
-            return Ok(Some(Clip::Text(String::new())));
-        }
-        if let Ok(img) = cb.get_image() {
-            let expected = img.width.checked_mul(img.height).and_then(|px| px.checked_mul(4));
-            if img.width > 0
-                && img.height > 0
-                && img.width <= MAX_IMAGE_SIDE
-                && img.height <= MAX_IMAGE_SIDE
-                && expected == Some(img.bytes.len())
-                && img.bytes.len() <= MAX_IMAGE_BYTES
-            {
-                return Ok(Some(Clip::Image { width: img.width, height: img.height, rgba: img.bytes.into_owned() }));
+        // Do not request the lower-priority format when the preferred one is usable.
+        let (image, text) = match mode {
+            ReadMode::ImagePaste => {
+                let text = cb.get_text();
+                let image = if text.as_ref().is_ok_and(|text| !text.is_empty()) { Err(arboard::Error::ContentNotAvailable) } else { cb.get_image() };
+                (image, text)
             }
-            return Ok(None);
-        }
-        Ok(cb.get_text().ok().filter(|text| !text.trim().is_empty()).map(Clip::Text))
+            ReadMode::Create => {
+                let image = cb.get_image();
+                let text = if image.as_ref().is_ok_and(valid_image) { Err(arboard::Error::ContentNotAvailable) } else { cb.get_text() };
+                (image, text)
+            }
+        };
+        Ok(select_content(image, text, mode))
     })
+}
+
+fn valid_image(image: &arboard::ImageData<'_>) -> bool {
+    let expected = image.width.checked_mul(image.height).and_then(|px| px.checked_mul(4));
+    image.width > 0
+        && image.height > 0
+        && image.width <= MAX_IMAGE_SIDE
+        && image.height <= MAX_IMAGE_SIDE
+        && expected == Some(image.bytes.len())
+        && image.bytes.len() <= MAX_IMAGE_BYTES
+}
+
+/// Pure format policy, shared by both native read modes. An unavailable result may also mean
+/// that the preferred format was usable, so the other format was never requested.
+fn select_content(image: Result<arboard::ImageData<'_>, arboard::Error>, text: Result<String, arboard::Error>, mode: ReadMode) -> Option<Clip> {
+    if matches!(mode, ReadMode::ImagePaste) && text.as_ref().is_ok_and(|text| !text.is_empty()) {
+        return Some(Clip::Text(String::new()));
+    }
+    if let Ok(image) = image
+        && valid_image(&image)
+    {
+        return Some(Clip::Image { width: image.width, height: image.height, rgba: image.bytes.into_owned() });
+    }
+    text.ok().filter(|text| !text.trim().is_empty()).map(Clip::Text)
 }
 
 pub(crate) fn for_image_paste() -> Result<Option<Clip>, NotResponding> {

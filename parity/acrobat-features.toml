@@ -7059,8 +7059,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["create.clipboard"]
 tools = []
-evidence = ["crates/ui-egui/src/os_clipboard/tests.rs::blocked_create_from_clipboard_returns_and_notifies", "crates/ui-egui/tests/it/create.rs::clipboard_images_and_text_become_new_pdfs"]
-notes = "an image (one page at its size) or text; headless tools read files instead. Native reads run on a worker with a one-second wait; timeout shows The clipboard isn't responding without opening a document (#6169)."
+evidence = ["crates/ui-egui/src/os_clipboard/tests.rs::clipboard_formats_keep_their_mode_priority", "crates/ui-egui/src/os_clipboard/tests.rs::invalid_create_image_falls_back_to_readable_text", "crates/ui-egui/src/os_clipboard/tests.rs::blocked_create_from_clipboard_returns_and_notifies", "crates/ui-egui/tests/it/create.rs::clipboard_images_and_text_become_new_pdfs"]
+notes = "An oversized or malformed clipboard image falls through to readable text, preserving image-first Create and text-first image-paste priorities. Creates a PDF from an image (one page at its size) or text; headless tools read files instead. Native reads run on a worker with a one-second wait; timeout shows The clipboard isn't responding without opening a document (#6169)."
 
 [[feature]]
 id = "create.from-screenshot"

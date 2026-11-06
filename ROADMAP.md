@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M7 #6169 adjacent follow-up: Create from Clipboard falls back to readable text when an image is oversized or malformed; pure format-priority regressions; estimates unchanged)
+
 > **Last reviewed:** 2026-11-05 | **Last updated:** 2026-11-05 | **Change:** patch (M7 #6169: native clipboard reads run on a worker with a one-second wait; context menus do not read it and Copy never waits on a stuck reader; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
@@ -231,6 +233,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-05 (M7, #6169 adjacent follow-up):** Create from Clipboard uses readable text when an available image has zero/overflowing dimensions, exceeds the side/byte limits, or has a mismatched pixel byte count. This corrects the early-return behavior moved from the old Create reader. Pure result-selection tests preserve image-before-text in Create and nonempty-text-before-image in ImagePaste, with a literal-revert red for the fallback. Worker timeout and nonblocking-lock behavior stay unchanged. Estimates unchanged.
 
 - **2026-11-05 (M7, #6169):** Page and image context menus no longer synchronously probe the native clipboard, avoiding the Copy/right-click selection-owner deadlock path on Wayland. Paste is offered optimistically; explicit Paste, Ctrl+V fallback and Create from Clipboard read on a worker with a one-second wait and a non-fatal timeout notice. Clipboard access uses try_lock, so a stuck reader cannot freeze a later image/file Copy. Unavailable contents cannot insert a stale cached image or modify the PDF. A real selection/floating Copy/context Paste kittest records clipboard access without using a desktop clipboard. The native Wayland hang was not exercised on this compositor-free host. Estimates unchanged.
 

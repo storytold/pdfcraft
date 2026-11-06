@@ -267,3 +267,50 @@ fn image_copy_after_a_stuck_read_never_waits_for_its_lock() {
     assert!(h.state().toast.as_ref().unwrap().0.starts_with("Couldn't copy the image:"));
     assert_eq!(probe.accesses(), 2);
 }
+
+fn image_data(width: usize, height: usize, bytes: usize) -> Result<arboard::ImageData<'static>, arboard::Error> {
+    Ok(arboard::ImageData { width, height, bytes: std::borrow::Cow::Owned(vec![128; bytes]) })
+}
+
+#[test]
+fn clipboard_formats_keep_their_mode_priority() {
+    use super::{ReadMode, select_content};
+    use crate::create_ui::Clip;
+    assert!(matches!(select_content(image_data(1, 1, 4), Ok("words".into()), ReadMode::Create),
+        Some(Clip::Image { width: 1, height: 1, rgba }) if rgba == vec![128; 4]));
+    assert!(matches!(select_content(image_data(1, 1, 4), Ok("words".into()), ReadMode::ImagePaste),
+        Some(Clip::Text(text)) if text.is_empty()));
+    for mode in [ReadMode::Create, ReadMode::ImagePaste] {
+        assert!(matches!(select_content(image_data(1, 1, 4), Ok(String::new()), mode), Some(Clip::Image { .. })));
+        assert!(matches!(select_content(image_data(1, 1, 4), Err(arboard::Error::ContentNotAvailable), mode), Some(Clip::Image { .. })));
+        assert!(matches!(select_content(Err(arboard::Error::ContentNotAvailable), Ok("words".into()), mode), Some(Clip::Text(_))));
+        assert!(select_content(Err(arboard::Error::ContentNotAvailable), Err(arboard::Error::ContentNotAvailable), mode).is_none());
+    }
+    // Preserve Paste's nonempty-text priority, including whitespace; Create ignores blank text.
+    assert!(matches!(select_content(image_data(1, 1, 4), Ok(" ".into()), ReadMode::ImagePaste), Some(Clip::Text(_))));
+    assert!(select_content(Err(arboard::Error::ContentNotAvailable), Ok(" ".into()), ReadMode::Create).is_none());
+}
+
+#[test]
+fn invalid_create_image_falls_back_to_readable_text() {
+    use super::{ReadMode, select_content};
+    use crate::create_ui::{Clip, MAX_IMAGE_SIDE};
+    // Zero dimensions, over the side/byte caps, malformed byte count and overflowing dimensions.
+    let cases =
+        [(0, 1, 0), (1, 0, 0), (MAX_IMAGE_SIDE + 1, 1, (MAX_IMAGE_SIDE + 1) * 4), (4096, 4097, 4096 * 4097 * 4), (2, 2, 4), (usize::MAX, 2, 0)];
+    for (width, height, bytes) in cases {
+        assert!(
+            matches!(select_content(image_data(width, height, bytes), Ok("fallback".into()), ReadMode::Create),
+            Some(Clip::Text(text)) if text == "fallback"),
+            "Create must retain readable text beside invalid {width}x{height}/{bytes}-byte image"
+        );
+        // Paste already prefers text, and without text an invalid image remains unusable.
+        assert!(
+            matches!(select_content(image_data(width, height, bytes), Ok("fallback".into()), ReadMode::ImagePaste), Some(Clip::Text(text)) if text.is_empty())
+        );
+        for mode in [ReadMode::Create, ReadMode::ImagePaste] {
+            assert!(select_content(image_data(width, height, bytes), Ok(String::new()), mode).is_none());
+            assert!(select_content(image_data(width, height, bytes), Err(arboard::Error::ContentNotAvailable), mode).is_none());
+        }
+    }
+}
