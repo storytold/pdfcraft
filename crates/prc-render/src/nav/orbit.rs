@@ -71,6 +71,9 @@ impl NamedView {
     }
 }
 
+/// How far from parallel two unit vectors must be to give a direction across them.
+const PARALLEL: f64 = 1e-9;
+
 /// The model point an orbit turns about: its depth along the look, and its offset right and up
 /// from the look's axis in model units. An orthographic view shows the height a perspective one
 /// would at that depth, so switching projection keeps the scale.
@@ -148,7 +151,12 @@ impl Orbit {
     pub fn looking(direction: [f64; 3], up: [f64; 3], perspective: bool) -> Option<Orbit> {
         let front = normalize(direction)?;
         let up = normalize(up)?;
-        let up = normalize(sub(up, scale(front, dot(up, front))))?;
+        // Parallel unit vectors leave a rounding residue, not a direction.
+        let across = sub(up, scale(front, dot(up, front)));
+        if length(across) < PARALLEL {
+            return None;
+        }
+        let up = normalize(across)?;
         Some(Orbit { yaw: 0.0, pitch: 0.0, zoom: 1.0, pan: [0.0; 2], perspective, axes: Axes { front, up }, anchor: None })
     }
 
@@ -285,7 +293,8 @@ impl Orbit {
     /// (width / height; 1 stands in when it is not positive).
     ///
     /// # Errors
-    /// [`RenderError::Camera`] when the view does not form: a position out of the finite range.
+    /// [`RenderError::Camera`] when the view does not form: a reach or a position out of the
+    /// finite range.
     pub fn camera(&self, bounds: &Bounds, reach: f64, aspect: f64) -> Result<Camera, RenderError> {
         let dir = self.direction();
         let (right, image_up) = self.axes.picture(dir).ok_or(RenderError::Camera("the view looks along its up axis"))?;
@@ -293,7 +302,11 @@ impl Orbit {
         let mut camera = match self.anchor {
             Some(a) => about(a, dir, (right, image_up), up, self.perspective),
             None => {
-                let reach = if reach.is_finite() && reach > 0.0 { reach } else { radius(bounds) };
+                let reach = match reach {
+                    r if !r.is_finite() => return Err(RenderError::Camera("the model's reach is out of range")),
+                    r if r > 0.0 => r,
+                    _ => radius(bounds),
+                };
                 fitted(bounds.centre(), reach, dir, up, self.perspective, aspect)
             }
         };
@@ -325,11 +338,12 @@ impl Orbit {
 }
 
 /// How far the farthest vertex the meshes draw lies from `bounds`' centre: the radius of the
-/// sphere [`Orbit::camera`] fits. Half the box's diagonal when there is none.
+/// sphere [`Orbit::camera`] fits. Half the box's diagonal when there is none, and infinite when a
+/// distance overflows, which [`Orbit::camera`] refuses.
 #[must_use]
 pub fn reach(meshes: &[WorldMesh], bounds: &Bounds) -> f64 {
     let c = bounds.centre();
-    let far = vertices(meshes).map(|p| length(sub(p, c))).filter(|d| d.is_finite()).fold(0.0_f64, f64::max);
+    let far = vertices(meshes).map(|p| length(sub(p, c))).fold(0.0_f64, |far, d| if d.is_finite() { far.max(d) } else { f64::INFINITY });
     if far > 0.0 { far } else { radius(bounds) }
 }
 

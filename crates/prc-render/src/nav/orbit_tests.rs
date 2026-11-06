@@ -64,6 +64,10 @@ fn a_view_with_its_up_along_its_look_or_out_of_range_is_refused() {
     assert!(Orbit::looking([0.0; 3], [0.0, 0.0, 1.0], true).is_none());
     assert!(Orbit::looking([f64::NAN, 0.0, 1.0], [0.0, 1.0, 0.0], true).is_none());
     assert!(Orbit::looking([f64::MAX, f64::MAX, 0.0], [0.0, 0.0, f64::MAX], true).is_some());
+    for v in [[1.0, 1.0, 1.0], [0.1, 0.7, 0.3], [-3.0, 1e-3, 7.0]] {
+        assert!(Orbit::looking(v, v, true).is_none(), "{v:?} along itself");
+        assert!(Orbit::looking(v, scale(v, -2.0), true).is_none(), "{v:?} against itself");
+    }
 }
 
 #[test]
@@ -157,6 +161,8 @@ fn a_far_pan_is_held_and_an_out_of_range_model_is_an_error_not_a_panic() {
     assert!(orbit.camera(&huge, f64::MAX, 1.0).is_err());
     let flat = Bounds { min: [0.0; 3], max: [0.0; 3] };
     assert!(orbit.camera(&flat, 0.0, f64::NAN).is_ok(), "an empty extent falls back to a unit radius");
+    assert!(orbit.camera(&cube(), f64::INFINITY, 1.0).is_err(), "an overflowing reach is refused, not replaced");
+    assert!(orbit.camera(&cube(), f64::NAN, 1.0).is_err());
     // A shift that overflows to NaN (a zoom about a model at the edge of the range) leaves the pan.
     orbit.set_pan([f64::NAN, 0.0]);
     assert_eq!(orbit.pan(), [PAN_LIMIT, -PAN_LIMIT]);
@@ -267,4 +273,15 @@ fn a_pressed_point_off_centre_keeps_its_place_as_the_view_turns() {
             }
         }
     }
+}
+
+#[test]
+fn a_vertex_too_far_to_measure_gives_an_infinite_reach_not_a_near_one() {
+    let mut mesh = pdfcraft_prc::TriangleMesh::default();
+    mesh.positions = vec![[-f64::MAX, -f64::MAX, 0.0], [f64::MAX, f64::MAX, 0.0], [f64::MAX, -f64::MAX, 0.0], [0.0, 0.0, 0.0]];
+    mesh.triangles = vec![[0, 1, 2], [3, 3, 3]];
+    let meshes = [WorldMesh::new(mesh)];
+    let bounds = Bounds::of(&meshes).unwrap();
+    assert_eq!(reach(&meshes, &bounds), f64::INFINITY);
+    assert!(Orbit::named(NamedView::Front, true, Upright::default()).camera(&bounds, reach(&meshes, &bounds), 1.0).is_err());
 }
