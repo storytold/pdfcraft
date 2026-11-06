@@ -140,7 +140,8 @@ enum Grab {
     Draw(Pos2),
     /// Selecting fields inside a dragged rectangle.
     Select(Pos2),
-    Move,
+    /// Moving the selected field; with Shift held, the axis the move keeps to once [`lock_axis`] chose it.
+    Move(Option<Axis>),
     /// Resizing by a corner: (moves left edge, moves top edge) in screen terms.
     Corner(bool, bool),
 }
@@ -229,11 +230,47 @@ fn handles(r: Rect) -> [(Pos2, bool, bool); 4] {
     [(r.left_top(), true, true), (r.right_top(), false, true), (r.left_bottom(), true, false), (r.right_bottom(), false, false)]
 }
 
-/// The rect while a move or resize is in progress. With `shift` held a corner keeps the field's
-/// proportions, as it does for comments and stamps.
+/// The direction a Shift-constrained move keeps to.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Axis {
+    Horizontal,
+    Vertical,
+}
+
+impl Axis {
+    /// The axis `delta` has gone further along; horizontal on a tie.
+    fn of(delta: egui::Vec2) -> Self {
+        if delta.x.abs() >= delta.y.abs() { Axis::Horizontal } else { Axis::Vertical }
+    }
+}
+
+/// How far, in screen pixels, a Shift-move goes before its axis is chosen, so the first pixel of
+/// hand jitter does not pick it.
+const AXIS_LOCK: f32 = 4.0;
+
+/// The axis a move keeps to with `shift` held: chosen once the drag has gone [`AXIS_LOCK`] pixels,
+/// from the direction it has gone furthest, and then kept while Shift stays down, so a drag that
+/// turns and crosses the diagonal does not flip it and make the field jump. Releasing Shift frees
+/// the move, and pressing it again chooses afresh.
+fn lock_axis(axis: Option<Axis>, delta: egui::Vec2, shift: bool) -> Option<Axis> {
+    if !shift {
+        return None;
+    }
+    axis.or_else(|| (delta.length() >= AXIS_LOCK).then(|| Axis::of(delta)))
+}
+
+/// The rect while a move or resize is in progress. With `shift` held a move keeps to one axis,
+/// horizontal or vertical, as Acrobat's Prepare Form does ("To constrain the vertical or horizontal
+/// movement as you drag, press and hold Shift"): the one [`lock_axis`] chose, or until it has
+/// chosen, the one the drag has gone furthest along. A corner keeps the field's proportions, as it
+/// does for comments and stamps.
 fn dragged(r: Rect, grab: Grab, delta: egui::Vec2, shift: bool) -> Rect {
     match grab {
-        Grab::Move => r.translate(delta),
+        Grab::Move(axis) if shift => r.translate(match axis.unwrap_or_else(|| Axis::of(delta)) {
+            Axis::Horizontal => vec2(delta.x, 0.0),
+            Axis::Vertical => vec2(0.0, delta.y),
+        }),
+        Grab::Move(_) => r.translate(delta),
         Grab::Corner(left, top) => {
             let handle = (if left { -1 } else { 1 }, if top { -1 } else { 1 });
             comments::resized(r, handle, delta, comments::corner_ratio(r, None, shift))
@@ -315,10 +352,14 @@ pub(crate) fn page_input(
     }
 
     // A grab in progress on this page.
-    if let Some((gp, grab, start)) = prep.grab
+    if let Some((gp, mut grab, start)) = prep.grab
         && gp == page
     {
         out.consumed = true;
+        if let (Grab::Move(axis), Some(p)) = (grab, pointer) {
+            grab = Grab::Move(lock_axis(axis, p - start, ui.input(|i| i.modifiers.shift)));
+            prep.grab = Some((gp, grab, start));
+        }
         if resp.drag_stopped() || !ptr.primary_down {
             prep.grab = None;
             let end = pointer.unwrap_or(start);
@@ -361,7 +402,7 @@ pub(crate) fn page_input(
                     view.pending_edit = Some(Edit::AddField { page, rect, kind: tool.new_field(join), name: None });
                     out.placed = true;
                 }
-                Grab::Move | Grab::Corner(..) => {
+                Grab::Move(_) | Grab::Corner(..) => {
                     let Some((name, wi)) = prep.selected.clone() else { return out };
                     let Some(w) = form.iter().find(|f| f.name == name).and_then(|f| f.widgets.get(wi)) else { return out };
                     let delta = end - start;
@@ -401,7 +442,7 @@ pub(crate) fn page_input(
             prep.grab = Some((page, Grab::Corner(left, top), origin));
         } else if let Some((f, wi)) = hit {
             prep.selected = Some((f.name.clone(), wi));
-            prep.grab = Some((page, Grab::Move, origin));
+            prep.grab = Some((page, Grab::Move(None), origin));
         } else {
             prep.marquee_before = Some(prep.selected.iter().chain(prep.also.iter()).cloned().collect());
             if !ui.input(|i| i.modifiers.shift || i.modifiers.command) {
@@ -777,6 +818,37 @@ mod tests {
             assert_eq!(if left { out.max.x } else { out.min.x }, if left { r.max.x } else { r.min.x });
             assert_eq!(if top { out.max.y } else { out.min.y }, if top { r.max.y } else { r.min.y });
         }
-        assert_eq!(dragged(r, Grab::Move, vec2(5.0, 6.0), true), r.translate(vec2(5.0, 6.0)));
+        assert_eq!(dragged(r, Grab::Move(None), vec2(5.0, 6.0), false), r.translate(vec2(5.0, 6.0)));
+    }
+
+    /// Shift keeps a move to one axis: whichever the drag has gone further along, so the field
+    /// follows the pointer's main direction and never drifts on the other.
+    #[test]
+    fn shift_keeps_a_move_horizontal_or_vertical() {
+        let r = Rect::from_min_max(pos2(100.0, 100.0), pos2(196.0, 132.0));
+        assert_eq!(dragged(r, Grab::Move(None), vec2(40.0, 6.0), true), r.translate(vec2(40.0, 0.0)), "mostly right");
+        assert_eq!(dragged(r, Grab::Move(None), vec2(-40.0, 6.0), true), r.translate(vec2(-40.0, 0.0)), "mostly left");
+        assert_eq!(dragged(r, Grab::Move(None), vec2(5.0, -30.0), true), r.translate(vec2(0.0, -30.0)), "mostly up");
+        assert_eq!(dragged(r, Grab::Move(None), vec2(-5.0, 30.0), true), r.translate(vec2(0.0, 30.0)), "mostly down");
+        // Releasing Shift moves freely again.
+        assert_eq!(dragged(r, Grab::Move(None), vec2(40.0, 6.0), false), r.translate(vec2(40.0, 6.0)));
+        // A chosen axis holds even where the drag has gone further along the other one.
+        assert_eq!(dragged(r, Grab::Move(Some(Axis::Horizontal)), vec2(40.0, 60.0), true), r.translate(vec2(40.0, 0.0)));
+        assert_eq!(dragged(r, Grab::Move(Some(Axis::Vertical)), vec2(60.0, 40.0), true), r.translate(vec2(0.0, 40.0)));
+        assert_eq!(dragged(r, Grab::Move(Some(Axis::Vertical)), vec2(60.0, 40.0), false), r.translate(vec2(60.0, 40.0)));
+    }
+
+    /// The axis is chosen once the drag has gone a few pixels with Shift held, kept while Shift
+    /// stays down whichever way the drag then turns, and freed when Shift is let go.
+    #[test]
+    fn a_shift_move_locks_its_axis_until_shift_is_let_go() {
+        assert_eq!(lock_axis(None, vec2(2.0, 1.0), true), None, "not yet past the jitter");
+        let axis = lock_axis(None, vec2(40.0, 0.0), true);
+        assert_eq!(axis, Some(Axis::Horizontal));
+        assert_eq!(lock_axis(axis, vec2(40.0, 42.0), true), axis, "crossing the diagonal keeps it");
+        assert_eq!(lock_axis(axis, vec2(0.0, 300.0), true), axis);
+        assert_eq!(lock_axis(axis, vec2(40.0, 42.0), false), None, "Shift let go frees it");
+        assert_eq!(lock_axis(None, vec2(40.0, 42.0), true), Some(Axis::Vertical), "and pressing it again chooses afresh");
+        assert_eq!(lock_axis(None, vec2(f32::NAN, 0.0), true), None, "a non-finite delta chooses nothing");
     }
 }
