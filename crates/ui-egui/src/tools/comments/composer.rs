@@ -125,16 +125,18 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
             view.comments.tool_done = true;
             let rotation = page_rotation(info, page);
             let border = prefs.style(CommentTool::TextBox).width;
+            let font_size = prefs.font_size(CommentTool::TextBox).unwrap_or(12.0);
             let rect = match (size, info.pages.get(page)) {
-                (Some(size), Some(p)) => drawn_text_box_rect(p, c.at, size, &text, 12.0, border),
-                _ => text_box_rect(c.at, &text, 12.0, rotation),
+                (Some(size), Some(p)) => drawn_text_box_rect(p, c.at, size, &text, font_size, border),
+                _ => text_box_rect(c.at, &text, font_size, rotation),
             };
-            Some(new_comment(&cx, CommentTool::TextBox, Shape::TextBox { rect, font_size: 12.0 }, text))
+            Some(new_comment(&cx, CommentTool::TextBox, Shape::TextBox { rect, font_size }, text))
         }
         ComposerKind::Callout { point } => {
             view.comments.tool_done = true;
             // A callout's leader and box stay in user-space axes (its appearance isn't turned).
-            let rect = text_box_rect(c.at, &text, 10.0, 0);
+            let font_size = prefs.font_size(CommentTool::Callout).unwrap_or(10.0);
+            let rect = text_box_rect(c.at, &text, font_size, 0);
             let side = if point[0] < rect[0] {
                 rect[0]
             } else if point[0] > rect[2] {
@@ -143,7 +145,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 (rect[0] + rect[2]) / 2.0
             };
             let knee = [(point[0] + side) / 2.0, (rect[1] + rect[3]) / 2.0];
-            Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size: 10.0, ending: LineEnding::OpenArrow }, text))
+            Some(new_comment(&cx, CommentTool::Callout, Shape::Callout { rect, knee, point, font_size, ending: LineEnding::OpenArrow }, text))
         }
         ComposerKind::Replace => {
             view.comments.tool_done = true;
