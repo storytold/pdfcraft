@@ -118,7 +118,10 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
     1,000 scanned pages' worth, plus more for each byte of the file, enough to decode a stream
     about 8 times at Flate's best. Images past it stay as they are, and `Report::images_refused`
     counts those the image step read. Streams it only stores with Flate (below) aren't counted.
-- **Discard objects:** thumbnails, alternate images, document tags, print settings.
+- **Discard objects:** thumbnails, alternate images, document tags, print settings, and form
+  submission, import and reset actions (`/SubmitForm`, `/ImportData`, `/ResetForm`, off by
+  default). The fields, links, bookmarks and pages that ran a removed action keep their other
+  actions, and the actions chained after it through `/Next` still run in order.
 - **Clean up:** Flate for streams with no filter; for streams with an outer ASCII85 or ASCIIHex
   layer, that layer is removed when the result is smaller (the inner filters keep their encoded
   bytes; streams with `/DecodeParms`, images and object streams keep their ASCII layer. LZW-compressed
