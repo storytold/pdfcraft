@@ -871,18 +871,24 @@ fn find_shortcut_replaces_the_existing_query_but_clicking_keeps_editing() {
         h.event(egui::Event::PointerButton { pos: page, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
     }
     h.run_steps(2);
+    h.state_mut().views[0].find.as_mut().unwrap().select_all_requested = true;
     let field = h.get_by_role_and_label(Role::TextInput, "Find text");
     let click_after_query = egui::pos2(field.rect().right() - 5.0, field.rect().center().y);
     h.hover_at(click_after_query);
     h.run_steps(1);
-    for pressed in [true, false] {
-        h.event(egui::Event::PointerButton {
-            pos: click_after_query,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::NONE,
-        });
-    }
+    h.event(egui::Event::PointerButton {
+        pos: click_after_query,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton {
+        pos: click_after_query,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
     h.run_steps(2);
     h.get_by_role_and_label(Role::TextInput, "Find text").type_text(" fox");
     h.run_steps(2);

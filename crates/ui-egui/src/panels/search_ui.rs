@@ -25,6 +25,9 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
         ui.memory_mut(|memory| memory.request_focus(input_id));
         find.focus = false;
     }
+    if pointer_pressed {
+        find.select_all_requested = false;
+    }
     if find.select_all_requested && !pointer_pressed {
         let mut state = egui::TextEdit::load_state(ui.ctx(), input_id).unwrap_or_default();
         let end = egui::text::CCursor::new(find.query.chars().count());

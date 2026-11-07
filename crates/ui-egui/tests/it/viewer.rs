@@ -1277,6 +1277,31 @@ fn advanced_search_lists_results_with_context() {
         h.get_by_role_and_label(egui::accesskit::Role::TextInput, "What word or phrase would you like to search for?").value().as_deref(),
         Some("brown")
     );
+    h.state_mut().views[i].find.as_mut().unwrap().select_all_requested = true;
+    let search = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "What word or phrase would you like to search for?");
+    let click_after_query = egui::pos2(search.rect().right() - 5.0, search.rect().center().y);
+    h.hover_at(click_after_query);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton {
+        pos: click_after_query,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton {
+        pos: click_after_query,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "What word or phrase would you like to search for?").type_text(" fox");
+    h.run_steps(2);
+    assert_eq!(
+        h.get_by_role_and_label(egui::accesskit::Role::TextInput, "What word or phrase would you like to search for?").value().as_deref(),
+        Some("brown fox")
+    );
     h.state_mut().views[i].find.as_mut().unwrap().query = "pages".into();
     // Background rendering and text extraction can take seconds on a loaded CI runner (FreeBSD VM).
     for _ in 0..3000 {
