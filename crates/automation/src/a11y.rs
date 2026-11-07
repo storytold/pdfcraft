@@ -393,8 +393,8 @@ impl Automation {
     pub(crate) fn doc_compare(&self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::compare::Kind;
         let (old, new) = self.compare_ids(a)?;
-        let pages = a.opt_ints("pages")?.map(|_| self.pages(a, "pages")).transpose()?;
-        let c = self.session.compare_pages(old, new, pages.as_deref()).map_err(failed)?;
+        let pages = a.opt_ints("pages")?.map(|_| self.pages(a, "pages")).transpose()?.unwrap_or_default();
+        let c = self.session.compare_pages(old, new, &pages).map_err(failed)?;
         let limit = a.opt_int("limit")?.unwrap_or(500).max(1) as usize;
         let r2 = |r: &[f64; 4]| r.map(|v| (v * 100.0).round() / 100.0);
         let side =
