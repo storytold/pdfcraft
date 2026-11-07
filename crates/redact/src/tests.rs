@@ -2597,6 +2597,23 @@ fn bookmarks_reached_only_backwards_lose_their_scripts() {
     assert!(!bytes.windows(13).any(|w| w == b"OUTLINESCRIPT"), "a script reached only backwards survived the save");
 }
 
+/// Outline items written in place count towards the outline budget too: 60,000 items with an inline
+/// child each are 120,000 items, so the outline is refused rather than walked past the budget.
+#[test]
+fn an_outline_past_the_budget_with_inline_items_is_refused() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let siblings = 60_000;
+    let mut items = Vec::with_capacity(siblings);
+    for i in 0..siblings {
+        let next = if i + 1 < siblings { format!(" /Next {} 0 R", 7 + i) } else { String::new() };
+        items.push(format!("<< /Title (a){next} /First << /Title (c) >> >>").into_bytes());
+    }
+    let mut doc = outlined_document(items);
+    assert_eq!(scan(&doc).into_iter().find(|c| c.0 == Hidden::LinksActionsScripts), Some((Hidden::LinksActionsScripts, 1)));
+    let out = remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]);
+    assert!(matches!(out, Err(RedactError::TooDeep)), "{out:?}");
+}
+
 /// Issue #2447: in a tagged PDF the structure tree points at the link and the comment it tags
 /// (`/OBJR`). Removing them must drop those references too, or the full rewrite keeps the
 /// annotations, the URL and the comment text included, while the page no longer lists them.

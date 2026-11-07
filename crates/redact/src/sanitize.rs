@@ -178,9 +178,11 @@ fn outline_len_seen(
 /// after it (`/Next`) keeps only the jump. Items it links to that are written in place are cleaned
 /// the same way, and items that are objects of their own go on `next`. Every link counts, not only
 /// `/First` and `/Next`: a damaged outline may reach an item only backwards, and a full save keeps
-/// that item too. Returns how many actions went, or `None` past the depth limit.
-fn clean_outline_item(doc: &Document, d: &mut Dict, next: &mut Vec<ObjRef>, depth: usize) -> Option<usize> {
-    if depth > MAX_DIRECT_DEPTH {
+/// that item too. `items` counts every item cleaned, inline ones included. Returns how many actions
+/// went, or `None` past the depth limit or past [`OUTLINE_ITEM_BUDGET`] items.
+fn clean_outline_item(doc: &Document, d: &mut Dict, next: &mut Vec<ObjRef>, items: &mut usize, depth: usize) -> Option<usize> {
+    *items = items.saturating_add(1);
+    if depth > MAX_DIRECT_DEPTH || *items > OUTLINE_ITEM_BUDGET {
         return None;
     }
     let mut n = 0;
@@ -203,18 +205,18 @@ fn clean_outline_item(doc: &Document, d: &mut Dict, next: &mut Vec<ObjRef>, dept
     for key in [&b"First"[..], b"Last", b"Next", b"Prev", b"Parent"] {
         match d.get_mut(key) {
             Some(Object::Ref(r)) => next.push(*r),
-            Some(Object::Dict(kid)) => n += clean_outline_item(doc, kid, next, depth + 1)?,
+            Some(Object::Dict(kid)) => n += clean_outline_item(doc, kid, next, items, depth + 1)?,
             _ => {}
         }
     }
     Some(n)
 }
 
-/// [`clean_outline_item`] over the outline from the objects in `next`: the outline objects to
-/// write back, and how many actions went. Each object is read once; `None` when the outline is
-/// larger than [`OUTLINE_ITEM_BUDGET`] objects or nests in place past the depth limit, so the
-/// removal can't be shown complete.
-fn outline_without_actions(doc: &Document, mut next: Vec<ObjRef>) -> Option<(Vec<(ObjRef, Dict)>, usize)> {
+/// [`clean_outline_item`] over the outline from the objects in `next`, after `items` items cleaned
+/// already: the outline objects to write back, and how many actions went. Each object is read once;
+/// `None` when the outline is larger than [`OUTLINE_ITEM_BUDGET`] items or nests in place past the
+/// depth limit, so the removal can't be shown complete.
+fn outline_without_actions(doc: &Document, mut next: Vec<ObjRef>, mut items: usize) -> Option<(Vec<(ObjRef, Dict)>, usize)> {
     let (mut out, mut n, mut seen) = (Vec::new(), 0, std::collections::HashSet::new());
     while let Some(r) = next.pop() {
         if !seen.insert(r) {
@@ -224,7 +226,7 @@ fn outline_without_actions(doc: &Document, mut next: Vec<ObjRef>) -> Option<(Vec
             return None;
         }
         let Some(mut d) = doc.get(r).as_dict().cloned() else { continue };
-        let went = clean_outline_item(doc, &mut d, &mut next, 0)?;
+        let went = clean_outline_item(doc, &mut d, &mut next, &mut items, 0)?;
         if went > 0 {
             out.push((r, d));
             n += went;
@@ -236,16 +238,16 @@ fn outline_without_actions(doc: &Document, mut next: Vec<ObjRef>) -> Option<(Vec
 /// How many outline actions Links, actions and JavaScripts would take out ([`clean_outline_item`]).
 /// An outline too large or too deep to follow counts as one, so the removal runs and refuses it.
 fn outline_action_count(doc: &Document, cat: &Dict) -> usize {
-    let mut next = Vec::new();
+    let (mut next, mut items) = (Vec::new(), 0);
     let mut n = match cat.get(b"Outlines") {
         Some(Object::Ref(r)) => {
             next.push(*r);
             0
         }
-        Some(Object::Dict(o)) => clean_outline_item(doc, &mut o.clone(), &mut next, 0).unwrap_or(1),
+        Some(Object::Dict(o)) => clean_outline_item(doc, &mut o.clone(), &mut next, &mut items, 0).unwrap_or(1),
         _ => return 0,
     };
-    n += outline_without_actions(doc, next).map_or(1, |(_, went)| went);
+    n += outline_without_actions(doc, next, items).map_or(1, |(_, went)| went);
     n
 }
 
@@ -589,16 +591,27 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
 
 /// Take from the outline of catalog `cat` every action that does more than go to a place in this
 /// document (see [`outline_without_actions`]): bookmarks that stay keep where they go, not what
-/// they run. An outline too large or nested too deep to follow is refused, not left half cleaned.
+/// they run. An outline too large or nested too deep to follow is refused, not left half cleaned:
+/// neither `cat` nor `doc` changes until the whole outline is cleaned.
 fn strip_outline_actions(doc: &mut Document, cat: &mut Dict) -> Result<(), RedactError> {
-    let mut next = Vec::new();
-    if let Some(Object::Dict(o)) = cat.get_mut(b"Outlines") {
-        clean_outline_item(doc, o, &mut next, 0).ok_or(RedactError::TooDeep)?;
-    } else if let Some(r) = cat.get(b"Outlines").and_then(Object::as_ref) {
-        next.push(r);
+    let (mut next, mut items) = (Vec::new(), 0);
+    let root = match cat.get(b"Outlines") {
+        Some(Object::Dict(o)) => {
+            let mut o = o.clone();
+            clean_outline_item(doc, &mut o, &mut next, &mut items, 0).ok_or(RedactError::TooDeep)?;
+            Some(o)
+        }
+        Some(Object::Ref(r)) => {
+            next.push(*r);
+            None
+        }
+        _ => None,
+    };
+    let (objs, _) = outline_without_actions(doc, next, items).ok_or(RedactError::TooDeep)?;
+    if let Some(o) = root {
+        cat.set(b"Outlines".to_vec(), Object::Dict(o));
     }
-    let (items, _) = outline_without_actions(doc, next).ok_or(RedactError::TooDeep)?;
-    for (r, d) in items {
+    for (r, d) in objs {
         doc.set(r, Object::Dict(d));
     }
     Ok(())
