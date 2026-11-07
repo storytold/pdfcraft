@@ -2,16 +2,17 @@
 //! refuses a command line over 32 767 characters. The message's values (the body can be long) must
 //! therefore travel on the helper's standard input, never on the command line.
 
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
-use pdfcraft_platform::mail::{Compose, DefaultMail, Route, plan_for};
+use pdfcraft_platform::mail::{Compose, DefaultMail, Route, plan_with_root};
 
 const WINDOWS_LIMIT: usize = 32_767;
 
 fn run_plan(body: String) -> (usize, Option<String>) {
     let compose =
         Compose { path: PathBuf::from(r"C:\Temp\Invoice 26340.pdf"), subject: "Invoice 26340".into(), body, to: vec!["ap@example.org".into()] };
-    let plan = plan_for("windows", &DefaultMail::Mapi("Mozilla Thunderbird".into()), &compose);
+    let plan = plan_with_root("windows", &DefaultMail::Mapi("Mozilla Thunderbird".into()), &compose, Some(OsStr::new(r"C:\Windows")));
     match plan.map(|p| p.route) {
         // The whole line: the program, then each argument and the space before it (quotes aside).
         Ok(Route::Run { command, args, stdin, .. }) => {
