@@ -10,6 +10,12 @@ use pdfcraft_ui_egui::{PdfCraftApp, i18n, theme};
 
 pub mod input;
 
+/// A stable point at the centre of the visible horizontal document ruler.
+pub fn horizontal_ruler_point(h: &Harness<'static, PdfCraftApp>) -> egui::Pos2 {
+    let viewport = h.state().views[0].viewport_rect();
+    egui::pos2(viewport.center().x, viewport.top() + pdfcraft_ui_egui::ruler::HORIZONTAL_RULER_HEIGHT / 2.0)
+}
+
 /// Step frames until `ready` holds or 30 seconds pass, and say whether it held. For background work
 /// (a worker-thread open, page text arriving) that a test then asserts on itself: a frame count is
 /// not a time, and a busy runner may not have finished the work within one. Sleeps briefly between

@@ -332,8 +332,7 @@ fn ruler_clicks_preserve_checkbox_and_radio_keyboard_focus() {
     let mut h = check_box_harness();
     h.state_mut().show_rulers = true;
     h.run_steps(3);
-    let viewport = h.state().views[0].viewport_rect();
-    let ruler = egui::pos2(viewport.center().x, viewport.top() + pdfcraft_ui_egui::ruler::HORIZONTAL_RULER_HEIGHT / 2.0);
+    let ruler = crate::support::horizontal_ruler_point(&h);
 
     click_field(&mut h, "agree", 0);
     let before = value(&h, "agree");

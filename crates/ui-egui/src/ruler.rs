@@ -775,30 +775,41 @@ mod tests {
     }
 
     #[test]
-    /// Handles inch labels use reduced binary fractions without decimals or mixed numbers.
+    /// Inch labels use reduced binary fractions without decimals or mixed numbers.
     fn inch_labels_use_reduced_binary_fractions_without_decimals_or_mixed_numbers() {
-        assert_eq!(format_inch_label(0.0), "0");
-        assert_eq!(format_inch_label(1.0 / 64.0), "1/64");
-        assert_eq!(format_inch_label(2.0 / 64.0), "1/32");
-        assert_eq!(format_inch_label(8.0 / 64.0), "1/8");
-        assert_eq!(format_inch_label(16.0 / 64.0), "1/4");
-        assert_eq!(format_inch_label(32.0 / 64.0), "1/2");
-        assert_eq!(format_inch_label(48.0 / 64.0), "3/4");
-        assert_eq!(format_inch_label(1.0), "1");
-        assert_eq!(format_inch_label(1.25), "1/4");
-        assert_eq!(format_inch_label(-2.75), "3/4");
-        assert!(!format_inch_label(5.0 / 16.0).contains('.'));
+        for (value, expected) in [
+            (0.0, "0"),
+            (1.0 / 64.0, "1/64"),
+            (2.0 / 64.0, "1/32"),
+            (8.0 / 64.0, "1/8"),
+            (16.0 / 64.0, "1/4"),
+            (32.0 / 64.0, "1/2"),
+            (48.0 / 64.0, "3/4"),
+            (1.0, "1"),
+            (1.25, "1/4"),
+            (-2.75, "3/4"),
+            (5.0 / 16.0, "5/16"),
+        ] {
+            assert_eq!(format_inch_label(value), expected, "value={value}");
+        }
     }
 
     #[test]
-    /// Handles non inch units label only whole numbers.
+    /// Metric and point rulers label whole values and suppress fractional values.
     fn non_inch_units_label_only_whole_numbers() {
+        let spec = TickSpec { minor_interval_units: 0.1, medium_every: 5, major_every: 10, label_every: 1 };
+        for (unit, value, index, expected) in [
+            (Unit::Millimetres, 1.5, 15, None),
+            (Unit::Millimetres, 2.0, 20, Some("2")),
+            (Unit::Centimetres, 1.5, 15, None),
+            (Unit::Centimetres, 2.0, 20, Some("2")),
+            (Unit::Points, 1.5, 15, None),
+            (Unit::Points, 2.0, 20, Some("2")),
+        ] {
+            assert_eq!(label_tick(unit, value, index, spec, 100.0).as_deref(), expected, "unit={unit:?}, value={value}");
+        }
         for unit in [Unit::Millimetres, Unit::Centimetres, Unit::Points] {
-            let spec = TickSpec { minor_interval_units: 0.1, medium_every: 5, major_every: 10, label_every: 1 };
-            assert_eq!(label_tick(unit, 1.5, 15, spec, 100.0), None);
-            assert_eq!(label_tick(unit, 2.0, 20, spec, 100.0).as_deref(), Some("2"));
-            assert_eq!(format_label(unit, 12.0), "12");
-            assert!(!format_label(unit, 12.0).contains('.'));
+            assert_eq!(format_label(unit, 12.0), "12", "unit={unit:?}");
         }
     }
     #[test]
@@ -923,11 +934,11 @@ mod tests {
     }
 
     #[test]
-    /// Handles inch labels show magnitudes on both sides of zero.
+    /// Inch labels show unsigned magnitudes on both sides of the ruler origin.
     fn inch_labels_show_magnitudes_on_both_sides_of_zero() {
-        assert_eq!(format_label(Unit::Inches, -8.0), "8");
-        assert_eq!(format_label(Unit::Inches, 8.0), "8");
-        assert_eq!(format_label(Unit::Inches, -0.0), "0");
+        for (value, expected) in [(-8.0, "8"), (8.0, "8"), (-0.0, "0"), (0.0, "0")] {
+            assert_eq!(format_label(Unit::Inches, value), expected, "value={value}");
+        }
     }
 
     #[test]

@@ -24,6 +24,35 @@ pub(crate) enum Edge {
 /// double-click in a slow frame), but one after a stall can hold any number.
 const MAX_EDGES: usize = 8;
 
+/// Raw evidence that a pointer interaction began in excluded viewport chrome.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct BlockedPointerInput {
+    /// Whether any button was pressed in an excluded region this frame.
+    press: bool,
+    /// Whether the primary button was pressed in an excluded region this frame.
+    primary_press: bool,
+    /// The first finite blocked press position this frame.
+    interaction: Option<Pos2>,
+}
+
+impl BlockedPointerInput {
+    /// Collect blocked-region ownership once from the frame's raw pointer events.
+    fn read(events: &[Event], blocked: &[Rect]) -> Self {
+        let blocked_at = |pos: Pos2| pos.is_finite() && blocked.iter().any(|rect| rect.contains(pos));
+        let mut state = Self::default();
+        for event in events {
+            if let Event::PointerButton { pos, button, pressed: true, .. } = event
+                && blocked_at(*pos)
+            {
+                state.press = true;
+                state.primary_press |= *button == PointerButton::Primary;
+                state.interaction.get_or_insert(*pos);
+            }
+        }
+        state
+    }
+}
+
 /// One frame's pointer, as the pages see it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct PagePointer {
@@ -70,18 +99,7 @@ impl PagePointer {
     /// The page pointer with gestures that begin in `blocked` retained as blocked through every
     /// egui pass of their release frame. A new frame clears the retained block.
     pub(crate) fn read_excluding(ui: &egui::Ui, resp: &egui::Response, modal: bool, blocked: &[Rect]) -> Self {
-        let (
-            at,
-            origin,
-            edges,
-            released,
-            mut primary_down,
-            mut any_down,
-            modifiers,
-            raw_press_blocked,
-            raw_primary_press_blocked,
-            blocked_interaction,
-        ) = ui.input(|i| {
+        let (at, origin, edges, released, mut primary_down, mut any_down, modifiers, blocked_input) = ui.input(|i| {
             (
                 i.pointer.interact_pos(),
                 i.pointer.press_origin(),
@@ -90,24 +108,11 @@ impl PagePointer {
                 i.pointer.primary_down(),
                 i.pointer.any_down(),
                 press_modifiers(&i.events).unwrap_or(i.modifiers),
-                i.events.iter().any(|event| match event {
-                    Event::PointerButton { pos, pressed: true, .. } => blocked.iter().any(|rect| rect.contains(*pos)),
-                    _ => false,
-                }),
-                i.events.iter().any(|event| match event {
-                    Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, .. } => blocked.iter().any(|rect| rect.contains(*pos)),
-                    _ => false,
-                }),
-                i.events.iter().find_map(|event| match event {
-                    Event::PointerButton { pos, pressed: true, .. } if pos.is_finite() && blocked.iter().any(|rect| rect.contains(*pos)) => {
-                        Some(*pos)
-                    }
-                    _ => None,
-                }),
+                BlockedPointerInput::read(&i.events, blocked),
             )
         });
         let layer = ui.layer_id();
-        let blocked_interaction = blocked_interaction.filter(|p| !modal && ui.ctx().layer_id_at(*p).is_none_or(|l| l == layer));
+        let blocked_interaction = blocked_input.interaction.filter(|p| !modal && ui.ctx().layer_id_at(*p).is_none_or(|l| l == layer));
         let blocked_press_key = resp.id.with("blocked-press");
         let primary_press_blocked_key = resp.id.with("primary-press-blocked");
         let clear_blocked_press_key = resp.id.with("clear-blocked-press");
@@ -119,10 +124,10 @@ impl PagePointer {
             });
         }
         let blocked_at = |point: Pos2| blocked.iter().any(|rect| rect.contains(point));
-        if raw_primary_press_blocked {
+        if blocked_input.primary_press {
             ui.data_mut(|data| data.insert_temp(primary_press_blocked_key, true));
         }
-        let primary_press_blocked = raw_primary_press_blocked || ui.data(|data| data.get_temp::<bool>(primary_press_blocked_key)).unwrap_or(false);
+        let primary_press_blocked = blocked_input.primary_press || ui.data(|data| data.get_temp::<bool>(primary_press_blocked_key)).unwrap_or(false);
         // Keep a ruler-owned primary interaction through its release frame. A release over a
         // ruler does not acquire ownership when the corresponding press began on the document.
         let blocked_release = if primary_press_blocked {
@@ -135,7 +140,7 @@ impl PagePointer {
         };
         let blocked_interaction =
             blocked_interaction.or(blocked_release.filter(|pos| !modal && ui.ctx().layer_id_at(*pos).is_none_or(|candidate| candidate == layer)));
-        let started_blocked = raw_press_blocked || origin.or_else(|| first_press(&edges)).is_some_and(blocked_at);
+        let started_blocked = blocked_input.press || origin.or_else(|| first_press(&edges)).is_some_and(blocked_at);
         if started_blocked {
             ui.data_mut(|data| data.insert_temp(blocked_press_key, true));
         }

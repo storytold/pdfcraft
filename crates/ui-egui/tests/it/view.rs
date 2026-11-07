@@ -1820,9 +1820,8 @@ fn fonts_tab_lists_fonts_and_embedding() {
 #[test]
 fn the_hand_tool_ignores_ruler_origin_but_keeps_a_document_origin_across_it() {
     let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "600"), ("quick", "hand"), ("rulers", "on")]);
-    let viewport = h.state().views[0].viewport_rect();
-    let horizontal_ruler = egui::pos2(viewport.center().x, viewport.top() + pdfcraft_ui_egui::ruler::HORIZONTAL_RULER_HEIGHT / 2.0);
-    let document = viewport.center();
+    let horizontal_ruler = crate::support::horizontal_ruler_point(&h);
+    let document = h.state().views[0].viewport_rect().center();
     let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
     let page = |h: &Harness<'static, PdfCraftApp>| rect(h, 0).expect("page 1 on screen").min;
 

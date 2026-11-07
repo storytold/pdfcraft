@@ -1615,7 +1615,7 @@ evidence = [
     "crates/ui-egui/tests/it/view.rs::ruler_visibility_persists_and_legacy_settings_keep_rulers_hidden",
     "crates/ui-egui/src/ruler.rs::visible_ticks_are_clipped_ordered_and_labelled",
     "crates/ui-egui/src/canvas/rulers.rs::independently_rounded_axes_keep_distinct_scales",
-    "crates/ui-egui/src/canvas/page_pointer/tests.rs::a_blocked_press_stays_blocked_through_every_release_pass",
+    "crates/ui-egui/src/canvas/page_pointer/tests.rs::a_blocked_secondary_press_does_not_revoke_a_held_primary_page_drag",
 ]
 notes = "Read-only horizontal and vertical document rulers use the configured display unit, final displayed page transforms, adaptive ticks and pointer indicators. View > Rulers, Ctrl/Command+R and the command palette toggle one persisted global setting. Missing: draggable origins, guides, grids and snap-to-grid."
 

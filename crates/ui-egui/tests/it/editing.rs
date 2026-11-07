@@ -8272,8 +8272,7 @@ fn command_palette_closes_text_editor_with_pointer_parked_over_a_ruler() {
     h.run_steps(3);
     assert!(h.state().views[0].line_editor.is_some(), "the line opens for editing");
 
-    let viewport = h.state().views[0].viewport_rect();
-    let ruler = egui::pos2(viewport.center().x, viewport.top() + pdfcraft_ui_egui::ruler::HORIZONTAL_RULER_HEIGHT / 2.0);
+    let ruler = crate::support::horizontal_ruler_point(&h);
     h.hover_at(ruler);
     h.run_steps(2);
     assert!(h.state().views[0].line_editor.is_some(), "hovering the ruler alone keeps the editor open");

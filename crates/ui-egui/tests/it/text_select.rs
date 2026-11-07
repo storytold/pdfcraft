@@ -243,8 +243,7 @@ fn a_ruler_press_closes_an_open_page_context_menu() {
     h.run_steps(2);
     assert!(h.query_by_label_contains("Copy").is_some(), "the page context menu opened");
 
-    let viewport = h.state().views[0].viewport_rect();
-    let ruler = egui::pos2(viewport.center().x, viewport.top() + pdfcraft_ui_egui::ruler::HORIZONTAL_RULER_HEIGHT / 2.0);
+    let ruler = crate::support::horizontal_ruler_point(&h);
     h.event(Event::PointerMoved(ruler));
     h.event(Event::PointerButton { pos: ruler, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.run_steps(1);
@@ -262,8 +261,7 @@ fn a_ruler_secondary_click_does_not_open_the_page_context_menu() {
     let (mut h, _) = harness(|app| app.show_rulers = true);
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
     h.run_steps(2);
-    let viewport = h.state().views[0].viewport_rect();
-    let ruler = egui::pos2(viewport.center().x, viewport.top() + pdfcraft_ui_egui::ruler::HORIZONTAL_RULER_HEIGHT / 2.0);
+    let ruler = crate::support::horizontal_ruler_point(&h);
     h.event(Event::PointerMoved(ruler));
     for pressed in [true, false] {
         h.event(Event::PointerButton { pos: ruler, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
@@ -283,8 +281,7 @@ fn a_ruler_secondary_click_is_blocked_when_a_page_drag_ends_in_the_same_frame() 
     let (mut h, at) = harness(|app| app.show_rulers = true);
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
     h.run_steps(2);
-    let viewport = h.state().views[0].viewport_rect();
-    let ruler = egui::pos2(viewport.center().x, viewport.top() + pdfcraft_ui_egui::ruler::HORIZONTAL_RULER_HEIGHT / 2.0);
+    let ruler = crate::support::horizontal_ruler_point(&h);
 
     // Give the page ownership of a primary drag first.
     h.event(Event::PointerMoved(at));
