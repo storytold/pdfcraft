@@ -50,19 +50,51 @@ pub(crate) enum XRefError {
 }
 
 /// Parse the "root" xref from the PDF.
-pub(crate) fn root_xref(data: PdfData, password: &[u8]) -> Result<XRef, XRefError> {
+///
+/// PdfCraft patch: (hayro-syntax (44)) also whether the table was rebuilt because the newest
+/// section cuts off the page tree (see below).
+pub(crate) fn root_xref(data: PdfData, password: &[u8]) -> Result<(XRef, bool), XRefError> {
     let mut xref_map = FxHashMap::default();
     let xref_pos = find_last_xref_pos(data.as_ref()).ok_or(XRefError::Unknown)?;
-    let trailer =
-        populate_xref_impl(data.as_ref(), xref_pos, &mut xref_map).ok_or(XRefError::Unknown)?;
+    // PdfCraft patch: (hayro-syntax (44)) the sections the chain reached, for the check below.
+    let mut visited = BTreeSet::new();
+    let trailer = populate_xref_impl_inner(data.as_ref(), xref_pos, &mut xref_map, &mut visited)
+        .ok_or(XRefError::Unknown)?;
 
-    XRef::new(
+    let xref = XRef::new(
         data.clone(),
         xref_map,
         XRefInput::TrailerDictData(trailer),
         false,
         password,
-    )
+    )?;
+    // PdfCraft patch: (hayro-syntax (44)) an update whose section has no `/Prev` (ISO 32000-2
+    // §7.5.6, §7.5.8.2) cuts off the revisions before it, and with them the page tree its catalog
+    // names (the signed files of PDFBOX-2720 and PDFBOX-2942). The table is rebuilt by scanning
+    // the file, as for a broken one, so the page tree is found rather than whatever page
+    // dictionaries `Pages::new_brute_force` turns up. Only when the chain reached that one
+    // section, the file holds another `startxref`, and the page tree can't be read: the
+    // conditions `pdfcraft-cos` rebuilds under, so the two agree on the pages.
+    let cut_off = visited.len() == 1
+        && xref
+            .get::<Dict<'_>>(xref.trailer_data().pages_ref)
+            .is_none()
+        && more_than_one_startxref(data.as_ref());
+    if cut_off {
+        warn!(
+            "the newest xref section has no Prev and the page tree is unreachable; rebuilding the xref table"
+        );
+        xref.repair();
+    }
+    Ok((xref, cut_off))
+}
+
+/// PdfCraft patch: (hayro-syntax (44)) whether `data` holds an earlier `startxref` than its last.
+fn more_than_one_startxref(data: &[u8]) -> bool {
+    let needle = b"startxref";
+    findr_needle(data, needle)
+        .and_then(|last| data.get(..last))
+        .is_some_and(|before| crate::util::find_needle(before, needle).is_some())
 }
 
 /// Try to manually parse the PDF to build an xref table and trailer dictionary.
@@ -980,6 +1012,9 @@ impl XRefEntry {
     }
 }
 
+// PdfCraft patch: (hayro-syntax (44)) `root_xref` reads the chain itself now; the tests still
+// call this.
+#[cfg(test)]
 fn populate_xref_impl<'a>(data: &'a [u8], pos: usize, xref_map: &mut XrefMap) -> Option<&'a [u8]> {
     let mut visited = BTreeSet::new();
     populate_xref_impl_inner(data, pos, xref_map, &mut visited)

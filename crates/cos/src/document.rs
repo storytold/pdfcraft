@@ -48,6 +48,8 @@ pub struct Document {
     /// `fill_xref_gaps`.
     located: Arc<BTreeMap<u32, (u64, u16)>>,
     repair_log: Arc<Vec<String>>,
+    /// See [`Self::rebuilt_unlinked_update`].
+    unlinked_update: bool,
     cache: Arc<Mutex<state::ObjectCache>>,
     objstms: Arc<Mutex<HashMap<u32, Arc<ObjStm>>>>,
     /// What `/JBIG2Globals` streams of the file decode to, by object number: the images of a scan

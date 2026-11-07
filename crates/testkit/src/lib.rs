@@ -133,6 +133,82 @@ pub fn stream_obj(dict: &str, data: impl AsRef<[u8]>) -> Vec<u8> {
     out
 }
 
+/// A three-page file (200, 300 and 400 points wide, in that order, the second with a link to
+/// `https://example.com/`) whose page tree sits in an object stream of its first revision, plus an update that rewrites the catalog and the first
+/// page in a cross-reference stream: with `/Prev` when `linked`, without it otherwise (the shape
+/// of the signed PDFBOX-2720 and PDFBOX-2942 files). Without `/Prev` a reader that follows the
+/// chain (ISO 32000-2 §7.5.6, §7.5.8.2) finds no page tree, and a scan for page dictionaries
+/// outside object streams finds only the rewritten page.
+pub fn update_without_prev(linked: bool) -> Vec<u8> {
+    fn row(out: &mut Vec<u8>, kind: u8, field: usize, index: u16) {
+        out.push(kind);
+        out.extend_from_slice(&u32::try_from(field).unwrap_or(u32::MAX).to_be_bytes());
+        out.extend_from_slice(&index.to_be_bytes());
+    }
+    let page = |width: u32, extra: &str| format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} 200] /Contents 4 0 R{extra} >>");
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let one = out.len();
+    out.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    let four = out.len();
+    out.extend_from_slice(b"4 0 obj\n<< /Length 14 >>\nstream\n0 0 50 50 re f\nendstream\nendobj\n");
+    // Objects 2 (the page tree), 3, 6 and 7 (the pages) and 10 (the link) in object stream 5.
+    let members = [
+        (2, "<< /Type /Pages /Kids [3 0 R 6 0 R 7 0 R] /Count 3 >>".to_string()),
+        (3, page(200, "")),
+        (6, page(300, " /Annots [10 0 R]")),
+        (7, page(400, "")),
+        (10, "<< /Type /Annot /Subtype /Link /Rect [10 10 60 60] /A << /S /URI /URI (https://example.com/) >> >>".to_string()),
+    ];
+    let (mut header, mut body) = (String::new(), String::new());
+    for (num, member) in &members {
+        header.push_str(&format!("{num} {} ", body.len()));
+        body.push_str(member);
+        body.push(' ');
+    }
+    let five = out.len();
+    out.extend_from_slice(
+        format!(
+            "5 0 obj\n<< /Type /ObjStm /N 5 /First {} /Length {} >>\nstream\n{header}{body}\nendstream\nendobj\n",
+            header.len(),
+            header.len() + body.len()
+        )
+        .as_bytes(),
+    );
+    let eight = out.len();
+    let mut rows = Vec::new();
+    row(&mut rows, 0, 0, 65535);
+    row(&mut rows, 1, one, 0);
+    row(&mut rows, 2, 5, 0);
+    row(&mut rows, 2, 5, 1);
+    row(&mut rows, 1, four, 0);
+    row(&mut rows, 1, five, 0);
+    row(&mut rows, 2, 5, 2);
+    row(&mut rows, 2, 5, 3);
+    row(&mut rows, 1, eight, 0);
+    row(&mut rows, 0, 0, 0);
+    row(&mut rows, 2, 5, 4);
+    out.extend_from_slice(format!("8 0 obj\n<< /Type /XRef /Size 11 /Root 1 0 R /W [1 4 2] /Length {} >>\nstream\n", rows.len()).as_bytes());
+    out.extend_from_slice(&rows);
+    out.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{eight}\n%%EOF\n").as_bytes());
+    // The update: the catalog and the first page again, and a section for them and itself.
+    let catalog = out.len();
+    out.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /Lang (en) >>\nendobj\n");
+    let first = out.len();
+    out.extend_from_slice(b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Annots [] >>\nendobj\n");
+    let nine = out.len();
+    let mut rows = Vec::new();
+    row(&mut rows, 1, catalog, 0);
+    row(&mut rows, 1, first, 0);
+    row(&mut rows, 1, nine, 0);
+    let prev = if linked { format!(" /Prev {eight}") } else { String::new() };
+    out.extend_from_slice(
+        format!("9 0 obj\n<< /Type /XRef /Size 11 /Root 1 0 R /Index [1 1 3 1 9 1] /W [1 4 2]{prev} /Length {} >>\nstream\n", rows.len()).as_bytes(),
+    );
+    out.extend_from_slice(&rows);
+    out.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{nine}\n%%EOF\n").as_bytes());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

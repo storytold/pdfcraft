@@ -17,6 +17,8 @@ pub struct Pdf {
     header_version: PdfVersion,
     pages: CachedPages,
     data: PdfData,
+    /// PdfCraft patch: (hayro-syntax (44)) see [`Pdf::rebuilt_unlinked_update`].
+    rebuilt_unlinked_update: bool,
 }
 
 /// An error that occurred while loading a PDF file.
@@ -47,12 +49,13 @@ impl Pdf {
         let data = data.into();
         let password = password.as_bytes();
         let version = find_version(data.as_ref()).unwrap_or(PdfVersion::Pdf10);
-        let xref = match root_xref(data.clone(), password) {
+        let (xref, rebuilt_unlinked_update) = match root_xref(data.clone(), password) {
             Ok(x) => x,
             Err(e) => match e {
-                XRefError::Unknown => {
-                    fallback(data.clone(), password).ok_or(LoadPdfError::Invalid)?
-                }
+                XRefError::Unknown => (
+                    fallback(data.clone(), password).ok_or(LoadPdfError::Invalid)?,
+                    false,
+                ),
                 XRefError::Encryption(e) => return Err(LoadPdfError::Decryption(e)),
             },
         };
@@ -65,7 +68,15 @@ impl Pdf {
             header_version: version,
             pages,
             data,
+            rebuilt_unlinked_update,
         })
+    }
+
+    /// PdfCraft patch: (hayro-syntax (44)) whether the newest cross-reference section has no
+    /// `/Prev`, so the page tree in the revisions before it could only be found by rebuilding the
+    /// table from the file's objects.
+    pub fn rebuilt_unlinked_update(&self) -> bool {
+        self.rebuilt_unlinked_update
     }
 
     /// Return the number of objects present in the PDF file.

@@ -21,6 +21,7 @@ impl Document {
             xref_oddities: Arc::default(),
             located: Arc::default(),
             repair_log: Arc::new(Vec::new()),
+            unlinked_update: false,
             cache: Arc::default(),
             objstms: Arc::default(),
             jbig2_globals: Arc::default(),
@@ -108,6 +109,7 @@ impl Document {
             xref_oddities: Arc::default(),
             located: Arc::default(),
             repair_log: Arc::new(Vec::new()),
+            unlinked_update: false,
             cache: Arc::default(),
             objstms: Arc::default(),
             jbig2_globals: Arc::default(),
@@ -132,6 +134,8 @@ impl Document {
         }
         let parsed = doc.read_xref_chain(&mut log);
         let mut authenticated = false;
+        // The newest section cut the page tree off from the chain (see `update_cuts_off_the_pages`).
+        let mut cut_off = false;
         let ok = match parsed {
             Ok((entries, trailer, revisions, oddities)) => {
                 doc.entries = Arc::new(entries);
@@ -145,17 +149,22 @@ impl Document {
                     doc.authenticate(&enc, &credentials)?;
                     authenticated = true;
                 }
-                doc.root_is_catalog()
+                let catalog = doc.root_is_catalog();
+                cut_off = catalog && doc.update_cuts_off_the_pages();
+                catalog && !cut_off
             }
             Err(e) => {
                 log.push(format!("cross-reference data unreadable ({e}); rebuilding from object headers"));
                 false
             }
         };
+        if cut_off {
+            log.push(UNLINKED_UPDATE.into());
+            doc.unlinked_update = true;
+        } else if !ok && !doc.entries.is_empty() {
+            log.push("cross-reference data does not lead to a valid catalog; rebuilding from object headers".into());
+        }
         if !ok {
-            if !doc.entries.is_empty() {
-                log.push("cross-reference data does not lead to a valid catalog; rebuilding from object headers".into());
-            }
             doc.reconstruct(&mut log)?;
         }
         // Header generations are plaintext, including in encrypted files. Inspect only the
@@ -178,6 +187,24 @@ impl Document {
         }
         doc.next_num = max.saturating_add(1).max(size).max(1);
         Ok(doc)
+    }
+
+    /// Whether the chain of cross-reference sections ends at the newest one (no `/Prev`, or one
+    /// that isn't an offset) although the file holds earlier sections, and the catalog's `/Pages`
+    /// is not among the objects that one section reaches. ISO 32000-2 §7.5.6 and §7.5.8.2 require
+    /// the `/Prev`; without it the earlier revisions, page tree and all, are cut off, so the file
+    /// is rebuilt from its object headers as a damaged one is (the newest definition of each
+    /// object wins), and the repair log says why. (A file whose `/Root` itself is missing is
+    /// rebuilt anyway.)
+    fn update_cuts_off_the_pages(&self) -> bool {
+        if self.revisions.len() != 1 {
+            return false;
+        }
+        let Some(root) = self.root() else { return false };
+        let Ok(catalog) = self.try_get_reference(root) else { return false };
+        let Object::Dict(catalog) = &*catalog else { return false };
+        // The page tree first: the scan for an earlier `startxref` reads the whole file.
+        !catalog.get(b"Pages").is_some_and(|pages| matches!(&*self.resolve(pages), Object::Dict(_))) && earlier_sections(&self.data)
     }
 
     fn authenticate(&mut self, enc: &Object, credentials: &Credentials<'_>) -> Result<(), CosError> {
@@ -407,4 +434,13 @@ impl Document {
             _ => o,
         }
     }
+}
+
+/// The repair-log line for a file rebuilt because its last update has no `/Prev`.
+const UNLINKED_UPDATE: &str = "the file's last update has no /Prev link to its earlier revisions, so their objects (the page tree among them) are unreachable through the cross-reference chain; rebuilding from object headers";
+
+/// Whether `data` has more than one `startxref`: an update was appended to it, or it is
+/// linearized (whose first-page section links to the main one).
+fn earlier_sections(data: &[u8]) -> bool {
+    find(data, b"startxref", 0, data.len()).and_then(|at| find(data, b"startxref", at.saturating_add(9), data.len())).is_some()
 }

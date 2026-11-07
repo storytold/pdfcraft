@@ -88,6 +88,13 @@ impl Document {
         &self.repair_log
     }
 
+    /// Whether the file was rebuilt from its object headers because its last update has no `/Prev`
+    /// and so cut its page tree off the cross-reference chain (ISO 32000-2 §7.5.6, §7.5.8.2). The
+    /// renderer rebuilds such a file under the same conditions, so the two read the same objects.
+    pub fn rebuilt_unlinked_update(&self) -> bool {
+        self.unlinked_update
+    }
+
     /// Add a line to [`Self::repair_log`]: a leniency applied while reading that the user should
     /// know about (fidelity: never silent).
     pub fn note_repair(&mut self, line: String) {

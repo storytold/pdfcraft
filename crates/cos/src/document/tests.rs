@@ -1921,3 +1921,39 @@ fn the_editor_cache_charges_a_dictionary_for_the_values_it_holds() {
     let sum = cache.values().fold(0usize, |n, o| n.saturating_add(held_bytes(o, &doc.data, 0)));
     assert_eq!(cache.owned(), sum, "the kept total is the cache's own");
 }
+
+/// The pages of `doc` in page-tree order, as the dictionaries the document holds.
+fn page_tree_pages(doc: &Document) -> Vec<Dict> {
+    let catalog = doc.get(doc.root().expect("root"));
+    let pages = doc.resolve(catalog.as_dict().and_then(|c| c.get(b"Pages")).expect("/Pages"));
+    let kids = pages.as_dict().and_then(|p| p.get(b"Kids")).and_then(Object::as_array).cloned().unwrap_or_default();
+    kids.iter().filter_map(|k| doc.resolve(k).as_dict().cloned()).collect()
+}
+
+/// ISO 32000-2 §7.5.6 and §7.5.8.2: an update reaches the revisions before it through `/Prev`.
+/// One without it cuts them off, page tree and all. The file is rebuilt from its object headers
+/// as a damaged one is, so its page tree is found, the newest definition of each object wins, and
+/// the repair log says why; a save rewrites it in full, with every page.
+#[test]
+fn an_update_without_prev_is_rebuilt_with_its_page_tree_and_a_repair_note() {
+    let doc = Document::open(Arc::new(pdfcraft_testkit::update_without_prev(false))).expect("the unlinked file opens");
+    let pages = page_tree_pages(&doc);
+    assert_eq!(pages.len(), 3);
+    assert!(pages.first().is_some_and(|p| p.contains(b"Annots")), "the update's page wins: {pages:?}");
+    assert!(doc.reconstructed() && doc.rebuilt_unlinked_update());
+    assert!(doc.repair_log().iter().any(|l| l.contains("no /Prev")), "{:?}", doc.repair_log());
+    let catalog = doc.get(doc.root().expect("root"));
+    assert!(catalog.as_dict().is_some_and(|c| c.contains(b"Lang")), "the update's catalog wins");
+
+    let saved = crate::write_incremental(&doc, &crate::SaveOptions::default()).expect("saves");
+    let reopened = Document::open(Arc::new(saved)).expect("the saved file opens");
+    assert_eq!(page_tree_pages(&reopened).len(), 3);
+    assert!(reopened.repair_log().is_empty(), "{:?}", reopened.repair_log());
+
+    // The same file with `/Prev` reads through its chain, as before.
+    let linked = Document::open(Arc::new(pdfcraft_testkit::update_without_prev(true))).expect("the linked file opens");
+    assert_eq!(page_tree_pages(&linked).len(), 3);
+    assert!(!linked.reconstructed() && !linked.rebuilt_unlinked_update());
+    assert_eq!(linked.revisions().len(), 2);
+    assert!(linked.repair_log().is_empty(), "{:?}", linked.repair_log());
+}

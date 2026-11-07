@@ -4649,6 +4649,7 @@ dependencies = [
  "lopdf",
  "pdfcraft-cos",
  "pdfcraft-fonts",
+ "pdfcraft-testkit",
  "serde",
  "skrifa 0.44.0",
  "thiserror 2.0.21",
