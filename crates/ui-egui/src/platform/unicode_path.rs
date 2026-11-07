@@ -15,16 +15,19 @@
 //! entry, tries its NFC and NFD forms. Both directions are covered — NFD delivered with NFC
 //! stored, the reverse, and any mix along the chain, so per-component resolution is required
 //! where one form for the whole path would not do. A path that exists as delivered is returned
-//! untouched, keeping the exact bytes the caller got.
+//! untouched, keeping the exact bytes the caller got. Where a later component matches in no
+//! form, the walk goes back and tries the next form of the one before. It makes at most three
+//! times as many lookups as the path has components, after the one for the path as delivered;
+//! past that, the path counts as not found.
 
 use std::path::{Path, PathBuf};
 
 use unicode_normalization::UnicodeNormalization;
 
 /// The existing file or directory `delivered` names, with each component tried in its NFC and
-/// NFD forms where the delivered form matches nothing (see the module docs). `None` when no
-/// variant of the path exists: the caller keeps the delivered path, so the error it reports
-/// names what the operating system actually sent.
+/// NFD forms where the delivered form matches nothing, or leads to no match further down (see
+/// the module docs). `None` when no variant of the path is found: the caller keeps the
+/// delivered path, so the error it reports names what the operating system actually sent.
 pub(crate) fn resolve(delivered: &str) -> Option<String> {
     resolve_with(delivered, Path::exists)
 }
@@ -36,40 +39,64 @@ fn resolve_with(delivered: &str, exists: impl Fn(&Path) -> bool) -> Option<Strin
     if exists(path) {
         return Some(delivered.to_owned());
     }
-    let mut resolved = PathBuf::new();
-    for component in path.components() {
-        // Roots and prefixes (`/`, `C:`) carry no name to vary; `components` folds `.` away.
-        // A non-UTF-8 component has no Unicode form to try either.
-        let name = component.as_os_str().to_str()?;
-        resolved = existing_form(&resolved, name, &exists)?;
-    }
-    // Only the empty path walks no components, and it names nothing to open.
-    if resolved.as_os_str().is_empty() {
+    // Roots and prefixes (`/`, `C:`) carry no name to vary; `components` folds `.` away.
+    // `delivered` is a `&str`, so every component is UTF-8 and this `?` never returns: it keeps
+    // the function total without an `expect`.
+    let names = path.components().map(|c| c.as_os_str().to_str()).collect::<Option<Vec<_>>>()?;
+    // Only the empty path has no components, and it names nothing to open.
+    if names.is_empty() {
         return None;
     }
-    Some(resolved.to_string_lossy().into_owned())
+    // Three lookups for each component, shared by the whole walk: the most a walk keeping the
+    // first form that exists could make, so the path that walk finds is always reached, and
+    // trying other forms never makes the number of lookups more than linear in the path's length.
+    let mut probes = names.len().saturating_mul(3);
+    walk(&names, &mut probes, &exists).map(|found| found.to_string_lossy().into_owned())
 }
 
-/// `dir`'s entry `name` in the form `exists` finds it in: as delivered, else its NFC form, else
-/// its NFD form (an ASCII name has neither). NFC first is arbitrary but fixed, so a directory
-/// holding both forms of one name resolves the same way every time.
-fn existing_form(dir: &Path, name: &str, exists: &impl Fn(&Path) -> bool) -> Option<PathBuf> {
-    let delivered = dir.join(name);
-    if exists(&delivered) {
-        return Some(delivered);
-    }
-    if name.is_ascii() {
-        return None;
-    }
-    for form in [name.nfc().collect::<String>(), name.nfd().collect::<String>()] {
-        if form != name {
-            let candidate = dir.join(form);
-            if exists(&candidate) {
-                return Some(candidate);
+/// The first existing path naming each of `names` in one of its [`forms`], tried in that order:
+/// where a later component matches in no form, the walk goes back and tries the next form of the
+/// one before. `None` once `probes` runs out. The walk keeps its place on the heap, not on the
+/// call stack, so no path is deep enough to overflow it, and it keeps the form each component
+/// matched so far was found in rather than a path to each, so its memory grows with the path's
+/// length and not with its length times its depth.
+fn walk(names: &[&str], probes: &mut usize, exists: &impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    // The form each component matched so far exists in, and for each of those components and the
+    // one after them, the forms still to try.
+    let mut matched: Vec<String> = Vec::new();
+    let mut untried = vec![forms(names.first()?).into_iter()];
+    while let Some(next) = untried.last_mut() {
+        let Some(form) = next.next() else {
+            untried.pop();
+            matched.pop();
+            continue;
+        };
+        *probes = probes.checked_sub(1)?;
+        let candidate: PathBuf = matched.iter().chain([&form]).collect();
+        if exists(&candidate) {
+            matched.push(form);
+            match names.get(matched.len()) {
+                Some(name) => untried.push(forms(name).into_iter()),
+                None => return Some(candidate),
             }
         }
     }
     None
+}
+
+/// `name` as delivered, then its NFC form, then its NFD form, each once (an ASCII name has no
+/// other). NFC first is arbitrary but fixed, so a directory holding both forms of one name
+/// resolves the same way every time.
+fn forms(name: &str) -> Vec<String> {
+    let mut forms = vec![name.to_owned()];
+    if !name.is_ascii() {
+        for form in [name.nfc().collect::<String>(), name.nfd().collect::<String>()] {
+            if !forms.contains(&form) {
+                forms.push(form);
+            }
+        }
+    }
+    forms
 }
 
 #[cfg(test)]
@@ -199,8 +226,9 @@ mod tests {
 
     /// A name that matches in no form resolves to `None`, never to an invented path, so the
     /// caller keeps what the operating system sent and the error names it. An ASCII miss has
-    /// no other form to try, a component that matches nothing ends the walk there, and the
-    /// empty path names nothing to open.
+    /// no other form to try, a component that matches in no form, below folders that have no
+    /// other form, leaves the walk nothing to go back to, and the empty path names nothing to
+    /// open.
     #[test]
     fn a_name_that_exists_in_no_form_resolves_to_nothing() {
         let dir = TempDir::new("missing");
@@ -210,7 +238,7 @@ mod tests {
         assert_eq!(resolve(dir.0.join("B\u{0300}se").to_str().unwrap()), None);
         // An ASCII miss says nothing more for the resolver to try.
         assert_eq!(resolve(dir.0.join("missing.pdf").to_str().unwrap()), None);
-        // A component that matches in no form stops the walk right there.
+        // A component that matches in no form, below folders with no other form, ends the walk.
         assert_eq!(resolve(dir.0.join("B\u{0300}se").join("gone.pdf").to_str().unwrap()), None);
         // The empty path names nothing.
         assert_eq!(resolve(""), None);
@@ -258,6 +286,18 @@ mod tests {
         assert_eq!(volume.probes.get(), 1, "one lookup, of the path as delivered");
     }
 
+    /// Where both forms of a folder name exist side by side, a file that only the second form
+    /// holds is still found: the walk goes back to the folder and tries its next form instead of
+    /// keeping the first one that exists.
+    #[test]
+    fn a_file_only_the_other_form_of_its_folder_holds_is_found() {
+        for (first, second) in [(NFC, NFD), (NFD, NFC)] {
+            let file = root().join(second).join("doc.pdf");
+            let volume = Volume::holding(&[root().join(first), file.clone()]);
+            assert_eq!(volume.resolve(&root().join(first).join("doc.pdf")), Some(file.to_string_lossy().into_owned()), "{first:?} delivered");
+        }
+    }
+
     /// Forms are tried in a fixed order — as delivered, NFC, NFD — so a folder holding more than
     /// one of them resolves the same way every time. "a" with an acute and a dot below, marks
     /// out of canonical order, is neither its NFC nor its NFD form.
@@ -267,5 +307,56 @@ mod tests {
         let (nfc, nfd) = ("\u{1ea1}\u{0301}", "a\u{0323}\u{0301}");
         let volume = Volume::holding(&[root().join(nfc), root().join(nfd)]);
         assert_eq!(volume.resolve(&root().join(delivered)), Some(root().join(nfc).to_string_lossy().into_owned()));
+    }
+
+    /// Trying other forms is bounded: past three times as many lookups as the path has
+    /// components, the path counts as not found. Sixteen folders each held in both forms, with
+    /// the file only under the last way through them, take 196,608 lookups to search
+    /// exhaustively.
+    #[test]
+    fn the_walk_gives_up_after_three_lookups_a_component() {
+        const DEPTH: usize = 16;
+        let probes = Cell::new(0);
+        // Every folder below the root exists in both forms; `doc.pdf` only below NFD ones.
+        let exists = |path: &Path| {
+            probes.set(probes.get() + 1);
+            let names: Vec<_> = path.components().skip(1).map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+            let (folders, file) = match names.split_last() {
+                Some((last, folders)) if last == "doc.pdf" => (folders, true),
+                _ => (names.as_slice(), false),
+            };
+            folders.len() <= DEPTH
+                && folders.iter().all(|f| f == NFC || f == NFD)
+                && (!file || (folders.len() == DEPTH && folders.iter().all(|f| f == NFD)))
+        };
+        let mut delivered = root();
+        for _ in 0..DEPTH {
+            delivered.push(NFC);
+        }
+        delivered.push("doc.pdf");
+        let found = resolve_with(delivered.to_str().unwrap(), exists);
+        let components = DEPTH + 2;
+        assert!(probes.get() <= 3 * components + 1, "{} lookups for {components} components", probes.get());
+        assert_eq!(found, None, "past the budget the path counts as not found");
+    }
+
+    /// The budget always covers the path the walk reaches without going back: a name whose
+    /// delivered, NFC and NFD forms all differ, stored in the last of them at every level, takes
+    /// all three lookups at each. With a root, the root's one lookup leaves two of its three
+    /// unused, so only the relative path spends the whole budget and fails if it is cut by one;
+    /// production paths are normally absolute, the relative one is here to pin the budget exactly.
+    #[test]
+    fn a_path_needing_every_form_of_each_name_is_within_the_budget() {
+        let (delivered, nfd) = ("a\u{0301}\u{0323}", "a\u{0323}\u{0301}");
+        let stored = root().join(nfd).join(nfd).join(nfd);
+        let volume = Volume::holding(std::slice::from_ref(&stored));
+        let found = volume.resolve(&root().join(delivered).join(delivered).join(delivered));
+        assert_eq!(found, Some(stored.to_string_lossy().into_owned()));
+        assert_eq!(volume.probes.get(), 1 + 1 + 3 * 3, "the path as delivered, the root, then three forms a name");
+        let stored = Path::new(nfd).join(nfd).join(nfd);
+        let volume = Volume::holding(std::slice::from_ref(&stored));
+        let found = volume.resolve(&Path::new(delivered).join(delivered).join(delivered));
+        assert_eq!(found, Some(stored.to_string_lossy().into_owned()), "a relative path");
+        assert_eq!(volume.probes.get(), 1 + 3 * 3, "the path as delivered, then three forms a name");
     }
 }
