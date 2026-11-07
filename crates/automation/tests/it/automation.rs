@@ -7987,37 +7987,29 @@ fn compare_pages_limits_text_comparison() {
     let pages = page_text(&mut a, v2);
     assert_eq!(pages.len(), 2, "{pages:?}");
     // Scoping the comparison to page 2 alone must report only the 950 change on page 2,
-    // not the page 1 alpha/beta change.
-    match a.call("doc_compare", &json!({ "doc": v2, "other": v1, "pages": [2] })) {
-        Ok(out) => {
-            let r = match out.into_iter().next() {
-                Some(Content::Json(v)) => v,
-                other => panic!("doc_compare with pages: expected JSON, got {other:?}"),
-            };
-            assert_eq!((r["replaced"].as_u64(), r["inserted"].as_u64(), r["deleted"].as_u64()), (Some(1), Some(0), Some(0)), "{r}");
-            assert_eq!(r["changes"].as_array().unwrap().len(), 1, "{r}");
-            assert_eq!(r["changes"][0]["old"]["text"], "900", "{r}");
-            assert_eq!(r["changes"][0]["new"]["text"], "950", "{r}");
-            assert_eq!(r["changes"][0]["new"]["page"], 2, "{r}");
-        }
-        Err(e) => {
-            assert!(e.to_string().is_empty() && e.to_string().contains("pages"), "doc_compare accepts a pages filter to scope the text diff: {e}")
-        }
-    }
-    // Scoping to page 1 alone must report only the alpha/beta change.
-    match a.call("doc_compare", &json!({ "doc": v2, "other": v1, "pages": [1] })) {
-        Ok(out) => {
-            let r = match out.into_iter().next() {
-                Some(Content::Json(v)) => v,
-                other => panic!("doc_compare with pages: expected JSON, got {other:?}"),
-            };
-            assert_eq!(r["changes"].as_array().unwrap().len(), 1, "{r}");
-            assert_eq!(r["changes"][0]["new"]["page"], 1, "{r}");
-        }
-        Err(e) => {
-            assert!(e.to_string().is_empty() && e.to_string().contains("pages"), "doc_compare accepts a pages filter to scope the text diff: {e}")
-        }
-    }
+    // not the page 1 alpha/beta change. old_words/new_words are the scoped
+    // counts for page 2 alone ("Second page 900" / "Second page 950" = 3 words each).
+    let r = ok(&mut a, "doc_compare", json!({ "doc": v2, "other": v1, "pages": [2], "visual": true }));
+    assert_eq!((r["replaced"].as_u64(), r["inserted"].as_u64(), r["deleted"].as_u64()), (Some(1), Some(0), Some(0)), "{r}");
+    assert_eq!(r["changes"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(r["changes"][0]["old"]["text"], "900", "{r}");
+    assert_eq!(r["changes"][0]["new"]["text"], "950", "{r}");
+    assert_eq!(r["changes"][0]["new"]["page"], 2, "{r}");
+    assert_eq!((r["old_words"].as_u64(), r["new_words"].as_u64()), (Some(3), Some(3)), "{r}");
+    assert!(r["visual"].as_array().unwrap().iter().all(|v| v["page"] == 2), "{r}");
+    // Scoping to page 1 alone must report only the alpha/beta change, with the
+    // page 1 word counts ("First page alpha" / "First page beta").
+    let r = ok(&mut a, "doc_compare", json!({ "doc": v2, "other": v1, "pages": [1] }));
+    assert_eq!(r["changes"].as_array().unwrap().len(), 1, "{r}");
+    assert_eq!(r["changes"][0]["new"]["page"], 1, "{r}");
+    assert_eq!((r["old_words"].as_u64(), r["new_words"].as_u64()), (Some(3), Some(3)), "{r}");
+    // A deletion present only on the old document's page 2 keeps that page on
+    // both sides, so it can be marked in the new document.
+    let v3 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "First page alpha\u{c}Second page 900" }))["doc"].as_u64().unwrap();
+    let v4 = ok(&mut a, "doc_create", json!({ "from": "text", "text": "First page alpha\u{c}" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "doc_compare", json!({ "doc": v4, "other": v3, "pages": [2] }));
+    assert!(!r["changes"].as_array().unwrap().is_empty(), "{r}");
+    assert!(r["changes"].as_array().unwrap().iter().all(|ch| ch["old"]["page"] == 2 && ch["new"]["page"] == 2), "{r}");
 }
 
 #[test]
